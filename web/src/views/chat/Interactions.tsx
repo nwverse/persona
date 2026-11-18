@@ -24,8 +24,6 @@ import { isSide } from "../../lib/side-fold";
 import { Button, Collapse, cx, EASE, Kbd, Loading, Menu, SECRET_INPUT, toast, useMenu } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { Markdown } from "../../ui/Markdown";
-import { permissionDetail, permissionReason, summaryExtra } from "../../lib/tool-detail";
-import { DIFF_TOOLS, DiffBlocks, editDiffs } from "./ActionRow";
 import { ANSWERED_LIST_MAX, cardFold, cardLine, nextWaiting, PLAN_MAX, showsAnswered } from "./dock";
 import { useCardCut } from "./card-cut";
 import { answeredShown, answeredTally, keptAnswers, latestAnswer, nextRun, runPosition, tallyDetail, answeredHideAt } from "./card-stack";
@@ -549,26 +547,25 @@ const PermissionCard = lazyPage(() => import("./PermissionCard").then((m) => m.P
 export function PermissionCardLoading({ ix }: { ix: Interaction }) {
   return (
     <Card kicker={t("chat-interactions.permission_kicker")} title={t("chat-interactions.permission_title", { tool: ix.tool_name ?? "" })} footer={null}>
-      <Loading label={t("common.loading")} />
+      <Loading />
     </Card>
   );
 }
 
-/** One failed permission chunk must not blank its card or take down the chat. A retry remounts lazyPage, whose failed
- *  import is deliberately not cached; a different card also starts without the previous card's failure. */
+/** One failed permission chunk must not blank its card or take down the chat. Retry first remounts lazyPage; browsers
+ *  that cached the failed native import reload on its repeated failure. Another card starts without this failure. */
 export class PermissionCardFrame extends Component<{ ix: Interaction; children?: ReactNode }, { error: unknown }> {
   state = { error: null as unknown };
+  failures = 0;
 
   static getDerivedStateFromError(error: unknown) {
     return { error };
   }
 
   componentDidCatch(error: unknown, info: ErrorInfo) {
-    reportBoundary(error, "permission_card", isChunkError(error), info.componentStack);
-  }
-
-  componentDidUpdate(prev: { ix: Interaction }) {
-    if (this.state.error && prev.ix.id !== this.props.ix.id) this.setState({ error: null });
+    const chunk = isChunkError(error);
+    reportBoundary(error, "permission_card", chunk, info.componentStack);
+    if (chunk && this.failures++) location.reload();
   }
 
   render() {
@@ -589,11 +586,8 @@ export class PermissionCardFrame extends Component<{ ix: Interaction; children?:
 /** A terminal dialog's words under its question (#6638): at most six lines in view, the rest a scroll inside them. */
 const DETAIL_FOLD = "mb-2 max-h-[6lh] text-[12.5px] leading-relaxed whitespace-pre-wrap text-ink-2";
 
-const CODE_BOX = "max-h-48 overflow-auto rounded-[8px] bg-inset px-2.5 py-2 font-mono text-[11.5px] leading-[1.6] whitespace-pre-wrap text-ink-2 shadow-hairline";
+export const CODE_BOX = "max-h-48 overflow-auto rounded-[8px] bg-inset px-2.5 py-2 font-mono text-[11.5px] leading-[1.6] whitespace-pre-wrap text-ink-2 shadow-hairline";
 
-/** What the tool will do, field by field (Android PermissionRequestSummary): the agent's sentence, then the command,
- *  file or address under a small label, an edit's changes; a tool it does not know shows the hub's summary. The raw
- *  input stays one click away, open from the start only when nothing else says what the tool does. */
 const FROM_MAX = 48;
 
 /** "From subagent · <type>" for a subagent's card, its type on one line and cut to FROM_MAX; for a child session's card
@@ -606,51 +600,6 @@ export function permissionFrom(ix: Pick<Interaction, "agent_id" | "agent_type" |
   const agent = name.length > FROM_MAX ? `${name.slice(0, FROM_MAX - 1)}…` : name;
   if (ix.folded_under && isSide(ix)) return t("lib-elicitation.from_side", { agent });
   return ix.folded_under && ix.folded_as === "worker" ? t("lib-elicitation.from_worker", { agent }) : t("lib-elicitation.from_subagent", { agent });
-}
-
-export function PermissionBody({ ix }: { ix: Interaction }) {
-  const input = ix.tool_input ?? {};
-  const hasInput = Object.keys(input).length > 0;
-  const detail = permissionDetail(ix.tool_name, input);
-  const diffs = detail && DIFF_TOOLS.has(ix.tool_name ?? "") ? editDiffs({ id: ix.id, seq: 0, role: "assistant", kind: "tool_use", tool_name: ix.tool_name, tool_input: input }) : null;
-  const reason = permissionReason(ix.agent, ix.reason);
-  const extra = detail ? summaryExtra(ix.summary, detail.fields) : "";
-  const extraShown = extra && extra !== detail?.note && extra !== reason && !detail?.fields.some((f) => f.value === extra);
-  const lead = detail ? undefined : ix.summary?.trim();
-  const [showInput, setShowInput] = useState(!detail && !lead);
-  // a subagent's call (Claude Code sends its parent's session with agent_id and agent_type): say which one asks
-  // (#4376); the main session's own cards (agent_type alone, as `claude --agent x` sets it, or "main") say nothing
-  const from = permissionFrom(ix);
-  return (
-    <div className="flex flex-col gap-2">
-      {from && <p data-permission-from title={from} className="truncate text-[12px] leading-snug text-ink-3">{from}</p>}
-      {reason && <p className="text-[13px] leading-relaxed whitespace-pre-wrap text-ink-2">{reason}</p>}
-      {detail?.note && <p className="text-[13px] leading-relaxed whitespace-pre-wrap text-ink">{detail.note}</p>}
-      {detail?.fields.map((f) => (
-        <div key={f.label}>
-          <div className="mb-1 text-[11px] font-medium text-ink-3">{t(`chat-interactions.field_${f.label}`)}</div>
-          <pre className={CODE_BOX}>{f.value}</pre>
-        </div>
-      ))}
-      {diffs && diffs.length > 0 && (
-        <div>
-          <div className="mb-1 text-[11px] font-medium text-ink-3">{t(ix.tool_name === "Write" ? "chat-interactions.field_content" : "chat-interactions.field_changes")}</div>
-          <div className="flex max-h-48 flex-col gap-2 overflow-auto">
-            <DiffBlocks diffs={diffs} />
-          </div>
-        </div>
-      )}
-      {extraShown && <p className="text-[12.5px] leading-relaxed whitespace-pre-wrap text-ink-2">{extra}</p>}
-      {lead && <pre className={CODE_BOX}>{lead}</pre>}
-      {hasInput && (detail || lead) && (
-        <button type="button" aria-expanded={showInput} onClick={() => setShowInput((v) => !v)} className="touch-hit flex items-center gap-1 self-start text-[11.5px] whitespace-nowrap text-ink-3 transition-colors hover:text-ink">
-          <Icon name="chevron" size={11} stroke={2.4} style={{ transform: showInput ? "none" : "rotate(-90deg)", transition: "transform 150ms" }} />
-          {t(showInput ? "chat-interactions.hide_input" : "chat-interactions.show_input")}
-        </button>
-      )}
-      {showInput && <pre className={CODE_BOX}>{JSON.stringify(input, null, 2)}</pre>}
-    </div>
-  );
 }
 
 /**
@@ -1417,7 +1366,7 @@ export function InteractionCard({ ix }: { ix: Interaction }) {
     : ix.kind === "plan" ? <PlanCard ix={ix} />
     : isSecretRun(ix) ? <SecretRunCard key={ix.id} ix={ix} />
     : isSecretHandoff(ix) ? <SecretHandoffCard key={ix.id} ix={ix} />
-    : ix.kind === "permission" ? <PermissionCardFrame ix={ix} />
+    : ix.kind === "permission" ? <PermissionCardFrame key={ix.id} ix={ix} />
     : ix.kind === "elicitation" ? <ElicitationCard ix={ix} /> : <ScreenCard ix={ix} />;
   const asked = useVoiceAsking(ix);
   // a permission card says it in its body (PermissionBody); a secret run's or hand-off's card has none, so it says it here

@@ -40,6 +40,7 @@ afterEach(() => {
   act(() => root.unmount());
   host.remove();
   reported.mockClear();
+  vi.unstubAllGlobals();
 });
 
 describe("a lazy permission card", () => {
@@ -69,9 +70,29 @@ describe("a lazy permission card", () => {
       expect(reported).toHaveBeenCalledWith(failure, "permission_card", true, expect.anything());
       const retry = [...host.querySelectorAll("button")].find((b) => b.textContent === t("app.retry"))!;
       act(() => retry.click());
-      await vi.waitFor(() => expect(host.textContent).toContain("Recovered approval"), { timeout: 20_000 });
+      await vi.waitFor(() => expect(host.textContent).toContain("Recovered approval"));
       expect(load).toHaveBeenCalledTimes(2);
       expect(host.querySelector('[role="alert"]')).toBeNull();
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it("reloads when the browser returns the same failed chunk after Retry", async () => {
+    const failure = new TypeError("Failed to fetch dynamically imported module");
+    const load = vi.fn<() => Promise<CardComponent>>().mockRejectedValue(failure);
+    const Lazy = lazyPage(load);
+    const reload = vi.fn();
+    vi.stubGlobal("location", { reload });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await render(Lazy);
+      await vi.waitFor(() => expect(host.querySelector('[role="alert"]')).not.toBeNull());
+      const retry = [...host.querySelectorAll("button")].find((b) => b.textContent === t("app.retry"))!;
+      act(() => retry.click());
+      await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+      expect(load).toHaveBeenCalledTimes(2);
+      expect(host.querySelector('[role="alert"]')).not.toBeNull();
     } finally {
       consoleError.mockRestore();
     }
