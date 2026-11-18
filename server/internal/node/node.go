@@ -268,6 +268,10 @@ type Node struct {
 	codexAbandoned map[string][]codexAbandonedStart
 	// keptStarts: the tabs of failed starts kept open for a while, by pane (shellsettle.go keepStartTab); n.mu.
 	keptStarts map[string]keptStart
+	// finishedSince: when each finished Agent's terminal was first seen at rest, with its screen; agentTerms: the
+	// terminals opened for Agents on engines without marks of their own (finished_close.go); n.mu.
+	finishedSince map[string]finishedClock
+	agentTerms    map[string]bool
 
 	expectedTokensMu sync.Mutex
 	expectedTokens   map[string]map[string]string
@@ -520,7 +524,8 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 	go n.sampleMetrics(ctx)
 	go n.watchPorts(ctx)
 	go n.modelRecoveryLoop(ctx)
-	go n.keepProbesFresh(ctx) // a message after a quiet spell finds its launcher's probe fresh (#9097)
+	go n.closeFinishedLoop(ctx) // finished Agents' terminals after their grace period (finished_close.go)
+	go n.keepProbesFresh(ctx)   // a message after a quiet spell finds its launcher's probe fresh (#9097)
 	n.startTodoTokensReconciler(ctx)
 	defer n.starts.close()
 	defer n.switches().leave(n) // the records of a switch still running go to the next connection's Node
@@ -1491,7 +1496,10 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	case "assistant.guest_delete": // a meeting's room, at its transcript's cut (assistant_guest.go)
 		return n.assistantGuestDelete(params)
 	case "session.modes":
-		return ok(n.setModelAndModes(ctx, p.SessionID, p.Model, p.PermissionMode, p.Effort)) // model: model_switch.go
+		if err := n.setModelAndModes(ctx, p.SessionID, p.Model, p.PermissionMode, p.Effort); err != nil { // model: model_switch.go
+			return nil, err
+		}
+		return n.modesAnswer(p.SessionID, p.PermissionMode), nil
 	case "assistant.compact": // the user compacting an assistant conversation, or the hub a meeting's room (assistant_compact.go)
 		return ok(n.assistantCompact(ctx, p.SessionID, p.OnlyRunning))
 	case "assistant.handoff": // what a new main conversation is told about the old one
