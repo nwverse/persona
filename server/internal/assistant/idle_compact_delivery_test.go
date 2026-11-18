@@ -77,6 +77,9 @@ func TestIdleCompactPolicyReachesMainDeliveryPaths(t *testing.T) {
 
 func TestIdleCompactRefusalKeepsOriginalRelayQueued(t *testing.T) {
 	s, f := newQuietService(t)
+	gap := relayRetryGap
+	relayRetryGap = 0 // Exercise repeated compaction refusals without the normal retry gap.
+	t.Cleanup(func() { relayRetryGap = gap })
 	idle := proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle}
 	msg := relayMsg{From: "conv2", Tool: "conversation_send", Text: "original relay", At: time.Now().UTC()}
 	s.queueRelay(idle.SessionID, msg)
