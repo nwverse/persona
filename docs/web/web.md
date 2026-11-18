@@ -1968,6 +1968,18 @@ Settings › About Persona's switch that records this browser's requests, socket
 and exports them as one zip, sent to an Agent's chat or downloaded: [developing-persona.md](../operations/developing-persona.md).
 It costs the first screen nothing (its chunks load only while it is on).
 
+**The To-dos view's shadow (#10226).** With the switch on, the recorder also starts
+`web/src/features/todos/model/view-shadow.ts` (a chunk of its own). While the hub lists `todo_view`, each row that
+carries a `view` also goes through today's triage, and `view-legacy.ts` maps the view onto today's sections (Waiting is
+Parked, Can wait is Needs you, To do with the Inactive mark is Shelved) and explains the differences the redesign decided
+(`docs/assistant/todo-status-sop.md` "The hub's view"). Only what nothing explains is recorded, as ids and enum words
+(`docs/operations/developing-persona.md`). The manager does not yet push when a run changes a view, so a row whose runs
+moved after the list was read is counted apart and the list is read again. With `localStorage persona.todos.viewDraw`
+set to `1` as well (then reload), the status sections and the header's counts come from the view (`view-triage.ts`; a row
+without one keeps its place). Each row's checkbox, Got it and line 2, and the folder and Pinned groupings, keep today's
+rules: a failed start the view files in To do still shows a ticked checkbox. Users without the switch see exactly what
+they saw before (`Todos.view-draw.test.tsx` pins the markup).
+
 ## Error reports (#5533)
 
 The page reports its own errors to `POST /api/v1/error-reports` (`lib/error-reports.ts`, wired up in `lib/error-reports-start.ts`; format and rules in [protocol.md](../protocol/protocol.md) "Error reports"). No UI, no strings.
