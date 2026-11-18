@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"slices"
 	"sort"
@@ -138,6 +139,11 @@ type PlanTask struct {
 	Error     string            `json:"error,omitempty"`
 	ErrorCode string            `json:"error_code,omitempty"`
 	ErrorArgs map[string]string `json:"error_args,omitempty"`
+	// RetryWith: when its start failed because of its launcher on that computer, the other launchers there a retry may
+	// start it with (start_retry_launcher.go, #10365), plain claude first: what a card's "Use <launcher> instead" and
+	// task_retry's launcher offer. The hub's, set with the failure and cleared by the next start; never what a tool call
+	// or an edit says.
+	RetryWith []string `json:"retry_with,omitempty"`
 	// Start: the start being remedied after its agent did not start, or how that ended (start_remedy.go, #2570).
 	Start *StartRemedy `json:"start,omitempty"`
 	// Queue is set while the admission gate has refused this start for now: the task stays open (not failed, no
@@ -826,13 +832,26 @@ func (s *Service) taskRoutes() {
 			apierr.Write(w, http.StatusForbidden, errors.New("read-only role cannot start tasks"))
 			return
 		}
-		t, err := s.retryTask(r.Context(), r.PathValue("id"))
+		// An optional body names another launcher of the same computer (and its model) to start with (#10365, hello
+		// feature task_retry_launcher); none, or an empty one, retries as the plan has it.
+		var in struct {
+			Launcher string `json:"launcher"`
+			Model    string `json:"model"`
+		}
+		if r.ContentLength != 0 {
+			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&in); err != nil && !errors.Is(err, io.EOF) {
+				apierr.Write(w, http.StatusBadRequest, err)
+				return
+			}
+		}
+		t, err := s.retryTaskWith(r.Context(), r.PathValue("id"), retryWith{launcher: in.Launcher, model: in.Model, by: "user"})
+		var refused retryRefused
 		switch {
 		case err == nil:
 			apierr.WriteJSON(w, map[string]any{"todo": t})
 		case errors.Is(err, db.ErrTodoNotFound):
 			apierr.Write(w, http.StatusNotFound, err)
-		case errors.Is(err, errTaskNotRetryable), errors.Is(err, errTaskNotInPlan), errors.Is(err, errMachineOffline):
+		case errors.Is(err, errTaskNotRetryable), errors.Is(err, errTaskNotInPlan), errors.Is(err, errMachineOffline), errors.As(err, &refused):
 			apierr.Write(w, http.StatusConflict, err)
 		default:
 			planErr(w, err)

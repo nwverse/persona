@@ -20,8 +20,10 @@ import {
   sentByPersona,
   planEditsToSend,
   planUltracodeToSend,
+  planTaskOf,
   removeTask,
   retryKey,
+  retryLauncher,
   retryTask,
   routeTodoId,
   startFailure,
@@ -231,9 +233,17 @@ export function taskAsk(ix: Interaction | undefined): string | undefined {
 
 
 /** "Retry" on a task that did not start, or "Continue" on one the model service cut off (lib/feed retryTask), saying why when the
- *  hub refused (the machine offline…). */
-export function retryTaskNow(todo: Todo, verb: "retry" | "continue" = "retry") {
-  retryTask(todo).catch((e) => toast(verb === "continue" ? t("assistant-tasks.continue_failed", { error: String(e instanceof Error ? e.message : e) }) : t("assistant-tasks.retry_failed", { error: String(e instanceof Error ? e.message : e) }), "error"));
+ *  hub refused (the machine offline…). `launcher`: "Use … instead", the retry on that launcher of the same computer. */
+export function retryTaskNow(todo: Todo, verb: "retry" | "continue" = "retry", launcher?: string) {
+  retryTask(todo, launcher ? { launcher } : {}).catch((e) => toast(verb === "continue" ? t("assistant-tasks.continue_failed", { error: String(e instanceof Error ? e.message : e) }) : t("assistant-tasks.retry_failed", { error: String(e instanceof Error ? e.message : e) }), "error"));
+}
+
+/** A task whose Agent did not start: its plan task (why, by its code) and the launcher "Use … instead" starts it with,
+ *  when the hub suggests one and takes it (lib/feed retryLauncher, #10365). */
+export function useFailedStart(todo: Todo | undefined): { task?: PlanTask; instead?: string } {
+  const task = useFeed((s) => (todo ? planTaskOf(todo, s.plans) : undefined));
+  const features = useStore((s) => s.features);
+  return { task, instead: retryLauncher(task, features) };
 }
 
 
@@ -1071,6 +1081,7 @@ function WaitingTaskRow({ rowKey, todo, status, countsOpenAttr }: { rowKey?: str
 function FailedTaskRow({ rowKey, todo, countsOpenAttr }: { rowKey: string; todo: Todo; countsOpenAttr: { "data-counts-open"?: string } }) {
   const retrying = useRetrying(todo.id);
   const why = useFeed((s) => whyNotStarted(todo, s.plans));
+  const { task, instead } = useFailedStart(todo);
   return (
     <div data-needs-row={rowKey} {...countsOpenAttr} data-failed-task={todo.id} className="flex flex-col gap-1.5 rounded-control bg-danger-wash px-3 py-2 text-sm">
       <div className="flex min-w-0 items-center gap-2">
@@ -1079,8 +1090,15 @@ function FailedTaskRow({ rowKey, todo, countsOpenAttr }: { rowKey: string; todo:
         <span className="shrink-0 text-xs text-ink">{waitsLabel(todo, "failed")}</span>
       </div>
       {/* in plain words; the hub's raw error is the task's details' (#8237) */}
-      {why && <div className="truncate pl-6 text-xs text-ink">{startFailureRowLine(why)}</div>}
+      {why && <div className="truncate pl-6 text-xs text-ink">{startFailureRowLine(why, task)}</div>}
       <div className={ROW_ACTIONS}>
+        {/* its launcher can't start there: the one-tap way out first, on the computer's other launcher (#10365) */}
+        {instead && (
+          <button type="button" data-retry-launcher={instead} disabled={retrying} onClick={() => retryTaskNow(todo, "retry", instead)} className="touch-hit inline-flex min-w-0 items-center gap-1 whitespace-nowrap font-semibold text-ink hover:underline disabled:opacity-50 disabled:hover:no-underline">
+            <Icon name="retry" size={12} />
+            <span className="truncate">{t("assistant-tasks.use_launcher_instead", { launcher: instead })}</span>
+          </button>
+        )}
         <button type="button" disabled={retrying} onClick={() => retryTaskNow(todo)} className="touch-hit inline-flex items-center gap-1 whitespace-nowrap font-semibold text-ink hover:underline disabled:opacity-50 disabled:hover:no-underline">
           <Icon name="retry" size={12} />
           {retrying ? t("assistant-tasks.retrying") : t("assistant-tasks.retry")}

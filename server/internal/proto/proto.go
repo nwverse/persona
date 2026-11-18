@@ -67,6 +67,7 @@ var Features = []string{
 	"machines_add",             // POST /api/v1/auth/pair-codes with add / machine from a signed-in device: it adds a computer and pairs it (docs/assistant/onboarding.md 5.3)
 	"todo_threads",             // a to-do's chat thread: PUT/DELETE /api/v1/todos/{id}/thread, and `thread` on the to-dos GET returns (docs/assistant/todos.md "Chat thread")
 	"todo_seen",                // Got it on a Just finished to-do: PUT/DELETE /api/v1/todos/{id}/seen, and `seen_at` on the to-dos GET returns (docs/assistant/todo-status-sop.md "Seen")
+	"task_retry_launcher",      // POST /api/v1/todos/{id}/retry takes {launcher, model}: a failed start again on another launcher of its computer; a failed plan task's retry_with (docs/assistant/todos.md "Retrying on another launcher")
 	"tls",                      // optional TLS listener and SPKI pin (hub-changes.md 1.1)
 	"endpoints",                // authenticated address discovery and capability-gated updates
 	"plugins",                  // GET /api/v1/plugins and the relay under /api/v1/plugins/{id}/ (docs/extensions/extensions.md)

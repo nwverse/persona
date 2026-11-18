@@ -117,14 +117,15 @@ describe("a to-do whose agent never started", () => {
 });
 
 describe("the page of a to-do whose agent never started (audit item 13)", () => {
-  it("says why, offers Hand to agent, and Complete closes it for good as its checkbox does", async () => {
+  it("says why, offers Retry and Hand to agent, and Complete closes it for good as its checkbox does", async () => {
     await show("waits");
     const detail = host.querySelector("[data-testid=todos-detail-column]")!;
     expect(detail.querySelector("[data-testid=todo-detail-start-failed]")?.textContent).toContain("machine offline");
     expect(button(t("todos.reopen"))).toBeUndefined();
     expect(button(t("todos.hand_over"))).toBeTruthy();
-    // not from a plan: the hub could not start it again by itself
-    expect(button(t("todos.retry"))).toBeUndefined();
+    // no plan id of its own (a plan that took it over through todo_id keeps none, #8770): the hub finds the plan that
+    // binds it, and says so when there is none (#10365)
+    expect(button(t("todos.retry"))).toBeTruthy();
     expect(detail.textContent).toContain(t("todos.no_agents"));
     await act(async () => button(t("todos.complete"))!.click());
     await flush();
@@ -163,6 +164,29 @@ describe("the page of a to-do whose agent never started (audit item 13)", () => 
     expect(getState().todos.find((x) => x.id === "again")?.done_at).toBeFalsy();
     expect(host.querySelector("[data-testid=todo-detail-start-failed]")).toBeNull();
     expect(button(t("todos.retry"))).toBeUndefined();
+  });
+
+  it("offers its computer's other launcher first when its own can't start there, where the hub takes it (#10365)", async () => {
+    const { getFeedState, TASK_RETRY_LAUNCHER_FEATURE } = await import("../lib/feed");
+    const plan = { id: "p2", conversation: "conv", state: "started" as const, tasks: [{ title: "Renew the certificate", prompt: "", machine: "m1", cwd: "/w",
+      todo_id: "again", error: "terminal", error_code: "launcher_missing", error_args: { where: "terminal", launcher: "work" }, retry_with: ["claude", "work2"] }] };
+    getFeedState().plans[plan.id] = plan;
+    const features = getState().features;
+    try {
+      // an older hub would start the launcher that failed again: no such button
+      seed({ features: ["todo_seen"] });
+      await show("again");
+      expect(button(t("assistant-tasks.use_launcher_instead", { launcher: "claude" }))).toBeUndefined();
+      seed({ features: ["todo_seen", TASK_RETRY_LAUNCHER_FEATURE] });
+      await show("again");
+      expect(button(t("todos.retry"))).toBeTruthy();
+      await act(async () => button(t("assistant-tasks.use_launcher_instead", { launcher: "claude" }))!.click());
+      await flush();
+      expect(calls("POST", "/todos/again/retry")).toEqual([{ launcher: "claude" }]);
+    } finally {
+      delete getFeedState().plans[plan.id];
+      seed({ features });
+    }
   });
 
   it("reopens it when it is handed to an agent, not when the dialog only opens", async () => {

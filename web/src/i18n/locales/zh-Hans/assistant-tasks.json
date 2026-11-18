@@ -72,6 +72,8 @@
   "list_separator": "、",
   "retrying": "正在重试",
   "retry": "重试",
+  "use_launcher_instead": "改用 {launcher}",
+  "retry_launcher_unsupported": "hub 还不能换启动器重试，请先更新 hub 上的 Persona，或者直接重试",
   "remove": "移除",
   "continue": "继续",
   "task_fallback": "任务",
@@ -177,5 +179,7 @@
   "start_cause_timed_out": "启动太久，超时了",
   "start_cause_not_allowed": "这台电脑没有允许",
   "start_cause_needs_update": "这台电脑上的 Persona 需要更新",
+  "start_code_launcher_terminal": "{launcher} 在这台电脑的终端里开不起来",
+  "start_code_worktree_path_taken": "上次没开起来时留下的工作区还占着位置",
   "start_failed_details": "没开起来，点开看详情"
 }

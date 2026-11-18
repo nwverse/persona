@@ -114,7 +114,7 @@ import { todoUltracode } from "../lib/ultracode";
 import { UltraMark } from "./chat/Ultracode";
 import { boundThread, threadLine, threadName, todoThreadsOn, unbindTodoThread } from "../lib/todo-thread";
 import { setTodoSeen, todoSeenOn } from "../lib/todo-seen";
-import { retryKey, retryTask, useFeed } from "../lib/feed";
+import { planTaskOf, retryKey, retryLauncher, retryTask, useFeed } from "../lib/feed";
 import { dueOn, duePatch, todoRowMenu } from "./todo-row-menu";
 
 /** What this browser was last on (#2029): the list or the calendar, the calendar's mode, and whether it shows done ones. */
@@ -2096,13 +2096,18 @@ function TodoDetail({
   };
 
   // A task whose agent never started, waiting on the owner (#3713, audit item 13): open, as its row reads, with why it
-  // did not start; Retry when the hub can start it again from its plan (POST …/retry), else Hand to agent.
+  // did not start; Retry for any a conversation handed out (POST …/retry: the hub finds the plan that binds it, one a
+  // plan took over through todo_id has no plan id of its own, #8770, and says when there is none), and Hand to agent.
+  // Its launcher could not start there: "Use … instead" on the computer's other launcher comes first (#10365).
   const failedStart = open && Boolean(todo.start_error);
-  const canRetry = failedStart && Boolean(todo.plan_id && todo.origin);
+  const canRetry = failedStart && Boolean(todo.origin);
+  const features = useStore((s) => s.features);
+  const instead = useFeed((s) => (canRetry ? retryLauncher(planTaskOf(todo, s.plans), features) : undefined));
   // the main chat's task card's Retry (lib/feed retryTask): one on its way at a time from either, and the to-do the hub
   // reopens shows at once; its agent starts in the background and the list says how the start goes
   const retrying = useFeed((s) => Boolean(s.busy[retryKey(todo.id)]));
-  const retry = () => retryTask(todo).catch((e) => toast(t("todos.action_failed", { error: errorText(e) }), "error"));
+  const retry = (launcher?: string) =>
+    retryTask(todo, launcher ? { launcher } : {}).catch((e) => toast(t("todos.action_failed", { error: errorText(e) }), "error"));
   const status = todoStatus(todo, lookup);
   const statusInfo = TODO_STATUS_INFO[shownStatus(todo, status)];
   // The to-do's own PR, parsed once here (the list row and the repository section's fallback share it).
@@ -2436,9 +2441,22 @@ function TodoDetail({
           failed start is open: Retry (or Hand to agent, which reopens it first) and Complete, which closes it for good as
           its row's checkbox does. */}
       <div className="mt-8 flex flex-wrap items-center gap-2.5 border-t border-line pt-4">
-        {canRetry && (
+        {instead && (
           <Button
             tone="accent"
+            icon="retry"
+            busy={retrying}
+            disabled={retrying}
+            onClick={() => void retry(instead)}
+            testId="todo-retry-launcher"
+            className="h-8.5 px-3.5 text-meta whitespace-nowrap"
+          >
+            {t("assistant-tasks.use_launcher_instead", { launcher: instead })}
+          </Button>
+        )}
+        {canRetry && (
+          <Button
+            tone={instead ? "secondary" : "accent"}
             icon="retry"
             busy={retrying}
             disabled={retrying}

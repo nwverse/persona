@@ -85,7 +85,11 @@ same piece of work finished in a related to-do (the same plan, PR, issue or titl
 retry: rule 1a files it with that work and it counts as closed, on the page, the sidebar's badge and the assistant's
 entries alike (`supersededFailedStarts` in each copy). A failed start that still waits on the owner reads as one on every
 client: not ticked or struck through, why it did not start in red, and its checkbox closes it for good (`"done": true`
-on it clears `start_error`: the owner closed it; `docs/assistant/todos.md`, API overview).
+on it clears `start_error`: the owner closed it; `docs/assistant/todos.md`, API overview). The hub's assistant reads it
+the same way (#10365): its snapshot counts such a to-do open (the open index marks it as not started) for exactly as long
+as this table does (`triageCountsAsOpen`), so a start failing does not take one off the assistant's count, and
+`task_plan`'s `todo_id` takes it up again, reopening it, instead of refusing it as done (`docs/assistant/todos.md`,
+"Retrying on another launcher" for its other way out).
 
 **Waiting on you is only for what the owner must do in person**: answer a question, grant a permission, decide on a
 large feature. A deployed to-do's "Please verify" ask and a "done" conclusion are not: the supervising assistant
