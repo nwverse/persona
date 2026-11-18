@@ -312,6 +312,47 @@ describe("a saved value this build can't read", () => {
   });
 });
 
+describe("a single-choice multiselect's Tab entry", () => {
+  const tabStops = (id: string) => radios(id).filter((r) => r.tabIndex === 0);
+  it("has exactly one: the saved choice", async () => {
+    await show(memory(oneOfOne()).source);
+    expect(radios("sections").map((r) => r.getAttribute("aria-checked"))).toEqual(["true", "false", "false"]);
+    expect(tabStops("sections")).toEqual([radios("sections")[0]]);
+  });
+
+  it("keeps exactly one when a save is refused, with the draft still shown", async () => {
+    const m = memory(oneOfOne());
+    await show(m.source);
+    act(() => radios("sections")[1].click());
+    m.state.fail = new ConfigurationError("storage_failed", "The disk is full");
+    act(() => buttonIn(row("sections"), t("settings-configuration.save")).click());
+    await settle();
+    expect(row("sections").querySelector('[role="alert"]')?.textContent).toBe("The disk is full");
+    expect(radios("sections").map((r) => r.getAttribute("aria-checked"))).toEqual(["false", "true", "false"]);
+    expect(tabStops("sections")).toEqual([radios("sections")[1]]);
+  });
+
+  it("keeps exactly one after Cancel, back on the saved choice", async () => {
+    await show(memory(oneOfOne()).source);
+    act(() => radios("sections")[1].click());
+    act(() => buttonIn(row("sections"), t("settings-configuration.cancel")).click());
+    expect(radios("sections").map((r) => r.getAttribute("aria-checked"))).toEqual(["true", "false", "false"]);
+    expect(tabStops("sections")).toEqual([radios("sections")[0]]);
+  });
+
+  it("has exactly one tab stop and no checked radio when no saved value is valid", async () => {
+    const doc = oneOfOne();
+    delete (doc.values as Record<string, unknown>).sections;
+    await show(memory(doc).source);
+    expect(radios("sections").every((r) => r.getAttribute("aria-checked") === "false")).toBe(true);
+    expect(tabStops("sections")).toEqual([radios("sections")[0]]);
+    // an arrow key from the empty state picks the first option, without pretending it was saved
+    key(row("sections").querySelector('[role="radiogroup"]')!, "ArrowDown");
+    expect(radios("sections").map((r) => r.getAttribute("aria-checked"))).toEqual(["true", "false", "false"]);
+    expect(tabStops("sections")).toEqual([radios("sections")[0]]);
+  });
+});
+
 describe("a multiselect's pending replacement", () => {
   it("draws a maximum of one as a single choice: a direct A → B click replaces it at once, and Save sends [B]", async () => {
     const m = memory(oneOfOne());

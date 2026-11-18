@@ -11,7 +11,7 @@
 import { allTypes } from "../src/lib/configuration/fixtures/shared.ts";
 import { checkUpdate, CONFIGURATION_VERSION, ConfigurationError } from "../src/lib/configuration/contract.ts";
 
-export const SCENARIO_IDS = ["default", "slow", "load-fail", "reject", "conflict", "unconfirmed", "contract", "invalid", "empty", "unsupported"];
+export const SCENARIO_IDS = ["default", "slow", "load-fail", "reject", "conflict", "unconfirmed", "keyboard", "contract", "invalid", "empty", "unsupported"];
 
 /** URL aliases: the preview can link the full set as ?scenario=overview, the name people would expect. */
 const SCENARIO_ALIASES = { overview: "default" };
@@ -285,6 +285,10 @@ function invalidDoc(lang) {
   doc.title = T(lang, "Settings that need a choice", "需要重新选择的设置", "選び直しが必要な設定");
   delete doc.description;
   doc.groups[0].fields.find((f) => f.id === "compact").default = true;
+  // a single-choice multiselect with no valid saved value: no radio checked, one Tab stop
+  const sections = doc.groups[0].fields.find((f) => f.id === "sections");
+  sections.multiselect = { ...sections.multiselect, min_selected: 1, max_selected: 1 };
+  sections.description = T(lang, "Choose one section.", "选择一个分区。", "セクションを1つ選びます。");
   doc.values = { ...doc.values, label: 7, notes: false, layout: "mosaic", accent: "violet", motion: "slow", interval: "often" };
   delete doc.values.compact;
   delete doc.values.sections;
@@ -385,6 +389,12 @@ function memorySource({ key, doc, lang, latency, readFailures = 0, behavior = nu
         answered = true;
         throw new TypeError("Failed to fetch");
       }
+      if (behavior === "rejectSingle" && !answered && update.changes && Object.hasOwn(update.changes, "snippet_language")) {
+        answered = true;
+        throw new ConfigurationError("configuration_invalid", "", [
+          { id: "snippet_language", code: "option", message: T(lang, "That language can't be used here. Pick another.", "这里不能使用这种语言，请换一个。", "その言語はここでは使えません。別の言語を選んでください。") },
+        ]);
+      }
       const refused = checkUpdate(current, update);
       if (refused) throw refused;
       const next = clone(current);
@@ -424,6 +434,7 @@ export function buildShowcase(scenario = "default", lang = "zh-Hans", options = 
   // exist for coverage through ?scenario= only, and a failure scenario shows just the module it happens in.
   if (chosen === "contract") return { scenario: chosen, modules: [mod("showcase-shared", clone(allTypes))] };
   if (chosen === "invalid") return { scenario: chosen, modules: [mod("showcase-recovery", invalidDoc(lang))] };
+  if (chosen === "keyboard") return { scenario: chosen, modules: [mod("showcase-editor", editorDoc(lang), { behavior: "rejectSingle" })] };
   if (chosen === "empty") return { scenario: chosen, modules: [mod("showcase-empty", emptyDoc(lang))] };
   if (chosen === "unsupported") {
     return { scenario: chosen, modules: [mod("showcase-newer-kind", newerKindDoc(lang)), mod("showcase-newer-version", newerVersionDoc(lang))] };

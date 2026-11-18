@@ -162,6 +162,8 @@ try {
     ["reject", "light", 1280],
     ["conflict", "light", 1280],
     ["unconfirmed", "light", 1280],
+    ["keyboard", "light", 1280],
+    ["keyboard", "light", 390],
     ["contract", "light", 1280],
     ["invalid", "light", 1280],
     ["invalid", "light", 390],
@@ -178,7 +180,11 @@ try {
     await open(page, scenario);
     if (await sideways(page)) fail(`${tag}: the scenario scrolls sideways`);
     const drawn = await page.$$eval("[data-showcase-module]", (els) => els.map((e) => e.getAttribute("data-showcase-module")));
-    const focused = scenario === "load-fail" ? ["showcase-terminal"] : ["reject", "conflict", "unconfirmed"].includes(scenario) ? ["showcase-digest"] : null;
+    const focused = scenario === "load-fail" ? ["showcase-terminal"]
+      : ["reject", "conflict", "unconfirmed"].includes(scenario) ? ["showcase-digest"]
+      : scenario === "keyboard" ? ["showcase-editor"]
+      : scenario === "invalid" ? ["showcase-recovery"]
+      : null;
     if (focused && drawn.join(",") !== focused.join(",")) fail(`${tag}: focused modules ${drawn}`);
     if (focused) ok(`${tag}: focused on ${focused[0]}`);
 
@@ -267,13 +273,29 @@ try {
         dropdown: (await fieldOf("accent").locator("select").inputValue()) === "",
         segmented: (await fieldOf("motion").locator('[role="radio"][aria-checked="true"]').count()) === 0,
         list: (await fieldOf("layout").locator('[role="radio"][aria-checked="true"]').count()) === 0,
-        checks: (await fieldOf("sections").locator('[role="checkbox"][aria-checked="true"]').count()) === 0,
+        checks: (await fieldOf("sections").locator('[role="radio"][aria-checked="true"]').count()) === 0,
         text: (await fieldOf("label").locator("input").inputValue()) === "",
         number: (await fieldOf("interval").locator("input").inputValue()) === "",
       };
       for (const [name, empty] of Object.entries(emptyStates)) if (!empty) fail(`${tag}: ${name} does not show its empty state`);
       if (!(await toggle.innerText()).includes("isn't valid here")) fail(`${tag}: no invalid-value hint`);
+      // A single-choice group with no valid saved value: no radio is checked, and its first radio is the one Tab stop.
+      const sectionRadios = fieldOf("sections").locator('[role="radio"]');
+      if ((await sectionRadios.count()) !== 3) fail(`${tag}: the sections group is not a single choice (${await sectionRadios.count()} radios)`);
+      await fieldOf("motion").locator("button").last().focus();
+      await page.keyboard.press("Tab");
+      const sectionEntry = await page.evaluate(() => ({
+        field: document.activeElement?.closest("[data-configuration-field]")?.getAttribute("data-configuration-field"),
+        role: document.activeElement?.getAttribute("role"),
+        checked: document.activeElement?.getAttribute("aria-checked"),
+      }));
+      if (sectionEntry.field !== "sections" || sectionEntry.role !== "radio" || sectionEntry.checked !== "false") fail(`${tag}: sections' Tab entry ${JSON.stringify(sectionEntry)}`);
+      ok(`${tag}: a single choice with no saved value has one Tab stop and no checked radio`);
       await page.screenshot({ path: join(shots, `${tag}-before.png`), fullPage: true });
+      // Space chooses the focused first option (the same interaction as a click).
+      await page.keyboard.press("Space");
+      await page.waitForFunction(() => document.querySelectorAll('[data-showcase-form="showcase-recovery"] [data-configuration-field="sections"] [role="radio"][aria-checked="true"]').length === 1, null, { timeout: 2000 })
+        .catch(() => fail(`${tag}: Space did not choose the first section`));
       // The hint itself says "saved", so wait for the exact save-state line, not any text containing it.
       const saved = (fieldLocator, what) => fieldLocator.locator('[aria-live="polite"]', { hasText: /^Saved$/ }).waitFor({ timeout: 5000 }).catch(() => fail(`${tag}: ${what} did not save`));
       // Save Off directly with an On default, and repair the unreadable notes with valid empty text.
@@ -287,6 +309,41 @@ try {
       await saved(notes, "the empty text");
       await page.screenshot({ path: join(shots, `${tag}.png`), fullPage: true });
       ok(`${tag}: invalid values show empty states and can be corrected`);
+    } else if (scenario === "keyboard") {
+      const editor = form(page, "showcase-editor");
+      const fieldOf = (id) => editor.locator(`[data-configuration-field="${id}"]`);
+      const active = () => page.evaluate(() => ({
+        field: document.activeElement?.closest("[data-configuration-field]")?.getAttribute("data-configuration-field"),
+        role: document.activeElement?.getAttribute("role"),
+        checked: document.activeElement?.getAttribute("aria-checked"),
+        choice: document.activeElement?.getAttribute("data-choice"),
+      }));
+      // The last focusable before the single-choice group is its row's Reset (the footer follows the checks).
+      const tabIn = async () => {
+        await fieldOf("pinned").locator("button").last().focus();
+        await page.keyboard.press("Tab");
+        return active();
+      };
+      const language = fieldOf("snippet_language");
+      // A saved value: the chosen radio is the group's only Tab stop, and the next Tab leaves the group.
+      let now = await tabIn();
+      if (now.field !== "snippet_language" || now.role !== "radio" || now.checked !== "true" || now.choice !== "0") fail(`${tag}: saved-value Tab entry ${JSON.stringify(now)}`);
+      await page.keyboard.press("Tab");
+      now = await active();
+      if (now.field !== "line_height") fail(`${tag}: the single-choice group has more than one Tab stop (${JSON.stringify(now)})`);
+      // Cancel returns to the saved choice, which is again the one stop.
+      await language.getByRole("radio", { name: "Chinese", exact: true }).click();
+      await language.getByRole("button", { name: "Cancel", exact: true }).click();
+      now = await tabIn();
+      if (now.field !== "snippet_language" || now.checked !== "true" || now.choice !== "0") fail(`${tag}: cancelled Tab entry ${JSON.stringify(now)}`);
+      // A refused save keeps the draft shown and still has exactly one Tab stop (the draft's radio).
+      await language.getByRole("radio", { name: "Chinese", exact: true }).click();
+      await language.getByRole("button", { name: "Save", exact: true }).click();
+      await language.locator('[role="alert"]').waitFor({ timeout: 5000 }).catch(() => fail(`${tag}: the refused save said nothing`));
+      now = await tabIn();
+      if (now.field !== "snippet_language" || now.checked !== "true" || now.choice !== "1") fail(`${tag}: refused-save Tab entry ${JSON.stringify(now)}`);
+      await page.screenshot({ path: join(shots, `${tag}.png`), fullPage: true });
+      ok(`${tag}: a single-choice group keeps one Tab stop through saved, cancelled and refused states`);
     } else if (scenario === "empty") {
       const fields = await page.locator("[data-showcase-form] [data-configuration-field]").count();
       if (fields !== 0) fail(`${tag}: the empty form drew ${fields} fields`);
@@ -305,7 +362,7 @@ try {
       ok(`${tag}: an unknown kind and a newer version are shown read-only`);
     }
 
-    if (!["empty", "unsupported", "slow", "reject", "conflict", "unconfirmed", "contract", "invalid"].includes(scenario)) {
+    if (!["empty", "unsupported", "slow", "reject", "conflict", "unconfirmed", "contract", "invalid", "keyboard"].includes(scenario)) {
       await page.screenshot({ path: join(shots, `${tag}.png`), fullPage: true });
       ok(`${tag}: scenario drawn`);
     }

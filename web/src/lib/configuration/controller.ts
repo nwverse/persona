@@ -12,7 +12,9 @@
 //   reload, keeping every draft. A refusal the source names (a validation or storage failure) is retriable at once. An
 //   unknown version blocks writing altogether.
 // - A controller belongs to one source: a different source is a new controller, and a disposed one ignores every late
-//   answer. A read that started before a newer Document arrived is ignored too.
+//   answer. A read that started before a newer Document arrived is ignored too, and so is one that started before a write
+//   (or while it was in flight): it may describe the resource before that write's outcome and must not replace the
+//   document the write returned or clear the barrier it set.
 import {
   checkUpdate,
   checkValue,
@@ -101,6 +103,8 @@ export class ConfigurationController {
   /** Counts Documents applied: a read that started before the last one is stale. */
   private applied = 0;
   private readSeq = 0;
+  /** Counts writes started and finished: a read that started before a write, or while it was in flight, is stale. */
+  private writeSeq = 0;
   /** The resource changed while a write was in flight: read again once it is done. */
   private again = false;
 
@@ -154,17 +158,20 @@ export class ConfigurationController {
   private async read(explicit: boolean) {
     const seq = ++this.readSeq;
     const applied = this.applied;
+    // a request that predates a write (or was made while one was in flight) may describe the resource before its
+    // outcome; it must not replace a committed document or clear the barrier that writes a reload
+    const write = this.writeSeq;
     if (explicit && this.state.phase === "failed") this.set({ phase: "loading", readError: null });
     try {
       const parsed = parseDocument(await this.source.read(this.abort.signal));
-      if (this.disposed || seq !== this.readSeq || applied !== this.applied) return;
+      if (this.disposed || seq !== this.readSeq || applied !== this.applied || write !== this.writeSeq) return;
       // the same revision is the same Document (the contract changes it with any change): leave pending marks and
       // "Saved" alone, as when a source tells of its own write
       const same = this.state.doc && parsed.doc.id === this.state.doc.id && parsed.doc.revision === this.state.doc.revision && parsed.writable === this.state.writable;
       if (!same) this.apply(parsed.doc, parsed.writable);
       this.set({ phase: "ready", readError: null, ...(explicit ? { blocked: null, formError: null } : {}) });
     } catch (e) {
-      if (this.disposed || this.abortedByUs(e) || seq !== this.readSeq) return;
+      if (this.disposed || this.abortedByUs(e) || seq !== this.readSeq || write !== this.writeSeq) return;
       this.set(this.state.doc ? { readError: problem(e) } : { phase: "failed", readError: problem(e) });
     }
   }
@@ -272,6 +279,9 @@ export class ConfigurationController {
       this.set({ fields: this.fieldErrors(refused, id, this.state.fields) });
       return;
     }
+    // from here to the end of the write, reads requested before either edge are stale: a write may answer with an
+    // older document, and a read may answer with one from before the write committed or failed
+    this.writeSeq += 1;
     const before = this.state.fields[id] ?? {};
     const sent = { draft: before.draft, selection: before.selection };
     this.set({ busy: id, formError: null, fields: this.field(id, { ...before, error: undefined, saved: undefined, pending }) });
@@ -303,6 +313,8 @@ export class ConfigurationController {
         this.set({ busy: null, fields: this.fieldErrors(e, id, fields) });
       }
     } finally {
+      // the write is over: a read requested during it is stale too, and the deferred one below starts after this edge
+      this.writeSeq += 1;
       if (this.again && !this.disposed) {
         this.again = false;
         void this.read(false);

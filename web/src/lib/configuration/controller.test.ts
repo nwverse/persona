@@ -507,6 +507,90 @@ describe("a change made elsewhere during a write", () => {
   });
 });
 
+describe("a read that raced a write", () => {
+  it("does not let a pre-write explicit reload clear a conflict", async () => {
+    const { ctl, m } = await ready();
+    ctl.reload(); // explicit read #2 starts before the write
+    ctl.choose("layout", "dense");
+    m.updates[0].reject(new ConfigurationError("configuration_conflict"));
+    await flush();
+    expect(ctl.snapshot().blocked).toMatchObject({ code: "configuration_conflict" });
+    m.reads[1].resolve(example); // the read that predates the write answers last
+    await flush();
+    expect(ctl.snapshot().blocked).toMatchObject({ code: "configuration_conflict" });
+    expect(ctl.snapshot().doc?.revision).toBe("revision-1");
+  });
+
+  it("does not let a pre-write explicit reload clear an unknown outcome", async () => {
+    const { ctl, m } = await ready();
+    ctl.reload();
+    ctl.choose("layout", "dense");
+    m.updates[0].reject(new TypeError("Failed to fetch"));
+    await flush();
+    expect(ctl.snapshot().blocked).toEqual({ code: "unconfirmed" });
+    m.reads[1].resolve(example);
+    await flush();
+    expect(ctl.snapshot().blocked).toEqual({ code: "unconfirmed" });
+  });
+
+  it("ignores a pre-write read's late failure after the write committed", async () => {
+    const { ctl, m } = await ready();
+    ctl.reload();
+    ctl.choose("layout", "dense");
+    const committed = commit(example, m.updates[0].body);
+    m.updates[0].resolve(committed);
+    await flush();
+    m.reads[1].reject(new Error("offline"));
+    await flush();
+    expect(ctl.snapshot().readError).toBeNull();
+    expect(ctl.snapshot().fields.layout).toEqual({ saved: true });
+    expect(ctl.snapshot().doc?.revision).toBe(committed.revision);
+  });
+
+  it("never lets a read started before a successful write replace its result", async () => {
+    const { ctl, m } = await ready();
+    ctl.reload();
+    ctl.choose("layout", "dense");
+    const committed = commit(example, m.updates[0].body);
+    m.updates[0].resolve(committed);
+    await flush();
+    m.reads[1].resolve(example); // the older revision
+    await flush();
+    expect(ctl.snapshot().doc?.revision).toBe(committed.revision);
+    expect(ctl.snapshot().doc?.values.layout).toBe("dense");
+    expect(ctl.snapshot().fields.layout).toEqual({ saved: true });
+  });
+
+  it("still applies the deferred read, which starts after the write", async () => {
+    const { ctl, m } = await ready();
+    ctl.choose("layout", "dense");
+    m.change(); // a change while the write is in flight: read once it is done
+    const committed = commit(example, m.updates[0].body);
+    m.updates[0].resolve(committed);
+    await flush();
+    expect(m.reads).toHaveLength(2);
+    const newer = { ...clone(committed), revision: "revision-2", values: { ...committed.values, layout: "comfortable" } };
+    m.reads[1].resolve(newer);
+    await flush();
+    expect(ctl.snapshot().doc?.revision).toBe("revision-2");
+    expect(ctl.snapshot().doc?.values.layout).toBe("comfortable");
+  });
+
+  it("lets a fresh explicit reload after the conflict clear the barrier", async () => {
+    const { ctl, m } = await ready();
+    ctl.choose("layout", "dense");
+    m.updates[0].reject(new ConfigurationError("configuration_conflict"));
+    await flush();
+    expect(ctl.snapshot().blocked).toMatchObject({ code: "configuration_conflict" });
+    ctl.reload();
+    const newer = { ...clone(example), revision: "revision-2", values: { ...example.values, layout: "comfortable" } };
+    m.reads[1].resolve(newer);
+    await flush();
+    expect(ctl.snapshot().blocked).toBeNull();
+    expect(ctl.snapshot().doc?.revision).toBe("revision-2");
+  });
+});
+
 describe("the HTTP source", () => {
   function http(answer: (r: ConfigurationRequest) => { status: number; body: unknown }) {
     const calls: [string, ConfigurationRequest][] = [];

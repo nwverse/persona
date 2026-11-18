@@ -2283,9 +2283,10 @@ The footer reserves the small-button height when no action is shown, and longer 
   (`list`, the default); a multiselect is a list of `role="checkbox"` rows with `CheckMark`; text is the field style's
   input or textarea, a number a narrower input with a decimal keyboard. Text and numbers are drafts, and a multiselect's
   checks are the same kind of pending edit, until **Save**; a multiselect whose maximum is one is drawn as a single choice
-  (`role="radio"` rows with round marks and arrow keys), and choosing another option replaces the old one in one click
-  (the wire value stays an array), while a larger maximum keeps ordinary checks and can pass through a temporary count.
-  **Reset** appears where the value differs from the default.
+  (`role="radio"` rows with round marks and arrow keys), with exactly one Tab stop — the chosen option, or the first when
+  none is chosen (no radio is marked chosen) — and choosing another option replaces the old one in one click (the wire
+  value stays an array), while a larger maximum keeps ordinary checks and can pass through a temporary count. **Reset**
+  appears where the value differs from the default.
 - Whole-form lines (a version it can't write, a conflict or an uncertain write with **Reload**, a refresh that failed with
   **Try again**) are one card above the groups.
 - An unknown kind or invalid definition keeps its title, description and details, with an orange line instead of a

@@ -4,7 +4,7 @@
 // fails exactly as its scenario says. This is fixture verification, not production behavior.
 import { describe, expect, it } from "vitest";
 import { buildShowcase, SCENARIO_IDS, shell } from "./configuration-showcase-data.mjs";
-import { CONFIGURATION_VERSION, fieldValue, parseDocument } from "../src/lib/configuration/contract.ts";
+import { checkUpdate, CONFIGURATION_VERSION, fieldValue, parseDocument, scalarLength } from "../src/lib/configuration/contract.ts";
 
 const LANGS = ["en", "zh-Hans", "ja"];
 const FAST = { latency: { read: 0, save: 0 } };
@@ -33,7 +33,7 @@ describe("the showcase in every language", () => {
       const strings = shell(lang);
       for (const key of ["title", "fixtureProblem"]) expect(strings[key].trim(), `${lang} ${key}`).not.toBe("");
     }
-    expect(SCENARIO_IDS).toEqual(["default", "slow", "load-fail", "reject", "conflict", "unconfirmed", "contract", "invalid", "empty", "unsupported"]);
+    expect(SCENARIO_IDS).toEqual(["default", "slow", "load-fail", "reject", "conflict", "unconfirmed", "keyboard", "contract", "invalid", "empty", "unsupported"]);
   });
 
   it.each(LANGS.flatMap((lang) => SCENARIO_IDS.map((id) => [lang, id])))("%s %s: every document parses with valid effective values", async (lang, id) => {
@@ -81,6 +81,7 @@ describe("the showcase in every language", () => {
     for (const id of ["reject", "conflict", "unconfirmed"]) expect(keys(id), id).toEqual(["showcase-digest"]);
     expect(keys("contract")).toEqual(["showcase-shared"]);
     expect(keys("invalid")).toEqual(["showcase-recovery"]);
+    expect(keys("keyboard")).toEqual(["showcase-editor"]);
   });
 
   it("keeps fixture framing out of the default module text", () => {
@@ -185,6 +186,43 @@ describe("the in-memory writers", () => {
     expect(after.revision).not.toBe(first.revision);
     expect(after.values.topic).toBe("Weekly digest");
     expect((await module.source.update(updateFor(after, { changes: { topic: "Mine" } }))).values.topic).toBe("Mine");
+  });
+
+  it("conflict: the other writer's value is valid in every language, and the recovery save commits", async () => {
+    for (const lang of LANGS) {
+      const module = moduleByKey(buildShowcase("conflict", lang, FAST), "showcase-digest");
+      const first = await module.source.read();
+      await expect(module.source.update(updateFor(first, { changes: { topic: "Mine" } }))).rejects.toMatchObject({ code: "configuration_conflict" });
+      const after = await module.source.read();
+      const { doc } = parseDocument(after);
+      const topic = doc.groups.flatMap((group) => group.fields).find((field) => field.id === "topic");
+      const value = fieldValue(doc, topic);
+      expect(value, lang).toBeDefined();
+      expect(scalarLength(value), lang).toBeGreaterThanOrEqual(1);
+      expect(scalarLength(value), lang).toBeLessThanOrEqual(40);
+      expect((await module.source.update(updateFor(after, { changes: { topic: "Mine" } }))).values.topic).toBe("Mine");
+    }
+  });
+
+  it("keyboard: the first single-choice save is refused, and the next one commits", async () => {
+    const module = moduleByKey(buildShowcase("keyboard", "en", FAST), "showcase-editor");
+    const doc = await module.source.read();
+    const err = await module.source.update(updateFor(doc, { changes: { snippet_language: ["zh-Hans"] } })).catch((e) => e);
+    expect(err).toMatchObject({ code: "configuration_invalid" });
+    expect(err.fieldErrors.map(({ id, code }) => ({ id, code }))).toEqual([{ id: "snippet_language", code: "option" }]);
+    expect((await module.source.update(updateFor(doc, { changes: { snippet_language: ["zh-Hans"] } }))).values.snippet_language).toEqual(["zh-Hans"]);
+  });
+
+  it("invalid: a direct repair update is valid and the repaired value is committed", async () => {
+    const module = moduleByKey(buildShowcase("invalid", "en", FAST), "showcase-recovery");
+    const doc = await module.source.read();
+    const { doc: parsed } = parseDocument(doc);
+    const update = updateFor(doc, { changes: { label: "Recovered" } });
+    expect(checkUpdate(parsed, update)).toBeNull();
+    const next = await module.source.update(update);
+    expect(next.values.label).toBe("Recovered");
+    const repaired = parseDocument(next).doc.groups.flatMap((group) => group.fields).find((field) => field.id === "label");
+    expect(fieldValue(parseDocument(next).doc, repaired)).toBe("Recovered");
   });
 
   it("unconfirmed: the first save throws, and a later one commits", async () => {
