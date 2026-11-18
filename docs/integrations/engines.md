@@ -155,6 +155,17 @@ Selecting `herdr-both` attaches both herdr and herdr-core hosts:
 - **Not Agents, headless by design**: assistant conversations (the main chat, leader chats, scheduled tasks, channels, meetings, the Inbox AI twin, Lark `/agent`), listed in the Persona tab and not under Agents, and model calls (titles, triage, the launcher Test).
 - **No terminal, by the user's choice**: an engine that runs Agents through provider SDKs (Paseo, Cindy), Orca's native chats and runtimes (DSH, pi, Antigravity, daemons) own their sessions; Persona leaves them as they are. So does Claude's desktop app, for a session New Agent starts there with the launcher `claude-desktop` (`docs/integrations/claude-integration.md`, "New sessions in the desktop app"), and the Codex App, for a chat started with `codex-app` (`docs/integrations/codex.md`, "New chats in the Codex App").
 - **Stopping keeps the terminal**: Persona's own passes stop an Agent with node `session.stop`: a finished task's, an idle one, a cancelled task's, and `/exit` sent by `agent_send` (`docs/assistant/todos.md` "Stop Agents of completed tasks"). The Agent process quits and its tab stays with the shell it ran in. Nothing closes such a tab on a timer.
+- **Closing it when the session ends, by the owner's choice** (#10355): the setting `close_ended_terminals` (`persona_settings` key
+  `assistant.close_ended_terminals`; Settings › Assistant › Agent follow-up on the web, Assistant Profile › Agent Follow-Up ›
+  Terminals on iOS, Assistant settings › Terminals on Android) is **off by default**, and off nothing above changes. On, the
+  manager closes an Agent's tab when its session ends, through the user's close paths only (`session.retire` with
+  `close_terminal`, plus `after_exit` for the shell an Agent that quit left): a done or cancelled task's idle Agent instead of
+  stopping it, and an Agent seen running that then quit, told to (`/exit`, stop cause `exit`) or by itself (no stop cause).
+  Not an end, so the terminal stays: the user's Stop, an idle stop, a restart. Never closed: a busy Agent (working, waiting
+  for an answer, background work, running subagents or workflows, a `/loop`, queued messages, a server it runs), assistant
+  conversations, other tools' sessions, Agents Persona did not start, panes without Persona's mark for the session. An
+  Agent that quit has its shell closed only on Herdr (the #9648 checks). The transcript stays and Resume opens a new tab
+  (`server/internal/assistant/agent_terminal_close.go`).
 - **Close already dispatched when the Agent exits** (#9648): a normal `session.close` can still close its original
   marked Herdr shell. The node reads the selected server directly, requires a matching session marker, no active or
   rebound Agent and a known foreground shell, then rechecks ownership and layout before closing only that pane.

@@ -901,10 +901,12 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	// (retire.go, #4754): session.retire is what a hub before #4754 asks, answered as it expects ("closed").
 	if method == "session.retire" {
 		var a struct {
-			CloseTerminal bool `json:"close_terminal"` // the user's "Archive and close"
+			CloseTerminal bool            `json:"close_terminal"` // the user's "Archive and close", or close-on-end (#10355)
+			AfterExit     bool            `json:"after_exit"`     // also the shell an Agent that quit left (#10355)
+			StopCause     proto.StopCause `json:"stop_cause"`
 		}
 		_ = json.Unmarshal(params, &a)
-		done, err := n.retire(ctx, p.SessionID, a.CloseTerminal)
+		done, err := n.retire(ctx, p.SessionID, a.CloseTerminal, a.AfterExit, a.StopCause)
 		return map[string]any{"closed": done}, err
 	}
 	if method == "session.stop" {
