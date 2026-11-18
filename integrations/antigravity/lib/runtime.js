@@ -28,6 +28,10 @@ import {
   workspacePathOf,
 } from './map.js'
 
+// agy acp's answer to a model it does not offer, and agy models' answer while the CLI is signed out (#10368).
+const UNKNOWN_MODEL = /\bunknown model\b|\bmodel_not_found\b/i
+const SIGNED_OUT = /\b(?:sign(?:ed)?|log(?:ged)?)[ -]?in\b/i
+
 export function createAgyRuntime(options = {}) {
   const home = options.home || homedir()
   const agyDir = options.agyDir || process.env.ANTIGRAVITY_CLI_CONFIG_DIR || join(home, '.gemini', 'antigravity-cli')
@@ -69,6 +73,11 @@ export function createAgyRuntime(options = {}) {
   let catalogAt = 0
   let catalogFlight
   let catalogTimer
+  // One agy acp process can keep the model list it had when the account's plan lapsed or the CLI signed out (#10368).
+  let discoveredGeneration = -1 // the agy acp generation running when the latest successful discovery began
+  let signedOut = false // the latest discovery failed because the CLI is signed out
+  let staleThrough = 0 // agy acp generations up to this one were running before the CLI signed in again
+  let freshRejection // a replacement process rejected this model too: { generation, model, listed }
   const catalogAbort = new AbortController()
   let stopped = false
   const update = options.update?.store && typeof options.update.name === 'string' && typeof options.update.hash === 'string'
@@ -95,20 +104,97 @@ export function createAgyRuntime(options = {}) {
       return { agent: RUNTIME, models: catalog }
     }
     if (!catalogFlight) {
+      const generation = acp.generation
       catalogFlight = discoverModels(acp.bin, { signal: catalogAbort.signal }).then((entries) => {
         if (!stopped) {
           catalogAt = Date.now()
+          discoveredGeneration = generation
+          if (signedOut) {
+            // The CLI signed in again: an agy acp process from before keeps the signed-out account.
+            signedOut = false
+            staleThrough = generation
+            void recycleStale(0)
+          }
           publishModels(entries)
         }
         return { agent: RUNTIME, models: catalog }
+      }, (err) => {
+        if (SIGNED_OUT.test(err?.message || '')) signedOut = true
+        throw err
       }).finally(() => { catalogFlight = undefined })
     }
     return catalogFlight
   }
 
+  // A session's models come from its agy acp process, which can keep the list it had when the account changed
+  // (#10368). A discovery that began while that process was already running has the newer list: keep it.
+  function publishSessionModels(entries) {
+    if (acp.generation > discoveredGeneration) publishModels(entries)
+  }
+
+  /** Whether anything besides the caller's own `own` calls uses agy acp: a turn, a probe, a rewind, a card or a request. */
+  function acpBusy(own) {
+    return inFlight > own || activeTurns.size > 0 || promptTurns.size > 0 || checkTurns.size > 0 || rewinding.size > 0 ||
+      acp.pending.size > 0 || rt.busy()
+  }
+
+  /** Replace an agy acp process that was running before the CLI signed in again, once nothing else uses it. */
+  async function recycleStale(own) {
+    if (!acp.proc || acp.generation > staleThrough || acpBusy(own)) return
+    await acp.recycle('the Antigravity CLI signed in again')
+  }
+
+  async function setNativeModel(rawId, model, timeoutMs) {
+    try {
+      return await acp.setModel(rawId, model, timeoutMs)
+    } catch (err) {
+      if (UNKNOWN_MODEL.test(`${err?.message || ''} ${JSON.stringify(err?.data ?? '')}`)) err.unknownModel = model
+      throw err
+    }
+  }
+
+  /**
+   * agy acp rejected `model` as unknown. When a fresh `agy models` lists it and nothing else uses agy acp, replace the
+   * process, which can keep the model list from a lapsed plan. The listed model when it was replaced, otherwise nothing.
+   */
+  async function recycleForModel(model) {
+    if (acpBusy(1)) return undefined
+    let discovered
+    try {
+      discovered = (await models({ refresh: true })).models
+    } catch (err) {
+      log(`agy model discovery error: ${err.message}`)
+      return undefined
+    }
+    const entry = discovered.find((candidate) => candidate.id === model || candidate.name === model)
+    const listed = discovered.map((candidate) => candidate.id).join('\n')
+    if (!entry || acpBusy(1)) return undefined
+    const last = freshRejection
+    if (last?.generation === acp.generation && last.model === entry.id && last.listed === listed) return undefined
+    await acp.recycle(`it does not know ${entry.id}, which agy models lists`)
+    return { model: entry.id, listed }
+  }
+
+  /** Run `attempt`; when agy acp rejects a model a fresh discovery lists, replace the process once and run it again. */
+  async function retryStaleModels(attempt) {
+    try {
+      return await attempt()
+    } catch (err) {
+      const recycled = err?.unknownModel ? await recycleForModel(err.unknownModel) : undefined
+      if (!recycled) throw err
+      try {
+        return await attempt()
+      } catch (again) {
+        // A fresh process rejects it too: report that, and do not replace this one for the same catalog again.
+        if (again?.unknownModel) freshRejection = { generation: acp.generation, ...recycled }
+        throw again
+      }
+    }
+  }
+
   function sessionConfiguration(rawId, result) {
     if (!result) return
-    if (result.models?.availableModels) publishModels(result.models.availableModels)
+    if (result.models?.availableModels) publishSessionModels(result.models.availableModels)
     if (result.models?.currentModelId) sessionModels.set(rawId, result.models.currentModelId)
     if (result.modes?.currentModeId) {
       const cur = sessionModes.get(rawId) || {}
@@ -659,6 +745,7 @@ export function createAgyRuntime(options = {}) {
   async function busyCall(fn) {
     inFlight++
     try {
+      await recycleStale(1)
       return await fn()
     } finally {
       inFlight--
@@ -672,40 +759,42 @@ export function createAgyRuntime(options = {}) {
       const started = Date.now()
       const deadline = started + (options.checkTimeoutMs ?? 75_000)
       const remaining = () => Math.max(1, deadline - Date.now())
-      let rawId
-      try {
-        await acp.ensureStarted()
-        const session = await acp.call('session/new', { cwd: params.cwd, mcpServers: [] }, remaining())
-        rawId = session.sessionId
-        if (!rawId) throw new Error('Antigravity returned no check session')
-        // Probes have no tools or phone permission cards. The existing archived-session guard cancels their requests.
-        archived.add(rawId)
-        const probe = { text: '' }
-        checkTurns.set(rawId, probe)
-        if (session.models?.availableModels) publishModels(session.models.availableModels)
-        const model = configuredModel()
-        if (model) await acp.call('session/set_model', { sessionId: rawId, modelId: model }, remaining())
-        await acp.call('session/set_mode', { sessionId: rawId, modeId: 'default' }, remaining())
-        const result = await acp.call('session/prompt', { sessionId: rawId, prompt: [{ type: 'text', text: params.prompt }] }, remaining())
-        if (result?.stopReason !== 'end_turn') throw new Error(`Antigravity availability check ended with ${result?.stopReason || 'no stop reason'}`)
-        if (!probe.text.trim()) throw new Error('Antigravity availability check returned no answer')
-        return { ok: true, agent: RUNTIME, model: model || session.models?.currentModelId, answer: probe.text.trim().slice(0, 400), millis: Date.now() - started }
-      } finally {
-        if (rawId) {
-          await acp.cancel(rawId)
-          await acp.closeSession(rawId)
-          checkTurns.delete(rawId)
-          sessionModels.delete(rawId)
-          sessionModes.delete(rawId)
+      return retryStaleModels(async () => {
+        let rawId
+        try {
+          await acp.ensureStarted()
+          const session = await acp.call('session/new', { cwd: params.cwd, mcpServers: [] }, remaining())
+          rawId = session.sessionId
+          if (!rawId) throw new Error('Antigravity returned no check session')
+          // Probes have no tools or phone permission cards. The existing archived-session guard cancels their requests.
+          archived.add(rawId)
+          const probe = { text: '' }
+          checkTurns.set(rawId, probe)
+          if (session.models?.availableModels) publishSessionModels(session.models.availableModels)
+          const model = configuredModel()
+          if (model) await setNativeModel(rawId, model, remaining())
+          await acp.call('session/set_mode', { sessionId: rawId, modeId: 'default' }, remaining())
+          const result = await acp.call('session/prompt', { sessionId: rawId, prompt: [{ type: 'text', text: params.prompt }] }, remaining())
+          if (result?.stopReason !== 'end_turn') throw new Error(`Antigravity availability check ended with ${result?.stopReason || 'no stop reason'}`)
+          if (!probe.text.trim()) throw new Error('Antigravity availability check returned no answer')
+          return { ok: true, agent: RUNTIME, model: model || session.models?.currentModelId, answer: probe.text.trim().slice(0, 400), millis: Date.now() - started }
+        } finally {
+          if (rawId) {
+            await acp.cancel(rawId)
+            await acp.closeSession(rawId)
+            checkTurns.delete(rawId)
+            sessionModels.delete(rawId)
+            sessionModes.delete(rawId)
+          }
         }
-      }
+      })
     })
   }
 
   async function applySessionOptions(rawId, { model, permission_mode, effort }) {
     try {
       if (model) {
-        await acp.setModel(rawId, model)
+        await setNativeModel(rawId, model)
         sessionModels.set(rawId, model)
         const selected = catalog.find((entry) => entry.id === model)
         if (selected?.default_effort) {
@@ -734,31 +823,39 @@ export function createAgyRuntime(options = {}) {
     sessionConfiguration(rawId, await acp.ensureSessionLoaded(rawId, cwd, servers))
   }
 
+  /** Create a native session with the requested or configured options; a session that refuses them is closed. */
+  async function openSession(params, cwd, isAsst) {
+    const res = await acp.newSession({ cwd, mcpServers: [] })
+    const rawId = res.sessionId
+    createdAt.set(rawId, Date.now())
+    sessionConfiguration(rawId, res)
+    const pid = toPersonaId(rawId)
+    sessionCwds.set(rawId, cwd)
+    if (isAsst) assistants.add(pid)
+
+    try {
+      await loadSession(rawId, cwd, mcpServersFor(pid, isAsst))
+      await applySessionOptions(rawId, {
+        model: params.model || configuredModel(),
+        permission_mode: params.permission_mode || configuredMode(),
+        effort: params.effort,
+      })
+    } catch (err) {
+      archived.add(rawId)
+      await acp.closeSession(rawId)
+      rt.sessionsChanged()
+      throw err
+    }
+    return rawId
+  }
+
   async function start(params) {
     return busyCall(async () => {
       const cwd = params.cwd || home
       const isAsst = Boolean(params.assistant) || isAssistantDir(cwd)
-      const res = await acp.newSession({ cwd, mcpServers: [] })
-      const rawId = res.sessionId
-      createdAt.set(rawId, Date.now())
-      sessionConfiguration(rawId, res)
+      // A process that rejected the model gets replaced and the session opened again on the new one (#10368).
+      const rawId = await retryStaleModels(() => openSession(params, cwd, isAsst))
       const pid = toPersonaId(rawId)
-      sessionCwds.set(rawId, cwd)
-      if (isAsst) assistants.add(pid)
-
-      try {
-        await loadSession(rawId, cwd, mcpServersFor(pid, isAsst))
-        await applySessionOptions(rawId, {
-          model: params.model || configuredModel(),
-          permission_mode: params.permission_mode || configuredMode(),
-          effort: params.effort,
-        })
-      } catch (err) {
-        archived.add(rawId)
-        await acp.closeSession(rawId)
-        rt.sessionsChanged()
-        throw err
-      }
 
       const session = {
         session_id: pid,
@@ -804,11 +901,13 @@ export function createAgyRuntime(options = {}) {
       const isAsst = Boolean(params.assistant) || assistants.has(pid) || isAssistantDir(cwd)
       if (isAsst) assistants.add(pid)
 
-      await loadSession(rawId, cwd, mcpServersFor(pid, isAsst))
-      await applySessionOptions(rawId, {
-        model: params.model,
-        permission_mode: params.mode,
-        effort: params.effort,
+      await retryStaleModels(async () => {
+        await loadSession(rawId, cwd, mcpServersFor(pid, isAsst))
+        await applySessionOptions(rawId, {
+          model: params.model,
+          permission_mode: params.mode,
+          effort: params.effort,
+        })
       })
 
       if (rewinding.has(pid)) throw new RpcError('The conversation is being rewound', 'rewind_busy')
@@ -979,11 +1078,13 @@ export function createAgyRuntime(options = {}) {
         throw new Error('Antigravity session is busy')
       }
       const cwd = sessionCwds.get(rawId) || home
-      await loadSession(rawId, cwd, mcpServersFor(toPersonaId(rawId), assistants.has(toPersonaId(rawId))))
-      await applySessionOptions(rawId, {
-        model: params.model,
-        permission_mode: params.permission_mode,
-        effort: params.effort,
+      await retryStaleModels(async () => {
+        await loadSession(rawId, cwd, mcpServersFor(toPersonaId(rawId), assistants.has(toPersonaId(rawId))))
+        await applySessionOptions(rawId, {
+          model: params.model,
+          permission_mode: params.permission_mode,
+          effort: params.effort,
+        })
       })
       rt.sessionsChanged()
     })
