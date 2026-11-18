@@ -52,7 +52,7 @@ extension AppModel {
                 // It did not go in (the assistant did not start, its computer was away) and the assistant keeps it to
                 // send by itself (#10194): the chat's row shows it from now on, on every device, so this bubble goes.
                 keptUndelivered(key, msg.id, reply.undelivered)
-                return .sent
+                return .kept
             }
             let waits = reply.waitsOnComputer == true
             if waits, visibleSession == key {
@@ -100,6 +100,7 @@ extension AppModel {
     /// A message the assistant keeps after it could not go in (#10194): off the outbox, onto the row at once (the
     /// hub's next list carries it too).
     func keptUndelivered(_ key: SessionKey, _ id: UUID, _ kept: UndeliveredMessage?) {
+        chat(key).settleSendFeedback(id, state: SendOutcome.kept.state) // no Processing left hanging (`settleSend` finds no bubble)
         chat(key).pending.removeAll { $0.id == id }
         saveOutbox()
         guard let kept else { return }
@@ -110,8 +111,10 @@ extension AppModel {
         }
     }
 
-    /// Retry on a kept message that gave up (#10194).
+    /// Retry on a kept message that gave up (#10194). A second tap while the first is on its way does nothing.
     func retryUndelivered(_ key: SessionKey, _ id: String) async {
+        guard undeliveredActions.insert(id).inserted else { return }
+        defer { undeliveredActions.remove(id) }
         do {
             try await api(key.group)?.retryUndelivered(conversation: key.sessionID, id: id)
             patchListedSession(key) { row in
@@ -124,8 +127,10 @@ extension AppModel {
         } catch { show(error) }
     }
 
-    /// Delete on a kept message (#10194): it is never sent.
+    /// Delete on a kept message (#10194): it is never sent. A second tap while the first is on its way does nothing.
     func deleteUndelivered(_ key: SessionKey, _ id: String) async {
+        guard undeliveredActions.insert(id).inserted else { return }
+        defer { undeliveredActions.remove(id) }
         do {
             try await api(key.group)?.deleteUndelivered(conversation: key.sessionID, id: id)
             patchListedSession(key) { row in row.undelivered = row.undelivered?.filter { $0.id != id } }

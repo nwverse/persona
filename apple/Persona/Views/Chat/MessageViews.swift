@@ -479,12 +479,16 @@ struct UndeliveredBubble: View {
     var message: UndeliveredMessage
     var retry: () -> Void
     var discard: () -> Void
+    @Environment(\.rowMemoScope) private var memoScope
+    @Environment(\.chatPin) private var pin
 
     var body: some View {
         let parsed = ContextRef.parse(message.text)
         let shown = AttachedFile.parse(parsed.rest).rest
         let reason = message.error ?? String(localized: "The assistant could not start")
         VStack(alignment: .trailing, spacing: Theme.Space.sm) {
+            let files = AttachedFile.parse(message.text).files
+            if !files.isEmpty { AttachedFileCards(files: files) }
             HStack(alignment: .bottom, spacing: Theme.Space.s) {
                 Spacer(minLength: 40)
                 Menu {
@@ -502,10 +506,19 @@ struct UndeliveredBubble: View {
                     }
                 }
                 .accessibilityLabel(message.gaveUp ? Text("Not delivered. Retry or delete.") : Text("Not delivered yet. It will be sent automatically."))
-                .accessibilityAction(named: Text("Delete"), discard)
-                UserBubbleBody(quotes: ContextRef.quotes(parsed.refs) ?? [], text: shown, comments: [], lead: nil,
-                               fold: BubbleFoldKey(id: "undelivered-" + message.id))
+                // The menu's items as actions too (VoiceOver's Actions rotor, the Runtime CLI), as on PendingBubble.
+                .accessibilityActions {
+                    if message.gaveUp { Button("Retry", action: retry) }
+                    Button("Delete", action: discard)
+                }
+                let split = MessageComments.inBubble(shown)
+                let fold = BubbleFoldKey(id: "undelivered-" + message.id)
+                UserBubbleBody(quotes: ContextRef.quotes(parsed.refs) ?? [], text: split?.rest ?? shown, comments: split?.comments ?? [], lead: split?.quote,
+                               fold: fold)
                     .opacity(0.6)
+                    .messageLongPress(id: "undelivered-" + message.id, opens: { fold.openOnPress(scope: memoScope, pin: pin) }) {
+                        UserBubbleBody(quotes: ContextRef.quotes(parsed.refs) ?? [], text: split?.rest ?? shown, comments: split?.comments ?? [], lead: split?.quote)
+                    }
             }
             Group {
                 if message.gaveUp {
@@ -521,6 +534,9 @@ struct UndeliveredBubble: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
+        // Copy, and Delete, from the long-press bar as on a message only on this phone (#6427).
+        .messageActionBar(id: "undelivered-" + message.id, text: shown, isUser: true, date: message.at, pending: true,
+                          delete: MessageBarDelete(title: String(localized: "Delete"), run: discard))
         .transition(.opacity)
     }
 }

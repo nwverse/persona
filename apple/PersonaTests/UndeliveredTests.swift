@@ -34,10 +34,34 @@ struct UndeliveredTests {
         model.applySessions([ref: [try session("")]])
         let msg = PendingMessage(text: "hello", images: [])
         model.chat(key).pending = [msg]
+        model.chat(key).beginSendFeedback(msg)
         let outcome = await model.sendPending(key, msg)
-        #expect(outcome == .sent)
+        model.settleSend(key, msg.id, outcome)
+        #expect(outcome == .kept)
         #expect(model.chat(key).pending.isEmpty, "the row draws it from now on")
         #expect(model.session(key)?.undelivered?.map(\.id) == ["x"])
+        #expect(model.chat(key).sendFeedback?.phase == .finished, "no Processing left hanging while nothing runs")
+    }
+
+    @Test func aKeptHandOffIsNotFiledAsDone() async throws {
+        let hub = FakeHub()
+        hub.on("POST", "/api/v1/sessions/m/s/messages", json: #"{"delivered":"later","undelivered":{"id":"x","text":"context","at":"2026-11-17T10:00:00Z","state":"waiting"}}"#)
+        let model = AppModel()
+        model.apiForTests = hub.client
+        model.applySessions([ref: [try session("")]])
+        var filings: [PendingMessage.InboxHandOff] = []
+        model.inboxHandOffDoneForTests = { filings.append($0) }
+        let item = try JSON.decoder.decode(InboxItem.self, from: Data(#"{"id":"mail:a:1","source":"mail","kind":"mail","account":"a","account_name":"A","title":"t","preview":"p","count":1,"manager":"mgr"}"#.utf8))
+        let result = await model.sendForHandOff(key, text: "context", item: item, file: true)
+        #expect(result.delivered && result.kept && !result.filed)
+        #expect(filings.isEmpty, "a message the agent has not got yet does not file the item")
+    }
+
+    @Test func shownLeavesOutWhatTheTranscriptOrThisPhoneHas() {
+        let at = Date(timeIntervalSince1970: 0)
+        let list = ["A", "b", "c"].map { UndeliveredMessage(id: $0, text: $0, at: at, state: "waiting") }
+        #expect(UndeliveredMessage.shown(list, landed: ["a"], drawn: ["B"]).map(\.id) == ["c"])
+        #expect(UndeliveredMessage.shown(nil, landed: [], drawn: []).isEmpty)
     }
 
     @Test func retryAndDeleteReachTheHub() async throws {

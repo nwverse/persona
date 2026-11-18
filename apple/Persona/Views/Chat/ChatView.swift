@@ -2165,8 +2165,8 @@ struct ChatView: View {
     /// The row's kept messages (#10194) the transcript does not have yet (the row may lag behind the line).
     private var keptUndelivered: [UndeliveredMessage] {
         guard let list = session?.undelivered, !list.isEmpty else { return [] }
-        let landed = Set(store.items.compactMap { $0.clientMsgID?.lowercased() })
-        return list.filter { !landed.contains($0.id.lowercased()) }
+        return UndeliveredMessage.shown(list, landed: store.items.compactMap(\.clientMsgID),
+                                        drawn: (store.pending + store.arriving).map(\.id.uuidString))
     }
 
     /// What was sent from here and is not in the transcript yet, split between the chat and the queue strip (#1461).
@@ -3109,6 +3109,9 @@ struct ChatView: View {
                 UndeliveredBubble(message: m, retry: { Task { await model.retryUndelivered(key, m.id) } },
                                   discard: { Task { await model.deleteUndelivered(key, m.id) } })
                     .chatMark("chat.undelivered.\(m.state).\(m.id)")
+                    #if os(iOS)
+                    .allowsHitTesting(!pick.on) // not sent yet: never picked, and quiet while selecting
+                    #endif
                     .flippedBack()
                     .id("undelivered-" + m.id)
             }

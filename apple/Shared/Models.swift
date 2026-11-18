@@ -1656,6 +1656,15 @@ nonisolated struct UndeliveredMessage: Codable, Hashable, Sendable, Identifiable
 
     var gaveUp: Bool { state == "failed" }
 
+    /// The row's kept messages to draw: not one the transcript has (`landed`: its items' client_msg_ids) nor one this
+    /// phone still draws as sending or arriving (`drawn`: those bubbles' ids), compared case-insensitively. The row can
+    /// come before the send's answer, or lag behind the transcript's line (web `shownUndelivered`).
+    static func shown(_ list: [UndeliveredMessage]?, landed: [String], drawn: [String]) -> [UndeliveredMessage] {
+        guard let list, !list.isEmpty else { return [] }
+        let skip = Set((landed + drawn).map { $0.lowercased() })
+        return list.filter { !skip.contains($0.id.lowercased()) }
+    }
+
     enum CodingKeys: String, CodingKey {
         case id, text, images, at, state, attempts, error
         case nextAt = "next_at"
