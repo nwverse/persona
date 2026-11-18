@@ -1,6 +1,6 @@
 ---
 name: pr-review-merge-loop
-description: Continuously discover GitHub PRs and new heads, semantically review and verify them, automatically fix defects and necessary refactoring, and exact-head merge after the repaired head passes. Use for "continuously review, fix and merge PRs", "keep fetching PR updates", "start or inspect pr-watch", or /pr-review-merge-loop. The full review-fix-verify-merge loop is the default; read-only diagnostics and merge opt-out are explicit exceptions.
+description: Continuously discover GitHub PRs and new heads, semantically review them with configured lightweight checks, automatically fix semantic defects, and exact-head merge after the repaired head passes. Use for "continuously review, fix and merge PRs", "keep fetching PR updates", "start or inspect pr-watch", or /pr-review-merge-loop. Full CI and failures on main belong to main-verify-fix-loop, not this skill.
 ---
 
 # Continuous PR review, fix and merge
@@ -16,6 +16,12 @@ Read `docs/operations/pr-review-automation.md` before running or changing anythi
 independent semantic review, verification on the exact base/head, at most three repair rounds across a PR's successive
 heads, a fresh review after every new head, privacy checks and exact-head squash merging. Read
 `docs/operations/collaboration.md` when publishing comments, continuation PRs or issue updates.
+
+**This skill no longer owns repeated full CI or repairs to `main`.** The two maintainer repositories use their
+`semantic_only` verification profile for independent semantic review plus lightweight privacy/documentation guards.
+Build/vet, cross-platform checks, full tests and main failures are handled separately by `main-verify-fix-loop`
+(`docs/operations/main-verification.md`). Do not switch those repositories back to the full PR profiles to compensate
+for a missing main verifier. Other repositories retain their configured verification behavior.
 
 ## Default behavior
 

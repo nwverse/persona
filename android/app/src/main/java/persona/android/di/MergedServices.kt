@@ -140,13 +140,21 @@ internal fun mergedInteractions(stacks: GroupStacks): InteractionCenter = object
 
 @OptIn(ExperimentalCoroutinesApi::class)
 internal fun mergedChats(stacks: GroupStacks, storage: ChatLocalStorage): ChatRepository =
-    object : ChatRepository, ChatLocalStorage by storage {
+    object : ChatRepository, StructuralChatRepository, ChatLocalStorage by storage {
         override fun observe(session: SessionKey) = stacks.stacks
             .map { list -> list.firstOrNull { it.names.owns(session.machineId) } }
             .distinctUntilChanged()
             .flatMapLatest { stack ->
                 stack?.repositories?.chats?.observe(stack.names.raw(session))
                     // A group that closed under the page (merged or disconnected) just stops; its own failures surface.
+                    ?.catch { failure -> if (stack.current) throw failure }
+                    ?: flowOf(ChatSnapshot(loading = false, verified = false))
+            }
+        override fun observeStructure(session: SessionKey) = stacks.stacks
+            .map { list -> list.firstOrNull { it.names.owns(session.machineId) } }
+            .distinctUntilChanged()
+            .flatMapLatest { stack ->
+                stack?.repositories?.chats?.observeStructure(stack.names.raw(session))
                     ?.catch { failure -> if (stack.current) throw failure }
                     ?: flowOf(ChatSnapshot(loading = false, verified = false))
             }
