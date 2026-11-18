@@ -409,6 +409,24 @@ order, assistant switching, real-page phone home/search/empty states in every st
 Advanced folding and owner-aware selection. Captures produced by these tests are **Native JVM Compose renders**,
 not emulator/handset screenshots, and do not prove system dialogs, background survival or live hub transport.
 
+### One read-only About Version generation experiment (#9694)
+
+The production About group remains the unchanged handwritten `AboutSettingsPage`, including native Version/Build
+reads and `BuildCommit.parse`, short-hash presentation and full-value copy. There is no setting, experiment switch,
+new style, app route, generator initialization or runtime. `android/refract/about/README.md` owns the bounded
+Android-only consumer experiment: one shared Swift Version row, an immutable typed model, direct mapping to the
+existing `JRow` and resources, a source-pinned CLI and a deterministic regenerate-and-diff command. Its generated
+Kotlin and its model adapter live only in `:feature:settings`'s test source set; ordinary debug/release source sets
+exclude them. `AboutVersionRefractTest` calls the generated row for comparison, never as the production fallback.
+Removing the experiment leaves the original screen and behavior intact.
+
+The comparison test requires pixel-identical native/generated rows in Glass, Brief and Board, light/dark,
+en/zh-Hans/ja and standard/2x text, plus a localized missing-version fallback. Existing `AboutBuildCommitTest` and
+`AboutBuildCommitShotsTest` retain native Commit coverage. These are **Native JVM Compose component captures**, not
+emulator/handset, accessibility-service, navigation or performance evidence. The pilot makes no three-platform
+readiness, performance-parity or complete-migration claim. The CLI's second-backend schema-validation output stays
+in temporary storage; no iOS/HarmonyOS destination is created.
+
 ### Large-window Settings presentation and hardware keys
 
 On regular and expanded windows, Settings keeps the same `settingsSheetStack`, entries, ViewModel stores and root Close / child Back behavior, but `JSettingsSheet` presents them inside a centered page-sized card. The card uses `SettingsPageSizing` (maximum width and height aliasing `ReadingWidth`, minimum margin `Tokens.Space.xl`) and the actual safe drawing bounds. The existing list-detail directive still decides when to show one pane. Compact and wide-phone windows retain the original full-window sheet. One `movableContentOf` moves the same Settings composition between the two containers, preserving non-saveable state and running effects; a fixed-key `SaveableStateHolder` additionally carries saveable drafts and list state.
