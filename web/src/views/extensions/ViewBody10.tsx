@@ -117,6 +117,8 @@ interface NodeProps {
   pressable: boolean;
   onPress: (a: UIAction) => void;
   onReveal: (id: string) => void;
+  /** The view's `selected` node: drawn with the accent's ring, and read as the current one. */
+  selected?: boolean;
   /** True when the previous committed render of this canvas drew this node differently (or not at all). */
   fade: boolean;
   fold?: React.ReactNode;
@@ -128,7 +130,7 @@ interface NodeProps {
  *  focus included). A node without an action is a focusable group, so Tab reaches it too and a screen reader reads
  *  its whole label. The node being pressed stays enabled (as the row's own button, ViewBody's ItemButton): disabling
  *  it would blur it mid-action and the browser would drop the keyboard focus to the page. */
-const GraphNode = memo(function GraphNode({ node: n, parentTitle, id, x, y, w, h, still, busy, pressable, onPress, onReveal, fade, fold }: NodeProps) {
+const GraphNode = memo(function GraphNode({ node: n, parentTitle, id, x, y, w, h, still, busy, pressable, onPress, onReveal, selected, fade, fold }: NodeProps) {
   const color = nodeColor(n);
   const glyph = glyphOf(n.icon, ROW_ICON);
   const label = nodeLabel(n, parentTitle);
@@ -161,7 +163,7 @@ const GraphNode = memo(function GraphNode({ node: n, parentTitle, id, x, y, w, h
   // The card fades in only when it is new or its fields changed since the last committed render (a move or a redraw
   // that only changes states does not replay it); reduced motion takes the animation itself away (styles.css).
   const anim = fade ? { animation: `fade-in 200ms ${EASE} both` } : undefined;
-  const common = { "data-graph-node": id, "aria-label": label, title: label } as const;
+  const common = { "data-graph-node": id, "aria-label": label, title: label, "aria-current": selected ? ("true" as const) : undefined } as const;
   return (
     <div role="listitem" data-graph-at={id} className="absolute" style={{ left: x, top: y, width: w, height: h }}>
       {act ? (
@@ -186,7 +188,7 @@ const GraphNode = memo(function GraphNode({ node: n, parentTitle, id, x, y, w, h
           role="group"
           tabIndex={still ? -1 : 0}
           onFocus={() => onReveal(id)}
-          className="flex h-full w-full items-center overflow-hidden rounded-card border border-line bg-surface pl-2.5 pr-2 shadow-card transition-colors duration-300"
+          className="flex h-full w-full items-center overflow-hidden rounded-card border border-line bg-surface pl-2.5 pr-2 shadow-card transition-colors duration-300 focus-visible:outline-2 focus-visible:outline-accent"
           style={anim}
         >
           {body}
@@ -211,10 +213,14 @@ interface FoldProps {
 
 /** The fold control: its own control inside the node's own wrapper, fully beside the node on the side where its
  *  children leave it (right for a right tree, below for a down one) — never over the node, whose badge stays whole —
- *  and never a press of the node. It counters the layer's zoom, so it stays 24 px on screen with a 44 px hit at any
- *  zoom. */
+ *  and never a press of the node. It counters the layer's zoom, so it stays its own size on screen with a 44 px hit at
+ *  any zoom. Folded, it shows the hidden count: a chip as wide as the count needs (+8 stays the 24 px circle,
+ *  +123 grows past it), still centred on the gap. */
 const FoldControl = memo(function FoldControl({ id, w, h, gap, down, folded, hidden, onToggle }: FoldProps) {
   const label = folded ? t("extensions-viewbody.graph_show_hidden", { count: hidden }) : t("extensions-viewbody.graph_fold");
+  // +NNN at the submeta size with tabular numerals: about 7 px a digit plus the plus and the border's padding
+  const wide = folded && hidden >= 100;
+  const size = wide ? Math.max(24, 14 + String(hidden).length * 7) : 24;
   return (
     <button
       type="button"
@@ -224,17 +230,19 @@ const FoldControl = memo(function FoldControl({ id, w, h, gap, down, folded, hid
       title={label}
       onClick={() => onToggle(id)}
       className={cx(
-        "touch-hit absolute z-[3] flex size-6 items-center justify-center rounded-full border border-line bg-surface text-ink-3 shadow-hairline",
+        "touch-hit absolute z-[3] flex items-center justify-center rounded-full border border-line bg-surface text-ink-3 shadow-hairline",
         "transition-transform duration-150 hover:text-ink",
       )}
       style={{
+        width: size,
+        height: 24,
         transform: "scale(var(--graph-fold-scale, 1))",
         transformOrigin: "center",
-        ...(down ? { left: w / 2 - 12, top: h + gap / 2 - 12 } : { left: w + gap / 2 - 12, top: h / 2 - 12 }),
+        ...(down ? { left: w / 2 - size / 2, top: h + gap / 2 - 12 } : { left: w + gap / 2 - size / 2, top: h / 2 - 12 }),
       }}
     >
       {folded ? (
-        <span className="text-submeta leading-none font-medium tabular-nums">+{hidden}</span>
+        <span className="px-1 text-submeta leading-none font-medium tabular-nums">+{hidden}</span>
       ) : (
         <Icon name={down ? "chevron" : "chevronRight"} size={11} stroke={2.4} />
       )}
@@ -589,6 +597,9 @@ export function GraphCanvas({ item, compact, busy, onPress, canPress }: {
   // A node the keyboard focuses is panned into view. It does not count as the person moving the canvas (an untouched
   // key still re-fits), but the shift itself is kept: without it, the next redraw of an untouched key would take the
   // opening view again and undo the scroll-into-view, dropping the focused node out of the visible area.
+  // A node the keyboard focuses is panned into view. It does not count as the person moving the canvas (an untouched
+  // key still re-fits), but the shift itself is kept: without it, the next redraw of an untouched key would take the
+  // opening view again and undo the scroll-into-view, dropping the focused node out of the visible area.
   const reveal = useCallback((id: string) => {
     const area = stage.current;
     const pane = layer.current;
@@ -602,8 +613,14 @@ export function GraphCanvas({ item, compact, busy, onPress, canPress }: {
     const sy = v.y + ny * v.zoom;
     const nw = nodeW * v.zoom;
     const nh = nodeH * v.zoom;
-    const dx = sx < 12 ? 12 - sx : sx + nw > w - 12 ? w - 12 - nw - sx : 0;
-    const dy = sy < 12 ? 12 - sy : sy + nh > h - 12 ? h - 12 - nh - sy : 0;
+    // the node's fold control sits beside it, fully past the node on the side its children leave it (right for a
+    // right tree, below for a down one), and counters the zoom (24 px drawn, a 44 px hit): a reveal that stops at the
+    // node's box leaves the control clipped at the stage edge, so the box it pans in grows by the control's far
+    // extent on that side — half the gap plus its own radius.
+    const gap = down ? (pitchY - nodeH) * v.zoom : (pitchX - nodeW) * v.zoom;
+    const reach = Math.max(24, gap / 2 + 24) * Math.max(1, 1 / v.zoom);
+    const dx = sx < 12 ? 12 - sx : sx + nw > w - 12 - (down ? 0 : reach) ? w - 12 - (down ? 0 : reach) - nw - sx : 0;
+    const dy = sy < 12 ? 12 - sy : sy + nh > h - 12 - (down ? reach : 0) ? h - 12 - (down ? reach : 0) - nh - sy : 0;
     if (dx || dy) {
       const next = { x: v.x + dx, y: v.y + dy, zoom: v.zoom };
       view.current = next;
@@ -615,7 +632,7 @@ export function GraphCanvas({ item, compact, busy, onPress, canPress }: {
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- readStore closes over keyed/scoped only through the store's own id
-  }, [at, nodeW, nodeH, still, keyed, scoped]);
+  }, [at, nodeW, nodeH, pitchX, pitchY, down, still, keyed, scoped]);
 
   const toggle = useCallback((id: string) => {
     const next = new Set(folds);
@@ -668,6 +685,7 @@ export function GraphCanvas({ item, compact, busy, onPress, canPress }: {
             pressable={pressable}
             onPress={onPress}
             onReveal={reveal}
+            selected={id === sel}
             fade={fadeOf(id)}
             fold={needsFold ? <FoldControl id={id} w={nodeW} h={nodeH} gap={down ? pitchY - nodeH : pitchX - nodeW} down={down} folded={folded} hidden={hidden} onToggle={toggle} /> : undefined}
           />
@@ -719,7 +737,9 @@ export function GraphCanvas({ item, compact, busy, onPress, canPress }: {
           const w = Math.max(...xs) + nodeW - Math.min(...xs) + 2 * FRAME_PAD;
           const h = Math.max(...ys) + nodeH - Math.min(...ys) + FRAME_PAD + CAPTION;
           return (
-            <div key={i} data-graph-frame={f.group} aria-hidden className="absolute rounded-card bg-inset" style={{ left: x, top: y, width: w, height: h }}>
+            <div key={i} data-graph-frame={f.group} className="absolute rounded-card bg-inset" style={{ left: x, top: y, width: w, height: h }}>
+              {/* the frame's title reads out (a group is part of the drawing, not decoration); the fill behind the
+                  members is the div itself, clipped to the frame's box */}
               <span className="absolute top-1.5 left-3 text-submeta text-ink-3">{f.group}</span>
             </div>
           );
@@ -757,6 +777,7 @@ export function GraphCanvas({ item, compact, busy, onPress, canPress }: {
             role="dialog"
             aria-modal="true"
             aria-label={t("extensions-viewbody.graph")}
+            tabIndex={-1}
             className="fixed inset-0 z-50 flex flex-col p-2 outline-none sm:p-4" style={{ background: "var(--page)" }}
           >
             <div className="flex shrink-0 justify-end">

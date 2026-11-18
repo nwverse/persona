@@ -164,6 +164,36 @@ describe("UI 10: the graph canvas", () => {
     );
   });
 
+  it("the selected node is the current one for a screen reader, and a group's frame title reads out", () => {
+    const d = doc(renderToStaticMarkup(<GraphCanvas item={draw(WORK)} busy="" onPress={() => {}} />));
+    expect(d.querySelector('[data-graph-node="c"]')!.getAttribute("aria-current")).toBe("true");
+    expect(d.querySelector('[data-graph-node="root"]')!.getAttribute("aria-current")).toBeNull();
+    // the frame's caption is not aria-hidden: the group's name reaches a screen reader (the nodes under it read
+    // their own fields; the frame itself says which group they belong to)
+    const frame = d.querySelector("[data-graph-frame]")!;
+    expect(frame.getAttribute("aria-hidden")).toBeNull();
+    expect(frame.textContent).toBe("Two ways");
+  });
+
+  it("a fold with a 3-digit hidden count grows past the 24 px circle instead of clipping its +N", () => {
+    // a deep folded part with 123 hidden nodes: the chip widens for the count, keeping its centre on the gap
+    const wide = structuredClone(WORK);
+    const graph = wide.sections[0].items[0] as { nodes: { id: string; title: string }[]; edges: { from: string; to: string }[] };
+    for (let i = 0; i < 121; i++) {
+      graph.nodes.push({ id: `x${i}`, title: `X${i}` });
+      graph.edges.push({ from: "s1", to: `x${i}` }); // under b's subtree: folding b hides them all
+    }
+    const item = draw(wide);
+    item.folded = ["b"]; // b starts folded in the view: 2 steps + 121 leaves = 123 hidden
+    const d = doc(renderToStaticMarkup(<GraphCanvas item={item} busy="" onPress={() => {}} />));
+    const fold = d.querySelector('[data-graph-fold="b"]') as unknown as HTMLElement;
+    expect(fold.textContent).toContain("+123");
+    expect(Number.parseFloat(fold.style.width)).toBeGreaterThan(24); // the count fits, not clipped by the circle
+    // a 2-digit count stays the 24 px circle
+    const d2 = doc(renderToStaticMarkup(<GraphCanvas item={draw(WORK)} busy="" onPress={() => {}} />));
+    expect(Number.parseFloat((d2.querySelector('[data-graph-fold="b"]') as unknown as HTMLElement).style.width)).toBe(24);
+  });
+
   it("puts each fold control inside its node's own listitem, so Tab walks node, its fold, the next node", async () => {
     const d = doc(renderToStaticMarkup(<GraphCanvas item={draw(WORK)} busy="" onPress={() => {}} />));
     const item = d.querySelector('[data-graph-at="root"]')!;
@@ -501,6 +531,41 @@ describe("UI 10: the graph canvas", () => {
     act(() => void window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
     await act(async () => {});
     expect(document.activeElement).toBe(host.querySelector<HTMLButtonElement>(".graph-preview"));
+  });
+
+  it("opening Full screen focuses the dialog itself, so the Tab trap runs (the dialog is focusable)", async () => {
+    // useModalFocus focuses the dialog element when nothing inside has the focus — which needs tabIndex={-1}, or the
+    // call does nothing and the focus stays outside the overlay (Tab leaves it, and a screen reader reads the page
+    // behind the modal).
+    await mountView(WORK);
+    const full = host.querySelector<HTMLButtonElement>(`[aria-label="${t("extensions-viewbody.graph_full_screen")}"]`)!;
+    full.focus();
+    act(() => full.click());
+    await act(async () => {});
+    const overlay = document.querySelector<HTMLElement>("[role=dialog]")!;
+    expect(overlay.getAttribute("tabindex")).toBe("-1");
+    expect(document.activeElement).toBe(overlay); // nothing inside was focused: the dialog itself takes it
+    // the Tab trap runs: Tab from the dialog's close button wraps to the dialog and never leaves the overlay
+    const close = overlay.querySelector<HTMLButtonElement>("button")!;
+    close.focus();
+    act(() => overlay.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true })));
+    await act(async () => {});
+    expect(document.activeElement).not.toBe(document.body);
+    expect(overlay.contains(document.activeElement)).toBe(true);
+    act(() => void window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+    await act(async () => {});
+    expect(document.querySelector("[role=dialog]")).toBeNull();
+  });
+
+  it("a focusable node without an action shows the focus ring (a group div, not a button)", async () => {
+    await mountView(WORK);
+    // `b` has no action: its node is a plain div with tabindex="0" — focusable with Tab, so it needs its own
+    // focus-visible outline (a button's own UA ring does not cover it).
+    const b = host.querySelector<HTMLElement>('[data-graph-node="b"]')!;
+    expect(b.tagName).toBe("DIV");
+    expect(b.getAttribute("tabindex")).toBe("0");
+    expect(b.className).toContain("focus-visible:outline-2");
+    expect(b.className).toContain("focus-visible:outline-accent");
   });
 
   it("a compact preview fits the whole layer into the stage, with no 25% floor", async () => {
