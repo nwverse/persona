@@ -171200,6 +171200,29 @@
       },
       "extractionState" : "manual"
     },
+    "Thinking [Call Screen]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Thinking"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "考え中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在思考"
+          }
+        }
+      }
+    },
     "Thinking [Message Views 8cf010]" : {
       "comment" : "Composer button title when no model is known: thinking effort follows",
       "localizations" : {
@@ -191898,6 +191921,29 @@
       },
       "extractionState" : "manual"
     },
+    "Waiting for your decision [Call Screen]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Waiting for your decision"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "あなたの判断待ち"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "等你拿主意"
+          }
+        }
+      }
+    },
     "Waiting for your decision [Inbox Now]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -196202,6 +196248,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Working [Call Screen]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Working"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "作業中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在工作"
+          }
+        }
+      }
     },
     "Working [Car Play Voice Screen 694b71]" : {
       "localizations" : {

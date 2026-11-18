@@ -55,6 +55,11 @@ extension PersonaCalls {
         if let note = admission() { return refuse(call, note: note) }
         guard let group = target?.group ?? group ?? model.hub?.group, let api = model.api(group) else { return refuse(call, note: Self.noHubNote) }
 
+        // Who the call is with is decided with its conversation (#9887 review): the look, the name the main conversation's
+        // top bar says and whose main conversation it is (the hub and the assistant picked there), read before the main
+        // conversation is asked for. The call is bound to that assistant: another one picked while it waits for the hub,
+        // the extension or the microphone renames nothing (`place` takes the name again only for this one).
+        let who = (look: assistant(), name: assistantName(), owner: assistantOwner())
         let key: SessionKey
         if let target {
             key = target
@@ -69,6 +74,7 @@ extension PersonaCalls {
                 return refuse(call, note: Self.unreachableNote)
             }
         }
+        call.assistant.retake(who.look, name: who.name, owner: who.owner)
         // The same checks as the voice chat's, so the reasons and Open Settings match (`VoiceEntry`): read-only, a
         // meeting's room, no voice extension or one not set up. It waits for the group's probe even when the chat's page
         // asked first (a cold launch from Recents).
@@ -108,8 +114,10 @@ extension PersonaCalls {
 
     /// Asks the system to start the call. Too early (the app still coming to the front): once more half a second later.
     /// Refused otherwise: `instead` (the in-app voice chat), and the call ends. Who the call is with is taken once more
-    /// just before the Start, after every wait (a cold launch's hub, roster and look may have come meanwhile): the look
-    /// and the name the main conversation's top bar says, together, fixed from then on as the system's handle is.
+    /// just before the Start, after every wait (a cold launch's roster and look may have come meanwhile): the look and the
+    /// name the main conversation's top bar says, together, fixed from then on as the system's handle is; only while the
+    /// same assistant is picked on the same hub as when its conversation was decided (`CallAssistant.Owner`): another one
+    /// picked meanwhile keeps the call's own name and look (#9887 review).
     func place(_ call: PersonaCall, origin: CallOrigin, instead: (@MainActor (CallSystemError) -> Void)? = nil) async {
         if origin != .app { await Self.waitUntilActive() }
         await readySystem()
@@ -118,7 +126,9 @@ extension PersonaCalls {
         while call.phase.isLive {
             // Asked again just before each Start: an urgent call that rang meanwhile goes first.
             if let note = admission() { return refuse(call, note: note) }
-            call.assistant.retake(assistant(), name: assistantName())
+            if !call.assistant.retake(assistant(), name: assistantName(), owner: assistantOwner()) {
+                Self.log.notice("call \(call.id.uuidString, privacy: .public): another assistant was picked meanwhile; the call keeps its own")
+            }
             do {
                 try await system.start(call.id, handle: .outgoing(name: call.name, kind: handleKind(), conversation: call.conversation?.title))
                 // Hung up while the system took it: its call ends too.

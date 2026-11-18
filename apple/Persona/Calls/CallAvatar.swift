@@ -36,18 +36,29 @@ nonisolated struct CallConversation: Equatable, Sendable {
 }
 
 /// Who a call is with, as its pages show them (#9290 follow-up): the assistant's look and its name, taken together when
-/// the call is made and once more just before the system's Start (a cold launch's look may have come by then:
-/// `PersonaCalls.place`), then fixed for the call, as the system's handle is. The name is the one the main conversation's
-/// top bar says (#9887: `AppModel.assistantShownName`, the current assistant's on a hub with several, else the look's),
-/// so the call screen, its bar, the question elsewhere and the system's handle say one name. Choosing another avatar,
-/// assistant or hub changes neither the face nor the name of a call that is on. A package's pictures are read and decoded
-/// off the main actor (`prepareFrames`, `prepareFace`) and kept here for the call; until they are ready, and for a
-/// built-in, the face is the built-in drawing in the look's design. The pages only arrange what is here
-/// (docs/apple/performance.md P1, P4, P8).
+/// the call is made, again as its conversation is decided (bound then to whose main conversation it is: `Owner`), and once
+/// more just before the system's Start for that same assistant only (a cold launch's look and roster may have come by
+/// then: `PersonaCalls.place`), then fixed for the call, as the system's handle is. The name is the one the main
+/// conversation's top bar says (#9887: `AppModel.assistantShownName`, the current assistant's on a hub with several, else
+/// the look's), so the call screen, its bar, the question elsewhere and the system's handle say one name. Choosing another
+/// avatar, assistant or hub changes neither the face nor the name of a call that is on, nor of one still being placed
+/// (#9887 review: it stays the assistant whose conversation it calls). A package's pictures are read and decoded off the
+/// main actor (`prepareFrames`, `prepareFace`) and kept here for the call; until they are ready, and for a built-in, the
+/// face is the built-in drawing in the look's design. The pages only arrange what is here (docs/apple/performance.md P1,
+/// P4, P8).
 @MainActor @Observable final class CallAssistant {
+    /// Whose main conversation a call is to: the selected hub's group and the assistant picked there (`manager`: its id;
+    /// nil, the hub's default or its only one), as the Persona page is (`AppModel.showsPage(of:)`).
+    nonisolated struct Owner: Equatable, Sendable {
+        var group: String
+        var manager: String?
+    }
+
     private(set) var persona: Persona
     /// The name as the main conversation's top bar says it when the call was made (before `CallHandle.name`).
     private(set) var shownName: String
+    /// Whose main conversation the call is to, once its conversation was decided; nil before.
+    @ObservationIgnored private(set) var owner: Owner?
     /// The package's dot frames for every state the call screen shows (`states`), once decoded.
     private(set) var frames: [PersonaState: PersonaFrames] = [:]
     /// The package's face for the urgent call's header and the voice chat's bar, once decoded.
@@ -69,15 +80,23 @@ nonisolated struct CallConversation: Equatable, Sendable {
         shownName = name ?? persona.name
     }
 
-    /// The look and name taken once more (just before the system's Start), together; its pictures go with the old look.
-    func retake(_ persona: Persona, name: String? = nil) {
+    /// The look and name taken once more, together; its pictures go with the old look. `owner`: whose main conversation
+    /// they are; the first one given binds the call to it (as its conversation is decided), and a later one taken for
+    /// another assistant or hub (picked while the call waited for the hub, the extension or the microphone) changes
+    /// nothing: false. Without `owner` (a DEBUG sample's look) it is taken as it is.
+    @discardableResult func retake(_ persona: Persona, name: String? = nil, owner: Owner? = nil) -> Bool {
+        if let owner {
+            if let bound = self.owner, bound != owner { return false }
+            self.owner = owner
+        }
         let name = name ?? persona.name
         if name != shownName { shownName = name }
-        guard persona != self.persona else { return }
+        guard persona != self.persona else { return true }
         self.persona = persona
         frames = [:]
         face = nil
         faceWidth = 0
+        return true
     }
 
     /// Reads and decodes the package's frames for the call's states off the main actor, once. Nothing for a built-in.
@@ -243,6 +262,10 @@ nonisolated struct CallAvatarLook: Equatable, Sendable {
 
     /// The ring follows a level (the microphone's, or the assistant's voice while it speaks).
     var followsLevel: Bool { ring == .voice || ring == .speaking }
+
+    /// Whether the avatar's clock ticks (P9): its look runs one, and the avatar is seen (`visible`: on screen, the page in
+    /// front of the call's details, the app in front). Otherwise it is paused and the speaking pose rests.
+    func ticks(visible: Bool) -> Bool { clock && visible }
 }
 
 @MainActor extension CallAvatarLook {
@@ -314,7 +337,83 @@ nonisolated struct CallSpeech: Equatable, Sendable {
 /// The speaking motion's state between frames (`CallSpeech`), kept by the avatar and stepped on its ring's clock. Not
 /// observed: nothing redraws because it changed, only the clock's frames read it.
 @MainActor final class CallSpeechClock {
-    var speech = CallSpeech.rest
+    private(set) var speech = CallSpeech.rest
+
+    /// The avatar's pose at `now` (nil: the clock does not tick, `CallAvatarLook.ticks`: still, off screen, under the
+    /// call's details, the app away): the voice's level read (only then, and only while the ring follows one) and, while
+    /// the look speaks with motion, followed one step; otherwise at rest at once, the level not read and no step taken,
+    /// so the motion starts from rest when the avatar is seen again.
+    func pose(_ look: CallAvatarLook, at now: TimeInterval?, level: () -> Double) -> CallAvatarPose {
+        let quiet: Double? = look.mouth ? 0 : nil
+        guard let now else {
+            if speech != .rest { speech = .rest }
+            return CallAvatarPose(mouth: quiet)
+        }
+        let heard = look.followsLevel ? min(1, max(0, level())) : 0
+        guard look.bounces || look.mouth else {
+            if speech != .rest { speech = .rest }
+            return CallAvatarPose(heard: heard, mouth: quiet)
+        }
+        speech.follow(heard, at: now)
+        let mouth = look.mouth ? speech.mouth : nil
+        guard look.bounces else { return CallAvatarPose(heard: heard, mouth: mouth) }
+        return CallAvatarPose(heard: heard, scale: speech.scale, lift: speech.lift, ripples: speech.ripples(at: now), mouth: mouth)
+    }
+}
+
+/// The avatar in one frame of its clock: the level its ring follows, its bounce (scale and lift, a share of its box), the
+/// ripples on their way out, and Mochi's mouth (nil: none drawn).
+nonisolated struct CallAvatarPose: Equatable, Sendable {
+    var heard: Double = 0
+    var scale: Double = 1
+    var lift: Double = 0
+    var ripples: [CallSpeech.Ripple] = []
+    var mouth: Double?
+}
+
+/// Whether the call's motion may run, as the system has it now (#9887 review): Low Power Mode and the app in front, each
+/// read once and again as the system says it changed (`NSProcessInfoPowerStateDidChange`, the app becoming active or
+/// resigning it), so the call's motion stops (and comes back) the moment the owner switches Low Power Mode or leaves the
+/// app, not at the next change of the call. Observed: the views that read it (`CallScreenAvatar`'s look, `CallAvatar`'s
+/// clock, `CallAssistantDot`'s frames) redraw then, and nothing else.
+@MainActor @Observable final class CallMotionPolicy {
+    static let shared = CallMotionPolicy()
+
+    private(set) var lowPower: Bool
+    private(set) var foreground: Bool
+    @ObservationIgnored private let readLowPower: @MainActor () -> Bool
+    @ObservationIgnored private var observers: [NSObjectProtocol] = []
+
+    /// `center`, `lowPower` and `active`: the system's (the tests' own).
+    init(center: NotificationCenter = .default,
+         lowPower: @escaping @MainActor () -> Bool = { ProcessInfo.processInfo.isLowPowerModeEnabled },
+         active: Bool = UIApplication.shared.applicationState == .active) {
+        readLowPower = lowPower
+        self.lowPower = lowPower()
+        foreground = active
+        // The power state is posted on a queue of the system's; delivered on the main one here.
+        observers.append(center.addObserver(forName: .NSProcessInfoPowerStateDidChange, object: nil, queue: .main) { @Sendable [weak self] _ in
+            MainActor.assumeIsolated { self?.powerChanged() }
+        })
+        observers.append(center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { @Sendable [weak self] _ in
+            MainActor.assumeIsolated { self?.setForeground(true) }
+        })
+        observers.append(center.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { @Sendable [weak self] _ in
+            MainActor.assumeIsolated { self?.setForeground(false) }
+        })
+    }
+
+    /// Motion is allowed: neither Reduce Motion (`reduceMotion`, the view's environment) nor Low Power Mode.
+    func allows(reduceMotion: Bool) -> Bool { !reduceMotion && !lowPower }
+
+    private func powerChanged() {
+        let now = readLowPower()
+        if now != lowPower { lowPower = now }
+    }
+
+    private func setForeground(_ now: Bool) {
+        if now != foreground { foreground = now }
+    }
 }
 
 /// The assistant on the call screen: the call's own look (`CallAssistant`, as the app's dot draws it: Mochi drawn, or a
@@ -323,10 +422,14 @@ nonisolated struct CallSpeech: Equatable, Sendable {
 /// layer: the avatar's bounce and the ripples leaving its edge. One clock, the ring's own, drives the ring, the ripples
 /// and the avatar's transform (its scale and lift); the picture itself is not drawn again for them (Mochi's mouth alone
 /// redraws Mochi as it moves), so a new level redraws the ring and moves the picture and nothing else
-/// (docs/apple/performance.md P4, P5). The clock runs only while the ring has something to follow or lap and motion is
-/// allowed: paused with Reduce Motion, in Low Power Mode, when the look is still, and when the page is not on screen
-/// (P9). While the assistant speaks and `interrupt` is given it is a button, Interrupt Voice, as the voice bar's orb;
-/// otherwise it is decoration (the name and the line under it say the state in words).
+/// (docs/apple/performance.md P4, P5). The clock runs only while the ring has something to follow or lap, motion is
+/// allowed and the avatar is seen (P9, `CallAvatarLook.ticks`): paused with Reduce Motion, in Low Power Mode (followed as
+/// it is switched, `CallMotionPolicy`), when the look is still, when the avatar is off screen (scrolled away, the page gone:
+/// `VisibleWork`, its own visibility reader), under the call's details (`covered`), and while the app is not in front
+/// (`CallMotionPolicy.foreground`, the scene's phase for that reader);
+/// the speaking pose rests then and the voice's level is not read. While the assistant speaks and `interrupt` is given it
+/// is a button, Interrupt Voice, as the voice bar's orb; otherwise it is decoration (the line under the name says the
+/// state in words, its value what the avatar shows: `CallScreenStateLine`).
 struct CallAvatar: View {
     let look: CallAvatarLook
     /// Who the call is with: the look and name it was made with (never the one chosen since).
@@ -337,11 +440,14 @@ struct CallAvatar: View {
     var level: () -> Double = { 0 }
     /// The box at the default text size; it grows with the text like every `Theme.Size`.
     var size: CGFloat = Theme.Size.callAvatar
+    /// Something covers the page (the call's details over it): the clock stops as if it were off screen.
+    var covered = false
     /// What a tap does while the assistant speaks: stop the voice. Given only then; without it this is never a button.
     var interrupt: (() -> Void)?
 
     @Environment(\.dynamicTypeSize) private var typeSize
     @State private var speech = CallSpeechClock()
+    @State private var policy = CallMotionPolicy.shared
 
     private var isButton: Bool { interrupt != nil }
 
@@ -349,26 +455,31 @@ struct CallAvatar: View {
         let box = size * Theme.sizeScale(typeSize)
         let face = box * Theme.Size.callAvatarFace
         Button { if isButton { interrupt?() } } label: {
-            TimelineView(.animation(minimumInterval: Theme.Motion.voiceFrame, paused: !look.clock)) { context in
-                let now = look.clock ? context.date.timeIntervalSinceReferenceDate : nil
-                let heard = now != nil && look.followsLevel ? min(1, max(0, level())) : 0
-                let step = pose(now, level: heard)
-                ZStack {
-                    if !step.ripples.isEmpty { CallAvatarRipples(ripples: step.ripples, box: box, face: face) }
-                    CallAvatarRing(look: look, lap: now.map { $0.truncatingRemainder(dividingBy: Theme.Motion.voiceSpin) / Theme.Motion.voiceSpin },
-                                   level: heard, box: box)
+            VisibleWork { visible in
+                let ticks = look.ticks(visible: visible && !covered)
+                TimelineView(.animation(minimumInterval: Theme.Motion.voiceFrame, paused: !ticks)) { context in
+                    let now = ticks ? context.date.timeIntervalSinceReferenceDate : nil
+                    let step = speech.pose(look, at: now, level: level)
                     ZStack {
-                        CallAvatarPicture(look: look, assistant: assistant, agent: agent, size: face, mouth: step.mouth)
-                        if let mark = look.mark {
-                            CallAvatarMark(mark: mark, side: box * Theme.Size.callAvatarBadge)
-                                .offset(x: face * 0.36, y: face * 0.36)
-                                .transition(.opacity)
+                        if !step.ripples.isEmpty { CallAvatarRipples(ripples: step.ripples, box: box, face: face) }
+                        CallAvatarRing(look: look, lap: now.map { $0.truncatingRemainder(dividingBy: Theme.Motion.voiceSpin) / Theme.Motion.voiceSpin },
+                                       level: step.heard, box: box)
+                        ZStack {
+                            CallAvatarPicture(look: look, assistant: assistant, agent: agent, size: face, mouth: step.mouth)
+                            if let mark = look.mark {
+                                CallAvatarMark(mark: mark, side: box * Theme.Size.callAvatarBadge)
+                                    .offset(x: face * 0.36, y: face * 0.36)
+                                    .transition(.opacity)
+                            }
                         }
+                        .scaleEffect(step.scale)
+                        .offset(y: -step.lift * box)
                     }
-                    .scaleEffect(step.scale)
-                    .offset(y: -step.lift * box)
                 }
             }
+            // The scene's phase for the avatar's visibility reader and its picture's is the app's, as the policy follows
+            // it: the call's window is UIKit's own over the app's scene (`CallWindow`), where SwiftUI's own may not say it.
+            .environment(\.scenePhase, policy.foreground ? .active : .inactive)
             .frame(width: box, height: box)
             .contentShape(.circle)
         }
@@ -379,20 +490,6 @@ struct CallAvatar: View {
         .accessibilityLabel("Interrupt Voice")
         .accessibilityHint("Stops only the voice; the work in progress carries on")
         .accessibilityIdentifier("call-avatar")
-    }
-
-    /// The speaking layer at `now` (nil: still): the level followed while the assistant speaks and motion is allowed, else
-    /// at rest.
-    private func pose(_ now: TimeInterval?, level: Double) -> (scale: Double, lift: Double, ripples: [CallSpeech.Ripple], mouth: Double?) {
-        let quiet: Double? = look.mouth ? 0 : nil
-        guard let now, look.bounces || look.mouth else {
-            if speech.speech != .rest { speech.speech = .rest }
-            return (1, 0, [], quiet)
-        }
-        speech.speech.follow(level, at: now)
-        let s = speech.speech
-        guard look.bounces else { return (1, 0, [], look.mouth ? s.mouth : nil) }
-        return (s.scale, s.lift, s.ripples(at: now), look.mouth ? s.mouth : nil)
     }
 
     /// As it is, enabled or not (the picture says the state); pressed, it dims as a plain button does.
@@ -503,7 +600,7 @@ private struct CallAvatarRing: View {
 /// once decoded (in a UIImageView, as the dot's; a state it has no frames for shows its idle ones), else the built-in
 /// drawing in the look's design, with the call's own expressions (`mouth`, `eyesShut`) where the call asks for them.
 /// Nothing is read or decoded here: the frames are asked for in a task, off the main actor. Holds still with Reduce
-/// Motion and in Low Power Mode, and when the call says so.
+/// Motion and in Low Power Mode (as it is switched: `CallMotionPolicy`), and when the call says so.
 struct CallAssistantDot: View {
     let assistant: CallAssistant
     let size: CGFloat
@@ -515,10 +612,11 @@ struct CallAssistantDot: View {
     var eyesShut = false
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var policy = CallMotionPolicy.shared
 
     var body: some View {
         let look = assistant.persona
-        face(look, still: still || reduceMotion || ProcessInfo.processInfo.isLowPowerModeEnabled)
+        face(look, still: still || !policy.allows(reduceMotion: reduceMotion))
             .frame(width: size, height: size)
             .accessibilityHidden(true)
             .task(id: look) { await assistant.prepareFrames(model.personas) }

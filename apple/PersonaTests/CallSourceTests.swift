@@ -292,7 +292,8 @@ struct CallSourceTests {
         let place = try #require(Self.body(owner, "func place(_ call: PersonaCall"))
         let ready = try #require(place.range(of: "await readySystem()"))
         #expect(ready.lowerBound < (place.range(of: "let system = system")?.lowerBound ?? place.startIndex))
-        #expect(place.contains("call.assistant.retake(assistant(), name: assistantName())"), "the look and the top bar's name, together")
+        #expect(place.contains("call.assistant.retake(assistant(), name: assistantName(), owner: assistantOwner())"),
+                "the look and the top bar's name, together, for the same assistant only")
 
         // The call's pages draw only what the call's assistant has ready: nothing read or decoded in their bodies.
         for path in ["Persona/Calls/CallAvatar.swift", "Persona/Calls/CallScreen.swift"] {

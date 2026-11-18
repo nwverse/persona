@@ -75,8 +75,11 @@ never stops the call.
 
 ## The avatar shows each state (#9887)
 
-The avatar on the call screen says what the call does, as the state line says it in words (VoiceOver hears the line; the
-avatar stays decorative). `CallScreenState.make` derives the row from what the call screen already observes: the call's
+The avatar on the call screen says what the call does; the avatar stays decorative, and VoiceOver hears it in words on
+the state line: its value is the row (`CallAvatarLook.Row.words`: Listening, Hearing you, Thinking, Speaking, Working,
+Waiting for your decision, Muted; nothing more where the line's own words say it) beside the running time the line shows,
+and "Waiting for your decision" is announced once as a card comes to wait (`CallScreenStateLine`, #9887 review); the
+minimised bar's face says Thinking, Working or Waiting for your decision within the bar's words. `CallScreenState.make` derives the row from what the call screen already observes: the call's
 phase and hold, the voice's phase and link, the mute, and what the call's conversation and voice do (`CallActivity`: the
 session working or a run the voice handed it still open, a card waiting for the owner, the voice thinking). The first row
 that applies wins: connecting, held, ended, speaking, needs you, thinking, working, muted, hearing, listening.
@@ -119,10 +122,15 @@ Every state's frames are decoded once, off the main actor, when the call screen 
 - **Performance** (docs/apple/performance.md P4, P5, P7, P9): one clock, the ring's own (`TimelineView` at `voiceFrame`),
   drives the ring, the ripples and the avatar's transform (its scale and lift); the picture is not drawn again for them,
   except Mochi's face as its mouth moves (in eighths, so only when it visibly moves, as its working state redraws). The
-  clock runs only while the ring has a level to follow or a lap to run, motion is allowed and the screen shows (a
-  minimised call has none). What the conversation does is read in the avatar's own small view (`CallScreenAvatar`), so
+  clock runs only while the ring has a level to follow or a lap to run, motion is allowed and the avatar is seen
+  (`CallAvatarLook.ticks`, #9887 review): its own visibility reader (`VisibleWork`: mounted, on screen in the page's scroll
+  view, the scene active), the app in front and the call's details closed (`CallAvatar.covered`); a minimised call has
+  no avatar at all. Unseen, the speaking pose rests at once, the voice's level is not read and no step is taken
+  (`CallSpeechClock.pose`). What the conversation does is read in the avatar's own small view (`CallScreenAvatar`), so
   only it redraws as that changes. Reduce Motion and Low Power Mode: every picture still (its state's first frame), no
-  bounce, ripples, mouth or clock; a bright, still ring alone says it speaks.
+  bounce, ripples, mouth or clock; a bright, still ring alone says it speaks. Low Power Mode is followed as it is
+  switched (`CallMotionPolicy`, from `NSProcessInfoPowerStateDidChange`), so the look is made again at once, whatever
+  the call does, and a package's frames hold still (or play again) with it.
 - **The minimised bar's small avatar** (`CallBarFace`): the same state, still: Mochi's still drawing of the state (the
   thinking bubble, the working arc, the needs-you ring, its eyes shut on hold, asleep once over), a package's first frame
   of the state (dimmed on hold), greyed once over; an Agent's mark as it is. No motion: the bar sits over every page for
@@ -140,9 +148,14 @@ Every state's frames are decoded once, off the main actor, when the call screen 
 
 Everything about a call says what the main conversation's top bar says: `AppModel.assistantShownName` (the current
 assistant's name on a hub with several assistants, else the look's, "Persona" for the built-in), taken when the call is
-made and once more just before the system's Start, then fixed for the call (`CallAssistant.name`, `PersonaCalls.assistantName`):
-the call screen and its bar, the question elsewhere ("End the call with <name> and call …?"), the handle's value and
-display name, and an urgent call's handle; the voice bar in the main conversation says it too (`VoiceEntry.label`), and the
+made, again as its conversation is decided and once more just before the system's Start, then fixed for the call
+(`CallAssistant.name`, `PersonaCalls.assistantName`): the call screen and its bar, the question elsewhere ("End the call
+with <name> and call …?"), the handle's value and display name, and an urgent call's handle and its page's header
+(`PersonaCalls.urgentCallerName`: the call's own name; the DEBUG sample with no call behind it, the name as it is now).
+The call is bound to whose main conversation it calls as that is decided (`CallAssistant.Owner`: the selected hub and
+the assistant picked there, #9887 review): the name and look are taken again before the Start only for that same
+assistant (a cold launch's roster and look), so picking another assistant or hub while the call waits for the extension
+or the microphone renames nothing; the voice bar in the main conversation says it too (`VoiceEntry.label`), and the
 voice chat's bar. A redial with any value still calls the current hub's main conversation.
 
 The page is a full-screen call screen that can be minimised to a "return to call" bar

@@ -85,6 +85,8 @@ import Testing
     /// The name the main conversation's top bar says when it is not the look's (a hub with several assistants: the current
     /// one's, `AppModel.assistantShownName`, #9887).
     var shownName: String?
+    /// Whose main conversation a new call is to: the hub and the assistant picked there (`PersonaCalls.assistantOwner`).
+    var owner = CallAssistant.Owner(group: "g", manager: nil)
     /// Developing Persona's Call handle (#9887).
     var handleKind: CallHandleKind = .generic
     /// What happened before the system's side was made, in order: "prepared" (`PersonaCalls.readySystem`), "made".
@@ -103,6 +105,8 @@ import Testing
             self?.persona ?? CallRig.persona(named: self?.assistant ?? "")
         }, assistantName: { [weak self] in
             self?.shownName ?? self?.persona?.name ?? self?.assistant ?? ""
+        }, assistantOwner: { [weak self] in
+            self?.owner ?? CallAssistant.Owner(group: "g", manager: nil)
         }, prepareSystem: { [weak self] in self?.systemSteps.append("prepared") }, handleKind: { [weak self] in self?.handleKind ?? .generic })
         calls.callLeft = { [weak self] in self?.left.append($0) }
         return calls

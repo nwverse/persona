@@ -30,20 +30,28 @@ struct UrgentCallView: View {
     }
 }
 
-/// The assistant's small face (who is calling, as on the call screen), "Urgent call" and how long it has lasted.
+/// Who is calling, as on the call screen: the assistant's small face and its name (the call's own, taken as it rang, as
+/// its handle says it: `PersonaCalls.urgentCallerName`, #9887 one name), "Urgent Call" under the name, and how long it has
+/// lasted. The name wraps whole, as every word of the page.
 private struct UrgentCallHeader: View {
     let session: UrgentCallSession
+    @State private var calls = PersonaCalls.shared
     @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         HStack(spacing: Theme.Space.s) {
             // The call's own assistant (its look when it rang), else the one on screen.
-            if let assistant = PersonaCalls.shared.urgentCall(session.id)?.assistant {
+            if let assistant = calls.urgentCall(session.id)?.assistant {
                 CallAssistantFace(assistant: assistant, size: Theme.Size.callBarAvatar * Theme.sizeScale(typeSize))
             } else {
                 PersonaAvatar(size: Theme.Size.callBarAvatar * Theme.sizeScale(typeSize))
             }
-            Text("Urgent Call").font(Theme.Font.heading).foregroundStyle(Theme.danger)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(verbatim: calls.urgentCallerName(session.id))
+                    .font(Theme.Font.heading)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("Urgent Call").font(Theme.Font.secondaryStrong).foregroundStyle(Theme.danger)
+            }
             Spacer(minLength: Theme.Space.s)
             if let answered = session.answeredAt {
                 Text(answered, style: .timer).font(Theme.Font.secondary.monospacedDigit()).foregroundStyle(.secondary)
@@ -51,6 +59,7 @@ private struct UrgentCallHeader: View {
             }
         }
         .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("urgentCall.header")
     }
 }
 

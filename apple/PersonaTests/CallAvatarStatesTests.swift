@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import SwiftUI
 import Testing
 import UIKit
@@ -259,14 +260,193 @@ struct CallAvatarStatesTests {
         #expect(fast.ripples.count <= CallSpeech.ripplesAtMost)
     }
 
-    /// The motion runs on the ring's own clock (one `TimelineView`, paused unless its look runs a clock), moves the picture
-    /// with a transform only, and the avatar is registered as one loop (`ContinuousMotionTests`).
+    /// The motion runs on the ring's own clock (one `TimelineView`, paused unless its look runs a clock and the avatar is
+    /// seen), moves the picture with a transform only, and the avatar is registered as one loop (`ContinuousMotionTests`).
     @Test func theMotionIsOnTheRingsOwnClock() throws {
         let code = try Self.code("Persona/Calls/CallAvatar.swift")
         #expect(code.components(separatedBy: "TimelineView(").count == 2, "one clock")
-        #expect(code.contains("TimelineView(.animation(minimumInterval: Theme.Motion.voiceFrame, paused: !look.clock))"))
+        #expect(code.contains("TimelineView(.animation(minimumInterval: Theme.Motion.voiceFrame, paused: !ticks))"))
         #expect(code.contains(".scaleEffect(step.scale)") && code.contains(".offset(y: -step.lift * box)"))
         #expect(ContinuousMotionTests.registry["Persona/Calls/CallAvatar.swift"]?.count == 1)
+    }
+
+    // MARK: The review: the clock only while the avatar is seen (P9)
+
+    /// The clock ticks only while the look runs one and the avatar is seen: never off screen, under the call's details or
+    /// with the app away, whatever the row and the picture.
+    @Test(arguments: Kind.allCases)
+    func theClockTicksOnlyWhileTheAvatarIsSeen(kind: Kind) {
+        for row in Row.allCases {
+            for muted in [false, true] {
+                let look = CallAvatarLook.make(row, muted: muted, kind: kind, motion: true)
+                #expect(!look.ticks(visible: false), "\(kind) \(row) muted \(muted): ticks unseen")
+                #expect(look.ticks(visible: true) == look.clock, "\(kind) \(row) muted \(muted)")
+            }
+        }
+    }
+
+    /// While the clock ticks the speaking pose follows the voice, a step a frame; once it stops (the avatar hidden, covered
+    /// or the app away) the pose is at rest at once, no step is taken and the voice's level is not read, and it starts
+    /// again from rest.
+    @Test func aHiddenAvatarTakesNoStep() {
+        let clock = CallSpeechClock()
+        let speaking = CallAvatarLook.make(.speaking, muted: false, kind: .builtin, motion: true)
+        var reads = 0
+        var t = 100.0
+        for _ in 0..<6 {
+            t += Theme.Motion.voiceFrame
+            _ = clock.pose(speaking, at: t, level: { reads += 1; return 1 })
+        }
+        let loud = clock.pose(speaking, at: t + Theme.Motion.voiceFrame, level: { reads += 1; return 1 })
+        #expect(reads == 7 && loud.heard == 1 && loud.scale > 1 && loud.lift > 0 && !loud.ripples.isEmpty && (loud.mouth ?? 0) > 0)
+        #expect(clock.speech.envelope > 0.9)
+
+        // Hidden: at rest, nothing read, nothing stepped, frame after frame.
+        for _ in 0..<5 {
+            let hidden = clock.pose(speaking, at: nil, level: { reads += 1; return 1 })
+            #expect(hidden == CallAvatarPose(mouth: 0), "Mochi's mouth closed, no bounce, no ripple")
+            #expect(clock.speech == .rest)
+        }
+        #expect(reads == 7, "the level was read while hidden")
+
+        // Seen again: from rest.
+        let back = clock.pose(speaking, at: t + 10, level: { reads += 1; return 1 })
+        #expect(reads == 8 && back.ripples.isEmpty && clock.speech.envelope < 0.5)
+
+        // A look that does not speak follows the level on its ring and keeps no speaking pose.
+        let listening = CallAvatarLook.make(.listening, muted: false, kind: .package, motion: true)
+        let ring = clock.pose(listening, at: t + 11, level: { 0.4 })
+        #expect(ring == CallAvatarPose(heard: 0.4) && clock.speech == .rest)
+        // A held one reads no level at all.
+        let held = CallAvatarLook.make(.held, muted: false, kind: .builtin, motion: true)
+        let still = clock.pose(held, at: t + 12, level: { reads += 1; return 1 })
+        #expect(still == CallAvatarPose() && reads == 8)
+    }
+
+    /// The app leaving the front stops the clock and its return starts it (`CallMotionPolicy.foreground`, from the app's
+    /// active notifications, the scene's phase for the avatar's visibility reader), observed so the avatar redraws then.
+    @Test func theAppAwayStopsTheClock() {
+        let center = NotificationCenter()
+        let policy = CallMotionPolicy(center: center, lowPower: { false }, active: true)
+        #expect(policy.foreground)
+        nonisolated(unsafe) var changed = false // the change handler fires once, synchronously, on the write
+        withObservationTracking { _ = policy.foreground } onChange: { changed = true }
+        center.post(name: UIApplication.willResignActiveNotification, object: nil)
+        #expect(!policy.foreground && changed)
+        center.post(name: UIApplication.didBecomeActiveNotification, object: nil)
+        #expect(policy.foreground)
+    }
+
+    /// The avatar reads its own visibility (`VisibleWork`: mounted, on screen in the page's scroll view, the scene active)
+    /// with the app in front and the call's details closed, and the clock's pause and the pose go by that alone; the call
+    /// screen says when its details cover it.
+    @Test func theAvatarsVisibilityInTheSources() throws {
+        let avatar = try Self.code("Persona/Calls/CallAvatar.swift")
+        #expect(avatar.contains(".environment(\\.scenePhase, policy.foreground ? .active : .inactive)"))
+        #expect(avatar.contains("VisibleWork { visible in"))
+        #expect(avatar.contains("let ticks = look.ticks(visible: visible && !covered)"))
+        #expect(avatar.contains("let now = ticks ? context.date.timeIntervalSinceReferenceDate : nil"))
+        #expect(avatar.contains("let step = speech.pose(look, at: now, level: level)"))
+        let screen = try Self.code("Persona/Calls/CallScreen.swift")
+        #expect(screen.contains("CallScreenMiddle(call: call, state: state, page: height, covered: details != nil)"))
+        #expect(screen.contains("CallScreenAvatar(call: call, size: size, covered: covered)"))
+        #expect(screen.contains("size: size, covered: covered, interrupt:"))
+    }
+
+    // MARK: The review: Low Power Mode as it is switched
+
+    /// Low Power Mode switched on and off during a call, the voice speaking all along: the policy follows the system's
+    /// power-state notification at once (observed, so the avatar's look is made again), and the same row's look loses its
+    /// bounce, ripples, mouth and clock, then has them back; a package's frames hold still with it.
+    @Test func lowPowerModeSwitchedDuringTheCall() {
+        let center = NotificationCenter()
+        let power = PowerSwitch()
+        let policy = CallMotionPolicy(center: center, lowPower: { power.low }, active: true)
+        func look(_ kind: Kind) -> CallAvatarLook {
+            CallAvatarLook.make(.speaking, muted: false, kind: kind, motion: policy.allows(reduceMotion: false))
+        }
+        #expect(!policy.lowPower && look(.builtin).bounces && look(.builtin).mouth && look(.package).clock)
+
+        nonisolated(unsafe) var changed = false // the change handler fires once, synchronously, on the write
+        withObservationTracking { _ = policy.allows(reduceMotion: false) } onChange: { changed = true }
+        power.low = true
+        center.post(name: .NSProcessInfoPowerStateDidChange, object: nil)
+        #expect(policy.lowPower && changed, "the views that read it are told")
+        for kind in Kind.allCases {
+            let l = look(kind)
+            #expect(!l.bounces && !l.mouth && !l.clock && l.still && l.ring == .speaking, "\(kind): a bright, still ring alone")
+        }
+
+        power.low = false
+        center.post(name: .NSProcessInfoPowerStateDidChange, object: nil)
+        #expect(!policy.lowPower && look(.builtin).bounces && look(.builtin).mouth && look(.package).clock && !look(.package).still)
+        #expect(!policy.allows(reduceMotion: true), "Reduce Motion holds still whatever the power")
+
+        // The call's views take it from the policy, never from a one-time read.
+        for path in ["Persona/Calls/CallScreen.swift", "Persona/Calls/CallAvatar.swift"] {
+            let code = try? Self.code(path)
+            let reads = (code ?? "").components(separatedBy: "isLowPowerModeEnabled").count - 1
+            #expect(reads == (path.hasSuffix("CallAvatar.swift") ? 1 : 0), "\(path): Low Power Mode read outside CallMotionPolicy")
+        }
+        let screen = (try? Self.code("Persona/Calls/CallScreen.swift")) ?? ""
+        #expect(screen.contains("let motion = policy.allows(reduceMotion: reduceMotion)"))
+        let avatar = (try? Self.code("Persona/Calls/CallAvatar.swift")) ?? ""
+        #expect(avatar.contains("face(look, still: still || !policy.allows(reduceMotion: reduceMotion))"), "a package's frames")
+    }
+
+    // MARK: The review: the avatar's states for VoiceOver
+
+    /// The avatar stays decorative; the call's line says each row in words as its value (the running time stays what it
+    /// shows): the conversation thinking, working and waiting for a decision, the voice speaking, the owner speaking,
+    /// nobody, muted; nothing more where the line's own words say it. The bar's face says what the conversation does.
+    @Test func eachRowInWordsForVoiceOver() {
+        let words: [Row: String?] = [
+            .connecting: nil, .held: nil, .ended: nil,
+            .listening: String(localized: "Listening [Voice Bar Line 226686]"),
+            .hearing: String(localized: "Hearing you"),
+            .thinking: String(localized: "Thinking [Call Screen]"),
+            .speaking: String(localized: "Speaking"),
+            .working: String(localized: "Working [Call Screen]"),
+            .needsYou: String(localized: "Waiting for your decision [Call Screen]"),
+            .muted: String(localized: "Muted [Inbox Mutes View e5e468]"),
+        ]
+        for row in Row.allCases {
+            #expect(row.words == words[row] ?? nil, "\(row)")
+            #expect(row.barWords == ([.thinking, .working, .needsYou].contains(row) ? row.words : nil), "\(row)")
+        }
+        // From what the call screen observes: a card coming, the conversation working, the voice thinking.
+        let live = (VoicePhase.live(.listening), VoiceLink.live)
+        #expect(Self.state(voice: live, asking: true).avatar.words == String(localized: "Waiting for your decision [Call Screen]"))
+        #expect(Self.state(voice: live, working: true).avatar.words == String(localized: "Working [Call Screen]"))
+        #expect(Self.state(voice: live, thinking: true).avatar.words == String(localized: "Thinking [Call Screen]"))
+        #expect(Self.state(voice: live, working: true).line == .duration(since: Self.since), "the line still shows the running time")
+    }
+
+    /// The new words in each language.
+    @Test func theRowsWordsInEachLanguage() throws {
+        let keys = ["Thinking [Call Screen]", "Working [Call Screen]", "Waiting for your decision [Call Screen]"]
+        let words: [String: [String]] = [
+            "en": ["Thinking", "Working", "Waiting for your decision"],
+            "zh-Hans": ["正在思考", "正在工作", "等你拿主意"], // i18n-ignore: the catalog's words
+            "ja": ["考え中", "作業中", "あなたの判断待ち"], // i18n-ignore: the catalog's words
+        ]
+        for (language, expected) in words.sorted(by: { $0.key < $1.key }) {
+            let path = try #require(Bundle.main.path(forResource: language, ofType: "lproj"), "no \(language) strings")
+            let bundle = try #require(Bundle(path: path))
+            #expect(keys.map { bundle.localizedString(forKey: $0, value: nil, table: nil) } == expected, "\(language)")
+        }
+    }
+
+    /// The call screen's line carries the row's words as its value and VoiceOver hears a decision waiting as it comes; the
+    /// avatar stays hidden from VoiceOver unless it is Interrupt Voice; the bar's face says its words within the bar's.
+    @Test func theWordsInTheSources() throws {
+        let screen = try Self.code("Persona/Calls/CallScreen.swift")
+        #expect(screen.contains("CallScreenStateLine(call: call, line: state.line)"))
+        #expect(screen.contains(".accessibilityValue(row.words ?? \"\")"))
+        #expect(screen.contains(".onChange(of: row == .needsYou)") && screen.contains("AccessibilityNotification.Announcement(words).post()"))
+        #expect(screen.contains(".accessibilityLabel(state.avatar.barWords ?? \"\")"))
+        let avatar = try Self.code("Persona/Calls/CallAvatar.swift")
+        #expect(avatar.contains(".accessibilityHidden(!isButton)"))
     }
 
     // MARK: Mochi's call-only drawing
@@ -385,6 +565,82 @@ struct CallAvatarStatesTests {
         #expect(entry.contains("session.assistant ? model.assistantShownName(in: key) : session.agentLabel"), "the voice bar's own name")
     }
 
+    /// A call still being placed keeps the assistant whose main conversation it calls (#9887 review): assistant A's main
+    /// conversation decided (the call bound to A, as `callPersona` does once it has the conversation), the owner picks B
+    /// while the call waits for the extension; at the Start the screen, the bar, the question elsewhere and the system's
+    /// handle still say A's name, with A's look. The same assistant's name and look that came meanwhile (a cold launch's
+    /// roster) do count; so does another hub's pick not, nor another assistant's afterwards.
+    @Test func aPendingCallKeepsItsAssistantWhenAnotherIsPicked() async {
+        let rig = CallRig()
+        rig.persona = CallRig.persona(named: "Mochi")
+        rig.shownName = "工作" // i18n-ignore: a test's assistant name
+        rig.owner = CallAssistant.Owner(group: "g", manager: "work")
+        let call = rig.calls.add(kind: .owner(group: rig.voice.key.group), direction: .outgoing)
+        // The conversation decided: who the call is with, bound to A.
+        #expect(call.assistant.retake(rig.calls.assistant(), name: rig.calls.assistantName(), owner: rig.calls.assistantOwner()))
+        rig.attachEngine(call)
+        // The owner picks B while the call waits; B's name and B's look.
+        rig.owner = CallAssistant.Owner(group: "g", manager: "life")
+        rig.shownName = "生活" // i18n-ignore: a test's assistant name
+        rig.persona = CallRig.persona(named: "Frog")
+        await rig.calls.place(call, origin: .app)
+        #expect(rig.system.startNames == ["工作"] && rig.system.startHandles.first?.displayName == "工作")
+        #expect(call.name == "工作" && call.title == "工作" && call.assistant.persona.name == "Mochi")
+        #expect(rig.calls.liveOwnerCallName == "工作", "the question elsewhere")
+        #expect(call.assistant.owner == CallAssistant.Owner(group: "g", manager: "work"))
+        // Another hub's assistant of the same id is another assistant too.
+        #expect(!call.assistant.retake(.builtin, name: "x", owner: CallAssistant.Owner(group: "h", manager: "work")))
+        #expect(call.name == "工作")
+
+        // The same assistant: what came meanwhile is taken (a cold launch's roster and look).
+        let same = CallRig()
+        same.shownName = "Persona"
+        same.owner = CallAssistant.Owner(group: "g", manager: "work")
+        let placed = same.calls.add(kind: .owner(group: same.voice.key.group), direction: .outgoing)
+        placed.assistant.retake(same.calls.assistant(), name: same.calls.assistantName(), owner: same.calls.assistantOwner())
+        same.attachEngine(placed)
+        same.shownName = "工作" // i18n-ignore: a test's assistant name
+        same.persona = CallRig.persona(named: "Mochi")
+        await same.calls.place(placed, origin: .app)
+        #expect(same.system.startNames == ["工作"] && placed.name == "工作" && placed.assistant.persona.name == "Mochi")
+
+        // `callPersona` binds it as the conversation is decided, from what it read before asking for it, and before
+        // every wait for the extension and the microphone.
+        let code = (try? Self.code("Persona/Calls/OwnerCall.swift")) ?? ""
+        let who = code.range(of: "let who = (look: assistant(), name: assistantName(), owner: assistantOwner())")
+        let key = code.range(of: "let key: SessionKey")
+        let bound = code.range(of: "call.assistant.retake(who.look, name: who.name, owner: who.owner)")
+        let refresh = code.range(of: "await VoiceSupport.shared.refresh(group: group, api: api)")
+        #expect(who != nil && key != nil && bound != nil && refresh != nil)
+        if let who, let key, let bound, let refresh {
+            #expect(who.lowerBound < key.lowerBound && key.lowerBound < bound.lowerBound && bound.lowerBound < refresh.lowerBound)
+        }
+    }
+
+    // MARK: The review: the urgent call's header says the call's own name
+
+    /// The urgent call's page says who is calling in its header: the call's own name, taken as it rang and fixed (as its
+    /// handle), not the look's ("Mochi") nor a name picked since; the page with no call behind it (the DEBUG sample) says
+    /// the name as it is now, "Persona" when empty.
+    @Test func theUrgentCallsHeaderSaysTheCallsName() async throws {
+        let rig = CallRig()
+        rig.persona = CallRig.persona(named: "Mochi")
+        rig.shownName = "助手" // i18n-ignore: a test's assistant name
+        try await rig.calls.ring(UUID(), callID: "call_1", name: "Urgent")
+        let call = try #require(rig.calls.urgentCall("call_1"))
+        #expect(call.assistant.persona.name == "Mochi" && rig.system.rings.last?.name == "助手")
+        #expect(rig.calls.urgentCallerName("call_1") == "助手")
+        rig.shownName = "工作" // i18n-ignore: a test's assistant name
+        #expect(rig.calls.urgentCallerName("call_1") == "助手", "fixed for the call, as its handle")
+        #expect(rig.calls.urgentCallerName("call_mock") == "工作", "no call behind the page: the name as it is now")
+        rig.shownName = " "
+        #expect(rig.calls.urgentCallerName("call_mock") == "Persona")
+        let page = try Self.code("Persona/Calls/UrgentCallView.swift")
+        let header = try #require(page.range(of: "private struct UrgentCallHeader"))
+        let body = String(page[header.upperBound...].prefix(1400))
+        #expect(body.contains("Text(verbatim: calls.urgentCallerName(session.id))") && body.contains("Text(\"Urgent Call\")"))
+    }
+
     // MARK: Item 6: the voice chat asks before it is replaced
 
     /// The voice chat in the app on in another conversation (the fallback that survives leaving its page): the phone icon
@@ -471,6 +727,11 @@ struct CallAvatarStatesTests {
         }
         return out
     }
+}
+
+/// Low Power Mode as a test switches it (`CallMotionPolicy`'s reader).
+@MainActor private final class PowerSwitch {
+    var low = false
 }
 
 private extension Duration {

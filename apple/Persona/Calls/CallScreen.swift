@@ -149,7 +149,7 @@ struct CallScreen: View {
                 minimise
                 Spacer(minLength: 0)
             }
-            CallScreenMiddle(call: call, state: state, page: height) { details = $0 }
+            CallScreenMiddle(call: call, state: state, page: height, covered: details != nil) { details = $0 }
             CallScreenControls(call: call, route: calls.route)
         }
         .padding(.horizontal, Theme.Space.page)
@@ -228,6 +228,8 @@ private struct CallScreenMiddle: View {
     let state: CallScreenState
     /// The page's height (the orb takes a share of it at most).
     let page: CGFloat
+    /// The call's details are open over the page: the avatar's clock stops (P9).
+    let covered: Bool
     /// The name or the caption tapped: their whole text.
     let open: (CallDetailsSheet.Opened) -> Void
     /// The height the middle has, what the name and the line take of it, and the caption's least room.
@@ -246,11 +248,11 @@ private struct CallScreenMiddle: View {
             VStack(spacing: Theme.Space.section) {
                 VStack(spacing: Theme.Space.l) {
                     if let size {
-                        CallScreenAvatar(call: call, size: size)
+                        CallScreenAvatar(call: call, size: size, covered: covered)
                     }
                     VStack(spacing: Theme.Space.s) {
                         CallScreenName(call: call, lines: CallScreen.nameLines(typeSize)) { open(.name) }
-                        CallStateLine(line: state.line)
+                        CallScreenStateLine(call: call, line: state.line)
                     }
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
                         if abs(who - h) >= 1 { who = h }
@@ -309,16 +311,20 @@ private struct CallScreenName: View {
 /// The assistant at the call screen's size showing what the call does (`CallAvatarLook` from the call's state and what its
 /// conversation and voice do, read here so only this view redraws as they change: docs/apple/performance.md P5), its
 /// ring following the voice (its levels: the microphone's while it listens, the assistant's own while it speaks). A tap
-/// while it speaks stops the voice, as the voice bar's orb does.
+/// while it speaks stops the voice, as the voice bar's orb does. Motion follows Reduce Motion and Low Power Mode as they
+/// are switched (`CallMotionPolicy`: the look is made again the moment Low Power Mode changes, whatever the call does).
 private struct CallScreenAvatar: View {
     let call: PersonaCall
     let size: CGFloat
+    /// The call's details over the page (`CallAvatar.covered`).
+    let covered: Bool
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var policy = CallMotionPolicy.shared
 
     var body: some View {
         let state = CallScreen.state(call, activity: .read(call, model: model))
-        let motion = !reduceMotion && !ProcessInfo.processInfo.isLowPowerModeEnabled
+        let motion = policy.allows(reduceMotion: reduceMotion)
         let look = CallAvatarLook.make(state.avatar, muted: state.microphoneOff, kind: CallAvatarLook.kind(call), motion: motion)
         let speaking = state.avatar == .speaking
         let voice = call.voice
@@ -330,8 +336,49 @@ private struct CallScreenAvatar: View {
         CallAvatar(look: look, assistant: call.assistant, agent: call.conversation?.agent, level: { [levels = voice?.levels] in
             guard let levels else { return sample() }
             return Double(speaking ? levels.output : levels.input)
-        }, size: size, interrupt: speaking ? voice.map { voice in { voice.interruptSpeech() } } : nil)
+        }, size: size, covered: covered, interrupt: speaking ? voice.map { voice in { voice.interruptSpeech() } } : nil)
     }
+}
+
+/// The call's line on the call screen with what the avatar shows in words, for VoiceOver (#9887 review: the avatar is
+/// decorative, and the line shows the running time whatever the call does): its value is the avatar's row
+/// (`CallAvatarLook.Row.words`: listening, hearing you, thinking, speaking, working, waiting for your decision, muted),
+/// and VoiceOver hears "Waiting for your decision" once as a card comes to wait for the owner. What the call's
+/// conversation and voice do is read here, so only the line redraws as it changes (docs/apple/performance.md P5).
+private struct CallScreenStateLine: View {
+    let call: PersonaCall
+    let line: CallScreenState.Line
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let row = CallScreen.state(call, activity: .read(call, model: model)).avatar
+        CallStateLine(line: line)
+            .accessibilityValue(row.words ?? "")
+            .onChange(of: row == .needsYou) { _, waiting in
+                if waiting, let words = row.words { AccessibilityNotification.Announcement(words).post() }
+            }
+    }
+}
+
+extension CallAvatarLook.Row {
+    /// What the avatar shows the call doing, in words (VoiceOver's value of the call's line, #9887 review); nil where the
+    /// line's own words say it (Calling…, Connecting…, Reconnecting…, On Hold, Call ended).
+    var words: String? {
+        switch self {
+        case .connecting, .held, .ended: nil
+        case .listening: String(localized: "Listening [Voice Bar Line 226686]")
+        case .hearing: String(localized: "Hearing you")
+        case .thinking: String(localized: "Thinking [Call Screen]")
+        case .speaking: String(localized: "Speaking")
+        case .working: String(localized: "Working [Call Screen]")
+        case .needsYou: String(localized: "Waiting for your decision [Call Screen]")
+        case .muted: String(localized: "Muted [Inbox Mutes View e5e468]")
+        }
+    }
+
+    /// What the minimised bar's face says to VoiceOver: what the conversation does (the bar's own words and marks say the
+    /// rest: the running time, muted, on hold).
+    var barWords: String? { [.thinking, .working, .needsYou].contains(self) ? words : nil }
 }
 
 /// The line under the name: Calling…, Connecting…, the running time, On Hold, Reconnecting…, or how it ended. It
@@ -560,7 +607,8 @@ struct CallReturnPill: View {
 /// conversation's look, stays the same picture. No motion and no clock: the bar sits over every page for the whole call,
 /// where a moving face would pull the eye from what the owner reads and keep a clock running on every page, and at its
 /// size a bounce or a mouth would not read; the call screen moves. What its conversation does is read here, so only this
-/// redraws as it changes.
+/// redraws as it changes, and said to VoiceOver within the bar's words (thinking, working, waiting for your decision:
+/// `CallAvatarLook.Row.barWords`).
 private struct CallBarFace: View {
     let call: PersonaCall
     let side: CGFloat
@@ -577,6 +625,9 @@ private struct CallBarFace: View {
             }
         }
         .opacity(look.pictureOpacity)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(state.avatar.barWords ?? "")
+        .accessibilityHidden(state.avatar.barWords == nil)
     }
 }
 

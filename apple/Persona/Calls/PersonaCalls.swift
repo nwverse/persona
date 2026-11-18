@@ -10,8 +10,9 @@ import os
     let id: UUID
     let kind: CallKind
     let direction: CallDirection
-    /// Who the call is with: the assistant's look and name, taken together when the call is made (and once more just
-    /// before the system's Start), then fixed for the call (`CallAssistant`).
+    /// Who the call is with: the assistant's look and name, taken together when the call is made (again as its
+    /// conversation is decided, and once more just before the system's Start for that same assistant), then fixed for the
+    /// call (`CallAssistant`).
     let assistant: CallAssistant
     /// The assistant's name as the call carries it (`CallHandle.name`): what the main conversation's top bar says
     /// (`AppModel.assistantShownName`, #9887), and what the system's call UI, the Lock Screen and Recents show.
@@ -155,6 +156,9 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
     /// The name a new call carries (#9887): what the main conversation's top bar says, the current assistant's on a hub
     /// with several, else the look's (`AppModel.assistantShownName`; the tests' own).
     @ObservationIgnored let assistantName: @MainActor () -> String
+    /// Whose main conversation a new call is to (#9887 review): the selected hub's group and the assistant picked there
+    /// (`CallAssistant.Owner`; the tests' own). A call's name and look are taken again only for the same one.
+    @ObservationIgnored let assistantOwner: @MainActor () -> CallAssistant.Owner
     /// What the system's side needs before it is made, off the main actor: its call UI's icon (`CallIcon.prepare`).
     @ObservationIgnored let prepareSystem: @MainActor () async -> Void
     /// The kind of handle a new call to Persona carries (Developing Persona's Call handle, #9887).
@@ -171,12 +175,16 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
          callCategory: @escaping @MainActor () async -> Void = { await PersonaCalls.setCallCategory() },
          assistant: @escaping @MainActor () -> Persona = { AppModel.shared.persona },
          assistantName: @escaping @MainActor () -> String = { AppModel.shared.assistantShownName },
+         assistantOwner: @escaping @MainActor () -> CallAssistant.Owner = {
+             CallAssistant.Owner(group: AppModel.shared.hub?.group ?? "", manager: AppModel.shared.assistantManagerID)
+         },
          prepareSystem: @escaping @MainActor () async -> Void = { await CallIcon.prepare() },
          handleKind: @escaping @MainActor () -> CallHandleKind = { DevMode.shared.callHandleInUse }) {
         makeSystem = system
         self.handleKind = handleKind
         self.assistant = assistant
         self.assistantName = assistantName
+        self.assistantOwner = assistantOwner
         self.prepareSystem = prepareSystem
         self.clock = clock
         self.voiceCalls = voiceCalls
@@ -255,6 +263,13 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
     /// The urgent call the hub knows as `callID` (its page's header shows who is calling).
     func urgentCall(_ callID: String) -> PersonaCall? {
         calls.last { if case .urgent(let id) = $0.kind { id == callID } else { false } }
+    }
+
+    /// Who the urgent call `callID`'s page says is calling (its header, #9887 review): the call's own name, taken as it
+    /// rang and fixed for it, as its handle says it (`PersonaCall.name`: what the main conversation's top bar said then,
+    /// "Persona" when that was empty); a page with no system call behind it (the DEBUG sample) says the name as it is now.
+    func urgentCallerName(_ callID: String) -> String {
+        urgentCall(callID)?.name ?? CallHandle.name(assistantName())
     }
 
     // MARK: What the page does
