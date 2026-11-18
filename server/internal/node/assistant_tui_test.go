@@ -526,23 +526,20 @@ func TestALongInteractiveCommandStartsInTmux(t *testing.T) {
 	})
 }
 
-// A tmux that refuses to start says why only on its own terminal: that is the reason the start fails with, the one the
+// A tmux that refuses to start says why only on its own output: that is the reason the start fails with, the one the
 // node's log and the conversation's execution report show, not an empty "exited (status 1)".
 func TestATmuxThatRefusesToStartSaysWhy(t *testing.T) {
 	dir := t.TempDir()
-	fake := "#!/bin/sh\ncase \"$*\" in\n*new-session*) echo 'command too long'; exit 1;;\n" +
+	fake := "#!/bin/sh\ncase \"$1\" in\n-D) echo 'tmux: unknown option -- D' >&2; exit 1;;\n" +
 		"*) echo \"no server running on $2\" >&2; exit 1;;\nesac\n"
 	if err := os.WriteFile(filepath.Join(dir, "tmux"), []byte(fake), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	b := &tuiBridge{spec: tuiSpec{Cwd: dir, TUI: []string{"claude"}}}
-	if err := b.launch(); err != nil {
-		t.Fatal(err)
-	}
 	defer b.shutdown()
-	err := b.awaitReady(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "tmux exited before Claude Code was ready (status 1): command too long") {
+	err := b.launch()
+	if err == nil || !strings.Contains(err.Error(), "tmux exited before Claude Code was ready (status 1): tmux: unknown option -- D") {
 		t.Fatalf("start failed with %v", err)
 	}
 }
@@ -550,7 +547,7 @@ func TestATmuxThatRefusesToStartSaysWhy(t *testing.T) {
 // The pane's script runs the command word for word, whatever its arguments hold.
 func TestTUIScriptQuotesEveryArgument(t *testing.T) {
 	args := []string{"printf", `%s|`, "it's", `$HOME`, "a b", "`id`", "", "line\nbreak"}
-	out, err := exec.Command("/bin/sh", "-c", tuiScript(args)).Output()
+	out, err := exec.Command("/bin/sh", "-c", tuiScript(args, "", false)).Output()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -585,5 +582,114 @@ func TestAMessageWithNoModelPickKeepsInteractive(t *testing.T) {
 	})
 	if spec.Session != id {
 		t.Fatalf("spec %+v", spec)
+	}
+}
+
+// Interactive Claude Code and what it runs (its MCP server, its hooks) descend from the bridge, the process the node
+// runs for the conversation, as claude -p's do: that is how the node takes the assistant's MCP server for the
+// assistant's (mcpAssistantOf). Under a tmux server that ran as a daemon of its own they descended from no process the
+// node runs, and the main conversation got an Agent's four tools.
+func TestInteractiveClaudeCodeDescendsFromTheBridge(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux is not installed")
+	}
+	dir := t.TempDir()
+	child := filepath.Join(dir, "child")
+	b := &tuiBridge{spec: tuiSpec{Cwd: dir, TUI: []string{"/bin/sh", "-c", `sleep 30 & echo $! > "$1.tmp"; mv "$1.tmp" "$1"; wait`, "sh", child}}}
+	if err := b.launch(); err != nil {
+		t.Fatal(err)
+	}
+	defer b.shutdown()
+	var pid int
+	waitFor(t, "the pane's child", func() bool {
+		raw, err := os.ReadFile(child)
+		return err == nil && json.Unmarshal(bytes.TrimSpace(raw), &pid) == nil
+	})
+	if line := lineage(pid, parentPID); !slices.Contains(line, os.Getpid()) {
+		t.Fatalf("the pane's child (pid %d) does not descend from the bridge (pid %d): %v", pid, os.Getpid(), line)
+	}
+	self, err := os.FindProcess(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := codexTestNode(t)
+	n.mu.Lock()
+	n.procs["main-chat"] = &assistantProc{id: "main-chat", cmd: &exec.Cmd{Process: self}}
+	n.mu.Unlock()
+	if id, ok := n.mcpAssistantOf(pid, nil, parentPID, "main-chat"); !ok || id != "main-chat" {
+		t.Fatalf("the node does not take the pane's MCP server for the assistant's: %q %v", id, ok)
+	}
+}
+
+// Interactive Claude Code gets the PWD claude -p gets, not the folder as tmux was told it: Claude Code takes its
+// working directory from PWD, and the folder written another way (a symlinked home) became a second working directory
+// of the conversation.
+func TestTheInteractivePaneGetsThePrintModePWD(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux is not installed")
+	}
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	physical, err := filepath.EvalSymlinks(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		pwd  string
+		set  bool
+		want string
+	}{{"", false, physical}, {link, true, link}} {
+		t.Setenv("PWD", c.pwd)
+		if !c.set {
+			os.Unsetenv("PWD") // claude -p from a node with no PWD: its shell takes the folder's real path
+		}
+		got := filepath.Join(real, "pwd")
+		b := &tuiBridge{spec: tuiSpec{Cwd: link, TUI: []string{"/bin/sh", "-c", `printf '%s' "$PWD" > "$1.tmp"; mv "$1.tmp" "$1"; exec sleep 30`, "sh", got}}}
+		if err := b.launch(); err != nil {
+			t.Fatal(err)
+		}
+		var raw []byte
+		waitFor(t, "the pane's PWD", func() bool { raw, err = os.ReadFile(got); return err == nil })
+		b.shutdown()
+		if string(raw) != c.want {
+			t.Fatalf("PWD set %v (%q): the pane has %q, claude -p %q", c.set, c.pwd, raw, c.want)
+		}
+		os.Remove(got)
+	}
+}
+
+// The print-mode command a bridge falls back to gets the environment claude -p gets from the node, PWD included
+// (none here): not the folder as written, which exec adds for a command with no environment of its own.
+func TestFallbackGetsThePrintModePWD(t *testing.T) {
+	dir := t.TempDir()
+	real := t.TempDir()
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	physical, err := filepath.EvalSymlinks(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	printer := filepath.Join(dir, "print")
+	if err := os.WriteFile(printer, []byte("#!/bin/sh\nprintf 'pwd %s\\n' \"$PWD\"\nwhile IFS= read -r l; do :; done\nexit 7\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir) // no tmux
+	t.Setenv("PWD", "")
+	os.Unsetenv("PWD")
+	spec, _ := json.Marshal(tuiSpec{Session: "s1", Cwd: link, TUI: []string{"claude"}, Print: []string{printer}})
+	r, w := io.Pipe()
+	out, errb := tuiTestOut{closeAt: "pwd ", closer: w}, tuiTestOut{}
+	defer time.AfterFunc(10*time.Second, func() { _ = w.Close() }).Stop()
+	go func() { _, _ = io.WriteString(w, string(spec)+"\n"+`{"type":"user","message":{"content":"hi"}}`+"\n") }()
+	if status := AssistantTUI(nil, r, &out, &errb); status != 7 {
+		t.Fatalf("status %d, stderr %s", status, errb.String())
+	}
+	if !strings.Contains(out.String(), "pwd "+physical+"\n") {
+		t.Fatalf("the fallback's PWD, want %q:\n%s", physical, out.String())
 	}
 }

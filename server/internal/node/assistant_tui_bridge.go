@@ -91,6 +91,9 @@ func (b *tuiBridge) fallback(ctx context.Context, reason string, pending [][]byt
 	fmt.Fprintf(b.stderr, "assistant-tui: interactive Claude Code did not start: %s; running claude -p instead\n", reason)
 	cmd := exec.Command(b.spec.Print[0], b.spec.Print[1:]...)
 	cmd.Dir, cmd.Stdout, cmd.Stderr = b.spec.Cwd, stdout, b.stderr
+	// The environment claude -p gets from the node, which sets Env: with none, exec adds PWD=Dir, the folder as the
+	// node wrote it, and Claude Code took a symlinked home's other spelling for a second working directory.
+	cmd.Env = os.Environ()
 	w, err := cmd.StdinPipe()
 	if err == nil {
 		err = cmd.Start()

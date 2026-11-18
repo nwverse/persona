@@ -23,8 +23,13 @@ import (
 // a private directory): tmux draws its screen, which Persona's screen readers understand (claudeready.go, screen), and
 // takes keys and bracketed pastes (internal/tmux). The bridge keeps a tmux client attached through a pseudo-terminal
 // of its own, with destroy-unattached on: however the bridge ends, even killed, its terminal closes, the client goes,
-// and the session with Claude Code in it goes too. remain-on-exit keeps a pane whose Claude Code exited, so what it
-// printed and its exit status can be read.
+// and the session with Claude Code in it goes too (exit-empty then ends the server). remain-on-exit keeps a pane whose
+// Claude Code exited, so what it printed and its exit status can be read.
+//
+// The server runs in the foreground (tmux -D) as the bridge's child, not as a daemon of its own: Claude Code and its
+// MCP server then descend from the process the node runs for the conversation, which is how the node tells the
+// assistant's MCP server and hooks from an Agent's (mcpAssistantOf, clicall.go). Under a daemonized server the main
+// conversation got an Agent's four tools.
 
 // tuiNoTranscript is what Claude Code shows when it keeps no transcript (2.1.325).
 const tuiNoTranscript = "Transcript saving is off"
@@ -33,7 +38,8 @@ const tuiNoTranscript = "Transcript saving is off"
 const tuiPane = "a"
 
 // tuiConf is the private server's configuration.
-const tuiConf = `set -g destroy-unattached on
+// destroy-unattached is set once the bridge's client is attached (launch): a session created detached would go at once.
+const tuiConf = `set -s exit-empty on
 set -g status off
 set -g focus-events on
 set -g history-limit 5000
@@ -49,6 +55,7 @@ type tuiBridge struct {
 
 	dir    string
 	tm     tmux.Client
+	server *exec.Cmd
 	client *exec.Cmd
 	ptmx   *os.File
 
@@ -63,6 +70,9 @@ type tuiBridge struct {
 	clientOut  *tuiTail      // what the tmux client printed, last bytes
 	clientDone chan struct{} // closed once the tmux client exited and what it printed is in clientOut
 	clientErr  error         // how it exited
+	serverOut  *tuiTail      // what the tmux server printed
+	serverDone chan struct{} // closed once the tmux server exited
+	serverErr  error         // how it exited
 
 	typeText func(context.Context, string) error // types a message in place of submit (tests)
 }
@@ -102,15 +112,27 @@ func (b *tuiBridge) launch() error {
 	if err := os.WriteFile(conf, []byte(tuiConf), 0o600); err != nil {
 		return err
 	}
+	pwd, hasPWD := os.LookupEnv("PWD")
 	script := filepath.Join(b.dir, "claude.sh")
-	if err := os.WriteFile(script, []byte(tuiScript(b.spec.TUI)), 0o600); err != nil {
+	if err := os.WriteFile(script, []byte(tuiScript(b.spec.TUI, pwd, hasPWD)), 0o600); err != nil {
 		return err
 	}
 	b.tm = tmux.Client{Bin: p, Socket: filepath.Join(b.dir, "s")}
-	args := []string{"-S", b.tm.Socket, "-f", conf, "new-session", "-s", tuiPane, "-c", b.spec.Cwd, "--", "/bin/sh", script}
-	b.client = exec.Command(p, args...)
-	b.client.Dir = b.spec.Cwd
-	b.client.Env = append(envWithoutTMUX(os.Environ()), "TERM=xterm-256color")
+	env := append(envWithoutTMUX(os.Environ()), "TERM=xterm-256color")
+	b.server = exec.Command(p, "-D", "-S", b.tm.Socket, "-f", conf)
+	b.server.Dir, b.server.Env = b.spec.Cwd, env
+	b.serverOut, b.serverDone = &tuiTail{}, make(chan struct{})
+	b.server.Stdout, b.server.Stderr = b.serverOut, b.serverOut
+	if err := b.server.Start(); err != nil {
+		return fmt.Errorf("start tmux: %w", err)
+	}
+	go func() { b.serverErr = b.server.Wait(); close(b.serverDone) }()
+	if err := b.newSession(script); err != nil {
+		return err
+	}
+	// The client attaches, and then the session goes with it (destroy-unattached), in one command list.
+	b.client = exec.Command(p, "-S", b.tm.Socket, "attach-session", "-t", tuiPane, ";", "set-option", "-g", "destroy-unattached", "on")
+	b.client.Dir, b.client.Env = b.spec.Cwd, env
 	if b.ptmx, err = pty.StartWithSize(b.client, &pty.Winsize{Rows: 50, Cols: 200}); err != nil {
 		return fmt.Errorf("start tmux: %w", err)
 	}
@@ -131,14 +153,53 @@ func (b *tuiBridge) launch() error {
 	return nil
 }
 
+// tuiServerWait bounds how long the private server takes to listen.
+const tuiServerWait = 10 * time.Second
+
+// newSession creates the pane, running script, once the server listens; a server that exits first says why.
+func (b *tuiBridge) newSession(script string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), tuiServerWait)
+	defer cancel()
+	tick := time.NewTicker(20 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		out, err := b.tmuxRun(ctx, "new-session", "-d", "-s", tuiPane, "-x", "200", "-y", "50", "-c", b.spec.Cwd, "--", "/bin/sh", script)
+		if err == nil {
+			return nil
+		}
+		select {
+		case <-b.serverDone:
+			note := b.exitNote("tmux exited before Claude Code was ready", b.serverErr, b.serverOut)
+			if t := strings.Join(b.serverOut.lines(3), " "); strings.Contains(t, "usage:") || strings.Contains(t, "unknown option") {
+				note += " (interactive Claude Code needs tmux 3.2 or later, whose server runs in the foreground: tmux -D)"
+			}
+			return errors.New(note)
+		case <-ctx.Done():
+			return fmt.Errorf("tmux did not start within %s: %s", tuiServerWait, strings.TrimSpace(out))
+		case <-tick.C:
+		}
+	}
+}
+
 // tuiScript is the pane's script: Claude Code's command, run by a shell that first forgets it is in tmux. Persona's
 // tmux engine finds the agents in tmux panes by their environment and by what Claude Code writes down of its pane, and
 // this pane is no Agent's, on no server it drives.
-func tuiScript(argv []string) string {
+//
+// It also gives Claude Code the PWD claude -p gets (the bridge's own, pwd; none when hasPWD is false) in place of the
+// one tmux sets from the folder it starts in: Claude Code takes its working directory from PWD, and the folder written
+// another way (a symlinked home: /home/me for /data/home/me) is another directory to it, added to the conversation's.
+func tuiScript(argv []string, pwd string, hasPWD bool) string {
+	quote := func(a string) string { return "'" + strings.ReplaceAll(a, "'", `'\''`) + "'" }
 	var sb strings.Builder
-	sb.WriteString("unset TMUX TMUX_PANE TERM_PROGRAM TERM_PROGRAM_VERSION\nexec")
+	sb.WriteString("unset TMUX TMUX_PANE TERM_PROGRAM TERM_PROGRAM_VERSION\n")
+	if hasPWD {
+		sb.WriteString("export PWD=" + quote(pwd) + "\n")
+	} else {
+		sb.WriteString("unset PWD\n")
+	}
+	sb.WriteString("exec")
 	for _, a := range argv {
-		sb.WriteString(" '" + strings.ReplaceAll(a, "'", `'\''`) + "'")
+		sb.WriteString(" " + quote(a))
 	}
 	sb.WriteString("\n")
 	return sb.String()
@@ -186,6 +247,9 @@ func (b *tuiBridge) shutdown() {
 	if b.client != nil && b.client.Process != nil {
 		_ = b.client.Process.Kill()
 	}
+	if b.server != nil && b.server.Process != nil {
+		_ = b.server.Process.Kill()
+	}
 	if b.dir != "" {
 		_ = os.RemoveAll(b.dir)
 	}
@@ -226,23 +290,35 @@ func (b *tuiBridge) ended(ctx context.Context, plain string, status int, early b
 	if _, err := b.tmuxRun(ctx, "has-session", "-t", tuiPane); err == nil {
 		return fmt.Sprintf("Claude Code exited%s (status %d) and printed nothing", when, status)
 	}
-	why := "tmux ended" + whenTmux
+	if b.serverDone != nil {
+		select {
+		case <-b.serverDone:
+			return b.exitNote("tmux exited"+whenTmux, b.serverErr, b.serverOut)
+		default:
+		}
+	}
 	if b.clientDone != nil {
 		select {
 		case <-b.clientDone:
-			var exit *exec.ExitError
-			if errors.As(b.clientErr, &exit) {
-				why = fmt.Sprintf("tmux exited%s (status %d)", whenTmux, exit.ExitCode())
-			}
+			return b.exitNote("tmux exited"+whenTmux, b.clientErr, b.clientOut)
 		case <-time.After(time.Second):
 		}
 	}
-	if b.clientOut != nil {
-		if tail := b.clientOut.lines(3); len(tail) > 0 {
-			return why + ": " + strings.Join(tail, " | ")
+	return "tmux ended" + whenTmux + " and printed nothing"
+}
+
+// exitNote says how a tmux process ended (what: who ended, err: its Wait's, out: what it printed).
+func (b *tuiBridge) exitNote(what string, err error, out *tuiTail) string {
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		what = fmt.Sprintf("%s (status %d)", what, exit.ExitCode())
+	}
+	if out != nil {
+		if tail := out.lines(3); len(tail) > 0 {
+			return what + ": " + strings.Join(tail, " | ")
 		}
 	}
-	return why + " and printed nothing"
+	return what + " and printed nothing"
 }
 
 // screenTail are the screen's last non-blank lines, for saying why it ended.
