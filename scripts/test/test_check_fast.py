@@ -509,7 +509,8 @@ class CheckFastScriptsTests(unittest.TestCase):
         code, out = self.check_fast(path=self.toolchain_without_node_and_go())
         self.assertEqual(0, code, out)
         self.assertIn("PASS     frozen migrations", out)
-        self.assertIn("server go tests (internal/db)", out)  # no Go module here; the freeze check still ran
+        # No go here, so no package graph: the skip names the changed directory; the freeze check still ran.
+        self.assertIn("SKIP  server go tests (internal/db/migrations/hub): go not found", out)
 
     def test_an_unrelated_change_does_not_run_the_freeze_check(self):
         self.write("scripts/ci/migration_freeze.py", "print('freeze-ran')\n")
@@ -533,7 +534,8 @@ class CheckFastScriptsTests(unittest.TestCase):
         code, out = self.check_fast(path=self.toolchain_without_node_and_go())
         self.assertEqual(0, code, out)
         self.assertIn("PASS     frozen migrations", out)
-        self.assertIn("SKIP  server go tests (internal/db): go not found", out)  # --no-renames retains the source path
+        # --no-renames retains the source path.
+        self.assertIn("SKIP  server go tests (internal/db/migrations/hub): go not found", out)
 
     def test_all_runs_the_freeze_check_when_the_script_exists(self):
         self.write("scripts/ci/migration_freeze.py", "print('freeze-ran')\n")
@@ -574,7 +576,19 @@ class CheckFastScriptsTests(unittest.TestCase):
         return str(bin_dir)
 
 
-FAKE_GO = '#!/bin/sh\nprintf "%s|%s\\n" "${PWD##*/}" "$*" >> "$FAKE_GO_LOG"\n'
+# A fake go that records each call ("<cwd basename>|<args>") instead of building anything. go list runs the real go
+# ($REAL_GO), so check-fast reads the package graph of the files a test writes; without one it fails like a broken
+# module does.
+FAKE_GO = """#!/bin/sh
+if [ "$1" = list ]; then
+  [ -n "$REAL_GO" ] && exec "$REAL_GO" "$@"
+  echo "go: cannot list packages here" >&2
+  exit 1
+fi
+printf "%s|%s\\n" "${PWD##*/}" "$*" >> "$FAKE_GO_LOG"
+"""
+REAL_GO = shutil.which("go")
+needs_go = unittest.skipUnless(REAL_GO, "check-fast reads the package graph with go list")
 # The package lists of check-fast's two repo-wide guard calls: whole packages, and the named guard tests (-run) of two
 # packages whose other tests are slow or need Postgres.
 GUARD_PACKAGES = "./internal/lazyre ./internal/archguard ./internal/tzguard ./plugins"
@@ -583,7 +597,8 @@ GUARD_RUN_PACKAGES = "./internal/hub ./internal/assistant"
 
 @unittest.skipUnless(shutil.which("timeout") or shutil.which("gtimeout"), "check-fast.sh needs GNU timeout")
 class CheckFastServerInputsTests(unittest.TestCase):
-    """Repository inputs outside server/ that server tests read run go test on the packages that read them."""
+    """Repository inputs outside server/ that server tests read run go test on the packages that read them; a server/ or
+    sdk/go change runs the packages it touches and the packages of that module that import them (go list)."""
 
     def setUp(self):
         self.repo = Path(tempfile.mkdtemp(prefix="check-fast-test-"))
@@ -595,14 +610,14 @@ class CheckFastServerInputsTests(unittest.TestCase):
         self.write("scripts/test/pr_needs_issue_test.mjs", "")
         self.write("scripts/test/server_test_env.py", "")
         self.write("scripts/test/test_sdk_bundle.py", "")  # a schema/ change also runs the sdk bundle and sdk/go jobs
-        self.write("sdk/go/go.mod", "module example.com/sdk\n")
+        self.write("sdk/go/go.mod", "module example.com/sdk\n\ngo 1.21\n")
         self.write("spec/fixtures/x.json", "{}\n")
         self.write("spec/tokens/colors.json", "{}\n")
         self.write("docs/example-guide.md", "guide\n")
         self.write("docs/other.md", "other\n")
         self.write("schema/extension/examples/Manifest.x.json", "{}\n")
         self.write("web/package.json", "{}\n")  # a schema/extension change also runs the web check (stubbed npm)
-        self.write("server/go.mod", "module example.com/server\n")
+        self.write("server/go.mod", "module example.com/server\n\ngo 1.21\n")
         self.write("server/internal/foo/foo_test.go", 'package foo\n\nconst dir = "../../../spec/fixtures/x"\n')
         self.write("server/internal/joined/joined_test.go",
                    'package joined\n\nvar dir = filepath.Join("..", "..", "..", "spec", "fixtures", "wire")\n')
@@ -627,7 +642,7 @@ class CheckFastServerInputsTests(unittest.TestCase):
         (bin_dir / "npm").chmod(0o755)
         self.go_log = bin_dir / "calls.log"
         self.env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
-                    "FAKE_GO_LOG": str(self.go_log)}
+                    "FAKE_GO_LOG": str(self.go_log), "REAL_GO": REAL_GO or "", "GOWORK": "off"}
 
     def write(self, path, text):
         file = self.repo / path
@@ -637,14 +652,25 @@ class CheckFastServerInputsTests(unittest.TestCase):
     def git(self, *args):
         subprocess.run(["git", "-C", str(self.repo), *args], check=True, capture_output=True)
 
-    def check_fast(self):
-        run = subprocess.run(["bash", "scripts/test/check-fast.sh", "--base", "base"], cwd=self.repo, env=self.env,
-                             capture_output=True, text=True, timeout=300)
+    def commit_base(self):
+        self.git("add", "-A")
+        self.git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "base")
+        self.git("tag", "-f", "base")
+
+    def check_fast(self, *args, ok=True):
+        run = subprocess.run(["bash", "scripts/test/check-fast.sh", *(args or ("--base", "base"))], cwd=self.repo,
+                             env=self.env, capture_output=True, text=True, timeout=300)
         out = run.stdout + run.stderr
-        self.assertEqual(0, run.returncode, out)
-        calls = self.go_log.read_text().splitlines() if self.go_log.exists() else []
-        # The package pattern is the last argument of each recorded "go test ... ./internal/<pkg>/..." call.
-        return out, sorted(call.split()[-1] for call in calls if call.startswith("server|test "))
+        if ok:
+            self.assertEqual(0, run.returncode, out)
+        return out, self.packages("server")
+
+    def packages(self, module):
+        """The package arguments of check-fast's own go test calls in server/ or sdk/go ("go"), sorted; the repo-wide
+        guard job's calls are not counted."""
+        guards = self.guard_calls()
+        calls = [call for call in self.go_calls() if call.startswith(module + "|test ") and call not in guards]
+        return sorted(arg for call in calls for arg in call.split()[1:] if arg.startswith("."))
 
     def go_calls(self):
         """Every recorded go call ("<cwd basename>|<args>") without the -timeout value check-fast derives from its budget."""
@@ -657,9 +683,10 @@ class CheckFastServerInputsTests(unittest.TestCase):
     def test_a_spec_fixture_runs_the_packages_that_read_it(self):
         self.write("spec/fixtures/x.json", '{"changed": true}\n')
         out, packages = self.check_fast()
-        self.assertIn("queued: server go test ./internal/foo/...", out)
-        # filepath.Join elements name the fixtures too; a // comment that mentions them is not a reader.
-        self.assertEqual(["./internal/foo/...", "./internal/joined/..."], packages, out)
+        self.assertIn("queued: server go test (2 packages)", out)
+        # filepath.Join elements name the fixtures too; a // comment that mentions them is not a reader. A reader runs
+        # alone: the code did not change, so its importers need nothing.
+        self.assertEqual(["./internal/foo", "./internal/joined"], packages, out)
         self.assertNotIn("no fast check maps to", out)
 
     def test_other_spec_files_stay_unmapped(self):
@@ -678,12 +705,12 @@ class CheckFastServerInputsTests(unittest.TestCase):
         self.write("docs/example-guide.md", "guide changed\n")
         self.write("docs/other.md", "other changed\n")
         out, packages = self.check_fast()
-        self.assertEqual(["./internal/guide/conformance/..."], packages, out)
+        self.assertEqual(["./internal/guide/conformance"], packages, out)
 
     def test_a_schema_example_runs_its_readers(self):
         self.write("schema/extension/examples/Manifest.x.json", '{"changed": true}\n')
         out, packages = self.check_fast()
-        self.assertEqual(["./internal/ext/..."], packages, out)
+        self.assertEqual(["./internal/ext"], packages, out)
 
     def test_a_wire_schema_runs_its_readers(self):
         self.write("server/internal/wirereader/wire_test.go",
@@ -693,12 +720,12 @@ class CheckFastServerInputsTests(unittest.TestCase):
         self.git("tag", "-f", "base")
         self.write("schema/wire/x.schema.json", '{"changed": true}\n')
         out, packages = self.check_fast()
-        self.assertEqual(["./internal/wirereader/..."], packages, out)
+        self.assertEqual(["./internal/wirereader"], packages, out)
 
     def test_the_server_test_launcher_runs_its_reader(self):
         self.write("scripts/test/server_test_env.py", "# changed\n")
         out, packages = self.check_fast()
-        self.assertEqual(["./internal/db/dbtest/..."], packages, out)
+        self.assertEqual(["./internal/db/dbtest"], packages, out)
 
     def test_an_sdk_ts_source_runs_the_trusted_adapter_check(self):
         # The trusted Deno adapter bundles sdk/ts/src (#4221): a change there runs denohost's tests, where
@@ -711,7 +738,7 @@ class CheckFastServerInputsTests(unittest.TestCase):
         self.assertEqual([], packages, out)
         self.write("sdk/ts/src/wire.ts", "export {}\n")
         out, packages = self.check_fast()
-        self.assertEqual(["./internal/extension/denohost/..."], packages, out)
+        self.assertEqual(["./internal/extension/denohost"], packages, out)
 
     def test_without_bun_the_trusted_adapter_check_says_it_skipped(self):
         self.env = {**self.env, "PATH": os.pathsep.join(
@@ -721,13 +748,14 @@ class CheckFastServerInputsTests(unittest.TestCase):
         self.assertEqual([], packages, out)
         self.assertIn("SKIP  trusted Deno adapter", out)
 
+    @needs_go
     def test_a_server_go_change_also_runs_the_repo_wide_guards(self):
         # The guards fail on code outside their own package (#1936 broke the lazyre guard on main that way), so a change
         # in any package runs them next to that package's own tests.
         self.write("server/internal/foo/x.go", "package foo\n")
         out, packages = self.check_fast()
         self.assertIn("queued: server repo-wide guards", out)
-        self.assertIn("./internal/foo/...", packages)
+        self.assertIn("./internal/foo", packages)
         calls = self.guard_calls()
         self.assertEqual(2, len(calls), out)
         self.assertEqual("server|test -count=1 " + GUARD_PACKAGES, calls[0])
@@ -741,10 +769,11 @@ class CheckFastServerInputsTests(unittest.TestCase):
         for package in (GUARD_PACKAGES + " " + GUARD_RUN_PACKAGES).split():
             self.assertTrue((ROOT / "server" / package).is_dir(), package)
 
+    @needs_go
     def test_a_plugin_change_runs_its_own_tests_and_the_guards_not_a_build(self):
         self.write("server/plugins/wechat/x.go", "package wechat\n")
         out, packages = self.check_fast()
-        self.assertIn("./plugins/wechat/...", packages)
+        self.assertEqual(["./plugins/wechat"], packages, out)
         self.assertEqual(2, len(self.guard_calls()), out)
         self.assertNotIn("server|build ./...", self.go_calls(), out)
 
@@ -758,9 +787,143 @@ class CheckFastServerInputsTests(unittest.TestCase):
         self.write("docs/example-guide.md", "guide changed\n")  # a server test reads it: that package still runs
         self.write("web/src/x.ts", "export {}\n")
         out, packages = self.check_fast()
-        self.assertEqual(["./internal/guide/conformance/..."], packages, out)
+        self.assertEqual(["./internal/guide/conformance"], packages, out)
         self.assertEqual([], self.guard_calls(), out)
         self.assertNotIn("repo-wide guards", out)
+
+    def write_graph(self):
+        """Commit a small package graph into the base. mid imports base/leaf, top imports mid and cmd/tool imports top;
+        user's internal tests import top and xuser's external tests import mid; above imports user, so it sees none
+        of user's test imports. leaf imports its parent base, which imports neither leaf nor its sibling sib.
+        embedder owns the files under data/ and testdata/, which are no packages."""
+        files = {  # path: (package clause, imported package or "")
+            "internal/base/base.go": ("base", ""),
+            "internal/base/leaf/leaf.go": ("leaf", "internal/base"),
+            "internal/base/sib/sib.go": ("sib", ""),
+            "internal/mid/mid.go": ("mid", "internal/base/leaf"),
+            "internal/top/top.go": ("top", "internal/mid"),
+            "internal/user/user.go": ("user", ""),
+            "internal/user/user_test.go": ("user", "internal/top"),
+            "internal/above/above.go": ("above", "internal/user"),
+            "internal/xuser/xuser.go": ("xuser", ""),
+            "internal/xuser/x_test.go": ("xuser_test", "internal/mid"),
+            "cmd/tool/main.go": ("main", "internal/top"),
+            "internal/embedder/embedder.go": ("embedder", ""),
+        }
+        for path, (name, imported) in files.items():
+            body = f"package {name}\n" + (f'\nimport _ "example.com/server/{imported}"\n' if imported else "")
+            self.write(f"server/{path}", body)
+        self.write("server/internal/embedder/data/prompt.md", "prompt\n")
+        self.write("server/internal/embedder/testdata/gen.go", "package gen\n")
+        self.commit_base()
+
+    @needs_go
+    def test_a_leaf_change_runs_the_leaf_and_its_importers_not_the_parent_tree(self):
+        self.write_graph()
+        self.write("server/internal/base/leaf/leaf.go", 'package leaf\n\nimport _ "example.com/server/internal/base"\n'
+                                                        "\nconst Changed = true\n")
+        out, packages = self.check_fast()
+        # Not base or sib (the old ./internal/base/... tree), nor above: user's test-only import goes no further.
+        self.assertEqual(["./cmd/tool", "./internal/base/leaf", "./internal/mid", "./internal/top", "./internal/user",
+                          "./internal/xuser"], packages, out)
+        self.assertIn("check-fast: server packages changed: ./internal/base/leaf\n", out)
+        self.assertIn("check-fast: server packages importing them: ./cmd/tool ./internal/mid ./internal/top "
+                      "./internal/user ./internal/xuser\n", out)
+        self.assertIn("queued: server go test (6 packages)", out)
+        own = [call for call in self.go_calls() if call.startswith("server|test ") and call not in self.guard_calls()]
+        self.assertEqual(1, len(own), out)  # one go test call shares the compile work
+        self.assertNotIn("server|build ./...", self.go_calls(), out)
+
+    @needs_go
+    def test_a_root_package_change_runs_every_package_that_imports_it(self):
+        self.write_graph()
+        self.write("server/internal/base/base.go", "package base\n\nconst Changed = true\n")
+        out, packages = self.check_fast()
+        self.assertEqual(["./cmd/tool", "./internal/base", "./internal/base/leaf", "./internal/mid", "./internal/top",
+                          "./internal/user", "./internal/xuser"], packages, out)
+
+    @needs_go
+    def test_a_file_that_is_no_go_source_runs_its_enclosing_package(self):
+        self.write_graph()
+        self.write("server/internal/embedder/data/prompt.md", "changed\n")  # an embedded file
+        out, packages = self.check_fast()
+        self.assertEqual(["./internal/embedder"], packages, out)
+        self.go_log.unlink()
+        self.git("checkout", "--", "server/internal/embedder/data/prompt.md")
+        self.write("server/internal/embedder/testdata/gen.go", "package gen\n\nconst Changed = true\n")  # go skips testdata/
+        out, packages = self.check_fast()
+        self.assertEqual(["./internal/embedder"], packages, out)
+
+    @needs_go
+    def test_a_removed_package_runs_the_importers_that_still_name_it(self):
+        self.write_graph()
+        self.git("rm", "-q", "-r", "server/internal/base/leaf")
+        out, packages = self.check_fast()
+        self.assertEqual(["./cmd/tool", "./internal/mid", "./internal/top", "./internal/user", "./internal/xuser"],
+                         packages, out)
+        self.assertIn("check-fast: server has no package here for internal/base/leaf (removed", out)
+
+    @needs_go
+    def test_a_moved_package_runs_where_it_is_now(self):
+        self.write_graph()
+        self.git("mv", "server/internal/base/sib", "server/internal/sib")
+        out, packages = self.check_fast()
+        self.assertEqual(["./internal/sib"], packages, out)
+        self.assertIn("no package here for internal/base/sib", out)
+
+    @needs_go
+    def test_a_module_file_runs_go_build_and_no_package(self):
+        self.write_graph()
+        self.write("server/go.sum", "")
+        out, packages = self.check_fast()
+        self.assertEqual([], packages, out)
+        self.assertIn("server|build ./...", self.go_calls(), out)
+        self.assertEqual(2, len(self.guard_calls()), out)
+
+    def test_when_go_list_fails_the_whole_module_is_tested(self):
+        self.env = {**self.env, "REAL_GO": ""}  # the fake go's list then fails
+        self.write("server/internal/foo/x.go", "package foo\n")
+        out, packages = self.check_fast()
+        self.assertEqual(["./..."], packages, out)
+        self.assertIn("queued: server go test ./...", out)
+        self.assertIn("INFO  server: go list failed (go: cannot list packages here); go test ran on the whole module",
+                      out)
+
+    @needs_go
+    def test_a_package_the_guard_job_runs_whole_is_left_to_it(self):
+        self.write("server/internal/lazyre/lazyre.go", "package lazyre\n")
+        self.write("server/internal/usesre/usesre.go", 'package usesre\n\nimport _ "example.com/server/internal/lazyre"\n')
+        self.commit_base()
+        self.write("server/internal/lazyre/lazyre.go", "package lazyre\n\nconst Changed = true\n")
+        out, packages = self.check_fast()
+        self.assertEqual(["./internal/usesre"], packages, out)
+        self.assertIn("server|test -count=1 " + GUARD_PACKAGES, self.go_calls(), out)
+
+    @needs_go
+    def test_an_sdk_go_change_runs_its_packages_and_their_importers_in_that_module(self):
+        self.write("sdk/go/sdk.go", "package sdk\n")
+        self.write("sdk/go/wire/wire.go", "package wire\n")
+        self.write("sdk/go/ext/ext.go", 'package ext\n\nimport _ "example.com/sdk/wire"\n')
+        self.write("sdk/go/other/other.go", "package other\n")
+        self.commit_base()
+        self.write("sdk/go/wire/wire.go", "package wire\n\nconst Changed = true\n")
+        out, _ = self.check_fast()
+        self.assertEqual(["./ext", "./wire"], self.packages("go"), out)
+        self.assertIn("queued: sdk/go go test (2 packages)", out)
+        self.assertEqual(2, len(self.guard_calls()), out)
+        self.go_log.unlink()
+        self.write("sdk/go/go.sum", "")  # no package encloses it: the whole module, as before
+        out, _ = self.check_fast()
+        self.assertEqual(["./..."], self.packages("go"), out)
+
+    def test_all_still_tests_each_module_whole_without_reading_the_graph(self):
+        self.env = {**self.env, "REAL_GO": ""}  # a go list call would fail and say so
+        self.write("server/internal/foo/x.go", "package foo\n")
+        out, packages = self.check_fast("--all", ok=False)  # other --all checks have nothing to run here
+        self.assertEqual(["./..."], packages, out)
+        self.assertEqual(["./..."], self.packages("go"), out)
+        self.assertNotIn("go list failed", out)
+        self.assertEqual([], self.guard_calls(), out)  # go test ./... runs them
 
 
 # A privacy-scan stub that never finishes on its own: it records its own pid, its parent's (the GNU timeout that runs

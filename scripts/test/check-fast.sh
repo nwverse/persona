@@ -21,11 +21,16 @@
 #   integrations/<pkg>/**      node --test test/*.test.{js,mjs} (packages without tests are skipped)
 #   site/**                    node --test site/worker.test.mjs
 #   sdk/ts/**                  bun test (skipped with a reason when bun is absent)
-#   sdk/ts/src/**              also go test ./internal/extension/denohost/...: the trusted Deno adapter bundles it,
+#   sdk/ts/src/**              also go test ./internal/extension/denohost: the trusted Deno adapter bundles it,
 #                              and TestTrustedAdapterMatchesOfficialSDK fails while the committed one is stale (#4221)
-#   sdk/go/**                  go test ./... inside the sdk/go module
-#   server/internal/foo/**     go test ./internal/foo/...   (cmd/<x>/** and plugins/<x>/** likewise; other server
-#                              changes: go build ./...)
+#   server/**                  go test on the packages the changed files belong to and on every package of the server
+#                              module that imports one of them, directly or transitively, or only from its tests (go
+#                              list; go_select). A file belongs to its directory's package, else to the nearest
+#                              enclosing one (embedded files, testdata/); internal/, cmd/ and plugins/ alike, and a
+#                              subpackage never pulls in its parent's other subpackages. A removed package's importers
+#                              that still name it run too. Files no package encloses (go.mod, go.sum): go build ./...
+#                              When go list fails: go test ./...
+#   sdk/go/**                  the same inside the sdk/go module; files no package there encloses: go test ./... there
 #   server/**, sdk/go/**       also the server's repo-wide guard tests (GO_GUARD_PKGS, GO_GUARD_TESTS), which fail on
 #                              code outside their own package; --all runs them as part of go test ./...
 #   server/internal/db/migrations/**, scripts/ci/migration_freeze.py
@@ -39,10 +44,11 @@
 #                              --all runs it when the script is present.
 #   spec/fixtures/**, schema/extension/**, schema/wire/**, integrations/**, docs/<file>, scripts/test/server_test_env.py
 #                              also go test on each server package whose _test.go names that input (server-test.yml's
-#                              path filter), found at run time with git grep (comment lines are ignored)
+#                              path filter), found at run time with git grep (comment lines are ignored); that package
+#                              alone, not its importers
 #   android/**                 scripts/app/android_i18n_check.py plus the android checkers' own unittests (no gradle)
 #   .github/**                 scripts/test/pr_needs_issue_test.mjs
-#   schema/**                  the extension-schema py, the sdk bundle py, and sdk/go go test (mirrors CI's job)
+#   schema/**                  the extension-schema py, the sdk bundle py, and go test ./... in sdk/go (mirrors CI's job)
 #   schema/wire/**, spec/fixtures/**, scripts/gen/extension_schema.py, scripts/test/test_extension_schema.py
 #                              also scripts/test/test_wire_schema.py: it holds the fixtures' samples to the wire schemas
 #                              (and imports the extension test's validator); CI's guards step always runs it
@@ -359,12 +365,18 @@ job_sdk_ts() {
   in_dir sdk/ts step "$TIMEOUT_OTHER" "sdk/ts: bun test" bun test
 }
 
-job_go() {  # $1 = a package dir (internal/foo, cmd/bar, plugins/baz) or ALL for ./...
+# go_packages prints the go test arguments for $1: ./... for ALL, else the packages listed in the file $1, one per line
+# (./internal/foo). One go test call for all of them shares the compile work, which separate calls would repeat.
+go_packages() {
+  if [ "$1" = ALL ]; then echo ./...; else sed '/^$/d' "$1"; fi
+}
+
+job_go() {  # $1 = ALL for ./..., or a file listing the server packages to test (go_select)
   [ "$HAVE_GO" -eq 1 ] || skip "go not found"
-  local _pattern _label _inner
-  if [ "$1" = ALL ]; then _pattern=./...; _label="go test ./..."; else _pattern="./$1/..."; _label="go test ./$1/..."; fi
+  local _pkgs=() _p _inner
+  while IFS= read -r _p; do _pkgs+=("$_p"); done < <(go_packages "$1")
   _inner=$((TIMEOUT_GO_TEST - 10)); [ "$_inner" -lt 5 ] && _inner=5
-  in_dir server step "$TIMEOUT_GO_TEST" "$_label" go test -count=1 -timeout "${_inner}s" "$_pattern"
+  in_dir server step "$TIMEOUT_GO_TEST" "go test ${_pkgs[*]}" go test -count=1 -timeout "${_inner}s" "${_pkgs[@]}"
 }
 
 # The server's repo-wide guards: tests that read other packages' source, go list output, the migrations or sdk/go, so
@@ -395,10 +407,12 @@ job_go_build() {
   in_dir server step "$TIMEOUT_GO_TEST" "go build ./..." go build ./...
 }
 
-job_sdk_go() {  # sdk/go is its own Go module (its own go.mod), not part of server/.
+job_sdk_go() {  # sdk/go is its own Go module (its own go.mod), not part of server/. $1 as for job_go.
   [ "$HAVE_GO" -eq 1 ] || skip "go not found"
-  local _inner=$((TIMEOUT_GO_TEST - 10)); [ "$_inner" -lt 5 ] && _inner=5
-  in_dir sdk/go step "$TIMEOUT_GO_TEST" "sdk/go: go test ./..." go test -count=1 -timeout "${_inner}s" ./...
+  local _pkgs=() _p _inner
+  while IFS= read -r _p; do _pkgs+=("$_p"); done < <(go_packages "$1")
+  _inner=$((TIMEOUT_GO_TEST - 10)); [ "$_inner" -lt 5 ] && _inner=5
+  in_dir sdk/go step "$TIMEOUT_GO_TEST" "sdk/go: go test ${_pkgs[*]}" go test -count=1 -timeout "${_inner}s" "${_pkgs[@]}"
 }
 
 job_i18n() {
@@ -566,7 +580,7 @@ CORE_FAIL=0
 CHANGED=""
 WEB=0; SDKTS=0; ANDROID=0; PRNEEDS=0; EXTSCHEMA=0; SERVER_BUILD=0; APPLE=0; UNMAPPED=0; GO_GUARDS=0
 SITE=0; SDKGO=0; EXTREFS=0; SDKBUNDLE=0
-INTEG=(); GO_GROUPS=(); UNMAPPED_FILES=(); SCRIPT_TESTS=()
+INTEG=(); GO_READERS=(); UNMAPPED_FILES=(); SCRIPT_TESTS=()
 CORE_MISSING=()
 
 core_missing() {  # --all treats a missing core toolchain as a failure; diff mode records a skip.
@@ -638,24 +652,9 @@ else
       sdk/ts/*) SDKTS=1 ;;
       spec/fixtures/*) ;;  # read by server tests: the reader packages are collected in a pass below
       spec/tokens/*|spec/icons/*) ;;  # test_gen_tokens.py / test_gen_icon_meanings.py, added with the scripts/ unittests below
-      server/*)
-        _rest=${f#server/}
-        case "$_rest" in
-          # Package groups are collected in a second pass below; plugins/<file> is the plugins package, which the
-          # repo-wide guard job runs.
-          internal/*/*|plugins/*) ;;
-          cmd/*)
-            _after=${_rest#cmd/}
-            case "$_after" in
-              */*)
-                _g="cmd/${_after%%/*}"
-                arr_has "$_g" "${GO_GROUPS[@]:-}" || GO_GROUPS+=("$_g") ;;
-              *) SERVER_BUILD=1 ;;
-            esac ;;
-          *) SERVER_BUILD=1 ;;
-        esac
-        ;;
-      sdk/go/*) SDKGO=1 ;;  # sdk/go is its own module; run its tests there, not server's build
+      # The Go packages to test are selected from the package graph below (go_select); sdk/go is its own module, so
+      # its packages are selected and tested there, not in server's.
+      server/*|sdk/go/*) ;;
       android/*) ANDROID=1 ;;
       .github/*) PRNEEDS=1 ;;
       schema/*)
@@ -680,19 +679,6 @@ else
   done <<< "$CHANGED"
 fi
 
-# Collect affected server packages: server/internal/foo/... -> ./internal/foo/..., plugins/bar/... likewise.
-if [ "$ALL" -eq 0 ]; then
-  while IFS= read -r f; do
-    case "$f" in
-      server/internal/*/*|server/plugins/*/*)
-        _rest=${f#server/}
-        _top=${_rest%%/*}; _rest=${_rest#*/}
-        _g="$_top/${_rest%%/*}"
-        arr_has "$_g" "${GO_GROUPS[@]:-}" || GO_GROUPS+=("$_g") ;;
-    esac
-  done <<< "$CHANGED"
-fi
-
 # server_readers prints the package directory (relative to server/) of each server _test.go that matches the extended regex $1
 # outside a // comment line. Finding them at run time keeps a new reader mapped without an edit here.
 server_readers() {
@@ -702,7 +688,8 @@ server_readers() {
 }
 
 # Repository inputs that server tests read (the extra paths in server-test.yml's filter): a change to one also runs go
-# test on the packages that read it. Each regex matches the input as a path string or as filepath.Join elements.
+# test on the packages that read it, not on their importers (the code did not change). Each regex matches the input as
+# a path string or as filepath.Join elements.
 if [ "$ALL" -eq 0 ]; then
   READER_RES=()
   while IFS= read -r f; do
@@ -720,7 +707,7 @@ if [ "$ALL" -eq 0 ]; then
   for _re in "${READER_RES[@]:-}"; do
     [ -n "$_re" ] || continue
     while IFS= read -r _g; do
-      [ -n "$_g" ] && { arr_has "$_g" "${GO_GROUPS[@]:-}" || GO_GROUPS+=("$_g"); }
+      [ -n "$_g" ] && { arr_has "./$_g" "${GO_READERS[@]:-}" || GO_READERS+=("./$_g"); }
     done < <(server_readers "$_re")
   done
 fi
@@ -730,9 +717,145 @@ fi
 # committed adapter is stale (#4221; scripts/gen/deno_adapter.sh regenerates it). A few seconds; it needs bun.
 if [ "$ALL" -eq 0 ] && printf '%s\n' "$CHANGED" | grep -q '^sdk/ts/src/'; then
   if [ "$HAVE_BUN" -eq 0 ]; then
-    INFO+=("SKIP  trusted Deno adapter (go test ./internal/extension/denohost/...): bun not found in PATH")
-  elif ! arr_has internal/extension "${GO_GROUPS[@]:-}"; then  # ./internal/extension/... already covers it
-    arr_has internal/extension/denohost "${GO_GROUPS[@]:-}" || GO_GROUPS+=(internal/extension/denohost)
+    INFO+=("SKIP  trusted Deno adapter (go test ./internal/extension/denohost): bun not found in PATH")
+  else
+    arr_has ./internal/extension/denohost "${GO_READERS[@]:-}" || GO_READERS+=(./internal/extension/denohost)
+  fi
+fi
+
+# go_select <module dir> <file of changed paths relative to it> picks the Go packages a change needs from the module's
+# package graph (one go list call: each package's imports and its tests' imports). One "<kind> <value>" line each:
+#   changed ./internal/foo    the package a changed file belongs to: its directory's, else the nearest enclosing one
+#                             (embedded files; go ignores testdata/ and directories whose name starts with . or _)
+#   importer ./internal/bar   a package that imports one of those, directly or through other packages, or whose tests
+#                             do. A test-only import goes no further: no other package compiles those test files.
+#   gone internal/baz         the directory of a changed .go file that is no package here: removed, or excluded by
+#                             build constraints on this platform. The packages that still import it are selected.
+#   unowned go.sum            a changed file that no package encloses, and the module's go.mod and go.sum
+# A subpackage's change selects its parent only when the parent imports it, never the parent's other subpackages. It
+# returns 1 when go list fails or times out; its stderr and exit code are kept in $WORK/go-list.<module>.err.
+go_select() {
+  local _dir=$1 _changed=$2 _mod _list _rc
+  _list="$WORK/go-list.$(printf '%s' "$_dir" | tr '/' '-')"
+  _mod=$(awk '$1 == "module" { gsub(/"/, "", $2); print $2; exit }' "$_dir/go.mod" 2>/dev/null)
+  if [ -z "$_mod" ]; then
+    echo "no module path in $_dir/go.mod" > "$_list.err"
+    return 1
+  fi
+  ( cd "$_dir" && "$TIMEOUT_BIN" -k 5s "$TIMEOUT_OTHER" go list -e \
+      -f '{{.ImportPath}}|{{join .Imports " "}}|{{join .TestImports " "}}|{{join .XTestImports " "}}' ./... ) \
+    > "$_list" 2> "$_list.err" || { _rc=$?; echo "exit $_rc" >> "$_list.err"; return 1; }
+  # FILENAME, not FNR == NR: a module without packages lists nothing, and the changed paths must not count as packages.
+  awk -v mod="$_mod" '
+    function path(d) { return d == "." ? mod : mod "/" d }
+    function rel(p) { return p == mod ? "." : "./" substr(p, length(mod) + 2) }
+    function up(d) { return sub(/\/[^\/]*$/, "", d) ? d : "." }
+    BEGIN { FS = "|" }
+    FILENAME == ARGV[1] {
+      pkg[$1] = 1
+      n = split($2, a, " ")
+      for (i = 1; i <= n; i++) users[a[i]] = users[a[i]] " " $1
+      n = split($3 " " $4, a, " ")
+      for (i = 1; i <= n; i++) testers[a[i]] = testers[a[i]] " " $1
+      next
+    }
+    $0 == "" { next }
+    # The module files change what every package builds against, even when the module root is a package itself.
+    $0 == "go.mod" || $0 == "go.sum" { print "unowned " $0; next }
+    {
+      d = up($0)
+      if ($0 ~ /\.go$/ && (d == "." || ("/" d "/") !~ /\/(testdata|[._][^\/]*)\//)) {
+        seed[path(d)] = 1
+        if (!(path(d) in pkg)) gone[d] = 1
+        next
+      }
+      while (1) {
+        if (path(d) in pkg) { seed[path(d)] = 1; next }
+        if (d == ".") break
+        d = up(d)
+      }
+      print "unowned " $0
+    }
+    END {
+      n = 0
+      for (p in seed) { hit[p] = 1; queue[++n] = p }
+      for (i = 1; i <= n; i++) {
+        m = split(users[queue[i]], a, " ")
+        for (j = 1; j <= m; j++) if (!(a[j] in hit)) { hit[a[j]] = 1; queue[++n] = a[j] }
+      }
+      for (p in hit) {
+        kind = (p in seed) ? "changed" : "importer"
+        if (p in pkg) print kind " " rel(p)
+        m = split(testers[p], a, " ")
+        for (j = 1; j <= m; j++) if (!(a[j] in hit)) print "importer " rel(a[j])
+      }
+      for (d in gone) print "gone " d
+    }' "$_list" "$_changed" | LC_ALL=C sort -u
+}
+
+# go_kind <kind> <go_select output> prints that kind's values on one line, space-separated.
+go_kind() {
+  awk -v k="$1" '$1 == k { sub(/^[^ ]* /, ""); printf "%s%s", s, $0; s = " " }' "$2"
+}
+
+# go_count <list file> names the number of packages listed: "1 package", "3 packages".
+go_count() {
+  local _n
+  _n=$(sed '/^$/d' "$1" | wc -l | tr -d ' ')
+  if [ "$_n" -eq 1 ]; then echo "1 package"; else echo "$_n packages"; fi
+}
+
+# go_pick <module label> <module dir> <changed paths file> <package list file> runs go_select, says what it chose and
+# appends the packages to test to the list file. It returns 1 when go list failed and 2 when a changed file belongs
+# to no package; the caller decides what that module falls back to.
+go_pick() {
+  local _label=$1 _dir=$2 _changed=$3 _out=$4 _sel _line
+  _sel="$WORK/go-selected.$(printf '%s' "$_dir" | tr '/' '-')"
+  go_select "$_dir" "$_changed" > "$_sel" || return 1
+  _line=$(go_kind changed "$_sel"); [ -n "$_line" ] && echo "check-fast: $_label packages changed: $_line"
+  _line=$(go_kind importer "$_sel"); [ -n "$_line" ] && echo "check-fast: $_label packages importing them: $_line"
+  _line=$(go_kind gone "$_sel")
+  [ -n "$_line" ] && echo "check-fast: $_label has no package here for $_line (removed, or not built on this platform)"
+  awk '$1 == "changed" || $1 == "importer" { print $2 }' "$_sel" >> "$_out"
+  if grep -q '^unowned ' "$_sel"; then return 2; fi
+  return 0
+}
+
+# The Go packages a change needs, per module (server/ and sdk/go are separate modules), in one list file each for
+# job_go and job_sdk_go. server: the readers above join the list, files that no package encloses add go build ./...,
+# and the packages the repo-wide guard job runs whole are left to it. sdk/go: such files test the whole module, as
+# every sdk/go change did before.
+GO_SERVER_ALL=0
+GO_SERVER_LIST="$WORK/go-test.server"
+GO_SDK_LIST="$WORK/go-test.sdk-go"
+if [ "$ALL" -eq 0 ]; then
+  printf '%s\n' "$CHANGED" | sed -n 's|^server/||p' > "$WORK/go-changed.server"
+  printf '%s\n' "$CHANGED" | sed -n 's|^sdk/go/||p' > "$WORK/go-changed.sdk-go"
+  printf '%s\n' "${GO_READERS[@]:-}" | sed '/^$/d' > "$GO_SERVER_LIST.all"
+  : > "$GO_SDK_LIST"
+  if [ "$HAVE_GO" -eq 1 ] && [ -s "$WORK/go-changed.server" ]; then
+    go_pick server server "$WORK/go-changed.server" "$GO_SERVER_LIST.all"
+    case $? in
+      1) GO_SERVER_ALL=1
+         INFO+=("INFO  server: go list failed ($(head -n 1 "$WORK/go-list.server.err")); go test ran on the whole module") ;;
+      2) SERVER_BUILD=1 ;;
+    esac
+  fi
+  _drop=""
+  [ "$GO_GUARDS" -eq 1 ] && _drop="${GO_GUARD_PKGS[*]}"
+  awk -v drop="$_drop" 'BEGIN { n = split(drop, d, " "); for (i = 1; i <= n; i++) skip[d[i]] = 1 }
+    !($0 in skip) && !seen[$0]++' "$GO_SERVER_LIST.all" > "$GO_SERVER_LIST"
+  if [ -s "$WORK/go-changed.sdk-go" ] && [ "$SDKGO" -eq 0 ]; then
+    if [ "$HAVE_GO" -eq 0 ]; then
+      SDKGO=1  # reported below as a skip
+    else
+      go_pick sdk/go sdk/go "$WORK/go-changed.sdk-go" "$GO_SDK_LIST"
+      case $? in
+        1) SDKGO=1
+           INFO+=("INFO  sdk/go: go list failed ($(head -n 1 "$WORK/go-list.sdk-go.err")); go test ran on the whole module") ;;
+        2) SDKGO=1 ;;
+      esac
+    fi
   fi
 fi
 
@@ -889,9 +1012,11 @@ if [ "${#SCRIPT_TESTS[@]}" -gt 0 ]; then
   fi
 fi
 [ "$SDKBUNDLE" -eq 1 ] && schedule "sdk bundle snapshot" job_sdk_bundle ""
-if [ "$SDKGO" -eq 1 ]; then
-  if [ "$HAVE_GO" -eq 1 ]; then
-    schedule "sdk/go go test" job_sdk_go ""
+if [ "$SDKGO" -eq 1 ] || [ -s "$GO_SDK_LIST" ]; then
+  if [ "$HAVE_GO" -eq 1 ] && [ "$SDKGO" -eq 1 ]; then
+    schedule "sdk/go go test" job_sdk_go ALL
+  elif [ "$HAVE_GO" -eq 1 ]; then
+    schedule "sdk/go go test ($(go_count "$GO_SDK_LIST"))" job_sdk_go "$GO_SDK_LIST"
   elif [ "$ALL" -eq 0 ]; then
     # In --all mode the missing-go failure is already reported by the server core_missing line below.
     INFO+=("SKIP  sdk/go tests: go not found")
@@ -903,12 +1028,15 @@ if [ "$ALL" -eq 1 ]; then
     schedule "server go test" job_go ALL
   else core_missing "go not found; server and sdk/go checks skipped"; fi
 else
-  if [ "${#GO_GROUPS[@]}" -gt 0 ]; then
-    if [ "$HAVE_GO" -eq 1 ]; then
-      for _g in "${GO_GROUPS[@]}"; do schedule "server go test ./$_g/..." job_go "$_g"; done
-    else
-      INFO+=("SKIP  server go tests (${GO_GROUPS[*]}): go not found")
-    fi
+  if [ "$HAVE_GO" -eq 0 ]; then
+    # Without go there is no package graph: name the changed directories and the reader packages instead.
+    _dirs=$( { awk '{ d = $0; if (!sub(/\/[^\/]*$/, "", d)) d = "."; print d }' "$WORK/go-changed.server"
+               sed 's|^\./||' "$GO_SERVER_LIST"; } | LC_ALL=C sort -u | tr '\n' ' ')
+    [ -n "$_dirs" ] && INFO+=("SKIP  server go tests (${_dirs% }): go not found")
+  elif [ "$GO_SERVER_ALL" -eq 1 ]; then
+    schedule "server go test ./..." job_go ALL
+  elif [ -s "$GO_SERVER_LIST" ]; then
+    schedule "server go test ($(go_count "$GO_SERVER_LIST"))" job_go "$GO_SERVER_LIST"
   fi
   if [ "$SERVER_BUILD" -eq 1 ]; then
     if [ "$HAVE_GO" -eq 1 ]; then schedule "server go build ./..." job_go_build ""; else INFO+=("SKIP  server go build: go not found"); fi
