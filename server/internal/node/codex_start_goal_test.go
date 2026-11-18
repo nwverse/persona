@@ -2,6 +2,8 @@ package node
 
 import (
 	"encoding/json"
+	"fmt"
+	"log"
 	"os"
 	"strings"
 	"testing"
@@ -25,17 +27,21 @@ func withStartRolloutVersion(t *testing.T, v string) {
 }
 
 // codexGoalAnswers makes the Codex in w1:p2 take a /goal typed at it as Codex 0.169 does: thread_goal_updated, active,
-// in its rollout (when take).
-func codexGoalAnswers(t *testing.T, n *Node, f *fakeHerdr, take bool) {
+// in its rollout (when take), with the objective keep makes of the typed one (nil: the same).
+func codexGoalAnswers(t *testing.T, n *Node, f *fakeHerdr, take bool, keep func(string) string) {
 	t.Helper()
 	f.after(func(c herdrCall) {
 		text := str(c.Params["text"])
 		if c.Method != "agent.prompt" || !strings.HasPrefix(text, "/goal ") || !take {
 			return
 		}
+		objective := strings.TrimPrefix(text, "/goal ")
+		if keep != nil {
+			objective = keep(objective)
+		}
 		line, _ := json.Marshal(map[string]any{"timestamp": time.Now().UTC().Format(time.RFC3339Nano), "type": "event_msg",
 			"payload": map[string]any{"type": "thread_goal_updated", "threadId": startThread, "goal": map[string]any{
-				"threadId": startThread, "objective": strings.TrimPrefix(text, "/goal "), "status": "active",
+				"threadId": startThread, "objective": objective, "status": "active",
 				"tokensUsed": 0, "timeUsedSeconds": 0, "createdAt": time.Now().Unix(), "updatedAt": time.Now().Unix()}}})
 		file, err := os.OpenFile(n.codexPath(startThread), os.O_APPEND|os.O_WRONLY, 0)
 		if err != nil {
@@ -52,7 +58,7 @@ func codexGoalAnswers(t *testing.T, n *Node, f *fakeHerdr, take bool) {
 func TestCodexStartSetsTheGoal(t *testing.T) {
 	n, f, _, _ := codexStartHerdr(t, 100*time.Millisecond)
 	f.setScreen("w1:p2", cxEmpty)
-	codexGoalAnswers(t, n, f, true)
+	codexGoalAnswers(t, n, f, true, nil)
 	goal := "go test ./... passes; the fix is merged"
 
 	res, err := request(t, n, "session.start", map[string]any{"cwd": "~/proj", "launcher": "codex", "prompt": "fix the build", "goal": goal})
@@ -87,7 +93,7 @@ func TestCodexStartGoalNeverFailsTheStart(t *testing.T) {
 			withStartRolloutVersion(t, tc.version)
 			n, f, _, _ := codexStartHerdr(t, 100*time.Millisecond)
 			f.setScreen("w1:p2", cxEmpty)
-			codexGoalAnswers(t, n, f, tc.take)
+			codexGoalAnswers(t, n, f, tc.take, nil)
 			res, err := request(t, n, "session.start", map[string]any{"cwd": "~/proj", "launcher": "codex", "prompt": "fix the build", "goal": "CI is green"})
 			if err != nil {
 				t.Fatal(err)
@@ -113,5 +119,25 @@ func TestCodexStartGoalNotTypedOverADraft(t *testing.T) {
 	n.firstWait.Wait()
 	if got := f.trace("agent.prompt"); len(got) != 0 {
 		t.Fatalf("the goal was typed over a draft: %v", got)
+	}
+}
+
+// Codex may keep a long objective as something else (a paste placeholder, a file reference); the goal the new thread
+// shows after /goal went in is still this one, and the log says how it was kept.
+func TestCodexStartGoalLongObjective(t *testing.T) {
+	n, f, _, _ := codexStartHerdr(t, 100*time.Millisecond)
+	logs := &syncBuffer{}
+	n.logger = log.New(logs, "", 0)
+	f.setScreen("w1:p2", cxEmpty)
+	codexGoalAnswers(t, n, f, true, func(typed string) string {
+		return fmt.Sprintf("[Pasted Content %d chars]", len(typed))
+	})
+	goal := strings.TrimSpace(strings.Repeat("every check in the suite passes ", 60))
+	if _, err := request(t, n, "session.start", map[string]any{"cwd": "~/proj", "launcher": "codex", "prompt": "fix the build", "goal": goal}); err != nil {
+		t.Fatal(err)
+	}
+	n.firstWait.Wait()
+	if got := logs.String(); !strings.Contains(got, "goal set (the rollout keeps its objective as") {
+		t.Fatalf("log %q", got)
 	}
 }

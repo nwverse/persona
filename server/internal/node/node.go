@@ -1320,7 +1320,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			if isDesktopLauncher(p.Launcher) || isCodexAppLauncher(p.Launcher) {
 				kind = "app"
 			}
-			if err := n.checkStartGoal(goal, kind, p.ResumeSessionID, p.Prompt); err != nil {
+			if err := n.checkStartGoal(goal, kind, cmp.Or(p.Host, n.defaultKind()), p.ResumeSessionID, p.Prompt); err != nil {
 				return nil, err
 			}
 		}

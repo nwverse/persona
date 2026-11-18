@@ -52,8 +52,8 @@ func cleanStartGoal(goal string) string { return strings.Join(strings.Fields(goa
 
 // checkStartGoal refuses, before anything starts, a start whose goal (cleaned) cannot be had: kind is the agent the
 // start runs ("claude", or what the launcher, a runtime or an app makes it), resume the session it resumes, prompt
-// the first message the goal is set after.
-func (n *Node) checkStartGoal(goal, kind, resume, prompt string) error {
+// the first message the goal is set after, hostKind the host the start runs in (its own, else the default).
+func (n *Node) checkStartGoal(goal, kind, hostKind, resume, prompt string) error {
 	switch {
 	case goal == "":
 		return nil
@@ -66,7 +66,7 @@ func (n *Node) checkStartGoal(goal, kind, resume, prompt string) error {
 	case kind != "claude" && kind != "codex": // Codex's goal: codex_start_goal.go
 		return refusal(proto.CodeStartGoalUnsupported, goalNotClaude, nil)
 	}
-	if h := n.defaultHost(); h != nil && !drivesScreen(h) {
+	if h := n.hosts.Get(hostKind); h != nil && !drivesScreen(h) { // botmux may hand /goal over as a plain message
 		return refusal(proto.CodeStartGoalUnsupported, goalScreenless, nil)
 	}
 	return nil

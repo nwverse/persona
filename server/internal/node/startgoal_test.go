@@ -187,6 +187,23 @@ func TestStartGoalRefusedBeforeAnythingStarts(t *testing.T) {
 	}
 }
 
+// A start in a host that cannot read the screen or press keys (botmux) takes no goal, even when the node's default
+// host can: botmux may hand /goal to the agent as a plain message.
+func TestStartGoalRefusedInAScreenlessHost(t *testing.T) {
+	n, f, home := herdrNode(t)
+	n.hosts.Set(append(n.hosts.All(), &botmuxHost{})...)
+	cwd := mkdir(t, filepath.Join(home, "project"))
+	_, err := request(t, n, "session.start", map[string]any{"cwd": cwd, "workspace_id": "w1", "prompt": "x", "launcher": "codex",
+		"host": "botmux", "goal": "done"})
+	var re *rpc.Error
+	if !errors.As(err, &re) || re.Code != proto.CodeStartGoalUnsupported {
+		t.Fatalf("botmux: %v", err)
+	}
+	if got := f.trace("tab.create", "agent.prompt"); len(got) != 0 {
+		t.Fatalf("started anyway: %v", got)
+	}
+}
+
 func TestCleanStartGoal(t *testing.T) {
 	if got := cleanStartGoal("  tests pass\n and\tthe PR is merged  "); got != "tests pass and the PR is merged" {
 		t.Fatalf("%q", got)

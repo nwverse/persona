@@ -640,10 +640,10 @@ Assistant snapshots and `agents_list` also carry the state. When on, they explai
 
 A `POST /api/v1/sessions` (the node's `session.start`) can carry `goal: string` alongside `prompt`. Only a brand-new
 Claude Code or Codex session in a terminal the node can read and type into takes it, and only with a `prompt` to set it
-after; a resume, an agent other than Claude Code or Codex, a screenless engine, a start without a `prompt` (an `async` one whose first
-message comes later) or a condition over 2000 characters is refused before anything starts with
-`409 start_goal_unsupported`, and a node without the `start_goal` capability gets the same code. The condition is
-one line: newlines collapse to spaces.
+after; a resume, an agent other than Claude Code or Codex, a screenless engine (the start's own host, else the
+default), a start without a `prompt` (an `async` one whose first message comes later) or a condition over 2000
+characters is refused before anything starts with `409 start_goal_unsupported`, and a node without the `start_goal`
+capability gets the same code. The condition is one line: newlines collapse to spaces.
 
 When it takes the goal, the node types the `prompt` first (after an `ultracode` start switch, as usual) and, once the
 transcript has it, types `/goal <condition>` on its own while the agent works: Claude Code runs `/goal` at once even

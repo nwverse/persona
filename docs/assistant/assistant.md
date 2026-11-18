@@ -1669,12 +1669,12 @@ is in `docs/protocol/protocol.md` ("Start defaults").
 - **Applied at the task's start** (`startTaskAgent`, after the launcher fit), so retries, remedies, queued starts and
   `task_spawn` children get the same: the first preset whose launcher the computer has and that is not at its usage
   limit (weights share starts among the usable ones; a preset passed over is named in the task's why); then the effort,
-  ultracode on Claude Code only, and the goal on Claude Code and Codex. A caller's own effort, ultracode choice, tier, model or launcher is never
-  replaced, and an effort the caller's tier gives wins over the policy's.
+  ultracode on Claude Code only, and the goal on Claude Code and Codex. A caller's own effort, ultracode choice, tier,
+  model or launcher is never replaced, and an effort the caller's tier gives wins over the policy's.
 - **The goal** is the task's `done_when` as one checkable sentence (`prompts/assistant/task_goal.md`), set by the node
   after the first message is in the transcript, as Claude Code's `/goal` or Codex's own `/goal`
-  ([agent-goal.md](../integrations/agent-goal.md), "A goal set at the start"). A computer
-  whose node cannot set it starts the Agent without it once, and the task's why says so, as for ultracode.
+  ([agent-goal.md](../integrations/agent-goal.md), "A goal set at the start"). A computer whose node cannot set it
+  starts the Agent without it once, and the task's why says so, as for ultracode.
 - **Plan first** adds `prompts/agents/plan_first_task.md` to the prompt: for a launch whose model does not act on an
   effort setting, the prompt is the only lever.
 

@@ -4,10 +4,12 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -52,6 +54,10 @@ func (n *Node) codexStartGoal(ctx context.Context, id, pane, goal string, unlock
 	var once sync.Once
 	release := func() { once.Do(unlock) }
 	defer release()
+	if host.ParsePane(pane).Kind == host.Botmux { // checkStartGoal refuses it; botmux may hand /goal over as a message
+		n.logf("start %s: goal not set: the terminal cannot be read or typed into", id)
+		return
+	}
 	path := n.codexPath(id)
 	if path == "" {
 		n.logf("start %s: goal not set: the thread's rollout is not found", id)
@@ -72,11 +78,9 @@ func (n *Node) codexStartGoal(ctx context.Context, id, pane, goal string, unlock
 		n.logf("start %s: goal not typed: %v", id, err)
 		return
 	}
-	if host.ParsePane(pane).Kind != host.Botmux {
-		if err := n.codexSubmitted(ctx, pane); err != nil {
-			n.logf("start %s: the /goal command may still be in the input box: %v", id, err)
-			return
-		}
+	if err := n.codexSubmitted(ctx, pane); err != nil {
+		n.logf("start %s: the /goal command may still be in the input box: %v", id, err)
+		return
 	}
 	n.typing.typed(pane, cmd)
 	release() // typed: another message may follow now
@@ -87,15 +91,21 @@ func (n *Node) codexStartGoal(ctx context.Context, id, pane, goal string, unlock
 			return
 		case <-time.After(goalVerdictPoll):
 		}
+		// A new thread has no goal but the one just typed. Codex may keep a long objective another way (a paste
+		// placeholder, a file reference), so a goal updated since is this one whatever its objective reads.
 		_, _, g, _ := n.backgroundTasks(path)
-		if g == nil || g.Objective != goal || g.UpdatedAt.Before(typedAt.Add(-time.Second)) {
+		if g == nil || g.UpdatedAt.Before(typedAt.Add(-time.Second)) {
 			continue
 		}
-		if g.Status == proto.GoalActive {
-			n.logf("start %s: goal set", id)
-		} else {
-			n.logf("start %s: goal set, now %s", id, g.Status)
+		state := "set"
+		if g.Status != proto.GoalActive {
+			state = "set, now " + g.Status
 		}
+		if g.Objective != goal {
+			state += fmt.Sprintf(" (the rollout keeps its objective as %d characters, typed %d)",
+				utf8.RuneCountInString(g.Objective), utf8.RuneCountInString(goal))
+		}
+		n.logf("start %s: goal %s", id, state)
 		return
 	}
 	n.logf("start %s: the rollout did not show the goal", id)
