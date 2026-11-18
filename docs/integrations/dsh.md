@@ -111,6 +111,7 @@ plugin management inside phone-driven sessions also reports `HMR transactions ca
 | Rename | Session name → `sessionController.rename`; ignore tab names |
 | Close | `workspaceRegistry.archiveSession(id, {stopActivity: true})`: same as Web GUI archiving; stop the current turn, subagents, background tasks, and scheduled tasks together; then omit from the list. Can be unarchived in DSH |
 | Phone tools | Hub tools (`mcp.tools` forwarded by node) register in DSH as `mcp__persona__<name>`; calls go through node `mcp.call` to the hub with the calling session attached. Result text becomes tool output; error results become tool failures |
+| Agent supervision | Regular Agent sessions get their own Persona tools (such as `report_to_supervisor`) even when assistant support is enabled. At step preparation, DSH checks the calling session with the node and offers `task_plan` and `task_review` only to an active task leader. |
 
 ## Authorization, questions, and plan approval
 
@@ -130,7 +131,7 @@ The plugin goes first (`prepend`) on DSH's two response chains, `approval/reques
 - **Return to computer / expiry / no hub**: call `next()`, and the Web GUI prompts normally. While the phone holds a card, the Web GUI cannot see it (the response chain is a chain, not a broadcast),
   the same trade-off as Claude hooks intercepting dialogs so they do not appear in the computer TUI.
 - **Timed questions**: `ask_user_question` waits only 45 seconds by default. At timeout, DSH first reports "Not answered yet" to the model, without withdrawing the phone card; a later answer goes through `userQuestions.answer` (late answer).
-- **Node restart**: interaction ids derive from session + tool call; after connecting to the next node, the plugin asks again with the same id (waiting at most 2 minutes), preserving the same phone card.
+- **Node restart, hub link drop**: interaction ids derive from session + tool call; after connecting to the next node (or once its hub is back), the plugin asks again with the same id (waiting at most 2 minutes from the drop), preserving the same phone card: the hub keeps a card under the runtime's own id through the gap (#8128).
 
 ## Phone tools
 

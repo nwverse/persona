@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"slices"
 	"strings"
@@ -25,6 +26,22 @@ import (
 type InboxAgentConfig = assistantwire.InboxAgentConfig
 
 func agentConcurrency(c InboxAgentConfig) int { return max(c.Concurrency, 1) }
+
+// inboxOrdinaryRunning is the processing-conversation count that looking state already represents. A deferred row is
+// deliberately invisible here until the unified wake scheduler admits it. The caller holds inbox.mu.
+func inboxOrdinaryRunning(it *InboxItem) bool {
+	a, h := it.Agent, it.Handling
+	if a == nil || a.SessionID == "" || a.DeferredAt != nil {
+		return false
+	}
+	return h == nil && a.State == AgentRunning || h != nil && h.State == HandlingLooking
+}
+
+// inboxConversationRunning also counts an admitted programmatic turn whose handling state does not ordinarily show
+// it, principally a source reply delivered while the item's current Agent keeps HandlingAgent. The caller holds mu.
+func inboxConversationRunning(it *InboxItem) bool {
+	return inboxOrdinaryRunning(it) || it.Agent != nil && it.Agent.SessionID != "" && it.Agent.WakeSlot
+}
 
 func agentTimeout(c InboxAgentConfig) time.Duration {
 	if c.TimeoutMinutes <= 0 {
@@ -93,6 +110,13 @@ type InboxAgent struct {
 	Wake    bool        `json:"wake,omitempty"`
 	SentOf  string      `json:"sent_of,omitempty"`
 	Lost    []string    `json:"lost,omitempty"`
+	// ProcessingTurn identifies the latest prompt issued to this processing conversation.
+	ProcessingTurn string `json:"processing_turn,omitempty"`
+	// DeferredAt is when this item's oldest held programmatic wake joined the eligibility queue. WakeSlot reserves
+	// the processing conversation's admitted slot while HandlingAgent (or another non-looking state) hides it from
+	// the ordinary running count. Both are persisted internal bookkeeping and are stripped from listed items.
+	DeferredAt *time.Time `json:"deferred_at,omitempty"`
+	WakeSlot   bool       `json:"wake_slot,omitempty"`
 	// Back is the handling state a waking note interrupted (waiting, done…): a turn that only updates the recap
 	// goes back to it.
 	Back string `json:"back,omitempty"`
@@ -120,6 +144,19 @@ func (a *InboxAgent) queueNote(n inboxNote) {
 // keepToldSince drops the notes a message made at count told carried: only those queued since stay.
 func (a *InboxAgent) keepToldSince(told int) {
 	a.Pending = a.Pending[len(a.Pending)-min(max(a.told-told, 0), len(a.Pending)):]
+}
+
+// keepToldOthers removes exactly the queue positions one selective delivery carried. Deferred notes before a ready
+// informational note therefore stay queued without disturbing the existing append-and-trim told accounting.
+func (a *InboxAgent) keepToldOthers(delivered map[int]bool) {
+	base := a.told - len(a.Pending)
+	kept := a.Pending[:0]
+	for i, n := range a.Pending {
+		if !delivered[base+i+1] {
+			kept = append(kept, n)
+		}
+	}
+	a.Pending = kept
 }
 
 // lost: conversation sid was found gone.
@@ -240,6 +277,7 @@ func (b *inboxBook) releaseInboxAgent(it *InboxItem, state, reason string, now t
 	}
 	if a := it.Agent; a != nil {
 		a.Pending, a.Wake, a.Back, a.RetryAfter = nil, false, "", nil
+		a.DeferredAt, a.WakeSlot = nil, false
 	}
 	b.settle(w)
 	return w
@@ -250,7 +288,7 @@ func inboxAgentReleaseState(it *InboxItem) (active, pending bool) {
 	a, h := it.Agent, it.Handling
 	active = it.open() && (h != nil && (h.State == HandlingLooking || h.State == HandlingAgent) ||
 		h == nil && a != nil && (a.State == AgentQueued || a.State == AgentRunning))
-	pending = a != nil && (len(a.Pending) > 0 || a.Wake || a.Back != "" || a.RetryAfter != nil)
+	pending = a != nil && (len(a.Pending) > 0 || a.Wake || a.Back != "" || a.RetryAfter != nil || a.DeferredAt != nil || a.WakeSlot)
 	return active, pending
 }
 
@@ -276,7 +314,7 @@ func (s *Service) startInboxAgents(ctx context.Context, cfg InboxAgentConfig) {
 			continue
 		}
 		switch {
-		case it.Agent.SessionID != "" && (it.Handling == nil && it.Agent.State == AgentRunning || it.Handling != nil && it.Handling.State == HandlingLooking):
+		case inboxConversationRunning(it):
 			running++
 		case it.Agent.State == AgentQueued && it.Agent.SessionID == "" && it.open():
 			// Recheck before backoff, capacity or adoption: a saved rule also covers work already queued.
@@ -313,11 +351,21 @@ func (s *Service) startInboxAgents(ctx context.Context, cfg InboxAgentConfig) {
 		if len(jobs) >= max(agentConcurrency(cfg)-running, 0) {
 			continue
 		}
+		if it.Agent.DeferredAt != nil {
+			// A missing conversation recovered with held work reaches its first message only after this capacity check.
+			// Admit now so that message includes every note and the replay establishes the same restoration state.
+			b.admitInboxSourceWake(it, now)
+		}
 		it.Agent.State, it.Agent.StartedAt, it.Agent.Attempts, it.Agent.RetryAfter = AgentRunning, &now, it.Agent.Attempts+1, nil
 		delete(b.listMemo.kept, it.ID) // saved once the start returns: listed as running meanwhile (inbox_list_memo.go)
 		a := b.inboxAgentFor(it, owner, linked[it.Agent.TodoID], larkDefault, loc)
 		a.KnowledgeDir = s.kb.dir // the heading of what the knowledge base knows names where it is
-		jobs = append(jobs, job{it, b.kbChatOf(it), func(kbc *prompts.KBContext) string { a.KB = kbc; return prompts.RenderInboxAgent(a) },
+		turn := rand.Text()
+		it.Agent.ProcessingTurn = turn
+		jobs = append(jobs, job{it, b.kbChatOf(it), func(kbc *prompts.KBContext) string {
+			a.KB = kbc
+			return inboxProcessingPrompt(turn, prompts.RenderInboxAgent(a))
+		},
 			it.Agent.told})
 	}
 	b.mu.Unlock()
@@ -471,6 +519,9 @@ func (s *Service) sweepInboxAgents(ctx context.Context, cfg InboxAgentConfig, no
 		a, h := it.Agent, it.Handling
 		switch {
 		case a == nil:
+		case a.DeferredAt != nil && (h == nil || h.State != HandlingAgent || inboxDeferredAgentStop(it)):
+			// A held wake has not started a processing turn. Replied-while-Agent keeps its current Agent's supervision
+			// only until that Agent's settled stop is itself deferred; a known-settled stop must never time out as running.
 		case a.SessionID != "" && (a.State == AgentRunning || h != nil && (h.State == HandlingLooking || h.State == HandlingAgent)):
 			running = append(running, it)
 		case a.State != AgentRunning || a.SessionID != "":
@@ -507,10 +558,11 @@ func (s *Service) sweepInboxAgents(ctx context.Context, cfg InboxAgentConfig, no
 						continue // known unsettled work (or an undone stop): wait for the next pass, never time it out now
 					}
 					b.mu.Lock()
-					stillAgent := it.Agent != nil && it.Agent.SessionID == a.SessionID && it.Handling != nil && it.Handling.State == HandlingAgent
+					stillAgent := it.Agent != nil && it.Agent.SessionID == a.SessionID && it.Handling != nil && it.Handling.State == HandlingAgent &&
+						!inboxDeferredAgentStop(it)
 					b.mu.Unlock()
 					if !stillAgent {
-						continue // the stop returned the item to its processing conversation
+						continue // the stop returned the item to its processing conversation or is held for capacity
 					}
 				}
 			}
@@ -533,7 +585,9 @@ func (s *Service) sweepInboxAgents(ctx context.Context, cfg InboxAgentConfig, no
 			continue
 		}
 		b.mu.Lock()
-		if it.Agent != nil && it.Agent.SessionID == a.SessionID && (it.Handling == nil || it.Handling.State == state) {
+		// A wake queued during the session read can keep the same session and handling state; only settle the turn we read.
+		if it.Agent != nil && it.Agent.SessionID == a.SessionID && (it.Handling == nil || it.Handling.State == state) &&
+			a.Back == it.Agent.Back && sameTime(a.StartedAt, it.Agent.StartedAt) && !inboxDeferredAgentStop(it) {
 			w := beginWrite(it)
 			if it.Suggestion != nil { // new messages left its suggestion standing: it still holds
 				b.setHandling(it, HandlingDone, "", now)
@@ -562,6 +616,9 @@ func (b *inboxBook) inboxAgentFor(it *InboxItem, owner string, linked *prompts.I
 		}
 	}
 	for _, n := range it.Agent.Pending {
+		if n.Deferred {
+			continue
+		}
 		if n.Name != prompts.NoteNewMessages { // the item above is its content now
 			a.Notes = append(a.Notes, renderNote(n, owner))
 		}

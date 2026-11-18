@@ -1,6 +1,10 @@
 package assistantwire
 
-import "github.com/nwverse/persona/server/internal/proto"
+import (
+	"time"
+
+	"github.com/nwverse/persona/server/internal/proto"
+)
 
 // ---- the assistant's settings, and the conversations the hub's features start (docs/assistant/assistant.md "Boundary with hub") ----
 
@@ -41,7 +45,21 @@ const (
 	// MethodRename: RenameParams → the node's answer: the user renames one of its conversations in the app (the main
 	// one has no title to change, a Codex one only its tab); the new title is the user's from now on.
 	MethodRename = "assistant.rename"
+	// MethodKeepUndelivered: KeepUndeliveredParams → {undelivered}: the owner's message to one of its conversations
+	// went nowhere (nothing was typed: its process did not start, its computer was away), its transport outcome is
+	// unknown, or SendParams answered CodeUndeliveredAhead. The manager keeps it and sends it again by itself, once
+	// (#10194); an unknown first attempt is checked in the transcript before any retry. An older manager answers
+	// "unknown method": the hub answers the app with the failure, as before.
+	MethodKeepUndelivered = "assistant.keep_undelivered"
 )
+
+// CodeUndeliveredAhead: SendParams refuses the owner's message because older ones to the same conversation are kept
+// undelivered (MethodKeepUndelivered): the hub keeps this one behind them instead of sending it first.
+const CodeUndeliveredAhead = "undelivered_ahead"
+
+// CodeDeliveryUnknown: the node connection or caller's wait ended before a send's result was known. The first attempt
+// may have typed the message, so the manager looks for it in the transcript before trying again.
+const CodeDeliveryUnknown = "delivery_unknown"
 
 // The node's methods the assistant calls for its directory, its conversations and its settings
 // (docs/protocol/protocol.md "hub ↔ node"), passed through by the hub's device.call like the others.
@@ -62,7 +80,8 @@ const (
 	DeviceAssistantWarm = "assistant.warm"
 	// DeviceAssistantMemory: {op, cwd, name?, content?} → the memory files (op list) or {}.
 	DeviceAssistantMemory = "assistant.memory"
-	// DeviceAssistantCompact: {session_id} → {}.
+	// DeviceAssistantCompact: {session_id, only_running?} → {}; only_running refuses not_running instead of starting a
+	// process that is not running (an older node ignores it and starts one).
 	DeviceAssistantCompact = "assistant.compact"
 	// DeviceAssistantHandoff: {session_id} → {summary, recent}: what a main conversation leaves for the next one.
 	DeviceAssistantHandoff = "assistant.handoff"
@@ -71,6 +90,12 @@ const (
 	// DeviceLaunchersProbe: {name} → {detail}.
 	DeviceLaunchersProbe = "launchers.probe"
 )
+
+// ConfigDirClaudeOnly is the node's refusal of a config_dir for a conversation whose launcher runs another agent than
+// Claude Code, which alone has profiles. The node refuses it before starting anything (node/assistant.go), so a caller
+// that asked for a profile without knowing what the launcher runs can start again without one (assistant
+// startSignedIn, #6884).
+const ConfigDirClaudeOnly = "config_dir is only supported for Claude assistant conversations"
 
 // StartParams is assistant.start's params.
 type StartParams struct {
@@ -131,6 +156,22 @@ type SendParams struct {
 	// the manager's own sends (channels, the inbox, meetings) never set it, and an older hub never sends it. A hand-off's
 	// Always rule spares the card only for a turn of such messages (assistant secret_handoff.go).
 	Human bool `json:"human,omitempty"`
+}
+
+// KeepUndeliveredParams is assistant.keep_undelivered's params. Params are the app's message as it came (text, images,
+// launcher, model; never what SendParams made of it): a retry runs SendParams again. Human is SendParams.Human for it;
+// Error the failure the owner is told, Code its code ("" for none).
+type KeepUndeliveredParams struct {
+	MachineID string         `json:"machine_id"`
+	SessionID string         `json:"session_id"`
+	Params    map[string]any `json:"params"`
+	Human     bool           `json:"human,omitempty"`
+	Lang      string         `json:"lang,omitempty"`
+	Code      string         `json:"code,omitempty"`
+	Error     string         `json:"error,omitempty"`
+	// TriedAt is when the first send began for CodeDeliveryUnknown. Zero means nothing was typed, so no landed-check is
+	// needed before a retry. The original start, not when the connection ended, covers a slow first attempt.
+	TriedAt time.Time `json:"tried_at,omitempty"`
 }
 
 // RenameParams is assistant.rename's params: Params are the app's ({title?, tab_name?}).

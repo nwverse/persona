@@ -39,6 +39,12 @@ export function originMarkLabel(o: AutoOrigin): string {
   return (EXTERNAL_ORIGINS as readonly string[]).includes(o) ? externalFrom(o as ExternalOrigin) : originLabel(o);
 }
 
+/** The words for an origin's mark and the line under the opening message: "From <name>" while the mark draws the icon of
+ *  the extension `name` names (#10358, OriginMark's `onName`), else the origin's own (originMarkLabel). */
+export function openerFrom(o: AutoOrigin, name: string | undefined): string {
+  return name ? t("chat-segmentview.from", { name }) : originMarkLabel(o);
+}
+
 /** Each group's mark (OriginMark), on the rows of the conversations in it: the sidebar's and All chats' (#5195). */
 export const ORIGIN_ICON: Record<AutoOrigin, IconName> = { inbox: "inbox", task: "clock", lark_agent: "at", spawned: "fork", extension: "extension", other: "more" };
 /** A group with a brand of its own draws its mark instead of the icon (#3758). */
@@ -47,6 +53,14 @@ export const ORIGIN_BRAND: Partial<Record<AutoOrigin, BrandId>> = { lark_agent: 
 /** The conversations an extension opened (#3758): Lark /agent's and any other extension's. */
 export const EXTERNAL_ORIGINS = ["lark_agent", "extension"] as const;
 export type ExternalOrigin = (typeof EXTERNAL_ORIGINS)[number];
+
+/** The extension that opened an external conversation, by id (#10358): its `opened_by`, else its `origin_ref`, which for
+ *  these two origins is that extension too (the hub's start notes both, server/internal/assistant/start.go
+ *  requestOrigin); undefined for any other origin and for one nobody noted (a conversation the backfill judged). */
+export function openerOf(origin: string | undefined, s: Pick<Session, "opened_by" | "origin_ref"> | undefined): string | undefined {
+  if (!(EXTERNAL_ORIGINS as readonly string[]).includes(origin ?? "")) return undefined;
+  return s?.opened_by?.trim() || s?.origin_ref?.trim() || undefined;
+}
 
 /** Where an external conversation came from, by its origin with the spaces trimmed; undefined for every other one (the
  *  user's own, a channel's /new, the inbox's, a task's, one spawned from a chat, an origin this page doesn't know). */
@@ -108,11 +122,12 @@ export function autoConversations(conversations: readonly Session[], main: strin
  *  listed above it), the archived ones, the hub's built-in background supervisor (`background`, its id: listed with the
  *  scheduled tasks' chats in "All chats" only, #4927) and the scheduled tasks' own chats (#6228: those have their own
  *  entry on Scheduled Tasks and stay in "All chats", so they no longer crowd Recent), by last activity (equal times by
- *  id, as iOS). The sidebar shows the first ones (lib/sidebar-recent.ts, #5146). */
-export function recentConversations(conversations: readonly Session[], main: string | undefined, leaders: readonly string[], background?: string): Session[] {
+ *  id, as iOS). The sidebar shows the first ones (lib/sidebar-recent.ts, #5146). `withTasks`: the user's "Show scheduled
+ *  task chats" (#8324, `assistant.recent_task_chats`) brings the background supervisor and the tasks' chats back, by time. */
+export function recentConversations(conversations: readonly Session[], main: string | undefined, leaders: readonly string[], background?: string, withTasks = false): Session[] {
   const lead = new Set(leaders);
   return conversations
-    .filter((c) => c.session_id !== main && !lead.has(c.session_id) && !c.archived && !(background && c.session_id === background)
-      && autoOrigin(c, background) !== "task")
+    .filter((c) => c.session_id !== main && !lead.has(c.session_id) && !c.archived
+      && (withTasks || (!(background && c.session_id === background) && autoOrigin(c, background) !== "task")))
     .sort((a, b) => byTime(b.updated_at, a.updated_at) || (a.session_id < b.session_id ? -1 : a.session_id > b.session_id ? 1 : 0));
 }

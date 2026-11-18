@@ -51,6 +51,10 @@ Continuation filenames may append `_<segment UUID>` after the thread UUID. The a
 | FileChange | One `Edit` per file, input includes `diff` (unified diff, rendered by the App's `UnifiedDiffView`) |
 | McpToolCall | `mcp__<server>__<tool>` |
 | ImageView | `Read` |
+| Extension `web.search` | `WebSearch` / `WebFetch` (below) |
+| Extension `clock.sleep` | `sleep`, input `duration` (`25s`, `1m30s`) and `duration_ms`; a run of sleeps folds with the work around it |
+| SubAgentActivity (`started` / `interacted` / `completed`) | `subagent`, input `name` (the last segment of `agent_path`), `event`, `agent_path`, `agent_thread_id`, and on `started` the `model` and `reasoning_effort` Codex gave the subagent; the activity line follows `event` (dispatching, messaging, finished) |
+| CollabAgentToolCall | `wait_agent` for `wait`, otherwise the record's `tool`; input `receiver_thread_ids` / `receiver_agents`, result `agents_states`, `status: failed` marks failure; the `wait` records seen so far carry none of the three, so a wait shows without a subject or a count |
 | ContextCompaction | "Context compacted" notice |
 | `event_msg/turn_aborted` | "Interrupted" notice |
 | `turn_context` / `token_count` | Model, approval policy, context tokens |
@@ -63,7 +67,7 @@ strip `<in-app-browser-context>` (browser state automatically attached by the Co
 `<environment_context>`, `<INSTRUCTIONS>`, `<skill>`, `<turn_aborted>`, `<subagent_notification>`, `<realtime_delegation>`,
 and `<codex_internal_context>` appear only in response_item (model input), not in the chat.
 
-`response_item` is the model wire format for the same content and is skipped. Extension `web.search` displays as `WebSearch` (search, query input) / `WebFetch` (`action.type=openPage`, URL input), with one "title  URL" per result. SubAgentActivity, other Extensions (image generation), and CollabAgentToolCall remain recognizable event notices; the original session history is still authoritative for full content.
+`response_item` is the model wire format for the same content and is skipped. Extension `web.search` displays as `WebSearch` (search, query input) / `WebFetch` (`action.type=openPage`, URL input), with one "title  URL" per result. A coordinating chat's `clock.sleep`, SubAgentActivity and CollabAgentToolCall are finished tool calls, not notices (#10436): the apps draw them as ordinary calls ("Call subagent · review_api") and they fold into the turn's work, so a chat that delegates shows its prompt, one folded work row and its reply rather than a line per sleep or subagent ping. The subagents themselves are their own threads, listed under the chat. Other Extensions (image generation) and item types Persona does not know remain recognizable event notices; the original session history is still authoritative for full content.
 
 The Persona assistant ("Persona" tab) can also use Codex launchers through `codex app-server`; see `docs/assistant/assistant.md` ("Codex").
 
@@ -118,6 +122,10 @@ Since 2026-11-04 (#1709), Codex sessions controlled by the phone through app-ser
 (`source_kind: codex_app_server`), and herdr panes already joined to the shared daemon ("Sessions on the daemon" above, "Connection: app-server").
 Messages to them already use `turn/start` / `turn/steer`; thinking effort is the thread's own setting, requiring no terminal typing (`node/codex_effort.go`).
 
+Assistant conversations on a custom Codex launcher also accept Codex's native levels, including `minimal` and `ultra`.
+Both the first-message selection and a configured effort are checked against the agent that the launcher actually runs,
+not its command name; Claude launchers still reject Codex-only levels (`node/assistant_codex_alias_effort_test.go`).
+
 - **Unchanged**: permission mode still cannot be changed on the phone (Codex approval policy and sandbox remain determined by launch arguments and `config.toml`; requests with permission mode return
   "Only Codex thinking effort can be changed on the phone; change permission mode on the computer"). Terminal-only panes (terminal route), sub-Agents
   and the internal Codex fork cannot even change thinking effort, with existing prompts unchanged. Codex desktop App chats change it through the App (#5575, "Sessions in the Codex desktop App" below). Starting Codex from the phone still omits thinking effort (see "Starting from the phone").
@@ -126,8 +134,11 @@ Messages to them already use `turn/start` / `turn/steer`; thinking effort is the
   An explicitly empty list means unsupported: neither show nor accept it. The session includes `efforts` (levels from weakest to strongest) and `effort` (current value); clients show the selector only when `efforts` is nonempty
   (`docs/protocol/protocol.md`, "Codex sources and capabilities"). The node validates levels itself: observed 0.163 `thread/settings/update` accepts any string.
 - **Current value**: the value app-server says is configured for this thread (`reasoningEffort` from `thread/read` every 5 seconds, the join-time `thread/resume` reply,
-  and `thread/settings/updated` notifications). If unset (`null`, as on new threads), use the model's default (`defaultReasoningEffort` in `model/list`);
-  old app-servers without these fields use the last rollout turn's `turn_context`. Changes in the computer TUI update the phone.
+  and `thread/settings/updated` notifications). Otherwise use the latest rollout turn's `turn_context.effort`, including
+  terminal-only and history-only sessions. A model's default (`defaultReasoningEffort` in `model/list`) is only a fallback
+  for a controlled thread with no recorded effort. The computer-wide `config.toml` is not session evidence.
+  The incremental metadata scan retains the latest effort even when long tool output pushes its turn context outside the quick tail.
+  Changes in the computer TUI update the phone. Readback does not grant control: unsupported sessions still offer no effort choices.
 - **Changing it**: after validation, the node sends `thread/settings/update {threadId, effort}`. It applies from the next turn, whether sent from phone or computer; the TUI also receives
   `thread/settings/updated`. It can be changed while the current turn runs, without affecting that turn. In 0.163 this method is experimental (the node already declares `experimentalApi` when connecting).
   Observed: successful call, immediate `thread/settings/updated`, new value read back with `thread/read`.
@@ -142,12 +153,94 @@ Messages to them already use `turn/start` / `turn/steer`; thinking effort is the
   session display follows its next read).
 - **Clients**: web, iOS, and Android show only thinking effort for send-capable sessions with nonempty `efforts`: the chip below the web input, the label above the old iOS input and new shell's "Model · Thinking effort"
   menu, Android's "Mode" button. Options come directly from `efforts` (minimal "Minimal", ultra "Ultra"; unknown values shown as-is). Claude Code and the assistant still have both settings.
+  On the web, the current Codex model row remains actionable for its effort flyout even when changing the model itself is unsupported.
+  The panel preserves recorded effort even if the launcher's catalog omits that level; it never replaces it with the catalog default.
+  Offline, read-only, parent-controlled, terminal-only, and non-adjustable-model states explain why effort cannot change here.
+  Supported changes explain that they apply on the next turn without interrupting the current one.
 - **Tests**: `node/codex_effort_test.go` (synthetic app-server: rejected before joining; after joining accepts only effort; invalid levels; `thread/settings/update` parameters;
   -32601 carries effort on next `turn/start` but not `turn/steer`; other errors / timeout / disconnect report failure, record nothing, and clear previous selections; rejected `turn/start` discards the selection;
   changed connection or unloaded thread invalidates it; model levels and defaults; Codex rejection; model without levels; `thread/settings/updated`; terminal route and internal fork still rejected);
   web `session-actions.test.ts`; iOS `SyncEventTests.codexThreadOnItsAppServerSetsItsEffortOnly`; Android `SessionSourceTest`, `SessionModesTest`.
   Real Codex was manually checked only for `model/list`, `thread/settings/update`, and `thread/read` on a stdio app-server with temporary `CODEX_HOME` (no model run).
   `scripts/test/test-codex.sh` does not yet cover this.
+
+## Gateway model catalog
+
+A managed Codex provider (Settings › Models, agent `codex`) runs its codex with Persona's own model provider
+(`docs/integrations/launchers.md`, "Provider model and gateway parameters (#2455)"). Codex knows nothing of a gateway's models from that: its picker
+lists the OpenAI models it bundles, and a model only the gateway has runs on fallback metadata ("Model metadata for `…`
+not found. Defaulting to fallback metadata"), with the wrong context window, compaction threshold and thinking levels.
+Since #8797, when the gateway serves Codex's own catalog, the provider table carries `model_catalog_url` and codex reads
+the gateway's models from it (`server/internal/node/codex_catalog.go`).
+
+- **Codex's side** (checked against the 0.167.0 source and run): `model_catalog_url` is a key of the provider table.
+  Codex asks `<url>?client_version=<major.minor.patch>` with the provider's key (`Authorization: Bearer`), within 5
+  seconds and following no redirect, and reads `{"models":[…]}` of its own model entries. That catalog is then the only
+  list it uses: one that fails, never answers or cannot be decoded leaves no list, and the start still runs, the model
+  on fallback metadata. The key exists since 0.156; until 0.160 Codex reads it only with
+  `[features] api_key_model_discovery = true`, stable and on by default since 0.161. Older versions ignore the key.
+  A `model_catalog_json` file would have to hold every field Codex requires in its version, and one Codex cannot read
+  stops it from starting; `model_context_window` changes one model's window, not the list or its levels. Neither is used.
+- **Codex's cache** (`$CODEX_HOME/models_cache.json`, checked with codex-cli 0.167.0, two providers in one
+  `CODEX_HOME`, #8814): one file for every provider in that home, holding the last list fetched and whose it was. Each
+  fetch overwrites it, so a gateway's catalog and the user's own codex take turns in it; neither ever lists the other's
+  models (an entry is used only by the provider that wrote it), each just fetches again. A catalog that fails is
+  answered from it only when the file is that provider's, from the same Codex version and under 5 minutes old; else
+  the list is empty.
+- **Finding the catalog**: the node asks, when `personad launch` asks for the provider (`launcher.env`), what codex
+  would: both `<base>/models` (Codex's own path for its backend's catalog; some gateways answer it in Codex's shape when
+  `client_version` is given, with OpenAI's list otherwise) and `<base>/codex/models` (magpie's, beside an OpenAI
+  `/v1/models`), at once, with the provider's key and proxy and this computer's `codex --version`, in 5 seconds in all.
+  The first, in that order, whose answer is a catalog Codex can read is taken: a `models` list whose entries each have a
+  unique slug and every field Codex 0.161–0.169 requires, of its JSON kind (`display_name`, `supported_reasoning_levels`
+  with an `effort` and a `description` in each, `shell_type`, `visibility`, `supported_in_api`, `priority` (a whole
+  number), `support_verbosity`, `truncation_policy` with a `mode` and a whole-number `limit`,
+  `experimental_supported_tools`), one of them
+  listed. The words inside (a level, a shell type) are left to the gateway, which was told the version. An entry with
+  only some of them is none: codex-cli 0.167.0 fails such a catalog whole ("failed to decode models response"), lists
+  nothing and runs the model on fallback metadata, worse than no catalog. OpenAI's `{"data":[…]}`, an error or a
+  redirect is none too. Nothing depends on the gateway's name; the node's log names only the path below the base URL.
+- **Never holding a start**: `launcher.env` waits for that whole lookup (finding codex, its version, the probe) at most
+  2 seconds (`codexCatalogWait`, well under the 10 seconds `personad launch` waits for the node). Past it the provider's
+  codex starts without a catalog, as before, and the lookup goes on: what it finds is kept for the next start. The
+  answer, a catalog or none, is fresh for 10 minutes per gateway, key, proxy and Codex version; for a day after that it
+  is still given at once while the gateway is asked again in the background. A probe that cannot tell (no answer in
+  time, a body that does not arrive whole, a 5xx, 408 or 429) keeps the catalog found before and is tried again after a
+  minute; only a gateway that answers without a catalog drops it. A codex that is not found, or whose `--version` fails
+  or hangs (its run gets a second to give up the output after it is stopped), is looked for again after a minute, not on
+  every start; a run its caller gave up on keeps nothing. A version read is fresh for 10 minutes, then still given at
+  once while `codex --version` runs again in the background: a shim (volta, mise, asdf) stays the same file when the
+  codex behind it is upgraded, and a slow one must not hold a start. A panic in the lookup's own goroutines is logged
+  and finds no catalog; it does not end the node. One lookup runs at a time per gateway, key and proxy as codex will
+  see them, the provider's own `env` included (a gateway set only there is looked up too).
+- **Which codex**: the node checks the codex it finds, and `launcher.env` names it (`codex_catalog_codex`). The codex
+  `personad launch` runs comes from the shell's `PATH`, which may name another install: then `personad launch` asks
+  that one its version (within 5 seconds, after the node has answered, so not part of `LaunchNodeWait`) and passes no
+  catalog to one before 0.161 or one that does not answer.
+- **Exactly as before** without one: no gateway, no key (codex would not fetch it and would list nothing), a codex
+  before 0.161 or a prerelease of it, arguments that choose their own provider or profile (the provider and everything
+  in it are left out then), a base URL with a query, or a probe that found nothing. The arguments are then the same,
+  byte for byte, and an older node or `personad` simply does not pass the fields (`codex_catalog_url`,
+  `codex_catalog_codex`, node.sock only; nothing new on the hub–node wire). The probe runs on the node with the node's
+  environment and the provider's: a proxy only the shell sets is not used for it, so such a computer may find no
+  catalog its codex could read (it then starts as before); codex reads the catalog from the same gateway it talks to. The user's `~/.codex/config.toml` is never written.
+- **The picker**: the node lists a managed Codex launcher's models by running `personad launch <name> app-server` and
+  asking `model/list` (`node/launcher_models.go`). That is the same codex a start runs, with the same catalog, so the
+  picker's models and levels are the ones codex is given. A model whose catalog entry has no levels offers none, and no
+  default level when Codex reports that default as `none`. Before #8797 the node ran `personad launch <name>` alone, whose
+  codex started its TUI and exited with "stdin is not a terminal", so the picker had no list for these launchers.
+- **Tests**: `node/codex_catalog_test.go` (found at either path by shape, the first in order winning; OpenAI's list, an
+  error, a redirect, a body that is no catalog and no answer in time are none; no probe for an old or prerelease codex,
+  no codex, no key, the launcher's own provider or profile; kept per key; given at once when stale and asked again;
+  kept through a probe that cannot tell, dropped by a gateway without one; a failing `codex --version` not rerun on
+  every start; #8814: every required field of its kind, a cut-off body, `launcher.env`'s bounded wait for a slow gateway
+  or `codex --version`, a `--version` whose child keeps the output open, a shim's upgrade read again in the background,
+  a caller giving up, a missing codex, a gateway set in the provider's `env`, a panic in the lookup, the log line),
+  `nodecmd` `TestLaunchWaitsLongerThanTheCatalogLookup`, `node/managed_test.go`
+  `TestLaunchArgsCodexGateway` (the catalog goes in the provider table only; arguments unchanged without it),
+  `node/launcher_models_test.go` `TestManagedCodexModelsAskTheAppServer`, and `cmd/personad`
+  `TestLaunchCodexGatewayCatalog` (a fake node and a fake codex: catalog, none, the caller's own provider, another
+  codex than the node checked that reads one or is too old).
 
 ## Sessions in the Codex desktop App (App-local IPC)
 
@@ -164,11 +257,12 @@ The node joins as another bus client (`server/internal/node/codex_desktop.go`):
 - Only the App's own chats use this route: `session_meta` on the first rollout line has `originator: Codex Desktop` or `codex_work_desktop` (or `persona_codex_app`, a chat New Agent started in the App: "New chats in the Codex App" below) (`source: vscode` for sidebar chats, `exec` for background runs, `subagent.thread_spawn` for sub-Agents). Codex CLI writes `codex-tui` / `cli`. App chats are send-capable (`capabilities.send`), with `agent_name` "Codex App". Sessions created by other tools using the App's codex also write a desktop originator but do not appear in its sidebar; only sidebar chats (in `thread-project-assignments` or `projectless-thread-ids`) count. App sub-Agents remain view-only with `parent_thread_id`, belong to their parent chat's project, and count as Seen after finishing. CLI sessions keep `agent_name` "Codex CLI".
 - **Sub-Agents without a parent session are not listed** (#4745): rollouts marked as sub-Agents in `session_meta` (as above, `thread_source: "subagent"` or `source.subagent`) that are neither on the shared app-server nor under a parent chat in the Codex App sidebar do not enter Agents as standalone sessions, generate completion pushes, or show as Unread. Previously each such subthread (for example, a reviewer delegated by a skill to review an MR) had its own row, title falling back to the cwd directory name, and completion push. Their work remains in the parent session's history (SubAgentActivity). App-server sub-Agents remain view-only with `parent_thread_id` (their permission cards must be answerable).
 - **Program-created one-shot sessions are not listed** (#2131): rollouts with `session_meta.source: exec` (`codex exec`, SDK, App background runs), or `originator: codex_exec` / `codex_sdk_*` (inherited by their sub-Agents), do not enter Agents, snapshot statistics, or `agents_list`. Scripts launch these in batches and they end when finished (one evaluation created dozens in separate temporary `CODEX_HOME`s; over two thousand existed on the development machine within two weeks). Do not classify them by directory. Those already in clients are removed as "no longer on the machine" on the next Codex-history fetch. Sessions in herdr panes use the pane route and are unaffected.
-- **Guardian approval reviews are not listed** (#5486): when Codex has a review model assess a tool call before it runs (Guardian, also the fork's below), each review writes its own rollout next to the chat, with `session_meta.source: {"subagent": {"other": "guardian"}}`, `thread_source: subagent`, and the chat in `session_id` / `forked_from_id`. It holds only the review's request and assessment JSON, nothing to answer, and in a long chat such rollouts far outnumber real sub-Agents, so they enter neither Agents nor their chat's sub-Agents (`readCodexOrigin`, `codexSessionsIn`); clients that listed them drop them on the next Codex-history fetch. `thread_spawn` sub-Agents are listed as before. Test: `node/codex_hierarchy_test.go`.
+- **Guardian approval reviews are not listed** (#5486): when Codex has a review model assess a tool call before it runs (Guardian, also the fork's below), each review writes its own rollout next to the chat, with `session_meta.source: {"subagent": {"other": "guardian"}}`, `thread_source: subagent`, and the chat in `session_id` / `forked_from_id`. It holds only the review's request and assessment JSON, nothing to answer, and in a long chat such rollouts far outnumber real sub-Agents, so they enter neither Agents nor their chat's sub-Agents (`readCodexOrigin`, `codexSessionsIn`; a review whose rollout is gone by its row in the App's database, "Chats without a rollout" below); clients that listed them drop them on the next Codex-history fetch. `thread_spawn` sub-Agents are listed as before. Test: `node/codex_hierarchy_test.go`.
 - The list follows the App's sidebar, with states isomorphic to herdr (`docs/protocol/agent-states.md`). Reread `<CODEX_HOME>/.codex-global-state.json` on changes: unread chats in `electron-thread-read-state-v1`, projects in `local-projects`, and membership in `thread-project-assignments` / `projectless-thread-ids`. Group by App project (unassigned chats go under "Codex chats", also when the App made a folder for one, `~/Documents/Codex/<date>/<name>`, which `node/codex_hierarchy.go` would otherwise take for a project of its own; their subagents with them, also when the chat is not listed. This is the space grouping: the session's `repo_root` stays its folder), newest first within groups. A project goes by the name the App keeps in `local-projects` when its folder is the repository's root (a project the user renamed, a ChatGPT project in `<CODEX_HOME>/.chatgpt-projects/g-p-<id>`), else by the folder's name. Its `space_index` is where the App's sidebar lists it, from 1 down `project-order` in the same file (a folder shared by two projects: the first of them); none for a project the order does not list (a ChatGPT project) or a chat in no project. A subagent takes its chat's. Clients list the App's projects in that order. For chats from the last 3 days: last turn running → Working; finished and still unread in the App → `done` (Unread); seen in the App → `idle` (Seen). Viewing on the phone also counts as Seen, as usual.
-- **Chats without a rollout** (#3305): since the App moved history into `thread_history_1.sqlite` (`history_mode: paginated`) it deletes rollouts, so most sidebar chats have none, and chats untouched for two weeks fall outside the rollout scan. For the chats in the sidebar's lists the node reads `<CODEX_HOME>/state_<n>.sqlite` (the highest `n`; table `threads`: `id`, `rollout_path`, `name` or `title`, `cwd`, `updated_at_ms`, `archived`) (and `model`, `reasoning_effort` where the schema has them: what the App runs the chat with, which a chat whose history is the App's database says nowhere else; its row's `model`, when nothing else gave one, and `effort` come from them, #6501) with the system `sqlite3 -readonly -json`, as the Messages and Cindy readers do, at most every 5 seconds and only when the database or the lists changed (`node/codex_appdb.go`). The App removes a database's `-wal` and `-shm` when it closes it (it quit, or the database was idle), and a read-only connection cannot open a WAL database without its `-shm`: such a database is opened as `immutable` (no locks, no `-shm`) and read as last checkpointed, which with the App's connection closed is every change it committed (`codexDBTarget`; the history database below too). An unarchived row is listed: through `rollout_path` while that file exists, whatever its age, else from the row alone (title, directory, last update), grouped and sent to (through the App's bus) like any App chat. An id in the lists with no row is a chat deleted in the App (the lists keep those) and is not listed. Without `sqlite3`, the database or these columns nothing more is listed than before. Tests: `node/codex_appdb_test.go`.
+- **Chats without a rollout** (#3305): since the App moved history into `thread_history_1.sqlite` (`history_mode: paginated`) it deletes rollouts, so most sidebar chats have none, and chats untouched for two weeks fall outside the rollout scan. For the chats in the sidebar's lists the node reads `<CODEX_HOME>/state_<n>.sqlite` (the highest `n`; table `threads`: `id`, `rollout_path`, `name` or `title`, `cwd`, `updated_at_ms`, `archived`) (and `model`, `reasoning_effort` where the schema has them: what the App runs the chat with, which a chat whose history is the App's database says nowhere else; its row's `model`, when nothing else gave one, and `effort` come from them, #6501) with the system `sqlite3 -readonly -json`, as the Messages and Cindy readers do, at most every 5 seconds and only when the database or the lists changed (`node/codex_appdb.go`). The App removes a database's `-wal` and `-shm` when it closes it (it quit, or the database was idle), and a read-only connection cannot open a WAL database without its `-shm`: such a database is opened as `immutable` (no locks, no `-shm`) and read as last checkpointed, which with the App's connection closed is every change it committed (`codexDBTarget`; the history database below too). An unarchived row is listed: through `rollout_path` while that file exists, whatever its age, else from the row alone (title, directory, last update), grouped and sent to (through the App's bus) like any App chat. An id in the lists with no row is a chat deleted in the App (the lists keep those) and is not listed. Without `sqlite3`, the database or these columns nothing more is listed than before. A row's `source` is what its rollout's `session_meta.source` was, so a row whose rollout is gone says where the thread came from as the rollout did (`codexThreadOrigin`, #8191): the migrated App's own rows include its sub-Agents (`{"subagent": {"thread_spawn": {"parent_thread_id": …}}}`), which fold under their chat, read-only, and its Guardian reviews (`{"subagent": {"other": "guardian"}}`), which are not listed; neither is a chat to send to. Read only from the rollout, each was listed as an agent of its own titled with its folder (one machine: 229 sub-Agents and 32 reviews beside 21 chats). Tests: `node/codex_appdb_test.go`, `node/codex_appdb_migrated_test.go`.
 - **Their history** (#3305): such a chat's transcript is its history in `<CODEX_HOME>/thread_history_<n>.sqlite` (the highest `n`): `thread_turns` (turn, status, duration, error) and `thread_items`, the app-server's ThreadItems (v2, camelCase), read in one query (`sqlite3 -readonly`, one snapshot, turns and their items by ordinal). The node writes it as rollout lines into `<state dir>/codex-app-history/<home hash>-<thread>.jsonl` (`node/codex_apphistory.go`): `session_meta` (originator Codex Desktop), then per finished turn `task_started`, an `item_completed` per item and `task_complete` (with the App's error when it failed) or `turn_aborted` (interrupted); the last turn while it still runs waits for the next write, and a turn that never finished (the App quit during it) but has turns after it is written as `turn_aborted`. Each ThreadItem becomes the rollout item the transcript reader knows: `userMessage` → `UserMessage` (text, `localImage` → `local_image`), `agentMessage` → `AgentMessage` with its phase, `reasoning` → `Reasoning`, `commandExecution` → `CommandExecution` (the login shell around the command dropped, as a rollout's argv is, the command unquoted as a POSIX shell would, for `sh`, `bash`, `zsh`, `dash`, `ksh` and `fish`; one that is not a single shell word is kept whole; output, exit code, duration), `fileChange` → `FileChange`, `mcpToolCall` → `McpToolCall`, `imageView` → `ImageView`, `imageGeneration` → `ImageView` of the saved picture, `webSearch` → `Extension` `web.search`, `contextCompaction` → `ContextCompaction`; other kinds (`sleep`, `subAgentActivity`, …) and items still running are left out. The file grows as a rollout does: the turns finished since are appended, so readers go on where they were; `<file>.mark` records the last turn written (ordinal, `turn_id` and its status then), what it is up to date with (the state database's `updated_at_ms` and the history database's files: the App can write a turn's rows after updating the chat, and finish a turn without updating it) and the file's size. A file unlike its mark, or whose last written turn is no longer in the database as it was (the App rolled the chat back, or finished a turn written as interrupted), is written anew (through a temporary file renamed over it, so readers start over), and removed when no finished turn is left. One writer at a time, across processes too (`<file>.lock`): the others wait for its write, up to 30 seconds, so a chat opened by several requests at once has its transcript for each. It is brought up to date when the transcript is read (`node.file`) and about once a second while a Codex thread is watched (`pumpWatch`, in its reading goroutine; a watched chat whose rollout the App deletes goes on from the written file), never by the list; with no change the database is not asked. While the App writes, a watched chat is checked against the database about once a second (one short query from its last written turn), so a watching client gets a turn about a second after the App finishes it; a message sent from the phone shows once its turn ends. A failed write is tried again at once when the chat's `updated_at_ms` changes, after 10 seconds when only the history database changed, and after 5 minutes otherwise. Turns before the last one written are not read again: one the App changes afterwards (an item added to a finished turn, an interrupted turn finished after a later one began) shows as written until the file is written anew. Files of chats the App no longer lists are removed when another of the home's chats is written; the directory can be deleted at any time. A chat with no finished turn, or without `sqlite3` or the history database, has no transcript, as before. Tests: `node/codex_apphistory_test.go`, `node/codex_shellargv_test.go`.
 - Replace new-chat directives in Codex replies, `::created-thread{threadId="…"}`, with `persona://session/<machine>/<session>` links (the in-App chat-link format: Android opens that chat; iOS currently recognizes only Live Activity `persona://open?…` links, so these chat links do not yet navigate and require a release), letting users tap on the phone to open the chat.
+- **A message while the chat runs a turn is delivered once, after the turn** (#9416): the bus has only `thread-follower-start-turn`, and the owning window passes it on as a `turn/start`, which Codex steers into a running turn and the App then runs again as a turn of its own when that turn ends: the Agent got the message twice. So while the chat's turn runs (the rollout's tail says `task_started` without its end, or, for a chat whose rollout the App deleted, its last turn in the history database is `inProgress`) the node holds the message, `session.send` answers `{queued: true}` (`agent_send` says "Queued", as for pi, #8097), and when the turn ends everything held for the chat goes in as one turn, texts in the order sent and pictures after them. A turn the node started counts as running for up to 20 seconds until the App writes something of it, so a second message right after the first waits for that turn too. Held messages live in the node process: a node that stops first drops them (logged), as does a turn still running after 12 hours (`node/codex_desktop_queue.go`; tests `node/codex_desktop_queue_test.go`).
 - **Stopping a turn from the phone**: a chat whose turn runs (`working`, read off its rollout as above; not a subagent) has `capabilities.interrupt`. `session.interrupt` sends `thread-follower-interrupt-turn` (version 4) to the owning window with `{conversationId, mode: "user-stop"}`, the App's own stop button: the turn stops, and so do the subagents it started, and the App shows it stopped. A thread no App window has loaded runs no turn there: refused (`codex_read_only`), not opened to be stopped (`node/codex_desktop.go` `interruptCodexDesktop`).
 - **Thinking effort from the phone** (#5575): a chat (not a subagent) has `efforts`, the levels its model takes on the App's own codex, and `effort`, as an app-server thread has, so the clients show their effort-only control on it ("Thinking effort" above) with no release (`node/codex_desktop_effort.go`). Like an app-server thread it has no `capabilities.modes`, which would have the apps offer the permission mode too.
   - **Levels**: the App's codex (the one it bundles, `codexAppCLI` as for new chats below) is asked `model/list` with `includeHidden` over stdio as the App's client, in the background and again after 10 minutes, so listing never waits on it. It runs with the node's Codex home as `CODEX_HOME`, the App's, so it reads the App's `config.toml` (custom catalog entries included). Until the list comes, and for a model it does not list, Codex's whole list, as on an app-server whose list could not be read. A model whose list is empty takes no effort: the chat then has no `efforts`.
@@ -183,7 +277,9 @@ The node joins as another bus client (`server/internal/node/codex_desktop.go`):
 
 `node/codexapp_new.go`. New Agent with the launcher `codex-app` starts the chat in the Codex App: it is in the App's sidebar (in the project its folder is in, or among the chats in no project), and the App runs it from its first message on. No client needs a release: it is a launcher like a runtime's, and needs no terminal engine (the start goes to the App before the engine check).
 
-- **Offered:** `launchers.list` has `{name: "codex-app", source: "codex_app", agent: "codex"}` when the App runs for the node's Codex home (its bus socket is there) and a Codex CLI is found: the one the App bundles (`/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex` on a Mac, the same version as the App's own app-server), else one on PATH or where Codex installs. A login-shell launcher of that name runs instead.
+- **Offered:** `launchers.list` has `{name: "codex-app", source: "codex_app", agent: "codex"}` when the App runs for the node's Codex home (its bus socket is there) and a Codex CLI is found: the one the App bundles (`/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex` on a Mac, the same version as the App's own app-server), else one on PATH or where Codex installs. A login-shell launcher of that name runs instead. It is only an explicit pick: where a
+  launcher is chosen for a start (a default the computer lacks), plain `codex` and the machine's other launchers come first and
+  `codex-app` is never chosen.
 - **Why this way:** `codex://new` only fills the App's composer. The App's sidebar lists any chat in its Codex home from an interactive source (`thread/list` with no `sourceKinds`: cli, vscode, …; no originator filter locally), `codex://threads/<id>` opens one, and a follower runs a turn in one it has loaded (above).
 - **The start:**
   1. The App's codex starts the chat with no model request: `codex app-server` over stdio in the folder (`CODEX_HOME` the node's), `initialize` as client `persona_codex_app`, `thread/start {cwd}`, then `thread/name/set` with the title, which writes the rollout (Codex writes a chat at its first turn otherwise; a chat with no message is not in the App's sidebar), and the app-server ends. It resumes nothing. The title is the first line of the first message (or the start's `name_hint`), spaces folded, at most 40 characters.
@@ -219,15 +315,22 @@ Since 2026-11-02, choosing a Codex launcher in the phone's "New Chat" starts a n
 Since 2026-11-12 the message is optional: with none, Codex opens in its tab and waits for one ("Starting without a first message" below).
 The entry point is the same as Claude's (machine, directory, launcher); subsequent behavior uses "Sessions on the daemon" above (bare `codex` 0.163 joins automatically) or the terminal route below.
 
-- **Which launchers are Codex launchers**: `codex` on PATH adds a launcher named `codex`. Aliases in `~/.zshrc` that run a single `codex` command are listed after Claude launchers (can have preceding
+- **Which launchers are Codex launchers**: `codex` on PATH adds a launcher named `codex`. On a Mac where the login shell finds
+  no `codex` and has no alias or function of that name, the CLI the ChatGPT app bundles is that launcher, run by its absolute path
+  (`bundledCodexCLI` in `node/codexapp_new.go`, #10437); its base name is still `codex`, so herdr recognizes the pane, `codex-start`
+  runs it and the effort check treats it as plain `codex`. `agentExecutable("codex")` finds it last too. Without this, such a Mac
+  offered only `codex-app`, so its Codex Agents ran as Codex App chats outside herdr on the App's model. Aliases in `~/.zshrc` that run a single `codex` command are listed after Claude launchers (can have preceding
   `export A=1;`, `VAR=… codex`, or wrappers such as `env` / `command`; arguments are retained, model taken from `-m` / `--model` / `-c model=…`).
   They carry `agent: "codex"` in the launcher list and are marked "Codex" on the App's launchers page (`parseCodexAliases` in `launchers.go`). Unsupported: shell functions running Codex
-  (rejected with an explanation, `codex_launcher`: functions run only in a shell, so the first message would have to pass through it), aliases doing additional work (`cd x && codex`, not listed), and the internal Codex fork.
+  under other names (rejected with an explanation, `codex_launcher`), aliases doing additional work (`cd x && codex`, not listed), and the internal Codex fork.
+  On Unix, the native `codex` command honors a same-name shell function, including its environment and flags (#4876).
+  With an available Bash/Zsh, the function or executable can be supplied by its rc file; it need not exist on the outer process's PATH.
 - **First message arrives unchanged**: Codex creates a thread only after receiving its first message. A start that includes it answers with that thread (below); one without it answers with a waiting row
   ("Starting without a first message"). Background startup (`async`) is still refused with `codex_needs_prompt`: older Apps get that and retry with the message. Older nodes refuse a start without a message the same way,
   so Apps make the message optional only for launchers marked `prompt_optional`. Launcher words and message are written together to a private temporary file under the node directory (0600). The pane receives only
-  `personad codex-start <file>`: it claims the file (renames it away, so a node that gave up on the start and withdrew the file the same way leaves it nothing, and the other way round), reads and deletes it, then `exec`s an argument array containing launcher words (preceding `VAR=…` enters the environment), `--`, and the message.
-  The message never passes through a shell—quotes, newlines, `$`, backticks, Chinese, and thousands of characters all reach Codex unchanged (`codex_start.go`). Launcher words also stay off-screen and out of shell history
+  `personad codex-start <file>`: it claims the file (renames it away, so a node that gave up on the start and withdrew the file the same way leaves it nothing, and the other way round), reads and deletes it, then runs the launcher words (preceding `VAR=…` enters the environment), adding `--` and the message only when one is supplied.
+  On Unix, native `codex` runs through the user's interactive shell to preserve a same-name function. The shell executes only `"$@"`: launcher words and the message are positional arguments, never interpolated as shell code.
+  Quotes, newlines, `$`, backticks, Chinese, and thousands of characters all reach Codex unchanged (`codex_start.go`). Launcher words also stay off-screen and out of shell history
   (aliases may contain keys). With `--remote`, add `-C <directory>` (the TUI does not supply the directory itself when connecting to another app-server).
 - **Text only**: the first message carries no photos or files. New Agent offers no attachments for a Codex launcher on iPhone and iPad, and the web refuses such a start with "This launcher can't take attachments in the first message" (#2321).
 - **Tell herdr this is Codex** (#3454): in herdr panes (except Windows), the file also contains `agent: "codex"`. `codex-start` sets `HERDR_AGENT=codex` in the exec environment,
@@ -243,6 +346,7 @@ The entry point is the same as Claude's (machine, directory, launcher); subseque
   The trust dialog is known by its question asking about trust, the option by what it says ("Trust and continue", "Yes, continue"), not by its number or the other option
   (0.167 has "Back to Agent Command Center" where 0.163 had "Quit"); the cursor is walked to it, then Enter.
   A rollout's `session_meta` is kept only once its first line is all written: 0.167 creates the file empty and writes the line milliseconds later, and a meta read in between, kept, hid the thread from the start for good.
+- **A daemon without its socket**: a shared daemon (0.163 and later) that still runs while its control socket under `/tmp/codex-daemon-<uid>` is gone takes no new client, and every plain `codex` exits with "failed to connect to …/app-server-control.sock" after printing the tail of the daemon's own old log. Before opening a tab, a start of a launcher that runs on the shared daemon checks for that (`codexDaemonSocketGone`: the control alias points at a missing socket and `app-server-daemon/daemon.pid` names a live process of the user) and fails at once with `codex_daemon_socket_gone`, naming `codex app-server daemon restart`. `launchers.check` does the same for such a launcher: its `codex exec` runs in its own process and passed while every start failed (2026-11-14). A stopped daemon, a managed launcher and a launcher with `-c` or `--remote` are not affected.
 - **No match**: the node waits at most 60 seconds (hub 100 seconds, App 110 seconds), then reports "Codex has opened in a new tab on the computer, but its session was not identified within 60 seconds…",
   followed by the last screen lines of that tab (falling back to the visible screen when the bottom rows are blank). If the launcher cannot run (command not found), fail as soon as a `personad codex-start:` line appears, without waiting the full timeout. codex-start's notes that it goes on after (the agent sandbox not wrapping the start) say `personad codex-start (note):` instead, so the Codex after them is not taken for a failure.
   If the terminal still reports Codex running, the error carries `agent_start_stalled`: the hub neither counts it as a broken launcher nor retries or reroutes the task automatically.
@@ -265,6 +369,13 @@ The entry point is the same as Claude's (machine, directory, launcher); subseque
 - for a bare `codex` on non-Windows, the login shell defines no `codex` function. Native starts preserve that
   function (#4876), whose own profile or overrides may change the effort before Persona's arguments. A bounded
   shell-resolution check does not call the function; an error or timeout keeps the explicit effort flag.
+- the `codex` that runs is the Codex CLI itself: for a bare `codex`, the first one on the PATH of that same interactive
+  shell (codex-start's shell, with herdr's pane variables `HERDR_ENV=1`, `TERM_PROGRAM=herdr` and `HERDR_AGENT=codex`,
+  since an rc file may put another `codex` first only in engine panes); a launcher's path is checked as it is. After
+  symlinks it must be a native (Mach-O / ELF) program, npm's `@openai/codex/bin/codex.js`, or the `/bin/sh` shim a
+  desktop app bundles as `codex-cli/bin/codex`, which only execs `../CodexCLI.app/Contents/MacOS/codex` next to it.
+  Any other script may set its own `CODEX_HOME` or `--profile`, so the effort in `~/.codex/config.toml` would not apply
+  (#10432). On Windows this check is skipped.
 
   Otherwise the flag stays (`node/codex_start_effort.go`, #4860). The creation UI still offers no permission mode / thinking effort selector; effort can be changed in-chat after joining app-server (see "Thinking effort"). Resuming an existing session: see "Resuming from the phone" below.
 - **In the conversation's folder**: the file also names the directory (`dir`), and `codex-start` changes to it (and sets `PWD` to it when the shell had one) before it runs the words, for a resume too.
@@ -348,7 +459,8 @@ A Codex thread nothing runs comes back in a new tab of the engine with `codex re
 on a message to it (the message goes in as the resume's prompt, nothing typed) or on `session.start` with `resume_session_id` (no message unless the start brings one).
 Code: `node/codex_resume.go`, `node/retire.go` (`resumeOther`, `resumeCodex`); #1700, #5220.
 
-- **Started by Persona**: the launcher, directory and model it ran with (node state). A terminal read-only start also retains `app_mode: plan`, so a later resume or message uses the same read-only CLI flags. A fresh `plan` resume applies and saves that constraint too; conflicting launcher flags are refused before opening a tab.
+- **Started by Persona**: the launcher, directory, model and effort it ran with (node state; #10434). The effort recorded is the one the start asked for, even when the start left out `-c model_reasoning_effort` because Codex's config already runs that effort; the resume leaves it out again in that case, so it stays on the shared app-server. A terminal read-only start also retains `app_mode: plan`, so a later resume or message uses the same read-only CLI flags. A fresh `plan` resume applies and saves that constraint too; conflicting launcher flags are refused before opening a tab.
+- **Natively archived threads**: after the resume's stop-cause, writer and permission checks pass, restore through the existing native archive route (`thread/unarchive` or `codex unarchive`) before opening the terminal. Otherwise Codex's archive confirmation can block the first prompt. A failed, unsupported or unconfirmed restore refuses the start without opening a tab; Persona never moves the rollout or edits Codex's database itself. Supervisor resumes still refuse user, unknown and missing stop causes.
 - **Started elsewhere** (`codex` in a terminal, since closed; listed as a "Codex history" row): the directory from its rollout's `session_meta`,
   the launcher the start gave (or the hub's "New Agent" one for a message) when it runs Codex, otherwise plain `codex`. From then on it is Persona's:
   what it was resumed with is kept, and it is retired and resumed like one Persona started.
@@ -359,8 +471,8 @@ Code: `node/codex_resume.go`, `node/retire.go` (`resumeOther`, `resumeCodex`); #
 - **Switching an Agent between the engines** (#5054, [claude-integration.md](claude-integration.md) "Switching a running Agent to another engine"): a Codex Agent Persona started (or resumed) in a terminal can move to Claude Code like a Claude Code Agent moves to Codex.
   It is quit with Ctrl+C in its pane; once only a shell is in front and no Codex CLI holds its rollout (an app-server that keeps the thread loaded does not count: nothing of the other engine writes it), Claude Code starts in that shell.
   When the conversation comes back to Codex, the thread it ran in is resumed in the same pane with `codex resume <id> -- <handoff and message>` through the launcher picked, when that launcher runs Codex in the thread's home and nothing has the thread open (the rules above: an app-server that still has it loaded keeps it from being resumed); otherwise a fresh thread takes the conversation with the whole handoff.
-  The resume runs in the thread's directory with the switch's mode (plan as read-only flags, bypassPermissions as the bypass flags), the model picked (`--model`) and the effort picked (`-c model_reasoning_effort`); the record then names that launcher. A switch that fails brings the Codex back on its own launcher with `codex resume <id>` in the same pane, its record's model and mode kept.
-- **Tests**: `node/codex_resume_test.go` (history row sendable / view only while held, resume on a message and on a start, Codex App thread refused), `node/retire_test.go`.
+  The resume runs in the thread's directory with the switch's mode (plan as read-only flags, bypassPermissions as the bypass flags), the model picked (`--model`) and the effort picked (`-c model_reasoning_effort`, left out when Codex's config already runs it); the record then names that launcher, model and effort. A switch that fails brings the Codex back on its own launcher with `codex resume <id>` in the same pane, its record's model, effort and mode kept.
+- **Tests**: `node/codex_resume_test.go` (history row sendable / view only while held, resume on a message and on a start, Codex App thread refused), `node/codex_resume_model_test.go` (model and effort recorded at the start and run again on a resume), `node/retire_test.go`.
 
 ## Archive
 
@@ -420,6 +532,14 @@ Before answering, the node restores the TUI to an answerable state. If it cannot
 Codex 0.166's model/path/warning footer is not draft text, even without a blank separator or shortcuts row.
 The blinking `[ . ]` / `[ ! ] Action Required | ` title prefix is also status, not part of the thread name. A named
 pane that cannot be identified uses neither a stale pane binding nor directory-based rollout guessing.
+The session id herdr reports for the pane stands under such a title while `session_index.jsonl` has no name for that
+thread: nothing says the title names another one, and dropping it left the pane unlisted and its thread only as its
+app-server's row, without a terminal (#7538). A reported thread the index knows under another name is still dropped,
+unless the index gave that thread the title's name before its latest one: a rename (Persona renames a joined thread on
+its app-server with `thread/name/set`) leaves two lines for the thread, and a title still showing the first name is
+the same thread's.
+A reported sub-Agent id is not: the name the index has is its main chat's, not the reported thread's, so the pane stays
+the main chat's row.
 
 | On the computer | Behavior |
 | --- | --- |
@@ -436,10 +556,19 @@ pane that cannot be identified uses neither a stale pane binding nor directory-b
 
 herdr reports blocked when Codex has an unanswered async question, so `agent prompt` rejects it (`agent_blocked`). Codex messaging handles this by pasting + Enter itself (after confirming the input is empty).
 
+Terminal messaging confirms that the composer is recognized and empty after either the host prompt or the blocked-session
+fallback, waiting up to 12 seconds for consumption. An unchanged or edited draft, a dialog, an unknown screen, a failed
+read, or cancellation cannot confirm delivery: the result is `delivered: "unknown"`, not success. The check only reads;
+it never clears input, pastes again, or retries Enter. The existing client message ID keeps retries from typing twice.
+Even an exact match with earlier assistant text does not authorize submitting a pre-existing draft: text equality alone
+cannot prove ownership or that an earlier message was not already delivered. App-server and Botmux sends retain their
+own receipt paths; Botmux has no readable terminal composer.
+
 ### Tests
 
 - Unit tests: `screen/codex_test.go` (recorded screens, 0.153.4 / 0.163.0, `screen/testdata/codex-*`), `transcript/codexask_test.go` (rollout recognition, both schemas,
   partial answers, direct typing, old desktop replies, internal fork), `node/codexask_test.go` (keys and input for every UI state on fake herdr, no keys on refusal),
+  `node/codex_submit_test.go` (terminal submission confirmation, uncertain outcomes, retry deduplication and matching-draft preservation),
   `hub/codexcards_test.go` (list additions / removals, restoring cards after failed answers, silent reconnect, push titles).
 - Real Codex: `scripts/test/test-codex.sh` (`docs/operations/testing.md`, "Codex integration testing") starts Codex in isolated herdr, asks questions and requests approvals, with one case per UI state and multiple turns each.
 - App: `CodexCardsTests` (mock `MOCK_CODEX=1`), light / dark screenshots.

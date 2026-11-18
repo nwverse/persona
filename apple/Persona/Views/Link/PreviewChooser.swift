@@ -36,13 +36,10 @@ struct PreviewChooser: View {
         NavigationStack {
             content
                 .navigationTitle(String(localized: "Preview"))
-                .navigationSubtitle(machineName + " · " + Fmt.path(preview.cwd, home: machine?.home))
+                .navigationSubtitleWhenSupported(machineName + " · " + Fmt.path(preview.cwd, home: machine?.home))
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button(role: .close) { dismiss() }
-                            .accessibilityIdentifier("preview-close")
-                    }
+                    SheetClose(id: "preview-close") { dismiss() }
                 }
         }
         .presentationDetents([.medium, .large], selection: $detent)

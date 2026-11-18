@@ -14,9 +14,19 @@ The document uses Settings CAS and a revision; at most 200 active records contai
 instance, full namespace path, canonical URL, optional name/aliases/purpose and `verified_at`. No credentials,
 computer or checkout are stored. HTTP(S), `git@host:path.git` and `ssh://git@host/path.git` normalize to the same
 identity. GitHub Enterprise and self-hosted GitLab require an explicit provider; nested GitLab groups are preserved.
+A provider extension (#10330, `docs/extensions/repository-providers.md`) is the source of the hosts it claims: an
+address on one of them with no provider chosen goes to it (`repo.parse`, then `repo.check` when saving), its provider
+is `ext:<extension>/<contribution>`, and its name is kept as `provider_name`. An explicit `github` / `gitlab` still wins.
+While that extension is off or gone, its saved references still list, edit (name, aliases, purpose) and bind to
+to-dos; only adding one, changing its address or checking it fails (`repository_provider_off` /
+`repository_no_provider`). Right after a restart, a save that needs a provider waits for the extensions within its
+eight-second budget and, if they are still starting, answers `repository_providers_starting` (409), never
+`repository_no_provider`.
 
-The web form parses locally on every URL/provider change and immediately shows the provider, full repository path,
-canonical web root and an explicit not-yet-checked state. No preview button or remote request is needed. The server
+The web form parses GitHub and GitLab addresses locally on every URL/provider change and immediately shows the
+provider, full repository path, canonical web root and an explicit not-yet-checked state; no remote request is needed
+for them. An address on a provider extension's host, or with one picked, is read through `/preview` before Save is
+enabled; the page lists the sources only once such an extension or a saved row of one exists. The server
 reparses on preview and save; both parsers share `spec/fixtures/repository-remotes.json`. GitHub repository pages
 (such as `/pull/5581`) and GitLab's `/-/` project pages discard their page suffix, ordinary query and fragment.
 GitLab paths without `/-/` keep every namespace segment; ambiguous old page URLs are not guessed by taking two
@@ -45,7 +55,8 @@ The shared server routes serve every caller; repository binding UI currently exi
 Android. Browser fixtures cover synthetic saves, while Go route and isolated database tests cover persistence.
 
 The manager-owned `/api/v1/assistant/repositories` routes list/create; `/{id}` reads/updates/unbinds;
-`/preview` parses without contacting a remote. Mutations require full access. `/{id}/restore` accepts the unbind
+`/preview` parses without contacting a remote (a provider extension's address is read by that extension, answering
+`provider_name` beside the identity); `GET /providers` lists the sources (`docs/protocol/protocol.md`). Mutations require full access. `/{id}/restore` accepts the unbind
 receipt once within ten minutes and restores the original ID and verification evidence, without a new probe.
 The latest 20 removed references are retained for undo. A failed persistence acknowledgement is not success.
 
@@ -68,12 +79,30 @@ The exact HTTP(S) instance (including nondefault port) and private CIDR must bot
 CIDRs cannot opt in private networks. Configure only infrastructure the operator trusts; this is not a connector
 or sign-in system. Public-only installations need no configuration.
 
+The remote image route (`docs/protocol/protocol.md` "Remote images (#9473)") asks a DNS-over-HTTPS service for a picture
+host's real addresses when this machine's resolver answers only a fake-IP proxy's (#9550). `remote_images.doh` in this
+manager's `manager.json` names that service's JSON API; without it `https://dns.alidns.com/resolve` is asked, and `""`
+asks none (those pictures are then refused). The service learns the host names of the pictures looked up this way:
+
+```json
+{"remote_images":{"doh":"https://dns.alidns.com/resolve"}}
+```
+
 Read-only MCP `repositories_list(query?, cursor?, limit?)` and `repository_get(id)` return only this manager's saved
 metadata. Search covers name, aliases, namespace path and purpose (200-character query, at most 50 records/page).
 Cursors are bounded and tied to query/document revision; edits invalidate old cursors. Neither tool accepts a
 manager selector or fetches source. Their descriptions and the existing `task_plan` description guide identity
 resolution: explicit user URLs/paths win, references grant no authorization, and machine/cwd must never be inferred.
 There is no forced lookup preflight, injected list, new prompt or launcher-dependent behavior.
+
+Assistant-only MCP `repository_add(url, provider?, name?, aliases?, purpose?)` (an address on a provider extension's
+host needs no provider) adds a reference through the same
+`saveRepository` service, including normalization, anonymous existence checks, uniqueness, limits and CAS. The
+permission card shows the canonical repository URL and proposed details; only the user's own approval saves it.
+It neither clones nor grants access. The saved ID and verification time are returned and immediately visible to
+Settings and the existing retrieval tools. On a lost/uncertain response, list/get before retrying; duplicates are
+refused. Remove the binding in Settings to reverse the addition. No manager, machine, credential or verification
+selector is accepted from the model.
 
 ## Steps
 
@@ -88,6 +117,7 @@ The roster is the bus's identity table `bus_identities` (`docs/protocol/protocol
 
 - The hub gives the assistant it starts a new token on every start, but **the name stays**: a name the user gave it is kept.
 - Manager ids: `m-` plus 6 hex digits for one made in the app; `assistant` for the hub's own.
+- **The hub's own can be kept out of the switcher while it is not used (#9055)**: `PATCH /api/v1/managers/assistant {"hide": true}` stores the choice in the hub's settings (`managers.builtin_hide`). The roster then says `hide` and, while it is not the default, owns no machine and has nothing in its inbox that needs the user (`inbox_needs_you`), `hidden`. A machine that falls back to it (its manager revoked) or making it the default shows it again, the choice kept. It is refused (`409 builtin_in_use`) while it is in use; showing it again always works. It stays the carrier, and nothing else changes.
 - Names: 1–40 characters, no control characters (C0 or C1) and no bidirectional formatting characters.
 
 ## Install codes
@@ -570,6 +600,7 @@ Every client has the same page (web: `docs/web/web.md`, Android: `docs/android/a
 
 - The list shows each manager's name, a Default chip, a status dot with Online / Offline · last synced … / Installing · code expires in n min, and where it runs (host · OS · the hub's own / service / container / standalone).
 - A manager's page (`SettingsPage.manager(id)`) has its status, where it runs, version, and when it connected or last synced. Its actions are Rename, Make Default, Install Elsewhere (it warns first that the old install stops; a manager still installing gets New Install Code instead), and Delete (confirmed; Cancel Install while installing). Delete is disabled for the hub's own manager and for the default one, and the footer says why.
+- The hub's own manager's page has Show in Switcher (#9055): off sends `{"hide": true}`, on `{"hide": false}`. It can't be turned off while that manager is the default; the footer says why, or that it is listed for now while it has a computer, and a `409 builtin_in_use` is shown in plain words. While the roster marks it `hidden` the list gives it a Hidden chip and the switcher leaves it out (docs/apple/ios.md "The Persona page's manager").
 - New Manager asks for a name, then opens the install code sheet: the code with Copy, an m:ss countdown, and New Install Code once it runs out. When the hub sends `commands`, the sheet adds As a Service and With Docker, each with Copy. Without them it shows the code and a short note.
 - The socket asks for feature `managers` in its URL's `?features=` (`LiveConnection.queryItems`; the Apple apps' `client_hello` only carries the locale), and each `{"type":"managers"}` push moves `AppModel.managersRevision`, which makes the open page reread the roster. A hub without the roster (404 without a code) gets a line saying to update the hub.
 - DEBUG launch arguments for screenshots: `-tab settings -openManagers YES`, `-openManagerPage <id>`, and `-showManagerCode YES` (makes a manager on the fake hub and opens its code sheet). The fake hub (`scripts/mock/mock_hub.py`) serves the roster; `MOCK_MANAGER_COMMANDS=1` adds the commands.
@@ -740,9 +771,10 @@ An app shows one assistant at a time, the **current assistant**, picked in a swi
 
 - **Names**: what people read says assistant (助手, アシスタント): New assistant, Manage assistants…, Settings › Assistants, Default assistant; the settings row for the assistant's own profile is Assistant profile (助手资料). Code, the protocol, `manager.json` and these docs keep `manager`.
 - **The pick** is kept on the device, per hub, across launches. A device that never picked follows the hub's default, and a pick whose manager left the roster (deleted, or never installed) goes back to it. Requests name the pick with `X-Persona-Manager: <id>`; with the default current none is sent, so a hub with one manager gets the requests it always got. Until the roster is read after a launch, the kept pick already counts: the pages list its things only and the switcher shows the name the roster last gave it, rather than every assistant's and the hub's own name for a moment.
-- **One identity for the default assistant (#6401)**: the default manager is the Persona of the main conversation, so every client shows the chosen look's face in the switcher's head — not the first-letter monogram every other assistant keeps — with the same presence and needs-you corner marks. Changing the look changes that face. Its name is the manager name the hub keeps (`PATCH /api/v1/managers/{id}`), shown in the switcher's head, the main conversation's row, the profile and the composer; on web and Apple the profile edits it directly (a pencil on the name), and every client can rename it from Settings › Assistants. A hub without a roster keeps the look's own name and the earlier header, read-only.
+- **One identity for the default assistant (#6401)**: the default manager is the Persona of the main conversation, so every client shows the chosen look's face in the switcher's head — not the first-letter monogram every other assistant keeps — with the same presence and needs-you corner marks. Changing the look changes that face. Its name is the manager name the hub keeps (`PATCH /api/v1/managers/{id}`), shown in the switcher's head, the main conversation's row (on Apple the row says Main Chat under the head instead and Persona's top bar names it, #9973), the profile and the composer; on web and Apple the profile edits it directly (a pencil on the name), and every client can rename it from Settings › Assistants. A hub without a roster keeps the look's own name and the earlier header, read-only.
 
 - **The switcher** shows the current assistant's avatar, name and status (Online · its computer, Offline · last synced …). It opens the roster: the installed managers, the default first and tagged Default, the current one checked, an offline one's whole row faded (avatar, name and line) but still selectable (its pages show what the app last read, as below); then the ones still installing (Installing · code expires in n minutes), where choosing one opens its install code and commands instead of switching; then **New assistant** and **Manage assistants…** (Settings › Assistants). With one installed manager, web, Android and Apple show the same switcher and a one-row roster without a Default tag; New assistant and Manage assistants… remain available. New assistant also remains in Settings › Assistants. With two or more installed managers, all three use the switcher above, including offline managers; pending installs alone do not enable it. On Apple, a hub without a roster keeps the persona's name as the sidebar's title; web and Android keep their earlier header and controls.
+- **A hidden built-in assistant** (`hidden` in the roster, #9055) is left out of the switcher's rows on every client. It still counts as installed, so scoping, badges and the Default tag are unchanged; a pick that becomes hidden goes back to the default. Settings' page of the built-in manager has a **Show in the switcher** switch (在切换器里显示, 切り替えに表示): off sends `hide: true`, which cannot be turned off while it is the default or has a computer; on sends `hide: false`.
 - **Avatars** are a disc with the first character of the name. The default manager's is the AI purple; any other takes one of five hues by the sum of its id's UTF-8 bytes modulo 5, in the order blue, green, orange, pink, indigo, each client using its own design system's color of that name. A mark at its foot gives its status (online green, offline neutral, installing orange), and on the sidebar's head a mark at its top says another assistant has something waiting. Where a client already shows the user's chosen Persona look, it keeps the look and changes only the name beside it.
 - **Counts** (one definition on every client): an assistant's count = its agents waiting for the user + its `inbox_needs_you` from the roster (`docs/protocol/protocol.md`; absent counts as 0). An agent waiting is a session of that assistant that is not a quiet task's, is not muted, and has at least one pending card or is in Needs you; each session counts once. A pending card on no session counts 1 each. The current assistant's row shows no count. The mark on the sidebar's avatar means another assistant's count is above 0. Clients count from the sessions and cards the hub already pushes with their `manager`, and again after every `managers` push. The Apple apps get no session pushes from a hub with bounded lists (`sessions_list`), so there they read the hub's sessions in Needs you for it.
 - **Pages**: the assistant page, Agents, computers, the inbox, to-dos, scheduled tasks and the knowledge base show the current assistant's only, with no manager headings. The hub's merged lists and pushes stay whole and the app filters by each item's `manager` (none, or one the roster doesn't know: the default's); the assistant's own routes and its knowledge base (`/api/v1/assistant…`, `/api/v1/kb…`, `/api/v1/kb-search`, `/api/v1/recordings…`) name the pick, and so does a new to-do. The Apple apps ask a hub that can for the current assistant's page of agents (`sessions_manager`, `docs/protocol/protocol.md` ("One manager's sessions")), as their Agents list is paged by the hub, and leave the recordings, and their part of the knowledge base (`/api/v1/kb/recordings…`), with the default: the phone syncs its own in the background, whichever assistant is current. An item opened from a notification or a link opens as itself, routed by its own manager as before, and does not change the pick; nor does anything done to another assistant's item (handing it to Persona, summarizing its chat, the outbox, answering a card): the conversation it starts or uses opens as itself on its own computer (its address names that computer and, when another than the default, its manager, so a reload, a new tab or a link opens it there too), its requests name its manager, and only the switcher, or a pick leaving the roster, changes the current assistant. What a conversation's feed offers (a plan's Start or Don't start, a briefing question's Handled) names the conversation's manager: those routes name no conversation, so the hub would take them to the default. A page that stays where it is when the pick changes shows the new assistant's at once: the lists filter again, and the pages that read the assistant's things themselves (All chats, the profile, scheduled tasks, the knowledge base) read them again, so nothing on screen and no request is the last assistant's; what a client keeps of them (the knowledge base's lists, the to-dos' projects) is kept per assistant. A page about one thing (an entry, an item, a to-do) either closes when the pick changes or keeps writing to the assistant it was read from; a knowledge entry opened by its address (which names no assistant) is read from the current assistant and everything its page writes names that same one. A new mail written on the inbox page is the current assistant's (its mail accounts, sent through it). A to-do made for an agent (Create and link, a project's new to-do) is the agent's assistant's, and the to-dos offered there are that assistant's.

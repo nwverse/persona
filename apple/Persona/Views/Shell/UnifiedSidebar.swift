@@ -1,17 +1,86 @@
 import SwiftUI
+import PersonaWire
 
 /// The Sidebar layout (Settings › Appearance › Navigation, #6332; docs/apple/ios.md「Sidebar layout」): one sidebar with
 /// the main conversation, the pages, Persona's chats and the Agents list, as the web app's, and the page picked in it
 /// beside it. What the column's pieces share: the Persona rows' state (search, dialogs), what the page beside it shows,
 /// and where the Agents' Needs You section is in the list.
 @MainActor @Observable final class UnifiedSidebar {
+    /// Which part of the one sidebar a column shows (#4206): the whole of it (the Sidebar layout), or in the Separate
+    /// layout at regular width each tab its own part, in the same column (header, width, color, slide, foot).
+    enum Part {
+        /// The main conversation, the pages, Persona's chats and the Agents list (Merged).
+        case whole
+        /// The Persona tab's: the main conversation, the pages and Persona's chats.
+        case persona
+        /// The Agents tab's: the Agents list, under the same head.
+        case agents
+    }
+
+    let part: Part
+
+    init(part: Part = .whole) {
+        self.part = part
+    }
+
     /// The Persona rows' search and dialogs (`AssistantSidebarUI`), shared by the head, the rows in the Agents list and
     /// the presenters around the column. Lazy: made when the column is first drawn (P3).
     @ObservationIgnored lazy var ui = AssistantSidebarUI()
-    /// The page beside the sidebar is the Persona conversation itself, nothing over it: its row is the one shaded.
-    var atRoot = true
-    /// The place shown beside the sidebar (Inbox, To-dos, Machines…), its row shaded; nil for a conversation or an Agent.
-    var shownPlace: ShellPage?
+    /// The Separate layout's Agents tab (#8596): the Persona tab's part, whose Pages heading gives the line the head's face
+    /// stands on (`AssistantSidebarUI.rowsLeading`). The Agents tab has no Pages heading, and its own list's rows start at
+    /// another inset on the iPad than on the open Duo, so it takes the Persona tab's line once that is measured.
+    @ObservationIgnored weak var linedUpWith: UnifiedSidebar?
+    /// The page beside the sidebar: its root, picked in the sidebar, and the drill-down path each root was left with
+    /// (#8359, `SidebarPageRoots`). A pick replaces the root; only what is opened inside the page is pushed.
+    /// Starts as a constant, no call: `RootView` holds a `UnifiedSidebar` in `@State` (performance rule P3).
+    private(set) var roots = SidebarPageRoots.start
+    /// The root in front.
+    var root: SidebarPageRoot { roots.current }
+    /// The page beside the sidebar is the Persona conversation (with or without pages opened from it): its row is the
+    /// one shaded.
+    var atRoot: Bool { roots.current == .conversation }
+    /// The place shown beside the sidebar (Inbox, To-dos, Machines…), its row shaded while it is the page's root, also
+    /// with pages opened from it; nil for a conversation or an Agent.
+    var shownPlace: ShellPage? { roots.current.place }
+
+    /// `root` picked (its row, a route) while the page shows `path` over the root in front: the root replaced at once,
+    /// or the root in front back at its root (`SidebarPageRoots.select`). Only the pop of a re-pick animates.
+    @discardableResult
+    func select(_ root: SidebarPageRoot, path: Binding<NavigationPath>, contentChanged: Bool = false) -> SidebarPageRoots.Step {
+        if root != askedFromOutside { askedFromOutside = nil }
+        return apply(path: path) { roots.select(root, path: path.wrappedValue, contentChanged: contentChanged) }
+    }
+
+    /// An Agent's chat asked for from outside (a notification, `-openSession`) and put in front as the root (#8603):
+    /// what the app came up for. Cleared once anything else is picked.
+    @ObservationIgnored var askedFromOutside: SidebarPageRoot?
+
+    /// Another assistant or hub: every root was the one before's (`SidebarPageRoots.forget`). `keepingAsked`: a chat
+    /// asked for from outside stays in front (the assistant read at launch, after the chat was opened, counts as a
+    /// switch; a notification's chat of another assistant stays, as `AppModel.assistantManagerChanged` keeps it).
+    func forget(path: Binding<NavigationPath>, keepingAsked: Bool = false) {
+        if keepingAsked, let asked = askedFromOutside, roots.current == asked { return }
+        askedFromOutside = nil
+        // Nothing to forget: written again all the same, the roots drew everything that reads them again, on every
+        // choice of the Agents tab, in the frame the tab bar's lens starts in (#10270).
+        if roots.forgotten, path.wrappedValue.isEmpty { return }
+        apply(path: path) { roots.forget() }
+    }
+
+    private func apply(path: Binding<NavigationPath>, _ make: () -> SidebarPageRoots.Step) -> SidebarPageRoots.Step {
+        var t = Transaction()
+        t.disablesAnimations = true
+        // The root and the path change in one update, without animation: the page is replaced, not pushed or popped.
+        let step = withTransaction(t) {
+            let s = make()
+            if !s.animated, path.wrappedValue != s.path { path.wrappedValue = s.path }
+            return s
+        }
+        if step.animated, path.wrappedValue != step.path {
+            withAnimation { path.wrappedValue = step.path }
+        }
+        return step
+    }
     /// How much of the Agents' Needs You section is on screen in the list (its heading and its rows, `NeedsAnchor`), and,
     /// when none is, whether it was scrolled past (above) or not reached yet (below): the jump's arrow (`SidebarNeedsJump`).
     private(set) var needsOnScreen = 0
@@ -28,6 +97,8 @@ import SwiftUI
     @ObservationIgnored var scrollToNeeds: (() -> Void)?
     @ObservationIgnored var scrollToAgents: (() -> Void)?
 
+    /// The column's coordinate space, where its parts measure where the list's rows start (`AssistantSidebarUI.rowsLeading`).
+    nonisolated static let columnSpace = "unified.column"
     /// The list's anchors (`ScrollViewReader` ids).
     nonisolated static let agentsAnchor = "unified.agents"
     nonisolated static let needsAnchor = "unified.needs"
@@ -38,6 +109,14 @@ import SwiftUI
         let above = minY < 0
         if needsAbove != above { needsAbove = above }
     }
+}
+
+extension UnifiedSidebar {
+    /// The column's one color (#4206, the owner: as ChatGPT's, the shell drawer's neutral near-white / near-black, in every
+    /// style and at every width): behind its head, its list and its foot, in the strip over it on the iPad, and behind
+    /// the phone's drawer. The system sidebar's grey-blue it had stayed under the head and the foot only in the styles
+    /// whose list paints the page's own color, three bands down the column (#4855).
+    @MainActor static var columnColor: Color { Theme.Shell.drawer }
 }
 
 extension EnvironmentValues {
@@ -93,10 +172,11 @@ struct UnifiedSidebarColumn<Agents: View>: View {
     /// A phone's width: the column is the drawer's (`UnifiedSidebar.drawer`), which a pick closes. The split says so
     /// (`SplitDetail.drawer`): an iPad's sidebar column can read compact by its own width.
     @Environment(\.splitDetail) private var split
+    @Environment(\.splitShowList) private var showList
     private var inDrawer: Bool { split?.drawer == true }
     let state: UnifiedSidebar
-    /// The Agents list, given the Persona rows to hold above its own.
-    @ViewBuilder var list: (AssistantSidebar) -> Agents
+    /// The Agents list, given the Persona rows to hold above its own (none for the Agents tab's part).
+    @ViewBuilder var list: (AssistantSidebar?) -> Agents
 
     var body: some View {
         #if DEBUG || PERF_SIGNPOST
@@ -104,16 +184,40 @@ struct UnifiedSidebarColumn<Agents: View>: View {
         #endif
         VStack(spacing: 0) {
             persona(.header)
-            persona(.main)
-            list(persona(.rows))
-            SidebarNeedsJump(state: state)
+            switch state.part {
+            case .whole:
+                persona(.main)
+                list(persona(.rows))
+                SidebarNeedsJump(state: state)
+            case .persona:
+                persona(.main)
+                personaList
+            case .agents:
+                list(nil)
+                SidebarNeedsJump(state: state)
+            }
             SidebarUsageStrip { show(.machines) }
             persona(.footer)
         }
+        .coordinateSpace(.named(UnifiedSidebar.columnSpace))
+        // Typing in the page beside it brings the keyboard up under both: the column stays where it is, its foot
+        // (New Chat, Search, Settings) not riding up with the keyboard (#4206, the owner). It holds no field of its own.
+        .ignoresSafeArea(.keyboard, edges: .bottom)
         .modifier(AssistantSidebarPresenters(ui: state.ui, open: open))
+        .background { UnifiedSidebar.columnColor.ignoresSafeArea() }
         // A container: on its own the identifier went onto every element in it, the rows' own lost.
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("unified-sidebar")
+    }
+
+    /// The Persona tab's rows (the Separate layout, #4206): the pages and Persona's chats in a list of their own, as they
+    /// sit over the Agents in the whole sidebar.
+    private var personaList: some View {
+        List { persona(.rows) }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .contentMargins(.horizontal, Theme.Space.l, for: .scrollContent)
+            .environment(\.defaultMinListRowHeight, Theme.Space.flush)
     }
 
     /// A piece of the Persona sidebar, every place it lists opening beside the sidebar.
@@ -133,7 +237,8 @@ struct UnifiedSidebarColumn<Agents: View>: View {
                          openHealth: { show(.health) },
                          openRecordingsPage: { show(.recordings) },
                          openMessages: LarkHomePreference.shared.shows ? { show(.messages) } : nil,
-                         part: part, shared: state.ui, shownPlace: state.shownPlace)
+                         part: part, shared: state.ui, shownPlace: state.shownPlace,
+                         foldColumn: inDrawer ? nil : showList?.hide)
     }
 
     private func open(_ key: SessionKey) {
@@ -142,9 +247,13 @@ struct UnifiedSidebarColumn<Agents: View>: View {
     }
 
     private func show(_ page: ShellPage) {
-        state.shownPlace = page.isSidebarPlace ? page : nil
+        // The Agents tab's foot opens Persona's pages (New Chat, Settings' places) on the Persona tab (#4206).
+        if state.part == .agents, model.selectedTab != .assistant { model.selectedTab = .assistant }
         router?.show(page)
         if inDrawer { state.drawer.close() }
+        // Laid over the page (the open Duo upright): a pick slides the column away, even one that leaves the page as it
+        // was (#4852); a pick that changes the page does it through the split's path too.
+        showList?.hideOverlay?()
     }
 }
 
@@ -191,7 +300,8 @@ struct SidebarNeedsJump: View {
 /// has every window.
 struct SidebarUsageStrip: View {
     @Environment(AppModel.self) private var model
-    var openMachines: () -> Void
+    /// Not `openMachines`: a stored property's name stays in the Release binary, and that is a DEBUG launch switch (#8306).
+    var onOpenMachines: () -> Void
     private let store = UsageWindowsStore.shared
 
     var body: some View {
@@ -201,7 +311,7 @@ struct SidebarUsageStrip: View {
             Color.clear.frame(height: Theme.Size.nonvisualProbe)
                 .tabActiveTask(id: model.groupIDs.joined(separator: ",")) { await store.keepFresh(model) }
             if !accounts.isEmpty {
-                Button(action: openMachines) {
+                Button(action: onOpenMachines) {
                     HStack(spacing: Theme.Space.l) {
                         ForEach(accounts) { a in
                             let used = UsageWindows.fullest(a)

@@ -53,6 +53,10 @@ type Minutes struct {
 	// localized dates and show When only without them (minutes from an older hub).
 	Start time.Time `json:"start,omitzero"`
 	End   time.Time `json:"end,omitzero"`
+
+	// modelTitle is the title the model wrote for them (titleLine; "" none), which settles the recording's AITitle
+	// when they are stored (#8873); never in minutes.json.
+	modelTitle string
 }
 
 // MinutesItem is a decision or an open question; At is seconds from the recording's start (a segment's start, or the
@@ -83,6 +87,12 @@ type MinutesAction struct {
 	TodoID  string  `json:"todo_id,omitempty"`
 }
 
+// PurposeMeetingMinutes is the model purpose every call of a minutes job asks for (#7980): the whole transcript, or each
+// part's notes and their merge, with the summary card in the same answers. It follows Information processing until it
+// is set apart in Model settings (docs/assistant/model-config.md "Meeting minutes and the in-meeting conversation
+// (#7980)"); the recordings' summaries and the day recap stay on kb.compress.
+const PurposeMeetingMinutes = "meeting.minutes"
+
 var (
 	// ErrMinutesStale: the minutes were written again since the version a request names.
 	ErrMinutesStale = errors.New("the minutes changed since; read them again")
@@ -98,7 +108,10 @@ const (
 	minutesCalendarAhead = 15 * time.Minute
 	// minutesMatchWait: a recording no calendar item matched is looked at again until this long after it ended, the
 	// calendar items being collected every half hour (a meeting's video call is listed once it has been held).
-	minutesMatchWait   = time.Hour
+	minutesMatchWait = time.Hour
+	// minutesImportWait: a matched recording with no imported meeting yet is looked at again until this long after it
+	// ended, for one a connected app imports later (#8872).
+	minutesImportWait  = 24 * time.Hour
 	minutesOneCall     = 16000 // runes of transcript read in one call; longer ones go in chunks
 	minutesChunk       = 12000
 	minutesMaxChunks   = 40
@@ -365,16 +378,22 @@ func (e *Engine) dropAudioAfterMinutes(id string, drop bool) {
 	}
 }
 
-// matchRecordings links each complete recording not matched at its current revision to the calendar item it overlaps;
-// one that none overlaps is looked at again until minutesMatchWait after it ended.
+// matchRecordings links each complete recording not matched at its current revision to the calendar item it overlaps
+// and to the imported meeting it overlaps; one that no calendar item overlaps is looked at again until
+// minutesMatchWait after it ended, and one matched without an imported meeting until minutesImportWait (#8872).
 func (e *Engine) matchRecordings(now time.Time) {
-	var due []string
+	var due, late []string
 	for _, r := range e.Store.Recordings() {
-		if r.Complete && r.MatchedRev < r.Revision && !r.Trimmed() && r.Kind != RecordingDay {
+		if !r.Complete || r.Trimmed() || r.Kind == RecordingDay {
+			continue
+		}
+		if r.MatchedRev < r.Revision {
 			due = append(due, r.ID)
+		} else if r.ImportedMeeting == nil && now.Sub(recordingEnd(r)) < minutesImportWait {
+			late = append(late, r.ID)
 		}
 	}
-	if len(due) == 0 {
+	if len(due) == 0 && len(late) == 0 {
 		return
 	}
 	events, meetings := e.Store.Items(KindEvent), e.Store.Items(KindMeeting)
@@ -383,8 +402,10 @@ func (e *Engine) matchRecordings(now time.Time) {
 		st.recMu.Lock()
 		r, ok := st.Recording(id)
 		if ok && r.Complete && r.MatchedRev < r.Revision && !r.Trimmed() && r.Kind != RecordingDay {
-			if old := r.Meeting; old != nil {
-				r.Items = removeStrings(r.Items, []string{old.Kind + "/" + old.ID})
+			for _, old := range []*MeetingRef{r.Meeting, r.ImportedMeeting} {
+				if old != nil {
+					r.Items = removeStrings(r.Items, []string{old.Kind + "/" + old.ID})
+				}
 			}
 			it := matchCalendar(r, events, meetings)
 			if it == nil && r.Meeting == nil && now.Sub(recordingEnd(r)) < minutesMatchWait {
@@ -396,6 +417,8 @@ func (e *Engine) matchRecordings(now time.Time) {
 				r.Meeting = &MeetingRef{Kind: it.Kind, ID: it.ID, Name: oneLine(it.Title)}
 				r.Items = addUnique(r.Items, it.Kind+"/"+it.ID)
 			}
+			r.ImportedMeeting = nil
+			r.linkImported(matchCalendar(r, meetings))
 			r.MatchedRev = r.Revision
 			r.Name = st.recordingName(r)
 			r.planMinutes()
@@ -405,6 +428,29 @@ func (e *Engine) matchRecordings(now time.Time) {
 		}
 		st.recMu.Unlock()
 	}
+	// An imported meeting that came after the match: linked alone, the calendar match and the minutes left as they are.
+	for _, id := range late {
+		st.recMu.Lock()
+		r, ok := st.Recording(id)
+		if ok && r.Complete && r.MatchedRev >= r.Revision && r.ImportedMeeting == nil && !r.Trimmed() && r.Kind != RecordingDay {
+			if it := matchCalendar(r, meetings); it != nil {
+				r.linkImported(it)
+				if err := st.putEntity(KindRecording, r.ID, r, &r.Tagging, false); err != nil {
+					e.logf("recording %s: link the imported meeting: %v", id, err)
+				}
+			}
+		}
+		st.recMu.Unlock()
+	}
+}
+
+// linkImported makes it (a meetings item, or nil) r's imported meeting, linked in Items.
+func (r *Recording) linkImported(it *Item) {
+	if it == nil {
+		return
+	}
+	r.ImportedMeeting = &MeetingRef{Kind: it.Kind, ID: it.ID, Name: oneLine(it.Title)}
+	r.Items = addUnique(r.Items, it.Kind+"/"+it.ID)
 }
 
 // matchCalendar is the calendar item r overlaps: one starting at most minutesCalendarAhead before r and before r
@@ -578,7 +624,7 @@ func (e *Engine) writeMinutes(ctx context.Context, id string) error {
 		return nil
 	}
 	in := e.minutesInput(&r, zone)
-	model := e.modelFor("kb.compress")
+	model := e.modelFor(PurposeMeetingMinutes)
 	callTime := minutesCallTime(r.minutesTimeouts())
 	call := func(system, user string, out *minutesAnswer) error {
 		cctx, cancel := context.WithTimeout(ctx, callTime)
@@ -880,7 +926,7 @@ func (e *Engine) buildMinutes(r *Recording, a minutesAnswer, read []minutesLine,
 		return sec, 0, ok
 	}
 	m := &Minutes{Title: cmp.Or(r.Title, calendarTitle(r), plainLine(a.Title), untitledMinutes(r, zone, lang)),
-		When: minutesWhen(r, zone), Language: string(lang)}
+		When: minutesWhen(r, zone), Language: string(lang), modelTitle: titleLine(a.Title)}
 	m.Start, m.End = minutesSpan(r, zone)
 	if r.Calendar != nil && r.Calendar.Location != "" {
 		m.Where = r.Calendar.Location
@@ -1285,6 +1331,10 @@ func (e *Engine) storeMinutes(ctx context.Context, r *Recording, m *Minutes, fin
 	}
 	quiet := cur.quietMinutes()
 	cur.MinutesVersion = m.Version
+	if m.modelTitle != "" { // the minutes' title is the recording's from now on, unless someone named it (NameSource)
+		cur.AITitle, cur.AITitleFrom = m.modelTitle, AITitleMinutes
+		cur.Name = e.recordingName(cur)
+	}
 	cur.clearMinutesFailures()
 	if cur.MinutesAsks == r.MinutesAsks { // else asked again meanwhile (the user, a photo): made again at the next round
 		cur.MinutesRev = r.Revision
@@ -1297,6 +1347,10 @@ func (e *Engine) storeMinutes(ctx context.Context, r *Recording, m *Minutes, fin
 	drop := final && cur.MinutesAsks == r.MinutesAsks
 	err = st.putEntity(KindRecording, cur.ID, cur, &cur.Tagging, false)
 	st.notify(KindRecording, cur.ID, "summary")
+	if err == nil && m.modelTitle != "" {
+		st.notify(KindRecording, cur.ID, "metadata")
+		e.index(KindRecording, cur.ID, cur.Name, cur.Tagging, cur.OneLine, cur.StartedAt)
+	}
 	snap := *cur
 	st.recMu.Unlock()
 	if photos {

@@ -123,7 +123,7 @@ Unboxed (control group):
 | --- | --- | --- |
 | Missing or invalid key | Upgrade rejected: HTTP 401, `text/plain` body `Unauthorized` (standard shape) | `{"type":"error","fatal":true,"message":"语音会话没能建立：HTTP 401: Unauthorized"}` ("Voice session could not be established: HTTP 401: Unauthorized"), then closes with 1011. |
 | Banned account | Service docs say HTTP 403 during upgrade; could not reproduce. | Same as above, "HTTP 403: …" |
-| Model backend temporarily unavailable | Upgrade succeeds first (101); after `session.start`, returns `error{type: server_error, code: upstream_unavailable}`, then closes with 1008 about 0.1–0.2 s later. **The message contains the service's internal deployment diagnostics** (cluster, data center, etc.). | App receives the message **verbatim** appended to `语音会话没能建立：…` ("Voice session could not be established: …"). |
+| Model backend temporarily unavailable | Upgrade succeeds first (101); after `session.start`, returns `error{type: server_error, code: upstream_unavailable}`, then closes with 1008 about 0.1–0.2 s later. **The message contains the service's internal deployment diagnostics** (cluster, data center, etc.). Since 2026-11 the service may answer `session.started` first and send this error a few tens of milliseconds later (seen for most models of one service at once, while two others worked with the same key). | Error before `session.started`: the App receives the message **verbatim** appended to `语音会话没能建立：…` ("Voice session could not be established: …"). After it: the session counts as started (the App already has `ready`), each such session is a drop and is reconnected; once the reconnects run out the call ends with `upstream_unavailable` and the service's words (`voice-upstream.unavailable`). Before that fix the App was told `upstream_failed`, "语音连接断了，重连也没成功" ("the connection dropped and reconnecting failed"), which hid the cause. |
 | Unknown model | `error{invalid_request, param: session.model}`, connection **stays open**. | Same as above (`connect()` returns on `error` without waiting for closure). |
 | Unknown field / extension | `unknown_parameter` / `unsupported_extension`, connection stays open. | — |
 | thinking over 500 tokens | `invalid_request` (append token limit exceeded) | Already prevented by `clipTokens(…, 450)`. |
@@ -359,6 +359,8 @@ Other values: allowing 450 tokens per append (500-token limit, rejection observe
     and Retry, and Retry ends the same way at once; no crash report. To drive the real socket and UI there, use `-openVoice silent`
     (`VoiceSample.SilentAudio`: no microphone and no speaker, it reports playing for as long as the received PCM lasts). Audio itself can only be checked
     on a device, or on a simulator whose Mac lets it record.
+    `CallScreenTests`' three walks are such a check (#10553): on a Mac with no audio input at all (a Mac Studio with no microphone
+    attached) every call there ends this way, from `main` and from the commit that added them alike, and the tests say so.
   - **Reading it**: the app's own log is in the simulator (`xcrun simctl spawn <udid> log show --predicate 'process == "Persona"'`); the TCC and
     `coreaudiod` side is in the Mac's (`log show --predicate 'process == "tccd" AND eventMessage CONTAINS "kTCCServiceMicrophone"'`).
 - **The voice bar was squeezed when cards were up**: the cards and the composer share the footer's height; offered too little, the bar shrank 在听 with

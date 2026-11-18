@@ -24,6 +24,7 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Settings
 		Permission             json.RawMessage `json:"default_permission_mode"`
+		Readonly               json.RawMessage `json:"readonly_mode"`
 		MinutesRetention       json.RawMessage `json:"minutes_days"`
 		TranscriptionMode      json.RawMessage `json:"meeting_transcription_default"`
 		Glossary               json.RawMessage `json:"meeting_glossary"`
@@ -46,9 +47,31 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	if in.Permission != nil && !s.explicitSettingsTarget(w, r) {
 		return
 	}
+	if in.Readonly != nil {
+		if err := json.Unmarshal(in.Readonly, &in.ReadonlyMode); err != nil || !validReadonlyMode(in.ReadonlyMode) {
+			apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-profile.bad_readonly_mode"))
+			return
+		}
+		if !s.explicitSettingsTarget(w, r) {
+			return
+		}
+	}
 	if in.TaskWorkspacePreference != "" && !validWorkspacePreference(in.TaskWorkspacePreference) {
 		apierr.Write(w, http.StatusBadRequest, errors.New("task_workspace_preference must be prefer-existing or prefer-new"))
 		return
+	}
+	if in.DispatchPolicy != nil && len(in.DispatchPolicy.Rules) > 0 {
+		if err := in.DispatchPolicy.validate(true, time.Now().UTC()); err != nil {
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		}
+	}
+	if in.StartDefaults != nil && len(in.StartDefaults.Rules) > 0 {
+		if err := in.StartDefaults.validate(true, time.Now().UTC()); err != nil {
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		}
+		in.StartDefaults.By = "owner" // this route is full credentials only
 	}
 	before := s.settings(ctx)
 	machine := before.MachineID
@@ -73,6 +96,14 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, http.StatusBadRequest, errors.New("recording_days must be 1–365"))
 		return
 	}
+	if m := in.IdleAutoCompactMinutes; m != nil && (*m < minIdleAutoCompactMinutes || *m > maxIdleAutoCompactMinutes) {
+		apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-profile.bad_idle_auto_compact_minutes"))
+		return
+	}
+	if n := in.IdleAutoCompactTokens; n != nil && (*n < minIdleAutoCompactTokens || *n > maxIdleAutoCompactTokens) {
+		apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-profile.bad_idle_auto_compact_tokens"))
+		return
+	}
 	if in.MinutesRetention != nil {
 		if err := json.Unmarshal(in.MinutesRetention, &in.MinutesDays); err != nil || in.MinutesDays == nil ||
 			*in.MinutesDays < minMinutesDays || *in.MinutesDays > maxMinutesDays {
@@ -90,6 +121,10 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if p := in.ReviewSamplePercent; p != nil && (*p < 0 || *p > 100) {
 		apierr.Write(w, http.StatusBadRequest, errors.New("review_sample_percent must be 0–100"))
+		return
+	}
+	if p := in.MainCompactWindow; p != nil && !validMainCompactWindow(*p) {
+		apierr.Write(w, http.StatusBadRequest, errors.New("main_compact_window must be 0 or 100000–10000000"))
 		return
 	}
 	if d := in.IdleCloseHours; d != nil && (*d < 0 || *d > maxIdleCloseHours) {
@@ -169,11 +204,23 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		if in.MainTasksQuiet != nil {
 			v.MainTasksQuiet = in.MainTasksQuiet
 		}
+		if in.IdleAutoCompact != nil {
+			v.IdleAutoCompact = in.IdleAutoCompact
+		}
+		if in.IdleAutoCompactMinutes != nil {
+			v.IdleAutoCompactMinutes = in.IdleAutoCompactMinutes
+		}
+		if in.IdleAutoCompactTokens != nil {
+			v.IdleAutoCompactTokens = in.IdleAutoCompactTokens
+		}
 		if in.StartRequestedTasks != nil {
 			v.StartRequestedTasks = in.StartRequestedTasks
 		}
 		if in.TaskWorkspacePreference != "" {
 			v.TaskWorkspacePreference = in.TaskWorkspacePreference
+		}
+		if in.Readonly != nil {
+			v.ReadonlyMode = in.ReadonlyMode
 		}
 		if in.RecordingDays != nil {
 			v.RecordingDays = in.RecordingDays
@@ -186,6 +233,12 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if in.MainBackgroundFolded != nil {
 			v.MainBackgroundFolded = in.MainBackgroundFolded
+		}
+		if in.MainCompactWindow != nil {
+			v.MainCompactWindow = in.MainCompactWindow
+		}
+		if in.RecentTaskChats != nil {
+			v.RecentTaskChats = in.RecentTaskChats
 		}
 		if in.MeetingAttendanceDefault != nil {
 			v.MeetingAttendanceDefault = in.MeetingAttendanceDefault
@@ -218,6 +271,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		if in.AgentTasks != nil {
 			v.AgentTasks = in.AgentTasks
 		}
+		if in.CloseEndedTerminals != nil {
+			v.CloseEndedTerminals = in.CloseEndedTerminals
+		}
 		if in.AgentAutoNaming != nil {
 			v.AgentAutoNaming = in.AgentAutoNaming
 		}
@@ -242,6 +298,21 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		if in.DefaultPermissionMode != "" {
 			v.DefaultPermissionMode = in.DefaultPermissionMode
 		}
+		if in.DispatchPolicy != nil {
+			// A non-empty policy was validated above before any other change; empty rules clear it.
+			if len(in.DispatchPolicy.Rules) == 0 {
+				v.DispatchPolicy = nil
+			} else {
+				v.DispatchPolicy = in.DispatchPolicy
+			}
+		}
+		if in.StartDefaults != nil { // the same for the start defaults (start_defaults.go)
+			if len(in.StartDefaults.Rules) == 0 {
+				v.StartDefaults = nil
+			} else {
+				v.StartDefaults = in.StartDefaults
+			}
+		}
 		return nil
 	}); err != nil {
 		apierr.Write(w, http.StatusInternalServerError, err)
@@ -261,6 +332,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 // can (its launcher has assistant: docs/integrations/runtimes.md "Assistant"); anything else would fail every message. One that can't
 // be probed now goes.
 func (s *Service) checkLauncher(ctx context.Context, machine, launcher string) error {
+	if proto.IsExternalLauncher(launcher) {
+		return i18n.Err("external-adapter.purpose_unsupported")
+	}
 	if launcher == "claude" {
 		return nil
 	}

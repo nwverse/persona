@@ -38,7 +38,6 @@ var hardcodedDirs = []string{
 	"internal/extmgr",
 	"internal/feishubot",
 	"internal/hub",
-	"internal/linktray", // the Windows tray: everything it shows goes through link-tray.json
 	"internal/mail",
 	"internal/quota",
 	"internal/update",
@@ -214,6 +213,8 @@ var terminalSources = []string{
 	"internal/manager/join.go",
 	"internal/manager/run.go",
 	"internal/manager/service.go",
+	"internal/scriptcli",
+	"internal/nodecmd",
 }
 
 // hardcodedCounts are the CJK string literals per file under sources (directories or files, relative to server/),

@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"runtime"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/iphone"
 	"github.com/nwverse/persona/server/internal/mcpserver"
@@ -44,9 +45,12 @@ const Usage = `  personad hook             Claude Code hook entry (reads hook JS
   personad office docx|pptx|xlsx|check …
                            write a Word document or a deck from Markdown, a workbook from JSON / CSV, or say what is in
                            one (the office skill): personad office --help
+  personad claude-plugin status|install|uninstall|on|off
+                           the Persona plugin for Claude Code on this computer, as JSON (persona-link plugin says it in
+                           words; docs/operations/link.md "Claude Code plugin")
   personad codex-start <file>
                            run the Codex launcher in file (written by the node, removed once read) with the first
-                           message as its last argument, no shell in between (docs/integrations/codex.md「Starting from the phone」)
+                           message as its last argument, no shell in between (docs/integrations/codex.md "Starting from the phone")
 ` + iphone.Usage
 
 // SysmonUsage is `sysmon`'s line in the usage text.
@@ -54,7 +58,7 @@ const SysmonUsage = `  personad sysmon [n]       print this machine's system inf
                            every 10 s), with what they cost`
 
 // LaunchUsage is `launch`'s line in the usage text.
-const LaunchUsage = `  personad launch <name> …   run claude with a launcher kept in 设置 › 模型 (from the local node)`
+const LaunchUsage = `  personad launch <name> …   run claude with a launcher kept in Settings › Models (from the local node)`
 
 // Run runs args (args[0] is the command) when it is a device command, and says whether it was. stop undoes the caller's
 // signal handling (launch execs claude and leaves signals as they came). A command that has an exit code of its own
@@ -90,6 +94,8 @@ func Run(ctx context.Context, stop func(), args []string, b Build) (handled bool
 		os.Exit(scriptcli.Notify(ctx, rest, os.Stdout, os.Stderr))
 	case "office":
 		os.Exit(office.Main(rest, os.Stdout, os.Stderr))
+	case "claude-plugin": // the Persona plugin for Claude Code here, as JSON (node/claudeplugin.go; persona-link plugin)
+		os.Exit(node.ClaudePluginCommand(ctx, rest, os.Stdout, os.Stderr))
 	case "iphone": // this computer's paired iPhones for phone control (internal/iphone)
 		os.Exit(iphone.Command(ctx, rest, os.Stdout, os.Stderr))
 	case "sysmon":
@@ -168,5 +174,8 @@ func runNode(ctx context.Context, args []string, b Build) error {
 	if err = n.ServeStdio(ctx); errors.Is(err, io.EOF) {
 		err = nil
 	}
+	stop, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	n.StopUnusedHerdr(stop) // a herdr it started and nobody used does not outlive it (#10114)
 	return err
 }

@@ -17,6 +17,15 @@ const (
 	CapabilityAgentSessionArchives = "agent_session_archives"
 	// CapabilityAgentNaming: ordinary full-user renames record manual intent before node dispatch.
 	CapabilityAgentNaming = "agent_naming.v1"
+	// CapabilityAgentAutoname: the manager names one Agent session with the model when the user asks
+	// (POST /api/v1/sessions/{mid}/{sid}/autoname; docs/protocol/protocol.md "Naming an Agent on request"). The hub
+	// lists the agent_autoname feature only while every manager that carries Agents names it.
+	CapabilityAgentAutoname = "agent_autoname"
+	// CapabilitySessionsSideFold: the manager folds a Claude desktop app's side sessions (parent_agent_id) under the
+	// session they were started from, folded_as "side", with folded_side and the children's sides rollup
+	// (docs/protocol/protocol.md "Session hierarchy", #7944). The hub lists the sessions_side_fold feature only while
+	// every manager that carries Agents names it; until then clients keep drawing side sessions as rows.
+	CapabilitySessionsSideFold = "sessions_side_fold"
 	// CapabilityAgentSessionArchiveClose: the manager's archive also takes ?close=1, "Archive and close", which closes
 	// the agent on its computer (session.retire) once archived (docs/protocol/protocol.md "Agent session archives").
 	CapabilityAgentSessionArchiveClose = "agent_session_archive_close"
@@ -48,6 +57,11 @@ const (
 	// revs and parts; docs/assistant/meeting-minutes.md "Phase 2b: highlights"). The hub lists meeting_highlights only
 	// while the default manager names it beside CapabilityMeetingLiveView.
 	CapabilityMeetingHighlights = "meeting_highlights"
+	// CapabilityMeetingNotes: the manager takes a room meeting's notes role (#8851: room.attendance and the timeline's
+	// roles may be notes, a room that keeps the topics and highlights while Persona answers nothing, …/ask refused
+	// with not_attending; docs/assistant/meeting-minutes.md "The notes role (#8851)"). The hub lists meeting_notes
+	// only while the default manager names it beside CapabilityMeetingLiveView.
+	CapabilityMeetingNotes = "meeting_notes"
 	// CapabilityMeetingEcho: the manager takes Persona's echo marked on a meeting's upload (#5905: the segments' echo
 	// and the spoken spans, its own copy of the rule, echo lines kept but left out of the minutes, the summary and the
 	// follow-up; docs/assistant/meeting-minutes.md "Persona's echo"). The hub lists meeting_echo only while the default
@@ -75,6 +89,18 @@ const (
 	// stream of its own instead of inside the bus message (#6574). The hub sends a large body that way only to a
 	// manager that names it; any other gets MethodHTTP as before.
 	CapabilityHTTPBodyStream = "http_body_stream"
+	// CapabilityMCPWait: the manager accepts enum-only mcp.wait updates through devices.notify for an explicitly
+	// opted-in MCP call. The hub sends them only when this capability and the call's opaque id are both present.
+	CapabilityMCPWait = "mcp_wait_v1"
+	// CapabilityTodoView: the manager works out each to-do's view (#10226, TodoSummary): `view` on every row of
+	// GET /api/v1/todos and on GET /api/v1/todos/{id}, and the list's `counts` (docs/protocol/protocol.md, the to-dos
+	// rows). The hub lists the todo_view feature only while every manager whose to-dos it merges names it; until then
+	// clients keep their own rules, and draw a row without `view` as before.
+	CapabilityTodoView = "todo_view"
+	// CapabilityTodoPlaces: the manager answers GET /api/v1/todos/places, the To-dos sidebar's places with the list's
+	// counts (#10226, TodoPlaces). The hub lists the todo_places feature only while every manager whose to-dos it
+	// merges names it.
+	CapabilityTodoPlaces = "todo_places"
 )
 
 // BodyStream is where MethodHTTPStreamed's body comes from: the relay the hub holds with ID (devicewire.RelayPath
@@ -157,6 +183,9 @@ const (
 // HandoffApprover is set by the hub on a card's answer from a device that may approve a hand-off card; Human on a new
 // conversation a person's own app opens.
 type HTTPRequest struct {
+	// OwnerAnswer is the hub's verified full-device provenance for a relayed card answer.
+	// It never comes from HTTP headers or the resolution body.
+	OwnerAnswer     bool                       `json:"owner_answer,omitempty"`
 	Caller          *devicewire.Caller         `json:"caller,omitempty"`
 	ShareAuthority  *devicewire.ShareAuthority `json:"share_authority,omitempty"`
 	HandoffApprover *HandoffApprover           `json:"handoff_approver,omitempty"`
@@ -190,7 +219,10 @@ var Routes = []string{
 	"GET /api/v1/sessions/archived",
 	"POST /api/v1/sessions/{mid}/{sid}/archive",
 	"POST /api/v1/sessions/{mid}/{sid}/unarchive",
+	"POST /api/v1/sessions/{mid}/{sid}/autoname",
 	"POST /api/v1/assistant/conversations/{id}/archive",
+	"PUT /api/v1/assistant/conversations/{id}/tags",
+	"DELETE /api/v1/assistant/conversations/{id}",
 	"GET /api/v1/assistant/conversations/{id}/always",
 	"GET /api/v1/assistant/standing-authorizations",
 	"GET /api/v1/assistant/north-star",
@@ -198,10 +230,17 @@ var Routes = []string{
 	"POST /api/v1/assistant/rule-suggestions/{id}/always",
 	"POST /api/v1/assistant/rule-suggestions/{id}/not-now",
 	"DELETE /api/v1/assistant/conversations/{id}/always/{hash}",
+	"POST /api/v1/assistant/conversations/{id}/undelivered/{msg}/retry",
+	"DELETE /api/v1/assistant/conversations/{id}/undelivered/{msg}",
 	"POST /api/v1/assistant/conversations/{id}/unarchive",
 	"POST /api/v1/assistant/conversations/{id}/stop",
 	"GET /api/v1/assistant/reporters",
 	"GET /api/v1/assistant/leaders",
+	"GET /api/v1/assistant/dispatch-policy",
+	"PUT /api/v1/assistant/dispatch-policy",
+	"GET /api/v1/assistant/worker-presets",
+	"GET /api/v1/assistant/start-defaults",
+	"PUT /api/v1/assistant/start-defaults",
 	"GET /api/v1/assistant/availability",
 	"GET /api/v1/assistant/directions/tree",
 	"GET /api/v1/assistant/directions/offers",
@@ -212,6 +251,7 @@ var Routes = []string{
 	"POST /api/v1/assistant/route/agent",
 	"POST /api/v1/assistant/agents/{mid}/{sid}/supervisor",
 	"PUT /api/v1/assistant/directions/{id}/name",
+	"PUT /api/v1/assistant/directions/{id}/notes",
 	"GET /api/v1/assistant/conversations/{id}/feed",
 	"POST /api/v1/assistant/feed/{id}/dismiss",
 	"POST /api/v1/assistant/feed/{id}/undo-dismiss",
@@ -224,9 +264,11 @@ var Routes = []string{
 	"DELETE /api/v1/assistant/tasks/{id}",
 	"POST /api/v1/assistant/tasks/{id}/run",
 	"POST /api/v1/assistant/tasks/{id}/fresh",
+	"DELETE /api/v1/assistant/tasks/{id}/start-grant",
 	"GET /api/v1/assistant/places",
 	"GET /api/v1/assistant/repositories",
 	"GET /api/v1/assistant/repositories/{id}",
+	"GET /api/v1/assistant/repositories/providers",
 	"POST /api/v1/assistant/repositories/preview",
 	"POST /api/v1/assistant/repositories",
 	"PUT /api/v1/assistant/repositories/{id}",
@@ -235,6 +277,11 @@ var Routes = []string{
 	"POST /api/v1/assistant/places",
 	"PUT /api/v1/assistant/places/{id}",
 	"DELETE /api/v1/assistant/places/{id}",
+	"GET /api/v1/assistant/saved-prompts",
+	"POST /api/v1/assistant/saved-prompts",
+	"PUT /api/v1/assistant/saved-prompts/order",
+	"PUT /api/v1/assistant/saved-prompts/{id}",
+	"DELETE /api/v1/assistant/saved-prompts/{id}",
 	"GET /api/v1/assistant/runs",
 	"GET /api/v1/assistant/routines",
 	"PUT /api/v1/assistant/routines",
@@ -250,6 +297,11 @@ var Routes = []string{
 	"DELETE /api/v1/task-trust",
 	// The todos (the assistant's todos.go, docs/assistant/todos.md).
 	"GET /api/v1/todos",
+	"GET /api/v1/todos/places", // the To-dos places and counts (todo_view_routes.go, #10226); the literal wins over {id}
+	"GET /api/v1/todos/{id}",   // one to-do as the list has it, with its view
+	"GET /api/v1/todos/{id}/repositories",
+	"PUT /api/v1/todos/{id}/repositories",
+	"PUT /api/v1/todos/{id}/repositories/{repo_id}/links",
 	"POST /api/v1/todos",
 	"PATCH /api/v1/todos/{id}",
 	"DELETE /api/v1/todos/{id}",
@@ -264,12 +316,16 @@ var Routes = []string{
 	"DELETE /api/v1/todos/{id}/thread",
 	"PUT /api/v1/todos/{id}/seen", // Got it on a Just finished to-do, and its Undo (todo_seen.go, #5707)
 	"DELETE /api/v1/todos/{id}/seen",
+	"PUT /api/v1/todos/{id}/restored", // Restore on an inactive to-do, and Someday and back (todo_marks.go, #10226)
+	"PUT /api/v1/todos/{id}/someday",
+	"DELETE /api/v1/todos/{id}/someday",
 	"POST /api/v1/todos/{id}/accept",
 	"POST /api/v1/todos/{id}/decision-dismiss",
 	"POST /api/v1/todos/{id}/decision-undo-dismiss",
 	"POST /api/v1/later/{id}/handled", // a question that can wait, marked handled (later.go)
 	"POST /api/v1/todos/{id}/done-check",
 	"POST /api/v1/todos/{id}/retry",
+	"POST /api/v1/todos/{id}/start/answer", // the startup question a task's start stopped on, answered (start_answer.go, #10365)
 	"POST /api/v1/todos/retitle",
 	"POST /api/v1/todos/import/reminders",
 	// Its settings and its main conversation (profile.go, start.go).
@@ -327,6 +383,8 @@ var Routes = []string{
 	"GET /api/v1/recordings",
 	"POST /api/v1/recordings/{id}/minutes",
 	"POST /api/v1/recordings/{id}/minutes/todos",
+	// The owner's name from the web (#8877).
+	"PUT /api/v1/recordings/{id}/title",
 	// All-day recordings' appends (kb_day.go there, #4741).
 	"POST /api/v1/recordings/{id}/segments",
 	// Attending a meeting (meeting_live.go there, docs/assistant/meeting-minutes.md "Attending a meeting").
@@ -337,6 +395,8 @@ var Routes = []string{
 	"PUT /api/v1/recordings/{id}/private",
 	"POST /api/v1/recordings/{id}/just-me",
 	"POST /api/v1/recordings/{id}/followup",
+	// A meeting handed to an Agent after it (meeting_handoff.go there, #8852).
+	"POST /api/v1/recordings/{id}/handoff",
 	// Its photos (meeting_photos.go there, "Phase 3: photos").
 	"POST /api/v1/recordings/{id}/photos",
 	"GET /api/v1/recordings/{id}/photos",

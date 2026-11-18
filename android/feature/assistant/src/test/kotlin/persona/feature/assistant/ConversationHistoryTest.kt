@@ -24,6 +24,9 @@ import persona.core.designsystem.LocalHomeDrawer
 import persona.core.designsystem.PersonaTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -47,7 +50,9 @@ import androidx.compose.ui.test.swipeLeft
 import androidx.navigation3.runtime.NavKey
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -251,6 +256,34 @@ class ConversationHistoryTest {
         rule.onNodeWithText("没有归档的对话").assertExists()
         rule.onNodeWithText("在对话列表里左滑一个对话就能归档，它会收在这里。").assertExists()
     }
+
+    @Test fun rightStackNavigationKeepsConversationHistoryIdentityAndTemporaryTitles() {
+        val hub = HistoryHub(main, first)
+        val routes = mutableStateListOf("root")
+        var history: ConversationHistory? = null
+        rule.setContent {
+            PersonaTheme(reduceMotion = true) {
+                val remembered = rememberConversationHistory(hub, hub)
+                SideEffect { history = remembered }
+                key(routes.last()) { Text(routes.last()) }
+            }
+        }
+        val original = requireNotNull(history)
+        rule.runOnIdle { runBlocking { original.rename(first.key, "Temporary title") } }
+        rule.waitForIdle()
+        assertEquals("Temporary title", original.titled(listOf(first)).single().title)
+        routes += "inbox"
+        rule.waitForIdle()
+        assertSame(original, history)
+        routes += "mail"
+        rule.waitForIdle()
+        assertSame(original, history)
+        routes.removeLast()
+        routes.removeLast()
+        rule.waitForIdle()
+        assertSame(original, history)
+        assertEquals("Temporary title", history!!.titled(listOf(first)).single().title)
+    }
 }
 
 /** The hub of these tests: Persona's list, its archived conversations, and what was archived, brought back and renamed. */
@@ -260,8 +293,10 @@ internal class HistoryHub(main: Session, vararg chats: Session) : AssistantRepos
     val archived = mutableListOf<SessionKey>()
     val unarchived = mutableListOf<SessionKey>()
     val renamed = mutableListOf<Pair<SessionKey, String>>()
+    val tagWrites = mutableListOf<Pair<SessionKey, List<String>>>()
     var archivedList: List<Session> = emptyList()
     var refuseRename = false
+    var refuseTags = false
     override suspend fun archiveConversation(session: SessionKey) {
         archived += session
         archivedList = listOf(assistant.value.conversations.first { it.key == session }.copy(archived = true)) + archivedList
@@ -273,6 +308,14 @@ internal class HistoryHub(main: Session, vararg chats: Session) : AssistantRepos
         assistant.value = assistant.value.copy(conversations = assistant.value.conversations + back.copy(archived = false))
     }
     override suspend fun archivedConversations(): List<Session> = archivedList
+    override suspend fun setConversationTags(session: SessionKey, tags: List<String>) {
+        tagWrites += session to tags
+        if (refuseTags) throw UnsupportedOperationException("Tags unavailable on this hub")
+        assistant.value = assistant.value.copy(conversations = assistant.value.conversations.map {
+            if (it.key == session) it.copy(tags = tags) else it
+        })
+        archivedList = archivedList.map { if (it.key == session) it.copy(tags = tags) else it }
+    }
     override suspend fun renameConversation(session: SessionKey, title: String) {
         check(!refuseRename) { "改名失败" }
         renamed += session to title

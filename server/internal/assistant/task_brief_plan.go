@@ -79,25 +79,22 @@ func errContinued(prev string, succ Todo) error {
 		"(agent_send)", prev, succ.ID, succ.Title, succ.ID)
 }
 
-// takeOver settles where a task that continues another runs (#6427), before its todo_id is checked: an earlier to-do
-// still open whose agents all stopped is carried on in itself (todo_id), not in a new to-do; one another open to-do
-// already carries on is refused (that one is where the work goes on). An earlier to-do that is closed, one whose agent
-// may still run (a retry elsewhere while its computer is offline), or one this conversation may not take, gets a new
-// to-do with its brief as before.
+// takeOver binds a continuation to its original to-do, without stopping Agents or reopening it before Start.
+// An unsafe or unauthorized handoff is refused, never replaced with a second to-do.
 func (s *Service) takeOver(ctx context.Context, conversation string, t *PlanTask) error {
-	if t.Continues == "" || t.ReuseTodo != "" {
+	if t.Continues == "" {
 		return nil
+	}
+	if t.ReuseTodo != "" && t.ReuseTodo != t.Continues {
+		return fmt.Errorf("continues and todo_id must name the same to-do")
 	}
 	if succ, ok := s.openSuccessor(t.Continues); ok {
 		return errContinued(t.Continues, succ)
 	}
-	prev, ok := s.todoNow(t.Continues)
-	if !ok || prev.DoneAt != nil || prev.Cancelled() {
-		return nil
+	if _, err := s.taskTodoForConversation(conversation, t.Continues); err != nil {
+		return err
 	}
-	if _, err := s.reusableTodo(ctx, conversation, prev.ID, false); err == nil {
-		t.ReuseTodo = prev.ID
-	}
+	t.ReuseTodo = t.Continues
 	return nil
 }
 
@@ -120,6 +117,9 @@ func (s *Service) planBriefs(ctx context.Context, machine, conversation string, 
 			if err != nil {
 				return fmt.Errorf("task %d: continues: %v", i+1, err)
 			}
+			if t.ScopeRevision != "" && t.ScopeRevision != brief.ClockAt.Format(time.RFC3339Nano) {
+				return fmt.Errorf("task %d: the scope of %s changed; read its brief and plan the continuation again", i+1, prev.ID)
+			}
 			// Its own prompt stays its own; what done means is the brief's, as its scope changes left it.
 			t.DoneWhen, t.ExpectMinutes = brief.Criteria, brief.ExpectNow
 			t.Brief = &brief
@@ -137,6 +137,20 @@ func (s *Service) planBriefs(ctx context.Context, machine, conversation string, 
 		}
 		v := (&taskBrief{rec: rec}).view()
 		t.Brief = &v
+	}
+	return nil
+}
+
+// checkContinuationScope rejects a plan that was prepared against a different
+// revision of the original brief. ClockAt advances for every scope entry,
+// including changes that keep the effective criteria and expected time.
+func (s *Service) checkContinuationScope(t *PlanTask) error {
+	if t.Continues == "" {
+		return nil
+	}
+	current, ok := s.briefOfTodo(t.Continues)
+	if !ok || t.Brief == nil || current.ID != t.Brief.ID || !current.ClockAt.Equal(t.Brief.ClockAt) {
+		return fmt.Errorf("the scope of %s changed or is unavailable; read its brief and plan the continuation again", t.Continues)
 	}
 	return nil
 }

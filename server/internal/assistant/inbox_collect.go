@@ -2,7 +2,6 @@ package assistant
 
 import (
 	"context"
-	"maps"
 	"slices"
 	"time"
 
@@ -117,6 +116,7 @@ func (s *Service) InboxCollected(ctx context.Context, r assistantwire.InboxRound
 		s.inboxChanged(ctx, nil) // nothing came in, but which sources could be read did (saveInbox tells otherwise)
 	}
 	s.triageInbox(ctx)
+	s.settleInbox(ctx) // "Needs you" events the owner answered in the source, or that were closed there (inbox_settle.go)
 	s.translateInbox(ctx)
 	s.admitInbox(ctx, batch, todo)
 	return nil
@@ -145,20 +145,8 @@ func (b *inboxBook) recordReads(r assistantwire.InboxRound) bool {
 		changed = changed || b.readErrs[id] != code
 	}
 	b.readErrs = next
-	mail := b.mailReadErrs
-	if _, there := r.Names["mail"]; r.Mail != nil || r.Names != nil && !there {
-		mail = map[string]assistantwire.InboxMailFailed{}
-		if r.Mail != nil {
-			for _, f := range r.Mail.Failed {
-				if f.ID != "" && f.ReadError != "" {
-					mail[f.ID] = f
-				}
-			}
-		}
-	}
-	changed = changed || !maps.Equal(mail, b.mailReadErrs)
-	b.mailReadErrs = mail
-	return changed
+	mailChanged := b.recordMailReads(r)
+	return changed || mailChanged
 }
 
 // ---- the connectors' ----

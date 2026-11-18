@@ -1,11 +1,19 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+// @vitest-environment jsdom
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RunStep } from "../../lib/run-step";
+import { Icon } from "../../ui/icons";
+import { FADE_OUT_MS, LINGER_MS } from "../../ui/motion";
 import { RunningStatusView, statusWords, WaitingView } from "./RunningStatusBar";
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 afterEach(() => vi.useRealTimers());
 
 const render = (props: Parameters<typeof RunningStatusView>[0]) => renderToStaticMarkup(<RunningStatusView {...props} />);
+const statusIcon = (name: "terminal" | "sparkles") => renderToStaticMarkup(<Icon name={name} size={14} className="shrink-0 -translate-y-px" />);
 const tool = (name: string, spawning?: boolean): RunStep => ({ kind: "tool", tool: name, ...(spawning ? { spawning } : {}) });
 const agent = (step?: RunStep, live: Parameters<typeof statusWords>[0] = null) => statusWords(live, step).text;
 const plain = (step?: RunStep, live: Parameters<typeof statusWords>[0] = null) => statusWords(live, step, true).text;
@@ -100,6 +108,68 @@ describe("RunningStatusView", () => {
     expect(html).not.toContain("全部停止");
   });
 
+  it("a working background command uses its own start, with the label, details and N more, never the turn's metrics", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-05T10:04:05Z"));
+    const html = render({ live: { verb: "Frosting", elapsed_s: 975, tokens_down: 22_800 }, working: true, startedAt: "2026-11-05T10:00:00Z", command: { what: "Build release", more: 2, since: "2026-11-05T10:01:00Z" } });
+    expect(html).toContain('data-running-background="command"');
+    expect(html).toContain("后台任务");
+    expect(html).toContain("Build release");
+    expect(html).toContain('data-running-command-separator="true"> · </span>');
+    expect(html).toContain("还有 2 个");
+    expect(html).toMatch(/data-running-elapsed[^>]*>3m 5s</);
+    expect(html).not.toContain("16m 15s");
+    expect(html).not.toContain("4m 5s");
+    expect(html).not.toContain("tok");
+    expect(html).not.toContain("data-running-speed");
+    expect(html).toContain("text-status-accent");
+    expect(html).not.toContain("text-status-waiting");
+    expect(html).toContain(statusIcon("terminal"));
+    expect(html).not.toContain(statusIcon("sparkles"));
+  });
+
+  it("a finished background command keeps its terminal line while it lingers, then fades without becoming Done", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-05T10:04:05Z"));
+    const box = document.createElement("div");
+    document.body.append(box);
+    const root = createRoot(box);
+    const command = { what: "Build release", more: 0, since: "2026-11-05T10:01:00Z" };
+    const bar = (working: boolean, done = false) => <RunningStatusView live={working ? { verb: "Frosting", elapsed_s: 975, tokens_down: 22_800 } : null} working={working} done={done} startedAt="2026-11-05T10:00:00Z" command={working ? command : null} />;
+    try {
+      act(() => root.render(bar(true)));
+      act(() => root.render(bar(false, true)));
+      expect(box.querySelector('[data-running-status="linger"]')).not.toBeNull();
+      expect(box.querySelector('[data-running-background="command"]')).not.toBeNull();
+      expect(box.textContent).toContain("后台任务 · Build release");
+      expect(box.querySelector("[data-running-done]")).toBeNull();
+      expect(box.querySelector(".status-done")).toBeNull();
+      expect(box.querySelector("svg")?.getAttribute("stroke-width")).toBe("1.9");
+      expect(box.querySelector("svg")?.outerHTML).toBe(statusIcon("terminal"));
+      expect(box.innerHTML).not.toContain(statusIcon("sparkles"));
+      act(() => { vi.advanceTimersByTime(LINGER_MS); });
+      expect(box.querySelector('[data-running-status="fading"]')).not.toBeNull();
+      expect(box.textContent).toContain("后台任务 · Build release");
+      expect(box.querySelector("[data-running-done]")).toBeNull();
+      act(() => { vi.advanceTimersByTime(FADE_OUT_MS); });
+      expect(box.querySelector("[data-running-status]")).toBeNull();
+    } finally {
+      act(() => root.unmount());
+      box.remove();
+    }
+  });
+
+  it("a background command with no listed detail, no start or an invalid start has no turn clock or tokens", () => {
+    for (const command of [{ what: "", more: 0 }, { what: "Build release", more: 0, since: "not a timestamp" }, { what: "Build release", more: 0, since: "0001-01-01T00:00:00Z" }]) {
+      const html = render({ live: { verb: "Frosting", elapsed_s: 975, tokens_down: 22_800 }, working: true, startedAt: "2026-11-05T10:00:00Z", command });
+      expect(html).toContain('data-running-background="command"');
+      expect(html).toContain("后台任务");
+      expect(html).not.toContain("data-running-elapsed");
+      expect(html).not.toContain("tok");
+      expect(html).not.toContain("Frosting");
+    }
+  });
+
   it("a background workflow says so first, before background subagents", () => {
     const html = render({ live: null, working: true, subtasks: true, background: { run: { task_id: "w", status: "running", running: true, agents_started: 3, agents_done: 1 }, more: 0, guessed: false } });
     expect(html).toContain('data-running-background="workflow"');
@@ -126,6 +196,138 @@ describe("RunningStatusView", () => {
 
   it("is not there while nothing works", () => {
     expect(render({ live: null, working: false })).toBe("");
+  });
+});
+
+describe("model request retries (#887)", () => {
+  // The CLI also prints " · retrying in 4s · attempt 5/10" (or 5s for the 500); the wire error is only its observed text.
+  const rateLimited = "429 Synthetic rate limit for retry capture";
+  const upstream = "500 Synthetic upstream failure for retry capture";
+  const retryLive = (retry_error: string, retry_attempt: number, retry_max: number, elapsed_s = 12) => ({
+    verb: "Frosting",
+    elapsed_s,
+    retry_error,
+    retry_attempt,
+    retry_max,
+  });
+  const bar = (live: Parameters<typeof RunningStatusView>[0]["live"], working = true) => <RunningStatusView live={live} working={working} step={tool("Bash")} />;
+  const expectNoRetry = (text: string) => {
+    expect(text).not.toContain("重试");
+    expect(text).not.toContain("API Error");
+    expect(text).not.toContain(rateLimited);
+    expect(text).not.toContain(upstream);
+    expect(text).not.toContain("模型请求失败");
+    expect(text).not.toContain("请求太多，被限流了");
+    expect(text).not.toContain("模型服务暂时不可用");
+  };
+
+  it("shows the observed error, its known classification and the current/max attempt while working", () => {
+    const html = render({ live: retryLive(rateLimited, 5, 10, 0), working: true });
+    expect(html).toContain(rateLimited);
+    expect(html).toContain("5/10");
+    expect(html).toContain("请求太多，被限流了");
+    expect(html).toContain("重试");
+  });
+
+  it("upgrades a generic API Error with the classifier, renders attempt updates and clears on normal work", () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    const text = () => host.textContent ?? "";
+    try {
+      act(() => root.render(bar(retryLive("API Error", 1, 10))));
+      expect(text()).toContain("API Error");
+      expect(text()).toContain("1/10");
+      expect(text()).toContain("模型请求失败");
+      expect(text()).not.toContain("请求太多，被限流了");
+
+      act(() => root.render(bar(retryLive(rateLimited, 5, 10))));
+      expect(text()).toContain(rateLimited);
+      expect(text()).toContain("5/10");
+      expect(text()).toContain("请求太多，被限流了");
+      expect(text()).not.toContain("模型请求失败");
+
+      act(() => root.render(bar(retryLive(rateLimited, 6, 10))));
+      expect(text()).toContain("6/10");
+      expect(text()).not.toContain("5/10");
+
+      act(() => root.render(bar({ verb: "Frosting", elapsed_s: 30 })));
+      expect(text()).toContain("Bash 运行中…");
+      expectNoRetry(text());
+      expect(text()).not.toContain("6/10");
+    } finally {
+      act(() => root.unmount());
+      host.remove();
+    }
+  });
+
+  it("clears retrying on a null live update even while the turn is still working", () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    const text = () => host.textContent ?? "";
+    try {
+      act(() => root.render(bar(retryLive(rateLimited, 5, 10))));
+      expect(text()).toContain(rateLimited);
+      act(() => root.render(bar(null)));
+      expect(text()).toContain("Bash 运行中…");
+      expectNoRetry(text());
+      expect(text()).not.toContain("5/10");
+    } finally {
+      act(() => root.unmount());
+      host.remove();
+    }
+  });
+
+  it("does not carry retrying into the turn-end linger or fade", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-05T10:01:05Z"));
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    const text = () => host.textContent ?? "";
+    try {
+      act(() => root.render(bar(retryLive(upstream, 4, 10))));
+      expect(text()).toContain(upstream);
+      expect(text()).toContain("4/10");
+      expect(text()).toContain("模型服务暂时不可用");
+
+      act(() => root.render(bar(null, false)));
+      expect(host.querySelector('[data-running-status="linger"]')).not.toBeNull();
+      expectNoRetry(text());
+      expect(text()).not.toContain("4/10");
+
+      act(() => { vi.advanceTimersByTime(LINGER_MS); });
+      expect(host.querySelector('[data-running-status="fading"]')).not.toBeNull();
+      expectNoRetry(text());
+      expect(text()).not.toContain("4/10");
+
+      act(() => { vi.advanceTimersByTime(FADE_OUT_MS); });
+      expect(host.querySelector("[data-running-status]")).toBeNull();
+    } finally {
+      act(() => root.unmount());
+      host.remove();
+    }
+  });
+
+  it("keeps a retry-only update in the foreground when an older hub guesses background work", () => {
+    const html = render({
+      live: { retry_error: rateLimited, retry_attempt: 5, retry_max: 10 },
+      working: true,
+      background: { run: { task_id: "w", status: "running", running: true, agents_started: 3, agents_done: 1 }, more: 0, guessed: true },
+    });
+    expect(html).toContain(rateLimited);
+    expect(html).toContain("5/10");
+    expect(html).not.toContain('data-running-background="workflow"');
+  });
+
+  it("never infers a retry from elapsed time or attempt numbers without an observed error", () => {
+    const live = { verb: "Frosting", elapsed_s: 975, retry_attempt: 5, retry_max: 10 };
+    const html = render({ live, working: true, step: tool("Bash") });
+    expect(html).toContain("Bash 运行中…");
+    expect(html).toContain("16m 15s");
+    expectNoRetry(html);
+    expect(html).not.toContain("5/10");
   });
 });
 

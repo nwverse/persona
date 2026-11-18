@@ -90,6 +90,8 @@ class OkHttpHubConnection(
      * Asked per request; null for the mesh's hubs, which are not paired here.
      */
     private val access: (hubId: String) -> HubAccess? = { null },
+    /** GroupRuntime defers the first dial until its data and reconciliation collectors are installed. */
+    private val connectOnCreation: Boolean = true,
 ) : HubConnection, ConnectionDiagnosticsSource, AutoCloseable {
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val lock = Any()
@@ -199,7 +201,11 @@ class OkHttpHubConnection(
     /** Where the next socket resumes from: the stream and its last broadcast seen. */
     internal val resumePoint: Pair<String, Long>? get() = eventStream?.let { it to lastEventSeq.get() }
 
-    init { http.access = ::accessFor; updateDiagnostics { it }; reconnect() }
+    init {
+        http.access = ::accessFor
+        updateDiagnostics { it }
+        if (connectOnCreation) reconnect()
+    }
 
     /**
      * The service token a request to [url] carries: that of the paired hub one of whose HTTPS candidates has its origin,
@@ -983,7 +989,7 @@ class OkHttpHubConnection(
     /** The socket's URL; with the stream and last broadcast seen, so the hub replays what was missed (#1574). */
     internal fun socketUrl(base: HttpUrl, resumeFrom: Pair<String, Long>?): HttpUrl =
         base.hubUrl("/api/v1/ws").newBuilder().apply {
-            addQueryParameter("features", "sessions_list,extension_ui_stream_v1,${ProtocolCompatibility.CAPABILITY}")
+            addQueryParameter("features", "sessions_list,sessions_hierarchy,extension_ui_stream_v1,${ProtocolCompatibility.CAPABILITY}")
             resumeFrom?.let { (stream, seq) ->
                 addQueryParameter("event_stream", stream)
                 addQueryParameter("event_seq", seq.toString())

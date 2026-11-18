@@ -64,10 +64,10 @@ export function Row({ row, second, describes, blocked, customizable, flyoutOpen,
   const name = row.kind === "typed" ? t("ui-modelpanel.use_typed", { id: model.id }) : row.preset ? row.preset.name : model.name;
   // a typed ID's "Use “…”" and a preset (a setup of the profile's, not a copy of one's own) have no star
   const stars = row.kind !== "typed" && row.kind !== "preset";
-  const effort = model.efforts.length ? shownEffort(row.setup, model) : "";
+  const effort = shownEffort(row.setup, model);
   const tier = priceTier(model.price);
   // what the right side says, in words: "Claude Code · High · Fast"
-  const setupTitle = [agentName(provider.engine), effort && effortTitle(effort), row.setup.fast && t("ui-modelpanel.fast_short")].filter(Boolean).join(" · ");
+  const setupTitle = [agentName(provider.engine, provider.engineLabel), effort && effortTitle(effort), row.setup.fast && t("ui-modelpanel.fast_short")].filter(Boolean).join(" · ");
   const off = Boolean(blocked) || Boolean(frozen);
   // the running model's row stays reachable while picks are off: its Customize still opens the flyout (effort, Fast), so it
   // is not announced as disabled (its pick is a no-op anyway, and Enter does nothing while blocked)
@@ -102,7 +102,8 @@ export function Row({ row, second, describes, blocked, customizable, flyoutOpen,
     }
     if (e.key !== "Enter" && e.key !== " ") return;
     e.preventDefault();
-    if (!off) onPick();
+    if (off && row.current && customizable && !frozen) onCustomizeKey(e.currentTarget);
+    else if (!off) onPick();
   };
   return (
     <div
@@ -116,7 +117,10 @@ export function Row({ row, second, describes, blocked, customizable, flyoutOpen,
       data-panel-row={row.key}
       data-current={row.current || undefined}
       data-open={flyoutOpen || undefined}
-      onClick={() => !off && onPick()}
+      onClick={(e) => {
+        if (off && row.current && customizable && !frozen) onCustomize(e.currentTarget, true);
+        else if (!off) onPick();
+      }}
       onContextMenu={(e) => {
         if (!customizable || frozen) return;
         e.preventDefault();
@@ -127,8 +131,8 @@ export function Row({ row, second, describes, blocked, customizable, flyoutOpen,
         "group/row relative z-[1] flex w-full flex-col rounded-control px-3 py-2 text-[14px] leading-[1.43] text-ink outline-none select-none [&+[data-panel-row]]:mt-1",
         "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent",
         row.current && "bg-hover-2 data-[glide]:bg-transparent",
-        off ? "cursor-not-allowed" : "cursor-pointer",
-        blocked && "opacity-50",
+        ariaOff || frozen ? "cursor-not-allowed" : "cursor-pointer",
+        ariaOff && "opacity-50",
       )}
     >
       <div className="flex min-w-0 items-center gap-2">
@@ -136,6 +140,7 @@ export function Row({ row, second, describes, blocked, customizable, flyoutOpen,
           <ProviderMark name={provider.name} />
         </span>
         <span ref={nameEl} title={row.kind === "typed" ? model.id : name} className={cx("min-w-0 truncate leading-5 font-medium", model.custom && stars && "font-mono")}>{name}</span>
+        {row.latest && <span data-row-latest className="shrink-0 text-submeta leading-5 text-ink-3">{t("ui-modelpanel.latest")}</span>}
         {tier && (
           <span data-price-tier={tier} aria-label={t("ui-modelpanel.price_tier", { tier })} title={t("ui-modelpanel.price_tier", { tier })} className="shrink-0 text-[11px] leading-none font-semibold tracking-[0.5px] text-ink-2">
             {"$".repeat(tier)}
@@ -171,7 +176,7 @@ export function Row({ row, second, describes, blocked, customizable, flyoutOpen,
         )}
         <span className="ml-auto flex shrink-0 items-center">
           <span title={setupTitle} data-row-setup className="flex max-w-[118px] shrink-0 items-center gap-1 truncate text-[12px] text-ink-3">
-            <AgentMark agent={provider.engine} size={12} decorative className="shrink-0" />
+            <AgentMark agent={provider.engine} label={provider.engineLabel} size={12} decorative className="shrink-0" />
             {effort && <span className="truncate">{effortTitle(effort)}</span>}
             {row.setup.fast && <Icon name="bolt" size={11} className="shrink-0 fill-current" />}
           </span>
@@ -188,6 +193,9 @@ export function Row({ row, second, describes, blocked, customizable, flyoutOpen,
             {model.id}
           </div>
         </div>
+      )}
+      {row.current && model.effortUnavailable && (
+        <div className="min-w-0 pt-1 pl-[26px] text-label leading-[1.4] text-ink-3">{model.effortUnavailable}</div>
       )}
     </div>
   );

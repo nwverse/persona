@@ -3,6 +3,7 @@ import { currentHeaders, noteItemManager } from "./manager-choice";
 import { acceptanceStands, reviewState, type Supervision } from "./supervision";
 import type { LineageStep, TaskBrief } from "./brief";
 import type { RuleSuggestion } from "./rule-suggestion";
+import type { TodoSummary } from "./todo-view-wire";
 import { api, ApiError, enc } from "./api";
 import { contextBody } from "./context-body";
 import { parseAPIError, retryable } from "./api-errors";
@@ -37,6 +38,9 @@ export interface TodoSpace {
   linked_at: string;
 }
 
+/** What the hub last read of a PR on GitHub (pr_status.go). */
+export interface PRFacts { url: string; state: "open" | "merged" | "closed"; draft: boolean; review: "required" | "approved" | "changes_requested" | "pending"; checks: "failure" | "pending" | "success" | "none"; conflicts: boolean; checked_at: string }
+
 export interface Todo {
   id: string;
   title: string;
@@ -54,6 +58,10 @@ export interface Todo {
   priority?: string;
   /** The slug of the knowledge-base project it belongs to (#2581, docs/assistant/todos.md "Project"); unset for none. */
   project?: string;
+  /** The to-do whose request this one is a piece of, and the pieces it waits for (docs/assistant/todos.md "Requests in
+   *  pieces"); unset for a to-do that is no piece and from hubs without them. */
+  part_of?: string;
+  after?: string[];
   done_at?: string | null;
   created_at: string;
   updated_at: string;
@@ -62,6 +70,10 @@ export interface Todo {
   /** The assistant conversation that opened it as a task, and the plan (docs/assistant/unified-entry.md); unset for a todo made by hand. */
   origin?: string;
   plan_id?: string;
+  /** The Inbox item this task was explicitly dispatched for. */
+  inbox_item?: string;
+  /** "concern" records a question the owner wants answered (docs/assistant/todos.md "Concerns"); unset for other to-dos and older hubs. */
+  kind?: string;
   /** "auto" when the hub marked the task done because its work was judged finished, with why (docs/assistant/todos.md "Automatic completion"). */
   done_by?: string;
   done_reason?: string;
@@ -83,6 +95,10 @@ export interface Todo {
   stage_kind?: string;
   /** The pull or merge request the work is in, when the hub knows one. */
   pr_url?: string;
+  /** Fresh, observational pull request facts; these do not change the task lifecycle. */
+  pr_status?: PRFacts;
+  /** Facts of its earlier PRs, newest first (#7935): work spanning several PRs waits for merge while any is open. */
+  other_prs?: PRFacts[];
   /** How far its finished work went out; short of live, where it is held and who can unhold it (docs/assistant/todos.md "Delivery"). */
   delivery?: TodoDelivery;
   /** The hub's latest automatic completion check of its work, while still current (#3180, docs/assistant/todos.md
@@ -103,6 +119,13 @@ export interface Todo {
    *  docs/assistant/unified-entry.md "Briefs"); unset for a to-do that is no task, and from hubs before briefs. */
   brief?: TaskBrief;
   lineage?: LineageStep[];
+  /** The owner's latest restore of it, and until when they put it off (Someday; a far date means no date), as the hub
+   *  keeps them (docs/assistant/todos.md "Restores and Someday"); unset when never, and from hubs before them. */
+  restored_at?: string | null;
+  someday_until?: string | null;
+  /** The hub's view of the row (#10226, docs/assistant/todo-status-sop.md "The hub's view"): read only behind
+   *  Developing Persona's switches for now (features/todos/model). Unset from managers without `todo_view`. */
+  view?: TodoSummary;
 }
 
 /** "Nobody is working on this" and why ("closed after an error"), for an open to-do the hub found orphaned; undefined
@@ -303,9 +326,10 @@ export function isReviewDone(todo: Todo): boolean {
 }
 
 /** An open task its supervisor accepted, reopened by the hub when its agent got more work, with nothing of it running
- *  or asking now: it reads as accepted, not "Follow up" (#3156, docs/assistant/todo-status-sop.md "Accepted tasks"). */
+ *  or asking now: it reads as accepted, not "Follow up" (#3156, docs/assistant/todo-status-sop.md "Accepted tasks").
+ *  An open concern still waits for its report, so neither an accepted verdict nor its done styling applies (#3582). */
 export function acceptedAtRest(todo: Todo, status: TodoStatus): boolean {
-  return !todo.done_at && acceptanceStands(todo) && (status === "follow_up" || status === "unread" || status === "not_started" || status === "usage_limit");
+  return todo.kind !== "concern" && !todo.done_at && acceptanceStands(todo) && (status === "follow_up" || status === "unread" || status === "not_started" || status === "usage_limit");
 }
 
 /** The status a row draws its tone and mark from: Done for an accepted task at rest, else its own. */
@@ -415,10 +439,16 @@ export function interruptedAgent(s?: Session): boolean {
   return st === "unread" || st === "idle";
 }
 
+/** The hub's own word on a turn that had no output at all (#10187): `no_output` (the model service answered nothing) or
+ *  `stopped` (Persona's Stop interrupted it with its conversation). Not a model API error: its turn_error is a sentence
+ *  in the user's language, said as it is. */
+const SILENT_TURN_KINDS: ReadonlySet<string> = new Set(["no_output", "stopped"]);
+
 /** Why the model service cut the agent off (#1516), in words, and whether "Continue" can help (a login or a bad request is
- *  not fixed by going on); undefined when it was not cut off. */
+ *  not fixed by going on); undefined when it was not cut off. A turn with no output says the hub's sentence for it. */
 export function interruption(s?: Session): { reason: string; canContinue: boolean } | undefined {
   if (!interruptedAgent(s)) return undefined;
+  if (SILENT_TURN_KINDS.has(s?.turn_error_kind ?? "")) return { reason: s!.turn_error!.trim(), canContinue: true };
   const info = parseAPIError(s?.turn_error);
   return { reason: info?.reason ?? t("lib-todos.model_request_failed"), canContinue: !info || retryable(info) };
 }
@@ -676,6 +706,8 @@ export interface TodoDecision {
   /** The newest decision that replaces this one; empty while it is in effect. */
   superseded_by: string;
   created_at: string;
+  /** Completion time for an outcome written by Persona, which may be recorded later. */
+  phase_completed_at?: string;
 }
 
 /** Where a decision came from, as the detail page says it: the agent that asked, by its title when known. */
@@ -915,7 +947,6 @@ export function formatAgentSource(
 
   return undefined;
 }
-
 
 /** An agent going on ("Needs you" / "Working") that the main conversation's dock shows after its tasks (#1113, iOS DockAgent). */
 export interface DockAgent {

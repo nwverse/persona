@@ -1,6 +1,7 @@
 import Observation
 import SwiftUI
 import UserNotifications
+import PersonaWire
 
 /// A system entry point kept in AppModel. The action is claimed before it is sent; a change of appearance or a rebuilt window only redraws, never replays the write.
 @Observable final class ExtensionSystemOpen: Identifiable {
@@ -113,9 +114,7 @@ private struct ExtensionSystemPresentation: ViewModifier {
                     }
                 }
                 .toolbar {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Done [Extension System Presentation c0b3fb]") { app.extensionOpen = nil }.lineLimit(1)
-                    }
+                    SheetClose { app.extensionOpen = nil }
                 }
             }
             .environment(app)

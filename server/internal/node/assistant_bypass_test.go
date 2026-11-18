@@ -14,20 +14,14 @@ import (
 )
 
 func TestAssistantUnselectedModeStartsBypass(t *testing.T) {
-	f := sdkTest(t)
-	id, err := f.n.assistantSend(context.Background(), "", t.TempDir(), "claude", "hello", nil, "", "", sdkExec(proto.AssistantRuntimeAgentSDK))
+	f := cliTest(t)
+	id, err := f.n.assistantSend(context.Background(), "", t.TempDir(), "claude", "hello", nil, "", "", cliExec())
 	if err != nil {
 		t.Fatal(err)
 	}
 	f.idle(t, id)
-	var start struct {
-		Options struct{ PermissionMode string }
-	}
-	if err := json.Unmarshal([]byte(f.file("start.json")), &start); err != nil {
-		t.Fatal(err)
-	}
-	if start.Options.PermissionMode != proto.ModeBypass {
-		t.Fatalf("startup mode = %q, want bypassPermissions", start.Options.PermissionMode)
+	if argv := f.file("cli-argv"); !strings.Contains(argv, "--permission-mode "+proto.ModeBypass) {
+		t.Fatalf("startup args %q, want --permission-mode bypassPermissions", argv)
 	}
 	if err := f.n.setModes(context.Background(), id, "default", ""); err != nil {
 		t.Fatal(err)
@@ -472,7 +466,7 @@ func TestAssistantBypassCLIControls(t *testing.T) {
 		`$C im +messages-send --text hello`,
 		`$(printf '%s' "$C") im +messages-send --text hello`,
 		"`printf '%s' \"$C\"` im +messages-send --text hello",
-		`lark-cli docs +fetch --doc-id "$DOCUMENT"`,
+		`lark-cli docs +create --title "$DOCUMENT"`, // a read with a variable flag value runs (#8119); a write is confirmed whole
 		`lark-cli im +messages-send --text hello < /home/me/message.txt`,
 		`echo hi > "/tmp/$(lark-cli im +messages-send --text hello)"`,
 		`$C im +messages-send --text hello <<< input`,

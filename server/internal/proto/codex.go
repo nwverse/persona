@@ -24,6 +24,19 @@ type SessionCapabilities struct {
 	Approve   bool `json:"approve"`
 	Terminal  bool `json:"terminal"`
 	Attach    bool `json:"attach"`
+	// PluginInput: a Claude outside Persona's terminals whose Persona plugin polls the node: the owner's own messages
+	// go in as their input while it rests, not as another session's through its inbox (docs/integrations/
+	// claude-integration.md "Owner input through the Persona plugin"). Absent from older nodes and everywhere else.
+	PluginInput bool `json:"plugin_input,omitempty"`
+	// PermissionModes are the permission modes session.modes takes for a session whose agent is not Claude Code (Modes
+	// is about Claude Code's five), as a runtime's row lists them (#8261): default, the agent's own approval, and
+	// bypassPermissions where it has an Allow all (Paseo's Auto Accept and Codex's full-access). The apps offer a
+	// switch between them with two or more; its PermissionMode bypassPermissions is Allow all, any other (none too)
+	// its own. Here rather than on Session, which has no room left (TestSessionFitsItsSizeClass), in the bools' padding.
+	// Absent from older nodes and hubs, and wherever Modes is true.
+	PermissionModes PermissionModeSet `json:"permission_modes,omitempty"`
+	// StopCause qualifies stopped-session recovery; absent/unknown never permits a supervisor resume.
+	StopCause StopCause `json:"stop_cause,omitempty"`
 	// Close is independent of terminal access. Absent on older nodes, where clients retain terminal-only closing.
 	Close *bool `json:"close,omitempty"`
 	// Rename permits session.rename's title without a terminal (a runtime's session, #6294). Absent on older nodes,

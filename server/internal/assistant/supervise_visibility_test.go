@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 
@@ -12,7 +11,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-func TestAgentSendPreservesSideConversationProvenance(t *testing.T) {
+func TestAgentSendOmitsSideConversationSender(t *testing.T) {
 	s, f := newQuietService(t)
 	ctx := context.Background()
 	assigned, err := s.createTodo(ctx, "Example task", "Fix and verify the example task.", "conv1", "")
@@ -29,8 +28,13 @@ func TestAgentSendPreservesSideConversationProvenance(t *testing.T) {
 		t.Fatal(err)
 	}
 	messages := sentToAgent(f)
-	if len(messages) != 1 || !strings.Contains(messages[0], `<persona-context kind="side-conversation">`) || !strings.Contains(messages[0], "From: conv-other") {
-		t.Fatalf("side source missing: %q", messages)
+	want := `<persona-context kind="side-conversation">
+This message does not replace or complete your assigned task. Answer it separately, then continue that task.
+</persona-context>
+<persona-side-conversation />
+Can you explain a different change?`
+	if len(messages) != 1 || messages[0] != want {
+		t.Fatalf("side instruction = %q, want %q", messages, want)
 	}
 	if _, err := s.runTool(ctx, "server", "conv1", "agent_send", args); err != nil {
 		t.Fatal(err)
@@ -38,6 +42,15 @@ func TestAgentSendPreservesSideConversationProvenance(t *testing.T) {
 	messages = sentToAgent(f)
 	if len(messages) != 2 || messages[1] != "Can you explain a different change?" {
 		t.Fatalf("owner instruction misclassified: %q", messages)
+	}
+	f.setSessions("box", proto.Session{SessionID: "s2abcdef", MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: proto.StatusIdle})
+	unassigned := json.RawMessage(`{"machine":"box","session_id":"s2abcdef","text":"Can you explain a different change?"}`)
+	if _, err := s.runTool(ctx, "server", "conv-other", "agent_send", unassigned); err != nil {
+		t.Fatal(err)
+	}
+	messages = sentToAgent(f)
+	if len(messages) != 3 || messages[2] != "Can you explain a different change?" {
+		t.Fatalf("unassigned instruction misclassified: %q", messages)
 	}
 }
 
@@ -130,6 +143,67 @@ func TestSupervisionDedupKeepsNewInformation(t *testing.T) {
 			out, _, _, err := s.reserveSupervision(context.Background(), []prompts.SuperviseEntry{e}, []superviseSignal{g}, now.Add(time.Minute))
 			if err != nil || len(out) != 1 {
 				t.Fatalf("new information suppressed: %v, %v", out, err)
+			}
+		})
+	}
+}
+
+// Signals whose news is not their agent's words (#6027): the owner's answer to a new round of a decision, a new
+// round's recheck or undecidable review, a retry's failure or start. A new one goes through while the stopped agent's
+// last words stay the same; the same one told again, as by a restarted manager, does not.
+func TestSupervisionDedupKeepsEachNewEvent(t *testing.T) {
+	for _, c := range []struct{ name, kind, first, next string }{
+		{"another answer to a new round", sigOwnerCannot, "explain_first@2026-11-01T12:00:00Z", "decide_yourself@2026-11-01T12:04:00Z"},
+		{"the same answer to a new round", sigOwnerCannot, "explain_first@2026-11-01T12:00:00Z", "explain_first@2026-11-01T12:04:00Z"},
+		{"a new round's recheck", sigRecheck, "recheck@2026-11-01T12:00:00Z", "recheck@2026-11-01T12:04:00Z"},
+		{"a new undecidable review", sigUndecidable, "undecidable@2026-11-01T12:00:00Z", "undecidable@2026-11-01T12:04:00Z"},
+		{"a retry that fails the same way", sigFailed, "The new tab's shell did not take the start line.", "retry 1: The new tab's shell did not take the start line."},
+		{"another retry that started", sigStarted, "retry 1", "retry 2"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ctx := context.Background()
+			st := &memStore{}
+			s, _ := newQuietServiceOn(t, st)
+			now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+			e := prompts.SuperviseEntry{ID: "todo_example", AgentID: "agent-example", Last: "Two ways to roll it out: A or B."}
+			g := superviseSignal{Todo: e.ID, Session: e.AgentID, Kind: c.kind, Key: c.first, Detail: "Synthetic detail."}
+			reserve := func(s *Service, at time.Time) int {
+				out, _, _, err := s.reserveSupervision(ctx, []prompts.SuperviseEntry{e}, []superviseSignal{g}, at)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return len(out)
+			}
+			if reserve(s, now) != 1 {
+				t.Fatal("the first event was not told")
+			}
+			restarted, _ := newQuietServiceOn(t, st)
+			if reserve(restarted, now.Add(5*time.Minute)) != 0 {
+				t.Fatal("the same event was told twice")
+			}
+			g.Key = c.next
+			if reserve(restarted, now.Add(6*time.Minute)) != 1 {
+				t.Fatalf("the new event (key %q) was folded into the one before (key %q)", c.next, c.first)
+			}
+		})
+	}
+}
+
+// A new turn or sweep of a signal whose key only moves with time is not news while its agent's words stay the same.
+func TestSupervisionDedupFoldsANewTurnWithTheSameWords(t *testing.T) {
+	for _, kind := range []string{sigIdle, sigStalled, sigInterrupted, sigUnjudged} {
+		t.Run(kind, func(t *testing.T) {
+			ctx := context.Background()
+			s, _ := newQuietServiceOn(t, &memStore{})
+			now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+			e := prompts.SuperviseEntry{ID: "todo_example", AgentID: "agent-example", Last: "Still waiting for task evidence."}
+			g := superviseSignal{Todo: e.ID, Session: e.AgentID, Kind: kind, Key: "2026-11-01T12:00:00Z"}
+			if out, _, _, err := s.reserveSupervision(ctx, []prompts.SuperviseEntry{e}, []superviseSignal{g}, now); err != nil || len(out) != 1 {
+				t.Fatalf("first: %v, %v", out, err)
+			}
+			g.Key = "2026-11-01T12:10:00Z"
+			if out, _, _, err := s.reserveSupervision(ctx, []prompts.SuperviseEntry{e}, []superviseSignal{g}, now.Add(10*time.Minute)); err != nil || len(out) != 0 {
+				t.Fatalf("a new turn with the same words woke the supervisor again: %v, %v", out, err)
 			}
 		})
 	}

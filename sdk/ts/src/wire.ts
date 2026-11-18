@@ -316,6 +316,7 @@ export interface Contributes {
   connectors?: ConnectorItem[];
   voice?: NamedItem[];
   transcription?: NamedItem[];
+  speech?: NamedItem[];
   computer?: NamedItem[];
   browser?: NamedItem[];
   iphone?: NamedItem[];
@@ -339,6 +340,7 @@ export interface Contributes {
   error_reports?: ErrorReportsItem[];
   auth_relay?: AuthRelayItem[];
   secret_providers?: SecretProviderItem[];
+  repository_providers?: RepositoryProviderItem[];
   messaging?: MessagingItem[];
   /** Extra keys are opaque JSON; declared properties keep their own types. */
   [key: string]: unknown;
@@ -550,6 +552,46 @@ export interface SecretProviderItem {
 }
 
 /**
+ * A code-hosting source on the exact hosts it names, for the repository catalog and a to-do's repositories and links
+ * there: the manager asks the program (repo.parse, repo.check, repo.link, repo.describe; repository.schema.json) and
+ * re-checks every answer. Needs the program to speak the protocol. A host another installed extension claims, on or
+ * off, fails the install, and so does one host in two items.
+ */
+export interface RepositoryProviderItem {
+  id: string;
+  /**
+   * What the source is called (Acme Code): the catalog and a to-do's repositories show it. Not only spaces, no
+   * control characters.
+   */
+  name: string;
+  /**
+   * The exact host names whose addresses it reads (code.example.com): lowercase, no scheme, port, path or wildcard,
+   * not an IP address, and not a host the built-in GitHub and GitLab read.
+   */
+  hosts: string[];
+  /**
+   * What it calls the link kinds it names (each at most once; the others keep their usual words). Only relabels: the
+   * kinds stay issue and pull_request.
+   */
+  link_kinds?: RepositoryLinkLabel[];
+}
+
+/**
+ * The word a repository provider shows for one kind of its links (MR for a pull_request).
+ */
+export interface RepositoryLinkLabel {
+  kind: RepositoryLinkKind;
+  /** Not only spaces, no control characters. */
+  label: string;
+}
+
+/**
+ * The kinds of a to-do's links to a repository: an issue, or a pull request (a merge request).
+ */
+export type RepositoryLinkKind = "issue" | "pull_request" | (string & {});
+export const REPOSITORY_LINK_KINDS = ["issue", "pull_request"] as const;
+
+/**
  * It is given the error and crash reports of the hub and the user's devices (error_reports.deliver): needs the
  * program to speak the protocol, on_startup and permissions.error_reports.
  */
@@ -624,7 +666,7 @@ export interface ConnectorItem {
 }
 
 /**
- * A contribution with only an id and a name: voice, transcription, computer, browser.
+ * A contribution with only an id and a name: voice, transcription, speech, computer, browser.
  */
 export interface NamedItem {
   id: string;
@@ -720,6 +762,19 @@ export interface UIItem {
   families?: WidgetFamily[];
   /** widget only: how often the widget is drawn again on its own (30 when not said). */
   refresh_minutes?: number;
+  /**
+   * nav_page only: the sidebar group the page goes in unless the user put it elsewhere (#9071). Title translated in
+   * l10n's groups.
+   */
+  group?: UIGroup;
+}
+
+/**
+ * A sidebar group a nav_page names (docs "UI slots"): pages of any extension naming the same id share it.
+ */
+export interface UIGroup {
+  id: string;
+  title: string;
 }
 
 export interface AgentSourceItem {
@@ -862,11 +917,37 @@ export interface AuthPrompt {
   expires_at?: string;
 }
 
+/**
+ * settings.check (manifest settings_check): the configuration and secrets as a change would leave them, before the
+ * hub saves it. The program answers whether they work (SettingsCheckResult) within 10 seconds.
+ */
+export interface SettingsCheckParams {
+  /** The whole configuration as it would be saved, the schema's defaults filled in. */
+  config: unknown;
+  secrets: Record<string, string>;
+  /**
+   * The egress proxy URL for this check only, when the program runs behind the proxy and a config: entry of
+   * permissions.network names an address: requests sent through it reach the addresses this configuration names, its
+   * ordinary requests only the saved ones. It stops working once the check answers. Absent: use the program's
+   * ordinary proxy (an older hub sends none).
+   */
+  proxy?: string;
+}
+
+/**
+ * settings.check's answer: ok, or why not in one sentence for the owner (the hub takes every secret out of it and
+ * cuts it to 300 characters).
+ */
+export interface SettingsCheckResult {
+  ok: boolean;
+  error?: string;
+}
+
 export type HubRole = "center" | "member" | (string & {});
 export const HUB_ROLES = ["center", "member"] as const;
 
-export type HubCapability = "inbox_group" | "inbox_group_state" | (string & {});
-export const HUB_CAPABILITIES = ["inbox_group", "inbox_group_state"] as const;
+export type HubCapability = "inbox_group" | "inbox_group_state" | "tool_images" | (string & {});
+export const HUB_CAPABILITIES = ["inbox_group", "inbox_group_state", "tool_images"] as const;
 
 /**
  * What the hub sends first. The extension is under extension; hubs before the rename (#1844) send it as plugin, newer
@@ -1061,6 +1142,8 @@ export interface UIPlace {
   opens?: string;
   badge?: Badge;
   connector?: string;
+  /** A nav_page's sidebar group, its title in the request's language (#9071). */
+  group?: UIGroup;
 }
 
 export interface UIPlaces {
@@ -1396,6 +1479,12 @@ export type TextStyle = "body" | "secondary" | "caption" | "code" | "title" | "h
 export const TEXT_STYLES = ["body", "secondary", "caption", "code", "title", "headline"] as const;
 
 /**
+ * A progress drawing hint: bar (the default) or ring.
+ */
+export type ProgressStyle = "bar" | "ring" | (string & {});
+export const PROGRESS_STYLES = ["bar", "ring"] as const;
+
+/**
  * date, time, datetime, multichoice and multiline are UI version 6. Values stay strings: date YYYY-MM-DD, time HH:MM
  * (24 hours), datetime YYYY-MM-DDTHH:MM local to context.tz, multichoice a JSON array of the chosen values, multiline
  * the text with \n.
@@ -1453,8 +1542,9 @@ export const PLATFORMS = ["ios", "mac", "android", "web"] as const;
 
 /**
  * The fixed icon set: a nav_page's icon, a row's, an empty state's (UI version 3 for the last two and the icons after
- * money; 4 for those after settings; 6 for those after file, and a metric's, a tile's, a row action's). Each app
- * draws its own icon for the meaning; an unknown one draws as the default (extension; plugin is its old name).
+ * money; 4 for those after settings; 6 for those after file, and a metric's, a tile's, a row action's; 8 a
+ * section's). Each app draws its own icon for the meaning; an unknown one draws as the default (extension; plugin is
+ * its old name).
  */
 export type NavIcon = "plugin" | "chart" | "gauge" | "list" | "bell" | "doc" | "calendar" | "money" | "extension" | "person" | "chat" | "mail" | "link" | "folder" | "star" | "check" | "warning" | "clock" | "tag" | "search" | "settings" | "branch" | "commit" | "code" | "pull_request" | "merge" | "file" | "home" | "sofa" | "light" | "power" | "fan" | "thermometer" | "droplet" | "lock" | "unlock" | "door" | "window" | "camera" | "video" | "play" | "pause" | "stop" | "speaker" | "music" | "tv" | "plug" | "battery" | "bolt" | "sun" | "moon" | "cloud" | "rain" | "snow" | "wind" | "leaf" | "car" | "location" | "robot" | "wifi" | "shield" | "trend_up" | "trend_down" | "wallet" | "bank" | "heart" | "plus" | "minus" | "trash" | "edit" | "refresh" | "share" | "info" | (string & {});
 export const NAV_ICONS = ["plugin", "chart", "gauge", "list", "bell", "doc", "calendar", "money", "extension", "person", "chat", "mail", "link", "folder", "star", "check", "warning", "clock", "tag", "search", "settings", "branch", "commit", "code", "pull_request", "merge", "file", "home", "sofa", "light", "power", "fan", "thermometer", "droplet", "lock", "unlock", "door", "window", "camera", "video", "play", "pause", "stop", "speaker", "music", "tv", "plug", "battery", "bolt", "sun", "moon", "cloud", "rain", "snow", "wind", "leaf", "car", "location", "robot", "wifi", "shield", "trend_up", "trend_down", "wallet", "bank", "heart", "plus", "minus", "trash", "edit", "refresh", "share", "info"] as const;
@@ -1488,6 +1578,16 @@ export interface Section {
   items: Component[];
   more?: More;
   pane?: Pane;
+  span?: SectionSpan;
+  /** Drawn before the title. */
+  icon?: NavIcon;
+  icon_color?: Color;
+  link?: SectionLink;
+  /**
+   * How many rows sit side by side in the section on a wide screen (UI version 8), in reading order; one on a narrow
+   * screen and when absent. Other components keep the whole width.
+   */
+  columns?: number;
 }
 
 /**
@@ -1549,13 +1649,19 @@ export interface MetricComponent {
 }
 
 /**
- * A bar filled to ratio (0 to 1).
+ * Progress toward a goal, filled to ratio (0 to 1).
  */
 export interface ProgressComponent {
   type: "progress";
   key?: string;
   label: string;
   ratio: number;
+  /**
+   * A drawing hint; omitted means bar. Apple Home Screen widgets (small, medium and large) draw ring as a ring; other
+   * surfaces draw a bar. Apps that do not recognize this field keep drawing a bar. Native stream does not accept this
+   * field.
+   */
+  style?: ProgressStyle;
   detail?: string;
   tone?: Tone;
 }
@@ -2011,21 +2117,56 @@ export interface Tile {
   control?: RowControl;
   actions?: RowAction[];
   action?: Action;
+  /** Draws the tile as a ring (UI version 9): never with an image or a spark. */
+  gauge?: Gauge;
+}
+
+/**
+ * A tile's ring (UI version 9), for a quota or a usage: filled to ratio, with the tile's value and the unit in its
+ * centre (the percentage when the tile has no value), the title below. Without color, the tile's color, else the
+ * app's accent. An older app gets the tile without it: the unit after the value, the percentage in the subtitle, the
+ * color as the tile's.
+ */
+export interface Gauge {
+  /** How full the ring is, 0 to 1. */
+  ratio: number;
+  /** A short word under the value (USD, GB, h), as a control's unit. */
+  unit?: string;
+  color?: Color;
 }
 
 /**
  * stack: sections one under another. split: on a wide screen the side pane's sections in a column at the start, the
  * rest beside it, each scrolling on its own; on a narrow one the side pane folds into a bar on top that opens as a
- * sheet.
+ * sheet. columns (UI version 8): on a wide screen the sections are cards in a grid, two columns or three when there
+ * is room, in reading order (left to right, then down), each row as tall as its tallest card; on a narrow one a
+ * single column, as stack. An older app gets stack.
  */
-export type Layout = "stack" | "split" | (string & {});
-export const LAYOUTS = ["stack", "split"] as const;
+export type Layout = "stack" | "split" | "columns" | (string & {});
+export const LAYOUTS = ["stack", "split", "columns"] as const;
 
 /**
  * Where a section of a split view goes.
  */
 export type Pane = "main" | "side" | (string & {});
 export const PANES = ["main", "side"] as const;
+
+/**
+ * How much of a row of a columns view a section takes (UI version 8): full, the whole row; absent, one column. Other
+ * layouts ignore it.
+ */
+export type SectionSpan = "full" | (string & {});
+export const SECTION_SPANS = ["full"] as const;
+
+/**
+ * A link beside a section's title (UI version 8), such as the page that has all of it: pressing it calls ui.action
+ * with action (which may answer with a push) or pushes action.push. An older app on a full page gets it as the
+ * section's last row.
+ */
+export interface SectionLink {
+  title: string;
+  action: Action;
+}
 
 export type FileStatus = "added" | "modified" | "deleted" | "renamed" | (string & {});
 export const FILE_STATUSES = ["added", "modified", "deleted", "renamed"] as const;
@@ -3452,6 +3593,12 @@ export interface ConnectorTool {
    * conversation.
    */
   shell?: string[];
+  /**
+   * Set by Persona itself on an assistant conversation's tool list: a rarely used tool is sent by name only and
+   * loaded with tool search when needed (#7317). A connector does not need to send it; the manager sets it on every
+   * list whatever a connector sent.
+   */
+  defer_loading?: boolean;
 }
 
 /**
@@ -3476,12 +3623,34 @@ export interface ConnectorCallParams {
 export interface ConnectorCallResult {
   text?: string;
   /**
+   * tools.call only (actions.do and catalog.call ignore it): pictures for the model after the text, on a hub whose
+   * initialize lists the capability tool_images (an older hub ignores them; the text must stand on its own). At most
+   * 16, each a whole JPEG, PNG or WebP of at most 1 MiB and 2000 pixels a side, together at most 4 MiB and 8 million
+   * pixels; the hub leaves out any over a limit and says so after the text.
+   */
+  images?: ConnectorToolImage[];
+  /**
    * actions.do only (tools.call ignores it): the id, on the other side, of the message the write made, when the
    * service gave one (a comment's id, a mail's Message-ID, a chat message's id). The hub trims it and keeps it as the
    * sent-as-user ledger row's message_ref; one longer than 200 characters is dropped (the row has none), not cut.
    * Leave it out when there is none.
    */
   message_ref?: string;
+}
+
+/**
+ * One picture of a tools.call answer (ConnectorCallResult.images).
+ */
+export interface ConnectorToolImage {
+  /** image/jpeg, image/png or image/webp: a hint, the hub reads the type from the bytes. */
+  mime?: string;
+  /** The bytes, base64 (standard, with padding). */
+  data: string;
+  /**
+   * One short line for the model and for people, shown before the picture (a time in a video, a picture's place in a
+   * post); the hub keeps the first 200 characters of its first line.
+   */
+  caption?: string;
 }
 
 /**
@@ -4719,8 +4888,15 @@ export interface KBEntry {
   updated: string;
   /** A project's short / long · status, a chat's dm / group… */
   extra?: string;
-  /** A chat's source (lark, mail, wechat, github…). */
+  /** A chat's source (lark, mail, wechat, github…); a document's, meeting's or event's connector (#8872). */
   source?: string;
+  /** A recording's kind: meeting, note or day (#8870); absent on other kinds and from an older hub. */
+  recording_kind?: string;
+  /**
+   * A recording's imported meeting: the id of the meetings item it overlaps, as the meetings list has it (#8872);
+   * absent on other kinds, before a match and from an older hub.
+   */
+  meeting_id?: string;
 }
 
 /**
@@ -5164,6 +5340,11 @@ export interface LeaderReportEvent {
   doing?: string;
   needs_you?: string;
   links?: string[];
+  /**
+   * set only while the hub's push tiering (low-distraction switch) is on: P1 for progress, reached and stuck (keep it
+   * in the log and the briefing, alert nobody), P0 for a decision
+   */
+  level?: string;
 }
 
 /**
@@ -5174,10 +5355,11 @@ export interface LeaderReportEvent {
  * dropped connection); model_refused (the model declined to answer this input, a refusal or a content filter: sending
  * it again unchanged gets the same answer, so split it, drop a part or report it; data ModelRefusal); timeout (past
  * timeout_seconds); invalid_output (with json_schema, the reply was still not JSON matching it after one more try;
- * data ModelInvalidOutput).
+ * data ModelInvalidOutput); model_candidates_failed (with two or more candidates, every one failed; data
+ * ModelCandidatesFailed names how each did; a single candidate that fails answers with its own code and data).
  */
-export type ModelErrorCode = "invalid_params" | "assistant_offline" | "model_unavailable" | "model_paused" | "model_failed" | "model_refused" | "timeout" | "invalid_output" | (string & {});
-export const MODEL_ERROR_CODES = ["invalid_params", "assistant_offline", "model_unavailable", "model_paused", "model_failed", "model_refused", "timeout", "invalid_output"] as const;
+export type ModelErrorCode = "invalid_params" | "assistant_offline" | "model_unavailable" | "model_paused" | "model_failed" | "model_refused" | "timeout" | "invalid_output" | "model_candidates_failed" | (string & {});
+export const MODEL_ERROR_CODES = ["invalid_params", "assistant_offline", "model_unavailable", "model_paused", "model_failed", "model_refused", "timeout", "invalid_output", "model_candidates_failed"] as const;
 
 /**
  * One turn of the conversation: the user's, or the model's earlier answer.
@@ -5210,6 +5392,19 @@ export interface ModelCompleteParams {
   timeout_seconds?: number;
   /** What the call is for (daily, weekly…): it goes in the hub's log line with the usage. */
   label?: string;
+  /**
+   * Candidate model ids, tried in order (#10398): one that fails (model_failed, model_refused, model_paused), runs
+   * past timeout_seconds, answers with no text (model_failed) or, with json_schema, still does not match it after its
+   * second try (invalid_output) hands over to the next. Each runs on a provider the user configured in Settings ›
+   * Model providers that offers it, the purpose's own provider first (a model none offers is model_unavailable with
+   * data {model}, nothing sent). One candidate that fails answers with its own error; when two or more all fail the
+   * error is model_candidates_failed. timeout_seconds bounds each candidate; the whole call stops at 600 seconds. The
+   * user can switch these lists off (the result then has no candidate) or replace them with a list of their own
+   * (candidate names the user's model) on the extension's purpose in Settings › Model configuration. Without models
+   * the call runs on the purpose's model, as it always did; a hub older than this field answers invalid_params
+   * (unknown field "models").
+   */
+  models?: string[];
 }
 
 /**
@@ -5233,6 +5428,40 @@ export interface ModelCompleteResult {
   model: string;
   /** end_turn, or max_tokens when the answer was cut off. */
   stop_reason: string;
+  /** What the call spent; with models, every attempt's requests together. */
+  usage: ModelUsage;
+  /** With models (or the user's own list): the candidate that answered. */
+  candidate?: string;
+  /** The candidates that failed before it, in order. */
+  attempts?: ModelAttempt[];
+}
+
+/**
+ * A candidate that did not answer: its model, the error code it failed with (a ModelErrorCode; a reply with no text
+ * is model_failed), what happened, how long it took and what it spent.
+ */
+export interface ModelAttempt {
+  model: string;
+  code: string;
+  message: string;
+  /** model_paused: when its connection lets go, an RFC 3339 time. */
+  until?: string;
+  seconds: number;
+  usage: ModelUsage;
+}
+
+/**
+ * The data of model_unavailable for a candidate no provider the user configured offers.
+ */
+export interface ModelNotOffered {
+  model: string;
+}
+
+/**
+ * The data of model_candidates_failed: every candidate's failure in order, and what they spent together.
+ */
+export interface ModelCandidatesFailed {
+  attempts: ModelAttempt[];
   usage: ModelUsage;
 }
 
@@ -5965,6 +6194,187 @@ export interface UIPageSnapshot {
   view: View;
 }
 
+/**
+ * error.code of the transcription calls besides permission_denied (data {scope: "transcription"}): invalid_params (a
+ * field missing or wrong, audio that is not base64 PCM16 or over 256 KiB a call, a job that is not this extension's
+ * or no longer runs); assistant_offline (the manager is away: try again); transcription_unavailable (no transcription
+ * is chosen, ready or able to replay: the owner sets it up in Settings › Meetings); busy (this extension has a job
+ * running, or two extensions have); too_long (more than 15 minutes of audio: the job is ended); timeout (the
+ * transcription stopped answering: the job is ended); transcription_failed (the transcription failed the job; data
+ * {code}: its error code).
+ */
+export type TranscriptionErrorCode = "invalid_params" | "assistant_offline" | "transcription_unavailable" | "busy" | "too_long" | "timeout" | "transcription_failed" | (string & {});
+export const TRANSCRIPTION_ERROR_CODES = ["invalid_params", "assistant_offline", "transcription_unavailable", "busy", "too_long", "timeout", "transcription_failed"] as const;
+
+/**
+ * transcription.start: a job for one piece of audio.
+ */
+export interface TranscriptionStartParams {
+  /**
+   * A BCP 47 hint (zh-CN, en-US); the transcription still follows the speech. Empty: the transcription's own guess.
+   */
+  language?: string;
+  /** A short name of what this is, for the manager's log (its first 40 characters); never what is said. */
+  label?: string;
+}
+
+export interface TranscriptionStartResult {
+  /** The job's id, for the calls after; it is this extension's only. */
+  job: string;
+}
+
+/**
+ * transcription.audio: the next piece of the audio, contiguous with the last: PCM16 little-endian, mono, 16 kHz,
+ * base64 (standard, with padding), at most 256 KiB of PCM (8 seconds) a call. The call returns once the audio is with
+ * the transcription and no more than 60 seconds wait ahead of it, so sending as fast as it returns paces the job.
+ */
+export interface TranscriptionAudioParams {
+  job: string;
+  data: string;
+}
+
+/**
+ * transcription.finish (every piece is sent: wait for the text) and transcription.cancel (drop the job and its text).
+ */
+export interface TranscriptionJobParams {
+  job: string;
+}
+
+/**
+ * One sentence, from and to in seconds from the start of the audio.
+ */
+export interface TranscriptionSegment {
+  from: number;
+  to: number;
+  text: string;
+}
+
+/**
+ * A span the transcription did not trust any text for (its sessions did not agree: noise, music, crosstalk): say so,
+ * never guess.
+ */
+export interface TranscriptionGap {
+  from: number;
+  to: number;
+}
+
+export interface TranscriptionFinishResult {
+  segments: TranscriptionSegment[];
+  gaps?: TranscriptionGap[];
+  /** How much audio the job took. */
+  seconds: number;
+}
+
+/**
+ * error.code a provider answers besides the base ErrorCode: not_found (no such repository or link, or the account it
+ * uses cannot see it), not_signed_in (the user has to sign in to the source first), refused (the source said no: say
+ * why in message), failed (anything else, say why in message). The manager shows the message on one line, clipped.
+ */
+export type RepoErrorCode = "not_found" | "not_signed_in" | "refused" | "failed" | (string & {});
+export const REPO_ERROR_CODES = ["not_found", "not_signed_in", "refused", "failed"] as const;
+
+/**
+ * repo.parse: what repository an address on one of the contribution's hosts names (a web address, an https clone
+ * address, ssh://git@host/... or git@host:...). Answer only from the address when it can; the manager asks repo.check
+ * before it saves one.
+ */
+export interface RepoParseParams {
+  /** The repository_providers item's id. */
+  contribution: string;
+  /** The address as the user or an Agent wrote it (an Agent's may be any page on the contribution's hosts). */
+  url: string;
+}
+
+/**
+ * The repository the address names. instance_url is exactly https://<host> or https://<host>:<port>, a lowercase host
+ * the contribution claims and nothing after it; the default port is left out (https://code.acme.test, never
+ * https://code.acme.test:443, which is refused), path its plain segments without a leading or trailing /
+ * (acme/tools), canonical_url exactly instance_url + "/" + path.
+ */
+export interface RepoParseResult {
+  instance_url: string;
+  path: string;
+  canonical_url: string;
+  /**
+   * How to clone it when that is not canonical_url: https or ssh on one of the contribution's hosts, no credentials,
+   * query or fragment.
+   */
+  clone_url?: string;
+  /** A name for people (Acme Tools): the catalog's default name for it. */
+  display_name?: string;
+}
+
+/**
+ * repo.check: whether the repository exists and the account the program uses can see it, before the manager saves it.
+ * Answered with Empty, or not_found / not_signed_in / refused / failed.
+ */
+export interface RepoCheckParams {
+  /** The repository_providers item's id. */
+  contribution: string;
+  /** The repository's canonical_url as repo.parse answered it. */
+  canonical_url: string;
+}
+
+/**
+ * A saved repository of the provider's, as repo.parse answered it.
+ */
+export interface RepoIdentity {
+  instance_url: string;
+  path: string;
+  canonical_url: string;
+}
+
+/**
+ * repo.link: one of the repository's issues or pull requests for a to-do, named by an address (url) or by kind and
+ * number. The manager asks only for a link it has not stored yet.
+ */
+export interface RepoLinkParams {
+  /** The repository_providers item's id. */
+  contribution: string;
+  repo: RepoIdentity;
+  /**
+   * The link's address as the user or an Agent wrote it; empty when kind and number name it. The hub only checks that
+   * the answer is under repo, so answer the link this address names, or an error when it names none.
+   */
+  url?: string;
+  /** With number, when there is no url: the answer must be this kind. */
+  kind?: RepositoryLinkKind;
+  /** With kind: the answer must have this number. */
+  number?: string;
+}
+
+/**
+ * The link: its kind and number, and its canonical address under the repository's canonical_url (https, no
+ * credentials, query or fragment).
+ */
+export interface RepoLinkResult {
+  kind: RepositoryLinkKind;
+  number: string;
+  canonical_url: string;
+  /** Its title when the program knows it; kept on one line. */
+  title?: string;
+}
+
+/**
+ * repo.describe (optional): the title and state of a link the manager has stored, by its canonical address.
+ */
+export interface RepoDescribeParams {
+  /** The repository_providers item's id. */
+  contribution: string;
+  /** The link's canonical_url as repo.link answered it. */
+  canonical_url: string;
+}
+
+/**
+ * What the link is called and where it stands.
+ */
+export interface RepoDescribeResult {
+  /** Kept on one line. */
+  title: string;
+  /** Left out when the source has no such word for it. */
+  state?: string;
+}
+
 /** One call or event of an extension point's protocol: who sends it, and the definitions its params and
  * its answer hold to (no result: any JSON; an event has no answer). */
 export interface Call {
@@ -6059,4 +6469,12 @@ export const CALLS: Record<string, Call> = {
   "storage.blob.finish": { from: "program", params: "StorageBlobMutateParams", result: "StorageBlobFinishResult" },
   "storage.blob.delete": { from: "program", params: "StorageBlobMutateParams", result: "StorageDeleteResult" },
   "storage.blob.read": { from: "program", params: "StorageBlobReadParams", result: "StorageBlobReadResult" },
+  "transcription.start": { from: "program", params: "TranscriptionStartParams", result: "TranscriptionStartResult" },
+  "transcription.audio": { from: "program", params: "TranscriptionAudioParams", result: "Empty" },
+  "transcription.finish": { from: "program", params: "TranscriptionJobParams", result: "TranscriptionFinishResult" },
+  "transcription.cancel": { from: "program", params: "TranscriptionJobParams", result: "Empty" },
+  "repo.parse": { from: "hub", params: "RepoParseParams", result: "RepoParseResult" },
+  "repo.check": { from: "hub", params: "RepoCheckParams", result: "Empty" },
+  "repo.link": { from: "hub", params: "RepoLinkParams", result: "RepoLinkResult" },
+  "repo.describe": { from: "hub", params: "RepoDescribeParams", result: "RepoDescribeResult" },
 };

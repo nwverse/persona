@@ -68,7 +68,7 @@ class InboxSwipeShotsTest {
         override val entries = MutableStateFlow(emptyList<InboxEntry>())
         override val snapshot = MutableStateFlow(snapshot)
         override val connectionState = flowOf(ConnectionState.Online)
-        override val preferences = flowOf(InboxPreferences(expanded = listOf("action", "fyi", "read-pending", "done")))
+        override val preferences = flowOf(InboxPreferences(expanded = listOf("action", "fyi", "done")))
         override suspend fun refresh() = Unit
         override fun conversation(feedId: String, startPosition: Long?) = flowOf(LarkConversation())
         override suspend fun loadOlder(feedId: String) = Unit
@@ -117,7 +117,7 @@ class InboxSwipeShotsTest {
         rule.setContent {
             PersonaTheme(style = style, darkTheme = dark, reduceMotion = true) {
                 Box(Modifier.testTag("page").width(400.dp).height(1000.dp).background(PersonaTheme.palette.background)) {
-                    InboxScreen(inbox, navigator)
+                    OnAll { InboxScreen(inbox, navigator) }
                 }
             }
         }

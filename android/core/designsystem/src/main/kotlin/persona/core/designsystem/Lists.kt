@@ -7,6 +7,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.ui.draw.rotate
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -23,20 +24,27 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.SubcomposeLayout
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
+import kotlin.math.roundToInt
 import persona.core.designsystem.icons.PhIcon
 import persona.core.designsystem.icons.PhIcons
 
@@ -81,20 +89,25 @@ fun JSectionHeader(
     /** [trailing] is the fold's own action word ("Expand" / "Collapse"): while the header folds ([onClick] and [open]),
      *  TalkBack hears it from the state and click label, so the visible word is not read a second time (#4120). */
     trailingIsFoldAction: Boolean = false,
+    /** Actions to move into an overflow menu only when the full title, count and ordinary actions do not fit. */
+    overflowActions: List<JAction> = emptyList(),
     // Last, so a caller can pass it as a trailing lambda: `JSectionHeader(title) { … }`.
     action: (@Composable RowScope.() -> Unit)? = null,
 ) {
     val palette = PersonaTheme.palette
     val style = PersonaTheme.style
     val fold = if (onClick != null && open != null) foldLabels(open) else null
-    Row(
-        modifier.fillMaxWidth().then(if (onClick != null) Modifier.combinedClickable(role = Role.Button, onClickLabel = fold?.action, onClick = onClick) else Modifier)
-            .padding(top = if (sub) Tokens.Space.s else if (style == AppStyle.Board) 18.dp.dense else 26.dp.dense, bottom = if (sub) Tokens.Space.xs else 10.dp.dense,
-                start = if (style == AppStyle.Brief) 0.dp else 4.dp.dense, end = if (style == AppStyle.Brief) 0.dp else 4.dp.dense)
-            .heightIn(min = if (leading != null) 48.dp else 0.dp)
-            .semantics { heading(); fold?.let { stateDescription = it.state } },
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
+    val titleStyle = if (sub) PersonaTheme.type.caption.copy(fontWeight = FontWeight.Normal)
+    else if (style == AppStyle.Glass) PersonaTheme.type.caption.copy(fontWeight = FontWeight.SemiBold, fontSize = androidx.compose.ui.unit.TextUnit(14f, androidx.compose.ui.unit.TextUnitType.Sp))
+    else PersonaTheme.type.headline.copy(fontSize = androidx.compose.ui.unit.TextUnit(15f, androidx.compose.ui.unit.TextUnitType.Sp))
+    fun headerModifier(): Modifier = modifier.fillMaxWidth()
+        .then(if (onClick != null) Modifier.combinedClickable(role = Role.Button, onClickLabel = fold?.action, onClick = onClick) else Modifier)
+        .padding(top = if (sub) Tokens.Space.s else if (style == AppStyle.Board) 18.dp.dense else 26.dp.dense, bottom = if (sub) Tokens.Space.xs else 10.dp.dense,
+            start = if (style == AppStyle.Brief) 0.dp else 4.dp.dense, end = if (style == AppStyle.Brief) 0.dp else 4.dp.dense)
+        .heightIn(min = if (leading != null) 48.dp else 0.dp)
+        .semantics { heading(); fold?.let { stateDescription = it.state } }
+    @Composable
+    fun leadingContent() {
         leading?.let { it(); Spacer(Modifier.width(Tokens.Space.xs)) }
         if (sub && open != null) {
             JIcon(PhIcons.CaretRight, null, size = Tokens.Space.m, tint = palette.ink3, modifier = Modifier.rotate(if (open) 90f else 0f))
@@ -104,19 +117,18 @@ fun JSectionHeader(
             Box(Modifier.size(10.dp).clip(RoundedCornerShape(2.dp)).background(palette.status(status).dot))
             Spacer(Modifier.width(8.dp.dense))
         }
-        // The title and its count take the free width, so the trailing text and the action sit at the end of the row
-        // (two weights in one row split the space, which left them near the middle and cut long titles at half width).
-        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+    }
+    @Composable
+    fun titleGroup(wrap: Boolean) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                title,
-                style = if (sub) PersonaTheme.type.caption.copy(fontWeight = FontWeight.Normal)
-                else if (style == AppStyle.Glass) PersonaTheme.type.caption.copy(fontWeight = FontWeight.SemiBold, fontSize = androidx.compose.ui.unit.TextUnit(14f, androidx.compose.ui.unit.TextUnitType.Sp))
-                else PersonaTheme.type.headline.copy(fontSize = androidx.compose.ui.unit.TextUnit(15f, androidx.compose.ui.unit.TextUnitType.Sp)),
-                color = if (muted) palette.ink3 else if (sub || style == AppStyle.Glass) palette.ink2 else palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                title, style = titleStyle,
+                color = if (muted) palette.ink3 else if (sub || style == AppStyle.Glass) palette.ink2 else palette.ink,
+                maxLines = if (wrap) Int.MAX_VALUE else 1, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f, fill = false),
             )
             count?.let {
-                Spacer(Modifier.width(6.dp.dense))
+                Spacer(Modifier.width(Tokens.Space.sm))
                 if (countTone == null) Text("$it", style = PersonaTheme.type.micro, color = palette.ink3)
                 else {
                     val tone = palette.status(countTone)
@@ -126,12 +138,78 @@ fun JSectionHeader(
                 }
             }
         }
-        if (trailing != null || action != null) Spacer(Modifier.width(8.dp.dense))
+    }
+    @Composable
+    fun ordinaryActions() {
+        if (trailing != null || action != null) Spacer(Modifier.width(Tokens.Space.s))
         trailing?.let {
             Text(it, style = PersonaTheme.type.caption, color = palette.ink3, maxLines = 1,
                 modifier = if (trailingIsFoldAction && fold != null) Modifier.clearAndSetSemantics {} else Modifier)
         }
-        action?.invoke(this)
+        if (action != null) Row { action.invoke(this) }
+    }
+    if (overflowActions.isEmpty()) {
+        Row(
+            headerModifier(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            leadingContent()
+            // The title and its count take the free width, so the trailing text and the action sit at the end of the row.
+            Row(Modifier.weight(1f)) { titleGroup(false) }
+            ordinaryActions()
+        }
+        return
+    }
+    var menu by remember { mutableStateOf(false) }
+    val textMeasurer = rememberTextMeasurer()
+    val countStyle = PersonaTheme.type.micro
+    val trailingStyle = PersonaTheme.type.caption
+    val actionStyle = PersonaTheme.type.labelSmall
+    SubcomposeLayout(
+        headerModifier(),
+    ) { constraints ->
+        val leading = subcompose("leading") {
+            Row(verticalAlignment = Alignment.CenterVertically) { leadingContent() }
+        }.map { it.measure(Constraints()) }
+        val leadingWidth = leading.maxOfOrNull { it.width } ?: 0
+        val density = this
+        fun textWidth(text: String, style: TextStyle): Int = textMeasurer.measure(
+            AnnotatedString(text), style = style, maxLines = 1, softWrap = false,
+        ).size.width
+        fun Dp.toPxInt() = with(density) { this@toPxInt.toPx() }.roundToInt()
+        val fullTitleWidth = textWidth(title, titleStyle) + (count?.let {
+            Tokens.Space.sm.toPxInt() + textWidth("$it", countStyle) +
+                if (countTone != null) SectionHeaderTokens.countPadding.toPxInt() * 2 else 0
+        } ?: 0)
+        val ordinaryWidth = (if (trailing != null || action != null) Tokens.Space.s.toPxInt() else 0) +
+            (trailing?.let { textWidth(it, trailingStyle) } ?: 0) +
+            if (action != null) maxOf(Tokens.MinTouch.android.toPxInt(),
+                textWidth(overflowActions.last().label, actionStyle) + Tokens.Space.s.toPxInt() * 2) else 0
+        val overflow = overflowActions.isNotEmpty() && leadingWidth + fullTitleWidth + ordinaryWidth > constraints.maxWidth
+        val right = if (overflow) subcompose("overflow") {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Spacer(Modifier.width(Tokens.Space.s))
+                JIconButton(PhIcons.DotsThree, stringResource(R.string.designsystem_more), { menu = true }, raised = false,
+                    modifier = Modifier.testTag("inbox.section.overflow"))
+                JMenu(menu, { menu = false }, buildList {
+                    trailing?.let { add(JAction(it, enabled = onClick != null, onClick = { onClick?.invoke() })) }
+                    addAll(overflowActions)
+                })
+            }
+        }.map { it.measure(Constraints()) } else subcompose("ordinary-visible") {
+            Row(verticalAlignment = Alignment.CenterVertically) { ordinaryActions() }
+        }.map { it.measure(Constraints()) }
+        val rightWidth = right.maxOfOrNull { it.width } ?: 0
+        val bounded = constraints.maxWidth != Constraints.Infinity
+        val titleWidth = if (bounded) (constraints.maxWidth - leadingWidth - rightWidth).coerceAtLeast(0) else fullTitleWidth
+        val title = subcompose("title") { titleGroup(overflow) }.map { it.measure(Constraints(maxWidth = titleWidth)) }
+        val height = maxOf(leading.maxOfOrNull { it.height } ?: 0, title.maxOfOrNull { it.height } ?: 0, right.maxOfOrNull { it.height } ?: 0)
+        val width = if (bounded) constraints.maxWidth else leadingWidth + titleWidth + rightWidth
+        layout(width, height) {
+            leading.forEach { it.place(0, (height - it.height) / 2) }
+            title.forEach { it.place(leadingWidth, (height - it.height) / 2) }
+            right.forEach { it.place(width - rightWidth, (height - it.height) / 2) }
+        }
     }
 }
 
@@ -280,6 +358,10 @@ fun JRow(
     leadingIconTint: Color? = null,
     /** The start of the title in the quiet ink, drawn before [title]: a hub conversation title's day and kind ("1101 | Fix | "), so its topic is what the eye finds (iOS `ConversationTitle`). */
     titleLead: String? = null,
+    /** A subtitle with part of it marked (a search match). Drawn instead of [subtitle] when set, on one line. */
+    subtitleMark: AnnotatedString? = null,
+    /** Lines the title may take before it ends in an ellipsis; rows whose labels must remain readable pass more than one. */
+    titleLines: Int = 1,
 ) {
     val palette = PersonaTheme.palette
     RowFrame(modifier, onClick, onLongClick, null, enabled, selected, value, trailing, chevron, changingValue, role) {
@@ -291,16 +373,20 @@ fun JRow(
         Column(Modifier.weight(1f)) {
             val titleText: @Composable (Modifier) -> Unit = { m ->
                 val ink = if (destructive) palette.danger.text else palette.ink
-                if (titleLead == null) Text(title, m, style = PersonaTheme.type.body, color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (titleLead == null) Text(title, m, style = PersonaTheme.type.body, color = ink, maxLines = titleLines, overflow = TextOverflow.Ellipsis)
                 else Text(buildAnnotatedString { withStyle(SpanStyle(color = palette.ink3)) { append(titleLead) }; append(title) }, m,
-                    style = PersonaTheme.type.body, color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    style = PersonaTheme.type.body, color = ink, maxLines = titleLines, overflow = TextOverflow.Ellipsis)
             }
             if (titleAccessory == null) titleText(Modifier)
             else Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
                 titleText(Modifier.weight(1f, fill = false))
                 titleAccessory()
             }
-            subtitle?.let { Text(it, style = PersonaTheme.type.caption.copy(fontWeight = FontWeight.Normal), color = palette.ink2, maxLines = subtitleLines, overflow = TextOverflow.Ellipsis) }
+            val caption = PersonaTheme.type.caption.copy(fontWeight = FontWeight.Normal)
+            when {
+                subtitleMark != null -> Text(subtitleMark, style = caption, color = palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                subtitle != null -> Text(subtitle, style = caption, color = palette.ink2, maxLines = subtitleLines, overflow = TextOverflow.Ellipsis)
+            }
         }
     }
 }
@@ -607,5 +693,86 @@ fun JCodeBlock(
         // the title bar is not code: a selection of the message leaves its language and Copy out
         DisableSelection { header() }
         text(Modifier.fillMaxWidth())
+    }
+}
+
+/**
+ * What a page that loads is in (iOS `Loadable`, with the two cases a phone also needs): [Loading] before anything has
+ * arrived, [Loaded] with the value (kept while it reloads or when the reload failed, so a cache is never shown as a fresh
+ * or empty answer), and [Failed] when there is nothing to show. Drawn by [jLoadableContent].
+ */
+sealed interface JLoadable<out T> {
+    /** First load, or a retry after [Failed]: a spinner. */
+    data object Loading : JLoadable<Nothing>
+
+    /**
+     * [value] is on screen. [refreshing] is a reload under way (the page's pull indicator, the content stays). [failure] is why
+     * the last reload failed over it: said above the content with Retry, and over an empty [value] it replaces the empty
+     * state (a failed read is not "nothing here").
+     */
+    data class Loaded<out T>(val value: T, val refreshing: Boolean = false, val failure: String? = null) : JLoadable<T>
+
+    /** Nothing to show and why; [title] heads the reason when the page has a name for what failed. */
+    data class Failed(val message: String, val title: String? = null) : JLoadable<Nothing>
+}
+
+/** A reload is under way over content: feed it to [JListPage]'s `refreshing`. */
+val JLoadable<*>.isRefreshing: Boolean get() = this is JLoadable.Loaded<*> && refreshing
+
+/** Which of the four things a [JLoadable] draws (the choice [jLoadableContent] makes, apart from drawing). */
+internal enum class LoadableSlot { Loading, Failure, Empty, Content }
+
+internal fun <T> loadableSlot(state: JLoadable<T>, isEmpty: (T) -> Boolean, hasEmpty: Boolean): LoadableSlot = when (state) {
+    JLoadable.Loading -> LoadableSlot.Loading
+    is JLoadable.Failed -> LoadableSlot.Failure
+    is JLoadable.Loaded -> when {
+        !hasEmpty || !isEmpty(state.value) -> LoadableSlot.Content
+        state.failure != null -> LoadableSlot.Failure
+        else -> LoadableSlot.Empty
+    }
+}
+
+/** The list item keys [jLoadableContent] uses, for scrolling and tests. */
+object LoadableKeys {
+    const val Loading = "loadable-loading"
+    const val Failure = "loadable-failure"
+    const val Reload = "loadable-reload-failure"
+}
+
+/**
+ * A [JLoadable] drawn the one way inside a [JListPage]: a centered spinner ([loadingText] under it), the [content], or the
+ * failure with Retry ([onRetry] null: no Retry). Over loaded content a failed reload is a line above it, not a page error.
+ * [empty] is the page's own empty state, drawn when [isEmpty] says the loaded value has nothing; without it [content]
+ * gets the value as it is.
+ */
+fun <T> LazyListScope.jLoadableContent(
+    state: JLoadable<T>,
+    onRetry: (() -> Unit)? = null,
+    loadingText: String? = null,
+    isEmpty: (T) -> Boolean = { false },
+    empty: (LazyListScope.() -> Unit)? = null,
+    content: LazyListScope.(T) -> Unit,
+) {
+    when (loadableSlot(state, isEmpty, hasEmpty = empty != null)) {
+        LoadableSlot.Loading -> item(LoadableKeys.Loading) { JLoading(text = loadingText) }
+        LoadableSlot.Failure -> {
+            val title = (state as? JLoadable.Failed)?.title
+            val message = (state as? JLoadable.Failed)?.message ?: (state as JLoadable.Loaded<T>).failure.orEmpty()
+            item(LoadableKeys.Failure) {
+                JNotice(message, Modifier.padding(top = Tokens.Space.m), title = title, status = Status.NeedsYou,
+                    actionLabel = onRetry?.let { stringResource(R.string.designsystem_retry) }, onAction = onRetry)
+            }
+        }
+        LoadableSlot.Empty -> requireNotNull(empty)()
+        LoadableSlot.Content -> {
+            val loaded = state as JLoadable.Loaded<T>
+            loaded.failure?.let { why ->
+                item(LoadableKeys.Reload) {
+                    JNotice(why, Modifier.padding(top = Tokens.Space.m), status = Status.NeedsYou,
+                        actionLabel = onRetry?.let { stringResource(R.string.designsystem_retry) }, onAction = onRetry, inlineAction = true)
+                }
+            }
+            content(loaded.value)
+        }
     }
 }

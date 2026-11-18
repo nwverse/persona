@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 /// Settings › Extensions › Extension Market (docs/extensions/extensions.md「Extension marketplace」): the plugins of every market the hub has, searched and filtered by
 /// market; a row each with its name, version, what it does, its tags and how it stands on this hub. The markets
@@ -796,10 +797,7 @@ private struct ExtensionRemovalNoticeSheet: View {
             .navigationTitle(notice.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(action: done) { Text("OK [Recordings Section de32e2]").lineLimit(1) }
-                        .accessibilityIdentifier("market-removal-done")
-                }
+                SheetClose(id: "market-removal-close", action: done)
             }
         }
         .interactiveDismissDisabled()
@@ -879,13 +877,9 @@ private struct MarketTokenSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .sheetCancel(unsaved: !spec.isEmpty || !token.isEmpty) { dismiss() }
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button { submit(clearing: false) } label: {
-                        if busy { ProgressView() } else { Text(asksSpec ? String(localized: "Add [Beautiful U I Bridge 7a8a11]") : String(localized: "Save")).lineLimit(1) }
-                    }
-                    .disabled(busy || (asksSpec ? spec.trimmingCharacters(in: .whitespaces).isEmpty : token.trimmingCharacters(in: .whitespaces).isEmpty))
-                    .accessibilityIdentifier("market-save")
-                }
+                SheetConfirm(id: "market-save",
+                             disabled: asksSpec ? spec.trimmingCharacters(in: .whitespaces).isEmpty : token.trimmingCharacters(in: .whitespaces).isEmpty,
+                             busy: busy) { submit(clearing: false) }
             }
         }
         .presentationDetents([.medium, .large])

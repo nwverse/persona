@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,8 +12,27 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/nodeclient"
+	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
+
+// noTranscript is file's error for a session id this machine has no transcript for: an unknown id (a stale link, a
+// client that sent the wrong field) or a file that is gone. Its text is the one the node has always given.
+type noTranscript struct{ id string }
+
+func (e noTranscript) Error() string { return fmt.Sprintf("transcript for session %s not found", e.id) }
+
+// readErr is the error a read of a session's history (session.items, session.item, session.image) answers: no
+// transcript is codeNotFound, which the hub serves as 404 not_found (apierr.Call), not a 502 internal error (#9551).
+// Sends, rewinds and the other callers of file keep the plain error: the manager takes a not_found send as "the
+// session is gone" and withdraws its card (assistant sessionNotFound), which a missing file alone must not do.
+func readErr(err error) error {
+	var nt noTranscript
+	if errors.As(err, &nt) {
+		return &rpc.Error{Code: codeNotFound, Message: nt.Error()}
+	}
+	return err
+}
 
 // startingSession reports whether a session without a transcript is one that exists but has not written its first
 // line yet (a headless conversation, or an agent that is live or that Persona started), rather than an unknown id.
@@ -46,11 +66,25 @@ func (n *Node) transcriptPathIn(id string, pass *codexListPass) string {
 	return p
 }
 
+// ownTranscriptPath is transcriptPath of session id's own file: never the transcript a runtime names for a session it
+// lists under that id (a fork's line names Claude sessions by their own ids, runtimealiases.go).
+func (n *Node) ownTranscriptPath(id string) string {
+	p := n.findOwnTranscriptPath(id, nil)
+	if !n.scopedTranscriptAllows(p) {
+		return ""
+	}
+	return p
+}
+
 func (n *Node) findTranscriptPath(id string, pass *codexListPass) string {
 	// A runtime's session whose conversation is a Claude transcript (runtimetranscript.go): that one's file.
 	if t := n.runtimes.transcriptOf(id); t != "" {
 		id = t
 	}
+	return n.findOwnTranscriptPath(id, pass)
+}
+
+func (n *Node) findOwnTranscriptPath(id string, pass *codexListPass) string {
 	if n.codexBlocked(id) {
 		return ""
 	}
@@ -63,7 +97,7 @@ func (n *Node) findTranscriptPath(id string, pass *codexListPass) string {
 				return src.path
 			}
 		}
-		if p := rolloutPath(src.home, src.thread); p != "" {
+		if p := rolloutPathIn(src.home, src.thread, pass); p != "" {
 			return p
 		}
 		return n.codexAppHistoryPath(src, pass) // the App's chat with no rollout: its history as written (codex_apphistory.go)
@@ -85,14 +119,15 @@ func (n *Node) findTranscriptPath(id string, pass *codexListPass) string {
 		}
 		return ""
 	}
-	// Looking again is for a Claude transcript's newer copy in another projects directory. A rollout found before has
-	// none: it stays the thread's file while it exists (a moved one is looked up afresh below).
-	if known && !isClaudeTranscript(p, id) {
+	// Looking again is for a Claude transcript's newer copy in another projects directory. A cached non-Claude path
+	// with no live rollout agent is returned directly. A live rollout instead rechecks its continuation segments.
+	kind := n.rolloutAgent(id)
+	if known && !isClaudeTranscript(p, id) && kind == "" {
 		n.setPath(id, p)
 		return p
 	}
 	// A live Codex or compatible-CLI agent's conversation is its rollout: the projects directories have nothing of it.
-	if kind := n.rolloutAgent(id); kind != "" {
+	if kind != "" {
 		found := ""
 		if kind == traexAgent {
 			found = n.traexPath(id)
@@ -201,7 +236,7 @@ func (n *Node) file(id string) (*transcript.File, error) {
 	} else {
 		p := n.transcriptPath(id)
 		if p == "" {
-			return nil, fmt.Errorf("transcript for session %s not found", id)
+			return nil, noTranscript{id}
 		}
 		f = transcript.NewFile(p)
 	}

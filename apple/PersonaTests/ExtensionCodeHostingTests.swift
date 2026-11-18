@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// UI version 4's code-hosting parts on Apple (#2961, docs/extensions/extensions.md「UI version 4: code hosting」): the schema's examples read
 /// with every component known, a diff's lines numbered and paired, a file tree built from paths, the page's blocks
@@ -192,7 +193,7 @@ struct ExtensionCodeHostingTests {
         try hub.sent("POST", "/api/v1/plugins/github/-/ui/pr").map { try JSON.decoder.decode(JSONValue.self, from: $0.body ?? Data()) }
     }
 
-    @Test func anActionsOwnValuesWinOverTheComponentsAndTheAppSaysVersion6() async throws {
+    @Test func anActionsOwnValuesWinOverTheComponentsAndTheAppSaysVersion8() async throws {
         let hub = FakeHub()
         hub.on("POST", "/api/v1/plugins/github/-/ui/pr", json: #"{"view":\#(try Self.example("View.code-review.json"))}"#)
         let m = page(hub)
@@ -200,16 +201,16 @@ struct ExtensionCodeHostingTests {
         let reply = ExtensionAction(id: "reply", values: ["thread": "t1"])
         _ = await m.perform(reply, with: ["body": "ok", "thread": "other"])
         let sent = try bodies(hub)
-        #expect(sent.first?["context"]?["ui_version"] == .number(6))
+        #expect(sent.first?["context"]?["ui_version"] == .number(8))
         #expect(sent.last?["action"] == .string("reply"))
         #expect(sent.last?["values"] == .object(["body": .string("ok"), "thread": .string("t1")]))
     }
 
-    @Test func pagesAndCardsSayVersion6AndWidgetsStayOnTheSharedVersion() {
+    @Test func pagesAndCardsSayVersion8AndWidgetsStayOnTheSharedVersion() {
         #expect(ExtensionUIContext.here().forPage().uiVersion == ExtensionUIContext.pageVersion)
-        #expect(ExtensionUIContext.here(size: "full").forPage().uiVersion == 6)
+        #expect(ExtensionUIContext.here(size: "full").forPage().uiVersion == 8)
         // A card is drawn by the app's renderer too (version 4–5's code components read-only).
-        #expect(ExtensionViewModel(plugin: "p", ui: "u", context: .here(size: "compact")).context.uiVersion == 6)
+        #expect(ExtensionViewModel(plugin: "p", ui: "u", context: .here(size: "compact")).context.uiVersion == 8)
         // Widgets, the watch and the system extensions draw none of it: the Shared version.
         #expect(ExtensionUIContext.here().uiVersion == ExtensionUIContext.version && ExtensionUIContext.version == 3)
     }

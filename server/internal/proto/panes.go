@@ -107,6 +107,17 @@ type WorktreePrepare struct {
 	AutomaticName bool `json:"automatic_name,omitempty"`
 	// Composer exposes the owning runtime's creation choices; absent on older nodes.
 	Composer *WorktreeComposer `json:"composer,omitempty"`
+	// Existing is a successfully inspected clean, idle checkout of the requested branch.
+	// Absent when the branch is not checked out, no branch was requested, or the node predates branch lookup.
+	Existing *WorktreeCheckout `json:"existing,omitempty"`
+}
+
+type WorktreeCheckout struct {
+	Path   string `json:"path"`
+	Branch string `json:"branch"`
+	// InCheckouts: the checkout lies in the folder where checkouts of this repository go (WorktreePrepare.Path), not
+	// the main checkout or a folder of the user's own. Older nodes leave it out.
+	InCheckouts bool `json:"in_checkouts,omitempty"`
 }
 
 type WorktreeComposer struct {

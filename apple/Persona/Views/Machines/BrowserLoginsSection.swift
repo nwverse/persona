@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import PersonaWire
 
 /// Browser Sign-ins on a Mac's page (#1304, docs/plans/plan-ego-browser.md「Importing cookies」; the web's BrowserLogins): the sites whose
 /// sign-ins ego lite keeps (how many cookies, until when, never what), clearing some of them, and importing a cookie
@@ -281,9 +282,7 @@ private struct CookiePickSheet: View {
             .navigationTitle("Choose Sites to Import")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { file = nil }.lineLimit(1).disabled(busy)
-                }
+                SheetClose(id: "browser-logins-close", disabled: busy) { file = nil }
                 ToolbarItem(placement: .confirmationAction) {
                     let n = file?.cookies.count ?? 0
                     Button(n > 0 ? String(localized: "Import \(n)") : String(localized: "Import")) { Task { await run() } }

@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// One "thing" in the unified inbox (docs/assistant/inbox.md): the new messages in a Feishu chat or a mail thread, with the
 /// hub's AI triage and whether it has been dealt with. Mirrors hub/inbox.go `InboxItem`.
@@ -19,6 +20,9 @@ nonisolated struct InboxItem: Codable, Identifiable, Hashable, Sendable {
     var updatedAt: Date?
     var tier: String?
     var summary: String?
+    /// An assistant row's text as Markdown, its line breaks kept (#9041): the detail draws it. Its `summary` and
+    /// `preview` are the same words without the marks; older hubs leave it out.
+    var body: String? = nil
     var reason: String?
     var read: Bool?
     /// Navigation counts only unread Needs you items; reading never files them.
@@ -72,6 +76,21 @@ nonisolated struct InboxItem: Codable, Identifiable, Hashable, Sendable {
     /// The conversations it was handed to with Hand to AI's main chat (#1194), oldest first: they may write back to
     /// it, and the main conversation offers "Wrap up" for it (#5932). Older hubs leave it out.
     var handoffs: [Handoff]?
+    /// The rows merged into this one by hand (#6480); the hub hides them from every list.
+    var mergedFrom: [MergeRef]?
+
+    /// One row merged into another: where it came from.
+    nonisolated struct MergeRef: Codable, Hashable, Sendable {
+        var id: String
+        var source: String
+        var accountName: String?
+        var title: String?
+
+        enum CodingKeys: String, CodingKey {
+            case id, source, title
+            case accountName = "account_name"
+        }
+    }
 
     /// The follow-up facts a client reads (spec/fixtures/inbox/now.json); the manager keeps the counters and due flag.
     nonisolated struct Follow: Codable, Hashable, Sendable {
@@ -306,8 +325,9 @@ nonisolated struct InboxItem: Codable, Identifiable, Hashable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, source, kind, account, title, `where`, sender, avatar, preview, count, tier, summary, reason, read, lark, mail, doc, moment, context, agent, translations, connector, mutes, version, parent
+        case id, source, kind, account, title, `where`, sender, avatar, preview, count, tier, summary, body, reason, read, lark, mail, doc, moment, context, agent, translations, connector, mutes, version, parent
         case status, urgent, recap, handling, suggestion, follow, now, chain, related, manager, handoffs
+        case mergedFrom = "merged_from"
         case accountName = "account_name", startedAt = "started_at", updatedAt = "updated_at", doneAt = "done_at", doneBy = "done_by"
         case chainCount = "chain_count"
     }
@@ -324,7 +344,7 @@ nonisolated struct InboxItem: Codable, Identifiable, Hashable, Sendable {
         var title: String {
             switch self {
             case .action: StateName.needsYou.text
-            case .working: String(localized: "Active")
+            case .working: String(localized: "In Progress")
             case .fyi: String(localized: "FYI")
             case .noise: String(localized: "Collapsed [Readiness Card ee6046]")
             }

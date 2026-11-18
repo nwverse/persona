@@ -252,7 +252,7 @@ func (s *Service) switchNowOrQueue(ctx context.Context, it *switchItem, t switch
 	if it.plan == switchContinued {
 		text = prompts.RenderAgentLimitContinue()
 		if _, theirs, err := s.supervisedElsewhere(ctx, self, it.m, it.c); err == nil && theirs {
-			text = prompts.RenderSideConversation(prompts.SideConversation{From: self, Text: text})
+			text = prompts.RenderSideConversation(text)
 		}
 	}
 	err := s.moveAgent(ctx, it.m, it.c, t, text)
@@ -415,9 +415,10 @@ func (s *Service) queuedSwitchOf(machine, id string) string {
 func (s *Service) switchQueueListed(machine string) {
 	q := &s.switchQ
 	q.mu.Lock()
-	idle := q.loaded && !slices.ContainsFunc(slices.Collect(maps.Values(q.items)), func(w queuedSwitch) bool { return w.Machine == machine })
+	loaded := q.loaded
+	idle := loaded && !slices.ContainsFunc(slices.Collect(maps.Values(q.items)), func(w queuedSwitch) bool { return w.Machine == machine })
 	q.mu.Unlock()
-	if idle || s.archiveStore() == nil && !q.loaded {
+	if idle || s.archiveStore() == nil && !loaded {
 		return // nothing queued there (or nothing ever queued without a store)
 	}
 	go s.runSwitchQueue(context.Background(), machine)

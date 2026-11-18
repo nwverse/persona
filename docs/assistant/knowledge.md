@@ -24,7 +24,7 @@ As part of moving hub business logic into managers (`docs/assistant/assistant.md
   Triage after an Agent's turn stops moved into the assistant (`docs/assistant/agent-work.md` ("Responsibilities")), which reads the project owning a directory directly; `kb.context` and `kb.projects` still answer on the bus, but nothing calls them now.
   Events seen by the hub are one-way: new source data (connector live events, enabling "Include in knowledge base", enabling "Hand to Persona" for "Information", `kb.kick`),
   and an Agent finishing a turn (before deciding notifications, `kb.agent_turn`, the project timeline entry).
-- **Models**: the knowledge base uses the manager's model configuration (`kb.compress`, `kb.project`, `kb.items`, `kb.dedupe`, `kb.moments`, `kb.topics`, defaulted by `kb.ai` in its `manager.json`),
+- **Models**: the knowledge base uses the manager's model configuration (`kb.compress`, `kb.project`, `kb.items`, `kb.dedupe`, `kb.moments`, `kb.topics`, and `meeting.minutes` for meetings' minutes, defaulted by `kb.ai` in its `manager.json`),
   resolved at every call, all in one place, `assistant/kb_model.go`.
 - **Where data lives**: by default the manager is a hub child process on the same machine. Its knowledge base is the data directory's `~/.persona/data` (`kb_dir` in its `manager.json` can move it), and its `handles.key` is in its own directory, `~/.persona/managers/assistant/` (copied there once from `~/.persona`, [managers.md](managers.md) ("The built-in manager's own files")).
   Storage **follows the manager's `manager.json`**: its `kb` section (`enabled`, `text_days`, `attachment_days`, `extra_dirs`, and `ai` for the models; `docs/operations/config.md` ("manager.json")). Since 2026-11-06 the hub neither reads it nor hands it over in its handshake response (`docs/protocol/protocol.md` ("Handshake")), except raw, once, to a built-in manager it did not start (`legacy_config`, [managers.md](managers.md) ("Configuration"));
@@ -80,11 +80,11 @@ Transcribed text from phone recordings (and watch recordings relayed through the
 - Detail, segment, reconciliation, search and summarization readers wait for active replacements and use a coherent accepted snapshot while a journal remains. Writable open restores pending snapshots before returning a store; a recovery error prevents opening or further recording metadata edits. Read-only open refuses an archive requiring recovery. Legacy directories need no migration, and the existing file paths and transcript links stay valid.
 - Recovery assumes one writable store owns the archive directory. Individual file contents are synced before replacement and directory syncing is best effort where supported; subprocess interruption and replacement failures are tested, not arbitrary hardware or filesystem corruption. External filesystem readers must wait for writable recovery if a journal remains: raw files can contain unfinished replacements after interruption or failed restoration. The journal covers upload content, not a transaction with generated summaries, project links or the database index; that index remains rebuildable from files.
 - For completed transcripts (`complete: true`) whose current revision has not been summarized, each manager round makes at most 3 model calls for them, newest first, failed ones included (same purpose as chat compression, `kb.compress`, prompt `prompts/kb/recording.md`). A recording whose summary failed waits 10 minutes, doubled with each failure in a row up to 6 hours, and the next one goes on; a new revision of it is tried at once (#4246; before, the first failure stopped the round and that recording was sent again every round). A paused model connection, or no model set up, stops the round without counting:
-  produces a summary, one-line description, title (used if the user has not named it), tags and mentioned projects, written in the recording's language (else the owner's; [meeting-minutes.md](meeting-minutes.md) "How the hub generates them"); projects are linked normally (a "Recording · Title" project timeline entry). At most 24k characters go to the model (keeping the beginning and end).
+  produces a summary, one-line description, title (used if neither the user nor a calendar named it; a meeting's minutes then settle the title, and a recording still recording is named by `meeting.title` once it has enough text, [meeting-minutes.md](meeting-minutes.md) "Titles (#8873)"), tags and mentioned projects, written in the recording's language (else the owner's; [meeting-minutes.md](meeting-minutes.md) "How the hub generates them"); projects are linked normally (a "Recording · Title" project timeline entry). At most 24k characters go to the model (keeping the beginning and end).
 - Retention follows assistant setting `recording_days` (default 14 days, independent of `text_days`): each round deletes directories and index rows whose start time predates retention; tombstones are retained equally long.
   A recording with minutes is **trimmed** instead (#3780): past `recording_days` its directory keeps only `meta.json` (with `trimmed_at`), `minutes.json`, `minutes.md`, a meeting's `meeting.json` (its private mark and its room, which the manager deletes then; never searched, [meeting-minutes.md](meeting-minutes.md) "Upload fields") and the photos the minutes cite (their files in `attachments/`, their entries in `photos.json` and `photos.md`; [meeting-minutes.md](meeting-minutes.md) "Phase 3: photos"), and everything else (`segments.json`, `transcript.md`, `summary.md`, `live.json`, the other photos, a pending undo journal, which is restored first) is deleted; its index row stays. It is deleted like any other once it started before assistant setting `minutes_days` (forever by default: unset or `0`; otherwise 1–3650 days, never below `recording_days`). With forever, retention never deletes these minutes; the user can still delete the recording and its minutes together. A trimmed recording is still listed, read and searched by its minutes; it takes no upload (`expired`), gets no summary and no new minutes, and its attendance is off. Tombstones keep the `recording_days` window: an upload of anything older is expired anyway (`server/internal/kb/recordings.go`, `PruneRecordings`).
 - `kb_list` / `kb_get` / `kb_search` and the app's Knowledge page gain the `recordings` category; `kb_get` includes summary, bookmarks and any transcription still retained (up to 12k characters). Recording content cannot be edited via `kb_update` (the phone is authoritative); only tags can change.
-- A recording that is a meeting (`kind: meeting`, overlapping a calendar item, or minutes asked for) also gets structured minutes besides the short summary ([meeting-minutes.md](./meeting-minutes.md)): `minutes.json` and `minutes.md` in the same directory, from chunked calls to the same `kb.compress` model, removed with the recording and kept past its transcript until `minutes_days` (above), returned as `detail.minutes`. `kb_get` prints them before the transcript, followed by where each action item stands (a suggestion, or its to-do open, done, cancelled or deleted); `kb_search` and the app search find them, and `kb_search kind=recordings` searches the recordings alone (finding a meeting by its title, the phone's calendar title or the matched calendar item's name). `kb_list` shows the start time of meetings and events as it does for recordings, and `kb_get` on a meeting or event lists the recordings matched to it.
+- A recording that is a meeting (`kind: meeting`, overlapping a calendar item, or minutes asked for) also gets structured minutes besides the short summary ([meeting-minutes.md](./meeting-minutes.md)): `minutes.json` and `minutes.md` in the same directory, from chunked calls to the Meeting minutes model (`meeting.minutes`, which follows Information processing until it is set apart; `kb.compress` before #7980, [model-config.md](model-config.md) "Meeting minutes and the in-meeting conversation (#7980)"), removed with the recording and kept past its transcript until `minutes_days` (above), returned as `detail.minutes`. `kb_get` prints them before the transcript, followed by where each action item stands (a suggestion, or its to-do open, done, cancelled or deleted); `kb_search` and the app search find them, and `kb_search kind=recordings` searches the recordings alone (finding a meeting by its title, the phone's calendar title or the matched calendar item's name). `kb_list` shows the start time of meetings and events as it does for recordings, and `kb_get` on a meeting or event lists the recordings matched to it.
 - An all-day recording (`kind: day`, #4741, [day-recap.md](day-recap.md)) grows by appends (`POST /api/v1/recordings/{id}/segments`) and gets a daily recap instead of a summary or minutes: `recap_notes.json` (notes per hour of its clock, which go with the transcript), `recap.json` and `recap.md` (kept past the transcript like minutes), written by the knowledge base's own recap lane, pushed once a day and told to the evening routine; `kb_get` prints the recap and where its suggested to-dos stand before the transcript (`server/internal/kb/day_recap.go`, `server/internal/assistant/kb_day.go`).
 
 ## Extra notes directories (`kb.extra_dirs`)
@@ -92,6 +92,28 @@ Transcribed text from phone recordings (and watch recordings relayed through the
 `kb.extra_dirs` in the manager's `manager.json` lists user-maintained notes directories on the manager's machine (the hub machine by default), for example a git repo of facts, lessons and decisions synced by its own tools.
 After searching the knowledge base, `kb_search` also searches `.md` files in these directories (skipping dot-prefixed directories such as `.git`); matching paths are absolute. The assistant's CLAUDE.md lists these directories
 and tells it to read their AGENTS.md / CLAUDE.md before reading or writing. Persona does not write, sync or index them.
+
+## Remote knowledge folders (`kb.remote_folders`)
+
+Add a named source in the manager's `manager.json` under `kb.remote_folders`. Use the connected personal computer's machine ID and an absolute path or `~/` path on that computer.
+
+```json
+{
+  "kb": {
+    "remote_folders": [{
+      "name": "handbook",
+      "machine": "laptop",
+      "path": "~/notes/handbook",
+      "exclude_dirs": ["private", "projects/drafts"],
+      "exclude_extensions": ["pdf", ".key"]
+    }]
+  }
+}
+```
+
+In a private assistant or Agent conversation, ask to search the source by name. The `kb_folder_search` tool lists source names when called without arguments, or searches file names and UTF-8 text for a case-insensitive literal substring. Use a returned relative path with `kb_folder_read`. The tools report an unreachable computer and flag partial results when a search reaches its work limit or a read reaches 64 KiB. Files can change between search and read.
+
+Exclusions are case-insensitive. Directory paths are relative to the configured folder with slash separators. Extension exclusions match filename suffixes. The node skips symlink entries and applies its ordinary remote-file protections. The manager keeps no index or archive of these folders. Text returned to a conversation is subject to that conversation's normal history and model processing. Restart the manager after editing this configuration, and reconnect the conversation’s tools if they were already loaded. Removing an entry and restarting revokes subsequent knowledge-folder calls. The tools are off by default and unavailable when the knowledge base is disabled.
 
 ## Why files
 
@@ -192,7 +214,10 @@ moving the archive into the user's zone ("Time zones") is the archive lane's fir
 lane's writes. The steps' backoffs (a failed source put off, `retryWait`) live with the manager's knowledge base, not the
 engine, so they carry over when the hub's settings change and a new engine is built; a lane already running finishes
 its run with the engine it started with. Each lane run that called the model, or took longer than a round, logs one line: `kb: <lane> lane: <duration>, <n> model call(s),
-<n> failed, <n> put off` (put off: a paused connection, "Upstream rate limits" in [model-config.md](model-config.md)). While the
+<n> failed, <n> put off` (put off: a paused connection, "Upstream rate limits" in [model-config.md](model-config.md)). A call with
+no model set up for it (no provider with a key for the step's purpose) is neither a call nor a failure: the lane logs
+`kb: <lane> lane: no model is set up for <purpose> …` once for each purpose, and `kb: <lane> lane: a model answers <purpose>
+again` once a call for that purpose gets an answer (a failed call is no answer) (#10435; before, such a lane logged "1 model call(s), 1 failed" every 2 minutes). While the
 assistant is not connected, the knowledge base closes once no lane runs; a lane started goes on to the end of its run, as a round did.
 
 1. **Archive**: every 2 minutes (5 seconds after a Lark live event), inspect the 100 recently active chats in Lark's Messages list, reading only when the list timestamp is newer than the last archive.
@@ -218,7 +243,7 @@ assistant is not connected, the knowledge base closes once no lane runs; a lane 
    At most 8 chats per round, most relevant first. Direct-chat / email tags propagate to the other person; a person's `summary.md` is assembled from metadata and direct-chat context without a model call.
    When the model declines the batch (a `refusal` stop reason, e.g. a safety classifier), it would decline it again: the batch is marked covered without a new summary and the chat continues with later messages.
    Any other failure puts the chat off for 10 minutes, doubled with each failure in a row up to 6 hours (`compress_failures` / `compress_retry_at` in `meta.json`, cleared on success);
-   a paused model connection does not count. Before this, a chat whose batch the model refused was sent again every round, every two minutes for days.
+   a paused model connection, or no model set up for it, does not count: the chat stays due without a log line of its own, and the round's compression stops there (#10435; before, no model counted as a failure of each chat, put it off up to 6 hours and logged a line for each). Before this, a chat whose batch the model refused was sent again every round, every two minutes for days.
 3. **Evolution (evo)**: merge projects mentioned in compression into `projects/` (names or aliases equal after stripping punctuation and case are merged; otherwise create), append progress to `log.md`
    and mark dirty. Only aliases belonging to this project are accepted: names / aliases of other unmerged projects, single characters or two-letter abbreviations, and generic terms are rejected; at most 12 automatic aliases per project
    (#2546: previously, several projects accumulated hundreds of aliases after a week and crossed into each other). Manual aliases from `kb_update` have no limit; `remove_aliases` deletes them. If several unmerged projects match a name,
@@ -322,10 +347,10 @@ unknown fields and rule names, an `order` that does not hold every rule exactly 
 `context` outside 0…200, `include_all` or `context` on another rule, and items without a source, a kind (`chat` / `doc`) or an id, twice, or stored without being read.
 The manager hands the document to the engine (`Engine.Selection`); an engine without one keeps everything as before.
 
-- **Web settings** (#2217): Settings → Knowledge selection targets an explicit manager independently of the chat switcher. Item overrides always precede the movable priority levels. Rules can share a level, split into a separate level, or move up/down. Chat candidates carry their source and chat id; document overrides use the original source/id from the selected document metadata, never its KB filename or display name. Failed/unsupported reads enable no save. Manager and credential changes retire pending work, and observable `kb_selection` events block dirty drafts until an explicit reload. Whole-document PUT has no revision precondition: this warning does not prevent an unobserved concurrent write atomically. Turning a rule off stops new writes; blank document days do not introduce default pruning.
+- **Web settings** (#2217): Settings → Knowledge selection targets an explicit manager independently of the chat switcher. Item overrides always precede the movable priority levels. Rules can share a level, split into a separate level, or move up/down. Chat candidates carry their source and chat id; document overrides use the original source/id from the selected document metadata, never its KB filename or display name. Failed/unsupported reads enable no save. Manager and credential changes retire pending work, and observable `kb_selection` events block dirty drafts until an explicit reload. Android's Settings › Knowledge Selection uses the same optimistic fresh-read/whole-document PUT without a page Save and preserves unknown JSON losslessly; its compact rows, level menus and unsupported-document notice are in `docs/android/android.md` ("Knowledge selection"). Android reloads for an observable `kb_selection` event only while idle (neither loading nor saving) and defers one that arrives while busy; a selection GET 404 hides its Settings entry and search result, while a PUT 403 latches read-only controls with one explanation. Whole-document PUT has no revision precondition: neither the web's warning nor Android's fresh read makes the sequence compare-and-swap, so a write between GET and PUT can still be overwritten. Turning a rule off stops new writes; blank document days do not introduce default pruning.
 
 - **Storage and API** (`server/internal/assistant/kb_selection.go`): the manager keeps the document in its settings table under `kb.selection` (as the workflow
-  board's switch), so every client and process agrees; the Web app edits it in Settings → Knowledge selection (#2217), and `kb_history_plan` keeps its existing import controls. The Web editor preserves the whole loaded document, including history and optional rule fields. The iPhone and iPad edit it in Settings › Knowledge Selection (`docs/apple/ios.md`, "Knowledge selection"): each change is applied to the document as the hub has it at that moment and saved at once, a document with a version or field the app does not know is shown as unsupported instead of being replaced, and a per-item setting is picked from the chats and documents already in the knowledge base (their `source` and `source_id` / `id`), so a chat of a source without `history_chats` can get one too. Android has no editor yet. `GET /api/v1/kb/selection` is the document (the defaults when none was saved);
+  board's switch), so every client and process agrees; the Web app edits it in Settings → Knowledge selection (#2217), and `kb_history_plan` keeps its existing import controls. The Web editor preserves the whole loaded document, including history and optional rule fields. The iPhone and iPad edit it in Settings › Knowledge Selection (`docs/apple/ios.md`, "Knowledge selection"): each change is applied to the document as the hub has it at that moment and saved at once, a document with a version or field the app does not know is shown as unsupported instead of being replaced, and a per-item setting is picked from the chats and documents already in the knowledge base (their `source` and `source_id` / `id`), so a chat of a source without `history_chats` can get one too. Android edits it in Settings › Knowledge Selection (`docs/android/android.md`, "Knowledge selection"), preserving the complete raw JSON document, including unknown fields and rule names, across its immediate whole-document saves. `GET /api/v1/kb/selection` is the document (the defaults when none was saved);
   `PUT /api/v1/kb/selection` takes the whole document, validated as above (400 with what is wrong; 403 from a read-only device), stores it, puts it in force at once
   and tells the apps (`kb_selection` event); `GET /api/v1/kb/selection/candidates?source=<connector id>` lists the source's chats (`connectors.history_chats`: id,
   name, kind, flags, estimate, the `source` a per-item setting names, the setting itself, and what the selection reads of it: `whole`, `personal` or `none`). While the
@@ -714,7 +739,7 @@ no more updates, snapshots or prompts; the app groups them under **Not projects*
 
 ## Deleting a project
 
-A project can be deleted from the web knowledge list (#4412). The delete is soft (`kb/project_trash.go`):
+A project can be deleted from the knowledge list on the web (#4412) and on the iPhone and iPad (#7077: a project row's swipe or context menu); both ask first and then offer Undo. The delete is soft (`kb/project_trash.go`):
 
 - The project's directory moves to `.trash/<id>/project` in the data dir, so it drops out of lists, search, prompts and the pipeline, which only read `projects/`. Its index rows go.
 - The chats, people and items that named it stop naming it. `.trash/<id>/trash.json` records which ones (`unlinked`, as `<kind>/<id>`), with the slug, the name and `deleted_at`.
@@ -752,12 +777,13 @@ chat's progress, each Agent's last words, to-do conclusions) and chat summaries,
 - **Pinned facts and hand edits**: `pinned` on a topic is read-only input to the merge, which drops points contradicting it. By hand (`kb_update`, `PUT /api/v1/kb/topics/<id>`) a topic's
   name, `note` (its one line), aliases, tags and pinned facts change and lock as for other kinds; its summary cannot be replaced (it is written from the points).
 - **Failures** wait like a project rewrite's (`retryWait`, in memory) per source and per topic. Both steps use the model use `kb.topics`.
-- **Switch**: `assistant.kb_topics`, on by default (Settings › Knowledge on the web, and Persona's settings tool after the user confirms). Off, neither step calls the model; the topics
+- **Switch**: `assistant.kb_topics`, on by default (Settings › Knowledge on the web, Settings › Knowledge Selection on the iPhone and iPad, and Persona's settings tool after the user confirms). Off, neither step calls the model; the topics
   already written stay readable, and turning it back on continues from the marks.
 - **Reading**: topics list (the most points first), open (`points` in the detail, `links` to the projects and chats they came from), search (`summary.md` and `meta.json`) and change
   events (`kb.changed` with kind `topics`) like the other kinds, through the app API, the assistant's `kb_list` / `kb_get` / `kb_search` and the extension `kb.*` RPC. `kb.recent`
-  does not include them by default (it is what came in, and topics are derived). The web shows them under Knowledge › Topics and in the knowledge map (`docs/web/web.md`); the iOS
-  and Android apps do not show the kind yet and skip it.
+  does not include them by default (it is what came in, and topics are derived). The web shows them under Knowledge › Topics and in the knowledge map (`docs/web/web.md`); the iPhone
+  and iPad too (#7251: Knowledge › Topics, a topic's points by subtopic, a point in a sheet, and the map as an outline, with a detail
+  column where there is room; `docs/design/DESIGN_SYSTEM.md` "Knowledge map outline"). The Android app does not show the kind yet and skips it.
 - **Deleting a source** removes the points that came only from it ("Deleting a connector's saved knowledge" above).
 
 ## Who uses it
@@ -766,6 +792,11 @@ chat's progress, each Agent's last words, to-do conclusions) and chat summaries,
   `kb_get` (profile + last 7 days' messages) / `kb_update` (create projects, edit profiles, tag, link, add timeline entries; manual tags lock and are not overwritten by compression);
   live snapshots include the 6 most important projects and 8 chats. These four tools belong to the assistant (parameter defaults, limits and model-facing copy in `assistant/tools_apps.go`),
   and since 2026-11-04 so does the knowledge base, so they call the engine directly (formerly bus calls to hub `kb.search` / `kb.list` / `kb.get` / `kb.update`).
+- **What `kb_get` hands the model** (#7316, `assistant/kb_get_fit.go`): a project's people (every member of each group chat linked to it, thousands for a large one)
+  are folded to 20, ranked as the detail's links are (importance, relevance, last seen), with a line giving the total and the meta.json that has them all. Any result
+  past 20,000 estimated tokens (a CJK character as 1.25, an ASCII one as half) is cut at a line's end (inside the line when it began over 2,000 bytes back), with a
+  line saying how much was left out and where the files are: Claude Code refuses an MCP tool's output past 25,000 tokens. Only the tool's text changes; the
+  files, `kb.get` and the apps' detail pages are as before.
 - **Main chat**: hub settings `assistant.main` stores its session id (set by `POST /api/v1/assistant/conversations` with `main: true`,
   cleared by `PUT /api/v1/assistant {"main":"-"}`). When requesting a snapshot per message, node passes the session id to `assistant.context`; main-chat snapshots start with "This is the main chat".
 - **AI twin**: Agent prompts end with this chat's profile and its first 3 projects (`<persona-context>`), requiring new conclusions to be written back to the project timeline through `kb_update`.
@@ -929,7 +960,7 @@ and a disabled knowledge base (`kb.enabled: false`) returns 503 as before.
 
 | Endpoint | Purpose |
 | --- | --- |
-| `GET /api/v1/kb/{kind}?tag=` | Sorted list (`items`) and common tags (`tags`); kind is projects / chats / people / docs / meetings / events / recordings / topics (topics: the most points first, `extra` is the count) |
+| `GET /api/v1/kb/{kind}?tag=` | Sorted list (`items`) and common tags (`tags`); kind is projects / chats / people / docs / meetings / events / recordings / topics (topics: the most points first, `extra` is the count; docs, meetings and events: `extra` is the link and `source` the connector that supplied it, #8872) |
 | `GET /api/v1/kb/{kind}/{id}` | `detail` (meta, summary, project timeline, last 7 days' chat messages, a topic's `points`); projects also include `agents` |
 | `PUT /api/v1/kb/{kind}/{id}` | Edit (fields as in `kb_update`); create a project if absent |
 | `DELETE /api/v1/kb/projects/{id}` | Soft-delete a project ("Deleting a project" above); returns its trash entry (`id`, `kind`, `slug`, `name`, `deleted_at`, `unlinked`); 404 for unknown or merged projects |

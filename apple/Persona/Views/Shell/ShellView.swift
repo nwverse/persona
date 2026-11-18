@@ -10,8 +10,9 @@ import SwiftUI
 /// rows…): `.assistant` / `.chats` pick the page, `.mail` opens the inbox on Assistant, `.settings` the sheet.
 struct ShellView: View {
     @Environment(AppModel.self) private var model
-    /// Opens on the app's tab: the page behind is built when it is first selected or dragged in.
-    @State private var shell = ShellState(page: ShellState.index(for: AppModel.shared.selectedTab),
+    /// Opens on the app's tab: the page behind is built when it is first selected or dragged in. `selectedTabNow`: this
+    /// runs each time `RootView`'s body builds the struct, and reading the observed tab there made that body follow it.
+    @State private var shell = ShellState(page: ShellState.index(for: AppModel.shared.selectedTabNow),
                                           pageCount: LarkHomePreference.shared.shows ? 3 : 2)
     /// Where the system puts its bars down the side (iPhone Duo's outer display, the inner one on its side): the top
     /// bars are the side rail there (`ShellSideRail`); nil on every other iPhone.
@@ -74,6 +75,8 @@ struct ShellView: View {
                 if shell.agentsBuilt {
                     ChatsView()
                         .modifier(ShellPageSlide(shell: shell, index: 1))
+                        // A chat under the Agents page's rail keeps its buttons clear of the tab bar (iPhone Duo, #9837).
+                        .modifier(SideColumnScope(own: true))
                 }
                 if LarkHomePreference.shared.shows, shell.feishuBuilt {
                     LarkConversationsView()
@@ -202,7 +205,7 @@ private struct ShellMovingBar: View {
     let pager: ShellPager
 
     var body: some View {
-        if let railEdge, pager.moving || pager.lingering {
+        if let railEdge, pager.standsIn(rail: true) {
             movingRail(railEdge)
         } else if pager.moving || pager.lingering {
             let p = Double(min(CGFloat(pager.pageCount - 1), max(0, pager.position)))
@@ -248,8 +251,7 @@ private struct ShellMovingBar: View {
                         .opacity(max(0, 1 - p) * (model.assistantCurrent == nil ? 0.4 : 1))
                     ShellCircleButton(symbol: Theme.Icon.compose, label: String(localized: "New Session [Chats View 58e21b]"), id: "shell-moving-agents-new") {}
                         .opacity(max(0, 1 - abs(p - 1)))
-                    ShellCircleButton(symbol: Theme.Icon.settings, label: String(localized: "Lark Settings"), id: "shell-moving-feishu-settings") {}
-                        .opacity(max(0, p - 1))
+                    // Messages' slot is the system's search; Lark Settings is at the column's top there (#9837).
                 }
             }
             .allowsHitTesting(false)

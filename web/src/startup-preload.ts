@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import ts from "typescript";
 import { brotliCompress, constants, gzip as gzipCompress } from "node:zlib";
+import { startupMatcher } from "./i18n/startup-keys";
 
 /** The languages under `dir` (src/i18n/locales): code → the language subtags its _meta.json matches. Build time only. */
 export function localeDirs(dir: string): Record<string, string[]> {
@@ -282,7 +283,141 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // against 476,155 B, zh-Hans 477,467 B against 477,133 B; the lists' fields and their strings went; ⌘K's matcher,
 // lib/agent-search.ts, and its Filter's menu load on intent, not here; the idle tier, 43,106 B with ⌘K's Filter button
 // against 41,966 B, stays under its ceiling). main's 96 B of room stay.
-export const FIRST_SCREEN_BUDGET = 480_285;
+// The Filter menu reads, toggles and drops the search parser's operator aliases (host, repo, status, after and
+// pin), so a valid alias can be switched off instead of duplicated (#7339). Measured: en 476,598 B, ja 480,302 B,
+// zh-Hans 477,580 B. The budget moves by the same 17 B.
+// #7329: saved prompts in every composer's "/" list and "Save as Prompt…" on your own messages add 192 B to ja, measured
+// in one environment against main at ec4c0513f9 (ja 480,302 B to 480,494 B; en 476,598 B to 476,803 B, zh-Hans
+// 477,580 B to 477,783 B; the same code measured +110 B on aa5e1ec43e): the small store the composers read their rows
+// from (lib/saved-prompt-rows.ts) and the Composer's use of it, the page event, the menu item and its words, and the
+// settings tab's name and line. The list, its reads, its words, the editor and the settings page are chunks of their
+// own, loaded the first time a box has the focus, the menu item is picked or the page opens. The budget moves by these
+// 192 B on top of #7339's.
+// A folded-search retry now clears its partial warning only after every requested fold has loaded; real failures and
+// budget caps still show it (#7389). Measured: en 476,854 B, ja 480,545 B, zh-Hans 477,834 B. The budget moves by 51 B.
+// #7375: Export Conversation… in a chat's ⋯ adds 77 B to ja, measured in one environment against main at 47973bbb81 (ja
+// 480,562 B to 480,639 B; en 476,871 B to 476,941 B, zh-Hans 477,851 B to 477,922 B): the menu item, its word and the
+// import of its dialog. Reading the conversation, the Markdown and the dialog's words are a chunk of their own
+// (views/chat/ExportDialog.tsx, lib/chat-export.ts). That main measured 17 B over the 480,545 B budget in this
+// environment before the change; the budget moves to what this change measured, 480,639 B.
+// #7418: the budget stays where #7375 left it and the first screen gives back about 8.5 KB in each language, so the
+// next changes have room again (measured in one environment against main at 85cfde464d: ja 480,639 B to 471,693 B;
+// en 476,941 B to 468,489 B, zh-Hans 477,922 B to 469,339 B). The startup catalog takes just the keys the first screen
+// reads of a namespace it reads a few of (src/i18n/startup-keys.ts: settings, todos, settings-managers, machines and
+// five more), five namespaces no first-screen code names left it, and Tailwind no longer scans test files and e2e
+// scripts (styles.css). Every build prints the room left (firstScreenRoom); when it runs low, take bytes off the
+// first screen before raising this.
+// #7459 (Web Push) takes about 90 B of that room in each language: the client_hello's device_id (lib/device-id.ts), the
+// switch that says Web Push is on here (lib/web-push-flag.ts) and the two imports of lib/web-push.ts, a chunk of its own.
+// #7440 takes 1,356 B of that room in each language, measured in one environment against main at 8ab19cb754 (ja
+// 473,110 B to 474,466 B; en 469,919 B to 471,275 B, zh-Hans 470,752 B to 472,108 B): the sidebar's long groups drawn
+// a part at a time (views/WindowedRows.tsx), the fold-all a group missed while it was not drawn (lib/fold-all.ts) and
+// the headings' heights from one ResizeObserver (views/SidebarSection.tsx). WindowedRows is not a chunk of its own: the
+// sidebar has no error boundary, so a failed download of it would leave the whole app blank.
+// #8116: the changes since used the rest of the room, and main measured ja 480,853 B at cc030f78d, 214 B over. The
+// budget stays; the startup catalog takes just the keys the first screen reads of thirteen more namespaces it reads
+// part of (agentmenus, chat-comments, chat-contextgroup, chat-modelpill, chat-subagentcard, composer, context,
+// lib-tasks, lib-todos, node-health, settings-nav, work-entry, worktree), measured in one environment against that
+// main: ja 480,853 B to 479,549 B (en 477,669 B to 476,385 B, zh-Hans 478,451 B to 477,198 B), 1,090 B of room.
+// #8380: the changes since used that room and put ja 569 B over (en 478,073 B, ja 481,208 B, zh-Hans 478,862 B).
+// The budget stays. Recovery cards and refusal notices, the external-image consent gate, and the archived-agents and
+// script-request routes load on intent. Their words, and other strings used only by already-lazy components, live in
+// client-rest beside those components rather than in a whole startup namespace. On main 196aacec7e, after later
+// changes had also reduced the first screen, the matched before/after counts are en 476,559 B to 473,866 B,
+// ja 479,767 B to 476,944 B, zh-Hans 477,391 B to 474,647 B: 3,695 B of room, up from 872 B.
+// #8261: the permission modes a provider lists (the composer's switch and the header's menu on Paseo's Grok, OpenCode
+// and Codex chats, New Agent's rule in lib/launcher-models.ts) add 418 B to ja. Against the same main (1a5722542c,
+// ja 569 B over) it kept the budget on its own: Session info is a chunk of its own, loaded on its first open
+// (views/chat/SessionInfoDialog.tsx, with a Persona conversation's standing permissions), and its words a namespace of
+// their own (chat-sessioninfo, out of chat-sessiondialogs): ja 481,208 B to 480,451 B (en 478,073 B to 477,315 B,
+// zh-Hans 478,862 B to 478,105 B). On top of #8380, merged with main 1941e2e779: en 473,455 B, ja 476,517 B, zh-Hans
+// 474,236 B, 4,122 B of room.
+// The sessions list's invalidation throttle (lib/session-list.ts, one read per 2 s hint window instead of one per
+// hint) takes 59 B of that room in ja, measured in one environment against its own main (ja 480,249 B to 480,308 B;
+// en 476,545 B to 476,604 B, zh-Hans 477,527 B to 477,586 B). The budget stays.
+// Parallel Agent worktrees add a Run again action and its shared launcher wiring; the measured first screen is
+// en 477,537 B, ja 480,666 B, zh-Hans 478,356 B, so the budget accounts for the 27 B ja overage.
+// #9146: a table cell's short code chips kept whole (ui/ReplyBlocks.tsx rehypeLinkedCode marks them data-chip; styles.css
+// keeps them on one line) add 69 B in each language, measured in one environment against main c53557621 (ja 480,666 B
+// to 480,735 B; en 477,537 B to 477,606 B, zh-Hans 478,356 B to 478,425 B). The cells' 40em cap is the same bytes.
+// #9175: the inbox reads the hub's deltas (lib/inbox.ts, its cursor and applyInboxDelta), 124 B in ja; the Feishu card
+// text (cardText) moves to the Inbox page's lib/inbox-page.ts and takes 150 B off: ja 480,666 B to 480,640 B (en
+// 477,537 B to 477,511 B, zh-Hans 478,356 B to 478,330 B), measured in one environment against main 576970b459; merged
+// with main 27a828ec48 (#9146 above): en 477,579 B, ja 480,708 B, zh-Hans 478,398 B, 27 B of room.
+// #9215: a paged list keeps Load more on screen while it refreshes (lib/session-list.ts loadingMore, read by the flat
+// list), a busy fleet's hints wait for a window counted from when the last read came back, and a reconnect reads the
+// Agents list at once. 80 B in ja, measured in one environment against main 211207fd5f: ja 480,708 B to 480,788 B
+// (en 477,579 B to 477,659 B, zh-Hans 478,398 B to 478,478 B). The budget takes the 53 B over.
+// #9158 (UI version 8) adds 84 B in each language, measured in one environment against main b802a4d51c (ja 480,788 B to
+// 480,872 B; en 477,659 B to 477,743 B, zh-Hans 478,478 B to 478,562 B): readView keeps the columns layout and a
+// section's span, icon, link and columns (lib/extension-ui.ts readSection8), as it reads every other field, because the
+// assistant's cards read views on the first screen too. Drawing them is a chunk loaded on intent (ViewBody8.tsx).
+// The task-chat model display and supervisor follow-up (#9248) adds 75 B in ja; the measured first screen is
+// en 477,818 B, ja 480,947 B, zh-Hans 478,637 B, so the budget accounts for that overage.
+// Paseo workspace pins (#9300), after sharing the pin comparator and reusing sorted subtree summaries, add 39 B:
+// en 477,857 B, ja 480,986 B, zh-Hans 478,676 B. The budget accounts for this measured feature delta.
+// Agent-only task-row status and separate to-do chips (#6492), measured against main 3324a7323c in the same environment:
+// en 478,843 -> 479,284 B, ja 481,979 -> 482,430 B, zh-Hans 479,676 -> 480,113 B. The budget adds 424 B of ja's measured
+// 451 B feature delta, using 27 B of main's 123 B of room and keeping 96 B rather than adding any new room.
+// #9283: an extension's sidebar entries and an open page's header drawn from the last places list at first paint
+// (lib/extension-slots.ts keeps it under lib/feed-cache.ts's hub and sign-in scope; it is read at startup, so it is
+// first-screen code, in the shared chunk that holds extension-slots) add 178 B in each language, measured in one
+// environment against main 96a337b73: ja 480,986 B to 481,164 B (en 477,857 B to 478,035 B, zh-Hans 478,676 B to
+// 478,854 B). The page's last view is drawn from a chunk of its own (lib/extension-view-cache.ts, with ExtensionView).
+// #9337 (UI version 9) takes 99 B of that room in each language, measured in one environment against main 2491fb513 (ja
+// 480,827 B to 480,926 B; en 477,709 B to 477,808 B, zh-Hans 478,522 B to 478,621 B): readView keeps a tile's gauge when
+// its ratio is a finite number (lib/extension-ui-v6.ts readTile), as the assistant's cards read views on the first screen
+// too; the ratio's bounds, its unit and the label are checked where the ring is drawn, a chunk loaded on intent
+// (ViewBody9.tsx). The budget stays.
+// #9071: the start page adds 348 B in each language, measured in one environment against main c11cdb8e3 (ja 480,926 B
+// to 481,274 B; en 477,808 B to 478,156 B, zh-Hans 478,621 B to 478,969 B): an opening at the root address goes to the
+// chosen page before the first paint, the hub's choice is read at the hello, and the sidebar gives way to the main chat
+// when that page is not there (lib/start-page.ts). Its setting is in the Settings chunk. Main's room is kept on top.
+// #9071 groups add 590 B in each language, measured in one environment against main 2b81cbc72, which has the start page
+// (ja 481,286 B to 481,876 B; en 478,168 B to 478,758 B, zh-Hans 478,981 B to 479,571 B): the sidebar draws each group of
+// pages as its own folding section (lib/sidebar-pages.ts arrangeSections, views/Sidebar.tsx PageGroup), and the
+// arrangement goes to and from the hub with the start page (lib/start-page.ts). The editor is in the Settings chunk.
+// Main's room is kept on top.
+// #9132: a finished reply's Sources row is a chunk of its own (views/chat/TurnSources.tsx with lib/turn-sources.ts and
+// its words); the first screen keeps only SegmentView's check for a web call and the lazy entry, the smallest of four
+// layouts tried (mounting it under every exchange, or riding the reply bar's chunk, cost more). 85 B in ja, measured in
+// one environment against main 21cd52cc2 (ja 482,104 B to 482,189 B; en 478,990 B to 479,075 B, zh-Hans 479,859 B to
+// 479,944 B). Main had 422 B of room; the budget stays.
+// #9751: Just finished (lib/agent-groups.ts justFinished, the paged list's section in lib/session-groups.ts, the seen
+// outbox's unseen rows in lib/seen-outbox.ts) adds 112 B in ja, measured in one environment against main 7f756aa00a (ja
+// 482,373 B to 482,485 B; en 479,275 B to 479,391 B, zh-Hans 480,079 B to 480,221 B). Main had 153 B of room; the
+// budget stays.
+// #9053: the Inbox section bar adds 9 B in each language, measured in one environment against main a2531b0b62 (ja
+// 482,485 B to 482,494 B; en 479,391 B to 479,400 B, zh-Hans 480,221 B to 480,230 B): two of atoms' hard-coded sizes
+// become the named one they equal, which pays the font ratchet for CountBadge's. Everything else is in the Inbox page's
+// chunk: CountBadge (ui/CountBadge.tsx; 131 B in atoms against main 094253763d), its Needs-you tone in the existing
+// --attention utility the sidebar's counts use until #4653 brings the blue (its text token was 29 B in the token table
+// alone, more in the CSS), the grouping button with its mark (IconButton's menu attributes and the icon set's mark took
+// 43 B), the bar's own copies of the edge fade's widths and the arrow keys' step (up to 131 B in the App chunk), and
+// spacing classes the CSS already has (a new one took 44 B). The budget stays.
+// 2026-11-17 (#9847): #9784 landed on a main that had moved since its measurement and added 270 B in ja, not 112 B
+// (main 6fc9e85a00~1: ja 482,373 B; 6fc9e85a00: ja 482,643 B, en 479,549 B, zh-Hans 480,379 B), 117 B over the budget,
+// so main stopped building. The budget is main's ja size plus 40 B; taking those bytes back off the first screen is
+// separate work.
+// #10226: Developing Persona's To-dos view shadow reads today's triage through App's module (App.tsx re-exports three of
+// lib/todo-triage.ts's functions; a direct import from the recorder's chunk split lib/todo-triage.ts into a chunk of its
+// own, about 700 B). 49 B in each language, measured in one environment against main d5050affc5 (ja 482,098 B to
+// 482,147 B; en 478,979 B to 479,028 B, zh-Hans 479,841 B to 479,890 B). The budget stays.
+// 2026-11-18 (#10538): #10524 (ja 482,147 B to 482,619 B) and #10504 (to 482,722 B) left main's ja first screen 39 B over
+// the budget, so main stopped building. The main conversation's readiness help (views/assistant/ReadinessHelp.tsx, a
+// lazyOverlay started once something that opens it is on screen) and its assistant-readiness words left the first screen:
+// ja 482,722 B to 481,367 B, en 479,634 B to 478,331 B, zh-Hans 480,477 B to 479,146 B, measured in one environment
+// against main 51eb4b6a47. The budget stays.
+// #10358: a conversation an extension opened is marked with that extension's own icon and, while the icon is drawn,
+// named after it. The icon and the installed extensions it is picked from are a lazy chunk (ui/OpenerTile.tsx,
+// lib/opener-icons.ts); the first screen keeps OriginMark's check for an opener, the lazy entry, the opener handed to
+// the first message's line and the name the mark tells its row and that line. 251 B in each language, measured in one
+// environment against main 4732e71a5 (ja 481,367 B to 481,618 B; en 478,331 B to 478,582 B, zh-Hans 479,146 B to
+// 479,397 B), much of it the lazy entry's preload list: its chunks' names in the App chunk's dependency table, which
+// renumbers the entries of every lazy import after it, so the count moves with main (117 B against affb08b4d, 258 B
+// against c53addf40; before the names: 45 B against 04cffd3d4, 198 B against c2fec3548, 155 B against bda346e8c). Main
+// had 1,316 B of room; the budget stays.
+export const FIRST_SCREEN_BUDGET = 482_683;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
@@ -426,6 +561,23 @@ export async function firstScreenBytes(dir: string, screens: [string, string[]][
   return Promise.all(screens.map(async ([lang, files]): Promise<[string, number]> => [lang, (await Promise.all(files.map(sized))).reduce((sum, n) => sum + n, 0)]));
 }
 
+/** Room under FIRST_SCREEN_BUDGET below which the build warns (firstScreenRoom): about one page's new strings. */
+export const FIRST_SCREEN_LOW_ROOM = 1_024;
+
+/**
+ * The line the build prints under the budget: each language's first screen (firstScreenBytes) and the room left in
+ * the fullest one, `low` when that is under FIRST_SCREEN_LOW_ROOM. The room is what the next first-screen change may
+ * add; a change that needs more takes bytes off the first screen first (docs/web/web.md, "Running it").
+ */
+export function firstScreenRoom(bytes: [string, number][], budget = FIRST_SCREEN_BUDGET): { line: string; low: boolean } {
+  const [fullest, most] = bytes.reduce((a, b) => (b[1] > a[1] ? b : a));
+  const room = budget - most;
+  const n = (v: number) => v.toLocaleString("en-US");
+  const all = bytes.map(([lang, v]) => `${lang} ${n(v)} B`).join(", ");
+  const low = room < FIRST_SCREEN_LOW_ROOM;
+  return { line: `startup-preload: first screen ${all}; ${n(room)} B left under FIRST_SCREEN_BUDGET (${fullest})${low ? ", under FIRST_SCREEN_LOW_ROOM: take bytes off the first screen before adding to it" : ""}`, low };
+}
+
 /** The build's error when any language's first screen (firstScreenBytes) is over `budget`, else undefined. */
 export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_SCREEN_BUDGET): string | undefined {
   const over = bytes.filter(([, n]) => n > budget);
@@ -465,9 +617,32 @@ export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_
  * ceiling, so the budget is held here at 44,583 B — not raised to cover the drift, which the move removes instead.
  * #6542's model-pill re-read adds ~4 B to this tier, still far under the cap after the queue-panel reduction.
  * Every other lazy page loads on intent, not at idle; raise it on purpose, in the change that needs it.
+ * And 432 B for the image editor's fit geometry (#8746, 2026-11-16): the chat's image viewer left the first screen for
+ * a chunk loaded on its first open (views/chat/LazyImageViewer.tsx), which took en 476,644 B to 474,342 B, ja 479,772 B
+ * to 477,462 B and zh-Hans 477,452 B to 475,146 B against main at 3765c39bcb. The idle editor's fitIn / fitRect had
+ * come with the viewer on the first screen; they now come at idle in lib/image-fit.ts (44,543 B to 44,975 B), so the
+ * bytes a cold start fetches before idle still go down by about 1.9 KB. Main's 47 B of room is kept on top.
+ * And 34 B of minifier drift (#8778, 2026-11-16): main at 168f8311e sent 45,025 B at idle, 3 B over, with no idle page's
+ * own source changed; #8778's provider metadata adds nothing of its own there (its code is in the Settings chunk: 45,023 B
+ * with it). 31 B of room so the next main does not tip it.
+ * And 31 B of minifier drift (#9069, 2026-11-16): hiding the built-in assistant from the switcher adds nothing at idle
+ * (its code is in the Settings chunk and the locale catalogs). A CI build of the PR merged with main measured 45,500 B,
+ * 8 B over; a local build of the same tree measured 45,476 B against main's 45,478 B, each of the 11 idle files within
+ * 5 B of main's either way (the chunk names they import). 31 B of room on top of the CI figure.
  */
 // Preserve the 7 B feature allowance while retaining main's queue-panel idle reduction.
-export const IDLE_TIER_BUDGET = 44_590;
+// Conversation-deletion guards, file retirement and open-search invalidation (#6172):
+// main 86a706664 measures 44,981 B with identical Node/dependencies; integrated tree measured 45,492 B.
+// The 511 B increment consumes 75 B of existing room, adding exactly 436 B. Intent-loading and check logic stay intact.
+// And 291 B for UI version 8 (#9158): main b802a4d51c sends 45,484 B at idle, the same tree with #9158 45,775 B, in one
+// environment. The idle renderer (ViewBody.tsx) gains a section's rows side by side in Run, the head hook and the
+// lazy registration of ViewBody8.tsx; the columns grid and the section heads themselves (1.2 KB) load on intent with
+// the first view that has them. Main's 47 B of room is kept on top.
+// And 241 B for UI version 9 (#9337): main 2491fb513 sends 45,762 B at idle, the same tree with #9337 46,003 B, in one
+// environment. The idle renderer (ViewBody6.tsx's TileView) gains a gauge tile's label and meter role, the ring's
+// space while it loads and the lazy registration of ViewBody9.tsx; the ring itself (about 1 KB) loads on intent with
+// the first tile that has a gauge. Main's 60 B of room is kept on top.
+export const IDLE_TIER_BUDGET = 46_063;
 
 const gzip = promisify(gzipCompress);
 
@@ -524,14 +699,30 @@ export function idleImports(code: string): string[] {
 }
 
 /**
- * The client namespaces the first screen's chunks (`code`) name in a key literal ("ns.…", 'ns.…' or `ns.…) that
- * `startup` (src/i18n/startup-namespaces.json) leaves out, sorted. Their keys could be read before the rest of the
- * catalog is in (src/i18n/index.ts startI18n), so the build fails on any. Build time only.
+ * What the first screen's chunks (`code`) read of the client catalog (`keys`, each `namespace.name`) that `startup`
+ * (src/i18n/startup-namespaces.json, src/i18n/startup-keys.ts) leaves to the rest, as the entries to add, sorted. A
+ * key literal ("ns.name", 'ns.name' or `ns.name…) may be completed by a template or a wrapper's suffix, so it reads
+ * every key that begins with it: it asks for `ns.name` when any of those is left out, and for the whole namespace
+ * when it holds no name ("ns." + x). Those keys could be read before the rest of the catalog is in
+ * (src/i18n/index.ts startI18n), so the build fails on any. Build time only.
  */
-export function startupNamespaceGaps(code: string[], namespaces: Iterable<string>, startup: Iterable<string>): string[] {
-  const known = new Set(namespaces);
-  const listed = new Set(startup);
+export function startupGaps(code: string[], keys: Iterable<string>, startup: readonly string[]): string[] {
+  const inStartup = startupMatcher(startup);
+  const byNamespace = new Map<string, string[]>();
+  for (const key of keys) {
+    const ns = key.slice(0, key.indexOf("."));
+    const list = byNamespace.get(ns);
+    if (list) list.push(key);
+    else byNamespace.set(ns, [key]);
+  }
   const gaps = new Set<string>();
-  for (const c of code) for (const [, ns] of c.matchAll(/["'`]([a-z0-9][a-z0-9-]*)\./g)) if (known.has(ns) && !listed.has(ns)) gaps.add(ns);
-  return [...gaps].sort();
+  for (const c of code) {
+    for (const [, ns, name] of c.matchAll(/["'`]([a-z0-9][a-z0-9-]*)\.(\w*)/g)) {
+      const start = `${ns}.${name}`;
+      if (byNamespace.get(ns)?.some((key) => key.startsWith(start) && !inStartup(key))) gaps.add(name ? start : ns);
+    }
+  }
+  // An entry another one already takes ("ns" over "ns.a", "ns.a" over "ns.ab") is left out.
+  const covers = (wider: string, entry: string) => wider !== entry && (wider.includes(".") ? entry.startsWith(wider) : entry.startsWith(`${wider}.`));
+  return [...gaps].filter((entry) => ![...gaps].some((wider) => covers(wider, entry))).sort();
 }

@@ -222,7 +222,7 @@ func (s *Service) workTurnEnded(ctx context.Context, machine, sid string) {
 	}
 	s.wakeWaitersOn(machine, sid)
 	// On a timer: a goroutine asleep through the window would hold a stack per pending turn end (#2472).
-	time.AfterFunc(settleOf(s.triageCfg(ctx)), func() { s.workTurnSettled(ctx, machine, sid) })
+	s.afterTurnCompletion(settleOf(s.triageCfg(ctx)), func() { s.workTurnSettled(ctx, machine, sid) })
 }
 
 // workTurnSettled checks the turn after the settle window.
@@ -258,9 +258,17 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 		s.work.mu.Unlock()
 		return
 	}
-	s.work.tried[k] = triedTurn{c.UpdatedAt, time.Now()}
+	tried := triedTurn{turn: c.UpdatedAt, at: time.Now()}
+	if was, ok := s.work.tried[k]; ok && sameTurn(c, was.turn) {
+		tried.read = was.read // the turn as an attempt before read it: not read again (triageRead)
+	}
+	s.work.tried[k] = tried
 	if had && sameTurn(c, prev.TurnAt) && (prev.Work.Phase != "" || prev.Work.By != "") {
+		retired, recovered := retiredRetry(c, *prev)
 		s.work.mu.Unlock()
+		if recovered {
+			s.putWork(ctx, retired)
+		}
 		return
 	}
 	s.work.triaging[k] = true
@@ -274,6 +282,12 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 		s.work.mu.Lock()
 		delete(s.work.triaging, k)
 		delete(s.work.generation, k)
+		// A turn with its work state is not tried again: what was read of it goes (kept for the retries, triageRead).
+		if e, ok := s.work.entries[k]; ok && sameTurn(c, e.TurnAt) && s.work.tried[k].read != nil {
+			t := s.work.tried[k]
+			t.read = nil
+			s.work.tried[k] = t
+		}
 		s.work.mu.Unlock()
 	}()
 
@@ -334,7 +348,7 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 	}
 	if e.WakeAt != nil && e.Work.On == proto.WaitExternal && e.Work.ResetsAt == nil {
 		if ciWaitIntent(&e.Work) {
-			ask, reply := s.lastTurnOf(ctx, machine, c.SessionID)
+			ask, reply, _ := s.lastTurnOf(ctx, machine, c.SessionID)
 			startCIWatch(c, &e, time.Now(), ask, reply)
 		}
 		if e.Work.CI != nil {
@@ -424,6 +438,11 @@ func triageRules(c proto.Session, loc *time.Location, l i18n.Lang) (w *proto.Wor
 		return nil, "", true
 	}
 	if e := c.TurnError; e != "" {
+		if proto.SilentTurnKind(c.TurnErrorKind) {
+			// The hub's word on a task Agent's turn with no output (silent_turns.go): no model error to ask the user about
+			// and none to continue by itself. Its task's receipt has the "Continue"; a turn Persona's Stop ended stays stopped.
+			return nil, "", true
+		}
 		if sessionTurnErrorCode(c) == proto.TurnErrorModelFallbackUnavailable {
 			return &proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitUser,
 				Line: i18n.T(l, "assistant-readiness.model_fallback_unavailable_title"),
@@ -513,7 +532,7 @@ func turnErrorTransient(c proto.Session) bool {
 	switch c.TurnErrorKind {
 	case proto.TurnErrorTransient:
 		return true
-	case proto.TurnErrorUser, proto.TurnErrorUsageLimit:
+	case proto.TurnErrorUser, proto.TurnErrorUsageLimit, proto.TurnErrorNoOutput, proto.TurnErrorStopped:
 		return false
 	}
 	return transientError(c.TurnError)

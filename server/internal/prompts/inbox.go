@@ -9,6 +9,8 @@ type InboxItem struct {
 	// Described is what the item's kind is, as a plugin's connector says (its kind_descriptions); "" otherwise.
 	Described string
 	Context   string
+	// Latest is the newest Lark DM's preview, separate from the older conversation; "" for other sources.
+	Latest string
 }
 
 func RenderInboxItem(it InboxItem) string { return render("inbox/item", it) }
@@ -43,9 +45,35 @@ type InboxGroup struct {
 
 func RenderInboxGroup(g InboxGroup) string { return render("inbox/group", g) }
 
+// InboxSettled is the system prompt that says whether an open "Needs you" event is over, given what came after it in
+// its conversation (inbox/settled; assistant/inbox_settle.go).
+type InboxSettled struct {
+	Owner string // "" is the Chinese "you"
+}
+
+func RenderInboxSettled(s InboxSettled) string { return render("inbox/settled", s) }
+
+// InboxSettledInput is the event and the messages after it (inbox/settled_input), oldest first.
+type InboxSettledInput struct {
+	Title, Summary, Context string
+	Later                   []InboxSettledLine
+}
+
+// InboxSettledLine is one message after the event: At as "01-02 15:04" ("" unknown), Mine the owner's own; ReplyTo the
+// message it quotes and Thread the topic it is in (ids as the event's context names its messages), "" none.
+type InboxSettledLine struct {
+	At, Sender, Text, ReplyTo, Thread string
+	Mine                              bool
+}
+
+func RenderInboxSettledInput(in InboxSettledInput) string { return render("inbox/settled_input", in) }
+
 // InboxGroupInput is one batch as the model reads it, with the tool calls made so far (inbox/group_input).
 type InboxGroupInput struct {
-	Thread  string
+	Thread string
+	// Kind is who the other side of a direct chat is, in the connector's words (its kind_descriptions: a person, a bot
+	// or an app); "" for a group, whose messages carry their own mention markers.
+	Kind    string
 	New     []string // the new messages' ids
 	Context string   // their text, as the connector wrote it
 	Events  string   // the events tool's answer without a query (JSON)
@@ -258,6 +286,24 @@ type InboxFolderItem struct {
 }
 
 func RenderInboxFoldersInput(in InboxFoldersInput) string { return render("inbox/folders_input", in) }
+
+// InboxMergeTitle is the system prompt that writes one title for rows the user merged (inbox/merge_title, #7229).
+type InboxMergeTitle struct {
+	Owner string // "" is the Chinese "you"
+	// Language is the title's language by its own name; "" leaves it to the language of the titles.
+	Language string
+}
+
+func RenderInboxMergeTitle(m InboxMergeTitle) string { return render("inbox/merge_title", m) }
+
+// InboxMergeTitleInput is the rows that were merged, newest first (inbox/merge_title_input).
+type InboxMergeTitleInput struct {
+	Items []InboxFolderItem
+}
+
+func RenderInboxMergeTitleInput(in InboxMergeTitleInput) string {
+	return render("inbox/merge_title_input", in)
+}
 
 // SubscriptionKind is a source subscription's kind of Inbox item (#2039, inbox/kinds/subscription): what its items'
 // type line says (InboxItem.Described, through the round's kinds).

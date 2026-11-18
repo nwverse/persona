@@ -8,7 +8,7 @@ unchanged. Nothing constructs `RustCore` or loads the native library on the App'
 ## Toolchain and cached build
 
 Install rustup, the Rust 1.98.0 targets and NDK **29.0.14206865**. The build uses the NDK's LLVM clang/ar directly;
-`cargo-ndk` is not required. It supports an x86_64 Linux build host and the App's `minSdk 30`.
+`cargo-ndk` is not required. It supports macOS and x86_64 Linux build hosts (NDK prebuilt `darwin-x86_64` or `linux-x86_64`; Apple silicon still uses `darwin-x86_64`) and the App's `minSdk 30`.
 
 ```sh
 rustup target add --toolchain 1.98.0 aarch64-linux-android x86_64-linux-android
@@ -58,8 +58,28 @@ Enable `release.androidTest` in `beforeVariants` (AGP 9.5 does not create librar
 production app's debug and release settings are unchanged. The same debug test APK can replay all fixtures without R8.
 It measures 1,000 samples after 100 warm-ups, separately for `dispatch` including bincode encoding
 and `drain + decode + apply`; worker synchronization (`flush`) is outside both timed spans. The JSON report names the
-model, ABI, API, build ID and kernel page size and records p50/p99/max in microseconds. The runner pulls the JSON after
-a real pass. Emulator measurements are diagnostics, not physical-device performance evidence.
+model, ABI, API, build ID and kernel page size and records p50/p99/max in microseconds. The benchmark retains the
+50 µs / 1 ms p99 assertions. Its report status and raw nanosecond arrays are emitted before those assertions, so a
+failed budget leaves evidence rather than hiding it; the runner still exits nonzero and never treats the report as a
+pass. An unavailable external report falls back to that same status JSON.
+
+Two additional, explicitly diagnostic suites are available: `attribution` records separate encoding/JNI/queue/lock/
+decode/apply spans, real thread IDs, GC and scheduler counters; `control` measures the original public boundary without
+per-iteration `/proc`, GC, atomics or JSON work. Neither replaces the original benchmark or its budgets. The former's
+spans include instrumentation overhead and are not independent wall-clock samples. Successful diagnostic tests do not
+call `sendStatus`: AndroidJUnitRunner owns the final completion status. Their runner reads the nonce-fenced report
+file after completion. Only the original failing benchmark publishes a report-only status before its budget failure.
+
+```sh
+python3 -I native/app-core/scripts/android-device-test.py --serial <owned serial> --suite attribution \
+  --apk android/core/rustcore-android/build/outputs/apk/androidTest/release/rustcore-android-release-androidTest.apk \
+  --output android/core/rustcore-android/build/reports/device-attribution
+python3 -I native/app-core/scripts/android-device-test.py --serial <owned serial> --suite control \
+  --apk android/core/rustcore-android/build/outputs/apk/androidTest/release/rustcore-android-release-androidTest.apk \
+  --output android/core/rustcore-android/build/reports/device-control
+```
+
+Emulator measurements are diagnostics, not physical-device performance evidence.
 
 ```sh
 python3 -I native/app-core/scripts/android-device-test.py --serial <owned serial> --suite benchmark \

@@ -52,7 +52,7 @@ If you have an always-on computer, put the hub on it. A laptop works as the hub 
 | Apple Watch | Installs along with the iPhone version |
 | Web | Nothing to install: once the hub is set up, open the hub's address in a browser (explained below). On a computer you can also install it as an app ([web.md](../web/web.md), "On computers") |
 | Android | No public package yet; build it yourself ([android.md](../android/android.md)) |
-| Mac App | Frozen: it gets fixes, not new features ([mac.md](../apple/mac.md)). On a Mac, use the web app (it can be installed as an app); a Mac whose Agents Persona should reach also needs Persona Link ("Connect a computer" below) |
+| Desktop app | Electron around the hub-hosted web UI ([desktop.md](../desktop/desktop.md)); no local node is required just to chat or use Agents on another computer. A computer whose Agents Persona should reach also needs the separately installed Persona Link ("Connect a computer" below) |
 
 ## Install the hub: paste one command
 
@@ -63,10 +63,11 @@ The phone and web side never need the terminal; installing Claude Code on a comp
 2. Copy this command, paste it into the terminal and press Return:
 
    ```sh
-   curl -fsSL https://personaside.com/install.sh | sh -s -- --hub
+   curl -fsSL https://github.com/nwverse/persona/releases/latest/download/install.sh | sh -s -- --hub
    ```
 
-   It's the same command the Persona website shows ([personaside.com](https://personaside.com/#start); the site is in Chinese for now).
+   It installs the newest GitHub Release, and the hub it sets up updates itself from GitHub Releases. The Persona website
+   ([personaside.com](https://personaside.com/#start); in Chinese for now) shows the same command.
 
 3. It installs step by step: download and verify the program, set up the database, make it start at boot, run a check. It prints one line per finished step.
    Partway through it may ask once whether to use administrator rights, so the hub can run even when nobody is logged in; answer "yes" and type this computer's login password.
@@ -130,9 +131,9 @@ To add another computer (say, your Mac laptop), do it on the web:
 2. Choose that computer's system and give it a name, for example "My MacBook".
 3. Follow the on-screen instructions on that computer; each system is different:
    - **Linux**: copy the line on screen, open a terminal on that computer, paste, press Return. It installs Persona's background service and connects by itself.
-   - **Mac**: you first need Persona Link, a small menu bar App. There's no package yet, so you build it from source: that needs Xcode (several GB; the download can take over an hour) and Go, plus a few commands in the terminal. Follow [persona-link-install.md](persona-link-install.md) step by step.
-     Once installed, send the pairing link to that Mac (with **Copy Pairing Link** or **Share…**), click the Persona Link menu bar icon › **Pair…**, and paste it in.
-   - **Windows**: build two programs yourself, then paste one line in PowerShell ([windows.md](windows.md)). There's no package or tray app yet.
+   - **Mac**: you first need the independently installed Persona Link background service. There's no signed package yet, so you build its helpers from source: that needs Xcode and Go. Follow [persona-link-install.md](persona-link-install.md) step by step.
+     Once installed, send the pairing link to that Mac (with **Copy Pairing Link** or **Share…**) and use the optional Electron setup window or the `persona-link pair` command shown there. Link starts at login and does not need a menu bar app.
+   - **Windows**: build two programs yourself, then paste one line in PowerShell ([windows.md](windows.md)). The optional Electron desktop is separate from Link and is not required by its scheduled task.
 4. Once that computer connects, the same screen asks "A computer wants to join: <name>. Is it yours?". If it's yours click **It's mine**; if you don't recognize it click **No, remove**.
 
 Why confirm again: if someone else gets hold of the pairing link, their computer can connect too. Until you confirm, the computer gets none of your model keys and Persona won't do work on it; if it isn't confirmed within 24 hours, it's removed automatically.
@@ -202,3 +203,9 @@ For people comfortable with the command line. The commands and files behind each
 - A freshly installed hub only opens its TLS port on LAN IPv4; to connect directly from outside too, rerun `personad hub setup --outside`, see [network.md](network.md).
 - If you already run claude through aliases or functions in `~/.zshrc` or `~/.bashrc`, they're still discovered and selectable, and **Import** beside **Add provider** in **Settings › Model Providers** turns a computer's aliases into providers, keeping their settings; see [launchers.md](../integrations/launchers.md).
 - The APIs for main chat readiness and error codes are in [protocol.md](../protocol/protocol.md) ("Main chat readiness"); design and future plans are in [onboarding.md](../assistant/onboarding.md).
+
+### Sign in to a browser with your phone
+
+On the browser's sign-in page, open **Scan a code with Persona on your phone**. In Persona on your iPhone or Android phone, go to **Settings › Devices › Scan browser sign-in code** and scan the code. The phone shows the browser's name, which network the request came from, and that the browser gets full access. Tap **Allow sign-in** only if you are signing in to that browser yourself, right now. The phone then shows a two-digit number: type it in the browser, and the browser signs in with its own credential, which you can revoke any time in **Settings › Devices**.
+
+Never tell anyone that number. A wrong number cancels the sign-in; refresh the code to start again. A code lasts five minutes. The browser's name is whatever the browser called itself, so a request from the internet gets a warning on the phone. It needs a recent Persona app: an older iPhone app has no such item, and an older Android app asks you to update it. Pairing links and password sign-in still work as before. The protocol is in [protocol.md](../protocol/protocol.md) ("Browser QR sign-in").

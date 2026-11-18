@@ -9,7 +9,7 @@ use persona_core_runtime::wire::{self, Config};
 use persona_core_runtime::{Host, Runtime};
 
 #[cfg(feature = "ohos")]
-use napi_ohos::bindgen_prelude::{Error, Result, Status};
+use napi_ohos::bindgen_prelude::{Buffer, Error, FnArgs, Result, Status};
 #[cfg(feature = "ohos")]
 use napi_ohos::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
 
@@ -46,8 +46,9 @@ pub fn create(config: &[u8], host: Arc<dyn Host>) -> Result<i64> {
     let handle = NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
     let handle = i64::try_from(handle).map_err(|_| error("core handle space exhausted"))?;
     let mut map = lock();
-    map.get_or_insert_with(HashMap::new)
-        .insert(handle, Arc::new(Runtime::new(host)));
+    let mut runtime = Runtime::new(host);
+    runtime.set_explicit_shutdown();
+    map.get_or_insert_with(HashMap::new).insert(handle, Arc::new(runtime));
     Ok(handle)
 }
 
@@ -76,8 +77,14 @@ pub fn flush(handle: i64, timeout_ms: u32) -> Result<bool> {
 }
 
 pub fn close(handle: i64) -> Result<()> {
-    let mut map = lock();
-    map.as_mut().and_then(|map| map.remove(&handle));
+    let removed = {
+        let mut map = lock();
+        map.as_mut().and_then(|map| map.remove(&handle))
+    };
+    // Explicit close owns worker termination; a normal lease drop never joins the worker.
+    if let Some(runtime) = removed {
+        runtime.shutdown();
+    }
     Ok(())
 }
 
@@ -86,16 +93,38 @@ pub fn config() -> Vec<u8> {
 }
 
 #[cfg(feature = "ohos")]
+// The false const argument selects callee-unhandled callbacks: JavaScript receives no leading error argument.
+type ChangedCallback = ThreadsafeFunction<i64, (), i64, Status, false>;
+#[cfg(feature = "ohos")]
+type ChangedChatCallback = ThreadsafeFunction<FnArgs<(String, i64)>, (), FnArgs<(String, i64)>, Status, false>;
+#[cfg(feature = "ohos")]
+type EffectsCallback = ThreadsafeFunction<Buffer, (), Buffer, Status, false>;
+
+#[cfg(feature = "ohos")]
 pub struct CoreHost {
-    changed: Arc<ThreadsafeFunction<i64>>,
-    effects: Arc<ThreadsafeFunction<Vec<u8>>>,
+    changed: Arc<ChangedCallback>,
+    changed_chat: Option<Arc<ChangedChatCallback>>,
+    effects: Arc<EffectsCallback>,
 }
 
 #[cfg(feature = "ohos")]
 impl CoreHost {
-    pub fn new(changed: ThreadsafeFunction<i64>, effects: ThreadsafeFunction<Vec<u8>>) -> Arc<Self> {
+    pub fn new(changed: ChangedCallback, effects: EffectsCallback) -> Arc<Self> {
         Arc::new(CoreHost {
             changed: Arc::new(changed),
+            changed_chat: None,
+            effects: Arc::new(effects),
+        })
+    }
+
+    pub fn with_changed_chat(
+        changed: ChangedCallback,
+        changed_chat: ChangedChatCallback,
+        effects: EffectsCallback,
+    ) -> Arc<Self> {
+        Arc::new(CoreHost {
+            changed: Arc::new(changed),
+            changed_chat: Some(Arc::new(changed_chat)),
             effects: Arc::new(effects),
         })
     }
@@ -106,13 +135,25 @@ impl Host for CoreHost {
     fn changed(&self, version: u64) {
         // This is a wake-up only. The patch's u64 version stays in bincode; do not silently wrap a NAPI number.
         let Ok(version) = i64::try_from(version) else { return };
-        let _ = self.changed.call(Ok(version), ThreadsafeFunctionCallMode::NonBlocking);
+        let _ = self.changed.call(version, ThreadsafeFunctionCallMode::NonBlocking);
+    }
+
+    fn changed_chat(&self, chat: &str, version: u64) {
+        let Some(callback) = &self.changed_chat else {
+            self.changed(version);
+            return;
+        };
+        let Ok(version) = i64::try_from(version) else { return };
+        let _ = callback.call(
+            FnArgs::from((chat.to_owned(), version)),
+            ThreadsafeFunctionCallMode::NonBlocking,
+        );
     }
 
     fn run(&self, effect: &[u8]) {
         let _ = self
             .effects
-            .call(Ok(effect.to_vec()), ThreadsafeFunctionCallMode::NonBlocking);
+            .call(Buffer::from(effect.to_vec()), ThreadsafeFunctionCallMode::NonBlocking);
     }
 }
 

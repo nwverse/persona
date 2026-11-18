@@ -1,7 +1,6 @@
 package hub
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -58,15 +57,11 @@ func (h *Hub) newShell(w http.ResponseWriter, r *http.Request, m *Machine) {
 		writeCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.T(h.requestLang(r), "hub-fileedit.outdated_feature", i18n.Args{"name": m.cfg.Name}), nil)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-	defer cancel()
-	var out json.RawMessage
-	if err := m.call(ctx, "panes.new", body, &out); err != nil {
-		callErr(w, err)
+	out, ok := h.callNode(w, r, m, "panes.new", body, 30*time.Second, "", nil)
+	if !ok {
 		return
 	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	_, _ = w.Write(out)
+	writeRawJSON(w, out)
 }
 
 // The terminal browser's and the sidebar's context menus change things on a computer (docs/integrations/terminal.md "Node menus"):
@@ -148,18 +143,14 @@ func (h *Hub) nodeAction(a nodeAction) http.HandlerFunc {
 				}
 			}
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), a.timeout)
-		defer cancel()
-		var out json.RawMessage
-		if err := m.call(ctx, a.method, params, &out); err != nil {
-			callErr(w, err)
+		out, ok := h.callNode(w, r, m, a.method, params, a.timeout, "", nil)
+		if !ok {
 			return
 		}
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		if len(out) == 0 {
 			out = json.RawMessage(`{}`)
 		}
-		_, _ = w.Write(out)
+		writeRawJSON(w, out)
 	})
 }
 
@@ -197,7 +188,8 @@ var nodeActions = map[string]nodeAction{
 	// user says so (the node refuses uncommitted work and unmerged branches unless force, which the user confirms).
 	"worktree/add":    {method: "worktree.add", timeout: 150 * time.Second, required: []string{"cwd"}, optional: []string{"branch", "name_hint", "kind", "locale"}},
 	"worktree/status": {method: "worktree.status", timeout: 30 * time.Second, required: []string{"cwd"}, optional: []string{"kind"}},
-	"worktree/remove": {method: "worktree.remove", timeout: 90 * time.Second, required: []string{"path"}, optional: []string{"kind"}, flags: []string{"delete_branch", "force"}},
+	// remove on a runtime engine waits for its archive (node runtimeRemoveDeadline, 145 s), as delete does.
+	"worktree/remove": {method: "worktree.remove", timeout: 150 * time.Second, required: []string{"path"}, optional: []string{"kind"}, flags: []string{"delete_branch", "force"}},
 }
 
 // paneRoutes are the terminal browser's (panes, tabs) and the "New worktree…" dialog's.

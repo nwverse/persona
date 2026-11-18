@@ -23,6 +23,7 @@ import persona.core.domain.lines.ToolCall
 import persona.core.domain.lines.WorkItem
 import persona.core.domain.sort.AgentSession
 import persona.core.domain.sort.foldedSubtasks
+import persona.core.domain.sort.foldRows
 
 // Tasks dispatched from an assistant conversation (docs/assistant/unified-entry.md; iOS TasksStore / Shared/Tasks.swift, web
 // lib/feed.ts): the todos that are tasks, the plans, each conversation's feed, and where those go among the chat's lines.
@@ -74,11 +75,17 @@ fun receiptState(item: FeedItem): String = when (val st = item.field("state")) {
  *  lines beside it; the receipt's own title (the name when it was written) once the to-do is gone; else null. */
 fun receiptTitle(item: FeedItem, todo: Todo?): String? = todo?.title?.trim()?.ifEmpty { null } ?: item.field("title")
 
-/** Why the model service cut the agent off (#1516), in words, and whether "Continue" can help; null when it was not. */
-data class Interruption(val reason: CoreText, val canContinue: Boolean) {
+/** Why the model service cut the agent off (#1516), in words, and whether "Continue" can help; null when it was not.
+ *  [plain]: no model service error, [reason] being the hub's own sentence, said as it is: a turn with no output at all
+ *  (turn_error_kind `no_output`, or `stopped` when Persona's Stop interrupted it with its conversation, #10187). */
+data class Interruption(val reason: CoreText, val canContinue: Boolean, val plain: Boolean = false) {
     companion object {
+        /** The hub's own kinds for a turn with no output (#10187): its turn_error is a sentence, not an API error. */
+        private val silentKinds = setOf("no_output", "stopped")
+
         fun of(s: Session?): Interruption? {
             if (s?.interrupted != true) return null
+            if (s.turnErrorKind in silentKinds) return Interruption(CoreText.plain(s.turnError.orEmpty().trim()), true, plain = true)
             val info = ApiErrorInfo.parse(s.turnError)
             return Interruption(info?.reason ?: CoreText.of(Key.ApiFailed), info?.needsAction != true)
         }
@@ -114,8 +121,16 @@ sealed interface TaskNow {
     }
 }
 
-/** A reminder or an event the assistant added on the phone, read from its tool call. */
-data class QuickResult(val reminder: Boolean, val callId: String, val title: String, val time: String?, val place: String?) {
+/**
+ * A reminder or an event the assistant added on the phone, read from its tool call (iOS `QuickResult`): a result whose
+ * `id` is missing or empty draws no card at all, as on iOS.
+ *
+ * [itemId] is the id of the item the phone made, which Undo deletes. The phone's calendar ids are numbers, so a result
+ * whose id is not one (an iPhone's event or reminder) still draws its card, without an Undo button.
+ */
+data class QuickResult(
+    val reminder: Boolean, val callId: String, val itemId: Long?, val title: String, val time: String?, val place: String?,
+) {
     companion object {
         fun of(call: ToolCall): QuickResult? {
             val short = call.name.substringAfterLast("__")
@@ -128,11 +143,19 @@ data class QuickResult(val reminder: Boolean, val callId: String, val title: Str
             if (result.isError == true) return null
             val o = runCatching { JsonCodec.parseToJsonElement(result.text.orEmpty()) as? JsonObject }.getOrNull() ?: return null
             fun s(k: String) = (o[k] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
-            if (s("id").isNullOrEmpty()) return null
-            return QuickResult(reminder, call.use.id, s("title").orEmpty(), s(if (reminder) "due" else "start"), s(if (reminder) "list" else "calendar"))
+            // No card without an id (iOS QuickResult.init), so an old or broken result says nothing it cannot back.
+            val id = s("id")?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+            return QuickResult(reminder, call.use.id, id.toLongOrNull()?.takeIf { it > 0 },
+                s("title").orEmpty(), s(if (reminder) "due" else "start"), s(if (reminder) "list" else "calendar"))
         }
     }
 }
+
+/**
+ * Undo on a quick result (iOS `TasksStore.undone`): [Added] when the phone still has the item, [Undoing] while the
+ * delete runs, [Undone] once it is off the phone. A failure goes back to [Added].
+ */
+enum class QuickResultUndo { Added, Undoing, Undone }
 
 /** What the assistant's conversation adds to the transcript's lines, drawn by the chat's host. */
 sealed interface AssistantExtra {
@@ -241,14 +264,15 @@ object AssistantLines {
  * above that: as one of these agents, or as an agent of a task not done, whose task the dock shows (#4769,
  * [foldedSubtasks]). One that needs the user stays, and so does a working one whose creator the dock does not show.
  */
-fun dockAgents(conversation: String, main: String?, sessions: List<Session>, todos: List<Todo>): List<Session> {
+fun dockAgents(conversation: String, main: String?, sessions: List<Session>, todos: List<Todo>, hierarchy: Boolean = false): List<Session> {
     if (main.isNullOrBlank() || conversation != main) return emptyList()
     val taskAgents = todos.filter { !it.origin.isNullOrBlank() && !it.isDone }.flatMap { t -> t.activeAgents.map { it.key } }.toSet()
     val manual = todos.filter { it.origin.isNullOrBlank() }.map { it.id }.toSet()
-    val going = sessions.filter { !it.assistant && (it.agentState == AgentState.NeedsYou || it.agentState == AgentState.Working) }
+    val rows = foldRows(sessions.map(::AgentSession), hierarchy)
+    val going = rows.map { it.session }.filter { !it.assistant && (it.agentState == AgentState.NeedsYou || it.agentState == AgentState.Working) }
         .filter { it.key !in taskAgents && (it.todo?.id?.takeIf(String::isNotBlank)?.let { id -> id in manual } ?: true) }
     val shown = going.mapTo(HashSet()) { it.key } + taskAgents
-    val folded = foldedSubtasks(sessions.map(::AgentSession)) { it.session.key in shown }
+    val folded = foldedSubtasks(rows) { it.session.key in shown }
     return going.filterNot { it.key.path in folded }
         .sortedWith(compareBy<Session> { it.agentState.priority }.thenByDescending { it.stateSince.orEmpty() }.thenBy { it.key.path })
 }

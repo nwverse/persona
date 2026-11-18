@@ -1,6 +1,7 @@
 import BeautifulUI
 import MarkdownUI
 import SwiftUI
+import PersonaWire
 
 extension InteractionKind {
     var title: String {
@@ -27,13 +28,17 @@ extension InteractionKind {
 extension Interaction {
     /// The assistant asks through its ask_user tool: it is Persona asking, not a Claude Code agent; a Codex card names
     /// Codex.
-    var title: String {
+    var title: String { title(session: nil) }
+
+    /// `title`, its agent named as `session`'s row names it where the card names only the engine that runs it
+    /// (`agentName(session:)`, #8144).
+    func title(session: Session?) -> String {
         if toolName == "ask_user" { return String(localized: "Persona Has a Question") }
         if isSecretRun { return secretRunTitle }
         if kind == .elicitation {
             return elicitation?.isURL == true ? String(localized: "MCP Link Needs You") : String(localized: "MCP Form Needs You")
         }
-        if let name = agentName {
+        if let name = agentName(session: session) {
             switch kind {
             case .question: return String(localized: "\(name) Has a Question")
             case .permission: return String(localized: "\(name) Is Waiting for Your Approval")
@@ -81,6 +86,19 @@ extension Interaction {
         case nil, "", "claude": nil
         default: agentLabelHint ?? agent
         }
+    }
+
+    /// The card names only the engine that runs its agent, not the provider (`Session.namesOnlyEngine`): a Paseo card
+    /// with no label of its own, or the node's "Paseo", which a node gave every card of a provider other than Claude
+    /// Code before its rows' labels reached the cards (#8142). Its session's row says who answers.
+    var namesOnlyEngine: Bool { Session.namesOnlyEngine(agent: agent, label: agentLabelHint) }
+
+    /// `agentName`, with the provider's name from `session`'s row where the card names only the engine (#8144): a Paseo
+    /// card asks "Tell Grok what to do instead", never Paseo. A card that carries its provider's label keeps it.
+    func agentName(session: Session?) -> String? {
+        guard let name = agentName else { return nil }
+        guard namesOnlyEngine, let session else { return name }
+        return session.agentLabel
     }
 }
 
@@ -274,6 +292,33 @@ struct RecommendedTag: View {
 /// Set by a card's form while a field in it has the keyboard (on a Mac, the focus) and the form ends with what the
 /// field is for (the password card's Run and Decline): the card keeps that end in sight, also as the keyboard takes
 /// the page's room (#1581).
+/// How many of a question card's questions are not answered yet, as its form counts them (#9392): the card's folded line
+/// says it. Nil: the form does not count (BeautifulUI's card holds its answers itself).
+struct QuestionsLeft: PreferenceKey {
+    static let defaultValue: Int? = nil
+    static func reduce(value: inout Int?, nextValue: () -> Int?) { value = nextValue() ?? value }
+}
+
+/// Where each pending card's message is in the chat, for its View in Chat (#9392): the chat finds them and keeps this
+/// up to date; a card reads only its own. A class, so the environment holding it never changes and redraws no card.
+@Observable final class CardSources {
+    /// The message each card is about (the item's id), by the card's interaction id.
+    var items: [String: String] = [:]
+    /// Brings the chat to that message.
+    @ObservationIgnored var open: ((String) -> Void)?
+
+    /// What View in Chat does for the card, or nil where the chat has not found its message.
+    func opener(for interaction: String) -> (() -> Void)? {
+        guard let item = items[interaction], let open else { return nil }
+        return { open(item) }
+    }
+}
+
+extension EnvironmentValues {
+    /// The chat's `CardSources`; nil outside a chat (a card in a sheet), where a card has no View in Chat.
+    @Entry var cardSources: CardSources? = nil
+}
+
 struct CardFormKeepsEnd: PreferenceKey {
     static let defaultValue = false
     static func reduce(value: inout Bool, nextValue: () -> Bool) { value = value || nextValue() }
@@ -284,6 +329,8 @@ struct CardFormKeepsEnd: PreferenceKey {
 struct InteractionPanel: View {
     @Environment(AppModel.self) private var model
     var interaction: Interaction
+    /// Whose card it is when it is not the chat's own session's: a side session's card in its parent's chat (#7944).
+    var from: String? = nil
     @State private var collapsed = false
     @State private var formHeight: CGFloat = 0
     /// What the page has (PendingCards measures it): the form's cap. Not `containerRelativeFrame`: inside the cards'
@@ -302,6 +349,10 @@ struct InteractionPanel: View {
     @State private var formPosition = ScrollPosition(edge: .top)
     /// The suggested rule's line under the form (#5802) while it is drawn: what of the card the form may not have.
     @State private var suggestionHeight: CGFloat = 0
+    /// The questions not answered yet in a question card of several (`QuestionsLeft`): the folded line says how many.
+    @State private var questionsLeft: Int?
+    /// The message the card is about, where the chat can find it (#9392): View in Chat goes there.
+    @Environment(\.cardSources) private var sources
 
     /// The form's cap while the keyboard is up (`cardFits`): the area less the card's header and margins; at least a tap
     /// target, so a sliver of a form never shows (a small iPhone with the shell's composer leaves the cards little more).
@@ -342,9 +393,11 @@ struct InteractionPanel: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.m) {
+        VStack(alignment: .leading, spacing: 0) {
             if !headerAway { header }
-            if !collapsed {
+            // Folded, the form stays in the card at no height (#9392): a question of several keeps its page and its
+            // picks, and folding and unfolding animate its height, not a cut between two cards.
+            VStack(alignment: .leading, spacing: Theme.Space.m) {
                 if ownsScroll {
                     // These forms own their one scroll area and keep their answers outside it (#4839, #6605).
                     form.environment(\.cardFormCap, formCap)
@@ -378,7 +431,14 @@ struct InteractionPanel: View {
                                    card: .interaction(uid: interaction.uid, manager: interaction.manager),
                                    group: interaction.group, height: $suggestionHeight)
             }
+            .padding(.top, headerAway || collapsed ? 0 : Theme.Space.m)
+            .frame(height: collapsed ? 0 : nil, alignment: .top)
+            .clipped()
+            .opacity(collapsed ? 0 : 1)
+            .allowsHitTesting(!collapsed)
+            .accessibilityHidden(collapsed)
         }
+        .onPreferenceChange(QuestionsLeft.self) { questionsLeft = $0 }
         .padding(.horizontal, Theme.Space.l)
         .padding(.top, Theme.Space.m)
         .padding(.bottom, Theme.Space.l)
@@ -389,52 +449,103 @@ struct InteractionPanel: View {
 
     /// The title, ⋯ and fold; a tap anywhere on it folds the card.
     private var header: some View {
-        HStack(spacing: Theme.Space.sm) {
-            ThemedIcon(interaction.symbol)
-                .font(Theme.Font.labelStrong)
-                .foregroundStyle(StatusPalette.needsYou.dot)
-            Text(panelTitle).font(Theme.Font.labelStrong).foregroundStyle(StatusPalette.needsYou.text)
-                .lineLimit(1)
-            VoiceAskMark(interaction: interaction) // Asking by Voice (docs/assistant/voice.md 1.2 H)
-            if collapsed {
-                Text(previewText).font(Theme.Font.secondary).foregroundStyle(.primary).lineLimit(1)
-            }
-            Spacer(minLength: 4)
-            if interaction.kind == .plan && !collapsed {
-                Button { showFullPlan = true } label: {
-                    ThemedIcon(Theme.Icon.enlarge)
+        VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+            HStack(spacing: Theme.Space.sm) {
+                ThemedIcon(interaction.symbol)
+                    .font(Theme.Font.labelStrong)
+                    .foregroundStyle(StatusPalette.needsYou.dot)
+                Text(panelTitle).font(Theme.Font.labelStrong).foregroundStyle(StatusPalette.needsYou.text)
+                    .lineLimit(1)
+                VoiceAskMark(interaction: interaction) // Asking by Voice (docs/assistant/voice.md 1.2 H)
+                if collapsed {
+                    Text(previewText).font(Theme.Font.secondary).foregroundStyle(.primary).lineLimit(1)
+                        .layoutPriority(-1)
+                    // How many of a card's several questions are still to answer (#9392).
+                    if let left = foldedQuestionsLeft {
+                        Text("\(left) left [Question Card]")
+                            .font(Theme.Font.captionMedium).foregroundStyle(.secondary).lineLimit(1).fixedSize()
+                            .accessibilityIdentifier("interaction-questions-left")
+                    }
+                }
+                Spacer(minLength: 4)
+                // Back to the message the card is about (#9392): the chat goes there and the card folds out of the way.
+                if !collapsed, let open = sources?.opener(for: interaction.id) {
+                    Button {
+                        Haptics.tap()
+                        withAnimation(Theme.Motion.standard) { collapsed = true }
+                        open()
+                    } label: {
+                        Text("View in Chat [Question Card]").lineLimit(1).fixedSize()
+                            .contentShape(.rect.inset(by: -Theme.Space.s)) // a finger's room without a taller row
+                    }
+                    .buttonStyle(.plain)
+                    .font(Theme.Font.captionMedium)
+                    .foregroundStyle(Theme.accent)
+                    .accessibilityIdentifier("interaction-source")
+                }
+                if interaction.kind == .plan && !collapsed {
+                    Button { showFullPlan = true } label: {
+                        ThemedIcon(Theme.Icon.enlarge)
+                            .font(Theme.Font.captionStrong)
+                            .foregroundStyle(.secondary)
+                            .scaledFrame(width: Theme.Size.wellXS, height: Theme.Size.wellXS)
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("View plan full screen")
+                }
+                if interaction.toolName != "ask_user" {
+                    Menu {
+                        Button { Task { await model.resolve(interaction, .dismissed) } } label: {
+                            Label("Handle in Terminal on Computer", systemImage: Theme.Icon.machine)
+                        }
+                    } label: {
+                        ThemedIcon(Theme.Icon.more)
+                            .font(Theme.Font.captionStrong)
+                            .foregroundStyle(.secondary)
+                            .scaledFrame(width: Theme.Size.wellXS, height: Theme.Size.wellXS)
+                            .contentShape(.rect)
+                    }
+                    .labelOnlyMenu() // just the ⋯, next to the fold ⌄
+                    .accessibilityIdentifier("interaction-menu")
+                    #if os(macOS)
+                    .help("More")
+                    #endif
+                }
+                // The fold, a button of its own (the whole row folds the card too): in a circle, so it reads as one.
+                Button(action: toggleFold) {
+                    ThemedIcon(Theme.Icon.expand)
                         .font(Theme.Font.captionStrong)
                         .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(collapsed ? 180 : 0))
                         .scaledFrame(width: Theme.Size.wellXS, height: Theme.Size.wellXS)
+                        .background(Theme.Fill.chip, in: .circle)
                         .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("View plan full screen")
+                .accessibilityLabel(collapsed ? Text("Expand [Question Card]") : Text("Collapse [Question Card]"))
+                .accessibilityIdentifier("interaction-fold")
             }
-            Menu {
-                Button { Task { await model.resolve(interaction, .dismissed) } } label: {
-                    Label("Handle in Terminal on Computer", systemImage: Theme.Icon.machine)
-                }
-            } label: {
-                ThemedIcon(Theme.Icon.more)
-                    .font(Theme.Font.captionStrong)
-                    .foregroundStyle(.secondary)
-                    .scaledFrame(width: Theme.Size.wellXS, height: Theme.Size.wellXS)
-                    .contentShape(.rect)
+            // A side session's card in its parent's chat says whose it is: "From Side Session · <title>" (#7944).
+            if let from {
+                Text(from).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
             }
-            .labelOnlyMenu() // just the ⋯, next to the fold ⌄
-            #if os(macOS)
-            .help("More")
-            #endif
-            ThemedIcon(Theme.Icon.expand)
-                .font(Theme.Font.captionStrong)
-                .foregroundStyle(.secondary)
-                .rotationEffect(.degrees(collapsed ? 180 : 0))
-                .scaledFrame(width: Theme.Size.wellXS, height: Theme.Size.wellXS)
         }
         .contentShape(.rect)
-        .onTapGesture { withAnimation(Theme.Motion.standard) { collapsed.toggle() } }
+        .onTapGesture(perform: toggleFold)
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { headerHeight = $0 }
+    }
+
+    private func toggleFold() {
+        Haptics.tap()
+        withAnimation(Theme.Motion.standard) { collapsed.toggle() }
+    }
+
+    /// Folded, a question card of several says how many are left: what the form reports, or all of them before it does.
+    private var foldedQuestionsLeft: Int? {
+        guard interaction.kind == .question, let count = interaction.questions?.count, count > 1 else { return nil }
+        let left = questionsLeft ?? count
+        return left > 0 ? left : nil
     }
 
     @ViewBuilder private var form: some View {
@@ -466,7 +577,28 @@ struct InteractionPanel: View {
             let name = model.session(interaction.sessionKey)?.agentLabel ?? "Claude"
             return d.commandAsk != nil ? String(localized: "\(name) Is Waiting for Your Approval") : String(localized: "\(name) Has a Question")
         }
-        return interaction.title
+        // A card that names only the engine (a Paseo provider's, #8144) takes its provider's name from its row.
+        return interaction.title(session: interaction.namesOnlyEngine ? model.session(interaction.sessionKey) : nil)
+    }
+}
+
+/// Close a supported question without answering. A text action with a finger-sized target, not the card's fold mark.
+struct QuestionSkipButton: View {
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(String(localized: "Skip [Question Card]"))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .scaledFrame(minWidth: Theme.Size.tapTarget, minHeight: Theme.Size.tapTarget)
+                .frame(minWidth: Theme.Size.tapTarget, minHeight: Theme.Size.tapTarget)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .font(Theme.Font.captionMedium)
+        .foregroundStyle(Theme.accent)
+        .accessibilityIdentifier("question-skip")
     }
 }
 
@@ -484,10 +616,14 @@ struct QuestionForm: View {
     @State private var other: [String: String] = [:]
     @State private var page = 0
     @State private var sending = false
+    @State private var skipping = false
     @State private var writing = false
     /// Several questions (#2970): the review shown before the answers go.
     @State private var reviewing = false
     @State private var failureHeight: CGFloat = 0
+    /// A single-select pick's step to the next question while its pause runs (#6549): the next pick or Previous / Next
+    /// cancels it. Not read in `body`.
+    @State private var pendingStep: Task<Void, Never>?
     @FocusState private var otherFocused: Bool
 
     private var questions: [Question] { interaction.questions ?? [] }
@@ -495,6 +631,7 @@ struct QuestionForm: View {
     /// Its answer is on the way (#6279): this form sent it a moment ago, or the model says so (the card was drawn again).
     private var isSending: Bool { sending || model.answerProgress(interaction.uid) == .sending }
     private var failure: String? { model.answerFailure(interaction.uid) }
+    private var canSkip: Bool { interaction.canCancel == true }
 
     var body: some View {
         if AppStyle.current.usesBeautifulUI { BUIQuestionForm(interaction: interaction) } else { plainLayout }
@@ -514,16 +651,18 @@ struct QuestionForm: View {
             }
             if showsReviewFooter {
                 ScreenReviewFooter(rows: QuestionSteps.rows(questions, answers: shownAnswers), sending: isSending ? "submit" : nil,
-                                   back: { withAnimation(Theme.Motion.standard) { reviewing = false } }, submit: { send() }, answer: nil)
+                                   back: { withAnimation(Theme.Motion.standard) { reviewing = false } }, submit: { send() }, answer: nil,
+                                   skip: canSkip ? { skip() } : nil)
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footerHeight = $0 }
             } else if showsFooter {
                 footer.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footerHeight = $0 }
             }
         }
         .deliberateTap($dragged)
+        .preference(key: QuestionsLeft.self, value: questions.filter { answer($0) == nil }.count)
     }
 
-    private var showsFooter: Bool { needsFooter && !(stepped && reviewing) }
+    private var showsFooter: Bool { (needsFooter || canSkip) && !(stepped && reviewing) }
     private var showsReviewFooter: Bool { stepped && reviewing }
 
     private var contentCap: CGFloat? {
@@ -680,20 +819,28 @@ struct QuestionForm: View {
 
     private var footer: some View {
         HStack(spacing: Theme.Space.m) {
+            if canSkip {
+                QuestionSkipButton { skip() }
+                    .disabled(isSending)
+            }
             if page > 0 {
-                Button { withAnimation(Theme.Motion.standard) { page -= 1 } } label: { Text("Previous [Interaction Views 39b1c2]").lineLimit(1) }
+                Button { pendingStep?.cancel(); withAnimation(Theme.Motion.standard) { page -= 1 } } label: { Text("Previous [Interaction Views 39b1c2]").lineLimit(1) }
                     .themedButton()
             }
             Spacer(minLength: 0)
-            Button { advance() } label: {
-                HStack(spacing: Theme.Space.sm) {
-                    if isSending { ProgressView().controlSize(.small).tint(.white) }
-                    Text(isSending ? String(localized: "Sending…") : isLast ? String(localized: "Submit") : String(localized: "Next [Interaction Views f82c68]")).lineLimit(1)
+            if needsFooter {
+                Button { advance() } label: {
+                    HStack(spacing: Theme.Space.sm) {
+                        if isSending { ProgressView().controlSize(.small).tint(.white) }
+                        Text(isSending ? String(localized: "Sending…") : isLast ? String(localized: "Submit") : String(localized: "Next [Interaction Views f82c68]")).lineLimit(1)
+                    }
+                    .padding(.horizontal, Theme.Space.s)
                 }
-                .padding(.horizontal, Theme.Space.s)
+                .themedButton(prominent: true)
+                .disabled(!canAdvance || isSending)
+            } else if skipping {
+                SendingMark()
             }
-            .themedButton(prominent: true)
-            .disabled(!canAdvance || isSending)
         }
         .controlSize(.regular)
     }
@@ -718,13 +865,19 @@ struct QuestionForm: View {
         if questions.count == 1 {
             submit() // one question, one choice: the tap is the answer
         } else if page < questions.count - 1 {
-            Task { try? await Task.sleep(for: .milliseconds(250)); withAnimation(Theme.Motion.standard) { page += 1 } }
+            let from = page // a newer pick starts the pause again, Previous / Next cancel it (QuestionSteps.step, #6549)
+            pendingStep = QuestionSteps.step(replacing: pendingStep) {
+                if let next = QuestionSteps.next(after: from, now: page, count: questions.count) {
+                    withAnimation(Theme.Motion.standard) { page = next }
+                }
+            }
         }
     }
 
     private var isLast: Bool { page >= questions.count - 1 || allAnswered }
 
     private func advance() {
+        pendingStep?.cancel()
         if isLast { submit() } else { withAnimation(Theme.Motion.standard) { page += 1 } }
     }
 
@@ -769,6 +922,19 @@ struct QuestionForm: View {
         for q in questions { answers[q.question] = answer(q) }
         Task {
             await model.resolve(interaction, Resolution(answers: answers))
+            sending = false
+        }
+    }
+
+    /// Close only the question. Its options and typed answers stay here if the request fails.
+    private func skip() {
+        guard canSkip, !isSending else { return }
+        sending = true
+        skipping = true
+        otherFocused = false
+        Task {
+            await model.resolve(interaction, .cancelled)
+            skipping = false
             sending = false
         }
     }
@@ -826,6 +992,11 @@ struct PlanForm: View {
         if AppStyle.current.usesBeautifulUI { BUIPlanForm(interaction: interaction, showFull: $showFull) } else { plain }
     }
 
+    /// The card's agent, its provider's name where the card names only the engine (#8144); nil: Claude Code.
+    private var agentName: String? {
+        interaction.agentName(session: interaction.namesOnlyEngine ? model.session(interaction.sessionKey) : nil)
+    }
+
     /// The plan's first lines (Show Full Text opens it whole, #6605) over the answers, which stay in view.
     @ViewBuilder private var plain: some View {
         CardForm {
@@ -839,7 +1010,7 @@ struct PlanForm: View {
     @ViewBuilder private var answers: some View {
         if rejecting {
             // The card's own agent: a runtime's plan (DSH…) names it, as AgentPermissionForm does; nil is Claude Code.
-            TextField(String(localized: "Tell \(interaction.agentName ?? "Claude") what to change…"), text: $feedback, axis: .vertical)
+            TextField(String(localized: "Tell \(agentName ?? "Claude") what to change…"), text: $feedback, axis: .vertical)
                 .lineLimit(2...6)
                 .padding(Theme.Space.m)
                 .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
@@ -882,7 +1053,7 @@ struct PlanTextSheet: View {
             }
             .navigationTitle(PlanText.title(plan))
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done [Extension System Presentation c0b3fb]") { done() } } }
+            .toolbar { SheetClose { done() } }
         }
     }
 }
@@ -960,7 +1131,11 @@ struct AgentPermissionForm: View {
     @State private var why = ""
     @FocusState private var whyFocused: Bool
 
-    private var name: String { interaction.agentName ?? "Codex" }
+    /// Who to tell: the card's agent, its provider's name where the card names only the engine (#8144). The session is
+    /// read only then, so other cards observe no row.
+    private var name: String {
+        interaction.agentName(session: interaction.namesOnlyEngine ? model.session(interaction.sessionKey) : nil) ?? "Codex"
+    }
 
     var body: some View {
         if AppStyle.current.usesBeautifulUI { BUIPermissionForm(interaction: interaction) } else { plain }
@@ -1767,6 +1942,11 @@ struct BUIQuestionForm: View {
     /// Its answer is on the way (#6279): sent from this form, or the model says so.
     private var isSending: Bool { sending || model.answerProgress(interaction.uid) == .sending }
     private var failure: String? { model.answerFailure(interaction.uid) }
+    private var canSkip: Bool { interaction.canCancel == true }
+    private var skipCard: ((ApprovalAnswers) -> Void)? {
+        guard canSkip else { return nil }
+        return { answers in skip(answers) }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.m) {
@@ -1818,16 +1998,19 @@ struct BUIQuestionForm: View {
                 .frame(height: reviewCap)
                 ScreenReviewFooter(rows: QuestionSteps.rows(questions, answers: Self.shown(held, questions)), sending: isSending ? "submit" : nil,
                                    back: { reopen(at: questions.count - 1) }, submit: { send(held) },
-                                   answer: { (row: ScreenReviewRow) in reopen(at: row.index) })
+                                   answer: { (row: ScreenReviewRow) in reopen(at: row.index) },
+                                   skip: canSkip ? { skip(kept) } : nil)
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { reviewFooterHeight = $0 }
             }
         } else {
             let picks = Delegated.recommendedLabels(questions, interaction.delegate?.recommend)
-            ApprovalCard(questions: zip(questions, picks).map { Self.card($0, picks: $1) }, startAt: startAt, answers: kept, skipLabel: nil,
+            ApprovalCard(questions: zip(questions, picks).map { Self.card($0, picks: $1) }, startAt: startAt, answers: kept,
+                         skipLabel: canSkip ? String(localized: "Skip [Question Card]") : nil,
                          continueLabel: String(localized: "Next [Interaction Views f82c68]"), sendLabel: isSending ? String(localized: "Sending…") : String(localized: "Submit"),
                          customPlaceholder: String(localized: "Other answer…"),
                          sentMessage: isSending ? String(localized: "Sending…") : String(localized: "Sent"),
-                         options: .panel(sending: isSending, maxHeight: cardCap, rejectsDraggedPicks: true)) { answers in
+                         options: .panel(sending: isSending, maxHeight: cardCap, rejectsDraggedPicks: true),
+                         onSkip: skipCard, onSubmit: { answers in
                 Haptics.tap()
                 if QuestionSteps.enabled(questions) { // the review first
                     withAnimation(Theme.Motion.standard) { held = answers; kept = answers }
@@ -1835,7 +2018,7 @@ struct BUIQuestionForm: View {
                     kept = answers // a failed answer builds the card again with them
                     send(answers)
                 }
-            }
+            })
             .id(round)
         }
     }
@@ -1852,6 +2035,17 @@ struct BUIQuestionForm: View {
         sending = true
         Task {
             await model.resolve(interaction, Resolution(answers: Self.answers(answers, questions)))
+            sending = false
+        }
+    }
+
+    /// Keep the card's current answers for a rebuild if closing it fails.
+    private func skip(_ answers: ApprovalAnswers) {
+        guard canSkip, !isSending else { return }
+        kept = answers
+        sending = true
+        Task {
+            await model.resolve(interaction, .cancelled)
             sending = false
         }
     }
@@ -2363,9 +2557,7 @@ struct SessionlessCardSheet: View {
             .macSheetDone { dismiss() }
             #else
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done [Extension System Presentation c0b3fb]") { dismiss() }.lineLimit(1)
-                }
+                SheetClose { dismiss() }
             }
             #endif
         }
@@ -2383,6 +2575,15 @@ extension Interaction {
     /// The line under a card's title in a list: its session's title; a sessionless card says where it comes from, and
     /// Script when its title does not already name who asks (`personad ask` labels its cards Script, docs/integrations/script-cli.md).
     func placeLine(machine: String?) -> String {
+        if let under = foldedUnder, !under.isEmpty, under != sessionID {
+            let title = sessionTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            // A side session's card says so (#7944), in the words its parent's chat uses.
+            if foldedAs == SideFold.side || foldedSide != nil, !title.isEmpty {
+                return String(localized: "From Side Session · \(title)")
+            }
+            let name = title.isEmpty ? String(localized: "Subagent task [Child Session]") : title
+            return String(localized: "From subagent · \(name)")
+        }
         let mark = (agentLabelHint ?? "").isEmpty ? String(localized: "Script") : nil
         let parts: [String?] = isSessionless ? [mark, sessionlessPlace, machine] : [sessionTitle, machine]
         return parts.compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")

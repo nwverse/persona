@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 /// Repository browsing keeps one compact line per Agent, without reply previews.
 nonisolated enum WorkspaceList {
@@ -87,6 +88,10 @@ struct WorkspaceSidebarCard<AgentContent: View, Actions: View>: View {
                             Text(workspace.name)
                                 .font(workspace.sidebarUnread ? Theme.WorkspaceSidebar.titleUnread : Theme.WorkspaceSidebar.title)
                                 .foregroundStyle(Theme.WorkspaceSidebar.foreground).lineLimit(1)
+                            if workspace.workspace?.pinnedAt != nil {
+                                ThemedIcon(Theme.Icon.pinned).font(Theme.WorkspaceSidebar.meta).foregroundStyle(Theme.accent)
+                                    .accessibilityHidden(true)
+                            }
                             if workspace.main {
                                 Text(String(localized: "workspace.primary", defaultValue: "Primary"))
                                     .font(Theme.WorkspaceSidebar.meta).foregroundStyle(Theme.WorkspaceSidebar.foreground.opacity(0.7))
@@ -108,6 +113,7 @@ struct WorkspaceSidebarCard<AgentContent: View, Actions: View>: View {
             .accessibilityIdentifier("agents.worktree")
             .accessibilityLabel(workspace.name)
             .accessibilityValue([workspace.main ? String(localized: "workspace.primary", defaultValue: "Primary") : "",
+                                 workspace.workspace?.pinnedAt != nil ? String(localized: "Pinned [Personal Agent List View fb47db]") : "",
                                  workspace.workspace?.branch ?? ""].filter { !$0.isEmpty }.joined(separator: ", "))
             if !workspace.sessions.isEmpty || !workspace.children.isEmpty {
                 VStack(alignment: .leading, spacing: Theme.Space.sm) {
@@ -476,7 +482,7 @@ struct ButtonRowInsets: ViewModifier {
         } else if let edges {
             content.listRowInsets(EdgeInsets(top: Theme.Space.flush, leading: edges.leading, bottom: Theme.Space.flush, trailing: edges.trailing))
         } else {
-            content.listRowInsets(.vertical, Theme.Space.flush)
+            content.listRowVerticalInsets(Theme.Space.flush)
         }
         #else
         content.listRowInsets(edges)
@@ -609,6 +615,8 @@ struct RepoWorktreeLine: View {
     /// Its computer is out of reach (a worktree the host lists).
     var offline = false
     var showChevron = true
+    /// Pinned in its engine (Paseo's Pin to top, #9316): the pin mark after its name.
+    var pinned = false
 
     var body: some View {
         RepoTreeLine(level: level) {
@@ -619,6 +627,10 @@ struct RepoWorktreeLine: View {
             HStack(spacing: Theme.Space.s) {
                 Text(name).font(Theme.Font.secondaryMedium).foregroundStyle(quiet || offline ? Color.secondary : Color.primary)
                     .lineLimit(1).layoutPriority(1)
+                if pinned {
+                    ThemedIcon(Theme.Icon.pinned).font(Theme.Font.caption).foregroundStyle(Theme.accent)
+                        .accessibilityHidden(true)
+                }
                 if main {
                     Chip(text: String(localized: "workspace.primary", defaultValue: "Primary"), look: .neutral, compact: true).fixedSize()
                 }
@@ -635,6 +647,7 @@ struct RepoWorktreeLine: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel([main ? String(localized: "Main worktree") : String(localized: "Worktree"), name, detail ?? "",
+                             pinned ? String(localized: "Pinned [Personal Agent List View fb47db]") : "",
                              offline ? String(localized: "This computer is offline") : "", tally ?? "",
                              showChevron ? (open ? String(localized: "Expanded") : String(localized: "Collapsed [Readiness Card ee6046]")) : ""]
             .filter { !$0.isEmpty }

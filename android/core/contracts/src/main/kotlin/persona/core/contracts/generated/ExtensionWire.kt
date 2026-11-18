@@ -391,6 +391,7 @@ data class ExtensionContributes(
     val connectors: List<ExtensionConnectorItem>? = null,
     val voice: List<ExtensionNamedItem>? = null,
     val transcription: List<ExtensionNamedItem>? = null,
+    val speech: List<ExtensionNamedItem>? = null,
     val computer: List<ExtensionNamedItem>? = null,
     val browser: List<ExtensionNamedItem>? = null,
     val iphone: List<ExtensionNamedItem>? = null,
@@ -414,6 +415,7 @@ data class ExtensionContributes(
     @SerialName("error_reports") val errorReports: List<ExtensionErrorReportsItem>? = null,
     @SerialName("auth_relay") val authRelay: List<ExtensionAuthRelayItem>? = null,
     @SerialName("secret_providers") val secretProviders: List<ExtensionSecretProviderItem>? = null,
+    @SerialName("repository_providers") val repositoryProviders: List<ExtensionRepositoryProviderItem>? = null,
     val messaging: List<ExtensionMessagingItem>? = null,
     /** Extra keys stay at this object's level on the wire; declared fields always win. */
     val additionalProperties: Map<String, JsonElement> = emptyMap(),
@@ -424,6 +426,7 @@ private data class ExtensionContributesKnown(
     val connectors: List<ExtensionConnectorItem>? = null,
     val voice: List<ExtensionNamedItem>? = null,
     val transcription: List<ExtensionNamedItem>? = null,
+    val speech: List<ExtensionNamedItem>? = null,
     val computer: List<ExtensionNamedItem>? = null,
     val browser: List<ExtensionNamedItem>? = null,
     val iphone: List<ExtensionNamedItem>? = null,
@@ -447,12 +450,13 @@ private data class ExtensionContributesKnown(
     @SerialName("error_reports") val errorReports: List<ExtensionErrorReportsItem>? = null,
     @SerialName("auth_relay") val authRelay: List<ExtensionAuthRelayItem>? = null,
     @SerialName("secret_providers") val secretProviders: List<ExtensionSecretProviderItem>? = null,
+    @SerialName("repository_providers") val repositoryProviders: List<ExtensionRepositoryProviderItem>? = null,
     val messaging: List<ExtensionMessagingItem>? = null,
 )
 
 object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
     private val known = ExtensionContributesKnown.serializer()
-    private val keys = setOf<String>("connectors", "voice", "transcription", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging")
+    private val keys = setOf<String>("connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "messaging")
     override val descriptor: SerialDescriptor = known.descriptor
 
     override fun deserialize(decoder: Decoder): ExtensionContributes {
@@ -464,6 +468,7 @@ object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
             connectors = fields.connectors,
             voice = fields.voice,
             transcription = fields.transcription,
+            speech = fields.speech,
             computer = fields.computer,
             browser = fields.browser,
             iphone = fields.iphone,
@@ -487,6 +492,7 @@ object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
             errorReports = fields.errorReports,
             authRelay = fields.authRelay,
             secretProviders = fields.secretProviders,
+            repositoryProviders = fields.repositoryProviders,
             messaging = fields.messaging,
             additionalProperties = obj.filterKeys { it !in keys },
         )
@@ -498,6 +504,7 @@ object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
             connectors = value.connectors,
             voice = value.voice,
             transcription = value.transcription,
+            speech = value.speech,
             computer = value.computer,
             browser = value.browser,
             iphone = value.iphone,
@@ -521,6 +528,7 @@ object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
             errorReports = value.errorReports,
             authRelay = value.authRelay,
             secretProviders = value.secretProviders,
+            repositoryProviders = value.repositoryProviders,
             messaging = value.messaging,
         )
         val obj = output.json.encodeToJsonElement(known, fields) as JsonObject
@@ -822,6 +830,53 @@ data class ExtensionSecretProviderItem(
 )
 
 /**
+ * A code-hosting source on the exact hosts it names, for the repository catalog and a to-do's repositories and links
+ * there: the manager asks the program (repo.parse, repo.check, repo.link, repo.describe; repository.schema.json) and
+ * re-checks every answer. Needs the program to speak the protocol. A host another installed extension claims, on or
+ * off, fails the install, and so does one host in two items.
+ */
+@Serializable
+data class ExtensionRepositoryProviderItem(
+    val id: String = "",
+    /**
+     * What the source is called (Acme Code): the catalog and a to-do's repositories show it. Not only spaces, no
+     * control characters.
+     */
+    val name: String = "",
+    /**
+     * The exact host names whose addresses it reads (code.example.com): lowercase, no scheme, port, path or wildcard,
+     * not an IP address, and not a host the built-in GitHub and GitLab read.
+     */
+    val hosts: List<String> = emptyList(),
+    /**
+     * What it calls the link kinds it names (each at most once; the others keep their usual words). Only relabels:
+     * the kinds stay issue and pull_request.
+     */
+    @SerialName("link_kinds") val linkKinds: List<ExtensionRepositoryLinkLabel>? = null,
+)
+
+/**
+ * The word a repository provider shows for one kind of its links (MR for a pull_request).
+ */
+@Serializable
+data class ExtensionRepositoryLinkLabel(
+    val kind: String = "",
+    /**
+     * Not only spaces, no control characters.
+     */
+    val label: String = "",
+)
+
+/**
+ * The kinds of a to-do's links to a repository: an issue, or a pull request (a merge request).
+ */
+object ExtensionRepositoryLinkKind {
+    const val ISSUE = "issue"
+    const val PULL_REQUEST = "pull_request"
+    val ALL = listOf("issue", "pull_request")
+}
+
+/**
  * It is given the error and crash reports of the hub and the user's devices (error_reports.deliver): needs the
  * program to speak the protocol, on_startup and permissions.error_reports.
  */
@@ -908,7 +963,7 @@ data class ExtensionConnectorItem(
 )
 
 /**
- * A contribution with only an id and a name: voice, transcription, computer, browser.
+ * A contribution with only an id and a name: voice, transcription, speech, computer, browser.
  */
 @Serializable
 data class ExtensionNamedItem(
@@ -1035,6 +1090,20 @@ data class ExtensionUIItem(
      * widget only: how often the widget is drawn again on its own (30 when not said).
      */
     @SerialName("refresh_minutes") val refreshMinutes: Int? = null,
+    /**
+     * nav_page only: the sidebar group the page goes in unless the user put it elsewhere (#9071). Title translated in
+     * l10n's groups.
+     */
+    val group: ExtensionUIGroup? = null,
+)
+
+/**
+ * A sidebar group a nav_page names (docs "UI slots"): pages of any extension naming the same id share it.
+ */
+@Serializable
+data class ExtensionUIGroup(
+    val id: String = "",
+    val title: String = "",
 )
 
 @Serializable
@@ -1235,6 +1304,36 @@ data class ExtensionAuthPrompt(
 )
 
 /**
+ * settings.check (manifest settings_check): the configuration and secrets as a change would leave them, before the
+ * hub saves it. The program answers whether they work (SettingsCheckResult) within 10 seconds.
+ */
+@Serializable
+data class ExtensionSettingsCheckParams(
+    /**
+     * The whole configuration as it would be saved, the schema's defaults filled in.
+     */
+    val config: JsonElement = JsonNull,
+    val secrets: Map<String, String> = emptyMap(),
+    /**
+     * The egress proxy URL for this check only, when the program runs behind the proxy and a config: entry of
+     * permissions.network names an address: requests sent through it reach the addresses this configuration names,
+     * its ordinary requests only the saved ones. It stops working once the check answers. Absent: use the program's
+     * ordinary proxy (an older hub sends none).
+     */
+    val proxy: String? = null,
+)
+
+/**
+ * settings.check's answer: ok, or why not in one sentence for the owner (the hub takes every secret out of it and
+ * cuts it to 300 characters).
+ */
+@Serializable
+data class ExtensionSettingsCheckResult(
+    val ok: Boolean = false,
+    val error: String? = null,
+)
+
+/**
  * Values of HubRole.
  */
 object ExtensionHubRole {
@@ -1249,7 +1348,8 @@ object ExtensionHubRole {
 object ExtensionHubCapability {
     const val INBOX_GROUP = "inbox_group"
     const val INBOX_GROUP_STATE = "inbox_group_state"
-    val ALL = listOf("inbox_group", "inbox_group_state")
+    const val TOOL_IMAGES = "tool_images"
+    val ALL = listOf("inbox_group", "inbox_group_state", "tool_images")
 }
 
 /**
@@ -1481,6 +1581,10 @@ data class ExtensionUIPlace(
     val opens: String? = null,
     val badge: ExtensionBadge? = null,
     val connector: String? = null,
+    /**
+     * A nav_page's sidebar group, its title in the request's language (#9071).
+     */
+    val group: ExtensionUIGroup? = null,
 )
 
 @Serializable
@@ -1914,6 +2018,15 @@ object ExtensionTextStyle {
 }
 
 /**
+ * A progress drawing hint: bar (the default) or ring.
+ */
+object ExtensionProgressStyle {
+    const val BAR = "bar"
+    const val RING = "ring"
+    val ALL = listOf("bar", "ring")
+}
+
+/**
  * date, time, datetime, multichoice and multiline are UI version 6. Values stay strings: date YYYY-MM-DD, time HH:MM
  * (24 hours), datetime YYYY-MM-DDTHH:MM local to context.tz, multichoice a JSON array of the chosen values, multiline
  * the text with \n.
@@ -2044,8 +2157,9 @@ object ExtensionPlatform {
 
 /**
  * The fixed icon set: a nav_page's icon, a row's, an empty state's (UI version 3 for the last two and the icons after
- * money; 4 for those after settings; 6 for those after file, and a metric's, a tile's, a row action's). Each app
- * draws its own icon for the meaning; an unknown one draws as the default (extension; plugin is its old name).
+ * money; 4 for those after settings; 6 for those after file, and a metric's, a tile's, a row action's; 8 a
+ * section's). Each app draws its own icon for the meaning; an unknown one draws as the default (extension; plugin is
+ * its old name).
  */
 object ExtensionNavIcon {
     const val PLUGIN = "plugin"
@@ -2163,6 +2277,18 @@ data class ExtensionSection(
     val items: List<ExtensionComponent> = emptyList(),
     val more: ExtensionMore? = null,
     val pane: String? = null,
+    val span: String? = null,
+    /**
+     * Drawn before the title.
+     */
+    val icon: String? = null,
+    @SerialName("icon_color") val iconColor: String? = null,
+    val link: ExtensionSectionLink? = null,
+    /**
+     * How many rows sit side by side in the section on a wide screen (UI version 8), in reading order; one on a
+     * narrow screen and when absent. Other components keep the whole width.
+     */
+    val columns: Int? = null,
 )
 
 /**
@@ -2289,7 +2415,7 @@ data class ExtensionMetricComponent(
 ) : ExtensionComponent
 
 /**
- * A bar filled to ratio (0 to 1).
+ * Progress toward a goal, filled to ratio (0 to 1).
  */
 @Serializable
 data class ExtensionProgressComponent(
@@ -2297,6 +2423,12 @@ data class ExtensionProgressComponent(
     val key: String? = null,
     val label: String = "",
     val ratio: Double = 0.0,
+    /**
+     * A drawing hint; omitted means bar. Apple Home Screen widgets (small, medium and large) draw ring as a ring;
+     * other surfaces draw a bar. Apps that do not recognize this field keep drawing a bar. Native stream does not
+     * accept this field.
+     */
+    val style: String? = null,
     val detail: String? = null,
     val tone: String? = null,
 ) : ExtensionComponent
@@ -2846,17 +2978,43 @@ data class ExtensionTile(
     val control: ExtensionRowControl? = null,
     val actions: List<ExtensionRowAction>? = null,
     val action: ExtensionAction? = null,
+    /**
+     * Draws the tile as a ring (UI version 9): never with an image or a spark.
+     */
+    val gauge: ExtensionGauge? = null,
+)
+
+/**
+ * A tile's ring (UI version 9), for a quota or a usage: filled to ratio, with the tile's value and the unit in its
+ * centre (the percentage when the tile has no value), the title below. Without color, the tile's color, else the
+ * app's accent. An older app gets the tile without it: the unit after the value, the percentage in the subtitle, the
+ * color as the tile's.
+ */
+@Serializable
+data class ExtensionGauge(
+    /**
+     * How full the ring is, 0 to 1.
+     */
+    val ratio: Double = 0.0,
+    /**
+     * A short word under the value (USD, GB, h), as a control's unit.
+     */
+    val unit: String? = null,
+    val color: String? = null,
 )
 
 /**
  * stack: sections one under another. split: on a wide screen the side pane's sections in a column at the start, the
  * rest beside it, each scrolling on its own; on a narrow one the side pane folds into a bar on top that opens as a
- * sheet.
+ * sheet. columns (UI version 8): on a wide screen the sections are cards in a grid, two columns or three when there
+ * is room, in reading order (left to right, then down), each row as tall as its tallest card; on a narrow one a
+ * single column, as stack. An older app gets stack.
  */
 object ExtensionLayout {
     const val STACK = "stack"
     const val SPLIT = "split"
-    val ALL = listOf("stack", "split")
+    const val COLUMNS = "columns"
+    val ALL = listOf("stack", "split", "columns")
 }
 
 /**
@@ -2867,6 +3025,26 @@ object ExtensionPane {
     const val SIDE = "side"
     val ALL = listOf("main", "side")
 }
+
+/**
+ * How much of a row of a columns view a section takes (UI version 8): full, the whole row; absent, one column. Other
+ * layouts ignore it.
+ */
+object ExtensionSectionSpan {
+    const val FULL = "full"
+    val ALL = listOf("full")
+}
+
+/**
+ * A link beside a section's title (UI version 8), such as the page that has all of it: pressing it calls ui.action
+ * with action (which may answer with a push) or pushes action.push. An older app on a full page gets it as the
+ * section's last row.
+ */
+@Serializable
+data class ExtensionSectionLink(
+    val title: String = "",
+    val action: ExtensionAction = ExtensionAction(),
+)
 
 /**
  * Values of FileStatus.

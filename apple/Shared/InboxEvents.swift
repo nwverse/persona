@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 // Inbox phase 1 (docs/assistant/inbox.md): an inbox item grows into an event — the manager's processing conversation
 // (`handling`), at most one suggestion to confirm, and the chain (`chain`). Mirrors the hub's inbox item fields; every
@@ -8,19 +9,55 @@ extension InboxItem {
     /// The assistant's own row (#6430, source `assistant`): the manager puts a conversation into the Inbox itself.
     var isAssistantRow: Bool { source == "assistant" }
 
-    /// The row's text repeats the summary under it (the assistant's own rows: their text is the summary), so it is drawn once.
+    /// The row's text repeats the summary under it (the assistant's own rows: their text is the summary, or its first
+    /// words cut with an ellipsis when it is long), so it is drawn once.
     var repeatsSummary: Bool {
         guard isAssistantRow, let summary = summary?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty else { return false }
         let text = preview.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !text.isEmpty && text.hasPrefix(summary)
+        guard !text.isEmpty else { return false }
+        let head = text.hasSuffix("…") ? String(text.dropLast()) : text
+        return text.hasPrefix(summary) || !head.isEmpty && summary.hasPrefix(head)
     }
 
-    /// The assistant's own row whose text is only its title and summary, already shown above: no Content section.
+    /// A row from before the hub kept an assistant post's Markdown as `body` (#9041): its summary and preview hold that
+    /// Markdown run into one line.
+    var markdownInSummary: Bool { isAssistantRow && body == nil }
+
+    /// What the detail draws as Markdown: an assistant row's `body`, or an older row's summary (`markdownInSummary`);
+    /// nil for any other row, whose summary is the AI's line about it.
+    var markdownBody: String? {
+        guard isAssistantRow else { return nil }
+        let text = (body ?? summary)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return text.isEmpty ? nil : text
+    }
+
+    /// The summary as a line or two of the list (or a strip) draws it: an older assistant row's without its marks.
+    var lineSummary: String? { markdownInSummary ? summary.map(Self.withoutMarks) : summary }
+
+    /// The preview likewise.
+    var linePreview: String { markdownInSummary ? Self.withoutMarks(preview) : preview }
+
+    nonisolated private static let marksMemo = TextMemo<String>(limit: 64)
+
+    /// Markdown run into one line, as words: emphasis, code and heading marks go (`Fmt.plain`), and so do the list
+    /// markers the lost line breaks left between words and a mark the cut left alone (`Due*…`). Only for an older
+    /// assistant row's text (`markdownInSummary`): a plain line's own dashes are not touched anywhere else.
+    nonisolated static func withoutMarks(_ text: String) -> String {
+        marksMemo(text) { text in
+            Fmt.plain(text).replacingOccurrences(of: "*…", with: "…").split(whereSeparator: \.isWhitespace)
+                .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "*")) }
+                .filter { !$0.isEmpty && $0 != "-" && $0 != "+" }
+                .joined(separator: " ")
+        }
+    }
+
+    /// The assistant's own row whose text is only its title and summary (or its Markdown `body`), already shown above:
+    /// no Content section.
     func onlyTitleAndSummary(_ context: String?) -> Bool {
         guard isAssistantRow, let summary, !summary.isEmpty else { return false }
         func flat(_ s: String) -> String { s.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
         let text = flat(context ?? preview)
-        return text.isEmpty || text == flat(title + " " + summary) || text == flat(summary)
+        return text.isEmpty || [summary, body].compactMap { $0 }.contains { text == flat(title + " " + $0) || text == flat($0) }
     }
 
     /// The processing conversation bound to the item.
@@ -49,6 +86,8 @@ extension InboxItem {
         var kind: String
         var text: String
         var note: String?
+        /// A to-do suggestion's due: a day (2006-01-02, all day) or a moment (RFC 3339); nil: no due date.
+        var due: String?
         /// Needs judgment: confirming hands it back to the processing conversation instead of running it.
         var handback: Bool?
         var machineID: String?
@@ -58,7 +97,7 @@ extension InboxItem {
         var conversation: Handoff?
 
         enum CodingKeys: String, CodingKey {
-            case version, kind, text, note, handback, changes, at, conversation
+            case version, kind, text, note, due, handback, changes, at, conversation
             case machineID = "machine_id"
         }
 
@@ -125,7 +164,7 @@ extension InboxItem {
     /// Where tapping a chain entry goes: the item's source (at a Feishu position, a mail uid, a URL, or just the source
     /// page), a conversation, or another inbox item.
     nonisolated struct Link: Codable, Hashable, Sendable {
-        /// source | session | item
+        /// source | session | item | todo
         var type: String
         var position: String?
         var uid: UInt32?
@@ -234,6 +273,7 @@ nonisolated enum InboxEventText {
         case "reply": String(localized: "Suggested reply")
         case "agent": String(localized: "Suggested Agent task")
         case "conclusion": String(localized: "Conclusion")
+        case "todo": String(localized: "Suggested To-Do")
         default: String(localized: "Suggestion")
         }
     }
@@ -244,6 +284,7 @@ nonisolated enum InboxEventText {
         case "reply": Theme.Icon.reply
         case "agent": Theme.Icon.agents
         case "conclusion": Theme.Icon.concluded
+        case "todo": Theme.Icon.todo
         default: Theme.Icon.ai
         }
     }
@@ -346,6 +387,7 @@ nonisolated enum InboxEventText {
         case "reply": return [.confirm(String(localized: "Send")), .edit, .reject]
         case "agent": return [.confirm(String(localized: "Start")), .edit, .reject]
         case "conclusion": return [.confirm(String(localized: "OK [Recordings Section de32e2]")), .reject]
+        case "todo": return [.confirm(String(localized: "Add to To-Dos")), .reject]
         default: return [.confirm(String(localized: "Confirm")), .reject]
         }
     }
@@ -357,10 +399,12 @@ nonisolated struct InboxSuggestionBody: Encodable, Sendable, Equatable {
     /// confirm | reject | instruct
     var action: String
     var text: String?
+    /// A to-do suggestion confirmed: its due as the card shows it (a day, or an RFC 3339 moment).
+    var due: String? = nil
     var clientID: String
 
     enum CodingKeys: String, CodingKey {
-        case version, action, text
+        case version, action, text, due
         case clientID = "client_id"
     }
 }
@@ -409,6 +453,8 @@ nonisolated enum InboxChainTarget: Equatable, Sendable {
     case session(SessionKey, manager: Bool)
     /// Another inbox item.
     case item(String)
+    /// The to-do the row was turned into (#6480).
+    case todo(String)
     /// No link: the entry's detail / messages open in place.
     case inline
     /// Nothing to open.
@@ -431,6 +477,9 @@ nonisolated enum InboxChainTarget: Equatable, Sendable {
         case "item":
             guard let id = l.id, !id.isEmpty else { return here }
             return .item(id)
+        case "todo":
+            guard let id = l.id, !id.isEmpty else { return here }
+            return .todo(id)
         default:
             return here
         }

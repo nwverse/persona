@@ -9,7 +9,7 @@
 // same way, from the next message, so "Recommended" is the provider the chat runs on now and the others keep their own
 // groups. Loaded with the panel, not with the composer.
 import { t } from "../i18n";
-import { agentId, agentName } from "./agent-kind";
+import { agentId, agentName, providerAgent } from "./agent-kind";
 import type { AssistantSetup } from "./assistant-models";
 import { ALL_EFFORTS, defaultModel, modelName, modelSupportsFast, typedModelOffered, type AgentModel, type LauncherModels } from "./launcher-models";
 import { validModelId } from "./model-id";
@@ -24,6 +24,7 @@ function panelModel(m: AgentModel, engine: string, catalogFast: boolean): PanelM
   const out: PanelModel = { id: m.id, name: modelName(m), efforts: m.efforts ?? (m.custom && engine === "claude" ? ALL_EFFORTS : []) };
   if (m.description) out.description = m.description;
   if (m.resolved) out.resolved = m.resolved;
+  if (m.aliases?.length) out.aliases = m.aliases;
   if (m.default_effort) out.defaultEffort = m.default_effort;
   if (catalogFast && modelSupportsFast(m)) out.fast = true;
   if (m.custom) out.custom = true;
@@ -57,7 +58,7 @@ export function assistantPanel(setup: AssistantSetup, info: AssistantLaunchers |
   const runs = agentId(engine);
   const launchers = info?.launchers ?? [];
   const providers: PanelProvider[] = launchers.map((l) => {
-    const kind = agentId(l.agent_type || l.agent || "claude");
+    const kind = agentId(providerAgent(l.agent_type || l.agent || "claude", l.name));
     const e = listOf(l.name);
     const p: PanelProvider = { id: l.name, name: providerTitle(l), engine: kind, models: null };
     if (e.list === undefined) {
@@ -83,9 +84,10 @@ export function assistantPanel(setup: AssistantSetup, info: AssistantLaunchers |
     const models = e.list ? e.list.models.map((m) => panelModel(m, engine, Boolean(o.starting))) : setup.model ? [{ id: setup.model, name: modelLabel(setup.model), efforts: [] }] : [];
     providers.unshift({ id: setup.provider, name: setup.provider, engine, models: claude && !e.list ? null : models, ...(claude ? (e.list ? {} : { loading: true }) : { unavailable: t("chat-modelpill.provider_gone") }) });
   }
+  // what can't run it, a Paseo provider among them: that provider is its engine, never "paseo" (#8142)
   for (const u of info?.unavailable ?? []) {
     if (providers.some((p) => p.id === u.name)) continue;
-    providers.push({ id: u.name, name: providerTitle(u), engine: agentId(u.agent || "claude"), models: null, unavailable: u.reason });
+    providers.push({ id: u.name, name: providerTitle(u), engine: agentId(providerAgent(u.agent || "claude", u.name)), models: null, unavailable: u.reason });
   }
 
   const own = providers.find((p) => p.id === setup.provider);

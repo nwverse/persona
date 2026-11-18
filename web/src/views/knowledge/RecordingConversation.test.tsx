@@ -143,8 +143,9 @@ describe("a recorded meeting's conversation", () => {
     expect(s.querySelector("h2")!.textContent).toBe("Conversation");
     expect(s.querySelector("[role=status]")!.textContent).toBe("Persona is in the meeting as a participant · answers can be said aloud");
     expect(s.querySelector('a[title="Open the meeting’s conversation"]')!.getAttribute("href")).toBe(`/persona/${room}`);
-    expect(kinds()).toEqual(["joined", "lines", "question", "answer"]);
-    expect(s.textContent).toContain("Persona joined the meeting");
+    // No "Persona joined the meeting" (#9411): the web can't know whether Persona was ever in it.
+    expect(kinds()).toEqual(["lines", "question", "answer"]);
+    expect(s.textContent).not.toContain("joined the meeting");
     expect(s.textContent).toContain("2 lines from the meeting");
     expect(s.textContent).toContain("You kept the 4 MB cap.");
     expect(s.querySelector('[title="Typed on the phone"]')).not.toBeNull();
@@ -155,6 +156,14 @@ describe("a recorded meeting's conversation", () => {
     expect(s.textContent).toContain("Bo: The cap is 4 MB.");
     expect(s.querySelector("textarea")).toBeNull();
     expect(s.textContent).toContain("Questions are asked on the phone while the meeting runs.");
+  });
+
+  it("says a notes room (#8851) keeps notes without Persona in the meeting, not that Persona stopped listening", async () => {
+    await load(fixture({ attendance: "notes" }));
+    expect(factRow("Persona")).toBeUndefined();
+    await reply(pending(livePath)[0], live({ attendance: "notes", asks: [] }));
+    await reply(pending(itemsPath(room))[0], { items: roomItems(), has_more: false });
+    expect(section()!.querySelector("[role=status]")!.textContent).toBe("Persona isn’t in this meeting: it keeps the topics and highlights and answers nothing.");
   });
 
   it("reads only the newer parts a meeting_live event names, and the thread again when the asks moved", async () => {
@@ -304,7 +313,7 @@ describe("a recorded meeting's conversation", () => {
     await reply(pending(itemsPath(follow))[0], { items: followItems() });
     const s = section()!;
     expect(s.querySelector("[role=separator]")!.textContent).toContain("After the meeting");
-    expect(kinds()).toEqual(["joined", "lines", "question", "answer", "material", "question", "answer"]);
+    expect(kinds()).toEqual(["lines", "question", "answer", "material", "question", "answer"]);
     const seed = s.querySelector<HTMLButtonElement>('li[data-thread="material"] button')!;
     expect(seed.textContent).toBe("The meeting’s material");
     expect(seed.getAttribute("aria-expanded")).toBe("false");

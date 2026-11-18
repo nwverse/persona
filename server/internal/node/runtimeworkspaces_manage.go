@@ -25,9 +25,11 @@ import (
 var workspaceRenameTimeout = 15 * time.Second
 
 // runtimeRemoveDeadline bounds a closed Agent's worktree.remove on a runtime engine, the checks and the runtime's
-// archive together, inside the 90 s the hub gives worktree/remove. A confirmed worktree.delete has
-// runtimeWorktreeDeadline, inside its 150 s.
-var runtimeRemoveDeadline = 85 * time.Second
+// archive together: at least as long as the runtime waits for the archive itself (the Paseo bridge gives Paseo 135 s,
+// integrations/paseo/lib/bridge.js ARCHIVE_WAIT, for a worktree removal of up to 2 minutes), inside the 150 s the hub
+// gives worktree/remove, as runtimeWorktreeDeadline is for a confirmed worktree.delete. A node that gave up first said
+// "no answer" while Paseo went on to remove the folder, and the branch stayed (#8135).
+var runtimeRemoveDeadline = 145 * time.Second
 
 // dropWorkspace takes a workspace the runtime archived off its list at once: its next push says the same.
 func (h *runtimeConn) dropWorkspace(id string) {
@@ -70,12 +72,13 @@ func (h *runtimeConn) workspaceSessions(id string) []string {
 }
 
 // workspaceAtWork: one of h's sessions in workspace id may still be writing in it: starting, working, waiting for the
-// user, or in a state the runtime does not say. Idle, done and stopped ones are not (the archive ends them).
+// user, running background tasks, or in a state the runtime does not say. A finished foreground turn alone does
+// not mean that its shell commands or delegated agents have stopped writing.
 func (h *runtimeConn) workspaceAtWork(id string) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return slices.ContainsFunc(h.sessions, func(s proto.Session) bool {
-		return s.WorkspaceID == id && (s.Starting || !slices.Contains([]string{proto.StatusIdle, proto.StatusDone, proto.StatusOffline}, s.Status))
+		return s.WorkspaceID == id && (s.Starting || len(s.Background) > 0 || !slices.Contains([]string{proto.StatusIdle, proto.StatusDone, proto.StatusOffline}, s.Status))
 	})
 }
 

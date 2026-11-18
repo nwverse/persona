@@ -2,6 +2,12 @@
 
 Pitfalls, odd behavior and the trade-offs made at the time (originally in `CLAUDE.md`; index in `docs/lessons/README.md`). Put new lessons in the matching section; if none fits, start a new one.
 
+## Saving mail attachments
+
+- Enforce a save limit while spooling, not after writing the attachment to disk (#9398). Keep reading and hashing the
+  full decoded attachment when its identity depends on its content, so the ID still matches and the IMAP connection
+  remains synchronized. Test a large attachment, the exact limit, a wrong ID, and a subsequent mailbox request.
+
 ## Sending attachments
 
 - Don't extend the client_id idempotency of text / images to files: the Lark gateway's direct file upload doesn't go through the outbox, and an unknown result must not be uploaded again. An API success whose receipt is lost or can't be parsed is also unknown; only an explicit rejection allows a retry. Test mocks must tell a 429 rejection apart from a receipt lost after acceptance, rather than always returning 502 and assuming a retry is safe.
@@ -108,6 +114,7 @@ Review follow-up: the optional projection isn't a required field for a whole pag
   reread the whole window as in the previous item. Events for other accounts aren't read; reconnects and events without chats (pinned, settings) still reread the whole window.
 - A load request at the end of the page can't just be dropped when a refresh comes along: SwiftUI doesn't restart the task when the cursor is unchanged. Wait for the refresh to finish, then continue with the new cursor; the queued refresh stays inside the page's own task, so leaving doesn't spawn a separate background task.
 - The chat list isn't the message subscription list; listing every group shouldn't make every active group keep prefetching chat content.
+- A plain `.task` following `LarkSync.changes(of:)` keeps listening and fetching on a hidden shell page (the shell keeps it mounted); follow from `.tabActiveTask` and catch up once when it starts again (#10337).
 
 - The persistent send queue must record separately whether a submission has been attempted. On restart, only files whose submission started with an unknown result need checking; queued files that were never sent should keep an explicit retry. Offline, DNS or connection failures must not be misjudged as uploaded-but-unknown either.
 - The Lark gateway's successful file receipt may omit the message ID; both the client and the hub must accept the success, and the client must not turn the optional field back into a send failure.

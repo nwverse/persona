@@ -230,26 +230,34 @@ const userStoppedNotice = transcript.InterruptedNotice
 // (it retries once with a hidden "no visible output" prompt, then stops); Codex's rollout maps to the same items.
 // Thinking alone is no output: the user sees nothing.
 func silentTurn(items []proto.Item) bool {
+	none, stopped := turnWithoutOutput(items)
+	return none && !stopped // stopped: the user stopped it (Esc), no failure to report
+}
+
+// turnWithoutOutput: a turn the node could read (none: it has items, at least the prompt) in which the agent neither
+// replied nor called a tool, and whether the transcript says it was stopped (the interrupted notice). Thinking alone
+// is no output.
+func turnWithoutOutput(items []proto.Item) (none, stopped bool) {
 	if len(items) == 0 {
-		return false // nothing to go by (an older node, a runtime that does not page items): not judged silent
+		return false, false // nothing to go by (an older node, a runtime that does not page items): not judged silent
 	}
 	for _, it := range items {
 		if it.Kind == proto.KindNotice && it.Text == userStoppedNotice {
-			return false // the user stopped it (Esc): no failure to report
+			stopped = true
 		}
 		if it.Role != "assistant" {
 			continue
 		}
 		switch it.Kind {
 		case proto.KindToolUse, proto.KindImage:
-			return false
+			return false, stopped
 		case proto.KindText:
 			if strings.TrimSpace(it.Text) != "" {
-				return false
+				return false, stopped
 			}
 		}
 	}
-	return true
+	return true, stopped
 }
 
 // sameRequest: ask is the task's own prompt (as sent, maybe with context around it).
@@ -446,7 +454,11 @@ func (s *Service) autoFinishTask(t Todo, work time.Time, worked bool) {
 		}
 	}
 	if !s.taskCompletionCurrent(ctx, t, work) {
-		s.logf("task %s: work changed while judged: left open", t.ID)
+		if cur, ok := s.todoNow(t.ID); !ok || cur.DoneAt != nil {
+			s.logf("task %s: closed while judged: judgment dropped", t.ID) // accepted, cancelled or closed by hand (#7539)
+		} else {
+			s.logf("task %s: work changed while judged: left open", t.ID)
+		}
 		return
 	}
 	s.applyTaskDone(ctx, t, work, worked, c, err)
@@ -455,8 +467,19 @@ func (s *Service) autoFinishTask(t Todo, work time.Time, worked bool) {
 // applyTaskDone writes judgment c (err: the judge could not say) of task t, whose agents last started a turn at work
 // (worked false: not known): the verdict on the todo, where its delivery is held, and then what follows a finished
 // stretch of work. A supervised task waits for its supervisor's review (never closed here); another is closed when
-// the judge found it done. autoFinishTask and Re-check with apply (doneCheckRoute) end here.
+// the judge found it done. autoFinishTask and Re-check with apply (doneCheckRoute) end here. A task closed since that
+// stretch began (accepted, cancelled, closed by hand, or a review that has written its acceptance and not closed the
+// to-do yet) gets none of it: the judgment is of work that is over (#7539).
 func (s *Service) applyTaskDone(ctx context.Context, t Todo, work time.Time, worked bool, c taskDoneCheck, err error) {
+	since := work
+	if !worked {
+		since = t.CreatedAt
+	}
+	if s.closedSince(t.ID, since) {
+		s.logf("task %s: closed since the work judged began: judged %s, dropped", t.ID, cmp.Or(c.Verdict, "with an error"))
+		s.turnJudged(ctx, t.ID, taskDoneCheck{}, nil, "done") // nothing to judge: the sweep does not ask again
+		return
+	}
 	if ai.IsNotConfigured(err) {
 		// A missing provider is not a transient judge failure: keep the same localized explanation the settings row shows.
 		c = taskDoneCheck{Verdict: verdictWaiting, Reason: mc(s.lang(ctx), s.noAPIStatus(ctx))}

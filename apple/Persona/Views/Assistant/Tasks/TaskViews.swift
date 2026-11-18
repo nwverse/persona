@@ -1,5 +1,6 @@
 import PersonaKit
 import SwiftUI
+import PersonaWire
 
 // The unified entry's pieces in the assistant's conversation (docs/assistant/unified-entry.md): the plan card, the hand-off card,
 // the lines the hub adds (answered, receipt, routed), the dock above the composer, the questions of the tasks' agents,
@@ -135,6 +136,8 @@ enum TaskPlace {
 @MainActor @Observable final class PlanChoices {
     /// Start These Directly: this kind of task starts without asking from now on.
     var remember = false
+    /// Let the scheduled task whose run planned this start this kind by itself from now on (#8045).
+    var scheduleGrant = false
     var editing = false
     /// Each task's ultracode as set on the card (#12), by index; the assistant's where it is not.
     var ultra: [Int: Bool] = [:]
@@ -192,6 +195,7 @@ struct PlanCard: View {
                     .contentShape(.rect)
             }
             .buttonStyle(.plain)
+            if let title = grantTitle { PlanScheduleGrant(title: title, choices: picked) }
             if !actionsPinned { PlanActions(plan: plan, choices: picked) }
         }
         .card(padding: Theme.Space.l)
@@ -200,9 +204,17 @@ struct PlanCard: View {
                 picked.editing = false
                 let blocked = Ultracode.blockedMachines(edits)
                 let sent = Ultracode.editsToSend(plan, edits: edits, blocked: { blocked.contains($0) })
-                Task { await store.start(plan, edits: sent, remember: picked.remember) }
+                Task { await store.start(plan, edits: sent, remember: picked.remember, scheduleGrant: picked.grantsSchedule(plan)) }
             }
         }
+    }
+
+    /// The name under which the card offers "Let … Start These by Itself" (#8045), nil where it offers nothing.
+    private var grantTitle: String? {
+        #if DEBUG
+        if StartGrantSample.on, plan.tasks.contains(where: { !$0.isReadOnly }) { return plan.grantableSchedule?.title ?? StartGrantSample.title }
+        #endif
+        return plan.grantableSchedule?.title
     }
 
     private func settled(symbol: String, text: String, failed: [PlanTask]) -> some View {
@@ -221,6 +233,53 @@ struct PlanCard: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+#if DEBUG
+/// `-showStartGrantSample YES` (#8045, screenshots against a mock hub that has no start grants): every open plan with a
+/// task that changes files offers the schedule's option, and a scheduled task's editor lists two kinds.
+enum StartGrantSample {
+    static let on = UserDefaults.standard.bool(forKey: "showStartGrantSample")
+    static let title = Locale.current.language.languageCode?.identifier == "zh" ? "周报" : "Weekly report" // i18n-ignore
+    static let kinds = ["macbook|/Users/me/code/weather|edit", "studio|/Users/me/notes|read"]
+}
+#endif
+
+extension PlanChoices {
+    /// Whether Start lets the plan's scheduled task start this kind by itself: ticked, and offered on this plan.
+    func grantsSchedule(_ plan: TaskPlan) -> Bool { scheduleGrant && plan.grantableSchedule != nil }
+}
+
+/// "Let “…” Start These by Itself" under Start These Directly (#8045), on a plan a scheduled task's own run made: drawn
+/// as that one, with what it covers under it.
+struct PlanScheduleGrant: View {
+    var title: String
+    var choices: PlanChoices
+
+    var body: some View {
+        let name = title.isEmpty ? String(localized: "This Scheduled Task") : title
+        VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+            Button {
+                withAnimation(Theme.Motion.state) { choices.scheduleGrant.toggle() }
+            } label: {
+                Label {
+                    Text("Let “\(name)” Start These by Itself").buttonLabelLine()
+                } icon: {
+                    // the same mark as Start These Directly's, so the two read as one group
+                    ThemedIcon(choices.scheduleGrant ? Theme.Icon.successFilled : Theme.Icon.unchecked)
+                }
+                .font(Theme.Font.caption)
+                .foregroundStyle(choices.scheduleGrant ? Theme.accent : .secondary)
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .accessibilityAddTraits(choices.scheduleGrant ? .isSelected : [])
+            Text("Only in this scheduled task's own runs, never after it read mail, Inbox or web pages. You can remove this on its page.")
+                .font(Theme.Font.label)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 
@@ -247,7 +306,7 @@ struct PlanActions: View {
         Button {
             let blocked = Ultracode.blockedMachines(plan.tasks)
             let edits = Ultracode.cardEdits(plan, choices: Ultracode.choices(plan, card: choices.ultra), blocked: { blocked.contains($0) })
-            Task { await store.start(plan, edits: edits, remember: choices.remember) }
+            Task { await store.start(plan, edits: edits, remember: choices.remember, scheduleGrant: choices.grantsSchedule(plan)) }
         } label: {
             Text(plan.tasks.count > 1 ? String(localized: "Start \(plan.tasks.count) Tasks") : String(localized: "Start"))
                 .lineLimit(1).fixedSize(horizontal: true, vertical: false)
@@ -420,12 +479,15 @@ struct FeedLine: View {
             // A routine's facts (#2320); a body this build can't read leaves the card out, never the feed around it.
             if let brief = item.brief { BriefCard(brief: brief, group: group, conversation: item.conversation) }
         case .message:
-            if let id = item.ref, !store.laterMessages.contains(id) { MessageCard(item: item, itemID: id) }
+            if let id = item.ref, !store.isLater(item) { MessageCard(item: item, itemID: id) }
         case .inboxSuggestion:
             // A hand-off conversation's write-back (#5932); a body this build can't read leaves the card out.
             if let id = item.ref, let card = item.handoffCard { HandoffCardView(item: item, card: card, itemID: id) }
         case .answered: AnsweredLine(item: item, taskTitle: taskTitle)
-        case .receipt: ReceiptCard(item: item)
+        case .receipt, .review, .report:
+            // A task's progress is its row in Needs You / In Progress, not a card in the chat (#8237): the chat leaves
+            // these out before they get here (`ChatLines.drawnFeed`).
+            EmptyView()
         case .routed:
             // Persona's own message to the task's agent is never the user's bubble (#1542). The new conversation layout
             // (#1666): "Persona → @task" folded in Persona's box, the user's own "Me → @task" in the user's box.
@@ -436,9 +498,6 @@ struct FeedLine: View {
             } else {
                 routed
             }
-        case .review: ReviewFeedLine(item: item, taskTitle: taskTitle)
-        case .report:
-            if layout.on { ReportExchange(item: item, taskTitle: taskTitle, layout: layout) } else { ReportFeedLine(item: item, taskTitle: taskTitle) }
         case .view:
             // Until the shared interactive renderer is connected, show the current card's plain-text fallback.
             if let id = item.ref,
@@ -745,358 +804,35 @@ struct MessageCard: View {
     }
 }
 
-/// A task finished (or its agent did not start): what it did, its PR, and what to do next.
-struct ReceiptCard: View {
-    var item: FeedItem
-    @Environment(\.openURL) private var openURL
-    private var store: TasksStore { .shared }
-
-    /// What a receipt says (#2362; the web's `receiptState` and `OutcomeReceipt`, #975). A receipt ends a stretch of work,
-    /// not the task: a done one reads "done" only once its to-do is, and says the task stopped unfinished while the to-do
-    /// is open. One whose to-do is gone from the list stands on its receipt. A turn the model service cut off is its own
-    /// state: `interrupted`, or a `done` from an older hub whose summary is the API error.
-    nonisolated enum Outcome: Equatable {
-        case done, stopped, failed
-        case interrupted(reason: String?)
-    }
-
-    nonisolated static func outcome(_ item: FeedItem, todo: TodoItem?) -> Outcome {
-        if item.failed { return .failed }
-        if item.turnInterrupted { return .interrupted(reason: TurnErrorReason.of(item.receiptError ?? item.summary)) }
-        if let reason = TurnErrorReason.of(item.summary) { return .interrupted(reason: reason) }
-        if let todo, todo.doneAt == nil { return .stopped }
-        return .done
-    }
-
-    /// The task's name on its receipt (#3036): its to-do's title now, so a rename (the user's, or the model's a moment
-    /// after the task was handed out) shows on every receipt, as on the card and lines beside it; the receipt's own title
-    /// (the name when it was written) once the to-do is gone from the list.
-    nonisolated static func title(_ item: FeedItem, todo: TodoItem?) -> String {
-        if let now = todo?.title.trimmingCharacters(in: .whitespacesAndNewlines), !now.isEmpty { return now }
-        return item.title ?? String(localized: "Tasks")
-    }
-
-    var body: some View {
-        switch item.interruptLook {
-        case .hidden: EmptyView() // drawn inside its batch's card (#3834)
-        case .batch(let batch): InterruptBatchCard(batch: batch)
-        case .resolved(let resolution):
-            InterruptHandledLine(todoID: item.ref, title: Self.title(item, todo: item.ref.flatMap { store.todos[$0] }), resolution: resolution)
-        case .pending, nil: card
-        }
-    }
-
-    /// DEBUG `-openReceiptAll YES`: receipts open on their whole summary (the name is in release.sh's list).
-    private static var opensOnAll: Bool {
-        #if DEBUG
-        UserDefaults.standard.bool(forKey: "openReceiptAll")
-        #else
-        false
-        #endif
-    }
-
-    @Environment(MessageMenu.self) private var menu: MessageMenu?
-    /// "Show All": the whole summary, not its first four lines.
-    @State private var all = ReceiptCard.opensOnAll
-    /// The summary is longer than its four lines, measured (so Show All and Hide appear only when there is more).
-    @State private var cuts: Set<Int> = []
-
-    /// What the actions under a receipt are (docs/design/task-cards.md §3.3), apart from the PR and View: a failed start
-    /// is retried while its to-do still is one, a turn cut off is continued unless the usage limit continues by itself.
-    nonisolated enum Action: Equatable { case retry, continueWork }
-
-    nonisolated static func action(_ outcome: Outcome, todoFailed: Bool, stillInterrupted: Bool, limitContinues: Bool) -> Action? {
-        switch outcome {
-        case .failed: todoFailed ? .retry : nil
-        case .interrupted: stillInterrupted && !limitContinues ? .continueWork : nil
-        case .done, .stopped: nil
-        }
-    }
-
-    /// What Copy and Quote take: the heading, then the summary when there is one.
-    nonisolated static func shareText(heading: String, detail: String?) -> String {
-        guard let detail, !detail.isEmpty else { return heading }
-        return heading + "\n\n" + detail
-    }
-
-    @ViewBuilder private var card: some View {
-        let todo = item.ref.flatMap { store.todos[$0] }
-        let outcome = Self.outcome(item, todo: todo)
-        let title = Self.title(item, todo: todo)
-        let lead = todo.flatMap { store.leadSession($0) }
-        // a turn is still cut off while its Agent has stopped on the error (an Agent not known yet is not "continued")
-        let stopped = lead.map { !($0.turnError ?? "").isEmpty && ($0.state == .unread || $0.state == .idle) } ?? true
-        let interrupted: Bool = if case .interrupted = outcome { true } else { false }
-        let limited = interrupted && (lead?.isUsageLimited() ?? false)
-        let failedNow = todo.map { store.state($0) == .failed } ?? false
-        let action = Self.action(outcome, todoFailed: failedNow, stillInterrupted: stopped, limitContinues: limited && (lead?.usageLimitContinues ?? false))
-        let tint: Color = switch outcome {
-        case .failed, .interrupted: limited ? Theme.caution : Theme.danger
-        case .stopped: .secondary
-        case .done: Theme.positive
-        }
-        let heading = Self.heading(outcome, title: title)
-        let detail = limited ? lead?.usageLimitLabel() : Self.detail(outcome, summary: item.summary)
-        if outcome == .failed, let todo, !failedNow, lead != nil, todo.doneAt == nil {
-            // started again (it has an Agent, is not failed and not closed): a quiet line, not a red card with a Retry that has
-            // nothing to retry; one closed another way has no restart to claim
-            Label(String(localized: "“\(title)” started on retry"), systemImage: Theme.Icon.successFilled)
-                .font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(2)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .accessibilityIdentifier("receipt.restarted")
-        } else if case .interrupted = outcome, todo != nil, !stopped {
-            Label(String(localized: "“\(title)” continued after the interruption"), systemImage: Theme.Icon.successFilled)
-                .font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(2)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .accessibilityIdentifier("receipt.continued")
-        } else {
-            HStack(alignment: .top, spacing: Theme.Space.m) {
-                ThemedIcon(limited ? Theme.Icon.backgroundWaiting : Self.icon(outcome))
-                    .font(Theme.Font.heading)
-                    .foregroundStyle(tint)
-                VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                    Text(heading)
-                        .font(Theme.Font.bodyStrong)
-                    if let s = detail {
-                        // The Agent's last words as Markdown, not raw `**` (#2363).
-                        let text = ExchangeText.linked(s)
-                        Text(text).font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(all ? nil : 4)
-                            .background { ClampMeasure(text: text, lines: 4, font: Theme.Font.secondary, cuts: $cuts) }
-                            .animation(Theme.Motion.state, value: all)
-                        if !cuts.isEmpty || all {
-                            Button { all.toggle() } label: { Text(all ? String(localized: "Show Less") : String(localized: "Show All")).lineLimit(1) }
-                                .font(Theme.Font.captionStrong)
-                                .buttonStyle(.plain)
-                                .foregroundStyle(Theme.accent)
-                                .tapTargetHeight()
-                                .accessibilityIdentifier("receipt.showall")
-                        }
-                    }
-                    actions(todo: todo, outcome: outcome, action: action, heading: heading, detail: detail)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .padding(Theme.Space.l)
-            .background(outcome == .stopped || limited ? Theme.Fill.well : tint.opacity(0.12),
-                        in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
-            .accessibilityIdentifier("receipt.\(Self.outcomeKey(outcome))")
-        }
-    }
-
-    /// PR and View, Retry or Continue, and a menu with Copy and Quote: one line each, the least needed in the row.
-    @ViewBuilder private func actions(todo: TodoItem?, outcome: Outcome, action: Action?, heading: String, detail: String?) -> some View {
-        HStack(spacing: Theme.Space.s) {
-            if let pr = item.pr, let url = URL(string: pr), let label = item.prLabel {
-                Button { openURL(url) } label: { Label(label, systemImage: Theme.Icon.pullRequest).lineLimit(1) }
-                    .themedButton()
-            }
-            if let todo, let action {
-                let busy = store.busyRetries.contains(todo.id)
-                Button { Task { await store.retry(todo) } } label: {
-                    Text(action == .retry ? String(localized: "Retry") : String(localized: "Continue")).lineLimit(1)
-                        .opacity(busy ? 0 : 1).overlay { if busy { ProgressView().controlSize(.small) } }
-                }
-                .themedButton(prominent: true)
-                .disabled(busy)
-                .accessibilityIdentifier(action == .retry ? "receipt.retry" : "receipt.continue")
-            }
-            if let id = item.ref, todo != nil, outcome != .failed {
-                Button { store.detailTask = id } label: { Text("View [Task Views d87059]").lineLimit(1) }
-                    .themedButton()
-            }
-            let shared = Self.shareText(heading: heading, detail: detail)
-            Menu {
-                Button { CodeCopy.copy(shared, said: String(localized: "Copied [Mac Hover 07d6bb]")) } label: {
-                    Label(String(localized: "Copy"), systemImage: Theme.Icon.copy)
-                }
-                if let menu {
-                    Button { menu.quote?(shared, item.id, false, nil) } label: {
-                        Label(String(localized: "Quote"), systemImage: Theme.Icon.quote)
-                    }
-                }
-            } label: {
-                ThemedIcon(Theme.Icon.moreMenu).font(Theme.Font.bodyStrong).foregroundStyle(.secondary)
-                    .tapTargetFrame()
-                    .contentShape(.rect)
-            }
-            .accessibilityLabel(String(localized: "More"))
-            .accessibilityIdentifier("receipt.more")
-        }
-        .font(Theme.Font.captionStrong)
-        .padding(.top, Theme.Space.xs)
-    }
-
-    nonisolated static func icon(_ outcome: Outcome) -> String {
-        switch outcome {
-        case .failed, .interrupted: Theme.Icon.errorFilled
-        case .stopped: Theme.Icon.time
-        case .done: Theme.Icon.successFilled
-        }
-    }
-
-    nonisolated static func heading(_ outcome: Outcome, title: String) -> String {
-        switch outcome {
-        case .failed: String(localized: "\(title) didn't start")
-        case .interrupted: String(localized: "Task “\(title)” was interrupted")
-        case .stopped: String(localized: "\(title) stopped, not done yet")
-        case .done: String(localized: "\(title) is done [Task Views cd37f3]")
-        }
-    }
-
-    /// The line under the heading: the agent's last words, or for an interrupted turn the reason in words rather than
-    /// the raw API error.
-    nonisolated static func detail(_ outcome: Outcome, summary: String?) -> String? {
-        if case .interrupted(let reason) = outcome {
-            if let reason, !reason.isEmpty { return String(localized: "Interrupted by a model service error: \(reason)") }
-            return String(localized: "Interrupted by a model service error")
-        }
-        guard let s = summary, !s.isEmpty else { return nil }
-        return s
-    }
-
-    nonisolated static func outcomeKey(_ outcome: Outcome) -> String {
-        switch outcome {
-        case .done: "done"
-        case .stopped: "stopped"
-        case .failed: "failed"
-        case .interrupted: "interrupted"
-        }
-    }
-}
-
-// MARK: - Interruptions after the fact (#3834)
-
-/// The words for how the hub says an interrupted task was dealt with.
-nonisolated enum InterruptWords {
-    static func resolution(_ r: InterruptResolution) -> String {
-        switch r {
-        case .pending: String(localized: "Pending [interrupt resolution]")
-        case .cancelled: String(localized: "Cancelled [interrupt resolution]")
-        case .rerouted: String(localized: "Dispatched again [interrupt resolution]")
-        case .resumed: String(localized: "Resumed [interrupt resolution]")
-        case .accepted: String(localized: "Accepted [interrupt resolution]")
-        case .done: String(localized: "Done [interrupt resolution]")
-        }
-    }
-
-    /// What cut a batch off (the hub's `cause`); one this build doesn't know reads as a model service error.
-    static func cause(_ c: String) -> String {
-        switch c {
-        case "rate_limited": String(localized: "Model service rate limit")
-        case "auth": String(localized: "Sign-in or key refused")
-        case "model_route": String(localized: "Unknown model [interrupt cause]")
-        case "no_output": String(localized: "Turns with no output")
-        default: String(localized: "Model service error")
-        }
-    }
-
-    static func title(_ b: InterruptBatch) -> String {
-        let what = cause(b.cause)
-        if let machine = b.machine, !machine.isEmpty {
-            return String(localized: "\(what) on \(machine): \(b.total) tasks interrupted")
-        }
-        return String(localized: "\(what): \(b.total) tasks interrupted")
-    }
-
-    static func counts(_ b: InterruptBatch) -> String {
-        b.pending > 0 ? String(localized: "→ \(b.resolved) handled / \(b.pending) pending") : String(localized: "→ all handled")
-    }
-}
-
-/// An interrupted task that was dealt with since: a grey line with its result; it opens the task.
-struct InterruptHandledLine: View {
-    var todoID: String?
-    var title: String
-    var resolution: InterruptResolution
-    private var store: TasksStore { .shared }
-
-    var body: some View {
-        let known = todoID.map { store.todos[$0] != nil } ?? false
-        Button { if let todoID { store.detailTask = todoID } } label: {
-            Label(String(localized: "“\(title)” was interrupted · \(InterruptWords.resolution(resolution))"), systemImage: Theme.Icon.infoFilled)
-                .lineLimit(1)
-                .font(Theme.Font.secondary)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .buttonStyle(.plain)
-        .disabled(!known)
-        .accessibilityIdentifier("receipt.interrupt.handled")
-    }
-}
-
-/// Several tasks one outage cut off: one card with its cause and how many are handled and still pending, that opens
-/// to each task and its result. Red only while one is pending.
-struct InterruptBatchCard: View {
-    var batch: InterruptBatch
-    @State private var open = false
-    private var store: TasksStore { .shared }
-
-    var body: some View {
-        let pending = batch.pending > 0
-        VStack(alignment: .leading, spacing: Theme.Space.s) {
-            Button { withAnimation(Theme.Motion.reveal) { open.toggle() } } label: {
-                HStack(alignment: .top, spacing: Theme.Space.m) {
-                    ThemedIcon(Theme.Icon.errorFilled)
-                        .font(Theme.Font.heading)
-                        .foregroundStyle(pending ? Theme.danger : .secondary)
-                    VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                        Text(InterruptWords.title(batch))
-                            .font(Theme.Font.bodyStrong)
-                            .foregroundStyle(pending ? Color.primary : Color.secondary)
-                        Text(InterruptWords.counts(batch))
-                            .font(Theme.Font.secondary)
-                            .foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    ThemedIcon(open ? Theme.Icon.expand : Theme.Icon.disclosure)
-                        .font(Theme.Font.caption)
-                        .foregroundStyle(.tertiary)
-                }
-                .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            if open {
-                VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                    ForEach(batch.tasks, id: \.receipt) { task in
-                        let todo = store.todos[task.todoID]
-                        Button { store.detailTask = task.todoID } label: {
-                            HStack(spacing: Theme.Space.s) {
-                                Text(todo?.title ?? task.title).lineLimit(1)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                Text(InterruptWords.resolution(task.resolved)).lineLimit(1)
-                                    .foregroundStyle(task.resolved == .pending ? Theme.danger : .secondary)
-                            }
-                            .font(Theme.Font.secondary)
-                            .contentShape(.rect)
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(todo == nil)
-                    }
-                }
-                .transition(.opacity)
-            }
-        }
-        .padding(Theme.Space.l)
-        .background(pending ? Theme.danger.opacity(0.12) : Theme.Fill.well,
-                    in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
-        .accessibilityIdentifier(pending ? "receipt.interrupt.batch.pending" : "receipt.interrupt.batch.handled")
-    }
-}
-
 // MARK: - Above the composer
 
 /// What the conversation's tasks are asking, at the bottom where the user is: the oldest question under its task's
 /// name, answered where it is; the next comes up when it is done (「还有 N 件」 counts them).
+///
+/// Capped as the cards' stack is (#9392): alone it may take the room a lone question takes (`FooterRoom.cardsRoom`,
+/// never less than half the page), beside the conversation's own cards half of that room, as Android's question does.
+/// Its card fits itself to the cap and scrolls inside. It had no cap: its form's scroll area, offered no height, took all
+/// the page had, the conversation got none (nothing left to scroll) and the card's top, with its fold, went under the
+/// page's top bar.
 struct TaskQuestions: View {
     var conversation: String
+    var room: FooterRoom
     private var store: TasksStore { .shared }
+    @State private var labelHeight: CGFloat = 0
+    @State private var shown: CGFloat = 0
+    /// What the footer holds besides both places of cards, held as `PendingCards.footerRest` is (#1580).
+    @State private var footerRest: CGFloat = 0
+    /// The page's (or column's) length, for the card's form (`cardRoom`).
+    @State private var containerLength: CGFloat = 0
 
     var body: some View {
         let asks = store.tasks(of: conversation)
             .flatMap { todo in store.interactions(todo).map { (todo: todo, ix: $0) } }
             .sorted { ($0.ix.createdAt ?? .distantPast) < ($1.ix.createdAt ?? .distantPast) }
         if let first = asks.first {
+            let cap = cap
+            let keyboard = keyboardRoom
+            let area = cap > 0 ? max(cap - labelHeight - Theme.Space.xs, Theme.Size.tapTarget) : 0
             VStack(alignment: .leading, spacing: Theme.Space.xs) {
                 HStack(spacing: Theme.Space.s) {
                     Label(first.todo.title, systemImage: Theme.Icon.askFirst).lineLimit(1)
@@ -1106,11 +842,47 @@ struct TaskQuestions: View {
                 .font(Theme.Font.captionStrong)
                 .foregroundStyle(AgentState.needsYou.tone.text)
                 .padding(.horizontal, Theme.Space.xs)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
+                    if abs(h - labelHeight) >= 1 { labelHeight = h }
+                }
                 InteractionPanel(interaction: first.ix)
+                    .environment(\.cardRoom, containerLength)
+                    .environment(\.cardArea, area)
+                    .environment(\.cardFits, keyboard ? area - Theme.Space.l : 0)
+                    // Alone, the cap is its only one (a lone question past half the page, #6277).
+                    .environment(\.cardTakesArea, !sharesRoom)
             }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("task-question")
             .id(first.ix.id)
             .transition(.move(edge: .bottom).combined(with: .opacity))
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
+                shown = h
+                if abs(room.taskShown - h) >= 1 { room.taskShown = h }
+            }
+            .onChange(of: room.footer - shown - room.stackShown, initial: true) { _, o in
+                if abs(o - footerRest) >= 1 { footerRest = o }
+            }
+            .onDisappear { room.taskShown = 0 }
+            .background {
+                Color.clear.containerRelativeFrame(.vertical)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { containerLength = $0 }
+                    .hidden()
+            }
         }
+    }
+
+    private var keyboardRoom: Bool { KeyboardState.shared.isUp && room.footer > 0 }
+    /// The conversation's own cards are on screen under the entries: half the room each (#9392).
+    private var sharesRoom: Bool { room.stackShown > 0 }
+
+    /// How tall the question with its task's name may be; 0 before the page is measured (no cap yet).
+    private var cap: CGFloat {
+        guard room.height > 0, room.footer > 0 else { return 0 }
+        let rest = footerRest > 0 ? footerRest : room.footer - shown - room.stackShown
+        let whole = room.cardsRoom(rest: rest, keyboard: keyboardRoom)
+        if sharesRoom { return max(Theme.Size.tapTarget, whole / 2) }
+        return keyboardRoom ? max(Theme.Size.tapTarget, whole) : max(room.height / 2, whole)
     }
 }
 

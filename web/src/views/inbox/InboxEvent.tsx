@@ -1,13 +1,15 @@
 // An inbox item as an event (docs/assistant/inbox.md "Events and handling chain", docs/web/web.md "Inbox"): the row's mark (the
-// manager's current state, or an older hub's handling / suggestion line) and the detail's body — ✦ summary, recap, the suggestion card
-// with its buttons right under it, then the handling chain folded to its three newest entries, each entry going where its link says.
+// manager's current state, or an older hub's handling / suggestion line) and the detail's body — ✦ summary, the suggestion card
+// with its buttons right under it, any recap, then the handling chain folded to its three newest entries, each entry going where its link says.
 // Drawn only for an item that carries this phase's fields (lib/inbox-events.ts `hasEvent`).
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   actOnSuggestion, canExpand, chainRows, chainTap, chainTime, firstLine, handlingFailed, handlingWord, preparing, suggestionButtons, suggestionTitle,
   type ChainEntry, type ChainTap, type InboxSuggestion,
 } from "../../lib/inbox-events";
-import { conversationRoute, docChangeLine, isDone, itemKey, itemPath, itemRoute, reloadInbox, replaceItem, suggestionAct, useInbox, type InboxItem } from "../../lib/inbox";
+import { conversationRoute, isDone, itemKey, itemPath, itemRoute, reloadInbox, replaceItem, suggestionAct, useInbox, type InboxItem } from "../../lib/inbox";
+import { markdownBody, markdownInSummary, withoutMarks } from "../../lib/inbox-markdown";
+import { docChangeLine } from "../../lib/inbox-page";
 import { otherManager } from "../../lib/manager-choice";
 import { nowText } from "../../lib/inbox-now";
 import { connectorBrand } from "../../lib/connectors";
@@ -21,6 +23,7 @@ import { t } from "../../i18n";
 import { Button, cx, Shimmer, Spinner, Switch, toast } from "../../ui/atoms";
 import { BrandMark } from "../../ui/BrandMark";
 import { Icon, type IconName } from "../../ui/icons";
+import { Markdown } from "../../ui/Markdown";
 import { StatusMark } from "../../ui/StatusMark";
 import { useFoldScroll } from "../chat/fold-scroll";
 import { useInboxView } from "../../lib/inbox-view-memory";
@@ -48,7 +51,7 @@ export function EventMark({ it }: { it: InboxItem }) {
     const working = key === "queued" || key === "looking" || key === "agent_working";
     const icon = key === "waiting" ? "clock" : working ? "spinner" : needsYou ? "needs-you" : key.startsWith("done_") ? "check" : "none";
     return (
-      <p className={cx("flex min-w-0 items-center gap-1.5 text-[11.5px] whitespace-nowrap", key === "failed" ? "text-red" : isDone(it) ? "text-ink-3" : "text-ink-2")} data-event-mark="now" data-event-icon={icon}>
+      <p className={cx("flex min-w-0 items-center gap-1.5 text-submeta whitespace-nowrap", key === "failed" ? "text-red" : isDone(it) ? "text-ink-3" : "text-ink-2")} data-event-mark="now" data-event-icon={icon}>
         {icon === "clock" && <Icon name="clock" size={12} className="shrink-0 text-ink-3" />}
         {icon === "spinner" && <Spinner size={11} />}
         {/* failed keeps the Needs-you shape, but both its mark and its words use the danger color */}
@@ -66,7 +69,7 @@ export function EventMark({ it }: { it: InboxItem }) {
     // An older hub keeps the manager-done line alone.
     if (it.done_by !== "manager") return null;
     return (
-      <p className="flex min-w-0 items-center gap-1.5 text-[11.5px] whitespace-nowrap text-ink-3" data-event-mark="manager-done">
+      <p className="flex min-w-0 items-center gap-1.5 text-submeta whitespace-nowrap text-ink-3" data-event-mark="manager-done">
         <Icon name="check" size={12} stroke={2.4} className="shrink-0" />
         <span className="truncate">{t("inbox-inboxevent.manager_done")}</span>
       </p>
@@ -75,7 +78,7 @@ export function EventMark({ it }: { it: InboxItem }) {
   const s = it.suggestion;
   if (s) {
     return (
-      <p className="flex min-w-0 items-center gap-1.5 text-[11.5px] whitespace-nowrap" data-event-mark="suggestion">
+      <p className="flex min-w-0 items-center gap-1.5 text-submeta whitespace-nowrap" data-event-mark="suggestion">
         <span className="shrink-0 font-medium text-accent-ink"><Spark />{suggestionTitle(s)}</span>
         <span className="min-w-0 truncate text-ink-2">{firstLine(s.text)}</span>
       </p>
@@ -83,7 +86,7 @@ export function EventMark({ it }: { it: InboxItem }) {
   }
   if (preparing(it)) {
     return (
-      <p className="flex min-w-0 items-center gap-1.5 text-[11.5px] whitespace-nowrap" data-event-mark="preparing">
+      <p className="flex min-w-0 items-center gap-1.5 text-submeta whitespace-nowrap" data-event-mark="preparing">
         <Spinner size={11} />
         <Shimmer className="truncate">{t("inbox-inboxevent.preparing")}</Shimmer>
       </p>
@@ -91,7 +94,7 @@ export function EventMark({ it }: { it: InboxItem }) {
   }
   if (handlingFailed(it)) {
     return (
-      <p className="flex min-w-0 items-center gap-1.5 text-[11.5px] whitespace-nowrap text-red" data-event-mark="failed">
+      <p className="flex min-w-0 items-center gap-1.5 text-submeta whitespace-nowrap text-red" data-event-mark="failed">
         <Icon name="warning" size={12} className="shrink-0" />
         <span className="truncate">{t("inbox-inboxevent.failed_short")}</span>
       </p>
@@ -101,7 +104,7 @@ export function EventMark({ it }: { it: InboxItem }) {
   if (!oldWord) return null;
   const waiting = it.handling?.state === "waiting";
   return (
-    <p className="flex min-w-0 items-center gap-1.5 text-[11.5px] whitespace-nowrap text-ink-2" data-event-mark="working">
+    <p className="flex min-w-0 items-center gap-1.5 text-submeta whitespace-nowrap text-ink-2" data-event-mark="working">
       {waiting ? <Icon name="clock" size={12} className="shrink-0 text-ink-3" /> : <Spinner size={11} />}
       <span className="truncate">{oldWord}</span>
     </p>
@@ -111,7 +114,7 @@ export function EventMark({ it }: { it: InboxItem }) {
 // ── the detail ───────────────────────────────────────────
 
 /**
- * The detail's body for an event: the active state and its actions, the suggestion, summary and recap, the handling chain, "Related" and "Trail".
+ * The detail's body for an event: the active state and its actions, the summary, any suggestion and recap, the handling chain, "Related" and "Trail".
  * `embedded`: above the item's own page (a Feishu chat or mail, #3262 / #5471), as tall as it needs up to a share of the pane, then scrolling.
  */
 export function EventBody({ item, onSource, embedded = false }: { item: InboxItem; onSource: (at: SourceAt) => void; embedded?: boolean }) {
@@ -120,28 +123,33 @@ export function EventBody({ item, onSource, embedded = false }: { item: InboxIte
   // capped above the source: its bottom fades while there is more below, so a cut-off row reads as more to scroll to
   const box = useRef<HTMLDivElement>(null);
   const fold = useFoldScroll(box, embedded, [item]);
+  const hasConversation = Boolean(item.handling?.machine_id && item.handling.session_id);
   const body = (
     <div ref={box} {...fold} className={embedded ? "min-h-0 overflow-y-auto" : "min-h-0 flex-1 overflow-y-auto"} data-event-body={embedded ? "embedded" : ""}>
       <div className={cx("mx-auto flex max-w-[760px] flex-col px-4 sm:px-6", embedded ? "gap-3 py-3" : "gap-4 py-4")}>
-        {(!done || now !== undefined) && <HandlingLine item={item} now={now} />}
-        {done && now === undefined && item.done_by === "manager" && (
+        {(!done || now !== undefined || hasConversation) && <HandlingLine item={item} now={now} />}
+        {done && now === undefined && item.done_by === "manager" && !hasConversation && (
           <p className="flex items-center gap-2 text-[12.5px] text-ink-2" data-event-manager-done>
             <Icon name="check" size={13} stroke={2.4} className="shrink-0 text-green" />
             {t("inbox-inboxevent.manager_done")}
           </p>
         )}
+        {!done && item.suggestion && item.summary && <EventSummary text={item.summary} marked />}
         {!done && item.suggestion && <SuggestionCard key={`${item.id}@${item.suggestion.version}`} item={item} suggestion={item.suggestion} />}
-        {(item.summary || item.recap) && (
+        {!done && item.suggestion && item.recap && (
           <section className="flex flex-col gap-2">
-            {item.summary && (
-              <p className="text-[13.5px] leading-relaxed font-medium text-ink">
-                <Spark />
-                {item.summary}
-              </p>
-            )}
+            <div>
+              <p className="text-submeta font-medium text-ink-3">{t("inbox-inboxevent.recap")}</p>
+              <p className="mt-0.5 text-meta leading-relaxed whitespace-pre-wrap text-ink-2" data-event-recap>{item.recap}</p>
+            </div>
+          </section>
+        )}
+        {(done || !item.suggestion) && (item.summary || item.recap) && (
+          <section className="flex flex-col gap-2">
+            {item.summary && (markdownBody(item) ? <AssistantBody key={itemKey(item)} text={markdownBody(item)!} /> : <EventSummary text={item.summary} />)}
             {item.recap && (
               <div>
-                <p className="text-[11.5px] font-medium text-ink-3">{t("inbox-inboxevent.recap")}</p>
+                <p className="text-submeta font-medium text-ink-3">{t("inbox-inboxevent.recap")}</p>
                 <p className="mt-0.5 text-meta leading-relaxed whitespace-pre-wrap text-ink-2" data-event-recap>{item.recap}</p>
               </div>
             )}
@@ -157,7 +165,52 @@ export function EventBody({ item, onSource, embedded = false }: { item: InboxIte
   return embedded ? <div className="flex max-h-[40%] shrink-0 flex-col border-b border-line">{body}</div> : body;
 }
 
+/** Lines an assistant row's text shows folded: a briefing's conclusion and first section. */
+const BODY_LINES = 10;
+/** Folded: ten lines high, scrolling inside, its bottom fading while there is more (fold-scroll), as a long message in the chat. */
+const BODY_FOLDED = "max-h-[10lh] overflow-y-auto";
+
+/** The assistant's own row's text (#9041): the chat's Markdown, folded to BODY_LINES with Expand under it when it runs
+ *  longer, never cut with "…". */
+function AssistantBody({ text }: { text: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [long, setLong] = useState(() => text.split("\n").length > BODY_LINES);
+  const [open, setOpen] = useState(false);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || open) return;
+    // its whole height in lines (a fold's scrollHeight is all of it)
+    const line = parseFloat(getComputedStyle(el).lineHeight) || 22;
+    setLong(el.scrollHeight / line > BODY_LINES + 0.5);
+  }, [text, open]);
+  const folded = long && !open;
+  const fold = useFoldScroll(ref, folded, [text]);
+  return (
+    <div className="flex flex-col items-start gap-1" data-event-text>
+      <div ref={ref} {...fold} className={cx("w-full text-meta leading-relaxed text-ink", folded && BODY_FOLDED)} data-folded={folded || undefined}>
+        {/* a reply, read line by line as it was written, as the chat draws one */}
+        <Markdown text={text} small lineBreaks />
+      </div>
+      {long && (
+        <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="rounded-[6px] px-1.5 py-0.5 text-label font-medium whitespace-nowrap text-ink-3 transition-colors hover:bg-hover-2 hover:text-ink-2">
+          {open ? t("inbox-inboxevent.entry_collapse") : t("inbox-inboxevent.entry_expand")}
+        </button>
+      )}
+    </div>
+  );
+}
+
 /** The active state, its processing conversation, and a way to instruct an open item without a suggestion. */
+/** The ✦ summary, before the suggestion (`marked`, #7473) or with the recap: one paragraph style for both. */
+function EventSummary({ text, marked = false }: { text: string; marked?: boolean }) {
+  return (
+    <p className="text-[13.5px] leading-relaxed font-medium text-ink" data-event-summary={marked || undefined}>
+      <Spark />
+      {text}
+    </p>
+  );
+}
+
 function HandlingLine({ item, now }: { item: InboxItem; now?: string }) {
   const conversation = useConversation();
   const [sayOpen, setSayOpen] = useState(false);
@@ -167,8 +220,9 @@ function HandlingLine({ item, now }: { item: InboxItem; now?: string }) {
   const done = isDone(item);
   const canSay = !done && !item.suggestion;
   const failed = canSay && (handlingFailed(item) || item.now === "failed");
+  const showPreparing = !done && preparing(item);
   if (!h && !canSay && now === undefined) return null;
-  const word = now ?? handlingWord(item);
+  const word = now ?? (done ? (item.done_by === "manager" ? t("inbox-inboxevent.manager_done") : undefined) : handlingWord(item));
   const working = h?.state === "looking" || h?.state === "agent";
   const to = h?.machine_id && h.session_id ? conversation(h.machine_id, h.session_id) : undefined;
   const instruct = async (words: string) => {
@@ -203,10 +257,10 @@ function HandlingLine({ item, now }: { item: InboxItem; now?: string }) {
   ) : null);
   const showSay = sayOpen && canSay && !failed;
   const actions = (open || action) ? <div className="flex shrink-0 items-center gap-2" data-event-status-actions>{open}{action}</div> : null;
-  if (!preparing(item) && !failed && !word && !action && !showSay) return null;
+  if (!showPreparing && !failed && !word && !(done && open) && !action && !showSay) return null;
   return (
     <div className="flex flex-col gap-2">
-      {preparing(item) ? (
+      {showPreparing ? (
         <div className="flex min-w-0 flex-col gap-2 rounded-[10px] bg-inset p-3 text-[12.5px] shadow-hairline sm:flex-row sm:items-center" data-event-preparing>
           <div className="flex min-w-0 items-center gap-2 sm:flex-1">
             <Spinner size={12} />
@@ -230,7 +284,7 @@ function HandlingLine({ item, now }: { item: InboxItem; now?: string }) {
           </div>
           {actions}
         </div>
-      ) : action ? <div className="flex justify-end gap-2">{open}{action}</div> : null}
+      ) : (done && open) || action ? <div className="flex justify-end gap-2">{open}{action}</div> : null}
       {showSay && (
         <div className="flex flex-col gap-2" data-event-say>
           <label className="flex h-8 items-center gap-2 rounded-control bg-field px-2.5 focus-within:shadow-[inset_0_0_0_1px_var(--accent)]">
@@ -289,7 +343,7 @@ function TodoSuggestion({ item, suggestion: s }: { item: InboxItem; suggestion: 
   const field = "h-8 rounded-control bg-field px-2.5 text-meta text-ink outline-none focus:shadow-[inset_0_0_0_1px_var(--accent)]";
   return (
     <section className="rounded-[14px] bg-surface p-3.5 shadow-card" data-suggestion="todo">
-      <p className="flex items-center gap-1.5 text-[11.5px] font-medium whitespace-nowrap text-accent-ink"><span><Spark />{suggestionTitle(s)}</span></p>
+      <p className="flex items-center gap-1.5 text-submeta font-medium whitespace-nowrap text-accent-ink"><span><Spark />{suggestionTitle(s)}</span></p>
       <input value={title} onChange={(e) => setTitle(e.target.value)} aria-label={t("inbox-inboxevent.todo_title")} className={cx(field, "mt-2 w-full")} data-todo-title />
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <input type="date" value={day} onChange={(e) => setDay(e.target.value)} aria-label={t("inbox-inboxevent.todo_day")} className={field} data-todo-day />
@@ -345,7 +399,7 @@ function TextSuggestion({ item, suggestion: s }: { item: InboxItem; suggestion: 
   const edited = text.trim() && text !== s.text ? text : undefined;
   return (
     <section className="rounded-[14px] bg-surface p-3.5 shadow-card" data-suggestion={s.kind} data-handback={s.handback ? "" : undefined}>
-      <p className="flex items-center gap-1.5 text-[11.5px] font-medium whitespace-nowrap text-accent-ink">
+      <p className="flex items-center gap-1.5 text-submeta font-medium whitespace-nowrap text-accent-ink">
         <span><Spark />{suggestionTitle(s)}</span>
         {s.handback && <span className="text-ink-3">· {t("inbox-inboxevent.handback")}</span>}
       </p>
@@ -387,7 +441,7 @@ function TextSuggestion({ item, suggestion: s }: { item: InboxItem; suggestion: 
         <>
           <p className="mt-1.5 text-meta leading-relaxed whitespace-pre-wrap text-ink" data-suggestion-text>{s.text}</p>
           {(s.changes ?? []).map((c) => (
-            <p key={`${c.ref}|${c.field}`} className="mt-1 flex items-center gap-1.5 truncate text-[11.5px] text-ink-2">
+            <p key={`${c.ref}|${c.field}`} className="mt-1 flex items-center gap-1.5 truncate text-submeta text-ink-2">
               <Icon name="chevronRight" size={11} stroke={2.4} className="shrink-0 text-ink-3" />
               <span className="truncate">{docChangeLine(c, item.doc)}</span>
             </p>
@@ -464,6 +518,14 @@ function ChainIcon({ item, e }: { item: InboxItem; e: ChainEntry }) {
   );
 }
 
+/** The Agent session a step links, or none for the processing conversation and non-Agent steps. */
+function agentSession(e: ChainEntry): { key: string; machine: string; session: string } | undefined {
+  if (e.kind !== "agent" && e.kind !== "agent_stopped") return undefined;
+  const link = e.link as Record<string, unknown> | undefined;
+  if (link?.type !== "session" || typeof link.machine_id !== "string" || typeof link.session_id !== "string") return undefined;
+  return { key: `${link.machine_id}\u0000${link.session_id}`, machine: link.machine_id, session: link.session_id };
+}
+
 /** The handling chain: folded to the three newest entries, "Show all (N)" shows them all, oldest first. */
 export function Chain({ item, onSource }: { item: InboxItem; onSource: (at: SourceAt) => void }) {
   const view = useInboxView();
@@ -481,6 +543,11 @@ export function Chain({ item, onSource }: { item: InboxItem; onSource: (at: Sour
   const all = item.chain ?? [];
   if (!all.length) return null;
   const rows = chainRows(all, open);
+  const latestAgent = new Map<string, string>();
+  for (const e of all) {
+    const link = agentSession(e);
+    if (link) latestAgent.set(link.key, e.id);
+  }
   const tap = (x: ChainTap) => {
     if (x.kind === "source") {
       if (x.url) {
@@ -491,18 +558,17 @@ export function Chain({ item, onSource }: { item: InboxItem; onSource: (at: Sour
     } else if (x.kind === "route") openFromInbox(x.route);
   };
   const agentState = (e: ChainEntry) => {
-    if (e.kind !== "agent" && e.kind !== "agent_stopped") return undefined;
-    const link = e.link as Record<string, unknown> | undefined;
-    if (link?.type !== "session" || typeof link.machine_id !== "string" || typeof link.session_id !== "string") return undefined;
-    const session = sessions[link.machine_id]?.find((s) => s.session_id === link.session_id);
+    const link = agentSession(e);
+    if (!link || latestAgent.get(link.key) !== e.id) return undefined;
+    const session = sessions[link.machine]?.find((s) => s.session_id === link.session);
     return session ? stateName(stateOf(session)) : undefined;
   };
   return (
     <section data-event-chain>
       <div className="flex items-center gap-2 pb-1">
-        <p className="min-w-0 flex-1 text-[11.5px] font-medium whitespace-nowrap text-ink-3">{t("inbox-inboxevent.chain")}</p>
+        <p className="min-w-0 flex-1 text-submeta font-medium whitespace-nowrap text-ink-3">{t("inbox-inboxevent.chain")}</p>
         {all.length > 3 && (
-          <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="h-6 shrink-0 rounded-[6px] px-1.5 text-[11.5px] font-medium whitespace-nowrap text-ink-3 transition-colors hover:bg-hover hover:text-ink" data-chain-toggle>
+          <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="h-6 shrink-0 rounded-[6px] px-1.5 text-submeta font-medium whitespace-nowrap text-ink-3 transition-colors hover:bg-hover hover:text-ink" data-chain-toggle>
             {open ? t("inbox-inboxevent.chain_collapse") : t("inbox-inboxevent.chain_expand", { count: all.length })}
           </button>
         )}
@@ -531,16 +597,17 @@ function ChainRow({ item, e, tap, onTap, agentState }: { item: InboxItem; e: Cha
           aria-expanded={!goes && expandable ? open : undefined}
           className={cx("flex min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-1.5 text-left text-[12.5px]", goes || expandable ? cx("hover:bg-field", reported ? "text-ink-2" : "text-ink") : cx("cursor-default", reported ? "text-ink-2" : "text-ink"))}
         >
-          <span className="min-w-[34px] shrink-0 text-[11.5px] whitespace-nowrap text-ink-3 tabular-nums">{chainTime(e.at)}</span>
+          <span className="min-w-[34px] shrink-0 text-submeta whitespace-nowrap text-ink-3 tabular-nums">{chainTime(e.at)}</span>
           <ChainIcon item={item} e={e} />
           {reported && <Tag>{t("inbox-inboxdetail.assistant_says")}</Tag>}
           <span className="min-w-0 flex-1 truncate">{text}</span>
-          {agentState && <span className="shrink-0 text-[11.5px] whitespace-nowrap text-ink-3" data-chain-agent-state>{agentState}</span>}
+          {agentState && <span className="shrink-0 text-submeta whitespace-nowrap text-ink-3" data-chain-agent-state>{agentState}</span>}
           {goes && <Icon name="chevronRight" size={11} stroke={2.4} className="shrink-0 text-ink-3" />}
           {!goes && expandable && <Icon name="chevronRight" size={11} stroke={2.4} className="shrink-0 text-ink-3 transition-transform duration-200" style={{ transform: open ? "rotate(90deg)" : undefined }} />}
         </button>
-        {/* an entry that goes somewhere and also has words to read: those open beside it */}
-        {goes && expandable && (
+        {/* an entry that goes somewhere and also has words to read: those open beside it; an assistant row's received
+            message is its text, drawn in full above (#9041): that entry only goes to the conversation, one arrow (#9930) */}
+        {goes && expandable && !(item.source === "assistant" && e.kind === "received") && (
           <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} aria-label={open ? t("inbox-inboxevent.entry_collapse") : t("inbox-inboxevent.entry_expand")} title={open ? t("inbox-inboxevent.entry_collapse") : t("inbox-inboxevent.entry_expand")} className="touch-hit flex size-7 shrink-0 items-center justify-center rounded-[8px] text-ink-3 transition-colors hover:bg-hover hover:text-ink">
             <Icon name="chevron" size={12} stroke={2.4} className="transition-transform duration-200" style={{ transform: open ? "rotate(180deg)" : undefined }} />
           </button>
@@ -550,9 +617,11 @@ function ChainRow({ item, e, tap, onTap, agentState }: { item: InboxItem; e: Cha
         <div className="mx-1.5 mb-1 flex flex-col gap-1 rounded-[10px] bg-inset px-3 py-2 text-[12.5px] leading-relaxed text-ink-2" data-chain-detail>
           {e.detail && <p className="whitespace-pre-wrap">{e.detail}</p>}
           {(e.messages ?? []).map((m, i) => (
-            <p key={i} className="min-w-0">
+            // an assistant row's message: its whole text is above (#9041), so three lines say which
+            <p key={i} className={cx("min-w-0", item.source === "assistant" && "line-clamp-3")}>
               {m.sender && <span className="font-medium text-ink">{t("inbox-inboxevent.message_sender", { sender: m.sender })}</span>}
-              <span className="whitespace-pre-wrap">{m.text}</span>
+              {/* an older assistant row's message is its Markdown run into one line: said without the marks (#9041) */}
+              <span className="whitespace-pre-wrap">{markdownInSummary(item) ? withoutMarks(m.text) : m.text}</span>
               {m.at && <span className="ml-1.5 text-[11px] text-ink-3 tabular-nums">{chainTime(m.at)}</span>}
             </p>
           ))}
@@ -568,7 +637,7 @@ function Related({ item }: { item: InboxItem }) {
   if (!list.length) return null;
   return (
     <section data-event-related>
-      <p className="pb-1 text-[11.5px] font-medium text-ink-3">{t("inbox-inboxevent.related")}</p>
+      <p className="pb-1 text-submeta font-medium text-ink-3">{t("inbox-inboxevent.related")}</p>
       <ul className="flex flex-col gap-0.5">
         {list.map((r) => (
           <li key={r.id}>

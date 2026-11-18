@@ -2,6 +2,7 @@ import Foundation
 import MapKit
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The iPhone system integrations (#2276–#2286): what each tool reads from its arguments, what its approval card says,
 /// and the rules that keep it from acting on a guess (an ambiguous occurrence, an overwritten field, an unallowed shortcut).
@@ -30,7 +31,7 @@ struct PhoneSystemToolsTests {
 
     @Test func homeIsOfferedOnlyInABuildWithHomeKit() {
         #expect(PhoneDataSource.onThisDevice.contains(.home) == HomeAccess.isBuilt)
-        #expect(PhoneDataSource.onThisDevice.contains(.alarms))
+        #expect(PhoneDataSource.onThisDevice.contains(.alarms) == AlarmsAccess.isSupported) // AlarmKit: iOS 26 (#6730)
     }
 
     // MARK: - Calendar (#2276)

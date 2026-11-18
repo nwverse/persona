@@ -26,7 +26,9 @@ import (
 // list its own /model menu shows. That list is in no config file — settings.json and config.toml hold the default
 // model and the gateway; the CLI makes the list from its aliases and what the gateway's /models answers — so the node
 // asks the CLI itself, run the way the launcher runs it: Claude Code answers its initialize control request (headless,
-// stream-json) with `models`, Codex's app-server answers model/list. Nothing is sent to a model.
+// stream-json) with `models`, Codex's app-server answers model/list. Nothing is sent to a model. A managed provider's
+// gateway models are read by the node as well (launcher_gateway_models.go): the CLI's answer has them only when its one
+// discovery cache was that gateway's.
 
 // launcherModelsTTL: a list is kept this long per launcher (and managed launcher's settings); refresh skips it.
 const launcherModelsTTL = 10 * time.Minute
@@ -58,18 +60,24 @@ func (n *Node) launcherModels(ctx context.Context, name, agentType string, refre
 	if name != "claude" && !shellcmd.NameRe.MatchString(name) {
 		return proto.LauncherModels{}, fmt.Errorf("invalid launcher %q", name)
 	}
+	if proto.IsExternalLauncher(name) {
+		return n.externalLauncherModels(ctx, name, refresh)
+	}
 	if isDesktopLauncher(name) { // the app runs its session on the model it picks (claudedesktop_new.go)
 		return proto.LauncherModels{Agent: "claude", Models: []proto.AgentModel{}, Locked: desktopModelLocked}, nil
 	}
 	if isCodexAppLauncher(name) { // so does the Codex App (codexapp_new.go)
 		return proto.LauncherModels{Agent: "codex", Models: []proto.AgentModel{}, Locked: codexAppModelLocked}, nil
 	}
-	if res, ok := n.runtimeLauncherModels(name); ok { // a runtime's launcher: static advertisement or native discovery
-		return n.liveRuntimeModels(ctx, name, refresh, res)
+	// A runtime's launcher, as a start in ctx's host runs it (where that host's engine runs only its own launchers, its
+	// provider of the name, #8140): static advertisement or native discovery.
+	if h := n.runtimeOfIn(ctx, name); h != nil {
+		res, _ := launcherModelsOf(h, name)
+		return n.liveRuntimeModels(ctx, h, name, refresh, res)
 	}
 	if m, ok := n.managedLauncher(name); ok && m.AgentType() == "agy" {
 		if res, ok := n.agyRuntimeModels(); ok {
-			return n.liveRuntimeModels(ctx, "agy", refresh, res)
+			return n.liveRuntimeModels(ctx, n.runtimes.launcherRuntime("agy"), "agy", refresh, res)
 		}
 		return proto.LauncherModels{Agent: "agy", Models: []proto.AgentModel{}}, nil
 	}
@@ -86,7 +94,7 @@ func (n *Node) launcherModels(ctx context.Context, name, agentType string, refre
 		}
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), launcherModelsTimeout)
 		defer cancel()
-		var models []proto.AgentModel
+		var models, gateway []proto.AgentModel
 		var listErr error
 		var wg sync.WaitGroup
 		wg.Add(1)
@@ -94,6 +102,15 @@ func (n *Node) launcherModels(ctx context.Context, name, agentType string, refre
 			defer wg.Done()
 			models, listErr = n.listAgentModels(ctx, name, agent)
 		}()
+		// A managed provider's gateway models, read here: the CLI's own answer has them only when its one cache file
+		// was this gateway's (launcher_gateway_models.go).
+		if m, ok := n.managedLauncher(name); ok && agent == "claude" {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				gateway = n.gatewayModels(ctx, m)
+			}()
+		}
 		// Whether a picked model reaches the agent at all: a launcher that fixes its own --model would start with
 		// that one whatever is picked (the start refuses it).
 		if _, err := n.launcherModelCheck(ctx, name, modelCheckProbe); err != nil {
@@ -103,7 +120,7 @@ func (n *Node) launcherModels(ctx context.Context, name, agentType string, refre
 		if listErr != nil {
 			return nil, listErr
 		}
-		res.Models = models
+		res.Models = withGatewayModels(models, gateway)
 		launcherModelsCache.Lock()
 		if len(launcherModelsCache.got) > 64 {
 			launcherModelsCache.at, launcherModelsCache.got = map[string]time.Time{}, map[string]proto.LauncherModels{}
@@ -136,6 +153,10 @@ func (n *Node) launcherModels(ctx context.Context, name, agentType string, refre
 // a login shell as `( name … )`, so it is asked only of a launcher this machine offers (knownLauncher) or one the hub's
 // hub.json names (configured). Any other word would run as a command: `reboot` (#1185).
 func (n *Node) runnableLauncher(ctx context.Context, name string, configured bool) error {
+	if proto.IsExternalLauncher(name) {
+		_, err := n.externalInventoryTarget(ctx, name, false)
+		return err
+	}
 	if configured || n.knownLauncher(ctx, name) {
 		return nil
 	}
@@ -143,6 +164,10 @@ func (n *Node) runnableLauncher(ctx context.Context, name string, configured boo
 }
 
 func (n *Node) knownLauncher(ctx context.Context, name string) bool {
+	if proto.IsExternalLauncher(name) {
+		_, err := n.externalInventoryTarget(ctx, name, false)
+		return err == nil
+	}
 	if name == "claude" || name == traexAgent {
 		return true
 	}
@@ -203,7 +228,13 @@ func (n *Node) launcherModelsAgent(ctx context.Context, name, agentType string) 
 func (n *Node) agentModelsCommand(ctx context.Context, shell, name, agent, dir string) (*exec.Cmd, error) {
 	var cmd *exec.Cmd
 	if agent == "codex" {
-		cmd = exec.CommandContext(ctx, shell, "-ic", codexShell(n.launcherForScript(name)), "persona")
+		launcher := n.launcherForScript(name)
+		if _, managed := n.managedLauncher(name); managed {
+			// `personad launch` runs codex itself, not the shell's codex codexShell wraps: without the subcommand
+			// here the provider's codex started its TUI ("stdin is not a terminal") and listed nothing.
+			launcher += " app-server"
+		}
+		cmd = exec.CommandContext(ctx, shell, "-ic", codexShell(launcher), "persona")
 	} else {
 		// No hooks: this claude is no session of the user's (Persona's own, or a hook of theirs, would see one start).
 		ours := filepath.Join(dir, "settings.json")
@@ -272,6 +303,9 @@ func (n *Node) listAgentModels(ctx context.Context, name, agent string) ([]proto
 				return nil, fmt.Errorf("%s 没有给出模型列表：%w（%s）", name, r.err, clipText(tail, 300))
 			}
 			return nil, fmt.Errorf("%s 没有给出模型列表：%w", name, r.err)
+		}
+		if agent == "claude" {
+			r.models = n.launcherSettingsModelDefault(ctx, name, dir, r.models)
 		}
 		return r.models, nil
 	case <-ctx.Done():
@@ -444,6 +478,9 @@ func codexModelList(w io.Writer, r io.Reader) ([]proto.AgentModel, error) {
 				if e.Effort != "" {
 					a.Efforts = append(a.Efforts, e.Effort)
 				}
+			}
+			if len(a.Efforts) == 0 && a.DefaultEffort == "none" { // a model that takes no level (a gateway catalog's) has no default one
+				a.DefaultEffort = ""
 			}
 			out = append(out, a)
 		}

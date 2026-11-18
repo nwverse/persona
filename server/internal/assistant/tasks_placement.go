@@ -1,8 +1,11 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
+	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -89,18 +92,70 @@ func (t *PlanTask) noteWhy(note string) {
 
 // fitTaskLauncher holds t's resolved launcher (params, resolveStart's) to what m has (fitLauncher): a default m lacks
 // is swapped for one it has, which t then names, without a tier that no longer applies, and its why says so. It also
-// reports whether the resolved launcher is Claude, using the same launcher list rather than another probe.
-func (s *Service) fitTaskLauncher(ctx context.Context, t *PlanTask, m Device, own startPick, params map[string]any) (bool, error) {
+// reports what the resolved launcher runs (startAgent: its agent type, and whether it runs with Allow all), using the same
+// launcher list rather than another probe. A read-only task whose launcher has no read-only mode is refused here
+// (readonlyLauncherRefusal), when it is planned and again before it starts.
+func (s *Service) fitTaskLauncher(ctx context.Context, t *PlanTask, m Device, own startPick, params map[string]any) (startAgent, error) {
 	note, agent, err := s.fitLauncher(ctx, m, own, params)
-	if err != nil || note == "" {
-		return agent == "claude", err
+	if err != nil {
+		return agent, err
+	}
+	if t.Readonly {
+		if err := s.readonlyLauncherRefusal(ctx, m, params, agent); err != nil {
+			return startAgent{}, err
+		}
+	}
+	if note == "" {
+		return agent, nil
 	}
 	t.Launcher, _ = params["launcher"].(string)
 	t.Model, _ = params["model"].(string)
 	t.Effort, _ = params["effort"].(string)
 	t.Tier = ""
 	t.noteWhy(note)
-	return agent == "claude", nil
+	return agent, nil
+}
+
+// readonlyLauncherRefusal refuses a read-only task on m whose launcher (params', as fitLauncher left it) starts a work
+// agent (proto.WorkAgentTypes: pi, the Cursor CLI, the Antigravity CLI) in a terminal, before anything reaches the node:
+// readonly_unsupported, naming the launchers of m that take a read-only task (Claude Code's and Codex's), so the plan
+// can be made writable or with one of them (#8316). These agents have no flag that holds them read-only, and a line in
+// the prompt does not (pi's tools write files), so Persona does not start one for a task the owner marked read-only;
+// the node refuses their plan-mode start too (node/control.go). No other launcher is put in its place: the plan named
+// that agent. Anything else goes on as before: a launcher whose agent the computer's list does not say goes to the node
+// with plan, which refuses what it cannot hold read-only (nothing is refused here on a guess), and a start an engine
+// runtime runs is the runtime's to refuse (Paseo holds only its Claude Code providers read-only, caps.readonly).
+func (s *Service) readonlyLauncherRefusal(ctx context.Context, m Device, params map[string]any, agent startAgent) error {
+	if !proto.IsWorkAgentType(agent.agent) {
+		return nil
+	}
+	if host, _ := params["host"].(string); agentStartHost(m, host) != "" {
+		return nil
+	}
+	launcher, _ := params["launcher"].(string)
+	launchers := strings.Join(s.readonlyLaunchersOn(ctx, m), ", ")
+	data, _ := json.Marshal(map[string]string{"launcher": launcher, "launchers": launchers, "delivered": "none"})
+	return &rpc.Error{Code: "readonly_unsupported", Data: data, Message: i18n.T(s.lang(ctx), "assistant-tasks.readonly_launcher_unsupported",
+		i18n.Args{"machine": firstNonEmpty(m.Name, m.ID), "launcher": launcher, "agent": kindName(agent.agent), "launchers": cmp.Or(launchers, "—")})}
+}
+
+// readonlyLaunchersOn are the launchers of m a read-only task can start on, as its picker lists them (plain claude
+// when m has Claude Code, its own, hub.json's and the managed ones): those that start Claude Code or Codex. Only plain
+// claude when the list can't be read and m has Claude Code; none otherwise.
+func (s *Service) readonlyLaunchersOn(ctx context.Context, m Device) []string {
+	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	list, err := s.pickerLaunchers(cctx, m.ID)
+	if err != nil && m.ClaudeVersion != "" {
+		return []string{"claude"}
+	}
+	var names []string
+	for _, l := range list {
+		if (l.AgentType == "claude" || l.AgentType == "codex") && l.Name != "" && !slices.Contains(names, l.Name) {
+			names = append(names, l.Name)
+		}
+	}
+	return names
 }
 
 // taskDirectoryExists checks the mapped directory before a flexible task changes machines. Missing, denied or
@@ -124,11 +179,35 @@ func (s *Service) taskDirectoryExists(ctx context.Context, machine, dir string) 
 // and answers the machine's id and the session's: the machine it reached is the one the agent is linked to (looking it
 // up again after the start could find another, or none). A failed start counts against the launcher there.
 func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (mid, sid string, err error) {
-	t.normalizeReadonlyPermission()
+	t.normalizeReadonlyPermission(readonlyModeOf(s.settings(ctx)))
 	if err := t.normalizeMachinePolicy(); err != nil {
 		return "", "", err
 	}
+	// What the task itself named, kept from its first try in this process. The task as stored never carries what a
+	// start-defaults policy filled in (storedLaunch), so a task read back from the store (a remedy, a queued start, a
+	// retry from the card, a manager restart) names only its own.
+	if t.callerPick == nil {
+		own := t.launchPick()
+		t.callerPick = &own
+	}
+	caller := *t.callerPick
+	// Every try starts from what the task named: what a policy filled in on an earlier try goes back first, whichever
+	// rule fits now (start_defaults.go), so a rule that changed or no longer fits leaves nothing of the earlier one.
+	if t.startFilled.any() {
+		t.Launcher, t.Model, t.Effort, t.Tier = caller.launcher, caller.model, caller.effort, caller.tier
+		t.Permission, t.Ultracode = caller.permission, copyBool(caller.ultracode)
+	}
+	t.startFilled = startFill{}
+	// A self-planning constraint applies only while a policy rule asks for it on this try.
+	t.planFirst = false
 	params := map[string]any{"launcher": t.Launcher, "model": t.Model, "effort": t.Effort, "tier": t.Tier}
+	// The start-defaults policy: its preset goes in before the start is resolved, as if the task had named that tier;
+	// its effort and ultracode after the launcher fit, and the goal (a rule's or the Codex default) after that.
+	defaults, withDefaults := s.taskStartDefaults(ctx, t)
+	presetNote := ""
+	if withDefaults {
+		presetNote = s.applyStartPreset(ctx, t, caller, defaults, params)
+	}
 	own, err := s.resolveStart(ctx, params)
 	if err != nil {
 		return "", "", err
@@ -183,13 +262,24 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	// On the computer it landed on (a flexible task may have moved): a default it lacks gives way to one it has, a
 	// launcher the plan named that it lacks is refused before any tab opens (#2640). Before the health check below,
 	// which is then about the launcher that will run.
-	claude, err := s.fitTaskLauncher(ctx, t, m, own, params)
+	fit, err := s.fitTaskLauncher(ctx, t, m, own, params)
 	if err != nil {
 		return "", "", err
 	}
-	if claude && !t.preservePermission {
+	if fit.allowAll() && !t.preservePermission {
 		t.Permission = "bypassPermissions"
 	}
+	modes := startTakesModes(fit.agent)
+	if !modes { // traex, omp…: no mode and no effort, whatever a default or a tier filled in (launcher_modes.go)
+		delete(params, "effort")
+		t.Effort = ""
+	}
+	if withDefaults { // only what the task left open, after the fit, which may itself have filled some in
+		s.applyStartExtras(ctx, t, caller, defaults, fit.agent, params, presetNote)
+	}
+	// The goal: a rule's, else the Codex default for a task with criteria (startGoalSource); the default is not sent
+	// where the node is known to refuse it, and its refusal elsewhere is only logged (below).
+	defaultGoal := s.applyStartGoal(t, defaults, withDefaults, fit.agent, defaultGoalRefusedOn(m, params, fit), params)
 	if t.MachinePolicy == machineFixed {
 		// Only an actual terminal start can recheck a repaired terminal shell.
 		// An explicit retry keeps that existing recovery path on the fixed target;
@@ -205,15 +295,30 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if err := s.admitTaskWorkspace(ctx, t); err != nil {
 		return "", "", err
 	}
+	if t.rememberKind { // "start these directly": the machine and repository that run, now that admission fixed them
+		t.rememberKind = false
+		s.trustKinds(ctx, []PlanTask{*t})
+	}
+	if t.grantSchedule != "" { // "let this scheduled task start these": the same kind, the schedule's own (#8045)
+		id := t.grantSchedule
+		t.grantSchedule = ""
+		s.grantScheduleKind(ctx, id, *t)
+	}
 	prompt := t.Prompt
+	if t.Continues != "" {
+		prompt += "\n\n" + prompts.RenderTaskContinuation(prompts.TaskContinuation{TodoID: t.Continues, Readonly: t.Readonly})
+	}
 	if t.Readonly {
 		prompt += "\n\n" + prompts.RenderReadonlyTaskConstraint()
+	}
+	if t.planFirst {
+		prompt += "\n\n" + prompts.RenderPlanFirstTaskConstraint()
 	}
 	if len(t.DoneWhen) > 0 { // what the supervisor will check (supervise.go)
 		prompt += "\n\n" + prompts.RenderTaskDoneWhen(t.DoneWhen)
 	}
 	if t.TodoID != "" && !s.isWorkMachine(m.ID) {
-		prompt += "\n\n" + prompts.RenderTaskHandoff()
+		prompt += "\n\n" + s.taskHandoff(ctx, m.ID, fit)
 	}
 	switch {
 	case t.Role == roleLeader: // what it may hand out, and how its workers reach it (task_leader.go)
@@ -230,9 +335,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if brief != "" {
 		prompt += "\n\n" + brief
 	}
-	// The project background, and the todo's decisions (a task started again may have some), go before the prompt
-	// (#2820, #1618); the tab is named from the title.
-	prompt = s.withProjectContext(ctx, m.ID, t.Cwd, s.withTodoDecisions(ctx, t.TodoID, prompt))
+	// The project background, and the decisions of the todo and its continuation ancestors (a task started again may
+	// have some), go before the prompt (#2820, #1618); the tab is named from the title.
+	prompt = s.withProjectContext(ctx, m.ID, t.Cwd, t.Supervisor, s.withTodoDecisions(ctx, t.TodoID, prompt))
 	prompt, err = s.withStandingAuthorizations(ctx, m.ID, t.Cwd, prompt)
 	if err != nil {
 		return "", "", err
@@ -249,11 +354,13 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if t.Model != "" {
 		params["model"] = t.Model
 	}
-	mode := t.Permission
-	if mode == "" { // a plan saved before task_plan settled it, or a task started another way (tasks_permission.go)
-		mode = s.taskPermission(ctx, m.ID, nil)
-	}
-	params["permission_mode"] = mode
+	if modes {
+		mode := t.Permission
+		if mode == "" { // a plan saved before task_plan settled it, or a task started another way (tasks_permission.go)
+			mode = s.taskPermission(ctx, m.ID, nil)
+		}
+		params["permission_mode"] = mode
+	} // else none, plan included: a read-only task's first message carries the constraint (above)
 	if t.Ultracode != nil && *t.Ultracode {
 		params["ultracode"] = true
 	}
@@ -262,6 +369,8 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	}
 	var res struct {
 		Session proto.Session `json:"session"`
+		// What an engine that runs only its own launchers ran in place of what was asked (#8140).
+		Instead *proto.StartInstead `json:"instead"`
 	}
 	picked, _ := params["launcher"].(string)
 	// Remember the sessions already there, so a start whose answer never comes back can adopt only the session it
@@ -279,12 +388,39 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		params["session_id"] = expectID
 	}
 	s.setPlanThen(ctx, m.ID, params)
+	if err := s.checkContinuationScope(t); err != nil {
+		return "", "", err
+	}
+	sentAt := time.Now()
 	err = s.call(ctx, m.ID, DeviceSessionStart, params, &res)
-	skipped, refused := s.ultracodeRefusal(ctx, err, params)
-	if refused {
-		delete(params, "ultracode") // an extra the agent it landed on cannot have: it starts without it (#3596)
-		s.logf("task %s: start: %s; starting without ultracode", t.TodoID, skipped)
-		err = s.call(ctx, m.ID, DeviceSessionStart, params, &res)
+	// Extras the agent it landed on cannot have (ultracode #3596, a start goal: start_defaults.go) are each dropped
+	// once, in whatever order the node refuses them; both refusals come before anything starts.
+	var skipped string
+	var refused bool
+	for range 2 {
+		if reason, no := s.goalRefusal(err, params); no {
+			delete(params, "goal")
+			s.logf("task %s: start: %s; starting without a goal", t.TodoID, reason)
+			if !defaultGoal { // a goal the owner never asked for is no news on the task's card
+				t.noteWhy(i18n.T(s.lang(ctx), "assistant-tasks.start_goal_skipped", i18n.Args{"reason": reason}))
+			}
+			if err := s.checkContinuationScope(t); err != nil {
+				return "", "", err
+			}
+			err = s.call(ctx, m.ID, DeviceSessionStart, params, &res)
+			continue
+		}
+		if reason, no := s.ultracodeRefusal(ctx, err, params); no {
+			skipped, refused = reason, true
+			delete(params, "ultracode")
+			s.logf("task %s: start: %s; starting without ultracode", t.TodoID, skipped)
+			if err := s.checkContinuationScope(t); err != nil {
+				return "", "", err
+			}
+			err = s.call(ctx, m.ID, DeviceSessionStart, params, &res)
+			continue
+		}
+		break
 	}
 	if err != nil {
 		s.recordStartFailure(ctx, m.ID, s.startLauncher(ctx, picked), err)
@@ -296,26 +432,59 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 				s.logf("task %s: start answered late on %s; adopted session %s from the machine's own list", t.TodoID, m.ID, sess.SessionID)
 				return m.ID, sess.SessionID, nil
 			}
+			// Nothing found, and the link took the answer (it closed, or the machine is not reachable now): the
+			// node may not have had the start at all. Wait for the link to come back and look once more; still
+			// nothing, the caller starts it once again (#7511). A link that stayed up is a busy node: no retry.
+			if s.startLinkDown(ctx, m.ID, err) {
+				back := s.waitMachineBack(ctx, m.ID)
+				if back {
+					// A start that may have reached the node is looked for until the node's own start has run out
+					// of time, so a retry never opens a second agent beside one still being built (#6540).
+					if sess, ok := s.adoptTaskStartSessionUntil(ctx, m, s.startLauncher(ctx, picked), t.Cwd, expectID, knownIDs, startMayHaveArrived(err, sentAt)); ok {
+						s.logf("task %s: start's link dropped; adopted session %s on %s after it reconnected", t.TodoID, sess.SessionID, m.ID)
+						return m.ID, sess.SessionID, nil
+					}
+				}
+				return "", "", startLinkLost{err: err, machine: m.Name, back: back}
+			}
 		}
 		return "", "", err
 	}
 	if res.Session.SessionID == "" || res.Session.MachineID != "" && res.Session.MachineID != m.ID {
 		return "", "", &rpc.Error{Code: "identity_conflict", Message: i18n.T(s.lang(ctx), "assistant-tasks.start_identity_conflict")}
 	}
+	ran := ranLauncher(s.startLauncher(ctx, picked), res.Instead, res.Session)
 	if res.Session.StartError != "" || res.Session.Starting {
 		observed := res.Session
-		observed.Launcher = s.startLauncher(ctx, picked)
+		observed.Launcher = ran
 		s.followStarts(ctx, DeviceSessions{MachineID: m.ID, Sessions: []proto.Session{observed}})
 		if observed.StartError != "" {
 			return "", "", sessionStartErr(observed)
 		}
 	}
 	if !res.Session.Starting {
-		s.recordStartSuccess(ctx, m.ID, s.startLauncher(ctx, picked))
+		s.recordStartSuccess(ctx, m.ID, ran)
+	}
+	// The engine ran a launcher of the same kind, its own default model or a lower effort in place of what the task
+	// asked for (#8140): the task names what runs, and its why says so.
+	if note := s.startInsteadNote(ctx, m, res.Instead, res.Session); note != "" {
+		if res.Instead.Launcher != "" && ran != picked {
+			t.Launcher, t.Tier = ran, ""
+		}
+		if res.Instead.Model != "" {
+			t.Model = ""
+		}
+		if res.Instead.Effort != "" {
+			t.Effort = res.Session.Effort
+		}
+		t.noteWhy(note)
 	}
 	if refused { // only once it started here: a task moved elsewhere after a failed start asks again
 		off := false
 		t.Ultracode = &off // a retry does not ask again
+		if t.callerPick != nil {
+			t.callerPick.ultracode = copyBool(t.Ultracode) // nor a policy's later rule: off is the task's own now
+		}
 		t.noteWhy(i18n.T(s.lang(ctx), "assistant-tasks.ultracode_skipped", i18n.Args{"reason": skipped}))
 	}
 	return m.ID, res.Session.SessionID, nil
@@ -326,48 +495,69 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 // #6540's incident). taskStartAdoptPoll is the pause between lists. Vars so tests shorten them instead of sleeping
 // through the production bounds.
 var (
-	taskStartAdoptWait = 30 * time.Second
-	taskStartAdoptPoll = 2 * time.Second
+	taskStartAdoptWait         = 30 * time.Second
+	taskStartAdoptPoll         = 2 * time.Second
+	taskStartFinalAdoptTimeout = time.Minute
 )
 
 // adoptTaskStartSession gives a task start whose answer never came back a second opinion from the target machine's
 // own session list, reusing agent_start's adoption rule (adoptStartedSession): the start's own session id is matched
 // exactly first, then a session absent from the pre-start snapshot, hub-started, a non-assistant agent of the same
 // launcher and directory with a fresh sign of life that no open todo links, newest wins. The start's own context may
-// be spent, so the reconciliation runs on a detached one. A pre-start snapshot that failed (nil knownIDs) or a
-// machine that cannot answer confirms nothing: the caller keeps its failure behavior, and nothing is started
-// elsewhere.
+// be spent, so the reconciliation runs on a detached one. A pre-start snapshot that failed (nil knownIDs) disables
+// only the heuristic: the exact expectID still needs no snapshot. With neither a snapshot nor an exact id nothing can
+// be adopted, but a nonzero until still holds the retry while the original request may be running. A machine that
+// cannot answer confirms nothing: the caller keeps its failure behavior, and nothing is started elsewhere.
 func (s *Service) adoptTaskStartSession(ctx context.Context, m Device, launcher, cwd, expectID string, knownIDs map[string]bool) (proto.Session, bool) {
-	if knownIDs == nil {
+	return s.adoptTaskStartSessionUntil(ctx, m, launcher, cwd, expectID, knownIDs, time.Time{})
+}
+
+// adoptTaskStartSessionUntil is adoptTaskStartSession that keeps looking until until when that is later than
+// taskStartAdoptWait from now. For a start that may have reached its node (nonzero until), one final lookup uses a
+// fresh context after the polling deadline: the last pre-deadline list can just miss the session (#7772).
+func (s *Service) adoptTaskStartSessionUntil(ctx context.Context, m Device, launcher, cwd, expectID string, knownIDs map[string]bool, until time.Time) (proto.Session, bool) {
+	if knownIDs == nil && expectID == "" && until.IsZero() {
 		return proto.Session{}, false
 	}
-	actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), taskStartAdoptWait)
+	wait := max(taskStartAdoptWait, time.Until(until))
+	actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), wait)
 	defer cancel()
 	for {
 		if sess, ok := s.adoptStartedSession(actx, m, launcher, cwd, expectID, knownIDs); ok {
 			return sess, true
 		}
-		if actx.Err() != nil {
+		if actx.Err() == nil {
+			select {
+			case <-time.After(taskStartAdoptPoll):
+				continue
+			case <-actx.Done():
+			}
+		}
+		if until.IsZero() {
 			return proto.Session{}, false
 		}
-		select {
-		case <-actx.Done():
-			return proto.Session{}, false
-		case <-time.After(taskStartAdoptPoll):
-		}
+		// Each list and the pause inside this final reconciliation have their own bounds, so the expired polling
+		// context must not be reused. Without a snapshot or exact id this returns false after the same safe wait.
+		// The final whole-call deadline also covers the todo book load used by heuristic adoption.
+		fctx, fcancel := context.WithTimeout(context.WithoutCancel(ctx), taskStartFinalAdoptTimeout)
+		defer fcancel()
+		return s.adoptStartedSession(fctx, m, launcher, cwd, expectID, knownIDs)
 	}
 }
 
 // updatePlanTask keeps the machine, directory and why task i of started plan planID runs with now, its actual launch
-// permission, and its ultracode when the start went without it.
+// permission, and its ultracode when the start went without it. For whatever a start-defaults policy filled in on
+// this try (a preset's launcher, model, effort, tier and permission mode, the policy's effort or ultracode) it keeps
+// the task's own value (storedLaunch): a later start reading the task back must not take the policy's for its own.
 func (s *Service) updatePlanTask(ctx context.Context, planID string, i int, t PlanTask) {
+	launch := t.storedLaunch()
 	if err := s.patchPlanTask(ctx, planID, i, func(pt *PlanTask) {
 		pt.Machine, pt.Cwd, pt.Why = t.Machine, t.Cwd, t.Why
-		pt.Reroute, pt.Ultracode = t.Reroute, t.Ultracode
+		pt.Reroute, pt.Ultracode = t.Reroute, launch.ultracode
 		pt.Workspace, pt.WorkspaceResolved, pt.MachinePolicy = t.Workspace, t.WorkspaceResolved, t.MachinePolicy
 		pt.WorkspaceInferred, pt.ReservedTodoID = t.WorkspaceInferred, t.ReservedTodoID
-		pt.Launcher, pt.Model, pt.Effort, pt.Tier = t.Launcher, t.Model, t.Effort, t.Tier
-		pt.Permission = t.Permission
+		pt.Launcher, pt.Model, pt.Effort, pt.Tier = launch.launcher, launch.model, launch.effort, launch.tier
+		pt.Permission = launch.permission
 	}); err != nil {
 		s.logf("plan %s: %v", planID, err)
 	}

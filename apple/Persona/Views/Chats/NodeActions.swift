@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 // The node menu of the Agents list (docs/integrations/terminal.md「Node menus」, the web's #2329): what changes a computer's terminals from
 // a space's ⋯ and an agent row's long press — split the agent's pane, close its tab, run an agent in a plain shell of the
@@ -176,7 +177,7 @@ nonisolated enum NodeMenu {
         var id: String { rawValue }
         var title: String {
             switch self {
-            case .pull: String(localized: "Pull")
+            case .pull: String(localized: "git.pull", defaultValue: "Pull")
             case .push: String(localized: "Push")
             case .fetch: String(localized: "Fetch")
             }
@@ -529,9 +530,7 @@ struct RunAgentHereSheet: View {
             .navigationTitle("Run Agent Here")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }.lineLimit(1).disabled(busy)
-                }
+                SheetClose(disabled: busy) { dismiss() }
                 ToolbarItem(placement: .confirmationAction) {
                     if busy {
                         ProgressView()
@@ -919,7 +918,7 @@ struct NewWorktreeSheet: View {
                 .navigationTitle(workspace == nil ? String(localized: "New Worktree") : String(localized: "workspace.newChildTitle", defaultValue: "New Worktree"))
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.lineLimit(1).disabled(busy) }
+                    SheetClose(disabled: busy) { dismiss() }
                     ToolbarItem(placement: .confirmationAction) {
                         if busy { ProgressView() }
                         else {

@@ -11,6 +11,7 @@ import { api, errorText, sessionPath } from "../../lib/api";
 import { assistantPickKey, assistantSetup, ASSISTANT_START_SERVICE_TIER_FEATURE, type AssistantChat, type AssistantSetup } from "../../lib/assistant-models";
 import { assistantPanel, assistantPickOf } from "../../lib/assistant-panel";
 import { pickEffort, pickFast, pickLauncher, pickModel } from "../../lib/assistant-chat";
+import { conversationModelPath, dropConversationPick } from "../../lib/assistant-pick";
 import { modelSupportsFast } from "../../lib/launcher-models";
 import { useChosenManager } from "../../lib/manager-choice";
 import type { PanelConfig } from "../../lib/model-panel";
@@ -24,8 +25,6 @@ import { toast } from "../../ui/atoms";
 import { ModelPanel } from "../../ui/model-panel/ModelPanel";
 import { setServiceTier } from "./SessionDialogs";
 
-const conversationModel = (s: Session) => `/assistant/conversations/${encodeURIComponent(s.session_id)}/model`;
-
 /** PUT …/model {launcher, model?, effort?, machine_id}: kept for the conversation. Drawn at once; put back, with the hub's
  *  words (out of the computer's scope, gone, another engine than the chat runs, can't run assistant chats…), if it says
  *  no. */
@@ -33,21 +32,7 @@ async function keepPick(s: Session, pick: ModelPick): Promise<boolean> {
   const before = s.model_pick;
   upsertSession({ ...s, model_pick: pick });
   try {
-    await api(conversationModel(s), { method: "PUT", json: { ...pick, machine_id: s.machine_id } });
-    return true;
-  } catch (e) {
-    upsertSession({ ...(getSession(s.machine_id, s.session_id) ?? s), model_pick: before });
-    toast(t("chat-sessiondialogs.change_failed", { error: errorText(e) }), "error");
-    return false;
-  }
-}
-
-/** DELETE …/model: the conversation follows the default again (another chat: keeps what it runs). */
-async function dropPick(s: Session): Promise<boolean> {
-  const before = s.model_pick;
-  upsertSession({ ...s, model_pick: undefined });
-  try {
-    await api(conversationModel(s), { method: "DELETE" });
+    await api(conversationModelPath(s), { method: "PUT", json: { ...pick, machine_id: s.machine_id } });
     return true;
   } catch (e) {
     upsertSession({ ...(getSession(s.machine_id, s.session_id) ?? s), model_pick: before });
@@ -80,7 +65,7 @@ export function PickStrip({ chat, setup, named, onBack }: { chat: AssistantChat;
         ? t("chat-modelpill.header_default", { setup: named })
         : t("chat-modelpill.header_own", { setup: named });
   // the main chat and the new one go back to the default; another chat's pick is undone (it then keeps what it runs)
-  const back = chat.session && !chat.isMain ? t("chat-modelpill.undo_pick") : t("chat-modelpill.follow_default");
+  const back = chat.session && !(chat.followsDefault ?? chat.isMain) ? t("chat-modelpill.undo_pick") : t("chat-modelpill.follow_default");
   return (
     <div data-pick-strip={setup.source} className="flex min-w-0 items-baseline gap-2 border-b border-line px-3.5 py-2 text-[12px] leading-[1.45] text-ink-2">
       <span className="min-w-0 flex-1 break-words">{text}</span>
@@ -106,7 +91,7 @@ export function AssistantModelPanel({ chat, mid, anchor, onClose }: { chat: Assi
   const fast = Boolean(chat.session?.service_tiers?.some((x) => x.id === "priority"));
   const fastOn = Boolean(setup.fast);
   const { providers, state } = useMemo(
-    () => assistantPanel(setup, info, (name) => modelList(mid, name), { typed, engine, running, starting: !chat.session && startServiceTier, fast, fastOn }),
+    () => assistantPanel(setup, info, (name) => modelList(mid, name, "assistant"), { typed, engine, running, starting: !chat.session && startServiceTier, fast, fastOn }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `version` stands for what was read
     [setup.provider, setup.model, setup.effort, setup.fast, info, mid, typed, engine, running, fast, fastOn, startServiceTier, version],
   );
@@ -128,7 +113,7 @@ export function AssistantModelPanel({ chat, mid, anchor, onClose }: { chat: Assi
     return true;
   };
   const onPick = async (config: PanelConfig) => {
-    const list = modelList(mid, config.provider).list;
+    const list = modelList(mid, config.provider, "assistant").list;
     const pick = assistantPickOf(config, list, state.current);
     if (pick) {
       if (!(await apply(pick))) return false;
@@ -156,7 +141,7 @@ export function AssistantModelPanel({ chat, mid, anchor, onClose }: { chat: Assi
     let effortApplied = false;
     if (patch.fast !== undefined) {
       if (!s) {
-        const list = modelList(mid, now.provider).list;
+        const list = modelList(mid, now.provider, "assistant").list;
         const row = list?.models.find((m) => m.id === now.model);
         if (patch.fast && (!startServiceTier || !modelSupportsFast(row))) return false;
         if (patch.fast) {
@@ -173,21 +158,21 @@ export function AssistantModelPanel({ chat, mid, anchor, onClose }: { chat: Assi
       }
     }
     if (patch.effort === undefined || effortApplied) return true;
-    const pick = assistantPickOf({ ...now, effort: patch.effort }, modelList(mid, now.provider).list, null);
+    const pick = assistantPickOf({ ...now, effort: patch.effort }, modelList(mid, now.provider, "assistant").list, null);
     return pick ? apply(pick) : false;
   };
   const back = () => {
     const s = latest();
-    if (s && chat.kept) void dropPick(s);
+    if (s && chat.kept) void dropConversationPick(s);
     else {
       pickLauncher(key, undefined);
       pickEffort(key, undefined);
       pickFast(false);
     }
   };
-  const onReload = (provider: string) => void readModels(mid, provider, { again: true, first: provider === setup.provider });
+  const onReload = (provider: string) => void readModels(mid, provider, { purpose: "assistant", again: true, first: provider === setup.provider });
   const onForget = (provider: string, model: string) => {
-    void forgetModel(mid, provider, model).then((error) => error && toast(error, "error"));
+    void forgetModel(mid, provider, model, "assistant").then((error) => error && toast(error, "error"));
   };
   const launcher = info?.launchers.find((l) => l.name === setup.provider);
   const row = providers.find((p) => p.id === setup.provider)?.models?.find((m) => m.id === state.current?.model);

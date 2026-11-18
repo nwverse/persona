@@ -1,5 +1,5 @@
 // The list transport stays separate from complete, subscribed chat details.
-import { SessionList, compareListIds } from "./session-list";
+import { SESSIONS_LIST_FEATURE, SessionList, compareListIds } from "./session-list";
 import { foldedState } from "./child-sessions";
 import { t } from "../i18n";
 import type { Session } from "./types";
@@ -41,9 +41,14 @@ export const runtimeActiveAt = (s: Session) => Date.parse(s.updated_at ?? "");
 export const runtimeNeedsYou = (s: Session) => foldedState(s) === "needs_you";
 /** Where a row is, by the attributes the hub groups and filters it by (docs/protocol/protocol.md "Bounded Agents
  *  lists"): its computer, its project directory and its space. */
-export const runtimePlace = (s: Session): SessionPlace => ({ machine: s.machine_id, project: s.repo_root || s.workspace_cwd || s.cwd || "", group: s.space_id || s.workspace_id || "", todo: s.todo?.id ?? "", state: s.state });
+// A Just finished row's state section is Just finished's on a hub that lists it apart (lib/session-groups.ts, #9751).
+export const runtimePlace = (s: Session): SessionPlace => ({ machine: s.machine_id, project: s.repo_root || s.workspace_cwd || s.cwd || "", group: s.space_id || s.workspace_id || "", todo: s.todo?.id ?? "",
+  state: s.state === "idle" && s.work?.just_finished ? "just_finished" : s.state });
 export const SESSIONS_LOOKUP_FEATURE = "sessions_lookup";
 export const SESSIONS_PAGE_COUNTS_FEATURE = "sessions_page_counts";
+export const SESSIONS_AGENTS_ONLY_FEATURE = "sessions_agents_only";
+export const supportsPagedAgents = (features: readonly string[]) => features.includes(SESSIONS_LIST_FEATURE) && features.includes(SESSIONS_AGENTS_ONLY_FEATURE);
+export const RUNTIME_AGENTS_PATH = "/sessions?agents_only=1";
 let pageCounts = false;
 /** Set from hello: whether this hub reads a page's counts with it (`with_counts`, #4858). */
 export function setRuntimePageCounts(on: boolean) { pageCounts = on; }
@@ -54,5 +59,9 @@ export function onRuntimeChanges(listener: (upsert: Session[], remove: string[])
 }
 export const runtimeSessions = new SessionList<Session>("/sessions", runtimeIdentity, runtimeOrder, undefined, runtimeRemoval, {
   onDelta: (upsert, remove) => changeListeners.forEach((listener) => listener(upsert, remove)),
+  pageCounts: () => pageCounts,
+});
+// A scoped removal can mean that a row is still present in the all-sessions list.
+export const runtimeAgents = new SessionList<Session>(RUNTIME_AGENTS_PATH, runtimeIdentity, runtimeOrder, undefined, runtimeRemoval, {
   pageCounts: () => pageCounts,
 });

@@ -11,8 +11,11 @@ import { t } from "../../i18n";
 import { agentName } from "../../lib/agent-kind";
 import { NEW_CONVERSATION, pickedEffort, pickedFast, pickedLauncher, pickedModel, pickEffort, pickFast, pickLauncher, pickModel } from "../../lib/assistant-chat";
 import { panelSections } from "../../lib/model-panel";
-import { getSession, getState, upsertSession } from "../../lib/store";
-import type { Session } from "../../lib/types";
+import { parseAPIError } from "../../lib/api-errors";
+import { requestModelPicker } from "../../lib/model-switch";
+import { getSession, getState, upsertSession, useStore } from "../../lib/store";
+import type { ChatLine } from "../../lib/turns";
+import type { Item, Session } from "../../lib/types";
 import type { ModelPanelProps } from "../../ui/model-panel/ModelPanel";
 
 vi.hoisted(() => {
@@ -29,7 +32,8 @@ vi.mock("../../ui/model-panel/ModelPanel", () => ({
 const toast = vi.hoisted(() => vi.fn());
 vi.mock("../../ui/atoms", async (orig) => ({ ...(await orig<typeof import("../../ui/atoms")>()), toast }));
 
-const { AssistantModelPill } = await import("./ModelPill");
+const { AssistantModelPill, assistantPickerKey, useAssistantTurnFix } = await import("./ModelPill");
+const { ErrorBanner } = await import("./Lines");
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -51,6 +55,7 @@ let root: Root;
 let calls: { method: string; url: string; body?: unknown }[];
 let pickAnswer: () => Response;
 let defaultSetup: { provider: string; model: string; effort: string };
+let superviseSetup: { provider: string; model: string; effort: string };
 
 const mid = () => `persona-${machine}`;
 const chat = (x: Partial<Session> = {}): Session =>
@@ -63,6 +68,7 @@ beforeEach(() => {
   calls = [];
   pickAnswer = () => json({ ok: true, model_pick: {} });
   defaultSetup = { provider: "claude", model: "opus", effort: "high" };
+  superviseSetup = defaultSetup; // the supervisor's own purpose follows Main chat until it is set apart
   Object.assign(getState(), { features: ["assistant_model_pick", "assistant_start_service_tier", "typed_models"], sessions: {}, assistant: { machine_id: mid(), launcher: "claude", main: "c1", conversations: [] } });
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -70,6 +76,7 @@ beforeEach(() => {
     calls.push({ method: init?.method ?? "GET", url, body });
     if (url.includes("/codex/models")) return json(codexList);
     if (url.includes("/models")) return json(claudeList);
+    if (url.includes("/launchers?purpose=assistant.supervise")) return json({ launchers: [{ name: "claude", source: "builtin" }], default: superviseSetup, unavailable: [] });
     if (url.includes("/launchers?purpose=assistant")) return json({
       launchers: [{ name: "claude", source: "builtin" }, { name: "relay", source: "zshrc" }, { name: "codex", source: "builtin", agent: "codex", agent_type: "codex" }],
       default: defaultSetup,
@@ -161,14 +168,54 @@ describe("a Persona chat's pill on a hub that keeps picks", () => {
     expect(toast).toHaveBeenCalledWith(expect.stringContaining("relay runs Codex; this conversation runs on Claude Code"), "error");
   });
 
-  it("hides the pill on a conversation the hub does not name as the main one (#6911)", async () => {
+  it("shows the pill on a conversation that is not the main one and keeps its pick there (#9248)", async () => {
     getState().assistant!.main = "other";
     await show(chat({ launcher: "relay", model: "claude-haiku-5-5" }));
-    expect(pill()).toBeNull();
-    expect(calls.some((c) => c.url.includes("/assistant/conversations/c1/model"))).toBe(false);
+    expect(pill()).not.toBeNull();
+    await open();
+    // no pick, not a conversation that follows the default: it runs on what it started with, the strip says so
+    expect(strip()!.getAttribute("data-pick-strip")).toBe("own");
+    expect(await act(() => panel.props!.onPick({ provider: "claude", model: "opus" }))).toBe(true);
+    expect(sent("PUT")).toEqual([{ launcher: "claude", model: "opus", machine_id: mid() }]);
+    expect(getSession(mid(), "c1")?.model_pick).toEqual({ launcher: "claude", model: "opus" });
+    act(() => root.render(<AssistantModelPill session={getSession(mid(), "c1")!} />));
+    await flush();
+    expect(strip()!.getAttribute("data-pick-strip")).toBe("pick");
+    expect(pill().textContent).toContain("Opus 5.5");
+    await act(async () => strip()!.querySelector("button")!.click());
+    expect(sent("DELETE")).toEqual([null]);
   });
 
-  it("keeps its hooks when the main conversation changes away from this one (#7070)", async () => {
+  it("shows a leader and a scheduled task's conversation what the next message runs on: Main chat until they pick (#9248)", async () => {
+    for (const as of [{ leaders: ["c1"] }, {}]) {
+      Object.assign(getState().assistant!, { main: "other", leaders: undefined }, as);
+      // it last ran on Haiku, but its next message follows Model configuration › Main chat (Opus)
+      await show(chat({ launcher: "relay", model: "claude-haiku-5-5", ...(as.leaders ? {} : { origin: "task" }) }));
+      expect(pill().textContent).toContain("Opus 5.5");
+      expect(pill().textContent).not.toContain("Haiku");
+      await open();
+      expect(strip()!.getAttribute("data-pick-strip")).toBe("default");
+      act(() => root.render(<></>));
+      await flush();
+    }
+    // with a pick it shows the pick, as it runs on it
+    getState().assistant!.leaders = ["c1"];
+    await show(chat({ launcher: "relay", model: "claude-haiku-5-5", model_pick: { launcher: "claude", model: "haiku" } }));
+    expect(pill().textContent).toContain("Haiku 5.5");
+  });
+
+  it("shows the background supervisor what its own model purpose runs, not Main chat's (#9248)", async () => {
+    Object.assign(getState().assistant!, { main: "other", background_supervisor: "c1" });
+    superviseSetup = { provider: "claude", model: "haiku", effort: "low" }; // Model configuration set the supervisor apart: Haiku, Main chat stays Opus
+    await show(chat({ launcher: "claude", model: "claude-opus-5-5", effort: undefined, origin: "task" }));
+    expect(pill().textContent).toContain("Haiku 5.5");
+    expect(pill().textContent).not.toContain("Opus");
+    await open();
+    expect(strip()!.getAttribute("data-pick-strip")).toBe("default");
+    expect(panel.props!.state.current).toEqual({ provider: "claude", model: "haiku", effort: "low" });
+  });
+
+  it("keeps its hooks when the conversation becomes or stops being the main one (#7070)", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const s = chat();
@@ -179,20 +226,7 @@ describe("a Persona chat's pill on a hub that keeps picks", () => {
         act(() => root.render(<AssistantModelPill session={{ ...s }} />));
       }).not.toThrow();
       await flush();
-      expect(pill()).toBeNull();
-      expect(error).not.toHaveBeenCalled();
-    } finally {
-      error.mockRestore();
-    }
-  });
-
-  it("keeps its hooks when this conversation becomes the main one (#7070)", async () => {
-    const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    try {
-      const s = chat();
-      getState().assistant!.main = "other";
-      await show(s);
-      expect(pill()).toBeNull();
+      expect(pill()).not.toBeNull();
       getState().assistant!.main = "c1";
       expect(() => {
         act(() => root.render(<AssistantModelPill session={{ ...s }} />));
@@ -374,5 +408,80 @@ describe("an older hub and the new-conversation page", () => {
     expect(await act(() => panel.props!.onPick({ provider: "relay", model: "haiku", effort: "low" }))).toBe(true);
     expect([pickedLauncher(NEW_CONVERSATION), pickedModel(NEW_CONVERSATION), pickedEffort(NEW_CONVERSATION)]).toEqual(["relay", "haiku", "low"]);
     expect(calls.some((c) => c.method !== "GET")).toBe(false);
+  });
+});
+
+// A model the chat can't run (turn_error_code model_route): "Fix it" on its error card opens this chat's own panel, where
+// another model is picked, never the new-provider wizard; a kept pick can be dropped from the card too (#10365).
+describe("a model error's Fix it", () => {
+  // i18n-ignore: Claude Code's words
+  const text = "There's an issue with the selected model (haiku). It may not exist or you may not have access to it.";
+  const errorLine = {
+    kind: "apiError", id: "err-e1", count: 1, info: parseAPIError(text)!,
+    item: { id: "e1", seq: 1, role: "assistant", kind: "text", text } as Item,
+  } as Extract<ChatLine, { kind: "apiError" }>;
+  // the chat's pill and the banner over its composer, both on the conversation as the store has it (ChatView)
+  function Chat() {
+    const s = useStore(() => getSession(mid(), "c1"))!;
+    const fix = useAssistantTurnFix(s, true);
+    return (
+      <>
+        <AssistantModelPill session={s} />
+        <ErrorBanner line={errorLine} assistant fix={fix} onDismiss={() => {}} />
+      </>
+    );
+  }
+  const button = (label: string) => [...host.querySelectorAll("button")].find((b) => b.textContent === label);
+  async function showChat(s: Session) {
+    act(() => upsertSession(s));
+    act(() => root.render(<Chat />));
+    await flush();
+  }
+  afterEach(() => history.replaceState(null, "", "/"));
+
+  it("opens the chat's own panel on a key of its own: `/model` in a Persona chat still sends the text", async () => {
+    await show(chat());
+    expect(requestModelPicker(`${mid()}/c1`)).toBe(false);
+    await act(async () => void expect(requestModelPicker(assistantPickerKey(mid(), "c1"))).toBe(true));
+    await act(async () => vi.dynamicImportSettled());
+    await flush();
+    expect(strip()).not.toBeNull();
+    act(() => root.render(<></>));
+    expect(requestModelPicker(assistantPickerKey(mid(), "c1"))).toBe(false);
+  });
+
+  it("opens the panel rather than a page, and follows the default again from the card, put back if the hub says no", async () => {
+    history.replaceState(null, "", "/s/c1");
+    await showChat(chat({ turn_error_code: "model_route", model_pick: { launcher: "relay", model: "haiku" } }));
+    expect(host.textContent).toContain(t("lib-readiness.turn_model_route"));
+    await act(async () => button(t("chat-lines.fix_it"))!.click());
+    await act(async () => vi.dynamicImportSettled());
+    await flush();
+    expect(strip()?.getAttribute("data-pick-strip")).toBe("pick");
+    expect(location.pathname + location.search).toBe("/s/c1");
+    pickAnswer = () => json({ error: "the hub is busy" }, 500);
+    await act(async () => button(t("chat-modelpill.follow_default"))!.click());
+    await flush();
+    expect(sent("DELETE")).toEqual([null]);
+    expect(getSession(mid(), "c1")?.model_pick).toEqual({ launcher: "relay", model: "haiku" });
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining("the hub is busy"), "error");
+    pickAnswer = () => json({ ok: true });
+    await act(async () => button(t("chat-modelpill.follow_default"))!.click());
+    await flush();
+    expect(sent("DELETE")).toEqual([null, null]);
+    expect(getSession(mid(), "c1")?.model_pick).toBeUndefined();
+    // following the default, the card has nothing to undo
+    expect(button(t("chat-modelpill.follow_default"))).toBeUndefined();
+    expect(button(t("chat-lines.fix_it"))).toBeDefined();
+  });
+
+  it("undoes the pick of a chat that keeps what it runs, and offers no way back on an older hub", async () => {
+    getState().assistant!.main = "other";
+    await showChat(chat({ turn_error_code: "model_route", model_pick: { launcher: "relay", model: "haiku" } }));
+    expect(button(t("chat-modelpill.undo_pick"))).toBeDefined();
+    Object.assign(getState(), { features: ["typed_models"] });
+    await showChat(chat({ turn_error_code: "model_route", model_pick: { launcher: "relay", model: "haiku" } }));
+    expect(button(t("chat-modelpill.undo_pick"))).toBeUndefined();
+    expect(button(t("chat-lines.fix_it"))).toBeDefined();
   });
 });
