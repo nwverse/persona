@@ -175,29 +175,33 @@ func migrationNameProblems(files map[string][]string) []string {
 
 // The guard on names: a numbered file added after the freeze (above the last number, or in a gap) fails, as do a
 // timestamp that is no time, one before the switch, and a minute taken twice; a timestamped file passes, in one set or
-// the other.
+// the other. The made-up files are of minutes far after any real one, so the real timestamped files added later
+// neither share their versions nor sort after them.
 func TestMigrationNameProblems(t *testing.T) {
-	with := func(part string, names ...string) map[string][]string {
+	with := func(add map[string][]string) map[string][]string {
 		files := setFiles(t)
-		files[part] = append(files[part], names...)
-		sort.Strings(files[part])
+		for part, names := range add {
+			files[part] = append(files[part], names...)
+			sort.Strings(files[part])
+		}
 		return files
 	}
+	in := func(part string, names ...string) map[string][]string { return with(map[string][]string{part: names}) }
 	for _, c := range []struct {
 		name  string
 		files map[string][]string
 		want  []string // a part of each problem, in order
 	}{
 		{"frozen", setFiles(t), nil},
-		{"timestamped", with("manager", "202611191230_probe.sql", "202611191231_probe_more.sql"), nil},
-		{"timestamped in each set", with("hub", "202611191232_hub_probe.sql"), nil},
-		{"next number", with("manager", "0562_probe.sql"), []string{"numbers stopped at 0561", "87 numbered migrations, 86"}},
-		{"a gap", with("hub", "0559_probe.sql"), []string{"36 numbered migrations, 35"}},
-		{"upper case", with("hub", "202611191230_Probe.sql"), []string{"in lower case"}},
-		{"three digits", with("hub", "562_probe.sql"), []string{"in lower case"}},
-		{"no time", with("hub", "202611311230_probe.sql"), []string{"not a time"}},
-		{"before the switch", with("hub", "202611181230_probe.sql"), []string{"before migrations were timestamped"}},
-		{"one minute twice", with("manager", "202611191230_a.sql", "202611191230_b.sql"), []string{"two migrations with version 202611191230"}},
+		{"timestamped", in("manager", "299912312350_probe.sql", "299912312351_probe_more.sql"), nil},
+		{"timestamped in each set", in("hub", "299912312352_hub_probe.sql"), nil},
+		{"next number", in("manager", "0562_probe.sql"), []string{"numbers stopped at 0561", "87 numbered migrations, 86"}},
+		{"a gap", in("hub", "0559_probe.sql"), []string{"36 numbered migrations, 35"}},
+		{"upper case", in("hub", "299912312350_Probe.sql"), []string{"in lower case"}},
+		{"three digits", in("hub", "562_probe.sql"), []string{"in lower case"}},
+		{"no time", in("hub", "299911311230_probe.sql"), []string{"not a time"}},
+		{"before the switch", in("hub", "202611181230_probe.sql"), []string{"before migrations were timestamped"}},
+		{"one minute twice", in("manager", "299912312350_a.sql", "299912312350_b.sql"), []string{"two migrations with version 299912312350"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			got := migrationNameProblems(c.files)
@@ -211,9 +215,7 @@ func TestMigrationNameProblems(t *testing.T) {
 			}
 		})
 	}
-	both := setFiles(t)
-	both["hub"] = append(both["hub"], "202611191230_probe.sql")
-	both["manager"] = append(both["manager"], "202611191230_probe_too.sql")
+	both := with(map[string][]string{"hub": {"299912312350_probe.sql"}, "manager": {"299912312350_probe_too.sql"}})
 	if got := migrationNameProblems(both); len(got) != 1 || !strings.Contains(got[0], "is in both sets") {
 		t.Fatalf("one minute in both sets: %q", got)
 	}

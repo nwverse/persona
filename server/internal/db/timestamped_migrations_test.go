@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"fmt"
 	"io/fs"
 	"slices"
 	"sort"
@@ -12,20 +13,52 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// timestampedProbes are timestamped migrations as later lines of work add them, by path under migrations/. The
-// manager's needs the table its last numbered migration (0561) makes, so it runs only after the numbered ones; neither
-// can run twice.
+// The probes' minutes are far later than any migration a line of work will write: whatever timestamped migrations
+// are added after this test, the probes take none of their versions and sort after all of them.
+const (
+	managerProbe = "299912312358_probe.sql"
+	hubProbe     = "299912312359_probe.sql"
+)
+
+// timestampedProbes are timestamped migrations as later lines of work add them, by path under migrations/. Each
+// fails unless its part's last numbered migration ran before it (frozen, so the probes don't depend on a table a
+// later migration may change), and neither can run twice.
 var timestampedProbes = map[string]string{
-	"manager/202611191230_probe.sql": `ALTER TABLE model_usage ADD COLUMN probe int`,
-	"hub/202611191231_probe.sql":     `CREATE TABLE timestamp_probe (id int)`,
+	"manager/" + managerProbe: probeSQL("manager", 561, "timestamp_probe_manager"),
+	"hub/" + hubProbe:         probeSQL("hub", 541, "timestamp_probe"),
 }
 
-// withMigrations are the embedded migrations and extra ones (path under migrations/: SQL): a build that has them.
-func withMigrations(t *testing.T, extra map[string]string) fstest.MapFS {
+// probeRecords are the rows the probes leave as "version name part", by the sets they run in.
+var probeRecords = map[Sets][]string{
+	HubSet:     {"299912312359 " + hubProbe + " hub"},
+	ManagerSet: {"299912312358 " + managerProbe + " manager"},
+	AllSets:    {"299912312358 " + managerProbe + " manager", "299912312359 " + hubProbe + " hub"},
+}
+
+// probeSQL makes table, after part's migration numbered last is recorded.
+func probeSQL(part string, last int, table string) string {
+	return fmt.Sprintf(`DO $$ BEGIN
+	IF NOT EXISTS (SELECT 1 FROM schema_migrations WHERE version = %d AND part = '%s') THEN
+		RAISE EXCEPTION 'ran before migration %04d';
+	END IF;
+END $$;
+CREATE TABLE %s (id int)`, last, part, last, table)
+}
+
+// buildOf is a build's migrations: the embedded ones of the versions keep takes, and extra ones (path under
+// migrations/: SQL).
+func buildOf(t *testing.T, keep func(version int64) bool, extra map[string]string) fstest.MapFS {
 	t.Helper()
 	out := fstest.MapFS{}
 	for part, names := range setFiles(t) {
 		for _, name := range names {
+			v, err := migrationVersion(name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !keep(v) {
+				continue
+			}
 			b, err := fs.ReadFile(migrations, "migrations/"+part+"/"+name)
 			if err != nil {
 				t.Fatal(err)
@@ -35,6 +68,40 @@ func withMigrations(t *testing.T, extra map[string]string) fstest.MapFS {
 	}
 	for path, sql := range extra {
 		out["migrations/"+path] = &fstest.MapFile{Data: []byte(sql)}
+	}
+	return out
+}
+
+// withMigrations are the embedded migrations and extra ones: a build that has them.
+func withMigrations(t *testing.T, extra map[string]string) fstest.MapFS {
+	t.Helper()
+	return buildOf(t, func(int64) bool { return true }, extra)
+}
+
+// numberedMigrations are the embedded migrations numbered by hand: what a build from before timestamps has.
+func numberedMigrations(t *testing.T) fstest.MapFS {
+	t.Helper()
+	return buildOf(t, func(v int64) bool { return v <= lastNumbered }, nil)
+}
+
+// stampedRecords are the records ("name part", as records has them) the timestamped migrations of fsys leave when
+// sets run them.
+func stampedRecords(t *testing.T, fsys fs.FS, sets Sets) []string {
+	t.Helper()
+	var out []string
+	for _, sd := range setDirs {
+		if sets&sd.set == 0 {
+			continue
+		}
+		entries, err := fs.ReadDir(fsys, "migrations/"+sd.part)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range entries {
+			if v, err := migrationVersion(e.Name()); err == nil && v > lastNumbered {
+				out = append(out, e.Name()+" "+sd.part)
+			}
+		}
 	}
 	return out
 }
@@ -50,14 +117,24 @@ func versionType(t *testing.T, d *DB) string {
 	return typ
 }
 
-// stamped are the versions of schema_migrations' timestamped rows, in order.
-func stamped(t *testing.T, d *DB) []int64 {
+// probeRows are schema_migrations' rows of the probes as "version name part", sorted.
+func probeRows(t *testing.T, d *DB) []string {
 	t.Helper()
-	var out []int64
-	if err := d.pool.QueryRow(context.Background(), `SELECT coalesce(array_agg(version ORDER BY version), '{}')
-		FROM schema_migrations WHERE version > $1`, lastNumbered).Scan(&out); err != nil {
+	rows, err := d.pool.Query(context.Background(), `SELECT version, name, coalesce(part, '-') FROM schema_migrations
+		WHERE name = ANY($1)`, []string{managerProbe, hubProbe})
+	if err != nil {
 		t.Fatal(err)
 	}
+	out, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (string, error) {
+		var v int64
+		var name, part string
+		err := row.Scan(&v, &name, &part)
+		return fmt.Sprintf("%d %s %s", v, name, part), err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sort.Strings(out)
 	return out
 }
 
@@ -67,28 +144,31 @@ func stamped(t *testing.T, d *DB) []int64 {
 // again only reads. A set with two files of one version is refused, not half skipped.
 func TestMigrateTimestampedAfterNumbered(t *testing.T) {
 	ctx := context.Background()
+	numbered := numberedMigrations(t)
 	built := withMigrations(t, timestampedProbes)
 	for _, c := range []struct {
-		name    string
-		sets    Sets
-		records []string
-		stamped []int64
+		name string
+		sets Sets
 	}{
-		{"hub", HubSet, []string{"202611191231_probe.sql hub"}, []int64{202611191231}},
-		{"manager", ManagerSet, []string{"202611191230_probe.sql manager"}, []int64{202611191230}},
-		{"shared", AllSets, []string{"202611191230_probe.sql manager", "202611191231_probe.sql hub"},
-			[]int64{202611191230, 202611191231}},
+		{"hub", HubSet},
+		{"manager", ManagerSet},
+		{"shared", AllSets},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			url := freshDatabase(t)
-			older, err := Open(ctx, url, c.sets)
+			older, err := Attach(ctx, url, c.sets)
 			if err != nil {
 				t.Fatal(err)
 			}
+			if err := older.migrateFrom(ctx, numbered); err != nil {
+				older.Close()
+				t.Fatal(err)
+			}
 			if typ := versionType(t, older); typ != "bigint" {
+				older.Close()
 				t.Fatalf("a new database's version is %s", typ)
 			}
-			want := append(records(t, older), c.records...)
+			want := append(records(t, older), stampedRecords(t, built, c.sets)...)
 			sort.Strings(want)
 			_, err = older.pool.Exec(ctx, `ALTER TABLE schema_migrations ALTER COLUMN version TYPE int`)
 			// Its connections keep reads of schema_migrations prepared, which Postgres refuses to run once the column
@@ -111,8 +191,8 @@ func TestMigrateTimestampedAfterNumbered(t *testing.T) {
 			if got := records(t, d); !slices.Equal(got, want) {
 				t.Fatalf("records %v, want %v", got, want)
 			}
-			if got := stamped(t, d); !slices.Equal(got, c.stamped) {
-				t.Fatalf("timestamped versions %v, want %v", got, c.stamped)
+			if got := probeRows(t, d); !slices.Equal(got, probeRecords[c.sets]) {
+				t.Fatalf("probe rows %v, want %v", got, probeRecords[c.sets])
 			}
 			traced, log := tracedDB(t, url)
 			traced.sets = c.sets
@@ -131,10 +211,10 @@ func TestMigrateTimestampedAfterNumbered(t *testing.T) {
 				return
 			}
 			twice := withMigrations(t, map[string]string{
-				"manager/202611191230_probe.sql": timestampedProbes["manager/202611191230_probe.sql"],
-				"manager/202611191230_other.sql": `CREATE TABLE timestamp_other (id int)`,
+				"manager/" + managerProbe:        timestampedProbes["manager/"+managerProbe],
+				"manager/299912312358_other.sql": `CREATE TABLE timestamp_other (id int)`,
 			})
-			if err := d.migrateFrom(ctx, twice); err == nil || !strings.Contains(err.Error(), "same version 202611191230") {
+			if err := d.migrateFrom(ctx, twice); err == nil || !strings.Contains(err.Error(), "same version 299912312358") {
 				t.Fatalf("two migrations of one minute: %v", err)
 			}
 			if slices.Contains(tablesOf(t, d), "timestamp_other") {
@@ -142,7 +222,7 @@ func TestMigrateTimestampedAfterNumbered(t *testing.T) {
 			}
 		})
 	}
-	// On a new database the timestamped migrations follow the numbered ones they build on.
+	// On a new database the timestamped migrations follow the numbered ones they build on (each probe checks).
 	d, err := Attach(ctx, freshDatabase(t), AllSets)
 	if err != nil {
 		t.Fatal(err)
@@ -151,8 +231,8 @@ func TestMigrateTimestampedAfterNumbered(t *testing.T) {
 	if err := d.migrateFrom(ctx, built); err != nil {
 		t.Fatal(err)
 	}
-	if got := stamped(t, d); !slices.Equal(got, []int64{202611191230, 202611191231}) {
-		t.Fatalf("timestamped versions %v", got)
+	if got := probeRows(t, d); !slices.Equal(got, probeRecords[AllSets]) {
+		t.Fatalf("probe rows %v", got)
 	}
 }
 
@@ -193,19 +273,22 @@ func TestOlderBuildAfterTimestampedMigrations(t *testing.T) {
 	var version int // what readSchemaRecords scanned into before timestamps
 	var name string
 	var part *string
-	seen := 0
+	var read []string
 	if _, err := pgx.ForEachRow(rows, []any{&version, &name, &part}, func() error {
-		if strings.HasPrefix(name, "2026") && int64(version) >= firstStamp {
-			seen++
+		if (name == managerProbe || name == hubProbe) && part != nil {
+			read = append(read, fmt.Sprintf("%d %s %s", version, name, *part))
 		}
 		return nil
-	}); err != nil || seen != len(timestampedProbes) {
-		t.Fatalf("an older build's read: %d timestamped rows, %v", seen, err)
+	}); err != nil {
+		t.Fatalf("an older build's read: %v", err)
 	}
-	// The older build's own migrations: the embedded ones, without the timestamped files.
+	if sort.Strings(read); !slices.Equal(read, probeRecords[AllSets]) {
+		t.Fatalf("an older build's read of the timestamped rows: %v", read)
+	}
+	// The older build's own migrations: the numbered ones.
 	traced, log := tracedDB(t, url)
 	traced.sets = AllSets
-	if err := traced.migrateFrom(ctx, migrations); err != nil {
+	if err := traced.migrateFrom(ctx, numberedMigrations(t)); err != nil {
 		t.Fatal(err)
 	}
 	if got := log.take(); len(got) > 4 {
