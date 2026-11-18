@@ -1,8 +1,9 @@
 import Foundation
 import XCTest
 
-/// UI version 10's graph on the mock's made-up 200-node Work page and its compact overview card
-/// (`MOCK_EXTENSIONS=1 MOCK_EXTENSION_GRAPH=1`, `TEST_RUNNER_PERSONA_GRAPH_HUB=http://127.0.0.1:<port>`).
+/// UI version 10's graph on the mock's made-up 200-node Work page and its compact overview card, plus UI version 9's
+/// gauge card (`MOCK_EXTENSIONS=1 MOCK_EXTENSION_GRAPH=1 MOCK_EXTENSION_GAUGE=1`,
+/// `TEST_RUNNER_PERSONA_GRAPH_HUB=http://127.0.0.1:<port>`).
 /// Covers zoom, folding, full screen, a node's row-style push, and the still preview opening the same canvas.
 /// `TEST_RUNNER_PERSONA_SHOTS` keeps screenshots; `TEST_RUNNER_PERSONA_GRAPH_OUTER_SHOTS=1` asks a driver to take them
 /// with `simctl io screenshot`, and `TEST_RUNNER_PERSONA_GRAPH_SCHEME=light|dark` chooses the appearance.
@@ -14,7 +15,7 @@ final class ExtensionGraphUITests: XCTestCase {
 
     @MainActor private func launch(tab: String = "assistant") throws -> XCUIApplication {
         guard let hub = env["PERSONA_GRAPH_HUB"] else {
-            throw XCTSkip("needs mock_hub.py with MOCK_EXTENSIONS=1 MOCK_EXTENSION_GRAPH=1 (PERSONA_GRAPH_HUB)")
+            throw XCTSkip("needs mock_hub.py with MOCK_EXTENSIONS=1 MOCK_EXTENSION_GRAPH=1 MOCK_EXTENSION_GAUGE=1 (PERSONA_GRAPH_HUB)")
         }
         continueAfterFailure = false
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
@@ -86,19 +87,25 @@ final class ExtensionGraphUITests: XCTestCase {
         zoomOut.tap()
         app.buttons["extension-graph-zoom-in"].tap()
 
-        // Fold a visible parent, then restore it. The control is independent of its node.
-        let folds = app.buttons.matching(
-            NSPredicate(format: "identifier BEGINSWITH %@", "extension-graph-fold-")).allElementsBoundByIndex
-        guard let fold = visible(folds, in: app) else {
-            XCTFail("no visible fold control:\n\(app.debugDescription)")
-            return
+        // Fold a visible parent through its chip, then restore it. The chip is hidden from VoiceOver because the node
+        // carries the same custom action, so drive its actual children-edge coordinate rather than an AX duplicate.
+        var foldPair: (parent: XCUIElement, child: XCUIElement)?
+        for part in 0..<8 {
+            for step in [3, 4, 1, 2, 0, 5] {
+                let parent = app.buttons["extension-graph-node-p\(part).s\(step)"]
+                let child = app.buttons["extension-graph-node-p\(part).s\(step).c0"]
+                if visible([parent], in: app) != nil && child.exists {
+                    foldPair = (parent, child)
+                    break
+                }
+            }
+            if foldPair != nil { break }
         }
-        let openLabel = fold.label
-        XCTAssertFalse(openLabel.isEmpty)
-        fold.tap()
-        XCTAssertNotEqual(fold.label, openLabel, "folding changes the control to its show-hidden label")
-        fold.tap()
-        XCTAssertEqual(fold.label, openLabel)
+        let (parent, child) = try XCTUnwrap(foldPair, "no visible parent with children:\n\(app.debugDescription)")
+        parent.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 0.5)).tap()
+        XCTAssertTrue(child.waitForNonExistence(timeout: 5), app.debugDescription)
+        parent.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 0.5)).tap()
+        XCTAssertTrue(child.waitForExistence(timeout: 5), app.debugDescription)
 
         app.buttons["extension-graph-full-screen"].tap()
         XCTAssertTrue(app.buttons["extension-graph-close"].waitForExistence(timeout: 10), app.debugDescription)
@@ -137,8 +144,8 @@ final class ExtensionGraphUITests: XCTestCase {
         plugins.tap()
         let card = app.descendants(matching: .any)["plugin-card-example-work-work-card"]
         let preview = app.descendants(matching: .any)["extension-graph-preview"]
-        let settingsList = app.descendants(matching: .any)["settings-list"]
-        for _ in 0..<10 where !card.waitForExistence(timeout: 2) { settingsList.swipeUp(velocity: .fast) }
+        let extensionsList = app.descendants(matching: .any)["extensions-list"]
+        for _ in 0..<10 where !card.waitForExistence(timeout: 2) { extensionsList.swipeUp(velocity: .fast) }
         XCTAssertTrue(card.waitForExistence(timeout: 10), app.debugDescription)
         XCTAssertTrue(preview.waitForExistence(timeout: 15), app.debugDescription)
         preview.tap()
@@ -147,5 +154,24 @@ final class ExtensionGraphUITests: XCTestCase {
         app.buttons["extension-graph-close"].tap()
         XCTAssertTrue(preview.waitForExistence(timeout: 10), app.debugDescription)
         shot(app, "overview")
+    }
+
+    @MainActor func testGaugeCard() throws {
+        let app = try launch()
+        let row = app.descendants(matching: .any)["sidebar-extension-example-quota-quota"]
+        if !row.waitForExistence(timeout: 10) {
+            let sidebar = app.buttons["assistant-sidebar-button"]
+            XCTAssertTrue(sidebar.waitForExistence(timeout: 10), app.debugDescription)
+            sidebar.tap()
+        }
+        XCTAssertTrue(row.waitForExistence(timeout: 10), app.debugDescription)
+        row.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["extension-ui-ready"].waitForExistence(timeout: 20),
+                      app.debugDescription)
+        for key in ["five_hours", "week", "fable_week"] {
+            XCTAssertTrue(app.descendants(matching: .any)["plugin-ui-tile-\(key)"].waitForExistence(timeout: 10),
+                          app.debugDescription)
+        }
+        shot(app, "gauge")
     }
 }

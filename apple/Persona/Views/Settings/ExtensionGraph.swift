@@ -49,6 +49,7 @@ struct ExtensionGraph: View {
                                 fullScreen = false
                                 return .handled
                             }
+                            .accessibilityAction(.escape) { fullScreen = false } // VoiceOver's scrub, as on a sheet
                             .onAppear { coverFocused = true }
                             .onChange(of: (controller as? ExtensionViewModel)?.pushed) { _, pushed in
                                 // A node's push belongs to the page's navigation stack, not to a cover left over it.
@@ -152,19 +153,18 @@ private struct ExtensionGraphCanvas: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var dragStart: ExtensionGraphTransform?
     @State private var pinchStart: ExtensionGraphTransform?
-    @State private var pointerStart: ExtensionGraphTransform?
 
     private var nodeSide: CGFloat { Theme.Size.graphNodeWidth * Theme.sizeScale(typeSize) }
     private var nodeHeight: CGFloat { Theme.Size.graphNodeHeight * Theme.sizeScale(typeSize) }
     private var gapX: CGFloat { Theme.Size.graphNodeGap * Theme.sizeScale(typeSize) }
     private var gapY: CGFloat { Theme.Size.graphNodeGap * Theme.sizeScale(typeSize) }
-    private var margin: CGFloat { Theme.Space.l * Theme.sizeScale(typeSize) }
+    private var margin: CGFloat { Theme.Space.xl * Theme.sizeScale(typeSize) }
 
     var body: some View {
         GeometryReader { geometry in
             if let layout = model.layout {
                 let content = contentSize(layout)
-                let transform = picture ? ExtensionGraphTransform.fit(content, in: geometry.size,
+                let transform = (picture || preview) ? ExtensionGraphTransform.fit(content, in: geometry.size,
                     minimum: Theme.Size.graphPreviewMinScale, maximum: 1) : model.transform
                 ZStack(alignment: .topLeading) {
                     Theme.pageBackground
@@ -181,14 +181,14 @@ private struct ExtensionGraphCanvas: View {
                 .contentShape(.rect)
                 .background {
                     if !preview {
-                        ExtensionGraphPointerPan { translation in
-                            if pointerStart == nil { pointerStart = model.transform }
-                            guard let start = pointerStart else { return }
-                            model.updateTransform(ExtensionGraphTransform(scale: start.scale,
-                                x: start.x + translation.width, y: start.y + translation.height))
+                        ExtensionGraphPointerPan { delta in
+                            let current = model.transform
+                            model.updateTransform(ExtensionGraphTransform(scale: current.scale,
+                                x: current.x + delta.width, y: current.y + delta.height))
+                        } onZoom: { factor, point in
+                            model.updateTransform(model.transform.zoom(factor, around: point))
                         } onEnded: {
-                            if pointerStart != nil { model.updateTransform(model.transform, persist: true) }
-                            pointerStart = nil
+                            model.persistCurrent(coalesced: true)
                         }
                     }
                 }
@@ -252,8 +252,8 @@ private struct ExtensionGraphCanvas: View {
                         .font(Theme.Font.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
-                        .position(x: rect.minX + Theme.Space.m + Theme.Space.l,
-                                  y: rect.minY + Theme.Space.s + Theme.Space.xs)
+                        .position(x: rect.minX + (Theme.Space.m + Theme.Space.l) * Theme.sizeScale(typeSize),
+                                  y: rect.minY + Theme.Space.m * Theme.sizeScale(typeSize))
                 }
             }
         }
@@ -301,7 +301,11 @@ private struct ExtensionGraphCanvas: View {
                     } label: {
                         Group {
                             if folded {
-                                Text("+\(hidden)").font(Theme.Font.labelStrong).lineLimit(1)
+                                Text("+\(hidden)")
+                                    .font(Theme.Font.labelStrong)
+                                    .lineLimit(1)
+                                    .monospacedDigit()
+                                    .padding(.horizontal, Theme.Space.xxs)
                             } else {
                                 ThemedIcon(Theme.Icon.disclosure)
                                     .font(Theme.Font.labelStrong)
@@ -309,9 +313,9 @@ private struct ExtensionGraphCanvas: View {
                             }
                         }
                         .foregroundStyle(.secondary)
-                        .scaledFrame(width: Theme.Size.graphFoldChip, height: Theme.Size.graphFoldChip)
-                        .background(Theme.Fill.chip, in: .circle)
-                        .overlay(Circle().stroke(Theme.cardStroke, lineWidth: Theme.Size.hairline))
+                        .scaledFrame(minWidth: Theme.Size.graphFoldChip, minHeight: Theme.Size.graphFoldChip)
+                        .background(Theme.Fill.chip, in: .capsule)
+                        .overlay(Capsule().stroke(Theme.cardStroke, lineWidth: Theme.Size.hairline))
                         .tapTargetFrame()
                         .contentShape(.rect)
                     }
@@ -319,6 +323,8 @@ private struct ExtensionGraphCanvas: View {
                     .accessibilityLabel(foldLabel(id: id, hidden: hidden))
                     .accessibilityIdentifier("extension-graph-fold-\(id)")
                     .position(center)
+                    // The node's custom action already speaks this same fold in reading order.
+                    .accessibilityHidden(true)
                 }
             }
         }
@@ -366,7 +372,7 @@ private struct ExtensionGraphCanvas: View {
                     x: start.x + value.translation.width, y: start.y + value.translation.height))
             }
             .onEnded { _ in
-                if dragStart != nil { model.updateTransform(model.transform, persist: true) }
+                if dragStart != nil { model.persistCurrent() }
                 dragStart = nil
             }
     }
@@ -380,23 +386,22 @@ private struct ExtensionGraphCanvas: View {
                 model.updateTransform(start.zoom(value, in: viewport))
             }
             .onEnded { _ in
-                if pinchStart != nil { model.updateTransform(model.transform, persist: true) }
+                if pinchStart != nil { model.persistCurrent() }
                 pinchStart = nil
             }
     }
 
     private func fitIfNeeded(_ layout: ExtensionGraphLayouter.Result, content: CGSize, viewport: CGSize) {
-        guard !picture, !covered, model.needsFit || !model.touched, viewport.width > 0, viewport.height > 0 else { return }
-        var fitted = ExtensionGraphTransform.fit(content, in: viewport,
-            minimum: preview ? Theme.Size.graphPreviewMinScale : 0.5, maximum: 1)
-        if !preview, let selected = graph.selected, let point = layout.at[selected] {
+        guard !picture, !preview, !covered, model.needsFit || !model.touched, viewport.width > 0, viewport.height > 0 else { return }
+        var fitted = ExtensionGraphTransform.fit(content, in: viewport, minimum: 0.5, maximum: 1)
+        if let selected = graph.selected, let point = layout.at[selected] {
             let rect = nodeRect(point)
             fitted.x = viewport.width / 2 - rect.midX * fitted.scale
             fitted.y = viewport.height / 2 - rect.midY * fitted.scale
-        } else if !preview, let first = layout.order.first, let point = layout.at[first] {
+        } else if let first = layout.order.first, let point = layout.at[first] {
             let rect = nodeRect(point)
             fitted.x = Theme.Space.page - rect.minX * fitted.scale
-            fitted.y = Theme.Space.page - rect.minY * fitted.scale
+            fitted.y = margin - rect.minY * fitted.scale
         }
         model.applyFit(fitted, explicit: false)
     }
@@ -419,7 +424,14 @@ private struct ExtensionGraphCanvas: View {
             let next = nodeRect(point)
             rect = rect?.union(next) ?? next
         }
-        return rect?.insetBy(dx: -Theme.Space.s, dy: -Theme.Space.l)
+        guard let rect else { return nil }
+        let scale = Theme.sizeScale(typeSize)
+        let horizontal = Theme.Space.s * scale
+        // A caption band and a small foot fit inside the node gap, so adjacent groups stay separate.
+        let top = Theme.Space.xl * scale
+        let bottom = Theme.Space.xs * scale
+        return CGRect(x: rect.minX - horizontal, y: rect.minY - top,
+                      width: rect.width + horizontal * 2, height: rect.height + top + bottom)
     }
 
     private func foldLabel(id: String, hidden: Int) -> String {
@@ -482,7 +494,7 @@ private struct ExtensionGraphPlacedNode: View {
             }
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                 HStack(spacing: Theme.Space.xs) {
-                    Text(node.title).font(Theme.Font.bodyStrong).lineLimit(1).minimumScaleFactor(0.7)
+                    Text(node.title).font(Theme.Font.bodyStrong).lineLimit(1).truncationMode(.tail)
                     if let badge = node.badge, !badge.text.isEmpty {
                         Chip(text: badge.text, look: ExtensionUIStyle.badge(badge))
                     }
@@ -557,12 +569,13 @@ private struct ExtensionGraphFoldAction: ViewModifier {
 }
 
 /// Trackpad scrolling and a mouse wheel are UIPanGestureRecognizer scroll events on iPadOS, not SwiftUI drag events.
-/// Direct touches are left to the canvas's ordinary DragGesture and the nodes' buttons.
+/// Ordinary scrolling pans; Command/Control + wheel zooms around the pointer. Direct touches stay with SwiftUI.
 private struct ExtensionGraphPointerPan: UIViewRepresentable {
     var onChanged: (CGSize) -> Void
+    var onZoom: (Double, CGPoint) -> Void
     var onEnded: () -> Void
 
-    func makeCoordinator() -> Coordinator { Coordinator(onChanged: onChanged, onEnded: onEnded) }
+    func makeCoordinator() -> Coordinator { Coordinator(onChanged: onChanged, onZoom: onZoom, onEnded: onEnded) }
 
     func makeUIView(context: Context) -> UIView {
         let view = UIView(frame: .zero)
@@ -577,28 +590,48 @@ private struct ExtensionGraphPointerPan: UIViewRepresentable {
 
     func updateUIView(_ view: UIView, context: Context) {
         context.coordinator.onChanged = onChanged
+        context.coordinator.onZoom = onZoom
         context.coordinator.onEnded = onEnded
     }
 
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var onChanged: (CGSize) -> Void
+        var onZoom: (Double, CGPoint) -> Void
         var onEnded: () -> Void
+        private var moved = false
 
-        init(onChanged: @escaping (CGSize) -> Void, onEnded: @escaping () -> Void) {
+        init(onChanged: @escaping (CGSize) -> Void, onZoom: @escaping (Double, CGPoint) -> Void,
+             onEnded: @escaping () -> Void) {
             self.onChanged = onChanged
+            self.onZoom = onZoom
             self.onEnded = onEnded
         }
 
         @objc func pan(_ recognizer: UIPanGestureRecognizer) {
             switch recognizer.state {
             case .began, .changed:
-                let translation = recognizer.translation(in: recognizer.view)
-                onChanged(CGSize(width: translation.x, height: translation.y))
+                let delta = recognizer.translation(in: recognizer.view)
+                recognizer.setTranslation(.zero, in: recognizer.view)
+                guard delta != .zero else { return }
+                moved = true
+                let modified = recognizer.modifierFlags.contains(.command) || recognizer.modifierFlags.contains(.control)
+                if modified, recognizer.buttonMask.isEmpty {
+                    onZoom(exp(Double(delta.y) * Theme.Size.graphWheelZoomSensitivity),
+                           recognizer.location(in: recognizer.view))
+                } else {
+                    onChanged(CGSize(width: delta.x, height: delta.y))
+                }
             case .ended, .cancelled, .failed:
-                onEnded()
+                if moved { onEnded() }
+                moved = false
             default:
                 break
             }
+        }
+
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            // Scroll only. A button-down pointer drag belongs to SwiftUI's DragGesture, not to both handlers.
+            gestureRecognizer.buttonMask.isEmpty
         }
 
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,

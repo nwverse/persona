@@ -18,14 +18,17 @@ nonisolated struct ExtensionGraphTransform: Codable, Equatable, Sendable {
         CGPoint(x: point.x * scale + x, y: point.y * scale + y)
     }
 
-    func zoom(_ factor: Double, in viewport: CGSize) -> ExtensionGraphTransform {
+    func zoom(_ factor: Double, around point: CGPoint) -> ExtensionGraphTransform {
         let next = min(max(scale * factor, Self.minimumScale), Self.maximumScale)
         guard next != scale else { return self }
-        let center = CGPoint(x: viewport.width / 2, y: viewport.height / 2)
         let ratio = next / scale
         return ExtensionGraphTransform(scale: next,
-            x: center.x - (center.x - x) * ratio,
-            y: center.y - (center.y - y) * ratio)
+            x: point.x - (point.x - x) * ratio,
+            y: point.y - (point.y - y) * ratio)
+    }
+
+    func zoom(_ factor: Double, in viewport: CGSize) -> ExtensionGraphTransform {
+        zoom(factor, around: CGPoint(x: viewport.width / 2, y: viewport.height / 2))
     }
 
     static func fit(_ content: CGSize, in viewport: CGSize, minimum: Double = 0.25,
@@ -80,7 +83,8 @@ private actor ExtensionGraphDiskStore {
             for key in gone { document.pages[key] = nil }
         }
         self.document = document
-        StateCache.save(Self.name, document)
+        // The graph model chains its saves; waiting for the actual write here keeps that order on disk too.
+        StateCache.saveNow(Self.name, document)
     }
 
     private func loadDocument() -> ExtensionGraphSavedDocument {
@@ -112,6 +116,8 @@ private actor ExtensionGraphDiskStore {
     @ObservationIgnored private var foldChoices: [String: Bool]
     @ObservationIgnored private var restored: Bool
     @ObservationIgnored private var revision = 0
+    @ObservationIgnored private var saveTask: Task<Void, Never>?
+    @ObservationIgnored private var wheelSaveTask: Task<Void, Never>?
 
     /// `keeps: false` is the in-memory store used by tests and share pictures. `restored` injects their starting state.
     init(graph: ExtensionGraphComponent, namespace: String = "", restored: ExtensionGraphSavedState? = nil,
@@ -231,6 +237,21 @@ private actor ExtensionGraphDiskStore {
         if persist { self.persist() }
     }
 
+    /// A gesture's changed callbacks have already installed the final transform; saving it must not depend on a further change.
+    /// Discrete wheel notches end separately, so their saves coalesce into one trailing write for the burst.
+    func persistCurrent(coalesced: Bool = false) {
+        wheelSaveTask?.cancel()
+        guard coalesced else {
+            writeCurrent()
+            return
+        }
+        wheelSaveTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(150))
+            guard !Task.isCancelled else { return }
+            self?.writeCurrent()
+        }
+    }
+
     func zoom(_ factor: Double, in viewport: CGSize) {
         updateTransform(transform.zoom(factor, in: viewport), persist: true)
     }
@@ -259,12 +280,21 @@ private actor ExtensionGraphDiskStore {
     }
 
     private func persist() {
+        wheelSaveTask?.cancel()
+        writeCurrent()
+    }
+
+    private func writeCurrent() {
         guard keeps, !persistenceKey.isEmpty else {
             onSave?(ExtensionGraphSavedState(transform: transform, folds: foldChoices, touched: touched))
             return
         }
         let saved = ExtensionGraphSavedState(transform: transform, folds: foldChoices, touched: touched)
         onSave?(saved)
-        Task { await ExtensionGraphDiskStore.shared.save(persistenceKey, saved) }
+        let previous = saveTask
+        saveTask = Task {
+            await previous?.value
+            await ExtensionGraphDiskStore.shared.save(persistenceKey, saved)
+        }
     }
 }

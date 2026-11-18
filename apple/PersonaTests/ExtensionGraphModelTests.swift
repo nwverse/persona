@@ -98,6 +98,55 @@ struct ExtensionGraphModelTests {
         #expect(!model.touched)
     }
 
+    @Test func gestureEndPersistsAnAlreadyChangedTransform() async {
+        var saves: [ExtensionGraphSavedState] = []
+        let model = ExtensionGraphModel(graph: graph(), keeps: false, onSave: { saves.append($0) })
+        await model.reload(graph())
+        let moved = ExtensionGraphTransform(scale: 1.4, x: -30, y: 24)
+        model.updateTransform(moved)
+        #expect(model.transform == moved && model.touched && saves.isEmpty)
+
+        model.persistCurrent()
+        #expect(saves.count == 1, "onChanged already installed the transform; onEnded must still save it")
+        #expect(saves.last?.transform == moved && saves.last?.touched == true)
+    }
+
+    @Test func wheelEndSavesCoalesceAndAnImmediateSaveWins() async {
+        var saves: [ExtensionGraphSavedState] = []
+        let model = ExtensionGraphModel(graph: graph(), keeps: false, onSave: { saves.append($0) })
+        await model.reload(graph())
+        model.updateTransform(ExtensionGraphTransform(scale: 1.1, x: -10, y: 0))
+        model.persistCurrent(coalesced: true)
+        let latest = ExtensionGraphTransform(scale: 1.2, x: -20, y: 0)
+        model.updateTransform(latest)
+        model.persistCurrent(coalesced: true)
+        #expect(saves.isEmpty)
+        try? await Task.sleep(for: .milliseconds(300))
+        #expect(saves.count == 1 && saves.last?.transform == latest, "one trailing save for a wheel burst")
+
+        model.persistCurrent(coalesced: true)
+        model.persistCurrent()
+        #expect(saves.count == 2, "an immediate gesture save is not delayed")
+        try? await Task.sleep(for: .milliseconds(300))
+        #expect(saves.count == 2, "the immediate save cancels the older pending wheel save")
+    }
+
+    @Test func pointerZoomKeepsItsAnchorAndClamps() {
+        let original = ExtensionGraphTransform(scale: 1, x: 10, y: 20)
+        let anchor = CGPoint(x: 100, y: 100)
+        let contentPoint = CGPoint(x: 90, y: 80)
+        let zoomed = original.zoom(1.5, around: anchor)
+        let landed = zoomed.apply(to: contentPoint)
+        #expect(zoomed.scale == 1.5)
+        #expect(abs(landed.x - anchor.x) < 0.001 && abs(landed.y - anchor.y) < 0.001)
+        #expect(original.zoom(1.5, in: CGSize(width: 400, height: 300)) ==
+                original.zoom(1.5, around: CGPoint(x: 200, y: 150)))
+        #expect(ExtensionGraphTransform(scale: 2).zoom(2, around: anchor) ==
+                ExtensionGraphTransform(scale: 2))
+        #expect(ExtensionGraphTransform(scale: 0.25).zoom(0.5, around: anchor) ==
+                ExtensionGraphTransform(scale: 0.25))
+    }
+
     @Test func fitClampsScaleAndCentersTheWholeGraph() {
         let content = CGSize(width: 800, height: 400)
         let viewport = CGSize(width: 400, height: 400)

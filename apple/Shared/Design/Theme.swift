@@ -686,6 +686,7 @@ nonisolated enum Theme {
         static let graphFoldChip: CGFloat = 24
         static let graphPreviewMinScale: CGFloat = 0.01
         static let graphZoomStep: CGFloat = 1.25
+        static let graphWheelZoomSensitivity: Double = 0.0025
     }
 
     /// The system's sidebar column on iPad (iOS 26, the glass styles), measured from its pixels: the split fills the

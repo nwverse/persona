@@ -2818,12 +2818,15 @@ presses; pressing it opens Full screen, the same interactive canvas as the page'
 Mac app keeps its earlier version. `apple/Persona/Views/Settings/ExtensionGraphLayout.swift` is a pure, nonisolated
 copy of the shared layout, checked against every field of every shared case by `ExtensionGraphLayoutTests`.
 `apple/Persona/Views/Settings/ExtensionGraph.swift` draws one edge `Canvas`, the group frames and native node cards,
-with 44 pt fold targets, reading-order VoiceOver elements and a fold custom action. Drag, pinch and iPad pointer
-scrolling move the canvas; the floating Zoom out, Zoom in, Fit and Full screen controls use the design system, and the
-cover keeps the same model, transform and folds. A page gives it 70% of the visible height, clamped to 320–900 pt; a
-compact card has a still 200 pt preview which opens the cover. `ExtensionGraphModel` lays out and restores off the
-main actor, persists the transform and explicit fold choices per component key, scoped to the hub, page and placement,
-in a bounded `StateCache` document, and refits only while the canvas is untouched. `ExtensionGraphModelTests` covers restoration, folding and fitting;
+with 44 pt fold targets, reading-order VoiceOver elements and a fold custom action (without a duplicate spoken chip).
+Drag, pinch and iPad pointer scrolling move the canvas; Command/Control + wheel zooms around the pointer. The floating
+Zoom out, Zoom in, Fit and Full screen controls use the design system, and the cover keeps the same model, transform
+and folds, closing by its button, Esc or VoiceOver Back. A page (including an Inbox item's full-size detail) gives it 70%
+of the visible height, clamped to 320–900 pt; a compact card has an always-fitted still 200 pt preview which opens
+the cover. `ExtensionGraphModel` lays out and restores off the main actor, persists the transform and explicit fold
+choices per component key, scoped to the hub, page and placement, in a bounded `StateCache` document with serialized,
+coalesced wheel-end writes. Interactive canvases refit only while untouched. `ExtensionGraphModelTests` covers
+restoration, folding, gesture saving and fitting;
 `ExtensionGraphUITests` checks zoom, fold, node push, full screen and the compact preview against the mock
 (`MOCK_EXTENSIONS=1 MOCK_EXTENSION_GRAPH=1`).
 
