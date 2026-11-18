@@ -2086,6 +2086,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
                         sid={sid}
                         streaming={(d.line.kind === "segment" || d.line.kind === "supervision") && d.line.live ? tr.streaming || undefined : undefined}
                         expandFold={tr.expandFold}
+                        launcher={session?.launcher}
                         fix={d.line.id === lastLine?.id ? turnFix : undefined}
                         limit={d.line.kind === "apiError" && d.line.id === limitOn ? limitLine : undefined}
                         exhausted={d.line.kind === "apiError" && d.line.id === lastLine?.id ? exhausted : undefined}
@@ -2218,6 +2219,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
             line={bannerError}
             assistant={assistant}
             limit={bannerError.id === limitOn ? limitLine : undefined}
+            launcher={session?.launcher}
             exhausted={exhausted}
             fix={turnFix}
             onRetry={canRetry ? () => void retryError() : undefined}

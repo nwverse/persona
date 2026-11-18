@@ -1177,6 +1177,11 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   the engine, an exact catalog reference-price line where known, and a footer that says whether the setup is the
   recommended one, customized or saved. A provider rail cell adds a 22 × 3 px weekly-remaining bar only when the existing
   launcher quota answer supplies a weekly ratio; its tooltip names the window and reset time.
+- Provider identity on model rows (#7360): every row in New Agent and in the All, Recent and Favorites model lists names
+  its owning launcher at the start of the second line, on web, Android and Apple. The rest of that line keeps the model
+  ID, resolved model, description or typed-model explanation; a launcher's own filtered view may keep its description
+  alone. A sign-in, key or model-availability error that offers a repair names the affected launcher in its title, and
+  the repair opens that launcher's provider settings. This is a content rule, not a new badge, token or visual style.
 - Rail cells (`web/src/ui/model-panel/Rail.tsx`): each cell is 60 px wide, its mark (16 px
   icon or the provider's letter tile) above a caption of up to two lines (the 11.5 px `text-submeta` on a 14 px line, centred, wrapping anywhere), the cell
   growing to fit. A provider's caption is the part of its name that tells it apart (`railCaptions`): a trailing note in

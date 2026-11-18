@@ -14,6 +14,7 @@ import {
   agyModeToPersona,
   cleanUserText,
   LABEL,
+  mapToolCall,
   mapToolInput,
   mapToolName,
   nativeWorking,
@@ -367,8 +368,7 @@ export function createAgyRuntime(options = {}) {
     const pid = toPersonaId(rawId)
     const tc = params?.toolCall || {}
     const rawName = tc.title || tc.name || 'run_command'
-    const toolName = mapToolName(rawName)
-    const toolInput = mapToolInput(rawName, tc.rawInput || tc.input || {})
+    const { toolName, toolInput } = mapToolCall(rawName, tc.rawInput || tc.input || {})
     const opts = Array.isArray(params?.options) ? params.options : []
     const allowAlwaysOpt = opts.find((o) => o.kind === 'allow_always') || opts.find((o) => o.kind === 'allow_once') || opts[0]
     const allowOpt = opts.find((o) => o.kind === 'allow_once') || allowAlwaysOpt
@@ -447,8 +447,8 @@ export function createAgyRuntime(options = {}) {
   }
 
   function historyOf(rawId) {
-    // Refresh cached items emitted before native failures used the shared API-error format.
-    return `agy:${rawId}:full:api-errors:content-v2:step-ids-v2`
+    // Refresh cached items emitted before native failures used the shared API-error format or MCP tool normalization.
+    return `agy:${rawId}:full:api-errors:content-v2:step-ids-v2:mcp-tools`
   }
 
   function cutMatches(cut, transcript) {
