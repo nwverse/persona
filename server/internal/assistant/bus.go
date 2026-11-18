@@ -562,6 +562,9 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 		if err := decode(&p); err != nil {
 			return nil, err
 		}
+		if s.keepsBehind(ctx, p) { // older owner messages to it are kept: this one goes after them (undelivered.go)
+			return nil, &rpc.Error{Code: assistantwire.CodeUndeliveredAhead, Message: "older messages to this conversation wait to go in"}
+		}
 		ctx, note := withLauncherNote(ctx)
 		params, err := s.SendParams(ctx, p)
 		if err != nil {
@@ -572,6 +575,16 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 			return map[string]any{"params": params, "launcher_note": *note}, nil
 		}
 		return map[string]any{"params": params}, nil
+	case assistantwire.MethodKeepUndelivered:
+		var p assistantwire.KeepUndeliveredParams
+		if err := decode(&p); err != nil {
+			return nil, err
+		}
+		kept, err := s.KeepUndelivered(ctx, p)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"undelivered": kept}, nil
 	case assistantwire.MethodRename:
 		var p RenameParams
 		if err := decode(&p); err != nil {
@@ -615,6 +628,15 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 			return nil, err
 		}
 		return s.askHub(ctx, p.Interaction)
+	case assistantwire.MethodFleetAskPrepared:
+		var p struct {
+			Interaction proto.Interaction `json:"interaction"`
+			Replacement string            `json:"replacement"`
+		}
+		if err := decode(&p); err != nil {
+			return nil, err
+		}
+		return b.askPreparedHub(ctx, p.Interaction, p.Replacement)
 	}
 	if out, ok, err := s.kbRequest(ctx, method, params); ok { // the knowledge base's (kb_bus.go)
 		return out, err
