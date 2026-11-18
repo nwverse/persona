@@ -121,10 +121,10 @@ the 0.2-s fade.
 
 ## Deviations from the spec text (for the lead)
 
-- **All pinned last in the bar** (E2 says All last and always shown; the V1-01 / V2-08 / V2-10 wireframes draw it
-  first). Pinning it at the end keeps both E2 promises at 320–402 pt. Owner decision 3 could put it first instead.
-- **Group by in ⋯ for list columns of 340 or less** (E2 puts the grouping icon in the capsule): with All pinned, the
-  icon would cut In progress at 320–336.
+- **All first in the bar**, as the owner decided on 2026-11-18 (the landing choice first; the V1-01 / V2-08 / V2-10
+  wireframes draw it so too).
+- **Group by in ⋯ for list columns of 340 or less** (E2 puts the grouping icon in the capsule): the icon would cut In
+  progress at 320–336.
 - **T02's row points at the door beside it** in V2-10, the Duo `~release` and the web `~release` (the V2-10 wireframe
   draws both the row's Review Plan › and the door card). Drawn once wins.
 - **V2-03's folded subtitle** reads "● Needs you · 3 ryokans near Gion" instead of "· Which ryokan?", so the ask's
@@ -173,6 +173,6 @@ the 0.2-s fade.
   "Persona is continuing without a ryokan").
 
 Counts, section order, bar order and words come from `data/todos.js`, which carries the synthesis's fact-check errata
-(Needs you · Working · Waiting · To do · Just finished; the bar Needs you · In progress · To do · Done · All; In progress
+(Needs you · Working · Waiting · To do · Just finished; the bar All · Needs you · In progress · To do · Done; In progress
 = Working + Waiting; "Didn't start"). V2 types no number. After Send Now the relay reads the data's "Sent now to
 Release notes" (errata E3), because the kit's `rline.relay` 'now' state still says "interrupted its step".

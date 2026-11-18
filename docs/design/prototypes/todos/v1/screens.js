@@ -112,11 +112,11 @@
   /* ================================================================== the section bar (E2) */
 
   /**
-   * The section bar: the Inbox's bar (Needs you · In progress · To do · Done · All, All last). Done shows only while it
-   * has rows; the grouping symbol sits inside the capsule's trailing end (Group By: Phase · Project · Due Date).
-   * All is the reset and the chip To-dos lands on, so it is pinned outside the scrolling chips, last, just before the
-   * grouping symbol: the chosen chip is always in view, and the order stays All last (E2). The other chips scroll and fade
-   * at their cut edge; a chip the owner picked is scrolled into view as the Inbox's bar does.
+   * The section bar: the Inbox's chips with the landing choice first (All · Needs you · In progress · To do · Done; the
+   * owner's 11-18 decision). Done shows only while it has rows; the grouping symbol sits inside the capsule's trailing
+   * end (Group By: Phase · Project · Due Date). Landing on All leaves the strip at its start, so All and Needs you with
+   * its blue N show in every column. The other chips scroll and fade at their cut edge; a chip the owner picked is
+   * scrolled into view as the Inbox's bar does.
    * o: { place, filter, go: { <chip id>: nav }, counts: { <chip id>: n } (a hub count that moved before the rows re-file),
    *      group: nav (the grouping symbol), compact (a column under 400 pt: In progress and To do drop their neutral
    *      counts, so more chips fit; Needs you keeps its blue N), web }
@@ -130,12 +130,11 @@
       o.counts && o.counts[x.id] != null ? { count: o.counts[x.id] } : {},
       o.compact && x.look !== 'needs' ? { count: null } : {},
       goes[x.id] || T(`Shows ${x.label}`)));
-    const all = items.find((x) => x.id === 'all');
-    const rest = items.filter((x) => x !== all);
-    const at = rest.findIndex((x) => x.id === sel);
-    const pinned = all ? `<span class="k-sbar-chip v1-all${sel === 'all' ? ' is-on' : ''}"${A(all)}><span>${all.label}</span></span>` : '';
+    // All comes first, the landing choice at the strip's start (the Inbox's rule: its landing choice, Needs you, is its
+    // first), so Needs you and its count sit beside it in any column; the trailing end holds only the grouping control.
+    const at = items.findIndex((x) => x.id === sel);
     const group = `<span class="v1-group"${A(o.group || T('Opens: Group By (Phase · Project · Due Date)'))} title="Group By">${I('line-3-decrease', o.web ? 15 : 19)}</span>`;
-    const html = ui.sectionBar(rest, { selected: at, trailing: `${pinned}<i class="v1-sbar-sep"></i>${group}` });
+    const html = ui.sectionBar(items, { selected: at, trailing: `<i class="v1-sbar-sep"></i>${group}` });
     return `<div class="v1-bar${o.compact ? ' is-compact' : ''}">${html}</div>`;
   }
 
@@ -646,7 +645,7 @@
     return ui.page({ top, body, overlay: overlay.join('') });
   }
 
-  const listNote = 'Place All To-dos, nothing selected. Toolbar: ☰ (the drawer), the title menu “All To-dos ▾”, ⌕ and ⋯ (Sort, Show); the section bar is the Inbox’s (Needs you (3) · In progress · To do · All, All last; Done only while it has rows; the grouping symbol inside it). To-dos lands on All, and the bar opens at its start so Needs you and its blue N always show; sections follow the hub’s order (Needs you · Working · Waiting · To do · Just finished). Safe asks answer on the row (OK: Ryokan Hanami), a plan shows one door (Review Plan ›), a failed start offers Start When It’s Back; “Can wait · 1” is listed, not counted. Line 3 carries the facts grouping doesn’t show.';
+  const listNote = 'Place All To-dos, nothing selected. Toolbar: ☰ (the drawer), the title menu “All To-dos ▾”, ⌕ and ⋯ (Sort, Show); the section bar is the Inbox’s chips with the landing choice first (All · Needs you (3) · In progress · To do; Done only while it has rows; the grouping symbol inside it). To-dos lands on All, at the bar’s start, so Needs you and its blue N always show beside it; sections follow the hub’s order (Needs you · Working · Waiting · To do · Just finished). Safe asks answer on the row (OK: Ryokan Hanami), a plan shows one door (Review Plan ›), a failed start offers Start When It’s Back; “Can wait · 1” is listed, not counted. Line 3 carries the facts grouping doesn’t show.';
 
   frame(PH.list, {
     device: 'iphone', important: true, title: 'V1-01 · iPhone · To-dos list (All To-dos)',

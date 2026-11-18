@@ -193,7 +193,6 @@
 /* chips: padding 6 and the count 4 from its label (E2 asks 8; at 6 Needs you 3 · In progress 5 · To do 2 · All fit
    whole on a 402 iPhone, a named deviation) */
 [data-variant="V3"] .v3-bar .k-sbar-chip { padding: 0 6px; gap: 4px; }
-[data-variant="V3"] .v3-bar .k-sbar-chip.v3-sbar-all { min-width: 44px; padding: 0 12px; justify-content: center; }
 /* the grouping icon: 24 wide, a 44-pt target */
 [data-variant="V3"] .v3-sbar-g { position: relative; width: 24px; height: 44px; display: grid; place-items: center; flex: none; color: var(--ink-2); cursor: pointer; }
 [data-variant="V3"] .v3-sbar-g::after { content: ""; position: absolute; top: 0; bottom: 0; left: -10px; right: -10px; }
@@ -407,3 +406,4 @@
 .kf-reduce [data-variant="V3"] .v3-anim-body-left .v3-bin,
 .kf-reduce [data-variant="V3"] .v3-anim-body-right .v3-bin,
 .kf-reduce [data-variant="V3"] .v3-anim-drawer .k-drawer { animation: v3-fade .2s ease both; }
+[data-variant="V3"] .v3-bar .k-sbar-chip { min-width: 44px; justify-content: center; }

@@ -498,12 +498,12 @@
     o = o || {};
     if (D.isCalm('all')) return '';
     const sel = selected || 'all';
-    const items = D.bar('all').filter((x) => x.id !== 'all' && !(x.id === 'done' && x.empty))
+    // All is the first chip (the landing choice first, as in every bar)
+    const items = D.bar('all').filter((x) => !(x.id === 'done' && x.empty))
       .map((x) => Object.assign({}, x, (o.counts || {})[x.id] != null ? { count: o.counts[x.id] } : {}, goFor(x.id)));
     const idx = items.findIndex((x) => x.id === sel);
-    const all = `<span class="k-sbar-chip v3-sbar-all${sel === 'all' ? ' is-on' : ''}"${navA(goFor('all'))}><span>All</span></span>`;
     const group = `<span class="v3-sbar-g" role="button" aria-label="Group by"${navA(o.group || opens('Group by Phase · Project · Due Date'))}>${I('line-3-decrease', 17)}</span>`;
-    return `<div class="v3-bar">${ui.sectionBar(items, { selected: idx < 0 ? 99 : idx, trailing: all + group })}</div>`;
+    return `<div class="v3-bar">${ui.sectionBar(items, { selected: idx < 0 ? 99 : idx, trailing: group })}</div>`;
   }
 
   const placeItems = (allNav) => ui.placeMenuItems({

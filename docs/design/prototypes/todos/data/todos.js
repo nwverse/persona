@@ -619,14 +619,15 @@
           a neutral count; All and Done none. */
       bar(place) {
         const c = countsOf(place);
-        // The Inbox's bar (inbox.md "Section bar"): Needs you · In progress · To do · Done · All, All last;
-        // Needs you and All always show, the others while they have rows. To-dos lands on All (a named deviation).
+        // The Inbox's chips, with the landing choice first, as every bar has it (the Inbox lands on Needs you, its
+        // first; Agents and To-dos land on All, their first): All · Needs you · In progress · To do · Done. Needs you
+        // and All always show, the others while they have rows.
         return [
+          { id: 'all', label: 'All', always: true },
           { id: 'needs', label: 'Needs you', count: c.needs, look: 'needs', always: true },
           { id: 'progress', label: 'In progress', count: c.inProgress },
           { id: 'todo', label: 'To do', count: c.todo },
           { id: 'done', label: 'Done', empty: c.done === 0 },
-          { id: 'all', label: 'All', always: true },
         ].filter((x) => x.always || x.id === 'done' || x.count > 0);
       },
       /** The calm rule (C): only the owner's plain To do rows and nothing needs the owner → no bar, no headers. */

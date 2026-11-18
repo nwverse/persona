@@ -83,18 +83,16 @@ never in screenshots.
 ## Choices and deviations
 
 - **Words and numbers follow the shared data**, including the fact-check errata it now carries (section order, the
-  Inbox's bar with All last, In progress = Working + Waiting with Just finished uncounted at its foot, "Didn't start",
+  Inbox's chips with All first, In progress = Working + Waiting with Just finished uncounted at its foot, "Didn't start",
   "Sent now to …"). Two shared components still draw older forms, so V1 draws them from the data itself: the relay
   line's Send Now state and the Fleet Live Activity, which counts sessions (at most two, buttons on the first
   actionable one only). The place summary's lines are ordered by the data's section order.
-- **The section bar** is the Inbox's (E2): Needs you (3) · In progress 5 · To do 2 · All, the grouping symbol inside
-  the capsule's trailing end (Group By: Phase · Project · Due Date, `iphone/list~group`); the list's ⋯ keeps Sort and
-  Show. Done shows only while it has rows, so the mock offers no Done chip (and no Done filter frame). To-dos lands on
-  All, and All is **pinned** after the scrolling chips, just before the grouping symbol: the chosen chip is always in
-  view and the order stays All last, while Needs you with its blue N leads the scrolling chips. In the list columns
-  (320 to 360 pt) In progress and To do drop their neutral counts so more chips show; what is cut fades at the edge.
-  **For the lead designer:** E2's All last plus landing on All cannot show every chip under 400 pt; pinning All (the
-  reset) is V1's answer. The neutral counts stay in the place summary and the tray.
+- **The section bar** has the Inbox's chips with the landing choice first (the owner's decision of 2026-11-18): All ·
+  Needs you (3) · In progress 5 · To do 2, the grouping symbol inside the capsule's trailing end (Group By: Phase ·
+  Project · Due Date, `iphone/list~group`); the list's ⋯ keeps Sort and Show. Done shows only while it has rows, so the
+  mock offers no Done chip (and no Done filter frame). To-dos lands on All at the strip's start, so Needs you with its
+  blue N always shows beside it. In the list columns (320 to 360 pt) In progress and To do drop their neutral counts so
+  more chips show; what is cut fades at the edge. The neutral counts stay in the place summary and the tray.
 - **Counts move once.** Answering on a row drops N at once (header, bar, drawer, tray); In progress keeps its number
   until the row re-files into Working (`~kyoto-answered` 5 → `~kyoto-booking` 6), in the list and in the tray alike.
 - **Drawn once beside the paper** (§2.7, §2.5 one primary): wherever the selected row's paper is on screen (the open

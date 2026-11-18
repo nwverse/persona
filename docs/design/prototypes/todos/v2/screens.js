@@ -139,11 +139,11 @@
     const goes = o.go || {};
     const n = (CD.bar(place).find((x) => x.id === 'needs') || {}).count;
     const chips = D.bar(place);
-    const items = chips.filter((x) => x.id !== 'all').map((x) => Object.assign({}, x, x.id === 'needs' ? { count: n } : {}, goes[x.id] || say(`Shows ${x.label}`)));
+    // All is the first chip (the landing choice first, as in every bar)
+    const items = chips.map((x) => Object.assign({}, x, x.id === 'needs' ? { count: n } : {}, goes[x.id] || say(`Shows ${x.label}`)));
     const idx = items.findIndex((x) => x.id === sel);
-    const all = `<span class="k-sbar-chip v2-sbar-all${sel === 'all' ? ' is-on' : ''}"${nav(goes.all || say('Shows All'))}><span>All</span></span>`;
     const group = o.group === false ? '' : ui.btn(Object.assign({ icon: 'list-bullet', look: 'plain', title: 'Group by' }, o.group || say('Opens: Group by · Phase ✓ · Project · Due Date')));
-    return `<div class="v2-bar">${ui.sectionBar(items, { selected: idx, trailing: all + group })}</div>`;
+    return `<div class="v2-bar">${ui.sectionBar(items, { selected: idx, trailing: group })}</div>`;
   }
 
   // A list column of 340 or less (Duo inner 334, iPad 320 / 340, Android 336) hands Group by to its ⋯, so the bar keeps
