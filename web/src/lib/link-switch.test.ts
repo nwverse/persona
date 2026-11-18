@@ -24,6 +24,10 @@ describe("link switch state", () => {
     const untimed: LinkSwitchAttempt = { starting: false, accepted: { available: false, phase: "checking" }, seen: linkSwitchKey({ available: true }) };
     expect(shownLinkSwitch({ available: true }, untimed)?.phase).toBe("checking");
     expect(shownLinkSwitch({ available: false, phase: "connecting" }, untimed)?.phase).toBe("connecting");
+    // the list says nothing about a switch yet, so it has no `at` (omitted when zero): the 202 holds until it moves
+    const fresh: LinkSwitchAttempt = { starting: false, accepted, seen: linkSwitchKey({ available: true }) };
+    expect(shownLinkSwitch({ available: true }, fresh)).toBe(accepted);
+    expect(shownLinkSwitch(later, fresh)).toBe(later);
     expect(shownLinkSwitch(undefined, attempt)).toBeUndefined();
   });
 
