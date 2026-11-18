@@ -589,6 +589,52 @@ describe("a read that raced a write", () => {
     expect(ctl.snapshot().blocked).toBeNull();
     expect(ctl.snapshot().doc?.revision).toBe("revision-2");
   });
+
+  it("does not let a read requested during a write apply before the write answers", async () => {
+    const { ctl, m } = await ready();
+    ctl.choose("layout", "dense"); // the update stays unresolved
+    ctl.reload(); // an explicit read while the write is in flight
+    expect(ctl.snapshot().busy).toBe("layout");
+    expect(ctl.snapshot().fields.layout).toEqual({ pending: "dense" });
+    const newer = { ...clone(example), revision: "revision-2", values: { ...example.values, layout: "comfortable" } };
+    m.reads[1].resolve(newer); // it answers before the write does
+    await flush();
+    // the pending choice and the Document stay until the write answers
+    expect(ctl.snapshot().busy).toBe("layout");
+    expect(ctl.snapshot().fields.layout).toEqual({ pending: "dense" });
+    expect(ctl.snapshot().doc?.revision).toBe("revision-1");
+    m.updates[0].resolve(commit(example, m.updates[0].body));
+    await flush();
+    expect(ctl.snapshot().busy).toBeNull();
+    expect(ctl.snapshot().fields.layout).toEqual({ saved: true });
+    expect(ctl.snapshot().doc?.revision).toBe("revision-1+");
+  });
+
+  it("ignores a read requested during a write that answers after a conflict", async () => {
+    const { ctl, m } = await ready();
+    ctl.choose("layout", "dense");
+    ctl.reload();
+    m.updates[0].reject(new ConfigurationError("configuration_conflict"));
+    await flush();
+    expect(ctl.snapshot().blocked).toMatchObject({ code: "configuration_conflict" });
+    m.reads[1].resolve({ ...clone(example), revision: "revision-2", values: { ...example.values, layout: "comfortable" } });
+    await flush();
+    expect(ctl.snapshot().blocked).toMatchObject({ code: "configuration_conflict" });
+    expect(ctl.snapshot().doc?.revision).toBe("revision-1");
+  });
+
+  it("ignores a read requested during a write that answers after an unknown outcome", async () => {
+    const { ctl, m } = await ready();
+    ctl.choose("layout", "dense");
+    ctl.reload();
+    m.updates[0].reject(new TypeError("Failed to fetch"));
+    await flush();
+    expect(ctl.snapshot().blocked).toEqual({ code: "unconfirmed" });
+    m.reads[1].resolve({ ...clone(example), revision: "revision-2", values: { ...example.values, layout: "comfortable" } });
+    await flush();
+    expect(ctl.snapshot().blocked).toEqual({ code: "unconfirmed" });
+    expect(ctl.snapshot().doc?.revision).toBe("revision-1");
+  });
 });
 
 describe("the HTTP source", () => {

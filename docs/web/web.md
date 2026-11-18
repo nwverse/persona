@@ -1998,8 +1998,8 @@ written until it has read again, and a version it can't write blocks writing alt
 validation or storage failure) is retriable at once. Field errors appear on their fields in the client's words for codes
 it knows; an unknown code shows the module's own message. A source replaced while it is still answering is ignored, and so
 is a read that started before a newer Document arrived, or before a write (or while it was in flight): a stale read cannot
-replace the document a write returned or clear the barrier a failed write set. A read that times out is reported, not
-mistaken for the form's own cancellation. The form loads with its page, in its own chunk. Every control is named by its field's title and described by
+replace the document a write returned, drop its pending choice, or clear the barrier a failed write set. A read that times
+out is reported, not mistaken for the form's own cancellation. The form loads with its page, in its own chunk. Every control is named by its field's title and described by
 its description. `web/e2e/configuration-form.html` shows the form over the shared `schema/configuration/all-types.json`
 for screenshots (`web/e2e/configuration-form.mjs`); it is never built. `web/e2e/configuration-showcase.html`
 (`web/e2e/configuration-showcase.mjs`, `web/e2e/configuration-showcase-data.mjs`) is a fixture-only page that presents

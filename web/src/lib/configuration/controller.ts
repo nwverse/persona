@@ -158,20 +158,21 @@ export class ConfigurationController {
   private async read(explicit: boolean) {
     const seq = ++this.readSeq;
     const applied = this.applied;
-    // a request that predates a write (or was made while one was in flight) may describe the resource before its
-    // outcome; it must not replace a committed document or clear the barrier that writes a reload
+    // A request that predates a write, was made while one was in flight, or answers before that write does may
+    // describe the resource before its outcome; it must not replace a committed document, drop a pending choice, or
+    // clear the barrier a failed write sets. The deferred post-write read starts after the end stamp with busy clear.
     const write = this.writeSeq;
     if (explicit && this.state.phase === "failed") this.set({ phase: "loading", readError: null });
     try {
       const parsed = parseDocument(await this.source.read(this.abort.signal));
-      if (this.disposed || seq !== this.readSeq || applied !== this.applied || write !== this.writeSeq) return;
+      if (this.disposed || seq !== this.readSeq || applied !== this.applied || write !== this.writeSeq || this.state.busy) return;
       // the same revision is the same Document (the contract changes it with any change): leave pending marks and
       // "Saved" alone, as when a source tells of its own write
       const same = this.state.doc && parsed.doc.id === this.state.doc.id && parsed.doc.revision === this.state.doc.revision && parsed.writable === this.state.writable;
       if (!same) this.apply(parsed.doc, parsed.writable);
       this.set({ phase: "ready", readError: null, ...(explicit ? { blocked: null, formError: null } : {}) });
     } catch (e) {
-      if (this.disposed || this.abortedByUs(e) || seq !== this.readSeq || write !== this.writeSeq) return;
+      if (this.disposed || this.abortedByUs(e) || seq !== this.readSeq || write !== this.writeSeq || this.state.busy) return;
       this.set(this.state.doc ? { readError: problem(e) } : { phase: "failed", readError: problem(e) });
     }
   }
