@@ -160,3 +160,17 @@ func TestThinkingAsTextIsThinking(t *testing.T) {
 		t.Fatalf("plain text that starts the same way is text: %q", m.LastText)
 	}
 }
+
+// Every verb a Codex subagent event's line starts with is one the hub words in the user's language (ActivityKey): not
+// the node's Chinese passed through as it is.
+func TestSubagentActivityVerbsHaveKeys(t *testing.T) {
+	for event, want := range map[string]string{
+		"started": "act_subtask", "interacted": "act_subtask_message", "completed": "act_subtask_done",
+	} {
+		line := Activity("subagent", json.RawMessage(`{"name":"review_api","event":"`+event+`"}`))
+		verb, _, _ := strings.Cut(line, " ")
+		if key, isVerb := ActivityKey(verb); key != want || !isVerb {
+			t.Errorf("%s: ActivityKey(%q) = %q, %v; want %q, true", event, verb, key, isVerb, want)
+		}
+	}
+}

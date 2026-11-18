@@ -199,7 +199,8 @@ var (
 	}
 	activityVerbs = map[string]string{
 		"在读": "act_read", "在改": "act_edit", "在写": "act_write", "在搜": "act_grep", "在找文件": "act_glob", "在看目录": "act_ls",
-		"在看网页": "act_fetch", "在搜网页": "act_web_search", "在派子任务": "act_subtask", "在用技能": "act_skill", "在调用": "act_tool",
+		"在看网页": "act_fetch", "在搜网页": "act_web_search", "在派子任务": "act_subtask", "在联系子任务": "act_subtask_message",
+		"子任务完成": "act_subtask_done", "在用技能": "act_skill", "在调用": "act_tool",
 		"在跑": "act_run",
 	}
 )
