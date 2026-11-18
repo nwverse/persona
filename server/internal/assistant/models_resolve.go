@@ -335,6 +335,10 @@ func (s *Service) apiConfig(ctx context.Context, b ModelBinding) (ai.Config, err
 
 // purposeModel is purpose id's model, resolved at the start of every request.
 func (s *Service) purposeModel(id string) *ai.Client {
+	return s.purposeModelFor(id, "")
+}
+
+func (s *Service) purposeModelFor(id, operation string) *ai.Client {
 	return ai.NewResolved(func(ctx context.Context) (*ai.Client, error) {
 		b, err := s.resolveModel(ctx, id)
 		if err != nil {
@@ -344,7 +348,7 @@ func (s *Service) purposeModel(id string) *ai.Client {
 		if err != nil {
 			return nil, err
 		}
-		return s.aiClient(c), nil
+		return s.countedClient(id, operation, b.Provider, c), nil
 	})
 }
 

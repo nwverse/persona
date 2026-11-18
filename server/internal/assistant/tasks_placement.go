@@ -275,7 +275,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		t.Effort = ""
 	}
 	if withDefaults { // only what the task left open, after the fit, which may itself have filled some in
-		s.applyStartExtras(ctx, t, caller, defaults, fit.agent == "claude", params, presetNote)
+		s.applyStartExtras(ctx, t, caller, defaults, fit.agent, params, presetNote)
 	}
 	if t.MachinePolicy == machineFixed {
 		// Only an actual terminal start can recheck a repaired terminal shell.

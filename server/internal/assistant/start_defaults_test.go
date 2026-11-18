@@ -248,7 +248,7 @@ func TestStartDefaultsWeights(t *testing.T) {
 	}
 }
 
-// A goal goes only with criteria and only to Claude Code; ultracode and effort max only to Claude Code too.
+// A goal goes only with criteria, to Claude Code and Codex alike; ultracode and effort max only to Claude Code.
 func TestStartDefaultsOnlyWhatTheAgentTakes(t *testing.T) {
 	s, f := defaultsHub(t)
 	stubStartDefaults(s, func(StartFacts) (StartDefaults, bool) { return fullDefaults(), true })
@@ -269,11 +269,24 @@ func TestStartDefaultsOnlyWhatTheAgentTakes(t *testing.T) {
 	if _, _, err := s.startTaskAgent(context.Background(), &task, false); err != nil {
 		t.Fatal(err)
 	}
-	if st := startsOf(f)[0]; st["goal"] != nil || st["ultracode"] != nil || st["effort"] == "max" {
+	if st := startsOf(f)[0]; st["goal"] != prompts.RenderTaskGoal(task.DoneWhen) || st["ultracode"] != nil || st["effort"] == "max" {
 		t.Fatalf("codex: %v", st)
 	}
 	if st := startsOf(f)[0]; st["launcher"] != "cx" {
 		t.Fatalf("the codex launcher was changed: %v", st)
+	}
+
+	// Codex without criteria: no goal either.
+	s, f = defaultsHub(t)
+	f.zshrc["box"] = append(f.zshrc["box"], proto.Launcher{Name: "cx", Source: "zshrc", Agent: "codex"})
+	stubStartDefaults(s, func(StartFacts) (StartDefaults, bool) { return fullDefaults(), true })
+	task = defaultsTask()
+	task.Launcher, task.DoneWhen = "cx", nil
+	if _, _, err := s.startTaskAgent(context.Background(), &task, false); err != nil {
+		t.Fatal(err)
+	}
+	if st := startsOf(f)[0]; st["goal"] != nil {
+		t.Fatalf("codex without criteria: %v", st)
 	}
 }
 
