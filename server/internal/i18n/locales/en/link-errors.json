@@ -1,4 +1,12 @@
 {
+  "kind_proxy": "Proxy",
+  "proxy_unavailable": "The outbound proxy is unavailable",
+  "proxy_invalid": "Invalid outbound proxy URL",
+  "proxy_invalid_target": "Invalid hub URL",
+  "proxy_connection_failed": "Cannot connect to the outbound proxy",
+  "proxy_tls_failed": "The outbound proxy's TLS certificate could not be verified",
+  "proxy_connect_failed": "The outbound proxy CONNECT failed",
+  "proxy_rejected": "The outbound proxy rejected CONNECT (HTTP {status})",
   "kind_lan": "LAN",
   "kind_ipv6": "Public IPv6",
   "kind_name": "Domain",

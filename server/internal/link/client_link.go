@@ -102,6 +102,44 @@ func dial(ctx context.Context, c *Config) (*link, error) {
 	return l, nil
 }
 
+// dialProxy keeps the selected proxy for all streams on the resulting link.
+func dialProxy(ctx context.Context, c *Config) (*link, error) {
+	var eps []Endpoint
+	for _, ep := range c.Endpoints {
+		p, err := proxyURL(c, ep.URL)
+		if err != nil {
+			return nil, err
+		}
+		if p != nil {
+			eps = append(eps, ep)
+		}
+	}
+	l, ep, err := race(ctx, eps, func(ctx context.Context, ep Endpoint) (*link, error) {
+		p, err := proxyURL(c, ep.URL)
+		if err != nil || p == nil {
+			return nil, newTextError("link-errors.proxy_unavailable", nil)
+		}
+		var local netip.Addr
+		client := proxyHubClient(c, p, func(raw net.Conn) {
+			if a, err := netip.ParseAddrPort(raw.LocalAddr().String()); err == nil {
+				local = a.Addr().Unmap()
+			}
+		})
+		conn, resp, err := websocket.Dial(ctx, wsURL(ep.URL, Path), &websocket.DialOptions{HTTPClient: client, HTTPHeader: bearer(c.Token)})
+		if err != nil {
+			return nil, handshakeError(resp, err)
+		}
+		conn.SetReadLimit(1 << 20)
+		return &link{conn: conn, local: local, streams: proxyHubClient(c, p, nil), token: c.Token}, nil
+	}, func(l *link) { l.closeNow() })
+	if err != nil {
+		return nil, err
+	}
+	l.baseURL = ep.URL
+	l.ep = Endpoint{URL: ep.URL, Kind: KindProxy}
+	return l, nil
+}
+
 var streamID = lazyre.New(`^[A-Za-z0-9_-]{1,64}$`)
 
 // serve runs the link until it ends and says why. A direct handoff is already connected and owned by the caller;
@@ -170,7 +208,7 @@ func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) (
 		pairT := time.NewTicker(cmp.Or(o.PairCheck, pairCheck))
 		defer pairT.Stop()
 		var directC <-chan time.Time
-		if l.ep.Kind == KindSSH && c.SSH != nil && !c.SSH.Always {
+		if l.ep.Kind == KindProxy || (l.ep.Kind == KindSSH && c.SSH != nil && !c.SSH.Always) {
 			directT := time.NewTicker(cmp.Or(o.DirectRetryEvery, DirectRetryEvery))
 			defer directT.Stop()
 			directC = directT.C
@@ -252,7 +290,7 @@ func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) (
 					reconnect(errRepaired)
 					return
 				}
-				o.Logf("link: direct hub reachable again; switching off ssh tunnel")
+				o.Logf("link: direct hub reachable again; switching route")
 				cancel(errDirectReady)
 				if !errors.Is(context.Cause(ctx), errDirectReady) {
 					// Cancellation won while the configuration was checked or the handoff was logged. The candidate was
@@ -384,7 +422,7 @@ func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) (
 func directHandoffConfig(path string, current *Config, ep Endpoint) *Config {
 	next, err := Load(path)
 	if err != nil || next.Hub != current.Hub || next.Machine != current.Machine || next.FP != current.FP ||
-		next.Trust != current.Trust || next.Token != current.Token || !next.SSH.Equal(current.SSH) ||
+		next.Trust != current.Trust || next.Token != current.Token || next.Proxy != current.Proxy || !next.SSH.Equal(current.SSH) ||
 		!slices.Contains(next.Endpoints, ep) {
 		return nil
 	}
@@ -469,7 +507,7 @@ func repaired(path string, c *Config) bool {
 	if err != nil {
 		return errors.Is(err, os.ErrNotExist)
 	}
-	return f.Token != c.Token || f.FP != c.FP || f.Trust != c.Trust || f.Machine != c.Machine || !f.SSH.Equal(c.SSH)
+	return f.Token != c.Token || f.FP != c.FP || f.Trust != c.Trust || f.Machine != c.Machine || f.Proxy != c.Proxy || !f.SSH.Equal(c.SSH)
 }
 
 // heartbeat is how a link is pinged: every, and how long a pong may take; hub: the hub said so (endpoints).

@@ -120,6 +120,8 @@ func kindText(l i18n.Lang, kind string) string {
 		return i18n.T(l, "link-errors.kind_ipv4")
 	case KindSSH:
 		return "SSH"
+	case KindProxy:
+		return i18n.T(l, "link-errors.kind_proxy")
 	default:
 		return i18n.T(l, "link-errors.kind_address")
 	}
@@ -197,6 +199,13 @@ var statusTemplateKeys = []string{
 	"link-errors.node_how_linux",
 	"link-errors.node_how_other",
 	"link-errors.pin_mismatch",
+	"link-errors.proxy_invalid",
+	"link-errors.proxy_invalid_target",
+	"link-errors.proxy_unavailable",
+	"link-errors.proxy_connection_failed",
+	"link-errors.proxy_tls_failed",
+	"link-errors.proxy_connect_failed",
+	"link-errors.proxy_rejected",
 	"link-errors.manual_reconnect",
 	"link-errors.repaired",
 	"link-errors.direct_ready",
@@ -270,7 +279,7 @@ type statusTemplate struct {
 
 var statusTemplates = sync.OnceValue(func() []statusTemplate {
 	kinds := []string{}
-	for _, kind := range []string{"lan", "ipv6", "name", "ipv4", KindSSH, "other"} {
+	for _, kind := range []string{"lan", "ipv6", "name", "ipv4", KindSSH, KindProxy, "other"} {
 		kinds = append(kinds, regexp.QuoteMeta(kindText(i18n.Default, kind)))
 	}
 	out := []statusTemplate{}
@@ -414,7 +423,7 @@ func listenErrorText(l i18n.Lang, text string) (string, bool) {
 }
 
 func localizedKindName(l i18n.Lang, canonical string) string {
-	for _, kind := range []string{"lan", "ipv6", "name", "ipv4", KindSSH, "other"} {
+	for _, kind := range []string{"lan", "ipv6", "name", "ipv4", KindSSH, KindProxy, "other"} {
 		if canonical == kindText(i18n.Default, kind) {
 			return kindText(l, kind)
 		}

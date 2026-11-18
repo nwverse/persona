@@ -1,4 +1,12 @@
 {
+  "kind_proxy": "代理",
+  "proxy_unavailable": "出站代理不可用",
+  "proxy_invalid": "出站代理地址无效",
+  "proxy_invalid_target": "hub 地址无效",
+  "proxy_connection_failed": "无法连接出站代理",
+  "proxy_tls_failed": "无法验证出站代理的 TLS 证书",
+  "proxy_connect_failed": "出站代理 CONNECT 连接失败",
+  "proxy_rejected": "出站代理拒绝 CONNECT（HTTP {status}）",
   "kind_lan": "内网",
   "kind_ipv6": "公网 IPv6",
   "kind_name": "域名",

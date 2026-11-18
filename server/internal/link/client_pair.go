@@ -89,6 +89,9 @@ func PairWithSSH(ctx context.Context, raw, machine, name, path string, ssh *SSH,
 	if err != nil {
 		return nil, err
 	}
+	if existing, err := Read(path); err == nil {
+		c.Proxy = existing.Proxy
+	}
 	if c.Machine != "" && machine != "" && machine != c.Machine {
 		return nil, newTextError("link-errors.pair_machine_mismatch", nil, i18n.Args{"expected": strconv.Quote(c.Machine), "actual": strconv.Quote(machine)})
 	}
@@ -163,6 +166,31 @@ func PairWithSSH(ctx context.Context, raw, machine, name, path string, ssh *SSH,
 		}, func(redeemed) {})
 		return got, err
 	}
+	redeemProxy := func() (redeemed, error) {
+		var eps []Endpoint
+		for _, ep := range c.Endpoints {
+			p, err := proxyURL(&c, ep.URL)
+			if err != nil {
+				return redeemed{}, err
+			}
+			if p != nil {
+				eps = append(eps, ep)
+			}
+		}
+		if len(eps) == 0 {
+			return redeemed{}, newTextError("link-errors.no_candidates", nil)
+		}
+		got, _, err := race(ctx, eps, func(ctx context.Context, ep Endpoint) (redeemed, error) {
+			p, err := proxyURL(&c, ep.URL)
+			if err != nil || p == nil {
+				return redeemed{}, newTextError("link-errors.proxy_unavailable", nil)
+			}
+			client := proxyHubClient(&c, p, nil)
+			defer client.CloseIdleConnections()
+			return redeemOne(ctx, client, ep.URL)
+		}, func(redeemed) {})
+		return got, err
+	}
 	redeemSSH := func() (redeemed, error) {
 		for attempt := 0; attempt < 2; attempt++ {
 			t, err := startSSHTunnel(bin, *c.SSH)
@@ -193,19 +221,34 @@ func PairWithSSH(ctx context.Context, raw, machine, name, path string, ssh *SSH,
 
 	var got redeemed
 	switch {
-	case c.SSH == nil:
-		got, err = redeemDirect()
-	case c.SSH.Always:
+	case c.SSH != nil && c.SSH.Always:
 		got, err = redeemSSH()
 	default:
 		got, err = redeemDirect()
 		if err != nil && ctx.Err() == nil && !pairAnswered(err) {
-			var sshErr error
-			got, sshErr = redeemSSH()
+			available := false
+			for _, ep := range c.Endpoints {
+				if p, e := proxyURL(&c, ep.URL); e != nil {
+					return nil, e
+				} else if p != nil {
+					available = true
+				}
+			}
+			if available {
+				proxied, proxyErr := redeemProxy()
+				if proxyErr == nil {
+					got, err = proxied, nil
+				} else {
+					err = errors.Join(err, proxyErr)
+				}
+			}
+		}
+		if err != nil && c.SSH != nil && ctx.Err() == nil && !pairAnswered(err) {
+			sshResult, sshErr := redeemSSH()
 			if sshErr != nil {
 				err = errors.Join(err, sshErr)
 			} else {
-				err = nil
+				got, err = sshResult, nil
 			}
 		}
 	}
@@ -225,6 +268,7 @@ func PairWithSSH(ctx context.Context, raw, machine, name, path string, ssh *SSH,
 		keep := c
 		keep.Endpoints = append(manual, c.Endpoints...)
 		keep.SSH = cloneSSH(c.SSH)
+		keep.Proxy = old.Proxy
 		// Pairing with a hub's link means dialing it; what passive mode had stays for switching back.
 		keep.Mode, keep.Passive = ModeActive, old.Passive
 		*old = keep

@@ -1,4 +1,12 @@
 {
+  "kind_proxy": "プロキシ",
+  "proxy_unavailable": "送信プロキシを利用できません",
+  "proxy_invalid": "送信プロキシの URL が無効です",
+  "proxy_invalid_target": "hub の URL が無効です",
+  "proxy_connection_failed": "送信プロキシに接続できません",
+  "proxy_tls_failed": "送信プロキシの TLS 証明書を検証できません",
+  "proxy_connect_failed": "送信プロキシの CONNECT に失敗しました",
+  "proxy_rejected": "送信プロキシが CONNECT を拒否しました（HTTP {status}）",
   "kind_lan": "LAN",
   "kind_ipv6": "パブリックIPv6",
   "kind_name": "ドメイン",
