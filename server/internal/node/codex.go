@@ -61,6 +61,7 @@ type rolloutCache struct {
 	// again only when a directory changes.
 	recentNames string
 	recentStamp []int64
+	relistedAt  time.Time              // when the look of the last relistMisses was taken
 	metas       map[string]rolloutMeta // path → its session_meta (never changes once written); gone paths leave it once a minute
 	titles      map[string]string
 	former      map[string][]string // id → the names session_index.jsonl gave the thread before its latest (a rename)
@@ -436,18 +437,27 @@ func newMissLook(home string) *missLook {
 // mtime's granularity (a coarse clock tick) without its mtime moving, so nothing seen then is kept for later looks.
 func (l *missLook) settled() bool { return slices.Max(l.stamp) < l.at.Add(-time.Second).UnixNano() }
 
-// keepMiss records that id has no rollout as of the look, unless it is not settled.
+// keepMiss records that id has no rollout as of the look, unless it is not settled, or a listing of every directory
+// began after it: that listing knows more, and may just have let this miss go for a rollout written meanwhile into an
+// older day. The next look decides then.
 func (l *missLook) keepMiss(id string) {
 	if !l.settled() {
 		return
 	}
 	rolloutCaches.Lock()
+	defer rolloutCaches.Unlock()
 	c := cacheFor(l.home)
+	if c.relistedAt.After(l.at) {
+		return
+	}
 	if c.misses == nil {
 		c.misses = map[string]rolloutMiss{}
 	}
-	c.misses[id] = rolloutMiss{stamp: l.stamp, asked: l.at}
-	rolloutCaches.Unlock()
+	asked := l.at
+	if m, ok := c.misses[id]; ok && m.asked.After(asked) {
+		asked = m.asked
+	}
+	c.misses[id] = rolloutMiss{stamp: l.stamp, asked: asked}
 }
 
 // recentNames are the rollout names in the look's directories, "\n" after each: listed once per look, and kept for
@@ -468,7 +478,9 @@ func (l *missLook) recentNames() string {
 			paths = append(paths, found...)
 		}
 		names = rolloutNames(paths)
-		if l.settled() {
+		// Kept only when no directory changed while they were listed: a rollout moved between two of them meanwhile
+		// may be in neither list.
+		if l.settled() && slices.Equal(dirStamps(l.dirs), l.stamp) {
 			rolloutCaches.Lock()
 			c.recentNames, c.recentStamp = names, l.stamp
 			rolloutCaches.Unlock()
@@ -492,6 +504,7 @@ func rolloutNames(paths []string) string {
 // id is in a name is let go, to be globbed (and the rollout's header read) at its next look, and so is one not asked
 // about for missKeptFor. Into a new map: deleting from a map never gives its memory back.
 func (c *rolloutCache) relistMisses(all []string, look *missLook) {
+	c.relistedAt = look.at
 	if len(c.misses) == 0 {
 		return
 	}

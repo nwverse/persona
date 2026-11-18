@@ -395,3 +395,67 @@ func TestRolloutPathUnarchivedIntoAnOlderDay(t *testing.T) {
 		t.Fatalf("unarchived into its day directory: %q", p)
 	}
 }
+
+// A lookup whose look was taken before a listing of every directory does not put back the miss that listing let go
+// (here for a rollout written meanwhile into an older day).
+func TestRolloutPathStaleLookKeepsNoMiss(t *testing.T) {
+	home := t.TempDir()
+	codex := filepath.Join(home, ".codex")
+	now := time.Now()
+	writeRollout(t, home, "11111111-1111-1111-1111-111111111111", "/w", now, now)
+	ageDirs(t, codex)
+	const id = "45454545-4545-4545-4545-454545454545"
+	if p := rolloutPath(codex, id); p != "" {
+		t.Fatalf("no rollout yet: %q", p)
+	}
+	look := newMissLook(codex) // a lookup under way, globbing before the rollout is there
+	old := now.AddDate(0, 0, -40)
+	writeRollout(t, home, id, "/w", old, old)
+	expireRollouts(codex, true)
+	rollouts(codex) // the listing has its name: the miss goes
+	look.keepMiss(id)
+	if p := rolloutPath(codex, id); p == "" {
+		t.Fatal("the lookup under way put the miss back: not found")
+	}
+}
+
+// Names listed while one of their directories changed are not kept for later looks.
+func TestRolloutPathNamesListedDuringAChangeAreNotKept(t *testing.T) {
+	home := t.TempDir()
+	codex := filepath.Join(home, ".codex")
+	now := time.Now()
+	writeRollout(t, home, "11111111-1111-1111-1111-111111111111", "/w", now, now)
+	archived := filepath.Join(codex, "archived_sessions")
+	if err := os.MkdirAll(archived, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ageDirs(t, codex)
+	const id = "34343434-3434-3434-3434-343434343434"
+	if p := rolloutPath(codex, id); p != "" {
+		t.Fatalf("no rollout yet: %q", p)
+	}
+	changed := time.Now().Add(-30 * time.Minute) // archived_sessions changed, long enough ago to be settled
+	if err := os.Chtimes(archived, changed, changed); err != nil {
+		t.Fatal(err)
+	}
+	today := filepath.Join(codex, "sessions", now.Format("2006"), now.Format("01"), now.Format("02"))
+	glob := rolloutGlob
+	t.Cleanup(func() { rolloutGlob = glob })
+	rolloutGlob = func(pattern string) ([]string, error) {
+		if pattern == filepath.Join(archived, "rollout-*.jsonl") { // today's directory changes while they are listed
+			if err := os.WriteFile(filepath.Join(today, "note"), nil, 0o644); err != nil {
+				t.Error(err)
+			}
+		}
+		return glob(pattern)
+	}
+	if p := rolloutPath(codex, id); p != "" {
+		t.Fatalf("still no rollout: %q", p)
+	}
+	rolloutCaches.Lock()
+	kept := cacheFor(codex).recentStamp
+	rolloutCaches.Unlock()
+	if kept != nil {
+		t.Fatal("names listed while a directory changed were kept")
+	}
+}
