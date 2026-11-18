@@ -33,6 +33,24 @@ Guests keep their own isolation (`node/assistant_user_setup.go`; `TestPrivatePro
 `TestPrivateProfileCarriesTheUserSkillSwitchesOff`, `TestClaudeStartDirIsTheUserProfile`,
 `TestSkillCatalogMatchesThePrivateProfileSettings`, `TestGuestSettingsIgnoreThePrivateProfileAdditions`).
 
+## Cold launch preparation
+
+A headless Claude assistant starts through the user's interactive shell. Before the assistant produces valid protocol
+output, launch preparation has a separate 60-second allowance from process creation. The first protocol output starts
+an ordinary 15-second settings acknowledgment budget; shell banners and stderr diagnostics do not count as readiness.
+Controls are written immediately because some CLI versions produce no output until they read one.
+
+A startup control timeout is retried up to three times before failure, within the caller's cancellation/deadline.
+Retries happen before any user input is written. Explicit settings refusals and caller cancellation are not retried.
+An empty conversation allocation follows the same preparation rule without sending a model turn. Effort remains
+unconfirmed until a control ACK: `--effort` cannot express automatic effort, and launcher environment or policy can
+override a startup flag. Initializing the in-memory field alone would silently skip that check.
+
+Logs record shell initialization completion and elapsed milliseconds. Timeouts distinguish shell initialization,
+assistant startup output, blocked settings writes and missing settings acknowledgments, and identify node-initiated
+termination. Exhausted startup attempts report their count, elapsed wait and final cause rather than presenting the
+node's termination as an assistant crash. Failed-message persistence and later redelivery are separate concerns.
+
 ## Work computers and personal context
 
 Set `machines[].trust` to `"work"` in `hub.json` to keep personal assistant data off that computer (see [config.md](../operations/config.md)).
@@ -530,6 +548,9 @@ merges such a message into the turn with `turn/steer` ("Codex" below); a Claude 
   user's language on what it is doing and how long it will take or what it waits for, then to answer the message; the sentence about
   work moved to the background is there only when it was. Without it an owner's "what happened?" got six minutes of tool calls and no
   word. Tests: `TestAssistantInterjectOffOrOldClaude`, `TestInterjectNote` (`node/assistant_interject_test.go`).
+- **A model recovery's resend is no interjection** (#10178): the bounded recovery's resend (`prompts/assistant/model_retry`) finds the
+  chat busy because the recovery holds the failed turn, but nobody sent it mid-turn: it carries neither the note nor the
+  `background_tasks` request. Test: `TestAssistantRecoveryResendIsNoInterjection` (`node/assistant_recovery_test.go`).
 
 ## Next-message suggestions (#4644)
 
@@ -901,6 +922,8 @@ Now one `Task` table (`assistant/schedule.go`, settings `assistant.tasks`), four
 - Older apps: iOS reads an unknown `repeat` as `once`, and Android and the web send it back without `cron`; a `PUT` without `cron` keeps a cron task's rule and saves the rest (title, prompt, on / off, permission mode). The legacy `GET /api/v1/assistant/followups` lists cron tasks with the other non-daily ones. Clients show cron tasks when the hub has `task_cron`.
 
 `until` is optional on a repeating task. It is stored and compared in UTC and shown in the user's time zone. One-off tasks ignore it, and saving a one-off clears it. Omitting `until` on update keeps the stored time; `null` clears it. Once that time is reached the task is turned off and a skipped run is recorded instead of running.
+
+**Last run** (#10182): the scheduler saves a run's `last_run` before the run starts (a restart in between loses the run rather than repeating it), while `last_status` / `last_error` change only when the run is recorded (sent, failed to start, skipped, its turn failed). The task also stores when the run that outcome is of started (`status_run`: the recorded run's own start, an automatic retry's being the retry's, so a Run now that ended without starting its conversation never lends its time to another run's outcome; a task saved before it has none, which means `last_run`). Every view shows the outcome with that time: the live snapshot's daily tasks, `list_followups`, and `GET /api/v1/assistant/tasks`, which sends it as `last_run` and never sends `status_run`. So a run that is still starting shows the previous run with its own time and outcome, not its own start with the previous outcome: a morning briefing read "last run today 08:45 failed" about the day before's failure while it was starting, and told the owner its run had been recorded as failed. A run lost to a restart leaves the previous run shown until the next one; nothing marks a run as running. Recording an outcome makes the next message take a new live snapshot.
 
 **Tasks it hands out** (#8045): a round's `task_plan` follows the plan rules ([unified-entry.md](unified-entry.md) "Plans"), and `user_requested` counts for nothing in it. A writable task waits on its card unless the owner let this scheduled task start its kind, on the card of one of its own rounds: the task's `start_grant`, shown with Remove on its page and dropped when the task changes. A task with a grant runs each round in a new conversation without the live snapshot, and a round that reads anything from outside (mail, Inbox, web pages, a shell) keeps the card; a task given facts, the report or a state note never offers a grant ([unified-entry.md](unified-entry.md) "A scheduled task's own start grant").
 
@@ -1673,6 +1696,7 @@ User-visible differences:
 - Background completion doesn't wake chat; use `schedule_followup` to revisit.
 - Denial reasons appear as "(Not executed)…" messages (native Codex denial carries no text).
 - User `~/.codex/config.toml` MCP servers, `hooks.json`, `AGENTS.md` load too, like Claude user settings; other MCP calls need phone approval outside Allow Everything.
+- The ChatGPT apps of a ChatGPT sign-in (`codex_apps`, every connector of that account) do not: the assistant's Codex starts with `features.apps=false` (#10275). Code mode declares every tool in full in each request (in its `exec` tool's description, nothing loaded on demand); on one install the apps were 295 tools, ~140k tokens of a ~195k request, and the same request without them ~51k (captured from `codex exec --ephemeral` against a local mock, no model called). The assistant has Persona's own tools; the computer's own Codex keeps its apps.
 
 Measurement (2026-11-01, isolated hub: fake HOME, separate port / database, real Codex launcher and Lark gateway): new chat (snapshot, `agents_list` no approval), resume,
 ask_user answer, `ol GET /me` allowed, `ol POST …/messages` Lark card denied (model stopped without retry, no send),
