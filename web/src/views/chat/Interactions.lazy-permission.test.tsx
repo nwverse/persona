@@ -60,7 +60,7 @@ describe("a lazy permission card", () => {
 
   it.each(titleCases)("uses the display name after a load failure: $tool_name", async (toolIx) => {
     const failure = new TypeError("Failed to fetch dynamically imported module");
-    const Lazy = lazyPage(() => Promise.reject(failure));
+    const Lazy = lazyPage(() => Promise.reject<CardComponent>(failure));
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       await render(Lazy, toolIx);
