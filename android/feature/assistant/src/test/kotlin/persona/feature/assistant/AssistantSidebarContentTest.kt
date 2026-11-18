@@ -276,7 +276,7 @@ class AssistantSidebarContentTest {
         var active by mutableStateOf(first.key)
         rule.setContent {
             PersonaTheme(style = AppStyle.Brief, reduceMotion = true) {
-                CompositionLocalProvider(LocalAssistantHost provides testBindings(management)) {
+                CompositionLocalProvider(LocalAssistantHost provides testBindings(management, repository)) {
                     Box(Modifier.width(400.dp).height(1200.dp)) {
                         AssistantSidebarContent(
                             snapshot, repository, active, operations, demo = false,
