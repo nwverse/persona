@@ -46,7 +46,10 @@ struct AssistantAvatar: View {
             if moving(eligible: eligible) {
                 PersonaFaceMotion(face: face(at: Date(timeIntervalSinceReferenceDate: 0), eligible: eligible))
             } else {
-                face(at: .now, eligible: eligible)
+                // Keep the original paused timeline container: still frames retain its exact compositing and never tick.
+                TimelineView(VisiblePeriodicSchedule(interval: Theme.Motion.personaFrameInterval, paused: true)) { tl in
+                    face(at: tl.date, eligible: eligible)
+                }
             }
         }
         .frame(width: size, height: size)
