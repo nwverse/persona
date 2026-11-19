@@ -173,7 +173,7 @@ func peerSendAt(ctx context.Context, p claudePeer, sessionID, text, priority str
 		}
 		token = "" // auth is optional on this platform: an inbox whose key file is missing takes the line without it
 	}
-	msg, err := peerMessageForSource(sessionID, text, priority, p.fromMode, p.source)
+	msg, err := peerMessageFor(sessionID, text, priority, p.fromMode, agentPromptLanguage(ctx), p.source)
 	if err != nil {
 		return &errPeer{code: peerUnsupported, msg: peerNoInboxMsg, cause: err}
 	}
@@ -215,16 +215,27 @@ func peerMessage(sessionID, text string) ([]byte, error) {
 
 // peerMessageAt is peerMessage at priority, stating fromMode in the envelope ("" for none).
 func peerMessageAt(sessionID, text, priority, fromMode string) ([]byte, error) {
-	return peerMessageForSource(sessionID, text, priority, fromMode, false)
+	return peerMessageFor(sessionID, text, priority, fromMode, "", false)
 }
 
+// peerMessageIn is peerMessageAt with the owner preface rendered in language ("" for the default).
+func peerMessageIn(sessionID, text, priority, fromMode, language string) ([]byte, error) {
+	return peerMessageFor(sessionID, text, priority, fromMode, language, false)
+}
+
+// peerMessageForSource is peerMessageAt for source-attested Agent text when source is set: the body goes as it is,
+// without the owner-only phone-message preface.
 func peerMessageForSource(sessionID, text, priority, fromMode string, source bool) ([]byte, error) {
+	return peerMessageFor(sessionID, text, priority, fromMode, "", source)
+}
+
+func peerMessageFor(sessionID, text, priority, fromMode, language string, source bool) ([]byte, error) {
 	if strings.TrimSpace(text) == "" {
 		return nil, errors.New("empty message")
 	}
 	body := text
 	if !source {
-		body = prompts.RenderPeerMessage(prompts.PeerMessage{Text: text})
+		body = prompts.RenderPeerMessage(prompts.PeerMessage{Language: language, Text: text})
 	}
 	return marshalNoEscape(map[string]any{
 		"type":       "user",

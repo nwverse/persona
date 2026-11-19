@@ -89,7 +89,7 @@ export function createDesktopRuntime({ dir = join(homedir(), '.gemini', 'antigra
   function transcript(id, full = false) {
     const brainDir = join(dir, 'brain', raw(id))
     const { steps, branch, revision } = readTranscript(brainDir, true)
-    return { ...stepsToItems(steps, { brainDir, full }), history: [id, branch, revision].join(':') }
+    return { ...stepsToItems(steps, { brainDir, full }), history: [id, 'no-tool-media', branch, revision].join(':') }
   }
   async function summaries(hub) {
     const result = await call(hub, 'GetAllCascadeTrajectories', {})
