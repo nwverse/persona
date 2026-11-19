@@ -24,9 +24,11 @@ class TodoViewWireTest(private val name: String, private val definition: String,
     companion object {
         @JvmStatic @Parameterized.Parameters(name = "{0}")
         fun samples(): List<Array<Any>> {
-            val root = File(System.getProperty("persona.repo.root"), "spec/fixtures")
-            return listOf("todo-view", "todo-counts", "todo-rounds").flatMap { domain ->
-                val files = requireNotNull(File(root, domain).listFiles { f -> f.extension == "json" }).sortedBy { it.name }
+            val root = File(System.getProperty("persona.repo.root"))
+            // Written out as spec/fixtures/<domain>, so the build declares these domains as the test's inputs.
+            return listOf("spec/fixtures/todo-view", "spec/fixtures/todo-counts", "spec/fixtures/todo-rounds").flatMap { path ->
+                val domain = path.substringAfterLast('/')
+                val files = requireNotNull(File(root, path).listFiles { f -> f.extension == "json" }).sortedBy { it.name }
                 require(files.isNotEmpty()) { "Missing $domain fixtures" }
                 files.flatMap { file ->
                     Json.parseToJsonElement(file.readText()).jsonObject.getValue("cases").jsonArray.flatMap { case ->
