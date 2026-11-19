@@ -31,13 +31,11 @@ import (
 // The ids these tests use (cleared first: the test database outlives a run).
 var switchTestIDs = []string{"lsw-box", "lsw-bare", "lsw-link", "lsw-far", "lsw-desk"}
 
-// switchOp is this run's operation id (the audit, which says which switches began, outlives a run).
-var switchOp = newSwitchOp()
-
 // newSwitchOp is an operation id of the manager's form, new for each test (the audit outlives a run).
 func newSwitchOp() string { return "ls_" + randomHex(8) }
 
-// clearSwitchIDs forgets what an earlier run left of these computers: trust rows, credentials, open codes.
+// clearSwitchIDs forgets what an earlier test left of these computers: trust rows, credentials, open codes, a switch
+// under way.
 func clearSwitchIDs(t *testing.T, database *db.DB) {
 	t.Helper()
 	ctx := context.Background()
@@ -47,6 +45,17 @@ func clearSwitchIDs(t *testing.T, database *db.DB) {
 		}
 		if _, err := database.RevokeMachineCredentials(ctx, id); err != nil {
 			t.Fatal(err)
+		}
+		// A switch an earlier test left under way holds the computer (the audit is not cleared): ended here.
+		latest, err := database.LinkSwitchLatest(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if latest != nil && !switchEnded(latest.Step) {
+			detail, _ := json.Marshal(map[string]string{"operation": latest.Operation, "step": switchRolledBack})
+			if err := database.AddMachineAudit(ctx, id, "link_switch", "test", detail); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 }
@@ -193,7 +202,7 @@ func TestLinkSwitchBeginsOnAHubJSONComputer(t *testing.T) {
 	if r := h.pendingRestart("en"); r.Required {
 		t.Fatalf("the switch waits for a restart: %v", r.Reasons)
 	}
-	if _, running := h.linkSwitch.get("lsw-bare"); !running {
+	if !h.linkSwitch.live("lsw-bare", time.Now()) {
 		t.Fatal("no switch under way")
 	}
 
@@ -243,13 +252,13 @@ func TestLinkSwitchBeginsOnAHubJSONComputer(t *testing.T) {
 		var d map[string]any
 		_ = json.Unmarshal(a.Detail, &d)
 		if a.Action == "link_switch" && d["operation"] == op {
-			if d["by"] != "device" || a.Actor != "manager:"+devicesOwner {
+			if d["by"] != "device" || a.Actor != "manager:"+devicesOwner || d["step"] == "begun" && d["pair_hash"] != got.PairHash {
 				t.Fatalf("audit %s by %s", a.Detail, a.Actor)
 			}
 			steps = append(steps, d["step"].(string))
 		}
 	}
-	if !slices.Equal(steps, []string{"begun"}) {
+	if !slices.Equal(steps, []string{"begin", "begun"}) {
 		t.Fatalf("audited steps %v", steps)
 	}
 }
@@ -257,6 +266,7 @@ func TestLinkSwitchBeginsOnAHubJSONComputer(t *testing.T) {
 // begin on a computer its manager keeps in its own list (machines_kept.go): the kind changes there, every other key
 // (its secrets too) as it was; hub.json is not touched. rolled_back puts it back there.
 func TestLinkSwitchBeginsOnAKeptComputer(t *testing.T) {
+	switchOp := newSwitchOp() // the audit outlives a run, and an operation id is used once
 	ctx := context.Background()
 	database := testDB(t)
 	clearSwitchIDs(t, database)
@@ -324,6 +334,7 @@ func TestLinkSwitchBeginsOnAKeptComputer(t *testing.T) {
 
 // begin is refused, with nothing written and no code made, when the hub cannot or must not switch the computer.
 func TestLinkSwitchBeginRefusals(t *testing.T) {
+	switchOp := newSwitchOp() // the audit outlives a run, and an operation id is used once
 	h, database, _ := switchHub(t)
 	ctx := context.Background()
 	other := &busConn{ident: db.BusIdentity{ID: "m-0d0d0d"}}
@@ -366,7 +377,7 @@ func TestLinkSwitchBeginRefusals(t *testing.T) {
 		if mc := h.cfgEntry(id); kindOf(*mc) != "ssh" {
 			t.Fatalf("%s's kind %q", id, mc.Kind)
 		}
-		if _, running := h.linkSwitch.get(id); running {
+		if running := h.linkSwitch.live(id, time.Now()); running {
 			t.Fatalf("%s: a refused switch left a guard", id)
 		}
 	}
@@ -375,6 +386,7 @@ func TestLinkSwitchBeginRefusals(t *testing.T) {
 // begin's compare-and-swap: the running hub's entry is the manager's, but hub.json says otherwise (edited, waiting for
 // a restart): refused as changed, nothing written, no code.
 func TestLinkSwitchBeginComparesTheEntry(t *testing.T) {
+	switchOp := newSwitchOp() // the audit outlives a run, and an operation id is used once
 	h, database, _ := switchHub(t)
 	ctx := context.Background()
 	edited := strings.Replace(switchHubJSON, "me@box.example", "me@new.example", 1)
@@ -408,6 +420,7 @@ func (noCodeStore) CreatePairToken(context.Context, string, time.Time, string) e
 
 // No pairing code: the kind goes back to ssh at once, and the manager is told it failed.
 func TestLinkSwitchBeginWithoutACodePutsTheKindBack(t *testing.T) {
+	switchOp := newSwitchOp() // the audit outlives a run, and an operation id is used once
 	h, database, _ := switchHub(t)
 	h.store = noCodeStore{database}
 	_, err := busBegin(h, nil, devicewire.LinkSwitchBegin{MachineID: "lsw-box", Operation: switchOp, SSHHost: "me@box.example"})
@@ -423,7 +436,7 @@ func TestLinkSwitchBeginWithoutACodePutsTheKindBack(t *testing.T) {
 	if mc := h.cfgEntry("lsw-box"); mc.Kind != "ssh" {
 		t.Fatalf("running kind %q", mc.Kind)
 	}
-	if _, running := h.linkSwitch.get("lsw-box"); running {
+	if running := h.linkSwitch.live("lsw-box", time.Now()); running {
 		t.Fatal("a failed begin left its guard")
 	}
 	if r := h.pendingRestart("en"); r.Required {
@@ -454,7 +467,7 @@ func TestLinkSwitchSucceeded(t *testing.T) {
 	if _, ok := h.authenticate(ctx, out["token"].(string)); !ok || diskKind(t, h, "lsw-bare") != "link" {
 		t.Fatal("a switch that succeeded lost its credential or its kind")
 	}
-	if _, running := h.linkSwitch.get("lsw-bare"); running {
+	if running := h.linkSwitch.live("lsw-bare", time.Now()); running {
 		t.Fatal("still switching")
 	}
 	h.nameAfterSystem(ctx, "lsw-bare", "bare-host")
@@ -473,18 +486,20 @@ func TestLinkSwitchSucceeded(t *testing.T) {
 			steps = append(steps, d["step"].(string))
 		}
 	}
-	if !slices.Equal(steps, []string{"begun", "succeeded", "succeeded"}) {
+	if !slices.Equal(steps, []string{"begin", "begun", "succeeded"}) {
 		t.Fatalf("audited %v", steps)
 	}
 }
 
-// A rollback without the code's hash (the manager lost it) revokes every Persona Link credential of the computer and
-// its codes not used yet, and puts it back to ssh; again, it answers the same. Another computer's are not touched.
+// A rollback without the code's hash (the manager lost it) revokes the code the switch recorded and the credential it
+// became, and puts the computer back to ssh; again, it answers the same. A code made for it otherwise, and another
+// computer's credential, are not touched.
 func TestLinkSwitchRollbackWithoutItsHash(t *testing.T) {
+	op := newSwitchOp()
 	h, _, _ := switchHub(t)
 	ctx := context.Background()
 	deskTok, _ := linkToken(t, h, "lsw-desk")
-	got, err := busBegin(h, nil, devicewire.LinkSwitchBegin{MachineID: "lsw-box", Operation: switchOp, SSHHost: "me@box.example"})
+	got, err := busBegin(h, nil, devicewire.LinkSwitchBegin{MachineID: "lsw-box", Operation: op, SSHHost: "me@box.example"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -493,11 +508,11 @@ func TestLinkSwitchRollbackWithoutItsHash(t *testing.T) {
 		t.Fatalf("redeem %d", code)
 	}
 	cred := out["token"].(string)
-	unused, err := h.newPairCode(ctx, "lsw-box")
+	more, err := h.newPairCode(ctx, "lsw-box")
 	if err != nil {
 		t.Fatal(err)
 	}
-	end := devicewire.LinkSwitchEnd{MachineID: "lsw-box", Operation: switchOp, Outcome: devicewire.LinkSwitchRolledBack}
+	end := devicewire.LinkSwitchEnd{MachineID: "lsw-box", Operation: op, Outcome: devicewire.LinkSwitchRolledBack}
 	for range 2 {
 		if err := busEnd(h, nil, end); err != nil {
 			t.Fatal(err)
@@ -506,8 +521,8 @@ func TestLinkSwitchRollbackWithoutItsHash(t *testing.T) {
 	if _, ok := h.authenticate(ctx, cred); ok {
 		t.Fatal("its credential still works")
 	}
-	if _, ok := h.authenticate(ctx, unused.Token); ok {
-		t.Fatal("an unused code for it still works")
+	if p, _ := h.store.PairTokenByHash(ctx, hashToken(more.Token)); p == nil || p.ExpiresAt.Before(time.Now()) {
+		t.Fatal("a code the switch did not make was revoked")
 	}
 	if _, ok := h.authenticate(ctx, deskTok); !ok {
 		t.Fatal("another computer's credential was revoked")
@@ -521,27 +536,8 @@ func TestLinkSwitchRollbackWithoutItsHash(t *testing.T) {
 	if r := h.pendingRestart("en"); r.Required {
 		t.Fatalf("restart %v", r.Reasons)
 	}
-	// Put back to ssh meanwhile (an admin edit): a rollback still revokes the switch's code and credential first.
-	got, err = busBegin(h, nil, devicewire.LinkSwitchBegin{MachineID: "lsw-box", Operation: switchOp, SSHHost: "me@box.example"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if code, out = redeem(t, h, pairTokenOf(t, got.Link), `{}`); code != 200 {
-		t.Fatalf("redeem again %d", code)
-	}
-	cred = out["token"].(string)
-	if err := os.WriteFile(filepath.Join(h.cfg.dir, "hub.json"), []byte(switchHubJSON), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := busEnd(h, nil, devicewire.LinkSwitchEnd{MachineID: "lsw-box", Operation: switchOp, PairHash: got.PairHash,
-		Outcome: devicewire.LinkSwitchRolledBack}); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := h.authenticate(ctx, cred); ok {
-		t.Fatal("its credential still works after its entry went back to ssh on its own")
-	}
 	// On a computer that never switched: nothing to undo.
-	if err := busEnd(h, nil, devicewire.LinkSwitchEnd{MachineID: "lsw-bare", Operation: switchOp, Outcome: devicewire.LinkSwitchRolledBack}); err != nil {
+	if err := busEnd(h, nil, devicewire.LinkSwitchEnd{MachineID: "lsw-bare", Operation: op, Outcome: devicewire.LinkSwitchRolledBack}); err != nil {
 		t.Fatal(err)
 	}
 	if diskEntry(t, h, "lsw-bare")["kind"] != nil {
@@ -559,6 +555,9 @@ func TestLinkSwitchEndRefusals(t *testing.T) {
 		Outcome: devicewire.LinkSwitchRolledBack}), devicewire.LinkSwitchCodeNoMachine)
 	refusedWith(t, "an unknown outcome", busEnd(h, nil, devicewire.LinkSwitchEnd{MachineID: "lsw-box", Operation: op, Outcome: "maybe"}),
 		bus.CodeInvalidParams)
+	for _, outcome := range []string{devicewire.LinkSwitchRolledBack, devicewire.LinkSwitchSucceeded} {
+		refusedWith(t, "no operation", busEnd(h, nil, devicewire.LinkSwitchEnd{MachineID: "lsw-box", Outcome: outcome}), bus.CodeInvalidParams)
+	}
 	if _, err := busBegin(h, nil, devicewire.LinkSwitchBegin{MachineID: "lsw-box", Operation: op, SSHHost: "me@box.example"}); err != nil {
 		t.Fatal(err)
 	}
@@ -625,7 +624,7 @@ func TestLinkSwitchRollbackOnlyUndoesABegunSwitch(t *testing.T) {
 		t.Fatal("a rollback of another operation undid this switch")
 	}
 	// This hub restarted: its memory of the switch is gone, the audit says it began.
-	h.linkSwitch.stop("lsw-bare")
+	h.linkSwitch = linkSwitches{}
 	if err := rollBack("lsw-bare", op, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -657,6 +656,7 @@ func TestLinkSwitchRollbackOnlyUndoesABegunSwitch(t *testing.T) {
 // own, yet a rollback that names its code still revokes that code's credential first; one without a hash revokes
 // nothing of another manager's computer.
 func TestLinkSwitchRollbackAfterTheComputerMoved(t *testing.T) {
+	switchOp := newSwitchOp() // the audit outlives a run, and an operation id is used once
 	h, _, _ := switchHub(t)
 	ctx := context.Background()
 	got, err := busBegin(h, nil, devicewire.LinkSwitchBegin{MachineID: "lsw-box", Operation: switchOp, SSHHost: "me@box.example"})
@@ -695,7 +695,7 @@ func TestLinkSwitchRollbackAfterTheComputerMoved(t *testing.T) {
 	if k := diskKind(t, h, "lsw-box"); k != "link" {
 		t.Fatalf("another manager's computer's kind was changed: %v", k)
 	}
-	if _, running := h.linkSwitch.get("lsw-box"); running {
+	if running := h.linkSwitch.live("lsw-box", time.Now()); running {
 		t.Fatal("the switch is still under way")
 	}
 }
@@ -726,9 +726,11 @@ func TestLinkSwitchRollbackAfterSuccessIsRefused(t *testing.T) {
 			name string
 			conn *busConn
 			hash string
-		}{{"with its hash", nil, got.PairHash}, {"without", nil, ""}, {"from another manager", other, got.PairHash}} {
+			code string
+		}{{"with its hash", nil, got.PairHash, devicewire.LinkSwitchCodeSucceeded}, {"without", nil, "", devicewire.LinkSwitchCodeSucceeded},
+			{"from another manager", other, got.PairHash, devicewire.LinkSwitchCodeNoMachine}} {
 			refusedWith(t, c.name, busEnd(h, c.conn, devicewire.LinkSwitchEnd{MachineID: "lsw-bare", Operation: op, PairHash: c.hash,
-				Outcome: devicewire.LinkSwitchRolledBack}), devicewire.LinkSwitchCodeSucceeded)
+				Outcome: devicewire.LinkSwitchRolledBack}), c.code)
 		}
 		if _, ok := h.authenticate(ctx, cred); !ok || diskKind(t, h, "lsw-bare") != "link" || h.cfgEntry("lsw-bare").Kind != kindLink {
 			t.Fatal("a succeeded switch was undone")
@@ -791,7 +793,10 @@ func TestLinkSwitchHoldsItsManager(t *testing.T) {
 	h.devices.entries, h.devices.started = []MachineConfig{{ID: "lsw-desk", Kind: kindLink}}, true
 	h.devices.assign = map[string]string{"lsw-desk": "m-0c0c0c"}
 	h.devices.mu.Unlock()
-	h.linkSwitch.start("lsw-desk", linkSwitchRun{operation: newSwitchOp(), by: "device"})
+	op := newSwitchOp()
+	if err := h.linkSwitch.claim("lsw-desk", &linkSwitchRun{operation: op, by: "device", until: time.Now().Add(time.Minute)}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
 	var out map[string]any
 	if code := managersDo(t, h, srv, "DELETE", "/api/v1/managers/m-0c0c0c", nil, &out); code != http.StatusConflict || out["code"] != "link_switch_in_progress" {
 		t.Fatalf("removed while one of its computers switches: %d %v", code, out)
@@ -799,7 +804,7 @@ func TestLinkSwitchHoldsItsManager(t *testing.T) {
 	if b, _ := store.BusIdentityByID(context.Background(), "m-0c0c0c"); b == nil {
 		t.Fatal("its identity went")
 	}
-	h.linkSwitch.stop("lsw-desk")
+	h.linkSwitch.finish("lsw-desk", op, switchRolledBack)
 	if code := managersDo(t, h, srv, "DELETE", "/api/v1/managers/m-0c0c0c", nil, nil); code != http.StatusOK {
 		t.Fatalf("remove once the switch ended: %d", code)
 	}
@@ -864,6 +869,7 @@ func TestAdminLinkSwitchWaitsForTheManager(t *testing.T) {
 // revokes exactly that credential (its cached lookup too) and closes its link as revoked (4002), and the computer is
 // on ssh again. A credential made for it otherwise and another computer's stay. Repeated, end answers the same.
 func TestLinkSwitchRollbackClosesItsLink(t *testing.T) {
+	switchOp := newSwitchOp() // the audit outlives a run, and an operation id is used once
 	database := testDB(t)
 	clearSwitchIDs(t, database)
 	ctx := context.Background()

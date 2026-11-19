@@ -121,7 +121,7 @@ func (h *Hub) editEntryLive(id string, edit func(*MachineConfig)) {
 // no name of its own yet (added without one: its id); a name it was given is kept, and so is the name of one switching
 // from ssh (link_switch.go: it is the same computer, as the user knows it).
 func (h *Hub) nameAfterSystem(ctx context.Context, id, system string) {
-	if _, switching := h.linkSwitch.get(id); switching {
+	if switching, err := h.linkSwitchUnderWay(ctx, id); switching || err != nil {
 		return
 	}
 	system = strings.Join(strings.Fields(system), " ")
