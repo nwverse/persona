@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -62,7 +63,7 @@ type modelExecution struct {
 }
 
 func supervisionRuntimeRefusal(ctx context.Context) error {
-	return refusal("assistant_supervision_runtime", i18n.T(i18n.From(ctx), "rpc-errors.assistant_supervision_runtime"), nil)
+	return refusal(assistantwire.CodeSupervisionRuntime, i18n.T(i18n.From(ctx), "rpc-errors.assistant_supervision_runtime"), nil)
 }
 
 // check refuses a model that is not a model id (proto.ValidModelID, #1644) before anything runs; the error's text is

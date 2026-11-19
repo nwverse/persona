@@ -92,6 +92,7 @@ private struct AccessibleItemConfirmationDialog<Actions: View, Message: View, It
     let isPresented: Binding<Bool>
     let titleVisibility: Visibility
     let hasCancel: Bool
+    let showsMessage: Bool
     let data: Item?
     let actions: (Item) -> Actions
     let message: (Item) -> Message
@@ -108,17 +109,30 @@ private struct AccessibleItemConfirmationDialog<Actions: View, Message: View, It
     @ViewBuilder func body(content: Content) -> some View {
         Group {
             if useAlert {
-                content.alert(title, isPresented: isPresented, presenting: data) { item in
-                    alertActions(item)
-                } message: { item in
-                    message(item)
+                if showsMessage {
+                    content.alert(title, isPresented: isPresented, presenting: data) { item in
+                        alertActions(item)
+                    } message: { item in
+                        message(item)
+                    }
+                } else {
+                    content.alert(title, isPresented: isPresented, presenting: data) { item in
+                        alertActions(item)
+                    }
                 }
             } else {
-                content.confirmationDialog(title, isPresented: isPresented, titleVisibility: titleVisibility,
-                                           presenting: data) { item in
-                    actions(item)
-                } message: { item in
-                    message(item)
+                if showsMessage {
+                    content.confirmationDialog(title, isPresented: isPresented, titleVisibility: titleVisibility,
+                                               presenting: data) { item in
+                        actions(item)
+                    } message: { item in
+                        message(item)
+                    }
+                } else {
+                    content.confirmationDialog(title, isPresented: isPresented, titleVisibility: titleVisibility,
+                                               presenting: data) { item in
+                        actions(item)
+                    }
                 }
             }
         }
@@ -148,11 +162,11 @@ extension View {
     }
 
     private func accessibleItemConfirmationDialog<Actions: View, Message: View, Item>(
-        title: Text, isPresented: Binding<Bool>, titleVisibility: Visibility, hasCancel: Bool, data: Item?,
+        title: Text, isPresented: Binding<Bool>, titleVisibility: Visibility, hasCancel: Bool, showsMessage: Bool, data: Item?,
         @ViewBuilder actions: @escaping (Item) -> Actions, @ViewBuilder message: @escaping (Item) -> Message
     ) -> some View {
         modifier(AccessibleItemConfirmationDialog(title: title, isPresented: isPresented, titleVisibility: titleVisibility,
-                                                  hasCancel: hasCancel, data: data, actions: actions, message: message))
+                                                  hasCancel: hasCancel, showsMessage: showsMessage, data: data, actions: actions, message: message))
     }
 
     func accessibleConfirmationDialog<Actions: View>(
@@ -206,13 +220,40 @@ extension View {
                                      hasCancel: hasCancel, showsMessage: true, actions: actions, message: message)
     }
 
+    func accessibleConfirmationDialog<Actions: View, Item>(
+        _ titleKey: LocalizedStringKey, isPresented: Binding<Bool>, titleVisibility: Visibility = .automatic,
+        hasCancel: Bool = false, presenting data: Item?, @ViewBuilder actions: @escaping (Item) -> Actions
+    ) -> some View {
+        accessibleItemConfirmationDialog(title: Text(titleKey), isPresented: isPresented, titleVisibility: titleVisibility,
+                                         hasCancel: hasCancel, showsMessage: false, data: data, actions: actions,
+                                         message: { _ in EmptyView() })
+    }
+
+    func accessibleConfirmationDialog<S: StringProtocol, Actions: View, Item>(
+        _ title: S, isPresented: Binding<Bool>, titleVisibility: Visibility = .automatic,
+        hasCancel: Bool = false, presenting data: Item?, @ViewBuilder actions: @escaping (Item) -> Actions
+    ) -> some View {
+        accessibleItemConfirmationDialog(title: Text(title), isPresented: isPresented, titleVisibility: titleVisibility,
+                                         hasCancel: hasCancel, showsMessage: false, data: data, actions: actions,
+                                         message: { _ in EmptyView() })
+    }
+
+    func accessibleConfirmationDialog<Actions: View, Item>(
+        _ title: Text, isPresented: Binding<Bool>, titleVisibility: Visibility = .automatic,
+        hasCancel: Bool = false, presenting data: Item?, @ViewBuilder actions: @escaping (Item) -> Actions
+    ) -> some View {
+        accessibleItemConfirmationDialog(title: title, isPresented: isPresented, titleVisibility: titleVisibility,
+                                         hasCancel: hasCancel, showsMessage: false, data: data, actions: actions,
+                                         message: { _ in EmptyView() })
+    }
+
     func accessibleConfirmationDialog<Actions: View, Message: View, Item>(
         _ titleKey: LocalizedStringKey, isPresented: Binding<Bool>, titleVisibility: Visibility = .automatic,
         hasCancel: Bool = false, presenting data: Item?, @ViewBuilder actions: @escaping (Item) -> Actions,
         @ViewBuilder message: @escaping (Item) -> Message
     ) -> some View {
         accessibleItemConfirmationDialog(title: Text(titleKey), isPresented: isPresented, titleVisibility: titleVisibility,
-                                         hasCancel: hasCancel, data: data, actions: actions, message: message)
+                                         hasCancel: hasCancel, showsMessage: true, data: data, actions: actions, message: message)
     }
 
     func accessibleConfirmationDialog<S: StringProtocol, Actions: View, Message: View, Item>(
@@ -221,7 +262,7 @@ extension View {
         @ViewBuilder message: @escaping (Item) -> Message
     ) -> some View {
         accessibleItemConfirmationDialog(title: Text(title), isPresented: isPresented, titleVisibility: titleVisibility,
-                                         hasCancel: hasCancel, data: data, actions: actions, message: message)
+                                         hasCancel: hasCancel, showsMessage: true, data: data, actions: actions, message: message)
     }
 
     func accessibleConfirmationDialog<Actions: View, Message: View, Item>(
@@ -230,7 +271,7 @@ extension View {
         @ViewBuilder message: @escaping (Item) -> Message
     ) -> some View {
         accessibleItemConfirmationDialog(title: title, isPresented: isPresented, titleVisibility: titleVisibility,
-                                         hasCancel: hasCancel, data: data, actions: actions, message: message)
+                                         hasCancel: hasCancel, showsMessage: true, data: data, actions: actions, message: message)
     }
 }
 
