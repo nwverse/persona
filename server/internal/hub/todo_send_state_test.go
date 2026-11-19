@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -30,15 +32,7 @@ const (
 // postTodoRoute posts body to todoRoutePath through mux, with op as X-Persona-Op-Id when set.
 func postTodoRoute(t *testing.T, ctx context.Context, h *Hub, mux http.Handler, op, body string) (int, string) {
 	t.Helper()
-	r := httptest.NewRequestWithContext(ctx, http.MethodPost, "https://hub.example.com"+todoRoutePath, strings.NewReader(body))
-	r.RemoteAddr = "127.0.0.1:12345"
-	r.Header.Set("Authorization", "Bearer "+h.cfg.Token)
-	if op != "" {
-		r.Header.Set("X-Persona-Op-Id", op)
-	}
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, r)
-	return w.Code, w.Body.String()
+	return postTodo(t, ctx, h, mux, todoRoutePath, op, body)
 }
 
 // todoSendApps are the apps a to-do write's states may reach: knows asked for them on its socket's URL, hello in its
@@ -77,6 +71,18 @@ func nextTodoSendState(t *testing.T, c *client) proto.TodoSendState {
 			t.Fatal("no todo_send_state within five seconds")
 		}
 	}
+}
+
+// soon waits up to five seconds for ch, failing with what did not happen.
+func soon[T any](t *testing.T, ch <-chan T, what string) T {
+	t.Helper()
+	select {
+	case v := <-ch:
+		return v
+	case <-time.After(5 * time.Second):
+		t.Fatalf("%s within five seconds", what)
+	}
+	panic("unreachable")
 }
 
 // noTodoSendState: c gets no todo_send_state for a moment.
@@ -132,28 +138,24 @@ func TestTodoSendStateProcessingThenDelivered(t *testing.T) {
 					t.Fatalf("processing: %+v", event)
 				}
 			}
-			<-arrived // the manager has it, and has not answered
-			cancel()  // the phone goes away: the write goes on
+			soon(t, arrived, "the manager never got the write") // the manager has it, and has not answered
+			cancel()                                            // the phone goes away: the write goes on
 			type reply struct {
 				code int
 				body string
 			}
 			retry := make(chan reply, 1)
 			go func() { code, out := tc.post(t, context.Background(), h, mux, op, tc.body); retry <- reply{code, out} }()
-			select {
-			case <-store.ops.read: // the retry waits for the first write's receipt
-			case <-time.After(5 * time.Second):
-				t.Fatal("the retry did not wait for the receipt")
-			}
+			soon(t, store.ops.read, "the retry did not wait for the receipt") // the retry waits for the first write's receipt
 			noTodoSendState(t, apps.knows, "an app while the write runs")
 			close(release)
-			<-first
+			soon(t, first, "the first write never answered")
 			for _, c := range []*client{apps.knows, apps.hello} {
 				if event := nextTodoSendState(t, c); event.State != proto.MessageSendDelivered || event.ClientOpID != lower || event.TodoID != "todo_a1" {
 					t.Fatalf("delivered: %+v", event)
 				}
 			}
-			if got := <-retry; got.code != http.StatusOK || !strings.Contains(got.body, `"f1"`) {
+			if got := soon(t, retry, "the retry never answered"); got.code != http.StatusOK || !strings.Contains(got.body, `"f1"`) {
 				t.Fatalf("the retry: %+v", got)
 			}
 			if code, out := tc.post(t, context.Background(), h, mux, op, tc.body); code != 200 || !strings.Contains(out, `"f1"`) {
@@ -169,9 +171,12 @@ func TestTodoSendStateProcessingThenDelivered(t *testing.T) {
 	}
 }
 
-// A refusal is failed (the same op id gets it again, so a phone sends again under a new one), a write that reached no
-// manager is failed too, its receipt not kept; a 200 that says no Agent could take the answer is still delivered:
-// the manager took it and handed it to the supervisor.
+// Failed only when the answer shows nothing was taken, so a phone may send again under a new op id: a write that
+// reached no manager (its receipt not kept), a refusal that says delivered "none", one refused before anything ran.
+// A refusal that says nothing of delivery may have typed the text (the conversation route answers 409 conflict for a
+// send whose result the manager does not know): unknown, and the same op id gets it back. A 200 that says no Agent
+// could take the answer is still delivered: the manager took it and handed it to the supervisor. The receipt records
+// what the final state says.
 func TestTodoSendStateFinalStates(t *testing.T) {
 	h := newTestHub(t)
 	store := &receiptStore{memStore: newMemStore(), ops: &clientOpsStore{ops: map[string]db.ClientOp{}}}
@@ -208,32 +213,105 @@ func TestTodoSendStateFinalStates(t *testing.T) {
 	manager.http = func(context.Context, assistantwire.HTTPRequest) (any, error) { return answer, nil }
 	manager.mu.Unlock()
 	for _, tc := range []struct {
-		name, op string
-		post     func(*testing.T, context.Context, *Hub, http.Handler, string, string) (int, string)
-		sent     string // the app's request
-		status   int    // the manager's answer
-		body     string
-		want     string
+		name, op, path string
+		sent           string // the app's request
+		status         int    // the manager's answer
+		body           string
+		want, receipt  string
 	}{
-		{"no Agent to take it", "00000000-0000-4000-8000-0000000c0465", postTodoRoute, todoRouteBody, http.StatusConflict,
-			`{"error":"This task has no running Agent","code":"conflict"}`, proto.MessageSendFailed},
-		{"a node's refusal", "00000000-0000-4000-8000-0000000d0465", postTodoAnswer, `{"text":"Hanami"}`, http.StatusLocked,
-			`{"error":"A dialog is open","code":"dialog_open","delivered":"none"}`, proto.MessageSendFailed},
-		{"recorded for the supervisor", "00000000-0000-4000-8000-0000000e0465", postTodoAnswer, `{"option":"Kaede"}`, http.StatusOK,
-			`{"ask":"todo:decision@2026-11-10T09:00:00Z","outcome":"answered","delivered":"none"}`, proto.MessageSendDelivered},
+		{"a send the manager is not sure of", "00000000-0000-4000-8000-0000000c0465", todoRoutePath, todoRouteBody, http.StatusConflict,
+			`{"error":"context deadline exceeded","code":"conflict"}`, proto.MessageSendUnknown, "unknown"},
+		{"an answer not taken, as far as the manager says", "00000000-0000-4000-8000-0000000c1465", todoAnswerPath, `{"text":"Hanami"}`,
+			http.StatusBadGateway, `{"error":"Not taken: the computer dropped","code":"accept_not_taken"}`, proto.MessageSendUnknown, "unknown"},
+		{"a node's refusal", "00000000-0000-4000-8000-0000000d0465", todoAnswerPath, `{"text":"Hanami"}`, http.StatusLocked,
+			`{"error":"A dialog is open","code":"dialog_open","delivered":"none"}`, proto.MessageSendFailed, "failed"},
+		{"refused before anything ran", "00000000-0000-4000-8000-0000000d1465", todoAnswerPath, `{"option":"Kaede"}`, http.StatusNotFound,
+			`{"error":"todo not found","code":"todo_not_found"}`, proto.MessageSendFailed, "failed"},
+		{"recorded for the supervisor", "00000000-0000-4000-8000-0000000e0465", todoAnswerPath, `{"option":"Kaede"}`, http.StatusOK,
+			`{"ask":"todo:decision@2026-11-10T09:00:00Z","outcome":"answered","delivered":"none"}`, proto.MessageSendDelivered, "done"},
 	} {
 		manager.mu.Lock()
 		answer = assistantwire.HTTPResponse{Status: tc.status, Header: map[string][]string{"Content-Type": {"application/json"}}, Body: []byte(tc.body)}
 		manager.mu.Unlock()
 		for range 2 { // asked again, the same reply and no second state
-			if code, out := tc.post(t, context.Background(), h, mux, tc.op, tc.sent); code != tc.status || out != tc.body {
+			if code, out := postTodo(t, context.Background(), h, mux, tc.path, tc.op, tc.sent); code != tc.status || out != tc.body {
 				t.Fatalf("%s: %d %s", tc.name, code, out)
 			}
 		}
 		if event := final(tc.op); event.State != tc.want {
 			t.Fatalf("%s: %+v", tc.name, event)
 		}
+		if got := receiptStates(store)[tc.op]; got != tc.receipt {
+			t.Fatalf("%s: receipt %q", tc.name, got)
+		}
 		noTodoSendState(t, apps.knows, tc.name+" asked again")
+	}
+}
+
+// finishStore holds a to-do write's receipt while it is stored (finishing, then release), and fails to store it when
+// fail is set.
+type finishStore struct {
+	*receiptStore
+	finishing, release chan struct{}
+	fail               atomic.Bool
+}
+
+func (s *finishStore) FinishClientOp(ctx context.Context, id, state string, result json.RawMessage) error {
+	s.finishing <- struct{}{}
+	<-s.release
+	if s.fail.Load() {
+		return errors.New("the database went away")
+	}
+	return s.receiptStore.FinishClientOp(ctx, id, state, result)
+}
+
+// The final state goes out once the receipt is stored, never before: one the hub could not store is unknown, as the
+// app's HTTP answer (503 state unknown) and a Check of the op id are, though the manager took the message.
+func TestTodoSendStateAfterTheReceipt(t *testing.T) {
+	h := newTestHub(t)
+	store := &finishStore{receiptStore: &receiptStore{memStore: newMemStore(), ops: &clientOpsStore{ops: map[string]db.ClientOp{}}},
+		finishing: make(chan struct{}, 1), release: make(chan struct{})}
+	h.store = store
+	manager, _ := connectInboxManager(t, h)
+	manager.mu.Lock()
+	manager.http = func(context.Context, assistantwire.HTTPRequest) (any, error) {
+		return assistantwire.HTTPResponse{Status: 200, Header: map[string][]string{"Content-Type": {"application/json"}},
+			Body: []byte(`{"item":{"id":"f1"}}`)}, nil
+	}
+	manager.mu.Unlock()
+	apps := newTodoSendApps(t, h)
+	mux := h.routes()
+	type reply struct {
+		code int
+		body string
+	}
+	for _, tc := range []struct {
+		op         string
+		fail       bool
+		code       int
+		want, body string
+	}{
+		{"00000000-0000-4000-8000-000000120465", false, http.StatusOK, proto.MessageSendDelivered, `"f1"`},
+		{"00000000-0000-4000-8000-000000130465", true, http.StatusServiceUnavailable, proto.MessageSendUnknown, `"state":"unknown"`},
+	} {
+		store.fail.Store(tc.fail)
+		answered := make(chan reply, 1)
+		go func() {
+			code, out := postTodoRoute(t, context.Background(), h, mux, tc.op, todoRouteBody)
+			answered <- reply{code, out}
+		}()
+		if event := nextTodoSendState(t, apps.knows); event.State != proto.MessageSendProcessing || event.ClientOpID != tc.op {
+			t.Fatalf("processing: %+v", event)
+		}
+		soon(t, store.finishing, "the receipt was never stored")
+		noTodoSendState(t, apps.knows, "an app while the receipt is stored")
+		store.release <- struct{}{}
+		if got := soon(t, answered, "the write never answered"); got.code != tc.code || !strings.Contains(got.body, tc.body) {
+			t.Fatalf("fail=%t: %d %s", tc.fail, got.code, got.body)
+		}
+		if event := nextTodoSendState(t, apps.knows); event.State != tc.want || event.ClientOpID != tc.op {
+			t.Fatalf("fail=%t: %+v", tc.fail, event)
+		}
 	}
 }
 
@@ -320,7 +398,7 @@ func TestTodoRouteWithoutOpIDIsUnchanged(t *testing.T) {
 	same := func(what, body string) {
 		t.Helper()
 		was, now := post(plain, "", body), post(routed, "", body)
-		if was.Code != now.Code || !bytes.Equal(was.Body.Bytes(), now.Body.Bytes()) || !slicesEqualHeader(was.Header(), now.Header()) {
+		if was.Code != now.Code || !bytes.Equal(was.Body.Bytes(), now.Body.Bytes()) || !maps.EqualFunc(was.Header(), now.Header(), slices.Equal[[]string]) {
 			t.Fatalf("%s: was %d %v %s, now %d %v %s", what, was.Code, was.Header(), was.Body, now.Code, now.Header(), now.Body)
 		}
 		t.Logf("%s: %d %s", what, now.Code, strings.TrimSpace(now.Body.String()))
@@ -341,7 +419,7 @@ func TestTodoRouteWithoutOpIDIsUnchanged(t *testing.T) {
 	manager.mu.Unlock()
 	same("taken", todoRouteBody)
 	manager.mu.Lock()
-	if len(asked) != 2 || asked[0].Path != asked[1].Path || !bytes.Equal(asked[0].Body, asked[1].Body) || !slicesEqualHeader(asked[0].Header, asked[1].Header) {
+	if len(asked) != 2 || asked[0].Path != asked[1].Path || !bytes.Equal(asked[0].Body, asked[1].Body) || !maps.EqualFunc(asked[0].Header, asked[1].Header, slices.Equal[[]string]) {
 		manager.mu.Unlock()
 		t.Fatalf("the manager was asked differently: %+v", asked)
 	}
@@ -394,19 +472,6 @@ func TestTodoRouteWithoutOpIDIsUnchanged(t *testing.T) {
 	}
 }
 
-// slicesEqualHeader: a and b hold the same values under the same keys.
-func slicesEqualHeader(a, b map[string][]string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for k, v := range a {
-		if !slices.Equal(v, b[k]) {
-			return false
-		}
-	}
-	return true
-}
-
 // todo_send_state is the hub's: declared once, never a manager's message (a forged one reaches no app, whatever an
 // extension report declares), its version written into the hello by the hub alone, and its key no field the iOS
 // Envelope already reads.
@@ -438,14 +503,13 @@ func TestTodoSendStateIsTheHubs(t *testing.T) {
 			t.Fatalf("hello's todo_send_state: %s", raw)
 		}
 	}
-	known := strings.Fields("type machine_id session_id machines sessions items backlog has_more more_after history from_seq to_seq text status interaction id call_id name args event message last_assistant_message error revs feed_ids fleet features epoch seq full cols rows data unsupported state")
-	if slices.Contains(known, proto.FeatureTodoSendState) {
+	if slices.Contains(iosEnvelopeKeys, proto.FeatureTodoSendState) {
 		t.Fatal("the hello's todo_send_state is a key the iOS Envelope reads")
 	}
 }
 
 // The conversation route keeps a todo_route receipt; one that reached no manager is asked again under its op id. How
-// a relay's answer reads as a final state.
+// a relay's answer reads as a final state, and as the receipt's: failed only when it shows nothing was taken.
 func TestTodoRouteReceiptKindAndOutcome(t *testing.T) {
 	offline, _ := json.Marshal(map[string]string{"code": assistantwire.CodeAssistantOffline})
 	doubt, _ := json.Marshal(map[string]string{"code": assistantwire.CodeAssistantInDoubt})
@@ -457,20 +521,62 @@ func TestTodoRouteReceiptKindAndOutcome(t *testing.T) {
 		t.Fatalf("the conversation route's receipt kind %q", kind)
 	}
 	for _, tc := range []struct {
-		status int
-		body   string
-		want   string
+		status        int
+		body          string
+		want, receipt string
 	}{
-		{200, `{"item":{"id":"f1"}}`, proto.MessageSendDelivered},
-		{0, ``, proto.MessageSendDelivered},
-		{200, `{"outcome":"answered","delivered":"none"}`, proto.MessageSendDelivered},
-		{502, `{"code":"assistant_in_doubt","delivered":"unknown"}`, proto.MessageSendUnknown},
-		{409, `{"code":"conflict"}`, proto.MessageSendFailed},
-		{423, `{"code":"dialog_open","delivered":"none"}`, proto.MessageSendFailed},
-		{503, `{"code":"assistant_offline"}`, proto.MessageSendFailed},
+		{200, `{"item":{"id":"f1"}}`, proto.MessageSendDelivered, "done"},
+		{0, ``, proto.MessageSendDelivered, "done"},
+		{200, `{"outcome":"answered","delivered":"none"}`, proto.MessageSendDelivered, "done"},
+		{502, `{"code":"assistant_in_doubt","delivered":"unknown"}`, proto.MessageSendUnknown, "unknown"},
+		{409, `{"code":"conflict"}`, proto.MessageSendUnknown, "unknown"}, // the conversation route's answer to any error
+		{502, `{"code":"accept_not_taken"}`, proto.MessageSendUnknown, "unknown"},
+		{502, `{"error":"bus: closed"}`, proto.MessageSendUnknown, "unknown"},
+		{409, `{"code":"ask_stale"}`, proto.MessageSendUnknown, "unknown"},
+		{409, `{"code":"input_draft","delivered":"none"}`, proto.MessageSendFailed, "failed"},
+		{409, `{"code":"conflict","delivered":"yes"}`, proto.MessageSendUnknown, "unknown"},
+		{423, `{"code":"dialog_open","delivered":"none"}`, proto.MessageSendFailed, "failed"},
+		{503, `{"code":"assistant_offline"}`, proto.MessageSendFailed, "failed"},
+		{404, `{"code":"no_manager"}`, proto.MessageSendFailed, "failed"},
+		{400, `{"code":"bad_request"}`, proto.MessageSendFailed, "failed"},
+		{403, `{"code":"forbidden","delivered":"none"}`, proto.MessageSendFailed, "failed"},
+		{400, `{"code":"bad_request","delivered":"unknown"}`, proto.MessageSendUnknown, "unknown"},
 	} {
+		if got := todoReceiptState(tc.status, []byte(tc.body)); got != tc.receipt {
+			t.Errorf("receipt %d %s: %s, want %s", tc.status, tc.body, got, tc.receipt)
+		}
 		if got := todoSendOutcome(tc.status, []byte(tc.body)); got != tc.want {
 			t.Errorf("%d %s: %s, want %s", tc.status, tc.body, got, tc.want)
+		}
+	}
+}
+
+// A to-do write under an op id is relayed with todoRelayWait, past the manager's own longest wait, not the plain
+// relay's five minutes; without an op id the request goes on as it came.
+func TestTodoRelayWaitsPastTheManager(t *testing.T) {
+	if managerLongest := 6*time.Minute + 90*time.Second; todoRelayWait <= managerLongest { // a new Agent's start, then its send
+		t.Fatalf("todoRelayWait %s is not past the manager's %s", todoRelayWait, managerLongest)
+	}
+	h := newTestHub(t)
+	h.store = &receiptStore{memStore: newMemStore(), ops: &clientOpsStore{ops: map[string]db.ClientOp{}}}
+	var left time.Duration
+	var bounded bool
+	relay := h.withTodoReceipt(todoRouteOp, func(w http.ResponseWriter, r *http.Request) {
+		deadline, ok := r.Context().Deadline()
+		left, bounded = time.Until(deadline), ok
+		w.WriteHeader(http.StatusOK)
+	})
+	for _, op := range []string{"00000000-0000-4000-8000-000000140465", ""} {
+		r := httptest.NewRequest(http.MethodPost, todoRoutePath, strings.NewReader(todoRouteBody))
+		if op != "" {
+			r.Header.Set("X-Persona-Op-Id", op)
+		}
+		relay(httptest.NewRecorder(), r)
+		if op != "" && (!bounded || left <= todoRelayWait-time.Minute) {
+			t.Fatalf("under an op id: deadline %t in %s", bounded, left)
+		}
+		if op == "" && bounded {
+			t.Fatalf("without an op id: a deadline in %s", left)
 		}
 	}
 }

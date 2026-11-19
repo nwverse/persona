@@ -505,7 +505,7 @@ The UUID is case-insensitive. The hub builds a digest from the operation kind, p
 | `failed` | Definitely failed, receipt stored; a repeated write still replays the original result |
 | `unknown` | Outcome unknown; for ordinary operations a repeated request returns `202 {"state":"unknown"}`. Query or check by hand; never treat it as success or resend automatically |
 
-For ordinary operations, HTTP 400 / 409 are usually recorded as `failed`; other errors are recorded as `unknown` unless it can be shown they didn't execute. On startup the hub marks leftover `pending` as `unknown` and does not re-execute them. After completion it still tries to store the receipt even if the HTTP caller has disconnected; if storing fails it returns 503 with `state: unknown`. Receipts are kept for 30 days from creation. That is a retention policy; dedup beyond the window is not guaranteed.
+For ordinary operations, HTTP 400 / 409 are usually recorded as `failed`; other errors are recorded as `unknown` unless it can be shown they didn't execute. A to-do's writes (`todo_answer`, `todo_route`) are recorded by the rule of their final `todo_send_state` ("Message feedback (#5258)", its "To-do writes"): `failed` only when the answer shows nothing was taken, so a manager's 409 or 502 that says nothing of delivery is `unknown`. On startup the hub marks leftover `pending` as `unknown` and does not re-execute them. After completion it still tries to store the receipt even if the HTTP caller has disconnected; if storing fails it returns 503 with `state: unknown`. Receipts are kept for 30 days from creation. That is a retention policy; dedup beyond the window is not guaranteed.
 
 Lark sends and Inbox replies also derive receipts from the body's `client_id`; see "Lark API" below. They reuse `client_ops` too, but an existing upstream error response is replayed as-is. Don't apply that response rule to all ordinary operations.
 
@@ -2288,7 +2288,7 @@ Server → client:
 | `conversation_deleted` | `machine_id`, `session_id`: a permanent manager tombstone. Drop cached transcript, feed, drafts and outgoing messages for this chat; show Conversation deleted for an open reference. The hub ends existing subscriptions and refuses replay; regular session lists omit the tombstone. Manager transport carries an identity-only `Session` with `deleted:true`, `assistant:true`, `status:offline`, a generic localized title and optional space. |
 | `items` | `machine_id`, `session_id`, `items`, plus this batch's position in the transcript (see "Continuity of items" below): `history`, `to_seq`, `from_seq` (only on continuation batches). Only pushed to clients subscribed to that session; lines with no item (ai-title and the like) also get an empty `items`, so the App knows those lines have been seen |
 | `message_send_state` | `machine_id`, `session_id`, `client_msg_id`, `state` (`processing` / `delivered` / `failed` / `unknown` / `kept`: nothing went in and the assistant chat's manager keeps it to send by itself, #10194), `at` (UTC RFC3339Nano): a transport receipt for `/sessions/{mid}/{sid}/messages`, only to that session's subscribers. Processing precedes manager preparation and node delivery; it is not a durable queue or execution state. Final HTTP remains authoritative. Not in the event log; reconnect/retry the original operation ID to reconcile. Trust only when the current authenticated `hello` has top-level `message_send_state: 1`, fixed by the hub, not the extension-merged feature array. No client feature negotiation; older clients ignore the unknown type. See "Message feedback (#5258)" below. |
-| `todo_send_state` | `todo_id`, `client_op_id` (the request's `X-Persona-Op-Id`, lower case), `state` (`processing` / `delivered` / `failed` / `unknown`), `at` (UTC RFC3339Nano): a transport receipt for a to-do's message on `POST /api/v1/assistant/conversations/{id}/route` (`todo_id` the body's) or an answer on `POST /api/v1/todos/{id}/asks/{ask}/answer` (`todo_id` the path's), sent with `X-Persona-Op-Id` (#10465). Only to full devices that declared `todo_send_state` (`?features=` or `client_hello.features`); not in the event log. Processing goes out once the hub has claimed the op id, before the manager has the write; the final state when the relay answered. Final HTTP (or the op id's receipt) remains authoritative. Trust only when the current authenticated `hello` has top-level `todo_send_state: 1`. See "Message feedback (#5258)" below, its "To-do writes". |
+| `todo_send_state` | `todo_id`, `client_op_id` (the request's `X-Persona-Op-Id`, lower case), `state` (`processing` / `delivered` / `failed` / `unknown`), `at` (UTC RFC3339Nano): a transport receipt for a to-do's message on `POST /api/v1/assistant/conversations/{id}/route` (`todo_id` the body's) or an answer on `POST /api/v1/todos/{id}/asks/{ask}/answer` (`todo_id` the path's), sent with `X-Persona-Op-Id` (#10465). Only to full devices that declared `todo_send_state` (`?features=` or `client_hello.features`); not in the event log. Processing goes out once the hub has claimed the op id, before the manager has the write (none when the body names no to-do); the final state once the relay answered and the receipt is stored, `failed` only when the answer shows nothing was taken. Final HTTP (or the op id's receipt) remains authoritative. Trust only when the current authenticated `hello` has top-level `todo_send_state: 1`. See "Message feedback (#5258)" below, its "To-do writes". |
 | `delta` | `machine_id`, `session_id`, `text` (the whole text the headless assistant is generating; an empty string means the turn is over. A Claude session Persona started sends it too: the message Claude is showing in its terminal, as far as the transcript does not have it yet, "" once it does; whole lines every 0.1–1 s; see `docs/integrations/claude-integration.md` "Live replies (MessageDisplay)". The live text is never the source: the transcript's items replace it). At most one every 80 ms, and what came after the last one goes out 80 ms after it, so the end of a burst of model output never waits for the next burst (#6651). The App draws each chat at most 5 times a second, the first one after a pause immediately and then the latest; an empty string is drawn immediately; anything not yet drawn is dropped when the message lands in the transcript or on reconnect (`DeltaPacer`). The streaming view reveals what was drawn a few characters a frame (`StreamReveal`); the web staggers new words at the stream's pace (`web/src/ui/stream/wordFade.ts`) |
 | `live` | `machine_id`, `session_id`, `live` (`SessionLive` or `null`): the status line of a working Claude, only sent to connections subscribed to that session that declared `session_live`; see "Live status" below |
 | `screen` | `machine_id`, `session_id`, `text`, `status`, `ts` (the node no longer samples the screen per subscription: the terminal page reads `/screen` itself on demand, and old Apps not receiving this doesn't matter) |
@@ -2996,34 +2996,43 @@ accepted the input. None of these alone proves that the model has begun answerin
 - A client talking to an older hub keeps its Sending/outbox feedback until the existing HTTP and transcript evidence
   arrives. No client may pretend that local enqueue alone was a hub receipt.
 
+Apple integration uses the same event and boundaries; no Apple code changes are included in #5258. A new main
+conversation started through a creation endpoint has no target session subscription yet: keep local Sending/Preparing
+until that endpoint's existing result binds it, then use the ordinary session flow.
+
 **To-do writes (#10465).** A message to a to-do (`POST /api/v1/assistant/conversations/{id}/route {todo_id, text}`) and
 an answer to one of its asks (`POST /api/v1/todos/{id}/asks/{ask}/answer`) get the same three boundaries when they carry
 `X-Persona-Op-Id`. Either may wait long before it answers: the message for the node to take it (up to five minutes for
 an Agent that resumes) or for a new Agent to start when every Agent of the to-do has stopped, the answer's words the
-same way.
+same way. Under an op id the hub waits up to ten minutes for the manager's answer, past the manager's own longest wait
+(six minutes for a new Agent's start, then its send); without one, the plain relay's five.
 
 - Declare `todo_send_state` in `client_hello.features` (or `?features=`) and trust the events only while the current
   authenticated `hello` has top-level `todo_send_state: 1`, under the same rules as `message_send_state` above. Full
   devices only.
 - The hub sends `todo_send_state` with `state: processing`, the op id and the to-do, once it has claimed the op id
   (the operation middleware's database admission) and before the manager has the write. Show **Processing** then;
-  the draft can go.
-- The final event follows the relay's answer: `delivered` for a 200 (the message reached an Agent, or the manager took
-  the answer; a 200 that says `delivered: "none"` was recorded and handed to the supervisor, which the HTTP answer
-  says), `unknown` when it may have been taken (502 `assistant_in_doubt`, `delivered: "unknown"`: the link to the
-  manager dropped, or the hub's five minutes ran out, while the manager had it), else `failed` (a refusal). The HTTP
-  answer stays authoritative. After `failed` a new send takes a new op id, since the same one gets the same refusal
-  back; only a write that reached no manager (503 `assistant_offline`) keeps no receipt, and its op id may go again.
-  After `unknown` ask again with the same op id: it gets the recorded answer and is never typed twice.
+  the draft can go. A write whose body names no to-do gets no event.
+- The final event goes out once the receipt is stored, and says what a Check of the op id would get. `delivered` for a
+  2xx (the message reached an Agent, or the manager took the answer; a 200 that says `delivered: "none"` was recorded
+  and handed to the supervisor, which the HTTP answer says). `failed` only when the answer shows nothing was taken: it
+  says `delivered: "none"`, it reached no manager (503 `assistant_offline`, which keeps no receipt), or it was refused
+  before anything ran (400, 401, 403, 404). Everything else is `unknown`, since it may have been taken: 502
+  `assistant_in_doubt` (the link to the manager dropped, or the hub's wait ran out, while the manager had it), and a
+  manager's 409 or 502 that says nothing of delivery (the conversation route answers 409 for a send whose result the
+  manager does not know too). A receipt the hub could not store is `unknown` as well, as the HTTP answer (503
+  `state: unknown`) says. The HTTP answer stays authoritative, and the op id's receipt is recorded by the same rule.
+- After `failed` a new send may take a new op id: nothing was typed. After `unknown`, never send the text again by
+  itself under a new op id; Check asks again with the same op id, which gets the recorded answer (or `202` with the
+  receipt's `state` while it has none) and is never typed twice. Check only while the current authenticated `hello`
+  still has `todo_send_state: 1`, not the one from when it was sent: a hub from before this (a switch back to an older
+  version) relays the conversation route without a receipt, and the same op id would type the message again. Without
+  the marker, show the send as not sure and point to the to-do's conversation.
 - Only the request that claimed the op id says anything: a retry of the same op id waits for the first one's answer
   or gets it back ("Operation receipts (client_ops)") and sends no event, so an older final state never follows a newer
   one. The write goes on when the caller disconnects. Events are not replayed on reconnect.
 - Without `X-Persona-Op-Id` both routes go as before (the conversation route keeps its plain relay: a link cut off
   while the manager had the message reads `assistant_offline` as it always did), with no event and no receipt.
-
-Apple integration uses the same event and boundaries; no Apple code changes are included in #5258. A new main
-conversation started through a creation endpoint has no target session subscription yet: keep local Sending/Preparing
-until that endpoint's existing result binds it, then use the ordinary session flow.
 
 Typing into someone else's terminal is the riskiest thing this App does. Before typing into a running Agent's pane, the node reads the screen once (`server/internal/node/sendsafe.go`,
 `server/internal/screen`), and in the following cases **types nothing** and returns 409:

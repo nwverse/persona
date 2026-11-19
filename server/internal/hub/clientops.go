@@ -178,6 +178,10 @@ func clientOpRetry(kind string, body []byte) bool {
 	return res.Code == assistantwire.CodeAssistantOffline || res.Code == assistantwire.CodeAssistantInDoubt
 }
 
+// clientOpStoredKey carries a *bool that executeClientOp sets once it has stored the operation's receipt (or let it
+// go, for the same op id to run again): a wrapper outside withClientOp says a final state only then (todo_receipts.go).
+type clientOpStoredKey struct{}
+
 func (h *Hub) executeClientOp(w http.ResponseWriter, r *http.Request, kind, id string, next http.HandlerFunc) {
 	state := "unknown"
 	var result json.RawMessage
@@ -197,6 +201,9 @@ func (h *Hub) executeClientOp(w http.ResponseWriter, r *http.Request, kind, id s
 	next(capture, r)
 	capture.WriteHeader(http.StatusOK)
 	state = clientOpState(capture.status, capture.body.Bytes())
+	if kind == todoAnswerOp || kind == todoRouteOp { // read as its final todo_send_state is (todo_receipts.go)
+		state = todoReceiptState(capture.status, capture.body.Bytes())
+	}
 	saved := clientOpResult{Status: capture.status, Body: capture.body.Bytes(), ContentType: capture.header.Get("Content-Type")}
 	result, _ = json.Marshal(saved)
 	var err error
@@ -211,6 +218,9 @@ func (h *Hub) executeClientOp(w http.ResponseWriter, r *http.Request, kind, id s
 		err = persist()
 	}
 	finished = true
+	if stored, ok := r.Context().Value(clientOpStoredKey{}).(*bool); ok {
+		*stored = err == nil
+	}
 	if err != nil {
 		writeErrorBody(w, http.StatusServiceUnavailable, map[string]any{"state": "unknown"})
 		return

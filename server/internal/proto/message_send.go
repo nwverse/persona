@@ -60,10 +60,12 @@ const (
 
 // TodoSendState is MessageSendState for a to-do's writes (#10465): a message on its conversation's route or an
 // answer to one of its asks, sent with X-Persona-Op-Id. Processing once the hub has claimed the op id, before the
-// manager has the write (which may wait for a node, or for a new Agent to start); then delivered (the route answered
-// 200), failed (a refusal: the same op id gets it again, a new one sends again) or unknown (it may have been taken:
-// ask again with the same op id). Only to the full devices that declared todo_send_state, outside the event log. The
-// HTTP answer, or the op id's receipt, stays authoritative.
+// manager has the write (which may wait for a node, or for a new Agent to start); then, once the receipt is stored,
+// delivered (the route answered 2xx), failed (nothing was taken: the answer says delivered "none", no manager had it,
+// or it was refused before anything ran; a new op id may send again) or unknown (it may have been taken, a refusal
+// that says nothing of delivery included: ask again with the same op id, never send it again). Only to the full
+// devices that declared todo_send_state, outside the event log. The HTTP answer, or the op id's receipt, stays
+// authoritative.
 type TodoSendState struct {
 	Type       string    `json:"type"`
 	TodoID     string    `json:"todo_id"`

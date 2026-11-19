@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -40,7 +42,13 @@ var todoReceiptRoutes = map[string]string{
 	"POST /api/v1/assistant/conversations/{id}/route": todoRouteOp,
 }
 
-// todoRelay relays a to-do write with a receipt to the manager by resolves, as a send. A message on the conversation
+// todoRelayWait bounds how long the hub waits for the manager's answer to a to-do write under an op id. It is longer
+// than the manager's own longest wait, a message that waits for a new Agent's start (six minutes) and then for its
+// send (ninety seconds), so a slow start ends delivered rather than in doubt. Without an op id the plain relay's five
+// minutes stay.
+const todoRelayWait = 10 * time.Minute
+
+// todoRelay relays a to-do write with a receipt, as a send, to the manager by names. A message on the conversation
 // route without an op id, which is all an older app sends, goes as it always went.
 func (h *Hub) todoRelay(kind string, by ownerOf) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -56,34 +64,60 @@ func (h *Hub) todoRelay(kind string, by ownerOf) http.HandlerFunc {
 	}
 }
 
+// todoFlight is one claimed to-do write under an op id, as withTodoReceipt follows it: the to-do it names, the op id,
+// how the relay ended, and whether the receipt was stored.
+type todoFlight struct {
+	todo, op, state string
+	stored          bool
+}
+
+// todoFlightKey carries a request's *todoFlight from withTodoReceipt's outer wrapper to the handler withClientOp runs.
+type todoFlightKey struct{}
+
 // withTodoReceipt gives next, a relayed to-do write, a receipt of kind under X-Persona-Op-Id. Once the receipt is
 // claimed the relay no longer ends with the caller: a write the manager takes is recorded, and its reply kept, even
 // when the phone stopped waiting. Only the claimed write says how it stands: a retry of its op id waits for the reply
-// or gets it back (withClientOp) and sends nothing, so an older final state never follows a newer one.
+// or gets it back (withClientOp) and sends nothing, so an older final state never follows a newer one. The final
+// state goes out once withClientOp has stored the receipt and answered, so it never says more than a Check of the op
+// id would: unknown when the receipt could not be stored.
 func (h *Hub) withTodoReceipt(kind string, next http.HandlerFunc) http.HandlerFunc {
-	return h.withClientOp(kind, func(w http.ResponseWriter, r *http.Request) {
-		op := strings.ToLower(r.Header.Get("X-Persona-Op-Id"))
-		if op == "" {
+	claimed := h.withClientOp(kind, func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), todoRelayWait)
+		defer cancel()
+		r = r.WithContext(ctx)
+		f := ctx.Value(todoFlightKey{}).(*todoFlight)
+		f.op, f.todo = strings.ToLower(r.Header.Get("X-Persona-Op-Id")), todoOfWrite(kind, r)
+		if f.todo == "" { // it names no to-do: the manager refuses it
 			next(w, r)
 			return
 		}
-		r = r.WithContext(context.WithoutCancel(r.Context()))
-		todo := todoOfWrite(kind, r)
-		if todo == "" { // it names no to-do: the manager refuses it
-			next(w, r)
-			return
-		}
-		h.todoSendState(todo, op, proto.MessageSendProcessing)
+		h.todoSendState(f.todo, f.op, proto.MessageSendProcessing)
 		seen := &keptRecorder{ResponseWriter: w}
-		state := proto.MessageSendUnknown // a relay that never answered may have been taken
-		defer func() { h.todoSendState(todo, op, state) }()
 		next(seen, r)
-		state = todoSendOutcome(seen.status, seen.body)
+		f.state = todoSendOutcome(seen.status, seen.body)
 	})
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Persona-Op-Id") == "" {
+			next(w, r)
+			return
+		}
+		f := &todoFlight{state: proto.MessageSendUnknown} // a relay that never answered may have been taken
+		defer func() {
+			if f.todo == "" { // not claimed here, or about no to-do
+				return
+			}
+			if !f.stored {
+				f.state = proto.MessageSendUnknown
+			}
+			h.todoSendState(f.todo, f.op, f.state)
+		}()
+		ctx := context.WithValue(r.Context(), todoFlightKey{}, f)
+		claimed(w, r.WithContext(context.WithValue(ctx, clientOpStoredKey{}, &f.stored)))
+	}
 }
 
 // todoOfWrite is the to-do a write under a receipt is about: the path's for an answer, the body's todo_id, read as the
-// manager reads it, for a message on the conversation route ("" when it names none).
+// manager reads it (the first JSON value), for a message on the conversation route ("" when it names none).
 func todoOfWrite(kind string, r *http.Request) string {
 	if kind != todoRouteOp {
 		return r.PathValue("id")
@@ -93,28 +127,51 @@ func todoOfWrite(kind string, r *http.Request) string {
 	var in struct {
 		TodoID string `json:"todo_id"`
 	}
-	if err != nil || json.Unmarshal(raw, &in) != nil {
+	if err != nil || json.NewDecoder(bytes.NewReader(raw)).Decode(&in) != nil {
 		return ""
 	}
 	return in.TodoID
 }
 
-// todoSendOutcome is how a to-do write's relay ended, read as messageSendState reads a session message's: delivered on
-// 200 (its Agent took the message, or the manager took the answer, one it recorded for the supervisor too, delivered
-// "none" in a 200), unknown when the answer says it may have been taken (assistant_in_doubt), else failed: a refusal,
-// which the same op id gets again and only a new one sends again.
+// todoSendOutcome is how a to-do write's relay ended, for its final todo_send_state and its receipt alike. Delivered
+// on a 2xx: its Agent took the message, or the manager took the answer (one it recorded for the supervisor too, a 200
+// that says delivered "none"). Failed only when the answer shows nothing was taken: it says delivered "none", it never
+// reached a manager (assistant_offline, whose receipt is let go, so the op id may go again), or the request was refused
+// before anything ran (400, 401, 403, 404). Anything else is unknown, since it may have been taken: 502
+// assistant_in_doubt, and a manager's 409 or 502 that says nothing of delivery (the conversation route answers 409 for
+// a send whose result it does not know too). The same op id gets the recorded answer back; only a new one could type
+// it twice.
 func todoSendOutcome(status int, body []byte) string {
 	var out struct {
 		Delivered string `json:"delivered"`
+		Code      string `json:"code"`
 	}
 	_ = json.Unmarshal(body, &out)
 	switch {
-	case status == 0 || status == http.StatusOK:
+	case status == 0 || status >= 200 && status < 300:
 		return proto.MessageSendDelivered
-	case out.Delivered == sendUnknown:
-		return proto.MessageSendUnknown
+	case out.Delivered == "none" || out.Code == assistantwire.CodeAssistantOffline:
+		return proto.MessageSendFailed
+	case out.Delivered == "" && slices.Contains(todoRefusedBeforeRun, status):
+		return proto.MessageSendFailed
 	}
-	return proto.MessageSendFailed
+	return proto.MessageSendUnknown
+}
+
+// todoRefusedBeforeRun are the statuses a to-do write is refused with before anything runs: a body the manager does
+// not take, a device that may not write, a to-do, ask or manager that is not there.
+var todoRefusedBeforeRun = []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound}
+
+// todoReceiptState is the receipt state of a to-do write the relay answered: the same reading as its final
+// todo_send_state, so the receipt never says failed for a write that may have been typed.
+func todoReceiptState(status int, body []byte) string {
+	switch todoSendOutcome(status, body) {
+	case proto.MessageSendDelivered:
+		return "done"
+	case proto.MessageSendFailed:
+		return "failed"
+	}
+	return "unknown"
 }
 
 // todoSendState tells the full devices that asked for todo_send_state (client_hello or ?features=) where the write
