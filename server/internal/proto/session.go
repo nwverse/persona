@@ -218,6 +218,10 @@ type Session struct {
 	AgentSurface string `json:"agent_surface,omitempty"`
 	Launcher     string `json:"launcher,omitempty"`
 	Model        string `json:"model,omitempty"`
+	// RequestedModel is the last model passed to a Persona-managed process.
+	// Nil means an older node or an observed session; an empty value means launcher default.
+	// Model remains the transcript-reported name, which a gateway may rewrite.
+	RequestedModel *string `json:"requested_model,omitempty"`
 	// PermissionMode and Effort are what Claude Code runs with now: default / acceptEdits / plan / auto /
 	// bypassPermissions, and low … max. Empty while unknown (before the first turn, Codex). A Codex thread the phone
 	// drives through its app-server has an Effort too (Codex's levels, see Efforts) but never a PermissionMode.
@@ -593,6 +597,9 @@ const (
 	// CodeSwitchUnsupported: not a Claude Code Agent running in a terminal Persona can restart it in (Codex, another
 	// CLI, a runtime's session, an assistant conversation, botmux).
 	CodeSwitchUnsupported = "switch_unsupported"
+	// CodeCompactFailed: a send that asked to compact a nearly full Agent first (#11137) found the compaction failed:
+	// nothing was sent, and the refusal says why.
+	CodeCompactFailed = "compact_failed"
 	// CodeSwitchLauncherMissing: the launcher picked is not on the session's computer.
 	CodeSwitchLauncherMissing = "switch_launcher_missing"
 	// CodeSwitchOtherAgent: the launcher picked runs another agent than Claude Code.
@@ -708,4 +715,13 @@ type ServiceTier struct {
 // Tokens32 is n as Session.ContextTokens and ContextWindow hold it: saturated at the int32 bounds.
 func Tokens32(n int) int32 {
 	return int32(max(min(n, math.MaxInt32), math.MinInt32))
+}
+
+// ContextNearlyFullShare is the share of its model's window an Agent's context may fill before the assistant's
+// agent_send compacts it ahead of the message (#11137): above it the Agent would compact, or run out, as it reads.
+const ContextNearlyFullShare = 0.85
+
+// ContextNearlyFull: what the model saw in the latest reply fills ContextNearlyFullShare of its window (both known).
+func ContextNearlyFull(tokens, window int) bool {
+	return window > 0 && tokens > 0 && float64(tokens) >= ContextNearlyFullShare*float64(window)
 }

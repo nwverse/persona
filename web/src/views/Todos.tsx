@@ -324,7 +324,7 @@ export function TodosView({
     [todos, lookup, restored, search, listFilter, superseded, triaged, tick, fromView],
   );
   // Where the status sections place each to-do the search and the filter leave: its row's section (a merged row takes
-  // its most urgent member's), and whether it counts as open (countsAsOpen, the sidebar badge's rule, its own reading).
+  // its most urgent member's), and whether it counts as open (countsAsOpen, the header's Not done, its own reading).
   // The folders and 常驻 split by the same placement, so their Done fold is the Done section to the to-do and every
   // grouping says one number for it (audit item 12).
   const placed = useMemo(() => {
@@ -673,8 +673,9 @@ export function TodosView({
             {(todosLoaded || todos.length > 0) && !(todos.length === 0 && todosError) && (
               // a phone's header has the List | Calendar switch to fit (#2029): the counts stay on wider screens
               <span className="text-[12px] whitespace-nowrap text-ink-3 max-sm:hidden" data-testid="todos-summary">
-                {/* one count in every grouping (audit item 12): open as the sidebar's badge counts it, the rest as the
-                    sections' titles do (a merged row's members under its section) */}
+                {/* one count in every grouping (audit item 12): open as countsAsOpen counts it (the sidebar's badge, the
+                    open ones that need the owner, #11085), the rest as the sections' titles do (a merged row's members
+                    under its section) */}
                 {t(listFilter === "all" ? "todos.summary_triage" : "todos.summary_filtered", { filter: filterLabel(listFilter), open: triageAll.open, parked: sectionSize(triageAll, "parked"), shelved: sectionSize(triageAll, "shelved"), done: sectionSize(triageAll, "done") })}
               </span>
             )}

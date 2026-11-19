@@ -107,12 +107,24 @@ func resumeSayable(cmd string) bool {
 
 // agentResumeArgv is the resume_argv for an agent Persona started (Claude, Codex, a compatible CLI, pi, the Cursor
 // CLI, the Antigravity CLI). A Codex, and a work agent herdr detects, gets HERDR_AGENT like Claude. A work agent's
-// command is the one it was started with (`--model` included). Pi names its session, and agy adds a verified
-// conversation ID when available.
+// command is the one it was started with (`--model` included). Pi names its session, omp its session file (none
+// known: no command), and agy adds a verified conversation ID when available.
 func (n *Node) agentResumeArgv(spec agentLaunch, id string) (argv []string, ok bool) {
 	kind := spec.Agent
 	if kind == "" || kind == "claude" {
 		return n.claudeResumeArgv(spec, id)
+	}
+	if kind == ompAgent { // omp resumes a session file, never a pane or an id (ompresume.go)
+		file := n.ompKnownFile(id)
+		if file == "" {
+			return nil, false
+		}
+		cmd := n.launcherCommandQ(spec.Launcher, dquote) + " --resume " + dquote(file)
+		cmd = n.agentCommand(cmd, dquote, herdrPaneShell())
+		if !resumeSayable(cmd) {
+			return nil, false
+		}
+		return []string{"eval", cmd}, true
 	}
 	cmd := withHerdrAgent(resumeHerdrAgent(kind), n.launcherCommandQ(spec.Launcher, dquote)+" resume "+id)
 	if _, program, ok := workAgent(kind); ok {
@@ -188,7 +200,11 @@ func (n *Node) reportResume(ctx context.Context, h *herdrHost, pane string, spec
 	n.mu.Unlock()
 	argv, ok := n.agentResumeArgv(spec, spec.ID)
 	if !ok {
-		n.logf("herdr resume: %s (%s) not given a resume command (herdr would refuse it: an apostrophe, a control character or too long)", pane, spec.ID)
+		if spec.Agent == ompAgent && n.ompKnownFile(spec.ID) == "" {
+			n.logf("herdr resume: %s (%s) is an omp with no known session file: no resume command reported", pane, spec.ID)
+		} else {
+			n.logf("herdr resume: %s (%s) not given a resume command (herdr would refuse it: an apostrophe, a control character or too long)", pane, spec.ID)
+		}
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
