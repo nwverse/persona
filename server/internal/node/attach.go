@@ -262,11 +262,11 @@ func AttachWithTransport(ctx context.Context, newNode func() (*Node, error), ext
 			n.share.Store(switches)
 			n.keeper = keeper // conversations go on from one connection to the next (assistant_keep.go)
 			n.spool = sp      // what standby took goes to this connection first (spool.go)
-			// The connection outlives a transport that ends, for the manager to resume (attach_resume.go): writes go to
-			// whichever transport is in use.
+			// The connection outlives a transport that ends, for the manager to resume (attach_resume.go). It writes on c
+			// until a resume gives its frame writer the new transport (rpc.Peer.AcceptResume).
 			n.resumeWindow, n.onPeer = resumeWindow, a.setPeer
 			go func() { <-cctx.Done(); a.end(errReplaced) }() // a replaced connection stops at once, a waiting one too
-			if err := n.Serve(cctx, reader, attachedWriter{a}); err != nil && !errors.Is(err, io.EOF) && cctx.Err() == nil {
+			if err := n.Serve(cctx, reader, c); err != nil && !errors.Is(err, io.EOF) && cctx.Err() == nil {
 				n.logger.Printf("connection ended: %v", err)
 			}
 			n.handOverBgScans(scans)

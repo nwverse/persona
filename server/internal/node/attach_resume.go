@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/nodeproto"
@@ -59,6 +60,9 @@ func (a *attached) end(err error) {
 
 // resume takes the connection back over c, which brought req (rest: what follows it); its old transport is closed,
 // which ends a read or write still stuck on it. rpc.ErrResumeRefused: nothing was written, c is the caller's.
+//
+// Nothing but AcceptResume writes on c, and only once the peer is lost and c installed under its lock: a refused or
+// failed resume never takes a frame from the transport in use (#10829's review).
 func (a *attached) resume(req rpc.ResumeRequest, c net.Conn, rest io.Reader) error {
 	a.mu.Lock()
 	p := a.peer
@@ -66,21 +70,28 @@ func (a *attached) resume(req rpc.ResumeRequest, c net.Conn, rest io.Reader) err
 	if p == nil {
 		return rpc.ErrResumeRefused
 	}
-	a.mu.Lock()
-	old := a.conn
-	a.conn = c // in use from the moment it may be: the peer ending right after closes this one
-	a.mu.Unlock()
+	if f := resumeDeciding.Load(); f != nil {
+		(*f)()
+	}
 	if err := p.AcceptResume(req, rest, c); err != nil {
-		a.mu.Lock()
-		if a.conn == c {
-			a.conn = old
-		}
-		a.mu.Unlock()
 		return err
 	}
+	a.mu.Lock()
+	old := a.conn
+	a.conn = c
+	a.mu.Unlock()
 	_ = old.Close()
+	select {
+	case <-p.Done(): // it ended while c was installed: closeConn may have closed the old one only
+		_ = c.Close()
+	default:
+	}
 	return nil
 }
+
+// resumeDeciding, in tests only, runs as a resume on a new transport is about to be decided: the connection in use goes
+// on writing meanwhile.
+var resumeDeciding atomic.Pointer[func()]
 
 // connReader is what a Node reads: the attached transport's bytes, the first line read ahead of them included. Close
 // ends the connection, its transport and its peer: a resident node reloading ends it that way (node.Serve), and a
@@ -117,14 +128,3 @@ func readFirstLine(c net.Conn) (line []byte, rest io.Reader, err error) {
 const firstLineMax = 64 << 10
 
 var errReplaced = errors.New("replaced by a new connection")
-
-// attachedWriter writes on the transport the attached connection began on. Once framed, the peer's frame writer
-// writes on the transport a resume gave it (rpc.Peer.AcceptResume): only the lines before the switch come here.
-type attachedWriter struct{ a *attached }
-
-func (w attachedWriter) Write(b []byte) (int, error) {
-	w.a.mu.Lock()
-	c := w.a.conn
-	w.a.mu.Unlock()
-	return c.Write(b)
-}

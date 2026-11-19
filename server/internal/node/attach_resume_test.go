@@ -4,11 +4,15 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -18,37 +22,49 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// A resident node keeps its connection when the transport under it ends: the manager comes back on a new one with its
-// token and takes it back, the same Node serving it (#10663). A token the node does not have is refused on the spot,
-// and the connection served is left as it was.
-func TestAttachResumesAConnection(t *testing.T) {
+// residentAttach is a resident node (Attach) and a manager's peer framed with it over a first transport, resuming
+// on: what these tests take back, refuse or load.
+type residentAttach struct {
+	t     *testing.T
+	home  string
+	ctx   context.Context
+	extra chan net.Conn
+	made  atomic.Int32
+	done  chan error
+	hub   *rpc.Peer
+	first net.Conn // the manager's end of the first transport
+	lost  chan error
+	stop  context.CancelFunc
+}
+
+func startResidentAttach(t *testing.T) *residentAttach {
 	home := shortHome(t)
 	t.Setenv("PERSONA_HOME", filepath.Join(home, ".persona"))
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	var made atomic.Int32
-	extra := make(chan net.Conn)
-	done := make(chan error, 1)
+	t.Cleanup(cancel)
+	r := &residentAttach{t: t, home: home, ctx: ctx, extra: make(chan net.Conn), done: make(chan error, 1),
+		lost: make(chan error, 64), stop: cancel}
 	go func() {
-		done <- Attach(ctx, func() (*Node, error) {
-			made.Add(1)
+		r.done <- Attach(ctx, func() (*Node, error) {
+			r.made.Add(1)
 			n, err := New("test")
 			if err == nil {
 				n.logger.SetOutput(io.Discard)
 				t.Cleanup(n.starts.close)
 			}
 			return n, err
-		}, extra, nil)
+		}, r.extra, nil)
 	}()
 	m1, n1 := net.Pipe()
-	extra <- n1
+	r.extra <- n1
+	r.first = m1
 	hub := rpc.New("h", m1)
 	hub.EnableLanes(nodeproto.ControlLane, nodeproto.BulkLane)
 	hub.EnableResume(5 * time.Second)
-	lost := make(chan error, 4)
-	hub.OnLost = func(err error) { lost <- err }
+	hub.OnLost = func(err error) { r.lost <- err }
 	hub.OnRequest = func(context.Context, string, json.RawMessage) (any, error) { return map[string]any{}, nil }
-	go func() { _ = hub.Serve(ctx, m1) }()
+	go func() { _ = hub.Serve(ctx, slowReader{m1}) }()
+	r.hub = hub
 	cctx, ccancel := context.WithTimeout(ctx, 20*time.Second)
 	defer ccancel()
 	var info proto.NodeInfo
@@ -64,46 +80,208 @@ func TestAttachResumesAConnection(t *testing.T) {
 	if !hub.Resumable() {
 		t.Fatal("not resumable after rpc.lanes with a resident node")
 	}
-	m1.Close() // the transport goes: a relay ended, a link dropped
+	return r
+}
+
+// end stops Attach and waits for it.
+func (r *residentAttach) end() {
+	r.t.Helper()
+	r.stop()
 	select {
-	case <-lost:
+	case <-r.done:
+	case <-time.After(15 * time.Second):
+		r.t.Fatal("Attach did not end")
+	}
+}
+
+// load keeps the node writing: listings of a large folder (answers no credit holds back) asked over and over by a
+// few callers until stop is called, which says the first error any of them had. more waits for another answer.
+func (r *residentAttach) load(ctx context.Context) (stop func() error, more func()) {
+	r.t.Helper()
+	dir := filepath.Join(r.home, "load")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		r.t.Fatal(err)
+	}
+	for i := range 400 {
+		name := fmt.Sprintf("%03d-%s.txt", i, strings.Repeat("persona", 20))
+		if err := os.WriteFile(filepath.Join(dir, name), nil, 0o600); err != nil {
+			r.t.Fatal(err)
+		}
+	}
+	lctx, cancel := context.WithCancel(ctx)
+	var wg sync.WaitGroup
+	errs := make(chan error, 16)
+	var answers atomic.Int64
+	for range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for lctx.Err() == nil {
+				var list json.RawMessage
+				err := r.hub.Call(lctx, "fs.list", map[string]any{"path": dir}, &list)
+				if lctx.Err() != nil {
+					return
+				}
+				if err != nil || len(list) < 400*100 {
+					errs <- fmt.Errorf("listing: %d bytes, %v", len(list), err)
+					return
+				}
+				answers.Add(1)
+			}
+		}()
+	}
+	stop = func() error {
+		cancel()
+		wg.Wait()
+		close(errs)
+		if answers.Load() == 0 {
+			return errors.New("no answer came")
+		}
+		return <-errs
+	}
+	more = func() {
+		r.t.Helper()
+		was := answers.Load()
+		for deadline := time.Now().Add(20 * time.Second); answers.Load() == was; {
+			if time.Now().After(deadline) {
+				r.t.Fatal("no answer came")
+			}
+			time.Sleep(time.Millisecond) // sleep-ok: polls a counter the callers bump
+		}
+	}
+	return stop, more
+}
+
+// slowReader is the manager's end of a slow link: what the node writes waits on it.
+type slowReader struct{ r io.Reader }
+
+func (s slowReader) Read(b []byte) (int, error) {
+	time.Sleep(time.Millisecond) // sleep-ok: at most 16 KiB a millisecond
+	return s.r.Read(b[:min(len(b), 16<<10)])
+}
+
+// A resident node keeps its connection when the transport under it ends: the manager comes back on a new one with its
+// token and takes it back, the same Node serving it (#10663). A token the node does not have is refused on the spot,
+// and the connection served is left as it was.
+func TestAttachResumesAConnection(t *testing.T) {
+	r := startResidentAttach(t)
+	hub := r.hub
+	cctx, ccancel := context.WithTimeout(r.ctx, 20*time.Second)
+	defer ccancel()
+	r.first.Close() // the transport goes: a relay ended, a link dropped
+	select {
+	case <-r.lost:
 	case <-time.After(5 * time.Second):
 		t.Fatal("the manager's peer was not told its transport was lost")
 	}
 	m2, n2 := net.Pipe()
-	extra <- n2
+	r.extra <- n2
 	if err := hub.Resume(cctx, m2, m2); err != nil {
 		t.Fatalf("resume: %v", err)
 	}
 	if err := hub.Call(cctx, "ping", map[string]any{}, nil); err != nil {
 		t.Fatalf("after resuming: %v", err)
 	}
-	if made.Load() != 1 {
-		t.Fatalf("%d Nodes made: a resume made a new one", made.Load())
+	if r.made.Load() != 1 {
+		t.Fatalf("%d Nodes made: a resume made a new one", r.made.Load())
 	}
 
 	// A token this node does not have: refused at once, the connection served left alone.
-	m3, n3 := net.Pipe()
-	extra <- n3
-	go func() {
-		_, _ = m3.Write([]byte(`{"id":"x1","method":"rpc.resume","params":{"token":"not-this-one","read":0}}` + "\n"))
-	}()
-	line, err := bufio.NewReader(m3).ReadString('\n')
-	if err != nil || !strings.Contains(line, rpc.CodeResumeRefused) {
-		t.Fatalf("a made-up token: %q, %v", line, err)
+	if line := refusedResume(t, r); !strings.Contains(line, rpc.CodeResumeRefused) {
+		t.Fatalf("a made-up token: %q", line)
 	}
 	if err := hub.Call(cctx, "ping", map[string]any{}, nil); err != nil {
 		t.Fatalf("after a refused resume: %v", err)
 	}
-	if made.Load() != 1 {
-		t.Fatalf("%d Nodes made: a refused resume made one", made.Load())
+	if r.made.Load() != 1 {
+		t.Fatalf("%d Nodes made: a refused resume made one", r.made.Load())
 	}
-	cancel()
+	r.end()
+}
+
+// refusedResume asks the resident node to resume with a token it does not have, on a new transport, and says the line
+// it answered.
+func refusedResume(t *testing.T, r *residentAttach) string {
+	t.Helper()
+	m, n := net.Pipe()
+	defer m.Close()
+	r.extra <- n
+	go func() {
+		_, _ = m.Write([]byte(`{"id":"x1","method":"rpc.resume","params":{"token":"not-this-one","read":0}}` + "\n"))
+	}()
+	_ = m.SetReadDeadline(time.Now().Add(10 * time.Second))
+	line, err := bufio.NewReader(m).ReadString('\n')
+	if err != nil {
+		t.Fatalf("a made-up token: %q, %v", line, err)
+	}
+	return line
+}
+
+// slowResumeDecisions holds every resume a moment before it is decided, for frames to be written meanwhile: one that
+// went to the new transport would show.
+func slowResumeDecisions(t *testing.T) {
+	wait := func() { time.Sleep(50 * time.Millisecond) } // sleep-ok: a window for the writer to write in
+	resumeDeciding.Store(&wait)
+	t.Cleanup(func() { resumeDeciding.Store(nil) })
+}
+
+// Resumes refused while the connection is busy writing take none of its frames: a frame on the refused transport would
+// be a gap on the one in use, which ends it and counts against framing (#10829's review). The manager never sees it
+// lost.
+func TestAttachRefusedResumeTakesNoFrames(t *testing.T) {
+	slowResumeDecisions(t)
+	r := startResidentAttach(t)
+	stop, more := r.load(r.ctx)
+	for range 40 {
+		more()
+		if line := refusedResume(t, r); !strings.HasPrefix(line, "{") || !strings.Contains(line, rpc.CodeResumeRefused) {
+			t.Fatalf("a made-up token answered %q", line)
+		}
+	}
+	if err := stop(); err != nil {
+		t.Fatalf("the connection in use: %v", err)
+	}
 	select {
-	case <-done:
-	case <-time.After(15 * time.Second):
-		t.Fatal("Attach did not end")
+	case err := <-r.lost:
+		t.Fatalf("the manager lost the connection in use: %v", err)
+	default:
 	}
+	if r.made.Load() != 1 {
+		t.Fatalf("%d Nodes made", r.made.Load())
+	}
+	r.end()
+}
+
+// The manager takes its connection back while the old transport still carries frames (its pings went unanswered, the
+// node saw nothing wrong): the answer is the first line of the new transport, every time, and the calls under way go
+// on (#10829's review).
+func TestAttachResumesWhileTheOldTransportStillWorks(t *testing.T) {
+	slowResumeDecisions(t)
+	r := startResidentAttach(t)
+	stop, more := r.load(r.ctx)
+	cctx, ccancel := context.WithTimeout(r.ctx, 60*time.Second)
+	defer ccancel()
+	old := r.first
+	for i := range 10 {
+		more()
+		if !r.hub.Lose(errors.New("two pings unanswered")) {
+			t.Fatalf("resume %d: the connection cannot be lost", i)
+		}
+		m, n := net.Pipe()
+		r.extra <- n
+		if err := r.hub.Resume(cctx, slowReader{m}, m); err != nil {
+			t.Fatalf("resume %d: %v", i, err)
+		}
+		old.Close() // the manager lets the old transport go (devices resumeConn)
+		old = m
+	}
+	if err := stop(); err != nil {
+		t.Fatalf("the calls under way: %v", err)
+	}
+	if r.made.Load() != 1 {
+		t.Fatalf("%d Nodes made", r.made.Load())
+	}
+	r.end()
 }
 
 // A transport that ends before it said a whole first line (a manager's attempt to resume cut on its way) is let go:
