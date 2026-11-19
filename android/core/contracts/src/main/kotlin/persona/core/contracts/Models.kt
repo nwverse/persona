@@ -282,6 +282,7 @@ data class SessionCapabilities(
 @Serializable(with = WorkStateSerializer::class)
 data class WorkState(
     val phase: String = "",
+    @SerialName("just_finished") val justFinished: Boolean = false,
     val on: String? = null,
     val line: String? = null,
     val wait: String? = null,
@@ -506,7 +507,8 @@ data class Session(
     @SerialName("turn_error") val turnError: String? = null,
     /**
      * What the agent or the hub called [turnError] (docs/protocol/protocol.md): `usage_limit` is a subscription limit
-     * until it resets, not a turn to continue as an interruption. Older hubs never send it.
+     * until it resets, not a turn to continue as an interruption; `no_output` and `stopped` are the hub's own word on a
+     * task Agent's turn with no output (#10187), [turnError] then being its sentence, not an API error. Older hubs never send it.
      */
     @SerialName("turn_error_kind") val turnErrorKind: String? = null,
     /** When a `usage_limit` resets (RFC3339). Absent when that time is not known. */

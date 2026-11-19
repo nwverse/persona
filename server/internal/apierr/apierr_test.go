@@ -65,6 +65,18 @@ func TestPlainStartRefusalLocalization(t *testing.T) {
 	}
 }
 
+// A Stop that found the turn already over (#10828) is said in the request's language, not the node's.
+func TestTurnOverBackgroundLocalization(t *testing.T) {
+	for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
+		want := i18n.T(lang, "rpc-errors."+proto.CodeTurnOverBackground)
+		err := &rpc.Error{Code: proto.CodeTurnOverBackground, Message: i18n.T(i18n.Default, "rpc-errors."+proto.CodeTurnOverBackground), Data: json.RawMessage(`{"delivered":"none"}`)}
+		body := LocalizedBody(http.StatusConflict, proto.CodeTurnOverBackground, err, lang)
+		if body["error"] != want || body["code"] != proto.CodeTurnOverBackground {
+			t.Fatalf("%s: %v, want %q", lang, body, want)
+		}
+	}
+}
+
 func call(t *testing.T, w http.ResponseWriter, rec *httptest.ResponseRecorder, err error) map[string]any {
 	t.Helper()
 	Call(w, err)
@@ -140,13 +152,13 @@ func TestCallExplainsTerminalRefusals(t *testing.T) {
 		action string
 		want   []string
 	}{
-		{"default", "", OnMachine(data(proto.CodeLauncherMissing, "not_found", "cc"), "mbp"), "connect_model",
+		{"default", "", OnMachine(data(proto.CodeLauncherMissing, "not_found", "cc"), "mbp"), ActionSwitchLauncher,
 			[]string{"mbp 上新开的终端标签页（bash）里没有「cc」", "「cc」", "zsh（~/.zshrc）"}},
-		{"English, here", i18n.En, data(proto.CodeLauncherMissing, "not_found", "cc"), "connect_model",
+		{"English, here", i18n.En, data(proto.CodeLauncherMissing, "not_found", "cc"), ActionSwitchLauncher,
 			[]string{"new terminal tabs on this computer (bash) has no command “cc”", "“cc”", "zsh (~/.zshrc)"}},
-		{"Japanese", i18n.Ja, OnMachine(data(proto.CodeLauncherMissing, "not_found", "cc"), "mbp"), "connect_model",
+		{"Japanese", i18n.Ja, OnMachine(data(proto.CodeLauncherMissing, "not_found", "cc"), "mbp"), ActionSwitchLauncher,
 			[]string{"mbp の新しいターミナルタブ（bash）には「cc」", "「cc」", "zsh（~/.zshrc）"}},
-		{"a path", i18n.En, OnMachine(data(proto.CodeLauncherMissing, "no_such_file", "/opt/p/personad"), "mbp"), "connect_model",
+		{"a path", i18n.En, OnMachine(data(proto.CodeLauncherMissing, "no_such_file", "/opt/p/personad"), "mbp"), ActionSwitchLauncher,
 			[]string{"new terminal tabs on mbp (bash) can't run “/opt/p/personad”", "“cc”"}},
 		{"claude", i18n.En, OnMachine(data(proto.CodeClaudeMissing, "not_found", "claude"), "mbp"), "install_claude",
 			[]string{"new terminal tabs on mbp (bash) can't find Claude Code (“claude”)", "“cc”"}},
@@ -166,6 +178,27 @@ func TestCallExplainsTerminalRefusals(t *testing.T) {
 	}
 	if got := Sentence(i18n.En, "input_draft", nil); got != "" {
 		t.Errorf("a refusal the hub does not word: %q", got)
+	}
+	// A launcher the terminal could not run also has a short line for a row (#10365), in each language; Claude Code
+	// missing, or a launcher missing from the computer's list, has none, and keeps its own action.
+	for _, tc := range []struct {
+		lang i18n.Lang
+		err  error
+		want string
+	}{
+		{i18n.En, OnMachine(data(proto.CodeLauncherMissing, "no_such_file", "/opt/p/personad"), "mbp"), "“cc” can’t start in the terminal on mbp"},
+		{i18n.ZhHans, data(proto.CodeLauncherMissing, "not_found", "cc"), "「cc」在这台电脑的终端里开不起来"},
+		{i18n.Ja, OnMachine(data(proto.CodeLauncherMissing, "not_found", "cc"), "mbp"), "「cc」は mbp のターミナルで開始できません"},
+		{i18n.En, OnMachine(data(proto.CodeClaudeMissing, "not_found", "claude"), "mbp"), ""},
+	} {
+		rec := httptest.NewRecorder()
+		body := call(t, langWriter{rec, tc.lang}, rec, tc.err)
+		if got, _ := body["summary"].(string); got != tc.want {
+			t.Errorf("%s %v: summary %q, want %q", tc.lang, tc.err, got, tc.want)
+		}
+	}
+	if got := Action(proto.CodeLauncherMissing, map[string]any{"where": "list"}); got != "connect_model" {
+		t.Errorf("a launcher the computer's list lacks: %q", got)
 	}
 	// A tab whose shell the node could not tell (herdr on Windows names none): the default shell, in the language.
 	for l, want := range map[i18n.Lang]string{i18n.En: "(the default shell)", i18n.ZhHans: "（默认的 shell）", i18n.Ja: "（既定のシェル）"} {
@@ -283,6 +316,10 @@ func TestRPCFailureLocalePreservesOutcomeAndDiagnostics(t *testing.T) {
 		{"omp not resumable", &rpc.Error{Code: "omp_resume_unknown", Message: "node's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.omp_resume_unknown"},
 		// a read of an agent its engine let go, which only an open chat starts (Paseo, #8132)
 		{"not loaded", &rpc.Error{Code: proto.CodeNotLoaded, Message: "the runtime's own words"}, "rpc-errors.not_loaded"},
+		// an owner's message to an Agent with older ones held for it (devices held.go, #10661)
+		{"held ahead", &rpc.Error{Code: "held_ahead", Message: "the manager's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.held_ahead"},
+		{"held not kept", &rpc.Error{Code: "held_not_kept", Message: "the manager's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.held_not_kept"},
+		{"held full", &rpc.Error{Code: "held_full", Message: "the manager's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.held_full"},
 	}
 	for _, tc := range cases {
 		legacy := httptest.NewRecorder()
@@ -346,8 +383,8 @@ func TestOpenElsewhereSpeaksTheClientsLanguage(t *testing.T) {
 	}
 }
 
-func TestAssistantServiceTierFailuresWithholdNativeDiagnostics(t *testing.T) {
-	for _, code := range []string{"assistant_service_tier_start_only", "assistant_service_tier_unsupported", "assistant_service_tier_refused"} {
+func TestAssistantActionableRefusalsWithholdNativeDiagnostics(t *testing.T) {
+	for _, code := range []string{"assistant_launcher_profile_switch", "assistant_service_tier_start_only", "assistant_service_tier_unsupported", "assistant_service_tier_refused"} {
 		for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
 			rec := httptest.NewRecorder()
 			raw := &rpc.Error{Code: code, Message: "native English diagnostic", Data: json.RawMessage(`{"delivered":"none","retryable":false}`)}
@@ -461,6 +498,43 @@ func TestStartTabRefusalsAreWorded(t *testing.T) {
 			body := LocalizedBody(http.StatusConflict, code, errors.New("node text"), lang)
 			if body["error"] != i18n.T(lang, "rpc-errors."+code) || body["error"] == "" {
 				t.Errorf("%s %s HTTP: %v", code, lang, body)
+			}
+		}
+	}
+}
+
+// shell_waiting is a session's start_error, a planned task's start failure and a refused message's 409 on every app
+// (#10365): only the web lists the question's answers, and only from a computer that offers them (not an older one,
+// nor a start that took a hand-off's values), so its words never say an answer is picked "here" or "in the chat".
+func TestShellWaitingWordsHoldOnEveryClient(t *testing.T) {
+	promised := map[i18n.Lang][]string{
+		i18n.En:     {"Pick an answer here", "Pick an answer in the chat"},
+		i18n.ZhHans: {"在这里选一个回答", "在对话里选一个回答"},
+		i18n.Ja:     {"ここで回答を選ぶ", "チャットで回答を選ぶ"},
+	}
+	for lang, words := range promised {
+		refused, _ := LocalizedBody(http.StatusConflict, proto.CodeShellWaiting, errors.New("node text"), lang)["error"].(string)
+		for _, got := range []string{
+			Sentence(lang, proto.CodeShellWaiting, map[string]any{"machine_name": "Studio", "line": "Update now? [Y/n]"}),
+			Sentence(lang, proto.CodeShellWaiting, nil),
+			refused,
+		} {
+			for _, w := range words {
+				if got == "" || strings.Contains(got, w) {
+					t.Errorf("%s: %q", lang, got)
+				}
+			}
+		}
+	}
+}
+
+// The refusals of an answer to that question from the app (#10365, node/startcontinue.go) read in every language.
+func TestStartContinueRefusalsAreWorded(t *testing.T) {
+	for _, code := range []string{"start_tab_gone", "start_not_waiting", "choice_not_offered", "prompt_changed", proto.CodeSecretEnvGone} {
+		for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
+			body := LocalizedBody(http.StatusConflict, code, errors.New("node text"), lang)
+			if body["error"] != i18n.T(lang, "rpc-errors."+code) || body["error"] == "" || body["error"] == "node text" {
+				t.Errorf("%s %s: %v", code, lang, body)
 			}
 		}
 	}

@@ -392,8 +392,10 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
 path, and Gradle treats that path as the only input. A change to the Rust code rebuilt the library at the same path, and
 Gradle then called the tests up to date and skipped them. A deliberately broken rule still "passed". The fix:
 
-- The Exec task that builds the library declares it with `outputs.file(...)`.
-- The test task takes that task's outputs as inputs, with `inputs.files(buildHostCore)`.
+- The task that builds the library declares it as its output (`HostCoreLibrary` copies cargo's result into the build
+  directory, with the core's sources, manifests, lockfile and toolchain file as its inputs; #10712).
+- The test task takes that output as an input by its contents (`FileContentProperty`, `PathSensitivity.NONE`), which
+  also passes its path to the test JVM.
 
 **To check the setup**, break one rule on purpose and confirm the binding tests fail before trusting them.
 
@@ -473,6 +475,15 @@ test meetings there, which then sat in the owner's meeting list. Before pairing 
 use another one, or move the earlier recordings out of the app's `Library/Application Support/Recordings/` while the
 app isn't running.
 
+## A made-up recording under a fixed id must never reach the hub, its delete included (2026-11-19, #10589)
+
+The replayed meeting (#9417) used one fixed id and was kept from uploading, but its Delete still queued
+`DELETE /api/v1/recordings/<that id>`. The hub answered `{"deleted": false}` and kept a tombstone for the id anyway; from
+then on every replay's entry was deleted by reconciliation while it played. Guarding the obvious calls (upload, the
+live read) is not enough for such an id: keep it out at the client (`ReplayedMeeting`: `APIClient` refuses any path or
+query naming it), make its delete local, and have reconciliation ignore the hub's word on it, since an older app may
+already have left the tombstone.
+
 ## The mock hub does not enforce device roles (2026-11-12, #4869)
 
 `scripts/mock/mock_hub.py` answers every request whatever the credential, so a watch feature checked only in a simulator against it can be refused on a real hub. The watch's Milk Frog shipped that way: its art requests got 403 from `allowed()` (the watch's `answer` token reads only `answerReads`), and the frog never appeared on a real watch. A new request from the watch (or any `answer`, `link` or extension credential) needs its path in the hub's allowlist, a case in `TestAnswerRoleOnlyWhatTheWatchDoes`, and one end-to-end call with a real token through `h.routes()` (`TestDeviceTokens`).
@@ -501,6 +512,10 @@ Ordinary `go test` and CI do not include `//go:build herdrlive`, so a node helpe
 ## Keep service proxy routing out of server fixtures (2026-11-08, #1175)
 
 - Server test children must not inherit service proxy routing (#1175). An ambient HTTPS proxy redirected a local Git clone and synthetic voice DNS fixtures, and remained visible outside an extension sandbox. A local rejecting proxy reproduced all four failures; isolating only the test child's upper/lowercase HTTP, HTTPS, ALL and NO proxy variables made the unchanged fixtures pass. `server_test_env.clean_environment` removes that routing at launch; explicit fixture proxy setup still works. Preserve the parent's route for toolchain resolution, dependency preparation and publishing, rather than changing production proxy settings or increasing test deadlines.
+
+## A shell proxy sends the mock suites' loopback calls away (2026-11-18, #10465)
+
+- With `http_proxy` (or `HTTPS_PROXY`, `ALL_PROXY`) set in the shell, about 30 suites under `scripts/mock/` run by hand failed with socket timeouts: their `urlopen` calls to the mock on `127.0.0.1` went to the proxy. CI never sees it, since `scripts/ci/python-tests.py` starts every suite with the environment `server_test_env.clean_environment` cleans. By hand, unset the proxy variables or go through `python3 scripts/ci/python-tests.py`; a new suite opens loopback URLs with `build_opener(ProxyHandler({}))` (as `scripts/mock/test_todo_view_mock.py` does) and needs neither.
 
 ## When Go on the hub is older than the repository (2026-11-03, #984)
 
@@ -1206,3 +1221,16 @@ To check that a failure is this, move `dev.json` aside in the app's data contain
 
 - `-showFleetSample needsYou` is only an initial DEBUG sample. A paired hub's next Fleet event or foreground fetch replaces it; the default mock's empty Fleet turns it into All Caught Up before the Lock Screen appears. For an action test, enable the mock's permission Fleet and take the interaction id from that response, so the resolve assertion names the request whose Deny is visible.
 - The first Live Activities authorization prompt can appear after the Lock Screen wake, not before a single immediate `exists` check. Wait for either the activity's Deny or the system's Allow, answer the system prompt, and then wait for Deny. Clear any launch alert before Home, and keep the unlock teardown registered immediately after locking.
+
+## Raw TCP test listeners get the port probe too (2026-11-19, #10659)
+
+`TestProxyRouteCarriesTheLinkAndItsStreams` saw one more "direct attempt" than the link made. The extra connection was the
+local node's port probe (`GET /`, `User-Agent: persona-ports`), which finds any new listener, plain TCP included, not only
+HTTP fakes. A raw listener that counts connections (`gatedDirectListener`, `link/ssh_test.go`) now counts only those
+that open with a TLS record (first byte `0x16`) and replays that byte before forwarding. Two traps on the way:
+
+- The first guess, a Happy Eyeballs second dial for a name with both address families, was wrong. Read the stray
+  connection's first bytes before explaining it.
+- Wrap the replayed connection by embedding the `net.Conn` interface, not `*net.TCPConn`. Embedding the concrete type
+  promotes `WriteTo`, which `io.Copy` uses instead of the overriding `Read`, so the replayed byte is silently dropped
+  and every forwarded TLS handshake fails.

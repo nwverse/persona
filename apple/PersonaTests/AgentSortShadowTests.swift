@@ -67,8 +67,7 @@ import PersonaWire
                 let core = try ProjectionFixture.project(fixture.input, fixture.name, using: PersonaCoreProjections.sort)
                 let coreComparable = try AgentSortComparable(core: try JSONDecoder().decode(AgentSortCoreProjection.self, from: Data(PersonaCoreProjections.sort(inputJSON: AgentSortProjectionAdapter.coreInput(input, presentation: snapshot.presentation, now: snapshot.now)).utf8)), input: input, presentation: snapshot.presentation)
                 let differences = AgentSortComparable.differences(native: native, core: coreComparable)
-                let known = ["machine_uses_registry_order": Set(["quick-filter", "pin-membership"]), // #9221
-                             "space_time_tie_reversed": Set(["unread-shown"])] // #9335
+                let known: [String: Set<String>] = [:]
                 if let expected = known[fixture.name], expected == Set(differences) {
                     withKnownIssue("Tracked core discrepancy for \(fixture.name)") {
                         #expect(differences == [], "\(fixture.name)")
@@ -81,6 +80,23 @@ import PersonaWire
                 Issue.record("\(fixture.name): \(error)")
             }
         }
+    }
+
+    @Test func spaceTimeTieReversedPreservesFilteredUnreadOrderThroughTheRealCABI() throws {
+        let fixture = try ProjectionFixture.require(try ProjectionFixture.cases(in: "sort", operation: "agents_list").first { $0.name == "space_time_tie_reversed" }, "space_time_tie_reversed")
+        let snapshot = try nativeSnapshot(fixture)
+        let native = AgentSortComparable(native: snapshot.input, presentation: snapshot.presentation, now: snapshot.now)
+        let legacy = try ProjectionFixture.project(fixture.input, fixture.name, using: PersonaCoreProjections.sort)
+        try ProjectionFixture.assertEqual(legacy, fixture.expected, fixture.name)
+        let output = try PersonaCoreProjections.sort(inputJSON: AgentSortProjectionAdapter.coreInput(snapshot.input, presentation: snapshot.presentation, now: snapshot.now))
+        let core = try AgentSortComparable(core: JSONDecoder().decode(AgentSortCoreProjection.self, from: Data(output.utf8)), input: snapshot.input, presentation: snapshot.presentation)
+        let expectedGroups = ["machine-a/space-a", "machine-a/space-b"]
+        let expectedUnread = ["machine-a/b", "machine-a/a"]
+        #expect(native.groups.map(\.id) == expectedGroups)
+        #expect(core.groups.map(\.id) == expectedGroups)
+        #expect(native.unread == expectedUnread)
+        #expect(core.unread == expectedUnread)
+        #expect(AgentSortComparable.differences(native: native, core: core) == [])
     }
 
     @Test func adapterKeepsSwiftOutputIdentical() throws {
@@ -140,6 +156,63 @@ import PersonaWire
         #expect(nativeHeld.groups.first { $0.id == "state/idle" }?.rows == ["hub-b|shared/first"])
         #expect(nativeHeld.groups.contains { $0.id == "state/unread" && $0.rows.contains("hub-a|shared/second") } == false)
         #expect(AgentSortComparable.differences(native: nativeHeld, core: coreHeld) == [])
+    }
+
+    private func selectedHubInput(_ filter: AgentFilter = .all) throws -> AgentListProjection.Input {
+        let sessions = try [("working", "hub-a"), ("unread", "hub-b")].map { state, group in
+            try session(.object([
+                "machine_id": .string("shared"), "session_id": .string("same"), "app_hub_group": .string(group),
+                "title": .string("needle"), "state": .string(state), "status": .string("idle"),
+                "updated_at": .string("2027-01-01T00:00:00Z"),
+            ]))
+        }
+        let machine = try JSON.decoder.decode(Machine.self, from: Data(#"{"id":"shared","name":"Fixture","kind":"local","online":true}"#.utf8))
+        var hubA = machine
+        hubA.group = "hub-a"
+        var hubB = machine
+        hubB.group = "hub-b"
+        var settings = AgentListProjection.Settings(grouping: "state")
+        settings.filter = filter
+        settings.multiHub = true
+        settings.hub = HubFilter.value("hub-a")
+        return AgentListProjection.Input(sessions: sessions, machines: [hubA, hubB], settings: settings)
+    }
+
+    @Test func selectedHubNativeAndCoreOutputMatchThroughTheRealCABI() throws {
+        var input = try selectedHubInput()
+        let encoded = try AgentSortProjectionAdapter.coreInput(input)
+        let object = try #require(JSONSerialization.jsonObject(with: Data(encoded.utf8)) as? [String: Any])
+        let encodedSettings = try #require(object["settings"] as? [String: Any])
+        #expect(encodedSettings["multi_hub"] as? Bool == true)
+        #expect(encodedSettings["hub_filter"] as? String == "=hub-a")
+        let native = AgentSortComparable(native: input)
+        // Production admits hub-a before counts, grouping, or unread output; hub-b has the same short ID.
+        #expect(native.filtered == ["hub-a|shared/same"])
+        #expect(native.filterCounts == ["needsYou": 0, "unread": 0, "working": 1, "backgroundWaiting": 0])
+        #expect(native.groups.map(\.id) == ["state/working"])
+        #expect(native.groups.first?.rows == ["hub-a|shared/same"])
+        #expect(native.unread == [])
+        let core = try AgentSortComparable(core: JSONDecoder().decode(AgentSortCoreProjection.self, from: Data(PersonaCoreProjections.sort(inputJSON: encoded).utf8)), input: input)
+        #expect(AgentSortComparable.differences(native: native, core: core) == [])
+
+        input.settings.filter = .unread
+        let quickNative = AgentSortComparable(native: input)
+        #expect(quickNative.filtered == [])
+        #expect(quickNative.filterCounts == ["needsYou": 0, "unread": 0, "working": 1, "backgroundWaiting": 0])
+        #expect(quickNative.groups == [])
+        #expect(quickNative.unread == [])
+        let quickOutput = try PersonaCoreProjections.sort(inputJSON: AgentSortProjectionAdapter.coreInput(input))
+        let quickCore = try AgentSortComparable(core: JSONDecoder().decode(AgentSortCoreProjection.self, from: Data(quickOutput.utf8)), input: input)
+        #expect(AgentSortComparable.differences(native: quickNative, core: quickCore) == [])
+    }
+
+    @Test func shadowComparesSelectedHubInputInsteadOfRejectingItAsHubFilter() async throws {
+        let recorder = Recorder()
+        let shadow = AgentSortShadow(report: { value in Task { await recorder.report(value) } })
+        shadow.submit(try selectedHubInput())
+        try await recorder.waitForSummary()
+        let reports = await recorder.reports
+        #expect(reports.map(\.rule) == ["summary-compared-1-mismatches-0"])
     }
 
     @Test func shadowRunsOffMainCoalescesAndNeverLeaksContent() async throws {
@@ -281,6 +354,32 @@ import PersonaWire
         #expect(AgentSortComparable.differences(native: nativeSide, core: coreSide) == [])
     }
 
+    @Test func compactSpaceRowsAndUnreadKeepTheirOwnOrderThroughTheRealCABI() throws {
+        let sessions = try ["b", "a"].map { id in
+            try session(.object([
+                "machine_id": .string("machine-a"), "session_id": .string(id),
+                "title": .string("Fixture"), "state": .string("unread"), "status": .string("idle"),
+                "space_id": .string("space-a"), "space_name": .string("Project"),
+                "updated_at": .string("2026-01-01T00:00:10Z"),
+            ]))
+        }
+        let machine = try JSON.decoder.decode(Machine.self, from: Data(#"{"id":"machine-a","name":"Fixture","kind":"local","online":true}"#.utf8))
+        let input = AgentListProjection.Input(sessions: sessions, machines: [machine], settings: .init(grouping: "space"))
+        let presentation = AgentSortPresentation(compact: true)
+        let native = AgentSortComparable(native: input, presentation: presentation)
+        let expectedOrder = ["machine-a/b", "machine-a/a"]
+        #expect(native.filtered == expectedOrder)
+        #expect(native.presentationRows?.count == 2)
+        #expect(Set(native.presentationRows?.map(\.id) ?? []) == Set(expectedOrder))
+        #expect(native.unread == expectedOrder)
+        let output = try PersonaCoreProjections.sort(inputJSON: AgentSortProjectionAdapter.coreInput(input, presentation: presentation))
+        let core = try AgentSortComparable(core: JSONDecoder().decode(AgentSortCoreProjection.self, from: Data(output.utf8)), input: input, presentation: presentation)
+        // Compact display order and unread order are independent contracts; neither is derived from the other.
+        #expect(core.presentationRows?.map(\.id) == native.presentationRows?.map(\.id))
+        #expect(core.unread == expectedOrder)
+        #expect(AgentSortComparable.differences(native: native, core: core) == [])
+    }
+
     @Test func presentationComparisonDetectsReorderedRows() throws {
         let fixture = try ProjectionFixture.require(try ProjectionFixture.cases(in: "sort", operation: "agents_list").first, "fixture")
         var input = try nativeInput(fixture)
@@ -343,6 +442,71 @@ import PersonaWire
         #expect(AgentListProjection.build(input).base.map(\.key) == [side.key], "a missing parent leaves the side visible")
         let orphanCore = try AgentSortComparable(core: JSONDecoder().decode(AgentSortCoreProjection.self, from: Data(PersonaCoreProjections.sort(inputJSON: AgentSortProjectionAdapter.coreInput(input)).utf8)), input: input)
         #expect(AgentSortComparable.differences(native: AgentSortComparable(native: input), core: orphanCore) == [])
+    }
+
+    @Test func nestedSubtaskSearchRetainsPreparedParentThroughRealCABI() throws {
+        let parent = try session(.object(["machine_id": .string("machine-a"), "session_id": .string("e"), "title": .string("ordinary parent"), "state": .string("offline"), "status": .string("offline")]))
+        let child = try session(.object(["machine_id": .string("machine-a"), "session_id": .string("child"), "title": .string("needle"), "state": .string("working"), "status": .string("idle"), "source_kind": .string("runtime"), "is_subagent": .bool(true), "parent_session_id": .string("e")]))
+        let machine = try JSON.decoder.decode(Machine.self, from: Data(#"{"id":"machine-a","name":"Machine A","kind":"local","online":true}"#.utf8))
+        var settings = AgentListProjection.Settings(grouping: "state", query: "needle")
+        settings.preferences[""] = .init()
+        settings.preferences[""]!.pins.sessions = ["machine-a/e"]
+        let input = AgentListProjection.Input(sessions: [parent, child], machines: [machine], settings: settings)
+        let nativeProjection = AgentListProjection.build(input)
+        #expect(nativeProjection.filtered.map(\.key.path) == ["machine-a/e"])
+        #expect(nativeProjection.pinnedAgents.map(\.key.path) == ["machine-a/e"])
+        let output = try PersonaCoreProjections.sort(inputJSON: AgentSortProjectionAdapter.coreInput(input))
+        let core = try AgentSortComparable(core: JSONDecoder().decode(AgentSortCoreProjection.self, from: Data(output.utf8)), input: input)
+        #expect(core.filtered == ["machine-a/e"])
+        #expect(core.groups.map(\.id) == ["pinned"])
+        #expect(core.groups.first?.rows == ["machine-a/e"])
+        #expect(AgentSortComparable.differences(native: AgentSortComparable(native: input), core: core) == [])
+    }
+
+    @Test func promotedSubtaskSearchDoesNotRetainItsOfflineParent() throws {
+        let parent = try session(.object(["machine_id": .string("machine-a"), "session_id": .string("e"), "title": .string("ordinary parent"), "state": .string("offline"), "status": .string("offline")]))
+        let child = try session(.object(["machine_id": .string("machine-a"), "session_id": .string("child"), "title": .string("needle"), "state": .string("working"), "status": .string("idle"), "source_kind": .string("runtime"), "is_subagent": .bool(true), "parent_session_id": .string("e")]))
+        let machine = try JSON.decoder.decode(Machine.self, from: Data(#"{"id":"machine-a","name":"Machine A","kind":"local","online":true}"#.utf8))
+        let settings = AgentListProjection.Settings(grouping: "state", query: "needle")
+        let input = AgentListProjection.Input(sessions: [parent, child], machines: [machine], settings: settings)
+        let nativeProjection = AgentListProjection.build(input)
+        #expect(nativeProjection.filtered.map(\.key.path) == ["machine-a/child"])
+        let native = AgentSortComparable(native: input, projection: nativeProjection)
+        #expect(native.groups.map(\.id) == ["state/working"])
+        let output = try PersonaCoreProjections.sort(inputJSON: AgentSortProjectionAdapter.coreInput(input, projection: nativeProjection))
+        let core = try AgentSortComparable(core: JSONDecoder().decode(AgentSortCoreProjection.self, from: Data(output.utf8)), input: input)
+        #expect(core.filtered == ["machine-a/child"])
+        #expect(core.groups.map(\.id) == ["state/working"])
+        #expect(core.groups.first?.rows == ["machine-a/child"])
+        #expect(AgentSortComparable.differences(native: native, core: core) == [])
+    }
+
+    @Test func missingMachineStaysInInventoryWithoutMachineSectionThroughRealCABI() throws {
+        let registered = try session(.object(["machine_id": .string("machine-a"), "session_id": .string("working"), "state": .string("working"), "status": .string("idle")]))
+        let orphan = try session(.object(["machine_id": .string("machine-missing"), "session_id": .string("orphan"), "state": .string("needs_you"), "status": .string("idle")]))
+        let machine = try JSON.decoder.decode(Machine.self, from: Data(#"{"id":"machine-a","name":"Machine A","kind":"local","online":true}"#.utf8))
+        let settings = AgentListProjection.Settings(grouping: "machine", filter: .needsYou)
+        let input = AgentListProjection.Input(sessions: [registered, orphan], machines: [machine], settings: settings)
+        let native = AgentSortComparable(native: input)
+        #expect(native.filtered == ["machine-missing/orphan"])
+        #expect(native.unpinned == ["machine-missing/orphan"])
+        #expect(native.groups.contains { $0.id == "machine/machine-missing" } == false)
+        let output = try PersonaCoreProjections.sort(inputJSON: AgentSortProjectionAdapter.coreInput(input))
+        let core = try AgentSortComparable(core: JSONDecoder().decode(AgentSortCoreProjection.self, from: Data(output.utf8)), input: input)
+        #expect(core.filtered == ["machine-missing/orphan"])
+        #expect(core.unpinned == ["machine-missing/orphan"])
+        #expect(core.groups.contains { $0.id == "machine/machine-missing" } == false)
+        #expect(AgentSortComparable.differences(native: native, core: core) == [])
+    }
+
+    @Test func coreComparisonUsesInventoryInsteadOfRenderedGroups() throws {
+        let orphan = try session(.object(["machine_id": .string("machine-missing"), "session_id": .string("orphan"), "state": .string("needs_you"), "status": .string("idle")]))
+        let input = AgentListProjection.Input(sessions: [orphan], machines: [], settings: .init(grouping: "machine"))
+        let document = #"{"counts":{"needsYou":1,"unread":0,"working":0,"backgroundWaiting":0},"groups":[],"unread_shown":[],"filtered":["machine-missing/orphan"],"unpinned":["machine-missing/orphan"]}"#
+        let core = try AgentSortComparable(core: JSONDecoder().decode(AgentSortCoreProjection.self, from: Data(document.utf8)), input: input)
+        #expect(core.groups.isEmpty)
+        #expect(core.filtered == ["machine-missing/orphan"])
+        #expect(core.unpinned == ["machine-missing/orphan"])
     }
 
     private func waitForIdle(_ shadow: AgentSortShadow) async throws {

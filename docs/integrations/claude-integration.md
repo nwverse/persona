@@ -75,6 +75,20 @@ set to a model of its own is marked only when that model's window is 1M or more 
 hold a smaller one to its size. An ID already ending in `[1m]` is left alone, and one with no known window is passed as
 it is. The reply limit and thinking levels a gateway reports are in "What a gateway reports about a model" below.
 
+A tier alias in one of these variables is not resolved again: Claude Code 2.1.291 sends `ANTHROPIC_DEFAULT_OPUS_MODEL`'s
+value as the model's name, so a provider whose default model or Opus field was `opus` asked its gateway for "opus" and got
+404 ("There's an issue with the selected model (opus)"). Behind a Base URL that is not Anthropic's own API, `providerEnv`
+counts a tier alias (`opus`, `sonnet`, `haiku`, `fable`, `best`, `opusplan`, `default`, `inherit`, `[1m]` or not) in the
+default model, a tier field, the model asked for or the provider's `env` as unset: the tier's own model, else the default
+model, else nothing, and Claude Code uses its own ID (#10365). A `--model <alias>` the node passes for such a provider
+(`claudeModelArg`: the assistant's start, a terminal Agent and a launcher switch, Test, a typed `/model`) is the model its
+environment gives that tier (`opusplan` the Opus tier's), or is left out so the provider's default runs (a typed
+`/model` then types `/model default`, which puts the session back on it); `personad launch` maps or drops one that
+reaches it anyway, with a line on stderr. An alias asked for with `[1m]` keeps it on the model it maps to, as Claude
+Code's own resolution does (`opus[1m]` runs the Opus tier's model with the 1M window, declared or not). Plain `claude`,
+shell launchers and providers on Anthropic's own API keep the alias (`TestProviderEnvNeverWritesTierAlias`,
+`TestProviderModelArg`, `TestManagedAliasModelArg`, `TestHerdrSetModelMapsATierAliasOnAGatewayProvider`).
+
 ## What a gateway reports about a model (tested 2.1.325, #8798)
 
 Model discovery saves what a gateway says of each model (`docs/integrations/launchers.md`, "Provider model and gateway
@@ -219,6 +233,78 @@ sub-Agent fails with the refusal instead of a misleading 404. The provider's own
 either way: `CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK=` (empty) keeps the fallback on a gateway whose list lacks a model it
 serves after all, and `CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK=1` turns it off for one with no list; the next process start
 picks it up. Plain `claude`, shell launchers and providers from before #2455 keep their own environment.
+
+## Tool search behind a gateway (#10365)
+
+Claude Code decides tool search from `ENABLE_TOOL_SEARCH` (read in the 2.1.291 binary): `false` (or `0`, `no`, `off`)
+loads every tool up front; unset or `true` defers tools behind `ToolSearch`. With the variable unset it also keeps tool
+search off when `ANTHROPIC_BASE_URL` names a host other than `api.anthropic.com` ("[ToolSearch:optimistic] disabled:
+ANTHROPIC_BASE_URL=… is not a first-party Anthropic host"), and any non-empty value lifts that rule. With tool search on,
+requests carry tools marked `defer_loading` (Persona's deferred tools, other MCP servers' tools and built-ins such as
+`WebFetch`), `tool_reference` blocks and the `ToolSearch` tool. A gateway edge that cannot represent them answers `400
+request is not representable on this edge: ToolSearch is not supported on this endpoint (defer_loading:true,
+tool_search_*, tool_reference)`; on the gateway where this was seen it depended on the upstream model (its Claude model
+carried deferral, two other vendors' models refused it). #7371 made every assistant process carry `true`, which put
+deferral on every gateway conversation; `claude -p` checks, which set nothing, kept passing.
+
+So Persona decides per start and keeps Claude Code's own rule where it cannot tell:
+
+- **Managed providers.** `providerEnv` sets `ENABLE_TOOL_SEARCH=false` for a provider whose Base URL (its `env`'s
+  `ANTHROPIC_BASE_URL`, else the stored one) is not Anthropic's own API, in the launch environment and the settings env
+  alike (settings env beats the process environment), so herdr Agents, `personad launch` typed in a terminal or from the
+  assistant's Bash, and the assistant all load every tool there. `personad launch` drops an inherited value when the
+  provider sets one. The provider's `env` is applied last: `ENABLE_TOOL_SEARCH=true` opts back in.
+- **The assistant's start** (`toolSearchFor`, `node/assistant_tool_search.go`): Anthropic's own API (no Base URL, or the
+  host `api.anthropic.com`) gets `true`, which also lifts Claude Code's hold-off for a conversation that once ran without
+  `ToolSearch` (#7317); a known gateway gets `false`; a start that cannot tell where its requests go (a launcher the probe
+  did not see) gets nothing, so Claude Code's rule decides, as before #7371; a launcher that sets the variable itself
+  keeps its value. A value the node inherited never reaches claude. Where the requests go is read with the compaction
+  policy's layers (`claudeEndpoint`): a managed provider's Base URL; for any other launcher the first of the
+  administrator's managed settings env (`managed-settings.d/*.json`, the last in alphabetical order first, then
+  `managed-settings.json`, in the system directory of Linux, macOS or Windows: above every other layer, so an
+  `ENABLE_TOOL_SEARCH` there counts as the launcher's own; MDM profiles and the server-policy cache `remote-settings.json`
+  are not read), the launcher's `--settings` env, the project's `.claude/settings.local.json` and `settings.json` env,
+  the profile's `settings.json` env, what the launcher exports and the shell's environment that names
+  `ANTHROPIC_BASE_URL` (an empty value is Anthropic's own API).
+- **A refusal.** A failed turn whose words are a 400, or a gateway's "not representable", that names tool search
+  (`assistantwire.ToolSearchRefused`: `ToolSearch is not supported`, `defer_loading`, `tool_reference`, `tool_search`,
+  `tool search`) is remembered for its launcher and model, with the endpoint that refused, in the node's memory only (no
+  state file: a restarted node learns it again with one resend). The node restarts that conversation's process with
+  `ENABLE_TOOL_SEARCH=false` in its environment and in the start's own settings env, which win over the provider's, the
+  launcher's and the user's, and resends the turn once with the model-retry prompt: unseen, on its own budget (the
+  same-model and next-model retries stay), with no model-recovery marker. A process started that way and refused again
+  ends the turn on the refusal; with background tasks running the restart would kill, the turn ends too and the next
+  start loads every tool. Other conversations on that launcher and model restart that way on their next message when
+  idle (a busy one keeps its turn), and a spare warmed before is not adopted: the next warm replaces it with one that
+  loads every tool. The readiness probe's assistant-turn check (`launchers.check` with `assistant_turn`) takes the same
+  decision, by the model asked for (the one the start remembers a refusal by, before `--model` maps a tier alias), with
+  `false` written over its own `--settings` env too, so "Try it" passes once the chat does.
+- **What is left.** The hub gives such a turn error `turn_error_code: "tool_search_unsupported"` (`assistant/fleet.go`
+  `turnErrorCode`): not `model_route` and not the user's to fix, worded "the gateway refused on-demand tool loading; try
+  again" (readiness `tool_search_unsupported_*`, action `test_assistant`, not blocking). The node announces all of the
+  above as the capability `assistant_tool_search_fallback`; only for a computer whose node does is the readiness step
+  worded "Persona sends every tool to this gateway from now on, so try again" (`toolSearchWords`,
+  `tool_search_unsupported_fallback_detail`). An older node keeps tool search on, so a retry there meets the same
+  refusal, and the chat's card, which can't tell the node, promises only the retry.
+
+Loading every tool costs a gateway that did carry deferral about 23K tokens per request (#7317's measurement), most of
+it read from the prompt cache; a provider opts back in with its `env`, and its models that refuse are then resent once
+and remembered (`TestToolSearchFor`, `TestAssistantToolSearchFollowsTheEndpoint`,
+`TestToolSearchRefusalRetriesOnceWithoutToolSearch`, `TestToolSearchRefusalIsRetriedOnlyOnce`,
+`TestProviderEnvToolSearchBehindAGateway`).
+
+`TestGatewayToolSearchLive` (build tag `gatewaylive`, `GATEWAYLIVE=1`, never in CI) runs the machine's real claude with a
+provider's environment as `personad launch` builds it, against an in-process emulation of such an edge: it refuses any
+deferred tool with that 400 and answers the rest itself, or, with `GATEWAYLIVE_LAUNCHER=<a managed provider>`, passes it
+on to that provider's gateway with the key the local node gives (kept in memory, never printed; `GATEWAYLIVE_MODEL`
+picks the model). Measured on Claude Code 2.1.291: with tool search on, both requests were refused and the result's
+words are a tool-search refusal; with the provider's environment (`false` over an inherited `true`) the turn answered
+with no deferred tool; `--model opus` reached the gateway as "opus" with the old Opus variable and as the provider's
+model now.
+
+```sh
+cd server && GATEWAYLIVE=1 go test -tags gatewaylive -run TestGatewayToolSearchLive -v -count=1 ./internal/node
+```
 
 ## Persona tools Agents call without a card
 
@@ -522,6 +608,12 @@ engine: the same pick, the same message that carries it out, the same time bound
   While the watcher looks, its pane counts as a Codex starting (`codexStarting`: a node self-update waits) and it
   answers Codex's trust and update screens there, for up to five minutes.
 
+## Live status and model retries (#887)
+
+Measured with Claude Code 2.1.326 against local synthetic 429 and 500 responses: while the turn is still active, the CLI draws `✻ 429 <error> · retrying in 4s · attempt 5/10` (or the corresponding 500 error) above its input box. An early line can say only `API Error`; a later one names the status and detail. Interrupting the turn removes the line. This is separate from `system/api_error` transcript rows: a CLI that writes those early gets the existing first/final retry notices, while one that writes them only after exhausting its attempts still needs the screen status.
+
+Node reads this banner through the same bounded, watched-session `session.live` path as the ordinary spinner. It sends only the observed error and current/max attempt, not the countdown, and never infers a model error from elapsed time. The last ordinary verb, elapsed baseline, output count and thought duration stay with the retry because the banner has no counters; current thinking is not carried over. Ordinary work replaces the retry; a disappeared line, turn end or unwatch sends `live: null`. Clients also forget it on unsubscribe, and a long backoff does not expire it. Web and Apple chats use their existing API-error classifiers for the plain reason, keep the observed error as secondary detail, and show a localized attempt count before the final failure.
+
 ## Session IDs and transcripts
 
 - Mac has herdr's Claude integration; `agent list` includes `agent_session.value` (= Claude session ID). **The hub machine does not**, so it lacks the ID.
@@ -561,11 +653,27 @@ Node lists every live one (`procStart` matches the running process: a reused pid
 
 ### Sending from the phone
 
-`sendOutside`: when no pane runs the session and a claude outside Persona's terminals has it open with an inbox, a message goes there, never as a second claude. Text is `prompts/agents/peer_message` (it tells the model the words are the user's own from the phone, to be answered in this session, not with SendMessage, that a choice is asked with AskUserQuestion as usual, since the phone answers that question as a card ("Question cards outside Persona's terminals" below), and that plan approvals, permission prompts and other dialogs are answered only at the computer) inside Claude Code's envelope signed `from-name="Persona"`, without `from`, and with `from-mode` only for the owner's own message, card answer or Stop (`peerAttest`, #9607). That message (`owner_input`, which only the hub's check of a full-role device's own typed message sets, dropped from any caller in any letter case, and honoured by the node only as that exact key, once) goes in as the session's own user's words: bypass when the session's own transcript (the newest copy in the live claude's config directory, read at the send) says `bypassPermissions`, none otherwise. That is the one authorization: the person who owns the session is the one its prompts and held messages wait on, and what they type at its terminal goes in whatever its mode; a stale record can only make the session hold the message. For card answers and Stop, the hub checks the same full-role device credential and the node uses the same transcript check (#9645). The devices manager uses separate owner-control RPCs on supporting nodes so an old manager forwarding extra parameters cannot accidentally attest a caller. Supervision, another Agent's message, and answers or stops without verified owner provenance state no class, so a bypass session holds them for approval at the computer. Pictures go as paths in `<attached_images>` as with a pane; the inbox is not a paste, so the paths stay text (no `[Image #n]`, no `keepImagePaths`) and the model reads the files itself. A slash command is refused (`peer_command`): the inbox would hand `/exit` to the model as words. The send counts once the transcript shows the session took it (a `queue-operation` or a peer line with the words, within 6 s); one the inbox read but the session did not take (held, dropped) fails as `peer_unconfirmed` with `delivered: unknown`, so the app neither marks it sent nor resends it; when the session wrote that it holds a message of Persona's for approval (its transcript's `Held peer message … (peer claims name: Persona)` notice since the send, `peerHeldSeen`, #9607) it is `peer_held` instead, still `delivered: unknown`: held for approval at the computer, which the apps say in those words ("Waiting for approval on the computer") rather than only "not sure it arrived" (#8975). One taken while the claude's own status says `waiting` (a permission prompt or another dialog holds it, listed `blocked`) sits in its queue until that is answered at the computer: the send still succeeds, with `waits_on_computer: true`, and the iOS and web apps say the Agent reads it after the question on the computer is answered (#5890). A reply to a question the session asked is no such message: it goes at priority now and is the answer ("Stop and answers from the phone" below, #5961), with no `waits_on_computer`. Refusals with nothing sent: `peer_unsupported` (unknown protocol, a path this platform does not dial), `peer_unreachable` (no inbox there, no key), `peer_too_long`. A claude with no inbox at all is refused as before (`open_elsewhere`). The hub words each code in the app's language (`rpc-errors.peer_*`).
+`sendOutside`: when no pane runs the session and a claude outside Persona's terminals has it open with an inbox, a message goes there, never as a second claude. Text is `prompts/agents/peer_message` (it tells the model the words are the user's own from the phone, to be answered in this session, not with SendMessage, that a choice is asked with AskUserQuestion as usual, since the phone answers that question as a card ("Question cards outside Persona's terminals" below), and that plan approvals, permission prompts and other dialogs are answered only at the computer) inside Claude Code's envelope signed `from-name="Persona"`, without `from`, and with `from-mode` only for the owner's own message, card answer or Stop (`peerAttest`, #9607). That message (`owner_input`, which only the hub's check of a full-role device's own typed message sets, dropped from any caller in any letter case, and honoured by the node only as that exact key, once) goes in as the session's own user's words: bypass when the session's own transcript (the newest copy in the live claude's config directory, read at the send) says `bypassPermissions`, none otherwise. That is the one authorization: the person who owns the session is the one its prompts and held messages wait on, and what they type at its terminal goes in whatever its mode; a stale record can only make the session hold the message. For card answers and Stop, the hub checks the same full-role device credential and the node uses the same transcript check (#9645). The devices manager uses separate owner-control RPCs on supporting nodes so an old manager forwarding extra parameters cannot accidentally attest a caller. Supervision, another Agent's message, and answers or stops without verified owner provenance state no class, so a bypass session holds them for approval at the computer. Pictures go as paths in `<attached_images>` as with a pane; the inbox is not a paste, so the paths stay text (no `[Image #n]`, no `keepImagePaths`) and the model reads the files itself. A slash command is refused (`peer_command`): the inbox would hand `/exit` to the model as words. The send counts once the transcript shows the session took it (a `queue-operation` or a peer line with the words, within 6 s); one the inbox read but the session did not take (held, dropped) fails as `peer_unconfirmed` with `delivered: unknown`, so the app neither marks it sent nor resends it; when the session wrote that it holds a message of Persona's for approval (its transcript's `Held peer message … (peer claims name: Persona)` notice since the send, `peerHeldSeen`, #9607) it is `peer_held` instead, still `delivered: unknown`: held for approval at the computer, which the apps say in those words ("Waiting for approval on the computer") rather than only "not sure it arrived" (#8975). One taken while the claude's own status says `waiting` (a permission prompt or another dialog holds it, listed `blocked`) sits in its queue until that is answered at the computer: the send still succeeds, with `waits_on_computer: true`, and the iOS and web apps say the Agent reads it after the question on the computer is answered (#5890). A reply to a question the session asked is no such message: it goes at priority now and is the answer ("Stop and answers from the phone" below, #5961), with no `waits_on_computer`. Refusals with nothing sent: `peer_unsupported` (unknown protocol, a path this platform does not dial), `peer_unreachable` (no inbox there, no key), `peer_too_long`. A claude with neither a pane nor an inbox at all is refused as before (`open_elsewhere`). The hub words each code in the app's language (`rpc-errors.peer_*`).
 
 The session writes the message as a peer's: the transcript reader takes the user's words out of the envelope and the prompt (`prompts.PeerMessageBody`, which also strips the heads earlier versions of the prompt put there, kept in `olderPeerMessageHeads` for old transcripts and an older node during a rolling upgrade), shows them from "Persona", and the echo ties that line to the phone's `client_msg_id` (a peer line signed Persona is the only peer line that can be the user's send). It does not count as the user's prompt for `LastPromptAt`. In bypass permissions mode (what the desktop app's sessions often run in) a message that states no class or the other one is held: the person at the computer approves it in the terminal (or sets `"crossSessionInbound": "accept"` in that Claude Code's settings), and until then the phone says it is waiting there. A supervision message to a task leader the node reports as maybe delivered (`delivered: unknown`) is not sent again by the next digest, and not counted as told either (`sendToLeader`, #9607): the conversation above the leader hears once that the leader may not have it, the message goes to the leader again only after a growing wait, and the turn stays untold with its deduplication released, so a restarted manager can still deliver it; a retry the leader takes records its deduplication and marks its turn told, so a restart after it does not deliver it again. Before, each digest added another held copy.
 
 Measured end to end on a throwaway `claude` 2.1.291 in an empty directory (its own `CLAUDE_CONFIG_DIR`, a pseudo console): with the default permission mode the message was taken in 0.15–0.3 s (also while a startup dialog was on screen) and answered in the transcript; a second message while it worked was queued and answered next; in bypass permissions mode the message was held, as above. The desktop app's sessions were not written to.
+
+### Owner input in a tmux pane (#5965)
+
+An outside Claude in tmux already has a terminal the node can read and type into (`outsidePane`, `hosttmux.go`). A normal
+`session.send` with the verified `owner_input` mark therefore leaves `sendOutside` and uses the ordinary pane pipeline:
+the same per-session typing lock, draft and dialog checks, image handling, paste and Enter, stuck-prompt recovery and
+transcript confirmation as a Claude in an engine pane. A successful send answers `delivered_as: "user_input"`; it does
+not also go to the plugin or inbox. A draft, a dialog or a pane whose screen cannot be read refuses it with nothing typed,
+and an unconfirmed submission is not reported as delivered. Slash commands keep their `peer_command` refusal. This route
+needs no peer inbox.
+
+Only that verified mark authorizes typing. An unmarked message, a caller's casing variant the devices manager would have
+stripped, supervision and other senders keep the peer inbox; without a usable inbox they are refused with nothing typed.
+The tmux row lists `send` and `terminal` with or without an inbox and has no inbox-only read-only reason. It does not
+advertise `plugin_input`: the pane, not the plugin, carries the owner's message. A readable dialog on the pane supplies
+its attention reason as in #7900. Sessions with no tmux pane keep the plugin and inbox behavior below.
 
 ### Owner input through the Persona plugin
 
@@ -573,8 +681,9 @@ Measured end to end on a throwaway `claude` 2.1.291 in an empty directory (its o
 The inbox can never carry the owner's go-ahead: Claude Code tells the model a peer message is not the user's and cannot
 grant consent, so "yes, merge it" from the phone was refused (#5965). Claude Code's plugin API has a supported way in:
 `$.prompt.submit({ text, asUser: true })` submits text as the person's own words, without the "The <plugin> plugin sent a
-message" frame. A user-scope plugin installed from a terminal also loads in the desktop app's local sessions. Persona's
-plugin (`persona`) uses it for the owner's own messages; Persona Link installs and updates it.
+message" frame. A user-scope plugin installed from a terminal also loads in the desktop app's local sessions. For an
+outside Claude with no tmux pane, Persona's plugin (`persona`) uses it for the owner's own messages; Persona Link
+installs and updates it.
 
 - **Measured** (2026-11-16, Windows 11; Claude Code 2.1.291, 2.1.299 and 2.1.308, the last the desktop app's own; a
   throwaway `claude -p --input-format stream-json` session per run in an empty directory whose `CLAUDE.md` allowed a
@@ -620,7 +729,7 @@ plugin (`persona`) uses it for the owner's own messages; Persona Link installs a
   `plugin_unavailable`, `plugin_refused`, `plugin_unconfirmed`), only for messages that carried `owner_input` to such a
   session. A relayed message meets the inbox's own outcomes too: one a bypass-mode session holds is `peer_held`, as
   before. Pictures go as paths in `<attached_images>`, as through the inbox.
-- **What the apps show**: the session's row says `capabilities.plugin_input: true` while its plugin polls. The message
+- **What the apps show**: a no-pane session's row says `capabilities.plugin_input: true` while its plugin polls. The message
   shows in the chat as the user's own line (the transcript's plain user line); one relayed shows from "Persona" as
   before. The web app says so when an owner's message to a session with the plugin was relayed (`lib-outbox.relayed_busy`,
   `lib-outbox.relayed_plugin`): the Agent may not take it as their approval. Nothing is said when it went in as their
@@ -1033,7 +1142,7 @@ Assistant does not enter herdr: node directly launches `zsh -ic 'CLAUDE_CONFIG_D
   The same rule applies to headless Codex's `turn/completed`. A hub/request 400 or any other 4xx but 429, authentication or model-route error, subscription usage limit (including Claude's textual quota errors), over-context refusal, or user interruption is never replayed. The structured kind wins over the words: Claude's failed turn is classified from its transcript (a rejected quota, or Claude Code's notice that it goes on by itself after the reset, is a usage limit; authentication and model routes are the user's), Codex's from `codexErrorInfo`, and only a safeguards refusal is replayed whatever its kind (#3495). Model changes use the ordinary stop-and-resume path, require an explicitly observed empty background-task inventory, and never kill running or not-yet-known background work to make a switch. Claude Code reports that inventory only when it changes, never at start, so before a switch node sends `initialize` (twice: the node sends none of its own, and only a repeated one is answered with the current set, empty included; 2.1.311). The old process stops only after the new start is checked, so a refused switch keeps it; if no eligible model can continue, the original error becomes final. Only then can the manager's scheduled-run watcher record `failed`. The transcript and session retain the model that actually answered, including a fallback.
   The session stays working throughout process replacement, including after the replacement is registered and before its message is delivered. A resident-node handover waits for the active recovery send, then carries the remaining budget and any queued failure to the new owner, a turn's first failure in the gap included; late results follow that owner. The new owner resumes a carried failure only once its session state has loaded; without the state, or when it cannot go on, the failure is final. A user's message cancels a recovery, but gives back the turn's busy only while the recovery still holds it: a delivered recovery turn is answering, and the message waits for it as for any other turn. A refusal sticks to a conversation (the refused turn stays in its transcript), and the main conversation and a scheduled task's ask for the configured model with every message, so a fallback that answered would last one turn (#3788). After a model switch answered, messages asking for the model it moved away from stay on that fallback for 30 minutes, or until the conversation compacts; any other model picked ends the hold, and a resident-node handover carries it. A conversation refused again within two hours of its last fallback skips the same-model retry. A Claude safeguards refusal always skips it: Claude Code has already continued once on the same model ("safeguards stopped the response above · continuing once with that noted"), so a resend would be the third try (#4283). A model the chain switched to that the gateway does not have ("There's an issue with the selected model", `model_not_found`) was the recovery's own pick: it is spent and the chain goes on to the next model; the same failure on the model the user asked for stays theirs to fix. Such a model is also remembered for its launcher for 6 hours, across conversations and resident handovers, so the next chain does not offer it again (#5234). The same failure on a model that answered this conversation within the last hour is the gateway's passing failure, not the user's choice: it is replayed on that model once, then follows the chain (#5234). A usage limit is told by the transcript first: a failed turn written there is a usage limit only by its record (a rejected quota, or Claude Code's notice that it goes on by itself), so a gateway's "upstream account quota usage limit has been reached" 429 is recovered; the words decide only when nothing was written. A current process exiting without a result closes its recovery instead of leaving a permanent working placeholder.
 - Hooks trigger normally, but **AskUserQuestion is unavailable in -p mode** (No such tool available … nobody in this session can answer it; PreToolUse cannot run). Assistant uses MCP `ask_user` (`docs/assistant/assistant.md`).
-- Per-process inline MCP JSON (`--mcp-config '{…}'`), carrying `PERSONA_ASSISTANT=1` and PERSONA_SESSION_ID. `personad mcp` marks the Persona tools the manager did not defer `_meta: {"anthropic/alwaysLoad": true}` for assistant processes, so they load up front while the rarely used ones (all but `coreTools`, `assistant/tool_loading.go`; none while `assistant.load_all_tools` is on) and other MCP servers keep normal ToolSearch deferral (#5838, #7317); `ToolSearch` is in the built-in `--tools` list, which filters it too, so those deferred tools can still be loaded (#5839); the process carries `ENABLE_TOOL_SEARCH=true`, which lifts Claude Code's hold-off for a conversation that ran without ToolSearch (never `false`, which would load every server's tools up front); `--append-system-prompt` is hub's live snapshot.
+- Per-process inline MCP JSON (`--mcp-config '{…}'`), carrying `PERSONA_ASSISTANT=1` and PERSONA_SESSION_ID. `personad mcp` marks the Persona tools the manager did not defer `_meta: {"anthropic/alwaysLoad": true}` for assistant processes, so they load up front while the rarely used ones (all but `coreTools`, `assistant/tool_loading.go`; none while `assistant.load_all_tools` is on) and other MCP servers keep normal ToolSearch deferral (#5838, #7317); `ToolSearch` is in the built-in `--tools` list, which filters it too, so those deferred tools can still be loaded (#5839); the process carries `ENABLE_TOOL_SEARCH=true` on Anthropic's own API, which lifts Claude Code's hold-off for a conversation that ran without ToolSearch, `false` behind a gateway, where `true` would lift Claude Code's own rule that keeps tool search off there, and nothing where the start cannot tell ([Tool search behind a gateway](#tool-search-behind-a-gateway-10365)); `--append-system-prompt` is hub's live snapshot.
 - New assistant and guest sessions register only the `persona` MCP namespace when the hub advertises `persona_contracts_v1`; old or unknown hubs and resumed sessions keep both compatibility namespaces. The allow list uses the same selection. Historical tool-name readers continue accepting both names ([rolling-upgrade-compatibility.md](../protocol/rolling-upgrade-compatibility.md), "MCP namespace / tools").
 - Spare: Claude waits on stdin for first message, so can launch ahead; new chats use its session ID.
 - Launcher change kills process and resumes with new launcher. Idle 20-minute processes are reclaimed; next message resumes automatically.

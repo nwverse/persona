@@ -231,6 +231,110 @@ fn multi_hub_preferences_scoped_pin_mute_and_order_match_ios() {
     );
 }
 
+fn hub_selection_input(multi_hub: bool, hub_filter: &str, quick: &str) -> Input {
+    serde_json::from_value(serde_json::json!({
+        "sessions": [
+            {"machine_id": "shared", "session_id": "default", "app_hub_group": "", "title": "needle", "state": "needs_you"},
+            {"machine_id": "shared", "session_id": "same", "app_hub_group": "hub-a", "title": "needle", "state": "working"},
+            {"machine_id": "shared", "session_id": "same", "app_hub_group": "hub-b", "title": "needle", "state": "unread"},
+        ],
+        "machines": [
+            {"id": "shared", "name": "Fixture"},
+            {"id": "shared", "name": "Fixture", "group": "hub-a"},
+            {"id": "shared", "name": "Fixture", "group": "hub-b"},
+        ],
+        "pins": {}, "mutes": {},
+        "settings": {"grouping": "state", "quick": quick, "multi_hub": multi_hub, "hub_filter": hub_filter},
+    }))
+    .expect("hub selection input")
+}
+
+fn all_hubs_projection_expectation() -> Value {
+    serde_json::json!({
+        "counts": {"needsYou": 1, "working": 1, "unread": 1, "backgroundWaiting": 0},
+        "groups": [
+            {"id": "state/needs", "title": "需要你", "rows": ["shared/default"], "visible_rows": ["shared/default"], "folded": false},
+            {"id": "state/unread", "title": "完成未看", "rows": ["hub-b|shared/same"], "visible_rows": ["hub-b|shared/same"], "folded": false},
+            {"id": "state/working", "title": "工作中", "rows": ["hub-a|shared/same"], "visible_rows": ["hub-a|shared/same"], "folded": false},
+        ],
+        "unread_shown": ["hub-b|shared/same"],
+    })
+}
+
+#[test]
+fn selected_hub_scopes_counts_groups_and_unread_match_ios() {
+    let input = hub_selection_input(true, "=hub-a", "all");
+    let actual = serde_json::to_value(persona_core::sort::project(&input)).expect("selected hub projection");
+    // HubFilter.matches("=hub-a", group) admits only hub-a before any of these outputs are derived.
+    assert_eq!(
+        actual,
+        serde_json::json!({
+            "counts": {"needsYou": 0, "working": 1, "unread": 0, "backgroundWaiting": 0},
+            "groups": [
+                {"id": "state/working", "title": "工作中", "rows": ["hub-a|shared/same"], "visible_rows": ["hub-a|shared/same"], "folded": false},
+            ],
+            "unread_shown": [],
+        }),
+        "the selected non-default hub retains its full path without admitting the default or hub-b rows"
+    );
+}
+
+#[test]
+fn selected_hub_filter_precedes_quick_filter_match_ios() {
+    let input = hub_selection_input(true, "=hub-a", "unread");
+    let actual =
+        serde_json::to_value(persona_core::sort::project(&input)).expect("selected hub quick-filter projection");
+    // iOS counts the selected hub's base first, then applies Unread. hub-b's matching unread row is already absent.
+    assert_eq!(
+        actual,
+        serde_json::json!({
+            "counts": {"needsYou": 0, "working": 1, "unread": 0, "backgroundWaiting": 0},
+            "groups": [],
+            "unread_shown": [],
+        }),
+        "another hub's unread session must not satisfy the selected hub's quick filter"
+    );
+}
+
+#[test]
+fn empty_hub_filter_selects_all_hubs_with_distinct_full_paths() {
+    let input = hub_selection_input(true, "", "all");
+    let actual = serde_json::to_value(persona_core::sort::project(&input)).expect("all-hubs projection");
+    assert_eq!(
+        actual,
+        all_hubs_projection_expectation(),
+        "the empty HubFilter selects every group and identical short IDs remain distinct by full path"
+    );
+}
+
+#[test]
+fn default_hub_filter_selects_only_the_empty_group() {
+    let input = hub_selection_input(true, "=", "all");
+    let actual = serde_json::to_value(persona_core::sort::project(&input)).expect("default hub projection");
+    // HubFilter.value("") is "=", which selects the default empty group rather than every group.
+    assert_eq!(
+        actual,
+        serde_json::json!({
+            "counts": {"needsYou": 1, "working": 0, "unread": 0, "backgroundWaiting": 0},
+            "groups": [
+                {"id": "state/needs", "title": "需要你", "rows": ["shared/default"], "visible_rows": ["shared/default"], "folded": false},
+            ],
+            "unread_shown": [],
+        })
+    );
+}
+
+#[test]
+fn legacy_multi_hub_false_ignores_hub_filter() {
+    let input = hub_selection_input(false, "=hub-a", "all");
+    let actual = serde_json::to_value(persona_core::sort::project(&input)).expect("legacy multi-hub projection");
+    assert_eq!(
+        actual,
+        all_hubs_projection_expectation(),
+        "without multiHub, iOS does not apply HubFilter even when a selected value is present"
+    );
+}
+
 #[test]
 fn awaiting_reply_is_not_folded_like_plain_idle() {
     let document: Value =
@@ -618,6 +722,82 @@ fn nested_rows_and_folded_children_match_ios_counts() {
     assert_eq!(
         actual["groups"][0]["spoken"],
         serde_json::json!("7 个工作中，1 个后台等待中")
+    );
+}
+
+#[test]
+fn search_retains_parent_when_nested_subtask_matches() {
+    // iOS retains a prepared root when any task below it admits the query. Pinning the offline parent makes its
+    // otherwise invisible inventory membership observable in the one section that can render an offline row.
+    let input: Input = serde_json::from_value(serde_json::json!({
+        "sessions": [
+            {"machine_id": "machine-a", "session_id": "e", "title": "ordinary parent", "state": "offline", "status": "offline", "nested_match": true},
+        ],
+        "machines": [{"id": "machine-a", "name": "Machine A"}],
+        "pins": {"sessions": ["machine-a/e"]}, "mutes": {},
+        "settings": {"grouping": "state", "quick": "all", "query": "needle", "inventory": true},
+    }))
+    .expect("nested search input");
+    let actual = serde_json::to_value(persona_core::sort::project(&input)).expect("projection");
+    assert_eq!(
+        actual["groups"],
+        serde_json::json!([{
+            "id": "pinned", "title": "置顶", "rows": ["machine-a/e"],
+            "visible_rows": ["machine-a/e"], "folded": false,
+        }]),
+        "the matching nested row retains its parent, not a flattened subtask row"
+    );
+    assert_eq!(actual["filtered"], serde_json::json!(["machine-a/e"]));
+    assert_eq!(actual["unpinned"], serde_json::json!([]));
+}
+
+#[test]
+fn search_keeps_promoted_subtask_root_when_parent_cannot_render() {
+    // A live subtask is an independent root when no rendered ancestor is live or pinned. Parent identity alone must
+    // not fold that root back into an offline parent (regression control for the prepared-input contract).
+    let input: Input = serde_json::from_value(serde_json::json!({
+        "sessions": [
+            {"machine_id": "machine-a", "session_id": "e", "title": "ordinary parent", "state": "offline", "status": "offline"},
+            {"machine_id": "machine-a", "session_id": "child", "title": "needle", "state": "working", "status": "idle", "source_kind": "runtime", "nested_subtask": true, "parent_session_id": "e"},
+        ],
+        "machines": [{"id": "machine-a", "name": "Machine A"}],
+        "pins": {}, "mutes": {},
+        "settings": {"grouping": "state", "quick": "all", "query": "needle", "inventory": true},
+    }))
+    .expect("promoted subtask input");
+    let actual = serde_json::to_value(persona_core::sort::project(&input)).expect("projection");
+    assert_eq!(
+        actual["groups"],
+        serde_json::json!([{
+            "id": "state/working", "title": "工作中", "rows": ["machine-a/child"],
+            "visible_rows": ["machine-a/child"], "folded": false,
+        }])
+    );
+    assert_eq!(actual["filtered"], serde_json::json!(["machine-a/child"]));
+    assert_eq!(actual["unpinned"], serde_json::json!(["machine-a/child"]));
+}
+
+#[test]
+fn missing_machine_stays_in_filtered_inventory_without_a_group() {
+    // Inventory membership is independent of whether the machine registry can supply a section. The Needs You quick
+    // filter also removes the registered Working row, leaving only the unregistered, unpinned session.
+    let input: Input = serde_json::from_value(serde_json::json!({
+        "sessions": [
+            {"machine_id": "machine-a", "session_id": "working", "state": "working"},
+            {"machine_id": "machine-missing", "session_id": "orphan", "state": "needs_you"},
+        ],
+        "machines": [{"id": "machine-a", "name": "Machine A"}],
+        "pins": {}, "mutes": {},
+        "settings": {"grouping": "machine", "quick": "needsYou", "inventory": true},
+    }))
+    .expect("missing machine input");
+    let actual = serde_json::to_value(persona_core::sort::project(&input)).expect("projection");
+    assert_eq!(actual["filtered"], serde_json::json!(["machine-missing/orphan"]));
+    assert_eq!(actual["unpinned"], serde_json::json!(["machine-missing/orphan"]));
+    assert_eq!(
+        actual["groups"],
+        serde_json::json!([]),
+        "an absent registry entry emits no machine section"
     );
 }
 

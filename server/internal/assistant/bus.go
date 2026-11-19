@@ -120,8 +120,10 @@ func NewBusHub(o BusOptions) *BusHub {
 		id = assistantwire.AssistantID
 	}
 	b.client = &bus.Client{
-		// The manager's extensions stop waiting for a card when their caller does (extmgr's interactions.wait).
-		Cancels: map[string]bool{assistantwire.MethodApp: true},
+		// The manager's extensions stop waiting for a card when their caller does (extmgr's interactions.wait). A switch
+		// to Persona Link that gave up on the hub's begin (its time ran out) has the hub give it up too, so it changes
+		// nothing the manager no longer waits for (internal/devices link_switch.go).
+		Cancels: map[string]bool{assistantwire.MethodApp: true, devicewire.MethodLinkSwitchBegin: true},
 		Hub:     o.Hub, Token: o.Token, HTTPClient: o.HTTPClient, Logf: o.Logf, Backoff: o.Backoff,
 		StopWhenRevoked: o.StopWhenRevoked, StopWhenRejected: o.StopWhenRejected,
 		// The hub's own manager (its child, or the built-in one's service dialing the hub's local address) is on the
@@ -135,7 +137,8 @@ func NewBusHub(o BusOptions) *BusHub {
 					assistantwire.CapabilityMeetingAttendance, assistantwire.CapabilityMeetingConversation, assistantwire.CapabilityMeetingPhotos, assistantwire.CapabilityMeetingLiveView,
 					assistantwire.CapabilityMeetingHighlights, assistantwire.CapabilityMeetingNotes, assistantwire.CapabilityMeetingEcho, assistantwire.CapabilityMeetingTranscription,
 					assistantwire.CapabilityRecordingDay, assistantwire.CapabilityAssistantSearch, assistantwire.CapabilityHTTPBodyStream, assistantwire.CapabilityAssistantStartServiceTier,
-					assistantwire.CapabilityMCPWait, assistantwire.CapabilitySessionsSideFold, assistantwire.CapabilityRemoteImages, devicewire.SharingCapability}}
+					assistantwire.CapabilityMCPWait, assistantwire.CapabilitySessionsSideFold, assistantwire.CapabilityRemoteImages, assistantwire.CapabilityTodoView,
+					assistantwire.CapabilityTodoPlaces, devicewire.SharingCapability}}
 		},
 		OnHello: b.onHello,
 		// A node's tool call that its caller stopped waiting for ends at the hub too (fleet_tools.go).

@@ -45,6 +45,8 @@ type codexAppThread struct {
 	// history in the App's database says neither. Empty in a schema without them.
 	Model  string `json:"model"`
 	Effort string `json:"effort"`
+	// Terminal CLIs have no app-server stream: include the stored items of their running turn too.
+	includeRunning bool
 }
 
 func (t codexAppThread) updated() time.Time { return time.UnixMilli(t.UpdatedAtMs) }
@@ -74,9 +76,12 @@ var codexAppDBs = struct {
 	byHome map[string]*codexAppDB
 }{byHome: map[string]*codexAppDB{}}
 
+// codexAppDBGlob is what codexAppDBPath globs with (a test counts the globs).
+var codexAppDBGlob = filepath.Glob
+
 // codexAppDBPath is the newest state database in home (state_5.sqlite in 2026-11): its number goes up with its schema.
 func codexAppDBPath(home string) string {
-	paths, _ := filepath.Glob(filepath.Join(home, "state_*.sqlite"))
+	paths, _ := codexAppDBGlob(filepath.Join(home, "state_*.sqlite"))
 	best, bestN := "", -1
 	for _, p := range paths {
 		n, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(filepath.Base(p), "state_"), ".sqlite"))

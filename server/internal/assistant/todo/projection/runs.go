@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -39,13 +40,19 @@ const (
 	runPersona                    // one of Persona's own conversations works now
 )
 
-// run is one active linked run: its link, its session when the hub lists it, and how it stands.
+// run is one active linked run: its link, its session when the hub lists it (else noSession), how it stands, and the
+// pending card it asks by (asksBefore; nil: none the hub holds). s and card point into the facts: a session is 1.5 KB,
+// and every read of the list makes a run of each active link.
 type run struct {
 	link  Agent
-	s     proto.Session
+	s     *proto.Session
 	found bool
 	kind  runKind
+	card  *proto.Interaction
 }
+
+// noSession is the session of a run the hub does not list: the zero session, never written.
+var noSession proto.Session
 
 // title is the run's title as the session list has it, else as the link recorded it.
 func (r run) title() string {
@@ -71,11 +78,20 @@ func activeRuns(f *Facts, now time.Time) []run {
 		if a.ReleasedAt != nil || a.DismissedAt != nil || a.StartError != "" {
 			continue // a run whose start failed counts as stopped
 		}
-		r := run{link: a}
-		for _, s := range f.Sessions {
-			if s.MachineID == a.MachineID && s.SessionID == a.SessionID {
+		r := run{link: a, s: &noSession}
+		for i := range f.Sessions {
+			if s := &f.Sessions[i]; s.MachineID == a.MachineID && s.SessionID == a.SessionID {
 				r.s, r.found = s, true
 				break
+			}
+		}
+		for i := range f.Interactions {
+			c := &f.Interactions[i]
+			if c.MachineID != a.MachineID || c.SessionID != a.SessionID {
+				continue
+			}
+			if r.card == nil || asksBefore(c, r.card) {
+				r.card = c
 			}
 		}
 		r.kind = runReading(r, now)
@@ -84,13 +100,26 @@ func activeRuns(f *Facts, now time.Time) []run {
 	return out
 }
 
+// asksBefore: card c, rather than d, is what their run asks: the session's own before the manager's card about its
+// turn, as the session list reads them (a work card may stay up after the agent went on to ask something else), then
+// the older, then the lesser id, so two reads of the same cards name the same one.
+func asksBefore(c, d *proto.Interaction) bool {
+	if cw, dw := c.ToolName == assistantwire.WorkCardTool, d.ToolName == assistantwire.WorkCardTool; cw != dw {
+		return dw
+	}
+	if !c.CreatedAt.Equal(d.CreatedAt) {
+		return c.CreatedAt.Before(d.CreatedAt)
+	}
+	return c.ID < d.ID
+}
+
 // runReading is how run r stands: the first that holds of offline, asks, a usage limit, interrupted, awaits a reply,
 // unread, waits on another Agent or a named outside event, background, starting, running.
 func runReading(r run, now time.Time) runKind {
 	if !r.found {
 		return runOffline
 	}
-	s := r.s
+	s := *r.s
 	st := stateOf(s)
 	switch {
 	case st == proto.StateNeedsYou:
@@ -361,6 +390,9 @@ func openPRs(f *Facts, now time.Time) []PRStatus {
 func dueEnd(f *Facts) (time.Time, bool) {
 	if f.DueAt != nil {
 		return *f.DueAt, true
+	}
+	if f.DueDate == "" { // most to-dos have no date: a failed parse would allocate its error on every read
+		return time.Time{}, false
 	}
 	loc := f.Loc
 	if loc == nil {
