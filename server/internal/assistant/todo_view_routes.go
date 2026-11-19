@@ -103,6 +103,22 @@ func (s *Service) todosViewed(ctx context.Context, briefs bool) ([]listedTodo, t
 	return list, p, nil
 }
 
+// viewedTodo is to-do id as GET /api/v1/todos/{id} answers it: its row as the list has it, with its view and its
+// brief; false when there is none.
+func (s *Service) viewedTodo(ctx context.Context, id string) (listedTodo, bool, error) {
+	list, _, err := s.todosViewed(ctx, false)
+	if err != nil {
+		return listedTodo{}, false, err
+	}
+	for _, t := range list {
+		if t.ID == id {
+			t.Todo = s.withBrief(t.Todo) // as withBriefFrom gives it in the list
+			return t, true, nil
+		}
+	}
+	return listedTodo{}, false, nil
+}
+
 func (s *Service) todoViewRoutes() {
 	// GET /api/v1/todos/{id}: one to-do as GET /api/v1/todos lists it, its view included → {"todo": row}; an unknown
 	// id 404 todo_not_found.
@@ -119,19 +135,15 @@ func (s *Service) todoViewRoutes() {
 			apierr.WriteCode(w, http.StatusNotFound, "todo_not_found", errors.New("todo not found"))
 			return
 		}
-		list, _, err := s.todosViewed(r.Context(), false)
-		if err != nil {
+		t, found, err := s.viewedTodo(r.Context(), id)
+		switch {
+		case err != nil:
 			apierr.Write(w, http.StatusServiceUnavailable, errTodosUnavailable)
-			return
+		case !found: // deleted meanwhile
+			apierr.WriteCode(w, http.StatusNotFound, "todo_not_found", errors.New("todo not found"))
+		default:
+			apierr.WriteJSON(w, map[string]any{"todo": t})
 		}
-		for _, t := range list {
-			if t.ID == id {
-				t.Todo = s.withBrief(t.Todo) // as withBriefFrom gives it in the list
-				apierr.WriteJSON(w, map[string]any{"todo": t})
-				return
-			}
-		}
-		apierr.WriteCode(w, http.StatusNotFound, "todo_not_found", errors.New("todo not found")) // deleted meanwhile
 	})
 	// GET /api/v1/todos/places: the To-dos sidebar's places with the list's counts (assistantwire.TodoPlaces).
 	s.handle("GET /api/v1/todos/places", func(w http.ResponseWriter, r *http.Request) {
