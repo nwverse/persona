@@ -47,6 +47,7 @@ type larkCall struct {
 	Risk string   // lark-cli's own risk level for a "CLI" call: read | write | high-risk-write ("" unknown)
 	Args []string // lark-cli's arguments, for the phone card
 
+	fileBody     bool // a positional @file body, whose content can change between the check and the call
 	relFile      bool // a relative @file body or query input, read from the conversation's directory (classifyLark, #8404)
 	queryUnknown bool // execution-time stdin, expansion, or -G data cannot be bound to a query-confirmed grant
 	dataInQuery  bool // -G moved the parsed data argument to the query, leaving the actual request body empty
@@ -121,7 +122,7 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 		if c.queryUnknown && needsConfirmation {
 			return "deny", "查询要在执行时才能确定，无法绑定这次确认；请把查询直接写在路径或 --url-query 参数里。", nil
 		}
-		classified = classified && larkBypassSafe(c)
+		classified = classified && larkBypassCallSafe(cfg, c)
 	}
 	safe := len(v.calls) > 0 && classified
 	if v.other {
@@ -177,7 +178,7 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 	for _, c := range v.calls {
 		decision := larkDecision(cfg, c)
 		if bypass {
-			if larkBypassSafe(c) {
+			if larkBypassCallSafe(cfg, c) {
 				bypassed = append(bypassed, c)
 				continue
 			}

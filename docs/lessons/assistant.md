@@ -726,6 +726,14 @@ nothing, so lark-cli's own answer still wins. When a card names a read as a writ
 environment first, before changing the classifier. A literal `cd` before a command variable (`cd /tmp; L=/abs/lark-cli; $L …`)
 now resolves only absolute values: a relative one is looked up from the new directory.
 
+## Check-time file content is not what an Auth-less gate sends (#8413)
+
+A gate without `Auth` has no proxy to compare the request with the body the hook read. A body-scoped allow therefore
+cannot trust `@file`, even for a lone call or in bypass mode: require confirmation, while leaving inline bodies and
+body-independent rules alone. Read bodies through `openNoBlock`, check both lexical and `EvalSymlinks` paths for
+`/proc` / `/dev` / `/sys`, accept regular files only and cap both stat size and bytes read. Output-filter names need
+option checks too: `sort -o` / `--compress-program` and `date -s` / `--set` have effects beyond formatting.
+
 ## A rejected answer must not consume Don't handle (#7907)
 
 Validate the ask round and the answer before changing its dismissal. Keep the persisted receipt in force while an

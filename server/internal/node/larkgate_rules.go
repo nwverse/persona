@@ -36,7 +36,28 @@ func larkDecision(cfg proto.AssistantLark, c larkCall) string {
 	if c.Gate < 0 || c.Gate >= len(cfg.Gates) {
 		return "confirm"
 	}
+	if larkFileBodyRuleAllow(cfg, c) {
+		return "confirm"
+	}
 	return decideLark(cfg.Gates[c.Gate].Rules, c)
+}
+
+// larkFileBodyRuleAllow reports a silent body-scoped allow that a direct gate cannot enforce at send time.
+func larkFileBodyRuleAllow(cfg proto.AssistantLark, c larkCall) bool {
+	if !c.fileBody || c.Gate < 0 || c.Gate >= len(cfg.Gates) {
+		return false
+	}
+	gate := cfg.Gates[c.Gate]
+	if gate.Auth != nil {
+		return false
+	}
+	rule, ok := firstLark(gate.Rules, c)
+	return ok && rule.Action == "allow" && len(rule.Body) > 0
+}
+
+// larkBypassCallSafe keeps mutable file bodies behind confirmation even when ordinary writes bypass cards.
+func larkBypassCallSafe(cfg proto.AssistantLark, c larkCall) bool {
+	return larkBypassSafe(c) && !larkFileBodyRuleAllow(cfg, c)
 }
 
 // larkRead: a call that only reads (lark-cli's own read risk, a GET / HEAD).

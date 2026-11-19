@@ -135,7 +135,7 @@ func literalLarkLoopCommands(cmd string, gates []proto.CommandGate) ([]string, b
 			// These commands cannot mutate a binding in the parent shell. Unknown
 			// builtins/functions and all assignment/declaration forms fall back.
 			ordinary := map[string]bool{"[": true, ":": true, "false": true, "ls": true, "git": true, "go": true, "pwd": true, "sleep": true, "cat": true, "tee": true}[name] ||
-				larkFilters[name] && name != "printf" && name != "cd"
+				larkOutputFilter(words[index:]) && name != "printf" && name != "cd"
 			external := (filepath.IsAbs(name) || strings.HasPrefix(name, "~/")) && !commandShells[base] && !indirectLarkCommand(base)
 			if !gated && !ordinary && !external {
 				return false

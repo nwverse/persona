@@ -1,6 +1,7 @@
 package node
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -22,6 +23,55 @@ var (
 		"--data-raw": true, "-o": true, "--output": true, "-i": false, "--include": false, "-m": true, "--max-time": true, "-s": false,
 		"-S": false, "-f": false, "--compressed": false, "-H": true, "--header": true, "--upload": true, "-X": true, "--request": true}
 )
+
+// larkOutputFilter reports whether words are a command that only prints or transforms its input. A filter's name is
+// not enough: sort can write a file or run a compressor, and date can set the clock.
+func larkOutputFilter(words []string) bool {
+	if len(words) == 0 || !larkFilters[words[0]] {
+		return false
+	}
+	switch words[0] {
+	case "sort":
+		return !larkFilterFlag(words, "--compress-program", 'o', "ktTS", "")
+	case "date":
+		return !larkFilterFlag(words, "--set", 's', "dfrv", "I")
+	default:
+		return true
+	}
+}
+
+// larkFilterFlag finds a side-effecting long or short option. valueOptions take a separate value when their cluster
+// ends; attachedOptions take only the rest of their cluster. An 'o' or 's' inside such a value is data.
+func larkFilterFlag(words []string, long string, short byte, valueOptions, attachedOptions string) bool {
+	for i := 1; i < len(words); i++ {
+		arg := words[i]
+		if arg == "--" {
+			return false
+		}
+		if arg == long || strings.HasPrefix(arg, long+"=") {
+			return true
+		}
+		if len(arg) < 2 || arg[0] != '-' || strings.HasPrefix(arg, "--") {
+			continue
+		}
+		cluster := arg[1:]
+		for j := 0; j < len(cluster); j++ {
+			if cluster[j] == short {
+				return true
+			}
+			if strings.ContainsRune(valueOptions, rune(cluster[j])) {
+				if j == len(cluster)-1 {
+					i++ // a separate option value, even one beginning with '-'
+				}
+				break
+			}
+			if strings.ContainsRune(attachedOptions, rune(cluster[j])) {
+				break
+			}
+		}
+	}
+	return false
+}
 
 // classifyLark reads a Bash command against the command gates (curl / wget aimed at one's API is refused); cwd
 // resolves @file bodies and query inputs; risk supplies CLI metadata when configured. Known read commands also have a
@@ -74,7 +124,7 @@ func larkLoneGateCall(cmd string, gates []proto.CommandGate) bool {
 			}
 		}
 		if i > 0 {
-			if !larkFilters[words[0]] || words[0] == "cd" {
+			if !larkOutputFilter(words) || words[0] == "cd" {
 				return false
 			}
 			continue
@@ -362,7 +412,7 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 			v.other = true // it edits text and runs none of it, whatever its pattern names
 		case name == "for" || name == "done" || name == "fi":
 			v.other = true // a loop's words are its variable's values: run only where a command uses $var (dynamicCommandName)
-		case larkFilters[name] && len(env) == 0:
+		case larkOutputFilter(words) && len(env) == 0:
 			seg.filter = true
 		case name == "tee":
 			v.other, seg.filter, seg.writes = true, true, true
@@ -412,7 +462,7 @@ func larkFilterSubstitution(cmd string) bool {
 			return false
 		}
 		words, ok := unwrapCommand(s.Words)
-		if !ok || len(words) == 0 || len(words) != len(s.Words) || !larkFilters[words[0]] {
+		if !ok || len(words) == 0 || len(words) != len(s.Words) || !larkOutputFilter(words) {
 			return false
 		}
 	}
@@ -658,7 +708,7 @@ func larkVariableScopeStable(cmd string, gates []proto.CommandGate) bool {
 			}
 			if !allowed {
 				allowed = map[string]bool{"cat": true, "tee": true, "ls": true, "git": true, "go": true, "pwd": true, "sleep": true, "false": true, ":": true}[name] ||
-					larkFilters[name] && name != "printf" && name != "cd"
+					larkOutputFilter(suffix) && name != "printf" && name != "cd"
 			}
 			if !allowed {
 				stable = false
@@ -809,6 +859,7 @@ func parseGateCall(g proto.CommandGate, args []string, vars map[string]string, c
 		c.Body, rest, hasData = rest[0], rest[1:], true
 	} else if len(rest) > 0 && strings.HasPrefix(rest[0], "@") {
 		c.Body, c.relFile, rest = readBodyFile(rest[0][1:], cwd), !filepath.IsAbs(rest[0][1:]), rest[1:]
+		c.fileBody = true
 		hasData = true
 	}
 	for i := 0; i < len(rest); i++ {
@@ -960,13 +1011,40 @@ func gateCurlQueryEscape(s string) string {
 	return out.String()
 }
 
+const bodyFileReadLimit = 1 << 20
+
 func readBodyFile(p, cwd string) string {
 	if !filepath.IsAbs(p) {
 		p = filepath.Join(cwd, p)
 	}
-	b, err := os.ReadFile(p)
+	p = filepath.Clean(p)
+	unreadable := func() string { return "（读不到 " + p + "）" }
+	virtual := func(candidate string) bool {
+		for _, root := range []string{"/proc", "/dev", "/sys"} {
+			if candidate == root || strings.HasPrefix(candidate, root+"/") {
+				return true
+			}
+		}
+		return false
+	}
+	if virtual(p) {
+		return unreadable()
+	}
+	if resolved, err := filepath.EvalSymlinks(p); err == nil && virtual(resolved) {
+		return unreadable()
+	}
+	f, err := openNoBlock(p)
 	if err != nil {
-		return "（读不到 " + p + "）"
+		return unreadable()
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() > bodyFileReadLimit {
+		return unreadable()
+	}
+	b, err := io.ReadAll(io.LimitReader(f, bodyFileReadLimit+1))
+	if err != nil || len(b) > bodyFileReadLimit {
+		return unreadable()
 	}
 	return textfmt.Clip(string(b), 4000)
 }
