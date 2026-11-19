@@ -1242,3 +1242,14 @@ that open with a TLS record (first byte `0x16`) and replays that byte before for
 - Wrap the replayed connection by embedding the `net.Conn` interface, not `*net.TCPConn`. Embedding the concrete type
   promotes `WriteTo`, which `io.Copy` uses instead of the overriding `Read`, so the replayed byte is silently dropped
   and every forwarded TLS handshake fails.
+
+- A fresh test repository's first branch is whatever the machine's `init.defaultBranch` says (#11017): `main` on one
+  machine, `master` on another. A test that then runs `git branch main` or `git checkout -b master` fails only where
+  the setting matches. Name the first branch (`git init --initial-branch=<name>`, or `git branch -M` after the first
+  commit), and run the suite with `GIT_CONFIG_GLOBAL` pointing at a file that sets `init.defaultBranch` to `main`, then
+  to `master`.
+
+- A test that waits for a signal to end a command must give the command far longer to live than the wait (#11017). A
+  command that sleeps 20 s under a 20 s wait passes when the signal is lost and fails on a slow machine when it was
+  not, so the result says nothing. Let it sleep ten times the wait, keep the wait generous, and on a timeout say which
+  side stalled: the command never got the signal, or it got it and its parent had not exited yet.
