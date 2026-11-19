@@ -15,6 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -516,6 +517,7 @@ func (s *Service) removeTodo(ctx context.Context, id string) error {
 		for _, sp := range cur.Spaces {
 			delete(s.todos.spacesByKey, sp.MachineID+"/"+sp.Space)
 		}
+		s.todoGone(cur)
 		delete(s.todos.todos, id)
 	}
 	s.todos.mu.Unlock()
@@ -915,8 +917,8 @@ func (s *Service) todoRoutes() {
 	s.todoTimelineRoutes()
 	// GET /api/v1/todos: list all todos (newest created_at first), agents sorted (active first, then released); a todo
 	// waiting for the owner carries its ask (todo_ask.go), an open one nobody works on why (tasks_orphan.go); each its
-	// view, and the list its counts (todo_view_routes.go); to an extension's token without what it is not shown of the
-	// runs (todo_scope.go)
+	// view, and the list its counts (todo_view_routes.go); to an extension's token without the to-dos it is not shown
+	// (todo_scope.go)
 	s.handle("GET /api/v1/todos", func(w http.ResponseWriter, r *http.Request) {
 		list, p, err := s.todosViewed(r.Context(), true)
 		if err != nil {
@@ -924,7 +926,7 @@ func (s *Service) todoRoutes() {
 			return
 		}
 		if r.Header.Get(RoleHeader) == roleExtension {
-			s.forExtension(r.Context(), list, p, -1)
+			list = s.extensionRows(r.Context(), list, p)
 		}
 		apierr.WriteJSON(w, todosList{Todos: list, Counts: p.counts()})
 	})
@@ -1131,6 +1133,10 @@ func (s *Service) todoRoutes() {
 			apierr.Write(w, http.StatusConflict, errors.New("todo is already completed"))
 			return
 		}
+		if r.Header.Get(RoleHeader) == roleExtension && s.spaceTakeRefused(r.Context(), todoID, mid, space) {
+			apierr.Write(w, http.StatusNotFound, errors.New("space not found")) // what it is not shown (todo_scope.go)
+			return
+		}
 
 		linkedCount, err := s.linkTodoSpace(r.Context(), todoID, mid, space)
 		if err != nil {
@@ -1188,8 +1194,15 @@ func (s *Service) todoRoutes() {
 		}
 
 		var title, cwd, agent string
-		if c, ok := s.session(r.Context(), mid, sid); ok {
+		c, found := s.session(r.Context(), mid, sid)
+		if found {
 			title, cwd, agent = c.Title, c.Cwd, c.Agent
+		}
+		// An extension's token takes no run it cannot be shown: one the computer does not list, one in the health space,
+		// one off a to-do it is not shown (todo_scope.go).
+		if r.Header.Get(RoleHeader) == roleExtension && (!found || s.todoTakeRefused(r.Context(), mid, c)) {
+			apierr.Write(w, http.StatusNotFound, errors.New("agent not found"))
+			return
 		}
 		if err := s.linkTodoAgent(r.Context(), todoID, mid, sid, title, cwd, agent); err != nil {
 			todoErr(w, err)
@@ -1284,6 +1297,19 @@ func (s *Service) linkTodoSpace(ctx context.Context, todoID, mid, space string) 
 	spKey := spaceKey(mid, space)
 
 	var oldTodoID string
+	// The links in the health space of the to-do it takes the space from stay (keepHealthLinks), once the link is known to
+	// go ahead: memory is the store's while todoBook.writing is held.
+	s.todos.mu.RLock()
+	holder := s.todos.spacesByKey[spKey]
+	target, ok := s.todos.todos[todoID]
+	open := ok && target.DoneAt == nil
+	s.todos.mu.RUnlock()
+	if holder != "" && holder != todoID && open {
+		if err := s.keepHealthLinks(ctx, holder, mid, spKey); err != nil {
+			s.todos.writing.Unlock()
+			return 0, err
+		}
+	}
 	if st := s.todoDB(); st != nil {
 		var err error
 		oldTodoID, err = st.LinkTodoSpace(ctx, todoID, mid, space, now)
@@ -1472,6 +1498,10 @@ func (s *Service) unlinkTodoSpace(ctx context.Context, todoID, mid, space string
 		s.todos.writing.Unlock()
 		return db.ErrTodoNotFound
 	}
+	if err := s.keepHealthLinks(ctx, todoID, mid, spKey); err != nil {
+		s.todos.writing.Unlock()
+		return err
+	}
 
 	if st := s.todoDB(); st != nil {
 		if err := st.UnlinkTodoSpace(ctx, todoID, mid, space); err != nil {
@@ -1524,9 +1554,18 @@ func (s *Service) TodoSpaceRenamed(ctx context.Context, r TodoSpaceRenamed) {
 		return
 	}
 	s.todos.writing.Lock()
+	oldKey := spaceKey(r.MachineID, r.Old)
 	s.todos.mu.RLock()
 	_, voided := s.todos.spacesByKey[spaceKey(r.MachineID, r.New)]
+	holder := s.todos.spacesByKey[oldKey]
 	s.todos.mu.RUnlock()
+	if voided && holder != "" {
+		if err := s.keepHealthLinks(ctx, holder, r.MachineID, oldKey); err != nil {
+			s.todos.writing.Unlock()
+			s.logf("rename space: keep the links in the health space of %s: %v", holder, err)
+			return
+		}
+	}
 	if st := s.todoDB(); st != nil {
 		var err error
 		if voided, err = st.RenameTodoSpace(ctx, r.MachineID, r.Old, r.New); err != nil {
@@ -1674,6 +1713,19 @@ func (s *Service) linkTodoSpaceAgent(ctx context.Context, todoID, mid, key strin
 // Callers release it before notifying the hub or contacting nodes.
 func (s *Service) writeTodoAgentLink(ctx context.Context, todoID, mid, sid, title, cwd, agent, startError, source, via string, allowDone bool) error {
 	now := time.Now().UTC()
+	// A link keeps a directory in the health space: a run's directory follows its shell's cd, and where it worked tells
+	// the to-do's history as the space's for good (todosHidden, #10941).
+	if cwd != "" && !identity.InHealthSpace(cwd) {
+		s.todos.mu.RLock()
+		if t := s.todos.todos[todoID]; t != nil {
+			for _, a := range t.Agents {
+				if a.MachineID == mid && a.SessionID == sid && identity.InHealthSpace(a.Cwd) {
+					cwd = a.Cwd
+				}
+			}
+		}
+		s.todos.mu.RUnlock()
+	}
 
 	if st := s.todoDB(); st != nil {
 		link := st.LinkTodoAgentWithSource

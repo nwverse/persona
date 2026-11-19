@@ -27,9 +27,9 @@ import (
 // which clients match to the to-do by its ref. The manager names CapabilityTodoTimeline in its hello.
 //
 // An extension's token (todos.read) reads less (docs/extensions/extensions.md "Never shown to extensions"): nothing of
-// a to-do whose history may hold the health space's words (todosHidden, todo_scope.go), and no answered cards, whose
-// records hold what the owner typed into a card's fields and do not say whose card it was (a Just me card, a health
-// run's).
+// a to-do whose history may hold the health space's words, whose routes answer it 404 (todoScoped, todo_scope.go), and
+// no answered cards, whose records hold what the owner typed into a card's fields and do not say whose card it was (a
+// Just me card, a health run's).
 
 const (
 	// todoTimelineFeedCap is how many of a to-do's feed items a read takes, the newest: a to-do has a few hundred at
@@ -45,7 +45,7 @@ func (s *Service) todoTimelineRoutes() {
 	// GET /api/v1/todos/{id}/timeline?before=<round id>&limit=<n>: the to-do's conversation → assistantwire.TodoTimeline,
 	// its latest limit rounds (todoTimelinePage when not given, at most todoTimelineMaxPage) before the round named
 	// before (none: up to the latest), oldest first, with more while earlier ones are left. An unknown id 404
-	// todo_not_found, and so does a to-do an extension is not shown the history of; a before that names no round (one
+	// todo_not_found, and so does a to-do an extension is not shown (todoScoped); a before that names no round (one
 	// read from rows the stores no longer keep, or never one) 409 round_not_found, and the client reads the latest page
 	// again; the to-dos or their history unreadable 503.
 	s.handle("GET /api/v1/todos/{id}/timeline", func(w http.ResponseWriter, r *http.Request) {
@@ -61,10 +61,6 @@ func (s *Service) todoTimelineRoutes() {
 			return
 		}
 		sessions := s.todoFactsOf(ctx, list)[0].Sessions
-		if ext && s.todoHistoryHidden(ctx, id, sessions) {
-			apierr.WriteCode(w, http.StatusNotFound, "todo_not_found", i18n.Err("assistant-todos.not_found"))
-			return
-		}
 		list[0].Todo = s.withBrief(list[0].Todo) // as the item route lists it
 		raw, err := json.Marshal(list[0])
 		if err != nil {
@@ -98,9 +94,10 @@ func healthRun(c proto.Session) bool {
 
 // conversationSpace is the space of the conversation a to-do names, id ("" the assistant's own, as for no
 // conversation), and whether it could be told. An assistant conversation's as the assistant's machine lists it
-// (selfSpace), else as the record of its deletion keeps it; a task leader's agent (task_leader.go, whose workers' to-dos
-// it opens and supervises) as its run's (leaderSpace). One neither knows (the node not connected yet, the call failed,
-// the conversation no longer listed) is not told.
+// (selfSpace), the main conversation's also as the computer it is routed to lists it (Settings.mainRouteMachine: one
+// kept on the assistant's former computer), else as the record of its deletion keeps it; a task leader's agent
+// (task_leader.go, whose workers' to-dos it opens and supervises) as its run's (leaderSpace). One neither knows (the
+// node not connected yet, the call failed, the conversation no longer listed) is not told.
 func (s *Service) conversationSpace(ctx context.Context, id string) (string, bool) {
 	if machine, sid, ok := parseLeaderRef(id); ok && s.isLeaderSession(machine, sid) {
 		return s.leaderSpace(ctx, s.canonical(machine), sid)
@@ -108,28 +105,35 @@ func (s *Service) conversationSpace(ctx context.Context, id string) (string, boo
 	if space, ok := s.selfSpace(ctx, id); ok {
 		return space, true
 	}
-	if row, ok, err := s.deletedConversation(ctx, s.settings(ctx).MachineID, id); err == nil && ok {
+	set := s.settings(ctx)
+	if routed := set.mainRouteMachine(); id == set.Main && routed != set.MachineID {
+		if c, ok := s.session(ctx, routed, id); ok {
+			return spaceOf(c), true
+		}
+	}
+	if row, ok, err := s.deletedConversation(ctx, set.MachineID, id); err == nil && ok {
 		return row.Space, true
 	}
 	return "", false
 }
 
-// leaderSpace is the space of task leader agent machine/sid, and whether it could be told: by the directory its link
-// keeps, else as its computer lists it.
+// leaderSpace is the space of task leader agent machine/sid, and whether it could be told: the health space's when any
+// of its links keeps a directory there (a subfolder counts: this only hides), else outside it when one keeps a
+// directory, else as its computer lists it.
 func (s *Service) leaderSpace(ctx context.Context, machine, sid string) (string, bool) {
 	s.todos.mu.RLock()
-	cwd := ""
+	inSpace, kept := false, false
 	for _, t := range s.todos.todos {
 		for _, a := range t.Agents {
 			if a.MachineID == machine && a.SessionID == sid && a.Cwd != "" {
-				cwd = a.Cwd
+				inSpace, kept = inSpace || identity.InHealthSpace(a.Cwd), true
 			}
 		}
 	}
 	s.todos.mu.RUnlock()
-	if identity.InHealthSpace(cwd) { // a subfolder counts: this only hides
+	if inSpace {
 		return SpaceHealth, true
-	} else if cwd != "" {
+	} else if kept {
 		return "", true
 	}
 	list, err := s.todoRunSessions(ctx, machine, map[string]bool{sid: true})
@@ -164,12 +168,8 @@ func timelinePage(rounds []assistantwire.TodoRound, before string, limit int) (p
 // todoItemDetail is what GET /api/v1/todos/{id} answers beside to-do t's row raw, whose active runs' sessions are
 // sessions (assistantwire.TodoItemDetail): the rounds the paper shows (timeline.Latest), how many there are in all, its
 // results and what changed since the owner looked; for an extension (ext) as todoTimelineOf reads it. Nothing when its
-// history cannot be read, or is hidden from the extension that reads it (hidden, todosHidden): the row still answers,
-// and the paper draws what it has as from an older manager.
-func (s *Service) todoItemDetail(ctx context.Context, t Todo, raw json.RawMessage, sessions []proto.Session, ext, hidden bool) assistantwire.TodoItemDetail {
-	if hidden {
-		return assistantwire.TodoItemDetail{}
-	}
+// history cannot be read: the row still answers, and the paper draws what it has as from an older manager.
+func (s *Service) todoItemDetail(ctx context.Context, t Todo, raw json.RawMessage, sessions []proto.Session, ext bool) assistantwire.TodoItemDetail {
 	d, err := s.todoTimelineOf(ctx, raw, sessions, ext)
 	if err != nil {
 		s.logf("todo %s: timeline: %v", t.ID, err)
@@ -184,10 +184,10 @@ func (s *Service) todoItemDetail(ctx context.Context, t Todo, raw json.RawMessag
 
 // todoTimelineOf works out the timeline of the to-do whose row is raw, as GET /api/v1/todos/{id} lists it (with its
 // brief and lineage; its view, when there, is not read), with sessions its active runs' sessions as its view reads them
-// (todoFactsOf). For an extension (ext) it leaves out the answered cards; whether the extension is shown the to-do's
-// history at all its caller asks first (todosHidden). The row is read from its JSON, as the shared cases give it, so
-// the timeline sees exactly what the apps do: an open ask's id is formed from asked_at as listed, as the view forms it.
-// An error when the feed's items about it or its decisions cannot be read.
+// (todoFactsOf). For an extension (ext) it leaves out the answered cards; a to-do it is not shown never gets here
+// (todoScoped). The row is read from its JSON, as the shared cases give it, so the timeline sees exactly what the apps
+// do: an open ask's id is formed from asked_at as listed, as the view forms it. An error when the feed's items about it
+// or its decisions cannot be read.
 func (s *Service) todoTimelineOf(ctx context.Context, raw json.RawMessage, sessions []proto.Session, ext bool) (d timeline.Derived, err error) {
 	in := timeline.Input{Sessions: sessions, Loc: s.location(ctx)}
 	if err := json.Unmarshal(raw, &in.Todo); err != nil {

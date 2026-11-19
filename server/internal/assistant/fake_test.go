@@ -1007,6 +1007,11 @@ func (noPlans) FeedByRef(context.Context, string, []string, int) ([]db.FeedRow, 
 	return nil, errors.New("no assistant_feed here")
 }
 
+// FeedConversations: none, as no item is ever written here (what an extension is shown of a to-do, todo_scope.go).
+func (noPlans) FeedConversations(context.Context, []string, []string) (map[string][]string, error) {
+	return map[string][]string{}, nil
+}
+
 func (m *memStore) Setting(_ context.Context, key string, out any) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

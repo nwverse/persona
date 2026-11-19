@@ -410,6 +410,66 @@ func TestRenameTodoSpaceConflictVoidsOldLink(t *testing.T) {
 	}
 }
 
+// KeepTodoAgents takes a todo's links off the space they came through, released and dismissed (#10941): the space's
+// unlink, which deletes the links through it, leaves them, and so do a move of the space to another todo and a rename
+// that voids it; another link through the space is deleted as before, and another todo's link is not touched.
+func TestKeepTodoAgents(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	now := time.Now().Truncate(time.Millisecond)
+	for _, id := range []string{"t1", "t2", "t3"} {
+		_ = d.CreateTodo(ctx, TodoRow{ID: id, Title: id, CreatedAt: now, UpdatedAt: now})
+	}
+	link := func(todo, space, sid string) {
+		t.Helper()
+		if _, err := d.LinkTodoSpace(ctx, todo, "macbook", space, now); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := d.LinkTodoAgentWithSource(ctx, todo, "macbook", sid, sid, "/cwd", "claude", "", "space", "macbook/"+space, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link("t1", "journal", "kept")
+	if _, err := d.LinkTodoAgentWithSource(ctx, "t1", "macbook", "other", "other", "/cwd", "claude", "", "space", "macbook/journal", now); err != nil {
+		t.Fatal(err)
+	}
+	link("t2", "diary", "moved")
+	link("t3", "notes", "voided")
+	_, _ = d.LinkTodoSpace(ctx, "t1", "macbook", "beta", now)
+	at := now.Add(time.Minute)
+	for todo, sid := range map[string]string{"t1": "kept", "t2": "moved", "t3": "voided"} {
+		if err := d.KeepTodoAgents(ctx, todo, "macbook", []string{sid}, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := d.UnlinkTodoSpace(ctx, "t1", "macbook", "journal"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.LinkTodoSpace(ctx, "t1", "macbook", "diary", at); err != nil {
+		t.Fatal(err)
+	}
+	if voided, err := d.RenameTodoSpace(ctx, "macbook", "notes", "beta"); err != nil || !voided {
+		t.Fatalf("rename: voided %v, %v", voided, err)
+	}
+	agents, err := d.ListAllTodoAgents(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kept := map[string]TodoAgentRow{}
+	for _, a := range agents {
+		kept[a.TodoID+"/"+a.SessionID] = a
+	}
+	for _, key := range []string{"t1/kept", "t2/moved", "t3/voided"} {
+		a, ok := kept[key]
+		if !ok || a.Source != "manual" || a.Via != "" || a.ReleasedAt == nil || !a.ReleasedAt.Equal(at) || a.DismissedAt == nil ||
+			!a.DismissedAt.Equal(at) || a.Cwd != "/cwd" {
+			t.Errorf("%s: %+v (kept %v)", key, a, ok)
+		}
+	}
+	if _, ok := kept["t1/other"]; ok || len(agents) != 3 {
+		t.Errorf("links: %+v", agents)
+	}
+}
+
 // An agent linked to a todo the user already finished stays linked (#2954): that is what a task's start does when the
 // user taps "Done" while the agent is still starting, so the task keeps the agent and the close loop retires it.
 // Linking one to a done todo by hand stays refused.

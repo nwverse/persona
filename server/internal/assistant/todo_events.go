@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"context"
 	"slices"
 	"sync"
 	"time"
@@ -13,7 +14,8 @@ import (
 // deleted, or its title, whether it is done, its supervisor (#3484) or its chat thread changes (each carries its kind:
 // concern for one of the owner's concerns, #3561), and todo.decision for every decision written on
 // one. The hub hands them only to the extensions that subscribed and were granted todos.read (extmgr/todo_events.go);
-// this side only says what happened, and nothing is sent while the hub carries no extensions (todoEventPublisher).
+// this side only says what happened, and nothing is sent while the hub carries no extensions (todoEventPublisher), nor
+// of a todo an extension is not shown (todoChangedFlush, todoDecisionHidden, #10941).
 
 // todoChangedSettle is how long a change waits for the rest: what happens to todos within it is told once, as the
 // todos are at its end.
@@ -67,9 +69,10 @@ type todoNotice struct {
 // todoEvents is what the todos have waiting to be told to the hub. marks is the todos as the extensions were last told
 // of them (nil until the todos are loaded: nothing is told of the todos as they were found).
 type todoEvents struct {
-	mu       sync.Mutex // marks, armed
+	mu       sync.Mutex // marks, armed, gone
 	marks    map[string]todoMark
-	armed    bool // a flush is scheduled
+	armed    bool            // a flush is scheduled
+	gone     map[string]Todo // the todos deleted since the last flush read the todos, as they last were (todoGone)
 	flushing sync.Mutex
 	after    func(d time.Duration, f func()) // tests replace the timer
 
@@ -102,6 +105,23 @@ func (s *Service) todoMarksBaseline(todos map[string]*Todo) {
 	e := &s.tevents
 	e.mu.Lock()
 	e.marks = marks
+	e.mu.Unlock()
+}
+
+// todoGone keeps todo t, which is being deleted, for the todo.changed that tells of it: todoChangedFlush judges it as
+// it last was. The caller holds the todos' lock.
+func (s *Service) todoGone(t *Todo) {
+	if !s.todoEventsOn() {
+		return
+	}
+	e := &s.tevents
+	e.mu.Lock()
+	if e.marks != nil {
+		if e.gone == nil {
+			e.gone = map[string]Todo{}
+		}
+		e.gone[t.ID] = copyTodoLocked(t)
+	}
 	e.mu.Unlock()
 }
 
@@ -139,6 +159,13 @@ func (s *Service) todoChangedFlush() {
 	e.mu.Lock()
 	prev := e.marks
 	e.marks = cur
+	gone := map[string]Todo{}
+	for id, t := range e.gone {
+		if _, there := cur[id]; !there { // deleted before the todos were read: told now (or never known)
+			gone[id] = t
+			delete(e.gone, id)
+		}
+	}
 	e.mu.Unlock()
 	if prev == nil {
 		return
@@ -153,9 +180,25 @@ func (s *Service) todoChangedFlush() {
 		}
 	}
 	slices.Sort(ids)
+	// What is told is judged once, a deleted todo as it last was: nothing of a todo an extension is not shown.
+	var tell []string
+	for _, id := range ids {
+		if now, there := cur[id]; !there || now != prev[id] {
+			tell = append(tell, id)
+		}
+	}
+	if len(tell) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(s.runCtx(), todoNoticeTimeout)
+	hidden := s.todosHiddenOf(ctx, tell, gone, nil)
+	cancel()
 	for _, id := range ids {
 		now, there := cur[id]
 		was, known := prev[id]
+		if hidden[id] {
+			continue
+		}
 		switch {
 		case there && !known:
 			s.todoQueue(todoNotice{assistantwire.EventTodoChanged, assistantwire.TodoChangedEvent{
@@ -242,6 +285,9 @@ func (s *Service) todoSendEvents() {
 		n := e.pending[0]
 		e.pending = e.pending[1:]
 		e.qmu.Unlock()
+		if s.todoDecisionHidden(n) {
+			continue
+		}
 		if publisher.TodoEvent(n.event, n.params) != nil {
 			s.logf("todos: %s could not be told to the extensions", n.event)
 		}

@@ -609,6 +609,17 @@ func (d *DB) UnlinkTodoSpace(ctx context.Context, todoID, machineID, space strin
 	})
 }
 
+// KeepTodoAgents takes todoID's links to machineID's sessionIDs off the space they came through, released and dismissed
+// as UnlinkTodoAgent leaves a link (#10941: a space's unlink, move or void, which deletes the links through it, keeps
+// those in the health space, since they tell the to-do's history as the space's).
+func (d *DB) KeepTodoAgents(ctx context.Context, todoID, machineID string, sessionIDs []string, at time.Time) error {
+	_, err := d.pool.Exec(ctx, `UPDATE todo_agents SET source = 'manual', via = '',
+			released_at = COALESCE(released_at, $4), dismissed_at = COALESCE(dismissed_at, $4)
+		WHERE todo_id = $1 AND machine_id = $2 AND session_id = ANY($3)`,
+		todoID, machineID, sessionIDs, at.UTC())
+	return err
+}
+
 // RenameTodoSpace migrates todo_spaces and todo_agents via when a space is renamed via hub.
 // If newSpace is already linked to another todo (unique constraint conflict), the old space's
 // link is voided (deleted) rather than migrating, returning (voided: true, err: nil).

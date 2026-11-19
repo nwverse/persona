@@ -83,16 +83,26 @@ func todosListBodyAs(tb testing.TB, s *Service, role string) []byte {
 	return w.Body.Bytes()
 }
 
-// BenchmarkTodosList: GET /api/v1/todos with n finished supervised tasks. ext/…: as an extension's token reads it,
-// what it is not shown of each to-do decided (todo_scope.go): every rule's read made, as their conversation is listed
-// outside the health space, so every to-do reads whole. db/…: with Postgres as the store and four feed items a to-do,
-// which ext,db/… reads the conversations of (FeedConversations); skipped without PERSONA_TEST_DATABASE_URL.
+// BenchmarkTodosList: GET /api/v1/todos with n finished supervised tasks, each handed out and supervised by a
+// conversation of its own. ext/…: as an extension's token reads it, which to-dos it is not shown decided
+// (todo_scope.go): every rule's read made, the conversations told by one read of the assistant's computer, as they are
+// listed outside the health space, so every to-do is listed. db/…: with Postgres as the store and four feed items a
+// to-do, which ext,db/… reads the conversations of (FeedConversations); skipped without PERSONA_TEST_DATABASE_URL.
 func BenchmarkTodosList(b *testing.B) {
 	manager := func(n int, o Options) *Service {
 		f := newFakeHub().withMachine()
-		f.setSessions("server", proto.Session{SessionID: "conv1", Title: "Persona", Assistant: true, Status: proto.StatusIdle})
 		o.Hub = f
-		return manyTodosOn(n, o)
+		s := manyTodosOn(n, o)
+		chats := []proto.Session{{SessionID: "conv1", Title: "Persona", Assistant: true, Status: proto.StatusIdle}}
+		s.todos.mu.Lock()
+		for _, t := range s.todos.todos {
+			chat := "chat_" + strings.TrimPrefix(t.ID, "todo_")
+			t.Origin, t.Supervision.Supervisor = chat, chat
+			chats = append(chats, proto.Session{SessionID: chat, Title: "A chat", Assistant: true, Status: proto.StatusIdle})
+		}
+		s.todos.mu.Unlock()
+		f.setSessions("server", chats...)
+		return s
 	}
 	for _, role := range []string{"", roleExtension} {
 		for _, n := range []int{250, 1000, 4000} {

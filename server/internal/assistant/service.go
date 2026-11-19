@@ -386,6 +386,9 @@ func New(o Options) *Service {
 // handle adds one of the routes the hub relays.
 func (s *Service) handle(pattern string, fn http.HandlerFunc) {
 	s.routes = append(s.routes, pattern)
+	if _, path, _ := strings.Cut(pattern, " "); strings.HasPrefix(path, "/api/v1/todos/{id}") {
+		fn = s.todoScoped(fn) // what an extension is not shown of a to-do, at every route of one (todo_scope.go)
+	}
 	s.mux.HandleFunc(pattern, fn)
 }
 
