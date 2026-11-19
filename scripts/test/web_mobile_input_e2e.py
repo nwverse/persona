@@ -11,7 +11,8 @@ installed Chrome):
 
     MOCK_SPLIT_TABS=1 MOCK_CHAT_CARDS=1 MOCK_FILES=1 PORT=18961 python3 scripts/mock/mock_hub.py &
     (cd web && PERSONA_HUB_URL=http://127.0.0.1:18961 npx vite --port 5961 --strictPort &)
-    uv run --no-project --with playwright==1.58.0 python3 scripts/test/web_mobile_input_e2e.py http://127.0.0.1:5961 [--shots <dir>]
+    uv run --no-project --with playwright==1.58.0 python3 scripts/test/web_mobile_input_e2e.py http://127.0.0.1:5961 \
+        --hub http://127.0.0.1:18961 [--shots <dir>]
 
 Prints one line per check and a verdict; exits 1 on the first failure. --shots saves 390, 360 and 844×390 screenshots,
 light and dark.
@@ -124,7 +125,57 @@ def crowded(page, what, min_chat=0.25, fold="还有 2 件"):
     ok(f"{what}: three cards, {fold}; the chat keeps {chat} px, the composer on screen")
 
 
-def run(base, shots):
+def card_field_keyboard(browser, base, hub, shots):
+    """The Assistant's question card (#11442): its own field, typed into with the iOS keyboard up, stays in sight and
+    takes a finger over the composer at 390 and 360; with the keyboard down or the focus gone the dock keeps its cap."""
+    import urllib.request
+    if not hub:
+        fail("card field: pass --hub <the fake hub's URL> (the card comes from its /mock/assistant_ask)")
+    hit = """() => { const f = document.activeElement, c = document.querySelector('main textarea[aria-label=消息]');
+      const at = (e) => { const r = e.getBoundingClientRect(); return document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); };
+      const fr = f.getBoundingClientRect(), cr = c.getBoundingClientRect();
+      return { field: Boolean(f.closest('[data-pending-card]')) && at(f) === f, top: fr.top, bottom: fr.bottom, composer: at(c) === c,
+        composerBottom: cr.bottom, dock: document.querySelector('[data-chat-dock]').getBoundingClientRect().toJSON() }; }"""
+    for w, h, kb in ((390, 844, 508), (360, 740, 440)):
+        # Persona's main conversation asks; the card is answered at the end whatever happens (/mock/reset keeps it)
+        ix = json.load(urllib.request.urlopen(hub + "/mock/assistant_ask?session=b2e4d6f8-0000-4000-8000-000000000001"))["id"]
+        ctx, page = phone(browser, w, h, ios=True)
+        try:
+            login(page, base)
+            go(page, "/")
+            field = page.locator("[data-pending-card]").get_by_role("textbox", name="自定义回答").first
+            field.tap()
+            for vh in (h - 100, h - 200, kb):  # the keyboard slides up
+                page.evaluate(f"window.__kb({vh})")
+                page.wait_for_timeout(120)
+            page.keyboard.type("Next Monday, after the review")
+            page.wait_for_timeout(500)
+            at = page.evaluate(hit)
+            if not at["field"] or at["top"] < 0 or at["bottom"] > kb + 0.5:
+                fail(f"{w}: the card's field is not in sight over the keyboard ({at})")
+            if not at["composer"] or at["composerBottom"] > kb + 0.5 or at["dock"]["bottom"] > kb + 0.5:
+                fail(f"{w}: the composer left the screen while typing in the card ({at})")
+            if shots:
+                page.screenshot(path=os.path.join(shots, f"card-field-{w}.png"), clip={"x": 0, "y": 0, "width": w, "height": kb})
+            page.evaluate(f"window.__kb({h})")  # the keyboard down, the field still focused
+            page.wait_for_timeout(400)
+            if page.evaluate(hit)["dock"]["height"] > h * 0.55 + 1:
+                fail(f"{w}: with the keyboard down the dock is over its cap")
+            page.evaluate(f"window.__kb({kb})")
+            page.evaluate("document.activeElement.blur()")
+            page.wait_for_timeout(400)
+            if box(page, "[data-chat-dock]")["height"] > kb * 0.55 + 1:
+                fail(f"{w}: the focus gone, the dock is over its cap")
+            ok(f"{w}: the card's own field stays in sight and takes a tap over the keyboard, the composer on screen; "
+               "the cap again with the keyboard down or the focus gone")
+        finally:
+            ctx.close()
+            urllib.request.urlopen(urllib.request.Request(
+                f"{hub}/api/v1/interactions/{ix}/resolve", data=b"{}", method="POST",
+                headers={"Authorization": "Bearer mock", "Content-Type": "application/json"})).read()
+
+
+def run(base, shots, hub=None):
     with sync_playwright() as p:
         browser = p.chromium.launch(channel="chrome")
 
@@ -350,6 +401,7 @@ def run(base, shots):
         if shots:
             page.screenshot(path=os.path.join(shots, "1280.png"))
         ctx.close()
+        card_field_keyboard(browser, base, hub, shots)
         browser.close()
     if ERRORS:
         fail(f"uncaught page errors: {ERRORS[:3]}")
@@ -360,7 +412,8 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("base")
     ap.add_argument("--shots")
+    ap.add_argument("--hub")
     a = ap.parse_args()
     if a.shots:
         os.makedirs(a.shots, exist_ok=True)
-    run(a.base.rstrip("/"), a.shots)
+    run(a.base.rstrip("/"), a.shots, a.hub)

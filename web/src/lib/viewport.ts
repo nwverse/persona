@@ -29,13 +29,15 @@ export function keyboardVars(f: ViewportFrame | undefined): Record<(typeof KB_VA
 }
 
 /** Keeps `ref`'s element over the visible part while the keyboard is up, and `--kb-top` / `--kb-h` on the root element
- *  for the other fixed things (the side panel, sheets). It sets the styles itself: the keyboard sends a stream of frames
- *  as it slides, and a React state per frame would re-render the whole page. */
+ *  for the other fixed things (the side panel, sheets), with `data-kb` on it meanwhile for the stylesheet (a waiting
+ *  card's own field, styles.css). It sets the styles itself: the keyboard sends a stream of frames as it slides, and a
+ *  React state per frame would re-render the whole page. */
 export function useKeyboardFrame(ref: RefObject<HTMLElement | null>) {
   useEffect(() => {
     const vv = typeof window === "undefined" ? undefined : window.visualViewport;
     if (!vv) return;
-    const root = document.documentElement.style;
+    const html = document.documentElement;
+    const root = html.style;
     let last = "";
     const update = () => {
       const f = keyboardFrame(window.innerHeight, vv);
@@ -46,6 +48,7 @@ export function useKeyboardFrame(ref: RefObject<HTMLElement | null>) {
       last = key;
       const vars = keyboardVars(f);
       KB_VARS.forEach((k) => (vars ? root.setProperty(k, vars[k]) : root.removeProperty(k)));
+      html.toggleAttribute("data-kb", Boolean(f));
       const el = ref.current;
       if (!el) return;
       el.style.position = f ? "fixed" : "";
@@ -60,6 +63,7 @@ export function useKeyboardFrame(ref: RefObject<HTMLElement | null>) {
       vv.removeEventListener("resize", update);
       vv.removeEventListener("scroll", update);
       KB_VARS.forEach((k) => root.removeProperty(k));
+      html.removeAttribute("data-kb");
     };
   }, [ref]);
 }
