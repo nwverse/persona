@@ -665,10 +665,12 @@ class OkHttpHubConnection(
                     messages.trySend(Signal.Open)
                 }
                 override fun onMessage(webSocket: WebSocket, text: String) {
-                    val type = runCatching {
-                        JsonCodec.parseToJsonElement(text).jsonObject["type"]?.jsonPrimitive?.contentOrNull ?: "unknown"
-                    }.getOrDefault("unknown")
-                    persona.core.contracts.DevProbe.frame(type, text.toByteArray(Charsets.UTF_8).size.toLong())
+                    persona.core.contracts.DevProbe.frame {
+                        val type = runCatching {
+                            JsonCodec.parseToJsonElement(text).jsonObject["type"]?.jsonPrimitive?.contentOrNull ?: "unknown"
+                        }.getOrDefault("unknown")
+                        frame(type, text.toByteArray(Charsets.UTF_8).size.toLong())
+                    }
                     received()
                     messages.trySend(Signal.Text(text))
                 }

@@ -1,5 +1,7 @@
 package persona.core.hub
 
+import com.sun.management.ThreadMXBean
+import java.lang.management.ManagementFactory
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.After
@@ -13,6 +15,9 @@ import persona.core.contracts.api.ConnectionState
 import java.util.concurrent.ConcurrentLinkedQueue
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import okhttp3.Request
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
 
 class DevSocketProbeTest {
     private val sink = Sink()
@@ -47,6 +52,37 @@ class DevSocketProbeTest {
         while (!condition()) delay(10)
         true
     } == true
+
+    @Test fun inactiveTextFramesDoNotAllocateJsonAndUtf8Metadata() = runBlocking {
+        DevProbe.install(null)
+        val hub = LoopbackHub()
+        val config = HubConnectionConfig("test-hub", null, "token", listOf(hub.endpoint("lan")), "test")
+        val http = HubHttpClient(config.hubId, config.fingerprint, config.version)
+        val factory = CaptureFactory(http.client)
+        val connection = OkHttpHubConnection(config, HubNetwork("test"), http = http, webSocketFactory = factory)
+        try {
+            connection.state.first { it == ConnectionState.Online }
+            val text = """{"type":"sessions","items":[],"padding":"${"x".repeat(2_000_000)}"}"""
+            val allocations = ManagementFactory.getThreadMXBean() as ThreadMXBean
+            val thread = Thread.currentThread().threadId()
+            val before = allocations.getThreadAllocatedBytes(thread)
+            factory.listener.onMessage(factory.socket, text)
+            val allocated = allocations.getThreadAllocatedBytes(thread) - before
+            assertTrue("inactive frame allocated $allocated bytes", allocated in 0..512_000)
+        } finally {
+            connection.close()
+            hub.close()
+        }
+    }
+
+    private class CaptureFactory(private val delegate: WebSocket.Factory) : WebSocket.Factory {
+        lateinit var listener: WebSocketListener
+        lateinit var socket: WebSocket
+        override fun newWebSocket(request: Request, listener: WebSocketListener): WebSocket {
+            this.listener = listener
+            return delegate.newWebSocket(request, listener).also { socket = it }
+        }
+    }
 
     private data class Frame(val type: String, val bytes: Long)
     private class Sink : DevProbeSink {

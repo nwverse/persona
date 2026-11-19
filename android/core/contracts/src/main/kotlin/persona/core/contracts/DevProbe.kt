@@ -50,6 +50,7 @@ object DevProbe {
     }
 
     fun frame(type: String, bytes: Long) = synchronized(lock) { sink }?.frame(type, bytes) ?: Unit
+    fun frame(record: DevProbeSink.() -> Unit) = synchronized(lock) { sink }?.record() ?: Unit
     fun socket(event: String) = synchronized(lock) { sink }?.socket(event) ?: Unit
 
     private fun currentPage(): String = screens.lastOrNull()?.name ?: tab
