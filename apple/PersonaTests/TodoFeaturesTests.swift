@@ -141,6 +141,26 @@ struct TodoFeaturesTests {
         #expect(!gate.isOn, "a new hub in the group: its own hello decides")
     }
 
+    /// One group signed out while another stays: nothing is kept for it, so a launch whose stored pick still names it
+    /// (only picking a hub writes that) starts with today's screens and lets the hub the app falls back to decide.
+    @Test func aGoneGroupIsNotWhereTheNextLaunchStarts() throws {
+        let d = try defaults()
+        let pick = TodoHubPick()
+        pick.group = "x"
+        let gate = gate(d, pick: pick)
+        gate.heard(TodoFeatures(["todo_view"]), from: "x")
+        #expect(gate.isOn)
+        gate.forget(["x"])
+        pick.group = "a"
+        gate.follow()
+        #expect(!gate.isOn && TodoFeatures.remembered("x", in: d) == TodoFeatures())
+        d.set("x", forKey: AppModel.hubGroupKey)
+        #expect(!TodosV1(allowed: true, defaults: d, hubGroup: { "a" }).isOn, "the stored pick names a gone group")
+        pick.group = "x"
+        gate.follow()
+        #expect(!gate.isOn, "a hub paired again under it: its own hello decides")
+    }
+
     /// The app's own gate follows the owner's pick of the hub-level group.
     @Test func theGateFollowsThePick() async throws {
         let pick = TodoHubPick()

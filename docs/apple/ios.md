@@ -2049,7 +2049,11 @@ built in stages behind the hub's `todo_view`; this section grows with it.
   until the app quits, so a hello without it while a manager reconnects never swaps the page back, and such a hello is
   not remembered as a downgrade (the first hello of a run is). It follows the owner's pick of the hub-level group:
   picking an older group's hub turns it off, picking back a group it was on for turns it on without another hello.
-  Signing out of every hub forgets the remembered values. It is off in every build until the switch-on
+  Signing out of every hub forgets the remembered values, and a group that goes while others stay (signed out of, or
+  merged into another: `TodosV1.forget`) loses its own, since the app's stored pick, written only when the owner picks
+  a hub, can still name that group at the next launch. The gate turns on at the first hello that lists `todo_view`, also in the
+  middle of a run: holding that change while To-dos is on screen, so a visible page never swaps, is the page's job and
+  arrives with the V1 list; the gate stays a plain value. It is off in every build until the switch-on
   (`TodosV1.released`), and on the iPhone and iPad only (`TodosV1.platform`): visionOS keeps today's To-dos. The data
   and model files under `apple/Persona/Features/Todos/` compile on every platform, since `TodoStore` (shared with
   visionOS) names them; the V1 views will be iOS only. The hub's `todo_send_state` marker is not read yet.

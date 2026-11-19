@@ -732,9 +732,10 @@ struct TodoCacheTests {
     /// no places, no timer; forgetting the hub still takes away an entry V1 may have written for it.
     @Test func v1OffReadsOnlyTheList() async throws {
         var writes: [TodoViewCache?] = []
-        var off = TodoStore.V1.on(saved: { writes.append($0) })
-        off.isOn = { false }
         let hub = FakeHub()
+        // The store's own reads go through `hub` too, so a timer that armed anyway would show in its count below.
+        var off = TodoStore.V1.on(saved: { writes.append($0) }, api: hub.client)
+        off.isOn = { false }
         let soon = ISO8601DateFormatter().string(from: Date().addingTimeInterval(0.05))
         hub.on("GET", "/api/v1/todos", json: TodoViewJSON.list([TodoViewJSON.row("t", view: TodoViewJSON.view(TodoListSection.todo, next: soon))]))
         hub.on("GET", "/api/v1/todos/places", json: #"{"places":[],"counts":{}}"#)

@@ -147,6 +147,16 @@ final class TodosV1 {
         set(on)
     }
 
+    /// These groups are gone (signed out of, or merged into another) while others stay: nothing is kept for them. The
+    /// app's stored pick can still name one at the next launch (only picking a hub writes it), and the gate must not
+    /// start that launch from a hub this app no longer has; a hub paired later under one of them decides for itself.
+    func forget(_ groups: Set<String>) {
+        for g in groups { TodoFeatures.forget(g, in: defaults) }
+        onGroups.subtract(groups)
+        listed.subtract(groups)
+        known.subtract(groups)
+    }
+
     private func set(_ on: Bool) {
         guard on != isOn else { return }
         isOn = on
