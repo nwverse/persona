@@ -445,6 +445,11 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // effortTitle, and home.task_agents_more). 205 B in ja, measured in one environment against main e7a12f7323 (ja
 // 482,497 B to 482,702 B; en 479,378 B to 479,585 B, zh-Hans 480,224 B to 480,422 B). Main had 29 B of room, so the
 // budget is this ja size plus those 29 B.
+// #11090: a waiting to-do's label says what it waits on (lib/todo-wait-reason.ts waitReason and todoLook, read on the
+// first screen by Overview's task cards, the main chat's trays and the sidebar's By to-do rows; the seven
+// lib-state-labels waits_* words in place of task_waiting). 532 B in ja, measured in one environment against main
+// 4999ad6d91 (ja 479,051 B to 479,583 B; en 476,160 B to 476,688 B, zh-Hans 476,915 B to 477,431 B). Main had 3,680 B
+// of room; the budget stays.
 export const FIRST_SCREEN_BUDGET = 482_731;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
