@@ -21,12 +21,12 @@ const mergedPlaces = `{"places":[{"id":"all","kind":"all","title":"","needs_you"
 	`"counts":{"open":2,"needs_you":1,"in_progress":0,"sections":{"needs_you":1,"can_wait":0,"working":0,` +
 	`"waiting":0,"todo":1,"just_finished":0,"someday":0,"done":0}}}`
 
-// The views, counts and places the shared to-do cases expect (spec/fixtures/todo-view and todo-counts, #10226), and
-// the timelines, results and recaps (spec/fixtures/todo-rounds, #10465) with what the item route carries of them,
-// read into the generated types
-// (todo_view_gen.go) and write back as the same JSON: no field lost, renamed or added, and no time written another
-// way. What Go writes also holds to the schema (checkTodoView), so a required list or map is never null, which a nil
-// slice or map would be.
+// The views, counts and places the shared to-do cases expect (spec/fixtures/todo-view and todo-counts, #10226), the
+// timelines, results and recaps (spec/fixtures/todo-rounds, #10465) with what the item route carries of them, the
+// answers and replies of spec/fixtures/todo-asks (#10465) and the decision pushes' todo (spec/fixtures/todo-push,
+// #10465) read into the generated types (todo_view_gen.go) and write back as the same JSON:
+// no field lost, renamed or added, and no time written another way. What Go writes also holds to the schema
+// (checkTodoView), so a required list or map is never null, which a nil slice or map would be.
 func TestTodoViewSamplesRoundTrip(t *testing.T) {
 	root := todoViewSchema(t)
 	samples := append(todoViewSamples(t),
@@ -58,7 +58,8 @@ func TestTodoViewSamplesRoundTrip(t *testing.T) {
 		}
 		seen[s.def] = true
 	}
-	for _, def := range []string{"TodoSummary", "TodoCounts", "TodoPlaces", "TodoTimeline", "TodoResult", "TodoRecap", "TodoItemDetail"} {
+	for _, def := range []string{"TodoSummary", "TodoCounts", "TodoPlaces", "TodoTimeline", "TodoResult", "TodoRecap",
+		"TodoItemDetail", "TodoAskAnswer", "TodoAskAnswered", "TodoDecidePush"} {
 		if !seen[def] {
 			t.Errorf("no %s sample", def)
 		}
@@ -112,12 +113,13 @@ type todoViewSample struct {
 	raw        json.RawMessage
 }
 
-// todoViewSamples are the expected values of every todo-view, todo-counts and todo-rounds case, with the definition
-// each holds to.
+// todoViewSamples are the expected values of every todo-view, todo-counts, todo-rounds and todo-push case, what the
+// item route carries of each todo-rounds case, and the answers and replies of every todo-asks case, with the
+// definition each holds to.
 func todoViewSamples(t *testing.T) []todoViewSample {
 	t.Helper()
 	var out []todoViewSample
-	for _, domain := range []string{"todo-view", "todo-counts", "todo-rounds"} {
+	for _, domain := range []string{"todo-view", "todo-counts", "todo-rounds", "todo-asks", "todo-push"} {
 		files, err := filepath.Glob(filepath.Join("..", "..", "..", "spec", "fixtures", domain, "*.json"))
 		if err != nil || len(files) == 0 {
 			t.Fatalf("spec/fixtures/%s: %v", domain, err)
@@ -129,7 +131,10 @@ func todoViewSamples(t *testing.T) []todoViewSample {
 			}
 			var doc struct {
 				Cases []struct {
-					Name     string
+					Name  string
+					Input struct {
+						Answer json.RawMessage `json:"answer"`
+					}
 					Expected struct {
 						View     json.RawMessage   `json:"view"`
 						Counts   json.RawMessage   `json:"counts"`
@@ -138,6 +143,8 @@ func todoViewSamples(t *testing.T) []todoViewSample {
 						Results  []json.RawMessage `json:"results"`
 						Recap    json.RawMessage   `json:"recap"`
 						Latest   []string          `json:"latest"`
+						Todo     json.RawMessage   `json:"todo"`
+						Answered json.RawMessage   `json:"answered"`
 					}
 				}
 			}
@@ -148,7 +155,8 @@ func todoViewSamples(t *testing.T) []todoViewSample {
 				where := fmt.Sprintf("%s/%s %s", domain, filepath.Base(f), c.Name)
 				for def, raw := range map[string]json.RawMessage{"TodoSummary": c.Expected.View,
 					"TodoCounts": c.Expected.Counts, "TodoPlaces": c.Expected.Places,
-					"TodoTimeline": c.Expected.Timeline, "TodoRecap": c.Expected.Recap} {
+					"TodoTimeline": c.Expected.Timeline, "TodoRecap": c.Expected.Recap,
+					"TodoAskAnswer": c.Input.Answer, "TodoAskAnswered": c.Expected.Answered, "TodoDecidePush": c.Expected.Todo} {
 					if raw != nil {
 						out = append(out, todoViewSample{def: def, where: where + " " + def, raw: raw})
 					}

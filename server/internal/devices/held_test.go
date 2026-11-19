@@ -17,6 +17,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -98,12 +99,16 @@ func (s *heldMem) HoldOperation(_ context.Context, op db.HeldOperation) (db.Held
 // heldShownOf is op with what its row shows of its call (as db.DB reads it in the database).
 func heldShownOf(op db.HeldOperation) db.HeldOperation {
 	var c struct {
+		Caller *devicewire.Caller `json:"caller"`
 		Params struct {
 			Text   string `json:"text"`
 			Images any    `json:"images"`
 		} `json:"params"`
 	}
 	_ = json.Unmarshal(op.Call, &c)
+	if c.Caller != nil {
+		op.CredentialID = c.Caller.CredentialID
+	}
 	op.Text, op.Images = c.Params.Text, 0
 	if list, ok := c.Params.Images.([]any); ok {
 		op.Images = len(list)
@@ -290,7 +295,7 @@ func (s *heldMem) RetryHeldOperation(_ context.Context, seq int64, at time.Time)
 		return false, false, s.retryErr
 	}
 	r, ok := s.rows[seq]
-	if !ok || r.State != db.HeldFailed {
+	if !ok || r.State != db.HeldFailed || r.Failure == db.HeldSignedOut {
 		return false, false, nil
 	}
 	check := r.Failure == db.HeldUnclear
@@ -771,6 +776,98 @@ func TestHeldMessagesGoWhenTheComputerIsBack(t *testing.T) {
 	}
 	if got := n.sent(); len(got) != 4 || got[3] != "c" {
 		t.Fatalf("sent %v", got)
+	}
+}
+
+func TestHeldMessagesFromSignedOutDeviceAreDeleteOnly(t *testing.T) {
+	for _, event := range []bool{true, false} {
+		name := "received_event"
+		if !event {
+			name = "missed_event"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			st := newHeldMem()
+			d, _ := heldDevices(t, st, time.Hour)
+			n := &heldNode{}
+			up := make(chan struct{})
+			laterMachine(t, d, "mac", "Studio Mac", n, up)
+
+			for _, id := range []string{"signed-out", "other-device"} {
+				p := heldSend("mac", "s1", id, id)
+				p.Caller.CredentialID = id
+				out, err := d.Call(ctx, p)
+				if row := heldAnswerOf(t, out, err); row.State != proto.UndeliveredWaiting {
+					t.Fatalf("initial row: %+v", row)
+				}
+			}
+			assertFailed := func() {
+				t.Helper()
+				rows := d.HeldMessages("mac", i18n.En)["s1"]
+				if len(rows) == 0 || rows[0].ID != "signed-out" || rows[0].State != proto.UndeliveredFailed ||
+					!rows[0].DeleteOnly || rows[0].Error != "Not sent: the device that sent it was signed out" {
+					t.Fatalf("held rows: %+v", rows)
+				}
+			}
+			host := d.host()
+			if event {
+				raw, err := json.Marshal(bus.DeviceCredential{ID: "signed-out"})
+				if err != nil || !d.Event(bus.EventCredentialRevoked, raw) {
+					t.Fatalf("revocation event: %v", err)
+				}
+				assertFailed()
+				rows := d.HeldMessages("mac", i18n.En)["s1"]
+				if len(rows) != 2 || rows[1].ID != "other-device" || rows[1].State != proto.UndeliveredWaiting || rows[1].DeleteOnly {
+					t.Fatalf("other device's row: %+v", rows)
+				}
+			} else {
+				host.mu.Lock()
+				host.revokedDevices = map[string]bool{"signed-out": true}
+				host.credentialCheckErr = errors.New("hub temporarily unavailable")
+				host.mu.Unlock()
+			}
+
+			close(up)
+			if !event {
+				eventually(t, 5*time.Second, "the first authorization check deferred delivery", func() bool {
+					rows := st.all()
+					return len(rows) == 2 && rows[0].State == db.HeldWaiting && rows[0].Attempts > 0
+				})
+				heldIdle(t, d)
+				if got := n.sent(); len(got) != 0 {
+					t.Fatalf("sent while the credential could not be checked: %q", got)
+				}
+				host.mu.Lock()
+				host.credentialCheckErr = nil
+				host.mu.Unlock()
+				d.heldWake("mac")
+			}
+			eventually(t, 5*time.Second, "only the other device's message delivered", func() bool {
+				return len(n.sent()) > 0
+			})
+			heldIdle(t, d)
+			if got := n.sent(); !slices.Equal(got, []string{"other-device"}) {
+				t.Fatalf("sent %q", got)
+			}
+			assertFailed()
+			if rows := st.all(); len(rows) != 1 || rows[0].Failure != db.HeldSignedOut {
+				t.Fatalf("persisted failure: %+v", rows)
+			}
+
+			mux := d.Handler(http.NotFoundHandler())
+			path := "/api/v1/sessions/mac/s1/held/signed-out"
+			if code, body := personCall(t, mux, http.MethodPost, path+"/retry"); code != http.StatusConflict {
+				t.Fatalf("retry: %d %v", code, body)
+			}
+			if code, body := personCall(t, mux, http.MethodDelete, path); code != http.StatusOK || body["ok"] != true {
+				t.Fatalf("delete: %d %v", code, body)
+			}
+			d.heldWake("mac")
+			heldIdle(t, d)
+			if got := n.sent(); !slices.Equal(got, []string{"other-device"}) || len(d.HeldMessages("mac", i18n.En)) != 0 || len(st.all()) != 0 {
+				t.Fatalf("after delete, sent %q, stored %+v", got, st.all())
+			}
+		})
 	}
 }
 

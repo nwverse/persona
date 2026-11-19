@@ -12,11 +12,19 @@ import { cx, EASE, IconButton, Loading } from "../../ui/atoms";
 import { Icon, type IconName } from "../../ui/icons";
 import { lazyPage } from "../../lib/lazy-page";
 import { NEW_ICON_GLYPH } from "./icon-map";
+import { ExtensionOwnerScope } from "../../lib/extension-owner";
 
 // The extension page is its own chunk (#1794): App.tsx reaches this file for the sidebar's and the nav page's icons and
 // titles, and the first screen draws no extension UI. A page, a card and a section each wait under their own Suspense
 // (the page keeps its top bar) with the Loading that ExtensionUI shows while it asks for its view.
 const ExtensionUI = lazyPage(() => import("../settings/ExtensionView").then((m) => m.ExtensionUI));
+
+// Whose extension is being drawn (ExtensionView knows it, the items it draws do not): the graph's per-key store is
+// scoped by it through a context (lib/extension-owner.tsx), so two extensions using the same key never share what it
+// keeps — a context, not a module global set in a render, stays right on a lone re-render of the graph under it.
+const OwnerScope = ({ extension, children }: { extension: string; children: React.ReactNode }) => (
+  <ExtensionOwnerScope owner={extension}>{children}</ExtensionOwnerScope>
+);
 
 /** A nav_page's icon from the fixed vocabulary, as one of the web's icons (unknown: the extension's). */
 const NAV_ICON: Record<UIIcon, IconName> = { extension: "extension", plugin: "extension", chart: "chart", gauge: "gauge", list: "list", bell: "bell", doc: "read", calendar: "calendar", money: "money",
@@ -57,7 +65,7 @@ export function ExtensionNavPage({ extension, ui, onToggleSidebar }: { extension
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className={cx("mx-auto flex flex-col px-4 py-6 sm:px-8", wide ? "max-w-[1680px]" : "max-w-[880px]")}>
           <Suspense fallback={<Loading />}>
-            <ExtensionUI key={`${extension}/${ui}/${n}`} extension={extension} ui={ui} title={title} bare state={state} onWide={setWide} remember />
+            <OwnerScope extension={extension}><ExtensionUI key={`${extension}/${ui}/${n}`} extension={extension} ui={ui} title={title} bare state={state} onWide={setWide} remember /></OwnerScope>
           </Suspense>
         </div>
       </div>
@@ -113,7 +121,7 @@ function OverviewCard({ place, i }: { place: UIPlace; i: number }) {
         {place.extension_name && <span className="max-w-[45%] shrink-0 truncate text-[11px] text-ink-3">{place.extension_name}</span>}
       </div>
       <Suspense fallback={<Loading />}>
-        <ExtensionUI extension={place.extension} ui={place.id} context={context} compact onMissing={() => setGone(true)} />
+        <OwnerScope extension={place.extension}><ExtensionUI extension={place.extension} ui={place.id} context={context} compact onMissing={() => setGone(true)} /></OwnerScope>
       </Suspense>
     </div>
   );
@@ -153,7 +161,7 @@ function MachineSection({ place, mid, manager, heading }: { place: UIPlace; mid:
         ),
       )}
       <Suspense fallback={<Loading />}>
-        <ExtensionUI extension={place.extension} ui={place.id} context={context} manager={manager} bare title={place.title} pages="open" onMissing={() => setGone(true)} />
+        <OwnerScope extension={place.extension}><ExtensionUI extension={place.extension} ui={place.id} context={context} manager={manager} bare title={place.title} pages="open" onMissing={() => setGone(true)} /></OwnerScope>
       </Suspense>
     </section>
   );

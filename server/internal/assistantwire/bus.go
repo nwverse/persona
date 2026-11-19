@@ -101,6 +101,11 @@ const (
 	// counts (#10226, TodoPlaces). The hub lists the todo_places feature only while every manager whose to-dos it
 	// merges names it.
 	CapabilityTodoPlaces = "todo_places"
+	// CapabilityTodoAsks: the manager answers POST /api/v1/todos/{id}/asks/{ask}/answer, one route for every answer to a
+	// to-do's own asks, named by the ask ids of its view (#10465, TodoAskAnswer). The hub lists the todo_asks feature
+	// only while every manager whose to-dos it merges names it; until then clients answer through the accept,
+	// decision-dismiss and retry routes. It gates the route alone: the to-do count unit rides on its own payload.
+	CapabilityTodoAsks = "todo_asks"
 	// CapabilityTodoTimeline: the manager answers GET /api/v1/todos/{id}/timeline, a to-do's conversation grouped into
 	// rounds (#10465, TodoTimeline), and GET /api/v1/todos/{id} carries the rounds the paper shows, how many there are,
 	// the to-do's results and what changed since the owner looked (TodoItemDetail). The hub lists the todo_timeline
@@ -330,6 +335,8 @@ var Routes = []string{
 	"POST /api/v1/todos/{id}/accept",
 	"POST /api/v1/todos/{id}/decision-dismiss",
 	"POST /api/v1/todos/{id}/decision-undo-dismiss",
+	// Any answer to a to-do's own ask, by the id its view lists (todo_asks_routes.go, #10465).
+	"POST /api/v1/todos/{id}/asks/{ask}/answer",
 	"POST /api/v1/later/{id}/handled", // a question that can wait, marked handled (later.go)
 	"POST /api/v1/todos/{id}/done-check",
 	"POST /api/v1/todos/{id}/retry",
