@@ -36,7 +36,7 @@ import type { SessionCapabilityInput, EffectiveSessionCapabilities, TranscriptIt
 
 
 interface DevicePreferenceChange { appearance?: number; style?: string; alerts?: boolean; }
-interface HeldRetryReceipt { scope: string; key: string; }
+interface HeldActionReceipt { scope: string; pairing: number; target: string; expected: HeldAgentMessage; deleted: boolean; }
 
 export interface ClientViewLease {
   readonly epoch: number;
@@ -110,8 +110,11 @@ export class ClientModel {
   private renderedMessages: ChatMessage[] = [];
   private echoedMessages: Set<string> = new Set();
   @Trace private heldActions: string[] = [];
-  @Trace private heldRetryReceipts: HeldRetryReceipt[] = [];
-  private heldRevision: number = 0;
+  @Trace private heldReceipts: HeldActionReceipt[] = [];
+  private heldRevisions: Map<string, number> = new Map();
+  private heldOwner(): ClientModel { return this.directoryParent ? this.directoryParent.heldOwner() : this; }
+  private heldRevision(scope: string): number { return this.heldRevisions.get(scope) || 0; }
+  private heldChanged(scope: string): void { this.heldRevisions.set(scope, this.heldRevision(scope) + 1); }
   @Trace draftLoading: boolean = false;
   @Trace sourceContext: string = '';
   @Trace reply: string = '';
@@ -559,9 +562,18 @@ export class ClientModel {
   }
   private async restoreSnapshot(generation: number, scope: string): Promise<void> {
     try {
-      const cached = await this.local.get('snapshot:' + scope);
-      if (!this.owns(generation, scope) || !cached) return;
+      const owner = this.heldOwner(), heldRevision = owner.heldRevision(scope);
+      const cached = await new ChatDraftStore(this.local).readSessionSnapshot(scope);
+      if (!this.owns(generation, scope) || heldRevision !== owner.heldRevision(scope) || !cached) return;
       const snapshot = Wire.record(JSON.parse(cached) as Object);
+      const restored = owner.heldReceipts.filter((receipt: HeldActionReceipt) => receipt.scope !== scope);
+      for (const saved of Wire.rows(snapshot, 'heldActions')) {
+        const target = Wire.text(saved, 'target'), expected = new HeldAgentMessage();
+        expected.id = Wire.text(saved, 'id'); if (!target || !expected.id) continue;
+        expected.state = Wire.text(saved, 'state'); expected.line = Wire.text(saved, 'line'); expected.deleteOnly = Wire.bool(saved, 'deleteOnly');
+        restored.push({ scope: scope, pairing: this.pairingRevision(), target: target, expected: expected, deleted: Wire.bool(saved, 'deleted') });
+      }
+      owner.heldReceipts = restored;
       this.sessionsReady = Wire.has(snapshot, 'sessions');
       this.sessions = Wire.rows(snapshot, 'sessions').map((data: Record<string, Object>) => this.cachedRow(data, 'session'));
       this.conversations = Wire.rows(snapshot, 'conversations').map((data: Record<string, Object>) => this.cachedRow(data, 'conversation')); this.publishDirectory();
@@ -582,6 +594,9 @@ export class ClientModel {
     this.cleanupProfiles.set(id, profile.hubId || id); this.pendingCleanupCount = this.cleanupProfiles.size;
     this.forgettingProfiles.add(id); AssistantViewModel.forgetProfile(id); this.retireViews(id);
     this.retirePairing(id);
+    const belongsToHub = (scope: string): boolean => (JSON.parse(scope) as string[])[0] === id;
+    this.heldReceipts = this.heldReceipts.filter((receipt: HeldActionReceipt) => !belongsToHub(receipt.scope));
+    for (const scope of this.heldRevisions.keys()) if (belongsToHub(scope)) this.heldRevisions.delete(scope);
     this.forgetEpochs.set(id, (this.forgetEpochs.get(id) || 0) + 1);
     if (this.pendingNotification && Wire.text(this.pendingNotification, 'profile') === id) { this.pendingNotification = undefined; this.notificationEpoch++; }
     try {
@@ -659,17 +674,27 @@ export class ClientModel {
   private async refreshCurrent(): Promise<void> {
     if (this.demo && this.demoRepository) { this.refreshDemo(); if (this.isChat() && this.chatVisible) await this.loadChat(this.selected); return; }
     if (!this.connected || !this.repository) return;
-    const generation = this.generation, scope = this.scope(), repo = this.repository, heldRevision = this.heldRevision;
+    const generation = this.generation, scope = this.scope(), repo = this.repository, owner = this.heldOwner(), heldRevision = owner.heldRevision(scope);
     this.busy = true;
     try {
       const sessions = await repo.sessions(), assistant = await repo.call('/api/v1/assistant');
       const machines = await repo.machines();
       const managers = this.features.includes('managers') ? await repo.list('/api/v1/managers', 'managers', 'manager') : [];
       if (!this.owns(generation, scope)) return;
-      if (heldRevision !== this.heldRevision) { this.queueRefresh(); return; }
+      if (heldRevision !== owner.heldRevision(scope)) { this.queueRefresh(); return; }
       sessions.forEach((row: ResourceRow) => row.group = this.profile.id); machines.forEach((row: ResourceRow) => row.group = this.profile.id);
-      this.sessions = sessions; this.sessionsReady = true; this.machines = machines; this.managers = managers; this.publishDirectory();
-      if (this.heldRetryReceipts.length) this.heldRetryReceipts = this.heldRetryReceipts.filter((receipt: HeldRetryReceipt) => receipt.scope !== scope);
+      this.sessions = sessions; this.sessionsReady = true; this.machines = machines; this.managers = managers;
+      if (owner.heldReceipts.length) owner.heldReceipts = owner.heldReceipts.filter((receipt: HeldActionReceipt) => {
+        if (receipt.scope !== scope) return true;
+        const row = sessions.find((item: ResourceRow) => this.target(item) === receipt.target);
+        if (receipt.pairing !== this.pairingRevision()) return false;
+        // The Hub can omit an entire computer while its manager still holds this operation.
+        if (!row) return true;
+        if (receipt.deleted) return this.removeHeldMessage(row, receipt.expected.id);
+        // The Hub can return the same cached failure after the manager has already started checking.
+        return this.matchesHeldRow(receipt.expected, row);
+      });
+      this.publishDirectory();
       if (this.selected.kind === 'session') {
         const selected = sessions.find((item: ResourceRow) => item.id === this.selected.id && item.machine === this.selected.machine);
         if (selected) this.selected = selected;
@@ -682,7 +707,11 @@ export class ClientModel {
         if (!row.machine) row.machine = Wire.text(assistant, 'machine_id'); if (!row.session) row.session = row.id;
         return row;
       });
-      try { await this.local.put('snapshot:' + scope, JSON.stringify({ sessions: sessions, conversations: this.conversations })); } catch (_) { this.error = 'cache_unavailable'; }
+      const heldActions = owner.heldReceipts.filter((receipt: HeldActionReceipt) => receipt.scope === scope)
+        .map((receipt: HeldActionReceipt) => this.cachedHeldAction(receipt));
+      try { await new ChatDraftStore(this.local).saveSessionSnapshot(scope, sessions, this.conversations, heldActions,
+        (): boolean => this.owns(generation, scope) && owner.heldRevision(scope) === heldRevision); }
+      catch (_) { if (this.owns(generation, scope)) this.error = 'cache_unavailable'; }
       if (this.isChat() && this.chatVisible) await this.loadChat(this.selected);
       else if (this.isChat() && this.decisionsVisible) await this.refreshDecisions();
       if (this.section === 2) { const inbox = await repo.inbox(); if (this.owns(generation, scope)) this.inbox = inbox; }
@@ -973,6 +1002,8 @@ export class ClientModel {
   }
   private async dispatchMessage(repo: HubRepository, row: ResourceRow, text: string, images: Object[], generation: number, scope: string, target: string, draft: string, context: string, attachmentSnapshot: string = '', admit?: () => boolean): Promise<boolean> {
     const store = new ChatDraftStore(this.local), entry = new ChatOutboxEntry();
+    const hub = this.profile.id, pairing = this.pairingRevision();
+    const paired = (): boolean => (ClientModel.pairingEpochs.get(hub) || 0) === pairing && this.local.accepts('outbox:' + scope, entry.localEpoch);
     if (!this.draftRevision) this.draftRevision = util.generateRandomUUID();
     entry.id = util.generateRandomUUID(); entry.target = target; entry.revision = this.draftRevision; entry.text = text; entry.context = context; entry.draft = draft; entry.imageCount = images.length; entry.attachmentSnapshot = attachmentSnapshot; entry.at = Date.now(); entry.localEpoch = this.local.revision('outbox:' + scope);
     this.activeMessages.add(entry.id); this.cancelDraftTimer(); this.operationState = 'pending'; this.error = ''; let dispatched = false, staged = false;
@@ -988,19 +1019,24 @@ export class ClientModel {
       if (reply && row.kind === 'session' && Wire.text(reply, 'delivered') === 'later') {
         const raw = Wire.object(reply, 'undelivered'), held = HeldAgentMessage.from(raw);
         if (held?.id === entry.id) {
+          if (!paired()) { this.activeMessages.delete(entry.id); return true; }
+          this.heldOwner().heldChanged(scope);
           if (entry.state !== 'done' && this.owns(generation, scope) && this.repository === repo) {
             const source = this.sessionRow(row), data = source.data(), list = Wire.rows(data, 'undelivered');
             if (!list.some((item: Record<string, Object>) => Wire.text(item, 'id') === entry.id)) {
-              data['undelivered'] = list.concat([raw]); source.raw = JSON.stringify(data); this.heldRevision++;
+              data['undelivered'] = list.concat([raw]); source.raw = JSON.stringify(data);
             }
             // The other device may already have canceled this operation while its initial reply was in flight.
             this.queueRefresh();
           }
           this.activeMessages.delete(entry.id);
           // The manager now owns this operation. A later cancellation must not resurrect a local "sent" bubble.
+          let cached = true;
+          try { await store.cacheHeldMessage(scope, target, row, entry.id, raw, paired); }
+          catch (_) { cached = false; if (this.owns(generation, scope)) this.error = 'cache_unavailable'; }
           try {
             await this.completeLocalDelivery(entry, scope, repo);
-            await store.discardEchoed(scope, [entry.id]);
+            if (cached) await store.discardEchoed(scope, [entry.id]);
             if (this.owns(generation, scope) && this.target() === target) {
               this.localMessages = this.localMessages.filter((item: ChatOutboxEntry) => item.id !== entry.id);
               this.syncOutboxState(); this.publishMessages();
@@ -1213,6 +1249,12 @@ export class ClientModel {
     // Preserve compatibility with callers that still provide only the blocking decision.
     return !this.pendingDecisionTarget && this.pendingDecisions.length === 0 && this.decision !== undefined;
   }
+  private coldHeldPlaceholder(row: ResourceRow, data: Record<string, Object>): boolean {
+    // A freshly restarted manager knows only this held operation's machine and session, until the runtime is listed.
+    return this.features.includes('agent_message_hold') && Wire.text(data, 'status', row.state) === 'offline' &&
+      !Wire.text(data, 'source_kind') && !Wire.text(data, 'agent') && !Wire.text(data, 'agent_label') &&
+      !row.title && !row.path && !Wire.has(data, 'capabilities') && Wire.has(data, 'undelivered');
+  }
   agentInputNotice(): string {
     if (this.selected.kind !== 'session') return '';
     const row = this.sessionRow(), data = row.data(), caps = Wire.object(data, 'capabilities');
@@ -1220,7 +1262,8 @@ export class ClientModel {
     const source = Wire.text(data, 'source_kind'), status = Wire.text(data, 'status', row.state);
     if ((!source || source === 'codex_history') && ['offline', 'interrupted'].includes(status) &&
       Wire.bool(caps, 'read') && Wire.bool(caps, 'terminal') && !Wire.bool(caps, 'send')) return 'agent_stopped';
-    if (Wire.bool(data, 'deleted') || !this.capabilities().canSend || (Wire.has(data, 'capabilities') && !Wire.bool(caps, 'send'))) return 'read_only';
+    if (Wire.bool(data, 'deleted') || this.coldHeldPlaceholder(row, data) || !this.capabilities().canSend ||
+      (Wire.has(data, 'capabilities') && !Wire.bool(caps, 'send'))) return 'read_only';
     const machine = this.machines.find((item: ResourceRow) => item.id === row.machine);
     if (this.connected && machine && !Wire.bool(machine.data(), 'online', true)) {
       return this.features.includes('agent_message_hold') ? 'agent_computer_holds' : 'agent_computer_offline';
@@ -1234,13 +1277,32 @@ export class ClientModel {
   }
   offersHeldAction(message: ChatMessage, retry: boolean): boolean {
     const expected = message.held;
-    if (!expected || message.ownerTarget !== this.target() || !this.connected || this.demo || !this.canCompose() ||
+    if (!expected || message.ownerTarget !== this.target() || !this.connected || this.demo || !this.profile.id ||
       !this.features.includes('agent_message_hold') || this.echoedMessages.has(expected.id)) return false;
+    const row = this.sessionRow(), data = row.data(), capabilities = this.capabilities();
+    if (!row.machine || !(row.session || row.id) || (row.group && row.group !== this.profile.id) ||
+      (row.manager && row.manager !== this.profile.manager)) return false;
+    // The manager keeps this read-capable placeholder while a runtime is absent from its computer.
+    const archivedRuntime = Wire.text(data, 'source_kind') === 'runtime' && Wire.text(data, 'status', row.state) === 'offline';
+    const heldPlaceholder = (archivedRuntime || this.coldHeldPlaceholder(row, data)) && capabilities.canRead &&
+      !capabilities.readOnly && !Wire.bool(data, 'deleted');
+    if (!this.canCompose() && !heldPlaceholder) return false;
     return this.matchesHeldRow(expected, this.selected) && (!retry || (expected.state === 'failed' && !expected.deleteOnly));
   }
   private matchesHeldRow(expected: HeldAgentMessage, row: ResourceRow): boolean {
     const held = this.heldMessages(row).find((item: HeldAgentMessage) => item.id === expected.id);
     return !!held && held.state === expected.state && held.line === expected.line && held.deleteOnly === expected.deleteOnly;
+  }
+  private removeHeldMessage(row: ResourceRow, id: string): boolean {
+    const data = row.data(), previous = Wire.rows(data, 'undelivered');
+    const kept = previous.filter((value: Record<string, Object>) => Wire.text(value, 'id') !== id);
+    if (kept.length === previous.length) return false;
+    data['undelivered'] = kept; row.raw = JSON.stringify(data); return true;
+  }
+  private cachedHeldAction(receipt: HeldActionReceipt): Record<string, Object> {
+    const expected = receipt.expected;
+    if (receipt.deleted) return Wire.payload(['target', 'id', 'deleted'], [receipt.target, expected.id, true]);
+    return Wire.payload(['target', 'id', 'state', 'line', 'deleteOnly'], [receipt.target, expected.id, expected.state, expected.line, expected.deleteOnly]);
   }
   canActOnHeld(message: ChatMessage, retry: boolean): boolean {
     if (!this.offersHeldAction(message, retry) || !message.held) return false;
@@ -1249,8 +1311,8 @@ export class ClientModel {
       !this.operationBlocked(path) && !this.operationBlocked(path + '/retry');
   }
   heldRetryPending(message: ChatMessage): boolean {
-    const key = JSON.stringify([message.ownerTarget, message.id]);
-    return this.heldRetryReceipts.some((receipt: HeldRetryReceipt) => receipt.key === key);
+    return this.heldOwner().heldReceipts.some((receipt: HeldActionReceipt) => !receipt.deleted && receipt.target === message.ownerTarget &&
+      receipt.pairing === this.pairingRevision() && receipt.expected.id === message.held?.id);
   }
   private heldActionPath(id: string): string {
     const row = this.selected;
@@ -1259,23 +1321,23 @@ export class ClientModel {
   async actOnHeld(message: ChatMessage, retry: boolean, admit?: () => boolean): Promise<void> {
     if (admit && !admit() || !this.canActOnHeld(message, retry) || !message.held) return;
     const row = this.selected, expected = message.held, id = expected.id, path = this.heldActionPath(id);
-    const repo = this.repo(), scope = this.scope(), generation = this.generation;
+    const repo = this.repo(), scope = this.scope(), generation = this.generation, hub = this.profile.id, pairing = this.pairingRevision();
     const key = JSON.stringify([message.ownerTarget, message.id]);
-    const current = (): boolean => (!admit || admit()) && this.owns(generation, scope) && this.repository === repo && this.offersHeldAction(message, retry);
+    const current = (): boolean => (!admit || admit()) && this.owns(generation, scope) && this.pairingRevision() === pairing &&
+      this.repository === repo && this.offersHeldAction(message, retry);
     this.heldActions = this.heldActions.concat([key]);
     try {
       await repo.call(path + (retry ? '/retry' : ''), retry ? 'POST' : 'DELETE', {}, '', current, false,
         (result: Record<string, Object>): boolean => Wire.bool(result, 'ok'));
-      if (this.owns(generation, scope) && this.repository === repo && this.matchesHeldRow(expected, row)) {
-        this.heldRevision++;
-        if (retry) {
-          // The receipt acknowledges the action. Only a subsequent manager snapshot supplies its delivery state.
-          this.heldRetryReceipts = this.heldRetryReceipts.concat([{ scope: scope, key: key }]);
-        } else {
-          const source = this.sessionRow(row), data = source.data();
-          data['undelivered'] = Wire.rows(data, 'undelivered').filter((value: Record<string, Object>) => Wire.text(value, 'id') !== id);
-          source.raw = JSON.stringify(data); this.publishMessages();
-        }
+      const paired = (): boolean => (ClientModel.pairingEpochs.get(hub) || 0) === pairing;
+      const inScope = this.scope() === scope && !this.retired;
+      if (paired() && (!retry || !inScope || this.matchesHeldRow(expected, row))) {
+        const owner = this.heldOwner(); owner.heldChanged(scope);
+        const receipt: HeldActionReceipt = { scope: scope, pairing: pairing, target: message.ownerTarget, expected: expected, deleted: !retry };
+        owner.heldReceipts = owner.heldReceipts.filter((old: HeldActionReceipt) => old.target !== receipt.target || old.expected.id !== id).concat([receipt]);
+        if (inScope && !retry) { this.removeHeldMessage(this.sessionRow(row), id); this.publishMessages(); }
+        try { await new ChatDraftStore(this.local).cacheHeldMessage(scope, message.ownerTarget, row, id, undefined, paired, this.cachedHeldAction(receipt)); }
+        catch (_) { if (this.owns(generation, scope)) this.error = 'cache_unavailable'; }
       }
     } catch (error) {
       if (current()) this.failure(error as Error);

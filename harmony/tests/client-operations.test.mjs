@@ -333,6 +333,302 @@ test('held Agent check-only acknowledgment preserves the manager reason through 
   await model.actOnHeld(model.messages[0],true); assert.equal(posts.length,2);
 });
 
+function heldSession(entries, session = 'chat/one', manager = 'personal', extra = {}) {
+  return ResourceRow.from({machine_id:'my laptop', session_id:session, manager, undelivered:entries, ...extra}, 'session');
+}
+
+test('held Agent successful stale snapshots cannot rearm the same check-only Retry', async () => {
+  const {model, held} = heldFixture(), calls = [];
+  const uncertain = held('a','failed','Might not have arrived. Retry checks the chat first.');
+  const unconfirmed = {...uncertain, error:'Could not confirm it arrived. Retry to send anyway.'};
+  const other = {...uncertain, id:'b'};
+  let sessions = [heldSession([uncertain, other]), heldSession([uncertain], 'elsewhere')];
+  model.queueRefresh = () => {};
+  model.repository.sessions = async () => sessions;
+  model.repository.machines = async () => model.machines;
+  model.repository.call = async (path, method) => { if (method === 'POST') calls.push(path); return {ok:true}; };
+  await model.refresh();
+  for (const message of model.messages) await model.actOnHeld(message, true);
+  const stale = model.messages[0];
+  // The GET succeeds with a cached row. Another session even has the same operation ID.
+  sessions = [heldSession([uncertain, {...other,error:'Retry can send this other message.'}]),
+    heldSession([unconfirmed],'elsewhere')];
+  await model.refresh();
+  assert.equal(model.heldRetryPending(model.messages[0]), true);
+  assert.equal(model.heldRetryPending(model.messages[1]), false);
+  assert.equal(model.canActOnHeld(model.messages[0], false), true);
+  await model.actOnHeld(stale, true);
+  await model.actOnHeld(model.messages[0], true);
+  assert.equal(calls.length, 2);
+  // A complete snapshot obtained for a different manager cannot consume this manager's receipt.
+  model.profile.manager = 'work';
+  sessions = [heldSession([unconfirmed],'chat/one','work')];
+  await model.refresh();
+  assert.equal(model.heldRetryPending(model.messages[0]), false);
+  model.profile.manager = 'personal';
+  sessions = [heldSession([uncertain])];
+  await model.refresh();
+  assert.equal(model.heldRetryPending(model.messages[0]), true);
+  sessions = [heldSession([unconfirmed])];
+  await model.refresh();
+  await model.actOnHeld(stale, true);
+  assert.equal(calls.length, 2);
+  await model.actOnHeld(model.messages[0], true);
+  assert.equal(calls.length, 3);
+  // The target session reports that this operation has left it.
+  sessions = [heldSession([])]; await model.refresh();
+  sessions = [heldSession([unconfirmed])]; await model.refresh();
+  assert.equal(model.canActOnHeld(model.messages[0], true), true);
+});
+
+for (const action of ['retry','delete']) test('held Agent ' + action + ' receipt survives a whole computer missing from the Hub inventory', async () => {
+  const {HubRepository} = await import('../entry/src/main/ets/models/HubRepository.ets');
+  const {model,held} = heldFixture(), retry = action === 'retry', writes = [];
+  const waiting = held('same','failed','Retry checks the chat first.');
+  const row = {machine_id:'my laptop',session_id:'chat/one',manager:'personal',undelivered:[waiting]};
+  const unrelated = {...row,machine_id:'other computer'};
+  let rows = [row,unrelated], machines = ['my laptop','other computer'];
+  const repo = new HubRepository({managerId:'personal',hubId:model.profile.id});
+  repo.transport.request = async (path,method) => {
+    if (method !== 'GET') { writes.push([method,path]); return JSON.stringify({ok:true}); }
+    if (path === '/api/v1/sessions') return JSON.stringify({sessions:rows});
+    if (path === '/api/v1/machines') return JSON.stringify({machines:machines.map(id=>({id,manager:'personal'}))});
+    assert.equal(path,'/api/v1/assistant'); return JSON.stringify({conversations:[]});
+  };
+  model.repository = repo; model.queueRefresh = () => {};
+  await model.refresh(); await model.actOnHeld(model.messages[0],retry);
+  assert.equal(writes.length,1);
+  // A successful GET describes another computer, which happens to reuse both session and operation IDs.
+  rows = [unrelated]; machines = ['other computer']; await model.refresh();
+  assert.equal(model.messages.length,0);
+  const reopened = heldFixture().model; reopened.local = model.local; reopened.connected = false;
+  await reopened.restoreSnapshot(reopened.connectionGeneration(),reopened.scope());
+  reopened.repository = repo; reopened.queueRefresh = () => {}; reopened.connected = true;
+  rows = [row,unrelated]; machines = ['my laptop','other computer']; await reopened.refresh();
+  if (retry) {
+    assert.equal(reopened.messages[0].held.line,waiting.error);
+    assert.equal(reopened.canActOnHeld(reopened.messages[0],false),true);
+    await reopened.actOnHeld(reopened.messages[0],true);
+    assert.equal(writes.length,1,'the old check-only prompt cannot issue a second POST');
+    rows = [{...row,undelivered:[{...waiting,error:'Could not confirm. Retry to send anyway.'}]}];
+    await reopened.refresh(); await reopened.actOnHeld(reopened.messages[0],true); assert.equal(writes.length,2);
+  } else {
+    assert.deepEqual(reopened.messages,[],'the stale target row cannot bring back the confirmed deletion');
+    assert.deepEqual(writes.map(([m])=>m),['DELETE']);
+  }
+  rows = [{...row,undelivered:[]}]; await reopened.refresh();
+  const known = JSON.parse(await reopened.local.get('snapshot:'+reopened.scope()));
+  assert.deepEqual(known.heldActions,[],'the target itself can acknowledge departure');
+});
+
+test('held Agent forgetting a pairing cleans only its pending receipts and snapshots', async () => {
+  const {model,held,update} = heldFixture();
+  const keeper = new HubProfile(model.profile.id+'-other'); keeper.manager = model.profile.manager;
+  const forgotten = model.profile; model.profiles = [forgotten,keeper]; model.queueRefresh = () => {};
+  model.repository.close = () => {}; model.repository.call = async () => ({ok:true});
+  const scopes = [];
+  for (const profile of [keeper,forgotten]) {
+    model.profile = profile; scopes.push(model.scope());
+    update([held('same','failed','Check first.')]); await model.actOnHeld(model.messages[0],true);
+  }
+  await model.forgetProfile(forgotten.id);
+  assert.equal(await model.local.get('snapshot:'+scopes[1]),'');
+  assert.ok(await model.local.get('snapshot:'+scopes[0]));
+  assert.deepEqual(model.heldReceipts.map(receipt=>receipt.scope),[scopes[0]]);
+  assert.deepEqual(Array.from(model.heldRevisions.keys()),[scopes[0]]);
+});
+
+test('held Agent confirmed receipt and deletion survive offline restart and an outstanding stale snapshot in their own scope', async () => {
+  const {model, held} = heldFixture(), stale = deferred(), readStarted = deferred();
+  const kept = held('keep'), deleted = held('remove'), incoming = [];
+  model.queueRefresh = () => {};
+  model.repository.sessions = async () => [heldSession([kept, deleted])];
+  model.repository.machines = async () => model.machines;
+  model.repository.call = async () => ({ok:true});
+  model.repository.send = async (_row, _text, id) => { const receipt = held(id); incoming.push(receipt); return {delivered:'later',undelivered:receipt}; };
+  await model.refresh();
+  model.repository.sessions = async () => {
+    const previous = [heldSession([kept, deleted])];
+    readStarted.resolve(); await stale.promise; return previous;
+  };
+  const oldRead = model.refresh(); await readStarted.promise;
+  const original = model.messages.find(m => m.held?.id === deleted.id);
+  await model.actOnHeld(original, false);
+  assert.ok(await model.send()); assert.equal(incoming.length,1);
+  stale.resolve(); await oldRead;
+  const restored = async (hub, manager) => {
+    const other = heldFixture().model;
+    other.local = model.local; other.profile = new HubProfile(hub); other.profile.manager = manager;
+    other.selected = new ResourceRow('chat/one','Test','session'); other.selected.machine = 'my laptop';
+    other.selected.session = 'chat/one'; other.sessions = []; other.connected = false;
+    await other.restoreSnapshot(other.connectionGeneration(),other.scope());
+    await other.restoreLocalDelivery(); other.publishMessages();
+    return other.messages.map(m => [m.held?.id,m.held?.line]);
+  };
+  assert.deepEqual(await restored('synthetic-hub','personal'), [kept,incoming[0]].map(m=>[m.id,m.error]));
+  assert.deepEqual(await restored('synthetic-hub','other'), []);
+  assert.deepEqual(await restored('other-hub','personal'), []);
+});
+
+test('held Agent offline restart retains a check-only lock and a confirmed deletion through a cached Hub read', async () => {
+  const {model,held} = heldFixture(), uncertain = held('check','failed','Retry checks the chat first.'), removed = held('gone');
+  let list = [heldSession([uncertain,removed])], posts = 0;
+  const connect = client => {
+    client.queueRefresh = () => {};
+    client.repository.sessions = async () => list;
+    client.repository.machines = async () => client.machines;
+    client.repository.call = async (_path,method) => { if (method === 'POST') posts++; return {ok:true}; };
+  };
+  connect(model); await model.refresh();
+  await model.actOnHeld(model.messages[0],true);
+  await model.actOnHeld(model.messages[1],false);
+  const reopened = heldFixture().model; reopened.local = model.local; reopened.connected = false;
+  await reopened.restoreSnapshot(reopened.connectionGeneration(),reopened.scope()); reopened.publishMessages();
+  assert.deepEqual(reopened.messages.map(m=>m.held?.id),[uncertain.id]);
+  assert.equal(reopened.heldRetryPending(reopened.messages[0]),true);
+  connect(reopened); reopened.connected = true; await reopened.refresh();
+  assert.deepEqual(reopened.messages.map(m=>m.held?.id),[uncertain.id]);
+  await reopened.actOnHeld(reopened.messages[0],true); assert.equal(posts,1);
+  list = [heldSession([{...uncertain,error:'Could not confirm. Retry to send anyway.'}])];
+  await reopened.refresh();
+  assert.equal(reopened.heldRetryPending(reopened.messages[0]),false);
+  await reopened.actOnHeld(reopened.messages[0],true); assert.equal(posts,2);
+  assert.ok(!JSON.stringify(await reopened.local.get('snapshot:'+reopened.scope())).includes(removed.id));
+});
+
+test('held Agent replacement pairing rejects a late response from the previous pairing', async () => {
+  const {model,held} = heldFixture(), waiting = deferred(), entered = deferred();
+  model.queueRefresh = () => {};
+  model.repository.sessions = async () => [heldSession([])];
+  model.repository.machines = async () => model.machines;
+  model.repository.call = async () => ({ok:true});
+  model.repository.send = async (_row,_text,id) => { entered.resolve(); await waiting.promise; return {delivered:'later',undelivered:held(id)}; };
+  await model.refresh();
+  const request = model.send(); await entered.promise;
+  model.retirePairing(model.profile.id); ++model.generation;
+  waiting.resolve(); await request;
+  const saved = JSON.parse(await model.local.get('snapshot:'+model.scope()));
+  assert.deepEqual(JSON.parse(saved.sessions[0].raw).undelivered,[]);
+});
+
+test('held Agent snapshots reject an incomplete sessions envelope without releasing the current row', async () => {
+  const {HubRepository} = await import('../entry/src/main/ets/models/HubRepository.ets');
+  const {model, held, update} = heldFixture();
+  const repo = new HubRepository({managerId:'personal',hubId:model.profile.id});
+  let envelope = {sessions:[{machine_id:'my laptop',session_id:'chat/one',manager:'personal',undelivered:[held('x','failed','Check first.')]}]};
+  repo.call = async (path) => path === '/api/v1/sessions' ? envelope : {ok:true};
+  repo.machines = async () => model.machines;
+  model.queueRefresh = () => {}; model.repository = repo;
+  update([]); await model.refresh(); await model.actOnHeld(model.messages[0],true);
+  const target = {machine_id:'my laptop',session_id:'chat/one',manager:'personal'};
+  for (const malformed of [{},{sessions:null},{sessions:{}},{sessions:[],has_more:true},
+    {sessions:[null]},{sessions:[{...target,undelivered:{}}]},{sessions:[{...target,undelivered:[{}]}]}]) {
+    envelope = malformed; await model.refresh();
+    assert.equal(model.messages[0]?.held?.id,'x'); assert.equal(model.heldRetryPending(model.messages[0]),true);
+  }
+  envelope = {sessions:[]}; await model.refresh(); assert.equal(model.messages.length,0);
+});
+
+test('held Agent confirmed state waits for a stale disk write and stays in the dispatching manager after navigation', async () => {
+  const {model, held} = heldFixture(), disk = deferred(), started = deferred(), reply = deferred(), posted = deferred();
+  const queued = held('delete'), keeper = held('keep');
+  model.queueRefresh = () => {};
+  model.repository.sessions = async () => [heldSession([queued,keeper])];
+  model.repository.machines = async () => model.machines;
+  model.repository.call = async () => ({ok:true});
+  await model.refresh();
+  const scope = model.scope(), key = 'snapshot:' + scope, put = model.local.put.bind(model.local);
+  let delay = true;
+  model.local.put = async (k,v,...rest) => { if (k === key && delay) { delay = false; started.resolve(); await disk.promise; } await put(k,v,...rest); };
+  const writing = model.refresh(); await started.promise;
+  const removing = model.actOnHeld(model.messages[0],false);
+  let wire;
+  model.repository.send = async (_row,_text,id) => { wire = held(id); posted.resolve(); await reply.promise; return {delivered:'later',undelivered:wire}; };
+  const sending = model.send(); await posted.promise;
+  model.profile.manager = 'work'; model.generation++;
+  disk.resolve(); await writing; await removing;
+  reply.resolve(); assert.ok(await sending);
+  const cached = JSON.parse(await model.local.get(key));
+  assert.deepEqual(JSON.parse(cached.sessions[0].raw).undelivered.map(m=>m.id),[keeper.id,wire.id]);
+  assert.equal(await model.local.get('snapshot:'+model.scope()),'');
+});
+
+test('held Agent retired detail receipts survive the replacement workspace view reading the same scope', async () => {
+  const {model:owner,held} = heldFixture(), {model:detail,update} = heldFixture();
+  detail.directoryParent = owner; detail.local = owner.local;
+  const waiting = held('remove'), uncertain = held('check','failed','Retry checks first.');
+  const snapshot = () => [heldSession([waiting,uncertain])];
+  owner.queueRefresh = detail.queueRefresh = () => {};
+  owner.repository.sessions = async () => snapshot();
+  owner.repository.machines = async () => owner.machines;
+  owner.repository.call = async () => ({ok:true});
+  await owner.refresh(); update([waiting,uncertain]);
+  const sent = deferred(), reply = deferred(), started = deferred(), old = deferred(); let actions = 0;
+  detail.repository.call = async (_p,_m,_b,_i,admit) => {
+    assert.ok(admit()); if (++actions === 2) sent.resolve(); await reply.promise; return {ok:true};
+  };
+  const deleted = detail.actOnHeld(detail.messages[0],false), checked = detail.actOnHeld(detail.messages[1],true);
+  await sent.promise; detail.retired = true; detail.generation++;
+  owner.repository.sessions = async () => { started.resolve(); await old.promise; return snapshot(); };
+  const reading = owner.refresh(); await started.promise;
+  reply.resolve(); await Promise.all([deleted,checked]); old.resolve(); await reading;
+  const restored = heldFixture().model; restored.local = owner.local; restored.connected = false;
+  await restored.restoreSnapshot(restored.connectionGeneration(),restored.scope()); restored.publishMessages();
+  assert.deepEqual(restored.messages.map(m=>m.held?.id),[uncertain.id]);
+  assert.equal(restored.heldRetryPending(restored.messages[0]),true);
+  await owner.refresh();
+  assert.deepEqual(owner.messages.map(m=>m.held?.id),[uncertain.id]);
+  assert.equal(owner.canActOnHeld(owner.messages[0],true),false);
+});
+
+test('held Agent manager actions on an offline runtime placeholder are independent of composing a new message', async () => {
+  const {model, held} = heldFixture(), calls = [];
+  const waiting = held('queued'), failed = held('expired','failed','Not sent. Desk was away for 24 hours.');
+  const signedOut = {...failed,id:'delete-only',delete_only:true};
+  const archive = {source_kind:'runtime', agent:'dsh', state:'offline', status:'offline', capabilities:{read:true}};
+  const place = heldSession([waiting, failed, signedOut], 'chat/one', 'personal', archive);
+  model.selected = place; model.sessions = [place]; model.publishMessages();
+  model.queueRefresh = () => {};
+  model.repository.call = async (path, method, _body, _id, admit) => { assert.ok(admit()); calls.push([path,method]); return {ok:true}; };
+  const [queued, expired, signed] = model.messages, view = heldDeleteView(model);
+  assert.equal(model.canCompose(), false); assert.equal(model.canSend(), false);
+  assert.equal(model.offersHeldAction(queued, true), false);
+  assert.equal(model.offersHeldAction(signed, true), false);
+  assert.equal(model.canActOnHeld(expired, true), true);
+  assert.equal(model.canActOnHeld(queued, false), true);
+  assert.equal(model.canActOnHeld(signed, false), true);
+  await model.actOnHeld(expired, true);
+  view.confirmHeldDelete(queued); await view.dialog.primaryButton.action();
+  assert.equal(calls.length, 1); assert.ok(model.messages.some(m => m.held?.id === waiting.id));
+  view.confirmHeldDelete(queued); await view.dialog.secondaryButton.action();
+  assert.deepEqual(calls, [
+    ['/api/v1/sessions/my%20laptop/chat%2Fone/held/expired/retry','POST'],
+    ['/api/v1/sessions/my%20laptop/chat%2Fone/held/queued','DELETE'],
+  ]);
+  for (const override of [{read_only:true},{deleted:true},{source_kind:'identity_conflict'},{source_kind:'history'},
+    {capabilities:{read:false}}, {manager:'other'}]) {
+    const row = heldSession([failed], 'chat/one', 'personal', {...archive,...override});
+    model.sessions = [row]; model.selected = row; model.publishMessages();
+    assert.equal(model.offersHeldAction(model.messages[0], false), false, JSON.stringify(override));
+  }
+});
+
+test('held Agent cold manager placeholder allows cancel while its runtime identity is unavailable', async () => {
+  const {model, held} = heldFixture();
+  const row = heldSession([held('cold')], 'chat/one', 'personal', {status:'offline',state:'offline'});
+  model.sessions = [row]; model.selected = row; model.publishMessages();
+  model.queueRefresh = () => {};
+  let deletes = 0;
+  model.repository.call = async (_path, method, _body, _id, admit) => {
+    assert.equal(method,'DELETE'); assert.ok(admit()); deletes++; return {ok:true};
+  };
+  assert.equal(model.canCompose(), false);
+  assert.equal(model.canActOnHeld(model.messages[0], false), true);
+  const view = heldDeleteView(model); view.confirmHeldDelete(model.messages[0]); await view.dialog.secondaryButton.action();
+  assert.equal(deletes, 1); assert.equal(model.messages.length, 0);
+  assert.equal(model.canCompose(), false);
+});
+
 test('held Agent actions cannot cross a chat, manager, denied route or capability change', async () => {
   for (const change of ['chat','manager','route','read-only','stopped','disconnected']) {
     const {model,held,update} = heldFixture();
