@@ -45,19 +45,23 @@ func (s *Service) taskModelBaseline(ctx context.Context, machine string) (ModelB
 	return local, nil // normal validation reports an authoritative unavailable configuration
 }
 
-// Include the selected computer's advertised identity, so a local alias changing gateways starts a new chat.
-func (s *Service) taskBindingFingerprint(ctx context.Context, machine string, b ModelBinding) string {
+// Compare the binding even when the selected computer cannot report a launcher identity.
+func (s *Service) taskExecutionFingerprints(ctx context.Context, machine string, b ModelBinding) (binding, observed string) {
+	type launcherIdentity struct{ Agent, Source, BaseURL, Model string }
+	prefix := s.modelBindingFingerprint(ctx, b) + "\x00" + machine + "\x00"
+	fingerprint := func(identity launcherIdentity) string {
+		raw, _ := json.Marshal(identity)
+		sum := sha256.Sum256(append([]byte(prefix), raw...))
+		return hex.EncodeToString(sum[:])
+	}
+	binding = fingerprint(launcherIdentity{}) // also the digest older tasks stored when the catalog was unknown
 	name := strings.TrimPrefix(b.Provider, "launcher.")
-	var identity struct{ Agent, Source, BaseURL, Model string }
 	if list, known := s.launchersHere(withUnhidden(ctx, name), machine); known {
 		for _, l := range list {
 			if l.Name == name {
-				identity.Agent, identity.Source, identity.BaseURL, identity.Model = l.Agent, proto.CanonicalLauncherSource(l.Source), l.BaseURL, l.Model
-				break
+				return binding, fingerprint(launcherIdentity{Agent: l.Agent, Source: proto.CanonicalLauncherSource(l.Source), BaseURL: l.BaseURL, Model: l.Model})
 			}
 		}
 	}
-	raw, _ := json.Marshal(identity)
-	sum := sha256.Sum256(append([]byte(s.modelBindingFingerprint(ctx, b)+"\x00"+machine+"\x00"), raw...))
-	return hex.EncodeToString(sum[:])
+	return binding, ""
 }

@@ -27,15 +27,16 @@ func writeTaskExecutionError(w http.ResponseWriter, err error) {
 // TaskExecution is the shared execution context for scheduled prompts and their content references.
 // An empty model or effort means the launcher's own default, not another provider's default.
 type TaskExecution struct {
-	MachineID      string `json:"machine_id"`
-	Launcher       string `json:"launcher"`
-	Agent          string `json:"agent,omitempty"`
-	Model          string `json:"model,omitempty"`
-	Effort         string `json:"effort,omitempty"`
-	Runtime        string `json:"runtime,omitempty"` // legacy Claude execution evidence; new Claude runs use the CLI
-	Cwd            string `json:"cwd,omitempty"`
-	PermissionMode string `json:"permission_mode,omitempty"`
-	Fingerprint    string `json:"fingerprint,omitempty"`
+	MachineID          string `json:"machine_id"`
+	Launcher           string `json:"launcher"`
+	Agent              string `json:"agent,omitempty"`
+	Model              string `json:"model,omitempty"`
+	Effort             string `json:"effort,omitempty"`
+	Runtime            string `json:"runtime,omitempty"` // legacy Claude execution evidence; new Claude runs use the CLI
+	Cwd                string `json:"cwd,omitempty"`
+	PermissionMode     string `json:"permission_mode,omitempty"`
+	BindingFingerprint string `json:"binding_fingerprint,omitempty"` // independent of node discovery
+	Fingerprint        string `json:"fingerprint,omitempty"`         // includes the observed launcher identity
 }
 
 func (s *Service) taskMachine(ctx context.Context, t Task) string {
@@ -87,7 +88,7 @@ func (s *Service) taskExecution(ctx context.Context, t Task, validate bool, bind
 		}
 	}
 	ex.Launcher, ex.Model, ex.Effort = strings.TrimPrefix(b.Provider, "launcher."), b.Model, b.Effort
-	ex.Fingerprint = s.taskBindingFingerprint(ctx, machine, b)
+	ex.BindingFingerprint, ex.Fingerprint = s.taskExecutionFingerprints(ctx, machine, b)
 	if !validate {
 		ex.Agent = s.launcherAgent(withUnhidden(ctx, ex.Launcher), machine, ex.Launcher)
 		if ex.Cwd == "" {
@@ -391,6 +392,20 @@ func (s *Service) saveTaskConfiguredLocked(ctx context.Context, sc *schedule, ta
 }
 
 func compatibleTaskExecution(old, next TaskExecution) bool {
+	if old.BindingFingerprint != "" && old.BindingFingerprint != next.BindingFingerprint {
+		return false
+	}
+	// Older snapshots can still compare an observed digest. Their empty-identity digest only records the binding.
+	if old.BindingFingerprint == "" && old.Fingerprint == next.BindingFingerprint {
+		old.Fingerprint = ""
+	}
+	if old.Fingerprint == "" || next.Fingerprint == "" {
+		old.Fingerprint, next.Fingerprint = "", ""
+	}
+	if old.Agent == "" || next.Agent == "" {
+		old.Agent, next.Agent = "", ""
+	}
+	old.BindingFingerprint, next.BindingFingerprint = "", ""
 	// Permission changes can be applied to a compatible session; the agent, directory and model identity cannot.
 	old.PermissionMode, next.PermissionMode = "", ""
 	return old == next

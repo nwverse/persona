@@ -1776,6 +1776,13 @@ func (s *Service) recordRun(r ScheduleRun) string {
 		if r.SessionID != "" {
 			t.LastSessionID = r.SessionID
 		}
+		// Learn the observed identity on a successful resume. Keep the last observation through an outage
+		// and leave an in-flight "New chat next time" intact.
+		if r.Conversation == "resumed" && r.Execution != nil && r.Execution.Fingerprint != "" &&
+			r.SessionID == t.RunSessionID && r.MachineID == t.RunMachineID &&
+			(t.RunExecution == nil || t.RunExecution.BindingFingerprint == "" || t.RunExecution.Fingerprint == "") {
+			t.RunExecution = r.Execution
+		}
 	}
 	streakTask, streakN, streak := streakToldLocked(sc, len(sc.runs)-1, false) // told once per streak (schedule_streak.go)
 	r = sc.runs[len(sc.runs)-1]
