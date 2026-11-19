@@ -5,7 +5,6 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { InboxItem } from "../../lib/inbox";
-import { avatarSrc } from "../../lib/connectors";
 import { ItemAvatar, Monogram } from "./InboxParts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -43,16 +42,19 @@ describe("inbox avatars", () => {
   it("draws a connector row's picture from the avatars route", () => {
     act(() => root.render(<ItemAvatar it={telegramItem("/api/v1/avatars/telegram/YS51MS41MDE")} />));
     const src = face()?.getAttribute("src") ?? "";
-    expect(src).toMatch(/^\/api\/v1\/avatars\/telegram\/YS51MS41MDE\?size=(64|128)/);
+    expect(src).toMatch(/^\/api\/v1\/avatars\/telegram\/YS51MS41MDE\?size=40(&|$)/); // 40 px at this screen's ratio, 1
     expect(host.querySelector("[title='Telegram']")).not.toBeNull();
   });
 
-  it("asks for the smallest size the route draws that covers the pixels drawn", () => {
-    expect(avatarSrc("/api/v1/avatars/t/x", 40, 1)).toBe("/api/v1/avatars/t/x?size=64");
-    expect(avatarSrc("/api/v1/avatars/t/x", 40, 2)).toBe("/api/v1/avatars/t/x?size=128");
-    expect(avatarSrc("/api/v1/avatars/t/x", 36, 3)).toBe("/api/v1/avatars/t/x?size=128");
-    expect(avatarSrc("/api/v1/avatars/t/x", 400, 3)).toBe("/api/v1/avatars/t/x?size=512");
-    expect(avatarSrc(undefined, 40)).toBeUndefined();
+  it("asks for the pixels drawn on this screen", () => {
+    const ratio = window.devicePixelRatio;
+    Object.defineProperty(window, "devicePixelRatio", { value: 3, configurable: true });
+    try {
+      act(() => root.render(<ItemAvatar it={telegramItem("/api/v1/avatars/telegram/YS51MS41MDE")} size={36} />));
+      expect(face()?.getAttribute("src")).toMatch(/\?size=108(&|$)/);
+    } finally {
+      Object.defineProperty(window, "devicePixelRatio", { value: ratio, configurable: true });
+    }
   });
 
   it("keeps a connector row's letter without a picture, and when it does not load", () => {
