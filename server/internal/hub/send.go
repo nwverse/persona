@@ -586,8 +586,14 @@ func (h *Hub) keepUndelivered(ctx context.Context, m *Machine, sid string, msg m
 	if code == assistantwire.CodeDeliveryUnknown {
 		tried = sendTimingOf(ctx).start
 	}
+	p := principalOf(ctx)
+	credential := ""
+	if p.Role == roleFull || p.Role == roleAnswer {
+		credential = p.ID
+	}
 	err := h.asstOf(h.sessionOwner(m.cfg.ID, sid)).call(kctx, assistantwire.MethodKeepUndelivered, assistantwire.KeepUndeliveredParams{
 		MachineID: m.cfg.ID, SessionID: sid, Params: msg, Human: personSent(ctx), Lang: string(h.contextLang(ctx)), Code: code, Error: why, TriedAt: tried,
+		CredentialID: credential,
 	}, &res)
 	if err != nil || res.Undelivered == nil {
 		h.logf("send to %s/%s: not kept for later: %v", m.cfg.ID, sid, err)

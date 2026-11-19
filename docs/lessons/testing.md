@@ -1,11 +1,7 @@
 # Lessons: testing and validation
 
-- A UI test that lands on the wrong page in the wrong language did not get its launch (#10109). xcodebuild installs the
-  app at the start of each run; a Live Activity the previous run left is stopped by that install, and liveactivitiesd
-  wakes the app in the background a few milliseconds before XCTest's launch, which then attaches to that argument-less
-  process. Longer waits never help: read SpringBoard's `OpenApplication … ForRequester(…)` lines around the launch, and
-  end what a test leaves (Debug builds end their Live Activities on SIGTERM). A test that waits for one of two
-  renderings (a folded box shows the caption, not the line) waits on the hub's own count first, then either rendering.
+- A viewer's Close button existing, or being non-hittable, does not prove that its picture and tap recognizers are ready, or that a tap hid the chrome (#8562). The full-screen presentation may still be settling, the decoded page may still be a spinner, or a SpringBoard alert may cover the app. Dismiss the known icon-change alert, wait for the decoded `viewer-page-N` and a hittable Close before the first tap, and only then assert the hide/show sequence. A delayed-decode launch turns the old race into a deterministic failure; a longer poll after a mistimed tap only hides the synchronization gap.
+
 
 - Fixture teardown is part of a test's elapsed time (#5730). A scripted terminal whose shell is ready immediately
   does not need a fixed startup pause. When a test has finished its assertions, cancel background prompt checks
@@ -13,6 +9,13 @@
   must still await the check before their assertions; cancellation at teardown must not substitute for those checks.
   Keep normal detached delivery and production wait limits unchanged, and measure serial and partitioned commands
   separately when evaluating the gain.
+
+- A UI test that lands on the wrong page in the wrong language did not get its launch (#10109). xcodebuild installs the
+  app at the start of each run; a Live Activity the previous run left is stopped by that install, and liveactivitiesd
+  wakes the app in the background a few milliseconds before XCTest's launch, which then attaches to that argument-less
+  process. Longer waits never help: read SpringBoard's `OpenApplication … ForRequester(…)` lines around the launch, and
+  end what a test leaves (Debug builds end their Live Activities on SIGTERM). A test that waits for one of two
+  renderings (a folded box shows the caption, not the line) waits on the hub's own count first, then either rendering.
 
 - A fake peer recording a user line is not the send's completion (#9673). The desktop launcher's first message
   continues in the background and still reads the shared confirmation timeout. After observing inbox receipt, wait
