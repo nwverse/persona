@@ -1,3 +1,6 @@
+#if os(iOS) && canImport(AlarmKit)
+import AlarmKit
+#endif
 import Foundation
 import MapKit
 import Testing
@@ -297,6 +300,26 @@ struct PhoneSystemToolsTests {
         #expect(throws: ToolFailure.self) { try AlarmsTool.timerSeconds(json(#"{"seconds":86401}"#)) }
         #expect(AlarmsTool.timerSummary(seconds: 1500, label: "Focus").contains("Focus"))
     }
+
+    @Test func aPausedTimerShowsTheTimeLeftAsTheClockAppDoes() {
+        #expect(AlarmActivityTime.paused(total: 1500, elapsed: 1.2) == "24:58")
+        #expect(AlarmActivityTime.paused(total: 3 * 3600, elapsed: 3600) == "2:00:00")
+        #expect(AlarmActivityTime.paused(total: 60, elapsed: 90) == "0:00")
+    }
+
+    @Test func theCountdownNeverStartsAfterItRings() {
+        let fire = Date(timeIntervalSince1970: 1_000)
+        #expect(AlarmActivityTime.countdown(start: Date(timeIntervalSince1970: 400), fire: fire).lowerBound == Date(timeIntervalSince1970: 400))
+        #expect(AlarmActivityTime.countdown(start: Date(timeIntervalSince1970: 2_000), fire: fire) == fire...fire)
+    }
+
+    #if os(iOS) && canImport(AlarmKit)
+    @Test func aTimersAttributesFitInsideActivityKitsLimit() throws {
+        guard #available(iOS 26.0, *) else { return }
+        let data = try JSONEncoder().encode(AlarmsTool.attributes(label: "Focus", timer: true))
+        #expect(data.count < 4096)
+    }
+    #endif
 
     // MARK: - Home (#2285)
 

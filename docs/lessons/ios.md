@@ -31,6 +31,38 @@ of the app on its main thread: 55–70 ms each with the `assistant` perf suite's
 app switching on a cue (`FrameProbe.switchPages`, `testTabSwitchAssistantAgentsByCue`) and the test only sleeping; keep
 the tapping test for the tap's own path.
 
+## What a development build redid with nothing changed (2026-11-19, #10713)
+
+`scripts/app/sim.sh` rebuilt more than the change it was run for (`docs/operations/testing.md`, "Development builds"):
+
+- **A script that runs on every build and edits a built file makes every task that reads that file run again.** "Stamp
+  the commit" (no dependency analysis, so it always runs) edited the built Info.plist in place on every build, so on
+  every unchanged build App Intents' training step read it again (Xcode 26.3), and a signed build signs the app again.
+  Declaring the plist as the script's input only orders the script after the task that writes it; no declaration makes
+  an in-place edit free. Without the edit, the built plist kept its time through every unchanged and one-file build.
+  The stamp now runs in Release only (an archive builds from clean anyway) or when a build asks for it
+  (`PERSONA_STAMP_COMMIT=YES`). The opt-in overlays that edit the plist the same way (`apple/siri-calls.yml`,
+  `apple/meta-wearables.yml`) still cost a signature per build while they are on.
+- **An XcodeGen include can add to `project.yml` but never take anything out of it.** Dictionaries merge, arrays append,
+  and `project.yml`'s own values are merged last, over every include's. A later include's `key:REPLACE` replaces only
+  what the includes before it merged. So what a switch must be able to remove lives in an include that is always on
+  (`apple/watch-and-share.yml`), and the switch's include, right after it, replaces those dependencies with nothing
+  (`apple/lean-dev-build.yml`); an include after the switch (Siri calls, Meta glasses) keeps its own.
+- **`enable: ${VAR}` is false while `VAR` is unset.** XcodeGen leaves an unknown `${VAR}` as it is, which is no boolean.
+  A switch can only be on when set, so the whole project has to be what an unset switch gives: CI, release and every
+  script that has never heard of the switch get it.
+- **Xcode leaves in place a watch app it no longer embeds.** After the watch dependency goes, `Persona.app/Watch/` from
+  the last whole build stays in the app and is installed with it (Xcode 26.3; the share extension's `.appex` did go).
+  `sim.sh` removes both before a lean build.
+- **A hash of files that names their absolute paths is one checkout's.** `shasum -a 256 <file>` prints the path after
+  the hash, so `native/app-core/scripts/build-apple.sh`'s input hash held each worktree's root and no worktree could use
+  another's build. Hash `< <file>`, name each file by its path in the checkout, and add what the environment changes
+  about the output (SDKs, `RUSTFLAGS`, deployment targets) before sharing the result.
+- **A slice-only framework in the worktree breaks the next build for another platform.** After `sim.sh` asked for the
+  Rust core's simulator slice only, Xcode building for a phone or "My Mac (Designed for iPad)" stopped with "no library
+  for this platform was found in PersonaCoreC.xcframework", which reads like a broken build. Every way the builder leaves
+  a simulator-only framework now says to run it with no flag first, and the docs that send people to Xcode say the same.
+
 ## A machine's heartbeat used to tell every reader of `machines` (2026-11-18, #10231)
 
 A busy hub pushes the machines with a new `lastSeen` all the time. `AppModel.machines` was replaced on each push, so
@@ -1460,6 +1492,8 @@ Use an invalidation revision as the task key and handle the flag after completio
   Store results first when one argument changes a variable used by another.
 - Build-product Info.plist script stages (Settings › About › Build commit, `project.yml` `Stamp the commit`) must declare `$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)`
   as input, or Xcode may run the script then rewrite the plist, losing values (bundle-id changes trigger this, 2026-10-31). Reading `.git` requires disabling `ENABLE_USER_SCRIPT_SANDBOXING` for this target.
+  Run on every build, such a stage also makes everything that reads the plist (App Intents, the signature) run again on
+  every build, so the stamp runs in Release only ("What a development build redid with nothing changed", #10713).
 
 ### iOS 18.6 floor
 
