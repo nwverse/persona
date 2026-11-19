@@ -137,6 +137,88 @@ func TestTaskSpawnDoesNotElevatePermissions(t *testing.T) {
 	}
 }
 
+func TestTaskSpawnUsesOriginalAssignmentModelOnSameLauncher(t *testing.T) {
+	s, f, todo := spawnFixture(t, "claude", "default")
+	ctx := context.Background()
+	f.setSessions("box", proto.Session{MachineID: "box", SessionID: "s1", Agent: "claude", Launcher: "claude",
+		Cwd: "/code/app", PermissionMode: "default", Model: "upstream/model-x", Status: proto.StatusWorking})
+	if err := s.patchPlanTask(ctx, todo.PlanID, 0, func(task *PlanTask) {
+		task.Launcher, task.Model = "claude", "relay/model-x-1m"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	res := s.mcpCall(ctx, "box", "s1", "task_spawn", json.RawMessage(spawnArgs), false)
+	if res.IsError {
+		t.Fatal(res.Content)
+	}
+	if got := f.starts[len(f.starts)-1]["model"]; got != "relay/model-x-1m" {
+		t.Fatalf("child model = %v, want the original assignment's relay/model-x-1m", got)
+	}
+}
+
+func TestTaskSpawnDoesNotUseAssignmentModelAfterLauncherSwitch(t *testing.T) {
+	s, f, todo := spawnFixture(t, "codex", "default")
+	ctx := context.Background()
+	f.setSessions("box", proto.Session{MachineID: "box", SessionID: "s1", Agent: "codex", Launcher: "codex",
+		Cwd: "/code/app", PermissionMode: "default", Model: "upstream/model-x", Status: proto.StatusWorking})
+	if err := s.patchPlanTask(ctx, todo.PlanID, 0, func(task *PlanTask) {
+		task.Launcher, task.Model = "claude", "relay/model-x-1m"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	res := s.mcpCall(ctx, "box", "s1", "task_spawn", json.RawMessage(spawnArgs), false)
+	if res.IsError {
+		t.Fatal(res.Content)
+	}
+	if got := f.starts[len(f.starts)-1]["model"]; got != "upstream/model-x" {
+		t.Fatalf("child model = %v, want the current launcher's reported upstream/model-x", got)
+	}
+}
+
+func TestTaskSpawnUsesOriginalAssignmentModelWithDefaultLauncher(t *testing.T) {
+	s, f, todo := spawnFixture(t, "claude", "default")
+	ctx := context.Background()
+	if got := s.startLauncher(ctx, ""); got != "claude" {
+		t.Fatalf("fixture default launcher = %q, want claude for the empty-assignment-launcher case", got)
+	}
+	f.setSessions("box", proto.Session{MachineID: "box", SessionID: "s1", Agent: "claude", Launcher: "claude",
+		Cwd: "/code/app", PermissionMode: "default", Model: "upstream/model-x", Status: proto.StatusWorking})
+	if err := s.patchPlanTask(ctx, todo.PlanID, 0, func(task *PlanTask) {
+		task.Launcher, task.Model = "", "relay/model-x-1m"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	res := s.mcpCall(ctx, "box", "s1", "task_spawn", json.RawMessage(spawnArgs), false)
+	if res.IsError {
+		t.Fatal(res.Content)
+	}
+	if got := f.starts[len(f.starts)-1]["model"]; got != "relay/model-x-1m" {
+		t.Fatalf("child model = %v, want the default-launcher assignment's relay/model-x-1m", got)
+	}
+}
+
+func TestTaskSpawnNonAssignmentAgentKeepsReportedModel(t *testing.T) {
+	s, f, todo := spawnFixture(t, "claude", "default")
+	ctx := context.Background()
+	s.todos.mu.Lock()
+	s.todos.todos[todo.ID].Agents[0].Source = "spawned"
+	s.todos.mu.Unlock()
+	f.setSessions("box", proto.Session{MachineID: "box", SessionID: "s1", Agent: "claude", Launcher: "claude",
+		Cwd: "/code/app", PermissionMode: "default", Model: "upstream/model-x", Status: proto.StatusWorking})
+	if err := s.patchPlanTask(ctx, todo.PlanID, 0, func(task *PlanTask) {
+		task.Launcher, task.Model = "claude", "relay/model-x-1m"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	res := s.mcpCall(ctx, "box", "s1", "task_spawn", json.RawMessage(spawnArgs), false)
+	if res.IsError {
+		t.Fatal(res.Content)
+	}
+	if got := f.starts[len(f.starts)-1]["model"]; got != "upstream/model-x" {
+		t.Fatalf("child model = %v, want the parent's unchanged upstream/model-x", got)
+	}
+}
+
 func TestTaskSpawnAmbiguousContinuationAssignmentStaysReadOnly(t *testing.T) {
 	s, f, todo := spawnFixture(t, "codex", "")
 	ctx := context.Background()

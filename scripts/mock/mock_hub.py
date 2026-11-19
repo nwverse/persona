@@ -22788,6 +22788,13 @@ def bump(what, session=None):
             s.update(state="needs_you", status="blocked", state_since=now, updated_at=now)
         push_machine(s["machine_id"])
         return {"key": s["machine_id"] + "/" + s["session_id"], "state": s["state"], "last": s.get("last_text") or ""}
+    if what == "heartbeat":  # only the machines' heartbeat (`last_seen`), which a busy hub pushes with its lists (#10231)
+        for m in MACHINES:
+            m["last_seen"] = now
+        for send, _ in list(LIVE):
+            try: send({"type": "machines", "machines": out_machines()})
+            except Exception: pass
+        return {"ok": True}
     if what == "ask":
         s = working[0] if working else SESSIONS[0]
         ix = dict(INTERACTIONS[0], id="ix_bump_%d" % n, machine_id=s["machine_id"], session_id=s["session_id"], created_at=now)

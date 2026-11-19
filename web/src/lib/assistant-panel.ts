@@ -75,7 +75,7 @@ export function assistantPanel(setup: AssistantSetup, info: AssistantLaunchers |
       // a launcher that fixes its own --model takes no model with a pick: what it runs by default, only
       if (e.list?.locked) models = models.filter((m) => m.id === defaultModel(e.list?.models ?? [])?.id);
       // no list to read (a direct API the computer can't ask, an older hub): the model it is configured with
-      if (!models.length && configuredModel) models = [{ id: configuredModel, name: modelLabel(configuredModel), efforts: kind === "claude" ? ALL_EFFORTS : [] }];
+      if (!models.length && configured) models = [{ id: configured, name: modelLabel(configured), efforts: kind === "claude" ? ALL_EFFORTS : [] }];
       p.models = models;
     }
     // the provider it runs on stays as it is, whatever its kind: it is what the panel says the chat runs
