@@ -314,7 +314,13 @@ struct AssistantView: View {
             #endif
         }
         .navigationDestination(isPresented: $showRoutines) { AssistantRoutinesView() }
-        .navigationDestination(isPresented: $showTodos) { TodosView() }
+        .navigationDestination(isPresented: $showTodos) {
+            #if os(iOS)
+            TodosPlacePage() // the V1 list where the hub sends the view (#10465), else TodosView
+            #else
+            TodosView()
+            #endif
+        }
         .navigationDestination(item: $openedExtension) { ExtensionNavPage(route: $0) }
         .navigationDestination(isPresented: $showHealth) {
             HealthView(disabled: shownStart != nil, launcher: healthLauncherPick, mode: $starterMode, effort: $starterEffort) { text, images in

@@ -45,6 +45,25 @@ struct StateNamesTests {
         #expect(StateName.markAllSeen(3) == "全部标为已看（3）")
     }
 
+    /// The To-dos list's words for where a to-do stands (#10465, docs/design/proposals/todos-redesign.md 3.11): Working
+    /// is the direction tree's word, which in Chinese is not a session's.
+    @Test func areTheToDosWords() {
+        #expect(StateName.todoNeedsYou == "需要你" && StateName.taskWorking == "在做" && StateName.taskWaiting.text == "等待中")
+        #expect(StateName.todoJustFinished == "刚做完待看" && StateName.todoToDo == "待做")
+        #expect(StateName.todoSomeday == "以后再做" && StateName.todoInactive == "暂无进展")
+    }
+
+    /// The new to-do words are defined once, as `StateName`'s; only the frozen pages that came before keep their own
+    /// entries (today's To-dos section, a setup step's value).
+    @Test func theToDosWordsAreDefinedOnce() throws {
+        let words: Set<String> = ["刚做完待看", "待做", "以后再做", "暂无进展"]
+        let frozen: Set<String> = ["Just Finished", "To do"]
+        let again = try Self.zh().filter { key, value in
+            words.contains(value) && !key.hasSuffix(Self.suffix) && !frozen.contains(key)
+        }.map { "\($0.key): \($0.value)" }.sorted()
+        #expect(again.isEmpty, "take these from StateName (Shared/StateNames.swift):\n\(again.joined(separator: "\n"))")
+    }
+
     /// The screens that name a state take it from `StateName` (a sample of the sites #3960 moved).
     @MainActor @Test func screensUseThem() {
         #expect(AgentState.needsYou.label == StateName.needsYou.text && AgentState.idle.label == StateName.seen.text)

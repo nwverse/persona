@@ -2052,11 +2052,29 @@ built in stages behind the hub's `todo_view`; this section grows with it.
   Signing out of every hub forgets the remembered values, and a group that goes while others stay (signed out of, or
   merged into another: `TodosV1.forget`) loses its own, since the app's stored pick, written only when the owner picks
   a hub, can still name that group at the next launch. The gate turns on at the first hello that lists `todo_view`, also in the
-  middle of a run: holding that change while To-dos is on screen, so a visible page never swaps, is the page's job and
-  arrives with the V1 list; the gate stays a plain value. It is off in every build until the switch-on
+  middle of a run: holding that change while To-dos is on screen, so a visible page never swaps, is the page's job
+  (`TodosPlacePage`, below); the gate stays a plain value. It is off in every build until the switch-on
   (`TodosV1.released`), and on the iPhone and iPad only (`TodosV1.platform`): visionOS keeps today's To-dos. The data
   and model files under `apple/Persona/Features/Todos/` compile on every platform, since `TodoStore` (shared with
   visionOS) names them; the V1 views will be iOS only. The hub's `todo_send_state` marker is not read yet.
+- **The list** (`apple/Persona/Features/Todos/List/`, iOS only; DESIGN_SYSTEM 3.4 "To-dos list"). `TodosListModel`
+  (`Deps`: the store, the hub, the clock, the projects' names, how a waiting filing lands) follows the store and lays
+  the list out once per change (`TodosListLayout`, pure): the sections for the bar's choice (`TodosBar`, `TodosChoice`),
+  the grouping and the sort, from `countsSource.filed`, less the steps their parents carry. Each row reads its own cell
+  (`TodosListModel.Row`), whose content (`TodoRowContentLogic`: times said from now, the mark, line 2 through
+  `TodoLineText`, the door, line 3) is worked out again only when its facts, its view or the minute changes. A new filing
+  waits for the list to rest (`Hold`: the page reports its scroll phase and when it is out of sight), a row that comes to
+  need the owner lands at once, and the numbers (`countsSource`) are never held. Rows open today's to-do page until the
+  to-do's own page arrives. `TodoWorkspace` (above `RootView`) keeps the place and each place's scroll, written only while
+  the scene is active and only from the tree the window shows. The grouping and the sort are kept on the device
+  (`todos.v1.grouping`, `todos.v1.sort`); the bar's choice is not.
+- **Which page.** `TodosPlacePage` draws the V1 list while the gate is on, else today's `TodosView` (frozen), deciding
+  as it appears: a hello that turns the gate on while To-dos is up (a manager that connects late) takes effect the next
+  time To-dos appears, never under the owner's eyes. The drawer's and sidebar's To-dos row and the folded Pages heading
+  show N on the V1 path (`TodoStore.sidebarCount`), today's open count otherwise. DEBUG `-showTodosV1 YES` stands for the
+  release (`TodosV1.allowedHere`); V1 still needs a hub that lists `todo_view`. The store's one-minute clock for rows
+  filed by the app's own rules starts with the list's first draw and follows whatever changes whether one is counted
+  (another assistant made current included).
 - **404 and 405.** An older hub answers 405 for `GET /api/v1/todos/{id}` and `GET /api/v1/todos/places` (the `PATCH` and
   `DELETE` routes of `/api/v1/todos/{id}` match the path) and 404 for the other new routes: `TodoNotThere` takes both
   as "not there". A 404 with `todo_not_found` is the to-do itself gone. `GET /api/v1/todos` answering 404 still hides
