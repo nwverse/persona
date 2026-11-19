@@ -7,13 +7,15 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.junit.runners.Parameterized
 import persona.core.contracts.generated.TodoCounts
+import persona.core.contracts.generated.TodoDecidePush
 import persona.core.contracts.generated.TodoPlaces
 import persona.core.contracts.generated.TodoSummary
 
 /**
- * The views, counts and places the shared to-do cases expect (spec/fixtures/todo-view and todo-counts, #10226) read
- * into the generated types (generated/TodoViewWire.kt) and write back as the same JSON. The codec writes required
- * fields even at their defaults and leaves absent optional ones out, as the hub does, and refuses a key a type lacks.
+ * The views, counts and places the shared to-do cases expect (spec/fixtures/todo-view and todo-counts, #10226), and
+ * the decision pushes' todo (spec/fixtures/todo-push, #10465), read into the generated types
+ * (generated/TodoViewWire.kt) and write back as the same JSON. The codec writes required fields even at their defaults
+ * and leaves absent optional ones out, as the hub does, and refuses a key a type lacks.
  */
 @RunWith(Parameterized::class)
 class TodoViewWireTest(private val name: String, private val definition: String, private val sample: JsonElement) {
@@ -21,7 +23,7 @@ class TodoViewWireTest(private val name: String, private val definition: String,
         @JvmStatic @Parameterized.Parameters(name = "{0}")
         fun samples(): List<Array<Any>> {
             val root = File(System.getProperty("persona.repo.root"), "spec/fixtures")
-            return listOf("todo-view", "todo-counts").flatMap { domain ->
+            return listOf("todo-view", "todo-counts", "todo-push").flatMap { domain ->
                 val files = requireNotNull(File(root, domain).listFiles { f -> f.extension == "json" }).sortedBy { it.name }
                 require(files.isNotEmpty()) { "Missing $domain fixtures" }
                 files.flatMap { file ->
@@ -29,8 +31,11 @@ class TodoViewWireTest(private val name: String, private val definition: String,
                         val c = case.jsonObject
                         val expected = c.getValue("expected").jsonObject
                         val where = "$domain/${file.name} ${c.getValue("name").jsonPrimitive.content}"
-                        listOf("view" to "TodoSummary", "counts" to "TodoCounts", "places" to "TodoPlaces")
-                            .mapNotNull { (key, def) -> expected[key]?.let { arrayOf<Any>("$where $def", def, it) } }
+                        val keys = listOf(
+                            "view" to "TodoSummary", "counts" to "TodoCounts", "places" to "TodoPlaces",
+                            "todo" to "TodoDecidePush",
+                        )
+                        keys.mapNotNull { (key, def) -> expected[key]?.let { arrayOf<Any>("$where $def", def, it) } }
                     }
                 }
             }
@@ -44,6 +49,7 @@ class TodoViewWireTest(private val name: String, private val definition: String,
             "TodoSummary" -> codec.encodeToJsonElement(codec.decodeFromJsonElement<TodoSummary>(sample))
             "TodoCounts" -> codec.encodeToJsonElement(codec.decodeFromJsonElement<TodoCounts>(sample))
             "TodoPlaces" -> codec.encodeToJsonElement(codec.decodeFromJsonElement<TodoPlaces>(sample))
+            "TodoDecidePush" -> codec.encodeToJsonElement(codec.decodeFromJsonElement<TodoDecidePush>(sample))
             else -> error("Unregistered definition: $definition")
         }
         assertEquals(name, sample, written)

@@ -252,8 +252,12 @@ func TestDecisionPushFixtures(t *testing.T) {
 			}
 			got, _ := json.Marshal(p["todo"])
 			var want, have any
-			_ = json.Unmarshal(c.Expected.Todo, &want)
-			_ = json.Unmarshal(got, &have)
+			if err := json.Unmarshal(c.Expected.Todo, &want); err != nil {
+				t.Fatalf("expected.todo: %v", err)
+			}
+			if err := json.Unmarshal(got, &have); err != nil {
+				t.Fatalf("todo %s: %v", got, err)
+			}
 			if !reflect.DeepEqual(want, have) {
 				t.Errorf("todo %s\nwant %s", got, c.Expected.Todo)
 			}
@@ -274,7 +278,7 @@ func TestDecisionPushFixtures(t *testing.T) {
 }
 
 // A manager from before the lock-screen rule gets the push it always got, byte for byte, though it sends its options
-// and fixed answers: TODO_DECIDE, whose Take Recommendation every app knows.
+// and fixed answers: TODO_DECIDE, whose Take Recommendation the iOS app offers.
 func TestOlderManagersDecisionPushIsUnchanged(t *testing.T) {
 	n := decideNotification(t)
 	n.Todo.Options, n.Todo.Responses = []string{"先灰度 10%", "直接全量"}, []string{"decide_yourself", "not_what_i_asked", "explain_first"}
@@ -340,9 +344,10 @@ func TestDecisionPushSaysHowItMayBeAnswered(t *testing.T) {
 	}
 }
 
-// A decision push too big for APNs keeps what says how it may be answered: the alert is shortened first, so the
-// longest labels a manager writes (120 characters each, decision.go) stay as actions; labels that cannot fit at all go
-// with mutable-content, and the push, its full alert fitted again, falls back to Take Recommendation, never losing its
+// A decision push too big for APNs keeps what says how it may be answered: the alert is shortened first, down to
+// decideAlertShortest, so the longest labels a manager writes (120 characters each, decision.go) still reach the app's
+// extension, which offers those an action's title shows whole; labels that would cut the alert shorter go with
+// mutable-content, and the push, its full alert fitted again, falls back to Take Recommendation, never losing its
 // category, its lockscreen or its ask.
 func TestDecisionPushFitKeepsItsRule(t *testing.T) {
 	for _, huge := range []bool{false, true} {
@@ -392,8 +397,8 @@ func TestDecisionPushFitKeepsItsRule(t *testing.T) {
 }
 
 // The relay's smaller budget may take a decision's options off where a direct push keeps them: the sealed push falls
-// back to Take Recommendation, and the payload other devices share is left as it was. The longest labels a manager
-// writes still go sealed, the alert shortened instead.
+// back to Take Recommendation, and the payload other devices share is left as it was. Short labels go sealed with
+// the alert shortened instead; labels that would leave it under decideAlertShortest go, and the alert keeps its length.
 func TestRelayDecisionBudgetDoesNotChangeDirectPayload(t *testing.T) {
 	h, _, priv := relayHub(t)
 	d, _ := h.push.device("phone")
@@ -433,13 +438,34 @@ func TestRelayDecisionBudgetDoesNotChangeDirectPayload(t *testing.T) {
 	if after, _ := json.Marshal(payload); !bytes.Equal(direct, after) {
 		t.Fatal("relay fitting changed the payload shared with direct devices")
 	}
-	label := strings.Repeat("界", 120)
-	n = decidePushWith(t, assistantwire.OwnerAskLockscreenAnswer, "先灰度 10%", label+"一", label+"二", label+"三")
-	sealed, err = h.push.sealFor(d, decidePayloadIn(assistantwire.AssistantID, "m", "Persona", "conv1", n.Title, strings.Repeat("q", 4000), *n.Todo))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if opts, _ := open(sealed)["todo"].(map[string]any)["options"].([]any); len(opts) != 4 {
-		t.Fatalf("the longest labels a manager writes lost their place in a sealed push: %v", opts)
+	for _, tc := range []struct {
+		name    string
+		runes   int // each label's length
+		options bool
+	}{
+		{"short labels", 40, true},
+		// Not the body: the labels would leave the alert under decideAlertShortest.
+		{"labels the alert would pay for", 120, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			label := strings.Repeat("界", tc.runes)
+			n := decidePushWith(t, assistantwire.OwnerAskLockscreenAnswer, "先灰度 10%", label+"一", label+"二", label+"三")
+			sealed, err := h.push.sealFor(d, decidePayloadIn(assistantwire.AssistantID, "m", "Persona", "conv1", n.Title,
+				strings.Repeat("问", 4000), *n.Todo))
+			if err != nil {
+				t.Fatal(err)
+			}
+			out := open(sealed)
+			aps, _ := out["aps"].(map[string]any)
+			td, _ := out["todo"].(map[string]any)
+			opts, _ := td["options"].([]any)
+			_, mutable := aps["mutable-content"]
+			if (len(opts) == 4) != tc.options || mutable != tc.options || td["lockscreen"] != assistantwire.OwnerAskLockscreenAnswer {
+				t.Fatalf("options %d, mutable %v, todo %v; want options %v", len(opts), mutable, td, tc.options)
+			}
+			if body, _ := aps["alert"].(map[string]any)["body"].(string); utf8.RuneCountInString(body) < decideAlertShortest {
+				t.Fatalf("the alert went down to %d characters for the labels", utf8.RuneCountInString(body))
+			}
+		})
 	}
 }

@@ -22,8 +22,8 @@ const mergedPlaces = `{"places":[{"id":"all","kind":"all","title":"","needs_you"
 
 // The views, counts and places the shared to-do cases expect (spec/fixtures/todo-view and todo-counts, #10226), and
 // the decision pushes' todo (spec/fixtures/todo-push, #10465), read into the generated types (todo_view_gen.go) and
-// write back as the same JSON: no field lost, renamed or added, and no time written another way. What Go writes also holds to the schema (checkTodoView), so a required list or map is
-// never null, which a nil slice or map would be.
+// write back as the same JSON: no field lost, renamed or added, and no time written another way. What Go writes also
+// holds to the schema (checkTodoView), so a required list or map is never null, which a nil slice or map would be.
 func TestTodoViewSamplesRoundTrip(t *testing.T) {
 	root := todoViewSchema(t)
 	samples := append(todoViewSamples(t),

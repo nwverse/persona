@@ -32,6 +32,7 @@ spec/
     todo-counts/      the To-dos list's counts and places, schema/wire/todo-view
     todo-detail/      a to-do's page: which elements it draws, in order, and its one primary action
     todo-layout/      the To-dos window rule: a window and what is wanted → its regions and their widths
+    todo-push/        a decision's push: what the manager sends → its category, mutable-content and todo, schema/wire/todo-view
     provider-import-link/ provider import links: what the web builds and what the hub reads
     deep-links/       links to Persona's pages: the hub's paths and what each client opens for a link
     agent-names/      what every client calls each coding agent (names.json)
@@ -75,6 +76,7 @@ spec/
 | todo-counts | [README](fixtures/todo-counts/README.md): a To-dos list's counts (N, open, in progress, rows per section), its places (All, Today, Upcoming, projects) and the order within each section, with the same schema and readers (#10226) |
 | todo-detail | [README](fixtures/todo-detail/README.md): a to-do's page (the paper) from what the item route answers and where it is shown: its elements in order, its one primary action and whom its composer addresses, with a guard that everyday pages name no engine, runtime, model, path, repository or session id; checked by `scripts/test/test_todo_fixtures.py`, read by no client yet: iOS will replay it from its paper (#10465), the web and Android from their stages |
 | todo-layout | [README](fixtures/todo-layout/README.md): the To-dos window rule, a window, its text size and what the owner asked for → the sidebar, list, paper and conversation regions with their forms and widths, every window of the redesign's table included; checked by `scripts/test/test_todo_fixtures.py`, read by no client yet: each will replay it with its own pure function, iOS first (#10465) |
+| todo-push | [README](fixtures/todo-push/README.md): a decision's push, the `todo` a manager sends → the push's category, whether it sets `mutable-content`, and its `todo` (an older manager's unchanged, the lock-screen rule, the options forwarded), answered by the hub (`TestDecisionPushFixtures`), held to the schema by `scripts/test/test_wire_schema.py` and read back by the generated Go, Swift and Kotlin types (#10465) |
 | sync | [README](fixtures/sync/README.md): stories of one chat on one or more devices (sends, cards, reconnects, hub restarts, wakes, long chats) with faults, checked at every step by Go, the clients and the end-to-end runs (#1073) |
 | stream-chunks | [README](fixtures/stream-chunks/README.md): the pure Rust projection of iOS `StreamChunks.split`, with source-cited Apple cases (#8607) |
 | tool-names | [README](fixtures/tool-names/README.md): a tool no table names in words ("GitHub · Create issue"), what its call is about, a shell's command line and its arguments as a key/value list, checked by Android; iOS's own tests hold the same cases until it reads them (#4339) |

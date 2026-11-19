@@ -235,7 +235,7 @@ func donePayloadIn(l i18n.Lang, machineID, machine, sessionID, title, text strin
 // decideCategory is the category of a decision's push (#2056): the app registers it with one action, OK, which takes the
 // recommendation (POST /api/v1/todos/{id}/accept with the push's todo.asked_at; apple/Persona/App/NotificationActions.swift).
 // decideOpenCategory is the one of a decision that is answered only after a look (lockscreen open_only, #10465): no app
-// registers it, so every app shows the notification with no action and a tap opens it, older apps included.
+// gives it actions, so every app shows the notification with none and a tap opens the app, older apps included.
 const (
 	decideCategory     = "TODO_DECIDE"
 	decideOpenCategory = "TODO_DECIDE_OPEN"
@@ -254,8 +254,8 @@ const decideOptionsMost = 4
 // push stays byte for byte as it was), `todo` also names the ask and that rule (schema/wire/todo-view.schema.json
 // TodoDecidePush). open_only, or a value this hub does not know (written open_only), takes the category no app gives
 // actions; answer keeps TODO_DECIDE and carries the options, whole and the recommended first, with mutable-content, so
-// a newer app's notification service extension can offer them as actions. fitAlert drops those two first when the push
-// is too big.
+// a newer app's notification service extension can offer them as actions. fitAlert drops those two, and nothing else
+// of `todo`, rather than cut the alert under decideAlertShortest when the push is too big.
 func decidePayloadIn(owner, machineID, machine, sessionID, title, text string, todo assistantwire.NotifyTodo) map[string]any {
 	td := map[string]any{"id": todo.ID, "asked_at": todo.AskedAt.UTC().Format(time.RFC3339Nano), "recommend": todo.Recommend}
 	if owner != "" {
