@@ -177,10 +177,8 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 	commit()
 	if command && runtimeCommandWord(text) == "/compact" {
 		// The runtime summarizes the conversation: the blocks it was told are gone, so the next message tells it everything
-		// again (as contextCompacted does for Persona's own compaction).
-		n.mu.Lock()
-		delete(n.ctxSent, id)
-		n.mu.Unlock()
+		// again, as after Persona's own compaction.
+		n.contextCompacted(id)
 	}
 	if st.AwaitingFirstMessage {
 		n.noteRuntimeWorking(h, id)
