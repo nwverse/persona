@@ -133,6 +133,11 @@ The hub puts the refusals into the reader's language (`rpc-errors.omp_resume_unk
 Everything else is pi's code under omp's identity: the extension API, the conversation mapping, approval and question handling,
 live text, and the host's record of where a session last ran (`integrations/pi/lib/pi.js`).
 
+## Token usage
+
+The node meters omp's token usage from its session files (`$PI_CODING_AGENT_DIR` or `~/.omp/agent`) like pi's: each assistant message's usage and its `model_usage`
+entries (calls outside the conversation), orchestration tokens included, under the agent `omp` (`docs/server/machines.md`, "Token usage").
+
 ## Known limitations
 
 - Only omp's default agent directory is read. Sessions started with `omp --profile <name>` live elsewhere.

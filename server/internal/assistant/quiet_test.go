@@ -98,7 +98,7 @@ func TestQuietTaskTellsTheMainConversation(t *testing.T) {
 	agentTurn(s, f, proto.StatusDone, "修好了，提了 https://github.com/o/r/pull/901", 0)
 	waitFor(t, "the notice", func() bool { return len(f.notices()) == 1 })
 	n := f.notices()[0]
-	for _, want := range []string{"📋 督办", "任务「修登录崩溃」（" + todo.ID + "，signal=review）：hub 判断做完了，等你验收（修好了）；在 box", "修好了，提了 https://github.com/o/r/pull/901", "不是用户发的"} {
+	for _, want := range []string{"📋 督办", "任务「修登录崩溃」（" + todo.ID + "，signal=review）：待逐项复核，不代表完成（修好了）；在 box", "修好了，提了 https://github.com/o/r/pull/901", "不是用户发的"} {
 		if !strings.Contains(n, want) {
 			t.Errorf("notice lacks %q:\n%s", want, n)
 		}
@@ -131,7 +131,7 @@ func TestQuietNoticesMerge(t *testing.T) {
 	agentTurn(s, f, proto.StatusDone, "用 main 做完了", 0)
 	waitFor(t, "the notice", func() bool { return len(f.notices()) == 1 })
 	n := f.notices()[0]
-	if !strings.Contains(n, "做完了，等你验收") || strings.Contains(n, "用哪个分支") || strings.Count(n, "任务「") != 1 {
+	if !strings.Contains(n, "待逐项复核，不代表完成") || strings.Contains(n, "用哪个分支") || strings.Count(n, "任务「") != 1 {
 		t.Fatalf("notice:\n%s", n)
 	}
 	time.Sleep(3 * quietNoticeDelay)
@@ -290,15 +290,18 @@ func TestAgentStartFromTheMainConversation(t *testing.T) {
 
 func TestGoldenTaskNotice(t *testing.T) {
 	for _, c := range []struct {
-		name string
-		n    quietNotice
+		name      string
+		n         quietNotice
+		retryWith string
 	}{
-		{"done", quietNotice{todo: Todo{Title: "修登录崩溃"}, machine: "box", state: "done", text: "修好了，PR：https://github.com/o/r/pull/1"}},
-		{"needs", quietNotice{todo: Todo{Title: "修登录崩溃"}, machine: "box", state: "needs", ask: "- 用哪个分支？（选项：main / dev）"}},
-		{"interrupted_after_needs", quietNotice{todo: Todo{Title: "整理材料"}, state: "interrupted", earlier: []string{"等过用户"}, text: "API Error: 529 overloaded"}},
-		{"failed", quietNotice{todo: Todo{Title: "整理材料"}, machine: "box", state: "failed", text: "box 现在离线"}},
+		{"done", quietNotice{todo: Todo{Title: "修登录崩溃"}, machine: "box", state: "done", text: "修好了，PR：https://github.com/o/r/pull/1"}, ""},
+		{"needs", quietNotice{todo: Todo{Title: "修登录崩溃"}, machine: "box", state: "needs", ask: "- 用哪个分支？（选项：main / dev）"}, ""},
+		{"interrupted_after_needs", quietNotice{todo: Todo{Title: "整理材料"}, state: "interrupted", earlier: []string{"等过用户"}, text: "API Error: 529 overloaded"}, ""},
+		{"failed", quietNotice{todo: Todo{Title: "整理材料"}, machine: "box", state: "failed", text: "box 现在离线"}, ""},
+		// its launcher could not start there (#10365): the card's other launcher is named
+		{"failed_retry_with", quietNotice{todo: Todo{Title: "整理材料"}, machine: "box", state: "failed", text: "box 上新开的终端运行不了「work」"}, "claude"},
 	} {
-		golden(t, "task_notice."+c.name, renderNotice(&c.n, false))
+		golden(t, "task_notice."+c.name, renderNotice(&c.n, false, c.retryWith))
 	}
 }
 
@@ -377,8 +380,8 @@ func TestStartWithReportTasks(t *testing.T) {
 }
 
 func TestGoldenTaskNoticeReporting(t *testing.T) {
-	golden(t, "task_notice.reporting_done", renderNotice(&quietNotice{todo: Todo{Title: "提 MR"}, machine: "box", state: "done", text: "MR：https://example.com/mr/7"}, true))
-	golden(t, "task_notice.reporting_needs", renderNotice(&quietNotice{todo: Todo{Title: "提 MR"}, machine: "box", state: "needs", ask: "- 合到哪个分支？"}, true))
+	golden(t, "task_notice.reporting_done", renderNotice(&quietNotice{todo: Todo{Title: "提 MR"}, machine: "box", state: "done", text: "MR：https://example.com/mr/7"}, true, ""))
+	golden(t, "task_notice.reporting_needs", renderNotice(&quietNotice{todo: Todo{Title: "提 MR"}, machine: "box", state: "needs", ask: "- 合到哪个分支？"}, true, ""))
 }
 
 // A needs notice already queued behind its conversation's turn is dropped when the user deals with the card

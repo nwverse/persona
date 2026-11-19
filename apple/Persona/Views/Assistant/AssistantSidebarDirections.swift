@@ -50,7 +50,7 @@ struct AssistantSidebarDirection<Head: View>: View {
         headRow
             .sheet(item: $shownTodo) { r in
                 NavigationStack {
-                    TodoDetailView(todoID: r.id).macSheetDone { shownTodo = nil }
+                    TodoDetailView(todoID: r.id).sheetDone { shownTodo = nil }
                 }
                 #if os(macOS)
                 .macSheet()

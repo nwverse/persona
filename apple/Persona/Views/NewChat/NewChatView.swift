@@ -518,11 +518,9 @@ struct NewChatView: View {
             .navigationTitle("New Chat [Quick Actions ea4b29]")
             .navigationBarTitleDisplayMode(.inline)
             .pageToolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        attachments.cancelUploads()
-                        dismiss()
-                    }
+                SheetClose {
+                    attachments.cancelUploads()
+                    dismiss()
                 }
                 #if os(macOS)
                 // A Mac sheet's primary button sits beside Cancel and answers ⏎ (docs/apple/mac.md「Mapping from iOS」).
@@ -963,7 +961,7 @@ struct NewChatView: View {
             }
         } else if let c = modelChoice, c.canPick {
             NavigationLink {
-                LauncherModelPicker(choice: c, picked: $pickedModel, refresh: { await loadModels(refresh: true) }, offersTyping: true,
+                LauncherModelPicker(choice: c, picked: $pickedModel, refresh: { await loadModels(refresh: true) }, owner: runLauncher, offersTyping: true,
                                     forget: { id in await modelList.forget(id, machine: ref, launcher: runLauncher) },
                                     forgetError: modelList.forgetError,
                                     defaultFooter: c.configured.isEmpty ? String(localized: "No model chosen: runs with the launcher's own settings.")

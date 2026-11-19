@@ -120,8 +120,9 @@ Responses relays that refuse the output bound fail closed, without retrying unbo
 lease precedes dispatch; failures back off from ten minutes and stop after three consecutive failures.
 Each failed attempt logs its computer/session and a static reason code (for example `no_dialogue`,
 `model_call_failed`, `invalid_name`, `model_output_truncated` or `naming_timeout`), even if a subsequent title
-or settings recheck discards the result. Provider error bodies, prompts and model replies never enter these
-logs. The ledger retains `last_failure` until a successful naming clears it; old silent failures have no
+or settings recheck discards the result. `model_not_configured` (no model set up for Sorting) is logged once
+and not again until a naming call reaches a model (#10435); each session still records it. Provider error
+bodies, prompts and model replies never enter these logs. The ledger retains `last_failure` until a successful naming clears it; old silent failures have no
 recoverable reason. A deployed hub does not add missing provenance to old nodes: those nodes remain excluded
 until an explicitly authorized compatible node update reports it.
 Before committing, the worker checks settings, counters, current provenance, native title and eligibility again.
@@ -154,12 +155,13 @@ Relationship to unified states: `state` values **do not change** (old Apps displ
 
 | Work state (this turn) | `state` | Explanation |
 | --- | --- | --- |
-| `done` | `idle` | No longer occupies "Unread"; conclusion is in `work.line` and included in pushes. |
+| `done` | `idle` | No longer occupies "Unread"; conclusion is in `work.line` and included in pushes. A turn nobody had seen is listed as Just finished (`work.just_finished`) for three hours ([agent-states.md](../protocol/agent-states.md) "Just finished", #9751). |
 | `blocked` · `user`, with options | `needs_you` | Persona created a question card (`pending_interactions` increases by one). |
 | `blocked` · `agent` / `external` / `transient`, with Persona waiting (`wake_at` or a target Agent) | `idle` | New Apps show "Waiting" + what it is waiting for; old Apps show Seen. |
 | Not triaged, triage failed, or unclear (`unsure`) | Unchanged (`unread`) | Better to leave a green dot than hide something not understood. |
 
-"Unread" then remains only while triage is pending (a dozen or so seconds after a turn ends) or when the model cannot tell.
+"Unread" then remains only while triage is pending (a dozen or so seconds after a turn ends) or when the model cannot tell;
+what the triage found done and nobody has looked at yet waits under Just finished instead of folding away with the seen sessions.
 
 ## Responsibilities (in the manager since 2026-11-04)
 
@@ -260,7 +262,7 @@ Apply in order; on a match, do not call the model:
    "questions":[{"question":"…","header":"…","options":[{"label":"…","description":"…"}],"multi_select":false}],
    "link":{"url":"https://…","minutes":10},
    "wait":{"what":"What it is waiting for","then":"What to do afterward","check_minutes":10,"agent":"<short id>","risky":false},
-   "artifacts":[{"kind":"pr|commit|doc|build|url","ref":"…"}]}
+   "artifacts":[{"kind":"pr|commit|doc|build|url|file","ref":"…"}]}
   ```
 
 - Decision principles in the prompt:
@@ -282,7 +284,7 @@ A closeout is a small record an Agent ends a turn with, so that a stopped sessio
 ```text
 <closeout status="done|not_done|blocked" merged="yes|no|n/a" deployed="yes|no|n/a">
 did: <what changed, one sentence; up to three such lines>
-artifact: <pr|commit|branch|doc|build|url> <reference>
+artifact: <pr|commit|branch|doc|build|url|file> <reference>
 verified: <what was run or measured and its reading, or "untested">
 missing: <what it still needs from someone, if anything>
 waiting: <for status="blocked": who or what it waits for>
@@ -305,6 +307,16 @@ waiting: <for status="blocked": who or what it waits for>
 - **Snapshot**: in the main chat's live snapshot an Agent's line ends with what its closeout claims of merging and deploying, marked as its own account, and with the hub's finding where that differs from the claim (`prompts/assistant/snapshot_closeout.md`, `snapshotCloseout`); nothing is added when the closeout says neither. A turn that is not finished is under "Unread" with its line.
 - **Delivery**: a reply with a closeout and no delivery line of its own (`docs/assistant/todos.md` "Delivery") states its delivery through the closeout: deployed `yes` is live, merged `yes` is merged and not live, merged `no` with a pull request is held at the PR, and a done closeout that says neither is "nothing to ship". A delivery line in the same reply wins.
 - **Not done yet** (follow-ups of #3612): the web (`docs/web/web.md`, "Pages": **Closeout**; the web and Android also have `closeout_ask`, #3616), Android (`docs/android/android.md`, "Closeout, decisions and tasks nobody works on") and the iOS app ("Clients" below) draw the closeout and have the switch, the Mac app and the watch do not; only Android gives a turn that is not finished a mark of its own (on the web and iOS it shows as the plain line of an Unread row, with a claim the hub found untrue marked in the suffix); Codex has no held stop and no starting context, so a Codex session started without a task prompt writes a closeout only if it is asked to (one it writes is read all the same); a session already running when the switch is turned on learns the form at its next start or held stop; the form reaches a task's Agent on Claude Code twice (prompt and starting context).
+
+## Files a task hands over (#10511)
+
+A task whose result is a file — a report, a PDF, an image, an archive — must not have its content pasted into the reply: the conversation sees a clipped copy of the text (1500 characters in a quiet task's notice, 600 in the receipt, 24 KiB in a paged item), and a binary file cannot be pasted at all.
+
+- **Asking for it** (always, independent of the closeout switch): every task prompt ends with `prompts/agents/task_files.md` (started by `startTaskAgent` and `startTaskSuccessor`), which asks the Agent to write one `file: <absolute path>` line per file (at most five) in its final reply, and never to paste the file's content. A closeout may name the same file as `artifact: file <path>`.
+- **Copying it** (`server/internal/assistant/task_files.go`): when a task's turn ends, `taskTurnSettled` reads the whole final reply (the paged item again with `session.item` when the node cut it), takes the paths, and copies each from the Agent's computer to the computer of the conversation that hears of the task (`taskReceiver`: its supervisor, the reporting conversation that opened it, the main conversation for a quiet one, else its origin). It uses the same node RPCs as the user's attachments in the other direction: `file.chunk` (the node's path guard refuses credentials, iCloud and the hub's own secrets) and `file.upload` with `dest=file`, which lands in `uploads/files/<date>/` and is kept, not swept (`dest=terminal` when the node is older). The same computer copies nothing. Limits: explicit paths only, regular files, 50 MB each and 100 MB a turn, five a turn; a copy that fails says why in the notice and never fails the task. The copy is the same trust as the reply it comes with: an Agent can already name any file it can read, and the read guard is what stops a credential from coming along.
+- **Telling the conversation**: the task notice (`prompts/assistant/task_notice.md`), the receipt body (`files`) and the supervision message (`prompts/assistant/supervise.md`) list the files by name and path on the conversation's computer, outside the text clip. The assistant is told to give the user the path in backticks and to read the file itself when it needs the content; never to ask the Agent to paste it or resend it in pieces.
+- **A file it did not hand over**: ask the Agent for it with `file: <path>` (its next reply carries the line, and the copy happens then) — never for the file's content, which would be clipped in the reply. An on-demand tool for pulling a path the Agent already named is a follow-up: it must free its prompt bytes from the assistant's instructions, which the size ratchet keeps from growing.
+- **Clients** need no change: the copy is on the conversation's computer, so the existing backticked-path links (web, iOS, Android) open it in the app's file viewer.
 
 ## Automatic actions
 
@@ -562,7 +574,7 @@ Users enable them under **Settings › Session Triage**. The switches are stored
 - Subswitches work only when the main switch is on (but `reply_reminder` and `transient_retry`). Disabling a switch takes effect immediately: Persona-created cards are removed, and queued retries / wakeups / status questions are not sent.
 - `GET / PUT /api/v1/agents/triage` (`{enabled, auto_continue, wake, decide, tool_loop, closeout, closeout_ask, reply_reminder, reply_reminder_minutes, transient_retry}`, forwarded by the hub to the manager); changes broadcast `{"type":"agents.triage"}`. A PUT without `tool_loop`, `closeout`, `closeout_ask`, `reply_reminder`, `reply_reminder_minutes` (or with minutes 0) or `transient_retry` keeps their values for older apps; negative minutes go back to the default 30. While the saved switches cannot be read, such a PUT saves their defaults.
 - A `GET` whose first read of the database fails answers `503` with an `error` in the request's language (Chinese, English or Japanese) saying why, instead of returning the defaults as if they were the saved switches (#4553). Failures are not cached: the next request reads again. Switches once read or saved stay cached in memory; `manager.json`'s initial values apply only when the database really has no setting. Triage itself still falls back to the defaults when its own read fails, and `PUT` saves as before.
-- `agents.triage` in the manager's `manager.json` (`docs/operations/config.md` ("manager.json"); in hub.json before 2026-11-06) now retains limits (`max_retries` default 5, `retry_base_seconds` default 15, `max_wakes` default 6, `settle_seconds` default 15);
+- `agents.triage` in the manager's `manager.json` (`docs/operations/config.md` ("manager.json"); in hub.json before 2026-11-06) now retains limits (`max_retries` default 5, `retry_base_seconds` default 15, `max_wakes` default 6, `settle_seconds` default 15, `just_finished_hours` default 3);
   its triage switches are initial values only when settings have never been saved in the App (omitted means off). The manager reads this section itself and lays it over the hub's handshake reply (`assistantwire.Hello.Agents`); the hub no longer reads or sends it.
 
 ## Storage

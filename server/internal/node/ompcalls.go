@@ -20,7 +20,7 @@ const ompStoppedRefusal = "这个 omp 会话已停止，没有这个操作：发
 // ompOfflineMethods are the calls ompOfflineCalls answers. Only these look a session up among the stopped ones, so
 // the other calls never wait on a scan of omp's session files.
 var ompOfflineMethods = map[string]bool{
-	"session.items": true, "session.item": true, "session.image": true,
+	"session.items": true, "session.item": true, "session.image": true, "session.visualization": true,
 	"session.watch": true, "session.unwatch": true, "session.send": true,
 	"session.interrupt": true, "session.modes": true, "session.queue.edit": true, "session.queue.send_now": true,
 	"session.rename": true, "session.close": true,
@@ -43,7 +43,7 @@ func (n *Node) ompOfflineCalls(ctx context.Context, method, id string, params js
 	case "session.items":
 		return map[string]any{"items": []proto.Item{{ID: "omp#0", Seq: 1, Role: "system", Kind: "notice",
 			Text: transcript.OmpStoppedNotice, TS: time.Now().UTC()}}, "has_more": false, "history": "omp-disk:" + id, "to_seq": 1}, nil, true
-	case "session.item", "session.image":
+	case "session.item", "session.image", "session.visualization":
 		return nil, fmt.Errorf("no item"), true
 	case "session.watch", "session.unwatch":
 		return okResult(nil), nil, true

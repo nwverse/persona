@@ -298,6 +298,9 @@ struct HTMLView: UIViewRepresentable {
         let config = WKWebViewConfiguration()
         config.defaultWebpagePreferences.allowsContentJavaScript = false
         let v = WKWebView(frame: .zero, configuration: config)
+        #if os(iOS)
+        CallMediaGuard.shared.register(v) // a mail's media stays still while a system call is live
+        #endif
         v.scrollView.isScrollEnabled = false
         v.isOpaque = false
         v.backgroundColor = .clear
@@ -404,7 +407,7 @@ struct ComposeView: View {
             .navigationTitle("New Email")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                SheetClose { dismiss() }
                 ToolbarItem(placement: .confirmationAction) {
                     Button { Task { await send() } } label: {
                         if sending { ProgressView() } else { Label("Send", systemImage: Theme.Icon.sendMail) }
@@ -453,7 +456,7 @@ struct MailAccountsView: View {
 
     var body: some View {
         if inSheet {
-            NavigationStack { page.toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done [Extension System Presentation c0b3fb]") { dismiss() } } } }
+            NavigationStack { page.toolbar { SheetClose { dismiss() } } }
         } else {
             page
         }
@@ -723,7 +726,7 @@ struct AddMailAccountView: View {
             // Ask before offering "Sign in with Google" (#2442); an older hub or a failed read keeps the button.
             .task { form.gmailAppPassword = (try? await requestAPI()?.googleConfig())?.configured == false }
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                SheetClose { dismiss() }
                 if form.request != nil {
                     ToolbarItem(placement: .confirmationAction) {
                         Button { Task { await save() } } label: { if saving { ProgressView() } else { Text("Connect [V N C Page a55741]") } }
