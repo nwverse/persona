@@ -432,6 +432,13 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // catalog: ja 482,497 B to 477,736 B (en 479,378 B to 474,739 B, zh-Hans 480,224 B to 475,592 B), measured in one
 // environment against main b6b333e7e4. Main then went 16 B over (de8b2b4c41: en 479,423 B, ja 482,542 B, zh-Hans
 // 480,269 B); merged with it: en 474,792 B, ja 477,789 B, zh-Hans 475,645 B, 4,737 B of room. The budget stays.
+// #10922: the Assistant tray's Finished entry (lib/assistant-entries.ts `finished` with lib/todo-triage.ts `finishedAt`,
+// its entry in views/assistant/Tasks.tsx, a new row's Just finished mark and the entry's word), less the Just finished
+// group In progress no longer draws, adds 47 B in ja, measured in one environment against main ac465e3d3 (ja 478,078 B
+// to 478,125 B; en 475,068 B to 475,117 B, zh-Hans 475,930 B to 475,960 B; against main f4d81af87 it was 10 B in ja).
+// Its rows, seeing a task on opening it and the tray's empty line come with the tray's first opening, in the chunk of
+// the Parked rows (FinishedTaskRows.tsx through ParkedTaskRow.tsx: no lazy entry of their own), which also took
+// lib/todo-seen.ts off the first screen; on it they cost 228 B. Main had 4,653 B of room; the budget stays.
 // Keep the stricter existing limit while combining these changes.
 // #10904: the overview's task cards name who works on each task, the lead Agent's computer, model and effort and "+N"
 // for the others (lib/home-tasks.ts leadAgent; views/Home.tsx taskAgentLine over the model pill's pillView, modelList and

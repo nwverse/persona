@@ -91,11 +91,11 @@ export function OverviewArrangeButton({ on, onClick }: { on: boolean; onClick: (
   return <IconButton icon="grid" label={t("home.arrange_cards")} pressed={on} onClick={onClick} />;
 }
 
-/** The cards on "Overview" (overview_card), one row under the agents' summary, as the user arranged them
- *  (lib/overview-cards.ts): in their order, a hidden one not drawn (nor asked for), each half a row or the whole row.
- *  Half-row cards go two a row once there are two of them; one alone fills the row, and on a page wide enough for two
- *  columns of rows takes one of them. `editing`: the cards are being arranged (dragged, moved with their arrows,
- *  widened, hidden or shown), the hidden ones drawn in their place without their content. */
+/** The cards on "Overview" (overview_card), the page's last block, under the agents' sections and the computers
+ *  (#11147), as the user arranged them (lib/overview-cards.ts): in their order, a hidden one not drawn (nor asked for),
+ *  each half a row or the whole row. Half-row cards go two a row once there are two of them; one alone fills the row,
+ *  and on a page wide enough for two columns of rows takes one of them. `editing`: the cards are being arranged
+ *  (dragged, moved with their arrows, widened, hidden or shown), the hidden ones drawn in their place without content. */
 export function OverviewCards({ editing = false, onDone }: { editing?: boolean; onDone?: () => void }) {
   const cards = useExtensionSlot("overview_card");
   const prefs = useOverviewPrefs();
@@ -103,7 +103,7 @@ export function OverviewCards({ editing = false, onDone }: { editing?: boolean; 
   const drawn = editing ? arranged : arranged.filter((c) => !c.hidden);
   if (!drawn.length) return null;
   return (
-    // a card is never wider than one of the overview's two columns of rows below it (Home's GRID.rows, from 60rem of
+    // a card is never wider than one of the overview's two columns of rows above it (Home's GRID.rows, from 60rem of
     // the page) unless the user made it a full row: alone at 1920 px it stretched its chart to 1540 px of sparse bars,
     // and to 1300 px at 1680. While arranging, the hidden cards count where they stand.
     // the cards of a row are one height (the grid's default stretch): each as tall as its own content left a gap under
