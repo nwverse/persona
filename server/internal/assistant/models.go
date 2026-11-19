@@ -10,6 +10,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/secretkey"
@@ -40,17 +41,20 @@ type modelRecord struct {
 
 // ModelProvider is one provider as Settings › Model configuration offers it: never its key.
 type ModelProvider struct {
-	ID       string        `json:"id"`
-	Name     string        `json:"name"`
-	Kind     string        `json:"kind"`
-	Agent    string        `json:"agent,omitempty"`
-	API      string        `json:"api,omitempty"`
-	Model    string        `json:"model,omitempty"`
-	Machines []string      `json:"machines,omitempty"`
-	Hidden   bool          `json:"hidden,omitempty"`
-	HasKey   bool          `json:"has_key,omitempty"`
-	Models   []ModelChoice `json:"models,omitempty"`
-	Status   string        `json:"status,omitempty"`
+	ID           string                `json:"id"`
+	Name         string                `json:"name"`
+	Kind         string                `json:"kind"`
+	Agent        string                `json:"agent,omitempty"`
+	API          string                `json:"api,omitempty"`
+	ChatEffort   bool                  `json:"chat_effort,omitempty"`
+	Effort       string                `json:"effort,omitempty"`
+	Model        string                `json:"model,omitempty"`
+	Machines     []string              `json:"machines,omitempty"`
+	Hidden       bool                  `json:"hidden,omitempty"`
+	HasKey       bool                  `json:"has_key,omitempty"`
+	Models       []proto.ProviderModel `json:"models,omitempty"`
+	ModelAliases map[string]string     `json:"model_aliases,omitempty"`
+	Status       string                `json:"status,omitempty"`
 }
 
 type ModelChoice = assistantwire.ModelChoice
@@ -85,6 +89,8 @@ type ModelPurpose struct {
 	// Candidates (an extension's purpose only, #10398): its candidate models as the extension sends them, and as the
 	// user keeps, switches off or replaces them (model_candidates.go).
 	Candidates *ModelCandidates `json:"candidates,omitempty"`
+	// Usage is what the purpose's calls of the last 7 days added up to (model_usage.go); the list only, none without calls.
+	Usage *db.ModelUsage `json:"usage,omitempty"`
 }
 
 // launch is the purpose's execution form, independent of its provider.
@@ -107,7 +113,7 @@ func (p ModelPurpose) launch() string {
 	return ""
 }
 
-var modelCategoryIDs = []string{"assistant", "agent.new", "kb", "inbox.triage", "agent.delegate"}
+var modelCategoryIDs = []string{"assistant", "agent.new", "kb", "inbox.triage", "agent.delegate", "translate"}
 
 // The catalog also includes the uses set apart from their category: the opt-in overrides of Agents (agentsOverride),
 // in the order of Agents' uses, then the background supervisor's (#5806), then the In-meeting conversation's and
@@ -124,17 +130,17 @@ func agentsOverride(id string) bool { return id == purposeAgent || id == purpose
 var modelPurposes = []ModelPurpose{
 	{ID: "assistant", Group: "group_default", Kind: "launcher", ConfigDirs: assistantConfigDirs, Uses: []ModelUse{{Name: "use_chat"}, {Name: "use_schedule"}, {Name: "use_meeting_room"}}},
 	{ID: "agent.new", Group: "group_default", Kind: "launcher", Uses: []ModelUse{{Name: "use_new_agent"}, {Name: "use_inbox_agent"}, {Name: "use_lark_agent"}}},
-	{ID: "kb", Group: "group_default", Kind: "api", Uses: []ModelUse{{Name: "use_translate"}, {Name: "use_draft"}, {Name: "use_knowledge"}, {Name: "use_projects"}, {Name: "use_titles"},
+	{ID: "kb", Group: "group_default", Kind: "api", Uses: []ModelUse{{Name: "use_draft"}, {Name: "use_knowledge"}, {Name: "use_projects"}, {Name: "use_titles"},
 		{Name: "use_meeting_minutes"}, {Name: "use_meeting_answer"}}},
 	{ID: "inbox.triage", Group: "group_default", Kind: "api", Uses: []ModelUse{{Name: "use_triage"}, {Name: "use_importance"}, {Name: "use_reply_or_agent"}}},
 	// "Answering agents' questions" (delegate.go) is a category of its own, so it can run on a stronger model than the triage's (#3029).
 	{ID: "agent.delegate", Group: "group_default", Kind: "api", Uses: []ModelUse{{Name: "use_delegate"}}},
+	{ID: "translate", Group: "group_default", Kind: "api", Uses: []ModelUse{{Name: "use_translate"}}},
 	{ID: "inbox.agent", Group: "group_agents", Kind: "launcher", Parent: "agent.new"},
 	{ID: "lark.agent", Group: "group_agents", Kind: "launcher", Parent: "agent.new"},
 	{ID: "inbox.judge", Group: "group_triage", Kind: "api", Parent: "inbox.triage"},
 	{ID: "agent.triage", Group: "group_triage", Kind: "api", Parent: "inbox.triage"},
 	{ID: "inbox.draft", Group: "group_processing", Kind: "api", Parent: "kb"},
-	{ID: "translate", Group: "group_processing", Kind: "api", Parent: "kb"},
 	{ID: "kb.compress", Group: "group_processing", Kind: "api", Parent: "kb"},
 	{ID: "kb.project", Group: "group_processing", Kind: "api", Parent: "kb"},
 	{ID: "kb.dedupe", Group: "group_processing", Kind: "api", Parent: "kb"},
@@ -230,14 +236,19 @@ var errModelPurposeNotFound = i18n.Err("assistant-models.err_purpose_not_found")
 
 var errModelConflict = i18n.Err("assistant-models.err_conflict")
 
-func modelKey(id string) string { return "model_config." + id }
+const (
+	modelKeyPrefix         = "model_config."
+	modelOverrideKeyPrefix = modelKeyPrefix + "overrides.v1."
+)
+
+func modelKey(id string) string { return modelKeyPrefix + id }
 
 // The AI twin, Lark /agent and a task's own use were retired with category-only settings. A fresh namespace keeps
 // dormant records (model_config.inbox.agent, model_config.lark.agent, model_config.task.<id>) inert, including their
 // revisions. Only a new user save creates such a record.
 func modelRecordKey(id string) string {
 	if agentsOverride(id) || isTaskPurpose(id) {
-		return "model_config.overrides.v1." + id
+		return modelOverrideKeyPrefix + id
 	}
 	return modelKey(id)
 }
@@ -446,7 +457,7 @@ func (s *Service) modelProviders(ctx context.Context) []ModelProvider {
 		if apiName == "" {
 			apiName = "messages"
 		}
-		out = append(out, ModelProvider{ID: x.id, Name: x.name, Kind: "api", API: apiName, Model: c.Model, HasKey: c.APIKeyFile != "" || c.APIKey != ""})
+		out = append(out, ModelProvider{ID: x.id, Name: x.name, Kind: "api", API: apiName, ChatEffort: apiName == "chat", Model: c.Model, HasKey: c.APIKeyFile != "" || c.APIKey != ""})
 	}
 	for _, v := range s.launcherViews(ctx) {
 		kind := v.Kind
@@ -461,7 +472,22 @@ func (s *Service) modelProviders(ctx context.Context) []ModelProvider {
 		if kind == "launcher" {
 			agent = viewAgent(v)
 		}
-		out = append(out, ModelProvider{ID: "launcher." + v.Name, Name: cmp.Or(v.DisplayName, v.Name), Kind: kind, Agent: agent, API: apiName, Model: v.Model, Machines: v.Machines, Hidden: v.Hidden, HasKey: v.HasKey})
+		var aliases map[string]string
+		if kind == "api" && apiName == "chat" {
+			stored := storedLauncher{ManagedLauncher: proto.ManagedLauncher{
+				OpusModel: v.OpusModel, SonnetModel: v.SonnetModel, HaikuModel: v.HaikuModel,
+				FableModel: v.FableModel, SmallModel: v.SmallModel,
+			}}
+			for alias := range apiTierAliases {
+				if resolved, err := resolveAPITierAlias(stored, alias); err == nil {
+					if aliases == nil {
+						aliases = map[string]string{}
+					}
+					aliases[alias] = resolved
+				}
+			}
+		}
+		out = append(out, ModelProvider{ID: "launcher." + v.Name, Name: cmp.Or(v.DisplayName, v.Name), Kind: kind, Agent: agent, API: apiName, ChatEffort: kind == "api" && apiName == "chat", Effort: v.Effort, Model: v.Model, Machines: v.Machines, Hidden: v.Hidden, HasKey: v.HasKey, Models: v.Models, ModelAliases: aliases})
 	}
 	if !slices.ContainsFunc(out, func(p ModelProvider) bool { return p.ID == "launcher.claude" }) {
 		p := ModelProvider{ID: "launcher.claude", Name: mc(l, "provider_claude_default"), Kind: "launcher", Agent: "claude"}
@@ -471,7 +497,11 @@ func (s *Service) modelProviders(ctx context.Context) []ModelProvider {
 		out = append(out, p)
 	}
 	for _, p := range s.voicePlugins(ctx) {
-		out = append(out, ModelProvider{ID: "plugin." + p.ID, Name: p.Name, Kind: "plugin", Model: p.Default, Models: p.Models, Status: p.Error})
+		models := make([]proto.ProviderModel, len(p.Models))
+		for i, m := range p.Models {
+			models[i] = proto.ProviderModel{ID: m.ID, Name: m.Name}
+		}
+		out = append(out, ModelProvider{ID: "plugin." + p.ID, Name: p.Name, Kind: "plugin", Model: p.Default, Models: models, Status: p.Error})
 	}
 	return out
 }

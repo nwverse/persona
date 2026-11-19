@@ -1,7 +1,7 @@
 import { t } from "../i18n";
 import { MANAGER_HEADER } from "./manager-choice";
 import { api, enc } from "./api";
-import type { ProviderAPI } from "./providers";
+import type { ProviderAPI, ProviderModel } from "./providers";
 
 export interface ModelBinding {
   provider?: string;
@@ -20,7 +20,14 @@ export interface ModelProvider {
   kind: "api" | "launcher" | "plugin";
   agent?: string;
   api?: ProviderAPI;
+  /** A current hub accepts purpose effort on this Chat connection; absent on older hubs. */
+  chat_effort?: boolean;
+  /** The connection's saved default, inherited when a purpose effort is unset. */
+  effort?: string;
   model?: string;
+  models?: ProviderModel[];
+  /** Legacy Chat tier aliases resolved to the stored model IDs whose capabilities apply. */
+  model_aliases?: Record<string, string>;
   machines?: string[];
   hidden?: boolean;
   has_key?: boolean;
@@ -53,6 +60,23 @@ export interface ModelPurpose {
   runtimes?: string[];
   /** Main chat only (#4633): the profiles its new conversations can start in (an older hub: none, no row). */
   config_dirs?: string[];
+  /** What its calls of the last 7 UTC days added up to, the list's only (#10498): none without calls, none from an older hub. */
+  usage?: ModelUsage;
+}
+
+export interface ModelUsage {
+  calls: number;
+  failures: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_input_tokens: number;
+  cache_creation_input_tokens: number;
+}
+
+/** The tokens Settings › Models shows for a purpose (#10498): input + output + cache writes. Cache reads cost a fraction
+ *  and would swamp the number, so they are left out of it and listed apart. */
+export function usageTokens(u: ModelUsage): number {
+  return u.input_tokens + u.output_tokens + u.cache_creation_input_tokens;
 }
 
 export interface ModelConfigurationBody {
