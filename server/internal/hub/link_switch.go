@@ -31,11 +31,13 @@ import (
 // The computer keeps its id, so all that is kept by id (its name, pins, mutes, history, trust) stays. While a switch
 // runs, the new credential does not rename the computer after its system (nameAfterSystem).
 
-// linkSwitches are the switches begun and not ended, by machine id. Kept in memory only: a hub that restarted has
-// none, and a credential made then names the computer as any pairing would.
+// linkSwitches are the switches begun and not ended, by machine id, and the last one of each machine that succeeded.
+// Kept in memory only: a hub that restarted has none (the audit has what a rollback must know), and a credential made
+// then names the computer as any pairing would.
 type linkSwitches struct {
-	mu  sync.Mutex
-	run map[string]linkSwitchRun
+	mu        sync.Mutex
+	run       map[string]linkSwitchRun
+	succeeded map[string]string // machine id -> operation
 }
 
 // linkSwitchRun is one switch under way: the manager's id for it, and who asked (device | admin).
@@ -54,6 +56,23 @@ func (s *linkSwitches) stop(mid string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.run, mid)
+}
+
+// succeed records that operation op of computer mid succeeded.
+func (s *linkSwitches) succeed(mid, op string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.succeeded == nil {
+		s.succeeded = map[string]string{}
+	}
+	s.succeeded[mid] = op
+}
+
+// succeededOp: operation op of computer mid succeeded, as this hub saw it.
+func (s *linkSwitches) succeededOp(mid, op string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return op != "" && s.succeeded[mid] == op
 }
 
 // get is computer mid's switch under way (ok false: none).
@@ -206,11 +225,25 @@ func linkSwitchSwapErr(err error) error {
 // endLinkSwitch is devices.link_switch.end from manager c. A rollback undoes only a switch whose begin took effect:
 // the one this hub has under way with that operation, or one whose begun row the audit has (this hub restarted
 // since), or the one whose code the hash names. Any other changes nothing: begin was refused, never reached this
-// hub, or this is not a switch at all (the computer's own Persona Link stays).
+// hub, or this is not a switch at all (the computer's own Persona Link stays). One the hub saw succeed is not undone
+// either (already_succeeded): a manager's stale record does not take a working Persona Link away.
 func (h *Hub) endLinkSwitch(ctx context.Context, c *busConn, p devicewire.LinkSwitchEnd) (any, error) {
 	mid, op := p.MachineID, clip(p.Operation, 64)
 	run, running := h.linkSwitch.get(mid)
 	running = running && op != "" && run.operation == op // this switch, as this hub saw it begin
+	audited := false                                     // its begun row is in the audit
+	if p.Outcome == devicewire.LinkSwitchRolledBack && mid != "" && op != "" {
+		succeeded := h.linkSwitch.succeededOp(mid, op)
+		if !succeeded && h.store != nil {
+			var err error
+			if audited, succeeded, err = h.store.LinkSwitchSteps(ctx, mid, op); err != nil {
+				return nil, err
+			}
+		}
+		if succeeded {
+			return nil, linkSwitchRefusal(devicewire.LinkSwitchCodeSucceeded, "this switch succeeded; nothing is undone")
+		}
+	}
 	if mid == "" || h.ownsMachine(c, mid) != nil {
 		// Not this manager's (any more: moved to another meanwhile). A rollback that names its code still revokes
 		// that code and what it became, which only the manager that began it can name; never all of a computer's.
@@ -234,7 +267,13 @@ func (h *Hub) endLinkSwitch(ctx context.Context, c *busConn, p devicewire.LinkSw
 		if running {
 			h.linkSwitch.stop(mid)
 		}
-		h.linkSwitchAudit(ctx, c, mid, run, "succeeded", nil)
+		if op != "" {
+			h.linkSwitch.succeed(mid, op)
+		}
+		// A later rollback of it goes by this row once this hub restarted: its failure is the manager's to retry.
+		if err := h.linkSwitchAuditNow(ctx, c, mid, run, "succeeded"); err != nil {
+			return nil, fmt.Errorf("the switch's audit: %w", err)
+		}
 		return map[string]any{}, nil
 	case devicewire.LinkSwitchRolledBack:
 	default:
@@ -242,7 +281,7 @@ func (h *Hub) endLinkSwitch(ctx context.Context, c *busConn, p devicewire.LinkSw
 	}
 	h.machineAdd.Lock()
 	defer h.machineAdd.Unlock()
-	begun, revoked, err := h.revokeLinkSwitch(ctx, mid, op, p.PairHash, running)
+	begun, revoked, err := h.revokeLinkSwitch(ctx, mid, p.PairHash, running || audited)
 	if err != nil {
 		return nil, err
 	}
@@ -261,23 +300,14 @@ func (h *Hub) endLinkSwitch(ctx context.Context, c *busConn, p devicewire.LinkSw
 	return map[string]any{}, nil
 }
 
-// revokeLinkSwitch revokes what switch op of computer mid made, once it shows that switch's begin took effect (begun
+// revokeLinkSwitch revokes what a switch of computer mid made, once it shows that switch's begin took effect (begun
 // false: it did not, nothing done): the pairing code whose hash is pairHash and the credential it became; else (no
 // hash) every Persona Link credential of the computer and its codes not used yet, while its entry is kind link. It
-// closes what they have open (revoked); the computer's share records stay, as it does, on ssh. running: this hub has
-// the switch under way. How many credentials.
-func (h *Hub) revokeLinkSwitch(ctx context.Context, mid, op, pairHash string, running bool) (begun bool, n int, err error) {
+// closes what they have open (revoked); the computer's share records stay, as it does, on ssh. proven: this hub has
+// the switch under way, or the audit its begun row. How many credentials.
+func (h *Hub) revokeLinkSwitch(ctx context.Context, mid, pairHash string, proven bool) (begun bool, n int, err error) {
 	if h.store == nil {
 		return false, 0, errors.New("no database")
-	}
-	audited := func() (bool, error) {
-		if running {
-			return true, nil
-		}
-		if op == "" {
-			return false, nil
-		}
-		return h.store.LinkSwitchBegun(ctx, mid, op)
 	}
 	if pairHash != "" {
 		id, found, err := h.store.RevokeLinkPair(ctx, pairHash, mid)
@@ -291,14 +321,14 @@ func (h *Hub) revokeLinkSwitch(ctx context.Context, mid, op, pairHash string, ru
 			h.revoked(id)
 			return true, 1, nil
 		}
-		// No code of this computer: one that begun says it made is not that one.
-		if begun, err := audited(); err != nil || !begun {
-			return false, 0, err
+		if !proven {
+			return false, 0, nil
 		}
+		// No code of this computer: one that began says it made is not that one.
 		return false, 0, &rpc.Error{Code: bus.CodeInvalidParams, Message: "pair_hash is no pairing code of this computer"}
 	}
-	if begun, err = audited(); err != nil || !begun {
-		return false, 0, err
+	if !proven {
+		return false, 0, nil
 	}
 	if mc := h.knownEntry(mid); mc == nil || mc.Kind != kindLink {
 		return true, 0, nil // not on Persona Link (any more): what it has of one is not this switch's

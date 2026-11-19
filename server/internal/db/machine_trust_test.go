@@ -142,9 +142,9 @@ func TestMachineLinkInUse(t *testing.T) {
 	}
 }
 
-// Whether a switch's begin took effect, by its audit row: that operation's begun step on that computer only. The
+// How far a switch got, by its audit rows: that operation's begun and succeeded steps on that computer only. The
 // audit is not cleared between tests: the computers are this test's, the operations this run's.
-func TestLinkSwitchBegun(t *testing.T) {
+func TestLinkSwitchSteps(t *testing.T) {
 	d := open(t)
 	ctx := context.Background()
 	run := fmt.Sprintf("%x", time.Now().UnixNano())
@@ -153,7 +153,9 @@ func TestLinkSwitchBegun(t *testing.T) {
 		{"begun-laptop", "link_switch", `{"operation":"` + op("a") + `","step":"begun","by":"device"}`},
 		{"begun-laptop", "link_switch", `{"operation":"` + op("b") + `","step":"begin_failed"}`},
 		{"begun-desk", "link_switch", `{"operation":"` + op("c") + `","step":"begun"}`},
+		{"begun-desk", "link_switch", `{"operation":"` + op("c") + `","step":"succeeded"}`},
 		{"begun-laptop", "code", `{"operation":"` + op("d") + `","step":"begun"}`},
+		{"begun-laptop", "link_switch", `{"operation":"` + op("e") + `","step":"succeeded"}`},
 	} {
 		if err := d.AddMachineAudit(ctx, a.machine, a.action, "manager:assistant", json.RawMessage(a.detail)); err != nil {
 			t.Fatal(err)
@@ -161,16 +163,18 @@ func TestLinkSwitchBegun(t *testing.T) {
 	}
 	for _, c := range []struct {
 		machine, operation string
-		want               bool
+		begun, succeeded   bool
 	}{
-		{"begun-laptop", op("a"), true}, {"begun-laptop", op("b"), false}, {"begun-laptop", op("c"), false},
-		{"begun-desk", op("c"), true}, {"begun-laptop", op("d"), false}, {"begun-laptop", op("none"), false},
+		{"begun-laptop", op("a"), true, false}, {"begun-laptop", op("b"), false, false}, {"begun-laptop", op("c"), false, false},
+		{"begun-desk", op("c"), true, true}, {"begun-laptop", op("d"), false, false}, {"begun-laptop", op("e"), false, true},
+		{"begun-laptop", op("none"), false, false},
 	} {
-		if got, err := d.LinkSwitchBegun(ctx, c.machine, c.operation); err != nil || got != c.want {
-			t.Errorf("%s %s: %v %v, want %v", c.machine, c.operation, got, err, c.want)
+		begun, succeeded, err := d.LinkSwitchSteps(ctx, c.machine, c.operation)
+		if err != nil || begun != c.begun || succeeded != c.succeeded {
+			t.Errorf("%s %s: begun %v succeeded %v %v, want %v %v", c.machine, c.operation, begun, succeeded, err, c.begun, c.succeeded)
 		}
 	}
-	if _, err := d.LinkSwitchBegun(ctx, "begun-laptop", ""); err == nil {
+	if _, _, err := d.LinkSwitchSteps(ctx, "begun-laptop", ""); err == nil {
 		t.Fatal("no operation accepted")
 	}
 }

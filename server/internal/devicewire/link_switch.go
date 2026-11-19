@@ -51,10 +51,11 @@ const (
 
 // Why the hub refused begin or end (rpc.Error codes). The manager shows each as proto.LinkSwitch* reason.
 const (
-	LinkSwitchCodeNotSSH       = "not_ssh"          // begin: the entry is not kind ssh (end: not kind link)
-	LinkSwitchCodeChanged      = "config_changed"   // the entry is not what the manager saw (ssh_host, owner)
-	LinkSwitchCodePending      = "pending"          // the user has not confirmed the computer
-	LinkSwitchCodeUnavailable  = "link_unavailable" // the hub takes no Persona Link (no TLS port, no https public_url)
-	LinkSwitchCodeExistingLink = "existing_link"    // the computer has a Persona Link credential or unused code already
-	LinkSwitchCodeNoMachine    = "no_machine"       // the hub has no such machine, or not of this manager
+	LinkSwitchCodeNotSSH       = "not_ssh"           // begin: the entry is not kind ssh (end: not kind link)
+	LinkSwitchCodeChanged      = "config_changed"    // the entry is not what the manager saw (ssh_host, owner)
+	LinkSwitchCodePending      = "pending"           // the user has not confirmed the computer
+	LinkSwitchCodeUnavailable  = "link_unavailable"  // the hub takes no Persona Link (no TLS port, no https public_url)
+	LinkSwitchCodeExistingLink = "existing_link"     // the computer has a Persona Link credential or unused code already
+	LinkSwitchCodeNoMachine    = "no_machine"        // the hub has no such machine, or not of this manager
+	LinkSwitchCodeSucceeded    = "already_succeeded" // end rolled_back: the hub saw this operation succeed; nothing undone
 )

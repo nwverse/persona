@@ -99,16 +99,16 @@ func (d *DB) MachineLinkInUse(ctx context.Context, machine string) (bool, error)
 	return inUse, err
 }
 
-// LinkSwitchBegun: the machine's switch to Persona Link with this operation id got as far as its begin (its audit row,
-// action link_switch, step begun), which outlives a hub's restart.
-func (d *DB) LinkSwitchBegun(ctx context.Context, machine, operation string) (bool, error) {
+// LinkSwitchSteps is how far the machine's switch to Persona Link with this operation id got, by its audit rows
+// (action link_switch), which outlive a hub's restart: begun, its begin took effect; succeeded, its manager said it
+// succeeded.
+func (d *DB) LinkSwitchSteps(ctx context.Context, machine, operation string) (begun, succeeded bool, err error) {
 	if machine == "" || operation == "" {
-		return false, errors.New("machine and operation are required")
+		return false, false, errors.New("machine and operation are required")
 	}
-	var begun bool
-	err := d.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM machine_audit WHERE machine_id = $1 AND action = 'link_switch'
-		AND detail->>'step' = 'begun' AND detail->>'operation' = $2)`, machine, operation).Scan(&begun)
-	return begun, err
+	err = d.pool.QueryRow(ctx, `SELECT COALESCE(bool_or(detail->>'step' = 'begun'), false), COALESCE(bool_or(detail->>'step' = 'succeeded'), false)
+		FROM machine_audit WHERE machine_id = $1 AND action = 'link_switch' AND detail->>'operation' = $2`, machine, operation).Scan(&begun, &succeeded)
+	return begun, succeeded, err
 }
 
 // MachineAudit is one row of a computer's audit.
