@@ -171,6 +171,7 @@ type Service struct {
 	origins      originBook           // origins.go
 	guests       guestBook            // guest.go
 	relays       relayBook            // conversations.go
+	chatReplies  chatReplyBook        // chat_reply.go: what conversations that wrote as the user were told of the chats
 	undelivered  undeliveredBook      // undelivered.go: the owner's messages that could not go in
 	quotes       quoteBook            // relay_quote.go: the owner's messages relays carried, verified
 	avail        availBook            // availability.go

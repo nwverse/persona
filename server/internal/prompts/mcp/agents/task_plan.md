@@ -53,6 +53,7 @@ Workspace policy: "new" makes an isolated checkout; {"new":{"branch":"task/my-ch
             "description": "the project directory: absolute path or ~/…"
           },
           "workspace": {
+            "type": ["string", "object"],
             "description": "Task workspace policy. Omit to use the assistant preference and readonly/busy exceptions. new uses the machine engine and default branch task/<todo id>; existing accepts an absolute/~/ path or a workspace id on that machine; none creates nothing. To choose a branch use {new:{branch:...}}. No custom worktree root.",
             "oneOf": [
               { "type": "string", "enum": ["new", "none"] },

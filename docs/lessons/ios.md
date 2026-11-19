@@ -3024,6 +3024,12 @@ coordinate space (`onGeometryChange` into a store that redraws nothing), read th
 and set it through `ScrollPosition.scrollTo(x:)`. `InboxSectionBarUITests.testAChosenChoiceComesWhollyIntoViewAtTheLargestText`
 checks the chip's frame against the strip's.
 
+## Confirmation-dialog labels ignore the window's text-size traits (2026-11-18, #8127)
+
+- On iOS 27 at AX5, the window's xxxLarge trait override reaches an action sheet's title, message and button capsules, but its button labels still use the application's uncapped size. Plain string titles and custom labels draw alike; `lineLimit`, `dynamicTypeSize` on a label, and environment or scene trait overrides do not change that label. An alert's labels and capsules stay consistent.
+- Pages use `.accessibleConfirmationDialog`: the original confirmation dialog through xxxLarge, an alert above it on iOS. The alert needs exactly one Cancel. Since a generic `ViewBuilder` cannot reveal whether its actions already contain one, each call says `hasCancel: true` only for an existing cancel action; otherwise the shared modifier adds Cancel. `ConfirmationDialogRuleTests` keeps pages on that rule.
+- XCTest sees two nested button elements with the capsule's frame and no static-text element for the action label, at both ordinary and AX5 sizes. For a frame assertion, the DEBUG `-probes YES` element `probe.confirmation-dialog-labels` reads the presented `UIAlertController`'s real `UILabel` frames. Compare those with the XCTest button frame; do not assert containment between the two nested buttons, which stays equal even while the glyphs overflow.
+
 ## A place chosen again while in front keeps its page and its state (2026-11-16, #9053)
 
 `AssistantView.show` returns the place in front to its root by `backToRoot()` then appending the place's route again, in
