@@ -1,5 +1,9 @@
 # Lessons: hub / node and networking
 
+## A cancelled RPC test must acknowledge cancellation before releasing work (#10342)
+
+A local context cancellation only starts delivery of `rpc.cancel`; it does not prove the node has processed it. A test that releases a held file write immediately can let the operation finish as `done`, after which polling for `cancelled` times out and the original destination is not restored. Keep the write held until a following `file.operation` request on the same ordered connection has been answered, then release it. Exercise cancellation and normal completion in the same command, and keep the existing deadline, cleanup and restoration assertions.
+
 ## Queue admission decides notification replay (#10394)
 
 A connected WebSocket is not evidence that its outbound queue accepted a notification. Record admission per device
@@ -7,6 +11,16 @@ and retain the event in the existing reconnect ring when every eligible socket r
 same credential accepts it, do not retain a duplicate. Keep recipient-selection counts separate from queue admission
 and delivery. Exercise the real notification bus handler with a full queue, same-ID outbox retry and reconnect;
 keep push-route, capability and preference exclusions intact.
+
+## A response that stops mid-body must be aborted, not returned from (#10855)
+
+`http.ServeContent` stops at a read that fails and returns as if it were done, with the head (200 or 206 and its
+Content-Length) already sent. Over HTTP/1.1 net/http then closes the connection short of that length, which clients
+notice; over HTTP/2 it ends the stream cleanly with fewer bytes than declared, and a client that does not compare them
+keeps the cut file as the whole one. Keep the reader's error and `panic(http.ErrAbortHandler)` after `ServeContent`
+(`recoverPanics` passes it on): HTTP/2 resets the stream. Check it over a real HTTP/2 connection by reading the frames
+(`server/internal/hub/download_abort_test.go`): a `ResponseRecorder` cannot show it, and Go's client counts the bytes
+itself, so it reports the clean end and the reset alike as errors.
 
 ## Contribution identity must match both preview and commit (#10272)
 
@@ -571,10 +585,14 @@ entry can import a secret target. Recreate ordinary links with `--symlink` so th
 close links for special read-only files or partially closed directories. Keep the view root read-only so later secret
 backups cannot be created. File binds still pin their inode and the top-level entry list: a replaced `node.sock` stays
 old, so a node restart requires an agent restart. Do not permanently cache probes or preflight success; bwrap/PATH and
-namespace availability can change, and full per-cwd profiles make an unbounded key space. A tmpfs mounted directly on a symlink follows it and masks the target; give an alias its own view, but do not
-claim this protects the link from unlink. Stock bwrap 0.8 has no path-aware unlink/rename filter, so protecting the link
-while keeping its parent writable needs another mechanism. It also keeps a supervisor even without `--unshare-pid` or
-with `--as-pid-1`: verify the agent's `PPID` in the host pid namespace, not equal pids, and use `--die-with-parent` for
+namespace availability can change, and full per-cwd profiles make an unbounded key space. A tmpfs mounted directly on a
+symlink follows it and masks the target; the alias view alone does not protect the link from unlink. Stock bwrap 0.8 has
+no path-aware unlink/rename filter. To protect an explicit alias while its parent stays writable, a pre-exec helper can
+`open_tree` the symlink inode with `AT_SYMLINK_NOFOLLOW`, then `move_mount` the detached clone onto the alias without
+following the destination. Run the same helper in preflight and exec the agent at the same pid. Do not drop
+`CAP_SYS_ADMIN` to harden these mounts: that breaks `unshare -rm`, which was working; direct `umount` in the original
+namespace therefore remains an explicit boundary. Bubblewrap keeps a supervisor even without `--unshare-pid` or with
+`--as-pid-1`: verify the agent's `PPID` in the host pid namespace, not equal pids, and use `--die-with-parent` for
 lifecycle cleanup.
 
 ## Runtime policy and publisher-owned node packages (#2566)
@@ -2966,3 +2984,13 @@ documenting an order.
 ## Compile production and test callers after shared helper changes
 
 A helper refactor can leave a missing tuple return, a test caller without a new context argument, or a runtime reader naming the old helper. Compile both production and test packages after merging; retain the existing read-only database helper and exercise its failure paths rather than adding a parallel implementation.
+
+## A custom `DialTLSContext` owns its handshake deadline (2026-11-19, #11028)
+
+`http.Transport.TLSHandshakeTimeout` bounds only the handshake the transport runs itself. #10681 moved the link's hub
+handshake into a custom `DialTLSContext` (to trace it) and so dropped that bound, and the transport dials under a
+context that a given-up request does not end. A hub, or a proxy's tunnel, that took the connection and never answered
+the TLS hello then held it open forever, on the direct route and through the proxy alike; #10716 put the deadline back.
+Whoever writes a `DialTLSContext` gives the handshake its own deadline and closes the raw connection when it runs out.
+Test it by waiting for the far end to see the connection close, not by how long the request took: the request returns
+on its own deadline either way (`TestDirectStalledHandshakeIsClosed`, `TestProxyStallingInsideTheTunnelIsClosed`).

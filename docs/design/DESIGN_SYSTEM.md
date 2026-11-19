@@ -667,17 +667,19 @@ on-demand model panel, not the everyday Assistant home (#6887).
   reads "Claude Code → Codex · <badge>". That exchange draws no model change divider. Follows cindy's agent switch card
   at the user's request (2026-11-12), with the model's name instead of its raw id and the badge always shown
   (`docs/web/web.md`, "Engine switch divider").
-- Mode change line (web `ModeChangeDivider`, iOS `ModeChangeLine`, #10297): a permission mode change the hub recorded
+- Mode change line (web `ModeChangeDivider`, iOS `ModeChangeLine`, Android `ModeChangeDivider`, #10297): a permission mode change the hub recorded
   (`docs/protocol/protocol.md` "Session mode changes"), at the end of the exchange it happened in, in an Agent's chat
-  only. The compaction divider's look: hairlines either side (web `--line-strong`, iOS `Theme.cardStroke` / separator) of
-  one line of words (web `text-submeta` `--ink-3`, iOS `Theme.Font.label` secondary), not a control. Words: who (the
+  only. The compaction divider's look: hairlines either side (web `--line-strong`, iOS `Theme.cardStroke` / separator,
+  Android `PersonaTheme.palette.line` / `Tokens.Size.line`) of one line of words (web `text-submeta` `--ink-3`, iOS
+  `Theme.Font.label` secondary, Android `PersonaTheme.type.micro` `ink3`), not a control. Words: who (the
   device's name; "The hub"; "A device"), the modes in quotes (zh-Hans and ja 「」, en “ ”), a pick that waits for a
   restart says so, and what became of the restart says why in plain words from the node's reason code; no reason, no
-  colon. Hairlines only where the words fit on one line with at least 16 px / `Theme.Space.l` of rule each side;
-  otherwise the words alone, wrapped and centered (the owner, 2026-11-18: rules beside the first of two lines read as
-  crooked, rules a pixel or two long as dots). The web loads its code and words (`chat-modes`) with an Agent's chat,
-  off the first screen. The record is read when the chat opens and when its mode changes, never on a timer, a refresh
-  or the app back in front.
+  colon. Hairlines only where the words fit on one line with at least 16 px / `Theme.Space.l` / `Tokens.Space.l` of
+  rule each side; otherwise the words alone, wrapped and centered (the owner, 2026-11-18: rules beside the first of
+  two lines read as crooked, rules a pixel or two long as dots). The web loads its code and words (`chat-modes`) with
+  an Agent's chat, off the first screen. A frozen window shows only changes up to its last shown item; newer changes wait
+  with the newer transcript. The record is read when the chat opens and when its mode or waiting restart
+  changes, never on a timer, a refresh or the app back in front.
 
 ### 3.3 Cards and surfaces
 
@@ -747,7 +749,7 @@ The brief box (web, #3822; `web/src/views/assistant/TaskBrief.tsx`) shows what a
 - the loop as the first Running row (Persona's own; cindy lists none), its Stop confirmed inline;
 - a run's detail: Back, the run's mark and name, then the run's card;
 - a command's title, status and mono command line share one rounded hover / focus target (#9169). The independent Copy command icon appears on hover, keyboard focus and touch, without opening the output;
-- a command's detail opens inside the same panel (`BackgroundCommandDetail.tsx`), reusing the run's Back bar and existing Button / IconButton controls. Status, runtime and start time are label / value rows. Running time updates; an ended command shows its retained result, known exit code and fixed runtime. The full command is wrapped monospace, folded to three lines with **Show full command**; its Copy command icon sits beside it. Output has a label and line count, follows new text until scrolled up, and retains the last good text with Retry on a failed read. An open detail follows the command into Completed. On an older hub / node without retained outcomes, removal from Running says **Not listed as running**, without an inferred outcome or a still-ticking clock. Back restores list scroll and row focus; Escape returns to the list first, then closes, except while a menu, dialog or IME owns it. **Open as file** remains a secondary action. Why a command-specific detail: the file viewer does not follow running output or preserve the Background tasks list; a generic panel-history stack is unnecessary here.
+- a command's detail opens inside the same panel (`BackgroundCommandDetail.tsx`), reusing the run's Back bar and existing Button / IconButton controls. Status, runtime and start time are label / value rows. Running time updates; an ended command shows its retained result, known exit code and fixed runtime. The full command is wrapped monospace, folded to three lines with **Show full command**; its Copy command icon sits beside it. Output has a label and line count, follows new text until scrolled up, and retains the last good text with Retry on a failed read. An open detail follows the command into Completed. On an older hub / node without retained outcomes, removal from Running says **Not listed as running**, without an inferred outcome or a still-ticking clock. A shell command's or Monitor's row opens this detail even before the hub knows its output file (a Monitor's arrives with its first event, #10852): the rows and command are the same, Output says **No output yet** (**No output** once it ended) and there is no **Open as file**; when the file arrives the detail reads it in place, keeping the focus and the command's fold. A subagent's row opens nothing without an output file, since its work is its own conversation. Back restores list scroll and row focus; Escape returns to the list first, then closes, except while a menu, dialog or IME owns it. **Open as file** remains a secondary action. Why a command-specific detail: the file viewer does not follow running output or preserve the Background tasks list; a generic panel-history stack is unnecessary here.
 
 The status words are the task cards' (`taskStatusWord`), and the count on the top bar's button is the running background tasks and runs (`backgroundCount`), the same number the panel's Running section shows without the loop.
 
@@ -1304,6 +1306,7 @@ package-only Undo with retained recovery files; `docs/operations/hub-update.md` 
 | Page load (Android) | `JLoadable` and `jLoadableContent` (`Lists.kt`), the same three cases as `Loadable` plus the two a phone needs: a spinner (`JLoading`, with optional text) before the first answer; the content, kept while it reloads (`refreshing` feeds `JListPage`'s pull indicator) and with a failed reload said as one `JNotice` line above it with an inline Retry; and, with nothing to show, a `JNotice` carrying the reason (and an optional title) with Retry under it. A failed read over an empty value is a failure, never the page's empty state (`empty` slot, `JEmptyState`), so an offline cache is not shown as a successful empty answer. A retry goes back to the spinner. Retry is the shared `designsystem_retry`; the reason text comes from the page. First page on it: Settings › Hub version |
 | Row or button busy | `RowProgress`, `trailingProgress`, small `ProgressView` |
 | Load failure on a settings page | `LoadProblem` (`apple/Persona/DesignSystem/SettingsForm.swift:73`), no Retry |
+| Saved desktop hub cannot be reached at launch | The existing OS-default local setup window keeps the saved address and per-hub session, explains the failure in plain language, and offers **Retry** plus **Local settings**; the failed first-run form is not shown as if the profile were new (`docs/desktop/desktop.md`, "Two independent installations") |
 | List read failure (web) | `ListError` (`web/src/ui/ListError.tsx`): a red `role="alert"` line saying what could not be read and why, with **Retry** under it, in place of the rows; the paged session lists and the sidebar's Agents list (its complete list, and By to-do's unread to-dos) draw it, so a failed read never leaves a list blank or on "Loading…" |
 | Persistent notice | `NoticeBanner` |
 | A short server-driven process (web) | `Steps` (`web/src/ui/Steps.tsx`): one line per step, the current one with a spinner and `aria-current="step"`, done ones ticked green, a stop crossed red, the rest numbered and quiet. The step comes from what the hub pushes, never a local timer. Used by the alert sheet's Redeploy and by **Switch to Persona Link** on the machine detail and the admin Machines row (#10662: confirmation dialog, "Starting…" at once, then the steps, then the result in plain words; nothing shown for an older hub) |
@@ -1851,7 +1854,7 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   once the stack is opened in full (folded, its "N more" row says it), so the stack never hides how many it holds.
   Wherever an Allow is in view, what it allows is in view too.
 - **Room** (web, #4656): an open tray of requests takes the room its cards need, up to most of the visible height (the assistant's Needs you / In progress tray lets the dock grow to 82% of it while open), never a fixed short box. Its header (title, All, Expand, Close) stays and only its list scrolls; a card's answer row stays at the list's bottom edge with a hairline over what scrolls under it. **Expand** in the header fills the chat column for going through many requests, the composer still on screen; the same button, **Restore size**, or closing the tray gives the room back.
-- **Card text**: the title names the request and what happens next, in the same words on every client: the request titles in section 5.6. The body gives only what the decision needs: the command, the plan's summary, the question and its choices. Commands render formatted, never as raw JSON.
+- **Card text**: the title names the request and what happens next, in the same words on every client: the request titles in section 5.6. The body gives only what the decision needs: the command, the plan's summary, the question and its choices. Commands render formatted, never as raw JSON. A script ask whose interaction has `format: "markdown"` draws its permission summary or question with the existing reply Markdown renderer on iOS and the web, including inline styles, lists and short tables; missing and unrecognized formats keep the literal card text (#10857).
 - **A plan's recorded following mode** (#3784): when the plan interaction carries `plan_then`, the existing approval card names that mode with the general permission-mode label and offers one approval, not a competing set of modes; the recorded mode came from the task's start, so it wins on older clients too. Send Back stays. A card without the field keeps the existing approval-mode choices and default. This changes only the affected approval's content, reusing the current buttons, menu-free action row and localized labels.
 - **Editing before Allow** (web Lark send/reply): the default card remains read-only with Allow primary. **Edit text** and **Deny with note…** progressively disclose their fields only when the server declares the capability. An actual edit hides Always and makes Allow apply to the reviewed replacement, never the original command; blank text disables Allow. Deny remains an explicit action, with its optional reason secondary to the decision. Other clients and other permission kinds keep the unchanged Allow/Deny layout.
 - **One scroll, the answers in view** (iOS and iPadOS, #6605): a card scrolls in one place at most. A lone card fits the
@@ -2903,14 +2906,16 @@ to press; impromptu talks are meetings too (principles 1 and 4).
   the imported row goes; a recording naming a meeting the list doesn't have stays as it is (principle 4: one meeting,
   one row).
 - **Hand to Agent after a meeting** (#8852): the meeting's page after it (the iPhone's **⋯**, the web's button beside
-  Rename) offers **Hand to Agent…** only once the meeting is over and has something to hand, and only to someone with an
-  Agent that can take it (principle 2: someone who only uses the assistant never sees it). The sheet is the to-do's
-  Hand to Agent on the iPhone and the Inbox's Hand to AI on the web (`HandOffTargets`: the same Agents, the same rows):
-  the Agent (the latest picked), an optional line, **Include the transcript** off by default, and one line on what the
-  Agent gets. The latest hand-off is one row at the top of the page (`MeetingHandoffRow`, `RecordingHandoffRow`): where
-  it went with **Open**, or why not with **Retry**, which opens the sheet again on that Agent (principles 3 and 7: the
-  try shows at once, and a failure can be tried again). No toast besides: the row says it, and on the iPhone a toast
-  covered the meeting's title.
+  Rename, Android's **Hand to Agent** toolbar action) offers **Hand to Agent…** only once the meeting is over and has
+  something to hand, and only to someone with an Agent that can take it (principle 2: someone who only uses the assistant
+  never sees it). The sheet is the to-do's Hand to Agent on the iPhone and the Inbox's Hand to AI on the web and Android
+  (`HandOffTargets` / `handOffTargets`: the same Agents, the same rows): the Agent (the latest picked), an optional line,
+  **Include the transcript** off by default, and one line on what the Agent gets. The latest hand-off is one row at the
+  top of the page (`MeetingHandoffRow`, `RecordingHandoffRow`): where it went with **Open**, or why not with **Retry**,
+  which opens the sheet again on that Agent (principles 3 and 7: the try shows at once, and a failure can be tried again).
+  On Android the sheet's visibility and Retry context live in the page's ViewModel across Activity recreation, the
+  background row stays out of the sheet's accessibility tree, and a failure reason wraps in full at large text sizes.
+  No toast besides: the row says it, and on the iPhone a toast covered the meeting's title.
 - **While it records**: the live sheet's page menu ends with the same choice, Meeting and Note with their marks (a menu
   section, the current one checked), so it can change after the start (principle 3): the meeting page's menu, and in the live view a page menu beside **Hide** (the ellipsis, named
   "Recording options" for VoiceOver, apart from the Persona strip's "Persona" and the bar's "More"). Turning a meeting into
