@@ -2776,3 +2776,13 @@ documenting an order.
 - systemd as PID 1 in a container needs a writable cgroup. Plain `docker run` (cgroup v2, private namespace) exits 255 with
   "Failed to create /init.scope control group: Read-only file system". `--privileged --cgroupns=private` works, and
   `loginctl enable-linger` then gives `testuser` a user manager reachable over ssh.
+- **A rollback must not take away the only way back.** The first version gave up asking the hub to end a failed switch after
+  2 minutes, then removed Persona Link from the computer anyway. The hub still said `kind: link`, and nothing asked again, so
+  the computer had neither a link nor SSH. Undo the side that decides how the computer is reached (the hub's entry) first,
+  and keep asking until it answers. Remove things from the computer only after that. `scripts/test/link_switch_e2e.py
+  --scenario hub_pause` stops the hub's slot process for 150 s to check this.
+- **Proof that something began must be written before it begins, under the same lock as anything that reads it.** An end
+  read "has it begun?" before taking the lock its begin held, a begin wrote its audit row after changing the kind, and the
+  guards against moving a switching computer were checked in memory and acted on without a lock. Each of these could leave
+  the computer at `kind: link` with nobody able to undo it. Write the intent row first and decide under the lock. Keep what
+  must survive a restart in the database.

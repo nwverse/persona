@@ -70,7 +70,7 @@ def wait(check, seconds, label, every=0.25):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--bin", required=True)
-    p.add_argument("--scenario", choices=["success", "rollback", "linger_off"], default="success")
+    p.add_argument("--scenario", choices=["success", "rollback", "linger_off", "hub_pause"], default="success")
     p.add_argument("--port-base", type=int, default=18741)
     p.add_argument("--prefix", default="persona-link-switch-e2e")
     p.add_argument("--image", default="")
@@ -78,6 +78,7 @@ def main():
     p.add_argument("--node-service", action="store_true",
                    help="give the computer its own resident node service first (personad-node): a switch must leave it "
                         "as it was, and a rollback must not remove it")
+    p.add_argument("--pause", type=int, default=150, help="hub_pause: seconds the hub stays stopped")
     p.add_argument("--hold", type=int, default=0)
     p.add_argument("--manual", action="store_true",
                    help="start no switch: print READY with the hub's address and the file holding its token, and wait for "
@@ -103,6 +104,7 @@ def main():
     db, box, net = a.prefix + "-db", a.prefix + "-box", a.prefix + "-net"
     made = {"db": False, "box": False, "net": False}
     hub = None
+    paused = []  # the hub's slot process while hub_pause has it stopped
     verdict = "FAIL"
     token, password = secrets.token_hex(24), secrets.token_hex(24)
     base = f"http://{gateway}:{http_port}"
@@ -230,7 +232,7 @@ def main():
                  120, "the computer online over ssh")
         say(f"STEP hub: {MACHINE} online over ssh, link_switch={json.dumps(m.get('link_switch'))}")
 
-        if a.scenario == "rollback":
+        if a.scenario in ("rollback", "hub_pause"):
             # The computer can no longer reach the hub (its TLS port included); ssh from the hub still works, its
             # replies go to the computer's own network's gateway.
             run(["docker", "exec", box, "ip", "route", "add", "prohibit", f"{gateway}/32"])
@@ -260,6 +262,31 @@ def main():
             say(f"STEP second start: {status2} {json.dumps(body2)}")
             if status2 != 409:
                 raise AssertionError("a second start was not refused")
+        if a.scenario == "hub_pause":
+            # Stop the hub (its slot process: the edge only forwards) right after it began the switch, before the
+            # manager's rollback asks it to end it; keep it stopped past the manager's old two-minute give-up.
+            log_path = root / "hub.log"
+            wait(lambda: " begun " in log_path.read_text(errors="replace") and "link switch" in log_path.read_text(errors="replace"),
+                 120, "the hub beginning the switch", every=0.02)
+            slot = next(int(c) for c in run(["pgrep", "-P", str(hub.pid)]).stdout.split()
+                        if Path(f"/proc/{c}/cmdline").read_bytes().split(b"\0")[1:3] == [b"hub", b"slot"])
+            os.kill(slot, signal.SIGSTOP)
+            paused.append(slot)
+            stopped_at = time.monotonic()
+            if " rolled back" in log_path.read_text(errors="replace"):
+                raise AssertionError("the hub was stopped too late: the rollback had reached it already")
+            say(f"STEP hub stopped after its begin (slot pid {slot}) for {a.pause} s")
+            seen = set()
+            while time.monotonic() - stopped_at < a.pause:
+                time.sleep(5)
+                there = box_sh("test -e ~/.persona/bin/persona-link && echo yes || echo no").stdout.strip()
+                seen.add(there)
+            if seen != {"yes"}:
+                raise AssertionError("Persona Link was removed from the computer while the hub could not confirm the rollback")
+            say(f"STEP while the hub was stopped ({a.pause} s): Persona Link stayed on the computer")
+            os.kill(slot, signal.SIGCONT)
+            paused.clear()
+            say("STEP hub running again")
         phases = []
         first_phase_ms = None
 
@@ -276,7 +303,7 @@ def main():
                     f" online={mm.get('online')} error={s.get('error', '')} unconfirmed={s.get('rollback_unconfirmed', False)}")
             return mm if ph in ("succeeded", "failed") else None
 
-        m = wait(finished, 600, "the switch to end", every=0.2)
+        m = wait(finished, 900, "the switch to end", every=0.2)
         ls = m["link_switch"]
         say(f"STEP ended: {ls['phase']} after {(time.monotonic() - began):.1f} s, first phase seen at {first_phase_ms:.0f} ms,"
             f" phases {' > '.join(phases)}")
@@ -293,7 +320,7 @@ def main():
             # The node answers over the link: a real call through it.
             st, _ = api(f"/api/v1/machines/{MACHINE}/claude-settings")
             say(f"STEP call over the link: {st}")
-        elif a.scenario == "rollback":
+        elif a.scenario in ("rollback", "hub_pause"):
             if ls["phase"] != "failed" or ls.get("rollback_unconfirmed"):
                 raise AssertionError(f"expected a confirmed rollback: {ls}")
             m = wait(lambda: (lambda m: m if m and m.get("online") and m.get("transport") == "ssh" else None)(machine()),
@@ -348,6 +375,11 @@ def main():
     except Exception as e:  # noqa: BLE001
         say("ERROR", type(e).__name__, str(e)[:2000])
     finally:
+        for pid in paused:  # a stopped process takes no TERM: let it run first
+            try:
+                os.kill(pid, signal.SIGCONT)
+            except ProcessLookupError:
+                pass
         if hub is not None:
             try:
                 os.killpg(hub.pid, signal.SIGTERM)

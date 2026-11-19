@@ -686,26 +686,61 @@ moment is cut off, as when a node restarts.
 
 **When something fails**, the computer goes back to SSH:
 
-- Before the hub step, the manager removes the staged file.
-- After the hub step, the hub revokes this switch's code and the credential it was traded for (the link closes with 4002) and
-  puts the kind back to `ssh`. It does so only when it can show that this switch began: its own record, an audit row, or
-  the code's hash. It changes nothing for a switch it saw succeed. Over SSH, the manager then removes only what this switch installed: the connector with its
-  `link.json` and unit (`persona-link uninstall --purge`), and the node service only if the computer had none before
-  (`persona-link node uninstall`). Both run only through the program this switch sent, recognized by its SHA-256, never
-  through a `persona-link` found there. It then waits up to 2 minutes for the computer to answer over SSH again.
-- If any of that cannot be confirmed, the result says the switch could not be undone for sure, rather than that it was.
+- **Before the hub step**, the manager removes the staged file.
+- **After the hub step**, the manager asks the hub to end the switch (`devices.link_switch.end`). The hub revokes this switch's
+  code and the credential it was traded for (the link closes with 4002) and puts the kind back to `ssh`.
+  - **Until the hub answers**, the manager touches nothing on the computer. Persona Link stays installed, so the computer
+    is not left with neither a link nor SSH. The switch shows as rolling back while the manager asks again: after 1 s, then
+    twice as long each time, up to every minute, for as long as the manager runs, and again after it restarts.
+  - **When the hub has confirmed**, the manager removes over SSH only what this switch installed: the connector with its
+    `link.json` and unit (`persona-link uninstall --purge`), and the node service only if the computer had none before
+    (`persona-link node uninstall`). Both run only through the program this switch sent, recognized by its SHA-256, never
+    through a `persona-link` found there. Then it waits up to 2 minutes for the computer to answer over SSH again.
+- **If the hub refuses to undo it** (it cannot tie the request to this switch, or the computer belongs to another manager
+  now), the manager stops asking and leaves Persona Link on the computer.
+- **If any step cannot be confirmed**, the result says the switch could not be undone for sure, rather than that it was.
 
 The reason the switch failed is shown in plain words either way.
 
-**Restarts and repeats**: only one switch per computer runs at a time. While one runs, the hub refuses with 409:
+**What the hub keeps** (`machine_audit`, action `link_switch`): one row per step of an operation, written before the step
+takes effect.
+
+- `begin`: before the kind changes.
+- `begun`: once the code exists, with its hash.
+- One final row: `succeeded`, `rolled_back` or `begin_failed`.
+
+How the hub uses these rows:
+
+- **Undoing**: an end is accepted only for the computer's latest operation, and its hash must be the one recorded for it.
+  A final row is final: a repeated rollback changes nothing, a rollback of a switch that succeeded answers
+  `already_succeeded`, and an operation id cannot begin twice.
+- **Survives a hub restart**: the rows stand in for the hub's memory. A hub that stops between changing the kind and making
+  the code can still be undone from the `begin` row.
+- **Bounded**: a switch counts as running for at most 30 minutes after its `begin` row.
+
+**Restarts and repeats**: only one switch per computer runs at a time. While one runs, the hub refuses these with 409, and the
+checks hold across a hub restart:
 
 - a second start (`in_progress`);
 - **Redeploy** of its node;
-- moving the computer to another manager, removing it, or removing its manager (`link_switch_in_progress`).
+- moving the computer to another manager, removing it, or removing its manager (`link_switch_in_progress`). A move or removal
+  that is already under way holds the computer, and a new switch is refused until it finishes.
 
-A device signed in with a pairing code it has not traded yet cannot start a switch (403). The manager writes down each step before it takes it (setting `link_switch.<machine id>`; the pairing
-link is never kept). A manager that restarts during a switch finishes it if the computer connects through Persona Link before the
-deadline, and otherwise rolls it back.
+A device signed in with a pairing code it has not traded yet cannot start a switch (403).
+
+The manager writes down each step before it takes it (setting `link_switch.<machine id>`; the pairing link is never kept). A
+manager that restarts during a switch carries on as follows:
+
+- it finishes the switch if the computer connects through Persona Link before the deadline;
+- it rolls the switch back at once if the installer never ran;
+- it goes on asking the hub to end one it was rolling back;
+- it goes on telling the hub of a success the hub has not acknowledged yet.
+
+If the manager stops waiting for the hub's `begin`, the hub gives up the begin when it has not taken the computer yet.
+
+**The computer's own files**: the check, the transfer and the install refuse (`unsafe_permissions`) when `~/.persona` or its
+`bin` can be written by other users. A group-writable one is accepted only when the group is the user's own private group.
+After the build is put in place, its SHA-256 is checked once more before it runs.
 
 | Route | Who | Answer |
 | --- | --- | --- |
