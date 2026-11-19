@@ -177,8 +177,23 @@ class HttpMessageTransportTest {
                     assertEquals(MessageEvidence.Receipt(MessageTransportResult.Accepted), transport.reconcile(message, 0))
                     repeat(2) { withTimeout(5000) { requests.receive() } }
 
+                    val heldBody = Base64.getEncoder().encodeToString("""{"delivered":"later"}""".toByteArray())
+                    val heldReceipt = """{"state":"done","result":{"status":202,"body":"$heldBody"}}"""
+                    val heldEvidence = MessageEvidence.Receipt(MessageTransportResult.Held)
+                    for ((items, expectation) in listOf(
+                        MockResponse().setResponseCode(503) to heldEvidence,
+                        MockResponse().setBody("""{"items":[{"id":"other","role":"user","text":"hello","ts":"2026-11-03T09:00:00Z"}]}""") to heldEvidence,
+                        MockResponse().setBody("""{"items":[{"id":"echo","role":"user","client_msg_id":"stable-id"}]}""") to MessageEvidence.Shown,
+                    )) {
+                        responses.send(MockResponse().setBody(heldReceipt))
+                        responses.send(items)
+                        assertEquals(expectation, transport.reconcile(message, 0))
+                        repeat(2) { withTimeout(5000) { requests.receive() } }
+                    }
+
                     val results = listOf(
                         MockResponse().setBody("""{"ok":true}""") to MessageTransportResult.Accepted,
+                        MockResponse().setResponseCode(202).setBody("""{"delivered":"later"}""") to MessageTransportResult.Held,
                         MockResponse().setResponseCode(202).setBody("""{"state":"pending"}""") to MessageTransportResult.NoReceipt,
                         MockResponse().setResponseCode(202).setBody("""{"state":"unknown"}""") to MessageTransportResult.NoReceipt,
                         MockResponse().setResponseCode(409).setBody("""{"error":"draft","code":"input_draft","delivered":"none","retryable":false}""") to

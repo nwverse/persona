@@ -17,6 +17,36 @@ class CompleteSessionsRepositoryTest {
     private val rows = (0 until 8000).map { Session("demo", "session/$it") }
     private fun counts() = SessionListCounts(total = 8000)
 
+    @Test fun managerQueueAppearsOnceUpdatesOnAnotherDeviceAndClearsFromAnAuthoritativeRow() = runTest {
+        val connection = Connection()
+        val repository = HubSessionsRepository(Transport(), connection, backgroundScope)
+        val key = SessionKey("demo", "chat")
+        repository.adopt(Session(key.machineId, key.sessionId, title = "Chat"))
+        val waiting = HeldAgentMessage("held", "Hello", computer = "Laptop", error = "Waiting for Laptop")
+        repository.showHeld(key, waiting)
+        repository.showHeld(key, waiting)
+        assertEquals(listOf(waiting), repository.sessions.value.single().undelivered)
+
+        suspend fun push(raw: String) {
+            connection.events.emit(requireNotNull(ServerEvent.decode(raw)))
+            runCurrent()
+        }
+        push("""{"type":"session","session":{"machine_id":"demo","session_id":"chat","undelivered":[{"id":"held","text":"Hello","computer":"Laptop","state":"failed","error":"Check the chat first"}]}}""")
+        val failed = repository.sessions.value.single().undelivered!!.single()
+        assertEquals("failed", failed.state)
+        assertEquals("Check the chat first", failed.error)
+        repository.heldActionCompleted(key, failed.id, retry = true)
+        assertEquals(failed, repository.sessions.value.single().undelivered!!.single())
+        push("""{"type":"session","session":{"machine_id":"other","session_id":"chat"}}""")
+        assertEquals("held", repository.sessions.value.single().undelivered!!.single().id)
+        push("""{"type":"session","session":{"machine_id":"demo","session_id":"chat"}}""")
+        assertTrue(repository.sessions.value.single().undelivered.isNullOrEmpty())
+        push("""{"type":"sessions","machine_id":"demo","sessions":[{"session_id":"chat","undelivered":[{"id":"new","computer":"Laptop","state":"failed","delete_only":true}]}]}""")
+        assertTrue(repository.sessions.value.single().undelivered!!.single().deleteOnly)
+        repository.heldActionCompleted(key, "new", retry = false)
+        assertTrue(repository.sessions.value.single().undelivered.isNullOrEmpty())
+    }
+
     @Test fun firstCompleteMembershipRequestKeepsRestoredRowsUntilTheResponse() = runTest {
         val cached = listOf(Session("demo", "cached"))
         val fresh = listOf(Session("demo", "fresh"))

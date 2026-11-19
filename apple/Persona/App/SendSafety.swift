@@ -18,6 +18,27 @@ struct SendRefusal: Identifiable {
 }
 
 extension AppModel {
+    /// Managing a held copy belongs to this device's own credential at the hub that advertised it.
+    func canManageHeld(_ group: String) -> Bool {
+        guard let link = link(group), link.features.contains(UndeliveredMessage.agentHoldFeature),
+              link.surfaceCapabilitiesConfig == link.config else { return false }
+        return registry.hubs.contains { $0.group == group && $0.config.token == link.config.token && $0.deviceID?.isEmpty == false }
+    }
+
+    /// Only the computer being away is recoverable by holding a message. Its manager must still be reachable.
+    func offlineAgent(_ session: Session) -> (line: String, canHold: Bool)? {
+        #if os(iOS)
+        guard !session.assistant, session.canSend, !session.isStopped, let computer = machine(session.machineRef), !computer.online else { return nil }
+        let canHold = !session.isTerminalOnly && session.starting != true && offlineManager(of: session) == nil
+            && offlineManager(of: computer, group: session.group) == nil && canManageHeld(session.group)
+        let line = canHold ? String(localized: "\(computer.name) is offline. Sends when it's back.")
+                           : String(localized: "\(computer.name) is offline. Messages can be sent once it's back.")
+        return (line, canHold)
+        #else
+        return nil
+        #endif
+    }
+
     /// Sends a pending message, telling apart why it failed: a draft on the computer (an alert offers to clear it), an
     /// open dialog, a failure after typing began (it may have arrived; a retry with the same id cannot double it), or
     /// no answer at all (no network, the hub out of reach, a timeout): then it waits and goes again by itself, which
@@ -34,6 +55,10 @@ extension AppModel {
             noteFailure(key, msg.id, String(localized: "It may have reached the computer already. Check the chat before sending it again."))
             return .failed
         }
+        if let away = offlineAgent(session), !away.canHold {
+            noteFailure(key, msg.id, away.line)
+            return .failed
+        }
         guard let api = api(key.group) else {
             noteFailure(key, msg.id, String(localized: "Can't reach the hub"))
             return .failed
@@ -44,13 +69,18 @@ extension AppModel {
             // types it once. Through a short drop (a hub restart) it keeps trying with that id instead of going to
             // the outbox's clock; once the drop's grace is over the outbox takes it (flushOutbox).
             let launcher = assistantLaunchers[key], model = assistantModels[key]
+            #if os(iOS)
+            let holds = !session.assistant && canManageHeld(key.group)
+            #else
+            let holds = false
+            #endif
             let reply = try await OpRetry.untilDelivered(keepTrying: { socket?.takesWrites == true }) {
                 try await api.sendReply(key, text: msg.text, images: msg.images, launcher: launcher, model: model,
-                                        clientMsgID: msg.id.uuidString, clearDraft: clearDraft, via: msg.via, opID: msg.id)
+                                        clientMsgID: msg.id.uuidString, clearDraft: clearDraft, via: msg.via, opID: msg.id,
+                                        holdsAgentMessages: holds)
             }
             if reply.kept {
-                // It did not go in (the assistant did not start, its computer was away) and the assistant keeps it to
-                // send by itself (#10194): the chat's row shows it from now on, on every device, so this bubble goes.
+                // The manager kept it. Its row now carries its status to every device.
                 keptUndelivered(key, msg.id, reply.undelivered)
                 return .kept
             }
@@ -97,8 +127,7 @@ extension AppModel {
         }
     }
 
-    /// A message the assistant keeps after it could not go in (#10194): off the outbox, onto the row at once (the
-    /// hub's next list carries it too).
+    /// A kept send leaves the outbox for the row at once; the hub supplies its later status.
     func keptUndelivered(_ key: SessionKey, _ id: UUID, _ kept: UndeliveredMessage?) {
         chat(key).settleSendFeedback(id, state: SendOutcome.kept.state) // no Processing left hanging (`settleSend` finds no bubble)
         chat(key).pending.removeAll { $0.id == id }
@@ -111,29 +140,45 @@ extension AppModel {
         }
     }
 
-    /// Retry on a kept message that gave up (#10194). A second tap while the first is on its way does nothing.
     func retryUndelivered(_ key: SessionKey, _ id: String) async {
-        guard undeliveredActions.insert(id).inserted else { return }
-        defer { undeliveredActions.remove(id) }
-        do {
-            try await api(key.group)?.retryUndelivered(conversation: key.sessionID, id: id)
-            patchListedSession(key) { row in
-                row.undelivered = row.undelivered?.map { m in
-                    var m = m
-                    if m.id == id { m.state = "waiting"; m.error = nil }
-                    return m
-                }
-            }
-        } catch { show(error) }
+        await changeUndelivered(key, id, retry: true)
     }
 
-    /// Delete on a kept message (#10194): it is never sent. A second tap while the first is on its way does nothing.
     func deleteUndelivered(_ key: SessionKey, _ id: String) async {
-        guard undeliveredActions.insert(id).inserted else { return }
-        defer { undeliveredActions.remove(id) }
+        await changeUndelivered(key, id, retry: false)
+    }
+
+    private func changeUndelivered(_ key: SessionKey, _ id: String, retry: Bool) async {
+        guard let row = latest(key), let message = row.undelivered?.first(where: { $0.id == id }),
+              !retry || message.canRetry, let client = api(key.group) else { return }
+        if message.heldForComputer, !canManageHeld(key.group) { return }
+        guard undeliveredActions[key, default: []].insert(id).inserted else { return }
+        defer {
+            undeliveredActions[key]?.remove(id)
+            if undeliveredActions[key]?.isEmpty == true { undeliveredActions.removeValue(forKey: key) }
+        }
+        let api = message.heldForComputer ? client.manager(machine(key.machineRef)?.manager ?? row.manager) : client
         do {
-            try await api(key.group)?.deleteUndelivered(conversation: key.sessionID, id: id)
-            patchListedSession(key) { row in row.undelivered = row.undelivered?.filter { $0.id != id } }
+            if retry {
+                try await api.retryUndelivered(key, message)
+                if message.heldForComputer {
+                    // A Retry can mean "check the chat" or "send anyway". Only the manager knows its new line.
+                    // A row pushed while either request was in flight is already newer.
+                    guard latest(key)?.undelivered == row.undelivered,
+                          let fresh = try await api.sessionListDetail(key, title: row.title),
+                          latest(key)?.undelivered == row.undelivered else { return }
+                    patchListedSession(key) { $0.undelivered = fresh.undelivered }
+                } else {
+                    patchListedSession(key) { row in
+                        guard let i = row.undelivered?.firstIndex(of: message) else { return }
+                        row.undelivered?[i].state = "waiting"
+                        row.undelivered?[i].error = nil
+                    }
+                }
+            } else {
+                try await api.deleteUndelivered(key, message)
+                patchListedSession(key) { $0.undelivered?.removeAll { $0.id == id } }
+            }
         } catch { show(error) }
     }
 

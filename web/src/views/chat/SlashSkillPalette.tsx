@@ -1,5 +1,6 @@
 // Skill-aware second stage of the / palette, loaded only after the palette opens.
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
+import { imeKey, type ImeState } from "../../lib/ime";
 import { rankCommands, SLASH_LIMIT } from "../../lib/composer-commands";
 import type { ComposerCommand as Command } from "../../lib/extension-prompts";
 import type { MentionSkill } from "../../lib/skill-mentions";
@@ -29,27 +30,52 @@ export function SlashSkillPalette(input: SlashPaletteInput) {
     const skill = attached(row);
     input.onPick(skill ? { kind: "skill", id: `skill:${skill.id}`, skill } : row);
   };
+  // the listener below reads the list as it is now, so it is added once per composer, not again on every render
+  const latest = useRef({ entries, current, pick, onHover: input.onHover });
+  latest.current = { entries, current, pick, onHover: input.onHover };
   // Capture inside this composer, before its special /model and /permissions handling. Commands fall through to it;
   // arrows and a highlighted skill are handled here across the combined list.
+  const within = input.within;
+  const shared = input.ime;
   useEffect(() => {
-    const root = input.within?.current;
+    const root = within?.current;
     if (!root) return;
+    // The composer's input-method state where it passes one (lib/ime.ts): Safari's Enter right after compositionend is
+    // still the IME's, and that compositionend came before this palette mounted. Without one, a state of its own.
+    const own = { current: { active: false, endedAt: -Infinity } as ImeState };
+    const ime = shared ?? own;
+    const start = () => { own.current.active = true; };
+    const end = () => { own.current = { active: false, endedAt: performance.now() }; };
+    // a field that loses focus mid-composition may never get its compositionend
+    const out = () => { own.current.active = false; };
     const key = (e: KeyboardEvent) => {
-      if (e.isComposing || e.keyCode === 229) return;
-      const modEnter = e.ctrlKey || e.metaKey;
+      if (imeKey(e, ime.current)) return;
+      const { entries, current, pick, onHover } = latest.current;
+      // a plain Enter picks; Shift+Enter and Alt+Enter stay a new line, Mod+Enter sends
+      const pickEnter = e.key === "Enter" && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey;
       if ((e.key === "ArrowDown" || e.key === "ArrowUp") && entries.length) {
         e.preventDefault();
         e.stopPropagation();
-        input.onHover((current + (e.key === "ArrowDown" ? 1 : entries.length - 1)) % entries.length);
-      } else if (((e.key === "Enter" && !modEnter) || e.key === "Tab") && attached(entries[current])) {
+        onHover((current + (e.key === "ArrowDown" ? 1 : entries.length - 1)) % entries.length);
+      } else if ((pickEnter || e.key === "Tab") && attached(entries[current])) {
         e.preventDefault();
         e.stopPropagation();
         pick(entries[current]);
       }
     };
     root.addEventListener("keydown", key, true);
-    return () => root.removeEventListener("keydown", key, true);
-  });
+    if (!shared) {
+      root.addEventListener("compositionstart", start, true);
+      root.addEventListener("compositionend", end, true);
+      root.addEventListener("focusout", out, true);
+    }
+    return () => {
+      root.removeEventListener("keydown", key, true);
+      root.removeEventListener("compositionstart", start, true);
+      root.removeEventListener("compositionend", end, true);
+      root.removeEventListener("focusout", out, true);
+    };
+  }, [within, shared]);
   return (
     <SlashSkillView
       {...input}

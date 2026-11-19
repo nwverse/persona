@@ -621,6 +621,11 @@ on-demand model panel, not the everyday Assistant home (#6887).
   screen). Markdown rendered with `askImages` (Inbox connector and Lark threads) keeps a run its size with Load image
   over it; a hub without `remote_images` keeps every picture behind a click (#8162's gate), loaded from its host with
   no Referer.
+  Android (#9476) uses a 240 dp single and a 480 dp maximum column in Glass, Brief and Board. Inline pictures use the
+  measured text line height, including at large system text sizes. A tap opens that reply’s pictures in the existing
+  viewer, including inline and overflow pictures. Each third-party thumbnail and previously unopened gallery page
+  asks before loading. Mail keeps its Show images action. A pairing that has yet to advertise `remote_images` waits
+  for a tap and uses a separate HTTPS reader. WebView link preloading skips picture-bearing replies.
 - No shared bubble component exists. Messages, Tasks and Lark rebuild it with different paddings and gutters (DS-20).
 - Web: user bubble 14 px radius; replies unboxed. Android: 20 dp in Glass, max width 86%.
 - Web reply bar (#5314, `ReplyBar`; the owner's requested alignment with cindy's `MessageActionBar`, 2026-11-12): only
@@ -1051,7 +1056,7 @@ The web has the same `CountBadge` (`web/src/ui/CountBadge.tsx`, #4538) in three 
 
 Apple counts and row marks (#4538): `CountBadge` takes the web's three looks by name. `.needs` (Needs you's text on its soft tint) is for what waits for the user, `.neutral` (white on `Theme.countBadge` gray, the default) for a passive total such as unread messages or items in a group, and `.accent` (white on the accent) for a mention or the selected item. It shows nothing at zero and "99+" past 99 (`CountBadge.text`, which the tab and pane badges that must be plain strings also use); VoiceOver reads the exact number unless the host passes its own `label`. A tab bar's count is the system's: white on red (`Theme.tabBarBadge`) at its item's symbol's top trailing corner, the iPad's tab bar and iPhone Duo's (#4231, `TabBarBadge`); the same number the row and the list's Needs You show, only drawn as a tab bar draws it. On iPhone Duo's tab bar it is `TabBarCount`: `Theme.Size.badge` (18 pt) tall, round for one digit and a capsule for more, its number `Theme.Font.labelHeavy` (12 pt) white, ringed `Theme.Shell.tabBarBadgeRing` (1.5 pt) in the page's color so it stands apart from the chosen item's circle and the symbol, and centred `Theme.Shell.tabBarBadgeInset` (2 pt) inside the top trailing corner of the symbol's 32 pt well (`tabBarBadgeSpot`): its centre is off the circle and a third of it at most lies over the circle's edge. Centred on the corner itself its ring reached into the name of the item above; inside the corner, as before 11-17, it lay over the circle and most of the symbol. A dense row's state at its end is `RowStateMark`: Needs you a still blue dot, Unread a green dot, Working the amber spinner (`WorkingIndicator`), nothing otherwise, used by the Assistant sidebar's rows (the main chat and the Directions) and by All Chats (`AutoConversationsView`). Why: the sidebar drew Unread in the accent, the same blue as Needs you, so the two states looked alike, and its Needs you counts were white on solid blue while every other Needs you count was blue on the tint.
 
-**Pictures of people and conversations** (#10923, `apple/Persona/DesignSystem/ChatAvatar.swift`, `docs/protocol/protocol.md` ("Avatars (#10923)")): `ChatAvatar` draws the picture an item names by the hub's avatars route (`avatar_url`) over the name's `Monogram` of the same size. The initial is there at once and while the picture loads, stays when there is none or it cannot be loaded, and the picture takes its place without moving anything (same size, a circle with a 6 % hairline, as `LarkAvatarImage`). It asks at the smallest size the route draws (64, 128, 256, 512 px) that covers the points drawn times the display's scale, through `LarkMedia`'s memory and disk caches, so a scrolled-back row never asks again; hidden from VoiceOver (the row names whose it is). Without a picture it is pixel for pixel the `Monogram` the row drew before. The Inbox's connector rows use it first; conversation pages and other lists move to it as their sources move to the route (`ThreadAvatar`, `LarkAvatarImage` until then). The web has the same in its Inbox `Monogram` with `src` (`ItemAvatar`: the path asked at the pixels drawn, `?size=` the size × `devicePixelRatio`, rounded up by the route), the letter on error. Why a new component: one loader and one cache for every source's picture, where each source had its own.
+**Pictures of people and conversations** (#10923, `apple/Persona/DesignSystem/ChatAvatar.swift`, `docs/protocol/protocol.md` ("Avatars (#10923)")): `ChatAvatar` draws the picture an item names by the hub's avatars route (`avatar_url`) over the name's `Monogram` of the same size. The initial is there at once and while the picture loads, stays when there is none or it cannot be loaded, and the picture takes its place without moving anything (same size, a circle with a 6 % hairline, as `LarkAvatarImage`). It asks at the smallest size the route draws (64, 128, 256, 512 px) that covers the points drawn times the display's scale, through `LarkMedia`'s memory and disk caches, so a scrolled-back row never asks again; hidden from VoiceOver (the row names whose it is). Without a picture it is pixel for pixel the `Monogram` the row drew before. The Inbox's connector rows use it first; conversation pages and other lists move to it as their sources move to the route (`ThreadAvatar`, `LarkAvatarImage` until then). The web has the same in its Inbox `Monogram` with `src` (`ItemAvatar`: the path asked at the pixels drawn, `?size=` the size × `devicePixelRatio`, rounded up by the route), the letter on error. Android's `MessageItem` and its loader share `MessageItemTokens.avatarSize` (42 dp for Needs-you, 38 dp otherwise); `LarkAvatar` keeps its 40 dp default. `rememberLarkAvatar` converts that drawn size to display pixels for the hub request and Coil decode, with separate decoded-cache keys per scoped ref and pixel size. Deferred reads and both cache layers retain a non-default manager through `LarkContentSource` (#10932). Why a new component: one loader and one cache for every source's picture, where each source had its own.
 
 **Brand lockup** (#9468, #9508, #10172; `apple/Persona/DesignSystem/PersonaBrandLockup.swift`): wherever the app signs a picture. One component in two sizes: `.mark`, the quiet signature at the foot of an exported picture (the current assistant's face (`PersonaAvatar`), its name and "(Persona)" after it, "Persona" once when that is the name); `.banner`, what a chat's screenshot shows where its top bar is (`PersonaBannerRow`). The banner has the face (`Theme.Size.avatarM`) and the name (`display`) at the leading page margin, and GitHub's mark (`BrandMark`, `Theme.Brand.github`) with the repository (`PersonaBrandLockup.repository`, the one place the app spells out `nwverse/persona`) at the trailing one: one type level below the name (`title`), in the secondary color, mark and words alike, centred on the name. The repository goes last: short of room the name is cut at its tail and the repository stays whole; then the banner turns slim (the face at `wellXS`, the name in `heading`, the repository in `secondaryStrong`; also a folded header and the bar's largest text sizes); only where not even the slim row has room for the name's first two characters and the ellipsis beside it, the mark stands alone. A picture, not a link. Bar sizes stop at `Theme.Shell.topBarLargestTypeSize`. **Screenshot banner** (`screenshotBanner` in `apple/Persona/DesignSystem/ScreenshotBanner.swift`, docs/apple/ios.md "Screenshot banner"): a bar that is on screen but out of screenshots, recordings and mirroring, with the banner under it; an opaque backdrop under both, so neither shows through. Only on the chats' own bars (a system navigation bar cannot be moved into that layer); Settings › Appearance & Display › Persona Banner in Screenshots turns it off, and off the bar is drawn as it always was. Why a new pattern: the user asked for the brand in shared screenshots without changing the screen.
 
@@ -1308,6 +1313,17 @@ Explicit review-before-install is intentional even with Undo: uploaded instructi
 so selecting a file must not silently change behavior. Success refreshes the list and offers a bounded, unchanged-new-
 package-only Undo with retained recovery files; `docs/operations/hub-update.md` defines the state and discovery limits.
 
+**Web to-do images** (#11084): the existing New to-do `Dialog` takes JPEG/PNG images through the shared attachment
+picker and `AttachmentTray`; selection shows local thumbnails immediately, with an accessible Remove on each. Create is
+one single-flight busy action, with its failure inline in the dialog. Retry keeps every field, selected file and the
+operation ID; cancel releases the previews. The to-do detail uses the same tray and existing `ImageViewer` for zoom and
+download, not another gallery. Private image bytes are fetched with the to-do's credentials and manager, three at a
+time, with localized Retry on failure and object URLs released when replaced or closed. The no-image dialog and detail
+keep their previous layout and behavior. When `todo_images` is absent because any manager is too old to persist images,
+the picker is hidden and an image-less create is never sent. All controls use the existing 44 px touch expansion and en, zh-Hans and ja
+copy. The assistant manager owns persistence and handoff; the Web client does not invent a temporary upload or a local
+machine path.
+
 `EmptyStateView` (`apple/Persona/DesignSystem/Components.swift:385`): symbol, title, one-sentence message, optional prominent action. 92 uses. System `ContentUnavailableView` is used in about 22 other places and looks different (DS-15). Search results may use `ContentUnavailableView.search`. Web has no shared empty state outside admin; Android has `JEmptyState`. An offline current assistant (several assistants) takes the place of a merged list's empty state with its own: the assistant avatar faded with its offline mark, "<name> is offline" and when it last synced (web `OfflineState` in `web/src/views/ManagerParts.tsx`; Android `JAssistantOffline`, a `JEmptyState` whose `leading` slot holds `JManagerAvatar`; `docs/assistant/managers.md` "Clients").
 
 ### 3.10 Loading and error states
@@ -1438,6 +1454,8 @@ The widget extension doesn't build `Theme`: Persona's widgets take their colors,
 ### 3.15.1 Token usage calendar (Android)
 
 `UsageCalendarCard` and `UsageCalendarPage` (`feature/assistant/UsageCalendar.kt`) are the daily-token counterpart of the Machine monitoring charts. They compare magnitude over time, so they use one hue rather than categorical series colors: the current theme accent in four quantile steps, with `sunken` for no usage. Text, dates, legends and breakdown rows stay in the ordinary ink tokens. The exact number and the four token kinds are available by selecting a day; the details page also lists every computer and kind in text, so color is never the only way to read a value.
+
+On the detail page, each agent’s seven-day total adds input, output, cache write and cache read. Each positive total gets a grouped row with its Android agent mark, its name and a localized short number. The meter below the name compares the total to the largest agent on the same scale across rows. Historical usage gets a labeled row without a mark. At large text sizes the name can wrap above the meter. TalkBack reads the name and exact count together.
 
 The daily grid is Monday-first, seven rows per week, with the current week last and a thin outline on today. A day with usage ranks among only the days with usage: `ceil(4 × rank / count)`, where rank includes every equal or smaller day, gives steps 1–4; no usage is step 0. The hourly grid uses the same quantile rule among its hours and retains repeated clock-change hours by timestamp. Small chart cells are not the sole controls: selected days have 48dp previous / next buttons and an exact spoken value, while the card's non-cell area opens the details page. Home reads while resumed and keeps the previous devices section until real data arrives; it never substitutes an all-zero calendar for a failed or unsupported read.
 
@@ -2441,6 +2459,11 @@ item states its own scope, then one configuration form per module. Where a featu
 the page (never navigating away, so nothing open behind it, such as a chat's unsent draft, is unmounted) instead of a
 second switch, so there is one place to change it.
 
+An experiment can supply a permanent note under its introduction or beside a field, using the existing info and warning
+hint styles. A choice with consequences can request confirmation for a specific change. Use the shared Dialog, with the
+affected scope, impact, timing and an action-specific button. All dismissal paths preserve the edit. On success the
+field’s polite save status can explain when the choice takes effect. Show this receipt once, in the field footer.
+
 ## A chosen page that is not there now (#9071)
 
 A setting that names something which can come and go (the web's **Open on**, Settings › General › Start page: a page of
@@ -2453,6 +2476,19 @@ until it's back**). Choosing anything else in the same menu replaces it. Reason:
 back (principle 3), and a toast at every opening would be noise for something they can read where they would change it.
 The same rule as a chosen look whose extension is switched off ("the choice stays: the default only shows meanwhile",
 `server/internal/hub/looks.go` `looksGone`). It reuses Settings' `Row`, its hint line and a native select; no new component.
+
+## Arranging cards in place (#9745)
+
+Overview's extension cards (web) are arranged where they are drawn, not in a settings list: the result is a layout (which
+card is wide, which sit side by side), and a list would show neither widths nor neighbours. Overview's top bar has
+**Arrange cards** (`IconButton` with the `grid` icon, `aria-pressed` while on) beside **New agent**, only while there are
+cards. The edit state reuses the sidebar pages editor's pieces (`web/src/views/settings/SidebarPages.tsx`): the `grip`
+handle and an HTML drag onto another item, which takes its place; ↑ / ↓ `IconButton`s at 26 px for the keyboard and touch;
+a native select for the width (**Half row** / **Full row**); `Switch` for shown or hidden; the hub footer's words for where
+it is kept; and **Reset** with Undo in a toast (4.4). Each card keeps its surface and its content, made `inert`; its head
+becomes the controls, which wrap under the name on a narrow card. A hidden card is drawn only while arranging, as its
+hairline outline (`shadow-hairline`, no surface) with "Hidden: not loaded" in `--ink-3` under its name; the card a dragged
+one would land on has a 2 px inset `--accent` ring. No new token or component (`web/src/views/extensions/OverviewArrange.tsx`).
 
 ## Values a form fills in by itself (#4975)
 
@@ -2965,8 +3001,11 @@ stopped changing for 0.7 s, it runs once for that input. An address being typed 
 field to something else on the page (not when the window loses focus), the step is left, or a paste fills all of it,
 so a key never goes to a half-typed host; until then the form says leaving the field starts the check. It never runs
 on opening something already saved, only after the fields the form names as its connection change (the provider
-wizard: address, key, sign-in method); fields that play no part in the connection (a name) never block or repeat it.
-Each part runs whatever an earlier part said, since one part failing does not prove another will (a key may chat
+wizard: address, key, sign-in method, request headers); fields that play no part in the connection (a name) never block or repeat it.
+The optional request-header editor stays visible on the custom gateway's Connect step before the check, in add and edit,
+with configured names but never saved values and with the selected runtime's support or limitation beside it. Reserved or
+unsupported headers stop the check instead of letting it imply a launch would send them. A header-only edit invalidates
+old results and starts the same 0.7 s check. Each part runs whatever an earlier part said, since one part failing does not prove another will (a key may chat
 without listing models); a part that is running or passed is not sent again. A line says it will check by itself, then
 shows progress with a spinner, then the result; a failure keeps the server's words and offers to run that part again
 (Retry on the Connect step). Manual buttons, where the form has them, and the note that a test may cost a little stay;
@@ -3290,7 +3329,9 @@ that view in its link mode: no text area, a row with the link icon saying it was
 text, that nothing is saved until Save, with **Paste something else** (the status line's action) to go back to the text
 area. The link is read at once and its drafts, choices and notes look exactly like a paste's, so the wizard does not
 grow a second way to review a provider; a refused link is one plain line about what is wrong with it, never its
-content. Copying a link starts from the provider's dialog: a ⋯ `IconButton` before Edit opens a `Menu` (one row, **Copy
+content. Android uses this same link mode for `persona://provider/import` (#5428). iOS has no paste step, so the hub's
+returned draft opens its existing connection form directly. On both phone apps the link itself is never shown and is
+dropped when the wizard closes. Copying a link starts from the provider's dialog: a ⋯ `IconButton` before Edit opens a `Menu` (one row, **Copy
 import link**), and the row opens a `Dialog` in place of the provider's (Edit does the same), with one line on what the
 link brings, a `Switch` **Put a key in the link** that is off, and **Copy link** as the one primary button. Turning the
 switch on widens what the link exposes, so, as in "Sharing a conversation publicly" (4.9), the key field comes with an
@@ -3439,3 +3480,14 @@ New copy ships in English, Simplified Chinese and Japanese. Evidence:
 ## Lark topic group policy (#10238)
 
 Settings › Connectors › Lark bot › Topic groups serves owners who want one group to require their explicit bot mention. It reuses Group, Row, Switch, Button, the native select and settings input styles; policy defaults off. Each group shows its saved switch. Enrollment allows choosing the policy before adding the group; a strict first enrollment stays separate from the home choice. The home select shows the effective home or the private-chat fallback. Both writes wait for the existing acknowledged save; failures preserve saved values and enrollment drafts. No primary chat screen or model setting changes.
+
+## Shared botmux display setting (#10241)
+
+For people using Agents, Web Settings › Agents reuses `Row`, `Switch`,
+`SettingsHint` and `RowFailed` for **Show botmux sessions in Agents**. The row
+shows the acknowledged shared value; a save disables the switch and shows Saving,
+a failure keeps the last acknowledged value and offers Retry. A nearby Computers
+link explains the independent per-computer inventory switch. The sidebar's
+botmux chip is removed; its Lark group quick filter is absent when its count is
+zero. Complete and paged lists exclude the same hosts before grouping and counts.
+This requested interaction change adds no component, theme or motion pattern.

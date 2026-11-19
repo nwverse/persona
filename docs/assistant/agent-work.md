@@ -600,7 +600,7 @@ A process can be redeployed and cleared at any time, so triage results, retry co
 The main chat's live snapshot (`prompts/assistant/snapshot*.md`):
 
 - Each Agent under "Needs you" includes what it is waiting for;
-- Adds "Waiting" (Persona is waiting for it: retrying, deployment, another Agent). "Done (within 24 hours)" and "Muted" carry only counts; `agents_list state=done` / `state=muted` returns their names, session ids and conclusions when the assistant needs them;
+- Adds "Waiting" (Persona is waiting for it: retrying, deployment, another Agent). Working agents render only their count in the Agents heading (#11261), and "Done (within 24 hours)" and "Muted" carry only counts; `agents_list` returns working agents' names, session ids and running workflows (`state=working`) and done or muted agents' conclusions (`state=done` / `state=muted`) when the assistant needs them;
 - "Unread" contains only sessions not yet successfully triaged, and those whose closeout says the turn is not finished, with that line ("Closeout");
 - An Agent's line ends with what its closeout claims of merging and deploying, and the hub's finding where it differs.
 

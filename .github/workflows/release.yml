@@ -120,16 +120,32 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Check whether release-publish owns this tag's verified artifacts
+        id: owner
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          owned=false
+          if gh release view "$RELEASE_TAG" --json body --jq .body | grep -Eq '^release-pr: [0-9]+$'; then
+            echo 'This Release belongs to a verified release PR; release-publish owns its exact artifacts.'
+            owned=true
+          fi
+          printf 'release_pr=%s\n' "$owned" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v4
+        if: steps.owner.outputs.release_pr == 'false'
         with:
           persist-credentials: false
       - name: Build release command-line programs
+        if: steps.owner.outputs.release_pr == 'false'
         env:
           VERSION: ${{ needs.desktop-gate.outputs.version }}
           NO_DEPLOY: '1'
           RELEASE_CHANNEL: ${{ contains(github.ref_name, '-') && 'beta' || 'release' }}
         run: scripts/release/publish.sh
       - name: Install the existing signing certificate
+        if: steps.owner.outputs.release_pr == 'false'
         env:
           MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
           MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
@@ -149,11 +165,13 @@ jobs:
           test -n "$identity" || { echo 'Darwin CLI signing blocked: No Developer ID Application signing identity is available.' >&2; exit 1; }
           printf '%s\n' "$identity" > "${RUNNER_TEMP}/persona-cli-signing-identity"
       - name: Sign and verify fixed-identifier binaries
+        if: steps.owner.outputs.release_pr == 'false'
         run: |
           identity="$(cat "${RUNNER_TEMP}/persona-cli-signing-identity")"
           test -n "$identity" || { echo 'Darwin CLI signing blocked: No Developer ID Application signing identity is available.' >&2; exit 1; }
           python3 scripts/release/sign_darwin_cli.py build-publish/bin --identity "$identity"
       - name: Rebuild the manifest from the signed downloads
+        if: steps.owner.outputs.release_pr == 'false'
         env:
           VERSION: ${{ needs.desktop-gate.outputs.version }}
           COMMIT: ${{ github.sha }}
@@ -173,6 +191,7 @@ jobs:
           "$host" release manifest --dir build-publish/bin --version "$VERSION" --build "$build" --commit "$COMMIT" --channel "$RELEASE_CHANNEL" --out build-publish/bin/latest.json
           "$host" release verify --dir build-publish/bin --manifest build-publish/bin/latest.json
       - name: Upload signed Darwin downloads
+        if: steps.owner.outputs.release_pr == 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}

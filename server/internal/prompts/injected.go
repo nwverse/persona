@@ -95,6 +95,8 @@ func ParseInjected(text string) *proto.Injected {
 	text = strings.TrimSpace(text)
 	head, rest, _ := strings.Cut(text, "\n")
 	switch {
+	case head == "<persona-answer-again />" && strings.TrimSpace(rest) != "":
+		return &proto.Injected{Kind: proto.InjectedSystem, State: "answer_again", Line: "Persona 正在补问"}
 	case strings.HasPrefix(head, "<persona-wake"):
 		return parseWakeMarker(head, rest)
 	case strings.HasPrefix(head, "🔔 任务「"):
