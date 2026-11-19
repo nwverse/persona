@@ -28,7 +28,7 @@ func TestContextRestartRecommendation(t *testing.T) {
 			}
 		}
 	}
-	check := func(want bool) {
+	check := func(stage string, want bool) {
 		t.Helper()
 		st, err := os.Stat(path)
 		if err != nil {
@@ -41,7 +41,7 @@ func TestContextRestartRecommendation(t *testing.T) {
 			t.Fatal(err)
 		}
 		if got := bytes.Contains(wire, []byte(`"context_restart_recommended":true`)); got != want {
-			t.Fatalf("context restart on wire = %v, want %v", got, want)
+			t.Fatalf("%s: context restart on wire = %v, want %v", stage, got, want)
 		}
 		key := listKey([]proto.Session{session})
 		session.ContextRestartRecommended = !session.ContextRestartRecommended
@@ -52,37 +52,24 @@ func TestContextRestartRecommendation(t *testing.T) {
 	high := func(id, text string) string {
 		return fmt.Sprintf(`{"type":"assistant","message":{"id":%q,"content":[{"type":"text","text":%q}],"usage":{"input_tokens":10,"cache_read_input_tokens":260000,"cache_creation_input_tokens":50000}}}`, id, text)
 	}
-	for _, tc := range []struct {
-		name string
-		run  func()
-	}{
-		{"two distinct requests despite repeated usage and a long reply", func() {
-			add(high("a", ""), high("a", ""), high("b", strings.Repeat("x", quickTail+1)), high("a", ""))
-			add(`{"type":"assistant","isSidechain":true,"message":{"id":"side","usage":{"input_tokens":400000}}}`,
-				`{"type":"assistant","isApiErrorMessage":true,"message":{"id":"error","usage":{"input_tokens":400000}}}`,
-				`{"type":"assistant","message":{"id":"aggregate","usage":{"input_tokens":1700000}}}`,
-				`{"type":"api-request-blob","data":{"usage":{"input_tokens":1000000,"output_tokens":0}}}`)
-			check(false)
-		}},
-		{"third large request", func() {
-			add(high("c", ""))
-			check(true)
-		}},
-		{"compact clears the recommendation and the partial streak", func() {
-			add(`{"type":"system","subtype":"compact_boundary","compactMetadata":{"preTokens":510000,"postTokens":9000}}`)
-			check(false)
-			add(high("d", ""), high("e", ""))
-			check(false)
-			add(high("f", ""))
-			check(true)
-		}},
-		{"a lower request breaks the streak without a compact boundary", func() {
-			add(`{"type":"assistant","message":{"id":"g","usage":{"input_tokens":300000}}}`)
-			check(false)
-		}},
-	} {
-		t.Run(tc.name, func(t *testing.T) { tc.run() })
-	}
+	add(high("a", ""), high("a", ""), high("b", strings.Repeat("x", quickTail+1)), high("a", ""))
+	add(`{"type":"assistant","isSidechain":true,"message":{"id":"side","usage":{"input_tokens":400000}}}`,
+		`{"type":"assistant","isApiErrorMessage":true,"message":{"id":"error","usage":{"input_tokens":400000}}}`,
+		`{"type":"assistant","message":{"id":"aggregate","usage":{"input_tokens":1700000}}}`,
+		`{"type":"api-request-blob","data":{"usage":{"input_tokens":1000000,"output_tokens":0}}}`)
+	check("two distinct requests despite repeated usage and a long reply", false)
+	add(high("c", ""))
+	check("third large request", true)
+
+	add(`{"type":"system","subtype":"compact_boundary","compactMetadata":{"preTokens":510000,"postTokens":9000}}`)
+	check("compact clears the recommendation", false)
+	add(high("d", ""), high("e", ""))
+	check("compact also clears the partial streak", false)
+	add(high("f", ""))
+	check("third large request since compact", true)
+
+	add(`{"type":"assistant","message":{"id":"g","usage":{"input_tokens":300000}}}`)
+	check("a lower request breaks the streak without compact", false)
 }
 
 func TestContextRestartRecommendationCodex(t *testing.T) {
