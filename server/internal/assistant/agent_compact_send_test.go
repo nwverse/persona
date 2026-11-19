@@ -20,8 +20,8 @@ func nearlyFull(c proto.Session) proto.Session {
 	return c
 }
 
-// sendCalls are the session.send params the nodes were asked for, in order.
-func sendCalls(f *fakeHub) []map[string]any {
+// sessionSendCalls are the session.send params the nodes were asked for, in order.
+func sessionSendCalls(f *fakeHub) []map[string]any {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var out []map[string]any
@@ -70,7 +70,7 @@ func TestResumeOfANearlyFullAgentCompactsBeforeTheText(t *testing.T) {
 	if len(starts) != 1 || !maps.Equal(starts[0], map[string]any{"resume_session_id": "full0001", "resume_automatic": true}) {
 		t.Fatalf("session.start: %v", starts)
 	}
-	sends := sendCalls(f)
+	sends := sessionSendCalls(f)
 	if len(sends) != 1 || sends[0]["session_id"] != "full0001" || sends[0]["text"] != "go on with the fix" || sends[0]["compact_if_full"] != true {
 		t.Fatalf("session.send: %v", sends)
 	}
@@ -105,8 +105,8 @@ func TestResumeCompactionFailureFallsBackWithTheReason(t *testing.T) {
 			t.Fatalf("refusal lacks %q: %v", want, err)
 		}
 	}
-	if len(startCalls(f)) != 1 || len(sendCalls(f)) != 1 {
-		t.Fatalf("started %v, sent %v", startCalls(f), sendCalls(f))
+	if len(startCalls(f)) != 1 || len(sessionSendCalls(f)) != 1 {
+		t.Fatalf("started %v, sent %v", startCalls(f), sessionSendCalls(f))
 	}
 }
 
@@ -122,8 +122,8 @@ func TestResumeOfANearlyFullAgentPersonaCannotCompactIsRefused(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "pi has no compaction Persona can run") || !strings.Contains(err.Error(), "agent_start") {
 		t.Fatalf("refusal: %v", err)
 	}
-	if len(startCalls(f)) != 0 || len(sendCalls(f)) != 0 {
-		t.Fatalf("started %v, sent %v", startCalls(f), sendCalls(f))
+	if len(startCalls(f)) != 0 || len(sessionSendCalls(f)) != 0 {
+		t.Fatalf("started %v, sent %v", startCalls(f), sessionSendCalls(f))
 	}
 }
 
@@ -138,7 +138,7 @@ func TestSendToARunningNearlyFullAgentCompactsFirst(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sends := sendCalls(f); len(sends) != 1 || sends[0]["compact_if_full"] != true || sends[0]["text"] != "next step" {
+	if sends := sessionSendCalls(f); len(sends) != 1 || sends[0]["compact_if_full"] != true || sends[0]["text"] != "next step" {
 		t.Fatalf("session.send: %v", sends)
 	}
 	if !strings.Contains(res, "after compacting its nearly full context with its own /compact") {
@@ -159,7 +159,7 @@ func TestSendToABusyNearlyFullAgentWaitsForTheTurnThenCompacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sends := sendCalls(f); len(sends) != 1 || sends[0]["compact_if_full"] != true {
+	if sends := sessionSendCalls(f); len(sends) != 1 || sends[0]["compact_if_full"] != true {
 		t.Fatalf("session.send: %v", sends)
 	}
 	if !strings.Contains(res, "Queued for busy0001 on box") || !strings.Contains(res, "once the turn ends it is compacted with its own /compact") {
@@ -214,7 +214,7 @@ func TestNotNearlyFullBehavesAsBefore(t *testing.T) {
 	if len(starts) != 1 || !maps.Equal(starts[0], map[string]any{"resume_session_id": "roomy001", "prompt": "go on", "resume_automatic": true}) {
 		t.Fatalf("session.start: %v", starts)
 	}
-	if len(sendCalls(f)) != 1 { // only the first test's send
-		t.Fatalf("session.send: %v", sendCalls(f))
+	if len(sessionSendCalls(f)) != 1 { // only the first test's send
+		t.Fatalf("session.send: %v", sessionSendCalls(f))
 	}
 }
