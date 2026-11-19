@@ -598,11 +598,14 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			id = newUUID()
 		}
 	}
-	if id != "" && (origin != "" || originKnown) {
+	if id != "" && (origin != "" || resume && originKnown) {
 		// A Claude process can discover MCP as soon as it starts. Persist the origin before spawning it so even that
 		// first request is classified as this conversation, not as an ordinary Agent with the same session id. An
-		// explicitly ordinary decision must also clear a persisted Inbox origin before tool selection and spawn.
-		st.Origin, st.OriginKnown, st.Launcher, st.Cwd = origin, originKnown, launcher, cwd
+		// explicitly ordinary resumed decision must also clear a persisted Inbox origin before tool selection and spawn.
+		st.Origin, st.OriginKnown = origin, originKnown
+		if origin != "" {
+			st.Launcher, st.Cwd = launcher, cwd
+		}
 		n.state.put(id, st)
 	}
 	if cwd == "" {
