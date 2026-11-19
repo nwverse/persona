@@ -16,7 +16,7 @@ import (
 // A terminal can display a paste as several chips with literal text between or
 // after them. Chips only confirm the composer took input, never its full content:
 // the startup caller still requires the complete first message in the rollout.
-var codexPasteChipRE = lazyre.New(`\[Pasted Content ([0-9]+) chars\]`)
+var codexPasteChipRE = lazyre.New(`\[Pasted Content ([0-9]+) chars\](?: #([0-9]+))?`)
 
 func codexFirstPromptShown(draft, prompt string) bool {
 	if sameText(draft, prompt) {
@@ -34,6 +34,13 @@ func codexFirstPromptShown(draft, prompt string) bool {
 		n, err := strconv.Atoi(draft[m[2]:m[3]])
 		if err != nil || n <= 0 || n > budget-hidden {
 			return false
+		}
+		// Codex disambiguates equal-sized paste elements with #2, #3, etc.
+		if m[4] >= 0 {
+			suffix, err := strconv.Atoi(draft[m[4]:m[5]])
+			if err != nil || suffix < 2 {
+				return false
+			}
 		}
 		hidden += n
 		parts = append(parts, compact(draft[last:m[0]]))

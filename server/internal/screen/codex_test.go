@@ -212,7 +212,6 @@ func TestReadCodexDraftAboveHintWithoutStatus(t *testing.T) {
 	}
 }
 
-// 0.166 can place the status and warning on one row, without a shortcuts row.
 func TestReadCodexPasteWithHomeDirectoryWarningFooter(t *testing.T) {
 	draft := "[Pasted Content 1101 chars]Keep the visible tail\nincluding its wrapped continuation."
 	for _, footer := range []string{
@@ -226,6 +225,7 @@ func TestReadCodexPasteWithHomeDirectoryWarningFooter(t *testing.T) {
 	}
 }
 
+// 0.166 can place the status and warning on one row, without a shortcuts row.
 func TestReadCodexComposerWithSingleRowFooter(t *testing.T) {
 	footer := "  GPT-6-Astra high Fast · ~/project · Review project                 ⚠ 1 warning · f2 to view\n"
 	for _, tc := range []struct{ name, composer, want string }{

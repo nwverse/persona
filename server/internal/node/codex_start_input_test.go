@@ -55,6 +55,9 @@ func TestCodexFirstPromptWithPasteChips(t *testing.T) {
 			t.Errorf("%q: %v, want %v", tc.draft, got, tc.want)
 		}
 	}
+	if !codexFirstPromptShown("[Pasted Content 5 chars]m[Pasted Content 5 chars] #2tail", "abcdemfghijtail") {
+		t.Fatal("equal-sized chips with Codex's disambiguation suffix were rejected")
+	}
 }
 
 // Model both launch policies, and a modal arriving between readiness and the
