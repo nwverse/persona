@@ -112,33 +112,38 @@ type todoItem struct {
 	assistantwire.TodoItemDetail
 }
 
-// viewedTodo is to-do id as GET /api/v1/todos/{id} answers it: its row as the list has it, with its view and its
+// viewedTodo is to-do id as GET /api/v1/todos/{id} answers a device: its row as the list has it, with its view and its
 // brief; false when there is none.
 func (s *Service) viewedTodo(ctx context.Context, id string) (listedTodo, bool, error) {
-	t, _, found, err := s.viewedTodoRuns(ctx, id)
+	t, _, _, found, err := s.viewedTodoRuns(ctx, id, false)
 	return t, found, err
 }
 
 // viewedTodoRuns is viewedTodo with the sessions of the to-do's active runs as its view read them (todoFactsOf),
-// which its timeline reads rather than ask the computers again (todo_timeline.go).
-func (s *Service) viewedTodoRuns(ctx context.Context, id string) (listedTodo, []proto.Session, bool, error) {
+// which its timeline reads rather than ask the computers again (todo_timeline.go). For an extension's token (ext) the
+// row is as the list gives it one (forExtension), and hidden says whether its history is hidden from it (todosHidden).
+func (s *Service) viewedTodoRuns(ctx context.Context, id string, ext bool) (t listedTodo, sessions []proto.Session, hidden, found bool, err error) {
 	list, p, err := s.todosViewed(ctx, false)
 	if err != nil {
-		return listedTodo{}, nil, false, err
+		return listedTodo{}, nil, false, false, err
 	}
-	for i, t := range list {
-		if t.ID == id {
-			t.Todo = s.withBrief(t.Todo) // as withBriefFrom gives it in the list
-			return t, p.facts[i].Sessions, true, nil
-		}
+	i := slices.IndexFunc(list, func(r listedTodo) bool { return r.ID == id })
+	if i < 0 {
+		return listedTodo{}, nil, false, false, nil
 	}
-	return listedTodo{}, nil, false, nil
+	if ext {
+		hidden = s.forExtension(ctx, list, p, i)[id]
+	}
+	t = list[i]
+	t.Todo = s.withBrief(t.Todo) // as withBriefFrom gives it in the list
+	return t, p.facts[i].Sessions, hidden, true, nil
 }
 
 func (s *Service) todoViewRoutes() {
 	// GET /api/v1/todos/{id}: one to-do as GET /api/v1/todos lists it, its view included, and what the paper shows of
-	// its history (todoItemDetail; an extension's token as todoTimelineOf reads it) → {"todo": row, "rounds",
-	// "rounds_total", "recap"?, "results"?}; an unknown id 404 todo_not_found.
+	// its history (todoItemDetail; an extension's token as todoTimelineOf reads it, and its row as the list gives it
+	// one, todo_scope.go) → {"todo": row, "rounds", "rounds_total", "recap"?, "results"?}; an unknown id 404
+	// todo_not_found.
 	s.handle("GET /api/v1/todos/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if err := s.ensureTodosLoaded(r.Context()); err != nil {
@@ -152,7 +157,8 @@ func (s *Service) todoViewRoutes() {
 			apierr.WriteCode(w, http.StatusNotFound, "todo_not_found", i18n.Err("assistant-todos.not_found"))
 			return
 		}
-		t, sessions, found, err := s.viewedTodoRuns(r.Context(), id)
+		ext := r.Header.Get(RoleHeader) == roleExtension
+		t, sessions, hidden, found, err := s.viewedTodoRuns(r.Context(), id, ext)
 		switch {
 		case err != nil:
 			apierr.Write(w, http.StatusServiceUnavailable, errTodosUnavailable)
@@ -165,8 +171,7 @@ func (s *Service) todoViewRoutes() {
 				return
 			}
 			// Its runs' sessions as its view read them: the timeline asks no computer again.
-			ext := r.Header.Get(RoleHeader) == roleExtension
-			apierr.WriteJSON(w, todoItem{Todo: raw, TodoItemDetail: s.todoItemDetail(r.Context(), t.Todo, raw, sessions, ext)})
+			apierr.WriteJSON(w, todoItem{Todo: raw, TodoItemDetail: s.todoItemDetail(r.Context(), t.Todo, raw, sessions, ext, hidden)})
 		}
 	})
 	// GET /api/v1/todos/places: the To-dos sidebar's places with the list's counts (assistantwire.TodoPlaces).

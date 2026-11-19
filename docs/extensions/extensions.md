@@ -442,7 +442,7 @@ To call the hub's HTTP API, an extension lists the scopes it uses in `permission
 | `machines.read` | See your computers | `GET /api/v1/machines`, `/machines/{id}/metrics`, `/machines/{mid}/stat` |
 | `notify` | Send notifications to your devices | `POST /api/v1/notify` (see "Sending notifications") |
 | `assistant.ask` | Start chats with Persona and read chat activity | `GET /api/v1/assistant`, `POST /api/v1/assistant/conversations`, `GET …/conversations/{id}/feed` |
-| `todos.read` | See to-dos | `GET /api/v1/todos`, `GET /api/v1/todos/{id}`, `GET /api/v1/todos/places`, `GET /api/v1/todos/{id}/decisions`, `GET /api/v1/todos/{id}/repositories`, `GET /api/v1/todos/{id}/timeline`. From a manager naming `todo_timeline`, the to-do's conversation too: the timeline, and on `GET /api/v1/todos/{id}` its latest rounds, recap and results (what the owner told its runs and their turn summaries), less what "Never shown to extensions" leaves out |
+| `todos.read` | See to-dos | `GET /api/v1/todos`, `GET /api/v1/todos/{id}`, `GET /api/v1/todos/places`, `GET /api/v1/todos/{id}/decisions`, `GET /api/v1/todos/{id}/repositories`, `GET /api/v1/todos/{id}/timeline`. From a manager naming `todo_timeline`, the to-do's conversation too: the timeline, and on `GET /api/v1/todos/{id}` its latest rounds, recap and results (what the owner told its runs and their turn summaries), less what "Never shown to extensions" leaves out. A to-do whose history it is not shown (same section) lists with nothing of its runs (their titles, directories, questions and words) and no decisions |
 | `leaders.read` | See leader conversations (directions) and what they report | `GET /api/v1/assistant/leaders`; the events `leader.changed` and `leader.report` (see "Leader events") |
 | `assistant.dispatch_policy` | Read and change the assistant dispatch policy | `GET` / `PUT /api/v1/assistant/dispatch-policy`; a policy written by an extension must expire within one hour (see "Dispatch policy") |
 | `assistant.start_defaults` | Read the Agent presets and set the defaults task Agents start with | `GET /api/v1/assistant/worker-presets`, `GET` / `PUT /api/v1/assistant/start-defaults`; a policy written by an extension must expire within one hour ([assistant.md](../assistant/assistant.md) "Start defaults"). Not covered by the legacy `hub_api` full access: it can raise what task Agents spend (a preset, effort `max`, ultracode), so an extension gets it only by naming it, as `agents.permission_mode` |
@@ -802,17 +802,24 @@ Whatever scopes it was granted, an extension's token never sees:
   the health space (by its directory or its conversation's space), and a card without a directory whose conversation cannot be found
   are left out of `GET /api/v1/interactions` and `/interactions/history`.
 - **Values typed into a card's fields** (`resolution.values` in the history).
-- **A to-do's answered cards, and the conversation of a to-do that may hold the health space's words**
-  (`GET /api/v1/todos/{id}/timeline` and the rounds on `GET /api/v1/todos/{id}`,
+- **A to-do's answered cards, and what a to-do that may hold the health space's words has of its runs and its history**
+  (#10941: `GET /api/v1/todos`, `GET /api/v1/todos/{id}`, its timeline and its decisions;
   `docs/assistant/todo-status-sop.md` "The to-do's timeline"): the timeline leaves out every answered card, since its
-  record holds what was typed into the card and does not say whose card it was. A to-do has no conversation when it was
-  opened from a health conversation, when a health conversation wrote to it (a hand-off the owner confirmed included), or
-  when any run it ever had works in the space, taken off it or not, done or not. This is decided from what the manager
-  keeps of the to-do (the directory each run's link keeps, the conversations its history was written in, the record of a
-  deleted one), not only from what is live, and it fails closed: a conversation the hub does not list and has no deletion
-  record of, or a run whose link keeps no directory and whose session cannot be read, hides it too. Its timeline then
-  answers 404 as for a to-do that does not exist, and its item leaves out the rounds, recap and results; the row is the
-  one `GET /api/v1/todos` lists.
+  record holds what was typed into the card and does not say whose card it was. A to-do's history is hidden when it was
+  opened from a health conversation, when a health conversation wrote to it (a hand-off the owner confirmed included),
+  or when any run it ever had works in the space, taken off it or not, done or not. This is decided from what the
+  manager keeps of the to-do (the directory each run's link keeps, the conversations its history was written in, the
+  record of a deleted one), not only from what is live, and it fails closed: a conversation the hub does not list and
+  has no deletion record of, a history whose conversations cannot be read, or a run whose link keeps no directory and
+  whose session cannot be read, hides it too. The one rule decides every route, once per read. Its timeline then
+  answers 404 as for a to-do that does not exist, and its item leaves out the rounds, recap and results. Its decisions
+  answer `{"decisions": []}`: any of them can hold the space's words (a run's card and the answer to it, a run's own
+  note, an outcome read off its last reply). Its row, on the list and on its own, carries nothing of its runs: each
+  run's `title` and `cwd` in `agents` are empty, and its `view` has no run's question or title (an ask's `text` and
+  `run.title`, a step's ask on its parent's row included) and no run's words on line 2 (its `run`, and the `text` of
+  `agent_asks`, `awaits_reply`, `working` and `persona_working`). Each ask keeps its `id`, `kind` and `risk`, so the
+  row still says something waits, and the list's `counts` are the same. The to-do's own fields (its title, notes and
+  brief, its own ask, its supervisor's reviews, its completion check and why it closed) are listed as they are.
 
 The apps' and devices' credentials are not affected.
 

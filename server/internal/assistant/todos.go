@@ -915,12 +915,16 @@ func (s *Service) todoRoutes() {
 	s.todoTimelineRoutes()
 	// GET /api/v1/todos: list all todos (newest created_at first), agents sorted (active first, then released); a todo
 	// waiting for the owner carries its ask (todo_ask.go), an open one nobody works on why (tasks_orphan.go); each its
-	// view, and the list its counts (todo_view_routes.go)
+	// view, and the list its counts (todo_view_routes.go); to an extension's token without what it is not shown of the
+	// runs (todo_scope.go)
 	s.handle("GET /api/v1/todos", func(w http.ResponseWriter, r *http.Request) {
 		list, p, err := s.todosViewed(r.Context(), true)
 		if err != nil {
 			apierr.Write(w, http.StatusServiceUnavailable, errTodosUnavailable)
 			return
+		}
+		if r.Header.Get(RoleHeader) == roleExtension {
+			s.forExtension(r.Context(), list, p, -1)
 		}
 		apierr.WriteJSON(w, todosList{Todos: list, Counts: p.counts()})
 	})

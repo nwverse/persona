@@ -255,6 +255,37 @@ func (d *DB) FeedByRef(ctx context.Context, ref string, kinds []string, limit in
 	return scanFeed(rows)
 }
 
+// feedConversationsSQL is FeedConversations' query, through assistant_feed_unsent as feedByRefSQL is.
+const feedConversationsSQL = `SELECT DISTINCT ref, conversation FROM assistant_feed
+	WHERE kind = ANY($1) AND ref = ANY($2) AND NOT body ? 'sent_at'
+	ORDER BY ref, conversation`
+
+// FeedConversations are the conversations the items of kinds about each of refs are in, by ref, each once and in
+// order; a ref with none is left out (#10941: whose words a to-do's history may hold, every item counted, not only the
+// newest FeedByRef reads). It refuses the message kind as FeedByRef does.
+func (d *DB) FeedConversations(ctx context.Context, refs, kinds []string) (map[string][]string, error) {
+	if slices.Contains(kinds, "message") {
+		return nil, ErrFeedByRefMessage
+	}
+	out := map[string][]string{}
+	if len(kinds) == 0 || len(refs) == 0 {
+		return out, nil
+	}
+	rows, err := d.pool.Query(ctx, feedConversationsSQL, kinds, refs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var ref, conversation string
+		if err := rows.Scan(&ref, &conversation); err != nil {
+			return nil, err
+		}
+		out[ref] = append(out[ref], conversation)
+	}
+	return out, rows.Err()
+}
+
 func scanFeed(rows pgx.Rows) ([]FeedRow, error) {
 	defer rows.Close()
 	var out []FeedRow

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -287,11 +288,12 @@ func TestTodoTimelineToAnExtension(t *testing.T) {
 }
 
 // Whether an extension is shown a to-do's conversation is decided from what the to-do keeps, not only from what is live
-// (todoHistoryHidden): a health run hides it once the to-do is done, once the run is taken off it (by the extension
-// too) and while its computer does not answer; so do a health conversation or a task leader in the space it was opened
-// from, a health conversation that wrote to it, and a conversation or run whose space cannot be told. A to-do whose
+// (todosHidden): a health run hides it once the to-do is done, once the run is taken off it (by the extension too) and
+// while its computer does not answer; so do a health conversation or a task leader in the space it was opened from, a
+// health conversation that wrote to it, and a conversation or run whose space cannot be told. A to-do whose
 // conversations and runs are all known to be outside the space still reads, from its links' directories and its
-// conversations' deletion records too. A device reads every one.
+// conversations' deletion records too. The same rule decides its row, on the list and on its own (no run's title or
+// directory), and its decisions (none, a health run's card's included: #10941). A device reads every one whole.
 func TestTodoTimelineHiddenFromAnExtension(t *testing.T) {
 	const told, summary = "Resting heart rate was 48 all week", "Logged the new prescription"
 	health := identity.HealthDir("/home/owner")
@@ -474,9 +476,325 @@ func TestTodoTimelineHiddenFromAnExtension(t *testing.T) {
 					!c.hidden && !strings.Contains(rounds, told) {
 					t.Errorf("an extension's item (hidden %v): %s", c.hidden, w.Body)
 				}
+
+				hidden := map[string]bool{id: c.hidden}
+				dev, _ := rowsAs(t, e, "")
+				ext, _ := rowsAs(t, e, roleExtension)
+				if want := unshown(dev[id], hidden, false); !reflect.DeepEqual(ext[id], want) {
+					t.Errorf("an extension's row on the list (hidden %v):\n%v\nwant\n%v", c.hidden, ext[id], want)
+				}
+				if want := unshown(itemRow(t, e, "", id), hidden, false); !reflect.DeepEqual(itemRow(t, e, roleExtension, id), want) {
+					t.Errorf("an extension's item row (hidden %v):\n%v\nwant\n%v", c.hidden, itemRow(t, e, roleExtension, id), want)
+				}
+				if database == nil {
+					return // decisions need the hub's database
+				}
+				if _, err := e.s.insertDecision(context.Background(), e.s.todoDB(), db.TodoDecisionRow{ID: "dec_" + randomHex(8), TodoID: id,
+					Question: "Take the new dose at night?", Choice: "At night", Source: db.DecisionCard, SourceMachine: "server",
+					SourceSession: "h1", SourceMessage: "ix_dose", CreatedAt: decisionNow()}); err != nil {
+					t.Fatal(err)
+				}
+				if w := e.must("GET", "/api/v1/todos/"+id+"/decisions", ""); !strings.Contains(w.Body.String(), "At night") {
+					t.Errorf("a device's decisions: %s", w.Body)
+				}
+				for _, q := range []string{"", "?all=1"} {
+					w := e.doAs(roleExtension, "GET", "/api/v1/todos/"+id+"/decisions"+q, "")
+					var got struct{ Decisions []db.TodoDecisionRow }
+					if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != http.StatusOK || got.Decisions == nil ||
+						c.hidden != (len(got.Decisions) == 0) {
+						t.Errorf("an extension's decisions%s (hidden %v): %d %s", q, c.hidden, w.Code, w.Body)
+					}
+				}
 			})
 		})
 	}
+}
+
+// The probes of #10941: a health run's current question, its title and its directory reach an extension's token
+// (todos.read) neither on the list nor on the item, and neither do a working health run's words, a health step's ask
+// rolled up onto its parent's row, or the decisions made on a health run's question card. Every ask keeps its id, kind
+// and risk, so the row still says something waits; a run outside the space reads whole. A device reads every word,
+// and its answers are the same bytes whatever an extension read meanwhile; the extension's are the same bytes read
+// after read, so the list's tag holds.
+func TestTodoRowsToAnExtension(t *testing.T) {
+	const asks, works, eggs, form = "Did the new dose help you sleep?", "charting the resting heart rate",
+		"How many eggs this week?", "Which form do you need?"
+	health := identity.HealthDir("/home/owner")
+	todoStores(t, func(t *testing.T, e *todoEnv, database *db.DB) {
+		ctx := context.Background()
+		at := time.Now().UTC().Add(-time.Minute)
+		run := func(id, title, cwd, state, text string) proto.Session {
+			c := proto.Session{SessionID: id, Title: title, Cwd: cwd, State: state, StateSince: at, UpdatedAt: at, Status: proto.StatusIdle}
+			if cwd == health {
+				c.Space = SpaceHealth
+			}
+			switch state {
+			case proto.StateNeedsYou:
+				c.Status, c.Asks = proto.StatusBlocked, text
+			case proto.StateWorking:
+				c.Status, c.Activity = proto.StatusWorking, text
+			}
+			return c
+		}
+		e.sessions("server", proto.Session{SessionID: "conv1", Title: "Persona", Assistant: true, Status: proto.StatusIdle, State: proto.StateIdle},
+			run("h1", "Sleep log", health, proto.StateNeedsYou, asks),
+			run("h2", "Heart log", health, proto.StateWorking, works),
+			run("h3", "Diet diary", health, proto.StateNeedsYou, eggs),
+			run("s1", "Paperwork", "/home/owner/forms", proto.StateNeedsYou, form))
+		asking, working, plain := e.create("Log the week's sleep").ID, e.create("Chart the heart rate").ID, e.create("Renew the passport").ID
+		parent, step := e.create("Plan the meals").ID, e.create("Count the eggs").ID
+		e.must("PATCH", "/api/v1/todos/"+step, `{"part_of":"`+parent+`"}`)
+		for id, sid := range map[string]string{asking: "h1", working: "h2", step: "h3", plain: "s1"} {
+			e.must("PUT", "/api/v1/todos/"+id+"/agents/server/"+sid, "")
+		}
+		if database != nil { // the owner answers each asking run's card: a decision of its to-do
+			for _, c := range []struct{ sid, q, a string }{{"h1", asks, "Yes, much better"}, {"s1", form, "The blue one"}} {
+				e.s.cardDecisions(ctx, proto.Interaction{ID: "ix_" + c.sid, MachineID: "server", SessionID: c.sid, Kind: proto.IxQuestion,
+					Questions: []proto.Question{{Question: c.q, Options: []proto.QuestionOption{{Label: c.a}, {Label: "Not yet"}}}}},
+					proto.Resolution{Answers: map[string]string{c.q: c.a}}, "resolved")
+			}
+		}
+		healthWords := []string{asks, works, eggs, "Sleep log", "Heart log", "Diet diary", health}
+
+		dev, before := rowsAs(t, e, "")
+		for _, word := range slices.Concat(healthWords, []string{form, "Paperwork"}) {
+			if !bytes.Contains(before, []byte(word)) {
+				t.Errorf("a device's list has no %q: %s", word, before)
+			}
+		}
+		ext, body := rowsAs(t, e, roleExtension)
+		for _, word := range healthWords {
+			if bytes.Contains(body, []byte(word)) {
+				t.Errorf("an extension's list has %q: %s", word, body)
+			}
+		}
+		for _, word := range []string{form, "Paperwork", "/home/owner/forms"} {
+			if !bytes.Contains(body, []byte(word)) {
+				t.Errorf("an extension's list has no %q, which is outside the space: %s", word, body)
+			}
+		}
+		hidden := map[string]bool{asking: true, working: true, step: true}
+		for id := range dev {
+			if want := unshown(dev[id], hidden, id == parent); !reflect.DeepEqual(ext[id], want) {
+				t.Errorf("%s on an extension's list:\n%v\nwant\n%v", dev[id]["title"], ext[id], want)
+			}
+		}
+		// The asks still say something waits: the same ids, kinds and risks, on the asking run's to-do and on the parent
+		// of the asking step.
+		for _, id := range []string{asking, parent} {
+			d, x := dev[id]["view"].(map[string]any)["asks"].([]any), ext[id]["view"].(map[string]any)["asks"].([]any)
+			if len(x) != 1 || len(d) != 1 {
+				t.Fatalf("%s's asks: %v, a device's %v", id, x, d)
+			}
+			a := x[0].(map[string]any)
+			for _, k := range []string{"id", "kind", "risk"} {
+				if a[k] == nil || a[k] != d[0].(map[string]any)[k] {
+					t.Errorf("%s's ask's %s: %v, a device's %v", id, k, a[k], d[0].(map[string]any)[k])
+				}
+			}
+			if r := a["run"].(map[string]any); r["machine_id"] != "server" || r["session_id"] == nil || a["text"] != nil || r["title"] != nil {
+				t.Errorf("%s's ask to an extension: %v", id, a)
+			}
+		}
+		var counts [2]json.RawMessage
+		for i, b := range [][]byte{before, body} {
+			var l struct{ Counts json.RawMessage }
+			_ = json.Unmarshal(b, &l)
+			counts[i] = l.Counts
+		}
+		if !bytes.Equal(counts[0], counts[1]) {
+			t.Errorf("counts: a device's %s, an extension's %s", counts[0], counts[1])
+		}
+		if _, again := rowsAs(t, e, roleExtension); !bytes.Equal(again, body) {
+			t.Errorf("an extension's list read again:\n%s\n%s", body, again)
+		}
+
+		for _, id := range []string{asking, working, plain, parent, step} {
+			devItem := e.must("GET", "/api/v1/todos/"+id, "").Body.Bytes()
+			w := e.doAs(roleExtension, "GET", "/api/v1/todos/"+id, "")
+			for _, word := range slices.Concat(healthWords, []string{"Yes, much better"}) { // the rounds hold decisions
+				if bytes.Contains(w.Body.Bytes(), []byte(word)) {
+					t.Errorf("an extension's item %s has %q: %s", id, word, w.Body)
+				}
+			}
+			if want := unshown(itemRow(t, e, "", id), hidden, id == parent); !reflect.DeepEqual(itemRow(t, e, roleExtension, id), want) {
+				t.Errorf("an extension's item %s:\n%v\nwant\n%v", id, itemRow(t, e, roleExtension, id), want)
+			}
+			var item map[string]json.RawMessage
+			_ = json.Unmarshal(w.Body.Bytes(), &item)
+			if hidden[id] != (item["rounds_total"] == nil) {
+				t.Errorf("an extension's item %s (hidden %v): %s", id, hidden[id], w.Body)
+			}
+			if again := e.must("GET", "/api/v1/todos/"+id, "").Body.Bytes(); !bytes.Equal(again, devItem) {
+				t.Errorf("a device's item %s changed with an extension's read:\n%s\n%s", id, devItem, again)
+			}
+		}
+
+		if database != nil {
+			for id, word := range map[string]string{asking: "Yes, much better", plain: "The blue one"} {
+				if w := e.must("GET", "/api/v1/todos/"+id+"/decisions", ""); !strings.Contains(w.Body.String(), word) {
+					t.Errorf("a device's decisions of %s: %s", id, w.Body)
+				}
+				w := e.doAs(roleExtension, "GET", "/api/v1/todos/"+id+"/decisions", "")
+				if shown := strings.Contains(w.Body.String(), word); w.Code != http.StatusOK || shown == hidden[id] ||
+					hidden[id] && w.Body.String() != `{"decisions":[]}`+"\n" {
+					t.Errorf("an extension's decisions of %s (hidden %v): %d %q", id, hidden[id], w.Code, w.Body)
+				}
+			}
+		}
+		if _, after := rowsAs(t, e, ""); !bytes.Equal(after, before) {
+			t.Errorf("a device's list changed with an extension's reads:\n%s\n%s", before, after)
+		}
+	})
+}
+
+// An extension's list reads each computer at most once for the runs it decides by (their links keep no directory and
+// no view read them), whatever the number of to-dos, and nothing more than a device's does when every run is read
+// already or keeps its directory.
+func TestTodoListToAnExtensionReadsEachComputerOnce(t *testing.T) {
+	e := newTodoEnv(t, nil)
+	var listed []proto.Session
+	for i := range 5 {
+		listed = append(listed, proto.Session{SessionID: fmt.Sprint("s", i), Title: fmt.Sprint("Letters ", i), Status: proto.StatusIdle, State: proto.StateIdle})
+	}
+	e.sessions("server", listed...)
+	for i := range 5 {
+		id := e.create(fmt.Sprint("Answer the letters ", i)).ID
+		e.must("PUT", fmt.Sprintf("/api/v1/todos/%s/agents/server/s%d", id, i), "")
+		e.must("PATCH", "/api/v1/todos/"+id, `{"done":true}`) // its view reads no run
+	}
+	lists := func(role string) int {
+		t.Helper()
+		// The marks the links give the computer's panes go out in the background, and read its list once: not the read's.
+		waitFor(t, "the panes' marks", func() bool {
+			ts := e.s.tokenSyncOf("server")
+			ts.mu.Lock()
+			defer ts.mu.Unlock()
+			return !ts.sending
+		})
+		from := e.f.callCount()
+		rows, _ := rowsAs(t, e, role)
+		for _, r := range rows { // every run listed outside the space: shown
+			if a := r["agents"].([]any); len(a) != 1 || a[0].(map[string]any)["title"] == "" {
+				t.Fatalf("%q reads %v", role, r)
+			}
+		}
+		e.f.mu.Lock()
+		defer e.f.mu.Unlock()
+		n := 0
+		for _, c := range e.f.calls[from:] {
+			if c.Method == DeviceSessionsList {
+				n++
+			}
+		}
+		return n
+	}
+	if device, ext := lists(""), lists(roleExtension); ext != device+1 {
+		t.Fatalf("sessions.list: a device's list %d calls, an extension's %d, want one more", device, ext)
+	}
+	e.sessions("server", append(listed, proto.Session{SessionID: "s9", Title: "Filed", Cwd: "/home/owner/letters"})...)
+	id := e.create("File the letters").ID
+	e.must("PUT", "/api/v1/todos/"+id+"/agents/server/s9", "")
+	for i := range 5 { // their runs' links keep a directory now
+		e.s.todos.mu.Lock()
+		for _, todo := range e.s.todos.todos {
+			for k := range todo.Agents {
+				if todo.Agents[k].SessionID == fmt.Sprint("s", i) {
+					todo.Agents[k].Cwd = "/home/owner/letters"
+				}
+			}
+		}
+		e.s.todos.mu.Unlock()
+	}
+	if device, ext := lists(""), lists(roleExtension); ext != device {
+		t.Fatalf("sessions.list: a device's list %d calls, an extension's %d, want the same", device, ext)
+	}
+}
+
+// rowsAs is every row of GET /api/v1/todos as role reads it ("" a device), by id, as JSON values, and the answer's
+// bytes.
+func rowsAs(t *testing.T, e *todoEnv, role string) (map[string]map[string]any, []byte) {
+	t.Helper()
+	w := e.doAs(role, "GET", "/api/v1/todos", "")
+	var list struct {
+		Todos []map[string]any `json:"todos"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &list); err != nil || w.Code != http.StatusOK {
+		t.Fatalf("the list as %q: %d %s", role, w.Code, w.Body)
+	}
+	out := map[string]map[string]any{}
+	for _, r := range list.Todos {
+		out[r["id"].(string)] = r
+	}
+	return out, w.Body.Bytes()
+}
+
+// itemRow is to-do id's row on GET /api/v1/todos/{id} as role reads it, as a JSON value.
+func itemRow(t *testing.T, e *todoEnv, role, id string) map[string]any {
+	t.Helper()
+	w := e.doAs(role, "GET", "/api/v1/todos/"+id, "")
+	var item struct {
+		Todo map[string]any `json:"todo"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &item); err != nil || w.Code != http.StatusOK || item.Todo == nil {
+		t.Fatalf("the item as %q: %d %s", role, w.Code, w.Body)
+	}
+	return item.Todo
+}
+
+// unshown is a device's row r as an extension's token reads it (todo_scope.go), hidden the to-dos whose history it is
+// not shown, by id, and step whether any of the row's steps is: a hidden to-do's runs without their titles and
+// directories; its runs' asks without their text and the run's title (a step's ask on its parent's row by the step);
+// line 2 without the run and what the run says when the row's to-do is hidden (step, on a line a step leads). The rest
+// is the device's, byte for byte.
+func unshown(r map[string]any, hidden map[string]bool, step bool) map[string]any {
+	var out map[string]any
+	raw, _ := json.Marshal(r)
+	_ = json.Unmarshal(raw, &out)
+	own := hidden[out["id"].(string)]
+	if agents, _ := out["agents"].([]any); own {
+		for _, a := range agents {
+			a.(map[string]any)["title"], a.(map[string]any)["cwd"] = "", ""
+		}
+	}
+	v, _ := out["view"].(map[string]any)
+	if v == nil {
+		return out
+	}
+	asks, _ := v["asks"].([]any)
+	for _, x := range asks {
+		a := x.(map[string]any)
+		run, _ := a["run"].(map[string]any)
+		if run == nil {
+			continue
+		}
+		of := own
+		if rest, ok := strings.CutPrefix(a["id"].(string), "step:"); ok {
+			of = hidden[strings.SplitN(rest, "/", 2)[0]]
+		}
+		if of {
+			delete(a, "text")
+			delete(run, "title")
+		}
+	}
+	if l, _ := v["line"].(map[string]any); l != nil {
+		args, _ := l["args"].(map[string]any)
+		of := own
+		if _, ok := args["step"]; ok {
+			of = step
+		}
+		if of && args != nil {
+			delete(args, "run")
+			switch l["key"] {
+			case "agent_asks", "awaits_reply", "working", "persona_working":
+				delete(args, "text")
+			}
+			if len(args) == 0 {
+				delete(l, "args")
+			}
+		}
+	}
+	return out
 }
 
 // A to-do past the feed items one read takes (todoTimelineFeedCap, the newest) serves the rounds that began within

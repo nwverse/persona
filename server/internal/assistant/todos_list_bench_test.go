@@ -67,8 +67,14 @@ func manyTodosOn(n int, o Options) *Service {
 	return s
 }
 
-func todosListBody(tb testing.TB, s *Service) []byte {
+func todosListBody(tb testing.TB, s *Service) []byte { return todosListBodyAs(tb, s, "") }
+
+// todosListBodyAs is GET /api/v1/todos as role reads it ("" a device).
+func todosListBodyAs(tb testing.TB, s *Service, role string) []byte {
 	r := httptest.NewRequest("GET", "/api/v1/todos", nil)
+	if role != "" {
+		r.Header.Set(RoleHeader, role)
+	}
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, r)
 	if w.Code != 200 {
@@ -77,14 +83,51 @@ func todosListBody(tb testing.TB, s *Service) []byte {
 	return w.Body.Bytes()
 }
 
-// BenchmarkTodosList: GET /api/v1/todos with n finished supervised tasks.
+// BenchmarkTodosList: GET /api/v1/todos with n finished supervised tasks. ext/…: as an extension's token reads it,
+// what it is not shown of each to-do decided (todo_scope.go): every rule's read made, as their conversation is listed
+// outside the health space, so every to-do reads whole. db/…: with Postgres as the store and four feed items a to-do,
+// which ext,db/… reads the conversations of (FeedConversations); skipped without PERSONA_TEST_DATABASE_URL.
 func BenchmarkTodosList(b *testing.B) {
-	for _, n := range []int{250, 1000, 4000} {
-		b.Run(fmt.Sprintf("todos=%d", n), func(b *testing.B) {
-			s := manyTodos(n)
+	manager := func(n int, o Options) *Service {
+		f := newFakeHub().withMachine()
+		f.setSessions("server", proto.Session{SessionID: "conv1", Title: "Persona", Assistant: true, Status: proto.StatusIdle})
+		o.Hub = f
+		return manyTodosOn(n, o)
+	}
+	for _, role := range []string{"", roleExtension} {
+		for _, n := range []int{250, 1000, 4000} {
+			name := fmt.Sprintf("todos=%d", n)
+			if role != "" {
+				name = "ext/" + name
+			}
+			b.Run(name, func(b *testing.B) {
+				s := manager(n, Options{})
+				b.ReportAllocs()
+				for b.Loop() {
+					todosListBodyAs(b, s, role)
+				}
+			})
+		}
+	}
+	for _, role := range []string{"", roleExtension} {
+		name := "db/todos=1000"
+		if role != "" {
+			name = "ext," + name
+		}
+		b.Run(name, func(b *testing.B) {
+			database := todoTestDB(b)
+			s := manager(1000, Options{Store: func() Store { return database }})
+			for i := range 1000 {
+				from := fmt.Sprintf("todo_bench%06d", i)
+				id := todoCopyForBench(s, from) // the feed is never pruned: each run writes and reads its own
+				s.todos.mu.Lock()
+				delete(s.todos.todos, from)
+				s.todos.mu.Unlock()
+				todoFeedForBench(b, s, id, 4, false)
+			}
 			b.ReportAllocs()
 			for b.Loop() {
-				todosListBody(b, s)
+				todosListBodyAs(b, s, role)
 			}
 		})
 	}

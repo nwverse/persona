@@ -28,9 +28,16 @@ var errNoDecisionStore = errors.New("decisions need the hub's database")
 
 func (s *Service) todoDecisionRoutes() {
 	// GET /api/v1/todos/{id}/decisions[?all=1]: the decisions in effect, oldest first; all=1 adds the superseded ones.
+	// None to an extension's token for a to-do whose history it is not shown (todosHidden): any source can carry the
+	// health space's words (a run's card and its answer, a run's own notes, an outcome read off its last reply, the
+	// owner's own), and its timeline shows none of them either.
 	s.handle("GET /api/v1/todos/{id}/decisions", func(w http.ResponseWriter, r *http.Request) {
 		st, id, ok := s.decisionTodo(w, r)
 		if !ok {
+			return
+		}
+		if r.Header.Get(RoleHeader) == roleExtension && s.todoHistoryHidden(r.Context(), id, s.todoRunsRead(r.Context(), id)) {
+			apierr.WriteJSON(w, map[string]any{"decisions": []db.TodoDecisionRow{}})
 			return
 		}
 		all := r.URL.Query().Get("all")
