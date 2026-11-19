@@ -591,6 +591,17 @@ func TestInboxDoesNotAdoptOrdinaryToolSpare(t *testing.T) {
 	if got := n.adoptSpareFor(n.home, "claude", "default", modelExecution{}); got != p {
 		t.Fatal("ordinary conversation did not retain warm-spare adoption")
 	}
+	// Isolate the explicit guard from the origin-bearing execution fingerprint: even matching metadata must not let an
+	// Inbox conversation adopt a spare whose actual ordinary process already exposed SendMessage.
+	matching := &assistantProc{id: "matching-spare", agent: "claude", launcher: "claude", cwd: n.home, born: time.Now(),
+		fingerprint: n.executionFingerprint("claude", modelExecution{Origin: originInbox})}
+	n.spare = matching
+	if got := n.adoptSpareFor(n.home, "claude", "default", modelExecution{Origin: originInbox}); got != nil {
+		t.Fatal("matching fingerprint bypassed the explicit ordinary-tool spare guard")
+	}
+	if n.spare != matching {
+		t.Fatal("the guarded matching spare was consumed")
+	}
 }
 
 func TestOrdinaryClaudeKeepsBuiltInSendMessage(t *testing.T) {
