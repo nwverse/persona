@@ -185,14 +185,15 @@ type fakeHub struct {
 	checkParams []map[string]any
 	oldCheck    bool
 
-	repairs   []map[string]any
-	repairRes *proto.LauncherRepair
-	onRepair  func(f *fakeHub)
-	onSend    func(f *fakeHub, p map[string]any) // runs (under the fake's lock) after each session.send
-	onStart   func(f *fakeHub, p map[string]any) // runs (under the fake's lock) when session.start arrives, before slowStart blocks
-	down      map[string]bool                    // machines listed as not connected (devices.list) while f.devices is nil
-	downLists map[string]int                     // and for how many more devices.list answers a machine is listed so
-	onList    func(f *fakeHub, machine string)   // runs (under the fake's lock) before a sessions.list is answered, which then sends the list as it left it
+	repairs    []map[string]any
+	repairRes  *proto.LauncherRepair
+	onRepair   func(f *fakeHub)
+	onSend     func(f *fakeHub, p map[string]any) // runs (under the fake's lock) after each session.send
+	onSendOnce func(f *fakeHub, p map[string]any) // runs under the fake's lock when a once-only send is accepted
+	onStart    func(f *fakeHub, p map[string]any) // runs (under the fake's lock) when session.start arrives, before slowStart blocks
+	down       map[string]bool                    // machines listed as not connected (devices.list) while f.devices is nil
+	downLists  map[string]int                     // and for how many more devices.list answers a machine is listed so
+	onList     func(f *fakeHub, machine string)   // runs (under the fake's lock) before a sessions.list is answered, which then sends the list as it left it
 	// onAssistantSend runs (under the fake's lock) when assistant.send arrives, before it is answered
 	onAssistantSend func(f *fakeHub, p map[string]any)
 	// assistantAnswer adds to assistant.send's answer (under the fake's lock): what a node says of a supervision round
@@ -375,6 +376,9 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 			return nil, f.failSendOnce[p.Device+"/"+sid]
 		}
 		f.sentOnce = append(f.sentOnce, a)
+		if f.onSendOnce != nil {
+			f.onSendOnce(f, a)
+		}
 		return json.RawMessage(`{}`), nil
 	case DeviceSessionsList:
 		if f.sessionsFail[p.Device] > 0 { // a node that answers offline for a few tries, then recovers

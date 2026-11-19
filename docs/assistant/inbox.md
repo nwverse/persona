@@ -91,10 +91,41 @@ a mail whose SMTP server got the whole message and never answered it (the connec
 refusal of it is still not sent) or a manager further on that was in doubt is `assistant_in_doubt` whatever error came with it, its record stays `unknown`,
 and the same reply is not sent again.
 
-**For the apps** (their wording is #9126's): say what to do per code (sign in, turn the source on, reply in the source's app, wait `retry_after`), offer
-sending again only when `retryable` is true, and keep "check before sending again" for `assistant_in_doubt`. A confirmed suggestion is taken even when its send
-fails, so confirming the same version again answers `409 suggestion_stale`; the event shows the failed send (Needs you). An older manager still answers these
+**For the apps**: say what to do per code (sign in, turn the source on, reply in the source's app, wait `retry_after`), offer
+sending again only when `retryable` is true, and keep "check before sending again" for `assistant_in_doubt`. An older manager still answers these
 failures with a bare 502.
+
+**Reply-suggestion recovery (#9126)** keeps the existing send-once contract. The first confirmation persists its actual
+client identity, edited reply and bound source/target before outward work. An item exposes `suggestion_attempts`, one
+authoritative record per version: `version`, `status` (`sending`, `failed`, `unknown`, `sent`), `retryable`, optional safe
+`code` / `retry_after`, actual `text`, `at`, and optional `conversation`. `at` is the latest attempt reservation or outcome,
+not a later proposal's time. Internal client IDs, frozen action and target fingerprints stay in the manager's stored JSON;
+they are not listed. No relational table or connector acknowledgement protocol is added.
+
+- A confirmed, retryable non-delivery retains the current version. Retry uses the first attempt's actual payload and
+  send identity, including after reload; a fresh caller UUID cannot turn it into another send or edit that payload.
+- A live attempt is Sending. A send whose receipt is unknown, or an inactive reservation loaded after restart, is
+  explicitly unknown and not retryable. The server enforces that boundary as well as the Web controls. A missing
+  historical record is not evidence that nothing was sent.
+- Completion records the old attempt's result, but files, closes handling, clears the current suggestion or marks a
+  card sent only for the still-current attempt or its explicitly bound same-operation alias, with the full
+  version, authority and source/target fence intact. A new suggestion or source message
+  cannot be overwritten by an earlier request returning. Failure to durably reserve an attempt prevents outward work.
+- Web cards and the item's reply confirmation show the frozen edited text and outcome. A replaced card keeps its own
+  outcome/time and can open **Current suggestion**; only the current safely retryable version offers Retry. Unknown
+  delivery tells the user to check the source, rather than claiming Not sent or offering a blind send.
+- An equivalent waiting reply proposal reuses its version and card; equality includes the complete action and bound
+  conversation/target, including the confirmed edited action. Identical words alone do not authorize another delivery.
+  Different actions or a changed authority/target keep the existing replacement rules.
+  An intervening different proposal, a later edit back to the uncertain text, or a fresh UUID cannot clear an older
+  same-operation uncertainty. A new version inherits that protected result; known outcomes settle its matching aliases
+  without touching a genuinely different current action. Resolved display history follows the existing chain bound
+  (50 records); at least one proof of every unresolved operation survives that bound. An omitted old receipt remains
+  unknown history, never evidence of non-delivery.
+- Default **Wrap up** reveals the waiting card. Its sending handoff request opts into `reuse_pending: true` so the
+  manager also reuses pending work for the same incoming item across the request-return / suggestion-push gap.
+  New incoming work may start fresh, and explicitly typed instructions keep the normal handoff behavior. This adds
+  neither a regeneration control nor a permanent client cache.
 
 ## One item = one row
 
@@ -659,7 +690,7 @@ conversation the item was handed to ("Item actions", Hand to AI), rejecting othe
 - `recap` without `kind` updates the recap (for example after a send), up to 600 characters. `related` contains IDs of related Inbox items from other chats / sources, recorded on both sides.
 - A recap-only call with neither `kind` nor `follow` creates no suggestion. When the matter was already waiting on the other side or its Agent is still working, ending the turn with only that update returns `handling.state` to `waiting` or `agent`, respectively.
 - `title` names the matter (one line, clipped to 40 characters) and `summary` says where it stands and who is waited on for what (one line, clipped to 80); either may accompany a suggestion or a recap-only call. A non-blank accepted value sets `title_by=assistant`; blank values leave the item unchanged. Only chat events (a grouped event or a built-in chat) accept `title`, and only when they have no mail, document or company-feed block; a grouped event may still carry its connector block. Connector threads (including PRs / issues and iMessage), mail, documents and company-feed posts keep their own title: the tool ignores `title`, says why, and still writes `summary`.
-- Each submission increments `suggestion.version` and invalidates the old suggestion; producing a suggestion sets `handling.state = done`. Chain records "Manager suggests a reply / an Agent / advice awaiting your decision" (`handling`, linked to the handling chat); conclusions record `concluded`.
+- A semantically new submission increments `suggestion.version` and invalidates the old suggestion; an equivalent waiting reply reuses it ("Reply-suggestion recovery" above). Producing a suggestion sets `handling.state = done`. Chain records "Manager suggests a reply / an Agent / advice awaiting your decision" (`handling`, linked to the handling chat); conclusions record `concluded`.
 - A mail reply suggestion also keeps its exact reply target internally (not in the listed suggestion). Opening mail marks it seen, and a later collection can consequently reduce a thread to an older unread UID; confirmation checks the bound target under the collection lock and returns `409 mail_reply_target_changed` instead of answering that different mail (#5471). A pre-upgrade mail suggestion has no bound target and is refused the same way rather than guessed; non-mail suggestions keep their legacy confirmation path. An FYI conclusion likewise remains open when its mail is read elsewhere: the item becomes `read`, but only **Got it** files it.
 - Old `inbox_draft` (reply only) remains supported, equivalent to `kind: reply`, for chats started before the tool list changed.
 - `item` (an item id) is needed from a conversation the item was handed to (`assistant/inbox_handoff.go`); from the item's own handling chat it changes nothing. A tool error refuses an unknown item,
@@ -681,14 +712,14 @@ conversation the item was handed to ("Item actions", Hand to AI), rejecting othe
 
 **Confirmation API** `POST /api/v1/inbox/{id}/suggestion`: `{version, action, text?, client_id?}`, `action` = `confirm` / `reject` / `instruct`.
 
-- `confirm`: execute exactly what is shown; supplied `text` replaces suggestion text (edit then confirm; chain `edited: true`, chat learns the changed text).
+- `confirm`: execute exactly what is shown; before the first reply attempt, supplied `text` replaces suggestion text (edit then confirm; chain `edited: true`, chat learns the changed text). A retry uses the persisted first-attempt payload; conflicting edits cannot send under that identity.
 - `reject`: record rejection, clear the suggestion, and return to the handling chat to reconsider. `instruct` requires `text` (such as "Do not reply this way; ask about timing first"; absent text returns 400), records your words, clears the suggestion, and asks the chat for a new one.
   Without a current suggestion, `instruct` with `version: 0` records your words and wakes or queues the handling chat; `confirm`, `reject`, and nonzero versions still return `suggestion_stale`.
 - Responses: `200` item; `409 {"code":"suggestion_stale","error":"建议已更新","item":{…}}` ("Suggestion updated": version is no longer current or no suggestion exists; App shows the notice and redraws from the returned item,
   including the second tap on the same suggestion); `409 inbox_item_done`; `409 mail_reply_target_changed` (the message the reply suggestion answered is no longer the item's target; nothing was sent); `400`; `403`: reply-only devices (Watch) may confirm only replies / conclusions, as text (no Agent creation, handback, rejection, instructions, document-status changes, or `/agent …` sends;
-  hub allows the route for Watch, while the manager checks the actual suggestion); `502 assistant_in_doubt` (as `/reply`: it may already have sent; confirming again gives 409); a send that did not go out answers its reason ("Send failures": `409 inbox_cannot_reply`, `429 inbox_send_rate_limited`, `502`/`503 inbox_*`, `delivered: "none"`); other 502 errors.
+  hub allows the route for Watch, while the manager checks the actual suggestion); `502 assistant_in_doubt` (as `/reply`: it may already have sent; another confirmation cannot bypass the attempt outcome); a send that did not go out answers its reason ("Send failures": `409 inbox_cannot_reply`, `429 inbox_send_rate_limited`, `502`/`503 inbox_*`, `delivered: "none"`); other 502 errors.
 - **Direct reply**: `POST /api/v1/inbox/{id}/reply` without a card keeps an item with a processing conversation open in `waiting` with the default 24-hour follow, records `sent` then `waiting` (`via=user`), clears any remaining suggestion and its old-App draft mirror, and queues `NoteSent` without waking that conversation. Without a processing conversation it still files as replied; new messages arriving while the send is out keep the existing kept-open behavior. This mode does not change old-App card sends or replies confirmed in a handed-off conversation.
-- **Execution failure** (send fails / times out, Agent fails to start): `handling.state = failed`, return to Needs you without a suggestion; chain `failed` ("Send did not succeed").
+- **Execution failure**: a confirmed reply retains its versioned attempt and the safe retry/unknown state above; it stays Needs you. Agent-start and other non-reply failures keep `handling.state = failed` without a suggestion and the existing `failed` chain entry.
 - **Persona's own sends are not your replies**: after Persona sends a reply, the next Lark-plugin round reports the chat's latest message as yours (`done: replied`). While the item awaits the other person's response and no new messages arrived (`last` unchanged),
   treat it as Persona's send: do not archive or record You replied in Lark. If the other person replies and you later reply in Lark yourself, mark done as usual (`done_by=replied`), record your reply,
   and tell its active handling chat to stop. Phase 1 ambiguity: if you add another Lark message after sending but before the other person replies, it is also treated as Persona's send.
