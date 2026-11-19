@@ -3,6 +3,8 @@
 #   ./scripts/app/sim.sh [--with-watch] [extra launch args...]
 # A development build (#10713, docs/operations/testing.md "Development builds"): the iPhone app without the watch app and
 # the share extension, and the Rust core's simulator slice only. --with-watch builds and embeds both, as CI and release do.
+# A lean build prints one line naming that check when the branch changes apple/Shared/, the watch app or the share
+# extension (scripts/app/lean-build-note.sh).
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 LEAN=YES
@@ -30,6 +32,7 @@ SIM=$(../scripts/app/sim-boot.sh "$SIM") || exit 1
 PERSONA_LEAN_DEV_BUILD=$LEAN xcodegen generate -q
 APP=../build/DerivedData/Build/Products/Debug-iphonesimulator/Persona.app
 if [ "$LEAN" = YES ]; then
+  ../scripts/app/lean-build-note.sh
   # Xcode leaves in place the watch app a --with-watch build embedded (Xcode 26.3; the share extension went): take
   # both out before the build, which signs the app again.
   rm -rf "$APP/Watch" "$APP/PlugIns/PersonaShare.appex"
