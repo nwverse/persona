@@ -88,6 +88,7 @@ inbox.write          DELETE /api/v1/inbox/policies/{id}
 -                    DELETE /api/v1/recordings/{id}
 -                    DELETE /api/v1/recordings/{id}/photos/{n}
 -                    DELETE /api/v1/sessions/{mid}/{sid}
+-                    DELETE /api/v1/sessions/{mid}/{sid}/held/{msg}
 -                    DELETE /api/v1/subscriptions/{id}
 -                    DELETE /api/v1/task-trust
 -                    DELETE /api/v1/todos/{id}
@@ -589,6 +590,7 @@ agents.control       POST /api/v1/sessions
 -                    POST /api/v1/sessions/{mid}/{sid}/autoname
 -                    POST /api/v1/sessions/{mid}/{sid}/close
 -                    POST /api/v1/sessions/{mid}/{sid}/fork
+-                    POST /api/v1/sessions/{mid}/{sid}/held/{msg}/retry
 agents.control       POST /api/v1/sessions/{mid}/{sid}/interrupt
 -                    POST /api/v1/sessions/{mid}/{sid}/keys
 agents.control       POST /api/v1/sessions/{mid}/{sid}/messages

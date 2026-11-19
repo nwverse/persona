@@ -1484,6 +1484,8 @@ conversation. Upward transcript loading extends that range when it reaches earli
 still count from the full history. Reuse the existing rail, hover preview, keyboard controls and mark geometry.
 This requested pagination correction does not add a setting or change placement. Android has no corresponding
 navigator on current main and is outside this fix's scope; it must not use its two-turn body window as a global count.
+When a web selection needs older messages, keep its loading status at the rail while the current transcript stays in
+place. Only the latest selection can move the transcript. If it fails, keep the marks available so it can be selected again.
 
 The web Changes panel's secondary file tree (#10477) reuses the existing `ResizeHandle` separator from the sidebar and side panel: pointer drag, arrow keys, Home/End, and double-click/Enter to reset. Column dimensions live in `web/src/lib/layout.ts` (`CHANGES_TREE_DEFAULT`, `CHANGES_TREE_MIN`, `CHANGES_TREE_MAX`, `CHANGES_DIFF_MIN`). Its default remains 192 px; the browser remembers a user resize and temporarily fits it to the panel while keeping space for the diff. At narrow widths the tree stays above the diff. File names and indentation may truncate, while each row's unchanged addition/deletion counts remain whole and the full path remains on hover.
 
