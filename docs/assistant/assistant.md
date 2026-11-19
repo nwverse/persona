@@ -381,6 +381,7 @@ The assistant and the L2 read-only connector are available; Inbox, knowledge bas
   `Risk: read / write / high-risk-write`. node asks once on first seeing a command (cached per command, about 50 ms):
   - `read` allowed directly; outside assistant bypass, `write`, `high-risk-write`, and unknown risk show a phone "Lark" card explaining actor (`--as bot`: "as the bot", otherwise "as you"), action (send, reply, react, recall…), and full command;
     high / unknown risk is separately marked. Denial returns user feedback; "Always allow in this session" remembers the command.
+  - A command lark-cli does not have runs without a card, so lark-cli itself answers "unknown subcommand" (#10845). lark-cli prints the parent group's help for it: no `Risk:` line, a `Usage:` naming exactly the command without its last word, and an `Available Commands:` list without that word; all three must hold. That answer is cached like a risk level. A command that exists but prints no `Risk:` line, and a lark-cli that cannot run or fails, still get the card (not cached).
   - Output-only allowed directly: `--help`, `--version`, `--dry-run`, `schema`, `skills`, `whoami`, `doctor`, `auth status / check / scopes / list`, `event list / schema / status`;
     `lark-cli api` uses HTTP methods: GET / HEAD allowed, other methods follow the permission mode and action classification (method, path, `--data` on a confirmation card).
   - For a gated message send or reply, the approval summary shows the conversation name (id when unavailable), the original sender and a short excerpt for a reply, topic status, and the outgoing text, rather than internal JSON fields such as `clientId` or `expectedSenderId`. `node/larkgate_card_context.go` reads that metadata with read-only Lark CLI calls (1.5 s per call); if it cannot be read, the old method / path / body summary is kept, and no gate decision changes (#5776).
@@ -937,7 +938,11 @@ before the next message, Claude Code thinks the window is exceeded and auto-comp
 
 ### Manual compaction (2026-11-04, #1727)
 
-User selects "Compact context" in main-chat menu: `POST /api/v1/assistant/conversations/{id}/compact` → node `assistant.compact` (`node/assistant_compact.go`).
+User selects "Compact context" in any open Assistant conversation's menu, including direction and other persistent side
+conversations: `POST /api/v1/assistant/conversations/{id}/compact` → node `assistant.compact` (`node/assistant_compact.go`).
+Web, iOS and Android offer it when the hub advertises `assistant_compact`; progress belongs to the conversation on
+screen. "Clear context" and "New main chat" remain main-only. This manual action does not change automatic compaction
+windows or any main-only automatic policy.
 
 - Same path as idle compaction: write `/compact` into an existing process, or start with `--resume` (chat's previous launcher / model); Codex uses `thread/compact/start`; runtime chats unsupported.
   A Codex Agent on an app-server takes the same call when sent `/compact` alone (#10188, [codex.md](../integrations/codex.md) "Sessions on the daemon (app-server route)").
@@ -1342,8 +1347,8 @@ operation then read as accepted and the bubble waited for the transcript and wen
 - **Kept.** The hub hands such a message (a 5xx with nothing delivered, or a transport outcome whose delivery is
   unknown, with a `client_msg_id`) to the conversation's manager, `assistant.keep_undelivered`, with the app's own fields
   (`text`, `images`, `launcher`, `model`, `effort`), never what `assistant.send_params` added. An unknown first attempt
-  is marked `delivery_unknown` and carries `tried_at`, the original send's start, so the manager looks for it before
-  trying again rather than either dropping it or resending blindly. The manager keeps it in its Postgres (setting `assistant.undelivered`,
+  is marked `delivery_unknown` and carries `tried_at`, the original send's start: the manager only looks for it, never
+  sends it again by itself (below). The manager keeps it in its Postgres (setting `assistant.undelivered`,
   `server/internal/assistant/undelivered.go`). The hub answers 202 `{"delivered":"later"}`, records the send as `later`
   (a retry of the id is answered the same and sends nothing) and tells the chat's subscribers `kept`. A manager that
   cannot keep it leaves the failure as before.
@@ -1356,14 +1361,33 @@ operation then read as accepted and the bubble waited for the transcript and wen
 - **Sent by itself, once.** The manager tries again with backoff (15 s, 30 s, 1 min, 2 min, then every 5 min), at once
   when the conversation is seen running again on a session list, oldest first, one pass per conversation at a time.
   A try runs `SendParams` again (the live snapshot and the pick of now) and the node's `session.send` under the
-  message's own `client_msg_id`: the node sends an id once, and its transcript line is tied to the id, so the bubble
-  turns into the real line. A try that may have gone in (no answer in time, or the manager stopped during it) is
-  looked for in the conversation's latest turns first, by id, or by its words written since the try where the node
-  forgot the tie.
+  message's own `client_msg_id`: its transcript line is tied to the id, so the bubble turns into the real line. Before
+  each try the manager saves the try's start (`tried_at`); when that save fails, the try is not made and waits for the
+  next backoff step, so a manager stopped during a try always finds the mark. A try refused before anything was typed
+  (the process did not start, the computer is away) clears the mark and is tried again by itself.
+- **A try in doubt is never sent again by itself (#10669).** A try that may have gone in (no answer in time, the link
+  dropped, the manager stopped or restarted during it, or the hub's own first try unknown) cannot be settled by
+  sending again: the node remembers ids only in memory for ten minutes (`server/internal/node/sendsafe.go`), and the
+  transcript can be late or unreadable. Such a message is only looked for in the conversation's latest turns, by id,
+  or by its words written since the try where the node forgot the tie (it restarted), at 15 s, 45 s, 1 min 45 s and
+  3 min after the doubt began (`undeliveredLookFor`: long enough for a line a busy computer writes late or a read
+  that fails once, short enough that the owner hears within minutes). Found, it went in and leaves the list. Not
+  found by then (the transcript could not be read, a message of pictures alone has no words to know it by once the id
+  is forgotten, or it is not there), it is marked failed with "It may already have gone in. Check the conversation
+  before you retry", and the owner decides.
 - **In order.** While a conversation has kept messages, `assistant.send_params` answers `undelivered_ahead` for a newer
   owner message, and the hub keeps it behind them instead of letting it overtake.
 - **Gives up after a day.** A message not delivered within 24 hours is marked failed; the owner picks Retry (a new day
-  of tries) or Delete. A conversation that was deleted fails it at once.
+  of tries) or Delete. A conversation that was deleted fails it at once. Retry sends the message even after a try in
+  doubt (the owner looked and said so; a line found by a last look still counts as delivered), and a Retry that cannot
+  be saved answers an error and changes nothing. Until the message goes in, each try of the Retry first looks for the
+  earlier try, also when the computer was still away at the Retry and comes back later (a try that typed nothing keeps
+  the Retry and the look), and the look always goes from the first try in doubt: `tried_at` is never moved later, so a
+  line that try wrote before the node forgot its id is still found by its words. If the Retry's own try ends in doubt,
+  it is again only looked for and then left to the owner.
+- **Device signed out** (#10708). The hub gives the manager the sending device's credential ID when it keeps a
+  message. Signing out that device fails its kept messages. Their rows say why and offer Delete. Messages kept
+  before the hub recorded the sending credential have no device to match.
 - **Between conversations.** `conversation_send` to a conversation that cannot take the message now no longer fails:
   the message goes into its relay queue and is tried again under the same `once_id`. A conversation that failed to
   take a relayed message is tried again after `relayRetryGap` (30 s), not on every session list.
@@ -1434,8 +1458,9 @@ manager that connects the computer holds it and sends it once the computer is ba
 - **Known gap** (#10702): a runtime Agent's row leaves the list when its node shuts down cleanly, or after the manager
   restarts while its computer is away; its held messages then have no row to show on until it is listed again. They
   are still sent.
-- **Limits**: a held message is sent with the provenance it was taken with, even if that device was signed out
-  meanwhile (#10708); the owner sees it on every device and can delete it. Held messages stay with the manager that
+- **Device signed out** (#10708). Signing out the sending device fails its held messages. The rows say why and
+  offer Delete. The manager checks with the hub before delivering a held message, including after reconnecting.
+- **Limits**: Held messages stay with the manager that
   held them: moving the computer to another manager (or one
   computer absorbed into another) while some are held leaves them unsent there. A message the computer refused does
   not hold back the later ones, so a Retry of it arrives after them. Two messages to one Agent sent at the same moment
