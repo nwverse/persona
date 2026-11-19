@@ -50,7 +50,7 @@ func (d *Devices) measureNodes(ctx context.Context) {
 		m.mu.Lock()
 		peer := m.peer
 		m.mu.Unlock()
-		if peer == nil || peer.Suspended() { // waiting to be resumed: no transport to ping (resume.go)
+		if peer == nil || peer.Lost() { // waiting to be resumed: no transport to ping (resume.go)
 			continue
 		}
 		cctx, cancel := context.WithTimeout(ctx, pingWait)
@@ -149,17 +149,14 @@ func (m *Machine) pingAnswered(peer *rpc.Peer, err error) {
 	if at := peer.PingActivity(); !at.IsZero() {
 		last = "last reply or large frame " + now.Sub(at).Round(time.Second).String() + " ago"
 	}
-	m.mu.Lock()
-	cut := m.cutConn
-	m.mu.Unlock()
-	if cut != nil && peer.Resumable() {
+	why := fmt.Errorf("no answer to %d pings in a row (a half-open link?)", misses)
+	if peer.Lose(why) {
 		// The node keeps the connection: only the transport is dead, and a new one takes it back (resume.go).
-		m.d.logf("[%s] no answer to %d pings in a row over %s (%s, %s): cutting the transport to resume", m.cfg.ID, misses, m.transportNow(), last, peer.LaneStats())
-		cut()
+		m.d.logf("[%s] no answer to %d pings in a row over %s (%s, %s): resuming on a new transport", m.cfg.ID, misses, m.transportNow(), last, peer.LaneStats())
 		return
 	}
 	m.d.logf("[%s] no answer to %d pings in a row over %s (%s, %s): closing the connection to reconnect", m.cfg.ID, misses, m.transportNow(), last, peer.LaneStats())
-	peer.Close(fmt.Errorf("no answer to %d pings in a row (a half-open link?)", misses))
+	peer.Close(why)
 	m.wake()
 }
 

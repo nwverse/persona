@@ -1,7 +1,6 @@
 package rpc
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -69,7 +68,17 @@ func newResumeLink(t *testing.T, link netshape.Config, window time.Duration, hRe
 		t.Fatal(err)
 	}
 	eventually(t, func() bool { return l.n.Framed() })
+	if hResume && nResume { // both inputs framed too: a cut before the node read the marker line ends the connection
+		eventually(t, func() bool { return l.h.readsResumable() && l.n.readsResumable() })
+	}
 	return l
+}
+
+// readsResumable: this side's input is framed and read through a transport a resume can replace.
+func (p *Peer) readsResumable() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.resume != nil && p.resume.sr != nil
 }
 
 // silentConn is a transport that can go silent without a word (silence): what it is given goes nowhere, nothing comes,
@@ -145,8 +154,7 @@ func (l *resumeLink) resume() error {
 	a, b := silentPipe(l.link)
 	accepted := make(chan error, 1)
 	go func() {
-		br := bufio.NewReader(b)
-		line, err := br.ReadBytes('\n')
+		line, rest, err := ReadFirstLine(b, resumeLineMax)
 		if err != nil {
 			accepted <- err
 			return
@@ -156,7 +164,7 @@ func (l *resumeLink) resume() error {
 			accepted <- fmt.Errorf("not an rpc.resume: %q", line)
 			return
 		}
-		accepted <- l.n.AcceptResume(req, io.MultiReader(bytes.NewReader(bufferedOf(br)), b), b)
+		accepted <- l.n.AcceptResume(req, rest, b)
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -231,7 +239,7 @@ func TestResumeKeepsCallsAndEventsExactlyOnce(t *testing.T) {
 	eventually(t, func() bool { mu.Lock(); defer mu.Unlock(); return len(got) > events/4 })
 	l.cut()
 	l.waitLost()
-	if !l.h.Suspended() || !l.n.Suspended() {
+	if !l.h.Lost() || !l.n.Lost() {
 		t.Fatal("a side not waiting to be resumed after the cut")
 	}
 	if err := l.resume(); err != nil {
@@ -392,7 +400,7 @@ func TestResumeTokenOnceAndOwn(t *testing.T) {
 			t.Errorf("%s token: wrote %q", name, w.String())
 		}
 	}
-	if l.n.Suspended() {
+	if l.n.Lost() {
 		t.Fatal("a refused token suspended the connection")
 	}
 	var out map[string]any
@@ -426,7 +434,7 @@ func TestResumeBeforeTheOtherSideNoticed(t *testing.T) {
 	if err := l.h.Call(ctx, "echo", nil, &out); err != nil {
 		t.Fatalf("after resuming: %v", err)
 	}
-	if l.n.Suspended() || l.h.Suspended() {
+	if l.n.Lost() || l.h.Lost() {
 		t.Fatal("still suspended after resuming")
 	}
 }
@@ -488,7 +496,7 @@ func TestResumeLosesASilentTransport(t *testing.T) {
 	t.Cleanup(func() { resumeStale, resumeCheck = oldStale, oldCheck })
 	l := newResumeLink(t, netshape.Config{}, 5*time.Second, true, true, nil)
 	<-time.After(3 * resumeStale) // quiet: nothing waits to be acknowledged
-	if l.h.Suspended() || l.n.Suspended() {
+	if l.h.Lost() || l.n.Lost() {
 		t.Fatal("a quiet transport was lost")
 	}
 	l.silence()
@@ -514,4 +522,93 @@ func TestResumeLosesASilentTransport(t *testing.T) {
 	if err := <-call; err != nil {
 		t.Fatalf("the call made while the transport was silent: %v", err)
 	}
+}
+
+// After a resume a frame may come again that was read over the old transport after this side told how far it read
+// (the other side took the connection back before this one saw the old transport fail): it is dropped, and the line
+// it belongs to comes once.
+func TestResumeDropsFramesReadTwice(t *testing.T) {
+	line := func(i int) []byte { return []byte(fmt.Sprintf(`{"event":"e","params":{"i":%d}}`, i)) }
+	var lines [][]byte
+	for i := 1; i <= 7; i++ {
+		lines = append(lines, line(i))
+	}
+	first, _ := frames(0, LaneEvents, framePayloadMax, lines[:5]...) // 1..5 over the old transport
+	again, _ := frames(2, LaneEvents, framePayloadMax, lines[2:]...) // 3..7 written again after a resume
+	fr := newFrameReader(&resumedReader{parts: [][]byte{first, again}}, 64<<20)
+	var got []string
+	for fr.Scan() {
+		got = append(got, string(fr.Bytes()))
+	}
+	if err := fr.Err(); err != nil {
+		t.Fatalf("after %d lines: %v", len(got), err)
+	}
+	if len(got) != 7 {
+		t.Fatalf("%d lines, want 7: %q", len(got), got)
+	}
+	for i, g := range got {
+		if g != string(lines[i]) {
+			t.Fatalf("line %d is %s", i+1, g)
+		}
+	}
+}
+
+// resumedReader hands out its parts one after the other, errResumed between two as a replaced transport does.
+type resumedReader struct {
+	parts [][]byte
+	gap   bool
+}
+
+func (r *resumedReader) Read(b []byte) (int, error) {
+	if len(r.parts) == 0 {
+		return 0, io.EOF
+	}
+	if r.gap {
+		r.gap = false
+		return 0, errResumed
+	}
+	n := copy(b, r.parts[0])
+	if r.parts[0] = r.parts[0][n:]; len(r.parts[0]) == 0 {
+		r.parts = r.parts[1:]
+		r.gap = len(r.parts) > 0
+	}
+	return n, nil
+}
+
+// A resume writes again only what the other side did not read: the frames after the last one it read.
+func TestResumeWritesAgainFromWhatWasRead(t *testing.T) {
+	lw := newLaneWriter(io.Discard, make(chan struct{}), func(error) {}, nil)
+	lw.keep = true
+	now := time.Now()
+	for seq := uint64(1); seq <= 5; seq++ {
+		lw.seq = seq
+		f, _ := frames(seq-1, LaneEvents, framePayloadMax, []byte(fmt.Sprintf(`{"event":"e%d"}`, seq)))
+		lw.keepLocked(seq, f, now)
+	}
+	lw.resume(io.Discard, 1, 3)
+	lw.mu.Lock()
+	batch := lw.resendLocked(nil)
+	lw.mu.Unlock()
+	heads, _ := heads(t, batch)
+	var seqs []uint64
+	for _, h := range heads {
+		if h.kind == frameData {
+			seqs = append(seqs, h.seq)
+		}
+	}
+	if fmt.Sprint(seqs) != "[4 5]" {
+		t.Fatalf("written again: %v, want [4 5]", seqs)
+	}
+}
+
+// What a side keeps for a resume goes once the other side read it: every frame read is acknowledged, those of lanes
+// without credit too, soon after (allAckDelay) when nothing else is written the other way.
+func TestResumeKeptGoesOnceRead(t *testing.T) {
+	l := newResumeLink(t, netshape.Config{}, 5*time.Second, true, true, nil)
+	for i := range 50 {
+		if err := l.n.Notify("ev", map[string]int{"i": i}); err != nil { // the events lane: no credit, no other acknowledgement
+			t.Fatal(err)
+		}
+	}
+	eventually(t, func() bool { return l.n.LaneStats().Kept == 0 })
 }

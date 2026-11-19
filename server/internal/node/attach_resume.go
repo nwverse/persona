@@ -1,8 +1,6 @@
 package node
 
 import (
-	"bufio"
-	"bytes"
 	"errors"
 	"io"
 	"net"
@@ -96,22 +94,17 @@ type peekedConn struct {
 	rest  io.Reader
 }
 
-// readFirstLine reads c's first line, at most 64 KiB, waiting at most firstLineWait. line is what it read (the line,
-// or what came before giving up); rest is what follows it.
+// readFirstLine reads c's first line (rpc.ReadFirstLine), waiting at most firstLineWait. line is what it read: the
+// line, or what came before giving up; rest is what follows it.
 func readFirstLine(c net.Conn) (line []byte, rest io.Reader) {
 	_ = c.SetReadDeadline(time.Now().Add(firstLineWait))
 	defer func() { _ = c.SetReadDeadline(time.Time{}) }()
-	br := bufio.NewReaderSize(c, 4096)
-	for len(line) <= 64<<10 {
-		b, err := br.ReadSlice('\n')
-		line = append(line, b...)
-		if err != bufio.ErrBufferFull {
-			break
-		}
-	}
-	buffered, _ := br.Peek(br.Buffered())
-	return line, io.MultiReader(bytes.NewReader(bytes.Clone(buffered)), c)
+	line, rest, _ = rpc.ReadFirstLine(c, firstLineMax)
+	return line, rest
 }
+
+// firstLineMax bounds a new transport's first line: rpc.resume, or the manager's first call, both short.
+const firstLineMax = 64 << 10
 
 var errReplaced = errors.New("replaced by a new connection")
 

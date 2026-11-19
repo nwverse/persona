@@ -36,11 +36,7 @@ func (r resumeCounts) String() string {
 }
 
 // cut closes the transport in use; the connection, kept for a resume, waits for a new one (resumeConn).
-func (c *nodeConn) cut() {
-	if p := c.pipe(); p != nil {
-		p.close()
-	}
-}
+func (c *nodeConn) cut() { c.pipe().close() }
 
 // openPipe opens a new transport to the node on path p, by via; it lasts as long as ctx.
 func (m *Machine) openPipe(ctx context.Context, p *nodePath, via string) (*nodePipe, error) {
@@ -71,23 +67,7 @@ func (m *Machine) resumeConn(c *nodeConn, err error) {
 	m.d.logf("[%s] connection over %s lost (%v): resuming within %s", m.cfg.ID, c.via, oneLineErr(err), resumeWindow)
 	deadline := lostAt.Add(resumeWindow)
 	wait := 200 * time.Millisecond
-	for try := 1; ; try++ {
-		select {
-		case <-c.peer.Done():
-			m.fellBack(lostAt, "not resumed in time")
-			return
-		case <-c.ctx.Done():
-			return
-		default:
-		}
-		if time.Until(deadline) <= 0 { // the peer closes itself as its window ends; the run loop connects anew
-			select {
-			case <-c.peer.Done():
-				m.fellBack(lostAt, "not resumed in time")
-			case <-c.ctx.Done():
-			}
-			return
-		}
+	for try := 1; time.Until(deadline) > 0; try++ {
 		rerr := m.tryResume(c)
 		if rerr == nil {
 			took := time.Since(lostAt)
@@ -111,7 +91,15 @@ func (m *Machine) resumeConn(c *nodeConn, err error) {
 		case <-c.ctx.Done():
 			return
 		}
+		if c.peer.Err() != nil {
+			break
+		}
 		wait = min(wait*2, 3*time.Second)
+	}
+	select { // the peer closes itself as its window ends; the run loop connects anew
+	case <-c.peer.Done():
+		m.fellBack(lostAt, "not resumed in time")
+	case <-c.ctx.Done():
 	}
 }
 
@@ -127,9 +115,7 @@ func (m *Machine) tryResume(c *nodeConn) error {
 		l.close()
 		return err
 	}
-	c.pipeMu.Lock()
-	c.pipeNow = l
-	c.pipeMu.Unlock()
+	c.pipeNow.Store(l)
 	return nil
 }
 

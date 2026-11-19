@@ -48,6 +48,7 @@ type laneWriter struct {
 	allDue       uint64
 	allAt        uint32
 	allSent      uint64
+	allWaiting   bool // a write for the acknowledgement of every frame read is due (ackAll)
 	gen          uint64
 	lost         bool
 	resend       int
@@ -159,14 +160,27 @@ func (lw *laneWriter) ack(seq uint64, at uint32) {
 }
 
 // ackAll asks for an acknowledgement of every frame read through seq (resuming: what the other side need not keep).
+// It goes with the next write, or on its own after allAckDelay: one a read would be a write a read the other way.
 func (lw *laneWriter) ackAll(seq uint64, at uint32) {
 	lw.mu.Lock()
-	if seq > lw.allDue {
-		lw.allDue, lw.allAt = seq, at
-		lw.poke()
+	defer lw.mu.Unlock()
+	if seq <= lw.allDue {
+		return
 	}
-	lw.mu.Unlock()
+	lw.allDue, lw.allAt = seq, at
+	if !lw.allWaiting {
+		lw.allWaiting = true
+		time.AfterFunc(allAckDelay, func() {
+			lw.mu.Lock()
+			lw.allWaiting = false
+			lw.mu.Unlock()
+			lw.poke()
+		})
+	}
 }
+
+// allAckDelay bounds how long an acknowledgement of every frame read waits for a write to go with.
+const allAckDelay = 500 * time.Millisecond
 
 // acked takes the other side's acknowledgement of every frame through seq, the last read at at by its clock.
 func (lw *laneWriter) acked(seq uint64, at uint32) error {
@@ -506,7 +520,8 @@ func (lw *laneWriter) dropKeptLocked(seq uint64) {
 		i++
 	}
 	if i > 0 {
-		lw.kept = append(lw.kept[:0], lw.kept[i:]...)
+		clear(lw.kept[:i]) // the frames' bytes go; the slice moves on (append makes it anew when it outgrows its end)
+		lw.kept = lw.kept[i:]
 		if lw.resend >= 0 {
 			lw.resend = max(lw.resend-i, 0)
 		}
@@ -537,9 +552,10 @@ func (lw *laneWriter) canResume(peerRead uint64) bool {
 	return lw.keptAfterLocked(peerRead)
 }
 
-// keptAfterLocked: every frame written after seq is kept (none lost to a gap or dropped by an acknowledgement).
+// keptAfterLocked: every frame written after seq is kept. What is kept is every frame after the gap and the
+// acknowledged ones, so seq must be at least both.
 func (lw *laneWriter) keptAfterLocked(seq uint64) bool {
-	return lw.keep && seq <= lw.seq && (seq == lw.seq || len(lw.kept) > 0 && lw.kept[0].seq <= seq+1 && seq >= lw.gapThrough)
+	return lw.keep && max(lw.gapThrough, lw.ackedThrough) <= seq && seq <= lw.seq
 }
 
 // loseGen: the transport of generation gen failed; nothing more is written until resume.

@@ -176,7 +176,7 @@ func (m *Machine) watchTailcat(ctx context.Context, c *nodeConn) {
 			return
 		case <-check.C:
 			activity := c.pipe().activity // a resume brings another (resume.go)
-			if peer.Suspended() || activity == nil || activity.idle() < m.timings.checkEvery || m.ping(ctx, peer) || activity.idle() < m.timings.checkEvery {
+			if peer.Lost() || activity == nil || activity.idle() < m.timings.checkEvery || m.ping(ctx, peer) || activity.idle() < m.timings.checkEvery {
 				misses = 0
 				go m.updatePath(ctx)
 				continue
@@ -185,10 +185,9 @@ func (m *Machine) watchTailcat(ctx context.Context, c *nodeConn) {
 				return
 			}
 			if misses++; misses >= 2 {
-				if peer.Resumable() { // cut the dead transport: the node keeps the connection for a resume (resume.go)
+				if peer.Lose(errors.New("tailcat: no answer to two pings")) { // the node keeps the connection (resume.go)
 					m.d.logf("[%s] tailcat: no answer to two pings, resuming on a new transport", m.cfg.ID)
 					misses = 0
-					c.cut()
 					continue
 				}
 				m.d.logf("[%s] tailcat: no answer to two pings, reconnecting", m.cfg.ID)

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -27,9 +26,8 @@ var errSwitched = errors.New("moved to a better path")
 // nodeConn is one connection to the node, its node.info answered.
 type nodeConn struct {
 	path       *nodePath
-	via        string // the transport it took: local | ssh | tailcat | link | service | hub
-	pipeMu     sync.Mutex
-	pipeNow    *nodePipe // the transport in use, which a resume replaces (resume.go)
+	via        string                   // the transport it took: local | ssh | tailcat | link | service | hub
+	pipeNow    atomic.Pointer[nodePipe] // the transport in use, which a resume replaces (resume.go)
 	ctx        context.Context
 	peer       *rpc.Peer
 	info       proto.NodeInfo
@@ -48,11 +46,7 @@ func (c *nodeConn) close() {
 }
 
 // pipe is the transport in use.
-func (c *nodeConn) pipe() *nodePipe {
-	c.pipeMu.Lock()
-	defer c.pipeMu.Unlock()
-	return c.pipeNow
-}
+func (c *nodeConn) pipe() *nodePipe { return c.pipeNow.Load() }
 
 // run keeps the machine connected through its best path until ctx ends.
 func (m *Machine) run(ctx context.Context) {
@@ -248,18 +242,9 @@ func (m *Machine) establishVia(ctx context.Context, p *nodePath, via string) (*n
 // Repeating this pre-operation handshake is safe: only engine selection and node.info have been sent.
 func (m *Machine) establishViaOnce(ctx context.Context, p *nodePath, via string, wait time.Duration) (*nodeConn, error) {
 	cctx, cancel := context.WithCancel(ctx)
-	var l *nodePipe
-	var err error
-	if via == viaHub {
-		l, err = m.d.openThroughHub(cctx, p.hub, p.mid)
-	} else {
-		l, err = p.src.open(cctx, via)
-	}
+	l, err := m.openPipe(cctx, p, via)
 	if err != nil {
 		cancel()
-		if via == "tailcat" {
-			p.src.tailcatReset()
-		}
 		return nil, err
 	}
 	peer := rpc.New("h", l.w)
@@ -275,7 +260,8 @@ func (m *Machine) establishViaOnce(ctx context.Context, p *nodePath, via string,
 		"file.zip":               true,
 	}
 	// Every event goes on to the hub, the forwarded ports' bytes among them (the hub is their end, ports.go there).
-	c := &nodeConn{path: p, via: via, pipeNow: l, ctx: cctx, peer: peer, served: make(chan error, 1), cancel: cancel}
+	c := &nodeConn{path: p, via: via, ctx: cctx, peer: peer, served: make(chan error, 1), cancel: cancel}
+	c.pipeNow.Store(l)
 	peer.OnClose = func(err error, inflight []string) { m.logCutOff(via, err, inflight) }
 	peer.OnLost = func(err error) { m.resumeConn(c, err) } // a node that keeps it: resume.go
 	peer.OnRequest = func(ctx context.Context, method string, params json.RawMessage) (any, error) {
@@ -449,14 +435,6 @@ func (m *Machine) serve(ctx context.Context, c *nodeConn) error {
 			}
 		})()
 	}
-	m.mu.Lock()
-	m.cutConn = c.cut // a ping that finds the transport dead cuts it, to resume (resume.go)
-	m.mu.Unlock()
-	defer func() {
-		m.mu.Lock()
-		m.cutConn = nil
-		m.mu.Unlock()
-	}()
 
 	// A node this manager cannot drive stays connected, so it shows and can be updated (machine.call refuses the
 	// rest), but is neither configured nor listed nor watched: what it would answer is not known.

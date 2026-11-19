@@ -64,7 +64,6 @@ type resumeState struct {
 	token  string
 	gen    uint64
 	lost   bool
-	lostAt time.Time
 	timer  *time.Timer
 	// accepting: an AcceptResume is writing its answer.
 	accepting bool
@@ -105,11 +104,25 @@ func (p *Peer) Resumable() bool {
 	return on && lw != nil && lw.resumable()
 }
 
-// Suspended: the transport was lost and the peer waits to be resumed.
-func (p *Peer) Suspended() bool {
+// Lost: the transport was lost and the peer waits to be resumed (not SuspendCalls' suspension).
+func (p *Peer) Lost() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.resume != nil && p.resume.lost
+}
+
+// Lose takes the transport in use for dead (pings unanswered, nothing written for long) on a connection that can
+// resume: the peer waits for a resume, as when the transport fails, and OnLost is told err. false: it cannot (or it is
+// closed), and the caller closes the peer as it always did. Lost already: true, nothing more happens.
+func (p *Peer) Lose(err error) bool {
+	p.mu.Lock()
+	rs := p.resume
+	var gen uint64
+	if rs != nil {
+		gen = rs.gen
+	}
+	p.mu.Unlock()
+	return rs != nil && p.lose(err, gen)
 }
 
 // ResumeRequest is an rpc.resume read as the first line of a new transport (ParseResume).
@@ -195,7 +208,7 @@ func (p *Peer) lose(err error, gen uint64) bool {
 		p.mu.Unlock()
 		return false
 	}
-	rs.lost, rs.lostAt = true, time.Now()
+	rs.lost = true
 	lw.loseGen(gen)
 	window := rs.window
 	rs.timer = time.AfterFunc(window, func() {
@@ -232,9 +245,9 @@ func (p *Peer) Resume(ctx context.Context, r io.Reader, w io.Writer) error {
 		return err
 	}
 	type answered struct {
-		m   message
-		br  *bufio.Reader
-		err error
+		m    message
+		rest io.Reader
+		err  error
 	}
 	done := make(chan answered, 1)
 	go func() {
@@ -242,8 +255,7 @@ func (p *Peer) Resume(ctx context.Context, r io.Reader, w io.Writer) error {
 			done <- answered{err: err}
 			return
 		}
-		br := bufio.NewReaderSize(r, 4096)
-		b, err := readLineMax(br, resumeLineMax)
+		b, rest, err := ReadFirstLine(r, resumeLineMax)
 		if err != nil {
 			done <- answered{err: err}
 			return
@@ -253,7 +265,7 @@ func (p *Peer) Resume(ctx context.Context, r io.Reader, w io.Writer) error {
 			done <- answered{err: fmt.Errorf("rpc: answer to %s: %w", resumeMethod, err)}
 			return
 		}
-		done <- answered{m: m, br: br}
+		done <- answered{m: m, rest: rest}
 	}()
 	var a answered
 	select {
@@ -276,7 +288,7 @@ func (p *Peer) Resume(ctx context.Context, r io.Reader, w io.Writer) error {
 	if err := json.Unmarshal(a.m.Result, &ans); err != nil || ans.Token == "" {
 		return fmt.Errorf("rpc: answer to %s: %s", resumeMethod, a.m.Result)
 	}
-	rest := io.MultiReader(bytes.NewReader(bufferedOf(a.br)), r)
+	rest := a.rest
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if rs.gen != gen || !rs.lost {
@@ -316,7 +328,7 @@ func (p *Peer) AcceptResume(req ResumeRequest, r io.Reader, w io.Writer) error {
 		return ErrResumeRefused
 	}
 	if !rs.lost {
-		rs.lost, rs.lostAt = true, time.Now()
+		rs.lost = true
 		lw.loseGen(rs.gen)
 	}
 	rs.accepting = true // one at a time: the token stays this one's until the answer is out
@@ -367,30 +379,31 @@ func (p *Peer) installLocked(r io.Reader, w io.Writer, peerRead uint64) {
 	}
 	p.lw.resume(w, rs.gen, peerRead)
 	rs.sr.install(r, rs.gen)
+	p.lastWrite.Store(time.Now().UnixNano()) // what waits for progress counts from the new transport
 }
 
-// bufferedOf is what br read past the line it returned.
-func bufferedOf(br *bufio.Reader) []byte {
-	b, _ := br.Peek(br.Buffered())
-	return bytes.Clone(b)
-}
-
-// readLineMax reads one line of at most max bytes, its newline dropped.
-func readLineMax(br *bufio.Reader, max int) ([]byte, error) {
-	var line []byte
+// ReadFirstLine reads r's first line, up to max bytes: what a new transport starts with (rpc.resume, or a manager's
+// first call). line is what it read, the newline included; on an error (no newline within max, r ended, a deadline)
+// it is what came before. rest is what follows: the bytes read ahead, then r.
+func ReadFirstLine(r io.Reader, max int) (line []byte, rest io.Reader, err error) {
+	br := bufio.NewReaderSize(r, 4096)
 	for {
-		b, err := br.ReadSlice('\n')
+		b, rerr := br.ReadSlice('\n')
 		line = append(line, b...)
+		if rerr == nil {
+			break
+		}
+		if rerr != bufio.ErrBufferFull {
+			err = rerr
+			break
+		}
 		if len(line) > max {
-			return nil, bufio.ErrTooLong
-		}
-		if err == nil {
-			return bytes.TrimSuffix(line, []byte("\n")), nil
-		}
-		if err != bufio.ErrBufferFull {
-			return nil, err
+			err = bufio.ErrTooLong
+			break
 		}
 	}
+	buffered, _ := br.Peek(br.Buffered())
+	return line, io.MultiReader(bytes.NewReader(bytes.Clone(buffered)), r), err
 }
 
 // swapReader is the transport a framed connection reads, which a resume replaces (install). A read that fails tells
@@ -406,7 +419,9 @@ type swapReader struct {
 }
 
 func newSwapReader(p *Peer, r io.Reader) *swapReader {
-	return &swapReader{p: p, r: r, next: make(chan struct{})}
+	s := &swapReader{p: p, r: r, next: make(chan struct{})}
+	s.readAt.Store(time.Now().UnixNano())
+	return s
 }
 
 func (s *swapReader) Read(b []byte) (int, error) {

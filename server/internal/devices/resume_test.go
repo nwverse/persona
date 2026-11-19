@@ -1,7 +1,6 @@
 package devices
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -53,10 +52,7 @@ func (n *residentNode) dial(context.Context) (net.Conn, error) {
 	n.manager = managerSide
 	n.mu.Unlock()
 	go func() {
-		br := bufio.NewReader(nodeSide)
-		line, _ := br.ReadBytes('\n')
-		buffered, _ := br.Peek(br.Buffered())
-		rest := io.MultiReader(bytes.NewReader(bytes.Clone(buffered)), nodeSide)
+		line, rest, _ := rpc.ReadFirstLine(nodeSide, 64<<10)
 		n.mu.Lock()
 		p, restarted := n.peer, n.restarted
 		n.mu.Unlock()
@@ -261,7 +257,7 @@ func TestPingMissesCutAResumableConnection(t *testing.T) {
 		m.pingAnswered(peer, context.DeadlineExceeded)
 	}
 	eventually(t, 10*time.Second, "resumed", func() bool { return logs.count("resumed after") > 0 })
-	if logs.count("cutting the transport to resume") != 1 {
+	if logs.count("pings in a row over ssh") != 1 || logs.count("resuming on a new transport") != 1 {
 		t.Fatalf("not cut: %q", logs.since(0))
 	}
 	if peer.Err() != nil {
