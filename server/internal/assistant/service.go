@@ -18,6 +18,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/assistant/saved"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -490,6 +491,9 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 			if origin != "" {
 				p["origin"] = origin
 			}
+			if !originKnown || (origin != "" && origin != OriginTask) || p["is_main"] == true {
+				delete(p, devicewire.LegacyTaskExecution)
+			}
 			if method == DeviceSessionSend || method == DeviceSessionSendOnce {
 				cfg := s.settings(ctx)
 				if id != "" && id == cfg.Main && device == cfg.mainRouteMachine() {
@@ -696,13 +700,18 @@ func (s *Service) device(ctx context.Context, id string) (Device, bool) {
 
 // startParams are what a new conversation starts with.
 type startParams struct {
-	Text           string               `json:"text"`
-	PermissionMode string               `json:"permission_mode,omitempty"`
-	Purpose        string               `json:"purpose,omitempty"` // the model configuration's purpose; "" is the assistant's
-	Space          string               `json:"space,omitempty"`   // "health" starts it in the health space (docs/assistant/health.md)
-	Origin         string               `json:"origin,omitempty"`  // where it comes from (origins.go); "" is the user's
-	OriginRef      string               `json:"origin_ref,omitempty"`
-	Source         *proto.MessageSource `json:"source,omitempty"`
+	TaskModel           *ModelBinding
+	MachineID           string
+	Cwd                 string
+	TaskExecution       bool
+	LegacyTaskExecution bool
+	Text                string               `json:"text"`
+	PermissionMode      string               `json:"permission_mode,omitempty"`
+	Purpose             string               `json:"purpose,omitempty"` // the model configuration's purpose; "" is the assistant's
+	Space               string               `json:"space,omitempty"`   // "health" starts it in the health space (docs/assistant/health.md)
+	Origin              string               `json:"origin,omitempty"`  // where it comes from (origins.go); "" is the user's
+	OriginRef           string               `json:"origin_ref,omitempty"`
+	Source              *proto.MessageSource `json:"source,omitempty"`
 	// NewSessionID starts the conversation under this id (a Claude Code one; another agent picks its own).
 	NewSessionID string `json:"new_session_id,omitempty"`
 }

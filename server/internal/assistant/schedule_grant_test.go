@@ -351,15 +351,21 @@ func TestScheduleGrantDropsWhenTheScheduleChanges(t *testing.T) {
 			t.Fatalf("PUT: %d %s", w.Code, w.Body)
 		}
 	}
-	g := newGrantFixture(t, two())
+	legacy := two()
+	// The persisted basis before task-local execution options existed.
+	legacy.StartGrant.Basis = "3b456559ae474d2a197c2945636b3c1545a69e8165db3e811969db697fa3ca44"
+	g := newGrantFixture(t, legacy)
 	put(g, keep)
 	if task, _ := taskByID(g.s, "deps"); task.liveGrant() == nil || len(task.StartGrant.Kinds) != 2 {
 		t.Fatalf("a time change (or the body's start_grant) changed the grant: %+v", task.StartGrant)
 	}
 	for name, body := range map[string]string{
-		"prompt": strings.Replace(keep, "open a PR", "merge it", 1),
-		"facts":  strings.Replace(keep, `"enabled":true`, `"enabled":true,"facts":true`, 1),
-		"report": strings.Replace(keep, `"enabled":true`, `"enabled":true,"report":true`, 1),
+		"prompt":              strings.Replace(keep, "open a PR", "merge it", 1),
+		"facts":               strings.Replace(keep, `"enabled":true`, `"enabled":true,"facts":true`, 1),
+		"report":              strings.Replace(keep, `"enabled":true`, `"enabled":true,"report":true`, 1),
+		"execution computer":  strings.Replace(keep, `"enabled":true`, `"enabled":true,"execution_machine_id":"box"`, 1),
+		"execution directory": strings.Replace(keep, `"enabled":true`, `"enabled":true,"cwd":"/code/other"`, 1),
+		"prompt with model":   strings.Replace(strings.Replace(keep, "open a PR", "merge it", 1), `"enabled":true`, `"enabled":true,"model":"test-model"`, 1),
 	} {
 		g := newGrantFixture(t, two())
 		put(g, body)
