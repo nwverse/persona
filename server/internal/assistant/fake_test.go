@@ -1003,6 +1003,9 @@ func (noPlans) FeedItem(context.Context, string) (*db.FeedRow, error) {
 func (noPlans) MarkFeedSent(context.Context, string, string, time.Time, json.RawMessage) ([]db.FeedRow, error) {
 	return nil, errors.New("no assistant_feed here")
 }
+func (noPlans) FeedByRef(context.Context, string, []string, int) ([]db.FeedRow, error) {
+	return nil, errors.New("no assistant_feed here")
+}
 
 func (m *memStore) Setting(_ context.Context, key string, out any) (bool, error) {
 	m.mu.Lock()

@@ -2320,6 +2320,59 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(checked.call_args.kwargs["input_text"], payload)
         self.assertEqual(checked.call_args.args[0], ["gh", "api", "repos/example/one/pulls", "--input", "-"])
 
+    def test_open_continuation_matches_title_or_body(self):
+        fork = pr(isCrossRepository=True)
+        for title, body in (("fix: continue #7 verification repair", ""),
+                            ("fix: verification repair", "Continuation of https://github.com/example/one/pull/7.")):
+            with self.subTest(title=title, body=body):
+                candidates = [
+                    dict(pr(), title=title, body=body),  # The fork itself.
+                    dict(pr(), number=8, title="fix: continue #70 verification repair", body="Refs #7"),
+                    dict(pr(), number=9, title=title, body=body, state="CLOSED"),
+                    dict(pr(), number=10, title=title, body=body, state="MERGED", mergedAt="2026-11-16T00:00:00Z"),
+                    dict(pr(), number=11, title=title, body=body),
+                ]
+                with patch.object(pr_watch_repair, "gh_json", return_value=candidates) as search, \
+                        patch.object(pr_watch_repair, "checked") as checked:
+                    self.assertEqual(pr_watch_repair.find_continuation("example/one", fork), 11)
+                self.assertIn('"7" in:title,body', search.call_args.args[0])
+                checked.assert_not_called()
+
+    def test_merged_continuation_must_postdate_current_fork_head(self):
+        continuation = dict(pr(), number=9, title="fix: continue #7 verification repair",
+                            state="MERGED", mergedAt="2026-11-16T00:00:00Z")
+        with patch.object(pr_watch_repair, "gh_json", return_value=[continuation]), \
+                patch.object(pr_watch_repair, "checked", side_effect=["2026-11-15T00:00:00Z\n",
+                                                                     "2026-11-17T00:00:00Z\n"]) as checked:
+            self.assertEqual(pr_watch_repair.find_continuation("example/one", pr(isCrossRepository=True)), 9)
+            self.assertIsNone(pr_watch_repair.find_continuation("example/one", pr(head=SHA_B, isCrossRepository=True)))
+        self.assertIn("repos/example/one/commits/" + SHA_A, checked.call_args_list[0].args[0])
+        self.assertIn("repos/example/one/commits/" + SHA_B, checked.call_args_list[1].args[0])
+
+    def test_reused_continuation_survives_restart_and_base_change(self):
+        repo = "example/one"
+        fork = pr(isCrossRepository=True)
+        findings = [{"severity": "P0", "path": "file.py", "line": 1, "summary": "bad", "suggestion": "fix"}]
+        evidence = repo + "#7@" + SHA_BASE + ".." + SHA_A
+        self.watcher.state.put(repo, 7, SHA_A, evidence_key=evidence)
+        with patch.object(pr_watch, "pr_snapshot", return_value=fork), \
+                patch.object(pr_watch, "checked"), \
+                patch.object(pr_watch_repair, "repair_with_model"), \
+                patch.object(pr_watch_repair, "commit_and_push_repair", return_value=(9, None)):
+            self.watcher.repair_findings(self.config["repositories"][0], fork, self.root, findings)
+        self.assertEqual(self.comments, [])
+
+        restarted = pr_watch.Watcher(self.config, verbose=False)
+        record = restarted.state.get(repo, 7)
+        self.assertEqual((record["head"], record["outcome"], record["continuation"]), (SHA_A, "continuation", 9))
+        with patch.object(pr_watch, "pr_snapshot", return_value=dict(fork, baseRefOid="d" * 40)), \
+                patch.object(restarted, "worktree") as worktree, \
+                patch.object(pr_watch_repair, "find_continuation") as search:
+            restarted.process(repo, 7)
+        worktree.assert_not_called()
+        search.assert_not_called()
+        self.assertEqual(restarted.state.get(repo, 7), record)
+
     def test_continuation_pr_links_original_issue(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -2335,9 +2388,9 @@ class WatcherTests(unittest.TestCase):
                     patch.object(pr_watch_repair, "verify", return_value=[]), \
                     patch.object(pr_watch_repair, "checked", side_effect=fake_checked), \
                     patch.object(pr_watch_repair, "run", return_value=subprocess.CompletedProcess([], 0, "", "")), \
-                    patch.object(pr_watch_repair, "gh_json", side_effect=[[], {"number": 9}]) as created:
+                    patch.object(pr_watch_repair, "gh_json", side_effect=[[], [], {"number": 9}]) as created:
                 pr_watch_repair.commit_and_push_repair("example/one", pr(isCrossRepository=True), root, SHA_BASE, "failure", {"profile": "commands", "commands": [["true"]]}, allow_merge_only=True)
-        self.assertIn("Refs #6", created.call_args_list[1].kwargs["input_text"])
+        self.assertIn("Refs #6", created.call_args.kwargs["input_text"])
 
     def test_every_failed_lane_must_reproduce_on_main(self):
         failures = [{"command": ["test", "one"], "output": "--- FAIL: TestA\n"},

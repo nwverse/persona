@@ -193,22 +193,24 @@ type Node struct {
 	hostSig   map[string]*watcherSignals // change signals of the registered watcher hosts, by host kind (herdrevents.go)
 	cdirs     *claudeDirs                // Claude Code config directories in use (claudedirs.go)
 	cfiles    claudeFiles                // every claude's sessions/<pid>.json as last parsed (claudefiles.go)
-	hooks     *hookTurns                 // per-session turn counters from Persona's hooks (hookturn.go)
-	live      liveReplies                // the replies Claude is showing, from its MessageDisplay hook (livereply.go)
-	bgWait    bgWatch                    // whether background commands only wait (bgwait.go)
-	codices   *codexRegistry
-	oldCache  map[string]oldCodexLookup // opaque-id hits and misses, bounded by directory stamps and a one-minute TTL
-	takeovers codexTakeovers
-	usageWin  usageWindowsState // subscription rate-limit windows (usagewindows.go, #2432)
-	machineID string
-	sends     sentLog         // recent client_msg_ids (sendsafe.go)
-	echoes    echoLog         // sends tied to their transcript lines (echo.go)
-	typing    typingLocks     // one send at a time per session (sendsafe_turns.go)
-	recovery  typingLocks     // guarded resumes and user closures; first-message delivery takes typing independently
-	sendOrder sendQueue       // sends waiting for a start, in the order they came (sendsafe_turns.go)
-	cx        codexCards      // Codex questions and approvals listed to the hub (codexask.go)
-	kept      map[string]bool // sessions always listed (node.configure keep_sessions)
-	forked    map[string]bool // sessions "Branch to new chat" made (fork.go): listed however short they are
+	// profileSeedMu orders a new/empty assistant profile's hook seed across concurrent starts of one launcher.
+	profileSeedMu sync.Mutex
+	hooks         *hookTurns  // per-session turn counters from Persona's hooks (hookturn.go)
+	live          liveReplies // the replies Claude is showing, from its MessageDisplay hook (livereply.go)
+	bgWait        bgWatch     // whether background commands only wait (bgwait.go)
+	codices       *codexRegistry
+	oldCache      map[string]oldCodexLookup // opaque-id hits and misses, bounded by directory stamps and a one-minute TTL
+	takeovers     codexTakeovers
+	usageWin      usageWindowsState // subscription rate-limit windows (usagewindows.go, #2432)
+	machineID     string
+	sends         sentLog         // recent client_msg_ids (sendsafe.go)
+	echoes        echoLog         // sends tied to their transcript lines (echo.go)
+	typing        typingLocks     // one send at a time per session (sendsafe_turns.go)
+	recovery      typingLocks     // guarded resumes and user closures; first-message delivery takes typing independently
+	sendOrder     sendQueue       // sends waiting for a start, in the order they came (sendsafe_turns.go)
+	cx            codexCards      // Codex questions and approvals listed to the hub (codexask.go)
+	kept          map[string]bool // sessions always listed (node.configure keep_sessions)
+	forked        map[string]bool // sessions "Branch to new chat" made (fork.go): listed however short they are
 	// ccPlugins: Persona's Claude Code plugin in the sessions outside Persona's terminals that loaded it (ccplugin.go).
 	ccPlugins ccPluginRegistry
 	// freshForks: branches nothing has started yet, which a message may start (stopped.go); a stopped agent may not.
@@ -256,6 +258,12 @@ type Node struct {
 	autoCompanions bool
 	// keeper: a resident node's conversations between hub connections (assistant_keep.go); nil without one.
 	keeper *assistantKeeper
+	// Resuming (attach_resume.go): a resident node keeps a connection whose transport ended resumeWindow for the
+	// manager to take back; onPeer is told the connection's peer once it is made.
+	resumeWindow time.Duration
+	onPeer       func(*rpc.Peer)
+	// hookOut sends a resident node's hook events without holding the hooks (hook_outbox.go).
+	hookOut hookOutbox
 	// replayed is closed once what standby took while no manager was connected went to this one (spool_replay.go): new
 	// hooks wait for it, so the manager hears them after the older ones. nil (tests' Nodes): nothing waits.
 	replayed chan struct{}
@@ -477,6 +485,15 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 	// A manager that knows lanes asks for them after node.info (docs/protocol/protocol.md "Lanes"): pongs and answers
 	// then pass file chunks and updates on the way.
 	n.peer.EnableLanes(nodeproto.ControlLane, nodeproto.BulkLane)
+	if n.resumeWindow > 0 { // a resident node's: the connection outlives a transport that ends (attach_resume.go)
+		n.peer.EnableResume(n.resumeWindow)
+		n.peer.OnLost = func(err error) {
+			n.logger.Printf("connection lost (%v): kept %s for the manager to resume", err, n.resumeWindow)
+		}
+	}
+	if n.onPeer != nil {
+		n.onPeer(n.peer)
+	}
 	if n.external != nil {
 		peer := n.peer
 		n.external.SetOnChange(func() { _ = peer.Notify("launchers.changed", map[string]any{}) })
@@ -557,6 +574,8 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 	n.startTodoTokensReconciler(ctx)
 	defer n.starts.close()
 	defer n.switches().leave(n) // the records of a switch still running go to the next connection's Node
+	// First once the connection ended: the hook events it never sent are in the spool before the next one replays it.
+	defer n.hookOut.wait(5 * time.Second)
 	return n.peer.Serve(ctx, r)
 }
 
@@ -720,6 +739,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		ctx, _ = withOwnerDelivery(ctx)
 	}
 	switch method {
+	case "workspace.naming.resolve":
+		return n.resolveWorkspaceNaming(ctx, params)
 	case "session.share_projection":
 		return n.shareProjection(ctx, params)
 	case devicewire.MethodCloseTaskTerminal:
