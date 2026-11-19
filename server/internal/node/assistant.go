@@ -604,7 +604,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		// explicitly ordinary resumed decision must also clear a persisted Inbox origin before tool selection and spawn.
 		st.Origin, st.OriginKnown = origin, originKnown
 		if origin != "" {
-			st.Launcher, st.Cwd = launcher, cwd
+			st.Launcher = launcher
+			// Recovery sends an empty cwd to mean the persisted directory. Do not clear it before storedCwd below reads it.
+			st.Cwd = cmp.Or(cwd, st.Cwd)
 		}
 		n.state.put(id, st)
 	}
@@ -697,6 +699,10 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		originChanged := assistantOriginToolPolicy(p.origin) != assistantOriginToolPolicy(origin) ||
 			assistantOriginToolPolicy(p.model.Origin) != assistantOriginToolPolicy(origin)
 		active := p.busy || len(p.tasks) > 0
+		if originChanged {
+			// The old built-in policy must also survive compactions and accepted or queued input that has not started a turn.
+			active = p.workingLocked()
+		}
 		if proto.IsExternalLauncher(p.launcher) || proto.IsExternalLauncher(launcher) {
 			active = p.workingLocked() // compactions and accepted/unacknowledged queued input also belong to this process
 		}

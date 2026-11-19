@@ -351,6 +351,40 @@ func TestRecoveryWithoutModelAnswerRequiresKnownOrigin(t *testing.T) {
 	}
 }
 
+// Recovery without a fresh manager answer retains both the persisted origin decision and its working directory. The
+// send's empty cwd means "use the stored directory", not "clear it before the storedCwd fallback runs".
+func TestRecoveryWithoutModelAnswerPreservesStoredCwd(t *testing.T) {
+	for _, origin := range []string{"user", originInbox} {
+		t.Run(origin, func(t *testing.T) {
+			f := cliTest(t)
+			if err := os.WriteFile(filepath.Join(os.Getenv("HOME"), "bin", "claude"), []byte("#!/bin/sh\nprintf '%s\\n' \"$PWD\" >> \"$CLI_FAKE_DIR/cli-cwd\"\n"+fakeCLI), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			const id = "11111111-1111-4111-8111-11111111111a"
+			cwd := filepath.Join(t.TempDir(), ".persona", "assistant")
+			if err := os.MkdirAll(cwd, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			f.n.state.put(id, sessionState{Launcher: "claude", Cwd: cwd, AppMode: "default", Origin: origin, OriginKnown: true,
+				Tasks: []string{"watch a background task"}})
+			inboxResumeTranscript(t, f.n, id)
+			f.n.recoverAssistantTasks(f.n.recoverAssistantSend)
+			f.idle(t, id)
+			st, _ := f.n.state.get(id)
+			p := f.proc(id)
+			if p == nil {
+				t.Fatal("known-origin recovery did not start a process")
+			}
+			p.mu.Lock()
+			processCwd := p.cwd
+			p.mu.Unlock()
+			if st.Cwd != cwd || processCwd != cwd || strings.TrimSpace(f.file("cli-cwd")) != cwd {
+				t.Fatalf("recovery lost stored cwd %q: state=%q process=%q actual=%q", cwd, st.Cwd, processCwd, strings.TrimSpace(f.file("cli-cwd")))
+			}
+		})
+	}
+}
+
 // A legacy manager cannot attest an ordinary empty origin. Both continuation RPCs fail closed on a pre-upgrade record,
 // even if it supplies an origin string without origin_known; the new manager's explicit ordinary decision resumes it.
 func TestLegacyManagerSendRequiresExplicitOriginDecision(t *testing.T) {
@@ -569,29 +603,55 @@ func TestOrdinaryOriginAliasesKeepClaudeProcess(t *testing.T) {
 }
 
 func TestInboxReattestationRefusesBusyOrdinaryProcess(t *testing.T) {
-	f := cliTest(t)
-	cwd := t.TempDir()
-	id, err := f.n.assistantSend(context.Background(), "", cwd, "claude", "Investigate", nil, "default", "", modelExecution{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.idle(t, id)
-	p := f.proc(id)
-	p.mu.Lock()
-	p.busy = true
-	p.mu.Unlock()
-	defer func() {
-		p.mu.Lock()
-		p.busy = false
-		p.mu.Unlock()
-	}()
-	argvBefore, stdinBefore := f.file("cli-argv"), f.file("stdin.jsonl")
-	_, err = f.n.assistantSend(context.Background(), id, cwd, "claude", "Continue as Inbox", nil, "default", "", modelExecution{Origin: originInbox, OriginKnown: true, OriginDecisionRequired: true})
-	if !errors.Is(err, errAssistantOriginBusy) {
-		t.Fatalf("busy origin re-attestation error=%v, want errAssistantOriginBusy", err)
-	}
-	if f.proc(id) != p || f.file("cli-argv") != argvBefore || f.file("stdin.jsonl") != stdinBefore {
-		t.Fatal("Inbox message reached the busy process that still had ordinary built-in tools")
+	for _, tc := range []struct {
+		name          string
+		hold, release func(*assistantProc)
+	}{
+		{name: "turn", hold: func(p *assistantProc) { p.busy = true }, release: func(p *assistantProc) { p.busy = false }},
+		{name: "compaction", hold: func(p *assistantProc) { p.compacting = true }, release: func(p *assistantProc) { p.compacting = false }},
+		{name: "queued input", hold: func(p *assistantProc) {
+			p.written = []assistantInput{{queued: true, at: time.Now()}}
+		}, release: func(p *assistantProc) { p.written = nil }},
+		{name: "accepted unacknowledged input", hold: func(p *assistantProc) {
+			p.lifecycle = true
+			p.written = []assistantInput{{at: time.Now()}}
+		}, release: func(p *assistantProc) {
+			p.lifecycle = false
+			p.written = nil
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := cliTest(t)
+			cwd := t.TempDir()
+			id, err := f.n.assistantSend(context.Background(), "", cwd, "claude", "Investigate", nil, "default", "", modelExecution{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.idle(t, id)
+			p := f.proc(id)
+			p.mu.Lock()
+			tc.hold(p)
+			p.mu.Unlock()
+			defer func() {
+				p.mu.Lock()
+				tc.release(p)
+				p.mu.Unlock()
+			}()
+			argvBefore, stdinBefore := f.file("cli-argv"), f.file("stdin.jsonl")
+			_, err = f.n.assistantSend(context.Background(), id, cwd, "claude", "Continue as Inbox", nil, "default", "", modelExecution{Origin: originInbox, OriginKnown: true, OriginDecisionRequired: true})
+			if !errors.Is(err, errAssistantOriginBusy) {
+				t.Fatalf("working origin re-attestation error=%v, want errAssistantOriginBusy", err)
+			}
+			p.mu.Lock()
+			stillWorking := p.workingLocked()
+			p.mu.Unlock()
+			if !stillWorking {
+				t.Fatal("origin re-attestation discarded the process's held work")
+			}
+			if f.proc(id) != p || f.file("cli-argv") != argvBefore || f.file("stdin.jsonl") != stdinBefore {
+				t.Fatal("Inbox message reached or replaced the working process that still had ordinary built-in tools")
+			}
+		})
 	}
 }
 
