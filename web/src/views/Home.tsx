@@ -30,7 +30,8 @@ import { homeTasks, type HomeTask } from "../lib/home-tasks";
 import { sessionLauncher } from "../lib/model-switch";
 import { effortTitle } from "../lib/session-actions";
 import { modelList, pillView, useModelLists } from "../lib/session-models";
-import { heldDelivery, makeSessionLookup, orphanedLine, TODO_STATUS_INFO, TODO_TONE_CLASS, todoStatusLabel } from "../lib/todos";
+import { heldDelivery, makeSessionLookup, orphanedLine, TODO_TONE_CLASS } from "../lib/todos";
+import { todoLook } from "../lib/todo-wait-reason";
 import { BUSY_MOTION, spinStyle } from "../lib/busy-motion";
 import type { AgentState, Interaction, Machine, Session } from "../lib/types";
 import { Button, Collapse, cx, EASE, IconButton, Loading, useNow } from "../ui/atoms";
@@ -353,6 +354,8 @@ function taskAgentLine({ agents, lead }: Pick<HomeTask, "agents" | "lead">, mach
 // delivery, then who works on it (taskAgentLine). The PR link is beside the title link, not inside it.
 function TaskCard({ task, machine }: { task: HomeTask; machine: (mid: string) => string }) {
   const { todo, status } = task;
+  // its state word and tone; a waiting one's say what it waits on, attention only on the owner (#11090)
+  const look = todoLook(todo, status, task.wait, status);
   useModelLists(); // a model list the pill reads later names the model here too
   const to: Route = { name: "todos", id: todo.id };
   const held = heldDelivery(todo);
@@ -366,7 +369,7 @@ function TaskCard({ task, machine }: { task: HomeTask; machine: (mid: string) =>
           {todo.title}
         </a>
         {todo.kind === "concern" && <Tag><span data-testid="todo-concern">{t("todos.concern")}</span></Tag>}
-        <span className={cx("inline-flex h-5 shrink-0 items-center rounded-full bg-field px-1.5 text-[11px] font-medium whitespace-nowrap", TODO_TONE_CLASS[TODO_STATUS_INFO[status].tone])}>{todoStatusLabel(todo, status)}</span>
+        <span className={cx("inline-flex h-5 shrink-0 items-center rounded-full bg-field px-1.5 text-[11px] font-medium whitespace-nowrap", TODO_TONE_CLASS[look.tone])} data-testid="task-status">{look.label}</span>
       </div>
       <TodoStageBar stage={todo.stage} stageKind={todo.stage_kind} prURL={todo.pr_url} />
       {/* the lines under the stage bar sit at the card's bottom, so a row of cards of one height lines up */}
