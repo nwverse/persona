@@ -677,6 +677,9 @@ targets:
     sources:
       - path: PersonaTests
         excludes: ["*.json", "*.py"] # Static checks and TokenBaseline.json are read from the source tree, not the bundle
+      # The same shared source as #9694's Android consumer, compiled only into this iOS test bundle (#11069).
+      # Persona's production target, route and handwritten About row do not include it.
+      - path: ../android/refract/about/AboutVersionRow.swift
     dependencies:
       - package: PersonaWire
       - target: Persona

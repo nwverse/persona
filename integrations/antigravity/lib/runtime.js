@@ -8,7 +8,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { createRuntime, installCurrent, interactionId, page, RpcError, snippet, summaryOf, verifyPackage } from '../../runtime-sdk/index.js'
 import { isAssistantDir } from '../../runtime-sdk/lib/identity.js'
 import { AgyAcpClient } from './acp.js'
-import { discoverModels, mapModels } from './models.js'
+import { discoverModels, mapModels, SIGNIN_TIMEOUT } from './models.js'
 import { nativeErrorStep } from './errors.js'
 import {
   agyModeToPersona,
@@ -85,6 +85,11 @@ export function createAgyRuntime(options = {}) {
   let catalogAt = 0
   let catalogFlight
   let catalogTimer
+  // Discovery runs every catalogEveryMs; each discovery in a row that times out on an expired sign-in doubles the wait,
+  // up to catalogMaxMs, instead of holding a hung agy for 25 s every 5 minutes (#11106).
+  const catalogEveryMs = options.catalogEveryMs ?? 300_000
+  const catalogMaxMs = options.catalogMaxMs ?? 3_600_000
+  let catalogTimeouts = 0
   // One agy acp process can keep the model list it had when the account's plan lapsed or the CLI signed out (#10368).
   let discoveredGeneration = -1 // the agy acp generation running when the latest successful discovery began
   let signedOut = false // the latest discovery failed because the CLI is signed out
@@ -118,7 +123,7 @@ export function createAgyRuntime(options = {}) {
     }
     if (!catalogFlight) {
       const generation = acp.generation
-      catalogFlight = discoverModels(acp.bin, { signal: catalogAbort.signal }).then((entries) => {
+      catalogFlight = discoverModels(acp.bin, { signal: catalogAbort.signal, timeout: options.modelsTimeoutMs ?? 25_000 }).then((entries) => {
         if (!stopped) {
           catalogAt = Date.now()
           discoveredGeneration = generation
@@ -132,7 +137,7 @@ export function createAgyRuntime(options = {}) {
         }
         return { agent: RUNTIME, models: catalog }
       }, (err) => {
-        if (SIGNED_OUT.test(err?.message || '')) signedOut = true
+        if (err?.code === SIGNIN_TIMEOUT || SIGNED_OUT.test(err?.message || '')) signedOut = true
         throw err
       }).finally(() => { catalogFlight = undefined })
     }
@@ -1467,11 +1472,28 @@ export function createAgyRuntime(options = {}) {
     }
   }
 
+  /** The next periodic discovery: catalogEveryMs, doubled for each discovery in a row that timed out (#11106). */
+  function scheduleCatalog() {
+    clearTimeout(catalogTimer)
+    if (stopped) return
+    const wait = Math.min(catalogMaxMs, catalogEveryMs * 2 ** catalogTimeouts)
+    catalogTimer = setTimeout(() => {
+      void models({ refresh: true })
+        .then(() => { catalogTimeouts = 0 }, (err) => {
+          if (err?.code === SIGNIN_TIMEOUT) catalogTimeouts = Math.min(catalogTimeouts + 1, 16)
+          else catalogTimeouts = 0
+          log(`agy model discovery error: ${err.message}`)
+        })
+        .finally(scheduleCatalog)
+    }, wait)
+    catalogTimer.unref?.()
+  }
+
   /** Resolves once agy is gone. */
   function stop() {
     stopped = true
     clearInterval(idleTimer)
-    clearInterval(catalogTimer)
+    clearTimeout(catalogTimer)
     catalogAbort.abort()
     rt.stop()
     // A turn's transcript poll would otherwise keep running; acp.stop() fails the prompts themselves.
@@ -1490,8 +1512,7 @@ export function createAgyRuntime(options = {}) {
   return {
     start: () => {
       void models().catch((err) => log(`agy model discovery error: ${err.message}`))
-      catalogTimer = setInterval(() => { void models({ refresh: true }).catch((err) => log(`agy model discovery error: ${err.message}`)) }, 300_000)
-      catalogTimer.unref?.()
+      scheduleCatalog()
       return rt.start()
     },
     stop,
