@@ -288,7 +288,7 @@ func (s *Service) deliverApprovalResult(a approvalJournalEntry) error {
 		// node, or a list that has not arrived yet says nothing about deletion.
 		return errors.New("the originating conversation is not currently listed")
 	}
-	msg := relayMsg{From: "approval-result-" + a.ID, FromTitle: "Approval result", Tool: askAnswerTool,
+	msg := relayMsg{From: approvalResultFrom + a.ID, FromTitle: "Approval result", Tool: askAnswerTool,
 		Text: a.Result, At: a.UpdatedAt, Private: a.Private}
 	if msg.At.IsZero() {
 		msg.At = time.Now().UTC()
@@ -300,7 +300,9 @@ func (s *Service) deliverApprovalResult(a approvalJournalEntry) error {
 	if !working {
 		if err := s.tryDirectRelay(ctx, a.MachineID, a.SessionID, &msg); err == nil {
 			return nil
-		} else if !relayInDoubt(err) {
+		} else if s.refusedDirect(ctx, a.MachineID, a.SessionID, msg, err) {
+			return nil // never: refused for good, an approval result stays queued as well (relayRefused)
+		} else if !relayInDoubt(err) && !refusedForGood(err) {
 			// A transient send refusal may still be retried through the durable
 			// queue; an actually missing conversation was rejected above.
 			s.logf("approval result %s direct send: %v; queued", a.ID, err)
