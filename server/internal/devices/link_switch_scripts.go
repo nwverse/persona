@@ -20,9 +20,12 @@ const (
 	lsExitStageCopy      = 11 // the gzipped build on stdin did not arrive whole
 	lsExitStageSum       = 12 // what arrived is not the build sent (sha-256), or nothing here can tell
 	lsExitStageVersion   = 13 // the staged build does not run `version` here
+	lsExitStageUnsafe    = 14 // ~/.persona or its bin is writable by others: nothing written
 	lsExitInstallExists  = 20 // Persona Link appeared since the probe: nothing placed
 	lsExitInstallStaged  = 21 // the staged build is gone: nothing placed
 	lsExitInstallPlace   = 22 // the staged build could not be linked into place: nothing placed
+	lsExitInstallUnsafe  = 23 // ~/.persona or its bin is writable by others: nothing placed
+	lsExitInstallSum     = 24 // what was linked into place is not the build sent: taken out again, nothing run
 	lsExitUninstallStays = 30 // something this switch should have removed is still there
 )
 
@@ -84,6 +87,13 @@ func lsLinkPaths() string {
 var lsNodeThere = `n=0; for p in ` + lsIn("U", lsNodeUnit) + ` ` + lsIn("U", lsLegacyNodeUnit) + ` ` + lsIn("D", lsNodeBackup) +
 	`; do if e "$p"; then n=1; fi; done`
 
+// lsSafeDirs exits with code when ~/.persona or its bin is writable by its group or others (followed through links):
+// anyone else who can write there could swap the program a switch runs.
+func lsSafeDirs(code int) string {
+	return `for p in "$HOME/.persona" "$HOME/.persona/bin"; do case "$(ls -ldL "$p" 2>/dev/null | cut -c6,9)" in *w*) exit ` +
+		strconv.Itoa(code) + `;; esac; done`
+}
+
 // lsSum sets s to the sha-256 (hex) of the file in shell variable file, "" when nothing here computes one.
 func lsSum(file string) string {
 	return `if command -v sha256sum >/dev/null 2>&1; then s=$(sha256sum < "$` + file + `"); ` +
@@ -117,7 +127,8 @@ func lsProbeScript(p lsPaths) string {
 // lsStageScript writes the gzipped build on stdin to the staged name for op, checks it is the build of sha-256 sum and
 // runs here (`version`), and prints staged=1; on any failure it removes what it wrote (lsExitStage*).
 func lsStageScript(op, sum string) string {
-	return lsScript("set -u", `B="$HOME/.persona/bin"`, "f="+lsStaged(op),
+	return lsScript("set -u", "umask 022", `B="$HOME/.persona/bin"`, "f="+lsStaged(op),
+		lsSafeDirs(lsExitStageUnsafe),
 		`mkdir -p "$B" || exit `+strconv.Itoa(lsExitStageWrite),
 		`rm -f `+lsStagedAll, // what an earlier switch left
 		`if ! gzip -dc > "$f"; then rm -f "$f"; exit `+strconv.Itoa(lsExitStageCopy)+`; fi`,
@@ -133,13 +144,17 @@ func lsStageScript(op, sum string) string {
 // (`install --pair -` reads it to EOF), for at most limit where `timeout` exists, so it never outlives the ssh run and
 // races a rollback: the script's exit is the installer's from there, and paired=1 says the installer got as far as
 // pairing (link.json is there), so its link may still come. node_unit=1 (and the staged name's .node marker, which
-// the uninstall reads) says a node service was there just before the installer ran: not this switch's to remove.
-func lsInstallScript(op string, limit time.Duration) string {
+// the uninstall reads) says a node service was there just before the installer ran: not this switch's to remove. It
+// refuses a data directory others may write to, and checks what it linked into place is still the build of sha-256
+// sum before it runs it.
+func lsInstallScript(op, sum string, limit time.Duration) string {
 	secs := strconv.Itoa(max(int((limit+time.Second-1)/time.Second), 1))
 	lines := append(lsPrelude(), "f="+lsStaged(op), "t="+lsIn("B", lsLinkBin),
 		`for p in `+lsLinkPaths()+`; do if e "$p"; then rm -f "$f"; exit `+strconv.Itoa(lsExitInstallExists)+`; fi; done`,
 		`[ -f "$f" ] || exit `+strconv.Itoa(lsExitInstallStaged),
+		lsSafeDirs(lsExitInstallUnsafe),
 		`ln "$f" "$t" 2>/dev/null || { rm -f "$f"; exit `+strconv.Itoa(lsExitInstallPlace)+`; }`,
+		lsSum("t")+`; [ "$s" = `+shellQuote(sum)+` ] || { rm -f "$t" "$f"; exit `+strconv.Itoa(lsExitInstallSum)+`; }`,
 		`rm -f "$f"`, "echo placed=1",
 		lsNodeThere+`; if [ "$n" = 1 ]; then : > "$f.node"; echo node_unit=1; fi`,
 		`if command -v timeout >/dev/null 2>&1; then timeout `+secs+` "$t" install --pair -; else "$t" install --pair -; fi`, "x=$?",

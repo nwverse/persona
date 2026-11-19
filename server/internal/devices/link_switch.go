@@ -39,10 +39,10 @@ import (
 //     ends the ssh connection here (the machine is replaced, startMachines). One more ssh run links the staged build
 //     into place and runs `persona-link install --pair -` with the pairing link on its stdin (lsInstallScript).
 //  3. connecting: until the computer's node answers through Persona Link; then the hub's end(succeeded).
-//  4. rolling_back, on any failure once begin may have happened: the hub's end(rolled_back) revokes this switch's code
-//     and credential and puts the kind back to ssh; then only what this switch set up is removed (lsUninstallScript),
-//     and the computer must be back over ssh. What cannot be shown to have worked is failed with
-//     rollback_unconfirmed, never reported as undone.
+//  4. rolling_back, on any failure once begin may have happened: the hub's end(rolled_back), asked until it answers,
+//     revokes this switch's code and credential and puts the kind back to ssh; only then is what this switch set up
+//     removed (lsUninstallScript), and the computer must be back over ssh. What cannot be shown to have worked is
+//     failed with rollback_unconfirmed, never reported as undone.
 //
 // A record (link_switch.<machine id> in the settings) is written before each step that changes anything, so a
 // manager that restarts during a switch finishes it (resumeLinkSwitches). The pairing link is never written down:
@@ -71,7 +71,17 @@ type linkSwitchRecord struct {
 	// Install: "" not run, running (it may have placed the build, or not), placed, not_placed (refused before).
 	Install       string `json:"install,omitempty"`
 	InstallerExit *int   `json:"installer_exit,omitempty"`
+	// HubEnded: the hub took this switch's end: "" not yet, rolled_back, succeeded, refused (it never will: the
+	// computer is left as it is).
+	HubEnded string `json:"hub_ended,omitempty"`
 }
+
+// HubEnded values of a record.
+const (
+	lsEndedRolledBack = devicewire.LinkSwitchRolledBack
+	lsEndedSucceeded  = devicewire.LinkSwitchSucceeded
+	lsEndedRefused    = "refused"
+)
 
 // Install states of a record.
 const (
@@ -86,6 +96,11 @@ func (r *linkSwitchRecord) finished() bool {
 
 func (r *linkSwitchRecord) unfinished() bool { return r != nil && !r.finished() }
 
+// endOwed: a switch that succeeded whose end the hub has not taken yet (it is asked again until it does).
+func (r *linkSwitchRecord) endOwed() bool {
+	return r != nil && r.Phase == proto.LinkSwitchPhaseSucceeded && r.HubEnded == ""
+}
+
 // host is where ssh goes, as the machine's node connection does (Machine.command).
 func (r *linkSwitchRecord) host() string { return cmp.Or(r.SSHHost, r.MachineID) }
 
@@ -93,15 +108,18 @@ func linkSwitchKey(machine string) string { return "link_switch." + machine }
 
 // linkSwitchTimes bound each step (linkSwitches.times; zero: these).
 type linkSwitchTimes struct {
-	Probe, Transfer, Begin, Install, Connect, EndRetry, Succeed, Uninstall, SSHBack time.Duration
+	Probe, Transfer, Begin, Install, Connect, Uninstall, SSHBack time.Duration
+	// EndBackoff is how long the hub's end is first waited for before it is asked again, doubling up to EndBackoffMax:
+	// it is asked until it answers, as long as the manager runs.
+	EndBackoff, EndBackoffMax time.Duration
 	// Total is a switch's deadline, Resume how long a restarted manager waits for the link at least; Shown how long a
 	// finished switch stays on the machine; Poll how often a wait looks again.
 	Total, Resume, Shown, Poll time.Duration
 }
 
 var defaultLinkSwitchTimes = linkSwitchTimes{Probe: 30 * time.Second, Transfer: 10 * time.Minute, Begin: 30 * time.Second,
-	Install: 3 * time.Minute, Connect: 90 * time.Second, EndRetry: 2 * time.Minute, Succeed: 30 * time.Second,
-	Uninstall: time.Minute, SSHBack: 2 * time.Minute, Total: 20 * time.Minute, Resume: time.Minute, Shown: time.Hour,
+	Install: 3 * time.Minute, Connect: 90 * time.Second, Uninstall: time.Minute, SSHBack: 2 * time.Minute,
+	EndBackoff: time.Second, EndBackoffMax: time.Minute, Total: 20 * time.Minute, Resume: time.Minute, Shown: time.Hour,
 	Poll: time.Second}
 
 // sshRunner runs ssh's argv (argv[0] is "ssh") with stdin, its output to stdout, and answers ssh's exit code (-1 when
@@ -416,12 +434,13 @@ func (d *Devices) resumeLinkSwitches(ctx context.Context) {
 	}
 }
 
-// resumeLinkSwitch takes over the machine's unfinished switch, if it has one nobody here runs.
+// resumeLinkSwitch takes over the machine's unfinished switch, or the end the hub still owes a switch that succeeded,
+// if nobody here runs it.
 func (d *Devices) resumeLinkSwitch(ctx context.Context, id string, t linkSwitchTimes) {
 	ls := &d.switches
 	ls.mu.Lock()
 	rec := ls.records[id]
-	if !rec.unfinished() || ls.active[id] {
+	if !rec.unfinished() && !rec.endOwed() || ls.active[id] {
 		ls.mu.Unlock()
 		return
 	}
@@ -568,8 +587,13 @@ func (r *linkSwitchRun) run(ctx context.Context) {
 	r.rollback(ctx, why)
 }
 
-// resume carries on a switch a restarted manager found unfinished (resumeLinkSwitches).
+// resume carries on a switch a restarted manager found unfinished, or owed the hub's end (resumeLinkSwitches).
 func (r *linkSwitchRun) resume(ctx context.Context) {
+	if r.rec.endOwed() {
+		r.afterSuccess(ctx) // it may not have run before the restart
+		r.endSuccess(ctx, endNoAnswer)
+		return
+	}
 	if !r.rec.BeginIntended {
 		r.removeStaged(ctx)
 		if ctx.Err() == nil {
@@ -786,7 +810,7 @@ func (r *linkSwitchRun) begin(ctx context.Context) (link, refused string, err er
 func (r *linkSwitchRun) install(ctx context.Context, link string) string {
 	// The installer is cut off well before the ssh run's own end, so it never runs on into the rollback.
 	limit := max(r.t.Install-30*time.Second, r.t.Install/2)
-	exit, out := r.ssh(ctx, "install", lsInstallScript(r.rec.Operation, limit), strings.NewReader(link+"\n"), r.t.Install)
+	exit, out := r.ssh(ctx, "install", lsInstallScript(r.rec.Operation, r.rec.SHA256, limit), strings.NewReader(link+"\n"), r.t.Install)
 	kv := outputOf(out)
 	placed, paired := kv["placed"] == "1", kv["paired"] == "1"
 	if kv["node_unit"] == "1" { // one appeared since the probe: the computer's, never removed
@@ -795,7 +819,7 @@ func (r *linkSwitchRun) install(ctx context.Context, link string) string {
 	switch {
 	case placed:
 		r.rec.Install = lsInstallPlaced
-	case exit == lsExitInstallExists || exit == lsExitInstallStaged || exit == lsExitInstallPlace:
+	case lsRefusedBeforeInstall(exit):
 		r.rec.Install = lsInstallNotPlaced
 	}
 	if placed && exit >= 0 || r.rec.Install == lsInstallNotPlaced { // ssh failing alone says nothing of the installer
@@ -805,7 +829,7 @@ func (r *linkSwitchRun) install(ctx context.Context, link string) string {
 	switch {
 	case !placed && exit == lsExitInstallExists:
 		return proto.LinkSwitchReasonExistingLink
-	case !placed && (exit == lsExitInstallStaged || exit == lsExitInstallPlace):
+	case !placed && lsRefusedBeforeInstall(exit):
 		return proto.LinkSwitchReasonInstallFailed
 	case placed && exit > 0 && !sshFailed(exit) && !paired:
 		// The installer gave up before it paired (the hub not reachable from there, the code refused): no link comes.
@@ -813,6 +837,16 @@ func (r *linkSwitchRun) install(ctx context.Context, link string) string {
 	}
 	// The installer worked, or paired and its link may come still, or ssh failed with it perhaps running: wait.
 	return ""
+}
+
+// lsRefusedBeforeInstall: the install script's own refusals, each before the installer ran and with nothing of it left
+// in place.
+func lsRefusedBeforeInstall(exit int) bool {
+	switch exit {
+	case lsExitInstallExists, lsExitInstallStaged, lsExitInstallPlace, lsExitInstallUnsafe, lsExitInstallSum:
+		return true
+	}
+	return false
 }
 
 // linkOnline: the machine's entry is kind link and its node answered through Persona Link.
@@ -874,11 +908,26 @@ func (r *linkSwitchRun) succeed(ctx context.Context) {
 	if !saved {
 		r.logf("succeeded, but the record does not say so: a restart may roll it back, which the hub refuses")
 	}
-	if ok, _ := r.end(ctx, devicewire.LinkSwitchSucceeded, r.t.Succeed); !ok {
-		r.logf("the hub's end(succeeded) did not answer: the switch stays done")
-	}
+	first := r.endOnce(ctx, devicewire.LinkSwitchSucceeded)
 	r.logf("succeeded")
 	r.afterSuccess(ctx)
+	r.endSuccess(ctx, first)
+}
+
+// endSuccess has the hub take end(succeeded), asked again until it answers when the first try (got) did not: the
+// switch stays succeeded either way, and a restart asks again while the record says the hub has not taken it.
+func (r *linkSwitchRun) endSuccess(ctx context.Context, got endAnswer) {
+	if got == endNoAnswer {
+		got = r.endUntilAnswered(ctx, devicewire.LinkSwitchSucceeded)
+	}
+	if ctx.Err() != nil {
+		return
+	}
+	r.rec.HubEnded = lsEndedSucceeded
+	if got == endRefused {
+		r.rec.HubEnded = lsEndedRefused
+	}
+	r.save(context.WithoutCancel(ctx))
 }
 
 // afterSuccess removes the files a switch that succeeded leaves in the bin (the uninstall would have, but a success
@@ -890,63 +939,97 @@ func (r *linkSwitchRun) afterSuccess(ctx context.Context) {
 	}
 }
 
-// end tells the hub how the switch ended, again until it answers or within passes; true once it did. The hub revokes
-// this switch's code and credential before it looks at the entry, so not_ssh (the entry is not kind link any more)
-// leaves nothing to undo; so does no_machine (the computer went to another manager meanwhile) with the pairing hash,
-// but without it the hub revoked nothing. invalid_params (a hash that names no code of the machine) is not tried
-// again: it would only answer the same. succeeded: the hub refused a rollback of an operation it saw succeed.
-func (r *linkSwitchRun) end(ctx context.Context, outcome string, within time.Duration) (ok, succeeded bool) {
-	until := time.Now().Add(within)
-	for {
-		cctx, cancel := context.WithTimeout(ctx, max(min(r.t.Begin, time.Until(until)), time.Second))
-		err := r.d.opts.Hub.Call(cctx, devicewire.MethodLinkSwitchEnd, devicewire.LinkSwitchEnd{MachineID: r.rec.MachineID,
-			Operation: r.rec.Operation, PairHash: r.rec.PairHash, Outcome: outcome}, nil)
-		cancel()
-		var re *rpc.Error
-		switch {
-		case err == nil:
-			return true, false
-		case errors.As(err, &re) && re.Code == devicewire.LinkSwitchCodeSucceeded:
-			r.logf("end(%s): the hub saw this switch succeed", outcome)
-			return true, true
-		case errors.As(err, &re) && (re.Code == devicewire.LinkSwitchCodeNotSSH ||
-			re.Code == devicewire.LinkSwitchCodeNoMachine && r.rec.PairHash != ""):
-			r.logf("end(%s): %s, nothing left on the hub", outcome, re.Code)
-			return true, false
-		case errors.As(err, &re) && (re.Code == devicewire.LinkSwitchCodeNoMachine || re.Code == bus.CodeInvalidParams):
-			r.logf("end(%s) refused: %s, not asked again", outcome, re.Code)
-			return false, false
-		case errors.As(err, &re):
-			r.logf("end(%s) refused: %s", outcome, re.Code)
-		default:
-			r.logf("end(%s) not answered", outcome)
+// endAnswer is what the hub said to an end.
+type endAnswer int
+
+const (
+	endNoAnswer  endAnswer = iota // not answered, or an answer that may change: asked again
+	endTaken                      // done
+	endSucceeded                  // end(rolled_back) of a switch the hub saw succeed: it stays done
+	endRefused                    // the hub will never take it: the computer is left as it is
+)
+
+// endOnce tells the hub once how the switch ended. The hub revokes this switch's code and credential before it looks
+// at the entry, so not_ssh to end(rolled_back) (the entry is not kind link any more) leaves nothing to undo; a
+// rollback of an operation it saw succeed is already_succeeded. no_machine (the computer went to another manager)
+// and invalid_params (no such operation, or a hash not its code) say it will not take it, ever.
+func (r *linkSwitchRun) endOnce(ctx context.Context, outcome string) endAnswer {
+	cctx, cancel := context.WithTimeout(ctx, r.t.Begin)
+	defer cancel()
+	err := r.d.opts.Hub.Call(cctx, devicewire.MethodLinkSwitchEnd, devicewire.LinkSwitchEnd{MachineID: r.rec.MachineID,
+		Operation: r.rec.Operation, PairHash: r.rec.PairHash, Outcome: outcome}, nil)
+	var re *rpc.Error
+	switch {
+	case err == nil:
+		return endTaken
+	case errors.As(err, &re) && re.Code == devicewire.LinkSwitchCodeSucceeded:
+		r.logf("end(%s): the hub saw this switch succeed", outcome)
+		if outcome == devicewire.LinkSwitchSucceeded {
+			return endTaken
 		}
-		if ctx.Err() != nil || !time.Now().Before(until) {
-			return false, false
+		return endSucceeded
+	case errors.As(err, &re) && re.Code == devicewire.LinkSwitchCodeNotSSH && outcome == devicewire.LinkSwitchRolledBack:
+		r.logf("end(%s): %s, nothing left on the hub", outcome, re.Code)
+		return endTaken
+	case errors.As(err, &re) && (re.Code == devicewire.LinkSwitchCodeNotSSH || re.Code == devicewire.LinkSwitchCodeNoMachine ||
+		re.Code == bus.CodeInvalidParams):
+		r.logf("end(%s) refused: %s, not asked again", outcome, re.Code)
+		return endRefused
+	case errors.As(err, &re):
+		r.logf("end(%s) refused: %s", outcome, re.Code)
+	default:
+		r.logf("end(%s) not answered", outcome)
+	}
+	return endNoAnswer
+}
+
+// endUntilAnswered asks the hub's end until it answers, waiting EndBackoff between tries, doubling up to
+// EndBackoffMax, as long as the manager runs (endNoAnswer once it stops).
+func (r *linkSwitchRun) endUntilAnswered(ctx context.Context, outcome string) endAnswer {
+	wait := r.t.EndBackoff
+	for {
+		if got := r.endOnce(ctx, outcome); got != endNoAnswer {
+			return got
 		}
 		select {
 		case <-ctx.Done():
-			return false, false
-		case <-time.After(min(max(r.t.Poll, r.t.EndRetry/20), max(time.Until(until), time.Millisecond))):
+			return endNoAnswer
+		case <-time.After(wait):
 		}
+		wait = min(2*wait, r.t.EndBackoffMax)
 	}
 }
 
-// rollback undoes the switch that may have reached the hub's begin: the hub's end(rolled_back), then what this switch
-// set up on the computer, then the computer must be back over ssh; failed with why, and rollback_unconfirmed unless
-// all three were seen to work.
+// rollback undoes the switch that may have reached the hub's begin. First the hub's end(rolled_back), asked until it
+// answers (the switch stays rolling_back meanwhile, and a restart asks again): nothing on the computer is touched
+// before, so a computer is never left on neither Persona Link nor ssh. Then only what this switch set up on the
+// computer goes, and the computer must be back over ssh; failed with why, and rollback_unconfirmed unless both were
+// seen to work. A hub that will never take the end leaves the computer as it is (rollback_unconfirmed); one that saw
+// the switch succeed keeps it succeeded.
 func (r *linkSwitchRun) rollback(ctx context.Context, why string) {
 	r.rec.Error = why
 	r.phase(ctx, proto.LinkSwitchPhaseRollingBack)
 	r.logf("rolling back (%s)", why)
-	ended, succeeded := r.end(ctx, devicewire.LinkSwitchRolledBack, r.t.EndRetry)
-	if ctx.Err() != nil {
-		return
-	}
-	if succeeded { // a record that missed the success (it was not kept): nothing to undo
-		r.finish(ctx, proto.LinkSwitchPhaseSucceeded, "", false)
-		r.afterSuccess(ctx)
-		return
+	if r.rec.HubEnded != lsEndedRolledBack {
+		got := r.endUntilAnswered(ctx, devicewire.LinkSwitchRolledBack)
+		if ctx.Err() != nil {
+			return // still rolling_back: a restart asks the hub again
+		}
+		switch got {
+		case endSucceeded: // a record that missed the success (it was not kept): nothing to undo
+			r.rec.HubEnded = lsEndedSucceeded
+			r.finish(ctx, proto.LinkSwitchPhaseSucceeded, "", false)
+			r.afterSuccess(ctx)
+			return
+		case endRefused:
+			r.rec.HubEnded = lsEndedRefused
+			r.finish(ctx, proto.LinkSwitchPhaseFailed, why, true)
+			return
+		}
+		r.rec.HubEnded = lsEndedRolledBack
+		if !r.save(ctx) {
+			r.logf("the hub's end was not kept: a restart asks it again, which it answers the same")
+		}
 	}
 	// Only what this switch set up: the node service when there was none and its installer may have run, Persona
 	// Link when it was not there and its build may have been placed.
@@ -966,6 +1049,6 @@ func (r *linkSwitchRun) rollback(ctx context.Context, why string) {
 	if ctx.Err() != nil {
 		return
 	}
-	r.logf("rollback: hub %t, computer cleaned %t, back over ssh %t", ended, clean, back)
-	r.finish(ctx, proto.LinkSwitchPhaseFailed, why, !(ended && clean && back))
+	r.logf("rollback: computer cleaned %t, back over ssh %t", clean, back)
+	r.finish(ctx, proto.LinkSwitchPhaseFailed, why, !(clean && back))
 }
