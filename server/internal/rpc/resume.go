@@ -354,9 +354,6 @@ func (p *Peer) AcceptResume(req ResumeRequest, r io.Reader, w io.Writer) error {
 	if !rs.lost { // its transport not seen failing (half open): lost now, as if it had
 		tell = p.loseLocked(errTakenOver)
 	}
-	if rs.timer != nil {
-		rs.timer.Stop() // the window does not end while the answer goes out
-	}
 	rs.accepting = true // one at a time: the token stays this one's until the answer is out
 	next := newResumeToken()
 	result, err := marshal(resumeAnswer{Read: rs.fr.lastRead.Load(), Token: next})
@@ -377,8 +374,7 @@ func (p *Peer) AcceptResume(req ResumeRequest, r io.Reader, w io.Writer) error {
 	default:
 	}
 	if err != nil {
-		p.armWindowLocked(err) // the new transport failed already: still lost, a next one may come with the same token
-		return err
+		return err // the new transport failed already: still lost, its window running, a next one may come
 	}
 	rs.token = next
 	p.installLocked(r, w, req.Read)

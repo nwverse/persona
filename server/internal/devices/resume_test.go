@@ -267,3 +267,44 @@ func TestPingMissesCutAResumableConnection(t *testing.T) {
 		t.Fatalf("%d connections from the start", fresh)
 	}
 }
+
+// A transport's close runs once however often it is asked for: a resume cuts it while the connection ending closes
+// it too, and an ssh pipe's close waits for its process, which two waits at once would never see end (#10829's review).
+func TestPipeClosesOnce(t *testing.T) {
+	d := newTestDevices(t)
+	m := newMachine(d, MachineConfig{ID: "box", Name: "box", Kind: "ssh"})
+	var closes atomic.Int32
+	m.dialNode = func(context.Context) (net.Conn, error) {
+		a, b := net.Pipe()
+		t.Cleanup(func() { b.Close() })
+		return &countedConn{Conn: a, closes: &closes}, nil
+	}
+	d.addEntry(m)
+	paths := d.pathsOf(m)
+	if len(paths) == 0 {
+		t.Fatal("no path")
+	}
+	l, err := m.openPipe(context.Background(), paths[0], "ssh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() { defer wg.Done(); l.close() }()
+	}
+	wg.Wait()
+	if n := closes.Load(); n != 1 {
+		t.Fatalf("closed %d times", n)
+	}
+}
+
+type countedConn struct {
+	net.Conn
+	closes *atomic.Int32
+}
+
+func (c *countedConn) Close() error {
+	c.closes.Add(1)
+	return c.Conn.Close()
+}

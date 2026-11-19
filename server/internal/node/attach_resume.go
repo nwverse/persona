@@ -66,13 +66,18 @@ func (a *attached) resume(req rpc.ResumeRequest, c net.Conn, rest io.Reader) err
 	if p == nil {
 		return rpc.ErrResumeRefused
 	}
-	if err := p.AcceptResume(req, rest, c); err != nil {
-		return err
-	}
 	a.mu.Lock()
 	old := a.conn
-	a.conn = c
+	a.conn = c // in use from the moment it may be: the peer ending right after closes this one
 	a.mu.Unlock()
+	if err := p.AcceptResume(req, rest, c); err != nil {
+		a.mu.Lock()
+		if a.conn == c {
+			a.conn = old
+		}
+		a.mu.Unlock()
+		return err
+	}
 	_ = old.Close()
 	return nil
 }

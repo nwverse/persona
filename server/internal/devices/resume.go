@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/nodeproto"
@@ -38,16 +39,24 @@ func (r resumeCounts) String() string {
 // cut closes the transport in use; the connection, kept for a resume, waits for a new one (resumeConn).
 func (c *nodeConn) cut() { c.pipe().close() }
 
-// openPipe opens a new transport to the node on path p, by via; it lasts as long as ctx.
+// openPipe opens a new transport to the node on path p, by via; it lasts as long as ctx. Its close may come twice
+// (a resume cutting it while the connection ends), and runs once: an ssh pipe's waits for its process.
 func (m *Machine) openPipe(ctx context.Context, p *nodePath, via string) (*nodePipe, error) {
+	var l *nodePipe
+	var err error
 	if via == viaHub {
-		return m.d.openThroughHub(ctx, p.hub, p.mid)
+		l, err = m.d.openThroughHub(ctx, p.hub, p.mid)
+	} else {
+		l, err = p.src.open(ctx, via)
 	}
-	l, err := p.src.open(ctx, via)
-	if err != nil && via == "tailcat" {
-		p.src.tailcatReset()
+	if err != nil {
+		if via == "tailcat" {
+			p.src.tailcatReset()
+		}
+		return nil, err
 	}
-	return l, err
+	l.close = sync.OnceFunc(l.close)
+	return l, nil
 }
 
 // resumeConn takes c back after its transport was lost with err (rpc.Peer.OnLost): the old transport is closed, and
@@ -57,6 +66,9 @@ func (m *Machine) resumeConn(c *nodeConn, err error) {
 	m.mu.Lock()
 	m.resumes.drops++
 	m.mu.Unlock()
+	if c.ctx.Err() != nil {
+		return // the connection is ending anyway (its run loop closes the transport)
+	}
 	c.cut() // a write still stuck on it returns
 	if c.restarting.Load() {
 		// The resident node said it restarts: the next process has none of this connection.
@@ -138,11 +150,12 @@ func (m *Machine) tryResume(c *nodeConn) error {
 	if o.err != nil {
 		return o.err
 	}
+	prev := c.pipeNow.Swap(o.l) // in use from the moment it may be: a loss right after the resume cuts this one
 	if err := c.peer.Resume(tctx, o.l.r, o.l.w); err != nil {
+		c.pipeNow.CompareAndSwap(o.l, prev)
 		o.l.close()
 		return err
 	}
-	c.pipeNow.Store(o.l)
 	return nil
 }
 
