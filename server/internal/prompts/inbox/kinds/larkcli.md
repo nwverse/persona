@@ -1,4 +1,12 @@
-{{if eq .Kind "dm"}}类型：通过 lark-cli 收到的 Lark 私聊，另一方是人
+{{if eq .Language "日本語"}}{{if eq .Kind "dm"}}種類：lark-cli 経由の Lark 個人チャット。相手は人
+{{else if eq .Kind "bot"}}種類：lark-cli 経由の Lark 個人チャット。相手はボットかアプリ
+{{else if eq .Kind "mention"}}種類：lark-cli 経由のグループメッセージ。あなたか全員へのメンションあり
+{{else if eq .Kind "group"}}種類：lark-cli 経由の通常のグループメッセージ。参加したトピックへの返信も含む
+{{else if eq .Kind "doc"}}種類：lark-cli で監視する Lark ドキュメントのコメント。ユーザーへのメンション、または参加したコメントへの返信{{else}}種類：lark-cli 経由の Lark メッセージ{{end}}{{else if .Language}}{{if eq .Kind "dm"}}Type: Lark direct message received through lark-cli; the other party is a person
+{{else if eq .Kind "bot"}}Type: Lark direct message received through lark-cli; the other party is a bot or app
+{{else if eq .Kind "mention"}}Type: group message received through lark-cli, mentioning you or everyone
+{{else if eq .Kind "group"}}Type: ordinary group message received through lark-cli, including replies in topics you joined
+{{else if eq .Kind "doc"}}Type: comment on a Lark document watched through lark-cli, mentioning the user or replying to a comment they participated in{{else}}Type: Lark message received through lark-cli{{end}}{{else}}{{if eq .Kind "dm"}}类型：通过 lark-cli 收到的 Lark 私聊，另一方是人
 {{else if eq .Kind "bot"}}类型：通过 lark-cli 收到的 Lark 私聊，另一方是机器人或应用
 {{else if eq .Kind "mention"}}类型：通过 lark-cli 收到的群消息，提到了你或所有人
 {{else if eq .Kind "group"}}类型：通过 lark-cli 收到的普通群消息，包括你参与的话题回复
