@@ -69,7 +69,7 @@ jobs:
           Path(os.environ['PR_JSON']).write_text(json.dumps(pr))
           PY
           else
-            gh pr view "$PR_NUMBER" --repo "$REPOSITORY" --json state,isDraft,baseRefName,headRefOid,headRepository,author,title,mergeCommit > "$PR_JSON"
+            gh pr view "$PR_NUMBER" --repo "$REPOSITORY" --json number,title,state,isDraft,baseRefName,headRefOid,headRepository,author,mergeCommit > "$PR_JSON"
             gh api "repos/$REPOSITORY/pulls/$PR_NUMBER" --jq '{merge_commit_sha}' > "$PR_REST_JSON"
             python3 - <<'PY'
           import json,os
