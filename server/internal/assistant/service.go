@@ -17,6 +17,7 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/assistant/saved"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -160,25 +161,27 @@ type Service struct {
 	// interrupts: the interrupted receipts re-sent when their tasks change (interruptions.go).
 	interrupts interruptBook
 
-	titles      titleBook            // titles.go
-	phoneKept   keptPhoneTools       // fleet_tools.go: the phone's tools as the hub last listed them
-	agentNames  agentNamingBook      // agent_naming.go
-	prefs       settingsBook         // profile.go
-	main        mainBook             // start.go
-	archived    archiveBook          // conversations.go
-	tags        conversationTagsBook // conversation_tags.go
-	origins     originBook           // origins.go
-	guests      guestBook            // guest.go
-	relays      relayBook            // conversations.go
-	undelivered undeliveredBook      // undelivered.go: the owner's messages that could not go in
-	quotes      quoteBook            // relay_quote.go: the owner's messages relays carried, verified
-	avail       availBook            // availability.go
-	quiet       quietBook            // quiet.go
-	supervise   superviseBook        // supervise_signals.go
-	progress    progressBook         // supervise_progress.go
-	preempt     preemptBook          // owner_preempt.go
-	tbriefs     taskBriefBook        // task_brief.go
-	search      searchIndex          // search_index.go
+	titles       titleBook            // titles.go
+	phoneKept    keptPhoneTools       // fleet_tools.go: the phone's tools as the hub last listed them
+	agentNames   agentNamingBook      // agent_naming.go
+	prefs        settingsBook         // profile.go
+	main         mainBook             // start.go
+	archived     archiveBook          // conversations.go
+	tags         conversationTagsBook // conversation_tags.go
+	origins      originBook           // origins.go
+	guests       guestBook            // guest.go
+	relays       relayBook            // conversations.go
+	chatReplies  chatReplyBook        // chat_reply.go: what conversations that wrote as the user were told of the chats
+	undelivered  undeliveredBook      // undelivered.go: the owner's messages that could not go in
+	quotes       quoteBook            // relay_quote.go: the owner's messages relays carried, verified
+	avail        availBook            // availability.go
+	quiet        quietBook            // quiet.go
+	taskFileBook taskFileBook         // task_files.go: the files tasks handed over, by todo id
+	supervise    superviseBook        // supervise_signals.go
+	progress     progressBook         // supervise_progress.go
+	preempt      preemptBook          // owner_preempt.go
+	tbriefs      taskBriefBook        // task_brief.go
+	search       searchIndex          // search_index.go
 
 	deletedConversations conversationDeleteBook // conversation_delete.go
 	conversationWrites   sync.RWMutex
@@ -495,6 +498,11 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 		}
 		if _, set := p["interject_background"]; !set && s.interjectBackground(ctx) {
 			p["interject_background"] = true // what the node does with a message that comes while it answers
+		}
+	}
+	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceSessionSend) && p["is_main"] == true {
+		p["idle_compaction"] = assistantwire.IdleCompaction{
+			Enabled: s.idleAutoCompact(ctx), IdleMinutes: s.idleAutoCompactMinutes(ctx), ContextTokens: s.idleAutoCompactTokens(ctx),
 		}
 	}
 	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || method == DeviceSessionSend) {

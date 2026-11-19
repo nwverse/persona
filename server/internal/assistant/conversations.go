@@ -254,6 +254,9 @@ type relayMsg struct {
 	// (ask_later.go). It is not held for their presence (holdLocked): it is what they are waiting to see taken up. A
 	// version that does not know it drops it on its next save: the answer is then held as any late answer is.
 	Owner bool `json:"owner,omitempty"`
+	// Private renews Just me when the message is actually dispatched, including
+	// a result that waited in the durable queue or across a manager restart.
+	Private bool `json:"private,omitempty"`
 	// Answer: it answers a request the receiver sent (hopLocked, #7391), so it starts no exchange of its own: what
 	// the receiver sends next costs a hop.
 	Answer bool `json:"answer,omitempty"`
@@ -263,6 +266,9 @@ type relayMsg struct {
 	// it (relay_quote.go, #3822). A version that does not know it drops it on its next save: the message then goes
 	// without the owner's words, as before.
 	Quote *BriefRequest `json:"quote,omitempty"`
+	// Chat: what a chat_reply tells (chat_reply.go, #10777), so a later batch of the same chat merges into it. A version
+	// that does not know it drops it on its next save: the message then goes as it is, and the next batch queues its own.
+	Chat *chatReply `json:"chat,omitempty"`
 }
 
 type relayHop struct {
@@ -704,6 +710,10 @@ func (s *Service) queuedRelays() (map[string][]string, bool) {
 				out[id] = append(out[id], "督办消息")
 				continue
 			}
+			if msg.Tool == chatReplyTool { // a chat's new messages (chat_reply.go): their words stay out of the label
+				out[id] = append(out[id], msg.FromTitle+"的新消息") // i18n-ignore: the queue's label, as the task notices'
+				continue
+			}
 			out[id] = append(out[id], "来自「"+msg.FromTitle+"」："+msg.Text)
 		}
 	}
@@ -755,6 +765,12 @@ func (s *Service) deliverRelay(ctx context.Context, machine, to string, msg rela
 	if round {
 		params[superviseRoundParam] = true
 	}
+	if msg.Private {
+		// Just me covers the original turn, not a later terminal-result turn.
+		// Renew it at this actual-dispatch boundary so queued and restarted
+		// deliveries retain the same protection as immediate ones.
+		s.justMeSent(machine, to)
+	}
 	var res superviseRoundReply
 	if err := s.call(ctx, machine, DeviceAssistantSend, params, &res); err != nil {
 		if msg.Tool == superviseTool && !relayInDoubt(err) { // in doubt, drainRelays lets go once it knows it did not go in
@@ -772,7 +788,8 @@ func (s *Service) deliverRelay(ctx context.Context, machine, to string, msg rela
 // relayDeliveryText is what a relayed message says in the conversation: a notice, a supervision message and an answer
 // are their own text; a message from another conversation says where it comes from.
 func relayDeliveryText(msg relayMsg) string {
-	if msg.Tool == noticeTool || msg.Tool == superviseTool || msg.Tool == askAnswerTool || msg.Tool == spawnNoticeTool || msg.Tool == taskEndTool {
+	if msg.Tool == noticeTool || msg.Tool == superviseTool || msg.Tool == askAnswerTool || msg.Tool == spawnNoticeTool || msg.Tool == taskEndTool ||
+		msg.Tool == chatReplyTool {
 		return msg.Text
 	}
 	return relayText(msg)
@@ -786,6 +803,10 @@ func (s *Service) relayDelivered(ctx context.Context, to string, msg relayMsg) {
 	}
 	if msg.Tool == taskEndTool {
 		return // a record for the conversation that planned the task: no hop of any chain, no push of its own
+	}
+	if msg.Tool == chatReplyTool {
+		s.chatReplyDelivered(to, msg) // others' words: no hop of any chain; the next one about that chat waits its gap
+		return
 	}
 	if msg.Tool == noticeTool || msg.Tool == askAnswerTool {
 		s.noteReportTurn(to) // the answer to a task's notice (or to the owner's late call) is pushed however quick it was (#3438)

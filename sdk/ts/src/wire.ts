@@ -4151,6 +4151,15 @@ export interface ConnectorArchiveChat {
   /** The owner marked it done. */
   done?: boolean;
   updated_at?: string;
+  /**
+   * Where the conversation stands at the source, as the source records it (a pull request or issue: open, merged or
+   * closed); omitted when the source has no such state. A fact, not the owner's done flag: the selection does not
+   * read it; the knowledge base keeps it on the chat, finishes projects whose chats have all ended and leaves ended
+   * chats out of the assistant's snapshot.
+   */
+  state?: string;
+  /** When the conversation got to state; omitted when unknown. */
+  state_at?: string;
 }
 
 /**
@@ -4329,6 +4338,8 @@ export interface ConnectorKBItem {
   locked_fields?: string[];
   /** The store's: which extension holds a locked field. A connector's is ignored. */
   provenance?: Record<string, ConnectorKBProvenance>;
+  /** The store's: the links the user removed, by list. A connector's is ignored. */
+  excluded?: Record<string, string[]>;
 }
 
 /**
@@ -4949,6 +4960,11 @@ export interface KBDetail {
   log?: string[];
   recent?: string;
   links?: KBEntry[];
+  /**
+   * The links the user removed by hand (meta's excluded), named as links are; automatic organizing and extensions
+   * leave them out until the user links them again (docs/assistant/knowledge.md "Removed links").
+   */
+  removed?: KBEntry[];
   moments?: KBMomentRef[];
   segments?: KBRecordingSegment[];
   /** A recording's meeting minutes, once written (docs/assistant/meeting-minutes.md); kept as the hub sends them. */
@@ -5199,8 +5215,8 @@ export interface KBUpdateResult {
    */
   before?: Record<string, unknown>;
   /**
-   * Fields the update carried that its kind does not use (a person's summary and log, for one): not applied, each
-   * with why.
+   * Fields the update carried that its kind does not use (a person's summary and log, for one), and links to make
+   * that the user removed: not applied, each with why.
    */
   ignored?: KBIgnoredField[];
 }

@@ -549,6 +549,11 @@ const (
 // language (apierr.Call). 409.
 const CodeNotLoaded = "not_loaded"
 
+// CodeTurnOverBackground is session.interrupt's answer when the Escape went to a session whose turn was already over
+// and only its background work (a background command, a subagent, a workflow) keeps it Working: nothing was
+// interrupted and that work goes on (#10828).
+const CodeTurnOverBackground = "turn_over_background"
+
 // CodeAgentStopped is what session.send refuses with for an Agent that has stopped and is read-only (node/stopped.go,
 // #4754): nothing was typed, and it takes no message until it is resumed (the user's Resume on its terminal page).
 const CodeAgentStopped = "agent_stopped"
@@ -671,6 +676,10 @@ type UndeliveredMessage struct {
 	Attempts int        `json:"attempts,omitempty"`
 	NextAt   *time.Time `json:"next_at,omitempty"` // when the next try is due while waiting
 	Error    string     `json:"error,omitempty"`   // why the last try did not go in, in the owner's language
+	// Computer is set on a message held for an Agent while its computer was away (#10661, internal/devices held.go):
+	// that computer's name. Error is then the whole line to show under the bubble ("Will send when … is back"), and
+	// Retry / Delete go to the session's held routes (POST /api/v1/sessions/{mid}/{sid}/held/{msg}/retry, DELETE …).
+	Computer string `json:"computer,omitempty"`
 }
 
 // UndeliveredMessage states.

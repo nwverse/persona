@@ -211,8 +211,8 @@ func (s *Service) stopTurnEnded(machine, sid string, now time.Time) {
 }
 
 // stopFor is the Stop that interrupted agent sid on machine's turn in the task's stretch of work that began at
-// stretch, by its attempt (ok): one Stop, read under one lock, sent in that stretch, whose turn end the hub heard after
-// it was sent, within stopCounts of it. A Stop whose end is still to come (a newer one, for a turn going on), one of
+// stretch, by its attempt (ok): one Stop, read under one lock, sent in that stretch (stopStretch), whose turn end the
+// hub heard after it was sent, within stopCounts of it. A Stop whose end is still to come (a newer one, for a turn going on), one of
 // another stretch, one whose turn ended before it was sent, and one taken up since (forgetStop) are none. That same
 // attempt classifies the turn (quietTurnKind) and is the one its receipt spends (forgetStop). One kept past stopKeep
 // is let go here.
@@ -229,10 +229,32 @@ func (s *Service) stopFor(machine, sid string, stretch time.Time) (attempt time.
 		delete(q.stops, ref)
 		return time.Time{}, false
 	}
-	if m.ended.IsZero() || !m.stretch.Equal(stretch) || m.ended.Sub(m.at) > stopCounts {
+	if m.ended.IsZero() || m.ended.Sub(m.at) > stopCounts || !stopStretch(m, stretch) {
 		return time.Time{}, false
 	}
 	return m.at, true
+}
+
+// stopStretch: m is a Stop of the turn whose stretch of work began at stretch: sent in it, or sent while the agent was
+// still starting, before its turn's start was heard (the stretch then begins after the Stop's, but no later than the
+// turn end the hub heard after the Stop). A later turn's stretch begins after that end.
+func stopStretch(m stopMark, stretch time.Time) bool {
+	return m.stretch.Equal(stretch) || stretch.After(m.stretch) && !stretch.After(m.ended)
+}
+
+// quietTasksLeft: the agents left their open task (it closed or was cancelled, they were let go, or another task has
+// them now: fleetTakeSnapshot): what was said of their last turn for that task goes, verdict and Stop.
+func (s *Service) quietTasksLeft(refs []SessionRef) {
+	if len(refs) == 0 {
+		return
+	}
+	q := &s.tasks.quiet
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for _, ref := range refs {
+		delete(q.marks, ref)
+		delete(q.stops, ref)
+	}
 }
 
 // forgetStop: a turn end of agent sid on machine was taken up (a receipt): the Stop attempt that interrupted it

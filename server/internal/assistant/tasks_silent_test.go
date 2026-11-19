@@ -43,7 +43,7 @@ func TestTaskTurnEndWithoutOutputIsInterrupted(t *testing.T) {
 		{name: "a reply", items: []proto.Item{prompt, {Kind: proto.KindToolUse, Role: "assistant", ToolName: "Edit"},
 			{Kind: proto.KindText, Role: "assistant", Text: "修好了，提了 https://github.com/o/r/pull/901"}},
 			state: "done", summary: "修好了，提了 https://github.com/o/r/pull/901",
-			notice: []string{"做完了，等你验收", "修好了"}, judged: true},
+			notice: []string{"待逐项复核，不代表完成", "修好了"}, judged: true},
 		{name: "a model API error", items: []proto.Item{prompt}, turnError: "API Error: 529 overloaded",
 			state: "interrupted", summary: interruptedSummary, errText: "API Error: 529 overloaded",
 			notice: []string{"被模型服务出错打断了", "529 overloaded"}},
@@ -822,5 +822,108 @@ func TestAgentsListLabelOfAModelError(t *testing.T) {
 	}
 	if snapshotAgentGroup(cut, time.Now()) != snapshotAgentUnread {
 		t.Fatal("a model error moved in the snapshot")
+	}
+}
+
+// A Stop sent while the task's Agent was still starting (right after the hand-off, its turn's start not heard yet) is
+// that turn's: the turn's stretch of work begins after the Stop, and the silent end that follows is stopped.
+func TestQuietTurnStopWhileStarting(t *testing.T) {
+	ft := newFleetTaskTest(t)
+	s, ctx := ft.s, context.Background()
+	ft.f.known["lark1"] = true
+	ft.sessions("server", proto.Session{SessionID: "conv1", Assistant: true, Status: proto.StatusIdle},
+		proto.Session{SessionID: "lark1", Assistant: true, Status: proto.StatusWorking})
+	s.markReporter(ctx, "server", "lark1")
+	if _, err := s.toolTaskPlan(ctx, "lark1", planArgs(true)); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the link", func() bool { return len(onlyTodo(s).Agents) == 1 })
+	id := onlyTodo(s).ID
+	starting := proto.Session{SessionID: "s1", Cwd: "/code/app", Agent: "claude", Status: proto.StatusIdle, Starting: true, UpdatedAt: time.Now()}
+	ft.sessions("box", starting)
+	before := s.taskStretch(onlyTodo(s))
+	s.UserStopped(ctx, SessionRef{MachineID: "server", SessionID: "lark1"})
+	if got := ft.f.interrupted(); !slices.Contains(got, "box/s1") {
+		t.Fatalf("the starting agent was not interrupted: %q", got)
+	}
+	// Its turn's start is heard only now, after the Stop.
+	work := starting
+	work.Starting, work.Status, work.Rev, work.UpdatedAt = false, proto.StatusWorking, 1, starting.UpdatedAt.Add(time.Second)
+	ft.sessions("box", work)
+	waitFor(t, "the turn's start", func() bool { return !s.taskStretch(onlyTodo(s)).Equal(before) })
+	ft.f.setItems(proto.Item{Kind: proto.KindText, Role: "user", Text: "做吧"})
+	done := work
+	done.Status, done.Rev, done.UpdatedAt = proto.StatusDone, 2, work.UpdatedAt.Add(time.Second)
+	ft.sessions("box", done)
+	if rb := receiptOf(t, s, "lark1", id, 1); rb.Cause != causeStopped {
+		t.Fatalf("receipt %+v", rb)
+	}
+	if row := listed(t, s, "box", "s1"); row.TurnErrorKind != proto.TurnErrorStopped {
+		t.Fatalf("row %q %q", row.TurnError, row.TurnErrorKind)
+	}
+}
+
+// The verdict is about the turn its task got: once the task is closed (here cancelled), the Agent's row no longer
+// carries it, and no Stop of it is kept.
+func TestQuietTurnGoesWithItsTask(t *testing.T) {
+	ft := newFleetTaskTest(t)
+	s := ft.s
+	work := fleetTaskStarted(t, ft, 1)
+	ft.f.setItems(proto.Item{Kind: proto.KindText, Role: "user", Text: "做吧"})
+	done := work
+	done.Status, done.Rev, done.UpdatedAt = proto.StatusDone, 2, work.UpdatedAt.Add(time.Second)
+	ft.sessions("box", done)
+	id := onlyTodo(s).ID
+	receiptOf(t, s, "conv1", id, 1)
+	waitFor(t, "the verdict on the row", func() bool { return listed(t, s, "box", "s1").TurnError != "" })
+	s.noteStopped("box", "s1", time.Now())
+	reviewAndWait(t, s, id, reviewCancelled)
+	waitFor(t, "the verdict to go with the task", func() bool { return listed(t, s, "box", "s1").TurnError == "" })
+	q := &s.tasks.quiet
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if _, ok := q.stops[SessionRef{MachineID: "box", SessionID: "s1"}]; ok {
+		t.Fatal("a Stop of the closed task's Agent was kept")
+	}
+}
+
+// A turn the ledger took up without its verdict (an older manager, or a stop between the two writes) gets it when its
+// end is looked at again, and the row shows it then, though no second receipt goes out.
+func TestQuietTurnBackfilledVerdictShows(t *testing.T) {
+	ft := newFleetTaskTest(t)
+	s, ctx := ft.s, context.Background()
+	work := fleetTaskStarted(t, ft, 1)
+	ft.f.setItems(proto.Item{Kind: proto.KindText, Role: "user", Text: "做吧"})
+	done := work
+	done.Status, done.Rev, done.UpdatedAt = proto.StatusDone, 2, work.UpdatedAt.Add(time.Second)
+	ft.sessions("box", done)
+	id := onlyTodo(s).ID
+	receiptOf(t, s, "conv1", id, 1)
+	// As if the verdict had not been kept: none on the ledger's turn, none in memory.
+	b := &s.tasks.turns
+	b.mu.Lock()
+	e := b.doc.Turns[id]
+	e.Silent = ""
+	b.doc.Turns[id] = e
+	b.mu.Unlock()
+	q := &s.tasks.quiet
+	q.mu.Lock()
+	delete(q.marks, SessionRef{MachineID: "box", SessionID: "s1"})
+	q.mu.Unlock()
+	if row := listed(t, s, "box", "s1"); row.TurnError != "" {
+		t.Fatalf("the verdict is still on the row: %q", row.TurnError)
+	}
+	s.tasks.mu.Lock()
+	delete(s.tasks.receipted, id) // the end is looked at again (a retry, a recovery)
+	s.tasks.mu.Unlock()
+	s.taskTurnSettled(ctx, "box", "s1")
+	if e, _ := s.turnOf(ctx, id); e.Silent != proto.TurnErrorNoOutput {
+		t.Fatalf("the ledger's turn: %+v", e)
+	}
+	if row := listed(t, s, "box", "s1"); row.TurnErrorKind != proto.TurnErrorNoOutput {
+		t.Fatalf("the back-filled verdict is not on the row: %q %q", row.TurnError, row.TurnErrorKind)
+	}
+	if n := strings.Count(feedKinds(s, "conv1"), "receipt"); n != 1 {
+		t.Fatalf("%d receipts", n)
 	}
 }
