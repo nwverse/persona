@@ -433,7 +433,15 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // The editor (its heading, each card's controls, the drag and the edits) is a chunk of its own
 // (views/extensions/OverviewArrange.tsx, lib/overview-edit.ts). Main had 58 B of room, so the budget is this ja
 // size plus those 58 B.
-export const FIRST_SCREEN_BUDGET = 483_458;
+// #10905: Overview's own sections arranged with the extensions' cards add 162 B in ja, measured in one environment
+// against #9778's branch at cc6ca949cb (ja 483,452 B to 483,614 B; en 480,364 B to 480,542 B, zh-Hans 481,219 B to
+// 481,383 B): the sections' ids and their place in the arrangement, Needs you and Stuck never hidden
+// (lib/overview-cards.ts), Overview's cards and sections drawn in that order (views/OverviewBody.tsx, Home's sections
+// handed to it), the Arrange button always there, and a default manager of #9745 refusing a section known
+// (lib/start-page.ts). The sections' bars and their names while arranging, and what a change writes, are the editor's
+// chunk (views/extensions/OverviewArrange.tsx, lib/overview-edit.ts). That branch had 6 B of room, so the budget goes
+// up by those 162 B.
+export const FIRST_SCREEN_BUDGET = 483_620;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;

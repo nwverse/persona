@@ -20943,20 +20943,28 @@ PERSONAL_HIDDEN = {}  # session id -> when (ms)
 PERSONAL_PREFS = {"pins": [], "view": {}, "sections": [], "assign": {}}
 PERSONAL_PREF_FAIL = {"status": 0}
 # The user's navigation choices (#9071, GET / PUT /api/v1/navigation): the start page, the sidebar's pages and Overview's
-# extension cards (#9745). Empty until something is stored; MOCK_NAVIGATION=off is a hub (or a default manager) from
+# extension cards (#9745) with its own sections among them (#10905). Empty until something is stored; MOCK_NAVIGATION=off is a hub (or a default manager) from
 # before, which answers 404 and keeps nothing; MOCK_NAVIGATION=no-overview a default manager from before the cards
 # (#9351's): a PUT of only them is 400, and the record it answers never has them.
 NAVIGATION = {}
 NAVIGATION_START = re.compile(r"(?:[a-z][a-z0-9-]{0,63}|p:[^/\x00-\x20\x7f]{1,128}/[^/\x00-\x20\x7f]{1,128})")
 NAVIGATION_CARD_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")  # an extension's id and a UI contribution's
+NAVIGATION_SECTION = re.compile(r"[a-z][a-z0-9_]{0,31}")  # one of Overview's own sections (#10905)
 
 
 def navigation_overview_ok(cards):
-    """Whether `cards` is Overview's arrangement as the manager takes it (server/internal/assistant/navigation.go)."""
+    """Whether `cards` is Overview's arrangement as the manager takes it (server/internal/assistant/navigation.go): its
+    cards and its own sections (#10905), each once."""
     if not isinstance(cards, list) or len(cards) > 256:
         return False
     seen = set()
     for c in cards:
+        if isinstance(c, dict) and "section" in c:
+            if not isinstance(c["section"], str) or not NAVIGATION_SECTION.fullmatch(c["section"]) or set(c) - {"section", "hidden"} \
+                    or not isinstance(c.get("hidden", False), bool) or c["section"] in seen:
+                return False
+            seen.add(c["section"])
+            continue
         if not isinstance(c, dict) or not all(isinstance(c.get(k), str) and NAVIGATION_CARD_ID.fullmatch(c[k]) for k in ("extension", "id")):
             return False
         if not isinstance(c.get("hidden", False), bool) or c.get("span", "half") not in ("half", "full", ""):

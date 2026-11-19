@@ -735,3 +735,105 @@ describe("Overview's cards (#9745)", () => {
     });
   });
 });
+
+describe("Overview's own sections (#10905)", () => {
+  // In progress first, then the cards and the other sections: the arrangement the issue asks to keep on every device
+  const IN_PROGRESS_FIRST: OverviewEntry[] = [
+    { section: "in_progress" },
+    { extension: "example-quota", id: "left" },
+    { section: "needs_you" },
+    { section: "waiting_on_computer" },
+    { section: "working", hidden: true },
+    { section: "unread" },
+    { section: "computers" },
+  ];
+  const copyKey = async () => {
+    const f = await import("./feed-cache");
+    return f.scopedKey(f.feedCacheScope(), "overview.cards")!;
+  };
+  const puts$ = () => vi.mocked(fetch).mock.calls.filter(([, i]) => (i as RequestInit | undefined)?.method === "PUT");
+  // a default manager of #9745: it keeps cards only, and refuses an entry without an extension's ids in its own words
+  const cardsOnlyManager = () =>
+    vi.mocked(fetch).mockImplementation(async (input: string | URL | Request, init?: RequestInit) => {
+      if (new URL(String(input), location.href).pathname !== "/api/v1/navigation" || hub === "missing") return Response.json({});
+      if (init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as { overview?: OverviewEntry[] };
+        if (body.overview?.some((e) => !("extension" in e))) return Response.json({ error: 'overview: "" / "" is not an extension\'s card' }, { status: 400 });
+        hub = { ...hub, ...body };
+      }
+      return Response.json(hub);
+    });
+
+  it("two devices: In progress moved first on one, the other draws it from its hello, and a change on the push", async () => {
+    const laptop = await load();
+    await laptop.hello();
+    const cards = await import("./overview-cards");
+    cards.saveOverview(IN_PROGRESS_FIRST);
+    await flush();
+    expect(puts).toEqual([{ overview: IN_PROGRESS_FIRST }]);
+    expect(cards.overviewKept()).toBe(true);
+    laptop.store.disconnect();
+    vi.resetModules();
+    localStorage.clear();
+    localStorage.setItem("persona.token", "test-token");
+    const phone = await load();
+    await phone.hello();
+    const phoneCards = await import("./overview-cards");
+    expect(phoneCards.getOverviewPrefs()).toEqual(IN_PROGRESS_FIRST);
+    expect(JSON.parse(localStorage.getItem(await copyKey())!)).toEqual(IN_PROGRESS_FIRST);
+    const items = phoneCards.arrangeOverview([{ extension: "example-quota", id: "left" }], phoneCards.getOverviewPrefs());
+    expect(items.map((i) => i.key)[0]).toBe("section:in_progress");
+    // the laptop shows Working again: the push brings it here
+    const shown = IN_PROGRESS_FIRST.map((e) => ("section" in e && e.section === "working" ? { section: "working" } : e));
+    Socket.last.push({ type: "navigation", overview: shown });
+    expect(phoneCards.getOverviewPrefs()).toEqual(shown);
+  });
+
+  it("is handed over like the cards: an arrangement kept here goes to a hub that has none", async () => {
+    hub = { start: "" };
+    localStorage.setItem(await copyKey(), JSON.stringify(IN_PROGRESS_FIRST));
+    const { hello } = await load();
+    await hello();
+    expect(puts).toEqual([{ overview: IN_PROGRESS_FIRST }]);
+  });
+
+  it("a default manager of #9745 refuses one that names a section: it stays in this browser and says so, and goes once the manager is updated", async () => {
+    hub = { overview: [] };
+    cardsOnlyManager();
+    const { hello, startPageSynced } = await load();
+    await hello();
+    const cards = await import("./overview-cards");
+    cards.saveOverview(IN_PROGRESS_FIRST);
+    await flush();
+    expect(cards.overviewKept()).toBe(false);
+    expect(startPageSynced()).toBe(true);
+    expect(cards.getOverviewPrefs()).toEqual(IN_PROGRESS_FIRST);
+    // the next hello does not take the hub's cards over it: it asks again, and the manager refuses again
+    await hello();
+    expect(cards.getOverviewPrefs()).toEqual(IN_PROGRESS_FIRST);
+    expect(cards.overviewKept()).toBe(false);
+    expect(puts$()).toHaveLength(2);
+    // the manager is updated meanwhile; a hello that did not resume asks again
+    vi.mocked(fetch).mockImplementation(async (input: string | URL | Request, init?: RequestInit) => {
+      if (new URL(String(input), location.href).pathname !== "/api/v1/navigation" || hub === "missing") return Response.json({});
+      if (init?.method === "PUT") hub = { ...hub, ...(JSON.parse(String(init.body)) as object) };
+      return Response.json(hub);
+    });
+    await hello();
+    expect(hub).toMatchObject({ overview: IN_PROGRESS_FIRST });
+    expect(cards.overviewKept()).toBe(true);
+  });
+
+  it("the same manager still keeps a change of only cards (the sections where they are by default write none)", async () => {
+    hub = { overview: [] };
+    cardsOnlyManager();
+    const { hello } = await load();
+    await hello();
+    const cards = await import("./overview-cards");
+    cards.saveOverview([{ extension: "example-quota", id: "left", span: "full" }]);
+    await flush();
+    expect(cards.overviewKept()).toBe(true);
+    expect(hub).toMatchObject({ overview: [{ extension: "example-quota", id: "left", span: "full" }] });
+    expect(puts$()).toHaveLength(1);
+  });
+});

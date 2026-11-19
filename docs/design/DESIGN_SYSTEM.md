@@ -2374,14 +2374,23 @@ The same rule as a chosen look whose extension is switched off ("the choice stay
 
 Overview's extension cards (web) are arranged where they are drawn, not in a settings list: the result is a layout (which
 card is wide, which sit side by side), and a list would show neither widths nor neighbours. Overview's top bar has
-**Arrange cards** (`IconButton` with the `grid` icon, `aria-pressed` while on) beside **New agent**, only while there are
-cards. The edit state reuses the sidebar pages editor's pieces (`web/src/views/settings/SidebarPages.tsx`): the `grip`
+**Arrange Overview** (`IconButton` with the `grid` icon, `aria-pressed` while on) beside **New agent**, always: Overview's
+own sections are arranged with the cards (#10905). The edit state reuses the sidebar pages editor's pieces (`web/src/views/settings/SidebarPages.tsx`): the `grip`
 handle and an HTML drag onto another item, which takes its place; ↑ / ↓ `IconButton`s at 26 px for the keyboard and touch;
 a native select for the width (**Half row** / **Full row**); `Switch` for shown or hidden; the hub footer's words for where
 it is kept; and **Reset** with Undo in a toast (4.4). Each card keeps its surface and its content, made `inert`; its head
 becomes the controls, which wrap under the name on a narrow card. A hidden card is drawn only while arranging, as its
 hairline outline (`shadow-hairline`, no surface) with "Hidden: not loaded" in `--ink-3` under its name; the card a dragged
 one would land on has a 2 px inset `--accent` ring. No new token or component (`web/src/views/extensions/OverviewArrange.tsx`).
+
+Overview's own sections (#10905) take part in the same edit state, in their places among the cards: each is drawn as a
+bar the row's width, on the card surface (`rounded-card`, `bg-surface`, `shadow-card`), with the same `grip` handle and
+drag, its name as its heading would be, and the same ↑ / ↓ and `Switch`; no width select (a section always takes the
+row). Its rows are not drawn while arranging: a section can be long (every computer, every working agent), and its place
+is what is being chosen; a section with no rows now gets its bar all the same, so it can be placed before it fills. A
+section that holds what needs the user (Needs you, Stuck) has no switch and says "Always shown" under its name in
+`--ink-3` (3.4: a session that needs the user is never hidden); a hidden one is the same hairline outline as a hidden
+card, "Hidden" under its name. The greeting and its summary are not part of it and stay first. No new token or component.
 
 ## Values a form fills in by itself (#4975)
 

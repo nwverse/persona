@@ -29,7 +29,7 @@ vi.mock("../lib/sessions", async (importOriginal) => {
 });
 
 // the extensions' overview cards are not this test's
-vi.mock("./extensions/ExtensionSlots", () => ({ OverviewCards: () => null, OverviewArrangeButton: () => null }));
+vi.mock("./extensions/ExtensionSlots", () => ({ OverviewCards: () => null, OverviewArrangeButton: () => null, OverviewArranging: () => null }));
 // a card's answer stays on its way until the test lets it end
 const op = vi.hoisted(() => ({ finish: (_: unknown) => {} }));
 vi.mock("../lib/ops", async (importOriginal) => ({ ...(await importOriginal<typeof import("../lib/ops")>()), apiOp: () => new Promise((done) => { op.finish = done; }) }));
@@ -381,6 +381,27 @@ describe("tasks in progress", () => {
     expect(html).toContain("items-stretch");
     for (const id of ["a", "b"]) expect(html.slice(html.indexOf(`data-task="${id}"`) - 120, html.indexOf(`data-task="${id}"`))).toContain("h-full");
     expect(html).toContain("mt-auto flex");
+  });
+  // #10905: Overview's own sections come in the user's arrangement, kept on the hub for every device; nothing arranged,
+  // they are where they always were (the test above)
+  it("In progress moved first comes right under the greeting, above Needs you; a hidden section is not drawn", async () => {
+    const { adoptOverview } = await import("../lib/overview-cards");
+    adoptOverview([{ section: "in_progress" }, { section: "needs_you" }, { section: "waiting_on_computer" }, { section: "working", hidden: true }, { section: "unread" }, { section: "computers" }]);
+    fake.todos = [todo("a")];
+    try {
+      const html = render([agent(1, 0, "working"), agent(2, 0, "unread")], [{ id: "c1", machine_id: "mac", session_id: "s1", kind: "question", question: "ok?" } as Interaction]);
+      expect(heading(html, "进行中的任务")).toBeGreaterThan(-1);
+      expect(heading(html, "进行中的任务")).toBeLessThan(heading(html, "需要你"));
+      expect(heading(html, "需要你")).toBeLessThan(heading(html, "完成未看"));
+      expect(heading(html, "工作中")).toBe(-1);
+      expect(html.indexOf("</h1>")).toBeLessThan(heading(html, "进行中的任务"));
+    } finally {
+      fake.todos = [];
+      adoptOverview([]);
+    }
+    // put back: the default order again
+    const html = render([agent(1, 0, "working")], [{ id: "c1", machine_id: "mac", session_id: "s1", kind: "question", question: "ok?" } as Interaction]);
+    expect(heading(html, "需要你")).toBeLessThan(heading(html, "工作中"));
   });
   it("offers See all past six tasks", () => {
     fake.todos = Array.from({ length: 7 }, (_, i) => todo(`t${i}`));

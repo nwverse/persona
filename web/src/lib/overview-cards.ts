@@ -1,14 +1,19 @@
-// Overview's extension cards as the user arranged them (#9745, docs/web/web.md "Overview's extension cards"): their
-// order, the ones hidden, and each one's width, half a row (the default, as they always were) or the whole row. Kept
-// on the hub for every device of the user (`overview` of GET / PUT /api/v1/navigation; lib/start-page.ts reads it at
-// the hello and hears each push, and sends each change made here) and in this browser as its copy, alone where the hub
-// (or its default manager) can't keep it.
+// Overview as the user arranged it (#9745, #10905; docs/web/web.md "Overview's extension cards"): the extensions' cards
+// (their order, the ones hidden, and each one's width, half a row, the default, as they always were, or the whole row)
+// and Overview's own sections among them (their order, and the ones hidden where that is safe). Kept on the hub for
+// every device of the user (`overview` of GET / PUT /api/v1/navigation; lib/start-page.ts reads it at the hello and
+// hears each push, and sends each change made here) and in this browser as its copy, alone where the hub (or its
+// default manager) can't keep it.
 //
-// Which cards there are is the hub's list (lib/extension-slots.ts, in its order: by extension, then the manifest's).
-// A card the arrangement names comes in its place; one it does not name (an extension installed since) after the named
-// ones, half a row and shown, in the hub's order; an entry naming a card that is not there now is passed over, and kept
-// until the user saves another arrangement (it holds only the cards there are then). Changing it is
-// lib/overview-edit.ts's, loaded with Overview's card editor: the first screen only draws the cards.
+// Which cards there are is the hub's list (lib/extension-slots.ts, in its order: by extension, then the manifest's);
+// the sections are SECTIONS, under the cards by default. A card or section the arrangement names comes in its place.
+// A card it does not name (an extension installed since) comes after the last card it names (none: right above Needs
+// you, where the cards end by default), half a row and shown, in the hub's order; a section it does not name (one added
+// since) where it is by default, right after the section before it by default (Needs you: after the cards), so a
+// section the user put first stays first. An entry naming a card that is not
+// there now is passed over, and kept until the user saves another arrangement (it holds only the cards there are
+// then); one naming a section this web does not have (a newer web's) is kept where it is. Changing it is
+// lib/overview-edit.ts's, loaded with Overview's editor: the first screen only draws.
 import { useSyncExternalStore } from "react";
 import { feedCacheScope, scopedKey } from "./feed-cache";
 
@@ -18,32 +23,84 @@ const KEY = "overview.cards";
 export type CardSpan = "half" | "full";
 
 /** One card as the user placed it: the extension's id and the card's (its overview_card's id), hidden or not, its width. */
-export type OverviewEntry = { extension: string; id: string; hidden?: boolean; span?: CardSpan };
+export type CardEntry = { extension: string; id: string; hidden?: boolean; span?: CardSpan };
+/** One of Overview's own sections as the user placed it (#10905): its id, hidden or not. */
+export type SectionEntry = { section: string; hidden?: boolean };
+export type OverviewEntry = CardEntry | SectionEntry;
+
+/** Overview's own sections under the greeting (views/Home.tsx), by the ids the arrangement names them by, in their
+ *  default order: Needs you, Stuck (waiting on a computer), Tasks in progress, Working, Unread, Computers. */
+export const SECTIONS = ["needs_you", "waiting_on_computer", "in_progress", "working", "unread", "computers"] as const;
+export type SectionId = (typeof SECTIONS)[number];
+/** The sections that are only moved, never hidden: their rows need the user (docs/design/DESIGN_SYSTEM.md 3.4). */
+export const ALWAYS_SHOWN: readonly string[] = ["needs_you", "waiting_on_computer"];
 
 /** A card as Overview draws it: the hub's card, whether it is hidden, its width. */
 export type ArrangedCard<T> = { card: T; key: string; hidden: boolean; span: CardSpan };
+/** A section as Overview draws it: which, whether it is hidden. */
+export type ArrangedSection = { section: SectionId; key: string; hidden: boolean };
+export type ArrangedItem<T> = ArrangedCard<T> | ArrangedSection;
 
 /** A card's key: `<extension>/<id>`. */
 export const cardKey = (c: { extension: string; id: string }) => `${c.extension}/${c.id}`;
+/** A section's key: `section:<id>`, never a card's (a card's has a "/"). */
+export const sectionKey = (id: string) => `section:${id}`;
+export const isSection = (e: OverviewEntry): e is SectionEntry => typeof (e as SectionEntry).section === "string";
+export const entryKey = (e: OverviewEntry) => (isSection(e) ? sectionKey(e.section) : cardKey(e));
 
 /** An arrangement as stored or as the hub sends it (anything else is none; the hub checked its shape). */
 export const readOverview = (v: unknown): OverviewEntry[] =>
-  Array.isArray(v) ? v.filter((e) => typeof e?.extension === "string" && typeof e.id === "string") : [];
+  Array.isArray(v) ? v.filter((e) => typeof e?.section === "string" || (typeof e?.extension === "string" && typeof e.id === "string")) : [];
 
-/** The cards in the user's arrangement: the named ones in their place, hidden and wide as chosen; then the others in the
- *  hub's order, half a row and shown. Without an arrangement, the hub's cards as they always were. */
-export function arrangeCards<T extends { extension: string; id: string }>(cards: readonly T[], prefs: readonly OverviewEntry[]): ArrangedCard<T>[] {
+/** Overview's cards and sections in the user's arrangement: the named ones in their place, hidden and wide as chosen;
+ *  the cards it does not name after the last one it names (none: above Needs you), in the hub's order, half a row and
+ *  shown; the sections it does not name each after the one before it by default. Without an arrangement, Overview as
+ *  it always was: the cards, then the sections in their order. */
+export function arrangeOverview<T extends { extension: string; id: string }>(cards: readonly T[], prefs: readonly OverviewEntry[]): ArrangedItem<T>[] {
   const byKey = new Map<string, T>();
   for (const c of cards) if (!byKey.has(cardKey(c))) byKey.set(cardKey(c), c);
-  const out: ArrangedCard<T>[] = [];
+  const out: ArrangedItem<T>[] = [];
+  const placed = new Set<string>();
   for (const e of prefs) {
-    const key = cardKey(e);
-    const card = byKey.get(key);
-    if (!card) continue; // not there now, or named twice
-    byKey.delete(key);
-    out.push({ card, key, hidden: e.hidden === true, span: e.span === "full" ? "full" : "half" });
+    const key = entryKey(e);
+    if (placed.has(key)) continue; // named twice
+    if (isSection(e)) {
+      if (!(SECTIONS as readonly string[]).includes(e.section)) continue; // a newer web's
+      out.push({ section: e.section as SectionId, key, hidden: e.hidden === true && !ALWAYS_SHOWN.includes(e.section) });
+    } else {
+      const card = byKey.get(key);
+      if (!card) continue; // not there now
+      out.push({ card, key, hidden: e.hidden === true, span: e.span === "full" ? "full" : "half" });
+    }
+    placed.add(key);
   }
-  for (const [key, card] of byKey) out.push({ card, key, hidden: false, span: "half" });
+  const last = () => out.findLastIndex((i) => "card" in i);
+  let at = last() < 0 ? Math.max(0, out.findIndex((i) => i.key === sectionKey(SECTIONS[0]))) : last() + 1;
+  for (const [key, card] of byKey) if (!placed.has(key)) out.splice(at++, 0, { card, key, hidden: false, span: "half" });
+  // in their order: the one before each is in place by then
+  SECTIONS.forEach((id, i) => {
+    const key = sectionKey(id);
+    if (!placed.has(key)) out.splice((i ? out.findIndex((x) => x.key === sectionKey(SECTIONS[i - 1])) : last()) + 1, 0, { section: id, key, hidden: false });
+  });
+  return out;
+}
+
+/** A row of cards that come one after another, or a section: how Overview lays the arrangement out. */
+export type OverviewRun<T> = { key: string; cards: ArrangedCard<T>[] } | ArrangedSection;
+
+/** The arrangement as Overview lays it out: each run of cards (hidden ones too) one grid, each section on its own. A
+ *  run is named by its place among the runs, so a section moved past it does not draw its cards again. */
+export function overviewRuns<T>(items: readonly ArrangedItem<T>[]): OverviewRun<T>[] {
+  const out: OverviewRun<T>[] = [];
+  let run: ArrangedCard<T>[] | null = null;
+  let n = 0;
+  for (const it of items) {
+    if (!("card" in it)) {
+      out.push(it);
+      run = null;
+    } else if (run) run.push(it);
+    else out.push({ key: `cards:${n++}`, cards: (run = [it]) });
+  }
   return out;
 }
 

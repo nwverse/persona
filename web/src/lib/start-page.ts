@@ -1,5 +1,5 @@
 // Where the app opens (#9071, docs/web/web.md "Start page"): Persona's main chat, unless the user chose another page in
-// Settings › General › Start page. It also carries the sidebar's arrangement and Overview's cards (#9745) to and from the hub (below). The hub keeps the choice (GET / PUT /api/v1/navigation, its default manager's): a
+// Settings › General › Start page. It also carries the sidebar's arrangement and Overview's (#9745, #10905) to and from the hub (below). The hub keeps the choice (GET / PUT /api/v1/navigation, its default manager's): a
 // hub has one owner, so every device of theirs follows. This browser keeps a copy, so an opening decides before the
 // first paint without waiting for the hub, and keeps the choice itself where the hub has no such route (404). Only an
 // opening at the root address goes there (a new tab, the installed app, the hub's address typed): a reload, Back /
@@ -11,7 +11,7 @@ import { api, ApiError } from "./api";
 import { stripBase } from "./base";
 import { hasSlots } from "./extension-slots";
 import { NAV_PAGES } from "./persona-nav";
-import { adoptOverview, getOverviewPrefs, noteOverviewKept, onOverviewSaved, overviewChosen, overviewKept, type OverviewEntry } from "./overview-cards";
+import { adoptOverview, getOverviewPrefs, noteOverviewKept, onOverviewSaved, overviewChosen, overviewKept, type CardEntry, type SectionEntry } from "./overview-cards";
 import { adoptSidebarPrefs, chosen, getSidebarPrefs, onSidebarPrefsSaved } from "./sidebar-pages";
 import { isResumed } from "./reconnect";
 import { navigate, type Route } from "./router";
@@ -142,14 +142,17 @@ onSidebarPrefsSaved((pages) => {
     .finally(() => sending--);
 });
 
-// Overview's cards (lib/overview-cards.ts) go the same way, sent on their own. A default manager from before the field
-// answers a change of only them with its own 400 (OLD_MANAGER), or takes the PUT and leaves them out of its answer: the
-// arrangement then stays in this browser (Overview's editor says so) until the next hello asks again. Any other failure
+// Overview's cards and sections (lib/overview-cards.ts) go the same way, sent on their own. A default manager from
+// before the field answers a change of only them with its own 400 (OLD_MANAGER), or takes the PUT and leaves them out
+// of its answer: the arrangement then stays in this browser (Overview's editor says so) until the next hello asks
+// again. One from before the sections (#9745's) refuses an arrangement that names one in its own words (NO_SECTIONS):
+// the editor says so too, and as its record has the cards, the change is kept as one the hub did not take. Any other failure
 // (403, 5xx, the network, another 400) keeps the change and sends it again at the next hello. One change is on its way at a
 // time: one made meanwhile goes once that one is answered, the newest as this browser has it then, so the hub takes them in
 // the order they were made and the last answer says whether the newest reached it. Pushes heard meanwhile, and until the
 // hub's push of the last one taken comes (its answer can come first), are settled then (settleOverview), not dropped.
 const OLD_MANAGER = ["start is required", "start or pages is required"]; // #9328, #9351
+const NO_SECTIONS = 'overview: "" / "" is not an extension\'s card';
 let sendingOverview = false;
 let againOverview = false; // a change made while one was on its way
 let unsentOverview = false;
@@ -158,9 +161,9 @@ let heardOverview: unknown[] = []; // the arrangements the hub pushed meanwhile,
 let answeredOverview: string[] = []; // its answers to our changes, in the same order, until it pushed the last of them
 let helloOverview = 0; // bumped by each hello that did not resume: the hub's pushes from before it do not come again
 // The hub passes a push on as it read it (internal/hub bus_broadcast.go), a card's keys in another order than its answer's:
-// an arrangement is compared card by card.
+// an arrangement is compared card by card (and section by section).
 const overviewKey = (v: unknown) =>
-  JSON.stringify((Array.isArray(v) ? (v as Partial<OverviewEntry>[]) : []).map((c) => [c?.extension, c?.id, c?.hidden ?? false, c?.span ?? ""]));
+  JSON.stringify((Array.isArray(v) ? (v as Partial<CardEntry & SectionEntry>[]) : []).map((c) => [c?.extension, c?.id, c?.hidden ?? false, c?.span ?? "", c?.section]));
 function sendOverview(probe = false) {
   if (synced === false || (overviewKept() === false && !probe)) return; // this browser only
   if (sendingOverview) return void (againOverview = true);
@@ -178,8 +181,9 @@ function sendOverview(probe = false) {
       },
       (e) => {
         noteStartPageSynced(e);
-        const old = e instanceof ApiError && e.status === 400 && OLD_MANAGER.includes(String(e.body?.error));
-        if (old) noteOverviewKept(false);
+        const words = e instanceof ApiError && e.status === 400 ? String(e.body?.error) : "";
+        const old = OLD_MANAGER.includes(words);
+        if (old || words === NO_SECTIONS) noteOverviewKept(false);
         unsentOverview = !old && synced !== false;
       },
     )

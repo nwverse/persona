@@ -1813,7 +1813,7 @@ Clients report their errors and crashes only while `features` has `error_reports
 | POST | `/api/v1/workspace-board` | `{revision,action,...}` → the full updated board; `full` only, a stale revision gets 409 `conflict` |
 | GET | `/api/v1/workspace-board/settings` | `{enabled,can_write}`: the board switch (#2475), one per hub; when never set, inferred from whether the board has been changed, see "Workspace board" |
 | PUT | `/api/v1/workspace-board/settings` | `{enabled}` → `{enabled,can_write}`; `full` only, missing `enabled` returns 400 |
-| GET | `/api/v1/navigation` | `{"start"?, "pages"?, "overview"?}`: the page the apps open on, the sidebar's arrangement (#9071) and Overview's extension cards (#9745), one per hub, so the owner's for all their devices; each is left out until something is stored, see "Navigation" |
+| GET | `/api/v1/navigation` | `{"start"?, "pages"?, "overview"?}`: the page the apps open on, the sidebar's arrangement (#9071) and Overview's extension cards (#9745) with its own sections (#10905), one per hub, so the owner's for all their devices; each is left out until something is stored, see "Navigation" |
 | PUT | `/api/v1/navigation` | `{start?, pages?, overview?}` → the record; `full` only; none of them, or one of another shape, returns 400 |
 | GET | `/api/v1/workspaces` | `{workspaces:[Workspace],errors?:[{machine_id,error}]}`; workspace discovery independent of Agents, keeps the last known info on failure, readable by `answer` |
 | POST | `/api/v1/machines/{mid}/reconnect` | Reconnect that machine's node |
@@ -2250,7 +2250,7 @@ Server → client:
 | `saved_agent_searches` | `revision` (decimal string): the default manager committed a saved-query mutation; re-read the collection while its view is open, respecting the message's manager stamp. No query/name payload; see "Saved Agent searches" |
 | `workspace_board` | `revision`: a board change was saved; the client re-reads the full state; doesn't indicate an Agent state change |
 | `workspace_board_settings` | `enabled`: the board switch changed (`PUT /api/v1/workspace-board/settings`); clients show or hide the entry accordingly |
-| `navigation` | `start`, `pages` and / or `overview`, whichever changed (`PUT /api/v1/navigation`, "Navigation"): clients keep the start page for their next opening and draw the sidebar's arrangement and Overview's cards |
+| `navigation` | `start`, `pages` and / or `overview`, whichever changed (`PUT /api/v1/navigation`, "Navigation"): clients keep the start page for their next opening and draw the sidebar's arrangement and Overview's cards and sections |
 | `urgent_call` | `{id, state, conversation}`: an urgent call moved on (answered, declined, missed, ended, cancelled when its card was answered elsewhere); a phone still ringing for it ends the call (`docs/assistant/urgent-call.md`) |
 | `kb_selection` | —: the knowledge base's selection was saved (`PUT /api/v1/kb/selection`, or a per-item change from the assistant); clients re-read `GET /api/v1/kb/selection` |
 | `todos` | —: pushed whenever to-dos or links change; clients re-fetch `GET /api/v1/todos`. From a manager that names `todo_view` (#10226) also when what a row's `view` files it under (its phase, section, reason, ask ids, the Inactive, Can wait and seen marks, its steps' count) changes with no write to the to-do: one of its runs changed (a card came, its turn ended or was seen) or time alone moved it (its `next_change_at` passed). Never for a working run's latest line, `since`, `next_change_at` or `rank` alone: those reach clients with the list's next read. The seen mark counts, so the first step after the owner looked at a working row pushes once. Settled with the writes' pushes; a run's change waits a second for the rest, and for time alone the manager looks at most once a minute. What the manager told the apps lives in its memory, so the first views it works out after it starts push once ([todos.md](../assistant/todos.md) "Live WebSocket pushes") |
@@ -5090,7 +5090,7 @@ The web shows a prefs change at once and then PUTs it. When the PUT fails (other
 
 ## Navigation
 
-The page the apps open on (#9071), the sidebar's arrangement and Overview's extension cards (#9745): `GET /api/v1/navigation` / `PUT /api/v1/navigation`, answered by the default manager
+The page the apps open on (#9071), the sidebar's arrangement and Overview's (its extension cards, #9745, and its own sections, #10905): `GET /api/v1/navigation` / `PUT /api/v1/navigation`, answered by the default manager
 (`server/internal/assistant/navigation.go`, relayed by the hub like the other `assistantwire.Routes`) and kept in its
 settings table under the key `navigation`, `{"start":"<page>"}`. A hub has one owner, so this is the user's choice and
 every device of theirs follows it.
@@ -5117,9 +5117,22 @@ every device of theirs follows it.
   Which cards there are is the apps' business: a card the list does not name (an extension installed since) comes after the
   named ones, half a row and shown, in the hub's order (by extension, then the manifest's); an entry naming a card that is not
   there now is passed over and kept until the user saves another arrangement, which names only the cards there are then.
-  The manager checks only the shape (at most 256 cards, ids of the shape an extension's and a UI contribution's have,
-  `^[a-z0-9][a-z0-9_-]{0,31}$`, each card once, `span` of `half` or `full`). `[]` is the default chosen (Reset), kept as such.
-  Like the others, it is left out until stored, and an app hands over the arrangement it kept while there was none.
+  Overview's own sections (#10905) are entries of the same list, `{"section", "hidden"?: true}`, among the cards in the user's
+  order: `needs_you`, `waiting_on_computer` (Stuck), `in_progress` (Tasks in progress), `working`, `unread` and `computers`, under
+  the cards in that order by default. A section has no card's fields, so it can never be taken for a card, nor a card for it.
+  Needs you and Stuck are never hidden, only moved: their rows need the user (`docs/design/DESIGN_SYSTEM.md` 3.4), and the web
+  draws them whatever the list says. A section the list does not name (one added since) comes right after the one before it by
+  default (Needs you: after the cards), so a section the user put first stays first; a card it does not name, when it names
+  none, right above Needs you. One naming a section the app does not have (a newer app's) is passed over and kept where it is
+  when the app changes the arrangement. The web writes the sections only once one is moved or hidden, and from then all of
+  them until Reset, so an arrangement of only cards still suits a default manager from before them.
+  The manager checks only the shape (at most 256 cards and sections, ids of the shape an extension's and a UI contribution's
+  have, `^[a-z0-9][a-z0-9_-]{0,31}$`, a section's `^[a-z][a-z0-9_]{0,31}$`, each card and section once, `span` of `half` or
+  `full`, and only on a card). `[]` is the default chosen (Reset), kept as such, sections included. A PUT whose list names
+  cards and no section while the stored one names sections comes from an app that does not know them (#9745's web): the
+  manager keeps the sections where they are and gives the cards the stored cards' places in the new order (one it did not
+  have after the last of them), and stores and pushes that. Like the others, it is left out until stored, and an app hands
+  over the arrangement it kept while there was none.
 - PUT `{start?, pages?, overview?}` (at least one) changes only the fields it carries and pushes only those, so an app with an unsent
   change of another field keeps it. It requires `full` (an `answer` credential gets 403; extension tokens never reach it,
   `extwire.RouteScopes` does not list it); and broadcasts `{"type":"navigation","start"?:"<page>","pages"?:{…},"overview"?:[…]}`.
@@ -5128,7 +5141,9 @@ every device of theirs follows it.
   words (`start is required`, #9328; `start or pages is required`, #9351) and leaves it out of the record it answers; the web
   sends the arrangement on its own and, on either, keeps it in the browser, says so where the cards are arranged
   (`docs/web/web.md` "Overview's extension cards") and asks again at the next hello. Any other failure is not taken for that.
-  iOS and Android do not read the record yet.
+  A default manager from before the sections (#9745's) answers a list that names one 400 with its own words
+  (`overview: "" / "" is not an extension's card`): the web keeps that arrangement in the browser, says so, and sends it again
+  at the next hello rather than taking the manager's record over it. iOS and Android do not read the record yet.
 
 ## Tags in messages (parsed by clients)
 

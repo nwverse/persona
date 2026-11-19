@@ -1,14 +1,22 @@
-// Overview's extension cards as the user arranged them (#9745, lib/overview-cards.ts): the hub's cards in the user's
-// order, the ones the arrangement does not name after it, entries for cards that are not there passed over; the edits
-// (move, drop, hide, widen) and what an arrangement writes (lib/overview-edit.ts).
+// Overview as the user arranged it (#9745, #10905, lib/overview-cards.ts): the hub's cards in the user's order, the ones
+// the arrangement does not name after it, entries for cards that are not there passed over; Overview's own sections
+// among them, where they are by default unless named; the edits (move, drop, hide, widen) and what an arrangement
+// writes (lib/overview-edit.ts).
 import { describe, expect, it } from "vitest";
-import { arrangeCards, halvesPaired, readOverview } from "./overview-cards";
-import { changeEntry, dropEntry, entriesOf, moveEntry, OVERVIEW_MOST } from "./overview-edit";
+import { arrangeOverview, entryKey, halvesPaired, overviewRuns, readOverview, SECTIONS, type ArrangedCard, type OverviewEntry } from "./overview-cards";
+import { changeEntry, dropEntry, entriesOf, moveEntry, OVERVIEW_MOST, written } from "./overview-edit";
 
 const card = (extension: string, id: string) => ({ extension, id, title: id });
 // the hub's order: by extension, then the manifest's
 const HUB = [card("example-gateway", "today"), card("example-quota", "left"), card("example-today", "needs"), card("example-today", "agenda")];
 const keys = (list: { key: string }[]) => list.map((c) => c.key);
+// #9745's cards alone, in the arrangement's order
+const arrangeCards = <T extends { extension: string; id: string }>(cards: readonly T[], prefs: readonly OverviewEntry[]) =>
+  arrangeOverview(cards, prefs).filter((i): i is ArrangedCard<T> => "card" in i);
+const id = (e: OverviewEntry) => ("id" in e ? e.id : entryKey(e));
+// Overview's own sections as they are by default, under the cards
+const DEFAULT_SECTIONS = ["section:needs_you", "section:waiting_on_computer", "section:in_progress", "section:working", "section:unread", "section:computers"];
+const section = (s: string, hidden?: true): OverviewEntry => ({ section: s, ...(hidden ? { hidden } : {}) });
 
 describe("arrangeCards", () => {
   it("without an arrangement: the hub's cards in its order, shown, half a row", () => {
@@ -68,15 +76,15 @@ describe("the edits", () => {
   });
 
   it("moves a card one place earlier or later, and not past either end", () => {
-    expect(moveEntry(list, "example-today/needs", -1).map((e) => e.id)).toEqual(["left", "needs", "today", "agenda"]);
-    expect(moveEntry(list, "example-today/needs", 1).map((e) => e.id)).toEqual(["left", "today", "agenda", "needs"]);
+    expect(moveEntry(list, "example-today/needs", -1).map(id)).toEqual(["left", "needs", "today", "agenda"]);
+    expect(moveEntry(list, "example-today/needs", 1).map(id)).toEqual(["left", "today", "agenda", "needs"]);
     expect(moveEntry(list, "example-quota/left", -1)).toEqual(list);
     expect(moveEntry(list, "example-today/agenda", 1)).toEqual(list);
   });
 
   it("a card dropped on another takes its place", () => {
-    expect(dropEntry(list, "example-today/agenda", "example-quota/left").map((e) => e.id)).toEqual(["agenda", "left", "today", "needs"]);
-    expect(dropEntry(list, "example-quota/left", "example-today/needs").map((e) => e.id)).toEqual(["today", "needs", "left", "agenda"]);
+    expect(dropEntry(list, "example-today/agenda", "example-quota/left").map(id)).toEqual(["agenda", "left", "today", "needs"]);
+    expect(dropEntry(list, "example-quota/left", "example-today/needs").map(id)).toEqual(["today", "needs", "left", "agenda"]);
     expect(dropEntry(list, "example-quota/left", "example-quota/left")).toEqual(list);
   });
 
@@ -97,5 +105,123 @@ describe("halvesPaired", () => {
     expect(halvesPaired([half, { hidden: true, span: "half" }], true)).toBe(true); // arranging: the hidden one is drawn
     expect(halvesPaired([{ hidden: false, span: "full" }, half])).toBe(false);
     expect(halvesPaired([{ hidden: false, span: "full" }, half, half])).toBe(true);
+  });
+});
+
+describe("Overview's own sections (#10905)", () => {
+  const CARD_KEYS = ["example-gateway/today", "example-quota/left", "example-today/needs", "example-today/agenda"];
+  // In progress first, then the cards, then the other sections in their order: the user's target arrangement
+  const IN_PROGRESS_FIRST: OverviewEntry[] = [
+    section("in_progress"),
+    ...HUB.map((c) => ({ extension: c.extension, id: c.id })),
+    ...SECTIONS.filter((s) => s !== "in_progress").map((s) => section(s)),
+  ];
+
+  it("without an arrangement: the cards, then the sections in their order, all shown", () => {
+    const out = arrangeOverview(HUB, []);
+    expect(keys(out)).toEqual([...CARD_KEYS, ...DEFAULT_SECTIONS]);
+    expect(out.every((i) => !i.hidden)).toBe(true);
+    expect(SECTIONS).toEqual(["needs_you", "waiting_on_computer", "in_progress", "working", "unread", "computers"]);
+  });
+
+  it("an arrangement of only cards (#9745's) leaves the sections where they are by default, under the cards", () => {
+    const out = arrangeOverview(HUB, [{ extension: "example-today", id: "agenda" }, { extension: "example-quota", id: "left", hidden: true }]);
+    expect(keys(out)).toEqual(["example-today/agenda", "example-quota/left", "example-gateway/today", "example-today/needs", ...DEFAULT_SECTIONS]);
+  });
+
+  it("a section the arrangement moves comes in its place: In progress first, before the cards", () => {
+    const out = arrangeOverview(HUB, IN_PROGRESS_FIRST);
+    expect(keys(out)).toEqual(["section:in_progress", ...CARD_KEYS, ...DEFAULT_SECTIONS.filter((k) => k !== "section:in_progress")]);
+  });
+
+  it("a section it does not name (one added since) comes where it is by default: right after the one before it", () => {
+    const without = (x: string) => IN_PROGRESS_FIRST.filter((e) => !("section" in e && e.section === x));
+    // Working (after In progress by default) follows In progress, which stays first
+    expect(keys(arrangeOverview(HUB, without("working")))).toEqual([
+      "section:in_progress", "section:working", ...CARD_KEYS, "section:needs_you", "section:waiting_on_computer", "section:unread", "section:computers",
+    ]);
+    expect(keys(arrangeOverview(HUB, without("computers"))).at(-1)).toBe("section:computers");
+    // the first of them comes after the cards
+    expect(keys(arrangeOverview(HUB, without("needs_you"))).slice(4, 7)).toEqual(["example-today/agenda", "section:needs_you", "section:waiting_on_computer"]);
+  });
+
+  it("cards it does not name come after the last card it names; with none named, right above Needs you", () => {
+    const some = [section("in_progress"), { extension: "example-quota", id: "left" }, ...SECTIONS.filter((s) => s !== "in_progress").map((s) => section(s))];
+    expect(keys(arrangeOverview(HUB, some)).slice(0, 6)).toEqual(["section:in_progress", "example-quota/left", "example-gateway/today", "example-today/needs", "example-today/agenda", "section:needs_you"]);
+    // arranged while there was no card: a card installed since does not take In progress's place at the top
+    const noCards = IN_PROGRESS_FIRST.filter((e) => "section" in e);
+    expect(keys(arrangeOverview(HUB, noCards))).toEqual(keys(arrangeOverview(HUB, IN_PROGRESS_FIRST)));
+  });
+
+  it("Needs you and Stuck are never hidden, whatever the list says; the others can be", () => {
+    const out = arrangeOverview(HUB, [section("needs_you", true), section("waiting_on_computer", true), section("working", true), section("computers", true)]);
+    const hidden = Object.fromEntries(out.filter((i) => "section" in i).map((i) => [i.key, i.hidden]));
+    expect(hidden).toMatchObject({ "section:needs_you": false, "section:waiting_on_computer": false, "section:working": true, "section:computers": true, "section:in_progress": false });
+  });
+
+  it("a section this web does not have (a newer web's) is passed over, and one named twice once", () => {
+    const out = arrangeOverview(HUB, [section("later_section"), section("unread"), section("unread", true)]);
+    expect(keys(out)).not.toContain("section:later_section");
+    expect(keys(out).filter((k) => k === "section:unread")).toHaveLength(1);
+    expect(out.find((i) => i.key === "section:unread")?.hidden).toBe(false);
+  });
+
+  it("readOverview keeps the entries that name a section, with or without hidden", () => {
+    expect(readOverview([section("in_progress"), { section: 3 }, section("working", true), { extension: "example-quota", id: "left" }])).toEqual([
+      section("in_progress"), section("working", true), { extension: "example-quota", id: "left" },
+    ]);
+  });
+
+  it("runs: the cards that come one after another are one row, named by their place among the rows", () => {
+    const rest = ["waiting_on_computer", "working", "unread", "computers"].map((s) => section(s));
+    const runs = overviewRuns(arrangeOverview(HUB, [section("in_progress"), { extension: "example-quota", id: "left" }, section("needs_you"), { extension: "example-today", id: "agenda" }, ...rest]));
+    expect(runs.map((r) => ("cards" in r ? [r.key, keys(r.cards)] : r.key)).slice(0, 4)).toEqual([
+      "section:in_progress",
+      ["cards:0", ["example-quota/left"]],
+      "section:needs_you",
+      ["cards:1", ["example-today/agenda", "example-gateway/today", "example-today/needs"]],
+    ]);
+    // the default's one row keeps its name when a section moves above it: its cards are not drawn again
+    expect((overviewRuns(arrangeOverview(HUB, IN_PROGRESS_FIRST))[1] as { key: string }).key).toBe("cards:0");
+    expect((overviewRuns(arrangeOverview(HUB, []))[0] as { key: string }).key).toBe("cards:0");
+  });
+
+  describe("what a change writes", () => {
+    const items = arrangeOverview(HUB, []);
+
+    it("only the cards while no section was ever placed and the sections are where they are by default", () => {
+      const list = moveEntry(entriesOf(items), "example-quota/left", -1);
+      expect(written(items, list, [])).toEqual([{ extension: "example-quota", id: "left" }, { extension: "example-gateway", id: "today" }, { extension: "example-today", id: "needs" }, { extension: "example-today", id: "agenda" }]);
+    });
+
+    it("every section once one is moved or hidden, and from then on, back in its place too (until Reset)", () => {
+      const moved = written(items, dropEntry(entriesOf(items), "section:in_progress", "example-gateway/today"), []);
+      expect(moved).toEqual(IN_PROGRESS_FIRST);
+      const hidden = written(items, changeEntry(entriesOf(items), "section:computers", { hidden: true }), []);
+      expect(hidden.at(-1)).toEqual(section("computers", true));
+      expect(hidden.filter((e) => "section" in e)).toHaveLength(SECTIONS.length);
+      // put back where it was by default: the list still names them, or a hub keeping the sections of a list naming
+      // none (for #9745's web) would keep the old place
+      const now = arrangeOverview(HUB, moved);
+      const back = written(now, dropEntry(entriesOf(now), "section:in_progress", "section:waiting_on_computer"), moved);
+      expect(back.filter((e) => "section" in e).map(entryKey)).toEqual(DEFAULT_SECTIONS);
+    });
+
+    it("a section this web does not have stays after the entry it followed, or first", () => {
+      const prefs = [section("later_first"), section("in_progress"), ...IN_PROGRESS_FIRST.slice(1, 3), section("later_section"), ...IN_PROGRESS_FIRST.slice(3)];
+      const now = arrangeOverview(HUB, prefs);
+      const out = written(now, moveEntry(entriesOf(now), "example-today/needs", -1), prefs);
+      // Needs me moved before Quota left: the newer web's section stays after Quota left, the entry it followed
+      expect(out.map(entryKey).slice(0, 7)).toEqual(["section:later_first", "section:in_progress", "example-gateway/today", "example-today/needs", "example-quota/left", "section:later_section", "example-today/agenda"]);
+    });
+
+    it("hides and shows a section, moves it, and drops it on a card, writing only what differs from the default", () => {
+      const list = entriesOf(items);
+      expect(list.slice(-6)).toEqual(SECTIONS.map((s) => section(s)));
+      expect(changeEntry(list, "section:working", { hidden: true, span: "full" }).find((e) => entryKey(e) === "section:working")).toEqual(section("working", true));
+      expect(changeEntry(changeEntry(list, "section:working", { hidden: true }), "section:working", { hidden: false }).find((e) => entryKey(e) === "section:working")).toEqual(section("working"));
+      expect(moveEntry(list, "section:needs_you", -1).map(entryKey).slice(3, 5)).toEqual(["section:needs_you", "example-today/agenda"]);
+      expect(dropEntry(list, "section:in_progress", "example-gateway/today").map(entryKey)[0]).toBe("section:in_progress");
+    });
   });
 });

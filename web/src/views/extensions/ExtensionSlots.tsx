@@ -1,11 +1,11 @@
 // The extensions' places among the web's own pages (docs/extensions/extensions.md "UI slots"): a nav_page's full page (/extension/<id>/<ui>,
-// its entry is on the sidebar), the cards on "Overview" (overview_card, as the user arranged them: lib/overview-cards.ts)
-// and the sections on a machine's page (machine_section). Each draws the extension's declarative View with ExtensionUI;
+// its entry is on the sidebar), the cards on "Overview" (overview_card, as the user arranged them: lib/overview-cards.ts,
+// laid out among Overview's own sections by views/OverviewBody.tsx) and the sections on a machine's page (machine_section). Each draws the extension's declarative View with ExtensionUI;
 // the list comes from lib/extension-slots.ts.
 import { Suspense, useMemo, useState } from "react";
 import { uiIcon, type UIIcon, type UIPlace, type UITone } from "../../lib/extension-ui";
 import { useExtensionPlace, useExtensionSlot } from "../../lib/extension-slots";
-import { arrangeCards, halvesPaired, useOverviewPrefs, type ArrangedCard, type CardSpan } from "../../lib/overview-cards";
+import { halvesPaired, type ArrangedCard, type ArrangedItem, type CardSpan, type SectionId } from "../../lib/overview-cards";
 import { href, navigate, onLinkClick, type Route } from "../../lib/router";
 import { useKnownDefault } from "../../lib/manager-choice";
 import { useStore } from "../../lib/store";
@@ -20,8 +20,8 @@ import { ExtensionOwnerScope } from "../../lib/extension-owner";
 // titles, and the first screen draws no extension UI. A page, a card and a section each wait under their own Suspense
 // (the page keeps its top bar) with the Loading that ExtensionUI shows while it asks for its view.
 const ExtensionUI = lazyPage(() => import("../settings/ExtensionView").then((m) => m.ExtensionUI));
-// Arranging Overview's cards (#9745) is its own chunk too: the first screen draws the cards, never their editor (its
-// heading, and each card's controls and drag).
+// Arranging Overview (#9745, #10905) is its own chunk too: the first screen draws the cards and the sections, never
+// their editor (its heading, each card's controls and each section's bar, and the drag).
 const OverviewArrange = lazyPage(() => import("./OverviewArrange").then((m) => m.OverviewArrange));
 
 // Whose extension is being drawn (ExtensionView knows it, the items it draws do not): the graph's per-key store is
@@ -78,23 +78,30 @@ export function ExtensionNavPage({ extension, ui, onToggleSidebar }: { extension
   );
 }
 
-/** Overview's button that starts and ends arranging its cards (#9745), beside New agent; none while there is no card. */
+/** Overview's button that starts and ends arranging it (#9745, #10905), beside New agent: there is always something to
+ *  arrange, Overview's own sections if no card. */
 export function OverviewArrangeButton({ on, onClick }: { on: boolean; onClick: () => void }) {
-  const cards = useExtensionSlot("overview_card");
-  if (!cards.length && !on) return null;
-  return <IconButton icon="grid" label={t("home.arrange_cards")} pressed={on} onClick={onClick} />;
+  return <IconButton icon="grid" label={t("home.arrange")} pressed={on} onClick={onClick} />;
 }
 
-/** The cards on "Overview" (overview_card), one row under the agents' summary, as the user arranged them
- *  (lib/overview-cards.ts): in their order, a hidden one not drawn (nor asked for), each half a row or the whole row.
- *  Half-row cards go two a row once there are two of them; one alone fills the row, and on a page wide enough for two
- *  columns of rows takes one of them. `editing`: the cards are being arranged (dragged, moved with their arrows,
- *  widened, hidden or shown), the hidden ones drawn in their place without their content. */
-export function OverviewCards({ editing = false, onDone }: { editing?: boolean; onDone?: () => void }) {
-  const cards = useExtensionSlot("overview_card");
-  const prefs = useOverviewPrefs();
-  const arranged = useMemo(() => arrangeCards(cards, prefs), [cards, prefs]);
-  const drawn = editing ? arranged : arranged.filter((c) => !c.hidden);
+/** While Overview is arranged: the heading over it (`onDone`), or a section's bar (`section`), from the editor's chunk.
+ *  `items`: Overview's cards and sections as arranged. */
+export function OverviewArranging(props: { items: readonly ArrangedItem<UIPlace>[]; section?: SectionId; onDone?: () => void }) {
+  return (
+    <Suspense fallback={null}>
+      <OverviewArrange {...props} />
+    </Suspense>
+  );
+}
+
+/** A row of the cards on "Overview" (overview_card) that come one after another in the user's arrangement
+ *  (lib/overview-cards.ts, views/OverviewBody.tsx): in their order, a hidden one not drawn (nor asked for), each half a
+ *  row or the whole row. Half-row cards go two a row once there are two of them; one alone fills the row, and on a
+ *  page wide enough for two columns of rows takes one of them. `editing`: Overview is being arranged (cards dragged,
+ *  moved with their arrows, widened, hidden or shown; `items`, all of them and the sections), the hidden ones drawn in
+ *  their place without their content. */
+export function OverviewCards({ cards, items, editing = false }: { cards: readonly ArrangedCard<UIPlace>[]; items: readonly ArrangedItem<UIPlace>[]; editing?: boolean }) {
+  const drawn = editing ? cards : cards.filter((c) => !c.hidden);
   if (!drawn.length) return null;
   return (
     // a card is never wider than one of the overview's two columns of rows below it (Home's GRID.rows, from 60rem of
@@ -104,13 +111,8 @@ export function OverviewCards({ editing = false, onDone }: { editing?: boolean; 
       aria-label={t("extensions-extensionslots.extensions")}
       className={cx("grid grid-cols-1 gap-3 @min-[60rem]:grid-cols-2", halvesPaired(drawn, editing) && "md:grid-cols-2")}
     >
-      {editing && (
-        <Suspense fallback={null}>
-          <OverviewArrange cards={arranged} onDone={() => onDone?.()} />
-        </Suspense>
-      )}
       {drawn.map((c, i) => (
-        <OverviewCard key={c.key} place={c.card} i={i} span={c.span} hidden={c.hidden} edit={editing ? arranged : undefined} />
+        <OverviewCard key={c.key} place={c.card} i={i} span={c.span} hidden={c.hidden} edit={editing ? items : undefined} />
       ))}
     </section>
   );
@@ -118,8 +120,9 @@ export function OverviewCards({ editing = false, onDone }: { editing?: boolean; 
 
 const INTERACTIVE = "a,button,input,select,textarea,label,[role=radio],[role=switch],[tabindex]";
 
-/** One card; `edit`: the cards being arranged, this one among them (its controls and drag are the editor's). */
-function OverviewCard({ place, i, span = "half", hidden = false, edit }: { place: UIPlace; i: number; span?: CardSpan; hidden?: boolean; edit?: readonly ArrangedCard<UIPlace>[] }) {
+/** One card; `edit`: Overview's cards and sections being arranged, this one among them (its controls and drag are the
+ *  editor's). */
+function OverviewCard({ place, i, span = "half", hidden = false, edit }: { place: UIPlace; i: number; span?: CardSpan; hidden?: boolean; edit?: readonly ArrangedItem<UIPlace>[] }) {
   const [gone, setGone] = useState(false);
   // its entrance plays once: a card moved while arranging is moved in the DOM, which would play it again (and keep the
   // card invisible for its delay), so once played it is dropped; the card looks the same after it either way
@@ -166,7 +169,7 @@ function OverviewCard({ place, i, span = "half", hidden = false, edit }: { place
     >
       {edit ? (
         <Suspense fallback={head(false)}>
-          <OverviewArrange cards={edit} card={place} />
+          <OverviewArrange items={edit} card={place} />
         </Suspense>
       ) : (
         head(true)
