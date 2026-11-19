@@ -189,8 +189,9 @@ first message, and still require the rollout to contain that complete message be
 readiness and delivery checks share one timeout. Codex App messages already use structured input on its IPC bus.
 
 Codex can display a paste as `[Pasted Content N chars]` followed by literal tail text, or several chips. An anchored
-chip-only check rejects such a composer even when the input arrived. Match the visible fragments in order and check
-the count budget, then confirm the complete first message in the rollout after submitting once. A chip is not a
+chip-only check rejects such a composer even when the input arrived. Match chip lengths in Unicode characters and
+visible fragments against the full expected input; a prefix chip with its tail still in flight must wait. Codex
+normalizes line endings before counting. Confirm the complete first message in the rollout after submitting once. A chip is not a
 delivery receipt or evidence of ConPTY corruption. A compact footer with directory `~` and warnings is status, not
 draft content. Keep any real draft above that footer protected.
 

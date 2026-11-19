@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
+	"unicode"
 
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
@@ -26,13 +26,45 @@ func codexFirstPromptShown(draft, prompt string) bool {
 	if len(matches) == 0 {
 		return false
 	}
-	compact := func(s string) string { return strings.Join(strings.Fields(s), "") }
-	var parts []string
-	last, hidden := 0, 0
-	budget := utf8.RuneCountInString(prompt)
+	// Codex normalizes terminal line endings before counting a paste's chars.
+	expected := []rune(strings.NewReplacer("\r\n", "\n", "\r", "\n").Replace(prompt))
+	// Match every visible rune in order, allowing only whitespace to disappear
+	// when the terminal wraps/trims a row. Keep possible whitespace boundaries:
+	// the next chip must consume exactly its advertised number of Unicode chars.
+	visibleEnds := func(starts map[int]bool, text string) map[int]bool {
+		ends := map[int]bool{}
+		for start := range starts {
+			at, matched := start, true
+			for _, r := range text {
+				if unicode.IsSpace(r) {
+					continue
+				}
+				for at < len(expected) && unicode.IsSpace(expected[at]) {
+					at++
+				}
+				if at == len(expected) || expected[at] != r {
+					matched = false
+					break
+				}
+				at++
+			}
+			if matched {
+				for {
+					ends[at] = true
+					if at == len(expected) || !unicode.IsSpace(expected[at]) {
+						break
+					}
+					at++
+				}
+			}
+		}
+		return ends
+	}
+	positions := map[int]bool{0: true}
+	last := 0
 	for _, m := range matches {
 		n, err := strconv.Atoi(draft[m[2]:m[3]])
-		if err != nil || n <= 0 || n > budget-hidden {
+		if err != nil || n <= 0 || n > len(expected) {
 			return false
 		}
 		// Codex disambiguates equal-sized paste elements with #2, #3, etc.
@@ -42,34 +74,20 @@ func codexFirstPromptShown(draft, prompt string) bool {
 				return false
 			}
 		}
-		hidden += n
-		parts = append(parts, compact(draft[last:m[0]]))
-		last = m[1]
-	}
-	parts = append(parts, compact(draft[last:]))
-	// Wrapped display whitespace cannot be counted exactly. Reject impossible
-	// counts and foreign/reordered visible text; do not pretend this is a hash.
-	visible := 0
-	for _, p := range parts {
-		visible += utf8.RuneCountInString(p)
-	}
-	if hidden+visible > budget {
-		return false
-	}
-	p := compact(prompt)
-	first, tail := parts[0], parts[len(parts)-1]
-	if !strings.HasPrefix(p, first) || !strings.HasSuffix(p, tail) || len(first)+len(tail) > len(p) {
-		return false
-	}
-	p = p[len(first) : len(p)-len(tail)]
-	for _, part := range parts[1 : len(parts)-1] {
-		at := strings.Index(p, part)
-		if at < 0 {
+		next := map[int]bool{}
+		for at := range visibleEnds(positions, draft[last:m[0]]) {
+			if n <= len(expected)-at {
+				next[at+n] = true
+			}
+		}
+		if len(next) == 0 {
 			return false
 		}
-		p = p[at+len(part):]
+		positions, last = next, m[1]
 	}
-	return true
+	// A short chip with a tail still in flight must not trigger Enter. Matching
+	// the full character budget is readiness only; the rollout proves content.
+	return visibleEnds(positions, draft[last:])[len(expected)]
 }
 
 // typeCodexFirst handles only startup, including a waiting row's first message.
@@ -129,7 +147,7 @@ func (n *Node) typeCodexFirst(ctx context.Context, pane, prompt string) error {
 			return uncertain(err)
 		}
 		if s.View == screen.CodexComposer {
-			if codexFirstPromptShown(s.Draft, prompt) {
+			if len(s.Queued) == 0 && codexFirstPromptShown(s.Draft, prompt) {
 				return uncertain(n.sendKeys(confirm, pane, "enter"))
 			}
 			if postPasteSkipped && !replayed && s.Draft == "" && len(s.Queued) == 0 {

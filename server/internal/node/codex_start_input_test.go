@@ -41,7 +41,9 @@ func TestCodexFirstPromptWithPasteChips(t *testing.T) {
 	}{
 		{prompt, true},
 		{"[Pasted Content 35 chars]", true},
+		{"[Pasted Content 13 chars]", false}, // the tail has not arrived yet
 		{"[Pasted Content 13 chars]middle line\nfinal tail", true},
+		{"[Pasted Content 11 chars]middle line\nfinal tail", false},
 		{"[Pasted Content 13 chars]middle line[Pasted Content 1 chars]final tail", true},
 		{"context body", false},
 		{"[Pasted Content 0 chars]", false},
@@ -57,6 +59,42 @@ func TestCodexFirstPromptWithPasteChips(t *testing.T) {
 	}
 	if !codexFirstPromptShown("[Pasted Content 5 chars]m[Pasted Content 5 chars] #2tail", "abcdemfghijtail") {
 		t.Fatal("equal-sized chips with Codex's disambiguation suffix were rejected")
+	}
+	if !codexFirstPromptShown("[Pasted Content 4 chars]", "a\r\nb\r\n") {
+		t.Fatal("paste counts must use Codex's normalized line endings")
+	}
+}
+
+func TestCodexFirstPasteWaitsForItsVisibleTail(t *testing.T) {
+	n, f, _ := codexNode(t, "idle")
+	prefix, tail := strings.Repeat("Context 中文\n", 120), "the final instruction"
+	prompt := prefix + tail
+	chip := fmt.Sprintf("[Pasted Content %d chars]", len([]rune(prefix)))
+	f.setScreen(cxPane, cxReady)
+	reads, submittedWithTail := 0, false
+	var mu sync.Mutex
+	f.after(func(c herdrCall) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case c.Method == "pane.send_text":
+			f.setScreen(cxPane, "› "+chip+"\n\n  gpt-6 xhigh · /tmp/proj\n")
+		case c.Method == "pane.read":
+			reads++
+			if reads == 5 {
+				f.setScreen(cxPane, "› "+chip+tail+"\n\n  gpt-6 xhigh · /tmp/proj\n")
+			}
+		case isKeys("enter")(c):
+			submittedWithTail = reads > 5
+		}
+	})
+	if err := n.typeCodexFirst(context.Background(), cxPane, prompt); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !submittedWithTail || len(f.trace("pane.send_text")) != 1 || len(f.trace("pane.send_keys")) != 1 {
+		t.Fatalf("submitted while the tail was in flight: reads=%d keys=%v", reads, f.trace("pane.send_keys"))
 	}
 }
 
