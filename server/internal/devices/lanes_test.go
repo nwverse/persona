@@ -171,7 +171,22 @@ func TestNotesShareOneBudget(t *testing.T) {
 	m := newMachine(d, MachineConfig{ID: "box", Name: "box", Kind: "ssh"})
 	_, managerOut := io.Pipe() // a node that reads nothing: each queue's first note waits in its write
 	peer := rpc.New("h", managerOut)
-	t.Cleanup(func() { managerOut.Close(); peer.Close(nil) })
+	t.Cleanup(func() {
+		managerOut.Close()
+		peer.Close(nil)
+		// The writers end before the test does: they read noteStall, which other tests set.
+		eventually(t, 5*time.Second, "the notes' writers done", func() bool {
+			for _, q := range []*nodeNotes{&m.notes, &m.bulkNotes} {
+				q.mu.Lock()
+				writing := q.writing
+				q.mu.Unlock()
+				if writing {
+					return false
+				}
+			}
+			return true
+		})
+	})
 	m.mu.Lock()
 	m.peer = peer
 	m.mu.Unlock()
