@@ -237,6 +237,15 @@ private fun ChatPage(
     var linkContexts by rememberSaveable(stateSaver = ChatLinkContextsSaver) { mutableStateOf(emptyList<ChatLinkContext>()) }
     var conversationLauncher by rememberSaveable(key.path, chrome.assistantManagement) { mutableStateOf<String?>(null) }
     var conversationModel by rememberSaveable(key.path, chrome.assistantManagement) { mutableStateOf<String?>(null) }
+    // Forward (#3901): what another chat forwarded here waits over the composer, whether this page was open or not.
+    val forwarding = LocalChatForwarding.current
+    var forwardDraft by remember { mutableStateOf<ForwardDraft?>(null) }
+    val placedForwards = ForwardPlacements.waiting(key)
+    LaunchedEffect(placedForwards, readOnly, canSend) {
+        if (placedForwards == null || readOnly || !canSend) return@LaunchedEffect
+        ForwardPlacements.take(key).forEach { linkContexts = withQuote(linkContexts, it) }
+        composer.focusRequest++
+    }
     // /model in the "/" list asked for the "Mode" sheet: a one-off, cleared once the sheet opened (not replayed when the bar returns).
     var openModes by remember { mutableStateOf(false) }
     // The host's failure notice whose "Retry" went out: hidden until the list catches up; back if that send failed.
@@ -1087,7 +1096,9 @@ private fun ChatPage(
                                     // Glass: iOS's bubble, its mark and small menu in place of the status line, which still says why
                                     // one did not go (#4339 C9); a delivery to check keeps the status line.
                                     if (glass && drawsAsPendingBubble(deliveryState)) {
-                                        OutboxBubble(composerMessagePreview(message.text), message.clientMessageId, deliveryState, busy,
+                                        // A forward keeps its block here: the bubble draws it as its card (#3901).
+                                        val shown = if (carriesForward(message.text)) message.text else composerMessagePreview(message.text)
+                                        OutboxBubble(shown, message.clientMessageId, deliveryState, busy,
                                             canSend = canSend, onAction = onAction)
                                         if (receipt?.processing == true) Text(stringResource(persona.core.designsystem.R.string.designsystem_message_processing),
                                             Modifier.align(Alignment.End), style = PersonaTheme.type.caption,
@@ -1095,7 +1106,7 @@ private fun ChatPage(
                                         if (failed) PendingBadge(PendingStatus.Refused, Modifier.align(Alignment.End),
                                             reason = message.copy(error = delivery?.refusal?.code ?: message.error).refusalReason())
                                     } else {
-                                        UserBubble(composerMessagePreview(message.text), message.clientMessageId, deliveryState)
+                                        UserBubble(message.text, message.clientMessageId, deliveryState)
                                         OutboxStatus(message.copy(state = deliveryState,
                                             error = delivery?.refusal?.code ?: message.error),
                                             busy = busy, onAction = onAction, receipt = receipt, canSend = canSend, onDetails = { statusSheet = true })
@@ -1238,12 +1249,16 @@ private fun ChatPage(
             MessageMenuSheet(messageMenu, messageMenuWrites(readOnly, session),
                 onQuote = quoteTarget, onEdit = composer::edit,
                 onContext = { text -> linkContexts = linkContexts + messageContext(menuTitle, text, context.resources); notice = res.getString(R.string.chat_screen_added_context) },
-                onHandToPersona = chrome.onHandToPersona?.takeIf { renderStyle != ChatRenderStyle.Assistant }
-                    ?.let { hand -> { text: String -> hand(handoffMessage(menuTitle, text, context.resources)) } },
+                onForward = forwarding?.let { { target: MessageTarget -> forwardDraft = forwardDraftOf(target, key, session, machine, renderStyle, it) } },
                 onNotice = { notice = it }, onFork = onFork, rewind = rewindMenu,
                 onDelete = { target -> messages.firstOrNull { it.clientMessageId == target.id }?.let { message ->
                     deliveryAction(message, if (message.state.allows(DeliveryAction.Cancel)) DeliveryAction.Cancel else DeliveryAction.Delete)
                 } }, share = shareCardSource(session, LocalPersonaName.current))
+            val forwardFrom = forwardDraft
+            if (forwardFrom != null && forwarding != null) ForwardSheet(forwardFrom, forwarding,
+                complete = { ForwardMessage.ref(forwardFrom.cut?.let { repository.fullText(key, it) } ?: forwardFrom.raw, forwardFrom.source, res) },
+                onDismiss = { forwardDraft = null },
+                onPicked = { target, ref -> deliverForward(target, ref, key, forwarding, res) })
             viewer?.let { request ->
                 ChatImageViewer(request.images, request.index, onDismiss = { viewer = null },
                     onEdited = if (readOnly) null else ({ attachment -> composer.beginEdit(); composer.attachments += attachment }),
@@ -1307,7 +1322,7 @@ private fun ChatJumpToLatest(
 @Composable
 internal fun ComposerContextCards(contexts: List<ChatLinkContext>, compact: Boolean = false, onRemove: (ChatLinkContext) -> Unit) {
     Column(Modifier.heightIn(max = 140.dp).verticalScroll(rememberScrollState())) {
-        contexts.forEach { ref -> ChatContextCard(ref, compact = compact) { onRemove(ref) } }
+        contexts.forEach { ref -> ChatContextCard(ref, compact = compact, lines = if (contexts.size == 1) 2 else 1) { onRemove(ref) } }
     }
 }
 

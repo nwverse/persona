@@ -154,6 +154,16 @@ the fix and 448 KB after; the Assistant page went from 906 to 573 KB and a conve
 
 A SwiftUI container's `accessibilityIdentifier` can replace the identifiers on a nested `Menu` and `ScrollView`, while the buttons inside the scroll view keep theirs. The Agents capsule looked correct and its filters remained queryable, but its grouping icon was exposed under the capsule's identifier instead of `agents.grouping`. Put identifiers on the actionable controls, not on their surrounding capsule, and test both the menu's identity and its fixed frame after a horizontal drag.
 
+## Headings that must line up across a list's sections (2026-11-19, #10551)
+
+The Sidebar layout's Agents heading sat 12 pt further below Persona Chats than Persona Chats below Pages: the list's
+default section spacing came between the Persona rows' section and the Agents' one, and the Agents heading's own row was
+a 44 pt frame around its top padding with its words centred over its buttons. Hidden headers and separators do not remove
+that gap; `.listSectionSpacing(.custom(0))` on the section before it does. Give headings that should look alike one
+box (`SidebarHeadingBox`) and keep a heading's buttons out of its height, then measure the rows (`XCUIElement.cells`),
+not the headings' own elements: a SwiftUI button that is a row's only element reported the whole 52 pt cell, its
+neighbour with a tally its 44 pt label.
+
 ## A bar button's color goes on its label, not on the button (2026-11-17, #9653)
 
 In an iOS 26 toolbar, `.foregroundStyle(Color.primary)` on a `ToolbarItem`'s `Button` is ignored: the bar draws the button's label in the app's tint. Settings' ✕ carried that modifier from 11-01 and still showed in the orange accent. Style the label inside the button (`Text(…).sheetBarLabel()`, `ThemedIcon(…).sheetBarLabel()`, as `SheetClose` does). The system's own close button (`Button(role: .close)` with no label) is no way out of this: it draws its ✕ in the tint too (blue on the extension Update sheet, 11-17). Check a bar's colors in a screenshot, dark included, not in the code.
