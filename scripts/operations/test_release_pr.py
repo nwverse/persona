@@ -85,6 +85,7 @@ class ReleasePRTests(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(release.ReleaseError):
                 release.verify_merged_pr(self.pr(**{**pr, **change}), "nwverse/persona", "beta", COMMIT, "chyroc")
         self.assertEqual(release.verify_merged_pr({**pr, "mergedBy": None}, "nwverse/persona", "beta", COMMIT, "chyroc"), "0.9.2-beta.2")
+        self.assertEqual(release.verify_merged_pr({**pr, "mergedBy": {"login": "github-actions[bot]"}}, "nwverse/persona", "beta", COMMIT, "chyroc"), "0.9.2-beta.2")
         with self.assertRaises(release.ReleaseError):
             release.verify_merged_pr(pr, "nwverse/persona", "beta", COMMIT, "other")
 

@@ -58,7 +58,7 @@ jobs:
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?$ ]] || exit 0
           branch="release/$version"
           title="release: v$version"
-          if gh pr list --repo "$REPOSITORY" --state open --head "$branch" --json number --jq length | grep -qx 1; then
+          if [[ "$(gh pr list --repo "$REPOSITORY" --state open --head "$branch" --json number --jq length)" -gt 0 ]]; then
             echo "Release PR already exists for $version; do not duplicate it."
             exit 0
           fi
