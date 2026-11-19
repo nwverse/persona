@@ -91,6 +91,9 @@ func (m *Machine) run(ctx context.Context) {
 		lasted := time.Since(start)
 		m.d.logf("[%s] connection ended: via=%s lasted=%s planned=%t restarting=%t reason=%q %s", m.cfg.ID, conn.via,
 			lasted.Round(time.Second), planned, conn.restarting.Load(), dropReason(err), conn.peer.LaneStats())
+		if errors.Is(err, rpc.ErrFrame) {
+			m.noteFrameFailure(err)
+		}
 		m.d.pathEnded(conn.path, true, err, lasted, planned || conn.restarting.Load())
 		conn.close()
 		m.eventRetire.Lock()
@@ -312,7 +315,9 @@ func (m *Machine) establishViaOnce(ctx context.Context, p *nodePath, via string,
 	if !handshakeInterrupted(err) {
 		err = peer.Call(ictx, "node.info", map[string]any{}, &c.info)
 	}
-	if err == nil && nodeHas(c.info, nodeproto.NodeLanes) {
+	if off := m.lanesOff(); err == nil && nodeHas(c.info, nodeproto.NodeLanes) && !off.IsZero() {
+		m.d.logf("[%s] lanes over %s: not asked until %s (frames broke this computer's connections)", m.cfg.ID, via, off.Format(time.TimeOnly))
+	} else if err == nil && nodeHas(c.info, nodeproto.NodeLanes) {
 		// Before anything else goes out, so nothing large is on its way while the two sides switch, and within a wait of
 		// its own: the handshake is done. A refusal leaves lines, the connection working as with an older node; an
 		// answer later than the wait still switches both sides when it comes ("connected" says which it is then).
@@ -605,7 +610,49 @@ func (m *Machine) watchPaths(ctx, runCtx context.Context, c *nodeConn) {
 }
 
 // lanesWait bounds the wait for the node's answer to rpc.lanes.
-const lanesWait = 10 * time.Second
+var lanesWait = 10 * time.Second
+
+// A computer whose framed connections end on malformed frames (rpc.ErrFrame) lanesFailLimit times in lanesFailWithin
+// is not asked for lanes for lanesOffFor: something between the two ends changes the bytes, and with lines that
+// computer at least stays connected. Vars so tests change them.
+var (
+	lanesFailLimit  = 3
+	lanesFailWithin = 10 * time.Minute
+	lanesOffFor     = time.Hour
+)
+
+// noteFrameFailure counts a connection that ended on frames, and turns lanes off for the computer once there are
+// lanesFailLimit of them close together.
+func (m *Machine) noteFrameFailure(err error) {
+	now := time.Now()
+	m.mu.Lock()
+	recent := m.frameFails[:0]
+	for _, at := range m.frameFails {
+		if now.Sub(at) < lanesFailWithin {
+			recent = append(recent, at)
+		}
+	}
+	m.frameFails = append(recent, now)
+	off := len(m.frameFails) >= lanesFailLimit
+	if off {
+		m.lanesOffUntil, m.frameFails = now.Add(lanesOffFor), nil
+	}
+	m.mu.Unlock()
+	if off {
+		m.d.logf("[%s] %d connections in %s ended on malformed frames (last: %v): lanes off for %s", m.cfg.ID, lanesFailLimit,
+			lanesFailWithin, oneLineErr(err), lanesOffFor)
+	}
+}
+
+// lanesOff is until when lanes are not asked for; zero when they are.
+func (m *Machine) lanesOff() time.Time {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if time.Now().Before(m.lanesOffUntil) {
+		return m.lanesOffUntil
+	}
+	return time.Time{}
+}
 
 func onOff(on bool) string {
 	if on {

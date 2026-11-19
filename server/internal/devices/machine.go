@@ -154,6 +154,10 @@ type Machine struct {
 	// locks, not m.mu).
 	notes, bulkNotes nodeNotes
 	noteBytes        atomic.Int64 // what both hold together (maxNoteBytes)
+	// frameFails are when recent connections ended on malformed frames; lanesOffUntil, until when lanes are not asked
+	// for (conn.go noteFrameFailure). Under mu.
+	frameFails    []time.Time
+	lanesOffUntil time.Time
 	// opened is what the hub has open on the node through the bus connection of the moment (hubopen.go).
 	opened hubOpened
 	// claudeDirsMu serializes the read-modify-writes of the remembered and blocked Claude config dirs (claudedirs.go).

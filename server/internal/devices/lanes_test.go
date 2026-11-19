@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -182,4 +184,56 @@ func TestNoteStallIsNoProgressAtAll(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("never closed once nothing went through")
 	}
+}
+
+// A computer whose framed connections keep ending on malformed frames (something between the ends changes the bytes)
+// is not asked for lanes for a while, and stays connected with lines.
+func TestLanesOffAfterConnectionsBreakOnFrames(t *testing.T) {
+	old := lanesFailLimit
+	lanesFailLimit = 2
+	t.Cleanup(func() { lanesFailLimit = old })
+	d := newTestDevices(t)
+	logs := &benchLog{}
+	d.logf = func(f string, a ...any) { logs.add(fmt.Sprintf(f, a...)) }
+	var mu sync.Mutex
+	var peers []*rpc.Peer
+	m := newMachine(d, MachineConfig{ID: "box", Name: "box", Kind: "ssh"})
+	m.dialNode = func(context.Context) (net.Conn, error) {
+		managerSide, nodeSide := net.Pipe()
+		p := rpc.New("n", nodeSide)
+		p.EnableLanes(nodeproto.ControlLane, nodeproto.BulkLane)
+		p.OnRequest = func(_ context.Context, method string, _ json.RawMessage) (any, error) {
+			switch method {
+			case "node.info":
+				return proto.NodeInfo{Hostname: "box", OS: "linux", Arch: "amd64", Home: "/home/me", Version: "test", Protocol: nodeproto.Version,
+					ProtocolMin: nodeproto.MinManagerVersion, Capabilities: append(slices.Clone(nodeproto.Required), nodeproto.NodeLanes)}, nil
+			case "sessions.list":
+				return map[string]any{"sessions": []proto.Session{}}, nil
+			}
+			return map[string]any{"ok": true}, nil
+		}
+		go func() { _ = p.Serve(context.Background(), nodeSide); nodeSide.Close() }()
+		go func() { // once framed, bytes that are no frames: a relay that changed them
+			for range 200 {
+				if p.Framed() {
+					_, _ = nodeSide.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
+					return
+				}
+				time.Sleep(5 * time.Millisecond) // sleep-ok: polling for the switch in a fake node
+			}
+		}()
+		mu.Lock()
+		peers = append(peers, p)
+		mu.Unlock()
+		t.Cleanup(func() { managerSide.Close(); nodeSide.Close() })
+		return managerSide, nil
+	}
+	d.addEntry(m)
+	runMachine(t, m)
+	eventually(t, 20*time.Second, "lanes turned off", func() bool { return logs.count("lanes off for") > 0 })
+	eventually(t, 20*time.Second, "a connection with lines", func() bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return m.peer != nil && m.online && !m.peer.Framed() && logs.count("not asked until") > 0
+	})
 }
