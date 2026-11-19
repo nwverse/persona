@@ -210326,6 +210326,29 @@
         }
       }
     },
+    "the session stays in its current mode" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "the session stays in its current mode"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "セッションは現在のモードのままです"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会话保持当前模式"
+          }
+        }
+      }
+    },
     "the process it was picked for has exited" : {
       "extractionState" : "manual",
       "localizations" : {
