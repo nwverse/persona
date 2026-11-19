@@ -9,6 +9,7 @@ import java.io.File
 
 /** Optional local capabilities supplied by the app's pairing-scoped repository facade. */
 interface ChatLocalStorage {
+    fun replyImages(session: SessionKey): kotlinx.coroutines.flow.Flow<persona.core.contracts.api.ReplyImageSource?> = kotlinx.coroutines.flow.flowOf(null)
     val localStorage: StateFlow<ChatStorageSnapshot?>
     fun heldMessages(session: SessionKey): persona.core.contracts.api.HeldAgentActions? = null
     suspend fun imageFile(session: SessionKey, item: Item, width: Int, height: Int): File
