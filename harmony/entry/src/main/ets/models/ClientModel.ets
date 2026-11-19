@@ -692,7 +692,7 @@ export class ClientModel {
         if (!row) return true;
         if (receipt.deleted) return this.removeHeldMessage(row, receipt.expected.id);
         // The Hub can return the same cached failure after the manager has already started checking.
-        return this.matchesHeldRow(receipt.expected, row);
+        return !!this.matchingHeldInstruction(receipt.expected, row);
       });
       this.publishDirectory();
       if (this.selected.kind === 'session') {
@@ -837,7 +837,7 @@ export class ClientModel {
     const heldBubbles = held.map((item: HeldAgentMessage): ChatMessage => {
       const display = messageDisplay(item.text), content = parseMessageContent(display.text);
       const message = new ChatMessage('held:' + item.id, 'user', content.text);
-      message.held = item; message.at = item.at; message.localImageCount = item.images; message.source = display.sources;
+      message.held = item; message.at = Date.parse(item.at) || 0; message.localImageCount = item.images; message.source = display.sources;
       message.ownerTarget = this.target(); message.filePaths = content.files; message.imagePaths = content.images;
       return message;
     });
@@ -1287,11 +1287,14 @@ export class ClientModel {
     const heldPlaceholder = (archivedRuntime || this.coldHeldPlaceholder(row, data)) && capabilities.canRead &&
       !capabilities.readOnly && !Wire.bool(data, 'deleted');
     if (!this.canCompose() && !heldPlaceholder) return false;
-    return this.matchesHeldRow(expected, this.selected) && (!retry || (expected.state === 'failed' && !expected.deleteOnly));
+    const held = this.matchingHeldInstruction(expected, row);
+    return !!held && held.text === expected.text && held.images === expected.images && held.computer === expected.computer &&
+      held.at === expected.at && (!retry || (held.state === 'failed' && !held.deleteOnly));
   }
-  private matchesHeldRow(expected: HeldAgentMessage, row: ResourceRow): boolean {
-    const held = this.heldMessages(row).find((item: HeldAgentMessage) => item.id === expected.id);
-    return !!held && held.state === expected.state && held.line === expected.line && held.deleteOnly === expected.deleteOnly;
+  // An accepted Retry follows the manager's instruction even if the displayed message changes.
+  private matchingHeldInstruction(expected: HeldAgentMessage, row: ResourceRow): HeldAgentMessage | undefined {
+    return this.heldMessages(row).find((item: HeldAgentMessage) => item.id === expected.id && item.state === expected.state &&
+      item.line === expected.line && item.deleteOnly === expected.deleteOnly);
   }
   private removeHeldMessage(row: ResourceRow, id: string): boolean {
     const data = row.data(), previous = Wire.rows(data, 'undelivered');
@@ -1331,7 +1334,7 @@ export class ClientModel {
         (result: Record<string, Object>): boolean => Wire.bool(result, 'ok'));
       const paired = (): boolean => (ClientModel.pairingEpochs.get(hub) || 0) === pairing;
       const inScope = this.scope() === scope && !this.retired;
-      if (paired() && (!retry || !inScope || this.matchesHeldRow(expected, row))) {
+      if (paired() && (!retry || !inScope || this.matchingHeldInstruction(expected, row))) {
         const owner = this.heldOwner(); owner.heldChanged(scope);
         const receipt: HeldActionReceipt = { scope: scope, pairing: pairing, target: message.ownerTarget, expected: expected, deleted: !retry };
         owner.heldReceipts = owner.heldReceipts.filter((old: HeldActionReceipt) => old.target !== receipt.target || old.expected.id !== id).concat([receipt]);

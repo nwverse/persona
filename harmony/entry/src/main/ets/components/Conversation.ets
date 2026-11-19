@@ -718,7 +718,9 @@ export struct Conversation {
     const model = this.model, generation = model.connectionGeneration(), scope = model.scope(), visibility = this.revisionVisibilityRevision;
     const current = (): boolean => this.sendCurrent() && this.model === model && model.owns(generation, scope) && this.revisionVisibilityRevision === visibility;
     if (!current() || !model.canActOnHeld(message, false)) return;
-    this.getUIContext().showAlertDialog({ title: tr('agent_delete_held_title'), message: message.text,
+    const photos = message.localImageCount > 0 ? tr('photos') + ' · ' + message.localImageCount : '';
+    const body = [message.text, photos].filter((part: string) => !!part).join('\n');
+    this.getUIContext().showAlertDialog({ title: tr('agent_delete_held_title'), message: body,
       primaryButton: { value: tr('cancel'), defaultFocus: true, action: () => {} },
       secondaryButton: { value: tr('delete'), action: () => model.actOnHeld(message, false, current) } });
   }

@@ -81,7 +81,7 @@ export class HeldAgentMessage {
   line: string = '';
   state: string = '';
   images: number = 0;
-  at: number = 0;
+  at: string = '';
   deleteOnly: boolean = false;
 
   static from(data: Record<string, Object>): HeldAgentMessage | undefined {
@@ -90,7 +90,7 @@ export class HeldAgentMessage {
     const held = new HeldAgentMessage();
     held.id = id; held.computer = computer; held.state = state;
     held.text = Wire.text(data, 'text'); held.line = Wire.text(data, 'error'); held.images = Wire.number(data, 'images');
-    held.at = Date.parse(Wire.text(data, 'at')) || 0; held.deleteOnly = Wire.bool(data, 'delete_only');
+    held.at = Wire.text(data, 'at'); held.deleteOnly = Wire.bool(data, 'delete_only');
     return held;
   }
 }

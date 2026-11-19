@@ -102,12 +102,12 @@ function heldFixture() {
   return {model, held, update};
 }
 
-function heldDeleteView(model) {
+function heldDeleteView(model, translate = key => key) {
   const source = readFileSync(new URL('../entry/src/main/ets/components/Conversation.ets',import.meta.url),'utf8');
   assert.match(source,/onClick\(\(\) => this\.confirmHeldDelete\(message\)\)\.id\('chat\.held\.cancel\.'/);
   const method = source.match(/^  private confirmHeldDelete\(message: ChatMessage\): void \{[\s\S]*?^  \}/m);
   assert.ok(method);
-  const View = new Function('tr','return '+stripTypeScriptTypes('class HeldView { '+method[0]+' }'))(key=>key);
+  const View = new Function('tr','return '+stripTypeScriptTypes('class HeldView { '+method[0]+' }'))(translate);
   const view = new View();
   view.model=model; view.sendCurrent=()=>true; view.revisionVisibilityRevision=1;
   view.getUIContext=()=>({showAlertDialog:dialog=>{view.dialog=dialog;}});
@@ -146,6 +146,71 @@ test('held Agent native delete confirmation rechecks manager state, ownership an
     if(change==='model')view.model=heldFixture().model;
     await view.dialog.secondaryButton.action(); assert.equal(deletes,0,change);
   }
+});
+
+for (const [field, changed] of Object.entries({
+  text: 'Revised message', images: 2, computer: 'Other desk', at: '2026-11-01T12:00:00.000000002Z'
+})) {
+  test('held Agent open confirmation rejects a change only to ' + field, async () => {
+    const {model, held, update} = heldFixture(), view = heldDeleteView(model), writes = [];
+    const original = held('same', 'failed', 'Retry checks the chat first.', {images: 1, at: '2026-11-01T12:00:00.000000001Z'});
+    model.queueRefresh = () => {};
+    model.repository.call = async (_path, method) => { writes.push(method); return {ok: true}; };
+    update([original]);
+    const captured = model.messages[0];
+    view.confirmHeldDelete(captured);
+    update([{...original, [field]: changed}]);
+    await view.dialog.secondaryButton.action();
+    assert.deepEqual(writes, [], 'the old confirmation sent DELETE');
+    await model.actOnHeld(captured, true);
+    assert.deepEqual(writes, [], 'the old Retry sent POST');
+    view.confirmHeldDelete(model.messages[0]);
+    await view.dialog.secondaryButton.action();
+    assert.deepEqual(writes, ['DELETE']);
+  });
+}
+
+test('held Agent open confirmation describes image-only and mixed messages in the selected language', () => {
+  for (const [locale, photos] of [['en_US','Photos'], ['zh_CN','照片'], ['ja_JP','写真']]) {
+    const {model, held, update} = heldFixture();
+    const file = new URL('../entry/src/main/resources/' + locale + '/element/string.json', import.meta.url);
+    const strings = new Map(JSON.parse(readFileSync(file)).string.map(({name, value}) => [name, value]));
+    const view = heldDeleteView(model, key => strings.get(key));
+    for (const [text, expected] of [['', photos + ' · 2'], ['Keep these', 'Keep these\n' + photos + ' · 2']]) {
+      update([held('pictures', 'waiting', 'Will send later.', {text, images: 2})]);
+      view.confirmHeldDelete(model.messages[0]);
+      assert.equal(view.dialog.message, expected, locale);
+      assert.ok(view.dialog.primaryButton.defaultFocus);
+    }
+  }
+});
+
+test('held Agent accepted Retry survives content changes during the POST and on later reads', async () => {
+  const {model, held} = heldFixture(), entered = deferred(), receipt = deferred(), posts = [];
+  const original = held('same', 'failed', 'Retry checks the chat first.');
+  let current = original;
+  model.queueRefresh = () => {};
+  model.repository.machines = async () => model.machines;
+  model.repository.sessions = async () => [heldSession([current])];
+  model.repository.call = async (path, method) => {
+    if (method === 'POST') { posts.push(path); entered.resolve(); await receipt.promise; }
+    return {ok: true};
+  };
+  await model.refresh();
+  const retry = model.actOnHeld(model.messages[0], true);
+  await entered.promise;
+  current = {...original, text: 'Revised text'};
+  await model.refresh();
+  receipt.resolve(); await retry;
+  assert.equal(model.heldRetryPending(model.messages[0]), true);
+  current = {...current, images: 3, computer: 'Renamed desk', at: '2026-11-02T12:00:00Z'};
+  await model.refresh();
+  await model.actOnHeld(model.messages[0], true);
+  assert.equal(posts.length, 1);
+  assert.equal(model.canActOnHeld(model.messages[0], false), true);
+  current = {...current, error: 'Retry sends it anyway.'};
+  await model.refresh();
+  assert.equal(model.canActOnHeld(model.messages[0], true), true);
 });
 
 test('held Agent rows show the exact manager line once and give way to the same transcript operation', () => {
