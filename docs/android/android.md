@@ -168,7 +168,8 @@ The main conversation and the leader (direction) conversations fold the rounds t
   (`core/domain/.../tasks/BackgroundRounds.kt`) starts a round
   at a user input whose message source (`sourceOf`) is `conversation`, `followup` or `patrol` and ends it at the next
   genuine input, a queued one included; a system hint inside it does not end it. Such a round stays in the conversation
-  rather than going to the background record; supervision and the other quiet rounds keep going there as before.
+  rather than going to the background record. In Brief and Board, quiet supervision stays in the background record
+  and a supervision round with a visible reply stays in the conversation.
   A `followup` counts only as a scheduled follow-up: not a usage-limit continuation or a wake-up (injected
   `limit_continue` / `wake`), and not one without a title; those stay shown. Until the hub's config is read, the page
   uses the value it last read this run (in memory, `BackgroundFoldSetting.lastKnown`), else on.
@@ -180,7 +181,8 @@ The main conversation and the leader (direction) conversations fold the rounds t
 - **Not folded**: `supervisionVisible` (web's rule): a successful `ask_user` / `notify_user` (bare or Persona's
   `mcp__persona__…`), a pending `ask_user` while the round runs, a `task_review` with verdict `accepted` / `needs_user`,
   a `supervision_finish` whose result says `visibility: "user"`, a hub fold with `supervision_user`, or an injected
-  supervision message marked `level="user"` (`Injected.level`, the same two marks the web's and iOS's `supervisionVisible` read, #6969).
+  supervision message marked `level="user"` (`Injected.level`, #6969). A completed nonblank final reply also stays
+  shown unless the round successfully finished silent. Its work summary stays collapsed.
 - **Prompts**: while folding is on, a scheduled task's or follow-up's input shows only the hub's `injected.line` under its
   source label (`SourceMessage(hidePrompt)`), opened or not, and its line opens no prompt sheet; a supervisor message
   shows its text when opened.
@@ -2397,7 +2399,8 @@ Context/mark_viewed/auto-load use nonbusy `ExtensionUiState.fetch`, response ite
 
 ### UI version 8: dashboard columns (#9158)
 
-Specification [extensions.md](../extensions/extensions.md) ("UI version 8"). `HttpExtensionManagement.UI_VERSION` is `8`, and the native
+Specification [extensions.md](../extensions/extensions.md) ("UI version 8"). `HttpExtensionManagement.UI_VERSION` is `10` (this
+version plus the gauge and graph versions below), and the native
 stream (`ExtensionUIStreamController`) sends the same. `ExtensionColumns.kt`: the pure decisions (`count` by the pane's content width with
 `cardColumn` and `Space.m`, at most 3; `rows` in reading order, `span: "full"` a row of its own; `perLine` and `lines` for a section's rows
 side by side), `ExtensionPageWidth` (the page measures its pane; a columns view is `JListPage(fullWidth = true)`), `ExtensionCardRow` (a
@@ -2406,6 +2409,34 @@ section heads (`SectionHead` on a page, `SectionCardHead` in a card; the link is
 A phone, and anywhere a page is not measured (cards, machine and launcher sections, an inbox item's body), draws the stack.
 `nativeDiffIndex` mirrors the grid and the rows side by side; `NativeExtensionProfile` takes a section's `icon_color`.
 `ExtensionColumnsTest`, `NativeStreamColumnsTest`, `ExtensionColumnsShotsTest`.
+
+### UI version 9: gauge tiles (#9337)
+
+`ExtensionGaugeRing` draws a tile's named-color ring, value and unit (or percentage) on pages at 96 dp and in compact cards at
+80 dp, with an eased ratio that snaps under Reduce Motion. `JTile` keeps the tile's existing action, badge and switch while adding
+the exact readout and meter semantics. Native-stream grid and carousel tiles reuse the same ring and readout through `NativeTile`;
+`NativeExtensionProfile` accepts `gauge.color`. Tests: `ExtensionGaugeTest` and `NativeStreamCoverageTest`.
+
+### UI version 10: extension graphs (#9727)
+
+`ExtensionGraphLayout.kt` reproduces the shared slot-layout fixtures and reading order. `ExtensionGraph.kt` draws the native node
+cards, edges and group frames, with pan/zoom, separate fold targets and full-screen continuity. Page and full-screen canvases keep
+the 25%–200% zoom bounds; a compact card fits the whole graph into a still 200 dp preview with no zoom floor and opens the same
+interactive canvas full screen. Overview cards, columns cards, assistant cards, in-place reply blocks, machine and launcher
+sections, and inbox item bodies all use that preview.
+Tests: `ExtensionGraphLayoutTest`, `ExtensionGraphTest`, `NativeStreamCoverageTest` and the shared contract tests.
+
+`ExtensionGraphShotsTest` renders gauge page/card tiles, graph page/layered/full-screen/card views and a 200-node tree in all three
+styles, light and dark, using native Robolectric graphics. Run it from `android/` and pass the output property to the forked test
+JVM (a Gradle-command-line `-Dpersona.shots` does not reach it):
+
+```bash
+JAVA_TOOL_OPTIONS=-Dpersona.shots=/tmp/persona-extension-graph ./gradlew :feature:settings:testDebugUnitTest --rerun \
+  --tests 'persona.feature.settings.ExtensionGraphShotsTest'
+```
+
+The 42 PNGs go to that directory (default `feature/settings/build/extension-graph-shots/`). They are Compose/JVM evidence, not
+emulator, physical-device or production validation; attach them to the PR, never commit them.
 
 ### Host-owned extension settings (#2397)
 

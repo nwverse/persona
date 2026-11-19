@@ -602,6 +602,8 @@ struct ExtensionActionButton<Content: View>: View {
     @Binding var link: LinkTarget?
     /// Its accessibility identifier; nil: `plugin-ui-action-<action id>`.
     var identifier: String? = nil
+    /// A canvas or other transient container that a push closes after confirmation, before the page navigates.
+    var onPush: (() -> Void)? = nil
     @ViewBuilder var label: Content
     @State private var asking = false
 
@@ -623,6 +625,7 @@ struct ExtensionActionButton<Content: View>: View {
     }
 
     private func run() {
+        if action.push != nil { onPush?() }
         let execute = model.prepared(action, with: values, displayed: displayed)
         if model.managesConfirmation && displayed == nil { Keyboard.dismiss() }
         Task {
