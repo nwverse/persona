@@ -36,10 +36,12 @@ nonisolated struct ExtensionGraphTransform: Codable, Equatable, Sendable {
         guard content.width > 0, content.height > 0, viewport.width > 0, viewport.height > 0 else {
             return ExtensionGraphTransform()
         }
-        let scale = min(max(min(viewport.width / content.width, viewport.height / content.height), minimum), maximum)
+        let width = Double(content.width), height = Double(content.height)
+        let availableWidth = Double(viewport.width), availableHeight = Double(viewport.height)
+        let scale = min(max(min(availableWidth / width, availableHeight / height), minimum), maximum)
         return ExtensionGraphTransform(scale: scale,
-            x: (viewport.width - content.width * scale) / 2,
-            y: (viewport.height - content.height * scale) / 2)
+            x: (availableWidth - width * scale) / 2,
+            y: (availableHeight - height * scale) / 2)
     }
 }
 
