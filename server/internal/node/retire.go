@@ -183,7 +183,7 @@ func (n *Node) stoppable(id string, retire bool) (unlock func(), a host.Agent, o
 			return fail(notRetirable, "the agent is "+a.AgentStatus)
 		}
 		switch a.Agent {
-		case "", "claude", "codex", traexAgent:
+		case "", "claude", "codex", traexAgent, agyAgent: // agy leaves its TUI on two Ctrl+C presses too (#11087)
 		default:
 			return fail(notRetirable, "cannot stop a "+a.Agent)
 		}
