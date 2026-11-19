@@ -302,8 +302,11 @@ type triedTurn struct {
 	read     *turnRead
 }
 
-// turnRead is a session's latest turn as triage read it: what the user asked in it and its last reply ("" when none).
-type turnRead struct{ ask, reply string }
+// turnRead is a session's latest turn as triage read it: what the user asked, its last reply and the exact items.
+type turnRead struct {
+	ask, reply string
+	items      []proto.Item
+}
 
 // triageCfg is manager.json's agents.triage, as the hello has it.
 func (s *Service) triageCfg(ctx context.Context) assistantwire.TriageConfig {

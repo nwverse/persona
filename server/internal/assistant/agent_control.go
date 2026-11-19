@@ -839,6 +839,9 @@ func (s *Service) reportNow(ctx context.Context, t Todo, machine, session, kind,
 		}
 	}
 	s.logf("task %s: %s reports %s", t.ID, short(session), kind)
+	if kind == upReportDone {
+		s.goRecordWorkerReport(ctx, t, machine, session, text, evidence, now)
+	}
 	if kind == upReportProgress {
 		return "Noted for your supervisor: it reads it with its next supervision message. Go on with the work.", nil
 	}

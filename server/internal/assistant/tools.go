@@ -460,8 +460,21 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			if !note.reopens() {
 				lctx = ctx
 			}
+			// A nearly full Claude Code or Codex agent is compacted with its own /compact before the text goes in, by
+			// its node as it delivers, which checks again then (#11137): that takes minutes, so the wait is not the live
+			// send's. Any other send goes exactly as before.
+			if contextFull(c) && compactable(c) {
+				params["compact_if_full"] = true
+				var ccancel context.CancelFunc
+				lctx, ccancel = context.WithTimeout(context.WithoutCancel(ctx), compactSendWait)
+				defer ccancel()
+			}
 			var sent struct {
 				Queued bool `json:"queued"` // the runtime holds it behind the turn under way (#8097)
+				// CompactAfterTurn: nearly full mid-turn, the node holds it and compacts once the turn ends; Compacted:
+				// it compacted the agent before the text went in (#11137).
+				CompactAfterTurn bool `json:"compact_after_turn"`
+				Compacted        bool `json:"compacted"`
 			}
 			err = s.call(lctx, am.ID, DeviceSessionSend, params, &sent)
 			note.sent(lctx, err) // an unknown answer counts for the agent's next turn: it may still arrive
@@ -469,12 +482,24 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 				s.progressMade(am.ID, c.SessionID, time.Now()) // the supervisor told it something: a new stretch (supervise_progress.go)
 			}
 			if err != nil {
+				if errCode(err) == proto.CodeCompactFailed {
+					return "", task.sendFailed(ctx, s, compactFailed(c, am, err, false))
+				}
 				if note.reopens() && sendUnknown(err) {
 					// Its own wait ran out, or the link dropped, while the node may still type it in: the model reads
 					// the agent before it sends the text twice.
 					err = fmt.Errorf("%w (it may still arrive; check with agent_read before sending again)", err)
 				}
 				return "", task.sendFailed(ctx, s, err)
+			}
+			if sent.CompactAfterTurn {
+				return finish(fmt.Sprintf("Queued for %s on %s: it is in the middle of a turn and its context is nearly full, so once "+
+					"the turn ends it is compacted with its own /compact and then reads the message.", agentLabel(c), am.Name) +
+					handed.said() + task.sent(ctx, s, a.Text)), nil
+			}
+			if sent.Compacted {
+				return finish(fmt.Sprintf("Sent to %s on %s after compacting its nearly full context with its own /compact.",
+					agentLabel(c), am.Name) + handed.said() + task.sent(ctx, s, a.Text)), nil
 			}
 			if sent.Queued {
 				return finish(fmt.Sprintf("Queued for %s on %s: it is in the middle of a turn and reads the message once what it is doing now ends.",
