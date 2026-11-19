@@ -4637,6 +4637,10 @@
       "value": "Waiting in background"
     },
     {
+      "name": "agent_group_just_finished",
+      "value": "Just finished"
+    },
+    {
       "name": "agent_group_waiting",
       "value": "Waiting to wake"
     },

@@ -145,6 +145,40 @@ test('content rewritten under another history goes out even where its seq did no
   assert.equal(n.all('session.items').length, 3)
 })
 
+test('in-place item updates under the same history go out without advancing seq and coalesce by id', async (t) => {
+  const n = await startFakeNode(t)
+  const rt = createRuntime(minimal({ items: async () => ({ items: [], history: 'h1', to_seq: 5 }) }), { runtime: 'toy', socketPath: n.path, retryMs: 20 })
+  t.after(() => rt.stop())
+  rt.start()
+  await n.ready
+  await n.peer.call('session.watch', { session_id: 's1', since_seq: 0 })
+  // Two rapid in-place updates within the append window coalesce into the latest copy of that item id.
+  rt.append('s1', { items: [{ id: '5#0', seq: 5, kind: 'thinking', text: 'Step 1' }], fromSeq: 5, toSeq: 5, history: 'h1', update: true })
+  rt.append('s1', { items: [{ id: '5#0', seq: 5, kind: 'thinking', text: 'Step 1 + 2' }], fromSeq: 5, toSeq: 5, history: 'h1', update: true })
+  await until('coalesced in-place update pushed', () => n.all('session.items').length === 1)
+  assert.deepEqual(n.all('session.items')[0], {
+    session_id: 's1',
+    items: [{ id: '5#0', seq: 5, kind: 'thinking', text: 'Step 1 + 2' }],
+    from_seq: 5,
+    to_seq: 5,
+    history: 'h1',
+  })
+  // Without update: true, a same-seq append is still ignored as already pushed.
+  rt.append('s1', { items: [{ id: '5#0', seq: 5, kind: 'thinking', text: 'ignored' }], fromSeq: 5, toSeq: 5, history: 'h1' })
+  await new Promise((r) => setTimeout(r, 120))
+  assert.equal(n.all('session.items').length, 1)
+  // A follow-up in-place update after flush still goes out under the same history and seq.
+  rt.append('s1', { items: [{ id: '5#0', seq: 5, kind: 'thinking', text: 'Step 1 + 2 + 3' }], fromSeq: 5, toSeq: 5, history: 'h1', update: true })
+  await until('second in-place update pushed', () => n.all('session.items').length === 2)
+  assert.deepEqual(n.all('session.items')[1], {
+    session_id: 's1',
+    items: [{ id: '5#0', seq: 5, kind: 'thinking', text: 'Step 1 + 2 + 3' }],
+    from_seq: 5,
+    to_seq: 5,
+    history: 'h1',
+  })
+})
+
 test('a capped watch catch-up says there is more after its last batch', async (t) => {
   const n = await startFakeNode(t)
   const { page } = await import('../index.js')

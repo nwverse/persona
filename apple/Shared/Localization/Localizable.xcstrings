@@ -35989,6 +35989,29 @@
       },
       "extractionState" : "manual"
     },
+    "Changing Speed…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Changing Speed…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "速度を変更中…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在更改速度…"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Changing a category applies to every use in it. Takes effect from the next run without interrupting current tasks." : {
       "localizations" : {
         "en" : {
@@ -48558,6 +48581,29 @@
           }
         }
       }
+    },
+    "Couldn't change Speed: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't change Speed: %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "速度を変更できませんでした：%@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没能更改速度：%@"
+          }
+        }
+      },
+      "extractionState" : "manual"
     },
     "Couldn't change it: %@" : {
       "localizations" : {
@@ -68110,6 +68156,29 @@
         }
       }
     },
+    "Fast" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fast"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "高速"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "快速"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Fast, fine for simple things" : {
       "localizations" : {
         "en" : {
@@ -69486,6 +69555,29 @@
       },
       "extractionState" : "manual"
     },
+    "Finished [Action Bar]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Finished"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完了"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已完成"
+          }
+        }
+      }
+    },
     "Finished phase [Workflow Phase]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -70424,6 +70516,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "不连 hub"
+          }
+        }
+      }
+    },
+    "Nothing finished in the last 24 hours" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nothing finished in the last 24 hours"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "直近 24 時間に完了したタスクはありません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近 24 小时没有完成的任务"
           }
         }
       }
@@ -191141,6 +191256,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "默认使用「模型配置 › 新建 Agent」的设置。手动选择只影响这次会话，不改变全局默认。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Uses more quota" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Uses more quota"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "クォータをより多く使用します"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会使用更多配额"
           }
         }
       },

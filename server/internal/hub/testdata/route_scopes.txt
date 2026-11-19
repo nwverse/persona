@@ -338,8 +338,6 @@ todos.read           GET /api/v1/todos/places
 todos.read           GET /api/v1/todos/{id}
 todos.read           GET /api/v1/todos/{id}/decisions
 todos.read           GET /api/v1/todos/{id}/repositories
-todos.read           GET /api/v1/todos/{id}/workspace-naming/plans/{operation_id}
-todos.read           GET /api/v1/todos/{id}/workspace-rules
 todos.read           GET /api/v1/todos/{id}/timeline
 todos.read           GET /api/v1/todos/{id}/workspace-naming/plans/{operation_id}
 todos.read           GET /api/v1/todos/{id}/workspace-rules
@@ -498,6 +496,7 @@ inbox.write          POST /api/v1/inbox/{id}/done
 inbox.write          POST /api/v1/inbox/{id}/draft
 inbox.write          POST /api/v1/inbox/{id}/handoff
 inbox.write          POST /api/v1/inbox/{id}/reply
+inbox.write          POST /api/v1/inbox/{id}/retry
 inbox.write          POST /api/v1/inbox/{id}/suggestion
 inbox.write          POST /api/v1/inbox/{id}/task-link/recheck
 agents.control       POST /api/v1/interactions/{id}/choose
