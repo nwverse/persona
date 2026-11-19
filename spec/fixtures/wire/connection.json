@@ -44,6 +44,7 @@
       "protocol": 1,
       "server_version": "fixture-version",
       "tls_port": 0,
+      "todo_send_state": 1,
       "type": "hello"
     },
     "expected": {

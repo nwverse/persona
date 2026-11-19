@@ -299,7 +299,10 @@ passing is not first-install acceptance. Do not relax fuses or the existing orig
 green.
 
 The notch island's page failed the same way in every packaged app, not only on a first run: its window was on screen and
-empty. It now loads from its own scheme ("Island at the MacBook notch"); the setup page's path is still the claim's above.
+empty. It now loads from its own scheme ("Island at the MacBook notch"). The setup page now likewise loads from its own
+scheme (`persona-setup://app/setup.html`, `desktop/src/setup-page.ts`), which serves only `setup.html`, `setup.css` and
+`setup.cjs` from `dist/setup/` on the default session with `grantFileProtocolExtraPrivileges: false` unchanged. Full
+signed-release, macOS and physical-device acceptance under #6770 remain separate.
 
 ## Owner actions and decisions still required
 
