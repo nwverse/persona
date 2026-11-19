@@ -235,6 +235,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 				r.Evidence.RecordedBy = self
 			}
 			v.State, v.Waits = verdict, nil // reviewed: the supervisor answered what the judge found
+			v.FollowedUpAt = &r.At
 			v.Reviews = append(v.Reviews, r)
 			if len(v.Reviews) > 20 {
 				v.Reviews = v.Reviews[len(v.Reviews)-20:]

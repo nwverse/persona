@@ -298,6 +298,8 @@ data class WorkState(
     val artifacts: List<WorkArtifact>? = null,
     /** What the agent said of its own work as the turn ended (#3612); null without one and from an older hub. */
     val closeout: Closeout? = null,
+    /** End of this turn; reading its reply or restarting the hub does not reset it. */
+    @WireTime @SerialName("turn_at") val turnAt: String? = null,
 )
 
 /** One thing a turn produced: [kind] pr, commit, branch, doc, build or url (kept as sent), [ref] its link or name. */

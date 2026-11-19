@@ -50,13 +50,13 @@ describe("状态变化检测", () => {
   it("一直需要你不重复响", () => {
     expect(detectTransitions(prevOf(["a", "needs_you"]), [session("a", "needs_you")], noMutes).events).toEqual([]);
   });
-  it("工作中 → 完成未看算完成", () => {
+  it("工作中 → 新回复算完成", () => {
     expect(detectTransitions(prevOf(["a", "working"]), [session("a", "unread")], noMutes).events).toEqual([{ kind: "finished", key: "m/a" }]);
   });
   it("工作中 → 已看 不算（hub 也不推：看过了、或 hub 分诊为做完了）", () => {
     expect(detectTransitions(prevOf(["a", "working"]), [session("a", "idle")], noMutes).events).toEqual([]);
   });
-  it("工作中 → 未运行 / 未知 不算；别的状态到完成未看也不算", () => {
+  it("工作中 → 未运行 / 未知 不算；别的状态到新回复也不算", () => {
     expect(detectTransitions(prevOf(["a", "working"]), [session("a", "offline")], noMutes).events).toEqual([]);
     expect(detectTransitions(prevOf(["a", "working"]), [session("a", "unknown")], noMutes).events).toEqual([]);
     expect(detectTransitions(prevOf(["a", "idle"]), [session("a", "unread")], noMutes).events).toEqual([]);
@@ -139,7 +139,7 @@ describe("轮次时长（只推长任务）", () => {
 
 describe("处理过的通知收回（#3458）", () => {
   const snap = (...pairs: [string, AgentState][]) => new Map(pairs);
-  it("离开需要你、离开完成未看、从列表里没了的都收回", async () => {
+  it("离开需要你、离开新回复、从列表里没了的都收回", async () => {
     const { settledTags } = await import("./attention");
     const prev = snap(["m/a", "needs_you"], ["m/b", "unread"], ["m/c", "needs_you"], ["m/d", "working"]);
     const next = snap(["m/a", "working"], ["m/b", "idle"], ["m/d", "unread"]);

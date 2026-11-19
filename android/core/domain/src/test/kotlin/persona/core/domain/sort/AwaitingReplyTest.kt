@@ -9,7 +9,7 @@ import org.junit.Assert.*
 import org.junit.Test
 import java.time.Instant
 
-/** 待你回复 (#5096): a seen agent that stopped on a question nobody answered is not quiet and ranks after 完成未看. */
+/** 待你回复 (#5096): a seen agent that stopped on a question nobody answered is not quiet and ranks after 新回复. */
 class AwaitingReplyTest {
     private val machines = listOf(Machine("m", online = true))
     private val now = Instant.parse("2026-01-05T00:00:00Z")

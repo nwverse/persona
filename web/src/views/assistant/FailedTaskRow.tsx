@@ -9,14 +9,23 @@ import { openTask } from "../../lib/handoff";
 import { startFailureRowLine } from "../../lib/start-failure";
 import { planTaskOf, retryLauncher, retryOnLauncher, startFailureCodeLine } from "../../lib/start-retry";
 import { useStore } from "../../lib/store";
-import type { Todo } from "../../lib/todos";
+import { TODO_STATUS_INFO, type Todo, type TodoStatus } from "../../lib/todos";
 import { toast } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { whyNotStarted } from "./Handoff";
-import { removeTaskNow, retryTaskNow, ROW_ACTIONS, useRetrying, waitsLabel } from "./Tasks";
+import { removeTaskNow, retryTaskNow, useRetrying } from "./Tasks";
 
 // the question a failed start's tab stopped on, answered on its row (#10365): only for such a failure
 const ShellQuestion = lazy(() => import("../ShellQuestionCard"));
+
+const ROW_ACTIONS = "flex items-center gap-4 pl-6 text-[12.5px]";
+
+/** The task's line in Needs you when no card of its agent stands for it: what it waits for. */
+export function waitsLabel(todo: Todo, status: TodoStatus): string {
+  if (todo.supervision?.state === "pending_review") return t("assistant-tasks.review_pending");
+  if (todo.supervision?.state === "needs_user") return t("assistant-tasks.review_needs_user");
+  return TODO_STATUS_INFO[status]?.label ?? t("assistant-tasks.review_needs_user");
+}
 
 /** A task whose Agent did not start: its plan task (why, by its code) and the launcher "Use … instead" starts it with,
  *  when the hub suggests one and takes it (lib/start-retry retryLauncher, #10365). */

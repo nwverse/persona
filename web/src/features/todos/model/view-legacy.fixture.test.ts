@@ -38,6 +38,7 @@ const DECIDED: Record<string, ByDesign> = {
   run_waits_on_agent: "run_waits",
   run_waits_on_external: "run_waits",
   transient_retry_stays_background: "run_waits",
+  stopped_unfinished_closeout_needs_followup: "stopped_unfinished",
 };
 
 const zone = process.env.TZ;

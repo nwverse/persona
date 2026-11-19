@@ -62,7 +62,7 @@ const render = (sessions: Session[], interactions: Interaction[] = [], { machine
   Object.assign(fake, { sessions, interactions, machines }, loaded === undefined ? {} : { loaded });
   return renderToStaticMarkup(<Home onNewAgent={() => {}} onToggleSidebar={() => {}} />);
 };
-const markAll = (html: string) => html.match(/<button [^>]*title="把 (\d+) 个完成未看的会话标为已看"[^>]*>/)?.[1];
+const markAll = (html: string) => html.match(/<button [^>]*title="把 (\d+) 个新回复的会话标为已看"[^>]*>/)?.[1];
 // where a group's heading is in the page (-1: not there)
 const heading = (html: string, title: string) => html.indexOf(`>${title}</h2>`);
 const buttonLabels = (html: string) => (html.match(/<button\b[^>]*>[\s\S]*?<\/button>/g) ?? []).map((button) => button.replace(/<[^>]*>/g, ""));
@@ -70,7 +70,7 @@ const buttonLabels = (html: string) => (html.match(/<button\b[^>]*>[\s\S]*?<\/bu
 describe("the overview", () => {
   it("restores green unread success badges without tinting Needs you rows", () => {
     const html = render([agent(1, 0, "unread"), agent(2, 0, "needs_you")]);
-    expect(html).toMatch(/class="[^"]*bg-green-tint text-green" aria-label="完成未看"/);
+    expect(html).toMatch(/class="[^"]*bg-green-tint text-green" aria-label="新回复"/);
     expect(html).toMatch(/class="[^"]*bg-field text-attention" aria-label="需要你"/);
     expect(html).not.toContain("bg-orange-tint");
     expect(html).not.toContain("bg-red-tint");
@@ -265,7 +265,7 @@ describe("the overview", () => {
     const asking = agent(1, 0, "needs_you");
     const bg = { background_working: true, background_waiting: true };
     const html = render([asking, agent(2, 0, "needs_you"), agent(3, 0, "working"), agent(5, 0, "working", bg), agent(4, 0, "unread")], [{ id: "i1", kind: "permission", machine_id: "mac", session_id: asking.session_id, tool_name: "Bash" } as Interaction]);
-    const at = [heading(html, "需要你"), heading(html, "卡住了，要你去看"), heading(html, "工作中"), heading(html, "后台等待中"), heading(html, "完成未看"), heading(html, "电脑"), cards(html)];
+    const at = [heading(html, "需要你"), heading(html, "卡住了，要你去看"), heading(html, "工作中"), heading(html, "后台等待中"), heading(html, "新回复"), heading(html, "电脑"), cards(html)];
     expect(at.every((x) => x > -1)).toBe(true);
     expect(at).toEqual([...at].sort((a, b) => a - b));
     // nothing to do: the ready card and the computers still come first
@@ -291,15 +291,15 @@ describe("the overview", () => {
 
   it("offers 全部标为已看 beside the summary when the unread agents' tabs are working or need you", () => {
     const html = render([agent(1, 0, "working"), agent(1, 1, "unread"), agent(2, 0, "needs_you"), agent(2, 1, "unread")]);
-    expect(heading(html, "完成未看")).toBe(-1);
+    expect(heading(html, "新回复")).toBe(-1);
     expect(heading(html, "工作中")).toBeGreaterThan(-1);
     expect(html).toContain("卡住了，要你去看");
     expect(markAll(html)).toBe("2");
   });
 
-  it("keeps it in 完成未看's header, for every unread agent", () => {
+  it("keeps it in 新回复's header, for every unread agent", () => {
     const html = render([agent(1, 0, "working"), agent(1, 1, "unread"), agent(3, 0, "unread")]);
-    const section = heading(html, "完成未看");
+    const section = heading(html, "新回复");
     expect(section).toBeGreaterThan(-1);
     expect(markAll(html)).toBe("2");
     expect(html.indexOf("全部标为已看")).toBeGreaterThan(section);
@@ -335,14 +335,14 @@ describe("the overview", () => {
     try {
       const early = render([asking, agent(2, 0, "working"), agent(3, 0, "unread")], [ix]);
       expect(early).toContain("加载中");
-      for (const group of ["需要你", "卡住了，要你去看", "工作中", "完成未看", "电脑"]) expect(heading(early, group)).toBe(-1);
+      for (const group of ["需要你", "卡住了，要你去看", "工作中", "新回复", "电脑"]) expect(heading(early, group)).toBe(-1);
       expect(early).not.toContain("全部标为已看");
     } finally {
       fake.loaded = true;
     }
     const html = render([asking, agent(2, 0, "working"), agent(3, 0, "unread")], [ix]);
     expect(html).not.toContain("加载中");
-    for (const group of ["需要你", "工作中", "完成未看", "电脑"]) expect(heading(html, group)).toBeGreaterThan(-1);
+    for (const group of ["需要你", "工作中", "新回复", "电脑"]) expect(heading(html, group)).toBeGreaterThan(-1);
   });
 });
 

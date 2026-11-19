@@ -58,7 +58,6 @@ class AssistantEntriesSharedAgentTest {
     @Test fun keepsAnotherTodosOwnDecisionWithoutTheAgentsCard() {
         val decisions = listOf(
             todo("tests").copy(ask = TodoAsk(askedAt = at, outcome = "decide", verdict = "needs_user", question = "Which framework?")),
-            todo("tests").copy(supervision = Supervision(supervisor = "main", state = "pending_review")),
             todo("tests").copy(supervision = Supervision(supervisor = "main", state = "needs_user")),
         )
         for (decide in decisions) {
@@ -108,7 +107,7 @@ class AssistantEntriesSharedAgentTest {
     }
 
     @Test fun anUnsharedAgentsTaskDoesNotHaveAgentsElsewhere() {
-        val got = run(listOf(todo("only")), asking.copy(state = "idle", status = "idle"), interactions = emptyList())
+        val got = run(listOf(todo("only")), asking.copy(state = "working", status = "working"), interactions = emptyList())
         assertEquals(listOf("task:only"), got.running.map { it.key })
         assertFalse((got.running.single() as RunningEntry.Task).hasAgentsElsewhere)
     }

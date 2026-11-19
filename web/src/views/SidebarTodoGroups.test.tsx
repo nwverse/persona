@@ -87,10 +87,10 @@ describe("By to-do's rows (#6458)", () => {
     expect(row("todo:none").textContent).toMatch(/^没挂待办的.*0 个 Agent$/);
   });
 
-  it("says 完成未看 over a finished agent not looked at yet, as its row and By status do, not 已完成", () => {
+  it("says 新回复 over a finished agent not looked at yet, as its row and By status do, not 已完成", () => {
     const unseen = [...onTodos, s("done", "unread", "/code/notes"), s("seen", "idle", "/code/notes")];
     show(<TodoTreeView tree={buildTodoTree(unseen, machines, todos, { spaces: [], sessions: [] }, Date.now())} machines={machines} activeKey="" {...stable} />);
-    expect(row("todo:none").textContent).toMatch(/^没挂待办的.*2 个 Agent完成未看$/);
+    expect(row("todo:none").textContent).toMatch(/^没挂待办的.*2 个 Agent新回复$/);
     // Recent (not running) as the sidebar draws it under By to-do: its agents stopped
     act(() => root.unmount());
     root = createRoot(host);

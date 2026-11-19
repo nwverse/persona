@@ -13,7 +13,7 @@
 | hub 遇到待处理交互或 blocked 优先产生 needs_you，其余按宿主状态派生。 | `server/internal/assistant/fleet.go` 的 `agentState`；`docs/protocol/agent-states.md`「Unified states」 | `hub_blocked`、`hub_pending_offline`、`hub_working_seen`、`hub_idle`、`hub_offline`、`hub_unknown` |
 | hub 对 done 使用 `seen_at >= updated_at - 2 秒` 的已看容差，未看过则 unread。 | `agentState`；`docs/protocol/agent-states.md`「Seen」 | `hub_done_unseen`、`hub_done_seen_before_tolerance`、`hub_done_seen_at_tolerance`、`hub_done_seen_equal`、`hub_done_seen_after` |
 | idle 或 unknown 才算空闲，空闲会话有循环、后台任务或运行中的子代理时算待唤醒。 | Models 的 `isQuiet`；ChatsView 的 `Session.isWaiting` | `waiting_requires_quiet_state` |
-| 行优先级是需要你、完成未看、待你回复、工作中、后台等待中、待唤醒、已屏蔽、已看（按状态的八个分段），屏蔽不降低需要你的优先级。 | ChatsView 的 `rank` | `rank_all_states_and_mutes` |
+| 行优先级是需要你、新回复、待你回复、工作中、后台等待中、待唤醒、已屏蔽、已看（按状态的八个分段），屏蔽不降低需要你的优先级。 | ChatsView 的 `rank` | `rank_all_states_and_mutes` |
 | 工作中用 `state_since`，缺失时用 `updated_at`，其余状态用 `updated_at`，时间缺失排最后，同时间按 `session_id` 升序。 | Models 的 `sortDate`；ChatsView 的 `ordered`；`CLAUDE.md`「Most common pitfalls」 | `working_since_then_id`、`working_since_then_id_reversed` |
 | 本任务在排序键和 session_id 都相等时追加完整 id 比较，确保跨机器次序确定。 | `CLAUDE.md`；ChatsView 的 `ordered` | `cross_machine_same_session_id`、`cross_machine_same_session_id_reversed` |
 | 快速筛选中的组内排序跳过 rank，只比较排序时间和 session_id。 | ChatsView 的 `ordered` | `quick_filter_ignores_rank` |
@@ -25,7 +25,7 @@
 | 普通空间列表依次展示未屏蔽的置顶空间、活跃空间、活跃的屏蔽空间和空闲空间。 | ChatsView 的 `body` | `spaces_pin_busy_muted_quiet` |
 | 活跃空间里的行再次经过 ordered 排序，空闲空间展开时直接使用槽位顺序。 | ChatsView 的 `spaceSection`、`body` | `active_space_uses_rank_not_slots`、`spaces_pin_busy_muted_quiet` |
 | 快速筛选下置顶空间领先，其余空间仅按更新时间和完整空间 id 排序，并取消空闲空间容器。 | ChatsView 的 `body` | `quick_spaces_use_updated_time` |
-| 空间标题按需要你、工作中、完成未看、空闲的顺序朗读数量，unknown 合并到空闲。 | `StateCounts.spoken`；`AgentFilterTests.foldedHeaderSpeaksItsCounts` | `space_header_counts`、`spaces_pin_busy_muted_quiet` |
+| 空间标题按需要你、工作中、新回复、空闲的顺序朗读数量，unknown 合并到空闲。 | `StateCounts.spoken`；`AgentFilterTests.foldedHeaderSpeaksItsCounts` | `space_header_counts`、`spaces_pin_busy_muted_quiet` |
 | 助手、机器条件和搜索先决定 base，快速筛选计数取 base 中当前状态，全部标签不显示数字。 | ChatsView 的 `base`、`counts`、`QuickFilterBar` | `machine_search_before_counts`、`empty_list`、`filter_all` |
 | 搜索不区分大小写，按空白分词，每个词都要出现在 title、cwd、repo_root、branch、last_text、asks、space_name、slot_name、Agent 名、model、launcher、start_error、turn_error 之一；`machine:`、`project:`、`agent:`、`model:`、`state:`、`is:pinned`、`is:error`、`since:` 是条件，不是词（`AgentParsedQuery`）。 | ChatsView 的 `base` | `machine_search_before_counts`、`search_expands_idle` |
 | Scoped search follows `Session.matchesScope`: Title uses title/space/slot; Conversation uses title/asks/goal/prose/work; User uses asks/goal/todo/title; Assistant uses prose/work; Errors requires an error or block and searches all four error reasons, work and title. Dedicated dimension settings compose with inline qualifiers. Search as Code adds iOS's error, pin and 48-hour/168-hour raw-query heuristics without replacing parsed terms. Prepared `search_subtasks` can admit their root without becoming rows or counts. | `AgentSearchPlan.compile`; `AgentListProjection.build`; `Session.matchesScope`; `CodexTasks.flattened` | `search_scope_*`, `machine_qualifier_*`, `composable_qualifiers_*`, `dimension_settings_*`, `search_as_code_*`, `session_summary_*`, `subtask_*` |
@@ -35,7 +35,7 @@
 | 批量标已读只取筛选结果中当前 unread 的会话，不包含 kept 中已经看过的会话。 | ChatsView 的 `unreadShown` | `unread_keeps_seen_rows` |
 | 折叠只改变可见行，保留分组成员及计数；按状态的「已看」默认折叠，打开后 folded 里记 `!state/idle`。 | ChatsView 的 `spaceSection`、`stateSections`、`machineSections` | `folded_space_keeps_counts`、`folded_state_and_expanded_idle`、`folded_machine_hides_rows` |
 | 细列表不改变排序和计数，搜索会展开空闲行，显式折叠仍优先。 | ChatsView 的 `slotRow`、`foldedRows`、`spaceSection` | `compact_expands_idle_without_reordering`、`search_expands_idle`、`folded_state_and_expanded_idle` |
-| 打开时为完成未看的会话在离开前保持 held：安静后仍归完成未看分段，不进入行级空闲折叠；所在空间不收进空闲空间。 | `AgentListOrder` 的 `held`、`stays(_:)`、`rank(_:)`、`isQuiet(_:)`；`AppModel.visibleSession`、`markSeen` | `held_quiet_row_keeps_unread_state_section`、`held_quiet_space_stays_active`、`held_row_stays_out_of_quiet_idle_fold` |
+| 打开时为新回复的会话在离开前保持 held：安静后仍归新回复分段，不进入行级空闲折叠；所在空间不收进空闲空间。 | `AgentListOrder` 的 `held`、`stays(_:)`、`rank(_:)`、`isQuiet(_:)`；`AppModel.visibleSession`、`markSeen` | `held_quiet_row_keeps_unread_state_section`、`held_quiet_space_stays_active`、`held_row_stays_out_of_quiet_idle_fold` |
 
 ## JSON 结构
 
@@ -62,7 +62,7 @@
 - `folded` 使用 `state/needs` 等状态段 id（`!state/idle` 表示默认折叠的「已看」已打开）、`machine/机器标识` 或 `机器标识/空间标识`。
 - `expanded_idle` 使用活跃空间 id 或 `machine-机器标识`；`expanded_quiet` 使用空闲空间 id；二者和显式 folded 分开。
 - `compact` 只表示行样式，不参与行为输出。
-- `settings.held` 是打开时为完成未看、尚未离开的完整会话 id；离开后的下一帧应省略它，而非保留一个已失效的持有状态。
+- `settings.held` 是打开时为新回复、尚未离开的完整会话 id；离开后的下一帧应省略它，而非保留一个已失效的持有状态。
 
 `agents_list.expected`：
 
@@ -76,7 +76,7 @@
 
 ## 与设计文档的差异
 
-- `docs/protocol/agent-states.md` 开头写「需要你 → 工作中 → 完成未看」，但同文后段及 App 行排序都是完成未看先于工作中；夹具采用 App 的 `rank`。
+- `docs/protocol/agent-states.md` 开头写「需要你 → 工作中 → 新回复」，但同文后段及 App 行排序都是新回复先于工作中；夹具采用 App 的 `rank`。
 - 手表 `apple/PersonaWatch/PersonaWatchApp.swift` 使用 `AgentState.priority`，没有 App 的待唤醒和已屏蔽分档；SpaceGroup 也使用 priority，随后才由 ChatsView 调整空间和行次序，不能用一个 rank 替代所有层次。
 - 文档写空间里按 tab 顺序；当前 App 的活跃空间实际调用 ordered，只有空闲空间展开后保留 SpaceGroup 的槽位顺序。
 - 文档写有「最近（未运行）」；当前 ChatsView 普通分组过滤 offline，没有最近段，置顶 offline 则仍显示。

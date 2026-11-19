@@ -47,10 +47,10 @@
     <string name="agents_requests_history">请求列表与历史</string>
     <string name="agents_mark_all_read">全部标为已读</string>
     <plurals name="agents_mark_all_read_count">
-        <item quantity="other">%1$d 个完成未看</item>
+        <item quantity="other">%1$d 个新回复</item>
     </plurals>
     <plurals name="agents_mark_all_read_confirm">
-        <item quantity="other">把 %1$d 个完成未看的会话标为已读？</item>
+        <item quantity="other">把 %1$d 个新回复的会话标为已读？</item>
     </plurals>
     <string name="agents_mark_all_read_action">全部标为已读（%1$d）</string>
     <plurals name="agents_count_repos">
@@ -98,7 +98,7 @@
     <string name="agents_menu_note">置顶和屏蔽同步到 hub；已读仅影响本机列表</string>
     <string name="agents_filter_all">全部</string>
     <string name="agents_filter_needs_you">需要你</string>
-    <string name="agents_filter_unread">完成未看</string>
+    <string name="agents_filter_unread">新回复</string>
     <string name="agents_filter_working">工作中</string>
     <string name="agents_filter_background_waiting">后台等待中</string>
     <string name="agents_history_check_resume">核对继续结果</string>

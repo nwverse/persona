@@ -37,7 +37,7 @@ class AgentFilterCapsuleTest {
 
     /** The Agents page's seven filters in each language, worded as the page words them (the first is All). */
     private val english = listOf("All", "Needs you", "Unread", "Working", "Waiting in the background", "Lark groups", "Terminal")
-    private val chinese = listOf("全部", "需要你", "完成未看", "工作中", "后台等待中", "飞书群", "终端")
+    private val chinese = listOf("全部", "需要你", "新回复", "工作中", "后台等待中", "飞书群", "终端")
     private val japanese = listOf("すべて", "要対応", "未確認", "作業中", "バックグラウンドで待機中", "Lark グループ", "ターミナル")
     private val actions = listOf(JAction("By status", checked = true, onClick = {}))
 

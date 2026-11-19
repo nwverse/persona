@@ -31,7 +31,7 @@
   "machine_agents_other": "{count} 个 Agent",
   "offline": "离线",
   "online": "在线",
-  "mark_all_seen_title_other": "把 {count} 个完成未看的会话标为已看",
+  "mark_all_seen_title_other": "把 {count} 个新回复的会话标为已看",
   "agent_preview": "{agent}：{preview}",
   "answered": "已回答：{answer}",
   "permission_detail": "{tool}：{what}",

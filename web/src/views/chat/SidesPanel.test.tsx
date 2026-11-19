@@ -84,6 +84,6 @@ describe("SidesPanel", () => {
   });
 
   it("names a side's state, not its engine", () => {
-    expect(sideHint(side("r", { agent: "codex", title: "Review", state: "unread" }), false)).toBe("Review · 完成未看");
+    expect(sideHint(side("r", { agent: "codex", title: "Review", state: "unread" }), false)).toBe("Review · 新回复");
   });
 });

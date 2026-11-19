@@ -94,7 +94,7 @@ describe("By to-do: to-dos at the top level, no repository rows (#2526, #6458)",
       const td = todo(id, [link({ wait: "ci", follow: "seen", fresh: "new" }[id]!)]);
       expect(byId[id]!.statusLabel).toBe(todoStatusLabel(td, todoStatus(td, lookup)));
     }
-    expect([byId.wait!.statusLabel, byId.follow!.statusLabel, byId.fresh!.statusLabel]).toEqual(["等待中", "待跟进", "完成未看"]);
+    expect([byId.wait!.statusLabel, byId.follow!.statusLabel, byId.fresh!.statusLabel]).toEqual(["等待中", "待跟进", "新回复"]);
     expect(byId.wait!.state).toBe("bg_waiting");
     expect(todoTreeState("waiting")).toBe("bg_waiting");
   });
@@ -156,10 +156,10 @@ describe("By to-do: to-dos at the top level, no repository rows (#2526, #6458)",
 
 describe("a group's word says what its rows say, never Done over agents that are not", () => {
   const label = (all: Session[]) => agentGroupLabel(all, worstTreeState(all.map(agentTreeState)));
-  it("Not on a to-do holding a finished agent not looked at yet says 完成未看, as By status and the quick filter do", () => {
+  it("Not on a to-do holding a finished agent not looked at yet says 新回复, as By status and the quick filter do", () => {
     const tree = buildTodoTree([s("seen", "idle", "/code/a"), s("new", "unread", "/code/b")], machines, [], noMutes, NOW);
-    expect(tree.loose.map((g) => [g.state, g.label])).toEqual([["done", "完成未看"]]);
-    expect(label([s("seen", "idle", "/code/a"), s("new", "unread", "/code/b")])).toBe("完成未看");
+    expect(tree.loose.map((g) => [g.state, g.label])).toEqual([["done", "新回复"]]);
+    expect(label([s("seen", "idle", "/code/a"), s("new", "unread", "/code/b")])).toBe("新回复");
   });
   it("Recent (not running) of stopped agents says 未运行", () => {
     expect(label([s("gone", "offline", "/code/a"), s("gone2", "offline", "/code/b")])).toBe("未运行");

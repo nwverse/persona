@@ -60,6 +60,8 @@ type Supervision struct {
 	// its supervisor's to do, and an older one under Needs you (docs/assistant/unified-entry.md "Needs you and In
 	// progress"). nil in every other state, and for a task that waited for review before the hub kept the time.
 	PendingSince *time.Time `json:"pending_since,omitempty"`
+	// FollowedUpAt records a successful supervisor review or Agent send, not an automatic judgment or progress report.
+	FollowedUpAt *time.Time `json:"followed_up_at,omitempty"`
 	UpdatedAt    time.Time  `json:"updated_at"`
 	// Progress: what its agent last reported to the supervisor (report_to_supervisor, agent_control.go). A live
 	// reading kept in memory only (the next report brings it back after a restart), and apart from UpdatedAt, which
@@ -186,6 +188,10 @@ func (v *Supervision) clone() *Supervision {
 		at := *v.PendingSince
 		out.PendingSince = &at
 	}
+	if v.FollowedUpAt != nil {
+		at := *v.FollowedUpAt
+		out.FollowedUpAt = &at
+	}
 	out.Parked = out.parked()
 	return &out
 }
@@ -222,7 +228,7 @@ func (s *Service) supervisionDB() supervisionStore {
 
 func supervisionFromRow(r db.TodoSupervisionRow) *Supervision {
 	v := &Supervision{Supervisor: r.Supervisor, DoneWhen: r.DoneWhen, Criteria: r.Criteria, ExpectMinutes: r.ExpectMinutes, State: r.State, Round: r.Round,
-		PendingSince: r.PendingSince, UpdatedAt: r.UpdatedAt}
+		PendingSince: r.PendingSince, FollowedUpAt: r.FollowedUpAt, UpdatedAt: r.UpdatedAt}
 	_ = json.Unmarshal(r.Reviews, &v.Reviews)
 	if len(r.AutoReview) > 0 {
 		var a AutoReview
@@ -249,7 +255,8 @@ func (v *Supervision) row(todoID string) db.TodoSupervisionRow {
 		waits, _ = json.Marshal(v.Waits)
 	}
 	return db.TodoSupervisionRow{TodoID: todoID, Supervisor: v.Supervisor, DoneWhen: v.DoneWhen, Criteria: v.Criteria, ExpectMinutes: v.ExpectMinutes,
-		State: v.State, Round: v.Round, Reviews: raw, AutoReview: auto, Waits: waits, PendingSince: v.PendingSince, UpdatedAt: v.UpdatedAt}
+		State: v.State, Round: v.Round, Reviews: raw, AutoReview: auto, Waits: waits, PendingSince: v.PendingSince,
+		FollowedUpAt: v.FollowedUpAt, UpdatedAt: v.UpdatedAt}
 }
 
 // cleanDoneWhen is a task's criteria as kept: trimmed, no empty or repeated ones, at most 6 of at most 200 characters.

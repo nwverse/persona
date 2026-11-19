@@ -3,7 +3,7 @@ import Testing
 @testable import Persona
 
 /// The Agents filter capsule draws every filter's whole name (#9121). Before, a filter that was neither chosen nor in the
-/// middle of the strip showed its first two characters and an ellipsis, and 「完成未看」 read 「完成…」. Now a chip draws its
+/// middle of the strip showed its first two characters and an ellipsis, and 「新回复」 read 「完成…」. Now a chip draws its
 /// name whole whether it is chosen or not, in every language and at every text size, and a strip that does not fit scrolls.
 /// The scheme runs in zh-Hans: the English and Japanese names come from the string catalog, as `StateNamesTests` reads it.
 @MainActor struct FilterCapsuleTests {
@@ -93,7 +93,7 @@ import Testing
     }
 
     /// The comparison below tells a cut name from a whole one, and a name with an ellipsis from one without.
-    @Test(arguments: [("完成未看", "完成…"), ("工作中", "工作…"), ("Working", "Wo…"), ("作業中", "作業…"), ("Larkグループ", "La…")])
+    @Test(arguments: [("新回复", "完成…"), ("工作中", "工作…"), ("Working", "Wo…"), ("作業中", "作業…"), ("Larkグループ", "La…")])
     func theComparisonSeesACutName(whole: String, cut: String) throws {
         let distance = try ink(name(whole), .large).distance(to: ink(name(cut), .large))
         #expect(distance > Self.cutAtLeast, "\(whole) against \(cut): \(distance)")

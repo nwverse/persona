@@ -32668,6 +32668,53 @@ if MOCK_TASKS and os.environ.get("MOCK_TASK_TRAY_ACTIVITY") in ("1", "summary"):
     TASK_PLANS.clear()
     TASK_FEED[ASK1] = []
 
+# Five closeout-based task groups, including an unparked external wait and an explicit external park.
+if MOCK_TASKS and os.environ.get("MOCK_TASK_CLOSEOUT_GROUPS") == "1":
+    _now = datetime.now(timezone.utc)
+    _at = (_now - timedelta(minutes=15)).isoformat().replace("+00:00", "Z")
+    _template = copy.deepcopy(next(s for s in SESSIONS if s["machine_id"] == "server" and not s.get("assistant")))
+    SESSIONS[:] = [s for s in SESSIONS if s.get("assistant")]
+    INTERACTIONS[:] = []
+    TODOS_INIT[:] = []
+    TASK_PLANS.clear()
+    TASK_FEED[ASK1] = []
+    ITEMS[ASK1] = []
+    for _id, _state in [("owner", "needs_user"), ("executing", ""), ("reported", "pending_review"),
+                        ("unfinished", "rework"), ("external", ""), ("parked", "parked")]:
+        _sid = "taskbar-" + _id
+        _session = copy.deepcopy(_template)
+        _session.update(session_id=_sid, title="Example " + _id, cwd="/example", updated_at=_at, state_since=_at,
+                        state="working" if _id == "executing" else "idle",
+                        status="working" if _id == "executing" else "idle", pending_interactions=0,
+                        background_working=False, background_waiting=False, background=[], subagents=[], workflows=[],
+                        last_text="", rev=1001)
+        _session["work"] = {
+            "phase": "working" if _id == "executing" else "blocked" if _id in ("external", "parked") else "",
+            "on": "external", "turn_at": _at,
+            "closeout": {"status": "done" if _id == "reported" else "blocked" if _id in ("external", "parked") else "not_done",
+                         "waiting": "the maintainer to re-review the release"},
+        }
+        if _id == "unfinished":
+            _old = (_now - timedelta(minutes=61)).isoformat().replace("+00:00", "Z")
+            _session.update(updated_at=_old, state_since=_old)
+            _session["work"]["turn_at"] = _old
+        SESSIONS.append(_session)
+        ORIG_STATE[_sid] = (_session["status"], _session["state"])
+        _todo = _task_todo("taskbar-" + _id, "Example " + _id, "", "server", _sid, "/example", 15, "")
+        _todo.update(stage="review", created_at=_at, updated_at=_at,
+                     supervision={"supervisor": ASK1, "state": _state, "reviews": []})
+        if _state == "parked":
+            _todo["supervision"]["parked"] = {
+                "reason": "Waiting for the maintainer re-review", "waiting_on": "someone_else", "count": 1,
+                "until": (_now + timedelta(days=1)).isoformat().replace("+00:00", "Z"),
+            }
+        if _id == "unfinished":
+            _todo.update(created_at=_old, updated_at=_old)
+            _todo["agents"][0]["linked_at"] = _old
+        TODOS_INIT.append(_todo)
+    TODOS = copy.deepcopy(TODOS_INIT)
+MOCK_HELP.append("MOCK_TASK_CLOSEOUT_GROUPS=1  With MOCK_TASKS=1: aligned closeout rows, overdue unfinished work, and explicit waits")
+
 # MOCK_MODEL_FALLBACK=1 (#2528, docs/protocol/protocol.md "Going back to the configured model"): after an upstream refusal
 # Claude Code moved two sessions to a fallback model that then wasn't there: the review agent (a terminal session: the card
 # only says to type /model) and the main conversation (headless: "Back to configured model" closes its idle process).

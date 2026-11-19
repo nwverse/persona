@@ -263,7 +263,7 @@ describe("By to-do's to-dos read again from the grouping bar (audit item 27)", (
 });
 
 describe("By to-do's groups say what their rows say (audit item 48)", () => {
-  it("says 未运行 beside Recent (not running) and 完成未看 beside agents on no to-do finished and not looked at", async () => {
+  it("says 未运行 beside Recent (not running) and 新回复 beside agents on no to-do finished and not looked at", async () => {
     const stopped: Session = { machine_id: "mac", session_id: "s2", title: "旧的迁移", cwd: "/code/old", status: "offline", state: "offline", updated_at: "2026-11-04T00:00:00Z" };
     const unseen: Session = { machine_id: "mac", session_id: "s3", title: "写周报", cwd: "/code/notes", status: "idle", state: "unread", updated_at: "2026-11-05T00:00:00Z" };
     const every = [agent, stopped, unseen];
@@ -278,6 +278,6 @@ describe("By to-do's groups say what their rows say (audit item 48)", () => {
     expect(checked()).toBe("按待办");
     const end = (key: string) => host.querySelector(`[data-tree-branch="${key}"] [data-tree-branch-row]`)?.textContent;
     expect(end("recent")).toMatch(/1 个 Agent未运行$/);
-    expect(end("todo:none")).toMatch(/1 个 Agent完成未看$/);
+    expect(end("todo:none")).toMatch(/1 个 Agent新回复$/);
   });
 });
