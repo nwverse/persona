@@ -734,6 +734,9 @@ func serveHTTP(ctx context.Context, s http.Handler, p assistantwire.HTTPRequest,
 	if p.Human { // the same: a new conversation a person's own app opens (start.go's route)
 		ctx = assistantwire.WithHumanStart(ctx)
 	}
+	if p.ReplyInput {
+		ctx = assistantwire.WithReplyInput(ctx)
+	}
 	r, err := http.NewRequestWithContext(ctx, p.Method, target, bytes.NewReader(p.Body))
 	if err != nil {
 		return assistantwire.HTTPResponse{}, &rpc.Error{Code: bus.CodeInvalidParams, Message: err.Error()}

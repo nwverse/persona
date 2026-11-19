@@ -275,7 +275,7 @@ export function stepsToItems(steps, opts = {}) {
 
 const transcriptCache = new Map()
 const transcriptRevisions = new Map()
-const MAX_CACHED_TRANSCRIPTS = 16
+const MAX_CACHED_TRANSCRIPTS = 128
 const MAX_TRANSCRIPT_REVISIONS = 256
 const MAX_TRANSCRIPT_CACHE_BYTES = 64 * 1024 * 1024
 let transcriptCacheBytes = 0
