@@ -4829,6 +4829,20 @@ export interface ChannelMessage {
   /** The chat app's id of the message: the same message delivered again is taken once. */
   id: string;
   text?: string;
+  /** The chat where the owner invoked a mention channel, as display context rather than an instruction. */
+  chat?: string;
+  /** The topic or thread within chat, when the request came from one. */
+  topic?: string;
+  /**
+   * Context the extension gathered for this request, such as nearby chat history. It is data, not owner-authored
+   * instructions.
+   */
+  context?: string;
+  /**
+   * The extension's attestation that this is the owner's own request. A mention channel must send true; false or
+   * omitted is refused. Optional for an im channel's older messages.
+   */
+  owner?: boolean;
   /** At most 4 are kept. */
   images?: ChannelBlob[];
   files?: ChannelBlob[];

@@ -369,6 +369,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	}
 	// External authority and the raw runtime must be checked before guest/resume normalization can replace options.
 	requested := executionOption(options)
+	public := requested.Public // audience belongs to this input, even when launcher normalization replaces execution
 	requestedLauncher := launcherOr(launcher, st.Launcher)
 	if proto.IsExternalLauncher(requestedLauncher) || requested.External != nil {
 		bindingID := id
@@ -458,6 +459,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		launcher, options = own, nil // the model picked for the other launcher is not this one's
 	}
 	execution := executionOption(options)
+	execution.Public = public
 	execution.Origin = origin
 	// A new conversation has no legacy origin to recover. A resumed one gets here only with the manager's explicit
 	// decision or a previously persisted one; internal sends retain the decision already in session state.
@@ -500,7 +502,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			eff = execution.Effort
 		}
 		superviseRoundFrom(ctx).set(roundKept, roundWhyUnsupported) // a runtime keeps its own context (assistant_round.go)
-		return n.assistantSendRuntime(ctx, onRuntime, id, cwd, rl, text, images, mode, execution.Model, eff, policy)
+		return n.assistantSendRuntime(ctx, onRuntime, id, cwd, rl, text, images, mode, execution.Public, execution.Model, eff, policy)
 	}
 	if len(options) == 0 || (execution.Fingerprint == "" && execution.Model == "") {
 		if launcher == "" || launcher == st.Launcher {
@@ -514,6 +516,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		execution.UseEffort = true
 		execution.Fingerprint = "launcher-default"
 	}
+	execution.Public = public
 	if effort != "" {
 		execution.Effort = effort
 	}
@@ -640,8 +643,8 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	// Codex conversation has no id yet: it can't be the main one.
 	hasInput := strings.TrimSpace(text) != "" || len(images) > 0
 	snapc := make(chan contextAnswer, 1)
-	if guest != nil || !hasInput {
-		snapc <- contextAnswer{} // guests get no owner state; empty starts leave it for the first real message
+	if guest != nil || !hasInput || execution.Public {
+		snapc <- contextAnswer{} // guests and public mentions get no owner state; empty starts leave it for the first real message
 	} else {
 		go func(id string) { snapc <- n.assistantContext(id) }(id)
 	}

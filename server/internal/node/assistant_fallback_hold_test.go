@@ -98,6 +98,20 @@ func TestAssistantFallbackHoldBounds(t *testing.T) {
 	}
 }
 
+// A model fallback changes execution, not the current message's audience (#11130).
+func TestAssistantFallbackKeepsPublicMessage(t *testing.T) {
+	const id = "11111111-2222-3333-4444-555555555555"
+	n := assistantNode(t)
+	from := modelExecution{Model: "primary-model", Fingerprint: "fp"}
+	n.mu.Lock()
+	n.holdFallback(id, "claude", from, modelExecution{Model: "fallback-model", Fingerprint: "fp"})
+	n.mu.Unlock()
+	got := n.heldFallback(id, "claude", modelExecution{Model: "primary-model", Fingerprint: "fp", Public: true})
+	if got.Model != "fallback-model" || !got.Public {
+		t.Fatalf("the fallback lost the public marker: %+v", got)
+	}
+}
+
 // Only a switched chain that answered starts a hold, on the model it answered with.
 func TestAssistantHoldStartsOnlyWhenTheSwitchAnswered(t *testing.T) {
 	const id = "11111111-2222-3333-4444-555555555555"

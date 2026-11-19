@@ -58,6 +58,9 @@ type modelExecution struct {
 	// OriginDecisionRequired marks the RPC and autonomous-resume entries that must fail closed on a legacy unknown
 	// origin. Trusted in-process model plumbing may carry an existing execution without setting this per-entry gate.
 	OriginDecisionRequired bool `json:"-"`
+	// Public: this message answers in someone else's chat. Per message, never persisted or included in the execution
+	// fingerprint; assistantSend leaves the owner's live snapshot out of this input.
+	Public bool `json:"-"`
 	// Interject: a message this one carries, sent while the conversation answers, moves its foreground work to the
 	// background (assistant_interject.go). Per message, never part of the fingerprint.
 	Interject bool `json:"-"`
