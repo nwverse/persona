@@ -52,7 +52,7 @@ func (s *Service) applyModel(ctx context.Context, id string, params map[string]a
 //
 // The setting is read from the main chat whatever purpose the conversation starts under: only `assistant` stores it,
 // and a purpose that inherits from Agents (an extension's lark.agent) would otherwise resolve without it and start in
-// Persona's own, possibly signed-out profile (#10859).
+// Persona's own, possibly signed-out profile (#10859). startOn leaves out guests and the Inbox AI twin.
 func (s *Service) withNewConversationProfile(ctx context.Context, machine string, params map[string]any) bool {
 	if _, asked := params["config_dir"]; asked {
 		return false
