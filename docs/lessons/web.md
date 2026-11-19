@@ -1465,6 +1465,12 @@ trigger when opening. Check a real xterm textarea and a non-editable element as 
 pane addresses also need to resolve a listed Agent before closing, or they would fall back to a shell confirmation
 and lose the busy-Agent warning.
 
+## Local font preferences (#10243)
+
+A stylesheet's normal custom property loses to a theme's inline value. An explicit font preference needs precedence while keeping the inline default intact for reset and fallback. Do not replace the theme's token in place. Keep before-paint validation and runtime validation contract-tested, quote a custom family as one CSS string, and treat FontFaceSet checks as advisory: they cannot reliably establish whether every installed family exists.
+
+Full UI retains a machine's xterm feed between surfaces. Reading font family only in `mount()` misses a newly opened surface that reuses that feed. Refresh its family on attachment, preserve font size, and guard asynchronous local CJK loading against a later family choice.
+
 ## Deep tree rows need space for their counts (#10477)
 
 A shrinking file name cannot protect an end count when the row itself has unbounded indentation padding. Put the indentation and icon inside the name's shrinkable, clipped region; keep the count outside it with no wrapping. Bound deep indentation to a share of that region so the file name still has room for an ellipsis. Measure bounds against the containing panel, not the viewport, and keep the requested width separate from its temporary fitted width. Verify deep rows at minimum width in a real browser: jsdom cannot detect a clipped minus sign.

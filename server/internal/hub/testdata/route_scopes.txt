@@ -88,6 +88,7 @@ inbox.write          DELETE /api/v1/inbox/policies/{id}
 -                    DELETE /api/v1/recordings/{id}
 -                    DELETE /api/v1/recordings/{id}/photos/{n}
 -                    DELETE /api/v1/sessions/{mid}/{sid}
+-                    DELETE /api/v1/sessions/{mid}/{sid}/held/{msg}
 -                    DELETE /api/v1/subscriptions/{id}
 -                    DELETE /api/v1/task-trust
 -                    DELETE /api/v1/todos/{id}
@@ -95,6 +96,7 @@ todos.write          DELETE /api/v1/todos/{id}/agents/{mid}/{sid}
 -                    DELETE /api/v1/todos/{id}/seen
 -                    DELETE /api/v1/todos/{id}/someday
 todos.write          DELETE /api/v1/todos/{id}/spaces/{mid}/{space...}
+-                    DELETE /api/v1/todos/{id}/terminal-cleanup
 -                    DELETE /api/v1/todos/{id}/thread
 -                    DELETE {base}/markets/{mid}
 -                    GET /api/v1/admin/devices
@@ -335,6 +337,7 @@ todos.read           GET /api/v1/todos/places
 todos.read           GET /api/v1/todos/{id}
 todos.read           GET /api/v1/todos/{id}/decisions
 todos.read           GET /api/v1/todos/{id}/repositories
+todos.read           GET /api/v1/todos/{id}/timeline
 -                    GET /api/v1/usage
 -                    GET /api/v1/usage/days
 -                    GET /api/v1/usage/hours
@@ -588,6 +591,7 @@ agents.control       POST /api/v1/sessions
 -                    POST /api/v1/sessions/{mid}/{sid}/autoname
 -                    POST /api/v1/sessions/{mid}/{sid}/close
 -                    POST /api/v1/sessions/{mid}/{sid}/fork
+-                    POST /api/v1/sessions/{mid}/{sid}/held/{msg}/retry
 agents.control       POST /api/v1/sessions/{mid}/{sid}/interrupt
 -                    POST /api/v1/sessions/{mid}/{sid}/keys
 agents.control       POST /api/v1/sessions/{mid}/{sid}/messages
@@ -617,6 +621,7 @@ todos.write          POST /api/v1/todos
 -                    POST /api/v1/todos/import/reminders
 -                    POST /api/v1/todos/retitle
 -                    POST /api/v1/todos/{id}/accept
+-                    POST /api/v1/todos/{id}/asks/{ask}/answer
 -                    POST /api/v1/todos/{id}/decision-dismiss
 -                    POST /api/v1/todos/{id}/decision-undo-dismiss
 todos.write          POST /api/v1/todos/{id}/decisions
