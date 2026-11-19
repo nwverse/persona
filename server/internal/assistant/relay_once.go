@@ -32,6 +32,9 @@ var relayCheckWait = 15 * time.Second
 // relayMsgID is the once_id every try of message msg to conversation to goes under: made from the message, so
 // the same after the manager restarts and for messages queued before ids existed, and different for any other one.
 func relayMsgID(to string, msg relayMsg) string {
+	if msg.OnceID != "" {
+		return msg.OnceID
+	}
 	h := sha256.New()
 	for _, part := range []string{to, msg.From, msg.Tool, msg.State, msg.At.UTC().Format(time.RFC3339Nano), msg.Text} {
 		h.Write([]byte(part))
