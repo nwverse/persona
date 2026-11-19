@@ -1,5 +1,13 @@
 # Lessons: hub / node and networking
 
+## Queue admission decides notification replay (#10394)
+
+A connected WebSocket is not evidence that its outbound queue accepted a notification. Record admission per device
+and retain the event in the existing reconnect ring when every eligible socket rejects it. If another socket for the
+same credential accepts it, do not retain a duplicate. Keep recipient-selection counts separate from queue admission
+and delivery. Exercise the real notification bus handler with a full queue, same-ID outbox retry and reconnect;
+keep push-route, capability and preference exclusions intact.
+
 ## A response that stops mid-body must be aborted, not returned from (#10855)
 
 `http.ServeContent` stops at a read that fails and returns as if it were done, with the head (200 or 206 and its
@@ -537,6 +545,11 @@ cost is smaller than a broken image. When something has to be listed by hand in 
   may be one in each set since each records its own part (one file in both sets is
   still refused); move only an unpublished migration to another second, never an
   applied migration or the guard.
+- A numbered migration on an older feature branch may be absent from main's
+  frozen inventory (#7100). Keep its SQL unchanged when giving that branch-only
+  file a timestamp, and map its known legacy record through the existing
+  renumbering step. Test old-only and duplicate records with saved rules and
+  operation snapshots. Keep every frozen migration and the guard unchanged.
 - Future publication needs an immutable enable-window frontier **and** a moving
   verified scan checkpoint. Using the previous scan's EOF as the window boundary
   drops a new pending turn when it completes on a later scan. Preserve first-seen
@@ -1711,10 +1724,34 @@ back) and only keeps the entry. Tell them apart by git's `CONFLICT` lines plus `
 
 ## Block iCloud paths component by component (2026-11-04, #1669)
 
+- **A naming plan needs the same guard as a file path** (#7100): lexical root
+  checks miss links in the base, task and individual repository directories.
+  Resolve each through `realPath`, permit only its guarded missing tail, and
+  check both credentials and the entire physical private-state directory before
+  returning any plan. Keep the resolver pure, preserve Linux case sensitivity,
+  and reserve Darwin private paths without case; a Linux rule test or cross-build
+  does not establish native macOS filesystem behavior. Preparation rechecks when
+  resources are actually used.
+- **Test a missing state root as well as missing workspace targets** (#7100):
+  `realPath` returns the physical existing ancestors plus missing tail with
+  `ErrNotExist`. Keep that returned path for containment. A state-root link or
+  linked parent with an absent destination must still deny that destination at
+  the base, task and repository levels; a sibling sharing only its prefix stays
+  outside. Test through Node RPC with actual temporary links and no creation.
 - **Literal checks don't stop links**: `stat` / `file` only checked whether the resolved string contained `/Library/Mobile Documents`; a `~/x` symlink into iCloud still reached `os.Stat`, hanging the batch on a locked Mac.
 - **`filepath.EvalSymlinks` isn't enough**: it `Lstat`s component by component; after following a link into iCloud it stats the next component there, so checks after return are too late.
   Walk components ourselves (`realPath` in `node/pathguard.go`), checking `offLimits` before each `Lstat`; lowercase comparisons because macOS is case-insensitive by default.
 - **One hung stat mustn't stall the batch**: network drives and sleeping disks hang too. `statPaths` runs 8 concurrently, waits at most 3 seconds overall, and treats nonresponses as `missing`.
+
+## Verify saved settings on the wire (#7100)
+
+- Distinct JSON tags on an embedded saved-settings field and an effective field
+  do not collide. Verify the actual HTTP response before changing the view:
+  `workspace_rules` stays partial while `effective_workspace_rules` is complete.
+  Exercise untouched settings, partial writes, omitted fields, explicit values
+  equal to defaults and null resets through GET/PUT, then read the database and
+  GET from a fresh service. Internal struct assertions alone miss serialization
+  regressions and cannot establish the editor's inheritance contract.
 
 ## Upload names the file system cannot take
 
@@ -2000,6 +2037,40 @@ framing the connection on lanes (protocol.md "Lanes") changes the queue instead.
   still fill the transport ahead of a pong: narrowing them needs evidence from framed connections first. On Persona
   Link, frames also mean no WebSocket message over 32 KiB on the node stream, which takes away the 5 s `writeControl`
   wait and `spliceWS`'s one-minute write cap described in "Heartbeat timeouts on slow links" for that stream.
+
+## Resuming a node connection (2026-11-19, #10663)
+
+A connection that outlives its transport (protocol.md "Resuming") changes what several parts took for granted:
+
+- **The first line decides replace or resume.** A resident node used to serve a new transport at once, replacing the
+  connection it had; now it reads the transport's first line first. Read beside the accept loop, so a transport that
+  says nothing holds up no other; tests that connected without writing a line had to write one.
+- **A kept connection must still end when it should.** A resident node reloading closed its transport to end the
+  connection: with resuming that only lost it, and the reload would have waited out the window. Ending a connection
+  closes its peer too; losing it closes only the transport.
+- **Watchdogs that judge progress must know a connection is waiting.** The notes' stall check (nothing written for
+  30 s), pings and tailcat's probe would have closed a connection waiting to be resumed; they skip it, and pings that
+  find a resumable transport dead cut the transport instead of the connection.
+- **A frame can come twice.** When the node takes a connection back before it saw the old transport fail, it may read
+  frames over the old one after it told the manager how far it read; the manager writes them again. After a resume a
+  frame already read is dropped, where before any frame out of order was a protocol error.
+- **Nothing writes on a transport whose resume is not decided.** Switching the node's writer to the new transport
+  before the token was checked let a refused resume, or one over a transport still in use, take frames meant for the
+  connection: a gap on the transport in use, which ends it and counts against framing. The new transport becomes the
+  writer only inside the peer's lock, once the resume is taken.
+- **A kept connection must not hold its hooks.** A hook's event written on a lost connection waits for the resume, and
+  an agent waits on every hook: hook events go through an ordered queue the hook does not wait on while the transport
+  is lost, and what the connection never sent goes to the spool, as standby would have kept it. What the hook sends
+  next must still wait for that event: a card goes on the interactive lane, which is written before the events lane,
+  so a card asked for while the event waited reached the manager first.
+- **Acknowledge a frame when it is taken, not when more bytes are wanted.** Acknowledgements asked for only before a
+  read let a read loop slow over its lines (a handler blocking it per line) look silent to the other side, whose
+  silence check then dropped every computer's transport at once.
+- **A token rotated when its answer is written is lost with the answer.** The manager that never read the answer asks
+  again with the token it has: that one stays taken until the new transport carries a byte.
+- **A side that decides the transport is dead must tell the other.** One side's silence check fired while the other's
+  read loop was busy (not dead); the busy side then waited for its own pings, past the other side's window. The side
+  that loses a transport closes it, and the node keeps the connection longer than the manager takes to notice.
 
 ## A new value for an existing RPC parameter may be silently ignored by an old node (2026-11-06, #4858)
 
@@ -2377,6 +2448,13 @@ does not require inventing the digest it is meant to produce. Keep the producer'
 time when binding evidence to activation: later transport, REST and validation work must not
 renew its lifetime. Test embedded publisher modules in an isolated interpreter as well as
 ordinary imports; a transitive import can be available locally and missing remotely.
+
+An unset assistant settings row is not explicit empty authority (#2628): zero-value product
+settings do not settle that contract. Require an existing empty row's revision, and use a
+guaranteed-row read with a database timestamp to distinguish absence from a failed read. Do
+not create an empty row or a synthetic main. Require an explicit unassigned plan and deliberately
+empty flags, then prove empty Hub ownership twice. Zero owned machines needs no node dial, but
+any conversation, runtime row, partial assignment or revision change must still fail closed.
 
 
 ## Release status reporting is opt-in (#2671)
@@ -2882,3 +2960,7 @@ documenting an order.
   guards against moving a switching computer were checked in memory and acted on without a lock. Each of these could leave
   the computer at `kind: link` with nobody able to undo it. Write the intent row first and decide under the lock. Keep what
   must survive a restart in the database.
+
+## Compile production and test callers after shared helper changes
+
+A helper refactor can leave a missing tuple return, a test caller without a new context argument, or a runtime reader naming the old helper. Compile both production and test packages after merging; retain the existing read-only database helper and exercise its failure paths rather than adding a parallel implementation.

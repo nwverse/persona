@@ -525,6 +525,16 @@ of a kind is code there (as #7319 is for gateways whose model list lacks a fallb
 provider's `env` field, where a value, an empty one too, overrides a Persona default. Check such a setting in the
 profile the process really uses, not in `~/.claude`.
 
+## A profile hook installed on the next scan is too late for the first start (#7636)
+
+Claude Code reads settings hooks only at process startup. An extension that discovers a new assistant profile on its next
+heartbeat can therefore leave the conversation's first process without its `PermissionRequest` policy even when periodic
+reconciliation is otherwise correct. Seed a brand-new directory only with the extension's stable tagged entry, never copy
+arbitrary hooks or rewrite an existing profile; the extension still owns the policy and later profile-local reconciliation.
+A synthetic real-Claude check on 2.1.322 also rejected a plausible but wrong event attribution: storing an `ssh` command in
+a variable and expanding it as the command did not emit `PermissionRequest` in bypass mode and the command ran. Do not infer
+the prompt's command from elapsed time; capture the hook event or use a known bypass-immune call.
+
 ## `--setting-sources project` still reads `~/.claude` as the home's project files (2026-11-12, #5786)
 
 A guest conversation's `--tools ""` and `--strict-mcp-config` take away tools, not context: an extension's guest on the

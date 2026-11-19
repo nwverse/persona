@@ -17,6 +17,29 @@ func openHeld(t *testing.T) *DB {
 	return d
 }
 
+func TestHeldOperationKeepsSenderAndCannotRetryAfterSignOut(t *testing.T) {
+	d, ctx := openHeld(t), context.Background()
+	call := json.RawMessage(`{"caller":{"kind":"device","credential_id":"dev_sender"},"params":{"text":"hello"}}`)
+	op, _, err := d.HoldOperation(ctx, HeldOperation{Kind: HeldKindMessage, OpID: "hello",
+		MachineID: "mac", SessionID: "s1", Call: call, Lang: "en"})
+	if err != nil || op.CredentialID != "dev_sender" {
+		t.Fatalf("held operation: %+v, %v", op, err)
+	}
+	rows, err := d.HeldOperations(ctx, HeldKindMessage)
+	if err != nil || len(rows) != 1 || rows[0].CredentialID != "dev_sender" || rows[0].Call != nil {
+		t.Fatalf("held operation summaries: %+v, %v", rows, err)
+	}
+	if ok, err := d.SettleHeldOperation(ctx, op.Seq, HeldWaiting, HeldFailed, HeldSignedOut, ""); err != nil || !ok {
+		t.Fatalf("fail signed-out message: %t, %v", ok, err)
+	}
+	if ok, _, err := d.RetryHeldOperation(ctx, op.Seq, time.Now()); err != nil || ok {
+		t.Fatalf("retry signed-out message: %t, %v", ok, err)
+	}
+	if ok, err := d.DeleteHeldOperation(ctx, op.Seq, HeldFailed); err != nil || !ok {
+		t.Fatalf("delete signed-out message: %t, %v", ok, err)
+	}
+}
+
 // A held operation is kept once per kind, machine, session and op id, waiting, its call as it came; the list comes
 // back in the order they were held.
 func TestHeldOperationsKeptOnce(t *testing.T) {

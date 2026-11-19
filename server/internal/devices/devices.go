@@ -657,6 +657,9 @@ func (d *Devices) callNode(ctx context.Context, p devicewire.NodeCall) (json.Raw
 	if reservedOwnerControl(p.Method) {
 		return nil, errReservedOwnerControl
 	}
+	if p.Method == proto.MethodSessionSendUnseen {
+		return nil, &rpc.Error{Code: "forbidden", Message: "session.send_unseen is reserved for held-message delivery"}
+	}
 	if strings.HasPrefix(p.Method, "session.codex.takeover.") {
 		return nil, &rpc.Error{Code: "user_confirmation_required", Message: i18n.Err("codex-takeover.user_only").Error()}
 	}
