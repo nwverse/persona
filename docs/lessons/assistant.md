@@ -777,6 +777,13 @@ first sender's action lock.
 Cover the real database too: an ordinary `done: false` edit of an already-open todo intentionally does not advance
 `reopened_at`. Personal-verification feedback must explicitly restart that work round in the store; an in-memory
 timestamp alone lets an old Pass verify the rework after a manager restart.
+Reset the raw `user_check` ledger on every reopen, including a closed task's PATCH, since its effective state
+already reads accepted while closed. A fresh personal-verification review reopens before writing its new ledger.
+Do not restart a waiting verification until its replacement review passed validation and was saved. Release the
+round's action lock before feedback delivery, and bind the eventual reply receipt to that ask's timestamp so a slow
+delivery cannot swallow a newer verification.
+An ordinary edit that repeats `done: false` is not a reopen. A saved replacement review also makes the old Pass
+stale if a later work-round write fails, so a restart cannot verify rework through that old card.
 
 ## Manual compaction is not a main-only policy (#10064)
 

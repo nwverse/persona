@@ -234,6 +234,11 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 	if cur.isConcern() && cur.DoneAt == nil && e.Done != nil && *e.Done {
 		return Todo{}, db.ErrConcernUnreported // only its report closes it (concerns.go); the store checks it again
 	}
+	restartUserCheck := e.Done != nil && !*e.Done && (cur.DoneAt != nil || e.RestartWork) &&
+		cur.Supervision != nil && cur.Supervision.State == reviewUserCheck
+	if restartUserCheck {
+		e.RestartWork = true
+	}
 	links := e.PartOf != nil || e.After != nil
 	if f := s.pieceWriteHook; links && f != nil {
 		f(id)
@@ -276,6 +281,19 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 	s.todos.writing.Unlock()
 	if applied {
 		s.todoRowSet(ctx, doneKeys)
+	}
+	if applied && restartUserCheck {
+		if _, _, err := s.updateSupervision(ctx, id, func(v *Supervision) bool {
+			if v.State != reviewUserCheck || v.UpdatedAt.After(now) {
+				return false
+			}
+			v.State = ""
+			return true
+		}); err != nil {
+			return Todo{}, err
+		}
+		out, _ = s.todoNow(id)
+		out = formatTodo(out)
 	}
 	if cur.DoneAt == nil && row.DoneAt != nil {
 		// Done by the user: what the task came to goes in its decisions and its projects' timelines (#2820). cur

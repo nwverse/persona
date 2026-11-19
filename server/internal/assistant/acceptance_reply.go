@@ -75,14 +75,27 @@ func (s *Service) acceptReply(ctx context.Context, messageID, text string, media
 		return true
 	}
 	s.reviewDismissals.actions.acquire(id)
-	defer s.reviewDismissals.actions.release(id)
 	t, ok = s.todoNow(id)
 	if !ok {
+		s.reviewDismissals.actions.release(id)
 		s.botNote(ctx, messageID, i18n.T(l, "assistant-reports.accept_gone"))
 		return true
 	}
-	if a, _ := s.acceptAskLocked(id); a != nil && acceptAskStale(a, t) { // old round's change is answered, not routed
+	if a, _ := s.acceptAskLocked(id); a == nil || !a.AskedAt.Equal(ask.AskedAt) || acceptAskStale(a, t) {
+		s.reviewDismissals.actions.release(id)
 		s.botNote(ctx, messageID, i18n.T(l, "assistant-feishu_cards.already_handled"))
+		return true
+	}
+	// Feedback starts its work round before delivery, which may wait for an offline Agent to resume.
+	var reopenErr error
+	if t.StartError == "" {
+		reopenErr = s.reopenTodo(ctx, id)
+	}
+	s.reviewDismissals.actions.release(id)
+	if reopenErr != nil {
+		s.logf("task %s: acceptance reopen: %v", id, reopenErr)
+		s.botNote(ctx, messageID, withMediaDropped(l, i18n.T(l, "assistant-reports.accept_not_sent",
+			i18n.Args{"error": clip(oneLine(reopenErr.Error()), 120)}), media))
 		return true
 	}
 	question, msg := i18n.T(l, "assistant-reports.accept_question"), i18n.T(l, "assistant-reports.accept_to_agent", i18n.Args{"feedback": text})
@@ -106,17 +119,6 @@ func (s *Service) acceptReply(ctx context.Context, messageID, text string, media
 			s.decisionsChanged(ctx, id, at)
 		}
 	}
-	// Not accepted: the work goes on. A task the hub (or the user) closed meanwhile is open again before its agent is
-	// told, so the turn the change starts is followed (receipt, judgment, the next "Please verify") and the task shows as in
-	// progress, not done (#3457). It stays open when the send fails: the change is still to be made.
-	if t.StartError == "" {
-		if err := s.reopenTodo(ctx, id); err != nil {
-			s.logf("task %s: acceptance reopen: %v", id, err)
-			s.botNote(ctx, messageID, withMediaDropped(l, i18n.T(l, "assistant-reports.accept_not_sent",
-				i18n.Args{"error": clip(oneLine(err.Error()), 120)}), media))
-			return true
-		}
-	}
 	if _, err := s.relayToTask(ctx, t.Origin, id, msg, nil); err != nil {
 		s.logf("task %s: acceptance to agent: %v", id, err)
 		why := clip(oneLine(err.Error()), 120)
@@ -126,7 +128,7 @@ func (s *Service) acceptReply(ctx context.Context, messageID, text string, media
 		}
 		// A decision answered in words is made even when its agent cannot take it now: recorded above, its ask is answered,
 		// and its supervisor is told to pass it on. Never resent by the hub, so the agent cannot get it twice.
-		s.answeredInWords(ctx, id)
+		s.answeredInWords(ctx, id, ask.AskedAt)
 		s.decisionNotDelivered(ctx, id, ask.AskedAt, text, err)
 		s.botNote(ctx, messageID, withMediaDropped(l, i18n.T(l, "assistant-reports.accept_decided_not_sent", i18n.Args{"error": why}), media))
 		return true
@@ -134,17 +136,22 @@ func (s *Service) acceptReply(ctx context.Context, messageID, text string, media
 	if decideAsk(&ask) {
 		s.userDecided(ctx, id) // decided: its agent's next stop goes back to the supervisor
 	}
-	s.answeredInWords(ctx, id)
+	s.answeredInWords(ctx, id, ask.AskedAt)
 	s.botNote(ctx, messageID, withMediaDropped(l, i18n.T(l, "assistant-reports.accept_sent"), media))
 	return true
 }
 
 // answeredInWords: the owner's words answered task id's ask. Changed again: the next deploy asks again. A decision is answered:
 // its card stays known, and says so to a reply.
-func (s *Service) answeredInWords(ctx context.Context, id string) {
+func (s *Service) answeredInWords(ctx context.Context, id string, askedAt time.Time) {
 	b := &s.accept
 	b.mu.Lock()
-	if a := b.asks[id]; a != nil && decideAsk(a) {
+	a := b.asks[id]
+	if a == nil || !a.AskedAt.Equal(askedAt) {
+		b.mu.Unlock()
+		return
+	}
+	if decideAsk(a) {
 		a.AcceptedAt = time.Now().UTC()
 	} else {
 		delete(b.asks, id)

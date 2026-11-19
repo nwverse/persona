@@ -1886,7 +1886,7 @@ func (s *Service) reopenTodo(ctx context.Context, id string) error {
 	if !ok {
 		return db.ErrTodoNotFound
 	}
-	userCheck := cur.Supervision.state(cur) == reviewUserCheck
+	userCheck := cur.Supervision != nil && cur.Supervision.State == reviewUserCheck
 	if cur.DoneAt == nil && !userCheck {
 		return nil
 	}
@@ -1918,7 +1918,7 @@ func (s *Service) reopenTodo(ctx context.Context, id string) error {
 	}
 	if applied && userCheck {
 		_, _, err := s.updateSupervision(ctx, id, func(v *Supervision) bool {
-			if v.State != reviewUserCheck {
+			if v.State != reviewUserCheck || v.UpdatedAt.After(now) {
 				return false
 			}
 			v.State = ""

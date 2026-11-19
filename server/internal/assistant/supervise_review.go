@@ -145,15 +145,21 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	if a.UserCheck && verdict != reviewAccepted {
 		return "", fmt.Errorf("user_check applies to accepted only")
 	}
-	if t.Supervision.state(t) == reviewUserCheck && verdict != reviewAccepted {
-		if err := s.reopenTodo(ctx, t.ID); err != nil {
-			return "", err
-		}
-		t, _ = s.todoNow(t.ID)
-	}
+	restartUserCheck := t.Supervision.state(t) == reviewUserCheck && verdict != reviewAccepted
 	if verdict == reviewAccepted { // done_needs_delivery: its PR is live first (supervise_review_delivery.go)
 		if err := s.acceptedDeliveryError(ctx, t, strings.TrimSpace(a.Link), a.Outcome); err != nil {
 			return "", err
+		}
+		if a.UserCheck && t.DoneAt != nil {
+			if t.Supervision != nil && a.Outcome != outcomeCannot {
+				if err := completeReviewCriteriaError(t.Supervision.DoneWhen, a.Checks); err != nil {
+					return "", err
+				}
+			}
+			// Reopen the old round before writing the new personal-verification ledger.
+			if err := s.reopenTodo(ctx, t.ID); err != nil {
+				return "", err
+			}
 		}
 	}
 	// A conversation supervises what it handed out (task_plan, quietAgentTask): a task without a ledger
@@ -257,6 +263,13 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	if waiting != nil {
 		return "", ownerWaitError(t.ID, waiting)
 	}
+	if restartUserCheck {
+		open := false
+		if _, err := s.editTodo(ctx, t.ID, db.TodoEdit{Done: &open, RestartWork: true}); err != nil {
+			return "", err
+		}
+		t, _ = s.todoNow(t.ID)
+	}
 	if a.Verdict == reviewRework { // after the judge's done, a wrong "done" in the work stats (agents_work_wrong_done.go)
 		s.workEvent("", "", reviewReworkEvent, map[string]any{"todo": t.ID, "judged_done": judgedDone})
 	}
@@ -298,11 +311,6 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	switch verdict {
 	case reviewAccepted, reviewCancelled:
 		if verdict == reviewAccepted && a.UserCheck {
-			if t.DoneAt != nil {
-				if err := s.reopenTodo(ctx, t.ID); err != nil {
-					return "", err
-				}
-			}
 			s.dropTaskReport(t.ID)
 			s.dropDecision(ctx, t.ID)
 			s.sendsAccepted(ctx, t.ID, time.Now())

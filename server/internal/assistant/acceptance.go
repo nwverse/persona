@@ -270,6 +270,12 @@ func decisionOpen(a *acceptAsk, t Todo) bool {
 // old card. A fresh needs_user review replaces that marker. Non-decision verification asks are unaffected.
 // A ReopenedAt the auto-judge's second close leaves is harmless (the new ask is younger); zero AskedAt is a claim.
 func acceptAskStale(a *acceptAsk, t Todo) bool {
+	// A saved rework review supersedes verification even if its work-round write failed.
+	if !a.AskedAt.IsZero() && !decideAsk(a) && !a.Conclusion {
+		if r := triageLatestReview(t.Supervision); r != nil && r.Verdict != reviewAccepted && r.At.After(a.AskedAt) {
+			return true
+		}
+	}
 	return !a.AskedAt.IsZero() && (t.ReopenedAt != nil && a.AskedAt.Before(*t.ReopenedAt) ||
 		decideAsk(a) && t.Supervision.legacyOwnerPriorityReview() != nil)
 }
