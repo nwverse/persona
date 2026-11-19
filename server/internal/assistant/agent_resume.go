@@ -9,6 +9,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // The assistant's resume of a stopped agent (#8099). A stopped agent is read-only (node stopped.go, #4754): no message
@@ -178,8 +179,17 @@ func (s *Service) resumeAndSend(ctx context.Context, self string, am Device, c p
 	}
 	err = s.call(sctx, am.ID, DeviceSessionStart, startParams, &res)
 	if err != nil {
-		sendNote.sent(sctx, err)     // an unknown answer counts for the agent's next turn: it may still come up and take it
-		if startResultUnknown(err) { // it may still come up and take the message
+		if full && sendUnknown(err) {
+			// This start carried no prompt. Keep supervision of the possibly resumed agent, but no turn is
+			// attributed to text that the second call never sent.
+			sendNote.sent(sctx, rpc.NotSent(err))
+			if task != nil && task.made {
+				s.taskCard(sctx, task.self, task.todo.ID, task.wake)
+			}
+			return "", fmt.Errorf("%w (the agent may have resumed without a first message; check with agent_read before resuming again)", err)
+		}
+		sendNote.sent(sctx, err)
+		if sendUnknown(err) {
 			return "", task.sendFailed(sctx, s, err)
 		}
 		return "", task.sendFailed(sctx, s, resumeFailed(c, am, err))
@@ -194,6 +204,9 @@ func (s *Service) resumeAndSend(ctx context.Context, self string, am Device, c p
 		err = s.call(sctx, am.ID, DeviceSessionSend, send, &sent)
 		sendNote.sent(sctx, err)
 		if err != nil {
+			if sendUnknown(err) {
+				return "", task.sendFailed(sctx, s, err)
+			}
 			if errCode(err) == proto.CodeCompactFailed {
 				return "", task.sendFailed(sctx, s, compactFailed(c, am, err, true))
 			}
