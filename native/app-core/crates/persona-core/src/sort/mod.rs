@@ -160,6 +160,12 @@ pub struct Settings {
     pub query: String,
     #[serde(default)]
     pub machine_filter: String,
+    /// iOS's merged-list hub selection is active only in multi-hub mode. An empty filter selects every group;
+    /// `=<group>` selects one group, with `=` selecting the default empty group.
+    #[serde(default)]
+    pub multi_hub: bool,
+    #[serde(default)]
+    pub hub_filter: String,
     /// Archived history may include offline rows, without making ordinary offline live sessions visible.
     #[serde(default)]
     pub history: bool,
@@ -177,6 +183,9 @@ pub struct Settings {
     /// Opt into the real By Project tab rows. Legacy fixtures omit it and keep flat session rows.
     #[serde(default)]
     pub presentation_rows: bool,
+    /// Include filtered/unpinned inventory even when no renderable group can contain a row.
+    #[serde(default)]
+    pub inventory: bool,
     /// Paged spaces whose hub totals may not have arrived yet. Missing totals are zero, not local-window counts.
     #[serde(default)]
     pub bounded_spaces: BTreeSet<String>,
@@ -223,6 +232,12 @@ pub struct Projection {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rows: Option<Vec<Entry>>,
     pub unread_shown: Vec<String>,
+    /// Quick-filtered roots, independent of whether the selected grouping can render them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filtered: Option<Vec<String>>,
+    /// The same inventory without pinned roots; present with `filtered`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unpinned: Option<Vec<String>>,
     /// By Project always carries this field; other groupings omit it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quiet_title: Option<Option<String>>,
@@ -510,6 +525,17 @@ impl Query {
                 return false;
             }
         }
+        if input.settings.multi_hub
+            && !input.settings.hub_filter.is_empty()
+            && input.settings.hub_filter.strip_prefix('=') != Some(session.app_hub_group.as_deref().unwrap_or(""))
+        {
+            return false;
+        }
+        if session.nested_match {
+            // A child admitted the query for this prepared root. Query predicates belong to that child; the ordinary
+            // parent still had to pass the assistant and selected-machine/hub scopes above.
+            return true;
+        }
         let machine_path = machine_path.to_lowercase();
         if !self
             .machines
@@ -641,6 +667,10 @@ fn project_impl(input: &Input, oldest_first: bool) -> Projection {
         .iter()
         .filter(|row| quick == Quick::All || matching.contains(row.id.as_str()) || kept.contains(row.id.as_str()))
         .collect();
+    let filtered_ids = input
+        .settings
+        .inventory
+        .then(|| filtered.iter().map(|row| row.id.clone()).collect());
     let unread_shown = filtered
         .iter()
         .filter(|row| row.state == AgentState::Unread)
@@ -662,6 +692,10 @@ fn project_impl(input: &Input, oldest_first: bool) -> Projection {
         });
     }
     let unpinned: Vec<&Row> = filtered.into_iter().filter(|row| !row.pinned).collect();
+    let unpinned_ids = input
+        .settings
+        .inventory
+        .then(|| unpinned.iter().map(|row| row.id.clone()).collect());
     match input.settings.grouping {
         Grouping::State => groups.extend(state_groups(
             &unpinned,
@@ -691,6 +725,8 @@ fn project_impl(input: &Input, oldest_first: bool) -> Projection {
         groups,
         rows,
         unread_shown,
+        filtered: filtered_ids,
+        unpinned: unpinned_ids,
         quiet_title: (input.settings.grouping == Grouping::Space).then_some(quiet_title),
     }
 }
@@ -1173,16 +1209,21 @@ fn tab_key(row: &Row) -> Option<String> {
 /// The rows the compact By Project view actually draws. A quiet space opens flat pane rows, not tab headers.
 fn tab_rows(rows: &[&Row], groups: &[Group], settings: &Settings) -> Vec<Entry> {
     let pinned: Vec<&Row> = rows.iter().copied().filter(|row| row.pinned).collect();
+    let by_id: StdHashMap<&str, &Row> = rows.iter().copied().map(|row| (row.id.as_str(), row)).collect();
+    let group_members = |group: &Group| {
+        group
+            .rows
+            .iter()
+            .filter_map(|id| by_id.get(id.as_str()).copied())
+            .collect::<Vec<&Row>>()
+    };
+    // make_space already owns display order; unread_shown separately retains filtered input order.
     let mut entries = plain_entries(&pinned);
     for group in groups.iter().filter(|group| group.id != "pinned") {
         if group.folded {
             continue;
         }
-        let members: Vec<&Row> = rows
-            .iter()
-            .copied()
-            .filter(|row| group.rows.contains(&row.id))
-            .collect();
+        let members = group_members(group);
         let expanded = settings.expanded_idle.contains(&group.id) || !settings.query.is_empty();
         let busy: BTreeSet<&str> = members
             .iter()

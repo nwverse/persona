@@ -257,8 +257,9 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 		return proto.Session{}, badRequest(fmt.Errorf("space %q: health or none", p.Space))
 	}
 	if p.Origin == OriginInbox {
-		// The handling chat investigates and suggests; it never needs the assistant's bypass mode.
-		p.PermissionMode = proto.ModePlan
+		// Default keeps the explicit Persona MCP allowlist effective: Plan rejects MCP before consulting it. The
+		// manager/node origin policy, not the launcher's permission mode, prevents externally visible work.
+		p.PermissionMode = "default"
 	} else if p.PermissionMode == "" && p.GuestTools == nil {
 		p.PermissionMode = s.settings(ctx).DefaultPermissionMode
 		if p.PermissionMode == "" {
@@ -323,8 +324,10 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	if _, err := s.finishMainChatModel(ctx, machine, purpose, params, false); err != nil {
 		return proto.Session{}, err
 	}
-	// A guest's profile is its own: the main chat's setting is for the user's conversations only.
-	fromSetting := p.GuestTools == nil && s.withNewConversationProfile(ctx, machine, purpose, params)
+	// A guest's profile is its own: the main chat's setting is for the user's conversations only. So is the Inbox AI
+	// twin's: it acts on what strangers sent, and the user's own setup (allow rules, hooks, MCP servers) stays out of it
+	// in Persona's profile (#10859).
+	fromSetting := p.GuestTools == nil && purpose != purposeAgent && s.withNewConversationProfile(ctx, machine, params)
 	used, _ := params["launcher"].(string)
 	// A profile is Claude Code's: the node refuses a config_dir for any other agent before starting it (#6467). Judged
 	// here, by the launcher the start finally runs on, not the one asked for: the model configuration and a fallback
@@ -1126,7 +1129,7 @@ func (s *Service) sendParamsOwn(ctx context.Context, p SendParams) (map[string]a
 	delete(params, "origin") // only the manager's origin book may attest an Inbox conversation
 	if s.isInboxModelCall(ctx, p.MachineID, p.SessionID, "") {
 		// A node reload does not restore the node's in-memory origin field. Re-attest it on every later send so the
-		// first resumed process is clamped to Plan and its Lark gate cannot fall back to an ordinary conversation.
+		// first resumed process is clamped to non-bypass default and its Lark gate cannot fall back to an ordinary conversation.
 		params["origin"] = OriginInbox
 	}
 	text, _ := params["text"].(string)
@@ -1196,9 +1199,18 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 	delete(p, "external")
 	cfg := s.settings(ctx)
 	p["is_main"] = cfg.Main != "" && cfg.Main == sid && cfg.mainRouteMachine() == machine
+	delete(p, "idle_compaction")
+	if p["is_main"] == true {
+		p["idle_compaction"] = assistantwire.IdleCompaction{
+			Enabled: s.idleAutoCompact(ctx), IdleMinutes: s.idleAutoCompactMinutes(ctx), ContextTokens: s.idleAutoCompactTokens(ctx),
+		}
+	}
 	putMainCompactWindow(cfg, p)
 	if cfg.InterjectBackground != nil && *cfg.InterjectBackground {
 		p["interject_background"] = true
+	}
+	if cfg.ClaudeInteractive != nil && *cfg.ClaudeInteractive {
+		p["claude_interactive"] = true // what the conversation's Claude runs in (#10058, node/assistant_tui.go)
 	}
 	// A leader conversation and the background supervisor follow it too: the hub's own messages (supervision, digests)
 	// drive them and pick nothing, so a model a failed turn's recovery moved one to (node/assistant_recovery.go: Opus
@@ -1250,8 +1262,13 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 			}
 		}
 	}
-	if l == "" && !followsSetting {
-		if c, known := s.session(ctx, machine, sid); known {
+	if l == "" {
+		c, known := s.session(ctx, machine, sid)
+		if known && c.SourceKind == proto.SourceRuntime {
+			// The node resumes the session on the runtime that owns it, even for scheduled chats and leaders.
+			return nil
+		}
+		if known && !followsSetting {
 			l = c.Launcher // no launcher picked: the one this conversation runs
 			if l != "" {
 				p["launcher"] = l

@@ -149,6 +149,10 @@ func stamp(t time.Time) string {
 // listed is a time as the list writes it, for an ask's id and round: sent back as it is.
 func listed(t time.Time) string { return t.Format(time.RFC3339Nano) }
 
+// DecisionAskID is the id of a to-do's own decision asked at askedAt: its ask's in the view, and the one its push
+// names (assistantwire.NotifyTodo.Ask), so an answer from the notification reaches the same ask.
+func DecisionAskID(askedAt time.Time) string { return "todo:decision@" + listed(askedAt) }
+
 func utc(t time.Time) time.Time {
 	if t.IsZero() {
 		return t
@@ -221,8 +225,10 @@ func cancelNote(f *Facts) string {
 
 // ---- row 1: a failed start ----
 
-// failedStart: a run failed to start; it stays open and needs the owner for 48 hours after the failure (its retry is
-// the ask), then rows 12 to 14 place it as nothing works on it, with the Inactive mark whatever its due date or origin.
+// failedStart: a run failed to start; it stays open and needs the owner for 48 hours after the failure, then rows 12
+// to 14 place it as nothing works on it, with the Inactive mark whatever its due date or origin. Its retry is the ask,
+// safe to answer anywhere, on a to-do a conversation opened: the hub starts no other again, so one with no origin only
+// says why it did not start.
 func (r *reading) failedStart() placement {
 	f := r.f
 	// The failure is done_at, which FailTodo stores (a start that fails on a closed to-do keeps the close). updated_at
@@ -239,8 +245,10 @@ func (r *reading) failedStart() placement {
 	}
 	p := r.at(assistantwire.TodoPhaseNeedsYou, assistantwire.TodoListSectionNeedsYou, assistantwire.TodoReasonFailedStart)
 	p.Line, p.Since = line(lineFailedStart, "error", f.StartError), utc(failed)
-	p.Asks = []assistantwire.OwnerAsk{{ID: "todo:retry@" + listed(failed), Kind: assistantwire.OwnerAskKindRetry,
-		Home: assistantwire.OwnerAskHomeTodo}}
+	if f.Origin != "" {
+		p.Asks = []assistantwire.OwnerAsk{withRisk(assistantwire.OwnerAsk{ID: "todo:retry@" + listed(failed),
+			Kind: assistantwire.OwnerAskKindRetry, Home: assistantwire.OwnerAskHomeTodo}, assistantwire.OwnerAskRiskSafe)}
+	}
 	return p
 }
 
@@ -275,18 +283,67 @@ func (r *reading) runAsks() (placement, bool) {
 	return placement{}, false
 }
 
-// runAsk is run rn's ask: a question at home in its session (the session list says that it waits, not which card it
-// shows), its id following the moment the session came to wait.
+// runAsk is run rn's ask, at home in its session, its id following the moment the session came to wait: what its
+// pending card asks (cardKind), with the card's id to answer it by, safe to answer in place only when a notification
+// may answer it too (proto.Interaction.OneTapQuestion: one question with options, no fields, not a Just me turn's or a
+// health conversation's, and its asker did not say going ahead cannot be undone); a question, open, while the hub
+// holds no card for it (the session list says that it waits, not on what).
 func runAsk(rn run) assistantwire.OwnerAsk {
 	text := rn.s.Asks
 	if text == "" {
 		text = rn.s.AttentionReason
 	}
-	return assistantwire.OwnerAsk{
+	a := assistantwire.OwnerAsk{
 		ID:   "run:" + rn.link.MachineID + "/" + rn.link.SessionID + "@" + listed(rn.since()),
 		Kind: assistantwire.OwnerAskKindQuestion, Home: assistantwire.OwnerAskHomeRun, Text: text,
 		Run: &assistantwire.TodoRunRef{MachineID: rn.link.MachineID, SessionID: rn.link.SessionID, Title: rn.title()},
 	}
+	risk := assistantwire.OwnerAskRiskOpen
+	if c := rn.card; c != nil {
+		a.Kind, a.Interaction = cardKind(c), c.ID
+		if _, ok := c.OneTapQuestion(); ok {
+			risk = assistantwire.OwnerAskRiskSafe
+		}
+	}
+	return withRisk(a, risk)
+}
+
+// cardKind is the kind of ask a run's pending card is: secret when it asks for a password (on the screen, or among
+// the fields to fill in), form for other fields to fill in or an MCP server's form, tool for an approval, plan for a
+// plan, else question (a question card, or a dialog on the screen).
+func cardKind(c *proto.Interaction) string {
+	switch {
+	case c.Secret || slices.ContainsFunc(c.Fields, func(f proto.Field) bool { return f.Secret }):
+		return assistantwire.OwnerAskKindSecret
+	case len(c.Fields) > 0 || c.Kind == proto.IxElicitation:
+		return assistantwire.OwnerAskKindForm
+	case c.Kind == proto.IxPermission:
+		return assistantwire.OwnerAskKindTool
+	case c.Kind == proto.IxPlan:
+		return assistantwire.OwnerAskKindPlan
+	}
+	return assistantwire.OwnerAskKindQuestion
+}
+
+// withRisk is ask a with its risk and the lock-screen action that follows from it (Lockscreen); a risk that is neither
+// safe nor open (none said) is open.
+func withRisk(a assistantwire.OwnerAsk, risk string) assistantwire.OwnerAsk {
+	a.Risk = assistantwire.OwnerAskRiskOpen
+	if risk == assistantwire.OwnerAskRiskSafe {
+		a.Risk = assistantwire.OwnerAskRiskSafe
+	}
+	a.Lockscreen = Lockscreen(risk)
+	return a
+}
+
+// Lockscreen is what a push about an ask of the given risk may offer on the lock screen: its answers (answer) only when
+// it is safe, else nothing (open_only), a risk none said included. The view's asks and the decision push both take it
+// from here.
+func Lockscreen(risk string) string {
+	if risk == assistantwire.OwnerAskRiskSafe {
+		return assistantwire.OwnerAskLockscreenAnswer
+	}
+	return assistantwire.OwnerAskLockscreenOpenOnly
 }
 
 // withOwnAsk adds the to-do's own decision to p's asks when one also waits on the owner.
@@ -319,21 +376,21 @@ func (r *reading) dismissed() bool {
 	return r.f.DecisionReview != nil && r.f.DecisionReview.DismissalID != ""
 }
 
-// ownAsk is the to-do's own decision as an ask at home on the to-do, its id and round the moment it was asked, and the
-// ask it was read from (nil when no decision waits).
+// ownAsk is the to-do's own decision as an ask at home on the to-do, its id and round the moment it was asked, its
+// risk as listed, and the ask it was read from (nil when no decision waits).
 func (r *reading) ownAsk() (assistantwire.OwnerAsk, *Ask) {
 	a := r.decisionAsk()
 	if a == nil {
 		return assistantwire.OwnerAsk{}, nil
 	}
 	round := listed(a.AskedAt)
-	out := assistantwire.OwnerAsk{ID: "todo:decision@" + round, Kind: assistantwire.OwnerAskKindDecision,
+	out := assistantwire.OwnerAsk{ID: DecisionAskID(a.AskedAt), Kind: assistantwire.OwnerAskKindDecision,
 		Home: assistantwire.OwnerAskHomeTodo, Round: round, Text: a.Question, Recommend: a.Recommend,
 		Options: a.Options, CanWait: canWaitDecision(a)}
 	if a.Default == defaultTaken && a.Deadline != nil {
 		out.DefaultAt = utc(*a.Deadline)
 	}
-	return out, a
+	return withRisk(out, a.Risk), a
 }
 
 // canWaitDecision: a decision that can wait for the briefing.

@@ -68,6 +68,25 @@ import SwiftUI
         moving = false
     }
 
+    /// The spring is over, but the destination's own bar has not necessarily laid out at the strip's resting offset yet.
+    /// Keep the stationary moving bar (and only its switch) taking taps through two main-queue turns, so SwiftUI can
+    /// commit that transparent bar's layout before it takes over. Otherwise the first build of Assistant can put its bar
+    /// back about 30 pt out of place, and a tap meant for Agents lands on New Chat or nowhere (#10227). A new slide changes
+    /// `serial`, cancelling this handoff; immediate routes still call `rest()` directly. The settle fallback uses this
+    /// handoff too, whether the completion arrived just before it or was lost.
+    private func restAfterPageLayout() {
+        let mine = serial
+        DispatchQueue.main.async { [weak self] in
+            DispatchQueue.main.async { [weak self] in
+                guard let self, serial == mine, moving else { return }
+                #if DEBUG
+                ShellTrace.shared.note("bar ready \(position)")
+                #endif
+                rest()
+            }
+        }
+    }
+
     func dragBegan() {
         #if DEBUG
         ShellTrace.shared.note("drag began pos=\(String(format: "%.2f", position))")
@@ -175,7 +194,7 @@ import SwiftUI
             ShellTrace.shared.note("settled \(target) current=\(self?.serial == mine)")
             #endif
             guard let self, serial == mine else { return }
-            rest()
+            restAfterPageLayout()
         }
         // `.removed` waits for every view that took the animation, and one out of the window (under a pushed page) never
         // runs it: opening an agent from the inbox the slide never ended (2026-11-03, `ShellBarAtRest`, `PagerPill`).
@@ -185,7 +204,7 @@ import SwiftUI
             #if DEBUG
             ShellTrace.shared.note("settle lost \(target)")
             #endif
-            rest()
+            restAfterPageLayout()
         }
     }
 

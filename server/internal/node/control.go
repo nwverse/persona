@@ -52,10 +52,7 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	}
 	// The effort is checked against the agent this start actually dispatches: an explicit agentType wins over the
 	// launcher's name, so a Claude start refuses ultra even on a launcher named codex.
-	kind := agentType
-	if kind == "" {
-		kind = launcherAgentType(launcher)
-	}
+	kind := n.startAgentType(launcher, agentType)
 	if err := execution.check(kind); err != nil {
 		return nil, err
 	}
@@ -182,7 +179,11 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		}
 		// An inherited effort needs no override, which would leave the shared app-server; the record keeps it all the same.
 		runs := n.codexOwnEffort(ctx, argv, codexPaneEnv(launch), cwd, execution)
-		return n.startCodex(ctx, launch, cwd, launcher, codexExecutionArgs(argv, runs), execution, prompt, ws, tabName, mode)
+		s, err := n.startCodex(ctx, launch, cwd, launcher, codexExecutionArgs(argv, runs), execution, prompt, ws, tabName, mode)
+		if err == nil && strings.TrimSpace(prompt) != "" {
+			n.codexGoalAfterStart(s.SessionID, s.PaneID, execution.Goal) // its first message is in (codex_start_goal.go)
+		}
+		return s, err
 	}
 	if work := workAgentKind(launcher, kind); work != "" { // workagent.go
 		if resume != "" {
@@ -288,7 +289,8 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	n.starts.recovered(id)
 	_ = launch.NameAgent(ctx, created.Pane, "j-"+id[:6])
 	n.holdResume(ctx, launch, pane, id, spec) // herdr's restore resumes it through the launcher (herdrresume.go)
-	// The goal goes after the first prompt is in (startgoal.go): only a new Claude's.
+	// The goal goes after the first prompt is in (startgoal.go): only a new Claude's here; a Codex's in startCodex's
+	// caller above.
 	goal := ""
 	if kind == "claude" && resume == "" {
 		goal = execution.Goal

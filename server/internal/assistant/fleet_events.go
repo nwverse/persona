@@ -6,6 +6,7 @@ import (
 	"errors"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -62,7 +63,7 @@ func (s *Service) NodeEvent(machine, event string, params json.RawMessage) bool 
 			if s.endPreparedByID(p.ID, "dismissed", "The approval was dismissed on the computer; this card did not apply the change.") {
 				return false
 			}
-			s.recordEnd(p.ID, "dismissed", nil)
+			s.recordEnd(p.ID, "dismissed", &proto.Resolution{Dismiss: true, AnsweredBy: proto.AnsweredByTerminal})
 			s.finishInteraction(p.ID)
 		}
 		return false
@@ -146,6 +147,12 @@ func (s *Service) NodeRequest(ctx context.Context, machine, method string, param
 			return nil, true, err
 		}
 		return s.closeoutCheck(ctx, machine, p), true, nil
+	case devicewire.MethodAuthorizeTaskTerminal:
+		var p devicewire.TaskTerminalCloseRequest
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, true, err
+		}
+		return map[string]bool{"authorized": s.authorizeTaskTerminal(ctx, machine, p)}, true, nil
 	case assistantwire.MethodCloseoutBrief: // a session starts: the closeout's form, up front (agents_closeout_brief.go)
 		var p assistantwire.CloseoutBriefRequest
 		if err := json.Unmarshal(params, &p); err != nil {

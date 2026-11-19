@@ -385,6 +385,24 @@ redesign changes them:
 - **Inactive is a mark, not a section**: the to-do keeps its section (To do) with the time activity stopped. A restore
   counts as activity: the view reads the hub's `restored_at` ("Restores and Someday" in `docs/assistant/todos.md`),
   not each device's own.
+- **Every ask says how risky answering it is** (#10465): `risk` `safe`, which a row, its card or a push may answer in
+  place, or `open`, which the owner answers after a look, at its home, with `lockscreen` `open_only` so a push about it
+  offers nothing on the lock screen. A decision is `open` when it cannot be undone or other people will see it (the
+  manager's `askRisk`, also written on the list's `ask`, one rule for every place that answers it); a retry is
+  `safe`; a run's ask is what its pending card asks (`question`, `plan`, `tool`, `form` or `secret`, the card's id as
+  `interaction`; the session's own card before Persona's about its turn, then the oldest), `safe` only when a
+  notification may answer that card too (one question with options, not a Just me turn's or a health conversation's,
+  and its asker did not say going ahead cannot be undone; the hub's push for such a card offers no options either,
+  Android's own notification actions not yet, `docs/protocol/protocol.md` "Answering a question from its notification").
+  A failed start of a to-do no conversation opened carries no retry, since the hub would refuse it; its row still
+  says why it did not start. The table is in `spec/fixtures/todo-view/README.md` ("Risk and the lock screen"). The
+  decision's push says the same rule (`lockscreen`; `open_only` sends `TODO_DECIDE_OPEN`, which offers no action,
+  `docs/assistant/todos.md` "Waiting for the owner").
+- **Every ask is answered by its id** (#10465): `POST /api/v1/todos/{id}/asks/{ask}/answer` takes the id an ask has in the
+  row's `view` (a step's ask on its parent's row too) and an option, a fixed answer, words, Later, Don't handle or its
+  Undo, or nothing for a retry or a conclusion to acknowledge. An id whose round is over is 409 `ask_stale` with the
+  row as it is now, so what was answered elsewhere is never answered twice; a run's ask is answered at its card. The
+  hello feature `todo_asks` says every manager takes it (`docs/assistant/todos.md` "Decisions the owner can answer").
 
 The list carries it: every row of `GET /api/v1/todos` has its `view` and the answer the list's `counts`, worked out
 once per read over the whole list (`server/internal/assistant/todo_view_routes.go`); `GET /api/v1/todos/{id}` answers
@@ -400,3 +418,44 @@ row without one. Until then every client, and the hub's own triage for the direc
 (`todo_triage.go`), follows the rules above. The web's Developing Persona shadow compares the two on real data and
 records what the decided differences (the list above, Steps rolling up and Someday;
 `web/src/features/todos/model/view-legacy.ts` `BY_DESIGN`) do not explain (`docs/web/web.md` "Developing Persona").
+
+## The to-do's timeline (#10465)
+
+A to-do's conversation (`docs/design/proposals/todos-redesign.md` 3.6) is its history grouped into rounds: each
+instruction or answer of the owner's heads a round, and what followed folds under it (relays to its runs, one line per
+run with how many turns it took, asks, decisions, results, scope changes); supervision nobody asked for (reworks, parks,
+a run's reports to its supervisor, the overdue mark) forms one folded Background round per day in the owner's zone.
+With it come the to-do's results (at most three: a code change with how it stands, the work going live, what the work
+came to) and what changed since the owner last looked (`seen_at`), for the paper's Results and Since you looked. The
+shapes are `TodoTimeline`, `TodoResult` and `TodoRecap` in `schema/wire/todo-view.schema.json`.
+
+In stage 2 the manager derives it, with no migration, from the stores it already keeps: the conversation feed's items
+about the to-do (the owner's instructions, relays, receipts, answered cards, reviews, reports), its decisions, its
+supervision ledger, its brief's request and log, and its runs' links and sessions. The rules live in
+`server/internal/assistant/todo/timeline`, pure as the projection is, and the shared cases in
+`spec/fixtures/todo-rounds` pin them; its README says what each entry is read from, the round rules and every line key.
+The paper shows the latest two rounds that are not Background ones, so a day's supervision never pushes the round that
+asks the owner off it.
+Receipts and relayed messages written since #10465 name their run; an older receipt goes to the one run on its
+computer at its time, else to "A run". Stage 3 stores the entries themselves (`todo_activity`) and with them what the
+stores cannot show today: messages sent straight to a run, the steward's replies, message states other than
+delivered, and the rounds of the to-do a take-over continues.
+
+The manager works the timeline out on each read, from the feed's items about the to-do in any conversation (the newest
+1000, read through the feed's existing `assistant_feed_unsent` index), its decisions, its ledger, brief and runs' links,
+the sessions of its runs and the owner's zone (`server/internal/assistant/todo_timeline.go`), and keeps nothing of it.
+`GET /api/v1/todos/{id}/timeline` pages through the rounds, oldest first, back from the latest;
+`GET /api/v1/todos/{id}` carries what the paper shows beside the row (the rounds above, how many there are in all, the
+results and the recap), so opening the paper takes one read. Both are behind `todo_timeline`, which the hub lists only
+while every manager names it (`docs/protocol/protocol.md`, their rows). There is no push of its own: a client with the
+to-do open reads it again on `{"type":"todos"}` (decisions, supervision and scope changes send one) or on an
+`assistant_feed` whose item's `ref` is the to-do, and since each item read works the whole list's view out, it reads
+only while the paper is on screen and coalesces them.
+
+A to-do with more than 1000 such feed items serves the rounds that began within its newest 1000: its decisions, brief
+log and ledger reviews are cut at the same time, and the rounds that began earlier are left out, so every round served
+is whole and keeps its id as newer items come. An extension's token reads it without the answered cards, whose records
+hold what the owner typed into a card and do not say whose card it was, and not at all for a to-do that may hold the
+health space's words: one opened from or written to by a health conversation, one any of whose runs ever worked there
+(taken off it or not, done or not), and, since this fails closed, one with a conversation or run whose space cannot be
+told (`docs/extensions/extensions.md` "Never shown to extensions").

@@ -246,7 +246,7 @@ func (s *Service) backgroundThere(ctx context.Context, cfg Settings, id string) 
 		return true
 	}
 	if res.OK {
-		return res.Session.Assistant && !s.backgroundSignedOut(cfg, res.Session)
+		return res.Session.Assistant && res.Session.SourceKind != proto.SourceRuntime && !s.backgroundSignedOut(cfg, res.Session)
 	}
 	if d, ok := s.device(ctx, cfg.MachineID); !ok || !d.Online || !d.Reachable {
 		return true

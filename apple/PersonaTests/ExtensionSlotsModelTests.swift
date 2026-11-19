@@ -50,6 +50,14 @@ import PersonaWire
         #expect(m.context.size == "compact" && s.model(for: s.cards[0]) === m)
     }
 
+    @Test func slotsWithTheSameLocalIDHaveDistinctListIdentities() throws {
+        let slots = try JSON.decoder.decode([ExtensionUIPlace].self, from: Data(
+            #"[{"extension":"example-a","id":"status","title":"A","placement":"overview_card"},{"plugin":"example-b","id":"status","title":"B","placement":"overview_card"}]"#.utf8
+        ))
+        #expect(slots.map(\.id) == ["status", "status"])
+        #expect(slots.map(\.scopedID) == ["example-a/status", "example-b/status"])
+    }
+
     @Test func anOlderHubIsNotAsked() async throws {
         let hub = FakeHub()
         let s = slots(hub, features: ["plugins", "plugin_manager"])
@@ -184,7 +192,7 @@ import PersonaWire
         // The context: the machine, the card's size, the app's time zone, platform and UI version.
         let body = try JSON.decoder.decode(JSONValue.self, from: hub.sent("POST", "/api/v1/plugins/example-gateway/-/ui/today")[0].body ?? Data())
         #expect(body["context"]?["machine"] == .string("macbook") && body["context"]?["size"] == .string("compact"))
-        #expect(body["context"]?["ui_version"] == .number(8), "a card is drawn by the app's renderer (cardVersion)")
+        #expect(body["context"]?["ui_version"] == .number(10), "a card is drawn by the app's renderer (cardVersion)")
 
         // refresh_after: due that long after it was drawn; drawn again, what the user typed stays.
         #expect(v.refreshAfter == 300)

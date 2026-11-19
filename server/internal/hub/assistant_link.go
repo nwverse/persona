@@ -91,6 +91,14 @@ func (h *Hub) assistantRoutesRelayed(api *http.ServeMux) {
 			by = h.byTodo
 		}
 		var relay http.HandlerFunc = func(w http.ResponseWriter, r *http.Request) { h.forwardOwned(w, r, by) }
+		todoKind, todoReceipt := todoReceiptRoutes[pattern]
+		if todoReceipt { // relayed as a send: one cut off on the way may have been taken (todo_receipts.go)
+			relay = func(w http.ResponseWriter, r *http.Request) {
+				if id, ok := h.owner(w, r, by); ok {
+					h.forwardSend(w, r, id)
+				}
+			}
+		}
 		if pattern == "GET /api/v1/machines/{mid}/launchers/{name}/start-options" {
 			next := relay
 			relay = h.withMachine(func(w http.ResponseWriter, r *http.Request, m *Machine) {
@@ -106,6 +114,9 @@ func (h *Hub) assistantRoutesRelayed(api *http.ServeMux) {
 		}
 		if kind, ok := meetingReceiptRoutes[pattern]; ok {
 			relay = h.withBodyIDReceipt(kind, relay) // meeting_receipts.go
+		}
+		if todoReceipt {
+			relay = h.withTodoReceipt(todoKind, relay) // todo_receipts.go
 		}
 		api.HandleFunc(pattern, relay)
 	}
@@ -203,7 +214,7 @@ func (l assistantLink) deviceCallFrom(ctx context.Context, from string, p assist
 				m.mu.Lock()
 				online, info := m.online, m.info
 				m.mu.Unlock()
-				list = append(list, assistantwire.Device{ID: m.cfg.ID, Name: m.name(), Kind: m.cfg.Kind, SSHHost: m.cfg.SSHHost, Home: info.Home,
+				list = append(list, assistantwire.Device{ID: m.cfg.ID, Name: m.name(), Kind: m.kind(), SSHHost: m.cfg.SSHHost, Home: info.Home,
 					HomeReal: info.HomeReal, DataDir: info.DataDir, Online: online, Reachable: m.reachable(), Version: info.Version,
 					ModelConfiguration: info.ModelConfiguration, ClaudeVersion: info.ClaudeVersion, Engine: startEngine(info),
 					ExternalInventory: info.Protocol > 0 && slices.Contains(info.Capabilities, nodeproto.ExternalLauncherInventory)})
@@ -214,10 +225,10 @@ func (l assistantLink) deviceCallFrom(ctx context.Context, from string, p assist
 				others = append(others, from)
 			}
 			d.mu.Unlock()
-			// complete: the list is every machine there is (the manager reported them and the pending computers were
+			// complete: the list is every machine there is (from reported its own and the pending computers were
 			// read), so an id in neither it nor others was removed.
 			return json.Marshal(map[string]any{"devices": list, "phone_online": h.phoneClient() != nil,
-				"complete": h.devicesUp() && !h.trustUnknown(), "others": others, "apps": h.clientAppList(ctx)})
+				"complete": h.devicesUpFor(from) && !h.trustUnknown(), "others": others, "apps": h.clientAppList(ctx)})
 		}
 	}
 	m := h.localMachine(p.Device)

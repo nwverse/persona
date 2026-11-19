@@ -665,6 +665,37 @@ def repair_with_model(repo, pr, worktree, failure, config):
         return diff
 
 
+def continuation_title(number):
+    return "fix: continue #%s verification repair" % number
+
+
+def existing_continuation(repo, pr):
+    """An open or merged continuation of this fork PR that already contains its
+    current head, whoever published it (#10881). Each watcher keeps private
+    state, so GitHub is the only shared record; another watcher's continuation
+    must not be duplicated. A fork head pushed after that continuation is not
+    contained in it and gets a fresh repair."""
+    title = continuation_title(pr["number"])
+    found = gh_json(["pr", "list", "--repo", repo, "--state", "all", "--limit", "50",
+                     "--search", '"%s" in:title' % title,
+                     "--json", "number,title,state,headRefOid"]) or []
+    candidates = [item for item in found
+                  if isinstance(item, dict) and item.get("title") == title
+                  and item.get("state") in ("OPEN", "MERGED")
+                  and isinstance(item.get("number"), int)
+                  and isinstance(item.get("headRefOid"), str) and SHA.fullmatch(item["headRefOid"])]
+    # Prefer a continuation that is still open; a merged one also covers the head.
+    candidates.sort(key=lambda item: (item["state"] != "OPEN", -item["number"]))
+    for item in candidates:
+        if item["headRefOid"] == pr["headRefOid"]:
+            return item["number"]
+        status = checked(["gh", "api", "repos/%s/compare/%s...%s" % (repo, pr["headRefOid"], item["headRefOid"]),
+                          "--jq", ".status"], timeout=90).strip()
+        if status in ("ahead", "identical"):
+            return item["number"]
+    return None
+
+
 def moved(latest, expected, follows_main):
     """The PR moved under a repair: its head always counts; its base counts unless the repair follows main."""
     return latest["headRefOid"] != expected["headRefOid"] or (not follows_main and latest["baseRefOid"] != expected["baseRefOid"])
@@ -769,7 +800,7 @@ def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None
             issues[0], pr["number"], bounded(failure, 4000))
         owner = repo.split("/", 1)[0]
         created = gh_json(["api", "repos/%s/pulls" % repo, "--method", "POST", "--input", "-"],
-                          input_text=json.dumps({"title": "fix: continue #%s verification repair" % pr["number"],
+                          input_text=json.dumps({"title": continuation_title(pr["number"]),
                                                  "head": owner + ":" + branch, "base": pr["baseRefName"], "body": body}))
         actual = pr_snapshot(repo, created["number"])
         if actual["headRefOid"] != head:

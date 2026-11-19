@@ -98,6 +98,9 @@ func (n *Node) assistantCompact(ctx context.Context, id string, onlyRunning bool
 		if current.SupervisionResolved {
 			execution.SupervisionInstructions = current.SupervisionInstructions
 		}
+		// It starts as a send would: in interactive Claude Code while the setting is on (#10058; tuiWanted leaves guests
+		// and plan mode in print mode), so neither the compaction nor the next message runs a process of the other kind.
+		execution.Interactive = current.Interactive
 		if proto.IsExternalLauncher(launcher) {
 			execution.StartupContext = ctx
 		}
@@ -112,6 +115,16 @@ func (n *Node) assistantCompact(ctx context.Context, id string, onlyRunning bool
 	if proto.IsExternalLauncher(p.launcher) && ctx.Err() != nil {
 		return externalAdapterError(ctx, ctx.Err())
 	}
+	if err := n.compactAssistantProc(ctx, p); err != nil {
+		return err
+	}
+	return finishExternalStartup(ctx)
+}
+
+// compactAssistantProc starts an in-place compaction while assistantLife is held.
+// Both the user's request and idle-aware delivery use the same completion reporting.
+func (n *Node) compactAssistantProc(ctx context.Context, p *assistantProc) error {
+	id := p.id
 	p.mu.Lock()
 	p.compacting, p.compacted, p.manual = true, true, true
 	p.lastActive = time.Now()
@@ -131,10 +144,7 @@ func (n *Node) assistantCompact(ctx context.Context, id string, onlyRunning bool
 		n.compactionEnded(id, "没能开始压缩："+err.Error())
 		return err
 	}
-	if err := finishExternalStartup(ctx); err != nil {
-		return err
-	}
-	n.logger.Printf("assistant %s: compacting, as the user asked", short(id))
+	n.logger.Printf("assistant %s: compacting in place", short(id))
 	return nil
 }
 
