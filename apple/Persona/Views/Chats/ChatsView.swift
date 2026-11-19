@@ -1937,6 +1937,7 @@ private struct AgentsList: View {
             .accessibilityAddTraits(.isHeader)
             .accessibilityIdentifier("sidebar-agents-heading")
             AgentsListMenu(actions: menuActions)
+                .accessibilityIdentifier("sidebar-agents-menu")
             if showsPersonalEntry {
                 Button { openFromList(PersonalAgentsRoute()) } label: {
                     ThemedIcon(Theme.Icon.personalAgents).font(Theme.Font.label).foregroundStyle(.secondary)

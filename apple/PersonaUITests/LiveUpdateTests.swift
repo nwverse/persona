@@ -33,10 +33,11 @@ final class LiveUpdateTests: XCTestCase {
 
     /// `chat`: opened as the chat left open last time. A cold start restores it only when the tab saved with it is
     /// Agents (`app.tab`), so that is given too: otherwise the tab the last run ended on (another test's) decided it.
-    private func launch(chat: String = "", _ extra: [String] = []) {
+    /// `tab`: the tab opened at launch (the Sidebar layout's start is the conversation, `assistant`).
+    private func launch(chat: String = "", tab: String = "dev", _ extra: [String] = []) {
         app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-app.tab", "chats", "-dev.openChat", chat, "-tab", "dev", "-openAgentsFresh", "YES", "-openChatsFresh", "YES", "-perfCounts", "YES"]
+        app.launchArguments = ["-pairURL", pair, "-app.tab", "chats", "-dev.openChat", chat, "-tab", tab, "-openAgentsFresh", "YES", "-openChatsFresh", "YES", "-perfCounts", "YES"]
             + extra
         app.launchPinned()
     }
@@ -55,8 +56,9 @@ final class LiveUpdateTests: XCTestCase {
 
     /// Pushes `rounds` rounds of updates, 400 ms apart, and waits for the last. `steps`: new steps per round in each
     /// open conversation.
-    private func churn(steps: Int = 1, final: Bool = false, waiting: Bool = false) {
-        mock("churn?n=\(Self.rounds)&ms=400&steps=\(steps)&final=\(final ? 1 : 0)&inbox=1&waiting=\(waiting ? 1 : 0)")
+    /// `real`: also what else a real hub's pushes change (an agent finishing and starting again, rows growing and shrinking).
+    private func churn(steps: Int = 1, final: Bool = false, waiting: Bool = false, real: Bool = false) {
+        mock("churn?n=\(Self.rounds)&ms=400&steps=\(steps)&final=\(final ? 1 : 0)&inbox=1&waiting=\(waiting ? 1 : 0)&real=\(real ? 1 : 0)")
         let deadline = Date.now.addingTimeInterval(30)
         while (mock("churned")["rounds"] as? Int ?? 0) < Self.rounds + (final ? 1 : 0), Date.now < deadline { usleep(300_000) }
         sleep(1) // the last round applied
@@ -135,6 +137,62 @@ final class LiveUpdateTests: XCTestCase {
         XCTAssertLessThanOrEqual((after.bodies["ListMenu.content"] ?? 0) - (before.bodies["ListMenu.content"] ?? 0), 1,
                                  "the open menu's content is not rebuilt for each push")
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.95)).tap() // close it
+    }
+
+    // The same menu at the end of the Sidebar layout's Agents heading (#10738): there it is a row of the sidebar's list,
+    // which is drawn again with every push (states, times, the waiting count). Scrolled down to the machines, it jumped
+    // back to its top. The iPad's and the open Duo's column, or the phone's drawer.
+    @MainActor func testSidebarAgentsMenuHoldsStillThroughUpdates() {
+        launch(tab: "assistant", ["-app.navigation", "sidebar", "-sidebar.fold.places", "YES",
+                          "-sidebar.fold.chats", "YES"])
+        let menuButton = app.descendants(matching: .any)["sidebar-agents-menu"].firstMatch
+        let face = app.descendants(matching: .any)["assistant-sidebar-button"].firstMatch
+        let shown = NSPredicate { _, _ in (menuButton.exists && menuButton.isHittable) || face.exists }
+        XCTAssertEqual(XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: shown, object: NSNull())], timeout: 25), .completed,
+                       "no sidebar and no face:\n\(app.debugDescription)")
+        if !(menuButton.exists && menuButton.isHittable) {
+            face.tap() // a phone's drawer
+            XCTAssertTrue(menuButton.waitForExistence(timeout: 10), "the drawer did not open:\n\(app.debugDescription)")
+        }
+        sleep(2)
+        menuButton.tap()
+        let machines = app.buttons["全部机器"]
+        XCTAssertTrue(machines.waitForExistence(timeout: 5), "the menu opened")
+        scrollMenu(to: machines)
+        sleep(1)
+        let last = app.buttons["训练机"]
+        XCTAssertTrue(last.isHittable, "the last machine must really be on screen")
+        let lastY = last.frame.minY
+        let machinesY = machines.frame.minY
+        let before = counts()
+        churn(waiting: true, real: true)
+        // Where the menu is, before the counts: reading the probe while the menu is open moves the menu itself.
+        let open = last.exists
+        let (lastAfter, machinesAfter) = (last.frame.minY, machines.frame.minY)
+        let after = counts()
+        report("Sidebar Agents heading, ⋯ menu open", from: before, to: after)
+        XCTAssertTrue(open, "the menu is still open")
+        XCTAssertEqual(lastAfter, lastY, accuracy: 1, "the menu did not scroll or jump")
+        XCTAssertEqual(machinesAfter, machinesY, accuracy: 1, "the menu did not scroll or jump")
+        XCTAssertLessThanOrEqual((after.bodies["ListMenu.content"] ?? 0) - (before.bodies["ListMenu.content"] ?? 0), 1,
+                                 "the open menu's content is not rebuilt for each push")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.95)).tap() // close it
+    }
+
+    /// Scrolls an open long menu until `target` is on screen: a drag inside its visible rows (the native menu exposes
+    /// its offscreen rows too, and an empty row frame takes no drag).
+    @MainActor private func scrollMenu(to target: XCUIElement) {
+        for _ in 0..<4 where !target.isHittable {
+            let rows = app.buttons.allElementsBoundByIndex.filter { $0.isHittable && $0.frame.height > 20 }
+            guard let top = rows.min(by: { $0.frame.minY < $1.frame.minY }),
+                  let bottom = rows.max(by: { $0.frame.maxY < $1.frame.maxY }) else { break }
+            let origin = app.windows.firstMatch.coordinate(withNormalizedOffset: .zero)
+            let start = origin.withOffset(CGVector(dx: bottom.frame.midX, dy: bottom.frame.midY))
+            let end = origin.withOffset(CGVector(dx: bottom.frame.midX, dy: top.frame.midY))
+            start.press(forDuration: 0.05, thenDragTo: end, withVelocity: 600, thenHoldForDuration: 0)
+            usleep(500_000)
+        }
+        XCTAssertTrue(target.isHittable, "\(target.label) must really be on screen:\n\(app.debugDescription)")
     }
 
     // A row's long-press menu stays open through updates of that very agent (it is working: a new line every push).
