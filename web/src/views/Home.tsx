@@ -146,13 +146,6 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
             </div>
           </div>
 
-          {/* the extensions' cards (docs/extensions/extensions.md"UI slots" overview_card), under the agents' summary */}
-          <OverviewCards />
-
-          {/* Before the first snapshot the socket streams the machines' agents and cards in one by one, each moving the
-              groups already painted, and "Loading" then went from over them: until it is in only "Loading", then all at once. */}
-          {!loaded && <Loading label={t("common.loading")} />}
-
           {/* the headline counts agents, this counts cards: say so when one agent has several cards waiting */}
           {loaded && (interactions.length > 0 || held.length > 0) && (
             <Group title={stateName("needs_you")} count={interactions.length} hint={new Set(interactions.map(homeKey)).size < interactions.length ? t("home.needs_you_hint") : undefined} grid="cards">
@@ -202,6 +195,15 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
               ))}
             </Group>
           )}
+
+          {/* the extensions' cards (docs/extensions/extensions.md "UI slots" overview_card): under what waits for the owner
+              (Needs you, Stuck), so no number of cards pushes that off the first screen (#11092); with nothing waiting
+              they are right under the summary */}
+          <OverviewCards />
+
+          {/* Before the first snapshot the socket streams the machines' agents and cards in one by one, each moving the
+              groups already painted, and "Loading" then went from over them: until it is in only "Loading", then all at once. */}
+          {!loaded && <Loading label={t("common.loading")} />}
 
           {loaded && tasks.rows.length > 0 && (
             <Group
