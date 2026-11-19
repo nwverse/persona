@@ -447,6 +447,10 @@ func triageRules(c proto.Session, loc *time.Location, l i18n.Lang) (w *proto.Wor
 		return nil, "", true
 	}
 	if e := c.TurnError; e != "" {
+		if proto.UnrecoverableTurnErrorCode(e) != "" || c.TurnErrorKind == proto.TurnErrorUnrecoverable {
+			return &proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitUser,
+				Line: workT(l, "conversation_invalid")}, "rule", false
+		}
 		if proto.SilentTurnKind(c.TurnErrorKind) {
 			// The hub's word on a task Agent's turn with no output (silent_turns.go): no model error to ask the user about
 			// and none to continue by itself. Its task's receipt has the "Continue"; a turn Persona's Stop ended stays stopped.
@@ -535,6 +539,9 @@ func runningInBackground(c proto.Session) int {
 // turnErrorTransient: c's turn error is worth a "Continue". The agent's record says so when it gives a kind (Codex's error
 // kinds, #2185); otherwise the text does. A usage limit never is: a "Continue" before its reset is refused at once.
 func turnErrorTransient(c proto.Session) bool {
+	if proto.UnrecoverableTurnErrorCode(c.TurnError) != "" || c.TurnErrorKind == proto.TurnErrorUnrecoverable {
+		return false
+	}
 	if sessionTurnErrorCode(c) == proto.TurnErrorModelFallbackUnavailable {
 		return false
 	}
@@ -551,6 +558,9 @@ func turnErrorTransient(c proto.Session) bool {
 // (sign-in, key, the model picked, a request the service refuses as it is, a context too long, an interrupt). What the
 // user must fix wins when the text says both.
 func transientError(text string) bool {
+	if proto.UnrecoverableTurnErrorCode(text) != "" {
+		return false
+	}
 	t := strings.ToLower(text)
 	if userErrorStatus.MatchString(t) {
 		return false

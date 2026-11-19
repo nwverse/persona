@@ -198,6 +198,11 @@ const InterruptedSummary = "模型服务出错，中断了"
 // refusalMarkers, or is Claude Code's usage-limit line).
 func CutOff(answer string) bool {
 	answer = strings.TrimSpace(answer)
+	const sealedPrefix = "this conversation was compacted natively by "
+	if len(answer) >= len(sealedPrefix) && strings.EqualFold(answer[:len(sealedPrefix)], sealedPrefix) &&
+		proto.UnrecoverableTurnErrorCode(answer) != "" {
+		return true
+	}
 	return startsWithAny(answer, APIErrorMarkers) || startsWithAny(answer, refusalMarkers) || UsageLimitText(answer)
 }
 
