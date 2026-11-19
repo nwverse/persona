@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -50,11 +51,12 @@ func TestInboxCodexStartupKeyKeepsOrigin(t *testing.T) {
 	}
 }
 
-// The built-in Claude CLI really receives Plan mode through its permission-mode control, even when its start asks for
-// bypass. Origin is recorded before the first turn and re-attested by the manager on later sends, so a node restart
-// cannot silently return the conversation to bypass or lose its policy identity. (Only bypass is a startup flag;
-// other modes use the control request.)
-func TestInboxClaudeStartsInPlanAndPersistsOrigin(t *testing.T) {
+// The built-in Claude CLI receives non-bypass default through its permission-mode control, even when its start asks
+// for bypass. Unlike Plan, default allows the explicit Persona MCP rules to run investigation and inbox_suggest
+// without a permission prompt. Origin is recorded before the first turn and re-attested by the manager on later sends,
+// so a node restart cannot silently return the conversation to bypass or lose its policy identity. (Only bypass is a
+// startup flag; other modes use the control request.)
+func TestInboxClaudeUsesDefaultAndPersistsOrigin(t *testing.T) {
 	f := cliTest(t)
 	// No model fingerprint: filling the launcher's default execution must not discard the start's attested origin.
 	execution := modelExecution{Origin: originInbox}
@@ -64,18 +66,18 @@ func TestInboxClaudeStartsInPlanAndPersistsOrigin(t *testing.T) {
 	}
 	f.idle(t, id)
 	in := f.file("stdin.jsonl")
-	if !strings.Contains(in, `"subtype":"set_permission_mode"`) || !strings.Contains(in, `"mode":"plan"`) {
-		t.Fatalf("Claude control requests did not select Plan: %s", in)
+	if !strings.Contains(in, `"subtype":"set_permission_mode"`) || !strings.Contains(in, `"mode":"default"`) {
+		t.Fatalf("Claude control requests did not select non-bypass default: %s", in)
 	}
 	argv := f.file("cli-argv")
 	if !strings.Contains(argv, "--tools "+assistantBuiltinTools) {
 		t.Fatalf("Inbox investigation lost built-in file, shell, web or tool-search capabilities: %s", argv)
 	}
 	if !strings.Contains(argv, assistantAllowedTools) {
-		t.Fatalf("Plan mode would ask before inbox_suggest instead of allowing Persona's own tools: %s", argv)
+		t.Fatalf("Persona's own MCP tools lost their permission allowlist: %s", argv)
 	}
 	st, ok := f.n.state.get(id)
-	if !ok || st.Origin != originInbox || st.AppMode != proto.ModePlan {
+	if !ok || st.Origin != originInbox || st.AppMode != "default" {
 		t.Fatalf("persisted session state=%+v present=%v", st, ok)
 	}
 	p := f.proc(id)
@@ -87,6 +89,66 @@ func TestInboxClaudeStartsInPlanAndPersistsOrigin(t *testing.T) {
 	}
 	if got := f.n.assistantOrigin(id); got != originInbox {
 		t.Fatalf("live process origin=%q, want inbox", got)
+	}
+}
+
+// inboxPermissionCLI models the narrow Claude Code permission contract from the regression: Plan rejects Persona MCP
+// before allowedTools, while default runs calls covered by mcp__persona without asking. It records completion instead
+// of contacting a hub. TestInboxModelReadOnlyInvestigationAndSuggestion exercises the manager's real tool path.
+const inboxPermissionCLI = `printf '%s\n' "$*" >> "$CLI_FAKE_DIR/cli-argv"
+mode=default
+allowed=
+previous=
+for argument in "$@"; do
+  if [ "$previous" = "--allowedTools" ]; then allowed=$argument; fi
+  previous=$argument
+done
+echo '{"type":"system","subtype":"init"}'
+while IFS= read -r line; do
+  printf '%s\n' "$line" >> "$CLI_FAKE_DIR/stdin.jsonl"
+  case "$line" in
+    *'"type":"control_request"'*)
+      id=$(printf '%s' "$line" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
+      case "$line" in
+        *'"subtype":"set_permission_mode"'*) mode=$(printf '%s' "$line" | sed -n 's/.*"mode":"\([^"]*\)".*/\1/p') ;;
+      esac
+      echo "{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"$id\"}}" ;;
+    *'"type":"user"'*)
+      if [ "$mode" = "plan" ]; then
+        printf '%s\n' 'Cannot call mcp__persona__lark_messages while in plan mode.' >> "$CLI_FAKE_DIR/permission-requests"
+      else
+        case ",$allowed," in
+          *",mcp__persona,"*)
+            printf '%s\n' 'mcp__persona__lark_messages' 'mcp__persona__inbox_suggest' >> "$CLI_FAKE_DIR/completed-tools" ;;
+          *) printf '%s\n' 'Persona MCP was not allowed without asking' >> "$CLI_FAKE_DIR/permission-requests" ;;
+        esac
+      fi
+      echo '{"type":"result","subtype":"success","result":"done"}' ;;
+  esac
+done
+`
+
+// A read-only MCP investigation and inbox_suggest both complete without a permission request. Reverting the Inbox
+// clamp to Plan makes the CLI record the observed mode:plan rejection; removing mcp__persona records a prompt instead.
+func TestInboxClaudeReadOnlyMCPAndSuggestionSkipPermission(t *testing.T) {
+	f := cliTest(t)
+	if err := os.WriteFile(filepath.Join(os.Getenv("HOME"), "bin", "claude"), []byte("#!/bin/sh\n"+inboxPermissionCLI), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	id, err := f.n.assistantSend(context.Background(), "", t.TempDir(), "claude", "Investigate", nil, proto.ModeBypass, "", modelExecution{Origin: originInbox})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.idle(t, id)
+	if got := f.file("permission-requests"); got != "" {
+		t.Fatalf("Persona MCP stopped at a permission request: %s", got)
+	}
+	const completed = "mcp__persona__lark_messages\nmcp__persona__inbox_suggest\n"
+	if got := f.file("completed-tools"); got != completed {
+		t.Fatalf("completed Persona MCP calls = %q, want %q", got, completed)
+	}
+	if got := len(f.fh.interactions()); got != 0 {
+		t.Fatalf("handling opened %d permission cards, want none", got)
 	}
 }
 

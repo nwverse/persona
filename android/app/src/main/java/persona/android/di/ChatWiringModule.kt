@@ -54,7 +54,7 @@ object ChatWiringModule {
     }
 
     @Provides @Singleton
-    fun assistantWiring(owner: ChatDataOwner, services: AppServices, stacks: GroupStacks): AssistantAppWiring = object : AssistantAppWiring {
+    fun assistantWiring(owner: ChatDataOwner, services: AppServices, stacks: GroupStacks, conversations: AssistantConversations): AssistantAppWiring = object : AssistantAppWiring {
         @Composable
         override fun Host(navigator: Navigator, content: @Composable () -> Unit) {
             val wiring by owner.wiring.collectAsStateWithLifecycle()
@@ -76,7 +76,7 @@ object ChatWiringModule {
                 allMachines.filter { persona.core.contracts.GroupKeys.namespaceOf(it.id) == selectedNamespace }
             }
             val host = AssistantHostBindings(active.scope.path, active.assistantManagement, active.drafts,
-                active.coroutineScope, available, machines, active.mainSender) { key, options ->
+                active.coroutineScope, available, machines, conversations, active.mainSender) { key, options ->
                 ChatDestination(ChatRoute(key.machineId, key.sessionId,
                     kind = if (options.assistant) ConversationKind.Assistant else ConversationKind.Agent), navigator,
                     renderStyle = if (options.assistant) ChatRenderStyle.Assistant else ChatRenderStyle.Agent,
