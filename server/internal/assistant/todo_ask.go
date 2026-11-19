@@ -137,7 +137,8 @@ func (s *Service) pushDecision(ctx context.Context, id string) bool {
 func (s *Service) pushDecisionErr(ctx context.Context, id string) (bool, error) {
 	a, ok := s.askCopy(id)
 	t, found := s.todoNow(id)
-	if !ok || !found || !decideAsk(&a) || a.Recommend == "" || !a.AcceptedAt.IsZero() || t.Origin == "" {
+	if !ok || !found || !decideAsk(&a) || a.Recommend == "" || !a.AcceptedAt.IsZero() || t.Origin == "" ||
+		!a.RecheckAt.IsZero() || ownerDecisionReturned(t.Supervision) {
 		return false, nil
 	}
 	here := s.settings(ctx).MachineID

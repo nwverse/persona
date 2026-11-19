@@ -88,8 +88,8 @@ internal fun recentConversations(snapshot: AssistantSnapshot, limit: Int = RECEN
     val leaders = snapshot.leaders.toSet()
     return snapshot.conversations.distinctBy { it.key }
         .filter { it.key != snapshot.mainSession && it.sessionId !in leaders && !it.archived &&
-            it.sessionId != snapshot.backgroundSupervisor &&
-            automaticConversationOrigin(it.origin) != AssistantConversationOrigin.Task }
+            (snapshot.recentTaskChats == true || (it.sessionId != snapshot.backgroundSupervisor &&
+                automaticConversationOrigin(it.origin) != AssistantConversationOrigin.Task)) }
         .map { it to it.updated }
         .sortedWith(compareByDescending<Pair<Session, java.time.Instant?>> { it.second }.thenBy { it.first.sessionId })
         .take(limit).map { it.first }

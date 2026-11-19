@@ -86,7 +86,7 @@ func (r *fakeRelease) requests() []string {
 }
 
 // publish puts release m up at dl/<dir>/ (and as latest.json when latest) with builds: download name (no .gz) ->
-// the binary, each listed in Files or Nodes by its name.
+// the binary, each listed in Files, Nodes or Links by its name.
 func (r *fakeRelease) publish(t *testing.T, dir string, m update.Manifest, latest bool, builds map[string]string) *update.Manifest {
 	t.Helper()
 	m.Files = map[string]update.File{}
@@ -106,6 +106,11 @@ func (r *fakeRelease) publish(t *testing.T, dir string, m update.Manifest, lates
 				m.Nodes = map[string]map[string]update.File{"persona-node": {}}
 			}
 			m.Nodes["persona-node"][plat] = f
+		} else if plat, ok := strings.CutPrefix(name, programConnector+"-"); ok {
+			if m.Links == nil {
+				m.Links = map[string]update.File{}
+			}
+			m.Links[plat] = f
 		} else {
 			m.Files[strings.TrimPrefix(name, "personad-")] = f
 		}
