@@ -346,6 +346,33 @@ class OutboxMessageSenderTest {
         sender.close()
     }
 
+    @Test fun managerCustodySurvivesRestartWithoutSendingAgainAndRequiresAnIdentifiedEcho() = runTest {
+        val store = MemoryOutboxStore()
+        val transport = FakeTransport(online = true, supportsClientOps = true)
+        transport.answers += MessageTransportResult.Held
+        val at = java.time.Instant.parse("2026-11-01T10:00:00Z")
+        val first = OutboxMessageSender(scope, store, transport, backgroundScope) { at.toEpochMilli() }
+        first.send(session, "Held text", "held-a")
+        runCurrent()
+        assertEquals(OutboxState.Held, store.state("held-a"))
+        assertTrue(first.outbox.value.isEmpty())
+        first.close()
+
+        val resumed = OutboxMessageSender(scope, store, transport, backgroundScope) { at.toEpochMilli() }
+        transport.evidence["held-a"] = MessageEvidence.Receipt(MessageTransportResult.Held)
+        runCurrent()
+        resumed.onReady()
+        assertFalse(resumed.retry("held-a"))
+        assertFalse(resumed.cancel("held-a"))
+        val sameWords = Item("other", 3, role = "user", kind = "text", text = "Held text", ts = at.toString())
+        resumed.observeTranscript(session, listOf(sameWords))
+        assertEquals(OutboxState.Held, store.state("held-a"))
+        resumed.observeTranscript(session, listOf(sameWords.copy(id = "landed", clientMsgId = "held-a")))
+        assertEquals(OutboxState.Shown, store.state("held-a"))
+        assertEquals(1, transport.requests.size)
+        resumed.close()
+    }
+
     @Test fun durableQueueWaitsForNetworkAndDistinguishesRefusalFromUncertainDelivery() = runTest {
         val store = MemoryOutboxStore()
         val transport = FakeTransport(online = false)

@@ -21,6 +21,8 @@ import persona.core.navigation.RouteSource
 import persona.core.navigation.TodoDetailRoute
 import persona.core.navigation.TodosRoute
 import persona.feature.assistant.AssistantSidebarShade
+import persona.core.contracts.api.KnowledgeKind
+import persona.feature.knowledge.KnowledgeKindRoute
 import persona.feature.knowledge.KnowledgeRoute
 
 /** Mirrors apple/PersonaTests/SidebarPageRootsTests.swift (#9667, iOS #8359). */
@@ -42,6 +44,19 @@ class SidebarPageRootsTest {
             assertEquals(root, step.root)
             assertEquals(root, roots.current)
         }
+    }
+
+    @Test
+    fun aKnowledgeKindStaysTheKnowledgePlace() {
+        val kind = KnowledgeKindRoute(KnowledgeKind.Recordings)
+        val roots = SidebarPageRoots()
+        val step = roots.select(kind, emptyList())
+        assertEquals(SidebarPageRoots.Move.SwitchRoot, step.move)
+        assertEquals(kind, roots.current)
+        assertEquals(kind, placeRootFor(kind))
+        assertEquals(AssistantSidebarShade.Knowledge, sidebarShadeKey(kind))
+        assertTrue(retainsSidebarComposition(kind))
+        assertTrue(isSidebarPlaceRoot(kind))
     }
 
     @Test

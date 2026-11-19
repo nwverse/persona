@@ -85,7 +85,10 @@ type sessionModes struct {
 	// App: the effort the phone set for the next turn of a chat of the Codex App (codex_desktop_effort.go); nil none.
 	App *codexAppPick
 	// Model: the model the app switched a Claude Code session to, shown until its transcript shows another (model_switch.go).
-	Model     *pendingModel
+	Model *pendingModel
+	// Awaited: a model switch typed into Claude Code and not confirmed in time, taken up as Model once Claude Code's
+	// own record of it shows in the transcript (model_switch.go).
+	Awaited   *awaitedModel
 	Ultracode *ultracodeState // independent, session-only workflow switch (ultracode.go)
 }
 
@@ -346,7 +349,7 @@ func (n *Node) setModes(ctx context.Context, id, mode, effort string) error {
 				}
 			}
 		} else {
-			n.dropModeRestart(id)
+			n.dropModeRestart(id, mode)
 		}
 	}
 	pane, err := n.paneFor(ctx, id)
@@ -391,20 +394,55 @@ func (n *Node) noPaneForModes(id string) error {
 	return refusal(proto.CodeModesNotRunning, i18n.T(i18n.Default, "rpc-errors.modes_not_running"), nil)
 }
 
-// tuiMode reads the permission mode off the TUI's footer: the lines under the input box's bottom rule.
-func tuiMode(screen string) string {
-	lines := strings.Split(screen, "\n")
-	rule := -1
+// tuiFooterLines returns the lines under a real input box's bottom rule, or nil when no composer is visible. Two
+// rules alone are not enough: question and permission dialogs draw them too, and their hints are not permission modes.
+func tuiFooterLines(text string) []string {
+	lines := strings.Split(text, "\n")
+	end := -1
 	for i := len(lines) - 1; i >= 0; i-- {
 		if strings.HasPrefix(strings.TrimSpace(lines[i]), "──") {
-			rule = i
+			end = i
 			break
 		}
 	}
-	if rule < 0 {
-		return ""
+	if end < 1 {
+		return nil
 	}
-	for _, l := range lines[rule+1:] {
+	start := -1
+	for i := end - 1; i >= 0; i-- {
+		if strings.HasPrefix(strings.TrimSpace(lines[i]), "──") {
+			start = i
+			break
+		}
+	}
+	if start < 0 || start+1 >= end {
+		return nil
+	}
+	prompt := strings.TrimSpace(lines[start+1])
+	if !strings.HasPrefix(prompt, "❯") && !strings.HasPrefix(prompt, "!") {
+		return nil
+	}
+	if screen.ParseDialog(text) != nil {
+		return nil
+	}
+	return lines[end+1:]
+}
+
+// tuiComposerVisible reports whether the input box's bottom rule is visible, even when a draft or dialog hides the
+// idle hint that would identify a specific mode.
+func tuiComposerVisible(screen string) bool {
+	return tuiFooterLines(screen) != nil
+}
+
+// tuiPromptingScreen reports a visible composer without a recognized bypass or plan mode. Other screens, including a
+// status panel that exposes no current mode, do not override transcript evidence.
+func tuiPromptingScreen(text string) bool {
+	return tuiComposerVisible(text)
+}
+
+// tuiMode reads the permission mode off the TUI's footer: the lines under the input box's bottom rule.
+func tuiMode(screen string) string {
+	for _, l := range tuiFooterLines(screen) {
 		switch {
 		case strings.Contains(l, "accept edits on"):
 			return "acceptEdits"
@@ -412,6 +450,8 @@ func tuiMode(screen string) string {
 			return "plan"
 		case strings.Contains(l, "auto mode on"):
 			return "auto"
+		case strings.Contains(l, "don't ask"):
+			return "dontAsk"
 		case strings.Contains(l, "bypass permissions on"):
 			return "bypassPermissions"
 		case strings.Contains(l, "manual mode on"), strings.Contains(l, "? for shortcuts"):

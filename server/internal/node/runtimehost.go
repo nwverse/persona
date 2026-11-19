@@ -223,7 +223,15 @@ func (rh *RuntimeHost) request(ctx context.Context, h *runtimeConn, method strin
 		}
 		hello.Instance = strings.TrimSpace(hello.Instance)
 		hello.Launchers = cleanLaunchers(hello.Launchers)
-		stale, err := rh.reg.hello(h, hello, rh.reservedID)
+		stale, err := rh.reg.hello(h, hello, rh.reservedID, func(o *runtimeConn, incoming runtimeHello) bool {
+			if incoming.Runtime != agyRuntimeID || h.isDaemon() {
+				return false
+			}
+			o.mu.Lock()
+			oldInstance := o.hello.Instance
+			o.mu.Unlock()
+			return rh.isBuiltinAgyInstance(oldInstance) && incoming.Instance != oldInstance
+		})
 		if err != nil {
 			rh.logger.Printf("runtime %s #%d refused: %v", hello.Runtime, h.serial, err)
 			return nil, err
@@ -236,6 +244,9 @@ func (rh *RuntimeHost) request(ctx context.Context, h *runtimeConn, method strin
 			if drop != nil {
 				drop()
 			}
+		}
+		if hello.Runtime == agyRuntimeID && !h.isDaemon() && !rh.isBuiltinAgyInstance(hello.Instance) {
+			rh.yieldAgyBridge()
 		}
 		rh.logger.Printf("runtime %s %s #%d connected", hello.Runtime, hello.Version, h.serial)
 		if rh.autoCompanions && (hello.Launcher != "" || len(hello.Launchers) > 0) {
@@ -260,7 +271,7 @@ func (rh *RuntimeHost) request(ctx context.Context, h *runtimeConn, method strin
 		// (runtimeworkspaces.go).
 		features := []string{"prefer_running", "resume_argv", "handover", "transcript", "launchers", "start_params", "modes", "resume", "codex_thread", "unlisted_transcripts", "workspaces", "usage"}
 		if !h.isDaemon() {
-			features = append(features, "leader_tools")
+			features = append(features, "leader_tools", "supervision_policy")
 		}
 		res := map[string]any{"protocol": RuntimeProtocol, "node_version": rh.version, "hub": rh.current() != nil,
 			"features": features}
@@ -435,7 +446,7 @@ func (rh *RuntimeHost) event(h *runtimeConn, event string, params json.RawMessag
 				}
 			}()
 		}
-		n.publish(n.sessionList(context.Background(), false))
+		n.publishSessionsSoon()
 		return
 	}
 	if n != nil {

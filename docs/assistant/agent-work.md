@@ -275,6 +275,7 @@ Apply in order; on a match, do not call the model:
 
 - The `session_work` table ("Storage" below), sent with the session list as `work`;
 - When done: add `完成：<结论>` ("Completed: <conclusion>") to the knowledge-base project timeline for this directory (`kbAgentDone` used to record the last words of every turn; now it records the conclusion when available);
+- A supervised worker's `report_to_supervisor(kind=done)` and the committed `WorkDone` also share one structured outcome writer. It appends the conclusion, existing links, and any model-extracted decision and reason to the project's `memory.jsonl`, deduplicated by todo, agent, turn and transcript item. The todo's explicit project wins over `ProjectsForWork(machine, cwd)`; without either, nothing is written and a title is never treated as ownership. If the model is unavailable, the original short conclusion and links are kept with decision and reason empty. A failed append logs a warning and remains retryable. This M1 record does not change the existing `log.md` conclusion or inject memory into later dispatches;
 - Replace the "Completed" push body with the conclusion; the main chat's live snapshot adds "Done" and "Waiting" sections ("What Persona knows" below).
 
 ## Closeout
@@ -329,6 +330,15 @@ later without sending.
 
 ### Transient errors: automatic continuation
 
+- An unrecoverable conversation error overrides a runtime's generic transient kind and any upstream status.
+  Account-sealed native compaction is `turn_error_code: compaction_sealed`, `turn_error_kind: unrecoverable`:
+  the context belongs to another account, so the conversation is invalid. Clients explain the reason and direct
+  the owner to a new conversation instead of offering Continue. The manager neither schedules another retry nor
+  sends a retry queued before the cause was recognized. Adding permanent causes extends
+  `proto.UnrecoverableTurnErrorCode` and the clients' error parsers, with positive and negative regression cases.
+- An old interrupted participant does not override another participant that is working or waiting to resume.
+  Interrupted task rows stay out of Needs you when the task is parked or closed. Archive visibility still follows
+  new activity; it is not a substitute for the task-state filter.
 - On by default and independent of the main switch (`transient_retry`, #3208): it is a rule, with no triage model call. With the main switch off, only
   turns that a transient error ended are followed (`workActive`), and the lists show only the continuation on its way (`transientPending`); everything else stays as without triage.
 - Exponential backoff (`retryBackoff`): `retry_base_seconds` (default 15) doubled for each attempt, so 15 s, 30 s, 60 s, 120 s, 240 s; a rate limit (429, "rate limit",
@@ -384,8 +394,8 @@ A subscription's 5-hour or weekly usage limit (#1710) is no failure to report an
 - **The user's actions cancel it** as any automatic action ("Avoid conflicting with manual user actions"): a message, looking at it in herdr, queued input, a pending card.
 - **Moving it to another provider instead of waiting** (`agent_switch`, #5973): when the user asks, the main conversation moves a Claude Code agent its limit stopped to another launcher on its computer and sends it `prompts/agents/limit_continue.md` there, at once ([claude-integration.md](../integrations/claude-integration.md) "Switching a running Agent to another provider"). It is now or not at all: a busy agent is refused with nothing typed and no switch left waiting. The continuation that was due is not sent afterwards: the agent's turn moved on, and `workGuard` drops the wake. Persona never switches on its own; agents_list marks the agents a limit stopped (`usage_limit`) and their launcher. `agents_switch` (#6008) does the same for many agents in one call: the ones a limit stopped are switched and continued, idle ones switched with nothing sent, busy ones queued until their turn ends, stopped ones Persona started pointed at the new launcher for their next Resume.
 - **No misleading notices while it waits** (`limitTakenUp`: the reset is known and at most 10 minutes past, and the CLI said it goes on by itself, or Persona's continuation or its card is set): no "Completed" or "Interrupted" push for the turn. The turn stays followed, so the end after the reset is the one pushed, timed from the turn's start. A task dispatched from the main chat gets no receipt meanwhile; it is looked at again when the wait is over, so a turn that did not go on after all (its continuation cancelled) still gets its "Interrupted" receipt. A limit nothing takes up (the switches off and a CLI that does not go on by itself, or no reset known) is told as the turn ends, as a usage limit ("Usage limit reached; continue it once the limit resets: …"), never as "the model service failed". For the main assistant, a task waiting for the reset reads as `usage_limit` in its snapshot, not `interrupted`. A sign-in that is gone ("Please run /login · …", "Login expired · …") is no usage limit: it reads as interrupted (`turn_error_code` `auth_failed` / `not_logged_in`), never as "Completed".
-- **Scheduled tasks** (`watchScheduledRun`): a run whose conversation stopped on a usage limit with a known reset is retried a minute or so after the reset instead of after 3 minutes; that wait is not cut by the watcher's 30 minutes, and `retryStillDue` decides at that time as before (a retry that fails again is not retried); a conversation that went on meanwhile (its turn is no longer the one the limit stopped) is not retried, so what the run does is not done twice. A conversation that goes on by itself is not retried. The failure push is unchanged.
-- **Known limits**: the waits are kept in `session_work` like any wakeup and come back after a restart, but only for turns that ended within the last two days (a weekly limit can be longer); a scheduled run's retry waits in memory and is lost when the manager restarts.
+- **Scheduled tasks** (`watchScheduledRun`): a run whose conversation stopped on a usage limit with a known reset is retried a minute or so after the reset instead of after 3 minutes; that wait is not cut by the watcher's 30 minutes, and `retryStillDue` decides at that time as before (a retry that fails again is not retried); a conversation that went on meanwhile (its turn is no longer the one the limit stopped) is not retried, so what the run does is not done twice. A conversation that goes on by itself is not retried. The absolute retry deadline, failed run and target turn are persisted before the wait and restored after a restart. A claimed retry whose dispatch outcome is unknown after a restart is not sent again: its original run records the unknown outcome and the ordinary failure notification explains it. The initial failure push is unchanged.
+- **Known limits**: the waits are kept in `session_work` like any wakeup and come back after a restart, but only for turns that ended within the last two days (a weekly limit can be longer). Scheduled-run retries and delayed task receipt rechecks use the manager's durable wait backlog and resume at their original deadlines, promptly when already overdue. Receipt rechecks are fenced to the same task-agent link and reopen generation; the durable turn ledger and stable receipt ID prevent duplicate completion when a recheck is replayed.
 
 ## Safety boundary
 
@@ -590,7 +600,7 @@ A process can be redeployed and cleared at any time, so triage results, retry co
 The main chat's live snapshot (`prompts/assistant/snapshot*.md`):
 
 - Each Agent under "Needs you" includes what it is waiting for;
-- Adds "Waiting" (Persona is waiting for it: retrying, deployment, another Agent). "Done (within 24 hours)" and "Muted" carry only counts; `agents_list state=done` / `state=muted` returns their names, session ids and conclusions when the assistant needs them;
+- Adds "Waiting" (Persona is waiting for it: retrying, deployment, another Agent). Working agents render only their count in the Agents heading (#11261), and "Done (within 24 hours)" and "Muted" carry only counts; `agents_list` returns working agents' names, session ids and running workflows (`state=working`) and done or muted agents' conclusions (`state=done` / `state=muted`) when the assistant needs them;
 - "Unread" contains only sessions not yet successfully triaged, and those whose closeout says the turn is not finished, with that line ("Closeout");
 - An Agent's line ends with what its closeout claims of merging and deploying, and the hub's finding where it differs.
 

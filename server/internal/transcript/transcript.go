@@ -203,6 +203,10 @@ type Meta struct {
 	// turn_duration / an interrupt), no turn started after it. Unlike !TurnOpen it is false when the lines say nothing
 	// (a tail read from mid-turn).
 	TurnClosed bool
+	// The closing record, even when it produces no visible item (e.g. Codex without a duration).
+	turnEndedAt time.Time
+	turnEndSeq  int
+	turnEndLine string
 	// TurnError / TurnErrorKind: the latest turn failed on the model service, as the agent's own record says it
 	// (Codex: task_complete's error, #2185; Claude Code: the reply it writes itself for a failed request,
 	// isApiErrorMessage, #1710); empty when it ended well or the model answered since. Kind is
@@ -412,7 +416,7 @@ const APIRetrying = "（正在重试）"
 
 // OmpStoppedNotice is what a stopped omp session (listed from omp's own session files, node/ompdisk.go) shows in
 // place of its conversation. The hub puts it into the reader's language (hub/transcript_text.go noticeText).
-const OmpStoppedNotice = "这个 omp 会话已停止。现在只能在电脑上接着它（omp --resume），这里还不能给它发消息。"
+const OmpStoppedNotice = "这个 omp 会话已停止。发一条消息会在电脑上新开一个终端标签页，用 omp --resume 接着它。"
 
 // InterruptedNotice is the notice a turn stopped by the user becomes (Claude Code and Codex); APIErrorPrefix starts
 // the notice of a turn the model service failed. The channels read them as why a turn ended without words
@@ -495,6 +499,14 @@ func ParseLine(seq int, line []byte, meta *Meta) []proto.Item {
 		}
 	}
 	return items
+}
+
+func (m *Meta) endTurn(seq int, at time.Time) {
+	m.TurnOpen, m.TurnClosed = false, true
+	m.turnEndedAt, m.turnEndSeq, m.turnEndLine = at, seq, m.tree.uuid
+	if m.tree.sidechain || m.Sidechain {
+		m.turnEndedAt = time.Time{}
+	}
 }
 
 // lineJSON is encoding/json's way of decoding without its check of the whole input before it decodes (its legacy
@@ -691,7 +703,7 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 		var text string
 		switch e.Subtype {
 		case "turn_duration":
-			meta.TurnOpen, meta.TurnClosed = false, true
+			meta.endTurn(seq, e.Timestamp)
 			meta.turnSucceeded = meta.turnWorked && meta.TurnError == ""
 			meta.turnWorked = false // the turn's work is done: Claude Code's own continuation after a limit opens with no prompt
 			ms, ok := recordedMilliseconds(e.DurationMS)

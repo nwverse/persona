@@ -139,7 +139,7 @@ func (s *Service) sendQuietNotice(id string) {
 		}
 		return
 	}
-	if err := s.deliverRelay(ctx, machine, to, msg); err != nil {
+	if err := s.tryDirectRelay(ctx, machine, to, &msg); err != nil {
 		s.logf("task %s: quiet notice: %v; queued", id, err)
 		if s.queueNotice(id, n, to, msg) {
 			s.publish(ctx)
@@ -358,6 +358,11 @@ func noticeAsk(ix proto.Interaction) string {
 			}
 			b.WriteByte('\n')
 		}
+	case terminalQuestion(ix):
+		if title := clip(oneLine(ix.SessionTitle), 70); title != "" {
+			b.WriteString(title + " · ")
+		}
+		b.WriteString(terminalQuestionText(ix))
 	case ix.Kind == proto.IxPlan:
 		b.WriteString("批准它的计划：\n" + clipMarkdown(ix.Plan, 1200))
 	default:

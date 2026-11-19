@@ -159,6 +159,24 @@ does not take part:
 Nothing is stored: every new connection negotiates again, so a node or manager rolled back mid-session simply connects
 with lines next time.
 
+### Resuming node connections (#10663)
+
+A framed connection between a manager and a resident node built since #10663 survives its transport ending for a
+while (protocol.md "Resuming"); anything older drops it as before. Resuming is asked for with `rpc.lanes` and happens
+on a new transport, through the same relays:
+
+| Pair | What happens |
+| --- | --- |
+| New manager, new resident node | `node.info` announces `node_resume_v1`; the manager adds `"resume":1` to `rpc.lanes` and the node's answer grants it with a token. Logged as `lanes=on resume=on`. A dropped transport is taken back with `rpc.resume` on a new one. |
+| New manager, a node without a resident node (`node --stdio` serving the connection itself) | It ends with its transport, so it does not announce `node_resume_v1`: the manager does not ask, and a drop reconnects as before. |
+| New manager, older node | No `node_resume_v1`: lanes as in #10660, a drop reconnects. |
+| Older manager, new resident node | The manager's `rpc.lanes` does not ask for resuming, so the node grants none and keeps nothing; a new transport's first line is the manager's handshake, which replaces the connection as before. The node reads that first line before serving, which an older manager writes at once too. |
+| A token the node does not have | A node restarted (a new process), or a token already used: `rpc.resume` is answered `resume_refused`, the transport closed, and the manager connects anew. A token asked with again because the answer was lost is still taken until the new transport carries a byte. |
+| A drop past the window, or while the node restarts | The manager closes its peer and connects anew after its 30 s; the node's kept connection ends at its own window's end (60 s), or when a new connection replaces it. |
+| An older relay in between | Relays copy bytes; the resume goes over a new transport through them like any connection. |
+
+Nothing is stored: tokens live in each process's memory, so a restarted manager or node connects anew.
+
 ### Launcher default models (#4663)
 
 A launcher with no explicit model has an empty `model` on the wire; display text is never a model ID. Older nodes and
@@ -204,6 +222,24 @@ hello; the hub lists the feature only while every manager that carries Agents na
 | New hub and managers, an older web bundle | Until it reloads it folds by `folded_under` alone: a side is drawn as a child card in its parent's chat and left out of the rows; its parent shows the side's working or needs-you state, not its unseen result (`sides_unread`). |
 | New hub and managers, an older Android app | The same: it folds rows by `folded_under`, so a side is one of its parent's child sessions until the app is updated. |
 | New hub and managers, an older iOS app | From #8010 on it folds rows by `folded_under` too, so a side is one of its parent's child sessions until the app is updated; an app from before #8010 folds by its own child fields, which a side lacks (no `parent_session_id`), and the side stays a plain row of its own. |
+
+### Screen Link close confirmation (#10006)
+
+Screen Link `close_ack` is message type 14 with the same channel and 64-bit final offset as the `close` it confirms. It is
+additive and needs no feature negotiation: a new phone sends it after every `close`, including a repeated close for an
+already ended channel, and an old node skips the unknown type. A final-data `ack` is not a close confirmation, because
+it can cross with a close the phone has not processed. A new node accepts `close_ack` only for the outstanding close's
+channel and exact final offset; duplicate, stale and unknown-channel confirmations are ignored.
+
+| Pair | Behavior |
+| --- | --- |
+| New node, new phone | An unconfirmed close is offered again on a different surviving route. Confirmation stops another copy; a late valid confirmation also cancels a copy not sent yet. |
+| New node, old phone | No `close_ack` arrives. A route change can offer the close again, which the old phone already accepts idempotently. An unconfirmed video close stays recoverable while it has a route; with no route it finishes as before. |
+| Old node, new phone | The old node skips type 14. The phone's data, reset and close behavior is otherwise unchanged. |
+| Old node, old phone | Unchanged. |
+
+RFB keeps its existing completion rule in every combination: the local close finishes the channel and session at the
+next watchdog tick without waiting for `close_ack`.
 
 ## Apple 端交接
 

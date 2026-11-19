@@ -96,22 +96,30 @@ func (s *Service) toolAgentInterrupt(ctx context.Context, machine, self string, 
 	// Only a turn under way is stopped: an agent still starting has none yet (then is queued for it, as agent_send does).
 	working := c.Status == proto.StatusWorking
 	stopped := false // its turn is known to have ended
+	// over: the node found its turn already ended, only its background work keeping it Working (#10828): nothing was
+	// interrupted and that work goes on, so it is not said to have been stopped.
+	over := false
 	if working {
 		var res struct {
 			Settled bool `json:"settled"`
 		}
 		err := s.call(ctx, am.ID, "session.interrupt", map[string]any{"session_id": c.SessionID}, &res)
 		var re *rpc.Error
-		over := errors.As(err, &re) && re.Code == proto.CodeTurnOverBackground // its turn ended while the phone was asked
+		over = errors.As(err, &re) && re.Code == proto.CodeTurnOverBackground // its turn ended while the phone was asked
 		if err != nil && !over {
 			return "", fmt.Errorf("stop: %w", err)
 		}
 		s.logf("agent_interrupt %s on %s (from %s)", short(c.SessionID), am.ID, short(self))
-		stopped = over || res.Settled || s.interruptLanded(ctx, am.ID, c.SessionID)
+		stopped = !over && (res.Settled || s.interruptLanded(ctx, am.ID, c.SessionID))
 	}
+	const overSaid = "%s on %s had already ended its turn: nothing was interrupted, and its background work is still running " +
+		"(it can be stopped in the terminal on that computer). Do not tell the user it stopped."
 	if then == "" {
 		if !working {
 			return fmt.Sprintf("%s on %s was not working: nothing to stop.", agentLabel(c), am.Name), nil
+		}
+		if over {
+			return fmt.Sprintf(overSaid, agentLabel(c), am.Name), nil
 		}
 		if !stopped {
 			return fmt.Sprintf("Asked %s on %s to stop, but its turn has not ended yet: it still reads as working after %s. "+
@@ -133,7 +141,7 @@ func (s *Service) toolAgentInterrupt(ctx context.Context, machine, self string, 
 	}
 	note.sent(sctx, err) // an unknown answer counts for the agent's next turn: it may still arrive
 	if err != nil {
-		if working {
+		if working && !over {
 			return "", fmt.Errorf("stopped it, but sending the new instruction failed: %w", err)
 		}
 		return "", err
@@ -141,13 +149,20 @@ func (s *Service) toolAgentInterrupt(ctx context.Context, machine, self string, 
 	if t, ok := s.taskOf(ctx, am.ID, c.SessionID); ok && (t.Origin == self || t.Supervision != nil && t.Supervision.Supervisor == self) {
 		// The conversation shows what it told its task, as for agent_send to a task (routed); marked when it cut in, and
 		// naming the run it told (#10465).
-		if _, err := s.appendFeed(ctx, self, feedRouted, t.ID, map[string]any{"text": then, "interrupted": working, "from": routedFromAssistant,
+		if _, err := s.appendFeed(ctx, self, feedRouted, t.ID, map[string]any{"text": then, "interrupted": working && !over, "from": routedFromAssistant,
 			"machine_id": am.ID, "session_id": c.SessionID}); err != nil {
 			s.logf("task %s: routed feed: %v", t.ID, err)
 		}
 	}
 	if !working {
 		return fmt.Sprintf("%s on %s was not working: sent the new instruction.", agentLabel(c), am.Name), nil
+	}
+	if over {
+		said := fmt.Sprintf(overSaid, agentLabel(c), am.Name)
+		if sent.Queued {
+			return said + " The new instruction is queued behind what it is doing now and is read when that ends.", nil
+		}
+		return said + " The new instruction was sent.", nil
 	}
 	if !stopped {
 		return fmt.Sprintf("Asked %s on %s to stop, but its turn has not ended yet (it still reads as working after %s): the new "+
@@ -234,9 +249,13 @@ func (s *Service) adoptAgent(ctx context.Context, self string, am Device, c prot
 }
 
 // adoptAgentAs is adoptAgent; with quiet the todo it makes is quiet whatever self's own tasks are (an agent that became
-// a task by itself, agent_tasks.go).
+// a task by itself, agent_tasks.go). An assistant's conversation is refused whatever its row's Assistant flag says
+// (assistantsConversation, #10801).
 func (s *Service) adoptAgentAs(ctx context.Context, self string, am Device, c proto.Session, title, prompt, notes string, doneWhen []string,
 	expect int, update, quiet bool) (Todo, bool, error) {
+	if s.assistantsConversation(ctx, am.ID, c) {
+		return Todo{}, false, errors.New("that is an assistant conversation, not a coding agent")
+	}
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		return Todo{}, false, err
 	}
@@ -492,16 +511,18 @@ func (h *handedTask) sent(ctx context.Context, s *Service, text string) string {
 }
 
 // sendFailed: the send did not go, so a task made for it is taken back (deleted, its link with it: a closed task's
-// agent would be closed after a while, tasks_close.go); err as the tool's error. When the machine only did not answer
-// in time (startResultUnknown: a resume can go on after the wait), the text may still arrive, so the task stays and
-// gets its card.
+// agent would be closed after a while, tasks_close.go). When it may have gone through, keep its task and tell the
+// caller to check the agent before sending the same words again.
 func (h *handedTask) sendFailed(ctx context.Context, s *Service, err error) error {
+	if sendUnknown(err) {
+		if h != nil && h.made {
+			s.taskCard(ctx, h.self, h.todo.ID, h.wake)
+			return fmt.Errorf("%w (task %s stays: the message may have arrived or may still arrive; check with agent_read before sending again)", err, h.todo.ID)
+		}
+		return fmt.Errorf("%w (the message may have arrived or may still arrive; check with agent_read before sending again)", err)
+	}
 	if h == nil || !h.made {
 		return err
-	}
-	if startResultUnknown(err) {
-		s.taskCard(ctx, h.self, h.todo.ID, h.wake)
-		return fmt.Errorf("%w (it may still arrive: task %s stays; check with agent_read before sending again)", err, h.todo.ID)
 	}
 	if rerr := s.removeTodo(context.WithoutCancel(ctx), h.todo.ID); rerr != nil {
 		s.logf("agent_send: take back task %s: %v", h.todo.ID, rerr)
@@ -820,6 +841,9 @@ func (s *Service) reportNow(ctx context.Context, t Todo, machine, session, kind,
 		}
 	}
 	s.logf("task %s: %s reports %s", t.ID, short(session), kind)
+	if kind == upReportDone {
+		s.goRecordWorkerReport(ctx, t, machine, session, text, evidence, now)
+	}
 	if kind == upReportProgress {
 		return "Noted for your supervisor: it reads it with its next supervision message. Go on with the work.", nil
 	}

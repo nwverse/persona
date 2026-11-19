@@ -445,7 +445,7 @@ func runtimeSummary(s proto.Session) runtimeRowSummary {
 		Agent: s.Agent, AgentLabel: s.AgentLabel, AgentName: s.AgentName, AgentSurface: s.AgentSurface,
 		SourceKind: s.SourceKind, SourceThreadID: s.SourceThreadID, SourceInstanceID: s.SourceInstanceID,
 		ParentThreadID: s.ParentThreadID, ParentSessionID: s.ParentSessionID, RootSessionID: s.RootSessionID, IsSubagent: s.IsSubagent,
-		Capabilities: s.Capabilities, Attached: s.Attached, CanFork: s.CanFork,
+		Capabilities: s.Capabilities, Attached: s.Attached, CanFork: s.CanFork, BypassPending: s.BypassPending,
 		SpaceKind: s.SpaceKind, SpaceID: s.SpaceID, SpaceName: s.SpaceName, SpaceIndex: s.SpaceIndex,
 		ParentSpaceID: s.ParentSpaceID, SlotID: s.SlotID, SlotName: s.SlotName, SlotIndex: s.SlotIndex, PaneIndex: s.PaneIndex,
 		WorkspaceID: s.WorkspaceID, TabID: s.TabID, PaneID: s.PaneID,
@@ -577,7 +577,7 @@ func (h *Hub) pagedSessions(w http.ResponseWriter, r *http.Request, manager stri
 		return
 	}
 	opts.Manager = manager
-	opts.NoPrivate = extensionToken(r) // an extension's token never sees a health-space conversation (extension_private.go)
+	opts.NoPrivate = restrictedAgentData(r) // external Agent clients cannot see health-space conversations
 	if values, lookup := r.URL.Query()["session_id"]; lookup {
 		if len(values) != 1 || values[0] == "" || opts.Machine == "" || opts.Since != "" || opts.Cursor != "" {
 			sessionListErr(w, errors.New("exact session lookup requires one nonempty session_id and machine_id, without since or cursor"))
@@ -639,7 +639,7 @@ func (h *Hub) pagedSessions(w http.ResponseWriter, r *http.Request, manager stri
 		return
 	}
 	if catalogAsked(r) {
-		catalog, err := h.sessionCatalogOf(r.Context(), index, opts, own, limited, !extensionToken(r))
+		catalog, err := h.sessionCatalogOf(r.Context(), index, opts, own, limited, !restrictedAgentData(r))
 		if err != nil {
 			sessionListErr(w, err)
 			return

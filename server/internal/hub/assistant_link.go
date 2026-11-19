@@ -93,11 +93,7 @@ func (h *Hub) assistantRoutesRelayed(api *http.ServeMux) {
 		var relay http.HandlerFunc = func(w http.ResponseWriter, r *http.Request) { h.forwardOwned(w, r, by) }
 		todoKind, todoReceipt := todoReceiptRoutes[pattern]
 		if todoReceipt { // relayed as a send: one cut off on the way may have been taken (todo_receipts.go)
-			relay = func(w http.ResponseWriter, r *http.Request) {
-				if id, ok := h.owner(w, r, by); ok {
-					h.forwardSend(w, r, id)
-				}
-			}
+			relay = h.todoRelay(todoKind, by)
 		}
 		if pattern == "GET /api/v1/machines/{mid}/launchers/{name}/start-options" {
 			next := relay
@@ -149,6 +145,9 @@ func (h *Hub) startConversationOnce() http.HandlerFunc {
 			return
 		}
 		r = withManager(withHumanStart(r), id) // a person's own app: its first message is theirs (secret_handoff.go)
+		if legacyAppOwner(r.Context()) {
+			r = r.WithContext(assistantwire.WithReplyInput(r.Context()))
+		}
 		if h.busConnOf(id) == nil {
 			writeErrCode(w, http.StatusServiceUnavailable, assistantwire.CodeAssistantOffline, errAssistantOffline)
 			return

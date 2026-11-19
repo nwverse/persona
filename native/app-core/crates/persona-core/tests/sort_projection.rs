@@ -66,8 +66,12 @@ fn fixture_manifest_has_unique_names_and_projection_shape() {
         "active_space_uses_rank_not_slots",
         "client_state_precedence",
         "compact_expands_idle_without_reordering",
+        "composable_qualifiers_match_with_plain_term",
+        "composable_qualifiers_reject_one_wrong_dimension",
         "cross_machine_same_session_id",
         "cross_machine_same_session_id_reversed",
+        "dimension_settings_compose_with_plain_term",
+        "dimension_settings_reject_wrong_model",
         "empty_list",
         "filter_all",
         "filter_needsyou",
@@ -90,8 +94,11 @@ fn fixture_manifest_has_unique_names_and_projection_shape() {
         "hub_pending_offline",
         "hub_unknown",
         "hub_working_seen",
+        "just_finished_rank_and_precedence",
         "kept_cannot_escape_base",
         "machine_search_before_counts",
+        "machine_qualifier_matches_registry_title",
+        "machine_qualifier_rejects_session_title_match",
         "machine_uses_registry_order",
         "mute_allow_and_explicit_override",
         "pinned_offline_is_visible",
@@ -99,11 +106,32 @@ fn fixture_manifest_has_unique_names_and_projection_shape() {
         "quick_filter_ignores_rank",
         "quick_spaces_use_updated_time",
         "rank_all_states_and_mutes",
+        "search_as_code_day_keyword_uses_ios_window",
+        "search_as_code_disabled_keeps_plain_text_matches",
+        "search_as_code_error_keyword_filters_plain_text",
+        "search_as_code_pinned_keyword_composes_with_terms",
+        "search_as_code_preserves_explicit_longer_window",
+        "search_as_code_week_keyword_uses_ios_window",
         "search_expands_idle",
+        "search_scope_assistant_matches_prose_and_work",
+        "search_scope_assistant_rejects_user_and_tool_fields",
+        "search_scope_conversation_matches_prose_and_summaries",
+        "search_scope_conversation_rejects_tool_noise",
+        "search_scope_errors_matches_reason_fields",
+        "search_scope_errors_rejects_non_error_evidence",
+        "search_scope_errors_without_terms_lists_only_error_rows",
+        "search_scope_title_matches_display_names",
+        "search_scope_title_rejects_other_fields",
+        "search_scope_user_matches_request_summaries",
+        "search_scope_user_rejects_assistant_fields",
+        "session_summary_fields_do_not_leak_into_all_scope",
         "space_header_counts",
         "space_time_tie",
         "space_time_tie_reversed",
         "spaces_pin_busy_muted_quiet",
+        "subtask_summary_evidence_retains_parent_in_user_scope",
+        "subtask_summary_evidence_does_not_leak_into_all_scope",
+        "subtask_title_evidence_retains_parent_in_all_scope",
         "unread_keeps_seen_rows",
         "unread_reselected_drops_seen_rows",
         "waiting_requires_quiet_state",
@@ -834,6 +862,42 @@ fn fixture_assertion_catches_a_wrong_sort_comparison() {
         failure.is_err(),
         "reversing the date comparison must fail the shared fixture assertion"
     );
+}
+
+#[test]
+fn just_finished_stays_active_but_its_muted_row_folds_with_seen() {
+    let document: Value =
+        serde_json::from_str(&fs::read_to_string(fixture_dir().join("ordering.json")).expect("ordering"))
+            .expect("JSON");
+    let case = document["cases"]
+        .as_array()
+        .expect("cases")
+        .iter()
+        .find(|case| case["name"] == "just_finished_rank_and_precedence")
+        .expect("just finished fixture");
+    let mut input = case["input"].clone();
+    input["sessions"]
+        .as_array_mut()
+        .expect("sessions")
+        .retain(|session| matches!(session["session_id"].as_str(), Some("finished" | "muted")));
+    input["settings"]["grouping"] = Value::String("space".to_owned());
+    input["settings"]["expanded_quiet"] = serde_json::json!(["machine-a/space-muted"]);
+    let input: Input = serde_json::from_value(input).expect("space input");
+    let actual = serde_json::to_value(persona_core::sort::project(&input)).expect("space projection");
+
+    assert_eq!(actual["groups"][0]["id"], serde_json::json!("machine-a/space-live"));
+    assert_eq!(actual["groups"][0]["parent"], Value::Null);
+    assert_eq!(
+        actual["groups"][0]["visible_rows"],
+        serde_json::json!(["machine-a/finished"])
+    );
+    assert_eq!(actual["groups"][1]["id"], serde_json::json!("machine-a/space-muted"));
+    assert_eq!(actual["groups"][1]["parent"], serde_json::json!("quiet"));
+    assert_eq!(
+        actual["groups"][1]["visible_rows"],
+        serde_json::json!(["machine-a/muted"])
+    );
+    assert_eq!(actual["quiet_title"], serde_json::json!("空闲的空间"));
 }
 
 fn assert_projection(actual: &Value, expected: &Value, label: &str) {

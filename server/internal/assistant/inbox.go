@@ -8,6 +8,7 @@ import (
 
 	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/extwire"
 )
 
 // The unified inbox (docs/assistant/inbox.md) is the manager's: Feishu messages, mail and the connectors' threads in one list,
@@ -198,13 +199,14 @@ const (
 type MailAddress = assistantwire.MailAddress
 
 type InboxMail struct {
-	AccountID string      `json:"account_id"`
-	Mailbox   string      `json:"mailbox"`
-	UIDs      []uint32    `json:"uids"` // oldest first
-	MessageID string      `json:"message_id"`
-	From      MailAddress `json:"from"`
-	Direct    bool        `json:"direct,omitempty"` // to me, not cc / a list
-	Thread    string      `json:"thread"`           // normalized subject: replies join the same item
+	AccountID  string      `json:"account_id"`
+	Mailbox    string      `json:"mailbox"`
+	Generation uint32      `json:"generation,omitempty"` // follows known UIDVALIDITY changes in this mailbox
+	UIDs       []uint32    `json:"uids"`                 // oldest first
+	MessageID  string      `json:"message_id"`
+	From       MailAddress `json:"from"`
+	Direct     bool        `json:"direct,omitempty"` // to me, not cc / a list
+	Thread     string      `json:"thread"`           // normalized subject: replies join the same item
 }
 
 // open: not filed, and not a member of a merged row (inbox_merge.go): a member is hidden and its survivor stands for it.
@@ -281,7 +283,7 @@ func (it *InboxItem) listed() InboxItem {
 	}
 	if it.Mail != nil {
 		m := *it.Mail
-		m.UIDs = append([]uint32(nil), m.UIDs...)
+		m.UIDs = slices.Clone(m.UIDs)
 		c.Mail = &m
 	}
 	if it.Doc != nil {
@@ -303,6 +305,8 @@ func (it *InboxItem) listed() InboxItem {
 	}
 	if it.Connector != nil {
 		k := *it.Connector
+		// The apps get the picture's hub path, never the source's value (docs/protocol/protocol.md "Avatars").
+		k.AvatarURL, k.Avatar = extwire.AvatarURL(it.Source, k.Avatar), ""
 		c.Connector = &k
 	}
 	return c
