@@ -61,6 +61,9 @@ type modelExecution struct {
 	// assistant's claude_interactive setting. Part of the fingerprint, so a change resumes an idle conversation in a
 	// new process; omitted when off, so fingerprints from before it stay the same.
 	Interactive bool `json:",omitempty"`
+	// NewModelChoice classifies this request against the previous recovery chain. It is per-turn provenance, never
+	// persisted or included in the execution fingerprint, and is committed only when the input is delivered.
+	NewModelChoice bool `json:"-"`
 	// SecretTicket: the hand-off a new Claude Code start puts in its environment (secretenv.go). Per start, never
 	// part of a fingerprint, never kept for a resume.
 	SecretTicket string `json:"-"`

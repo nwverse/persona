@@ -29,6 +29,9 @@ func fakeClaudeHomeBash(t *testing.T, script string) {
 		t.Fatalf("no bash: %v", err)
 	}
 	fakeClaudeHomeFiles(t, script)
+	// Only here: the launcher profile probe dates every shell file it reads (assistant_profile_probe.go), and the
+	// zsh fixtures settle only ~/.zshrc, so a fresh ~/.bashrc beside it would read as a profile still being edited.
+	_ = os.WriteFile(filepath.Join(os.Getenv("HOME"), ".bashrc"), nil, 0o600)
 }
 
 func fakeClaudeHomeFiles(t *testing.T, script string) {
@@ -42,7 +45,6 @@ func fakeClaudeHomeFiles(t *testing.T, script string) {
 		t.Fatal(err)
 	}
 	_ = os.WriteFile(filepath.Join(home, ".zshrc"), nil, 0o600)
-	_ = os.WriteFile(filepath.Join(home, ".bashrc"), nil, 0o600)
 	// The fake claude is meant to work, so mark its first-run setup finished: the launcher check's onboarding gate
 	// (claudeonboarding.go) otherwise stops before it ever runs.
 	if err := os.WriteFile(filepath.Join(home, ".claude.json"), []byte(`{"hasCompletedOnboarding":true}`), 0o600); err != nil {
