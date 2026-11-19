@@ -152,7 +152,11 @@ def run(args):
                     assert all(b["h"] == b["capsule"] for b in boxes), boxes
                     assert all(b["radius"] >= b["h"] / 2 for b in boxes), boxes
                     assert len({b["top"] for b in boxes}) == 1 and len({b["font"] for b in boxes}) == 1, boxes
-                    assert sum(b["w"] for b in boxes) < bar.evaluate("e => e.getBoundingClientRect().width"), boxes
+                    # Side by side they fit the bar, Finished (#10922) too at the standard text size; at the large one on a
+                    # phone it runs past the bar's end, and the entries' scroller brings it into view when it opens (below)
+                    bar_width = bar.evaluate("e => e.getBoundingClientRect().width")
+                    assert sum(b["w"] for b in boxes[:2]) < bar_width, boxes
+                    assert args.text_size == "large" and width < 1280 or sum(b["w"] for b in boxes) < bar_width, boxes
                     assert entries.evaluate_all("es => es.map(e => e.getAttribute('aria-expanded'))") == ["false"] * 3
                     print(f"  entry heights {[b['h'] for b in boxes]} px, fully round, font {boxes[0]['font']}", flush=True)
                     capture("collapsed")
@@ -217,6 +221,9 @@ def run(args):
                     capture("accepted-live")
                     finished_entry.click()
                     expect(finished_entry).to_have_attribute("aria-expanded", "true")
+                    # the open entry is whole in view, however far the entries' row had to scroll for it
+                    assert finished_entry.evaluate("""e => { const b = e.getBoundingClientRect(), r = e.closest("[data-assistant-actionbar]").getBoundingClientRect();
+                        return b.left >= r.left - 1 && b.right <= r.right + 1; }""")
                     finished_rows = bar.locator("[data-tray-finished] [data-task-slot]")
                     assert finished_rows.evaluate_all("es => es.map(e => e.dataset.taskSlot)") == ["plan:demo-plan:0", "plan:demo-plan:3"]
                     assert finished_rows.evaluate_all("es => es.map(e => e.dataset.countsOpen)") == ["false", "false"]
