@@ -1,5 +1,13 @@
 # Lessons: Claude Code, Codex, and herdr
 
+## Runtime memory and task-directory preparation are separate (#6800)
+
+A runtime's first assistant turn must read the same merged memory as Claude and Codex. Keep that read through
+`memoryForUse`, including the index sent in the first turn. It does not make a user-selected task directory an
+assistant-owned directory: sync generated runtime skills only after `assistantDirectoryPrepared`. Cover both the
+actual runtime send with a note from another profile and strict task resumes whose selected directory stays untouched;
+either side alone misses a merge regression.
+
 ## A deferred action on an agent belongs to its process, not its session id (#10296)
 
 - A session id outlives its Claude Code process: the owner quits and resumes, Persona's Resume starts a new one, a crash is resumed. A queued restart into Full access, keyed by session id alone for a day, quit a claude that resumed the conversation later in Default and restarted it in Full access.

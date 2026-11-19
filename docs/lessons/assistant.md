@@ -1,5 +1,14 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- Context API changes must cover the empty branch and real prompt callers. A project context paired with project
+  slugs returns both empty values when no project matches; a new supervising-conversation argument is also passed by
+  language golden tests (empty when there is no supervisor). Keep the prompt and golden assertions unchanged, then
+  compile and run the caller checks together.
+
+- A selected schedule copy is not its admitted execution snapshot (#6800). Initialize to-do progress history after
+  reading the task and model together, including failed admission. A new or cleared association, or a change to a
+  one-off, must describe that admitted task rather than the scheduler's older copy. Test those edits before any send.
+
 - Persist a complete delivery round before its first external send (#10393). Saving only when the call returns handles a returned error but loses the result if the manager exits inside the call, after task acceptance has committed. Keep the original timestamp/key and acceptance metadata on disk while retaining an in-memory claim to block overlapping sends. Every other book save must preserve that prepared record too; retry must not send from memory when its preparation could not be saved. Use a child-process exit at the real provider boundary and a fresh manager on the same disposable database to prove recovery, with the returned-error case as a control.
 - A review wake is not a completion verdict (#8373). PR events and judged-done candidates share the same signal. Keep its wording neutral, preserve the actual reason and criterion evidence, and leave acceptance gates and display grouping unchanged.
 
@@ -242,6 +251,21 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
 - Blocking personal MCP tools is not enough to protect a work computer (#5061): `assistant.prepare` sends owner notes, knowledge-base locations, and plugin instructions before the first tool call. Refuse assistant starts and directory preparation before sending any of that; apply the same machine policy to Inbox conversation adoption and later note delivery, not just new starts. Project background enters ordinary Agent prompts through the shared `projectContext` helper, so gate that helper to cover assistant tools, planned tasks, and app handoffs together. MCP discovery can arrive before `assistant.send` returns its session ID; keep a manager-owned start authorization until the conversation origin is recorded.
 
 - Machine trust updates can reach the manager placement and device configuration at different times (#5061). Treat either authoritative work restriction as sufficient until both have caught up, including physical aliases and current mesh paths. Keep new restrictions even when rejecting an invalid assistant placement during a handshake: existing node connections survive that rejection. Runtime `mcp.tools` discovery may omit the session even after startup: allow schema discovery from a recorded manager start, while keeping execution bound to its session and refusing node-derived backfilled origins.
+
+- A task directory cannot replace a space's authority (#6800). Passing a resolved `cwd` to a shared start helper
+  skipped Health preparation while retaining its Health label. The node classifies its process and outbound gates
+  from the actual startup directory, so a label alone cannot preserve isolation. Reject Health task directory
+  overrides after sparse edits and before executing stored tasks; always prepare the Health directory at shared
+  startup. An old source chat's label can also be wrong: compare its actual directory with fresh node preparation
+  and enforce that directory on resume, replacing it before delivery when it cannot be verified. Other execution
+  choices can remain supported. Test actual prepare instructions and outbound sends, then
+  a fake node process's Health environment and single-use phone confirmation even with an allow rule and after `cd`.
+
+- Removing a model runtime upstream also changes a task's separate resolution and picker defaults (#6800).
+  Resolve the type and protocol conflicts without restoring the removed path or dropping strict task sends.
+  Keep an old run snapshot's runtime only as compatibility evidence so that task starts fresh; new Claude runs
+  follow the CLI-only policy. Exercise stored-task reconstruction, outbound parameters and picker defaults, and
+  adapt retry fixtures to the current fake CLI while retaining their same-model and no-fallback assertions.
 
 - **A space-wide rule must be at every entrance to the write** (#5278): the health space's "confirm every write, whatever a rule says" was in `larkCheck` (the gated command) only; the gate proxy, which a script reaches with no command in front, let a write through when a rule allowed it, with no card. Now the address is marked health when it is opened and takes only the grant a card left. When a rule is added to one check, look for the other route to the same write, and test it by calling the address itself. Both must decide the conversation's space from the same place: the process's own, noted when its address is opened. The hook's directory moves with the model's `cd`; and a grant kept under a conversation id needs the address to have that id, which a new Codex conversation gets only when its thread starts (`codexConn.start`).
 
@@ -634,6 +658,80 @@ panic can leave wrong is given back with `defer`; a random walk over the events 
 checks the orders a stress test meets only by chance; and a status that says "at its limit" needs a number in the log
 that can say otherwise: the requests out, the cap, and how long the longest has been out, since none outlives its
 caller's deadline.
+
+## An old-node capability refusal happens before delivery (#6800)
+
+The device layer returns `node_outdated` before dispatching unsupported requests. A source-chat task may safely fall
+back to its own conversation on that typed refusal. Keep it distinct from timeouts, closed links and unclassified
+errors, which cannot prove that a turn never started and must not cause replacement sends.
+
+## A new conversation's lost reply is not an unstarted task (#6800)
+
+`startConversation` can fail after `assistant.send` reached the node. Treating every error as a one-off that never
+started arms a delayed duplicate, even when source and resumed sends already refuse replacement. Use the existing
+`sendUnknown` delivery classification for the new-chat path too: retain the failure notice without retrying a possibly
+accepted turn. Persist `delivery_unknown` so a later manual send with a lost receipt cancels older pending retries too.
+Keep `rpc.ErrNotSent` and preparation failures retryable, and notify on a failed task-owned resume as well. A virtual-clock
+test must advance past the retry delay; checking only the immediate send count misses this failure.
+
+A fixed-facts briefing fallback must also cover task/model admission before ordinary fact preparation. Capture that
+failed run's fresh facts before its early return; a previous run's cached facts are not its snapshot. Keep this
+confirmed pre-delivery path separate from unknown delivery, which must neither resend the turn nor start a fallback.
+
+## A schedule grant must bind to the model record its round consumed (#6800)
+
+Task model overrides live in their own settings record. Hashing only the task row misses model-only and effort-only
+edits when the execution computer is already pinned. Compute configured grants from the effective provider, model,
+effort and runtime configuration, checking the candidate record in atomic saves and the authoritative record at use.
+Keep the legacy hash for untouched inheritance. Freeze that same basis with the run's actual model snapshot and its
+pending plans: an old conversation cannot adopt a new model's grant. Test real sends, owner authorization, edits,
+clears, service reconstruction and automatic dispatch, rather than copied model fields or hash equality alone.
+
+## A pre-run check must use the task's selected computer (#6800)
+
+An explicit execution computer or directory is also part of the schedule's start-grant basis. An edit must revoke
+the old grant and keep a pending plan from granting the changed schedule. Preserve the old basis when both fields
+are empty, so an upgrade alone does not revoke legacy grants. The atomic task-and-model save must run the same
+stale-grant cleanup as the ordinary schedule save; otherwise a prompt edit together with a model edit retains a
+grant that can revive when the old prompt returns.
+
+A task's last run and the assistant default can point to different computers from its explicit execution target.
+Run the pre-run command on the explicit target first, falling back to the historical run and assistant only when no
+target was chosen. Cover both a first run and a task reconfigured after an earlier run; a skip result must still
+prevent the model send.
+
+A local launcher name is not a portable provider identity. Resolve task inheritance on its execution computer before
+merging sparse overrides; a local alias there takes its own model defaults, while a shared managed provider can retain
+its configured binding. Include target identity metadata in the execution fingerprint. Explicit overrides still fail
+when unavailable, and changing only the computer must not pin a copied default.
+
+Saving an explicit model or effort override must retain both the provider and the computer on which it was validated,
+even when the choice equals today's default. The execution editor supplies `model_revision` for that intent; an old
+unversioned launcher/effort-only echo with the same effective binding must preserve inheritance instead. Compare the
+effective patched and stored bindings before normalizing, and keep explicit empty values as clears. Normalize before
+comparing the model record; persist the computer even when the model record itself is unchanged. Preserve untouched
+inheritance. Test after changing the
+Assistant defaults and reconstructing the service, asserting the actual send target as well as storage. A fake's
+allowed-computer list must include the replacement, or its settings fallback silently undoes the test's default change.
+
+Do not infer catalog uncertainty from the number of entries. An explicit successful empty task catalog confirms
+absence; a failed read or omitted/null catalog does not. Carry that distinction through the node-list merge and check
+the task's exact launcher before sending, including configured wrappers and managed providers. An unreadable managed
+catalog is also unknown. Test zero sends for authoritative deletion and incompatibility, alongside preserved exact
+bindings for older or unreadable discovery. Keep task-only inheritance behind an explicit picker purpose so ordinary
+Assistant defaults do not change. In the editor, scope every default and catalog read to the same chosen manager as
+the task write, and include that manager in response keys as well as effect dependencies.
+
+Exercise an undiscovered launcher's first save as well as a seeded run. A placeholder only in the run path can hide
+the generic validator's global-provider rejection in the save path. Share that task-specific validation between both
+paths, and retain negative checks for model validation, advertised effort and managed-provider computer scope.
+Legacy source-chat launcher/effort metadata was inert: permit unchanged saves and source resumes, while refusing
+new overrides and any stored explicit model, directory or computer. Do not let raw request-key presence decide intent.
+
+A runtime's session inventory is authoritative even without a local Claude/Codex state record. Strict task resumes
+validate the owning assistant-capable runtime, launcher and physical directory before sending; local id shape and state
+cannot classify a runtime-owned session as gone. Missing metadata for a known owner is uncertain, so it must fail without
+triggering a replacement send. Regress both runtime-shaped and UUID sessions, mismatches, missing sessions and lost replies.
 
 ## A send whose answer came too late may have gone in (2026-11-12)
 
