@@ -1370,11 +1370,12 @@ manager that connects the computer holds it and sends it once the computer is ba
   tied to its `client_msg_id` (the node ties a typed line to its message by its words) shows it did arrive: it leaves
   the row, and the next ones go. The node does not drop a second send of an id, so a Retry of such a message keeps that
   mark while it waits ("Will check the chat when <computer> is back"), and does not expire: the turns are read when the
-  computer is back. Found, it leaves the row and is not sent. Not found is no proof it did not arrive (the hub hands a
+  computer is back (the Agent listed again, or two minutes into the connection if it never is; the later ones wait
+  behind it meanwhile and do not expire). Found, it leaves the row and is not sent. Not found is no proof it did not arrive (the hub hands a
   restarted node its ties for a day, the node keeps them a day, only the latest turns are read, some runtimes never
   tie a line; #10790 would let the node say), so nothing is sent: it goes back to the owner, "Couldn't confirm it arrived. Retry to send it anyway,
-  or delete it", still holding the later ones back; that Retry sends it as it is. Three reads that fail end the same
-  way. While the turns are read, a Retry of it answers that it is being sent; a Delete goes. A node that refused it
+  or delete it", still holding the later ones back; that Retry sends it as it is. Three reads in a row that fail end
+  the same way. While the turns are read, a Retry of it answers that it is being sent; a Delete goes. A node that refused it
   (nothing typed), or a message that could not be made ready to send before the node was asked, fails with the reason
   and the next one goes; once the node took a message it counts as delivered, whatever came after. A message the owner
   is retrying or deleting holds the later ones back meanwhile.
