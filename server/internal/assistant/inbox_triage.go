@@ -350,7 +350,11 @@ func (b *inboxBook) ruleTier(it *InboxItem) string {
 
 // triageInput is the item as the models read it (prompts/inbox/item.md).
 func (b *inboxBook) triageInput(it *InboxItem) string {
-	return prompts.RenderInboxItem(b.promptItem(it))
+	p := b.promptItem(it)
+	if it.Connector != nil && it.Source == "larkcli" && it.Kind == KindDM {
+		p.Latest = it.Preview
+	}
+	return prompts.RenderInboxItem(p)
 }
 
 func (b *inboxBook) promptItem(it *InboxItem) prompts.InboxItem {
@@ -520,6 +524,14 @@ func (s *Service) replyInboxDoMode(ctx context.Context, id, text, clientID strin
 	once := r.(*inboxReply)
 	once.mu.Lock()
 	defer once.mu.Unlock()
+	if attempt, _ := ctx.Value(suggestionReplyOnly{}).(*InboxSuggestionAttempt); attempt != nil {
+		b.mu.Lock()
+		current := b.currentReplyAttempt(it, attempt)
+		b.mu.Unlock()
+		if !current {
+			return InboxItem{}, errSuggestionStale
+		}
+	}
 	if fromCard {
 		// Another reply of the item may have been out (the phone's, a repeat): filed while this one waited for it, the
 		// item is not answered again from a card either (#5117).
@@ -548,6 +560,14 @@ func (s *Service) replyInboxDoMode(ctx context.Context, id, text, clientID strin
 	}
 	if err != nil {
 		return InboxItem{}, err
+	}
+	if suggestionSendOnly(ctx) {
+		// A confirmed suggestion commits under its version/attempt/source fence after this send returns. The
+		// direct reply path must not file, mark cards sent or move a replacement suggestion in the meantime.
+		b.mu.Lock()
+		out := it.listed()
+		b.mu.Unlock()
+		return out, nil
 	}
 	now := time.Now()
 	if already {
@@ -626,7 +646,7 @@ func (s *Service) replyMail(ctx context.Context, r inboxReplyReq) (bool, error) 
 	}
 	b := &s.inbox
 	b.mu.Lock()
-	repeated := r.once.repeated(r.live, r.text)
+	repeated := !suggestionSendOnly(ctx) && r.once.repeated(r.live, r.text)
 	b.mu.Unlock()
 	if repeated {
 		return true, nil
