@@ -515,6 +515,11 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 		if _, set := p["main_compact_window"]; !set && p["is_main"] == true {
 			putMainCompactWindow(s.settings(ctx), p)
 		}
+		// Interactive Claude Code (#10058) is part of what a process runs: every send and warm carries it, or the node
+		// restarts a conversation between the two kinds as messages without it come.
+		if _, set := p["claude_interactive"]; !set && s.claudeInteractive(ctx) {
+			p["claude_interactive"] = true
+		}
 	}
 	if p, ok := params.(map[string]any); ok && startScopeMethods[method] {
 		// A Persona-managed provider out of this computer's scope does not run there (models_launchers_scope.go).
