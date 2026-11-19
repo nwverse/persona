@@ -1,4 +1,5 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import persona.buildlogic.configureFilteredTestRuns
 import persona.buildlogic.configureRepositoryTests
 
 plugins {
@@ -22,6 +23,8 @@ dependencies {
 }
 // The repository root and the shared fixture domains this module's tests read (persona/buildlogic/FixtureReferences.kt).
 configureRepositoryTests()
+// A --tests run executes instead of taking a result from the build cache (persona/buildlogic/TestRuns.kt).
+configureFilteredTestRuns()
 tasks.withType<Test>().configureEach {
     useJUnit()
     testLogging {

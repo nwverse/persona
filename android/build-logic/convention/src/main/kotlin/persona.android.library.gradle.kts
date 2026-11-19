@@ -1,3 +1,4 @@
+import persona.buildlogic.configureFilteredTestRuns
 import persona.buildlogic.configureRepositoryTests
 
 plugins {
@@ -6,6 +7,8 @@ plugins {
 
 // The repository root and the shared fixture domains this module's tests read, as persona.jvm.library sets them.
 configureRepositoryTests()
+// A --tests run draws its screenshots instead of taking a result from the build cache (persona/buildlogic/TestRuns.kt).
+configureFilteredTestRuns()
 
 val libs = extensions.getByType<VersionCatalogsExtension>().named("libs")
 android {

@@ -1,6 +1,11 @@
+import persona.buildlogic.configureFilteredTestRuns
+
 plugins {
     id("com.android.application")
 }
+
+// A --tests run draws its screenshots instead of taking a result from the build cache (persona/buildlogic/TestRuns.kt).
+configureFilteredTestRuns()
 
 val libs = extensions.getByType<VersionCatalogsExtension>().named("libs")
 android {

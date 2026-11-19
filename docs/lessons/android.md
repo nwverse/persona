@@ -161,6 +161,13 @@ in a task whose output feeds the test task's inputs, as `fixtureReferences` does
 `persona.build` lives in `persona/build/`, which `android/.gitignore`'s `build/` rule hides: the build compiles it
 locally and the commit leaves it out.
 
+Shared keys also change what a cache hit leaves behind. Robolectric screenshot tests write PNGs to `build/<name>-shots/`,
+which no task declares; while each checkout had its own keys, a new worktree's first test run always drew them. Once
+keys match, a new worktree's test task can come `FROM-CACHE` with no pictures, and a reused one keeps an older run's. An
+undeclared output is only safe where the task cannot be restored, so `--tests` runs (how screenshots are captured)
+skip the build cache (`android/build-logic/convention/src/main/kotlin/persona/buildlogic/TestRuns.kt`), and a
+whole-suite capture adds `--rerun`.
+
 ## Reusing an onboarding checklist for ordinary settings (#5233)
 
 Reusing the full phone-check list is not enough: an ordinary Notifications and background page must also suppress

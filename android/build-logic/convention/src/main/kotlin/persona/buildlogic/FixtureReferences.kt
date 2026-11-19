@@ -6,11 +6,13 @@ import org.gradle.api.GradleException
 import org.gradle.api.Project
 import org.gradle.api.Transformer
 import org.gradle.api.file.ConfigurableFileCollection
+import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.RegularFile
 import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.tasks.CacheableTask
 import org.gradle.api.tasks.IgnoreEmptyDirectories
 import org.gradle.api.tasks.InputFiles
+import org.gradle.api.tasks.Internal
 import org.gradle.api.tasks.OutputFile
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
@@ -27,24 +29,37 @@ import org.gradle.api.tasks.testing.Test
  *
  * A fixture path built from a variable would hide its domain, and a test reading it could pass from the cache after the
  * fixture changed. Such a line fails this task unless it explains, in a `fixture-inputs:` comment, where its callers name
- * the domain (FixtureReader's own path does). The scan runs at execution time, so editing a test never invalidates the
- * configuration cache.
+ * the domain (FixtureReader's own path does). A path whose domain is completed by a variable (`spec/fixtures/todo-$kind`)
+ * counts as one; a named domain that does not exist under spec/fixtures fails too, which also catches the partial name
+ * such a path leaves when the scan does not recognise it, and plain typos. The scan runs at execution time, so editing a
+ * test never invalidates the configuration cache.
  */
 @CacheableTask
 abstract class FixtureReferences : DefaultTask() {
     @get:InputFiles @get:PathSensitive(PathSensitivity.RELATIVE) @get:IgnoreEmptyDirectories
     abstract val sources: ConfigurableFileCollection
 
+    /**
+     * spec/fixtures, to check that each named domain exists. Not an input: a list restored from the cache was written
+     * where every domain it names existed, and a domain missing here is fingerprinted as missing by the test task, which
+     * then runs rather than coming from the cache.
+     */
+    @get:Internal abstract val fixtures: DirectoryProperty
+
     @get:OutputFile abstract val domains: RegularFileProperty
 
     @TaskAction fun scan() {
         val found = sortedSetOf<String>()
         val problems = mutableListOf<String>()
+        val missing = mutableListOf<String>()
+        val root = fixtures.get().asFile
         sources.asFileTree.visit {
             if (isDirectory) return@visit
             val text = file.readText()
-            found += domainsIn(text)
+            val named = domainsIn(text)
+            found += named
             unresolvedLines(text).forEach { line -> problems += "${relativePath.pathString}:$line" }
+            named.filterNot { File(root, it).exists() }.mapTo(missing) { domain -> "${relativePath.pathString}: $domain" }
         }
         if (problems.isNotEmpty()) {
             throw GradleException(
@@ -52,6 +67,14 @@ abstract class FixtureReferences : DefaultTask() {
                     problems.joinToString("\n") { "  $it" } +
                     "\nName the domain as spec/fixtures/<domain> or FixtureReader.read(\"<domain>\"), or add a " +
                     "`$MARKER <where the callers name it>` comment to that line (persona/buildlogic/FixtureReferences.kt).",
+            )
+        }
+        if (missing.isNotEmpty()) {
+            throw GradleException(
+                "A test names a spec/fixtures domain that does not exist, so the fixtures it reads are not inputs:\n" +
+                    missing.joinToString("\n") { "  $it" } +
+                    "\nWrite the whole domain name (a path completed by a variable hides it), or fix the name " +
+                    "(persona/buildlogic/FixtureReferences.kt).",
             )
         }
         domains.get().asFile.writeText(found.joinToString("") { "$it\n" })
@@ -62,9 +85,13 @@ abstract class FixtureReferences : DefaultTask() {
         private const val NAME = "[A-Za-z0-9_][A-Za-z0-9_.-]*"
         private val path = Regex("""spec/fixtures/($NAME)""")
         private val reader = Regex("""FixtureReader\.read\(\s*"($NAME)"""")
-        // The root alone, an interpolated or concatenated domain, a reader call whose argument is not a plain literal,
-        // or a path put together from separate segments.
-        private val dynamic = Regex("""spec/fixtures(?:"|/[$"{])|FixtureReader\.read\(\s*(?:[^"\s)]|"[^"]*\$)|"fixtures"""")
+        // The root alone, an interpolated or concatenated domain, a domain name that a variable completes
+        // ("spec/fixtures/todo-$kind", "spec/fixtures/todo-" + kind), a reader call whose argument is not a plain
+        // literal, or a path put together from separate segments.
+        private val dynamic = Regex(
+            """spec/fixtures(?:"|/[$"{])|spec/fixtures/$NAME(?:\$|"\s*\+)""" +
+                """|FixtureReader\.read\(\s*(?:[^"\s)]|"[^"]*\$)|"fixtures"""",
+        )
 
         /** The domain names (a directory, or a file directly under spec/fixtures) this source names. */
         fun domainsIn(text: String): Set<String> =
@@ -78,7 +105,7 @@ abstract class FixtureReferences : DefaultTask() {
     }
 }
 
-/** The paths under spec/fixtures that a [FixtureReferences] list names (missing ones are fingerprinted as missing). */
+/** The paths under spec/fixtures that a [FixtureReferences] list names. */
 class FixtureDirectories(private val fixtures: File) : Transformer<List<File>, RegularFile> {
     override fun transform(list: RegularFile): List<File> =
         list.asFile.readLines().filter { it.isNotBlank() }.map { File(fixtures, it) }
@@ -99,6 +126,7 @@ fun Project.configureRepositoryTests() {
             include("**/*.kt", "**/*.java")
             exclude("main/", "debug/", "release/", "androidTest*/")
         })
+        fixtures.set(File(repositoryRoot, "spec/fixtures"))
         domains.set(layout.buildDirectory.file("fixture-references.txt"))
     }
     val fixtures = references.flatMap { it.domains }.map(FixtureDirectories(File(repositoryRoot, "spec/fixtures")))
