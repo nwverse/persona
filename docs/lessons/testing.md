@@ -1,5 +1,9 @@
 # Lessons: testing and validation
 
+- Cache-age fixtures must settle every startup file the probe watches. Settling only `.zshrc` while the same fake
+  home just created `.bashrc` legitimately bypasses the cache; a fast temporary filesystem exposes that timing
+  assumption. Date only the fixture's files with the existing helper, keeping retry/freshness limits and assertions.
+
 - New relayed routes need both extension-scope inventories checked (#7100): `TestRouteScopes` records the exact
   scope, and `TestEveryExtensionRouteIsBounded` records how ownership is enforced. Updating `extwire.RouteScopes`
   alone leaves those checks failing. Exercise allowed and refused tokens, another manager's Todo and explicit manager
@@ -7,6 +11,10 @@
   Regenerate the route inventory after merging additions so shared-prefix routes remain sorted.
 
 - A viewer's Close button existing, or being non-hittable, does not prove that its picture and tap recognizers are ready, or that a tap hid the chrome (#8562). The full-screen presentation may still be settling, the decoded page may still be a spinner, or a SpringBoard alert may cover the app. Dismiss the known icon-change alert, wait for the decoded `viewer-page-N` and a hittable Close before the first tap, and only then assert the hide/show sequence. A delayed-decode launch turns the old race into a deterministic failure; a longer poll after a mistimed tap only hides the synchronization gap.
+
+- A fixture exercising a new read must answer with the real contract: register the same synthetic computer in the
+  fleet and transcript provider, and return a complete Assistant snapshot when an unlisted chat triggers a refresh.
+  An empty operation receipt is not a snapshot; do not weaken the registration or model-selection assertions.
 
 - Fixture teardown is part of a test's elapsed time (#5730). A scripted terminal whose shell is ready immediately
   does not need a fixed startup pause. When a test has finished its assertions, cancel background prompt checks
@@ -142,6 +150,50 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
 - A web test that times out only in the full suite is usually loading or reading something inside its body (2026-11-06, #4955). Vitest reports the timeout as `STACK_TRACE_ERROR` at about 5000 ms (or the test's own budget). On unchanged master with `--maxWorkers=96`, 10 of 10 runs were red. `catalog.test` re-read every language's catalog files and loaded the admin catalogs in each test, `busy-motion.test` walked the whole source tree in each test, and `highlight-lazy.test` did its first `import("rehype-highlight")` inside the test, while the checks themselves take milliseconds. Load or read once at the top of the file instead (collection is not covered by the test timeout), and don't raise the timeout; #5326 (inlined catalogs under Vitest) and #5729 (Persona's warm-up) fixed other cases of the same kind. Two of the failures were not load. `initI18n` applied whichever overlapping call finished last, so a test that timed out mid-switch changed the next test's language (`a、b、c`); now only the latest call applies. `formatList` follows the system region, which under Node is the machine's locale, so on an en-SG machine `a, b and c` failed every run; tests that format set `navigator.languages` themselves.
 
 - A web test that waits a fixed number of `act` turns can still lose to a lazy chunk (2026-11-10, #2874). `RelayAccounts.test` pushed an account's page whose first item is a header, drawn by the `CodeViews` chunk under `lazyPage`; its first draw waits for a dynamic import, and under Vitest even importing a module that is already loaded takes event-loop turns, not just microtasks (2 to 8 `setImmediate` turns in three quiet runs). In one of three loaded full-suite runs that outlasted `settle`'s eight `act` turns and the header was missing; delaying the chunk by 300 ms failed the test every time. Load the chunks first with `beforeAll(() => loadPages(), 60_000)` (as `CodeViews.test` and `ime-enter.test` do), or wait for what the test looks for, rather than adding turns. When a mocked lazy module is the boundary, delaying its real factory makes the gap deterministic; await that import inside `act` and then assert the mounted element with a bounded wait, so module resolution does not escape `act` (#7156).
+
+- Match a flaky full-suite failure to its actual scheduling boundary (#6800). A direct import of an image gate can
+  finish before React.lazy's own request; after rendering, await `vi.dynamicImportSettled()` inside `act`. A list test
+  asserting the state before its next idle batch must hold and release idle callbacks explicitly: wall time between
+  `act` calls can fire the 50 ms fallback and mount another batch. Check that unmount cancels pending callbacks too.
+  Collect cold component graphs and language-specific search fixtures before timed assertions, retaining fresh stores
+  per test and separate module registries per language. Build those language fixtures sequentially, since
+  `vi.resetModules()` changes the registry. For a paged conversation, wait for its observed message request, not a fixed
+  number of microtasks. Preserve the assertions and deadlines; compare the same fixed main and candidate under the
+  same ordering, and distinguish naturally reproduced failures from deliberately delayed imports or responses.
+  After merging a newer main, rerun the normal production build under the branch's committed byte limit.
+  An upstream budget increase does not prove that stricter limit. Keep a deferred confirmation and its failure
+  rendering in the same existing chunk; regress cancellation, retry and failed chunk loading before measuring again.
+  At 2× text, check every failure-dialog choice against the viewport: a clipped Cancel can be missed by a page-level
+  horizontal-overflow check. Let the action row wrap while each button stays on one line.
+  A Markdown image fixture must reach the component it asserts: once the reply-picture plugin loads, block images
+  use the gallery, while inline images keep the external-image gate. Preload that plugin and use an inline fixture
+  for the gate's privacy/retry assertions; otherwise an idle import makes the same fixture change components.
+  Freeze the Date clock at local noon when a formatting case assumes a recent message is from today. One minute
+  before 00:00 belongs to yesterday and correctly carries a date; do not loosen the same-day/date assertions.
+  A runtime gate fixture must prepare the assistant directory through `assistant.prepare` before sending, as the
+  hub does. Merely writing a user skill does not authorize copying it into an unprepared task directory; keep that
+  boundary and the gate's read, refused-write and conversation-ownership assertions intact.
+  For scheduled delivery, distinguish a real RPC peer closed before its write (`rpc.ErrNotSent`) from one closed
+  after accepting the request. Wrap the actual errors and advance a `synctest` clock past the production retry delay;
+  count attempts and effects separately, including persistent failure and uncertain delivery. Keep scheduled turns
+  and their completion watchers in the same clock bubble. A busy-process fixture must acknowledge its current mode
+  and effort, or an unrelated control request can obscure the model-compatibility boundary being tested.
+  Resume guards must apply the sender's launcher inheritance before comparing execution contexts. Exercise an
+  omitted launcher through both the actual send and a runtime peer, including a session row without a launcher.
+  Keep stored-launcher precedence and reject a stale stored launcher belonging to another connected runtime;
+  accepting the listed owner alone can validate one runtime while the sender routes to another.
+  A transport fixture for scheduled execution must mark its computer online, answer the exact synthetic model
+  probe, and recognize a listed source session when `resume_only` is sent. Otherwise setup failures hide the
+  category/inheritance behavior it asserts. Keep the original send-parameter and refusal assertions.
+  Trusted-adapter fixtures also validate their test executable's ancestors: use private temporary directories
+  and an owner-only process umask, since a group-writable Go build directory or test binary is correctly refused.
+  An empty external allocation still hands its initialized process off from the startup RPC before returning.
+  Regress cancellation of that RPC followed by an acknowledged control and the first real message on the same
+  process and pinned binding, with no early model input or context receipt. A new empty-start return can otherwise
+  report success just before deferred startup cleanup stops its native process.
+  When a model catalog folds aliases into one row, task saves and stored runs must still enforce that row's advertised
+  thinking levels, and the editor must use its default effort without rewriting the saved alias. Exercise an actual
+  folded catalog through rejected saves, refused dispatch and a supported choice; checking only the canonical ID misses it.
 
 - A concurrency test that passes with `-race` can still fail without it (2026-11-06, #5908). `-race` slows the instrumented code, so the goroutines meet in a different order. `TestInstallClaimsOperation` passed 20 of 20 runs with `-race` and failed 13 to 29 of 40 without it. Without `-race` its second install usually ran only after the first had committed and used up the preview, and got a 403 from the market check that the PR's own `-race` runs never reached. Run a new concurrency test with `-count`, both with and without `-race`. For the interleaving that matters, set up the state directly instead of hoping two goroutines meet there (here: claim the operation, drop the preview, then install again).
 
