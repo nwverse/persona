@@ -61,6 +61,18 @@ unknown capabilities, or kinds without an Inbox capability all fail registration
 | `login` | `Login` | Stepwise login | Telegram, larkcli |
 | `threads` | `Threads` | Opens an Inbox conversation as a chat page in the App: `Thread(thread, before, limit)` returns a page of messages (sender, avatar, media, references, cursor); `Media(ref)` supplies avatar/media bytes. Read-only; replies use the action named in `ThreadChat.Reply` (gated). The App selects a page by `ThreadChat.Kind`: bubbles for dm / group / channel, GitHub layout for pr / issue. A message whose `format` is `markdown` is drawn from its Markdown, and lark-cli's envelope for one interactive message (`<card title="…">…</card>`) as a card under its title. lark-cli's page takes its kind from the chat's own record (`docs/protocol/protocol.md`); a Lark page with an empty kind (a hub before that) is a chat too | Telegram (#1054), GitHub (#1055, `docs/plans/plan-connectors.md` ("Conversation page")), Lark via lark-cli |
 
+**Thread media** (#10974). `GET /api/v1/connectors/{id}/media?ref=` checks the bytes before serving them, including
+previously cached bodies; the connector's `Media.Mime` does not select the response type. Images are limited to JPEG,
+PNG, GIF and WebP (`image/jpeg`, `image/png`, `image/gif`, `image/webp`). The route also accepts recognized passive
+audio/video containers: `audio/aiff`, `audio/mpeg`, `audio/midi`, `audio/wave`, `video/avi`, `video/mp4`, `video/webm`
+and `application/ogg`. Conversation pages use media for pictures, stickers, avatars and video thumbnails; voice
+messages and files remain descriptions. HTML, SVG and other unsupported bytes receive 415 in the usual JSON error
+body, whatever MIME the connector declared. An empty connector answer or one over 4 MiB still receives 502.
+Invalid fresh bodies are not cached; a cached body that fails the check is refused. Responses written by the media
+handler, including its errors, carry `X-Content-Type-Options: nosniff` and
+`Content-Security-Policy: default-src 'none'; sandbox`. Accepted bodies keep the byte-derived `Content-Type` and
+existing private immutable caching; a ref must still name the same bytes.
+
 `Runner` (its own loop) and `Machines` (a computer connected) describe how it runs, not capabilities, and still use type assertions. Inbox tiers are `connector.Tier` (`TierAction`, `TierFYI`, `TierNoise`);
 the hub drops unknown tiers and leaves classification to the model.
 
@@ -198,6 +210,7 @@ The built-in `larkcli` connector keeps its cursor, bounded message-id overlap se
 
 `GET /api/v1/connectors?all=1` (without `all`, omits Lark and mail for pre-M6 Apps); each entry is `{id, name, status, account, via, error, guide, guide_url?, missing_scopes?, capabilities, hosts, enabled, options, archive, inbox}`. `guide_url` is an optional HTTPS page the App may open for a connector-specific fix; `missing_scopes` names permissions when available.
 `archive` / `inbox` are the "Add to knowledge base" / "Add to Inbox" toggles (`Registry.SetFeed`, on by default, stored in hub settings). Turning knowledge-base ingestion off stops new content from its conversations, documents, meetings, calendar events and posts: the connector is omitted from both knowledge-base source lists, calls to `Archive`, `Items` and document-title lookup are refused, and the program's `kb.posts_*` calls are refused too. Content already saved stays. The connector keeps running and tools remain available. Turning the connector's main `enabled` switch off also blocks these knowledge-base paths, even if its extension process remains running for another capability.
+Changing an extension's connector's `enabled` switch restarts that extension (`setConnectorEnabled`, #10467), so its program's new `initialize` lists in `active.connectors` only the connectors that are on, and work it does for a connector on its own (a listener, replies) can stop with the switch; the hub's own connectors and a switch that changes nothing restart nothing (`docs/extensions/extensions.md` "Turning contributions on and off").
 "Delete stored knowledge-base content" (`DELETE …/{id}/archive`) turns knowledge-base ingestion off and deletes the connector's conversations and people, including its `archive_sources`, archived posts, and documents, meetings and events. It also removes their indexes and project associations and resets archive cursors and deleted chats' history-import state. The connector keeps running; Inbox entries and tools stay available.
 "Delete stored data" (`DELETE …/{id}/data`) performs the same knowledge-base cleanup, disables the connector itself, and deletes its Inbox entries. Both responses include `chats`, `people`, `posts`, `items` and `inbox` counts (`inbox` is zero for knowledge-base-only deletion). Deletion does not sign out or change data at the remote service.
 Ownership is recorded when data enters the knowledge base. Older records without ownership are deleted only when their source or source chat identifies this connector; ambiguous records are retained to protect other sources. See `docs/assistant/knowledge.md` ("Deleting a connector's saved knowledge") for the legacy and shared-source rules. Disabling Inbox ingestion stops `Collect` without changing existing inbox items.

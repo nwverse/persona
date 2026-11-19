@@ -124,8 +124,8 @@ type sendOpts struct {
 	// typed and the switch is dropped, so none waits for the user's next message (switchNowRefusal).
 	SwitchNow bool `json:"switch_now"`
 	// OwnerInput: the owner typed this message in their own app (the devices manager sets it from the hub's
-	// human-input marker and drops any a caller sent). A Claude outside Persona's terminals at rest takes it as the
-	// person's input through Persona's plugin when it has it (ccplugin.go); every other message keeps its inbox.
+	// human-input marker and drops any a caller sent). A Claude outside Persona's terminals takes it as the person's
+	// input through its tmux pane, or through Persona's plugin when it has no pane; every other message keeps its inbox.
 	OwnerInput bool `json:"owner_input"`
 	// readBox: a screen that cannot be read refuses (unreadBoxMessage) instead of passing for an empty box. After a
 	// command that may still sit in the box (ultracode.go), not knowing is not enough to type after it.
@@ -433,6 +433,28 @@ const sentTTL = 10 * time.Minute
 // once runs send for a client_msg_id at most once: a retry waits for a send in flight and returns its outcome, or
 // succeeds at once after a delivered one. Refused sends (nothing typed) are forgotten, so their retry runs again.
 func (l *sentLog) once(id string, send func() error) error {
+	return l.onceReplacing(id, nil, send)
+}
+
+// completed returns the cached attempt and whether it can be replaced after an echo check. An in-flight or
+// acknowledged send may still be written to the transcript later.
+func (l *sentLog) completed(id string) (*sendRecord, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	r := l.sent[id]
+	if r == nil {
+		return nil, true
+	}
+	select {
+	case <-r.done:
+		return r, maybeDelivered(r.err)
+	default:
+		return r, false
+	}
+}
+
+// onceReplacing allows an echo-checked retry to supersede only the specific ambiguous attempt it checked.
+func (l *sentLog) onceReplacing(id string, previous *sendRecord, send func() error) error {
 	if id == "" {
 		return send()
 	}
@@ -441,11 +463,15 @@ func (l *sentLog) once(id string, send func() error) error {
 		l.sent = map[string]*sendRecord{}
 	}
 	for k, r := range l.sent {
-		if time.Since(r.at) > sentTTL {
-			delete(l.sent, k)
+		if time.Since(r.at) > sentTTL && (k != id || previous == nil) {
+			select {
+			case <-r.done:
+				delete(l.sent, k)
+			default:
+			}
 		}
 	}
-	if r := l.sent[id]; r != nil {
+	if r := l.sent[id]; r != nil && r != previous {
 		l.mu.Unlock()
 		<-r.done
 		return r.err
@@ -456,7 +482,13 @@ func (l *sentLog) once(id string, send func() error) error {
 	r.err = send()
 	if r.err != nil && !maybeDelivered(r.err) {
 		l.mu.Lock()
-		delete(l.sent, id)
+		if l.sent[id] == r {
+			if previous != nil && rpcCode(r.err) == proto.CodeEchoUnconfirmed {
+				l.sent[id] = previous // the recheck declined before replacing the ambiguous attempt
+			} else {
+				delete(l.sent, id)
+			}
+		}
 		l.mu.Unlock()
 	}
 	close(r.done)
