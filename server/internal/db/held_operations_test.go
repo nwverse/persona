@@ -241,7 +241,8 @@ func TestHeldOperationsShownRetriedAndUnsure(t *testing.T) {
 	if op, found, err := d.HeldOperationOf(ctx, HeldKindMessage, "mac", "s1", "a"); !found || err != nil || op.Call == nil || op.Images != 2 {
 		t.Fatalf("by key %+v %v %v", op, found, err)
 	}
-	for seq, failure := range map[int64]string{a: HeldUnclear, b: HeldRefused} {
+	u := hold("u", `{}`)
+	for seq, failure := range map[int64]string{a: HeldUnclear, b: HeldRefused, u: HeldUnconfirmed} {
 		if _, ok, _ := d.ClaimHeldOperation(ctx, seq, at); !ok {
 			t.Fatal("claim")
 		}
@@ -254,6 +255,13 @@ func TestHeldOperationsShownRetriedAndUnsure(t *testing.T) {
 	}
 	if ok, check, err := d.RetryHeldOperation(ctx, b, at); !ok || check || err != nil {
 		t.Fatalf("retry refused: %v %v %v", ok, check, err)
+	}
+	// Left to the owner after it was looked for: a Retry sends it anyway, no mark.
+	if ok, check, err := d.RetryHeldOperation(ctx, u, at); !ok || check || err != nil {
+		t.Fatalf("retry unconfirmed: %v %v %v", ok, check, err)
+	}
+	if op, _, _ := d.HeldOperationOf(ctx, HeldKindMessage, "mac", "s1", "u"); op.State != HeldWaiting || op.Failure != "" {
+		t.Fatalf("u retried %+v", op)
 	}
 	ops, _ = d.HeldOperations(ctx, HeldKindMessage)
 	if ops[0].State != HeldWaiting || ops[0].Failure != HeldUnclear || ops[1].State != HeldWaiting || ops[1].Failure != "" {
@@ -270,7 +278,7 @@ func TestHeldOperationsShownRetriedAndUnsure(t *testing.T) {
 	if ok, err := d.DeleteUnsureHeld(ctx, HeldKindMessage, "mac", "s1", "c"); !ok || err != nil {
 		t.Fatalf("unsure c: %v %v", ok, err)
 	}
-	if ops, _ := d.HeldOperations(ctx, HeldKindMessage); len(ops) != 2 {
+	if ops, _ := d.HeldOperations(ctx, HeldKindMessage); len(ops) != 3 {
 		t.Fatalf("left %+v", ops)
 	}
 }

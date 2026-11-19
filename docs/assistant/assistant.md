@@ -1365,16 +1365,19 @@ manager that connects the computer holds it and sends it once the computer is ba
   it) leaves it waiting.
 - **Never sent twice by itself.** A try whose outcome is unknown (the connection dropped during it, no answer in time,
   the node said it may have typed it, the manager stopped during it) is not tried again: it fails with "Might not have
-  arrived. Retry sends it only if the chat doesn't have it yet", and the Agent's later held messages wait behind it
-  until the owner picks Retry or Delete. Once per connection that lists the Agent, the manager reads its latest turns:
-  a line there that the node tied to its `client_msg_id` (the node ties a typed line to its message by its words) shows
-  it did arrive: it leaves the row, and the next ones go. The node does not drop a second send of an id, so a Retry of
-  such a message keeps that mark while it waits ("Will check and send when <computer> is back"): the turns are read
-  again before it goes, it goes only when they do not have it, and it waits when they could not be read. While they
-  are read, the owner's Retry and Delete of it answer that it is being sent. A node that refused it (nothing typed), or
-  a message that could not be made ready to send before the node was asked, fails with the reason and the next one
-  goes; once the node took a message it counts as delivered, whatever came after. A message the owner is retrying or
-  deleting holds the later ones back meanwhile.
+  arrived. Retry checks the chat first", and the Agent's later held messages wait behind it until the owner picks Retry
+  or Delete. Once per connection that lists the Agent, the manager reads its latest turns: a line there that the node
+  tied to its `client_msg_id` (the node ties a typed line to its message by its words) shows it did arrive: it leaves
+  the row, and the next ones go. The node does not drop a second send of an id, so a Retry of such a message keeps that
+  mark while it waits ("Will check the chat when <computer> is back"), and does not expire: the turns are read when the
+  computer is back. Found, it leaves the row and is not sent. Not found is no proof it did not arrive (the hub hands a
+  restarted node its ties for a day, the node keeps them a day, only the latest turns are read, some runtimes never
+  tie a line), so nothing is sent: it goes back to the owner, "Couldn't confirm it arrived. Retry to send it anyway,
+  or delete it", still holding the later ones back; that Retry sends it as it is. Three reads that fail end the same
+  way. While the turns are read, a Retry of it answers that it is being sent; a Delete goes. A node that refused it
+  (nothing typed), or a message that could not be made ready to send before the node was asked, fails with the reason
+  and the next one goes; once the node took a message it counts as delivered, whatever came after. A message the owner
+  is retrying or deleting holds the later ones back meanwhile.
 - **Store and memory kept in step.** A write to Postgres that failed, or a claim whose answer was lost, leaves the
   row as decided in memory and holds the Agent's later messages back; the manager writes it again on its next look,
   never sending it as part of that, and the owner's Retry or Delete works once no try of it can still be running. A hold

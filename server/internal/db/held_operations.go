@@ -27,6 +27,10 @@ const (
 	HeldUnclear = "unclear" // a try whose outcome is unknown: it may have arrived
 	HeldRefused = "refused" // the computer refused it, nothing typed (Error says why)
 	HeldExpired = "expired" // its computer was away for a whole day
+	// HeldUnconfirmed: one that may have arrived was looked for in its transcript and not found, or the transcript
+	// could not be read: not proof it did not arrive (the node's tie of a line to its id does not always last), so it
+	// waits for the owner; a Retry of it sends it as it is.
+	HeldUnconfirmed = "unconfirmed"
 )
 
 // HeldOperation is a row of held_operations: an operation the owner sent to a computer while it was away, held by its
