@@ -1,5 +1,7 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- Recover an untold completion by native turn identity, not transcript revision (#10686). Trailing transcript bookkeeping must not suppress an already judged signal. Revalidate the complete current ledger entry under its lock and enqueue without rewriting it, so an older recovery snapshot cannot replace a newer turn or judgment. Exercise both PostgreSQL-backed manager restart and stale-snapshot rejection, with replay disabled as a negative control.
+
 - Persist a complete delivery round before its first external send (#10393). Saving only when the call returns handles a returned error but loses the result if the manager exits inside the call, after task acceptance has committed. Keep the original timestamp/key and acceptance metadata on disk while retaining an in-memory claim to block overlapping sends. Every other book save must preserve that prepared record too; retry must not send from memory when its preparation could not be saved. Use a child-process exit at the real provider boundary and a fresh manager on the same disposable database to prove recovery, with the returned-error case as a control.
 - A review wake is not a completion verdict (#8373). PR events and judged-done candidates share the same signal. Keep its wording neutral, preserve the actual reason and criterion evidence, and leave acceptance gates and display grouping unchanged.
 
