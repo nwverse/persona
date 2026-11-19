@@ -75,6 +75,9 @@ def main():
     p.add_argument("--prefix", default="persona-link-switch-e2e")
     p.add_argument("--image", default="")
     p.add_argument("--web", default="")
+    p.add_argument("--node-service", action="store_true",
+                   help="give the computer its own resident node service first (personad-node): a switch must leave it "
+                        "as it was, and a rollback must not remove it")
     p.add_argument("--hold", type=int, default=0)
     p.add_argument("--manual", action="store_true",
                    help="start no switch: print READY with the hub's address and the file holding its token, and wait for "
@@ -170,6 +173,17 @@ def main():
             run(["docker", "exec", box, "loginctl", "enable-linger", "testuser"])
             wait(lambda: box_sh("systemctl --user is-system-running", check=False).stdout.strip() in ("running", "degraded"),
                  30, "the computer's user manager")
+        unit_before = ""
+        if a.node_service:
+            unit = ("[Unit]\nDescription=resident node (the computer's own, before the switch)\n[Service]\n"
+                    "ExecStart=%h/.persona/bin/personad node --attach\nRestart=always\nRestartSec=2\n"
+                    "[Install]\nWantedBy=default.target\n")
+            run(["docker", "exec", "-i", box, "su", "-", "testuser", "-c",
+                 "mkdir -p ~/.config/systemd/user && cat > ~/.config/systemd/user/personad-node.service"], input=unit)
+            box_sh("systemctl --user daemon-reload && systemctl --user enable --now personad-node.service")
+            wait(lambda: box_sh("systemctl --user is-active personad-node", check=False).stdout.strip() == "active", 30,
+                 "the computer's own node service")
+            unit_before = box_sh("sha256sum ~/.config/systemd/user/personad-node.service").stdout.split()[0]
         hostkey = run(["docker", "exec", box, "cat", "/etc/ssh/ssh_host_ed25519_key.pub"]).stdout.split()
         (sshdir / "known_hosts").write_text(f"[127.0.0.1]:{ssh_port} {hostkey[0]} {hostkey[1]}\n")
         (sshdir / "config").write_text(
@@ -288,6 +302,8 @@ def main():
             units = box_sh("systemctl --user list-unit-files 'persona*' --no-legend 2>/dev/null; true").stdout.strip()
             say(f"STEP rolled back: kind {m.get('kind')}, transport {m.get('transport')}, error {ls.get('error')},"
                 f" units [{units}]")
+            if a.node_service:  # its own node service stays; only Persona Link's unit must be gone
+                units = "\n".join(u for u in units.splitlines() if not u.startswith("personad-node"))
             if m.get("kind") != "ssh" or units or "link.json" in after_files or "persona-link" in after_files.replace(".persona-link-switch", "x"):
                 raise AssertionError(f"left behind:\n{after_files}")
             if sorted(before_files.split()) != sorted(after_files.split()):
@@ -300,6 +316,12 @@ def main():
                 raise AssertionError("the refused check changed files on the computer")
             say("STEP refused at the check, nothing changed on the computer")
 
+        if a.node_service:  # the computer's own node service, as it was before the switch, whatever its outcome
+            now = box_sh("sha256sum ~/.config/systemd/user/personad-node.service 2>/dev/null; true").stdout.split()
+            active = box_sh("systemctl --user is-active personad-node", check=False).stdout.strip()
+            say(f"STEP own node service: unchanged {bool(now) and now[0] == unit_before}, {active}")
+            if not now or now[0] != unit_before or active != "active":
+                raise AssertionError("the computer's own node service was changed or stopped")
         # The pairing secret never shows: not in the hub's log, the stored record, or the answers.
         text = (root / "hub.log").read_text(errors="replace")
         leaks = [w for w in ("jp_", "persona://link?") if w in text]

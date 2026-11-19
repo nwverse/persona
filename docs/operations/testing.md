@@ -1217,6 +1217,8 @@ never read. The containers (`--prefix`), the network and the key are removed at 
   get through. The run checks the switch fails, the kind is ssh again, nothing it installed is left, and the computer answers over
   ssh.
 - `linger_off` leaves linger off and expects a refusal at the check, with nothing changed on the computer.
+- `--node-service` gives the computer its own resident node service first. A switch must leave it as it was, and so
+  must a rollback.
 - Every scenario checks the pairing secret is not in the hub's log or the manager's record.
 - `--hold <seconds>` keeps it all up afterwards, for screenshots of the web app (`--web web/dist`).
 
