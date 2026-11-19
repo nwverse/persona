@@ -310,7 +310,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		prompt += "\n\n" + prompts.RenderTaskContinuation(prompts.TaskContinuation{TodoID: t.Continues, Readonly: t.Readonly})
 	}
 	if t.Readonly {
-		prompt += "\n\n" + prompts.RenderReadonlyTaskConstraint()
+		prompt += "\n\n" + prompts.RenderReadonlyTaskConstraint(answerLanguage(s.hello(ctx).Locale))
 	}
 	if t.planFirst {
 		prompt += "\n\n" + prompts.RenderPlanFirstTaskConstraint()

@@ -91,9 +91,10 @@ func (s *Service) triageTurnModel(ctx context.Context, v *workView, machine stri
 		}
 		in.Answered = triageAnswered(records)
 	}
+	hello := s.hello(ctx)
 	w, same, err = judgeTriageWith(ctx, s.purposeModel("agent.triage"), triageJudgeInput{
-		System: prompts.AgentTriage{Owner: s.owner(ctx), Language: answerLanguage(s.hello(ctx).Locale)},
-		Input:  in, Reply: reply, Others: byShort, Lang: s.lang(ctx),
+		System: prompts.AgentTriage{Owner: strings.TrimSpace(hello.Owner), Language: answerLanguage(hello.Locale)},
+		Input:  in, Reply: reply, Others: byShort, Lang: i18n.Lang(hello.Locale).Or(i18n.Default),
 	})
 	if err != nil {
 		return nil, false, err
@@ -119,8 +120,10 @@ type triageJudgeInput struct {
 // on the very step the user approved (#3824). It reads nothing else, so a behaviour check can run it on written-out
 // turns (#2586, agents_triage_judge_live_test.go).
 func judgeTriageWith(ctx context.Context, m jsonModel, j triageJudgeInput) (w *proto.WorkState, same bool, err error) {
+	in := j.Input
+	in.Language = j.System.Language // One captured language for both halves of this model call.
 	var out triageOut
-	if err := m.JSON(ctx, prompts.RenderAgentTriage(j.System), prompts.RenderAgentTriageInput(j.Input), &out); err != nil {
+	if err := m.JSON(ctx, prompts.RenderAgentTriage(j.System), prompts.RenderAgentTriageInput(in), &out); err != nil {
 		return nil, false, err
 	}
 	same = out.Wait != nil && out.Wait.Approved && j.Input.ApprovedThen != ""
@@ -383,8 +386,8 @@ type agentWake = prompts.AgentWake
 
 func renderWake(w agentWake) string { return prompts.RenderAgentWake(w) }
 
-func renderAnswer(items []agentAnswerItem) string {
-	a := prompts.AgentAnswer{}
+func renderAnswer(items []agentAnswerItem, language string) string {
+	a := prompts.AgentAnswer{Language: language}
 	for _, it := range items {
 		a.Items = append(a.Items, prompts.AgentAnswerItem{Question: oneLine(it.question), Answer: it.answer})
 	}
@@ -393,14 +396,14 @@ func renderAnswer(items []agentAnswerItem) string {
 
 // renderDelegatedAnswer is renderAnswer for answers the assistant gave for the user, and why (delegate.go): the agent
 // hears that they are the assistant's, and that the user may change them.
-func renderDelegatedAnswer(items []agentAnswerItem, reason string) string {
-	a := prompts.AgentAnswer{ByAssistant: true, Reason: oneLine(reason)}
+func renderDelegatedAnswer(items []agentAnswerItem, reason string, language string) string {
+	a := prompts.AgentAnswer{Language: language, ByAssistant: true, Reason: oneLine(reason)}
 	for _, it := range items {
 		a.Items = append(a.Items, prompts.AgentAnswerItem{Question: oneLine(it.question), Answer: it.answer})
 	}
 	return prompts.RenderAgentAnswer(a)
 }
 
-func renderAuthRelayed(app string) string {
-	return prompts.RenderAgentAuthRelayed(prompts.AgentAuthRelayed{App: app})
+func renderAuthRelayed(app string, language string) string {
+	return prompts.RenderAgentAuthRelayed(prompts.AgentAuthRelayed{Language: language, App: app})
 }

@@ -57,6 +57,35 @@ records a justified compatibility change. Before claiming any follow-up, recheck
 | tools | #6274 | Remaining tool guidance and generated helper text; keep protocol identifiers and parameters stable. |
 | channel/shared/bot | #6275 | Channel/bot wrappers and shared fragments; inventory all includes and preserve provenance and native message data. |
 
+### Agent prompt migration (#6268)
+
+The remaining Chinese Agent templates have full English and Japanese branches, with the original empty-language
+branch retained byte for byte. This includes decision answers and overrides, authorization relay notices,
+read-only task constraints, usage-limit continuations, peer-inbox wrappers, triage/delegation and report inputs,
+review instructions, and the closeout instructions and rules. Wake localization remains the #5976 implementation.
+System/input pairs for a model operation use one captured owner language; future deliveries use the current one.
+User questions, exact option labels, reports, decisions, owner rules, diff evidence, identifiers and the closeout
+form remain source data. Reanswer deduplication deliberately uses the legacy rendering, so changing the interface
+language does not resend the same override. Existing English classifier, replay and task-policy templates are
+inventoried separately; this migration does not translate recorded conversation history or fixed protocol enums.
+The full caller/parser inventory and original phase boundaries are in
+`docs/archive/assistant/agent-prompt-language-6268.md`.
+
+A localized usage-limit continuation begins with the exact standalone `<persona-limit-continue />` marker and a
+nonempty body. The hub reads that marker as the existing `limit_continue` follow-up; the old Chinese prefix is
+still recognized. User-authored context and `client_msg_id` protection still win over text recognition. The manager
+supplies the existing structured message source on delivery. Older hubs cannot recognize the new marker by text
+alone; update the hub before relying on its localized transcript classification.
+
+The devices manager overwrites the optional `prompt_language` on node `session.send` and `codex.answer` from its
+owner-language callback, removing all caller-supplied letter-case variants. Nodes use it only for the newly
+rendered peer/answer wrapper, in per-call context rather than global state. It is independent of `owner_input`,
+reserved owner-control RPCs and peer `from-mode`; it never grants authority. Old nodes ignore the field and keep
+their Chinese wrapper; calls from old managers omit it and new nodes keep that same default. The transcript reader
+strips exact English/Japanese peer heads as well as the current and historical Chinese heads, only on messages
+from Persona. Stop recognition remains unchanged. A display-language upgrade never reclassifies another peer's
+message as the owner's input.
+
 ### To-do prompts
 
 The model phase covers the title and completion receipt. The title keeps its existing output language and length rules,

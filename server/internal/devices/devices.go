@@ -88,6 +88,9 @@ type Options struct {
 	Detached func(machine string)
 	// Location is the user's time zone ("today" of the token usage); nil: the machine's.
 	Location func() *time.Location
+	// PromptLanguage is the owner language for newly generated node-side prompt wrappers.
+	// Nil retains legacy Chinese; it is display policy, never an authority input.
+	PromptLanguage func() string
 	// ConfigFile is the manager's manager.json (internal/managerconf): its usage section (the account-pool gateways
 	// and their keys, usagegateways.go) is read and written there. "": none (tests).
 	ConfigFile string
@@ -704,6 +707,11 @@ func (d *Devices) callNode(ctx context.Context, p devicewire.NodeCall) (json.Raw
 	if refusesHandoff(p.Method, params) {
 		return nil, errHandoffRefused
 	}
+	var languageErr error
+	params, languageErr = d.promptLanguageParams(p.Method, params)
+	if languageErr != nil {
+		return nil, languageErr
+	}
 	m.noteWatch(p.Method, params)
 	if p.Method == "session.unwatch" && m.follows(params) {
 		return json.RawMessage(`{}`), nil // the manager still follows it: the node keeps sending its items
@@ -969,6 +977,11 @@ func (d *Devices) CallNode(ctx context.Context, id, method string, params json.R
 		if method == "codex.answer" && devicewire.IsOwnerAnswer(ctx) {
 			ctx = context.WithValue(ctx, ownerControlKey{}, method)
 		}
+	}
+	var languageErr error
+	params, languageErr = d.promptLanguageParams(method, params)
+	if languageErr != nil {
+		return nil, languageErr
 	}
 	var out json.RawMessage
 	if err := m.call(ctx, method, params, &out); err != nil {
