@@ -421,7 +421,11 @@ Restore commits atomically, clears old-installation replay receipts and leaves d
 
 This generic store is **not a legacy filesystem importer, business-schema upgrade/downgrade, lease-renewal service, media URL or protocol-specific send/recovery implementation**. Migrations needing those contracts remain blocked until their separately scoped implementation and installed-source restart/crash acceptance preserve the original behavior. The store's schema version is 1; unsupported persisted versions fail closed. Source-default packages, marketplace indexes, signing changes and production activation remain separate phase gates.
 
+The [authenticated source handler design](source-api-handlers.md) defines how owner confirmation, manager-owned reservations and external-effect receipts compose with this store. It is a design gate, not an implemented capability.
+
 #### Hub API: scopes (#1855)
+
+The [source handler design](source-api-handlers.md) keeps its per-operation session rename/mode tickets separate from these legacy standing scopes; it neither broadens nor silently migrates them.
 
 To call the hub's HTTP API, an extension lists the scopes it uses in `permissions.hub` instead of asking for the full token:
 
@@ -1553,6 +1557,8 @@ An extension installed from a package (a marketplace, `file:`, `dir:`, …) can 
 
 The [2026-11-07 migration and acceptance record](../archive/extensions/source-extension-migration-2026-11-07.md) separates merged implementation, native-client evidence, complete source-package acceptance and outstanding production/platform gates. It is a historical snapshot, not deployment authorization.
 
+The [authenticated source API and assistant handler contract](source-api-handlers.md) is the design gate for source-dispatched API routes, bounded media and durable external writes. It does not make the source runtime an HTTP host or authorize activation.
+
 Executable packages retain the default `runtime.mode: "process"` behavior. A source package explicitly selects `"deno"` and carries a prebuilt, self-contained JavaScript module:
 
 ```json
@@ -1814,6 +1820,8 @@ When a request goes to the extension's own HTTP (the last row of the table above
 
 ## App endpoints
 
+The [source handler contract](source-api-handlers.md) deliberately keeps this native contribution separate from a future source-dispatched `namespaces.api` handler; an existing `api` grant does not open an inbound source route.
+
 An extension contributes `api` to provide a set of app-facing endpoints `/api/v1/<prefix>/…` on its own HTTP side (`PERSONA_EXTENSION_SOCKET`):
 
 - The hub authenticates first (like any other endpoint; read-only devices are restricted as usual), then forwards as-is to the extension: path unchanged, `Authorization` and `token` removed, `X-Persona-Device` (device id, empty for the master token) and
@@ -1836,6 +1844,8 @@ An extension contributes `api` to provide a set of app-facing endpoints `/api/v1
 ## Assistant
 
 An extension contributes `assistant`:
+
+The [source handler contract](source-api-handlers.md) defines the separate typed command-to-handler mapping and its independent credential-reference and per-write grants. It does not replace this command gate or open a generic command forwarder.
 
 - `skills`: skill directories in the package (each with a `SKILL.md`). The hub brings them in `assistant.prepare` to the computer that runs the assistant (each skill's files only once per computer, after that only a digest;
   those the node reports as "missing" are brought again next time). The assistant's check of its directories every minute compares the skills' digests as well as the CLAUDE.md, so a skill that an upgrade changes reaches that computer within a minute even when the CLAUDE.md stays the same (#4256). The node puts them in `~/.persona/plugin-skills/<name>` and copies them into the assistant directory like built-in skills; the user's own skill with the same name takes precedence; they are removed from the assistant directory when the extension is disabled or uninstalled.
@@ -2102,7 +2112,7 @@ Where each client puts them:
 | placement | Web | Mac | iOS | Android |
 | --- | --- | --- | --- | --- |
 | `nav_page` | In the sidebar's **Overview / Machines / Settings** group, before Settings, one row per page (icon, title, badge); at most 3 in the sidebar, later ones go first under **More** at the end of the group, and the user can reorder, show or put away pages in settings (web.md "The sidebar's pages") and choose one as the page the app opens on (web.md "Start page", #9071); a page that names a `group` comes in under that group's heading, a foldable section of its own after **Pages** (web.md "The sidebar's pages"); after a reload the entries and an open page's last view are drawn from this browser's cache until the hub answers (web.md "Extension pages on reload") | The left section column, same group and position as the web | In the new shell's drawer (iPhone) and iPad sidebar, after the **Machines** group, one row per page (icon, title, badge), opening directly when tapped (#2961); also above the installed list on **Settings › Extensions**; the Settings tab badge adds these badges (numbers summed; a dot when there are only text badges), and when the drawer already lists these entries, the Settings button at the bottom of the drawer does not add them again | Same as iOS: in the drawer after Machines, and above the list on **Settings › Extensions**; the Settings tab badge adds these badges |
-| `overview_card` | On the Overview page (`/overview`), a row of cards at the end of the page, under the Agent sections and the computers | No Overview page: above the list in **Settings › Extensions** | No Overview page: above the list in **Settings › Extensions** | Same as iOS |
+| `overview_card` | On the Overview page (`/overview`), a row of cards at the end of the page, under the Agent sections and the computers, in the hub's order (by extension, then the manifest's) unless the user arranged them: order, hidden, half or full row, kept per user on the hub (web.md "Overview's extension cards", #9745) | No Overview page: above the list in **Settings › Extensions** | No Overview page: above the list in **Settings › Extensions** | Same as iOS |
 | `machine_section` | Machine detail page | Machine detail page | Machine detail page | Machine detail page |
 | `inbox_item` | The Inbox detail pane: the header (title, source, **Done**, ✦ summary, **AI draft reply** / **Hand to AI**) stays, and the conversation / body below is replaced by what the extension draws | When an item from this connector's source is opened in the Inbox, the right column (✦ summary and buttons, **Done**) stays, and the conversation / body on the left is replaced by the extension's View | When an item from this connector's source is opened in the Inbox, the action bar under the navigation bar (✦ summary, **AI Draft Reply** / **Hand to AI**) and **Done** stay, and the conversation / body below is replaced by the extension's View | Same as web (Android's own PR) |
 

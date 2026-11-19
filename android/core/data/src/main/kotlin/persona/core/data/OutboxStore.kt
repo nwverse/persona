@@ -12,6 +12,7 @@ enum class OutboxState(val wire: String, val delivery: DeliveryState) {
     Unknown("unknown", DeliveryState.Unknown),
     Refused("refused", DeliveryState.Refused),
     Verifying("verifying", DeliveryState.Verifying),
+    Held("held", DeliveryState.Held),
     Sent("sent", DeliveryState.Sent),
     NeedsConfirmation("needsReview", DeliveryState.NeedsConfirmation),
     Cancelled("cancelled", DeliveryState.Rejected),

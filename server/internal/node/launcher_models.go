@@ -446,10 +446,14 @@ func claudeModelList(w io.Writer, r io.Reader) ([]proto.AgentModel, error) {
 		return nil, err
 	}
 	out := make([]proto.AgentModel, 0, len(models))
+	seen := map[string]bool{}
 	for _, m := range models {
-		if m.Value == "" {
+		// An id listed again is left out, the first stays: Claude Code lists "default" twice when its settings say
+		// "model": "default", and the Android panel closed on two rows of one model (#9998).
+		if m.Value == "" || seen[m.Value] {
 			continue
 		}
+		seen[m.Value] = true
 		a := proto.AgentModel{ID: m.Value, Name: m.DisplayName, Description: m.Description, Default: m.Value == "default"}
 		if m.ResolvedModel != m.Value {
 			a.Resolved = m.ResolvedModel
