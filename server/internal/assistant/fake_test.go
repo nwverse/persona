@@ -1426,13 +1426,13 @@ func (f *fakeHub) fakeModel(t testing.TB) {
 		case strings.Contains(in.System, "起一个待办标题"): // a task's todo (todo_titles.go): none unless the test gives one
 			f.todoTitleAsked = append(f.todoTitleAsked, modelCall{in.System, user})
 			reply, fail = f.todoTitleReply, f.todoTitleErr != nil
-		case strings.Contains(in.System, "盯着用户电脑上的编程 Agent"): // the Agents triage (agents_triage.go)
+		case strings.Contains(in.System, "盯着用户电脑上的编程 Agent") || strings.HasPrefix(in.System, "You watch coding Agents") || strings.HasPrefix(in.System, "ユーザー（呼び方："): // the Agents triage (agents_triage.go)
 			f.triageAsked = append(f.triageAsked, modelCall{strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(in.System), jsonOnly)), user})
 			reply, fail = f.triage, f.triage == ""
-		case strings.Contains(in.System, "向 Persona 的一次汇报转述成一句话"): // the Progress row's line (report_line.go)
+		case strings.Contains(in.System, "向 Persona 的一次汇报转述成一句话") || strings.HasPrefix(in.System, "Paraphrase one report") || strings.HasPrefix(in.System, "開発AgentからPersonaへの一回の報告"): // the Progress row's line (report_line.go)
 			f.reportLineAsked = append(f.reportLineAsked, modelCall{in.System, user})
 			reply, fail = f.reportLine, f.reportLine == ""
-		case strings.Contains(in.System, "先替用户判断 Agent 的提问"): // the delegate (delegate.go)
+		case strings.Contains(in.System, "先替用户判断 Agent 的提问") || strings.HasPrefix(in.System, "You first assess questions") || strings.HasPrefix(in.System, "ユーザーのAgentからの質問を、まず"): // the delegate (delegate.go)
 			f.delegateAsked = append(f.delegateAsked, modelCall{strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(in.System), jsonOnly)), user})
 			reply, fail = f.delegate, f.delegate == ""
 		case strings.Contains(in.System, "给一件做完的任务记结论"): // the outcome of a finished task (todo_outcome.go)

@@ -678,6 +678,34 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	n.mu.Lock()
 	p = n.procs[id]
 	n.mu.Unlock()
+	// A trailing refused turn stays in the transcript and, since Claude Code rebuilds the messages of a resume from the
+	// newest chain, would be merged into the next ordinary prompt. Stop the idle process that holds the refused turn in
+	// memory (and its sessions/<pid>.json lock file) first, then prune the refused tail so the next spawn resumes cold
+	// on clean history. Skip during immediate model-switch recovery (recovery != nil): sendAssistantRecovery sends only
+	// prompts.RenderModelRetry(), which relies on the interrupted request still being in the transcript for the
+	// fallback model to answer.
+	if agent == "claude" && id != "" && recovery == nil && (hasInput || resume) {
+		canHeal := p == nil || !p.alive()
+		if !canHeal {
+			p.mu.Lock()
+			canHeal = !p.workingLocked() && len(p.tasks) == 0
+			p.mu.Unlock()
+		}
+		if canHeal && n.transcriptHasTrailingClaudeRefusal(id) {
+			if p != nil {
+				if held := n.takeAssistant(id); held != nil {
+					stopAndWait([]*assistantProc{held})
+				}
+				n.rememberTasks(id, nil)
+				p = nil
+			}
+			if pruned, _ := n.healClaudeRefusalTranscript(id); pruned {
+				n.mu.Lock()
+				delete(n.ctxSent, id) // a fresh process takes the whole snapshot
+				n.mu.Unlock()
+			}
+		}
+	}
 	// Claude takes bypassPermissions only at start; Codex gets the policy with every turn (codexPolicy).
 	if p != nil && p.alive() && p.agent != agent {
 		return "", errors.New("换到另一种 Agent 需要新建对话")
