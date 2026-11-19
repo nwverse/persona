@@ -15,6 +15,7 @@ fun Session.keepingDetails(old: Session?): Session {
     return copy(
         launcher = launcher ?: old.launcher,
         permissionMode = permissionMode ?: old.permissionMode,
+        bypassAvailable = if (permissionMode == null) old.bypassAvailable else bypassAvailable,
         effort = effort ?: old.effort,
         efforts = efforts.ifEmpty { old.efforts },
         ultracode = ultracode ?: old.ultracode,
