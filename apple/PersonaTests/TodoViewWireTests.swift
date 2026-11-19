@@ -4,9 +4,9 @@ import Testing
 import PersonaWire
 
 /// The views, counts and places the shared to-do cases expect (spec/fixtures/todo-view and todo-counts, #10226), a
-/// to-do's timelines, results and recaps (spec/fixtures/todo-rounds, #10465) and the decision pushes' todo
-/// (spec/fixtures/todo-push, #10465) read into the generated types (schema/wire/todo-view.schema.json) and write back
-/// the same bytes: every field, no other.
+/// to-do's timelines, results and recaps (spec/fixtures/todo-rounds, #10465) with what the item route carries of them
+/// (itemDetail), and the decision pushes' todo (spec/fixtures/todo-push, #10465) read into the generated types
+/// (schema/wire/todo-view.schema.json) and write back the same bytes: every field, no other.
 @MainActor struct TodoViewWireTests {
     private static let fixtures = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         .deletingLastPathComponent().appending(path: "spec/fixtures")
@@ -34,16 +34,31 @@ import PersonaWire
                     for sample in expected["results"] as? [[String: Any]] ?? [] {
                         out.append(("TodoResult", name, sample))
                     }
+                    if let sample = itemDetail(expected) {
+                        out.append(("TodoItemDetail", name, sample))
+                    }
                 }
             }
         }
         return out
     }
 
+    /// What GET /api/v1/todos/{id} carries beside the row for a todo-rounds case (#10465): the rounds the paper shows
+    /// (the case's latest), how many there are, its recap and results; nil for a case of another domain.
+    private static func itemDetail(_ expected: [String: Any]) -> [String: Any]? {
+        guard let rounds = (expected["timeline"] as? [String: Any])?["rounds"] as? [[String: Any]] else { return nil }
+        let latest = Set(expected["latest"] as? [String] ?? [])
+        var out: [String: Any] = ["rounds": rounds.filter { latest.contains($0["id"] as? String ?? "") },
+                                  "rounds_total": rounds.count]
+        out["recap"] = expected["recap"]
+        out["results"] = expected["results"]
+        return out
+    }
+
     @Test func generatedTypesWriteTheFixtureBytesBack() throws {
         let samples = try Self.samples()
         #expect(Set(samples.map(\.definition)) == ["TodoSummary", "TodoCounts", "TodoPlaces", "TodoTimeline", "TodoRecap",
-                                                    "TodoResult", "TodoDecidePush"])
+                                                    "TodoResult", "TodoDecidePush", "TodoItemDetail"])
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         for (definition, name, sample) in samples {
@@ -55,6 +70,7 @@ import PersonaWire
             case "TodoTimeline": try encoder.encode(JSONDecoder().decode(TodoTimeline.self, from: data))
             case "TodoRecap": try encoder.encode(JSONDecoder().decode(TodoRecap.self, from: data))
             case "TodoDecidePush": try encoder.encode(JSONDecoder().decode(TodoDecidePush.self, from: data))
+            case "TodoItemDetail": try encoder.encode(JSONDecoder().decode(TodoItemDetail.self, from: data))
             default: try encoder.encode(JSONDecoder().decode(TodoResult.self, from: data))
             }
             #expect(written == data, "\(name)")

@@ -698,6 +698,8 @@ export interface Item {
   full_size?: number;
   queued?: boolean;
   wake?: boolean;
+  narration?: boolean;
+  codex_heartbeat_quiet?: boolean;
   task?: TaskNote;
   fold?: { items: number; tools: number; thoughts: number; until?: string; through_seq: number; through_id?: string; images?: FoldImage[]; tasks?: FoldTaskSnapshot[]; latest_thinking?: Item; supervision_user?: boolean; changes?: FoldChange[] | null; usage?: TokenUsage[]; sources?: FoldSource[] };
   image?: { mime: string; data?: string; lazy?: boolean; size?: number; width?: number; height?: number };

@@ -83,6 +83,7 @@ All three use `.shellTopBarScaled()`, so the font stops growing at `Theme.Shell.
   no more `onChange`. `.mail` pushes Inbox and returns to the assistant page; `.settings` opens the settings sheet and sets the tab back to the page in front. Compact iPhone navigation always belongs to the shell.
 - **The strip follows page**: `ShellPager.slide(to:)` remembers where it's going (`goal`), and the same target again does nothing; a slide that hasn't started is replaced by the new one, and one in progress turns around;
   when there's no displacement to animate it stops right away (so it never stays `moving` waiting for an animation that won't end). While dragging, the finger is in charge; whichever page the release settles on gets `select`ed.
+  If the recognizer never ends the drag, the window's last-touch watcher cancels it on the next run loop, after an ordinary release has chosen its goal. The drag's starting page takes the next tap while selection and position settle back together; the destination page stays out of reach during cancellation, and a late cancel cannot undo a newer slide.
 - **The switcher reads only page**: the selected state is page; a segment is a Menu (tap again for options) only when the strip is at rest on that page, and both segments are plain buttons during a slide.
   A tap calls `select` directly, not through a Binding. The switcher on the stand-in `ShellMovingBar` during a slide also takes taps: taps during the animation aren't lost, and the last one wins.
   If the strip stops while a finger is down (the tap lands just as the animation ends), `ShellMovingBar` stays until that finger lifts (`ShellPager.lingering`; a `Watcher` on the window reports finger down / up).
@@ -175,6 +176,7 @@ on the test side, `shellPage` / `shellValue` / `shellRoom` / `shellTrace` in `Sh
 | `ShellSwitchTests` | #182 etc.: switching after pages from the drawer (knowledge base, Inbox, scheduled tasks, machines) are pushed and left (☰ → the conversation's row, or the edge swipe; a place's root has no Back, #7799), with coordinate taps |
 | `ShellSearchTests` | #174: search giving way, switching after cancel |
 | `ShellPagerTests` | #190 swiping left / right to flip pages, swiping right on the filter bar to flip back after 56b2ead |
+| `ShellPagerTests` composer interruption cases, `ShellStateTests` | #9961: an abandoned drag restores the visible composer's first-tap keyboard input, an urgent-call cancellation keeps it, ordinary releases and a newer slide keep their targets |
 | `ShellAvatarTests` | #203: the avatar and drawer on both pages, switching between them with coordinate taps |
 | `ShellTests` | Default compact-width shell, switching, drawer |
 | `ShellLaunchTests` | Launching into a chat (`-openSession`, restoring the last one, connected to a hub, while the connection notice opens / closes) and launching on the assistant: only the front chat appears, exactly once |
