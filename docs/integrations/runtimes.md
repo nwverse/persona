@@ -396,7 +396,7 @@ Lark tokens and gates. node drives it with calls the protocol already has:
 | node sends | With (all optional fields; runtimes that don't declare `caps.assistant` never receive them) |
 | --- | --- |
 | `session.start {cwd, assistant: true}` | `cwd` is the assistant directory (`~/.persona/assistant`, containing `AGENTS.md` / `CLAUDE.md` and `.agents/skills/`); no `prompt`. The runtime reports this `cwd` for the chat's whole life (`runtime.sessions`, its cards), not where a tool's `cd` left the shell: the hub places assistant and health chats by that directory exactly (#2368) |
-| `session.send {session_id, text, images, client_msg_id, assistant: true, context, mode, memory_dir}` | `context`: a `<persona-context>` block given to the model before the user's text (the live snapshot; the first message of a new chat also has memory and Lark notes), not shown in the chat; `mode`: Persona's permission mode (`default` / `acceptEdits` / `auto` / `plan` / `bypassPermissions`); `memory_dir`: the memory directory; `client_msg_id`: the id the message came with (the App's, a channel's), absent when it came without one: put it on the message's item, or leave the item without one, never another (`docs/protocol/protocol.md` "Matching pending messages") |
+| `session.send {session_id, text, images, client_msg_id, assistant: true, context, mode, memory_dir}` | `context`: a `<persona-context>` block given to the model before the user's text (the live snapshot; the first message of a new chat also has memory and Lark notes), not shown in the chat, and left out of a message that is only a slash command (`/compact`, one line, no picture) so the runtime can run it: the snapshot goes with the next message, and after `/compact` in full; `mode`: Persona's permission mode (`default` / `acceptEdits` / `auto` / `plan` / `bypassPermissions`); `memory_dir`: the memory directory; `client_msg_id`: the id the message came with (the App's, a channel's), absent when it came without one: put it on the message's item, or leave the item without one, never another (`docs/protocol/protocol.md` "Matching pending messages") |
 | `session.interrupt` | Stop on the phone; closing the assistant chat = stopping the running turn, the chat stays in the runtime |
 
 For sessions it starts, the node restores persisted ownership and launcher metadata before publishing runtime rows.
@@ -438,6 +438,20 @@ end to end in `integrations/dsh/e2e/assistant.mjs`.
 | Antigravity CLI (`antigravity`) | `integrations/antigravity/companion.mjs`: companion process; reads CLI transcripts and runs terminal-less Agent and assistant sessions through `agy acp` | "Antigravity CLI" below |
 | echo (example) | `integrations/runtime-sdk/examples/echo-runtime.mjs` (with `--listen <port>` it's a daemon) | "Minimal example" in this doc, `docs/integrations/daemons.md` |
 
+### Antigravity Desktop (macOS, experimental)
+
+With Antigravity Desktop open and the Persona node running, start the desktop companion from the checkout:
+
+```sh
+node integrations/antigravity/desktop.mjs
+```
+
+It discovers the local desktop hub through the current user's private descriptor under
+`~/.gemini/antigravity/daemon/`, lists existing conversations, watches exported transcript items,
+and forwards text replies and interrupts to the selected Cascade. Start each conversation with a message in the desktop app so replies can reuse its model and tool configuration.
+Handle approvals there as well. The desktop and CLI companions can run together. Override the desktop data directory
+with `--desktop-dir` or the Persona runtime socket with `--socket`. The desktop RPC is private and version dependent.
+
 ### Antigravity CLI
 
 The session's `last_text` preview contains assistant response text after the latest explicit user input. A new user
@@ -454,7 +468,7 @@ fields, including a subscription reset timestamp supplied in native quota metada
 that result. Rejected ACP prompts also publish their failure through the session's error state.
 The history token includes the error format so connected clients refresh items cached before this representation.
 
-The implemented integration is for the **Antigravity CLI (`agy`)**, not the Antigravity desktop app. When `personad node`
+The CLI companion runs the **Antigravity CLI (`agy`)**. When `personad node`
 runs (`--attach` or `--stdio`), `agy` is installed, Node.js 22.5+ (`node:sqlite`) is available, and no external `agy`
 runtime is connected on `runtime.sock`, the node automatically writes out the embedded `persona-antigravity-runtime`
 package and supervises `antigravity/companion.mjs` (passing `--no-update --parent-stdin`), yielding whenever an external
@@ -476,6 +490,12 @@ five minutes, and the picker's refresh requests a fresh catalog through optional
 default. New sessions and availability checks explicitly apply that model through ACP, since ACP may ignore the
 settings file when choosing its initial model. An explicit caller model takes precedence, and resumed sessions retain
 their native selection. An unavailable catalog returns the native error instead of advertising a built-in model list.
+A CLI whose stored sign-in expired long ago does not fail `agy models`: it hangs. The companion kills it after 25 seconds
+and reports that the sign-in may have expired and that running `agy` once on the computer signs in again; each
+discovery in a row that times out doubles the wait before the next one, up to an hour, and one that answers restores
+the five-minute pace (#11106). Whether a call that sends no prompt can refresh such a sign-in is not established: a
+`agy models` run refreshed a token close to its expiry, but one expired for months stayed hung until a prompt in print
+mode signed in silently.
 One `agy acp` process can keep the model list it had when the account's plan lapsed or the CLI signed out (#10368), so
 a session's model list replaces the catalog only when its ACP process started after the latest successful discovery
 began. When ACP rejects a model as unknown and a fresh discovery lists it, the companion replaces the ACP process and
@@ -501,7 +521,10 @@ node's shell check. Shell and managed launchers keep their own execution context
 A chat gets Persona's MCP server once, named `persona`, through ACP `mcpServers`. `agy` defers the tools over its
 declaration budget, largest first, and has no `call_mcp_tool` for servers passed through ACP, so an assistant chat's
 server runs behind `integrations/antigravity/mcp-proxy.mjs`, which adds a small `persona_call` tool that calls any
-Persona tool by name (#7333).
+Persona tool by name (#7333). The proxy declares only the tools larger than `persona_call`, so it is always the smallest
+declared and never the one deferred, however many small tools connectors add (sizes are what agy declares of a tool: its
+name, description and input schema). The others stay callable through it: `persona_call` with no name lists every tool,
+and those left out with their description and arguments (#10756).
 
 Implementation: `integrations/antigravity/lib/runtime.js` and `integrations/antigravity/lib/acp.js`.
 
