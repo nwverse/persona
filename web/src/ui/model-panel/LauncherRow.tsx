@@ -67,7 +67,7 @@ export function LauncherRow({
           frozen && "cursor-not-allowed opacity-50",
         )}
       >
-        <ProviderMark name={p.name} />
+        <ProviderMark engine={p.engine} label={p.engineLabel} size={16} />
         <span className="min-w-0 flex-1">
           <span className="flex min-w-0 items-center gap-1.5 text-meta font-medium">
             <span className="min-w-0 truncate">{p.name}</span>

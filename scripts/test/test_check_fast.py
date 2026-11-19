@@ -19,6 +19,11 @@ import tempfile
 import time
 import unittest
 
+try:
+    import fcntl
+except ImportError:  # Windows
+    fcntl = None
+
 ROOT = Path(__file__).resolve().parents[2]
 PASSING = "import unittest\n\nclass T(unittest.TestCase):\n    def test_ok(self):\n        pass\n"
 FAILING = "import unittest\n\nclass T(unittest.TestCase):\n    def test_broken(self):\n        self.fail('broken on purpose')\n"
@@ -813,6 +818,59 @@ class CheckFastServerInputsTests(unittest.TestCase):
         for _, goflags, _ in tests:
             self.assertEqual("-mod=readonly -trimpath", goflags)
 
+    def test_go_and_vitest_run_in_a_heavy_slot_outside_their_timeout(self):
+        # Parallel worktrees queue for go and vitest instead of thrashing (#10714): check-fast runs them through
+        # scripts/heavy_slot.py, around the GNU timeout so a wait in the queue is not counted as a hung step. Each
+        # call records the slot marker (kind:pid of the helper holding the slot) and its parent's parent: the
+        # timeout's parent, which must be that helper.
+        shutil.copy(ROOT / "scripts/heavy_slot.py", self.repo / "scripts/heavy_slot.py")
+        self.git("add", "-A")
+        self.git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "helper")
+        self.git("tag", "-f", "base")
+        record = ('#!/bin/sh\nprintf "%s|%s|%s|%s\\n" "${PWD##*/}" "${PERSONA_HEAVY_SLOT_HELD:-}" '
+                  '"$(ps -o ppid= -p "$PPID" | tr -d " ")" "$*" >> "$FAKE_GO_LOG"\n')
+        for tool in ("go", "npm"):
+            (self.go_log.parent / tool).write_text(record)
+        slots = Path(tempfile.mkdtemp(prefix="check-fast-slots-"))
+        self.addCleanup(shutil.rmtree, slots)
+        self.env = {key: value for key, value in self.env.items() if not key.startswith("PERSONA_HEAVY_SLOT")}
+        self.env["PERSONA_HEAVY_SLOT_DIR"] = str(slots)
+        self.write("server/internal/foo/x.go", "package foo\n")
+        self.write("web/src/x.ts", "export {}\n")
+        self.check_fast()
+        calls = [line.split("|", 3) for line in self.go_log.read_text().splitlines()]
+        in_slot = {(where, args.split()[0]) for where, marker, grandparent, args in calls
+                   if re.fullmatch(r"(go|web):\d+", marker) and marker.split(":")[1] == grandparent}
+        self.assertEqual({("server", "test"), ("web", "test")}, in_slot, calls)
+        self.assertEqual(3, sum(1 for where, marker, _, _ in calls if where == "server" and marker.startswith("go:")))
+        # npm ci, the node_modules check and the typecheck take no slot.
+        self.assertEqual({"ci", "run check:deps", "run typecheck"},
+                         {args for where, marker, _, args in calls if where == "web" and not marker}, calls)
+        self.assertTrue((slots / "go.0.lock").exists() and (slots / "web.0.lock").exists())
+
+    @unittest.skipIf(fcntl is None, "heavy build slots need fcntl (not on Windows)")
+    def test_a_wait_for_a_slot_past_its_timeout_is_a_timeout_that_says_so(self):
+        # The only go slot is taken (by this test) and no wait is allowed: each go check is a TIMEOUT whose detail says
+        # it never ran, so nobody reads it as a hung test.
+        shutil.copy(ROOT / "scripts/heavy_slot.py", self.repo / "scripts/heavy_slot.py")
+        self.git("add", "-A")
+        self.git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "helper")
+        self.git("tag", "-f", "base")
+        slots = Path(tempfile.mkdtemp(prefix="check-fast-slots-"))
+        self.addCleanup(shutil.rmtree, slots)
+        held = os.open(slots / "go.0.lock", os.O_RDWR | os.O_CREAT, 0o600)
+        self.addCleanup(os.close, held)
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        env = {key: value for key, value in self.env.items() if not key.startswith("PERSONA_HEAVY_SLOT")}
+        env.update(PERSONA_HEAVY_SLOT_DIR=str(slots), PERSONA_HEAVY_SLOTS_GO="1", PERSONA_HEAVY_SLOT_TIMEOUT="0")
+        self.write("server/internal/foo/x.go", "package foo\n")
+        run = subprocess.run(["bash", "scripts/test/check-fast.sh", "--base", "base"], cwd=self.repo, env=env,
+                             capture_output=True, text=True, timeout=300)
+        out = run.stdout + run.stderr
+        self.assertEqual(124, run.returncode, out)
+        self.assertIn("go test ./internal/foo/... (no go slot came free; it did not run)", out)
+        self.assertFalse(any(call.startswith("server|test") for call in self.go_calls()), self.go_calls())
+
 
 # A privacy-scan stub that never finishes on its own: it records its own pid, its parent's (the GNU timeout that runs
 # it) and a sleeping child's, then waits.
@@ -938,9 +996,11 @@ VITEST_RELATED = "web|npx --no -- vitest related --run --passWithNoTests "
 WEB_FULL = ["web|run check:deps", "web|run typecheck", "web|test"]
 
 # A web tree that reads files outside web/ in each form the scan knows (#10619). reads.test.ts reads through fs and a
-# Vite glob, so it always runs; build.test.mjs builds through a Vite config, whose reads no import of the test shows,
-# so it always runs too; tiers.ts is a module that reads through fs, so its importers always run; stream.ts and
-# frame-host.ts read through Vite query imports, so they join when a file they name changes.
+# Vite glob, so it always runs; async-reads.test.ts reads only through node:fs/promises, so it always runs too;
+# build.test.mjs builds through a Vite config, whose reads no import of the test shows, so it always runs too;
+# tiers.ts is a module that reads through fs, so its importers always run; stream.ts and frame-host.ts read through
+# Vite query imports, so they join when a file they name changes. The config names a setup file (setupFiles, a list)
+# and a global setup (globalSetup, one path): what they reach runs the whole suite (#10715).
 WEB_TREE = {
     "web/src/lib/reads.test.ts": (
         'import { readFileSync } from "node:fs";\n'
@@ -952,6 +1012,8 @@ WEB_TREE = {
         'const view = (name: string) => readFileSync(new URL(`../../../schema/extension/examples/View.v8-${name}.json`, import.meta.url));\n'
         'const joined = join(__dirname, "..", "..", "..", "spec", "fixtures", "joined", "x.json");\n'
         '// Comments name spec/fixtures/other without reading it.\n'),
+    "web/src/lib/async-reads.test.ts": ('import { readFile } from "node:fs/promises";\n'
+                                        'const css = await readFile(new URL("../styles.css", import.meta.url), "utf8");\n'),
     "web/scripts/build.test.mjs": ('import { build } from "vite";\n'
                                    'await build({ configFile: new URL("../vite.config.ts", import.meta.url).pathname });\n'),
     "web/src/lib/tiers.ts": ('import { readdirSync } from "node:fs";\n'
@@ -964,7 +1026,17 @@ WEB_TREE = {
     "web/src/lib/store.ts": "export const store = {};\n",
     "web/src/i18n/index.ts": "export const t = (key: string) => key;\n",
     "web/src/startup.ts": "export const startup = 1;\n",
-    "web/vite.config.ts": 'import { startup } from "./src/startup";\nexport default { startup };\n',
+    "web/vite.config.ts": ('import { startup } from "./src/startup";\n'
+                           'export default { startup, test: { globalSetup: "scripts/global.mjs",'
+                           ' setupFiles: ["src/setup/test-setup.ts"] } };\n'),
+    "web/scripts/global.mjs": 'import { env } from "../src/setup/global-env.ts";\nexport default () => env;\n',
+    "web/src/setup/global-env.ts": "export const env = {};\n",
+    "web/src/setup/test-setup.ts": 'import { catalog } from "./catalog";\nimport { t } from "../i18n";\n',
+    "web/src/setup/catalog.ts": ('import { names } from "./names.js";\n'
+                                 'export const catalog = import.meta.glob("../locales/*.json");\n'),
+    "web/src/setup/names.ts": "export const names = [];\n",
+    "web/src/setup/other.ts": "export const other = 1;\n",
+    "web/src/locales/en.json": "{}\n",
     "spec/fixtures/forward/cases.json": "{}\n",
     "spec/fixtures/inbox/now.json": "{}\n",
     "spec/fixtures/tiers/a.json": "{}\n",
@@ -985,7 +1057,9 @@ WEB_TREE_INPUTS = [
     "spec/fixtures/tiers/**",
 ]
 # The files every related run starts from on top of the changed ones, relative to web/.
-WEB_TREE_READERS = ["scripts/build.test.mjs", "src/lib/reads.test.ts", "src/lib/tiers.ts"]
+WEB_TREE_READERS = [
+    "scripts/build.test.mjs", "src/lib/async-reads.test.ts", "src/lib/reads.test.ts", "src/lib/tiers.ts",
+]
 
 
 @unittest.skipUnless(shutil.which("timeout") or shutil.which("gtimeout"), "check-fast.sh needs GNU timeout")
@@ -1088,7 +1162,7 @@ class CheckFastWebInputsTests(unittest.TestCase):
     def test_a_view_change_runs_its_related_tests_and_the_readers(self):
         self.write("web/src/views/View.tsx", "export const View = () => 'changed';\n")
         out, npm_calls = self.check_fast()
-        self.assertIn("check-fast: web tests: vitest related, 1 changed file(s) and 3 that read files from disk", out)
+        self.assertIn("check-fast: web tests: vitest related, 1 changed file(s) and 4 that read files from disk", out)
         self.assertEqual(self.related("src/views/View.tsx"), npm_calls, out)
         self.assertIn("PASS     web", out)
 
@@ -1117,6 +1191,26 @@ class CheckFastWebInputsTests(unittest.TestCase):
         out, npm_calls = self.check_fast()
         self.assertIn("check-fast: web tests: the whole suite, web/package-lock.json is outside web/src", out)
         self.assertEqual(["web|ci", *WEB_FULL], npm_calls, out)
+
+    def test_what_the_vitest_setup_files_reach_runs_the_whole_suite(self):
+        # Every test runs the setup files first, but vitest related follows only a test's own imports (#10715).
+        for path in ("web/src/setup/test-setup.ts",  # the setup file
+                     "web/src/setup/catalog.ts",     # a module it imports
+                     "web/src/setup/names.ts",       # a module that one imports, as ./names.js
+                     "web/src/locales/en.json",      # a file that one reads through a Vite glob
+                     "web/src/setup/global-env.ts"):  # a module the global setup imports
+            with self.subTest(path=path):
+                self.write(path, "// changed\n")
+                try:
+                    out, npm_calls = self.check_fast()
+                finally:
+                    self.restore()
+                self.assertIn(f"check-fast: web tests: the whole suite, {path} is part of the vitest setup", out)
+                self.assertEqual(WEB_FULL, npm_calls, out)
+        # A module beside them that no setup file reaches runs its related tests.
+        self.write("web/src/setup/other.ts", "export const other = 2;\n")
+        _, npm_calls = self.check_fast()
+        self.assertEqual(self.related("src/setup/other.ts"), npm_calls)
 
     def test_all_runs_the_whole_web_suite(self):
         self.write("web/src/views/View.tsx", "export const View = () => 'changed';\n")
@@ -1168,6 +1262,31 @@ class CheckFastWebInputsTests(unittest.TestCase):
         out, npm_calls = self.check_fast()
         self.assertIn("queued: web\n", out)
         self.assertEqual(self.related("src/old.ts"), npm_calls, out)  # vitest related starts from the old path
+
+
+class WebFileTests(unittest.TestCase):
+    """Which files the scan counts as reading through node's fs (WebFile.fs): they run on every related run."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.paths = load_paths()
+
+    def test_each_fs_module_counts(self):
+        # fs/promises once never matched: the scan looked for a quoted "fs" before trying its pattern (#10715).
+        for text in ('import { readFile } from "node:fs/promises";\n',
+                     "import { readdir } from 'fs/promises';\n",
+                     'const { readFile } = await import("node:fs/promises");\n',
+                     'import { readdirSync } from "node:fs";\n',
+                     "import * as fs from 'fs';\n",
+                     "const text = readFileSync(path, 'utf8');\n"):
+            with self.subTest(text=text):
+                self.assertTrue(self.paths.WebFile("web/src/lib/a.test.ts", text).fs)
+
+    def test_other_names_ending_in_fs_do_not(self):
+        for text in ('const routes = { "/agents/prefs": {} };\n', 'import { refs } from "./refs";\n',
+                     'import { vol } from "memfs";\n', "const label = 'fs/promises is a node module';\n"):
+            with self.subTest(text=text):
+                self.assertFalse(self.paths.WebFile("web/src/lib/a.test.ts", text).fs)
 
 
 class WebPlanTests(unittest.TestCase):
@@ -1222,10 +1341,16 @@ class WebPlanTests(unittest.TestCase):
 
     def test_shared_entry_points_run_the_whole_suite(self):
         for path in ("web/src/lib/store.ts", "web/src/lib/api.ts", "web/src/ui/atoms.tsx", "web/src/i18n/index.ts",
-                     "web/src/i18n/test-setup.ts", "web/vite.config.ts", "web/tsconfig.json", "web/package.json",
-                     "web/package-lock.json", "web/scripts/installed-deps.mjs"):
+                     "web/src/i18n/test-setup.ts", "web/src/admin/catalog.ts", "web/vite.config.ts",
+                     "web/tsconfig.json", "web/package.json", "web/package-lock.json",
+                     "web/scripts/installed-deps.mjs"):
             with self.subTest(path=path):
                 self.assertEqual("full", self.paths.web_plan([path, "web/src/views/chat/ChatView.tsx"])[0])
+
+    def test_what_the_vitest_setup_file_imports_runs_the_whole_suite(self):
+        # web/src/i18n/test-setup.ts loads the admin catalog before every test, though no test needs to import it.
+        self.assertEqual(("full", "web/src/admin/catalog.ts is part of the vitest setup", []),
+                         self.paths.web_plan(["web/src/admin/catalog.ts"]))
 
 
 if __name__ == "__main__":
