@@ -1560,7 +1560,9 @@ manager that connects the computer holds it and sends it once the computer is ba
   that ended after the send, the same Retry sends the message after a second check (#10790). With an unknown result
   or an older node, a matching ID in the latest turns still proves
   arrival. Otherwise the owner sees "Couldn't confirm it arrived. Retry to send it anyway, or delete it", with the
-  later messages still waiting. That next Retry sends as before. Three failed reads in a row also leave the message
+  later messages still waiting. On iOS, once the manager acknowledges Retry, the same instruction keeps Retry disabled
+  across reconnects and app launches. Delete stays available. A changed instruction on that operation lets the owner
+  choose again. That next Retry sends as before. Three failed reads in a row also leave the message
   unconfirmed after Retry. During a check, another Retry returns a conflict and Delete is allowed. A node that refused it
   (nothing typed), or a message that could not be made ready to send before the node was asked, fails with the reason
   and the next one goes; once the node took a message it counts as delivered, whatever came after. A message the owner
