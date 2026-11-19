@@ -279,6 +279,7 @@ func TestLarkCLIRiskLive(t *testing.T) {
 	for cmd, want := range map[string]string{
 		"im +chat-list": "read", "im +messages-search": "read", "docs +fetch": "read", "calendar +agenda": "read",
 		"im +messages-send": "write", "im +messages-reply": "write", "im messages delete": "high-risk-write",
+		"im messages get": larkCLIMissing, // no such method in lark-cli 1.0.98 (#10845)
 	} {
 		if got := risk(strings.Fields(cmd)); got != want {
 			t.Errorf("%s: lark-cli says %q, the gate expects %q", cmd, got, want)
