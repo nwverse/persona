@@ -41,12 +41,12 @@ func taskSourceDefinitelyUnsent(err error, id string) bool {
 	return errors.Is(err, apierr.ErrOffline) || errors.Is(err, ErrNoDevice) || nodeOutdated(err) || (err != nil && taskConversationUnavailable(err, id))
 }
 
-func (s *Service) taskConversationChanged(t Task, ex TaskExecution, run *ScheduleRun) bool {
+func (s *Service) taskConversationChanged(t Task, ex TaskExecution, override ModelBinding, run *ScheduleRun) bool {
 	switch {
 	case t.RunExecution != nil && !compatibleTaskExecution(*t.RunExecution, ex):
 		run.ConversationReason = "execution_changed"
 		s.logf("task %s: execution context changed; starting a new conversation", t.ID)
-	case t.RunExecution == nil && (t.Cwd != "" || ex.Model != "" || ex.Effort != "" || ex.Runtime != ""):
+	case t.RunExecution == nil && (t.Cwd != "" || t.ExecutionMachineID != "" || override != (ModelBinding{})):
 		run.ConversationReason = "legacy_context"
 		s.logf("task %s: previous execution context is unknown; starting a new conversation", t.ID)
 	default:

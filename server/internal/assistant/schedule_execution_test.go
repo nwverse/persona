@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -179,6 +182,121 @@ func TestTaskExecutionRevisionOnlyEditRejectsStaleSave(t *testing.T) {
 	}
 }
 
+type taskDirectoryWaitHub struct {
+	*fakeHub
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (h taskDirectoryWaitHub) DeviceCall(ctx context.Context, call DeviceCall) (json.RawMessage, error) {
+	if call.Method == assistantwire.DeviceAssistantDirectory {
+		close(h.entered)
+		select {
+		case <-h.release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return h.fakeHub.DeviceCall(ctx, call)
+}
+
+func TestTaskExecutionSaveAllowsConcurrentScheduleActivity(t *testing.T) {
+	for _, tc := range []struct {
+		name, method, path string
+		want               int
+	}{
+		{"create", "POST", "/api/v1/assistant/tasks", http.StatusOK},
+		{"task changed", "PUT", "/api/v1/assistant/tasks/job", http.StatusConflict},
+		{"model changed", "PUT", "/api/v1/assistant/tasks/job", http.StatusConflict},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeHub().withMachine()
+			h := taskDirectoryWaitHub{f, make(chan struct{}), make(chan struct{})}
+			st := &memStore{}
+			s := withSettings(t, f, New(Options{Hub: h, Store: func() Store { return st }, Logf: testLogf(t)}))
+			now := time.Now()
+			setTasks(s,
+				Task{ID: "job", Title: "Before", Prompt: "Check", Repeat: repeatInterval, EveryMinutes: 30},
+				Task{ID: "manual", Title: "Manual", Prompt: "Check", Repeat: repeatInterval, EveryMinutes: 30},
+				Task{ID: "due", Title: "Due", Prompt: "Check", Repeat: repeatInterval, EveryMinutes: 30, Enabled: true, At: now})
+			const body = `{"title":"Slow edit","prompt":"Check","repeat":"interval","every_minutes":30,"cwd":"/work/project","model":"slow-model","model_revision":0}`
+			slow := make(chan *httptest.ResponseRecorder, 1)
+			go func() { slow <- request(s, tc.method, tc.path, body) }()
+			release := sync.OnceFunc(func() { close(h.release) })
+			defer release()
+			select {
+			case <-h.entered:
+			case r := <-slow:
+				t.Fatalf("save ended before node validation: %d %s", r.Code, r.Body)
+			case <-time.After(3 * time.Second):
+				t.Fatal("save did not reach the node")
+			}
+			progress := make(chan error, 1)
+			go func() {
+				if r := request(s, "GET", "/api/v1/assistant/tasks", ""); r.Code != http.StatusOK {
+					progress <- fmt.Errorf("task list: %d %s", r.Code, r.Body)
+					return
+				}
+				if _, err := runNow(t, s, "manual"); err != nil {
+					progress <- err
+					return
+				}
+				s.runDue(context.Background(), now)
+				s.sched.inflight.Wait()
+				if f.sent() != 2 {
+					progress <- fmt.Errorf("manual and due tasks did not both send: %d sends", f.sent())
+					return
+				}
+				switch tc.name {
+				case "task changed":
+					r := request(s, "PUT", tc.path, `{"title":"Concurrent","prompt":"Check","repeat":"interval","every_minutes":30}`)
+					if r.Code != http.StatusOK {
+						progress <- fmt.Errorf("concurrent edit: %d %s", r.Code, r.Body)
+						return
+					}
+				case "model changed":
+					if err := s.saveModel(context.Background(), "task.job", modelRecord{Binding: ModelBinding{Provider: "launcher.claude", Model: "concurrent-model"}}); err != nil {
+						progress <- err
+						return
+					}
+				}
+				progress <- nil
+			}()
+			select {
+			case err := <-progress:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(3 * time.Second):
+				release()
+				<-progress
+				<-slow
+				t.Fatal("schedule activity waited for the task edit's node validation")
+			}
+			release()
+			r := <-slow
+			if r.Code != tc.want {
+				t.Fatalf("slow save: %d %s", r.Code, r.Body)
+			}
+			task, _ := taskByID(s, "job")
+			model := modelRecordOf(t, s, "task.job")
+			wantTitle, wantRevision := "Before", int64(0)
+			if tc.name == "task changed" {
+				wantTitle = "Concurrent"
+			}
+			if tc.name == "model changed" {
+				wantRevision = 1
+				if model.Binding.Model != "concurrent-model" {
+					t.Fatalf("lost concurrent model: %+v", model)
+				}
+			}
+			if task.Title != wantTitle || task.Cwd != "" || model.Revision != wantRevision {
+				t.Fatalf("stale edit changed persisted state: %+v %+v", task, model)
+			}
+		})
+	}
+}
+
 func TestTaskExecutionModelAndComputerChangesStartFresh(t *testing.T) {
 	f := newFakeHub().withMachine()
 	f.sessions["remote"] = nil
@@ -271,6 +389,7 @@ func TestTaskExecutionLegacyDefaultsRemainInherited(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := newServiceOn(t, f, st)
+	setModel(t, s, "assistant", ModelBinding{Provider: "launcher.claude", Model: "inherited-model", Effort: "low"})
 	main, err := s.resolveModel(ctx, "assistant")
 	if err != nil {
 		t.Fatal(err)
@@ -303,7 +422,38 @@ func TestTaskExecutionLegacyDefaultsRemainInherited(t *testing.T) {
 	if err != nil || second.SessionID != first.SessionID {
 		t.Fatalf("legacy reuse: %+v %v", second, err)
 	}
-	if got := f.lastSend(t); got["launcher"] != "claude" {
+	if got := f.lastSend(t); got["launcher"] != "claude" || got["model"] != "inherited-model" || got["effort"] != "low" || got["resume_only"] != true {
 		t.Fatalf("legacy execution: %v", got)
+	}
+}
+
+func TestTaskExecutionLegacyExplicitChoicesStartFresh(t *testing.T) {
+	for _, tc := range []struct {
+		name, machine, cwd string
+		binding            ModelBinding
+	}{
+		{name: "backend", binding: ModelBinding{Provider: "launcher.claude"}},
+		{name: "model", binding: ModelBinding{Model: "explicit-model"}},
+		{name: "effort", binding: ModelBinding{Effort: "low"}},
+		{name: "computer", machine: "server"},
+		{name: "directory", cwd: "/work/project"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeHub().withMachine()
+			f.known["legacy-chat"] = true
+			s := newTestService(t, f)
+			setTasks(s, Task{ID: "legacy", Title: "Old task", Prompt: "Check", Repeat: repeatInterval, EveryMinutes: 30,
+				RunSessionID: "legacy-chat", RunMachineID: "server", RunLauncher: "claude", ExecutionMachineID: tc.machine, Cwd: tc.cwd})
+			if tc.binding != (ModelBinding{}) {
+				setModel(t, s, "task.legacy", tc.binding)
+			}
+			session, err := runNow(t, s, "legacy")
+			if err != nil || session.SessionID == "legacy-chat" || session.SessionID == "" {
+				t.Fatalf("explicit choice reused legacy conversation: %+v %v", session, err)
+			}
+			if run := waitRuns(t, s, 1)[0]; run.ConversationReason != "legacy_context" || run.Conversation != "new" {
+				t.Fatalf("legacy decision missing from history: %+v", run)
+			}
+		})
 	}
 }

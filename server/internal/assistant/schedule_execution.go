@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -139,9 +140,23 @@ func (s *Service) taskExecution(ctx context.Context, t Task, validate bool, bind
 	return ex, nil
 }
 
-// patchTaskExecution validates a sparse task edit. The caller holds models.mu before the schedule lock.
-// Model configuration keeps its existing namespace; task and model changes commit in one settings transaction.
-func (s *Service) patchTaskExecution(ctx context.Context, t *Task, raw map[string]json.RawMessage) (*modelRecord, error) {
+type taskExecutionEdit struct {
+	revision int64
+	record   *modelRecord
+}
+
+// prepareTaskExecutionEdit reads the model revision that the node checks will validate against.
+// The schedule and model writers remain free while the node answers.
+func (s *Service) prepareTaskExecutionEdit(ctx context.Context, t *Task, raw map[string]json.RawMessage) (taskExecutionEdit, error) {
+	old, err := s.modelRecord(ctx, "task."+t.ID)
+	if err != nil {
+		return taskExecutionEdit{}, err
+	}
+	record, err := s.patchTaskExecution(ctx, t, raw, old)
+	return taskExecutionEdit{revision: old.Revision, record: record}, err
+}
+
+func (s *Service) patchTaskExecution(ctx context.Context, t *Task, raw map[string]json.RawMessage, old modelRecord) (*modelRecord, error) {
 	changed := false
 	for key, dst := range map[string]*string{"execution_machine_id": &t.ExecutionMachineID, "cwd": &t.Cwd} {
 		if v, ok := raw[key]; ok {
@@ -158,10 +173,6 @@ func (s *Service) patchTaskExecution(ctx context.Context, t *Task, raw map[strin
 		}
 	}
 	if err := checkTaskExecutionSpace(*t); err != nil {
-		return nil, err
-	}
-	old, err := s.modelRecord(ctx, "task."+t.ID)
-	if err != nil {
 		return nil, err
 	}
 	patch := modelPatch{}
@@ -323,6 +334,44 @@ func (s *Service) checkTaskLauncher(ctx context.Context, machine, name string) (
 	return true, i18n.Err("assistant-models.err_provider_missing")
 }
 
+// commitTaskExecutionEdit compares the validated task and model with the live pair under the writers' lock order.
+// Keep concurrent schedule updates, including runs that finished while the node was validating the edit.
+func (s *Service) commitTaskExecutionEdit(ctx context.Context, before *Task, task Task, edit taskExecutionEdit) error {
+	s.models.mu.Lock()
+	defer s.models.mu.Unlock()
+	current, err := s.modelRecord(ctx, "task."+task.ID)
+	if err != nil {
+		return err
+	}
+	if current.Revision != edit.revision {
+		return errModelConflict
+	}
+	sc, err := s.lockedSchedule(ctx)
+	if err != nil {
+		return err
+	}
+	defer sc.mu.Unlock()
+	i := sc.indexLocked(task.ID)
+	if before == nil && i >= 0 || before != nil && (i < 0 || !reflect.DeepEqual(sc.tasks[i], *before)) {
+		return errModelConflict
+	}
+	tasks := slices.Clone(sc.tasks)
+	if i < 0 {
+		tasks = append(tasks, task)
+	} else {
+		tasks[i] = task
+	}
+	return s.saveTaskConfiguredLocked(ctx, sc, tasks, task.ID, edit.record)
+}
+
+func writeTaskExecutionCommitError(w http.ResponseWriter, err error) {
+	if errors.Is(err, errModelConflict) {
+		writeTaskExecutionError(w, err)
+		return
+	}
+	apierr.Write(w, http.StatusServiceUnavailable, err)
+}
+
 func (s *Service) saveTaskConfiguredLocked(ctx context.Context, sc *schedule, tasks []Task, id string, record *modelRecord) error {
 	if record == nil {
 		return s.saveLocked(sc, tasks)
@@ -347,34 +396,39 @@ func compatibleTaskExecution(old, next TaskExecution) bool {
 	return old == next
 }
 
+type taskRunModel struct {
+	effective ModelBinding
+	override  ModelBinding
+}
+
 // taskRunSnapshot pairs the task's directory/computer with its model record under the writers' lock order.
-func (s *Service) taskRunSnapshot(ctx context.Context, t Task) (Task, ModelBinding, error) {
+func (s *Service) taskRunSnapshot(ctx context.Context, t Task) (Task, taskRunModel, error) {
 	s.models.mu.Lock()
 	defer s.models.mu.Unlock()
 	sc, err := s.lockedSchedule(ctx)
 	if err != nil {
-		return t, ModelBinding{}, err
+		return t, taskRunModel{}, err
 	}
 	if i := sc.indexLocked(t.ID); i >= 0 {
 		t = sc.tasks[i]
 	}
 	sc.mu.Unlock()
 	if err := checkTaskExecutionSpace(t); err != nil {
-		return t, ModelBinding{}, err
+		return t, taskRunModel{}, err
 	}
 	r, err := s.modelRecord(ctx, "task."+t.ID)
 	if err != nil {
-		return t, ModelBinding{}, err
+		return t, taskRunModel{}, err
 	}
 	if taskExecutionNeedsOwnChat(t, r.Binding) {
-		return t, ModelBinding{}, i18n.Err("assistant-schedule.execution_own_chat")
+		return t, taskRunModel{}, i18n.Err("assistant-schedule.execution_own_chat")
 	}
 	b, err := s.resolveModelRecord(ctx, "task."+t.ID, &r)
 	t.runGrantBasis = t.grantBasis()
 	if r.Binding != (ModelBinding{}) {
 		t.runGrantBasis = t.grantBasis(b)
 	}
-	return t, b, err
+	return t, taskRunModel{effective: b, override: r.Binding}, err
 }
 
 // Only explicit pre-delivery refusals permit starting a replacement conversation.

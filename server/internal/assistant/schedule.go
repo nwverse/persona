@@ -1890,7 +1890,7 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 		return proto.Session{}, s.skipRun(run, errTaskBusy)
 	}
 	defer s.sched.end(t.ID)
-	t, binding, err := s.taskRunSnapshot(ctx, t)
+	t, model, err := s.taskRunSnapshot(ctx, t)
 	run.Kind, run.Title = t.kind(), t.label()
 	if t.TodoID != "" && t.Repeat != repeatOnce {
 		run.TodoProgress = &ScheduleTodoAssessment{TodoID: t.TodoID, State: "pending"}
@@ -1996,7 +1996,7 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 		}
 		run.ConversationReason = "source_unavailable"
 	}
-	ex, err := s.taskExecution(ctx, t, true, binding)
+	ex, err := s.taskExecution(ctx, t, true, model.effective)
 	run.Execution = &ex
 	if err != nil {
 		return s.failTaskRun(ctx, t, run, err, false)
@@ -2018,7 +2018,7 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 	if t.RunSessionID != "" {
 		m, ok := s.device(ctx, t.RunMachineID)
 		switch {
-		case s.taskConversationChanged(t, ex, &run):
+		case s.taskConversationChanged(t, ex, model.override, &run):
 		case t.RunLauncher != launcher:
 			run.ConversationReason = "execution_changed"
 			s.logf("task %s: launcher %s → %s, its conversation %s can't go on; starting a new one", t.ID, t.RunLauncher, launcher, short(t.RunSessionID))
@@ -2924,23 +2924,17 @@ func (s *Service) scheduleRoutes() {
 			return
 		}
 		rearm(Task{}, &t, now)
-		s.models.mu.Lock()
-		defer s.models.mu.Unlock()
-		sc, err := s.lockedSchedule(r.Context())
-		if err != nil {
+		if err := s.scheduleReadable(r.Context()); err != nil {
 			apierr.Write(w, http.StatusServiceUnavailable, err)
 			return
 		}
-		record, err := s.patchTaskExecution(r.Context(), &t, raw)
+		edit, err := s.prepareTaskExecutionEdit(r.Context(), &t, raw)
 		if err != nil {
-			sc.mu.Unlock()
 			writeTaskExecutionError(w, err)
 			return
 		}
-		err = s.saveTaskConfiguredLocked(r.Context(), sc, append(slices.Clone(sc.tasks), t), t.ID, record)
-		sc.mu.Unlock()
-		if err != nil {
-			apierr.Write(w, http.StatusServiceUnavailable, err)
+		if err := s.commitTaskExecutionEdit(r.Context(), nil, t, edit); err != nil {
+			writeTaskExecutionCommitError(w, err)
 			return
 		}
 		s.broadcastSchedule()
@@ -2971,8 +2965,6 @@ func (s *Service) scheduleRoutes() {
 		delete(raw, "until") // not a time.Time: "30m" and a local clock time would not unmarshal
 		ignoreTaskStateNote(raw)
 		mayBeMain := s.mayBeMainNow(r.Context())
-		s.models.mu.Lock()
-		defer s.models.mu.Unlock()
 		sc, err := s.lockedSchedule(r.Context())
 		if err != nil {
 			apierr.Write(w, http.StatusServiceUnavailable, err)
@@ -2984,31 +2976,29 @@ func (s *Service) scheduleRoutes() {
 			apierr.Write(w, http.StatusNotFound, i18n.Err("assistant-schedule.gone"))
 			return
 		}
+		old := sc.tasks[i]
+		sc.mu.Unlock()
 		var in Task
 		encoded, _ := json.Marshal(raw)
 		if err := json.Unmarshal(encoded, &in); err != nil {
-			sc.mu.Unlock()
 			apierr.Write(w, 400, err)
 			return
 		}
-		if _, has := raw["cron"]; !has && sc.tasks[i].Repeat == repeatCron {
+		if _, has := raw["cron"]; !has && old.Repeat == repeatCron {
 			// An app that does not know cron tasks keeps the task's rule (an older iOS app reads one as a one-off,
 			// Android and the web send its repeat back without the expression).
-			old := sc.tasks[i]
 			in.Repeat, in.Cron, in.At, in.Time, in.Weekdays, in.EveryMinutes = old.Repeat, old.Cron, old.At, "", nil, 0
 		}
-		t := editTask(sc.tasks[i], in, now)
+		t := editTask(old, in, now)
 		if hasRunIf {
 			t.RunIf = runIf
 		}
 		if err := editTaskState(&t, in, raw, now); err != nil {
-			sc.mu.Unlock()
 			writeTaskStateError(w, err)
 			return
 		}
 		push, has, err := pushIn(raw)
 		if err != nil {
-			sc.mu.Unlock()
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
 		}
@@ -3016,7 +3006,6 @@ func (s *Service) scheduleRoutes() {
 			t.Push = push
 		}
 		if mode, has, err := inboxIn(raw); err != nil {
-			sc.mu.Unlock()
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
 		} else if has { // and its inbox setting
@@ -3024,14 +3013,12 @@ func (s *Service) scheduleRoutes() {
 		}
 		if v, ok := raw["facts"]; ok { // and its facts: set only when the body has them
 			if err := json.Unmarshal(v, &t.Facts); err != nil {
-				sc.mu.Unlock()
 				apierr.Write(w, http.StatusBadRequest, err)
 				return
 			}
 		}
 		if v, ok := raw["report"]; ok { // and whether it is a daily report, the same way
 			if err := json.Unmarshal(v, &t.Report); err != nil {
-				sc.mu.Unlock()
 				apierr.Write(w, http.StatusBadRequest, err)
 				return
 			}
@@ -3040,23 +3027,17 @@ func (s *Service) scheduleRoutes() {
 		dropStaleUntil(&t, hasUntil, now)
 		isolateScheduledConversation(&t, mayBeMain)
 		if err := checkTask(&t, now); err != nil {
-			sc.mu.Unlock()
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
 		}
-		rearm(sc.tasks[i], &t, now)
-		record, err := s.patchTaskExecution(r.Context(), &t, raw)
+		rearm(old, &t, now)
+		edit, err := s.prepareTaskExecutionEdit(r.Context(), &t, raw)
 		if err != nil {
-			sc.mu.Unlock()
 			writeTaskExecutionError(w, err)
 			return
 		}
-		tasks := slices.Clone(sc.tasks)
-		tasks[i] = t
-		err = s.saveTaskConfiguredLocked(r.Context(), sc, tasks, t.ID, record)
-		sc.mu.Unlock()
-		if err != nil {
-			apierr.Write(w, http.StatusServiceUnavailable, err)
+		if err := s.commitTaskExecutionEdit(r.Context(), &old, t, edit); err != nil {
+			writeTaskExecutionCommitError(w, err)
 			return
 		}
 		s.broadcastSchedule()
