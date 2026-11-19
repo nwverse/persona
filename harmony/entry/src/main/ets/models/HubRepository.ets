@@ -111,9 +111,9 @@ export class HubRepository {
     return this.call('/api/v1/sessions/' + segment(row.machine) + '/' + segment(row.session || row.id) + '/items?lines=80&fold_work=1&lazy_images=1');
   }
   async cards(row: ResourceRow): Promise<Record<string, Object>> { return this.call('/api/v1/assistant/conversations/' + segment(row.id) + '/feed'); }
-  async send(row: ResourceRow, text: string, op: string, context: string, images: Object[] = [], admit?: () => boolean): Promise<void> {
+  async send(row: ResourceRow, text: string, op: string, context: string, images: Object[] = [], admit?: () => boolean): Promise<Record<string, Object>> {
     const body = Wire.payload(['text', 'client_msg_id'], [text, op]); if (images.length) body['images'] = images;
-    await this.call('/api/v1/sessions/' + segment(row.machine) + '/' + segment(row.session || row.id) + '/messages', 'POST', body, op, admit, true);
+    return this.call('/api/v1/sessions/' + segment(row.machine) + '/' + segment(row.session || row.id) + '/messages', 'POST', body, op, admit, true);
   }
   async stop(row: ResourceRow, admit?: () => boolean): Promise<void> { await this.call('/api/v1/sessions/' + segment(row.machine) + '/' + segment(row.session || row.id) + '/interrupt', 'POST', {}, '', admit); }
   async decisions(): Promise<Record<string, Object>[]> {

@@ -23,7 +23,7 @@ import { HubTransport, EndpointConfig, HttpFailure } from '../platform/HubTransp
 import { CredentialVault } from '../platform/CredentialVault';
 import { LocalStore } from '../platform/LocalStore';
 import { HubRepository, segment } from './HubRepository';
-import { Wire, ResourceRow, ChatMessage, Decision, HubProfile } from './Wire';
+import { Wire, ResourceRow, ChatMessage, Decision, HubProfile, HeldAgentMessage } from './Wire';
 import { tr, Strings } from '../design/Strings';
 import { withSourceContext, messageDisplay } from './Compatibility';
 import { MutationRecord, MutationStore } from './MutationStore';
@@ -36,6 +36,7 @@ import type { SessionCapabilityInput, EffectiveSessionCapabilities, TranscriptIt
 
 
 interface DevicePreferenceChange { appearance?: number; style?: string; alerts?: boolean; }
+interface HeldRetryReceipt { scope: string; key: string; }
 
 export interface ClientViewLease {
   readonly epoch: number;
@@ -108,6 +109,9 @@ export class ClientModel {
   private activeMessages: Set<string> = new Set();
   private renderedMessages: ChatMessage[] = [];
   private echoedMessages: Set<string> = new Set();
+  @Trace private heldActions: string[] = [];
+  @Trace private heldRetryReceipts: HeldRetryReceipt[] = [];
+  private heldRevision: number = 0;
   @Trace draftLoading: boolean = false;
   @Trace sourceContext: string = '';
   @Trace reply: string = '';
@@ -630,11 +634,21 @@ export class ClientModel {
       else if (type === 'items' || type === 'items_replace') { this.transcript?.receive(data); } else if (type === 'terminal') {
         if (Wire.text(data, 'machine_id') === this.selected.machine && Wire.text(data, 'session_id') === this.selected.session)
           this.terminalText = (this.terminalText + Wire.text(data, 'data')).slice(-200000);
-      } else if (['interaction', 'interactions', 'interaction_resolved', 'sessions', 'sessions_delta', 'item', 'items', 'session_delta', 'todo', 'inbox', 'task_plan', 'assistant_feed', 'managers', 'machines'].includes(type)) {
-        if (this.feedTimer !== -1) clearTimeout(this.feedTimer);
-        this.feedTimer = setTimeout(() => { this.feedTimer = -1; this.refresh().catch((error: Error) => this.failure(error)); }, 100);
+      } else if (['interaction', 'interactions', 'interaction_resolved', 'session', 'sessions', 'sessions_delta', 'item', 'items', 'session_delta', 'todo', 'inbox', 'task_plan', 'assistant_feed', 'managers', 'machines'].includes(type)) {
+        this.queueRefresh();
       }
     } catch (_) { this.error = 'failed'; }
+  }
+  private queueRefresh(): void {
+    if (this.feedTimer !== -1) clearTimeout(this.feedTimer);
+    const generation = this.generation, scope = this.scope();
+    this.feedTimer = setTimeout(() => {
+      this.feedTimer = -1;
+      // A push may arrive after an in-flight GET already read the previous row.
+      Promise.resolve(this.refreshTask).then(async (): Promise<void> => {
+        if (this.owns(generation, scope)) await this.refresh();
+      }).catch((error: Error) => { if (this.owns(generation, scope)) this.failure(error); });
+    }, 100);
   }
   async refresh(): Promise<void> {
     const owner = JSON.stringify([this.generation, this.scope()]);
@@ -645,19 +659,22 @@ export class ClientModel {
   private async refreshCurrent(): Promise<void> {
     if (this.demo && this.demoRepository) { this.refreshDemo(); if (this.isChat() && this.chatVisible) await this.loadChat(this.selected); return; }
     if (!this.connected || !this.repository) return;
-    const generation = this.generation, scope = this.scope(), repo = this.repository;
+    const generation = this.generation, scope = this.scope(), repo = this.repository, heldRevision = this.heldRevision;
     this.busy = true;
     try {
       const sessions = await repo.sessions(), assistant = await repo.call('/api/v1/assistant');
       const machines = await repo.machines();
       const managers = this.features.includes('managers') ? await repo.list('/api/v1/managers', 'managers', 'manager') : [];
       if (!this.owns(generation, scope)) return;
+      if (heldRevision !== this.heldRevision) { this.queueRefresh(); return; }
       sessions.forEach((row: ResourceRow) => row.group = this.profile.id); machines.forEach((row: ResourceRow) => row.group = this.profile.id);
       this.sessions = sessions; this.sessionsReady = true; this.machines = machines; this.managers = managers; this.publishDirectory();
+      if (this.heldRetryReceipts.length) this.heldRetryReceipts = this.heldRetryReceipts.filter((receipt: HeldRetryReceipt) => receipt.scope !== scope);
       if (this.selected.kind === 'session') {
         const selected = sessions.find((item: ResourceRow) => item.id === this.selected.id && item.machine === this.selected.machine);
         if (selected) this.selected = selected;
         else { this.selected.raw = JSON.stringify(Wire.payload(['read_only'], [true])); this.selected.state = 'unknown'; this.clearPendingDecisions(); }
+        this.reconcileMessageCopies();
       }
       this.mainId = Wire.text(assistant, 'main'); this.mainMachineId = Wire.text(assistant, 'main_machine_id', Wire.text(assistant, 'machine_id'));
       this.conversations = Wire.rows(assistant, 'conversations').map((data: Record<string, Object>) => {
@@ -764,25 +781,52 @@ export class ClientModel {
     for (const entry of entries) if (this.local.accepts('outbox:' + scope, epoch) && entry.state === 'pending' && !entry.confirmedPending && !this.activeMessages.has(entry.id) && !this.unresolvedWrites.some((record: MutationRecord) => record.id === entry.id)) { entry.state = 'unknown'; await new ChatDraftStore(this.local).settle(scope, entry.id, 'unknown'); }
     for (const entry of entries) if (entry.target === target && entry.state === 'done') await this.completeLocalDelivery(entry, scope, repository);
     if (!this.owns(generation, scope) || target !== this.target() || !this.local.accepts('outbox:' + scope, epoch)) return;
-    this.syncOutboxState(); this.publishMessages();
+    this.syncOutboxState(); this.reconcileMessageCopies();
   }
   private syncOutboxState(): void {
     const entries = this.localMessages.filter((entry: ChatOutboxEntry) => entry.target === this.target() && !this.echoedMessages.has(entry.id));
     const blocking = entries.find((entry: ChatOutboxEntry) => ['pending', 'unknown'].includes(entry.state));
     this.operationState = blocking?.state || (entries.length ? entries[entries.length - 1].state : '');
   }
+  private sessionRow(row: ResourceRow = this.selected): ResourceRow {
+    return this.sessions.find((item: ResourceRow) => item.machine === row.machine && (item.session || item.id) === (row.session || row.id)) || row;
+  }
+  private heldMessages(row: ResourceRow = this.selected): HeldAgentMessage[] {
+    if (row.kind !== 'session') return [];
+    const data = this.sessionRow(row).data();
+    if (Wire.bool(data, 'assistant')) return [];
+    const seen = new Set<string>(), held: HeldAgentMessage[] = [];
+    for (const raw of Wire.rows(data, 'undelivered')) {
+      const message = HeldAgentMessage.from(raw);
+      if (message && !seen.has(message.id)) { seen.add(message.id); held.push(message); }
+    }
+    return held;
+  }
   private publishMessages(): void {
-    const messages = this.localMessages.filter((entry: ChatOutboxEntry) => entry.target === this.target() && !this.echoedMessages.has(entry.id)).map((entry: ChatOutboxEntry): ChatMessage => {
+    const held = this.heldMessages().filter((item: HeldAgentMessage) => !this.echoedMessages.has(item.id));
+    const heldIds = new Set(held.map((item: HeldAgentMessage) => item.id));
+    const heldBubbles = held.map((item: HeldAgentMessage): ChatMessage => {
+      const display = messageDisplay(item.text), content = parseMessageContent(display.text);
+      const message = new ChatMessage('held:' + item.id, 'user', content.text);
+      message.held = item; message.at = item.at; message.localImageCount = item.images; message.source = display.sources;
+      message.ownerTarget = this.target(); message.filePaths = content.files; message.imagePaths = content.images;
+      return message;
+    });
+    const messages = this.localMessages.filter((entry: ChatOutboxEntry) => entry.target === this.target() && !this.echoedMessages.has(entry.id) && !heldIds.has(entry.id)).map((entry: ChatOutboxEntry): ChatMessage => {
       const display = messageDisplay(entry.text), content = parseMessageContent(display.text), message = new ChatMessage('local:' + entry.id, 'user', content.text);
       message.at = entry.at; message.source = display.sources; message.imagePaths = content.images; message.filePaths = content.files;
       message.ownerTarget = entry.target; message.localImageCount = entry.imageCount; message.localOperation = entry.id; message.deliveryState = entry.state; message.failed = entry.state === 'failed'; return message;
     });
-    this.messages = this.renderedMessages.concat(messages);
+    this.messages = this.renderedMessages.concat(heldBubbles, messages);
   }
   private publishTranscript(items: readonly TranscriptItem[], running: boolean): void {
     this.revisionItems = items.slice(); this.renderedMessages = this.projectMessages(items, running);
     this.echoedMessages = new Set(items.filter((item: TranscriptItem) => item.role === 'user').map((item: TranscriptItem) => Wire.text(Wire.record(item as Object), 'client_msg_id')).filter((id: string) => !!id));
-    const matched = this.localMessages.filter((entry: ChatOutboxEntry) => this.echoedMessages.has(entry.id)), scope = this.scope(), generation = this.generation, target = this.target();
+    this.reconcileMessageCopies();
+  }
+  private reconcileMessageCopies(): void {
+    const heldIds = new Set(this.heldMessages().map((item: HeldAgentMessage) => item.id)), scope = this.scope(), generation = this.generation, target = this.target();
+    const matched = this.localMessages.filter((entry: ChatOutboxEntry) => entry.target === target && (this.echoedMessages.has(entry.id) || heldIds.has(entry.id)));
     this.publishMessages();
     if (matched.length) {
       Promise.all(matched.map((entry: ChatOutboxEntry): Promise<void> => this.completeLocalDelivery(entry, scope))).then(async (): Promise<void> => {
@@ -939,7 +983,32 @@ export class ClientModel {
       await store.stage(scope, entry); staged = true;
       if (admit && !admit() || !this.owns(generation, scope) || this.target() !== target || this.repository !== repo || this.draftRevision !== entry.revision || this.decision || !this.canSend()) { await store.settle(scope, entry.id, 'failed'); this.activeMessages.delete(entry.id); entry.state = 'failed'; if (this.owns(generation, scope) && this.target() === target) { this.operationState = 'failed'; this.error = 'request_updated'; this.publishMessages(); } return false; }
       this.localMessages = this.localMessages.concat([entry]); this.publishMessages();
-      dispatched = true; await repo.send(row, text, entry.id, '', images, (): boolean => (!admit || admit()) && this.owns(generation, scope) && this.target() === target && this.repository === repo && this.draftRevision === entry.revision && !this.decision && this.canSend());
+      dispatched = true;
+      const reply = await repo.send(row, text, entry.id, '', images, (): boolean => (!admit || admit()) && this.owns(generation, scope) && this.target() === target && this.repository === repo && this.draftRevision === entry.revision && !this.decision && this.canSend());
+      if (reply && row.kind === 'session' && Wire.text(reply, 'delivered') === 'later') {
+        const raw = Wire.object(reply, 'undelivered'), held = HeldAgentMessage.from(raw);
+        if (held?.id === entry.id) {
+          if (entry.state !== 'done' && this.owns(generation, scope) && this.repository === repo) {
+            const source = this.sessionRow(row), data = source.data(), list = Wire.rows(data, 'undelivered');
+            if (!list.some((item: Record<string, Object>) => Wire.text(item, 'id') === entry.id)) {
+              data['undelivered'] = list.concat([raw]); source.raw = JSON.stringify(data); this.heldRevision++;
+            }
+            // The other device may already have canceled this operation while its initial reply was in flight.
+            this.queueRefresh();
+          }
+          this.activeMessages.delete(entry.id);
+          // The manager now owns this operation. A later cancellation must not resurrect a local "sent" bubble.
+          try {
+            await this.completeLocalDelivery(entry, scope, repo);
+            await store.discardEchoed(scope, [entry.id]);
+            if (this.owns(generation, scope) && this.target() === target) {
+              this.localMessages = this.localMessages.filter((item: ChatOutboxEntry) => item.id !== entry.id);
+              this.syncOutboxState(); this.publishMessages();
+            }
+          } catch (_) { if (this.owns(generation, scope) && this.target() === target) this.error = 'cache_unavailable'; }
+          return true;
+        }
+      }
     } catch (error) {
       if (entry.state === 'done') {
         this.activeMessages.delete(entry.id);
@@ -1125,8 +1194,7 @@ export class ClientModel {
     await this.useEndpoint(config, target.name, current);
   }
   private capabilities(): EffectiveSessionCapabilities {
-    const source = this.sessions.find((item: ResourceRow) => item.machine === this.selected.machine && (item.session || item.id) === (this.selected.session || this.selected.id));
-    const data = (source || this.selected).data(), caps = Wire.object(data, 'capabilities');
+    const data = this.sessionRow().data(), caps = Wire.object(data, 'capabilities');
     const input: SessionCapabilityInput = { sourceKind: Wire.text(data, 'source_kind'),
       readOnly: Wire.bool(data, 'read_only', Wire.bool(data, 'readonly')), readOnlyReason: Wire.text(data, 'read_only_reason'),
       capabilities: { read: Wire.bool(caps, 'read'), send: Wire.bool(caps, 'send'), interrupt: Wire.bool(caps, 'interrupt'),
@@ -1145,8 +1213,77 @@ export class ClientModel {
     // Preserve compatibility with callers that still provide only the blocking decision.
     return !this.pendingDecisionTarget && this.pendingDecisions.length === 0 && this.decision !== undefined;
   }
-  canSend(): boolean { return this.connected && this.capabilities().canSend && this.decisionsReady(); }
-  canCompose(): boolean { return this.isChat() && this.capabilities().canSend; }
+  agentInputNotice(): string {
+    if (this.selected.kind !== 'session') return '';
+    const row = this.sessionRow(), data = row.data(), caps = Wire.object(data, 'capabilities');
+    if (Wire.bool(data, 'assistant')) return '';
+    const source = Wire.text(data, 'source_kind'), status = Wire.text(data, 'status', row.state);
+    if ((!source || source === 'codex_history') && ['offline', 'interrupted'].includes(status) &&
+      Wire.bool(caps, 'read') && Wire.bool(caps, 'terminal') && !Wire.bool(caps, 'send')) return 'agent_stopped';
+    if (Wire.bool(data, 'deleted') || !this.capabilities().canSend || (Wire.has(data, 'capabilities') && !Wire.bool(caps, 'send'))) return 'read_only';
+    const machine = this.machines.find((item: ResourceRow) => item.id === row.machine);
+    if (this.connected && machine && !Wire.bool(machine.data(), 'online', true)) {
+      return this.features.includes('agent_message_hold') ? 'agent_computer_holds' : 'agent_computer_offline';
+    }
+    return '';
+  }
+  canSend(): boolean { return this.connected && this.canCompose() && this.decisionsReady(); }
+  canCompose(): boolean {
+    const notice = this.agentInputNotice();
+    return this.isChat() && this.capabilities().canSend && (!notice || notice === 'agent_computer_holds');
+  }
+  offersHeldAction(message: ChatMessage, retry: boolean): boolean {
+    const expected = message.held;
+    if (!expected || message.ownerTarget !== this.target() || !this.connected || this.demo || !this.canCompose() ||
+      !this.features.includes('agent_message_hold') || this.echoedMessages.has(expected.id)) return false;
+    return this.matchesHeldRow(expected, this.selected) && (!retry || (expected.state === 'failed' && !expected.deleteOnly));
+  }
+  private matchesHeldRow(expected: HeldAgentMessage, row: ResourceRow): boolean {
+    const held = this.heldMessages(row).find((item: HeldAgentMessage) => item.id === expected.id);
+    return !!held && held.state === expected.state && held.line === expected.line && held.deleteOnly === expected.deleteOnly;
+  }
+  canActOnHeld(message: ChatMessage, retry: boolean): boolean {
+    if (!this.offersHeldAction(message, retry) || !message.held) return false;
+    const path = this.heldActionPath(message.held.id);
+    return !(retry && this.heldRetryPending(message)) && !this.heldActions.includes(JSON.stringify([message.ownerTarget, message.id])) &&
+      !this.operationBlocked(path) && !this.operationBlocked(path + '/retry');
+  }
+  heldRetryPending(message: ChatMessage): boolean {
+    const key = JSON.stringify([message.ownerTarget, message.id]);
+    return this.heldRetryReceipts.some((receipt: HeldRetryReceipt) => receipt.key === key);
+  }
+  private heldActionPath(id: string): string {
+    const row = this.selected;
+    return '/api/v1/sessions/' + segment(row.machine) + '/' + segment(row.session || row.id) + '/held/' + segment(id);
+  }
+  async actOnHeld(message: ChatMessage, retry: boolean, admit?: () => boolean): Promise<void> {
+    if (admit && !admit() || !this.canActOnHeld(message, retry) || !message.held) return;
+    const row = this.selected, expected = message.held, id = expected.id, path = this.heldActionPath(id);
+    const repo = this.repo(), scope = this.scope(), generation = this.generation;
+    const key = JSON.stringify([message.ownerTarget, message.id]);
+    const current = (): boolean => (!admit || admit()) && this.owns(generation, scope) && this.repository === repo && this.offersHeldAction(message, retry);
+    this.heldActions = this.heldActions.concat([key]);
+    try {
+      await repo.call(path + (retry ? '/retry' : ''), retry ? 'POST' : 'DELETE', {}, '', current, false,
+        (result: Record<string, Object>): boolean => Wire.bool(result, 'ok'));
+      if (this.owns(generation, scope) && this.repository === repo && this.matchesHeldRow(expected, row)) {
+        this.heldRevision++;
+        if (retry) {
+          // The receipt acknowledges the action. Only a subsequent manager snapshot supplies its delivery state.
+          this.heldRetryReceipts = this.heldRetryReceipts.concat([{ scope: scope, key: key }]);
+        } else {
+          const source = this.sessionRow(row), data = source.data();
+          data['undelivered'] = Wire.rows(data, 'undelivered').filter((value: Record<string, Object>) => Wire.text(value, 'id') !== id);
+          source.raw = JSON.stringify(data); this.publishMessages();
+        }
+      }
+    } catch (error) {
+      if (current()) this.failure(error as Error);
+    } finally {
+      this.heldActions = this.heldActions.filter((item: string) => item !== key);
+      if (this.owns(generation, scope) && this.repository === repo) this.queueRefresh();
+    }
+  }
   canApprove(): boolean { return this.connected && this.capabilities().canApprove && this.decisionsReady(); }
   canInterrupt(): boolean { return this.connected && this.capabilities().canInterrupt; }
   contextTitle(): string {

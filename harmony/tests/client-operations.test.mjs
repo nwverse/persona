@@ -83,6 +83,253 @@ function fixture() {
 function decision(model,id='request-one') { const value=new Decision(); value.id=id; value.kind='permission'; value.raw=JSON.stringify({id}); model.decision=value; return value; }
 function deferred() { let resolve,reject; const promise=new Promise((yes,no)=>{resolve=yes;reject=no;}); return {promise,resolve,reject}; }
 
+function heldFixture() {
+  const {model} = fixture();
+  delete model.canSend;
+  model.features = ['agent_message_hold'];
+  model.selected.manager = 'personal';
+  model.selected.machine = 'my laptop';
+  model.selected.session = model.selected.id = 'chat/one';
+  model.sessions = [model.selected];
+  model.decisionReadyTarget = model.target();
+  model.machines = [ResourceRow.from({id:'my laptop',name:'Desk',online:false}, 'machine')];
+  const held = (id, state = 'waiting', error = 'Will send when Desk is back.', extra = {}) =>
+    ({id, state, error, text:'Original words', computer:'Desk', at:'2026-11-01T12:00:00Z', ...extra});
+  const update = (entries, extra = {}) => {
+    model.selected.raw = JSON.stringify({undelivered:entries, ...extra});
+    model.publishMessages();
+  };
+  return {model, held, update};
+}
+
+test('held Agent rows show the exact manager line once and give way to the same transcript operation', () => {
+  const {model, held, update} = heldFixture();
+  const first = held('wire/one', 'waiting', 'Will check the chat when Desk is back.', {images:2});
+  const second = held('two', 'failed', 'Not sent: Desk was away for 24 hours.');
+  const third = held('three', 'failed', 'May have arrived. Check the chat first.');
+  update([first, first, second, third, {...second,id:'persona',computer:''}]);
+  assert.deepEqual(model.messages.map(m => [m.role,m.text,m.held?.line,m.localImageCount]),
+    [first,second,third].map(h => ['user',h.text,h.error,h.images || 0]));
+  model.publishTranscript([{id:'landed',role:'user',kind:'text',text:'Original words',client_msg_id:'two'}], false);
+  assert.deepEqual(model.messages.map(m => m.held?.id || m.id), ['landed','wire/one','three']);
+  update([]);
+  assert.deepEqual(model.messages.map(m => m.id), ['landed']);
+});
+
+test('held Agent first receipt takes over the optimistic operation and retires its durable outbox copy', async () => {
+  const {model, held, update} = heldFixture();
+  let posted = 0;
+  model.repository.send = async (_row, _text, id) => { posted++; return {delivered:'later',undelivered:held(id)}; };
+  assert.equal(await model.send(), true);
+  assert.equal(posted, 1);
+  assert.deepEqual(model.messages.map(m => [m.text,m.held?.state,m.held?.line]), [['Original words','waiting','Will send when Desk is back.']]);
+  assert.equal(model.draft, '');
+  update([]);
+  await model.restoreLocalDelivery();
+  assert.deepEqual(model.messages, []);
+  assert.equal(posted, 1);
+});
+
+test('held Agent late first receipt rechecks a cancellation already made on the other device', async () => {
+  const {model, held} = heldFixture(), received = deferred(), mayReply = deferred();
+  model.repository.send = async (_row, _text, id) => {
+    received.resolve(); await mayReply.promise;
+    return {delivered:'later', undelivered:held(id)};
+  };
+  model.repository.sessions = async () => [ResourceRow.from({machine_id:'my laptop', session_id:'chat/one', manager:'personal'}, 'session')];
+  model.repository.machines = async () => model.machines;
+  model.repository.call = async () => ({conversations:[]});
+  const send = model.send(); await received.promise;
+  await model.refresh(); // The latest list already omits the operation. The initial HTTP reply arrives later.
+  mayReply.resolve(); assert.ok(await send);
+  assert.equal(model.messages[0]?.held?.state,'waiting');
+  for (let i = 0; i < 100 && model.messages.length; i++) await new Promise(done => setTimeout(done, 10));
+  assert.deepEqual(model.messages, []);
+  await model.restoreLocalDelivery(); assert.deepEqual(model.messages, []);
+});
+
+test('held Agent input distinguishes the offline computer, a stopped Agent and view-only sources', () => {
+  const {model, update} = heldFixture();
+  assert.equal(model.canSend(), true);
+  assert.equal(model.agentInputNotice(), 'agent_computer_holds');
+  model.features = [];
+  assert.equal(model.canCompose(), false);
+  assert.equal(model.agentInputNotice(), 'agent_computer_offline');
+  model.connected = false;
+  assert.equal(model.agentInputNotice(), '');
+  assert.equal(model.canCompose(), true);
+  assert.equal(model.canSend(), false);
+  model.connected = true;
+  model.features = ['agent_message_hold'];
+  update([], {status:'interrupted', capabilities:{read:true,terminal:true}});
+  assert.equal(model.canSend(), false);
+  assert.equal(model.agentInputNotice(), 'agent_stopped');
+  update([], {source_kind:'history',capabilities:{read:true}});
+  assert.equal(model.canCompose(), false);
+  assert.equal(model.agentInputNotice(), 'read_only');
+  update([], {read_only:true});
+  assert.equal(model.canSend(), false);
+  model.selected.kind = 'conversation';
+  update([]);
+  assert.equal(model.agentInputNotice(), '');
+  assert.equal(model.canCompose(), true);
+});
+
+test('held Agent actions revalidate the current state, suppress double taps and use the owning session', async () => {
+  const {model,held,update} = heldFixture(), calls = [], gate = deferred();
+  update([held('op/1'), held('op/2','failed','Could not confirm delivery.'), held('signed','failed','Sender signed out.',{delete_only:true})]);
+  const [waiting, failed, signed] = model.messages;
+  model.unresolvedWrites = [{path:'/api/v1/sessions/my%20laptop/chat%2Fone/held/op%2F2/retry'}];
+  assert.equal(model.canActOnHeld(failed, true), false);
+  assert.equal(model.canActOnHeld(failed, false), false);
+  assert.equal(model.canActOnHeld(waiting, false), true);
+  model.unresolvedWrites = [];
+  model.repository.call = async (...args) => { calls.push(args); await gate.promise; return {ok:true}; };
+  model.refresh = async () => {};
+  await model.actOnHeld(waiting, true);
+  await model.actOnHeld(signed, true);
+  assert.equal(calls.length, 0);
+  const first = model.actOnHeld(failed, true);
+  await model.actOnHeld(failed, true);
+  assert.equal(calls.length, 1);
+  gate.resolve(); await first;
+  assert.deepEqual(calls.map(c => c.slice(0,2)), [['/api/v1/sessions/my%20laptop/chat%2Fone/held/op%2F2/retry','POST']]);
+  await model.actOnHeld(failed, true);
+  assert.equal(calls.length, 1);
+  await model.actOnHeld(signed, false);
+  assert.deepEqual(calls.at(-1).slice(0,2), ['/api/v1/sessions/my%20laptop/chat%2Fone/held/signed','DELETE']);
+  assert.ok(!model.messages.some(m => m.held?.id === 'signed'));
+  update([], {read_only:true});
+  await model.actOnHeld(waiting, false);
+  assert.equal(calls.length, 2);
+});
+
+test('held Agent changes made on another device reach both chats, including a push during an older snapshot', async () => {
+  const a = heldFixture(), b = heldFixture(), clients = [a.model,b.model];
+  const row = entries => ResourceRow.from({machine_id:'my laptop',session_id:'chat/one',manager:'personal',undelivered:entries}, 'session');
+  const first = a.held('cross','waiting','Waits behind the message above.');
+  const expired = a.held('cross','failed','Not sent. Desk was away for 24 hours.');
+  let records = [first];
+  const reads = new Map();
+  for (const model of clients) {
+    reads.set(model, []);
+    model.repository.sessions = async () => { const result = row(records); reads.get(model).push(result); return [result]; };
+    model.repository.machines = async () => model.machines;
+    model.repository.call = async () => ({conversations:[]});
+    await model.refresh();
+    assert.equal(model.messages[0]?.held?.line, first.error);
+  }
+  const stale = deferred(), entered = deferred(), readSessions = b.model.repository.sessions;
+  b.model.repository.sessions = async () => {
+    b.model.repository.sessions = readSessions;
+    const previous = row(records); entered.resolve(); await stale.promise; return [previous];
+  };
+  const oldRefresh = b.model.refresh(); await entered.promise;
+  records = [expired];
+  const push = () => clients.forEach(model => model.event(JSON.stringify({type:'session',session:records.length ? row(records).data() : row([]).data()})));
+  const eventually = async check => { for(let i=0;i<100 && !check();i++) await new Promise(done => setTimeout(done,10)); assert.ok(check()); };
+  push(); await eventually(() => a.model.messages[0]?.held?.line === expired.error);
+  stale.resolve(); await oldRefresh;
+  await eventually(() => b.model.messages[0]?.held?.line === expired.error);
+  records = []; push(); await eventually(() => clients.every(model => !model.messages.length));
+  assert.ok(clients.every(model => reads.get(model).length >= 3));
+});
+
+test('held Agent retries are explicit again after the manager checks the chat and still cannot confirm', async () => {
+  const {model, held, update} = heldFixture(), calls = [];
+  const uncertain = held('cross','failed','May have arrived. Check the chat first.');
+  const unconfirmed = held('cross','failed','Could not confirm it arrived. Retry to send it anyway, or delete it.');
+  update([uncertain]); model.refresh = async () => {};
+  model.repository.call = async (path, method, _body, _op, admission) => {
+    assert.ok(admission()); calls.push([path,method]);
+    if (calls.length === 1) update([unconfirmed]); // The authoritative push beats the earlier action reply.
+    return {ok:true};
+  };
+  const stale = model.messages[0];
+  await model.actOnHeld(stale, true);
+  assert.equal(model.messages[0].held.line, unconfirmed.error);
+  await model.actOnHeld(stale, true);
+  assert.equal(calls.length, 1);
+  await model.actOnHeld(model.messages[0], true);
+  assert.equal(calls.length, 2);
+  assert.ok(calls.every(([path,method]) => path.endsWith('/held/cross/retry') && method === 'POST'));
+});
+
+test('held Agent check-only acknowledgment preserves the manager reason through an older list and a failed refresh', async () => {
+  const {model, held, update} = heldFixture(), posts = [], entered = deferred(), beforeAck = deferred();
+  const uncertain = held('cross','failed','Might not have arrived. Retry checks the chat first.');
+  const unconfirmed = held('cross','failed',"Couldn't confirm it arrived. Retry to send it anyway, or delete it.");
+  const row = value => ResourceRow.from({machine_id:'my laptop',session_id:'chat/one',manager:'personal',undelivered:[value]}, 'session');
+  update([uncertain]);
+  model.repository.call = async (path, method) => { if (method === 'POST') { posts.push(path); return {ok:true}; } return {}; };
+  model.repository.machines = async () => model.machines;
+  model.repository.sessions = async () => { entered.resolve(); await beforeAck.promise; return [row(uncertain)]; };
+  const oldRead = model.refresh(); await entered.promise;
+  const original = model.messages[0];
+  await model.actOnHeld(original, true);
+  beforeAck.resolve(); await oldRead;
+  let reads = 0;
+  model.repository.sessions = async () => { reads++; throw new Error('unreachable'); };
+  await model.refresh(); assert.ok(reads);
+  assert.deepEqual([model.messages[0].held.state,model.messages[0].held.line], ['failed',uncertain.error]);
+  assert.equal(model.selected.data().undelivered[0].error, uncertain.error);
+  assert.equal(model.heldRetryPending(model.messages[0]),true);
+  assert.equal(model.canActOnHeld(model.messages[0],true),false);
+  assert.equal(model.canActOnHeld(model.messages[0],false),true);
+  await model.actOnHeld(model.messages[0],true); assert.equal(posts.length,1);
+  model.repository.sessions = async () => [row(unconfirmed)];
+  await model.refresh();
+  assert.equal(model.messages[0].held.line,unconfirmed.error);
+  assert.equal(model.heldRetryPending(model.messages[0]),false);
+  assert.equal(model.canActOnHeld(original,true),false);
+  assert.equal(model.canActOnHeld(model.messages[0],true),true);
+  assert.equal(posts.length,1);
+  await model.actOnHeld(model.messages[0],true); assert.equal(posts.length,2);
+});
+
+test('held Agent actions cannot cross a chat, manager, denied route or capability change', async () => {
+  for (const change of ['chat','manager','route','read-only','stopped','disconnected']) {
+    const {model,held,update} = heldFixture();
+    update([held('x','failed','Not delivered.')]); const message = model.messages[0];
+    let posts = 0, route = true;
+    model.repository.call = async (_path, _method, _body, _id, admit) => {
+      if (change === 'chat') model.selected = new ResourceRow('other','Other','session');
+      if (change === 'manager') model.profile.manager = 'other';
+      if (change === 'route') route = false;
+      if (change === 'read-only') update([held('x','failed','Not delivered.')],{read_only:true});
+      if (change === 'stopped') update([held('x','failed','Not delivered.')],{status:'offline',capabilities:{read:true,terminal:true}});
+      if (change === 'disconnected') model.connected = false;
+      if (!admit()) throw new Error('request_updated');
+      posts++; return {ok:true};
+    };
+    model.refresh = async () => {};
+    await model.actOnHeld(message, true, () => route);
+    assert.equal(posts, 0, change);
+  }
+});
+
+test('held Agent retry receipts still guard the owning row when its live connection or view closes after dispatch', async () => {
+  for (const retirement of ['socket','chat']) {
+    const {model,held,update} = heldFixture();
+    update([held('x','failed','Might not have arrived. Retry checks the chat first.')]);
+    const owner = model.selected, message = model.messages[0];
+    let posts = 0;
+    model.repository.call = async (_path,_method,_body,_operation,admit) => {
+      assert.ok(admit()); posts++;
+      if (retirement === 'socket') model.connected = false;
+      else model.selected = new ResourceRow('elsewhere','Another chat','session');
+      return {ok:true};
+    };
+    model.refresh = async () => {};
+    await model.actOnHeld(message,true);
+    model.connected = true; model.selected = owner; model.publishMessages();
+    assert.equal(model.messages[0].held.line,message.held.line);
+    assert.equal(model.canActOnHeld(model.messages[0],true),false,retirement);
+    await model.actOnHeld(model.messages[0],true); assert.equal(posts,1);
+  }
+});
+
+
 test('an acknowledged message stays done when refreshing its transcript fails',async()=>{
   const {model,writes}=fixture(); model.loadChat=async()=>{throw new Error('read failed');};
   assert.equal(await model.send(),true); assert.equal(writes.length,1);
