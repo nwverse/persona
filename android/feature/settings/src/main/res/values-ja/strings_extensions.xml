@@ -268,6 +268,10 @@
     <string name="settings_ext_token_changed">トークンを変更しました</string>
     <string name="settings_ext_remove_market_title">%1$sを削除しますか？</string>
     <string name="settings_ext_remove_market_text">ハブはこのマーケットを読まなくなります。そこからインストールした拡張機能は残りますが、同じアドレスでマーケットを追加し直すまでアップグレードされません。</string>
+    <plurals name="settings_ext_remove_market_affected">
+        <item quantity="other">ハブはこのマーケットを読まなくなります。そこからインストールした%1$d件の拡張機能は残りますが、同じアドレスでマーケットを追加し直すまでアップグレードされません。</item>
+    </plurals>
+    <string name="settings_ext_remove_market_unused">ハブはこのマーケットを読まなくなります。このマーケットからインストールした拡張機能はありません。</string>
     <string name="settings_ext_remove">削除</string>
     <string name="settings_ext_market_removed">マーケットを削除しました</string>
     <string name="settings_ext_market_address">アドレス</string>
