@@ -92,9 +92,8 @@ class WatcherTests(unittest.TestCase):
         # GitHub's baseRefOid is the base recorded at the PR's last sync, not
         # the branch tip that the watcher fetches (#10568).
         fields = dict(pr(), baseRefOid=SHA_A)
-        fields["baseRefName"] = "main"
-        response = {"data": {"repository": {"ref": {"target": {"oid": SHA_BASE}},
-                                            "pullRequest": fields}}}
+        fields["baseRefName"] = "develop"
+        response = {"data": {"repository": {"pullRequest": dict(fields, baseRef={"target": {"oid": SHA_BASE}})}}}
         with patch.object(pr_watch_common, "run", return_value=subprocess.CompletedProcess(
                 [], 0, json.dumps(response), "")) as execute:
             result = pr_watch_common.pr_snapshot("example/one", 7)
@@ -102,22 +101,20 @@ class WatcherTests(unittest.TestCase):
         execute.assert_called_once()
         argv = execute.call_args.args[0]
         self.assertEqual(argv[:2], ["gh", "api"])
-        self.assertEqual(argv[2], "graphql")
-        query = argv[argv.index("-F") + 1]
-        self.assertIn("ref(qualifiedName: $base)", query)
-        self.assertIn("target { oid }", query)
+        self.assertEqual(argv[2:], ["graphql", "--input", "-"])
+        payload = json.loads(execute.call_args.kwargs["input_text"])
+        query = payload["query"]
+        self.assertIn("baseRef { target { oid } }", query)
         self.assertNotIn("baseRefOid", query)
-        self.assertIn("owner=example", argv)
-        self.assertIn("name=one", argv)
-        self.assertIn("number=7", argv)
-        self.assertIn("base=refs/heads/main", argv)
+        self.assertEqual(payload["variables"],
+                         {"owner": "example", "name": "one", "number": 7})
+        self.assertEqual(result["baseRefName"], "develop")
 
     def test_snapshot_rejects_missing_or_invalid_live_base(self):
         fields = dict(pr(), baseRefOid=None)
         for base in (None, "", "0" * 40, "not-a-sha"):
             with self.subTest(base=base):
-                response = {"data": {"repository": {"ref": {"target": {"oid": base}},
-                                                    "pullRequest": fields}}}
+                response = {"data": {"repository": {"pullRequest": dict(fields, baseRef={"target": {"oid": base}})}}}
                 with patch.object(pr_watch_common, "run", return_value=subprocess.CompletedProcess(
                         [], 0, json.dumps(response), "")):
                     with self.assertRaises(pr_watch_common.WatchError):
@@ -367,11 +364,13 @@ class WatcherTests(unittest.TestCase):
         next_page = {None: "comments-1", "comments-1": "reviews-1", "reviews-1": "threads-1", "threads-1": None}
         calls = []
         def response(argv, **kwargs):
-            self.assertEqual(argv[:2], ["api", "graphql"])
-            self.assertNotIn("comments", argv[1])
-            cursor = next((arg.split("=", 1)[1] for arg in argv if arg.startswith("threadsCursor=")
-                           and arg != "threadsCursor=null"), None)
-            calls.append(argv)
+            self.assertEqual(argv, ["api", "graphql", "--input", "-"])
+            payload = json.loads(kwargs["input_text"])
+            variables = payload["variables"]
+            self.assertEqual(variables["number"], 7)
+            self.assertEqual(variables["pageSize"], 100)
+            cursor = variables["threadsCursor"]
+            calls.append(payload)
             page = pages[cursor]
             if next_page[cursor] and cursor != "threads-1":
                 page["reviewThreads"]["pageInfo"] = {"hasNextPage": True, "endCursor": next_page[cursor]}
@@ -380,9 +379,9 @@ class WatcherTests(unittest.TestCase):
             activity = self.watcher.stale_activity("example/one", 7)
         self.assertEqual([len(activity[key]) for key in ("comments", "reviews", "inline")], [2, 3, 2])
         self.assertEqual(len(calls), 4)
-        self.assertTrue(all("comments(first: $pageSize" in call[call.index("-F") + 1] for call in calls))
-        self.assertIn("commentsCursor=null", calls[0])
-        self.assertIn("commentsCursor=comments-1", calls[1])
+        self.assertTrue(all("comments(first: $pageSize" in call["query"] for call in calls))
+        self.assertIsNone(calls[0]["variables"]["commentsCursor"])
+        self.assertEqual(calls[1]["variables"]["commentsCursor"], "comments-1")
 
     def test_stale_activity_requires_complete_cursor_pages(self):
         response = {"data": {"repository": {"pullRequest": {

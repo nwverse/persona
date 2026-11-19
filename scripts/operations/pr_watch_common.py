@@ -245,26 +245,25 @@ def pr_snapshot(repo, number, timeout=90, environ=None):
     # baseRefOid is not necessarily its base branch's current tip (#10568).
     owner, name = repository(repo).split("/", 1)
     query = """
-query($owner: String!, $name: String!, $number: Int!, $base: String!) {
+query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
-    ref(qualifiedName: $base) { target { oid } }
     pullRequest(number: $number) {
       number title body state isDraft headRefOid headRefName baseRefName
+      baseRef { target { oid } }
       isCrossRepository mergeable mergeStateStatus reviewDecision url createdAt updatedAt
     }
   }
 }
 """
-    response = gh_json(["api", "graphql", "-F", "query=" + query,
-                        "-F", "owner=" + owner, "-F", "name=" + name,
-                        "-F", "number=" + str(number), "-F", "base=refs/heads/main"],
+    payload = {"query": query, "variables": {"owner": owner, "name": name, "number": number}}
+    response = gh_json(["api", "graphql", "--input", "-"], input_text=json.dumps(payload),
                        timeout=timeout, environ=environ)
     if not isinstance(response, dict):
         raise WatchError("GitHub returned an invalid PR snapshot")
     try:
         repository_data = response["data"]["repository"]
         data = repository_data["pullRequest"]
-        base = repository_data["ref"]["target"]["oid"]
+        base = data["baseRef"]["target"]["oid"]
     except (KeyError, TypeError) as error:
         raise WatchError("GitHub returned an incomplete PR snapshot") from error
     if not isinstance(data, dict) or data.get("number") != number:

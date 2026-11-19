@@ -865,12 +865,10 @@ query($owner: String!, $name: String!, $number: Int!, $pageSize: Int!,
         activity = {"comments": [], "reviews": [], "inline": []}
         seen = set()
         for _ in range(1000):
-            argv = ["api", "graphql", "-F", "query=" + query,
-                    "-F", "owner=" + owner, "-F", "name=" + name,
-                    "-F", "number=" + str(number), "-F", "pageSize=100"]
-            for field, cursor_value in cursors.items():
-                argv += ["-F", field + "Cursor=" + (cursor_value if cursor_value is not None else "null")]
-            response = gh_json(argv, timeout=90)
+            variables = {"owner": owner, "name": name, "number": number, "pageSize": 100}
+            variables.update({field + "Cursor": value for field, value in cursors.items()})
+            response = gh_json(["api", "graphql", "--input", "-"],
+                               input_text=json.dumps({"query": query, "variables": variables}), timeout=90)
             try:
                 data = response["data"]["repository"]["pullRequest"]
             except (KeyError, TypeError) as error:
