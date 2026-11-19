@@ -685,7 +685,7 @@ func TestLinkSwitchRollbackAfterTheComputerMoved(t *testing.T) {
 		t.Fatal("a rollback without a hash revoked another manager's computer's credential")
 	}
 	refusedWith(t, "with its hash", busEnd(h, nil, devicewire.LinkSwitchEnd{MachineID: "lsw-box", Operation: switchOp,
-		PairHash: got.PairHash, Outcome: devicewire.LinkSwitchRolledBack}), devicewire.LinkSwitchCodeNoMachine)
+		PairHash: got.PairHash, Outcome: devicewire.LinkSwitchRolledBack}), devicewire.LinkSwitchCodeRolledBackGone)
 	if _, ok := h.authenticate(ctx, cred); ok {
 		t.Fatal("its credential still works")
 	}
@@ -804,7 +804,7 @@ func TestLinkSwitchHoldsItsManager(t *testing.T) {
 	if b, _ := store.BusIdentityByID(context.Background(), "m-0c0c0c"); b == nil {
 		t.Fatal("its identity went")
 	}
-	h.linkSwitch.finish("lsw-desk", op, switchRolledBack)
+	h.linkSwitch.finish("lsw-desk", linkSwitchEnded{operation: op, step: switchRolledBack})
 	if code := managersDo(t, h, srv, "DELETE", "/api/v1/managers/m-0c0c0c", nil, nil); code != http.StatusOK {
 		t.Fatalf("remove once the switch ended: %d", code)
 	}

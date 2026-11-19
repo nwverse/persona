@@ -75,7 +75,8 @@ type linkSwitchRun struct {
 	until                            time.Time
 }
 
-type linkSwitchEnded struct{ operation, step string }
+// linkSwitchEnded is how a computer's last switch ended (step), with the manager that began it and its code's hash.
+type linkSwitchEnded struct{ operation, step, manager, pairHash string }
 
 // errLinkSwitchHeld: a move or a removal of the computer, or another switch of it, is under way.
 var errLinkSwitchHeld = errors.New("the computer is being moved, removed or switched")
@@ -106,17 +107,17 @@ func (s *linkSwitches) begun(mid, op, pairHash string) {
 	}
 }
 
-// finish records that switch op of computer mid ended with step.
-func (s *linkSwitches) finish(mid, op, step string) {
+// finish records that switch e.operation of computer mid ended (e.step).
+func (s *linkSwitches) finish(mid string, e linkSwitchEnded) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if r := s.run[mid]; r != nil && r.operation == op {
+	if r := s.run[mid]; r != nil && r.operation == e.operation {
 		delete(s.run, mid)
 	}
 	if s.ended == nil {
 		s.ended = map[string]linkSwitchEnded{}
 	}
-	s.ended[mid] = linkSwitchEnded{op, step}
+	s.ended[mid] = e
 }
 
 // drop forgets switch op of computer mid, which never got as far as the audit.
@@ -195,7 +196,8 @@ func (h *Hub) linkSwitchOpOf(ctx context.Context, mid, op string) (linkSwitchOp,
 	case run != nil && run.operation == op:
 		st = linkSwitchOp{known: true, latest: true, begun: run.pairHash != "", manager: run.manager, pairHash: run.pairHash}
 	case run == nil && ended.operation == op:
-		st = linkSwitchOp{known: true, latest: true, ended: ended.step}
+		st = linkSwitchOp{known: true, latest: true, begun: ended.pairHash != "", manager: ended.manager, pairHash: ended.pairHash,
+			ended: ended.step}
 	}
 	newer := run != nil && run.operation != op // a switch begun after it
 	s.mu.Unlock()
@@ -293,6 +295,25 @@ func linkSwitchRefusal(code, msg string) *rpc.Error { return &rpc.Error{Code: co
 // linkSwitchNoMachine: the computer is none of this manager's (gone, or another manager's now).
 func linkSwitchNoMachine() *rpc.Error {
 	return linkSwitchRefusal(devicewire.LinkSwitchCodeNoMachine, "no such computer of this manager")
+}
+
+// linkSwitchEntryGone: computer mid has no entry a rollback could put back to ssh any more (removed from hub.json, or
+// from the list of the manager that kept it), though the running hub may still have it until its restart.
+func (h *Hub) linkSwitchEntryGone(mid string) bool {
+	if h.knownEntry(mid) == nil {
+		return true
+	}
+	if h.cfgEntry(mid) == nil {
+		return false // its manager keeps it
+	}
+	entry, _, err := hubJSONEntry(h.cfg.dir, mid)
+	return err == nil && entry == nil
+}
+
+// linkSwitchGone: the switch is undone (its code and credential revoked, its end recorded), and the computer is no
+// longer this manager's: the rollback is taken all the same.
+func linkSwitchGone() *rpc.Error {
+	return linkSwitchRefusal(devicewire.LinkSwitchCodeRolledBackGone, "the switch is undone; the computer is no longer this manager's")
 }
 
 func linkSwitchInvalid(msg string) *rpc.Error {
@@ -409,7 +430,7 @@ func (h *Hub) beginFailed(ctx context.Context, c *busConn, mid string, run *link
 	if err := h.linkSwitchRecord(context.WithoutCancel(ctx), c, mid, run.operation, run.by, switchBeginFailed, nil); err != nil {
 		h.logf("[%s] link switch %s: its begin changed nothing, which the audit could not record: %v", mid, run.operation, err)
 	}
-	h.linkSwitch.finish(mid, run.operation, switchBeginFailed)
+	h.linkSwitch.finish(mid, linkSwitchEnded{run.operation, switchBeginFailed, run.manager, run.pairHash})
 }
 
 // linkSwitchReady refuses a begin the hub cannot do now (devicewire's LinkSwitchCode*). h.machineAdd is held.
@@ -509,10 +530,13 @@ func (h *Hub) endLinkSwitch(ctx context.Context, c *busConn, p devicewire.LinkSw
 		}
 		return map[string]any{}, nil
 	case switchRolledBack, switchBeginFailed:
-		if rollBack {
-			return map[string]any{}, nil
+		switch {
+		case !rollBack:
+			return nil, linkSwitchInvalid("this switch did not succeed: it was undone")
+		case h.linkSwitchEntryGone(mid):
+			return nil, linkSwitchGone() // as the first answer said: the computer is gone since
 		}
-		return nil, linkSwitchInvalid("this switch did not succeed: it was undone")
+		return map[string]any{}, nil
 	}
 	if !st.known || !st.latest {
 		if rollBack {
@@ -531,7 +555,7 @@ func (h *Hub) endLinkSwitch(ctx context.Context, c *busConn, p devicewire.LinkSw
 		if err := h.linkSwitchRecord(ctx, c, mid, op, "", switchSucceeded, nil); err != nil {
 			return nil, fmt.Errorf("the switch's audit: %w", err)
 		}
-		h.linkSwitch.finish(mid, op, switchSucceeded)
+		h.linkSwitch.finish(mid, linkSwitchEnded{op, switchSucceeded, st.manager, st.pairHash})
 		return map[string]any{}, nil
 	}
 	revoked, err := h.revokeLinkSwitch(ctx, mid, st.pairHash)
@@ -542,7 +566,9 @@ func (h *Hub) endLinkSwitch(ctx context.Context, c *busConn, p devicewire.LinkSw
 	var re *rpc.Error
 	switch err := h.swapMachineKind(ctx, mid, "ssh", linkSwitchBack); {
 	case err == nil, errors.Is(err, errSwapDone):
-	case errors.Is(err, errSwapKind), errors.Is(err, errNoMachine), errors.As(err, &re) && re.Code == devicewire.CodeNoDevice:
+	case errors.Is(err, errNoMachine), errors.As(err, &re) && re.Code == devicewire.CodeNoDevice:
+		refused = linkSwitchGone() // removed meanwhile: undone all the same
+	case errors.Is(err, errSwapKind):
 		refused = linkSwitchSwapErr(err)
 	default:
 		return nil, err // tried again: what was revoked stays revoked
@@ -550,7 +576,7 @@ func (h *Hub) endLinkSwitch(ctx context.Context, c *busConn, p devicewire.LinkSw
 	if err := h.linkSwitchRecord(ctx, c, mid, op, "", switchRolledBack, map[string]any{"credentials_revoked": revoked}); err != nil {
 		return nil, fmt.Errorf("the switch's audit: %w", err)
 	}
-	h.linkSwitch.finish(mid, op, switchRolledBack)
+	h.linkSwitch.finish(mid, linkSwitchEnded{op, switchRolledBack, st.manager, st.pairHash})
 	h.logf("[%s] link switch %s rolled back: %d credentials revoked", mid, op, revoked)
 	if refused != nil {
 		return nil, refused
@@ -558,12 +584,23 @@ func (h *Hub) endLinkSwitch(ctx context.Context, c *busConn, p devicewire.LinkSw
 	return map[string]any{}, nil
 }
 
-// endMovedLinkSwitch is an end from a manager that does not carry the computer (any more: it moved meanwhile). Only
-// a rollback of the computer's latest switch, under way, that this manager began, naming its code: that code and the
-// credential it became are revoked (the kind is the new manager's), and the switch is over. Always no_machine.
-// h.machineAdd is held.
+// endMovedLinkSwitch is an end from a manager that does not carry the computer (any more: it moved, or was removed,
+// meanwhile). Only a rollback of the computer's latest switch that this manager began: under way and naming its code,
+// that code and the credential it became are revoked (the kind is not this manager's to put back) and the switch is
+// over; then, and for a repeat once it is over (undone here, or by its begin), rolled_back_gone: the rollback is taken.
+// Anything else changes nothing: no_machine. h.machineAdd is held.
 func (h *Hub) endMovedLinkSwitch(ctx context.Context, c *busConn, mid, op, pairHash string, rollBack bool, st linkSwitchOp) error {
-	if !rollBack || !st.known || !st.latest || st.ended != "" || st.manager != c.managerID() || pairHash == "" || pairHash != st.pairHash {
+	if !rollBack || !st.known || !st.latest || st.manager != c.managerID() || pairHash != "" && pairHash != st.pairHash {
+		return linkSwitchNoMachine()
+	}
+	switch st.ended {
+	case switchRolledBack, switchBeginFailed:
+		return linkSwitchGone()
+	case "":
+	default: // it succeeded: what it made stays
+		return linkSwitchNoMachine()
+	}
+	if pairHash == "" { // never all of a computer that is another manager's now
 		return linkSwitchNoMachine()
 	}
 	revoked, err := h.revokeLinkSwitch(ctx, mid, pairHash)
@@ -573,9 +610,9 @@ func (h *Hub) endMovedLinkSwitch(ctx context.Context, c *busConn, mid, op, pairH
 	if err := h.linkSwitchRecord(ctx, c, mid, op, "", switchRolledBack, map[string]any{"credentials_revoked": revoked, "moved": true}); err != nil {
 		return fmt.Errorf("the switch's audit: %w", err)
 	}
-	h.linkSwitch.finish(mid, op, switchRolledBack)
-	h.logf("[%s] link switch %s rolled back after the computer moved: %d credentials revoked", mid, op, revoked)
-	return linkSwitchNoMachine()
+	h.linkSwitch.finish(mid, linkSwitchEnded{op, switchRolledBack, st.manager, st.pairHash})
+	h.logf("[%s] link switch %s rolled back after the computer left its manager: %d credentials revoked", mid, op, revoked)
+	return linkSwitchGone()
 }
 
 // revokeLinkSwitch revokes what a switch of computer mid made: the pairing code whose hash is pairHash and the

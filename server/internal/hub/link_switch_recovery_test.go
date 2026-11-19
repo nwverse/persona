@@ -255,8 +255,8 @@ func TestLinkSwitchEndsAreFinal(t *testing.T) {
 }
 
 // An end from a manager that does not carry the computer (it moved): only the manager that began the switch, naming
-// its code, revokes that code's credential (nothing else, the kind stays the new manager's); any other is refused as
-// no_machine and changes nothing.
+// its code, revokes that code's credential (nothing else, the kind stays the new manager's), told rolled_back_gone;
+// any other is refused as no_machine and changes nothing.
 func TestLinkSwitchEndFromAnotherManager(t *testing.T) {
 	h, database, _ := switchHub(t)
 	ctx := context.Background()
@@ -286,7 +286,7 @@ func TestLinkSwitchEndFromAnotherManager(t *testing.T) {
 		}
 	}
 	refusedWith(t, "its own, with its hash", busEnd(h, nil, devicewire.LinkSwitchEnd{MachineID: "lsw-box", Operation: op, PairHash: got.PairHash,
-		Outcome: devicewire.LinkSwitchRolledBack}), devicewire.LinkSwitchCodeNoMachine)
+		Outcome: devicewire.LinkSwitchRolledBack}), devicewire.LinkSwitchCodeRolledBackGone)
 	if _, ok := h.authenticate(ctx, cred); ok || h.linkSwitch.live("lsw-box", time.Now()) || diskKind(t, h, "lsw-box") != "link" {
 		t.Fatal("its credential, its switch or its kind")
 	}
@@ -354,4 +354,59 @@ func TestLinkSwitchTimeRunsOut(t *testing.T) {
 	}
 	refusedWith(t, "a rollback after it", busEnd(h, nil, devicewire.LinkSwitchEnd{MachineID: "lsw-box", Operation: op,
 		Outcome: devicewire.LinkSwitchRolledBack}), devicewire.LinkSwitchCodeSucceeded)
+}
+
+// A rollback the hub takes though the computer is no longer the manager's that began the switch: moved to another
+// manager (once the switch no longer held it) or removed. The code and its credential are revoked and the switch is
+// over; the manager is told rolled_back_gone (the rollback is taken), and so again when it asks again.
+func TestLinkSwitchRollbackOfAComputerThatLeft(t *testing.T) {
+	was := linkSwitchFor
+	linkSwitchFor = 200 * time.Millisecond
+	t.Cleanup(func() { linkSwitchFor = was })
+	for _, how := range []string{"moved", "removed"} {
+		t.Run(how, func(t *testing.T) {
+			h, database, _ := switchHub(t)
+			ctx := context.Background()
+			h.bus.idents = &keptIdents{ids: &memIdents{}, kept: map[string]json.RawMessage{}} // a roster with the other manager
+			busToken(t, h, "m-0e0e0e", "other")
+			op := newSwitchOp()
+			got, err := busBegin(h, nil, devicewire.LinkSwitchBegin{MachineID: "lsw-box", Operation: op, SSHHost: "me@box.example"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			code, out := redeem(t, h, pairTokenOf(t, got.Link), `{}`)
+			if code != 200 {
+				t.Fatalf("redeem %d", code)
+			}
+			cred := out["token"].(string)
+			time.Sleep(300 * time.Millisecond) // the switch no longer holds it
+			switch how {
+			case "moved":
+				if _, err := h.moveMachine(ctx, "lsw-box", "m-0e0e0e"); err != nil {
+					t.Fatalf("move: %v", err)
+				}
+			case "removed":
+				if w := adminMachinesRequest(h, "DELETE", "/api/v1/admin/machines/lsw-box", ""); w.Code != http.StatusOK {
+					t.Fatalf("remove: %d %s", w.Code, w.Body.String())
+				}
+			}
+			for _, hash := range []string{got.PairHash, got.PairHash, ""} {
+				refusedWith(t, "the rollback", busEnd(h, nil, devicewire.LinkSwitchEnd{MachineID: "lsw-box", Operation: op, PairHash: hash,
+					Outcome: devicewire.LinkSwitchRolledBack}), devicewire.LinkSwitchCodeRolledBackGone)
+			}
+			if _, ok := h.authenticate(ctx, cred); ok {
+				t.Fatal("its credential still works")
+			}
+			if steps := switchSteps(t, database, "lsw-box", op); !slices.Equal(steps, []string{"begin", "begun", "rolled_back"}) {
+				t.Fatalf("audited %v", steps)
+			}
+			// A rollback of a switch that never began there: nothing was undone, so not rolled_back_gone.
+			never := busEnd(h, nil, devicewire.LinkSwitchEnd{MachineID: "lsw-box", Operation: newSwitchOp(), Outcome: devicewire.LinkSwitchRolledBack})
+			if how == "moved" {
+				refusedWith(t, "a switch it never began", never, devicewire.LinkSwitchCodeNoMachine)
+			} else if never != nil {
+				t.Fatalf("a switch it never began: %v", never)
+			}
+		})
+	}
 }
