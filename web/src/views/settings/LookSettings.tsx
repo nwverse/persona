@@ -1,5 +1,5 @@
 // Settings › General › Appearance's "Theme color" and "Text size" (ui/look.ts; the app's ThemeColorPicker and StyleSettingsPage's "Text size"),
-// and the web's own "Recent chats in the sidebar" (lib/sidebar-recent.ts).
+// and the web's own "Recent chats in the sidebar" (lib/sidebar-recent.ts) and "Sidebar icons" (lib/sidebar-icons.ts).
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { t } from "../../i18n";
 import { cx } from "../../ui/atoms";
@@ -11,6 +11,7 @@ import {
   type AccentChoice, type TextSize,
 } from "../../ui/look";
 import { RECENT_COUNTS, setRecentCount, useRecentCount } from "../../lib/sidebar-recent";
+import { setSidebarIconMode, SIDEBAR_ICON_MODES, useSidebarIconMode, type SidebarIconMode } from "../../lib/sidebar-icons";
 import { usePersona } from "../assistant/Persona";
 import { Segmented } from "../assistant/parts";
 import { Row } from "./SettingsParts";
@@ -97,6 +98,17 @@ export function RecentChatsRow() {
   return (
     <Row label={t("ui-look.recent_chats")} hint={t("ui-look.recent_chats_hint")} wrapHint stackOnNarrow anchor="recent-chats">
       <Segmented label={t("ui-look.recent_chats")} value={String(count)} options={RECENT_COUNTS.map((n) => ({ v: String(n), label: String(n) }))} onChange={(v) => setRecentCount(Number(v))} />
+    </Row>
+  );
+}
+
+/** "Sidebar icons": Monochrome (the default, the neutral ink) or Colored, a color for each page's icon (#10822).
+ *  Stacked on a phone like Recent chats, so the name is not cut beside the choices. */
+export function SidebarIconsRow() {
+  const mode = useSidebarIconMode();
+  return (
+    <Row label={t("ui-look.sidebar_icons")} hint={t("ui-look.sidebar_icons_hint")} wrapHint stackOnNarrow anchor="sidebar-icons">
+      <Segmented<SidebarIconMode> label={t("ui-look.sidebar_icons")} value={mode} options={SIDEBAR_ICON_MODES.map((v) => ({ v, label: t(`ui-look.sidebar_icons_${v}`) }))} onChange={setSidebarIconMode} />
     </Row>
   );
 }

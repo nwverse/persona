@@ -25113,6 +25113,9 @@ def markets_route(handler, p, body):
                     "size": "full", "icon": icon, "group": {"id": g, "title": gt}}
                    for i, title, icon, g, gt in (("lark", "Lark", "list", "workbench", "工作台"), ("calendar", "Calendar", "calendar", "workbench", "工作台"),
                                                  ("assets", "Assets", "money", "assets", "资产"), ("home", "Home devices", "gauge", "home", "家里"))]
+        if NAV_ICON_COLOR and placement in ("", "nav_page"):
+            ui += [{"plugin": "example-garden", "plugin_name": "Example Garden", "id": "garden", "title": "花园",
+                    "placement": "nav_page", "size": "full", "icon": "calendar", "icon_color": "green"}]
         if GAUGE_MODE and placement in ("", "nav_page"):
             ui += [{"plugin": "example-quota", "plugin_name": "Example Quota", "id": "quota", "title": "Quota",
                     "placement": "nav_page", "size": "full", "icon": "gauge"}]
@@ -30516,6 +30519,9 @@ def plugins_route(handler, p, body):
 COLUMNS_MODE = os.environ.get("MOCK_EXTENSION_COLUMNS") == "1"
 # MOCK_SIDEBAR_GROUPS=1 (with MOCK_EXTENSIONS=1 MOCK_EXTENSION_COLUMNS=1): nav_pages naming sidebar groups (#9071)
 SIDEBAR_GROUPS = os.environ.get("MOCK_SIDEBAR_GROUPS") == "1"
+# MOCK_NAV_ICON_COLOR=1 (with MOCK_EXTENSIONS=1): a made-up extension's nav_page naming its icon's color (#10822), drawn
+# in it once Settings › Appearance › Sidebar icons is Colored; the gateway's 用量 names none and stays neutral
+NAV_ICON_COLOR = os.environ.get("MOCK_NAV_ICON_COLOR") == "1"
 
 
 def _today_row(key, title, subtitle="", value="", **extra):

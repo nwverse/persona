@@ -325,6 +325,7 @@ Reduce Motion:
   No new style, setting or navigation is added; at accessibility sizes the market row puts its full name above the
   version and status instead of squeezing all three beside the logo.
 - Web draws about 80 stroke glyphs (`web/src/ui/icons.tsx`, 15 px, stroke 1.9). Android uses Phosphor. There is no shared glyph map.
+- The web sidebar's page icons are the neutral ink: `--ink-3`, the open page's `--ink` on its fill, never a page's own color. **Colored** sidebar icons are an opt-in (Settings › Appearance › Sidebar icons, #10822) that gives each page a named color; Monochrome stays the default, pixel-identical. The map and its contrast: "Sidebar icon colors" below.
 - `pullDown` (#10422, an alias of `expand`'s chevron) follows an action's words that open a menu of how far the action goes (a pull-down, as UIKit draws one): the Inbox group titles' **Mark All Seen ⌄** / **Clear All ⌄** (`docs/assistant/inbox.md` "Group titles"). A value that opens a menu of choices keeps `choices`; the web draws its `chevron`.
 - `sideSessions` (#7944) is a session's side sessions on every platform: SF Symbol `rectangle.stack` on Apple, its Phosphor match on Android, Lucide's gallery-vertical-end on the web.
 - Catalog package logos (#4780) replace only the generic extension glyph inside its existing leading tile in the market list, market detail, installed list and installed detail. A shared logo component keeps the tile's geometry and fallback glyph. Loaded artwork has a fixed light neutral backing (`--extension-logo-backing` on web, `PersonaPalette.catalogLogoBackground` on Android) so transparent dark marks remain legible in either appearance. Missing, invalid, loading and failed artwork retain the earlier role-tinted generic mark; a changed URL can retry. The image fits without cropping and is decorative beside the package name. Bundled catalog artwork (#5461) is a square PNG inside the versioned extension package; the hub verifies/reads it and returns an authenticated relative `icon_url`. Web uses its selected hub connection to fetch bytes and displays a local Blob URL; Android uses its authenticated hub image loader. Missing, stale or unavailable bundled files keep the same fallback. Legacy absolute HTTPS sources still load anonymously without hub or market credentials. Publisher limits and authenticated image routes are in `docs/extensions/extensions.md` ("Bundled catalog artwork"). Downloads, when supplied, use secondary text (`--extension-meta-size` on web, scaled by the existing text-size transform) and the same GHCR package total across versions on every surface, never an install/user count; unknown counts add no line. This adds package identity to an existing component, not a new style or theme. Other marks, actions and primary screens stay unchanged.
@@ -2397,6 +2398,48 @@ done, not applicable, or deviated (with the reason). It is short on purpose. The
 - Presentation changes keep the one `settingsSheetStack`, one `JSheet`, one presentation frame and one content invocation. Only the container and card geometry change, preserving non-saveable state and running effects as well as the fixed-key `SaveableStateHolder`; they never open Settings again, move content between dialog compositions or key a stack by window size. `focusRestorer` returns to the previously focused field only after a presentation transfer and only when no field already has focus. The outer blank-tap callback is an explicit user clear and disables restoration rather than reopening the IME on the next resize. Root Close dismisses the whole card and child Back pops one Settings destination. Book and tabletop use the same safe area and existing internal pane policy.
 - `HardwareShortcutHost` keeps the same parent and content call site in every window and provides its controller and `onKeyEvent` listener only in a large window. On entering a large window the shell host uses public focus state to request its own focus only when that window has none; Settings disables host auto-focus so dialog content keeps its field focus, and an already-large resize makes no focus request. Its listeners run after focused children, never in the preview phase. Shared text inputs, including `LargeWindowComposer`'s small field outside IME composition, handle only Ctrl+/ in their own preview phase because editors consume it before a parent listener; all other keys follow the ordinary path, so a focused terminal or IME keeps Escape, Tab, Shift+Tab, Ctrl+C, arrows and Ctrl+/. `JSheet`, `JDialog`, `FullTextReader`, `MessageSharePage` and `ChatSearchScreen` register their existing dismiss callbacks with stable tokens; Escape invokes only the last registration and consumes its key-up and repeats. With no registration it is a consumed no-op, never App exit, navigation pop or Agent interruption. `ExpandedComposer` and `JPointerMenu` retain their own Escape handling.
 - Ctrl+/ opens `KeyboardShortcutsSheet` as the top dialog. It lists only implemented send, newline, dismiss, help and existing terminal keys, with `en`, `zh-Hans` and `ja` resources and a single-line Close button. Its content scrolls at large text sizes. Opening it does not clear a draft, change a selected conversation or stop terminal work; closing the dialog returns to the previous window and its focused content. Compact windows add no help entry or new key handling.
+
+## Sidebar icon colors (#10822)
+
+Who it serves: anyone whose sidebar lists many pages and who finds it quicker to scan when each page has a color. It is
+an option, off by default (principle 2): Settings › General › Appearance › **Sidebar icons**, **Monochrome** or
+**Colored**, kept in this browser as the theme color is (`web/src/lib/sidebar-icons.ts`). Monochrome is the sidebar as
+it was, pixel for pixel: every page's line icon in `--ink-3`, the open page's in `--ink`, and nothing is stored.
+
+With Colored:
+
+- Each built-in page's icon takes the fixed named color below (`Color`, `schema/extension/view.schema.json`), drawn in
+  the web's existing `--hue-*` tokens through the same `hue()` a row's `icon_color` uses
+  (`web/src/lib/extension-ui-v6.ts`). No color value is added.
+- An extension's `nav_page` takes the `icon_color` its manifest names (`docs/extensions/extensions.md` "UI slots"); a
+  page without one, or with a name no client knows, stays neutral.
+- The open page keeps today's rule: its icon is the open row's `--ink`, not its color, so the open page stands out as
+  before. Under the pointer the color stays and the hover fill shows.
+- Everywhere the sidebar draws its pages: the Pages list and the groups, More, the folded icon rail and a phone's grid
+  of pages. The More menu, ⌘K and Settings › Sidebar pages keep neutral icons; the main chat's row, All chats and the
+  Agents' rows are not pages and are unchanged. State marks, dots and counts never take these colors (#4538).
+- Theme colors and extension themes move neither the `--hue-*` tokens nor the sidebar's backgrounds, so the colors and
+  their contrast are the same under each of them; the text size does not scale icons.
+
+| Page | Icon | Color | Light: on `--canvas` / `--hover` | Dark: on `--canvas` / `--hover` |
+| --- | --- | --- | --- | --- |
+| Overview | `home` | amber | 3.26 / 3.35 | 9.05 / 7.59 |
+| Inbox | `inbox` | orange | 3.01 / 3.09 | 7.16 / 6.01 |
+| Health | `heart` | pink | 3.82 / 3.93 | 6.44 / 5.41 |
+| Messages | `chat` | green | 3.25 / 3.34 | 6.87 / 5.76 |
+| Workflow board | `layers` | yellow | 3.25 / 3.34 | 10.89 / 9.14 |
+| To-dos | `todo` | blue | 3.23 / 3.32 | 5.84 / 4.90 |
+| Scheduled tasks | `clock` | purple | 4.25 / 4.37 | 6.53 / 5.48 |
+| Knowledge | `book` | indigo | 4.79 / 4.92 | 5.80 / 4.87 |
+| Machines | `machine` | teal | 3.65 / 3.75 | 7.15 / 6.00 |
+| Settings | `gear` | gray | 3.54 / 3.63 | 6.27 / 5.26 |
+
+Each page has a color of its own. Red (3.55 / 3.65 light, 5.09 / 4.27 dark) is left to extensions: on a built-in page
+it would read as an error. An icon is a graphic, so the floor is 3:1; `web/src/ui/theme-contrast.test.ts` checks all
+eleven named colors on both backgrounds in light and dark, since an extension may name any of them, and the closest is
+light orange at 3.01:1. Why a new pattern: one ink let only the open page stand out; Colored keeps that and adds a
+second cue for scanning, so it is an option and never the default. iOS and Android follow with the same setting, the
+same map and the same `icon_color`, so a page has one color on every client (#10822 tracks them).
 
 ## Configuration forms (web, #9877)
 

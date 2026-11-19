@@ -752,6 +752,7 @@
         "placement": {"$ref": "view.schema.json#/$defs/Placement"},
         "hosts": {"type": "array", "items": {"$ref": "#/$defs/Host"}, "description": "launcher_section only."},
         "icon": {"$ref": "view.schema.json#/$defs/NavIcon", "description": "nav_page only."},
+        "icon_color": {"$ref": "view.schema.json#/$defs/Color", "description": "nav_page only: the icon's named color in the sidebar, the same colors as a row's icon_color, drawn only while the owner chose Colored sidebar icons (#10822); without it the icon stays the sidebar's neutral ink."},
         "opens": {"type": "string", "description": "overview_card, capsule_card and widget only: a nav_page or extension_page of the same extension."},
         "connector": {"type": "string", "description": "inbox_item only: one of the extension's own connectors."},
         "families": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "view.schema.json#/$defs/WidgetFamily"}, "description": "widget only (and needed there): the sizes it can be drawn at."},

@@ -745,6 +745,9 @@ type UIItem struct {
 	Hosts []string `json:"hosts,omitempty"`
 	// nav_page only.
 	Icon string `json:"icon,omitempty"`
+	// nav_page only: the icon's named color in the sidebar, the same colors as a row's icon_color, drawn only while the
+	// owner chose Colored sidebar icons (#10822); without it the icon stays the sidebar's neutral ink.
+	IconColor string `json:"icon_color,omitempty"`
 	// overview_card, capsule_card and widget only: a nav_page or extension_page of the same extension.
 	Opens string `json:"opens,omitempty"`
 	// inbox_item only: one of the extension's own connectors.
@@ -1139,6 +1142,8 @@ type UIPlace struct {
 	Connector     string `json:"connector,omitempty"`
 	// A nav_page's sidebar group, its title in the request's language (#9071).
 	Group *UIGroup `json:"group,omitempty"`
+	// A nav_page's icon color as its manifest names it, drawn only with Colored sidebar icons (#10822).
+	IconColor string `json:"icon_color,omitempty"`
 }
 
 type UIPlaces struct {
