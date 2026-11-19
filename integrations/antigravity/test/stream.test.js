@@ -6,12 +6,13 @@ import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { startFakeNode, until } from '../../runtime-sdk/testing/fake-node.js'
 import { createAgyRuntime } from '../lib/runtime.js'
+import { AgyAcpClient } from '../lib/acp.js'
 
 const FAKE = fileURLToPath(new URL('./fake-acp-stream.mjs', import.meta.url))
 const RAW = '11111111-2222-4333-8444-555555555555'
 const SESSION = `agy-${RAW}`
 
-async function fixture(t) {
+async function fixture(t, options = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'agy-stream-'))
   writeFileSync(join(directory, 'updates.jsonl'), '')
   writeFileSync(join(directory, 'calls.jsonl'), '')
@@ -20,7 +21,7 @@ async function fixture(t) {
   chmodSync(binary, 0o700)
   mkdirSync(join(directory, 'config/brain', RAW), { recursive: true })
   const node = await startFakeNode(t)
-  const runtime = createAgyRuntime({ agyBin: binary, agyDir: join(directory, 'config'), home: directory, socketPath: node.path, log: () => {} })
+  const runtime = createAgyRuntime({ agyBin: binary, agyDir: join(directory, 'config'), home: directory, socketPath: node.path, log: () => {}, ...options })
   t.after(async () => { await runtime.stop(); rmSync(directory, { recursive: true, force: true }) })
   runtime.start()
   await node.ready
@@ -483,5 +484,124 @@ for (const secondReply of ['Second answer.', 'First answer.']) {
     transcripts(directory, full, full)
     await until('second export replaces pending', () => node.last('session.items') && !node.last('session.items').history.includes(':settled:'))
     assert.equal(node.last('session.items').items.at(-1).text, secondReply)
+  })
+}
+
+
+for (const externalReply of [false, true]) {
+  test(`a native successor supersedes pending live history (reply: ${externalReply})`, async (t) => {
+    const { node, directory, update, chunk, promptCount } = await fixture(t)
+    await node.peer.call('session.send', { session_id: SESSION, text: 'First.' })
+    await promptCount(1)
+    await chunk('First answer.')
+    update({ end: true })
+    await until('first reply settled', () => node.last('session.delta')?.text === '')
+    const steps = [userStep(0, 'First.'), replyStep(1, 'First answer.'), userStep(2, 'External question.')]
+    if (externalReply) steps.push(replyStep(3, 'External answer.'))
+    transcripts(directory, steps, steps)
+    const page = await node.peer.call('session.items', { session_id: SESSION })
+    assert.equal(page.history.includes(':settled:'), false)
+    assert.deepEqual(page.items.map((item) => item.text), steps.map((step) => step.content))
+  })
+}
+
+test('compact truncated replies eventually release pending history without losing wholly unexported replies', async (t) => {
+  const { node, directory, update, chunk, promptCount } = await fixture(t, { exportSettleTimeoutMs: 150, exportPollMs: 20 })
+  await node.peer.call('session.send', { session_id: SESSION, text: 'First.' })
+  await promptCount(1)
+  await chunk('First answer with complete details.')
+  update({ end: true })
+  await until('reply settled', () => node.last('session.delta')?.text === '')
+  await new Promise((resolve) => setTimeout(resolve, 200))
+  assert.equal((await node.peer.call('session.items', { session_id: SESSION })).items.at(-1).text, 'First answer with complete details.')
+  const logs = join(directory, 'config/brain', RAW, '.system_generated/logs')
+  mkdirSync(logs, { recursive: true })
+  writeFileSync(join(logs, 'transcript.jsonl'), JSON.stringify(userStep(0, 'First.')) + '\n')
+  assert.equal((await node.peer.call('session.items', { session_id: SESSION })).items.at(-1).text, 'First answer with complete details.')
+  writeFileSync(join(logs, 'transcript.jsonl'), [userStep(0, 'First.'),
+    { ...replyStep(1, 'First answer <truncated 20 bytes>'), truncated_fields: ['content'] }].map(JSON.stringify).join('\n') + '\n')
+  const page = await node.peer.call('session.items', { session_id: SESSION })
+  assert.equal(page.history.includes(':settled:'), false)
+  assert.equal(page.items.at(-1).text, 'First answer <truncated 20 bytes>')
+})
+
+test('a rejected initial preparation leaves idle history and error state unchanged', async (t) => {
+  const { node, calls } = await fixture(t)
+  const before = await node.peer.call('session.items', { session_id: SESSION })
+  const batches = node.all('session.items').length
+  await assert.rejects(node.peer.call('session.send', { session_id: SESSION, text: 'Do not publish this.', model: 'invalid-model' }), /Unknown model/)
+  const after = await node.peer.call('session.items', { session_id: SESSION })
+  assert.deepEqual(after, before)
+  const inventories = node.all('runtime.sessions').length
+  await node.peer.call('session.rename', { session_id: SESSION, title: 'Checked' })
+  await until('inventory refreshed', () => node.all('runtime.sessions').length > inventories)
+  const row = node.last('runtime.sessions').sessions.find((row) => row.session_id === SESSION)
+  assert.equal(row.status, 'idle')
+  assert.equal(row.turn_error, undefined)
+  assert.equal(node.all('session.items').slice(batches).flatMap((batch) => batch.items).some((item) => item.text === 'Do not publish this.'), false)
+  assert.equal(calls().some((call) => call.method === 'session/prompt'), false)
+})
+
+
+test('preparation does not expose a user message before accepting the send', async (t) => {
+  const { node } = await fixture(t)
+  const before = await node.peer.call('session.items', { session_id: SESSION })
+  let release, entered = false
+  const gate = new Promise((resolve) => { release = resolve })
+  const original = AgyAcpClient.prototype.setModel
+  t.mock.method(AgyAcpClient.prototype, 'setModel', async function (...args) {
+    entered = true
+    await gate
+    return original.apply(this, args)
+  })
+  const rejected = assert.rejects(node.peer.call('session.send', { session_id: SESSION, text: 'Not accepted.', model: 'invalid-model' }), /Unknown model/)
+  try {
+    await until('model preparation started', () => entered)
+    assert.deepEqual(await node.peer.call('session.items', { session_id: SESSION }), before)
+  } finally {
+    release()
+    await rejected
+  }
+})
+
+test('whitespace before a tool call does not allocate a text step', async (t) => {
+  const { node, update, promptCount } = await fixture(t)
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Inspect.' })
+  await promptCount(1)
+  update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '  \n' } })
+  update({ sessionUpdate: 'tool_call', toolCallId: 'read', name: 'read_file' })
+  await until('tool pushed', () => node.last('session.items')?.items.some((item) => item.kind === 'tool_use'))
+  const page = await node.peer.call('session.items', { session_id: SESSION })
+  assert.equal(page.items.find((item) => item.kind === 'tool_use').seq, 2)
+  assert.equal(page.to_seq, 2)
+  update({ end: true })
+})
+
+test('a queued preparation failure remains visible after its queued acknowledgement', async (t) => {
+  const { node, update, promptCount } = await fixture(t)
+  await node.peer.call('session.send', { session_id: SESSION, text: 'First.' })
+  await promptCount(1)
+  assert.equal((await node.peer.call('session.send', { session_id: SESSION, text: 'Queued.', model: 'invalid-model' })).queued, true)
+  update({ end: true })
+  await until('queued failure published', () => node.last('runtime.sessions')?.sessions.find((row) => row.session_id === SESSION)?.turn_error?.includes('Unknown model'))
+  const row = node.last('runtime.sessions').sessions.find((row) => row.session_id === SESSION)
+  assert.notEqual(row.status, 'working')
+})
+
+for (const truncated of [false, true]) {
+  test(`expiry preserves final replies over pre-tool narration (truncated: ${truncated})`, async (t) => {
+    const { node, directory, update, chunk, promptCount } = await fixture(t, { exportSettleTimeoutMs: 150, exportPollMs: 20 })
+    await node.peer.call('session.send', { session_id: SESSION, text: 'Inspect.' })
+    await promptCount(1)
+    await chunk('Preparing.')
+    update({ sessionUpdate: 'tool_call', toolCallId: 'read', name: 'read_file' })
+    await chunk('Final answer.')
+    const narration = truncated ? { ...replyStep(1, 'Preparing <truncated 8 bytes>'), truncated_fields: ['content'] } : replyStep(1, 'Preparing.')
+    const partial = [userStep(0, 'Inspect.'), narration]
+    transcripts(directory, partial, partial)
+    update({ end: true })
+    await until('reply settled', () => node.last('session.delta')?.text === '')
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    assert.equal((await node.peer.call('session.items', { session_id: SESSION })).items.at(-1).text, 'Final answer.')
   })
 }

@@ -381,3 +381,25 @@ test('queued messages inherit a policy applied while the preceding send prepares
   const resumes = received(env.record).filter((call) => call.method === 'session/resume')
   assert.deepEqual(resumes.at(-1).params.additionalDirectories, [policyDirOf(env.policyRoot, toAgyId(pid))])
 })
+
+
+test('rejected supervision preparation preserves an idle session without publishing a prompt', async (t) => {
+  const env = setupAgy(t, { acpFlags: ['--no-additional-dirs'] })
+  const { n } = await startRuntime(t, env)
+  const { session } = await n.peer.call('session.start', { cwd: env.assistantDir, assistant: true })
+  const pid = session.session_id
+  await n.peer.call('session.watch', { session_id: pid })
+  const before = await n.peer.call('session.items', { session_id: pid })
+  const batches = n.all('session.items').length
+  await assert.rejects(n.peer.call('session.send', {
+    session_id: pid, text: 'Not accepted.', supervision_instructions: 'Review before acting.',
+  }), (err) => err.code === SUPERVISION_ERROR_CODE)
+  assert.deepEqual(await n.peer.call('session.items', { session_id: pid }), before)
+  const inventories = n.all('runtime.sessions').length
+  await n.peer.call('session.rename', { session_id: pid, title: 'Checked' })
+  await until('inventory refreshed', () => n.all('runtime.sessions').length > inventories, SLOW)
+  const row = n.last('runtime.sessions').sessions.find((row) => row.session_id === pid)
+  assert.equal(row.status, 'idle')
+  assert.equal(row.turn_error, undefined)
+  assert.equal(n.all('session.items').slice(batches).flatMap((batch) => batch.items).some((item) => item.text === 'Not accepted.'), false)
+})

@@ -28,6 +28,10 @@ const input = createInterface({ input: process.stdin })
 input.on('line', (line) => {
   const request = JSON.parse(line)
   appendFileSync(`${directory}/calls.jsonl`, `${line}\n`)
+  if (request.method === 'session/set_model' && request.params.modelId === 'invalid-model') {
+    send({ id: request.id, error: { code: -32000, message: 'Unknown model: invalid-model' } })
+    return
+  }
   if (request.method === 'session/prompt') {
     const text = request.params.prompt?.[0]?.text
     if (text === 'invalid-always' || (text === 'invalid-once' && !rejected)) {

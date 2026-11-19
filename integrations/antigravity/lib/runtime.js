@@ -384,7 +384,7 @@ export function createAgyRuntime(options = {}) {
       case 'tool_call': {
         const turn = promptTurns.get(pid)
         if (turn && turn.nextStepIndex !== undefined) {
-          if (turn.streamingText) {
+          if (turn.streamingText.trim()) {
             turn.liveSteps.push({ step_index: turn.nextStepIndex++, type: 'PLANNER_RESPONSE', source: 'MODEL',
               status: 'DONE', created_at: turn.startedIso, content: turn.streamingText })
             turn.streamingText = ''
@@ -630,19 +630,30 @@ export function createAgyRuntime(options = {}) {
     return steps.filter((step) => step.type === 'USER_INPUT' && (!step.source || step.source === 'USER_EXPLICIT')).length
   }
 
-  function exportedHasReply(steps, baseMaxIndex, replyText, inputCount = 0) {
-    if (explicitInputs(steps) < inputCount) return false
-    const step = steps.findLast((step, index) =>
-      (step.step_index ?? index) > baseMaxIndex &&
-      ['USER_INPUT', 'PLANNER_RESPONSE', 'GENERIC', 'ERROR_MESSAGE'].includes(step.type))
-    return step?.type === 'ERROR_MESSAGE' || (step?.type === 'PLANNER_RESPONSE' &&
-      !step.tool_calls?.length && step.status !== 'RUNNING' && typeof step.content === 'string' && Boolean(step.content.trim()) &&
-      (!replyText || step.content.trim() === replyText.trim()))
+  function exportedHasReply(steps, baseMaxIndex, replyText, inputCount = 0, allowTruncated = false) {
+    let inputs = 0
+    let last
+    for (const [index, step] of steps.entries()) {
+      if (step.type === 'USER_INPUT' && (!step.source || step.source === 'USER_EXPLICIT')) inputs++
+      if (inputCount > 0 && inputs > inputCount) break
+      if (inputCount > 0 && inputs !== inputCount) continue
+      if ((step.step_index ?? index) > baseMaxIndex &&
+          ['USER_INPUT', 'PLANNER_RESPONSE', 'GENERIC', 'ERROR_MESSAGE'].includes(step.type)) last = step
+    }
+    const fragments = allowTruncated && last?.truncated_fields?.includes('content') && typeof last.content === 'string'
+      ? last.content.split(/<truncated \d+ bytes>/) : []
+    const truncatedMatch = fragments.length === 2 && replyText?.trim().startsWith(fragments[0].trimEnd()) &&
+      replyText.trim().endsWith(fragments[1].trimStart())
+    return last?.type === 'ERROR_MESSAGE' || (last?.type === 'PLANNER_RESPONSE' &&
+      !last.tool_calls?.length && last.status !== 'RUNNING' && typeof last.content === 'string' && Boolean(last.content.trim()) &&
+      (!replyText || last.content.trim() === replyText.trim() || truncatedMatch))
   }
 
   function pendingReplaced(pending, steps, curMax = maxStepIndex(steps)) {
+    if (pending.inputCount > 0 && explicitInputs(steps) > pending.inputCount) return true
+    // Only an explicitly truncated reply may replace mismatching live text after the export grace period.
     return curMax > pending.baseMaxIndex &&
-      (!pending.hasReply || exportedHasReply(steps, pending.baseMaxIndex, pending.replyText, pending.inputCount))
+      (!pending.hasReply || exportedHasReply(steps, pending.baseMaxIndex, pending.replyText, pending.inputCount, Date.now() >= pending.expiresAt))
   }
 
   function clearExportPoll(rawId) {
@@ -1324,11 +1335,9 @@ export function createAgyRuntime(options = {}) {
       .then(() => busyCall(async () => {
         turn.previous = undefined
         if (stopped || turn.cancelled || archived.has(rawId)) { readyResolve?.(); return }
-        if (prevTurn && !hasPolicy) nextPolicy = readPolicy(policyRoot, rawId)
-        cancelledAt.delete(rawId)
-        completedTurns.delete(pid)
-        beginLiveTurn(rawId, pid, turn)
-        turn.pollTimer = setInterval(() => syncTranscriptAppend(rawId), 400)
+        if (prevTurn && !hasPolicy) {
+          try { nextPolicy = readPolicy(policyRoot, rawId) } catch {}
+        }
         for (let attempt = 0; ; attempt++) {
           try {
             await retryStaleModels(async () => {
@@ -1344,12 +1353,18 @@ export function createAgyRuntime(options = {}) {
                 await applySessionOptions(rawId, { model: params.model, permission_mode: params.mode, effort: params.effort })
               }
             })
-            prepared = true
+            if (turn.cancelled || stopped || archived.has(rawId)) { readyResolve?.(); return }
+            if (!prepared) {
+              cancelledAt.delete(rawId)
+              completedTurns.delete(pid)
+              beginLiveTurn(rawId, pid, turn)
+              turn.pollTimer = setInterval(() => syncTranscriptAppend(rawId), 400)
+              prepared = true
+            }
             readyResolve?.()
-            if (turn.cancelled || stopped || archived.has(rawId)) return
             return await acp.prompt(rawId, blocks)
           } catch (err) {
-            if (!err.invalidSession || attempt > 0 || turn.cancelled) throw err
+            if (!err.invalidSession || attempt > 0 || turn.cancelled || stopped || archived.has(rawId)) throw err
           }
         }
       }))
@@ -1359,7 +1374,7 @@ export function createAgyRuntime(options = {}) {
           try { syncPolicy(policyRoot, rawId, prevPolicy) } catch {}
         }
         turn.failed = true
-        if (!stopped && !turn.cancelled && !cancelling.has(rawId)) {
+        if ((prepared || prevTurn) && !stopped && !turn.cancelled && !cancelling.has(rawId)) {
           promptFailures.set(rawId, { input: inputKey(rawId), fields: {
             turn_error: err.message, turn_error_after_work: Boolean(turn.streamingText || turn.newMessage),
           } })
@@ -1406,6 +1421,7 @@ export function createAgyRuntime(options = {}) {
                   hasReply: expectReply,
                   replyText: turn.streamingText,
                   inputCount: turn.inputCount,
+                  expiresAt: Date.now() + exportSettleTimeoutMs,
                 })
                 awaitExport = true
               }
@@ -1419,7 +1435,8 @@ export function createAgyRuntime(options = {}) {
           }
           if (activeTurns.get(pid)?.token === turnToken) {
             activeTurns.delete(pid)
-            completedTurns.add(pid)
+            cancelling.delete(rawId)
+            if (prepared || prevTurn) completedTurns.add(pid)
             syncTranscriptAppend(rawId)
             rt.sessionsChanged(0)
             if (awaitExport && turn.exportedBaseMax !== undefined) {
@@ -1447,19 +1464,18 @@ export function createAgyRuntime(options = {}) {
       for (let turn = tail; turn; turn = turn.previous) turn.cancelled = true
       withdrawPermissionAsks(rawId, 'interrupted')
       await acp.cancel(rawId)
+      return tail
     })
   }
 
   /**
-   * Stop the running turn. Resolves to {settled: true} once the turn that was running has ended (agy answers its
-   * session/prompt, stopReason cancelled), to nothing when it has not within interruptSettleMs: the runtime contract
-   * (docs/integrations/runtimes.md, #8097, #11108). A turn queued behind it is not waited for.
+   * Stop the running turn and queued follow-ups. Resolves to {settled: true} once that queue drains, or to nothing
+   * when it has not within interruptSettleMs (docs/integrations/runtimes.md, #8097, #11108).
    */
   async function interrupt(params) {
     const rawId = ownedId(params.session_id)
     const pid = toPersonaId(rawId)
-    const running = promptTurns.get(pid) || activeTurns.get(pid)
-    await cancelTurn(rawId)
+    const running = await cancelTurn(rawId)
     if (!running?.promise) return undefined
     let timer
     const ended = await Promise.race([
@@ -1467,7 +1483,7 @@ export function createAgyRuntime(options = {}) {
       new Promise((resolve) => { timer = setTimeout(() => resolve(false), interruptSettleMs) }),
     ])
     clearTimeout(timer)
-    return ended ? { settled: true } : undefined
+    return ended && !activeTurns.has(pid) ? { settled: true } : undefined
   }
 
   async function rename(params) {
