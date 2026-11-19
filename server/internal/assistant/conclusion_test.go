@@ -669,3 +669,39 @@ func TestDecisionAnsweredInWordsStaysDecidedWhenTheSendFails(t *testing.T) {
 		t.Fatalf("%d sends after the failed one: the hub resent it", n-sent)
 	}
 }
+
+func TestFeishuConclusionQuestionGoesToSupervisorWithoutAnswering(t *testing.T) {
+	s, f, todo, _, _ := conclusionService(t, false)
+	ctx := t.Context()
+	waitsForReview(t, s, f, todo.ID, "Two options: start with ten percent or defer the rollout.")
+	reviewTask(t, s, todo.ID, map[string]any{"verdict": "needs_user", "reason": "Which rollout do you want?", "recommend": "Start with ten percent"})
+	a := askOf(s, todo.ID)
+	status, err := s.feishuStatus(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := len(sentToAgent(f))
+	var ev feishubot.MessageEvent
+	ev.Message.ChatType, ev.Message.ParentID, ev.Message.MessageType = "p2p", a.MessageID, "text"
+	ev.Message.MessageID, ev.Message.Content = "om_background", `{"text":"能补充一下这个决定的背景吗"}`
+	s.feishuMessage(ev, status, "")
+	task := todoNow(s, todo.ID)
+	if got := askOf(s, todo.ID); got == nil || !got.AcceptedAt.IsZero() || task.Supervision.State != reviewNeedsUser ||
+		task.DoneAt != nil || len(sentToAgent(f)) != before {
+		t.Fatalf("the question changed the decision or sent to the Agent: ask=%+v task=%+v sends=%v", got, task.Supervision, sentToAgent(f))
+	}
+	text := sendOnceText(f)
+	if !strings.Contains(text, "能补充一下这个决定的背景吗") || !strings.Contains(text, todo.ID) {
+		t.Fatalf("question and task context did not reach supervisor: %q", text)
+	}
+	// The existing option still answers this exact card after the clarification.
+	ev.Message.MessageID, ev.Message.Content = "om_choice", `{"text":"B"}`
+	s.feishuMessage(ev, status, "")
+	if got := askOf(s, todo.ID); got == nil || got.AcceptedAt.IsZero() {
+		t.Fatalf("explicit option did not answer: %+v", got)
+	}
+	sends := sentToAgent(f)[before:]
+	if len(sends) != 1 || !strings.Contains(sends[0], "先不动") {
+		t.Fatalf("agent got %v, want just the selected option", sends)
+	}
+}
