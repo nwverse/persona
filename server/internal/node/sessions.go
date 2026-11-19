@@ -147,9 +147,11 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		// textAt: when the transcript last had the agent's words; rollout: a Codex pane's rollout meta, for its effort.
 		var textAt, promptAt time.Time
 		var rollout quickMeta
+		var rolloutPath string
 		if p := n.transcriptPath(id); p != "" {
 			if st, err := os.Stat(p); err == nil {
 				m := n.meta(p, st)
+				rolloutPath = p
 				textAt = m.lastTextAt
 				rollout = m
 				if m.title != "" && a.Agent != "codex" && a.Agent != traexAgent {
@@ -183,6 +185,12 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				s.Loop, s.Goal, s.Plan = m.loop, m.goal, m.plan
 				s.Subagents = n.subagents(id)
 			}
+		}
+		blockedSince := n.noteBlockedAt(id, s.Status == proto.StatusBlocked, now)
+		if a.Agent == "codex" && host.ParsePane(a.PaneID).Kind != host.Botmux && s.Status == proto.StatusBlocked &&
+			n.codexRolloutWorkingOverBlocked(ctx, id, a.PaneID, rolloutPath, rollout, blockedSince, now) {
+			s.Status = proto.StatusWorking
+			s.AttentionReason = ""
 		}
 		// The host's record of the answer (botmux's reply in the topic), unless the transcript has words well after it:
 		// the session went on outside the host (a `claude --resume` in a terminal). Text written in the same turn
