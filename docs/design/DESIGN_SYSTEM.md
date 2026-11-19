@@ -199,6 +199,8 @@ Dynamic Type behavior:
 - The interface's cap is `Theme.interfaceLargestTypeSize` (`.xxxLarge`, section 6.2); reading content lifts it (`.readingContent()`). Named caps below it: `Theme.Shell.topBarLargestTypeSize` is `.xxxLarge` (`apple/Shared/Design/Theme.swift:865`), for the top bars and the Agents search field that rises into their row (#10165); `compactSwitchLargestTypeSize` is `.large`. Other caps are literal at the call site: `xxLarge` for a glyph inside a 44 pt button, `xLarge` for badges (DS-14).
 - Documented fixed-size exceptions: Dynamic Island (`apple/Shared/Design/IslandMetrics.swift`), watch face (`apple/Shared/Design/WatchFaceTokens.swift`), Lark rich content that carries sender sizes, and the browser sign-in number (`Theme.Font.signInNumber`, 64 pt rounded bold with fixed-width digits, `apple/Shared/Design/BrowserLoginTokens.swift`, #10293): two digits read off the iPhone to be typed in a browser, already far above the interface's cap at every size.
 
+Web Appearance also offers opt-in interface/code font choices (#10243), independent of text size. Reuse settings rows and native selectors; reveal a single installed-family field only for Custom. Both Default values preserve the original stacks, and resets restore each family independently. User choices precede theme defaults while retaining the existing CJK/symbol fallbacks. No remote fonts are added; terminal size and CJK width correction stay separate. Details: `docs/web/web.md`, “Theme color and text size”.
+
 ### 2.3 Spacing
 
 `Theme.Space` (`apple/Shared/Design/Theme.swift:203-223`):
@@ -1416,6 +1418,14 @@ The widget extension doesn't build `Theme`: Persona's widgets take their colors,
 - Charts never take a hex: series use role colors, the data hues or `Theme.Hue`; text around them stays in the text's colors.
 - Machine monitoring has its own `MetricColor` palette on both Apple and Android: CPU blue, memory teal, download orange, upload purple and load magenta, with separate light/dark values from `spec/tokens/color.metric.json`. These series never reuse Agent state colors and do not change with interface style or theme accent. Android's additional disk series uses the registered neutral slate token. Holding a chart keeps one shared timestamp across the detail's charts; only **Back to now**, or that timestamp leaving the selected range, returns to current values. Missing series remain unknown and gaps never borrow a neighboring value.
 
+### 3.15.1 Token usage calendar (Android)
+
+`UsageCalendarCard` and `UsageCalendarPage` (`feature/assistant/UsageCalendar.kt`) are the daily-token counterpart of the Machine monitoring charts. They compare magnitude over time, so they use one hue rather than categorical series colors: the current theme accent in four quantile steps, with `sunken` for no usage. Text, dates, legends and breakdown rows stay in the ordinary ink tokens. The exact number and the four token kinds are available by selecting a day; the details page also lists every computer and kind in text, so color is never the only way to read a value.
+
+The daily grid is Monday-first, seven rows per week, with the current week last and a thin outline on today. A day with usage ranks among only the days with usage: `ceil(4 × rank / count)`, where rank includes every equal or smaller day, gives steps 1–4; no usage is step 0. The hourly grid uses the same quantile rule among its hours and retains repeated clock-change hours by timestamp. Small chart cells are not the sole controls: selected days have 48dp previous / next buttons and an exact spoken value, while the card's non-cell area opens the details page. Home reads while resumed and keeps the previous devices section until real data arrives; it never substitutes an all-zero calendar for a failed or unsupported read.
+
+Month labels have their own visible header above the scrolling weeks. The header follows the scroll position and keeps only the latest complete labels that fit the width and text scale; it never clips a month to a partial word. Weekday labels keep their full localized glyphs inside a dedicated column, while the day cells themselves stay the same size at every text size.
+
 ### 3.14 Tabletop hinge safety (Android)
 
 A horizontal separating hinge divides a page into safe regions; the window and hinge alone select this behavior, never a device model. All three Android styles use the same measured policy in `PageFrame`.
@@ -2357,6 +2367,43 @@ done, not applicable, or deviated (with the reason). It is short on purpose. The
 - Presentation changes keep the one `settingsSheetStack`, one `JSheet`, one presentation frame and one content invocation. Only the container and card geometry change, preserving non-saveable state and running effects as well as the fixed-key `SaveableStateHolder`; they never open Settings again, move content between dialog compositions or key a stack by window size. `focusRestorer` returns to the previously focused field only after a presentation transfer and only when no field already has focus. The outer blank-tap callback is an explicit user clear and disables restoration rather than reopening the IME on the next resize. Root Close dismisses the whole card and child Back pops one Settings destination. Book and tabletop use the same safe area and existing internal pane policy.
 - `HardwareShortcutHost` keeps the same parent and content call site in every window and provides its controller and `onKeyEvent` listener only in a large window. On entering a large window the shell host uses public focus state to request its own focus only when that window has none; Settings disables host auto-focus so dialog content keeps its field focus, and an already-large resize makes no focus request. Its listeners run after focused children, never in the preview phase. Shared text inputs, including `LargeWindowComposer`'s small field outside IME composition, handle only Ctrl+/ in their own preview phase because editors consume it before a parent listener; all other keys follow the ordinary path, so a focused terminal or IME keeps Escape, Tab, Shift+Tab, Ctrl+C, arrows and Ctrl+/. `JSheet`, `JDialog`, `FullTextReader`, `MessageSharePage` and `ChatSearchScreen` register their existing dismiss callbacks with stable tokens; Escape invokes only the last registration and consumes its key-up and repeats. With no registration it is a consumed no-op, never App exit, navigation pop or Agent interruption. `ExpandedComposer` and `JPointerMenu` retain their own Escape handling.
 - Ctrl+/ opens `KeyboardShortcutsSheet` as the top dialog. It lists only implemented send, newline, dismiss, help and existing terminal keys, with `en`, `zh-Hans` and `ja` resources and a single-line Close button. Its content scrolls at large text sizes. Opening it does not clear a draft, change a selected conversation or stop terminal work; closing the dialog returns to the previous window and its focused content. Compact windows add no help entry or new key handling.
+
+## Configuration forms (web, #9877)
+
+A module's settings described as a configuration Document (`docs/web/web.md`, "Configuration forms") are drawn by one
+generic form, never a page of their own: the document's title as a group heading (`text-[12px]` `ink-3`) with its
+description under it, then each group as a settings `Group` (its title above, its description as the footer). A field
+is a row: the title in the row's label type, its description in the hint type, the control, any error adjacent under it,
+any notice (orange for a warning, `ink-3` for info), the disabled reason or "Read only", and the module's details as a
+two-column definition list in `text-[11.5px]` (`ink-3` terms, `ink-2` values, the page's existing `grid-cols-[auto_1fr]`).
+Every field ends in one footer row: the default value, the scalar count where a text field has a maximum, the polite save
+state (**Saving…** with a spinner, then a green **Saved**) and the quiet **Reset** / **Cancel** / **Save** actions that
+apply, so the actions never sit between the control and its explanation and a short default keeps them on one line.
+The footer reserves the small-button height when no action is shown, and longer content can still wrap.
+- Controls, all existing: a toggle is the `Switch` at the row's end; a select is the `Segmented` control at the end
+  (`segmented`), a native select in the settings field style at the end (`dropdown`) or `ChoiceRows` under the text
+  (`list`, the default); a multiselect is a list of `role="checkbox"` rows with `CheckMark`; text is the field style's
+  input or textarea, a number a narrower input with a decimal keyboard. Text and numbers are drafts, and a multiselect's
+  checks are the same kind of pending edit, until **Save**; a multiselect whose maximum is one is drawn as a single choice
+  (`role="radio"` rows with round marks and arrow keys), with exactly one Tab stop — the chosen option, or the first when
+  none is chosen (no radio is marked chosen) — and choosing another option replaces the old one in one click (the wire
+  value stays an array), while a larger maximum keeps ordinary checks and can pass through a temporary count. **Reset**
+  appears where the value differs from the default.
+- Whole-form lines (a version it can't write, a conflict or an uncertain write with **Reload**, a refresh that failed with
+  **Try again**) are one card above the groups.
+- An unknown kind or invalid definition keeps its title, description and details, with an orange line instead of a
+  control. A known field whose saved value is missing or unreadable shows an empty input or unselected choices, including
+  an On/Off choice for an unreadable switch. The hint is part of the control's accessible description. Choosing or
+  entering a valid value repairs the field, and **Reset** returns the default.
+Why one form: the user asked for settings that modules inject with one portable contract and shared styles, so a new
+module adds data, not a page, and the same states (pending, saved, failed, conflict, read only) look the same everywhere.
+
+**Labs** (`docs/web/web.md`, "Labs") is a sidebar group of its own without a title, with the existing `sparkles` glyph (a
+dedicated one would not fit the first screen's budget); its page is an introduction card with a note under it that each
+item states its own scope, then one configuration form per module. Where a feature also has its own options menu
+(Terminal settings), it shows the current value read-only with a button that opens the same Labs page in a `Dialog` over
+the page (never navigating away, so nothing open behind it, such as a chat's unsent draft, is unmounted) instead of a
+second switch, so there is one place to change it.
 
 ## A chosen page that is not there now (#9071)
 

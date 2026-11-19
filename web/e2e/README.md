@@ -493,3 +493,13 @@ second. A trivial script is run in the page again and again; one not answered wi
 slowest answer and the stuck ones; a screenshot of each is taken when the page can still draw. It fails on any task over
 1 second, a stuck answer, a page error, a request leaving the origin, or a conversation not drawn within 30 seconds;
 the last line is the verdict, and a watchdog ends a run that overruns with a timeout verdict.
+
+## Local interface and code fonts (#10243)
+
+```sh
+PORT=<mock-port> python3 scripts/mock/mock_hub.py
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<mock-port> npx vite --port <web-port> --strictPort)
+node web/e2e/font-preferences.mjs http://127.0.0.1:<web-port> <artifact-directory>
+```
+
+Use exclusively owned mock/Vite processes and a fresh Chrome profile. This drives the real Settings page at wide/phone widths, light/dark and standard/large text, captures Default and Custom, checks immediate and cross-tab application/reset, before-paint reload, zero additional font requests and actual CJK/symbol fallback faces. It mounts the production single-pane and Full UI renderers against the synthetic hub and checks their first font family, retained-view attachment and unchanged size; it does not verify a live shell. All network access is restricted to the supplied loopback origin. Results and sixteen screenshots go outside the repository; a four-minute watchdog bounds the run.
