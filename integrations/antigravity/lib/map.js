@@ -11,6 +11,8 @@ export const PREFIX = 'agy-'
 
 // Kept off native JSON: an appended replacement branch is a new logical step even when its timestamp repeats.
 const STEP_IDENTITY = Symbol('persona.agy.stepIdentity')
+// Kept off native JSON: live ACP tool calls and results pair explicitly even when parallel calls complete out of order.
+export const LIVE_TOOL_USE_ID = Symbol('persona.agy.liveToolUseId')
 
 function stepIdentity(step, branch = '') {
   const birth = typeof step.created_at === 'string' ? step.created_at : ''
@@ -206,9 +208,10 @@ export function stepsToItems(steps, opts = {}) {
         for (let k = 0; k < calls.length; k++) {
           const tc = calls[k]
           if (!tc || typeof tc !== 'object') continue
-          const callId = `call_${line}_${k}`
+          const explicitCallId = typeof tc[LIVE_TOOL_USE_ID] === 'string' && tc[LIVE_TOOL_USE_ID] ? tc[LIVE_TOOL_USE_ID] : ''
+          const callId = explicitCallId || `call_${line}_${k}`
           const { toolName, toolInput } = mapToolCall(tc.name || 'tool', tc.args)
-          pendingCalls.push({ callId, idx })
+          if (!explicitCallId) pendingCalls.push({ callId, idx })
           const item = {
             id: `${line}#${sub++}`,
             seq,
@@ -225,8 +228,9 @@ export function stepsToItems(steps, opts = {}) {
       }
       case 'GENERIC': {
         afterWork = true
-        const paired = pendingCalls.shift()
-        const callId = paired ? paired.callId : `call_${line}_0`
+        const explicitCallId = typeof step[LIVE_TOOL_USE_ID] === 'string' && step[LIVE_TOOL_USE_ID] ? step[LIVE_TOOL_USE_ID] : ''
+        const paired = explicitCallId ? undefined : pendingCalls.shift()
+        const callId = explicitCallId || (paired ? paired.callId : `call_${line}_0`)
         let rawOut = step.error || step.content || ''
         if (opts.full && opts.brainDir && Array.isArray(step.truncated_fields) && step.truncated_fields.includes('content')) {
           const outFile = join(opts.brainDir, '.system_generated', 'steps', String(idx), 'output.txt')
