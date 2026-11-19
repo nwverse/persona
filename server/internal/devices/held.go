@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -151,12 +152,13 @@ func (r *heldRow) expired(now time.Time) bool { return now.Sub(r.HeldAt) >= held
 
 // heldBook is the held messages, read from the store once and kept in step with it.
 type heldBook struct {
-	loadMu sync.Mutex // one load at a time
-	mu     sync.Mutex
-	loaded bool
-	failed time.Time             // when the last load failed (heldLoadBackoff)
-	ctx    context.Context       // the deliveries' (heldLoop's); nil before it runs
-	rows   map[string][]*heldRow // by machine, in the order they were held
+	loadMu  sync.Mutex // one load at a time
+	mu      sync.Mutex
+	loaded  bool
+	failed  time.Time             // when the last load failed (heldLoadBackoff)
+	ctx     context.Context       // the deliveries' (heldLoop's); nil before it runs
+	rows    map[string][]*heldRow // by machine, in the order they were held
+	revoked map[string]bool       // credentials this manager was told were signed out
 	// sending: the sessions (machine + "/" + session) a delivery runs in: one at a time each.
 	sending map[string]bool
 	// gone: messages sent whose row the store kept (its delete failed), by seq, with the attempts of that try:
@@ -263,6 +265,7 @@ func (d *Devices) heldLoop(ctx context.Context) {
 	for {
 		if d.heldLoad(ctx) {
 			d.heldRepair(ctx)
+			d.heldFailRevoked(ctx)
 			d.heldExpire(ctx)
 			h.mu.Lock()
 			machines := make([]string, 0, len(h.rows))
@@ -468,7 +471,11 @@ func (d *Devices) hold(ctx context.Context, c *heldCall) error {
 		h.rows[op.MachineID] = slices.Insert(rows, i, newHeldRow(op))
 	}
 	n = len(h.rows[op.MachineID])
+	revoked := h.revoked[op.CredentialID]
 	h.mu.Unlock()
+	if revoked {
+		d.heldFailRevoked(ctx)
+	}
 	if fresh {
 		d.logf("[%s] %s: a message held until its computer is back (%d held there)", c.machine, c.session, n)
 		d.heldChanged(c.machine)
@@ -561,6 +568,9 @@ func (r *heldRow) wire(lang i18n.Lang, computer string, behind bool) proto.Undel
 			m.Error = i18n.T(lang, "devices-held.expired", i18n.Args{"name": computer})
 		case db.HeldUnconfirmed:
 			m.Error = i18n.T(lang, "devices-held.unconfirmed")
+		case db.HeldSignedOut:
+			m.Error = i18n.T(lang, "undelivered.signed_out")
+			m.DeleteOnly = true
 		default:
 			m.Error = i18n.T(lang, "devices-held.unclear")
 		}
@@ -958,6 +968,27 @@ func (d *Devices) heldDeliver(ctx context.Context, raw json.RawMessage, lang str
 	p.Hold, p.Ordered = nil, false // never held or refused again by its own delivery (rows kept before this said ordered)
 	cctx, cancel := context.WithTimeout(ctx, heldSendTimeout)
 	defer cancel()
+	if p.Caller != nil && p.Caller.CredentialID != "" {
+		id := p.Caller.CredentialID
+		d.held.mu.Lock()
+		revoked := d.held.revoked[id]
+		d.held.mu.Unlock()
+		if revoked {
+			return heldSignedOut, ""
+		}
+		if d.opts.Hub == nil {
+			return heldNotSent, ""
+		}
+		revoked, err := bus.CredentialRevoked(cctx, d.opts.Hub.Call, id)
+		if err != nil {
+			d.logf("check held message's device credential: %v", err)
+			return heldNotSent, ""
+		}
+		if revoked {
+			d.heldCredentialRevoked(id)
+			return heldSignedOut, ""
+		}
+	}
 	try := &heldTry{}
 	cctx = i18n.With(context.WithValue(cctx, heldDeliveryKey{}, try), l)
 	_, err := d.callNode(cctx, p)
@@ -999,6 +1030,7 @@ const (
 	heldNotSent               // nothing written: it waits again
 	heldRefused               // the node refused it, nothing typed
 	heldUnclear               // it may have arrived: never sent again by itself
+	heldSignedOut             // its sending credential was revoked
 )
 
 // heldOutcomeOf is what a node call that ended with err did, and the node's words for a refusal.
@@ -1067,6 +1099,8 @@ func (d *Devices) heldSettle(ctx context.Context, machine, session string, seq i
 		state, reason = db.HeldWaiting, ""
 	case heldRefused:
 		failure = db.HeldRefused
+	case heldSignedOut:
+		failure = db.HeldSignedOut
 	default:
 		failure, reason = db.HeldUnclear, ""
 	}
@@ -1090,11 +1124,13 @@ func (d *Devices) heldSettle(ctx context.Context, machine, session string, seq i
 	}
 	switch {
 	case state == db.HeldWaiting:
-		d.logf("[%s] %s: a held message waits again: its computer is away", machine, session)
+		d.logf("[%s] %s: a held message waits again", machine, session)
 		return false
 	case failure == db.HeldRefused:
 		d.logf("[%s] %s: a held message was refused: %s", machine, session, reason)
 		return true // nothing typed: the next one goes
+	case failure == db.HeldSignedOut:
+		return true
 	}
 	d.logf("[%s] %s: a held message may have arrived: left to the owner", machine, session)
 	return false
@@ -1181,7 +1217,8 @@ var (
 	// errHeldSendingNow: the message is being sent this moment: Delete could not take it back.
 	errHeldSendingNow = i18n.Err("devices-held.sending_now")
 	// errHeldStore: the store did not take the change.
-	errHeldStore = i18n.Err("devices-held.store_failed")
+	errHeldStore     = i18n.Err("devices-held.store_failed")
+	errHeldSignedOut = i18n.Err("undelivered.signed_out")
 )
 
 // heldFind finds held message msg of session sid of machine ("": any machine) and marks it busy for the owner's
@@ -1218,6 +1255,15 @@ func (d *Devices) heldRetry(ctx context.Context, machine, sid, msg string) (bool
 	r, err := h.heldFind(machine, sid, msg, false)
 	if r == nil {
 		return err != nil, err
+	}
+	h.mu.Lock()
+	signedOut := r.Failure == db.HeldSignedOut || h.revoked[r.CredentialID]
+	if row := h.rowLocked(r.MachineID, r.Seq); signedOut && row != nil {
+		row.busy = false
+	}
+	h.mu.Unlock()
+	if signedOut {
+		return true, errHeldSignedOut
 	}
 	now := h.clock()
 	held, wrote, check := true, false, false
@@ -1551,7 +1597,7 @@ func heldRPCError(ctx context.Context, err error) error {
 		return nil
 	}
 	code := "internal"
-	if errors.Is(err, errHeldSendingNow) {
+	if errors.Is(err, errHeldSendingNow) || errors.Is(err, errHeldSignedOut) {
 		code = "conflict"
 	}
 	return &rpc.Error{Code: code, Message: i18n.Localize(err, i18n.From(ctx).Or(i18n.Default))}
@@ -1591,7 +1637,7 @@ func (d *Devices) heldRoute(w http.ResponseWriter, r *http.Request, m *Machine,
 	}
 	found, err := act(r.Context(), m.cfg.ID, r.PathValue("sid"), r.PathValue("msg"))
 	switch {
-	case errors.Is(err, errHeldSendingNow):
+	case errors.Is(err, errHeldSendingNow), errors.Is(err, errHeldSignedOut):
 		writeErrCode(w, http.StatusConflict, "conflict", err)
 	case err != nil:
 		writeErr(w, http.StatusServiceUnavailable, err)

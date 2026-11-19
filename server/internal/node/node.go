@@ -256,6 +256,12 @@ type Node struct {
 	autoCompanions bool
 	// keeper: a resident node's conversations between hub connections (assistant_keep.go); nil without one.
 	keeper *assistantKeeper
+	// Resuming (attach_resume.go): a resident node keeps a connection whose transport ended resumeWindow for the
+	// manager to take back; onPeer is told the connection's peer once it is made.
+	resumeWindow time.Duration
+	onPeer       func(*rpc.Peer)
+	// hookOut sends a resident node's hook events without holding the hooks (hook_outbox.go).
+	hookOut hookOutbox
 	// replayed is closed once what standby took while no manager was connected went to this one (spool_replay.go): new
 	// hooks wait for it, so the manager hears them after the older ones. nil (tests' Nodes): nothing waits.
 	replayed chan struct{}
@@ -477,6 +483,15 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 	// A manager that knows lanes asks for them after node.info (docs/protocol/protocol.md "Lanes"): pongs and answers
 	// then pass file chunks and updates on the way.
 	n.peer.EnableLanes(nodeproto.ControlLane, nodeproto.BulkLane)
+	if n.resumeWindow > 0 { // a resident node's: the connection outlives a transport that ends (attach_resume.go)
+		n.peer.EnableResume(n.resumeWindow)
+		n.peer.OnLost = func(err error) {
+			n.logger.Printf("connection lost (%v): kept %s for the manager to resume", err, n.resumeWindow)
+		}
+	}
+	if n.onPeer != nil {
+		n.onPeer(n.peer)
+	}
 	if n.external != nil {
 		peer := n.peer
 		n.external.SetOnChange(func() { _ = peer.Notify("launchers.changed", map[string]any{}) })
@@ -557,6 +572,8 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 	n.startTodoTokensReconciler(ctx)
 	defer n.starts.close()
 	defer n.switches().leave(n) // the records of a switch still running go to the next connection's Node
+	// First once the connection ended: the hook events it never sent are in the spool before the next one replays it.
+	defer n.hookOut.wait(5 * time.Second)
 	return n.peer.Serve(ctx, r)
 }
 
@@ -722,6 +739,18 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	switch method {
 	case "session.share_projection":
 		return n.shareProjection(ctx, params)
+	case devicewire.MethodCloseTaskTerminal:
+		var a devicewire.TaskTerminalCloseRequest
+		if err := json.Unmarshal(params, &a); err != nil {
+			return nil, err
+		}
+		status := n.closeTaskTerminal(ctx, a.Terminal, func() bool {
+			var out struct {
+				Authorized bool `json:"authorized"`
+			}
+			return n.peer != nil && n.peer.Call(ctx, devicewire.MethodAuthorizeTaskTerminal, a, &out) == nil && out.Authorized
+		})
+		return map[string]string{"status": status}, nil
 	case "node.doctor": // the machine page's "What this computer can do": node doctor's report, read-only unless {"fix":true} (doctor_rpc.go)
 		return n.doctor(ctx, params, false)
 	case "node.doctor.fix": // the same path as `node doctor --fix`: Persona's own generated files only
@@ -760,6 +789,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		SessionID               string        `json:"session_id"`
 		CreationID              string        `json:"creation_id"`
 		Incarnation             string        `json:"incarnation"`
+		TaskTerminalToken       string        `json:"task_terminal_token"`
 		Cwd                     string        `json:"cwd"`
 		Launcher                string        `json:"launcher"`
 		AgentType               string        `json:"agent_type"`
@@ -841,6 +871,10 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		// SuperviseRound: assistant.send of a round of the background supervisor, resumed at the end of its first turn
 		// (assistant_round.go); the answer says whether it was (context, why).
 		SuperviseRound bool `json:"supervise_round"`
+
+		// Interactive: assistant.send, session.send and assistant.warm run Claude as interactive Claude Code
+		// (assistant_tui.go).
+		Interactive bool `json:"claude_interactive"`
 	}
 	// Ordinary conversations ignore legacy runtime selections and always use the CLI. External selections keep the
 	// raw value only to refuse unsupported requests before normalization or process start.
@@ -1454,11 +1488,21 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		if validID(p.SessionID) {
 			newID = p.SessionID
 		}
+		mark := taskTerminalStart{token: p.TaskTerminalToken}
+		if method == "session.start" && p.ResumeSessionID == "" && p.InPane == "" && validID(mark.token) {
+			ctx = context.WithValue(ctx, taskTerminalStartKey{}, &mark)
+		}
 		s, err := n.start(ctx, r.cwd, r.launcher, p.Prompt, p.ResumeSessionID, p.WorkspaceID, r.mode, r.effort, r.tab, newID, p.AgentType, r.execution)
 		if err == nil && p.ResumeSessionID != "" {
 			n.forkStarted(p.ResumeSessionID)
 		}
-		return n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation)
+		result, err := n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation)
+		if err == nil && s != nil && mark.pane != "" {
+			if target := n.taskTerminalReceipt(ctx, s, mark); target != nil {
+				result.(map[string]any)["task_terminal"] = target
+			}
+		}
+		return result, err
 	case "session.fork": // "Branch to new chat" (fork.go)
 		id, err := n.fork(ctx, p.SessionID, p.AtItemID)
 		return map[string]any{"session_id": id}, err
@@ -1502,7 +1546,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		_ = json.Unmarshal(params, &opts)
 		sctx = withClientMsgID(sctx, opts.ClientMsgID) // a runtime's message goes under it (assistant_runtime.go)
 		send := func() (string, error) {
-			return n.assistantSend(sctx, p.SessionID, p.Cwd, p.Launcher, p.Text, p.Images, p.PermissionMode, p.Effort, (modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, ServiceTier: p.ServiceTier, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: n.externalRuntime(p.SessionID, p.Launcher, p.Runtime), External: p.External, IsMain: p.IsMain, MainCompactWindow: p.MainCompact, FollowsSetting: p.FollowsSetting, ConfigDir: p.ConfigDir, Origin: p.Origin, Interject: p.Interject}).withSupervision(p.SupervisionInstructions))
+			return n.assistantSend(sctx, p.SessionID, p.Cwd, p.Launcher, p.Text, p.Images, p.PermissionMode, p.Effort, (modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, ServiceTier: p.ServiceTier, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: n.externalRuntime(p.SessionID, p.Launcher, p.Runtime), External: p.External, IsMain: p.IsMain, MainCompactWindow: p.MainCompact, FollowsSetting: p.FollowsSetting, ConfigDir: p.ConfigDir, Origin: p.Origin, Interject: p.Interject, Interactive: p.Interactive}).withSupervision(p.SupervisionInstructions))
 		}
 		if p.NewSessionID == "" && p.SessionID == "" && opts.ClientMsgID != "" {
 			// A new conversation's first message with its client_msg_id (one a person's own app opened, the manager's
@@ -1565,7 +1609,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	case "assistant.handoff": // what a new main conversation is told about the old one
 		return n.assistantHandoff(p.SessionID)
 	case "assistant.warm":
-		return ok(n.assistantWarm(p.Cwd, p.Launcher, (modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, ConfigDir: p.ConfigDir, IsMain: p.IsMain, MainCompactWindow: p.MainCompact}).withSupervision(p.SupervisionInstructions)))
+		return ok(n.assistantWarm(p.Cwd, p.Launcher, (modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, ConfigDir: p.ConfigDir, IsMain: p.IsMain, MainCompactWindow: p.MainCompact, Interactive: p.Interactive}).withSupervision(p.SupervisionInstructions)))
 	case "assistant.memory":
 		var a memoryOp
 		if err := json.Unmarshal(params, &a); err != nil {
@@ -1595,7 +1639,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			}
 			return n.sendEchoed(p.SessionID, opts.ClientMsgID, p.Text, len(p.Images), after, func() error { // echo.go
 				if n.isAssistantSession(p.SessionID) {
-					_, err := n.assistantSend(withSkillOwner(withClientMsgID(ctx, opts.ClientMsgID), p.SkillOwner), p.SessionID, "", p.Launcher, p.Text, p.Images, "", "", (modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: n.externalRuntime(p.SessionID, p.Launcher, p.Runtime), External: p.External, IsMain: p.IsMain, MainCompactWindow: p.MainCompact, FollowsSetting: p.FollowsSetting, ConfigDir: p.ConfigDir, Interject: p.Interject}).withSupervision(p.SupervisionInstructions))
+					_, err := n.assistantSend(withSkillOwner(withClientMsgID(ctx, opts.ClientMsgID), p.SkillOwner), p.SessionID, "", p.Launcher, p.Text, p.Images, "", "", (modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: n.externalRuntime(p.SessionID, p.Launcher, p.Runtime), External: p.External, IsMain: p.IsMain, MainCompactWindow: p.MainCompact, FollowsSetting: p.FollowsSetting, ConfigDir: p.ConfigDir, Interject: p.Interject, Interactive: p.Interactive}).withSupervision(p.SupervisionInstructions))
 					return err
 				}
 				return n.send(ctx, p.SessionID, p.Text, p.Images, opts)
@@ -1722,7 +1766,14 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 				return ok(err)
 			}
 		}
-		return ok(n.keys(ctx, p.SessionID, []string{"esc"}, ""))
+		over := n.turnOver(p.SessionID) // before the key: the Escape itself may end a turn
+		err := n.keys(ctx, p.SessionID, []string{"esc"}, "")
+		if err == nil && over && n.backgroundRuns(p.SessionID) {
+			// The Escape went to an idle prompt and the background work goes on: said, not claimed as an interruption
+			// (#10828). The key is pressed whatever this finds, so a turn that does run is never left running.
+			err = refusal(proto.CodeTurnOverBackground, i18n.T(i18n.From(ctx), "rpc-errors."+proto.CodeTurnOverBackground), nil)
+		}
+		return ok(err)
 	case "session.screen.before":
 		var a struct {
 			SessionID string   `json:"session_id"`
