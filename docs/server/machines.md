@@ -461,6 +461,22 @@ Persona Link (`persona-link name`, the Windows tray) — see [protocol.md](../pr
 `hub/machine_rename.go` updates the entries it hands the manager and the name it shows (`Machine.name()`, never `cfg.Name`: the entry is read without a lock and stays as it was made); the manager keeps the machine
 when only the name changed (`sameConfig` ignores it) and tells the link (`endpoints`'s `machine_name`, part of `linkSays`); a member's rename reaches the center through its record (`derivedName`).
 
+## Switching an ssh computer to Persona Link
+
+The one other live edit of an entry is its kind, from `ssh` to `link` and back (#10662; the steps and what runs on the computer are in
+[link.md](../operations/link.md) "Switching from SSH"). Who does what follows the rule above:
+
+- **The manager** owns the switch (`devices/link_switch*.go`). It holds a write-ahead record (setting `link_switch.<machine id>`) and
+  runs the SSH probe, transfer, install and rollback with its own SSH access. It waits for the node over the new link and reports
+  `link_switch` in each machine's snapshot. The Persona Link build it sends is found like a node build (`devices/connector_package.go`).
+- **The hub** answers `devices.link_switch.begin` / `end` (`hub/link_switch.go`), because the entry, the pairing code and the
+  credential are its. It compare-and-swaps the kind in hub.json, or in the manager's own list through `devices.machines.put`, and
+  takes the change live, as a rename does (so the admin page's restart list does not count it). It makes or revokes the code and
+  credential, and relays the admin page's `POST /api/v1/admin/machines/{mid}/link-switch` to the machine's manager.
+- When the kind changes, the manager replaces the machine (`sameConfig` sees a change), which ends the SSH connection. The new
+  machine then waits for Persona Link. Everything kept by id stays: pins, mutes, trust, engine choice, sessions, metrics, usage and
+  `node.deploy.<id>`.
+
 ## API
 
 See `docs/protocol/protocol.md`: `GET /api/v1/metrics` (Machines), `GET /api/v1/machines/{id}/metrics?range=1h|6h|24h` (detail), `GET /api/v1/machines/{id}/usage?range=1h|24h|7d` (token usage), `GET /api/v1/usage/days` and `GET /api/v1/usage/hours` (token usage history),

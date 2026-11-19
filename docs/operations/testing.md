@@ -1207,6 +1207,32 @@ that has no panes (`StopUnusedHerdr`, `server/internal/node/herdrstart.go`); a s
 still ends by checking `ps eww` for processes whose `HOME` is the test's, and stops any it finds through their own
 socket (`HERDR_SOCKET_PATH=<test socket> herdr server stop`), never the user's herdr.
 
+### Switching an ssh computer to Persona Link (#10662)
+
+`scripts/test/link_switch_e2e.py --bin <dir> --scenario success|rollback|linger_off` runs a switch end to end, as in
+[link.md](link.md) "Switching from SSH". `<dir>` holds linux/amd64 `personad` and `persona-link` of one version. Each run is
+disposable:
+
+- a throwaway hub and its manager under an isolated `HOME` / `PERSONA_HOME`, with TLS on the docker bridge address;
+- a Postgres container;
+- a systemd container as the computer, which runs `--privileged --cgroupns=private` because systemd needs a writable cgroup.
+  Without that flag it exits at once.
+
+The hub reaches the computer over ssh only through a wrapper with its own config, key and known_hosts, so the user's `~/.ssh` is
+never read. The containers (`--prefix`), the network and the key are removed at the end.
+
+- `rollback` cuts the computer's route to the hub (`ip route add prohibit`). It sits on a network of its own, so ssh replies still
+  get through. The run checks the switch fails, the kind is ssh again, nothing it installed is left, and the computer answers over
+  ssh.
+- `linger_off` leaves linger off and expects a refusal at the check, with nothing changed on the computer.
+- `--node-service` gives the computer its own resident node service first. A switch must leave it as it was, and so
+  must a rollback.
+- `hub_pause` is `rollback` with the hub's slot process stopped (SIGSTOP) right after its begin, for `--pause` seconds
+  (150). Until the hub is running again, Persona Link must stay on the computer; the rollback must then finish and be
+  confirmed.
+- Every scenario checks the pairing secret is not in the hub's log or the manager's record.
+- `--hold <seconds>` keeps it all up afterwards, for screenshots of the web app (`--web web/dist`).
+
 ## Codex integration
 
 `./scripts/test/test-codex.sh` tests real Codex question/approval cards (`docs/integrations/codex.md` ("Questions and approvals")), independent `persona-codex-<pid>` herdr

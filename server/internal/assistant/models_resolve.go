@@ -27,6 +27,26 @@ func (s *Service) modelBaseline(ctx context.Context, p ModelPurpose) (ModelBindi
 		}
 		return b, "inbox.triage", err // inheritedLabel names the connection and the model
 	}
+	if p.ID == "translate" {
+		b, err := s.resolveModel(ctx, "inbox.triage")
+		if err != nil {
+			return b, "inbox.triage", err
+		}
+		c, err := s.apiConfig(ctx, b)
+		if err == nil && messagesAPI(c.API) && strings.HasPrefix(c.Model, "claude-") {
+			b.Model = translationHaikuModel
+			if name, ok := strings.CutPrefix(b.Provider, "launcher."); ok {
+				for _, launcher := range s.storedLaunchers(ctx) {
+					if launcher.Name == name && launcher.HaikuModel != "" {
+						b.Model = launcher.HaikuModel
+						break
+					}
+				}
+			}
+			b.Effort = "off"
+		}
+		return b, "inbox.triage", nil
+	}
 	if p.Kind == "api" {
 		provider := "legacy.ai"
 		if p.ID == "inbox.triage" {
@@ -54,6 +74,8 @@ func (s *Service) modelBaseline(ctx context.Context, p ModelPurpose) (ModelBindi
 	}
 	return ModelBinding{Provider: p.ID}, mc(l, "source_extension_default"), nil
 }
+
+const translationHaikuModel = "claude-haiku-5-5"
 
 // delegateModel is what "Answering agents' questions" runs on unless the user picks another (2026-11-05, the user's call): it decides for the
 // user whether an agent's question is theirs, a cheap triage model is not up to that.
@@ -94,9 +116,9 @@ func inheritedLabel(l i18n.Lang, p ModelPurpose, base ModelBinding, from string,
 		}
 	}
 	switch {
-	case p.ID == "agent.delegate" && (p.Override.Model != "" || model == ""):
+	case (p.ID == "agent.delegate" || p.ID == purposeTranslate) && (p.Override.Model != "" || model == ""):
 		return mc(l, "source_delegate_connection", i18n.Args{"provider": name}) // the model is the user's pick, or the connection's own
-	case p.ID == "agent.delegate":
+	case p.ID == "agent.delegate" || p.ID == purposeTranslate:
 		return mc(l, "source_delegate_default", i18n.Args{"provider": name, "model": model})
 	case ownModelRecord(p.ID), isExtensionPurpose(p.ID):
 		return purposeName(l, p.Parent)
