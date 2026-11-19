@@ -139,12 +139,12 @@ final class LiveUpdateTests: XCTestCase {
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.95)).tap() // close it
     }
 
-    // The same menu at the end of the Sidebar layout's Agents heading (#10738): there it is a row of the sidebar's list,
-    // which is drawn again with every push (states, times, the waiting count). Scrolled down to the machines, it jumped
-    // back to its top. The iPad's and the open Duo's column, or the phone's drawer.
+    // The same menu at the end of the Sidebar layout's Agents heading (#10738): there it is in the sidebar's list, whose
+    // view graph updates with every push (states, times, the waiting count). SwiftUI handed the menu's items to UIKit
+    // again on those updates (`updateVisibleMenuWithBlock:`), and UIKit replaced the open menu and scrolled it back to
+    // its top: scrolled down to the machines, it jumped. The iPad's and the open Duo's column, or the phone's drawer.
     @MainActor func testSidebarAgentsMenuHoldsStillThroughUpdates() {
-        launch(tab: "assistant", ["-app.navigation", "sidebar", "-sidebar.fold.places", "YES",
-                          "-sidebar.fold.chats", "YES"])
+        launch(tab: "assistant", ["-app.navigation", "sidebar", "-sidebar.fold.places", "YES", "-sidebar.fold.chats", "YES"])
         let menuButton = app.descendants(matching: .any)["sidebar-agents-menu"].firstMatch
         let face = app.descendants(matching: .any)["assistant-sidebar-button"].firstMatch
         let shown = NSPredicate { _, _ in (menuButton.exists && menuButton.isHittable) || face.exists }
@@ -158,17 +158,21 @@ final class LiveUpdateTests: XCTestCase {
         menuButton.tap()
         let machines = app.buttons["全部机器"]
         XCTAssertTrue(machines.waitForExistence(timeout: 5), "the menu opened")
-        scrollMenu(to: machines)
-        sleep(1)
+        keep("menu-opened")
         let last = app.buttons["训练机"]
+        scrollMenu(to: last)
+        sleep(1)
         XCTAssertTrue(last.isHittable, "the last machine must really be on screen")
+        XCTAssertTrue(machines.isHittable, "All Machines must really be on screen")
         let lastY = last.frame.minY
         let machinesY = machines.frame.minY
+        keep("menu-scrolled")
         let before = counts()
         churn(waiting: true, real: true)
         // Where the menu is, before the counts: reading the probe while the menu is open moves the menu itself.
         let open = last.exists
         let (lastAfter, machinesAfter) = (last.frame.minY, machines.frame.minY)
+        keep("menu-after-updates")
         let after = counts()
         report("Sidebar Agents heading, ⋯ menu open", from: before, to: after)
         XCTAssertTrue(open, "the menu is still open")
@@ -179,11 +183,45 @@ final class LiveUpdateTests: XCTestCase {
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.95)).tap() // close it
     }
 
-    /// Scrolls an open long menu until `target` is on screen: a drag inside its visible rows (the native menu exposes
-    /// its offscreen rows too, and an empty row frame takes no drag).
+    /// A screenshot kept with the test's results, for the PR's before and after. PERSONA_SHOTS=<dir> also writes it there
+    /// (PERSONA_SHOTS_DEVICE names the device, PERSONA_SHOTS_APPEARANCE the look; PERSONA_SHOTS_EXTERNAL=1 asks a watcher
+    /// for a `simctl` screenshot instead, which the iPhone Duo needs, as SidebarHeadingGapsUITests does).
+    @MainActor private func keep(_ name: String) {
+        let a = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        a.name = name
+        a.lifetime = .keepAlways
+        add(a)
+        let env = ProcessInfo.processInfo.environment
+        guard let dir = env["PERSONA_SHOTS"] else { return }
+        let device = env["PERSONA_SHOTS_DEVICE"] ?? (UIDevice.current.userInterfaceIdiom == .pad ? "ipad" : "iphone")
+        let file = "agents-menu-\(device)-\(env["PERSONA_SHOTS_APPEARANCE"] ?? "light")-\(name).png"
+        let folder = URL(fileURLWithPath: dir)
+        guard env["PERSONA_SHOTS_EXTERNAL"] != nil else {
+            try? XCUIScreen.main.screenshot().pngRepresentation.write(to: folder.appendingPathComponent(file))
+            return
+        }
+        try? file.write(to: folder.appendingPathComponent("want"), atomically: true, encoding: .utf8)
+        let target = folder.appendingPathComponent(file)
+        let deadline = Date.now.addingTimeInterval(15)
+        while Date.now < deadline, !FileManager.default.fileExists(atPath: target.path) { Thread.sleep(forTimeInterval: 0.2) }
+    }
+
+    /// The menu's items above the machines, in the app's test language: what a drag may start and end on.
+    private static let menuItems = ["按仓库", "按项目", "按待办", "按状态", "按机器", "按 App", "最近使用", "按常驻", "状态优先",
+                                    "最近更新", "头像", "紧凑两行", "卡片", "细列表", "全部折叠", "全部展开"]
+
+    /// Scrolls an open long menu until `target` is on screen. A swipe on the menu's own list where it can be found: a
+    /// held drag that starts on an item is the menu's slide to choose on a phone, and letting go chose the item under
+    /// the finger. Otherwise a drag inside its visible rows (the native menu exposes its offscreen rows too, an empty
+    /// row frame takes no drag, and a drag that starts outside the menu closes it).
     @MainActor private func scrollMenu(to target: XCUIElement) {
+        let list = app.collectionViews.containing(.button, identifier: Self.menuItems[0]).firstMatch
+        for _ in 0..<3 where !target.isHittable && list.exists && list.isHittable {
+            list.swipeUp(velocity: .slow)
+            usleep(800_000)
+        }
         for _ in 0..<4 where !target.isHittable {
-            let rows = app.buttons.allElementsBoundByIndex.filter { $0.isHittable && $0.frame.height > 20 }
+            let rows = Self.menuItems.map { app.buttons[$0].firstMatch }.filter { $0.exists && $0.isHittable }
             guard let top = rows.min(by: { $0.frame.minY < $1.frame.minY }),
                   let bottom = rows.max(by: { $0.frame.maxY < $1.frame.maxY }) else { break }
             let origin = app.windows.firstMatch.coordinate(withNormalizedOffset: .zero)

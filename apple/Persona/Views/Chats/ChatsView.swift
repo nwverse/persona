@@ -1936,8 +1936,8 @@ private struct AgentsList: View {
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(.isHeader)
             .accessibilityIdentifier("sidebar-agents-heading")
-            AgentsListMenu(actions: menuActions)
-                .accessibilityIdentifier("sidebar-agents-menu")
+            // In a view graph of its own: the list's updates replaced the open menu and scrolled it to its top (#10738).
+            MenuIsland(content: SidebarAgentsListMenu(actions: menuActions))
             if showsPersonalEntry {
                 Button { openFromList(PersonalAgentsRoute()) } label: {
                     ThemedIcon(Theme.Icon.personalAgents).font(Theme.Font.label).foregroundStyle(.secondary)
@@ -4124,7 +4124,8 @@ struct QuickFilterBar: View, Equatable {
         }, selection: selection.rawValue, choose: { id in
             if let filter = AgentFilter(rawValue: id), filter != selection { choose(filter) }
         }) {
-            AgentsGroupingMenu(iconOnly: true)
+            // In a view graph of its own: the list's updates replaced the open menu and scrolled it to its top (#10738).
+            MenuIsland(content: AgentsGroupingMenu(iconOnly: true))
         }
     }
     #endif
