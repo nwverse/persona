@@ -601,6 +601,12 @@ On a Mac running Orca, starts kept failing after 3 minutes with "the tab's shell
 
 `settleShell` now waits while the host has no screen yet, and Orca starts type the start file as herdr's do (`TestOrcaStartWaitsForTheScreenAndTypesAShortLine`). If a host can say "not drawn yet", treat that as "wait", not as "cannot read". To check by hand: `orca terminal create` followed at once by `orca terminal send` of a line over 1024 bytes plus `\r` leaves the line unrun.
 
+## An engine naming claude in a start's tab is not claude having come (2026-11-19, #10588)
+
+On a Linux node with Orca, one of three starts sent in the same second failed twice with `agent_start_stalled`, "claude did not become ready within 1m0s of starting". Its tab held only about 30 empty zsh prompts: the start line was never echoed and Claude Code never ran there. No dialog had appeared, so Orca must have named claude for that pane, and `waitReady` took that alone as claude running (`started()`): it waited 1 minute for an input box instead of 3 for the shell, blamed Claude, and skipped the shell's answers (`shellmiss.go`, #1642 and #2570), which it reads only while claude has not come. Orca names an agent from a process scan by pane key and, when that fails, from its own row and terminal identity, which outlive the agent (`hostorca.go`); its `terminal.send` does not say whether the text reached the shell either. Why the line never arrived is still unknown.
+
+A start in an Orca tab now needs evidence of its own before Orca's word counts (`node/startevidence.go`): Claude Code's screen (its banner, input box or a dialog), or the start line run, meaning its start file is gone (the file removes itself first) and nothing on screen says the shell could not run it. The echo alone is not enough: a line sitting unrun after the prompt (#5450) and a line the shell answered for (a cut head, a command not found) both leave it on screen. A start whose line never showed in the tab and whose start file was never read ends after the shell's wait as `terminal_not_ready`: nothing ran, the tab is closed, and the hub's one retry opens a new one. herdr keeps its word: it names the program in front of the pane, stops once it exits (`claudeGoneWait` relies on that), and reports a line it could not send (`pane_send_failed`). `TestOrcaStartNeedsEvidenceBeyondOrcasWord` covers each case. Not covered: an Orca terminal takes one launch (`orcaHost.Run`), so the #2570 retype of a rejected line cannot run in the same Orca tab and fails as a second launch.
+
 ## A pane's shell may be fish: quote for it too (2026-11-10, #2867)
 
 What the node quotes for a pane is parsed by the user's own shell: the start file runs through `source` in fish, and Orca types `cd -- <cwd>` and the command into the terminal. fish still takes `\'` and `\\` as escapes inside single quotes, so the POSIX quoting of the first message `a\';touch PWNED;#` kept the quotes open in fish and ran `touch`. `shellQuote` (`server/internal/node/node.go`) now puts each backslash outside the quotes (`'\\'`), where the sh family and fish read it alike, as the SSH deploy already did after the same finding (`docs/lessons/server.md`). `TestShellQuoteReadsBackInRealShells` reads such words back in every installed shell, fish included. No quoting makes a control character safe on a typed line (a tab completes and closes the quoted word): a first message gets its controls made inert (`typedArg`, "Text an agent is sent can press keys in its terminal" below), but a directory can't be rewritten, so Orca refuses one whose name holds a control character before it opens a terminal.
@@ -1382,6 +1388,19 @@ AskUserQuestion, often with several questions. Read the open call from the trans
 rather than counting on the model to follow the prompt, and check a real transcript's `tool_use` input shape before
 parsing it. Once the card worked, the prompt went back to asking with AskUserQuestion as usual (#8558): a prompt's
 workaround that outlives the fix it stood in for is wrong advice to the model.
+
+## Peer attestation needs the receiver's live permission mode (#9672)
+
+Claude Code 2.1.326's `sessions/<pid>.json` names the live process, session and tmux pane, but not its permission mode or
+bypass availability. A transcript's standalone `permission-mode` row is not rewritten on shift+tab; the next prompt records
+the mode instead. Reading even the newest transcript at send time therefore states the old class immediately after a switch:
+none after default became bypass is held, and stale bypass after the return to default is a mismatch. For an external tmux
+session, read the footer through the pane named by the PID file before using transcript evidence. A visible composer
+without a bypass or plan indicator is prompting even when a draft or dialog hides default's idle hint; do not fall back
+to a stale bypass transcript just because `tuiMode` has no exact idle-text match. Question and permission dialogs draw
+rules too; they are not composers and must not override transcript bypass. Plan has no single class:
+Claude counts it as bypass only when bypass is available, so use the live process's argv for the enabling flag rather than
+treating every plan session as prompting. Without those live sources, keep the old fail-closed outcome instead of guessing.
 
 ## A plugin's asUser prompt is the only way in that counts as the person's (Persona's Claude Code plugin)
 

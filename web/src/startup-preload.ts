@@ -426,23 +426,24 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // sections), all in the first screen's static closure; the canvas itself is a chunk of its own (ViewBody10.tsx).
 // Main had 1,583 B of room; the budget stays.
 // Keep the stricter existing limit while combining these changes.
-// #9745: Overview's extension cards drawn as the user arranged them add 648 B in ja, measured in one environment
-// against main 9deea81b02 (ja 482,476 B to 483,124 B; en 479,357 B to 480,014 B, zh-Hans 480,203 B to 480,867 B): the
-// arrangement's store, kept per hub and sign-in, and the order, hidden cards and widths it draws
-// (lib/overview-cards.ts), Arrange cards in Overview's top bar, and the arrangement to and from the hub with the start
-// page, one change on its way at a time and pushes heard during it settled once the hub pushed it (lib/start-page.ts).
-// The editor (its heading, each card's controls, the drag and the edits) is a chunk of its own
-// (views/extensions/OverviewArrange.tsx, lib/overview-edit.ts). Main had 50 B of room, so the budget is this ja size
-// plus those 50 B.
-// #10905: Overview's own sections arranged with the extensions' cards add 321 B in ja, measured in one environment
-// against #9778's branch at 2cda213bda (ja 483,124 B to 483,445 B; en 480,014 B to 480,336 B, zh-Hans 480,867 B to
-// 481,193 B): the sections' ids and their place in the arrangement, Needs you and Stuck never hidden
+// #9745: Overview's extension cards drawn as the user arranged them add 720 B in ja, measured in one environment
+// against main f6ce407496 (ja 482,542 B to 483,262 B; en 479,423 B to 480,152 B, zh-Hans 480,269 B to 481,005 B): the
+// arrangement's store, kept per hub and sign-in, with the revision Reset's Undo checks, and the order, hidden cards and
+// widths it draws (lib/overview-cards.ts), Arrange cards in Overview's top bar, and the arrangement to and from the hub
+// with the start page, one change on its way at a time and pushes heard during it settled once the hub pushed it, a
+// read a later hello or another sign-in overtook left alone (lib/start-page.ts). The editor (its heading, each card's
+// controls, the drag and the edits) is a chunk of its own (views/extensions/OverviewArrange.tsx, lib/overview-edit.ts).
+// Main was itself 16 B over its budget (ja 482,542 B against 482,526 B), so, as in #9847, the budget is this ja size,
+// with no room.
+// #10905: Overview's own sections arranged with the extensions' cards add 285 B in ja, measured in one environment
+// against #9778's branch at a72213c14f (ja 483,262 B to 483,547 B; en 480,152 B to 480,438 B, zh-Hans 481,005 B to
+// 481,295 B): the sections' ids and their place in the arrangement, Needs you and Stuck never hidden
 // (lib/overview-cards.ts), Overview's cards and sections drawn in that order (views/OverviewBody.tsx, Home's sections
 // handed to it), the Arrange button always there, and a default manager of #9745 refusing a section known
 // (lib/start-page.ts). The sections' bars and their names while arranging, and what a change writes, are the editor's
-// chunk (views/extensions/OverviewArrange.tsx, lib/overview-edit.ts). That branch had 50 B of room, so the budget is
-// this ja size plus those 50 B.
-export const FIRST_SCREEN_BUDGET = 483_495;
+// chunk (views/extensions/OverviewArrange.tsx, lib/overview-edit.ts). That branch has no room, so the budget is this
+// ja size.
+export const FIRST_SCREEN_BUDGET = 483_547;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;

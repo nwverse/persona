@@ -86,6 +86,11 @@
 #                              test_apple_no_callkit.py (no CallKit import or link setting, #9290; also for
 #                              scripts/persona_config.py, whose xcconfig it reads); the iOS/macOS builds and tests
 #                              are skipped with a note (they need a Mac)
+#   apple/project.yml, apple/{lean-dev-build,watch-and-share}.yml, scripts/app/{sim,ui-test}.sh,
+#   scripts/release/release.sh, scripts/ci/apple.sh
+#                              also scripts/test/test_apple_dev_build.py (the development build's switch and stamp, #10713)
+#   native/app-core/scripts/build-apple.sh
+#                              scripts/test/test_app_core_apple_build.py (the shared XCFramework cache, #10713)
 #   deploy/docker/**, docs/operations/docker.md, Dockerfile
 #                              scripts/test/test_docker_entrypoint.py (it also reads the root Dockerfile)
 #                              These Linux suites run in CI's Scripts tests job; they run from scripts/test as there.
@@ -863,6 +868,13 @@ else
     case "$f" in apple/*) script_test_add scripts/test/test_apple_l10n.py ;; esac
     # Every Apple source and build file, and the xcconfig persona_config.py writes, against CallKit (#9290).
     case "$f" in apple/*|scripts/persona_config.py) script_test_add scripts/test/test_apple_no_callkit.py ;; esac
+    # The development build (#10713): the switch that leaves the watch app and the share extension out, who sets it,
+    # the Release-only commit stamp; and the Rust core's XCFramework cache shared between worktrees.
+    case "$f" in
+      apple/project.yml|apple/lean-dev-build.yml|apple/watch-and-share.yml|scripts/app/sim.sh|scripts/app/ui-test.sh|\
+      scripts/release/release.sh|scripts/ci/apple.sh) script_test_add scripts/test/test_apple_dev_build.py ;;
+      native/app-core/scripts/build-apple.sh) script_test_add scripts/test/test_app_core_apple_build.py ;;
+    esac
     # test_gen_tokens.py checks the token sources against the iOS values and the committed Android Tokens.kt (#4209).
     case "$f" in
       spec/tokens/*|apple/Shared/Design/*|android/core/designsystem/src/main/kotlin/persona/core/designsystem/Tokens.kt)

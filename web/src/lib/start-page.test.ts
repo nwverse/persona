@@ -402,6 +402,23 @@ describe("Overview's cards (#9745)", () => {
     }
   });
 
+  // review of #9778, P1: a push heard after the failure took the place of the change, and the next hello sent the push's
+  it("a push heard after a change the hub did not take leaves the change, which goes again at the next hello", async () => {
+    hub = { overview: [] };
+    const { hello } = await load();
+    await hello();
+    const cards = await import("./overview-cards");
+    vi.mocked(fetch).mockImplementationOnce(answer(503, { error: "database down" }) as never);
+    cards.saveOverview(arrangement);
+    await flush();
+    Socket.last.push({ type: "navigation", overview: newer }); // an older change's push, late, or another device's
+    expect(cards.getOverviewPrefs()).toEqual(arrangement);
+    hub = { overview: newer };
+    await hello();
+    expect(cards.getOverviewPrefs()).toEqual(arrangement);
+    expect(hub).toMatchObject({ overview: arrangement });
+  });
+
   it("stays in this browser on a hub without the route", async () => {
     hub = "missing";
     const { hello, startPageSynced } = await load();
@@ -718,7 +735,7 @@ describe("Overview's cards (#9745)", () => {
       expect(hub).toMatchObject({ overview: arrangement });
     });
 
-    it("nor a later hello's read that a change sent at an earlier hello overtook", async () => {
+    it("nor an earlier hello's read: the latest one sends a change the hub did not take", async () => {
       const { cards, hello } = await loaded();
       queue.push(answer(503, { error: "database down" }));
       cards.saveOverview(arrangement);
@@ -727,11 +744,39 @@ describe("Overview's cards (#9745)", () => {
       const second = holdNext();
       await hello();
       await hello(); // the socket came back twice before either read was answered
-      await first(); // sends the change the hub did not take
-      expect(hub).toMatchObject({ overview: arrangement });
-      await second(); // the hub's arrangement from before it
+      const sent = puts$().length;
+      await first(); // overtaken by the second hello: left to it
+      expect(puts$()).toHaveLength(sent);
+      expect(hub).toMatchObject({ overview: [] });
+      await second(); // the hub's arrangement from before the change: the change goes again
       expect(cards.getOverviewPrefs()).toEqual(arrangement);
       expect(hub).toMatchObject({ overview: arrangement });
+    });
+
+    // review of #9778, P1: a read answered late put back what the hub had at an earlier hello, or under another sign-in
+    it("an earlier hello's read answered after a later one's does not put the older arrangement back", async () => {
+      const { cards, hello } = await loaded();
+      hub = { overview: arrangement };
+      const first = holdNext(); // answered with the hub's arrangement when it was asked
+      await hello();
+      hub = { overview: newer }; // changed on another device meanwhile
+      await hello(); // its read answered at once
+      expect(cards.getOverviewPrefs()).toEqual(newer);
+      await first();
+      expect(cards.getOverviewPrefs()).toEqual(newer);
+      expect(puts$()).toEqual([]);
+    });
+
+    it("nor one answered after signing in as someone else, under that account's copy", async () => {
+      const { cards, hello } = await loaded();
+      hub = { overview: arrangement };
+      const read = holdNext();
+      await hello();
+      localStorage.setItem("persona.token", "another-token"); // signed in again as someone else
+      await read();
+      expect(cards.getOverviewPrefs()).toEqual([]);
+      expect(localStorage.getItem(await copyKey())).toBeNull();
+      expect(puts$()).toEqual([]);
     });
   });
 });

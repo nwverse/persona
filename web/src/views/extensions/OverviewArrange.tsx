@@ -8,7 +8,7 @@
 import { useEffect, useRef } from "react";
 import { t } from "../../i18n";
 import type { UIPlace } from "../../lib/extension-ui";
-import { ALWAYS_SHOWN, cardKey, getOverviewPrefs, saveOverview, sectionKey, useOverviewKept, useOverviewPrefs, type ArrangedItem, type CardSpan, type OverviewEntry, type SectionId } from "../../lib/overview-cards";
+import { ALWAYS_SHOWN, cardKey, getOverviewPrefs, overviewRevision, saveOverview, sectionKey, useOverviewKept, useOverviewPrefs, type ArrangedItem, type CardSpan, type OverviewEntry, type SectionId } from "../../lib/overview-cards";
 import { changeEntry, dropEntry, entriesOf, moveEntry, written } from "../../lib/overview-edit";
 import { useStartPageSynced } from "../../lib/start-page";
 import { stateName } from "../../lib/state-labels";
@@ -45,10 +45,11 @@ function EditHead({ onDone }: { onDone: () => void }) {
   const field = useOverviewKept();
   const synced = route !== false && field !== false;
   // Undo puts back the arrangement from before only while Overview is still as Reset left it: one changed since (here,
-  // in another tab, or on another device) is newer and stays
+  // in another tab, or on another device), even one reset again, is newer and stays
   const reset = () => {
     saveOverview([]);
-    const undo = () => (getOverviewPrefs().length ? toast(t("extensions-overviewarrange.undo_stale"), "info") : saveOverview(prefs));
+    const at = overviewRevision();
+    const undo = () => (overviewRevision() !== at ? toast(t("extensions-overviewarrange.undo_stale"), "info") : saveOverview(prefs));
     toast(t("extensions-overviewarrange.reset_done"), "info", { label: t("extensions-overviewarrange.undo"), run: undo });
   };
   return (

@@ -138,6 +138,11 @@ export function getOverviewPrefs(): OverviewEntry[] {
 /** Whether this browser holds an arrangement at all (none: the cards as they always were). */
 export const overviewChosen = () => getOverviewPrefs().length > 0;
 
+// Bumped by each arrangement kept here (made here or taken from the hub) and each one another tab wrote: one equal to an
+// earlier (another Reset) is newer all the same (OverviewArrange's Undo).
+let revision = 0;
+export const overviewRevision = () => revision;
+
 // The hub's copy is told each change made here (lib/start-page.ts), not the ones it sent (adoptOverview).
 let told: ((p: OverviewEntry[]) => void) | null = null;
 export const onOverviewSaved = (f: (p: OverviewEntry[]) => void) => void (told = f);
@@ -156,6 +161,7 @@ export function saveOverview(list: OverviewEntry[]) {
 function keep(p: OverviewEntry[]) {
   scope = feedCacheScope();
   prefs = p;
+  revision++;
   const key = scopedKey(scope, KEY);
   try {
     if (key && p.length) localStorage.setItem(key, JSON.stringify(p));
@@ -182,6 +188,7 @@ if (typeof window !== "undefined") {
   window.addEventListener("storage", (e) => {
     if (e.key === null || e.key.endsWith(`:${KEY}`)) {
       prefs = null;
+      revision++;
       changed();
     }
   });
