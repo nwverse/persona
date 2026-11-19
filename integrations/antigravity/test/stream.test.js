@@ -370,6 +370,37 @@ test('a late export of one wake cannot settle the next wake', async (t) => {
   assert.equal(final.items.filter((item) => item.kind === 'tool_use').length, 2)
 })
 
+for (const exportSettleTimeoutMs of [450, 1100]) {
+  test(`a chained timeout protects the next wake with a ${exportSettleTimeoutMs} ms export window`, async (t) => {
+    const { node, directory, chunk, runtime } = await fixture(t, { autonomousIdleMs: 700, exportPollMs: 20, exportSettleTimeoutMs })
+    const reply = 'Workflow finished.'
+    const steps = []
+    const exportWake = () => {
+      steps.push({ step_index: steps.length, type: 'SYSTEM_MESSAGE' }, replyStep(steps.length + 1, reply))
+      transcripts(directory, steps, steps)
+      nativeState(directory, 'IDLE', steps.length)
+    }
+    const retired = () => runtime.idle() && node.last('session.delta')?.text === ''
+
+    await chunk(reply)
+    await until('the first wake times out', retired)
+    const firstExpiry = Date.now() + exportSettleTimeoutMs
+    await chunk(reply)
+    exportWake()
+    await until('the second wake also times out', retired)
+    await new Promise((resolve) => setTimeout(resolve, Math.max(0, firstExpiry - Date.now() + 30)))
+
+    await chunk(reply)
+    exportWake()
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    assert.equal(runtime.idle(), false, 'the second wake export cannot settle the third wake')
+    assert.equal(node.last('session.delta').text, reply)
+
+    exportWake()
+    await until('the third wake settles on its own export', retired, 350)
+  })
+}
+
 test('unknown and archived sessions cannot start autonomous work', async (t) => {
   const { node, update, chunk, runtime } = await fixture(t)
   const unknown = '66666666-2222-4333-8444-555555555555'

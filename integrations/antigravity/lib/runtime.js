@@ -1241,6 +1241,7 @@ export function createAgyRuntime(options = {}) {
     if (toolCallId && missed?.toolIds.includes(toolCallId)) {
       missed.skip--
       missed.toolIds = []
+      delete missed.observed
     }
     if (!turn) {
       if (!start) return undefined
@@ -1280,6 +1281,7 @@ export function createAgyRuntime(options = {}) {
           if (prior && prior.seq === unexportedTurns.get(rawId)?.seq) unexportedTurns.delete(rawId)
           prior = undefined
           if (remaining-- === 0) return true
+          cursor.observed = { after: step.step_index ?? index, remaining }
           turn.observedMissed = cursor
           return false
         })
@@ -1293,7 +1295,9 @@ export function createAgyRuntime(options = {}) {
     if (now - turn.lastUpdate >= autonomousIdleMs) {
       if (!nativeWorking(native)) {
         const next = missed ?? turn.wakeCursor
-        missedWakes.set(rawId, { ...next, skip: next.skip + 1, expiresAt: next.expiresAt ?? now + exportSettleTimeoutMs,
+        const { observed } = cursor
+        missedWakes.set(rawId, { after: observed?.after ?? next.after, pending: observed ? undefined : next.pending,
+          skip: (missed ? observed?.remaining ?? missed.skip : 0) + 1, expiresAt: now + exportSettleTimeoutMs,
           toolIds: [...turn.liveToolsById.keys()] })
       }
       retireAutonomousTurn(rawId, native)
