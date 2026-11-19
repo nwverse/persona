@@ -102,6 +102,7 @@ The parts (the hub, the managers, the node on each computer, extensions) talk on
 | `connectorwire` | Inbox things and replies, conversation batches, posts and snapshots from connectors (`docs/protocol/connector-protocol.md`) |
 | `aiwire` | A model setting (`aiwire.Config`) |
 | `dialogwire` | A terminal dialog read off a screen, as the node and the apps see it |
+| `repositorywire` | A task's requested refs, repository layouts and the preparation snapshot a manager hands to a node, with the alias and ref rules both apply; `assistant/repository` aliases them |
 | `nodeproto` | The node protocol handshake: the protocol version and capability names a node announces (`docs/protocol/protocol.md` "Node handshake") |
 | `proto`, `rpc`, `relayproto` | The client API and node protocol types, the JSON-RPC framing, the push relay |
 | `sdk/go/wire` (the SDK's module) | The extension protocol's types generated from its schema (an error report the bus carries, say), shared with extensions written against the SDK |

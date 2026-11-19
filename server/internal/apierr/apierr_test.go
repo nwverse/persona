@@ -383,6 +383,20 @@ func TestOpenElsewhereSpeaksTheClientsLanguage(t *testing.T) {
 	}
 }
 
+func TestCodexWriterConflictSpeaksTheClientsLanguage(t *testing.T) {
+	for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
+		rec := httptest.NewRecorder()
+		raw := &rpc.Error{Code: "codex_writer_busy", Message: "node recovery words", Data: json.RawMessage(`{"delivered":"none","detail":"codex: thread 11111111-2222-3333-4444-555555555555 already has an active writer (-32600)"}`)}
+		body := call(t, langWriter{rec, lang}, rec, raw)
+		if rec.Code != http.StatusConflict || body["code"] != "codex_writer_busy" || body["error"] != i18n.T(lang, "rpc-errors.codex_writer_busy") {
+			t.Fatalf("%s: %d %v", lang, rec.Code, body)
+		}
+		if body["delivered"] != "none" || body["detail"] != "codex: thread 11111111-2222-3333-4444-555555555555 already has an active writer (-32600)" {
+			t.Fatalf("%s lost delivery or diagnostic evidence: %v", lang, body)
+		}
+	}
+}
+
 func TestAssistantActionableRefusalsWithholdNativeDiagnostics(t *testing.T) {
 	for _, code := range []string{"assistant_launcher_profile_switch", "assistant_service_tier_start_only", "assistant_service_tier_unsupported", "assistant_service_tier_refused"} {
 		for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
