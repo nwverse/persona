@@ -505,6 +505,14 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 	var replyAsk acceptAsk
 	var draft *TodoPRStatus
 	switch g.Kind {
+	case sigHandoffResult:
+		h := v.handoffResult()
+		if h == nil || h.ID != g.Key {
+			return prompts.SuperviseEntry{}, false
+		}
+		// Render through the existing review entry, with this receipt as the evidence.
+		return prompts.SuperviseEntry{ID: t.ID, Title: t.Title, Kind: sigReview, Detail: handoffResultDetail(h),
+			DoneWhen: v.DoneWhen, Round: v.Round, Link: todoLink(web, t.ID), Quiet: t.Quiet}, true
 	case sigDraftPR:
 		if t.PRURL != g.PRURL && !slices.Contains(t.PRs, g.PRURL) {
 			return prompts.SuperviseEntry{}, false
@@ -534,14 +542,6 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 		if st != reviewPending || v.handoffResult() != nil {
 			return prompts.SuperviseEntry{}, false
 		}
-	case sigHandoffResult:
-		h := v.handoffResult()
-		if h == nil || h.ID != g.Key {
-			return prompts.SuperviseEntry{}, false
-		}
-		// Render through the existing review entry, with this receipt as the evidence.
-		return prompts.SuperviseEntry{ID: t.ID, Title: t.Title, Kind: sigReview, Detail: handoffResultDetail(h),
-			DoneWhen: v.DoneWhen, Round: v.Round, Link: todoLink(web, t.ID), Quiet: t.Quiet}, true
 	case sigNeedsYou:
 		if !s.taskWaits(ctx, t) {
 			return prompts.SuperviseEntry{}, false // answered meanwhile

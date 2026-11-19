@@ -116,8 +116,6 @@ type TaskReview struct {
 	// Evidence is absent on legacy parks. A new park records its external wait, inspected source receipt and
 	// recording conversation here, in the existing Reviews JSON; it needs no new state store.
 	Evidence *ParkEvidence `json:"evidence,omitempty"`
-	// Handoff is an internal wait recorded after session.send was acknowledged.
-	Handoff *taskHandoff `json:"handoff,omitempty"`
 	// Reply is the source receipt that ended this exact park, committed with the pending-review transition.
 	Reply *connectorwire.LarkReplyObservation `json:"reply,omitempty"`
 	// Decided: the owner's decision (its id) that ended this park before its time (parkDecided, parked.go), and
@@ -135,6 +133,8 @@ type TaskReview struct {
 	OwnerResponse   string    `json:"owner_response,omitempty"`
 	OwnerResponseAt time.Time `json:"owner_response_at,omitzero"`
 	HoldReleased    bool      `json:"hold_released,omitempty"`
+	// Handoff is an internal wait recorded after session.send was acknowledged.
+	Handoff *taskHandoff `json:"handoff,omitempty"`
 }
 
 // OwnerWait is a judgment that a supervised task's stretch of work (begun at Work) stopped on the owner's decision:
@@ -161,13 +161,13 @@ func (v *Supervision) clone() *Supervision {
 	out.Reviews = make([]TaskReview, len(v.Reviews))
 	for i, r := range v.Reviews {
 		out.Reviews[i] = r
-		out.Reviews[i].Checks = slices.Clone(r.Checks)
-		out.Reviews[i].Options = slices.Clone(r.Options)
-		out.Reviews[i].Evidence = r.Evidence.clone()
 		if r.Handoff != nil {
 			handoff := *r.Handoff
 			out.Reviews[i].Handoff = &handoff
 		}
+		out.Reviews[i].Checks = slices.Clone(r.Checks)
+		out.Reviews[i].Options = slices.Clone(r.Options)
+		out.Reviews[i].Evidence = r.Evidence.clone()
 		if r.Reply != nil {
 			receipt := *r.Reply
 			out.Reviews[i].Reply = &receipt
