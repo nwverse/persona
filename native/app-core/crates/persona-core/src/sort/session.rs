@@ -90,6 +90,9 @@ pub struct Session {
     /// Already folded by the client's SideFold/ChildSessions input preparation, not a child to fold again.
     #[serde(default)]
     pub nested_subtask: bool,
+    /// The client's prepared input found a nested row that admits the current query.
+    #[serde(default)]
+    pub nested_match: bool,
     #[serde(default)]
     pub children: Option<Children>,
     #[serde(default)]

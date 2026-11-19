@@ -2843,6 +2843,24 @@ The tier criteria are shared with event grouping. Describe each event's assigned
 requests, not one "current new message" for an entire batch. A mixed-event regression should keep a new request
 and screenshot separate from another event's final acknowledgement, while retaining each event's overall tier.
 
+## Doing the owner's call later (#10661)
+
+A message held while its computer is away must reach the Agent as the owner's, or a Claude outside Persona's
+terminals reads it as another session's (no `owner_input`) and a public share loses its submission. The devices
+manager strips both from every call a manager makes (`devices/owner_input.go`), so a manager cannot re-send it as its
+own `session.send`: keep the hub's `devicewire.NodeCall` as it came (caller, submission, share authority) and replay it
+through the devices manager's own call path (`devices/held.go`).
+
+Only an error that proves nothing was written (`errOffline`, `rpc.ErrNotSent`, `rpc.ErrSuspended`, a hop's
+`machine_offline`) may lead to an automatic second try. `rpc.ErrNotWritten` alone does not: `Peer.Call` gives it to any
+write error that matches the call's ending context, and a WebSocket writer reports its own context's end after part
+of a frame went out. A bare `ErrClosed` proves nothing either once a wrapper may have lost `ErrDropped`. Anything else,
+a deadline included, may have typed it: ask the owner instead.
+
+Sending the moment the node's connection is configured and listed is too early for a runtime Agent: the runtime
+reconnects to the new node's socket a moment later, and the node answers "no such session". Wait for the session in
+the connection's own list (a new connection starts with none).
+
 ## Moving an element to the front with `slices.Delete` in the same expression (2026-11-19, #10659)
 
 `append([]T{s[i]}, slices.Delete(s, i, i+1)...)` sometimes reads `s[i]` after `Delete` ran. Go doesn't fix the order

@@ -168,7 +168,8 @@ The main conversation and the leader (direction) conversations fold the rounds t
   (`core/domain/.../tasks/BackgroundRounds.kt`) starts a round
   at a user input whose message source (`sourceOf`) is `conversation`, `followup` or `patrol` and ends it at the next
   genuine input, a queued one included; a system hint inside it does not end it. Such a round stays in the conversation
-  rather than going to the background record; supervision and the other quiet rounds keep going there as before.
+  rather than going to the background record. In Brief and Board, quiet supervision stays in the background record
+  and a supervision round with a visible reply stays in the conversation.
   A `followup` counts only as a scheduled follow-up: not a usage-limit continuation or a wake-up (injected
   `limit_continue` / `wake`), and not one without a title; those stay shown. Until the hub's config is read, the page
   uses the value it last read this run (in memory, `BackgroundFoldSetting.lastKnown`), else on.
@@ -180,7 +181,8 @@ The main conversation and the leader (direction) conversations fold the rounds t
 - **Not folded**: `supervisionVisible` (web's rule): a successful `ask_user` / `notify_user` (bare or Persona's
   `mcp__persona__…`), a pending `ask_user` while the round runs, a `task_review` with verdict `accepted` / `needs_user`,
   a `supervision_finish` whose result says `visibility: "user"`, a hub fold with `supervision_user`, or an injected
-  supervision message marked `level="user"` (`Injected.level`, the same two marks the web's and iOS's `supervisionVisible` read, #6969).
+  supervision message marked `level="user"` (`Injected.level`, #6969). A completed nonblank final reply also stays
+  shown unless the round successfully finished silent. Its work summary stays collapsed.
 - **Prompts**: while folding is on, a scheduled task's or follow-up's input shows only the hub's `injected.line` under its
   source label (`SourceMessage(hidePrompt)`), opened or not, and its line opens no prompt sheet; a supervisor message
   shows its text when opened.
@@ -967,7 +969,7 @@ Shared conventions (language list, fallback, glossary, protocol fields) are defi
 - **Resources**: `values/` is the English fallback, Chinese is in `values-zh/`, Japanese in `values-ja/`. English is the fallback because the fallback rule is "every other language shows English": with a French system Android takes `values/` directly; if `values/` were Chinese, French users would see Chinese, and places where the system reads resources directly without the App's Configuration (widgets, tiles, notification channel names) couldn't be fixed. `values-zh` has no region and covers `zh-CN`, `zh-Hans`, `zh-SG`. When packaging the App, `localeFilters` keeps only en / zh / ja, so libraries' bundled French and other translations don't leak into the English UI.
 - **Keys**: all modules' resources merge into one table, so keys start with the module name (`settings_…`, `chat_…`), and each module keeps its own `strings.xml`. Language self-names ("简体中文", "English", "日本語") and the name Persona are marked `translatable="false"` and live only in `values/`. Plurals use `plurals` (English needs one / other, Chinese and Japanese only other).
 - **Dates and numbers**: `LocalizedFormats` (`core/designsystem`) picks formats by skeleton (which fields to show: `MMMd`, `jmm`…), and the language decides order and wording; pages never write patterns containing words (`M月d日`). Inside Compose use `currentLocale`; outside Composables use `LocalizedFormats.locale(context)`.
-- **Text from pure JVM modules**: `core/contracts`, `core/domain` and `core/hub` have no resources, so any human-facing text is returned as `CoreText` (`core/contracts`, a key plus arguments; lists and concatenation use `CoreText.joined`, user names and the hub's verbatim text use `CoreText.plain`), with entries in `res/values*/strings_core.xml` in `core/designsystem` (`designsystem_core_…`). Pages call `text()`, places with a Context call `resolve(context)`; places with no resources at hand (pure notification functions, exception messages, text that `core/data` repositories put into state) use `shown`, which goes through `CoreText.words`, pointed at the App's own resources in `PersonaApp.onCreate` at startup. Failures use `CoreTextException` (its `message` is the text in the current language). Unit tests: Android modules have `values-zh/strings_core.xml` on the test classpath (build-logic), `shown` reads it, and expected Chinese is written as is; JVM modules' tests read the same file through their own `zh()` helper. Demo mode data comes in three copies per language: `Demo.json` (Chinese), `Demo.en.json` and `Demo.ja.json` in `core/demo`, picked by the current language when entering demo mode.
+- **Text from pure JVM modules**: `core/contracts`, `core/domain` and `core/hub` have no resources, so any human-facing text is returned as `CoreText` (`core/contracts`, a key plus arguments; lists and concatenation use `CoreText.joined`, user names and the hub's verbatim text use `CoreText.plain`), with entries in `res/values*/strings_core.xml` in `core/designsystem` (`designsystem_core_…`). Pages call `text()`, places with a Context call `resolve(context)`; places with no resources at hand (pure notification functions, exception messages, text that `core/data` repositories put into state) use `shown`, which goes through `CoreText.words`, pointed at the App's own resources in `PersonaApp.onCreate` at startup. Failures use `CoreTextException` (its `message` is the text in the current language). Unit tests: Android modules that apply `persona.coretext.zh` (build-logic) have `values-zh/strings_core.xml` on the test classpath, `shown` reads it, and expected Chinese is written as is (elsewhere `shown` is English); JVM modules' tests read the same file through their own `zh()` helper. Demo mode data comes in three copies per language: `Demo.json` (Chinese), `Demo.en.json` and `Demo.ja.json` in `core/demo`, picked by the current language when entering demo mode.
 - **Passing it to the hub**: `ClientLanguage` (`core/contracts`) holds the language currently displayed (`zh-Hans` / `en` / `ja`); the hub client sends `Accept-Language` on every request and WebSocket upgrade, and `client_hello` carries `locale`; when the language changes, `client_hello` is sent again on the current connection (`docs/protocol/i18n.md` ("Protocol")). Android doesn't register push devices, so there's no device `locale`.
 - **Tests**: Robolectric tests run in Simplified Chinese by default (`android/build-logic/robolectric/robolectric.properties`; tests that set `qualifiers` must include the `zh-` prefix); to test other languages use `@Config(qualifiers = "en-…")` / `"ja-…"`; `LanguageShotsTest` is an example.
 - **Checks** (no Android SDK needed; also run in CI's Privacy and workflow checks):
@@ -1131,6 +1133,17 @@ cd android
 ```
 
 `core:designsystem` has pixel-checking component unit tests (`EnabledStateTest`) using Robolectric native rendering (`@GraphicsMode(NATIVE)`); the first run downloads Robolectric's Android runtime (SDK 35) from Maven Central. Shared specifications live in `spec/fixtures/`; relevant tests read continuity, lines, answers, sorting, Inbox and terminal fixtures. The convention plugin passes the repository root, which can also be set with `-PpersonaRepoRoot=<repository root>`. These commands were not run for this page; listing them does not claim tests passed.
+
+#### What a build reuses (#10712)
+
+The build cache and the configuration cache are on, projects build in parallel (`org.gradle.parallel`) and the Kotlin daemon has its own 2 GB heap. `scripts/app/android.sh` caps Gradle at 4 workers (`ANDROID_MAX_WORKERS`) unless `org.gradle.workers.max` is already set; `scripts/ci/android.sh` uses `ANDROID_CI_MAX_WORKERS`.
+
+- **Keys without absolute paths**: worktrees of one repository share local build cache entries, so a second checkout at the same commit gets compile and test tasks `FROM-CACHE`. Paths reach tests through argument providers in `android/build-logic/convention/src/main/kotlin/persona/buildlogic/TestArguments.kt`: `persona.repo.root` is a location, not an input, and a native library is an input by its contents only. Friend modules go through the Kotlin compile task's `friendPaths`, not `-Xfriend-paths=`, and list only project jars (Kotlin keys friends by their path relative to the module's build directory). A `systemProperty`, compiler flag, Exec argument or KSP argument that holds an absolute path gives every checkout its own key.
+- **Fixture inputs per module**: a module's tests declare only the `spec/fixtures` domains their sources name, as `spec/fixtures/<domain>` or `FixtureReader.read("<domain>")`; the module's `fixtureReferences` task lists them in `build/fixture-references.txt`. A change to one domain re-runs only the modules that read it. A fixture path built from a variable fails that task (`"spec/fixtures/" + domain`, and also `"spec/fixtures/todo-$kind"`, where a variable completes the name), and so does a domain name that does not exist under `spec/fixtures`: write the domain out, or mark the line with a `// fixture-inputs: <where callers name it>` comment, as `FixtureReader` does. Other repository files that tests read (`schema/extension/examples`, for one) are still undeclared, as before: a change to one of them alone does not re-run those tests.
+- **Screenshots from unit tests**: Robolectric screenshot tests write their PNGs to the module's `build/<name>-shots/`, which no task declares, so a test result taken from the build cache (perhaps one another worktree stored) draws nothing. A run with `--tests` therefore never uses the build cache (`android/build-logic/convention/src/main/kotlin/persona/buildlogic/TestRuns.kt`): it runs, or it is `UP-TO-DATE` because its last run had the same inputs and drew the pictures still on disk. A whole-suite run (`testDebugUnitTest` without `--tests`, as for a shot diff) can still come `FROM-CACHE` and leave an older run's PNGs in place: add `--rerun` after the test task to draw them, as also after deleting a shots directory.
+- **CoreText in Chinese is opt-in**: modules whose tests expect Chinese `CoreText` apply `persona.coretext.zh`, which puts only core/designsystem's `values-zh/strings_core.xml` on the test classpath.
+- **Release unit tests**: `test` runs the debug unit tests. The release ones (`app` and `core:data`, which add the `src/testRelease` checks) run the whole suite again against the release variant, so they need `-Ppersona.releaseUnitTests=true`; `scripts/ci/android.sh` always passes it. Locally: `./gradlew -Ppersona.releaseUnitTests=true :app:testReleaseUnitTest :core:data:testReleaseUnitTest`.
+- **The Rust core**: `:core:rustcore:buildHostCore` declares the core's sources, manifests, lockfile and toolchain file, and copies the host library into its build directory; with nothing changed it is `UP-TO-DATE` (or `FROM-CACHE`) and cargo does not run. Debug APKs package the core built with the `android-dev` cargo profile (cargo's dev profile with line tables only); release builds keep the release profile. `-Ppersona.abis=arm64-v8a` (or `x86_64`) builds one ABI for a local debug build; release always packages both.
 
 Screenshots use a dedicated emulator, a mock hub and adb; first run `python3 scripts/mock/mock_hub.py` in a separate terminal, then run the commands below. The package name matches the configuration of `scripts/app/android.sh`; replace placeholders and do not connect to a production hub.
 
@@ -2294,7 +2307,8 @@ Specification [extensions.md](../extensions/extensions.md) ("Declarative UI", "E
   Unsupported shows hub reason/no refresh; failed refresh retains old result with reason. Tests `LauncherQuotaTest`, `HttpMachineManagementTest`; `LauncherQuotaShotsTest`, styles × light / dark, `feature/settings/build/launcher-quota-shots/`.
 - **Auto-upgrade, machine toggles and uninstall** (#3049, web/iOS, [extensions.md](../extensions/extensions.md) ("Auto-upgrade", "Machines (`format: machine`)")):
   - Market extension `HubExtension.autoUpgrade` detail adds Upgrade below Enabled, toggle `PUT …/{id}/-/auto-upgrade`; new version row with `ExtensionText.upgradeDetail`, Confirm (pending/rolled-back caution) or Upgrade opens catalog preview/confirmation; no `market` means text only. Toggle failure says Couldn't enable/disable auto-upgrade: reason; no update shows last automatic-upgrade/rollback result. List pending version appends New version needs confirmation.
-  - `auto_upgrade_paused` (switch off and greyed out) picks the footer by value (`ExtensionText.upgradeFooter`, #1895): `disabled` paused while the extension is off; `market_removed` its market was removed, so no upgrades until it is added again with the same address; any other value only "paused". Removing a market says its extensions stop upgrading.
+  - `auto_upgrade_paused` keeps the saved switch value but greys it out. The footer follows `ExtensionText.upgradeFooter` (`disabled`, `market_removed` same-address recovery, or an unknown reason); the current settings page keeps that recovery in its Auto-upgrade footer. Tests `ExtensionUpgradePausedTest`.
+  - Removing a market reads the installed list before confirming and counts the current assistant's own host-managed market installations (`source == "installed"`, not attached) whose hub-provided `market` matches, excluding other assistants' copies. The dialog has zero / singular / plural wording and the same-address consequence. A failed read, ambiguous ownership or an old-hub auto-upgrade item without `market` keeps the uncounted warning rather than inventing zero; a superseded read cannot open a stale dialog. Tests `ExtensionMarketRemovalTest`, model cases in `ExtensionMarketStateTest`; dialog shots `ExtensionMarketRemovalShotsTest`.
   - Manage markets top Auto-upgrade extensions master (`GET/PUT /api/v1/extensions/-/upgrades`), explanatory copy follows value; hidden for old404/no markets.
   - While that master is off (`auto: false`), each extension's Auto-upgrade switch keeps its own saved value but is greyed and can't be flipped; the note says it applies again once automatic updates are back on (#4748, as the web). Unknown (loading, an old hub) leaves it editable. Tests `ExtensionGlobalAutoTest`; shots `ExtensionSettingsShotsTest.marketNotesWithUpdatesOffEverywhere` (`example-notes-updates-off-*`).
   - Form `type: array`, `items.format: machine` uses `MachineSwitches`: filter OS by `items.os`, repository machine id/name/OS/online only so metric changes don't redraw; online/offline text. `node_machines` enabled machines add program status (`ExtensionText.programStatus`); computer-providing extension (cua) adds other online Mac Cua Driver status (Not installed / Not running / Missing permission / Locked / Ready), from `Machine.computer` → `ExtensionText.cuaStatus`, web `machineStatus`, omitted before node response. Unknown ids still listed/removable. Immediate `ExtensionModel.saveNow` changes only this saved config field, preserves other unsaved draft; rejection rolls back and explains above. `confirm` / `x-confirm` asks before enabling only. Forms with only these fields have no Save.
@@ -2385,7 +2399,8 @@ Context/mark_viewed/auto-load use nonbusy `ExtensionUiState.fetch`, response ite
 
 ### UI version 8: dashboard columns (#9158)
 
-Specification [extensions.md](../extensions/extensions.md) ("UI version 8"). `HttpExtensionManagement.UI_VERSION` is `8`, and the native
+Specification [extensions.md](../extensions/extensions.md) ("UI version 8"). `HttpExtensionManagement.UI_VERSION` is `10` (this
+version plus the gauge and graph versions below), and the native
 stream (`ExtensionUIStreamController`) sends the same. `ExtensionColumns.kt`: the pure decisions (`count` by the pane's content width with
 `cardColumn` and `Space.m`, at most 3; `rows` in reading order, `span: "full"` a row of its own; `perLine` and `lines` for a section's rows
 side by side), `ExtensionPageWidth` (the page measures its pane; a columns view is `JListPage(fullWidth = true)`), `ExtensionCardRow` (a
@@ -2394,6 +2409,34 @@ section heads (`SectionHead` on a page, `SectionCardHead` in a card; the link is
 A phone, and anywhere a page is not measured (cards, machine and launcher sections, an inbox item's body), draws the stack.
 `nativeDiffIndex` mirrors the grid and the rows side by side; `NativeExtensionProfile` takes a section's `icon_color`.
 `ExtensionColumnsTest`, `NativeStreamColumnsTest`, `ExtensionColumnsShotsTest`.
+
+### UI version 9: gauge tiles (#9337)
+
+`ExtensionGaugeRing` draws a tile's named-color ring, value and unit (or percentage) on pages at 96 dp and in compact cards at
+80 dp, with an eased ratio that snaps under Reduce Motion. `JTile` keeps the tile's existing action, badge and switch while adding
+the exact readout and meter semantics. Native-stream grid and carousel tiles reuse the same ring and readout through `NativeTile`;
+`NativeExtensionProfile` accepts `gauge.color`. Tests: `ExtensionGaugeTest` and `NativeStreamCoverageTest`.
+
+### UI version 10: extension graphs (#9727)
+
+`ExtensionGraphLayout.kt` reproduces the shared slot-layout fixtures and reading order. `ExtensionGraph.kt` draws the native node
+cards, edges and group frames, with pan/zoom, separate fold targets and full-screen continuity. Page and full-screen canvases keep
+the 25%–200% zoom bounds; a compact card fits the whole graph into a still 200 dp preview with no zoom floor and opens the same
+interactive canvas full screen. Overview cards, columns cards, assistant cards, in-place reply blocks, machine and launcher
+sections, and inbox item bodies all use that preview.
+Tests: `ExtensionGraphLayoutTest`, `ExtensionGraphTest`, `NativeStreamCoverageTest` and the shared contract tests.
+
+`ExtensionGraphShotsTest` renders gauge page/card tiles, graph page/layered/full-screen/card views and a 200-node tree in all three
+styles, light and dark, using native Robolectric graphics. Run it from `android/` and pass the output property to the forked test
+JVM (a Gradle-command-line `-Dpersona.shots` does not reach it):
+
+```bash
+JAVA_TOOL_OPTIONS=-Dpersona.shots=/tmp/persona-extension-graph ./gradlew :feature:settings:testDebugUnitTest --rerun \
+  --tests 'persona.feature.settings.ExtensionGraphShotsTest'
+```
+
+The 42 PNGs go to that directory (default `feature/settings/build/extension-graph-shots/`). They are Compose/JVM evidence, not
+emulator, physical-device or production validation; attach them to the PR, never commit them.
 
 ### Host-owned extension settings (#2397)
 
