@@ -210,7 +210,9 @@ func (p *Peer) framedInput(lr *lineReader, act *readActivity, maximum int) *fram
 	if rs := p.resume; rs != nil && rs.on && lr.err == nil {
 		// resume.go: what follows is read through a transport a resume replaces, every frame acknowledged.
 		rs.sr = newSwapReader(p, act.r)
+		rs.sr.readAt.Store(time.Now().UnixNano())
 		act.r = rs.sr
+		go p.watchStale(resumeStale, resumeCheck)
 	}
 	p.mu.Unlock()
 	fr := newFrameReader(io.MultiReader(bytes.NewReader(bytes.Clone(lr.buffered())), rest), maximum)

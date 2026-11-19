@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -39,6 +40,12 @@ const (
 var (
 	resumeKeepMax = 16 << 20
 	resumeKeepAge = time.Minute
+	// resumeStale: a transport on which nothing at all was read for this long while frames written over it wait to be
+	// acknowledged is taken as dead (an address changed, a link gone without a word) and lost, to be resumed over a new
+	// one. Acknowledgements come for every frame read, so a working transport answers within a round trip; resumeCheck
+	// is how often that is looked at.
+	resumeStale = 15 * time.Second
+	resumeCheck = time.Second
 )
 
 // ErrResumeRefused is what Resume returns when the other side would not take the connection back: the caller lets the
@@ -390,11 +397,12 @@ func readLineMax(br *bufio.Reader, max int) ([]byte, error) {
 // the peer (lose); while it waits for a resume the read waits too, and once the next transport is in it returns
 // errResumed.
 type swapReader struct {
-	p    *Peer
-	mu   sync.Mutex
-	r    io.Reader
-	gen  uint64
-	next chan struct{} // closed when the next generation is installed
+	p      *Peer
+	mu     sync.Mutex
+	r      io.Reader
+	gen    uint64
+	next   chan struct{} // closed when the next generation is installed
+	readAt atomic.Int64  // unix nanoseconds: the latest read that brought bytes (watchStale)
 }
 
 func newSwapReader(p *Peer, r io.Reader) *swapReader {
@@ -406,6 +414,9 @@ func (s *swapReader) Read(b []byte) (int, error) {
 	r, gen, next := s.r, s.gen, s.next
 	s.mu.Unlock()
 	n, err := r.Read(b)
+	if n > 0 {
+		s.readAt.Store(time.Now().UnixNano())
+	}
 	if n > 0 || err == nil {
 		return n, nil // an error with data comes again on the next read
 	}
@@ -424,6 +435,36 @@ func (s *swapReader) install(r io.Reader, gen uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.r, s.gen = r, gen
+	s.readAt.Store(time.Now().UnixNano()) // a new transport: its silence counts from now
 	close(s.next)
 	s.next = make(chan struct{})
+}
+
+// errStale is why watchStale lost a transport.
+var errStale = errors.New("rpc: nothing read while frames waited to be acknowledged")
+
+// watchStale loses the transport of a resumable connection that went silent for stale, looking every every, until
+// the peer closes.
+func (p *Peer) watchStale(stale, every time.Duration) {
+	tick := time.NewTicker(every)
+	defer tick.Stop()
+	for {
+		select {
+		case <-p.closed:
+			return
+		case <-tick.C:
+		}
+		p.mu.Lock()
+		rs, lw := p.resume, p.lw
+		if rs == nil || !rs.on || rs.lost || rs.sr == nil || lw == nil {
+			p.mu.Unlock()
+			continue
+		}
+		gen, read := rs.gen, time.Unix(0, rs.sr.readAt.Load())
+		p.mu.Unlock()
+		now := time.Now()
+		if oldest := lw.oldestKept(); !oldest.IsZero() && now.Sub(oldest) > stale && now.Sub(read) > stale {
+			p.lose(fmt.Errorf("%w for %s", errStale, now.Sub(read).Round(time.Second)), gen)
+		}
+	}
 }

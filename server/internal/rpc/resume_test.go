@@ -11,6 +11,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -34,7 +35,7 @@ type resumeLink struct {
 func newResumeLink(t *testing.T, link netshape.Config, window time.Duration, hResume, nResume bool, setup func(h, n *Peer)) *resumeLink {
 	t.Helper()
 	l := &resumeLink{t: t, link: link, hLost: make(chan error, 8), nLost: make(chan error, 8), served: make(chan error, 2)}
-	l.a, l.b = netshape.Pipe(link, link)
+	l.a, l.b = silentPipe(link)
 	l.h, l.n = New("h", l.a), New("n", l.b)
 	for _, side := range []struct {
 		p      *Peer
@@ -71,6 +72,52 @@ func newResumeLink(t *testing.T, link netshape.Config, window time.Duration, hRe
 	return l
 }
 
+// silentConn is a transport that can go silent without a word (silence): what it is given goes nowhere, nothing comes,
+// and neither end is told, as when a computer's address changes.
+type silentConn struct {
+	net.Conn
+	silent atomic.Bool
+	gone   chan struct{}
+	once   sync.Once
+}
+
+func silentPipe(link netshape.Config) (net.Conn, net.Conn) {
+	a, b := netshape.Pipe(link, link)
+	return &silentConn{Conn: a, gone: make(chan struct{})}, &silentConn{Conn: b, gone: make(chan struct{})}
+}
+
+func (c *silentConn) Read(b []byte) (int, error) {
+	n, err := 0, error(nil)
+	if !c.silent.Load() {
+		n, err = c.Conn.Read(b)
+	}
+	if c.silent.Load() {
+		<-c.gone
+		return 0, net.ErrClosed
+	}
+	return n, err
+}
+
+func (c *silentConn) Write(b []byte) (int, error) {
+	if c.silent.Load() {
+		return len(b), nil
+	}
+	return c.Conn.Write(b)
+}
+
+func (c *silentConn) Close() error {
+	c.once.Do(func() { close(c.gone) })
+	return c.Conn.Close()
+}
+
+// silence makes the transport go silent both ways.
+func (l *resumeLink) silence() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.a.(*silentConn).silent.Store(true)
+	l.b.(*silentConn).silent.Store(true)
+}
+
 // cut closes both ends of the transport: what was on its way either way is lost.
 func (l *resumeLink) cut() {
 	l.mu.Lock()
@@ -95,7 +142,7 @@ func (l *resumeLink) waitLost() {
 // resume connects the two again over a new link: h asks with its token, n answers as a resident node does, from the
 // first line of the new transport.
 func (l *resumeLink) resume() error {
-	a, b := netshape.Pipe(l.link, l.link)
+	a, b := silentPipe(l.link)
 	accepted := make(chan error, 1)
 	go func() {
 		br := bufio.NewReader(b)
@@ -430,4 +477,41 @@ func (p *Peer) pendingMethods() []string {
 		out = append(out, m)
 	}
 	return out
+}
+
+// A transport that goes silent without ending (an address changed) is lost once nothing was read on it for
+// resumeStale while frames wait to be acknowledged: each side's reads would wait forever otherwise, and the calls
+// behind them. A quiet one with nothing to acknowledge is left alone.
+func TestResumeLosesASilentTransport(t *testing.T) {
+	oldStale, oldCheck := resumeStale, resumeCheck
+	resumeStale, resumeCheck = 300*time.Millisecond, 20*time.Millisecond
+	t.Cleanup(func() { resumeStale, resumeCheck = oldStale, oldCheck })
+	l := newResumeLink(t, netshape.Config{}, 5*time.Second, true, true, nil)
+	<-time.After(3 * resumeStale) // quiet: nothing waits to be acknowledged
+	if l.h.Suspended() || l.n.Suspended() {
+		t.Fatal("a quiet transport was lost")
+	}
+	l.silence()
+	call := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		call <- l.h.Call(ctx, "echo", nil, nil)
+	}()
+	select {
+	case <-l.hLost:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the silent transport was never lost")
+	}
+	l.mu.Lock()
+	oldA, oldB := l.a, l.b
+	l.mu.Unlock()
+	oldA.Close() // as the manager does when told
+	if err := l.resume(); err != nil {
+		t.Fatal(err)
+	}
+	oldB.Close() // as the resident node does once a resume took its connection over
+	if err := <-call; err != nil {
+		t.Fatalf("the call made while the transport was silent: %v", err)
+	}
 }

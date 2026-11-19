@@ -513,6 +513,16 @@ func (lw *laneWriter) dropKeptLocked(seq uint64) {
 	}
 }
 
+// oldestKept is when the oldest frame waiting to be acknowledged was written; zero with none.
+func (lw *laneWriter) oldestKept() time.Time {
+	lw.mu.Lock()
+	defer lw.mu.Unlock()
+	if len(lw.kept) == 0 {
+		return time.Time{}
+	}
+	return lw.kept[0].at
+}
+
 // resumable: what is kept would resume the connection, every frame after those the other side acknowledged.
 func (lw *laneWriter) resumable() bool {
 	lw.mu.Lock()

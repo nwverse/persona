@@ -8,23 +8,30 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/netshape"
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // residentNode is a fake resident node: it keeps its connection when the transport ends and takes it back for an
-// rpc.resume with its token, as node/attach_resume.go does; restarted, it has none to take back.
+// rpc.resume with its token, as node/attach_resume.go does; restarted, it has none to take back. With noResume it is a
+// node from before resuming (main's): every transport is a new connection. link shapes its transports (zero: net.Pipe).
 type residentNode struct {
+	link      netshape.Config
+	noResume  bool
 	mu        sync.Mutex
 	peer      *rpc.Peer
 	conn      net.Conn
-	transport int // transports dialed
-	fresh     int // connections served from the start
+	manager   *deadConn // the manager's end of the transport in use
+	transport int       // transports dialed
+	fresh     int       // connections served from the start
 	restarted bool
 	release   chan struct{} // what a "slow" call waits for
 	slowSeen  chan struct{} // closed when one came
@@ -32,9 +39,18 @@ type residentNode struct {
 }
 
 func (n *residentNode) dial(context.Context) (net.Conn, error) {
-	managerSide, nodeSide := net.Pipe()
+	var a, b net.Conn
+	if n.link == (netshape.Config{}) {
+		a, b = net.Pipe()
+	} else {
+		a, b = netshape.Pipe(n.link, n.link)
+	}
+	managerSide, nodeConn := newDeadConn(a), newDeadConn(b)
+	var nodeSide net.Conn = nodeConn
+	managerSide.other, nodeConn.other = nodeConn, managerSide
 	n.mu.Lock()
 	n.transport++
+	n.manager = managerSide
 	n.mu.Unlock()
 	go func() {
 		br := bufio.NewReader(nodeSide)
@@ -59,14 +75,23 @@ func (n *residentNode) dial(context.Context) (net.Conn, error) {
 		}
 		p = rpc.New("n", nodeSide)
 		p.EnableLanes(nodeproto.ControlLane, nodeproto.BulkLane)
-		p.EnableResume(resumeWindow)
+		caps := append(append([]string{}, nodeproto.Required...), nodeproto.NodeLanes)
+		if !n.noResume {
+			p.EnableResume(resumeWindow)
+			caps = append(caps, nodeproto.NodeResume)
+		}
 		p.OnLost = func(error) { n.cut() }
 		p.OnRequest = func(ctx context.Context, method string, params json.RawMessage) (any, error) {
 			switch method {
 			case "node.info":
 				return proto.NodeInfo{Hostname: "box", OS: "linux", Arch: "amd64", Home: "/home/me", Version: "test",
-					Protocol: nodeproto.Version, ProtocolMin: nodeproto.MinManagerVersion,
-					Capabilities: append(append([]string{}, nodeproto.Required...), nodeproto.NodeLanes, nodeproto.NodeResume)}, nil
+					Protocol: nodeproto.Version, ProtocolMin: nodeproto.MinManagerVersion, Capabilities: caps}, nil
+			case "file.chunk": // a piece of a file being downloaded (resume_bench_test.go)
+				var req struct {
+					Length int `json:"length"`
+				}
+				_ = json.Unmarshal(params, &req)
+				return map[string]any{"data": strings.Repeat("d", req.Length)}, nil
 			case "sessions.list":
 				return map[string]any{"sessions": []proto.Session{}}, nil
 			case "slow":
@@ -86,6 +111,54 @@ func (n *residentNode) dial(context.Context) (net.Conn, error) {
 		go func() { _ = p.Serve(context.Background(), io.MultiReader(bytes.NewReader(line), rest)) }()
 	}()
 	return managerSide, nil
+}
+
+// deadConn is a transport that can die without a word (the computer's address changed: nothing it sends arrives, and
+// nothing comes back, but neither end is told), or be closed as any.
+type deadConn struct {
+	net.Conn
+	other  *deadConn
+	dead   atomic.Bool
+	gone   chan struct{} // closed by Close
+	closed sync.Once
+}
+
+func newDeadConn(c net.Conn) *deadConn { return &deadConn{Conn: c, gone: make(chan struct{})} }
+
+func (c *deadConn) Read(b []byte) (int, error) {
+	if c.dead.Load() {
+		<-c.gone // nothing comes any more: until closed
+		return 0, net.ErrClosed
+	}
+	n, err := c.Conn.Read(b)
+	if c.dead.Load() {
+		<-c.gone
+		return 0, net.ErrClosed
+	}
+	return n, err
+}
+
+func (c *deadConn) Write(b []byte) (int, error) {
+	if c.dead.Load() {
+		return len(b), nil // goes nowhere
+	}
+	return c.Conn.Write(b)
+}
+
+func (c *deadConn) Close() error {
+	c.closed.Do(func() { close(c.gone) })
+	return c.Conn.Close()
+}
+
+// die makes the transport in use go silent both ways, as an address change does.
+func (n *residentNode) die() {
+	n.mu.Lock()
+	m := n.manager
+	n.mu.Unlock()
+	if m != nil {
+		m.dead.Store(true)
+		m.other.dead.Store(true)
+	}
 }
 
 // cut closes the transport in use, as a relay that ended or a link that dropped.
