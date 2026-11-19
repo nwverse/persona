@@ -12,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 const ompResumeUnknownNote = "这个 omp 会话找不到会话文件，请在电脑上恢复，这次没有发送。"
@@ -71,6 +73,40 @@ func ompResumePath(home, path string) bool {
 	root := filepath.Join(ompAgentDir(home), "sessions")
 	rel, err := filepath.Rel(root, filepath.Clean(path))
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// ompResumeSendKey carries what a session.start resuming a session brought besides its prompt (node.go): the images and
+// the client_msg_id, so the message a resumed omp gets is the one the client sent, deduplicated like any send.
+type ompResumeSendKey struct{}
+
+type ompResumeSend struct {
+	images      []proto.Image
+	clientMsgID string
+}
+
+func withOmpResumeSend(ctx context.Context, images []proto.Image, clientMsgID string) context.Context {
+	if len(images) == 0 && clientMsgID == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, ompResumeSendKey{}, ompResumeSend{images: images, clientMsgID: clientMsgID})
+}
+
+// ompResumeParams is the session.send a session.start resuming id makes of its prompt: nil when it brought nothing to
+// send (the session is started to be watched).
+func ompResumeParams(ctx context.Context, id, prompt string) json.RawMessage {
+	extra, _ := ctx.Value(ompResumeSendKey{}).(ompResumeSend)
+	if prompt == "" && len(extra.images) == 0 {
+		return nil
+	}
+	m := map[string]any{"session_id": id, "text": prompt}
+	if len(extra.images) > 0 {
+		m["images"] = extra.images
+	}
+	if extra.clientMsgID != "" {
+		m["client_msg_id"] = extra.clientMsgID
+	}
+	b, _ := json.Marshal(m)
+	return b
 }
 
 // resumeOmp resumes a stopped omp in herdr and sends the phone's message there. Without a usable session file nothing

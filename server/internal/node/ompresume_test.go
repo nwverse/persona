@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // tabStartRE finds the file `personad tab-start` was given in the typed command.
@@ -128,7 +130,7 @@ func TestOmpResumeTwoSendsOneTab(t *testing.T) {
 
 // stoppedOmpForStart is a stopped omp on disk with an idle extension connected, whose resume tab herdr then reports as
 // that omp's pane (what herdr's omp integration does once omp writes its session file).
-func stoppedOmpForStart(t *testing.T, id string) (*Node, *fakeHerdr, *fakeRuntime, string) {
+func stoppedOmpForStart(t *testing.T, id string) (*Node, *fakeHerdr, *fakeRuntime, string, *RuntimeHost) {
 	t.Helper()
 	t.Setenv("PI_CODING_AGENT_DIR", "")
 	n, f, home, rh := piHerdrNode(t)
@@ -149,14 +151,14 @@ func stoppedOmpForStart(t *testing.T, id string) (*Node, *fakeHerdr, *fakeRuntim
 			f.reply("session.snapshot", snapshot(nil, nil, []any{ompPaneAgent("w1:p2", cwd, file)}, nil))
 		}
 	})
-	return n, f, rt, cwd
+	return n, f, rt, cwd, rh
 }
 
 // Two session.start calls resuming the same stopped omp start it once: the second waits on the session's recovery lock
 // and finds it running.
 func TestOmpStartResumeTwiceOneTab(t *testing.T) {
 	id := "01b10000-0000-7000-8000-000000000021"
-	n, f, _, cwd := stoppedOmpForStart(t, id)
+	n, f, _, cwd, _ := stoppedOmpForStart(t, id)
 	var wg sync.WaitGroup
 	res := make([]map[string]any, 2)
 	errs := make([]error, 2)
@@ -184,7 +186,7 @@ func TestOmpStartResumeTwiceOneTab(t *testing.T) {
 // A session.start and a send racing for the same stopped omp start it once, and the message reaches that omp.
 func TestOmpStartResumeRacingASendOneTab(t *testing.T) {
 	id := "01b10000-0000-7000-8000-000000000022"
-	n, f, rt, cwd := stoppedOmpForStart(t, id)
+	n, f, rt, cwd, _ := stoppedOmpForStart(t, id)
 	var wg sync.WaitGroup
 	var startErr, sendErr error
 	wg.Add(2)
@@ -205,6 +207,83 @@ func TestOmpStartResumeRacingASendOneTab(t *testing.T) {
 	}
 	if got := len(rt.got("session.send")); got != 1 {
 		t.Fatalf("the extension got %d messages, want the send's one", got)
+	}
+}
+
+// leftExtension is an omp whose extension listed id while it ran and then left with it (omp exited): the node still
+// knows which runtime listed the session, but that runtime is gone.
+func leftExtension(t *testing.T, n *Node, rh *RuntimeHost, id, cwd string) {
+	t.Helper()
+	old := ompExtension(t, rh, "omp-gone", map[string]any{"session_id": id, "status": "idle", "pane_id": "w1:p9", "cwd": cwd})
+	_ = old.conn.Close()
+	waitFor(t, "the omp extension to leave", func() bool { return rh.reg.ownerOf(id) == nil })
+	if h, _, known := n.runtimes.belongs(id); h != nil || !known {
+		t.Fatalf("the left extension: connection %v, known %v", h, known)
+	}
+}
+
+// A message to a stopped omp whose extension listed it and then left (the usual case: omp exited) resumes it from its
+// file, rather than being refused as a runtime that is away.
+func TestOmpResumeAfterItsExtensionLeft(t *testing.T) {
+	id := "01b10000-0000-7000-8000-000000000031"
+	n, f, rt, cwd, rh := stoppedOmpForStart(t, id)
+	leftExtension(t, n, rh, id, cwd)
+	if _, err := request(t, n, "session.send", map[string]any{"session_id": id, "text": "go on", "client_msg_id": "m-left"}); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if got := f.trace("tab.create"); len(got) != 1 {
+		t.Fatalf("opened %d tabs", len(got))
+	}
+	if got := len(rt.got("session.send")); got != 1 {
+		t.Fatalf("the resumed omp got %d messages", got)
+	}
+}
+
+// session.start resuming a stopped omp whose extension left: resumed from its file, not refused as another tool's.
+func TestOmpStartResumeAfterItsExtensionLeft(t *testing.T) {
+	id := "01b10000-0000-7000-8000-000000000032"
+	n, f, _, cwd, rh := stoppedOmpForStart(t, id)
+	leftExtension(t, n, rh, id, cwd)
+	res, err := request(t, n, "session.start", map[string]any{"cwd": cwd, "launcher": "omp", "agent_type": "omp", "resume_session_id": id})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if s, _ := res["session"].(map[string]any); s["session_id"] != id {
+		t.Fatalf("start answered %v", res)
+	}
+	if got := f.trace("tab.create"); len(got) != 1 {
+		t.Fatalf("opened %d tabs", len(got))
+	}
+}
+
+// A session.start resuming an omp with a prompt sends what came with it: its images and client_msg_id, so the same
+// message sent again under that id is not delivered twice.
+func TestOmpStartResumeSendsItsImagesAndClientMsgID(t *testing.T) {
+	id := "01b10000-0000-7000-8000-000000000033"
+	n, _, rt, cwd, _ := stoppedOmpForStart(t, id)
+	images := []proto.Image{{Mime: "image/png", Data: "aW1hZ2U="}}
+	if _, err := request(t, n, "session.start", map[string]any{"cwd": cwd, "launcher": "omp", "agent_type": "omp", "resume_session_id": id,
+		"prompt": "look at this", "images": images, "client_msg_id": "m-start"}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	sent := rt.got("session.send")
+	if len(sent) != 1 {
+		t.Fatalf("the resumed omp got %d messages", len(sent))
+	}
+	var got struct {
+		Text        string        `json:"text"`
+		Images      []proto.Image `json:"images"`
+		ClientMsgID string        `json:"client_msg_id"`
+	}
+	_ = json.Unmarshal(sent[0], &got)
+	if got.Text != "look at this" || len(got.Images) != 1 || got.Images[0].Data != images[0].Data || got.ClientMsgID != "m-start" {
+		t.Fatalf("sent %s", sent[0])
+	}
+	if _, err := request(t, n, "session.send", map[string]any{"session_id": id, "text": "look at this", "client_msg_id": "m-start"}); err != nil {
+		t.Fatalf("the same message again: %v", err)
+	}
+	if got := len(rt.got("session.send")); got != 1 {
+		t.Fatalf("the same client_msg_id was delivered %d times", got)
 	}
 }
 

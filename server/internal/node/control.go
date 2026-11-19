@@ -3,7 +3,6 @@ package node
 import (
 	"context"
 	"crypto/rand"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -113,17 +112,15 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 			if r := n.openElsewhereRefusal(resume); r != nil {
 				return nil, r
 			}
-			if _, _, known := n.runtimes.belongs(resume); known {
+			// Only a runtime still connected owns it: one that listed it and left (its omp exited) does not keep the
+			// session from its file.
+			if h, _, _ := n.runtimes.belongs(resume); h != nil {
 				return nil, refusal("runtime_session", "这个会话属于另一个工具（例如 Orca 的原生对话），请在那里继续，这次没有启动。", nil)
 			}
 			if n.startKind(ctx) == proto.EngineOrca {
 				return nil, refusal("orca_resume", "Orca 上只能从手机继续 Claude 会话：其它 Agent 请在电脑上恢复，这次没有启动。", nil)
 			}
-			var params json.RawMessage
-			if prompt != "" {
-				params, _ = json.Marshal(map[string]any{"session_id": resume, "text": prompt})
-			}
-			if _, err := n.resumeOmp(ctx, resume, params); err != nil { // ompresume.go
+			if _, err := n.resumeOmp(ctx, resume, ompResumeParams(ctx, resume, prompt)); err != nil { // ompresume.go
 				return nil, err
 			}
 			if a, ok := n.agent(resume); ok {
