@@ -114,15 +114,15 @@ A non-main conversation reviewing another supervisor's task may only accept/canc
         "kind": {
           "type": "string",
           "enum": ["person_reply", "merge_review", "external_event", "date"],
-          "description": "parked: person_reply (a sent request to a person), merge_review (a sent request for review of a ready PR/MR), external_event (an observable outside event), or date"
+          "description": "Type of external wait"
         },
         "target": {"type": "string", "maxLength": 200, "description": "the named person/reviewer or external object"},
-        "wake": {"type": "string", "maxLength": 600, "description": "the observable change that ends this wait"},
-        "url": {"type": "string", "maxLength": 2000, "description": "required for merge_review (ready PR/MR link) and external_event (observable object URL); omit for person_reply and date"},
+        "wake": {"type": "string", "maxLength": 600, "description": "Observable change that ends the wait"},
+        "url": {"type": "string", "maxLength": 2000, "description": "Required source URL for merge_review (ready PR/MR) or external_event. Omit otherwise"},
         "pr_event": {
           "type": "string",
           "enum": ["terminal", "terminal_or_review"],
-          "description": "optional for external_event only, with the exact GitHub PR in url. Use terminal when merge or closure ends the wait, and terminal_or_review when a new submitted review also ends it. Omit if the PR link is context for a deployment, check, or another dependency"
+          "description": "For external_event with the exact GitHub PR URL. terminal wakes on merge or closure. terminal_or_review also wakes on a new submitted review. Omit for other dependencies"
         },
         "contact": {
           "type": "object",
@@ -154,7 +154,7 @@ A non-main conversation reviewing another supervisor's task may only accept/canc
           "description": "person_reply: exact IDs from a configured lark-cli reader, never names. contact.url must be the sent request's matching topic AppLink. A verified reply asks the current supervisor to review, not direct Agent delivery"
         }
       },
-      "description": "required for parked. Inspect the source receipt: this records your attestation, not a provider check. Do not supply recorded_by (current conversation, server-authored/output only). Legacy missing evidence is unrecorded, not verified"
+      "description": "Required for parked. Inspect the source before attesting. recorded_by is server-authored. Legacy evidence may be absent"
     }
   }
 }
