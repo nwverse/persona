@@ -15,6 +15,25 @@ requesting context or submitting model input, and keep the new conversation idle
 in the session record until the first successful delivery. A manager test with a fake node cannot catch this: exercise
 the real node against a recording CLI and runtime, including prewarmed sessions, whitespace, images and node restart.
 
+## Progress snapshots must be JSONB-safe (#9755)
+
+A Go map key joined with NUL marshals to `\u0000`, which PostgreSQL JSONB rejects with `22P05`.
+Hash a structured machine/session pair instead, validate snapshot strings before saving, and remove NUL from
+model-written summaries without altering literal backslash-u0000 text. Exercise multiple Agent answers against
+real PostgreSQL: an in-memory JSON store accepts the very payload the production database refuses.
+If saving an assessment fails, expose the error and signal supervision without counting undurable evidence.
+A history-write failure must not suppress escalation from an assessment already committed with its schedule.
+Progress also depends on identity and evidence quality, not just timestamps: use the persisted conversation origin
+to exclude every past patrol conversation, and retain per-Agent unreadable markers so a first successful read cannot
+invent progress. Retain older known evidence so partial node failures cannot hide a real change, without suppressing
+newly linked workers' genuine output. Equal-time runs need their distinct
+IDs and dispatch order when recovering a delayed history write. Recover a watcher's evicted history row under the
+same ID, within the existing cap; history retention must not determine whether a completed run is assessed.
+Runtime failures and their automatic retries belong to the scheduler's failure handling, not the no-progress count.
+Distinguish an assessment commit failure from its history projection failing: keep a committed result and its count
+while retrying the latter. A task-leader Agent reference is not a conversation identity; use the existing authority
+of the conversation above that leader for scheduler-triggered worker decisions, without taking over the worker.
+
 ## Journal recovery before changing live update files (#6921)
 
 A fence saying an update started cannot restore a Web directory renamed before `pending.json`

@@ -31,6 +31,26 @@ of the app on its main thread: 55–70 ms each with the `assistant` perf suite's
 app switching on a cue (`FrameProbe.switchPages`, `testTabSwitchAssistantAgentsByCue`) and the test only sleeping; keep
 the tapping test for the tap's own path.
 
+## A machine's heartbeat used to tell every reader of `machines` (2026-11-18, #10231)
+
+A busy hub pushes the machines with a new `lastSeen` all the time. `AppModel.machines` was replaced on each push, so
+every body that read `machines` for anything ran again: a chat's subtitle (#1337), the Agents list (#1495), and after
+#9623 every Agents row, whose long-press menu read the machines (for Screen) in the row's body. `.contextMenu { … }`
+and `Menu(content:)` run their content when the view holding them runs its body, not when the menu opens. The first
+two were fixed where they read; the third came in through a new reader, about twice the main-thread time of the list
+under pushes. Nothing looked wrong in a single frame, and the typing and scrolling perf tests did not show it.
+
+Now the rule is in the model: a list that differs only in `lastSeen` is stored without telling who read `machines`,
+and what shows `lastSeen` reads `lastSeen(_:)` (`NamedMachineTests/aHeartbeatDoesNotTellWhoReadTheMachines`). The Agent
+menu's facts are built only by `AgentActionMenuReader` (their initializer from the model is `fileprivate`), so a row or
+header cannot observe what its menu reads. `RenderBudgetTests` has a `heartbeat` push with a budget of 0, run by hand
+with its mock hub (hosted CI runs no UI tests).
+
+To find such a cost, `sample` the app's main thread on an optimized build while the mock hub pushes
+(`/mock/churn`), with no UI test attached, and look for row bodies (`KeyedRow.body`) under the push. The typing perf
+tests are mostly XCTest's own work (`UIKeyboardTaskQueue`, accessibility snapshots), so a regression in them is not
+the app's until a sample says so.
+
 ## Scroll perf tests: which page did the test actually measure (#8824)
 
 `PerfAgentsTests/testAgentChatScrollLongHistory` opens its chat, after a fresh install, in one of two states: with the
@@ -133,6 +153,16 @@ the fix and 448 KB after; the Assistant page went from 906 to 573 KB and a conve
 ## Keep a control's accessibility identifier off its surrounding container (#7033)
 
 A SwiftUI container's `accessibilityIdentifier` can replace the identifiers on a nested `Menu` and `ScrollView`, while the buttons inside the scroll view keep theirs. The Agents capsule looked correct and its filters remained queryable, but its grouping icon was exposed under the capsule's identifier instead of `agents.grouping`. Put identifiers on the actionable controls, not on their surrounding capsule, and test both the menu's identity and its fixed frame after a horizontal drag.
+
+## Headings that must line up across a list's sections (2026-11-19, #10551)
+
+The Sidebar layout's Agents heading sat 12 pt further below Persona Chats than Persona Chats below Pages: the list's
+default section spacing came between the Persona rows' section and the Agents' one, and the Agents heading's own row was
+a 44 pt frame around its top padding with its words centred over its buttons. Hidden headers and separators do not remove
+that gap; `.listSectionSpacing(.custom(0))` on the section before it does. Give headings that should look alike one
+box (`SidebarHeadingBox`) and keep a heading's buttons out of its height, then measure the rows (`XCUIElement.cells`),
+not the headings' own elements: a SwiftUI button that is a row's only element reported the whole 52 pt cell, its
+neighbour with a tally its 44 pt label.
 
 ## A bar button's color goes on its label, not on the button (2026-11-17, #9653)
 
@@ -2363,6 +2393,7 @@ but UIKit still had a page with only Agents Back and empty content.
 - Measuring: resting states pixel by pixel against master (screenshots of each state, diffed); motion from the app writing each block's place every frame (`SearchTrace`, a CADisplayLink reading presentation layers). The simulator's home indicator strip differs from one screenshot to the next (~6400 px): leave it out.
 - The shell's chrome grows with the text (`shellScaled`, the top bar up to XXXL: 50 → 60 pt tall), the navigation bar, the shell's room and the field's band do not. A timing worked out at the standard size (the bar gone by 0.35 of the field's way) let the field into the bar's rows at XXXL while the bar was still ~8 % there (#4928): derive such timings from where things are drawn, and run motion tests at a larger size too. A 60 Hz trace can step over a crossing that lasts one frame; check the geometry, not only the frames.
 - A `withAnimation { } completion:` can run before anything has moved. Opening the search from `keyboardWillShow` during the first keyboard of a launch, the change reached the list's `ListShift` (and the field) only in an update after the ~0.4 s stall. The transaction had nothing animating when it committed, so the completion ran at once (80 ms after the start, the slide still 270 ms away) and switched the list's layout early: a 54 pt jump in one frame, in about half the historical tab-navigation runs (#5999; the shell did not fail in any run). Do what has to wait for a move when the animated value itself arrives (`ListShift.arrived`), and guard against a stale arrival (`AgentsHeader.rising`).
+- On a busy main thread, sibling `Animatable` modifiers can miss the same Boolean's animation: the list came down while the floating field stayed in the bar's row, or the reinserted shell bar stayed transparent forever (#10166). The field and list keep their native animations; `Rise` publishes its actual progress, and the bar uses the later of its own and that published progress, so neither a missed animation nor a queued update can fade it back while the field is still in its row. `resting` makes the bar fully visible when the close leaves the floating state. A tab return while a close is in flight leaves a pending refold that runs when `floating` clears, rather than consuming the one-shot fold. The UI test keeps the raw trace on failure and verifies the page round trip; a folded field's marker can still exist in the trace because the marker does not know the list clips it.
 
 ## On an iPad the chat's sideways scroll views are inset by the sidebar (2026-11-06, #5737)
 

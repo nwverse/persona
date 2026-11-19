@@ -126,6 +126,8 @@ object PersonaIcons {
     val forkChat: PhIcon get() = PhIcons.GitBranch
     /** SF Symbol `chevron.forward`. */
     val forward: PhIcon get() = PhIcons.CaretRight
+    /** SF Symbol `arrowshape.turn.up.right`. */
+    val forwardMessage: PhIcon get() = PhIcons.ArrowBendUpRight
     /** SF Symbol `arrow.triangle.branch`. */
     val gitBranch: PhIcon get() = PhIcons.GitBranch
     /** SF Symbol `star`. */
