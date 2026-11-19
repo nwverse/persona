@@ -229,9 +229,10 @@ type Service struct {
 	questions                questions     // tools.go (ask_user)
 	// deadlineSweeping: a sweep of the decisions past their deadline is running (decision_deadline.go).
 	deadlineSweeping atomic.Bool
-	askTodos         askTodoBook  // ask_todo.go: the questions nobody answered, now to-dos
-	askLaters        askLaterBook // ask_later.go: the questions asked without waiting, still out
-	approvals        approvalBook // approval_clarify.go: clarified prepared approvals and their result delivery
+	askTodos         askTodoBook       // ask_todo.go: the questions nobody answered, now to-dos
+	askLaters        askLaterBook      // ask_later.go: the questions asked without waiting, still out
+	approvals        approvalBook      // approval_clarify.go: clarified prepared approvals and their result delivery
+	detached         detachedGrantBook // approval_detached.go: one-time continuation grants for command gates
 	// minutesMu is held while confirmed action items of meeting minutes become to-dos (kb_minutes.go): one
 	// confirmation at a time reads and records what the others made.
 	minutesMu  sync.Mutex

@@ -1055,6 +1055,12 @@ func (m *memStore) SettingsPrefix(_ context.Context, prefix string) (map[string]
 	return values, nil
 }
 
+func (m *memStore) setFailPut(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.failPut = err
+}
+
 func (m *memStore) PutSetting(_ context.Context, key string, v any) error {
 	b, err := json.Marshal(v)
 	if err != nil {
