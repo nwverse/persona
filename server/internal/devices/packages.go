@@ -325,12 +325,12 @@ func (d *Devices) lookupPackage(ctx context.Context, k packageKey) (nodePackage,
 		if k.program == nodeproto.ProgramPersonaNode {
 			// Only deploy.sh puts persona-node there, with the version it is in <name>.version: the hub's own updates
 			// replace personad-* alone, so one left from an earlier deploy is another build than the hub's.
-			node := filepath.Join(dir, nodeproto.ProgramPersonaNode+"-"+plat)
+			node := filepath.Join(dir, nodeBinaryName(nodeproto.ProgramPersonaNode, plat))
 			if b, err := os.ReadFile(node + ".version"); err == nil && k.hub != "" && strings.TrimSpace(string(b)) == k.hub && fileExists(node) && localBuildOK(node, nodeproto.ProgramPersonaNode) {
 				return local(node, nodeproto.ProgramPersonaNode), nil
 			}
 		}
-		if p := filepath.Join(dir, "personad-"+plat); personad == "" && fileExists(p) && localBuildOK(p, nodeproto.ProgramPersonad) {
+		if p := filepath.Join(dir, nodeBinaryName(nodeproto.ProgramPersonad, plat)); personad == "" && fileExists(p) && localBuildOK(p, nodeproto.ProgramPersonad) {
 			personad = p
 		}
 	}
@@ -422,6 +422,15 @@ func releaseNodeIncompatible(m *update.Manifest) string {
 	default:
 		return fmt.Sprintf("its node speaks node protocol %d (this manager needs %d) or lacks %v", m.NodeProtocol, nodeproto.MinVersion, c.Missing)
 	}
+}
+
+// nodeBinaryName is a cached or bundled personad for plat. A Windows executable keeps .exe; it must be looked up
+// with the same suffix that the release download and hub update retain.
+func nodeBinaryName(program, plat string) string {
+	if strings.HasPrefix(plat, "windows-") {
+		return program + "-" + plat + ".exe"
+	}
+	return program + "-" + plat
 }
 
 // fileFor: f is named as a release names a node build for plat (personad-<plat>[.exe].gz,

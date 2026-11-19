@@ -273,6 +273,35 @@ func TestNodePackageLookupOrder(t *testing.T) {
 		if err != nil || update.ProgramOf(bin) != nodeproto.ProgramPersonaNode || !strings.HasPrefix(bin, identity.NodePackageCacheDir()) {
 			t.Fatalf("fetched %s %v", bin, err)
 		}
+		t.Run("cached Windows node", func(t *testing.T) {
+			const goos, arch = "windows", "amd64"
+			plat := goos + "-" + arch
+			full := updatetest.Program(t, nodeproto.ProgramPersonad, goos, arch)
+			node := updatetest.Program(t, nodeproto.ProgramPersonaNode, goos, arch)
+			d, dir, _ := packageDevices(t, "v2", "")
+			for name, program := range map[string]string{"personad-windows-amd64.exe": full, "persona-node-windows-amd64.exe": node} {
+				raw, err := os.ReadFile(program)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, name), raw, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, name+".version"), []byte("v2\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, tc := range []struct{ program, name string }{
+				{nodeproto.ProgramPersonad, "personad-windows-amd64.exe"},
+				{nodeproto.ProgramPersonaNode, "persona-node-windows-amd64.exe"},
+			} {
+				pkg, err := d.nodePackageFor(ctx, goos, arch, tc.program)
+				if err != nil || pkg.path != filepath.Join(dir, tc.name) || pkg.Program != tc.program {
+					t.Errorf("local %s: %+v %v", plat, pkg, err)
+				}
+			}
+		})
+
 		// A personad node is sent the hub's own personad: no download for it.
 		if pkg, _ := d.nodePackageFor(ctx, otherOS, otherArch, nodeproto.ProgramPersonad); pkg.path != filepath.Join(dir, "personad-"+plat) {
 			t.Fatalf("personad: %+v", pkg)
