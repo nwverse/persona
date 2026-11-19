@@ -1215,6 +1215,9 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 	if cfg.InterjectBackground != nil && *cfg.InterjectBackground {
 		p["interject_background"] = true
 	}
+	if cfg.ClaudeInteractive != nil && *cfg.ClaudeInteractive {
+		p["claude_interactive"] = true // what the conversation's Claude runs in (#10058, node/assistant_tui.go)
+	}
 	// A leader conversation and the background supervisor follow it too: the hub's own messages (supervision, digests)
 	// drive them and pick nothing, so a model a failed turn's recovery moved one to (node/assistant_recovery.go: Opus
 	// down to Haiku on a run of 429s) was carried over as what it runs, for good.
