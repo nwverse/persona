@@ -793,6 +793,8 @@ The web Agent conversation header's **Session overview** list button toggles a p
 
 ### 3.4 Lists and rows
 
+- Web History (#10240) is an Agents destination for non-running sessions, grouped by local activity day. It shares folded sidebar state and visibility before filtering; day counts equal the displayed filtered rows, including only loaded content-search matches. The primary switch stays Assistant / Agents. Agents + owns New Agent, New terminal and Open terminals; History never starts on a remembered terminal inventory (details in `docs/web/web.md`).
+
 - **Native workspace pins** (#9300): the Agents workspace tree shows a host-pinned workspace with the existing pin mark,
   ordered before its unpinned siblings (newest pin first, then the existing stable order). Its repository moves ahead
   of unpinned repositories. Match the exact machine/source/workspace identity, never the folder or project name; empty
@@ -1482,6 +1484,8 @@ conversation. Upward transcript loading extends that range when it reaches earli
 still count from the full history. Reuse the existing rail, hover preview, keyboard controls and mark geometry.
 This requested pagination correction does not add a setting or change placement. Android has no corresponding
 navigator on current main and is outside this fix's scope; it must not use its two-turn body window as a global count.
+
+The web Changes panel's secondary file tree (#10477) reuses the existing `ResizeHandle` separator from the sidebar and side panel: pointer drag, arrow keys, Home/End, and double-click/Enter to reset. Column dimensions live in `web/src/lib/layout.ts` (`CHANGES_TREE_DEFAULT`, `CHANGES_TREE_MIN`, `CHANGES_TREE_MAX`, `CHANGES_DIFF_MIN`). Its default remains 192 px; the browser remembers a user resize and temporarily fits it to the panel while keeping space for the diff. At narrow widths the tree stays above the diff. File names and indentation may truncate, while each row's unchanged addition/deletion counts remain whole and the full path remains on hover.
 
 ### 4.3 Feedback and haptics
 
@@ -3225,6 +3229,8 @@ subtopic closed, more than three loose points beside subtopics under one closed 
 a topic or a project its page. From `Theme.Size.knowledgeMapTwoColumns` of width (any iPad in landscape, a 13-inch one upright beside its
 sidebar) the outline sits beside a detail column for the selected node, the web map's side panel.
 Text follows Dynamic Type (the rows are reading content) and every row reads as one VoiceOver element.
+Android (#7678) draws the same outline with the same rules (`KnowledgeMapScreen`): rows of the design system's tokens, a dot and rails
+in the branch's tone, a 48 dp fold target with Expanded / Collapsed read out, in all three styles, with no detail column.
 
 ## Repository link preview
 
@@ -3295,9 +3301,15 @@ Home/End, Enter takes the first match, Escape closes and returns the focus to
 its button), not a native `select`. Each repository's issues and PRs are link
 rows with their own **Add issue or PR** field: Enter adds, Escape cancels, and a
 URL of another repository is refused inline by `repositoryLinkView`, the same
-rule the manager applies. Directory aliases and source refs stay in the
-per-repository **Source options** disclosure; empty aliases and default branches
-need no setup. Saved-source changes (`removed`, `identity_changed`) and
+rule the manager applies. Public HTTP aliases, scheme case and repository-path
+case are normalized by the shared parser before that comparison; a self-hosted
+instance's scheme and port must match exactly. Two links that normalize to the
+same repository, kind and number are refused before create/save, with both
+entries kept for correction. Directory names and source refs are validated with
+the manager's rules before a create or save, and an invalid optional draft
+shows the field error and cannot be submitted. Directory aliases and source
+refs stay in the per-repository **Source options** disclosure; empty aliases
+and default branches need no setup. Saved-source changes (`removed`, `identity_changed`) and
 `unlisted` rows inferred from agent-added links are explained beneath their
 repository while the saved source stays. A to-do's `pr_url` is drawn inside
 this group as a link row with one line saying it predates the store, and never
