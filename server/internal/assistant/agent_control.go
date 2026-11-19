@@ -230,9 +230,13 @@ func (s *Service) adoptAgent(ctx context.Context, self string, am Device, c prot
 }
 
 // adoptAgentAs is adoptAgent; with quiet the todo it makes is quiet whatever self's own tasks are (an agent that became
-// a task by itself, agent_tasks.go).
+// a task by itself, agent_tasks.go). An assistant's conversation is refused whatever its row's Assistant flag says
+// (assistantsConversation, #10801).
 func (s *Service) adoptAgentAs(ctx context.Context, self string, am Device, c proto.Session, title, prompt, notes string, doneWhen []string,
 	expect int, update, quiet bool) (Todo, bool, error) {
+	if s.assistantsConversation(ctx, am.ID, c) {
+		return Todo{}, false, errors.New("that is an assistant conversation, not a coding agent")
+	}
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		return Todo{}, false, err
 	}
