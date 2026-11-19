@@ -9,6 +9,8 @@ import (
 
 func TestWorkGuideFreshChatSettings(t *testing.T) {
 	s, f, _ := briefService(t, "Add preparing the release checklist to my to-dos")
+	// Keep the fixture's machine list in the same order across the three prompt renders.
+	f.devices = []Device{{ID: "box", Name: "box", Online: true, Reachable: true}, {ID: "server", Name: "server", Online: true, Reachable: true}}
 	if out, bad := tool(t, s, "todo_create", map[string]any{"title": "Release checklist"}); bad {
 		t.Fatal(out)
 	}

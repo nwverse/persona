@@ -266,6 +266,8 @@ func (s *Service) updateSettings(ctx context.Context, fn func(*Settings) error) 
 	return v, nil
 }
 
+func (v Settings) workGuideOn() bool { return v.WorkGuide != nil && *v.WorkGuide }
+
 // settings are the settings in effect, what the rest of the package reads (the main conversation, the machine, the time
 // zone; isMain and mainTasksQuiet for short): the machine one the hub has (else the hub's default), the launcher the
 // assistant's own (else hub.json's, else claude; Model configuration › Main chat goes over it: launcherNow). A read that fails once
@@ -615,7 +617,7 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 		TaskWorkspacePreference: s.taskWorkspacePreference(ctx),
 		ReadonlyMode:            readonlyModeOf(v),
 		MainBackgroundFolded:    quietOn(v.MainBackgroundFolded),
-		WorkGuide:               v.WorkGuide != nil && *v.WorkGuide,
+		WorkGuide:               v.workGuideOn(),
 		RecentTaskChats:         v.RecentTaskChats != nil && *v.RecentTaskChats,
 		DoneNeedsDelivery:       v.DoneNeedsDelivery != nil && *v.DoneNeedsDelivery, IdleCloseHours: int(s.idleCloseAfter(ctx) / time.Hour),
 		ArchiveClosedDays:            int(s.archiveClosedAfter(ctx) / (24 * time.Hour)),

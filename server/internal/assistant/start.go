@@ -124,7 +124,7 @@ func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onl
 		settings := s.settings(ctx)
 		d := s.assistantPrompt(ctx, machine, conns.LarkCLI, settings)
 		own = prompts.RenderAssistantClaudeMD(d)
-		if settings.WorkGuide != nil && *settings.WorkGuide {
+		if settings.workGuideOn() {
 			d.WorkGuide = true
 			onDemand = prompts.RenderAssistantClaudeMD(d)
 		}

@@ -337,3 +337,35 @@ func TestWorkGuideCatalogBudget(t *testing.T) {
 	}
 	t.Fatal("missing guide")
 }
+
+func TestWorkGuideRoutesToNativeReferences(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PERSONA_PLUGIN_SKILLS_DIR", t.TempDir())
+	if err := Sync(dir, t.TempDir(), Selection{WorkGuide: true}, t.Logf); err != nil {
+		t.Fatal(err)
+	}
+	read := func(path string) string {
+		t.Helper()
+		b, err := os.ReadFile(filepath.Join(dir, workGuideName, path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	entry := read("SKILL.md")
+	catalog := description(entry)
+	for _, area := range []struct{ cue, reference, operation string }{
+		{"to-do", "record", "todo_create"},
+		{"delegation", "delegate", "task_plan"},
+		{"review", "review", "task_review"},
+		{"Agent", "agents-and-machines", "agents_list"},
+		{"machine", "agents-and-machines", "machines_list"},
+		{"conversation", "conversations", "conversation_tags_set"},
+		{"repository", "repositories", "todo_repositories_set"},
+	} {
+		ref := "references/" + area.reference + ".md"
+		if !strings.Contains(catalog, area.cue) || !strings.Contains(entry, "]("+ref+")") || !strings.Contains(read(ref), area.operation) {
+			t.Errorf("%s must route from the catalog to %s and its %s workflow", area.cue, ref, area.operation)
+		}
+	}
+}

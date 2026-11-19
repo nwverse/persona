@@ -434,10 +434,11 @@ func RenderSnapshotWorkflow(w SnapshotWorkflow) string {
 // AssistantContext is the hub's answer to assistant.context: the snapshot, for the main conversation with a line
 // saying so first (assistant/context). Node puts what changed of it at the start of each message (TurnContext).
 type AssistantContext struct {
-	Main     bool
-	Leader   bool // a leader conversation (#3133): it supervises the tasks it hands out
-	Owner    string
-	Snapshot string
+	ScheduledWorkPlan bool // Inline instructions for a granted scheduled round when the manager uses persona-work.
+	Main              bool
+	Leader            bool // a leader conversation (#3133): it supervises the tasks it hands out
+	Owner             string
+	Snapshot          string
 	// Directions: for the main conversation, the current leaders it hands work to (task_plan supervisor, #3609);
 	// LeaderName: for a leader, its direction's name.
 	Directions []ContextDirection

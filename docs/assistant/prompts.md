@@ -241,7 +241,10 @@ Go side: `prompts.go` (parsing, template functions), `assistant.go`, `inbox.go`,
 
 When adding, renaming, removing or changing a work-management tool, check the affected workflow in the built-in
 `persona-work` skill (`server/internal/assistantskills/builtin/persona-work/`) in the same PR. Put operation-specific
-changes in the relevant reference. Keep the catalog description short and retain the contracts that task Agents use.
+changes in the relevant reference. Check that the catalog and startup hint still route a natural request to it. Keep the
+catalog description short and retain the contracts that task Agents use. A scheduled round with a start grant gets
+its planning steps inline when the guide is enabled. Reading a skill or reference still requires the owner’s Start
+for dispatch in that round.
 
 Each MCP tool hub provides to Agents / the assistant has one file: `mcp/<scenario>/<tool-name>.md`. The filename is the tool name. Contents: one paragraph of model-facing description, a blank line,
 then a ```json code block containing the input schema (parameters and their descriptions). These files are **not templates**; they are read verbatim. The schema is loaded with `json.Compact`,

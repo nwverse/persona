@@ -6,4 +6,4 @@ If they refer to an existing item, find it with `todo_list` and inspect it with 
 
 When the owner asks main to keep track of a question and report back, create a concern with the question as its title. Find open concerns with `todo_list`. Once there is an answer, tell the owner what happened and record that same answer with `concern_report`.
 
-For repository-related work, keep known repository and issue or PR associations on the to-do. Resolve saved references with `repositories_list`; use the returned IDs and revision when writing bindings. Read current bindings before replacing them. A saved repository reference identifies the project and confers no access.
+For a requested link or binding change, see [Repositories and links](repositories.md).

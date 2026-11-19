@@ -5,5 +5,3 @@ Read the latest snapshot, `todo_get` and, if needed, `agent_read` for the linked
 For a requested change, send the new information to the existing Agent with `agent_send`. Use `task_scope` to record an owner-authorized change to the task's boundaries. A failed start can use `task_retry`; first check its recorded outcome. Respect the conversation's actual supervision role. Main can assign work to an existing direction; create a direction only at the owner's request.
 
 For a direction report, use the available work-log progress card if one is provided. Otherwise give one line per direction with results, current work or blockers, and what the owner needs to do. Directions record milestones with `leader_progress`.
-
-Operating an Agent is a separate request. Follow the tool's preview and confirmation for bulk launcher switches. Archiving a conversation is reversible; closing its terminal follows the existing confirmation path.

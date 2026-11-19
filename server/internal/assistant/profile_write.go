@@ -192,7 +192,7 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	errGuideChanged := errors.New("work guide setting changed")
 	if _, err := s.updateSettings(ctx, func(v *Settings) error {
-		if in.WorkGuide != nil && in.ExpectedWorkGuide != nil && *in.ExpectedWorkGuide != (v.WorkGuide != nil && *v.WorkGuide) {
+		if in.WorkGuide != nil && in.ExpectedWorkGuide != nil && *in.ExpectedWorkGuide != v.workGuideOn() {
 			return errGuideChanged
 		}
 		if len(in.WorkspaceRulesPatch) > 0 {
