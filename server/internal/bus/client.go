@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -20,9 +22,18 @@ var ErrOffline = errors.New("not connected to the hub")
 // stableAfter: a connection that stayed up this long starts the backoff over when it drops.
 const stableAfter = time.Minute
 
+// A wait longer than probeOver looks every probeEvery whether the hub's port answers (Client.pause). Settings, not
+// measurements: a laptop that wakes reconnects within about probeEvery of its hub answering again.
+const (
+	probeOver  = 3 * time.Second
+	probeEvery = 2 * time.Second
+)
+
 // Client keeps a service's connection to the hub's bus up until Run's context ends: dial with the token, say the
 // handshake, serve the hub's calls and events until the connection drops, dial again. Between tries it waits
-// Backoff, doubling up to MaxBackoff; a rejected token (ErrRejected) waits MaxBackoff every time.
+// Backoff, doubling up to MaxBackoff; a rejected token (ErrRejected) waits MaxBackoff every time. A long wait ends
+// early when the hub, out of reach as it began, answers again (pause): a laptop waking from sleep, its backoff long
+// grown by the failed tries while it slept, is back within seconds of its network.
 type Client struct {
 	Hub        string       // the hub's base URL, http(s)://host:port
 	Token      string       // the service's bus token
@@ -57,6 +68,9 @@ type Client struct {
 	// context (about 0.85 MB) and its largest compressed message. A hub only compresses when it is offered.
 	Uncompressed bool
 
+	// probeOver, probeEvery replace the constants of the same names (tests).
+	probeOver, probeEvery time.Duration
+
 	mu   sync.Mutex
 	peer *rpc.Peer     // the connection that said its handshake; nil between connections
 	up   chan struct{} // closed while peer is set
@@ -82,6 +96,7 @@ func (c *Client) Run(ctx context.Context) error {
 	}
 	first, most := orDefault(c.Backoff, time.Second), orDefault(c.MaxBackoff, time.Minute)
 	delay := first
+	reach := c.prober()
 	for {
 		began := time.Now()
 		helloed, err := c.session(ctx)
@@ -99,19 +114,116 @@ func (c *Client) Run(ctx context.Context) error {
 			c.logf("bus: the hub refused this token: %v; not trying again", err)
 			return fmt.Errorf("%w (%v)", ErrRevoked, err)
 		}
-		wait := delay
+		wait, probe := delay, reach
 		if errors.Is(err, ErrRejected) {
-			wait = most
+			wait, probe = most, nil // the hub answered, and said no: only someone fixing the token helps
 		} else {
 			delay = min(delay*2, most)
 		}
 		c.logf("bus: the connection to the hub ended: %v; again in %s", err, wait)
+		if err := c.pause(ctx, wait, probe); err != nil {
+			return err
+		}
+	}
+}
+
+// pause waits d before the next try, or ctx's end (its error). A wait longer than probeOver whose hub was out of
+// reach as it began (reach: its port did not answer) ends as soon as the port answers again, looking every
+// probeEvery: the network or the hub came back, and the next try goes at once. A port that answered as the wait
+// began says the try failed past it (a reset during the handshake, a hub that is starting): that wait runs to its
+// end, so a hub that takes connections but not the bus is still tried only as the backoff says, and its port sees
+// one probe a wait. A nil reach waits d whole.
+func (c *Client) pause(ctx context.Context, d time.Duration, reach func(context.Context, time.Duration) bool) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	var look <-chan time.Time
+	every := orDefault(c.probeEvery, probeEvery)
+	if reach != nil && d > orDefault(c.probeOver, probeOver) && !reach(ctx, every) {
+		t := time.NewTicker(every)
+		defer t.Stop()
+		look = t.C
+	}
+	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(wait):
+		case <-timer.C:
+			return nil
+		case <-look:
+			if reach(ctx, every) {
+				c.logf("bus: the hub answers again; trying now")
+				return nil
+			}
 		}
 	}
+}
+
+// prober is how pause looks whether the hub's port answers: a TCP connection to it, closed without a word, dialed the
+// way the client's own connections are (its transport's DialContext: a pinned client's too), given up after within.
+// nil when such a connection would not be to the hub: through a proxy (it answers for a hub that may be gone), or
+// with a transport that dials TLS itself or is not an *http.Transport. pause then waits each backoff whole, as before.
+func (c *Client) prober() func(ctx context.Context, within time.Duration) bool {
+	u, addr, err := hubAddr(c.Hub)
+	if err != nil {
+		return nil
+	}
+	hc := c.HTTPClient
+	if hc == nil {
+		hc = http.DefaultClient // as websocket.Dial
+	}
+	rt := hc.Transport
+	if rt == nil {
+		rt = http.DefaultTransport
+	}
+	t, ok := rt.(*http.Transport)
+	if !ok {
+		return nil
+	}
+	if t.Proxy != nil {
+		if p, err := t.Proxy(&http.Request{URL: u, Header: http.Header{}}); err != nil || p != nil {
+			return nil
+		}
+	}
+	if u.Scheme == "https" && t.DialTLSContext != nil {
+		return nil
+	}
+	dial := t.DialContext
+	if dial == nil {
+		dial = (&net.Dialer{}).DialContext
+	}
+	return func(ctx context.Context, within time.Duration) bool {
+		ctx, cancel := context.WithTimeout(ctx, within)
+		defer cancel()
+		conn, err := dial(ctx, "tcp", addr)
+		if err != nil {
+			return false
+		}
+		_ = conn.Close()
+		return true
+	}
+}
+
+// hubAddr is the URL of the bus's request as the transport gets it (websocket.Dial asks http for ws, https for wss),
+// and the host:port it dials for it: the URL's port, or the scheme's (80 for http, 443 for https).
+func hubAddr(hub string) (u *url.URL, addr string, err error) {
+	raw, err := Endpoint(hub)
+	if err != nil {
+		return nil, "", err
+	}
+	if u, err = url.Parse(raw); err != nil {
+		return nil, "", err
+	}
+	port := "80"
+	switch u.Scheme {
+	case "ws":
+		u.Scheme = "http"
+	case "https", "wss":
+		u.Scheme, port = "https", "443"
+	}
+	if p := u.Port(); p != "" {
+		port = p
+	}
+	return u, net.JoinHostPort(u.Hostname(), port), nil
 }
 
 // session is one connection: dial, handshake, serve until it drops. helloed: the handshake went through.

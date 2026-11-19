@@ -4185,6 +4185,14 @@ Types are in the channel section of `assistantwire`; the hub side is `hub/assist
 
 `Dial`, `Conn` (the adapter between WebSocket and rpc lines), `Keepalive`, and `Client`: dial, handshake (`HelloMethod`, `HelloParams`, `OnHello`), answer the hub's calls and events, and reconnect when dropped:
 starting at 1 second and doubling up to 1 minute; if a connection lasted over 1 minute before dropping, counting restarts at 1 second. When the token is rejected (401, close code 4002 / 4003, handshake returns `wrong_identity`), it waits the full 1 minute every time.
+
+- **A wait ends early when the hub comes back** (#10743). A laptop that slept failed a try at each dark wake, so its wait is usually at the full minute when it wakes. A wait longer than 3 seconds therefore checks every 2 seconds whether the hub's port takes a TCP connection, and closes it without sending anything.
+  - If the port did not answer when the wait began and answers now, the client tries again at once.
+  - If the port answered when the wait began, the try failed past the network (a reset during the handshake, a hub still starting), and that wait runs to its end. A hub that accepts connections but not the bus is still tried only as often as the backoff allows, and its port gets one probe per wait.
+  - A rejected token's wait is never cut short.
+  - The probe dials the way the client's connections do (the dialer of a client pinned to the hub's key included). It is skipped when they go through a proxy, which would answer for a hub that may be gone.
+  - Anything that accepts connections for the hub, such as a running SSH local forward or a reverse proxy, looks reachable to the probe. Such a client keeps the plain backoff, and only a forward that was down and comes back up ends a wait early.
+
 While not connected (or the handshake isn't done), `Call` and `Notify` return `ErrOffline`.
 The assistant uses `assistant.BusHub` (`server/internal/assistant/bus.go`), a wrapper around it: it keeps the handshake answer, maps the hub's error codes back, handles the hub's events in order, and reports a full snapshot on every connect.
 
