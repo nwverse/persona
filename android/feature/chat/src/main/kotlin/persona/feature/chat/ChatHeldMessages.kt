@@ -87,7 +87,7 @@ internal fun HeldAgentBubble(row: HeldAgentMessage, actions: HeldAgentActions?, 
         busy = true
         scope.launch {
             try {
-                if (retry) actions.retry(row.id) else actions.cancel(row.id)
+                if (retry) actions.retry(row) else actions.cancel(row.id)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -114,8 +114,10 @@ internal fun HeldAgentBubble(row: HeldAgentMessage, actions: HeldAgentActions?, 
         if (actions != null && (waiting || failed)) {
             val remove = stringResource(if (failed) R.string.chat_delivery_delete else R.string.chat_outbox_dont_send)
             Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
-                if (failed && !row.deleteOnly && canSend)
-                    JTextButton(stringResource(R.string.chat_delivery_retry), { act(true) }, enabled = !busy)
+                if (failed && !row.deleteOnly && canSend) {
+                    val allowed by remember(actions, row) { actions.canRetry(row) }.collectAsStateWithLifecycle(false)
+                    JTextButton(stringResource(R.string.chat_delivery_retry), { act(true) }, enabled = !busy && allowed)
+                }
                 JTextButton(remove, { confirmRemoval = true }, enabled = !busy)
             }
             if (confirmRemoval) JDialog(onDismiss = { confirmRemoval = false },
