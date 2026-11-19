@@ -1225,6 +1225,9 @@ never read. The containers (`--prefix`), the network and the key are removed at 
 - `linger_off` leaves linger off and expects a refusal at the check, with nothing changed on the computer.
 - `--node-service` gives the computer its own resident node service first. A switch must leave it as it was, and so
   must a rollback.
+- `hub_pause` is `rollback` with the hub's slot process stopped (SIGSTOP) right after its begin, for `--pause` seconds
+  (150). Until the hub is running again, Persona Link must stay on the computer; the rollback must then finish and be
+  confirmed.
 - Every scenario checks the pairing secret is not in the hub's log or the manager's record.
 - `--hold <seconds>` keeps it all up afterwards, for screenshots of the web app (`--web web/dist`).
 
