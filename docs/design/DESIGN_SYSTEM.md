@@ -70,6 +70,7 @@ Relationship to other docs:
    (`docs/extensions/secret-providers.md` "In the apps").
 5. Never write `glassEffect` or `.glass` directly. Go through `.surface` and `.themedButton`.
 6. Docs are English only. User-visible strings go through the string catalogs (section 5.5).
+7. Apple confirmations use `.accessibleConfirmationDialog` (`apple/Persona/DesignSystem/WindowTextSize.swift`), never SwiftUI's `.confirmationDialog` directly in a page. Through the interface's xxxLarge cap it is the existing confirmation dialog; above the cap it presents an alert, whose labels and button capsules use compatible traits. Keep every action label on one line under rule 3. Set `hasCancel: true` exactly when the existing actions already include Cancel; otherwise the alert adds Cancel once. `ConfirmationDialogRuleTests` rejects direct calls.
 
 ### 1.3 Enforcement today
 
@@ -79,6 +80,7 @@ Relationship to other docs:
 | `apple/PersonaTests/TypeScaleTests.swift` | No system font styles or sizes outside `Theme.Font`. |
 | `apple/PersonaTests/IconVocabularyTests.swift` | A registered symbol must be written as its `Theme.Icon` name. |
 | `apple/PersonaTests/SheetCloseTests.swift` with `apple/PersonaTests/SheetCloseBaseline.json` | Per-file counts, under `apple/Persona` and outside Mac-only branches, of a presented page's close written by the page instead of `SheetClose` (any item at `.cancellationAction`, or a ✕, Cancel, Close or Done at `.topBarLeading` outside `SheetActions.swift`), and of closes at the trailing edge (✕, a close or cancel role, Cancel, Close, or a Done whose action is one plain statement, at `.confirmationAction`, `.topBarTrailing` or `.primaryAction`; Select's Done and Mark as Done do more and do not count). Counts may only go down. Baseline: none of either since 2026-11-17 (#9653): every presented page closes through `SheetClose`, so any new one fails. |
+| `apple/PersonaTests/ConfirmationDialogRuleTests.swift` | Every Swift source under `apple/Persona` uses `.accessibleConfirmationDialog`; the only direct `.confirmationDialog` calls are the shared implementation in `WindowTextSize.swift`. No baseline or per-page exemptions. |
 | `apple/PersonaTests/ContinuousMotionTests.swift` | Every unending animation lists where Reduce Motion stops it. |
 | `StyleSpecTests` (Apple) | Contrast floors for every style and theme color. |
 | `web/src/ui/theme-contrast.test.ts` | AA 4.5:1 for text tokens on seven backgrounds, both schemes. |
@@ -1535,7 +1537,7 @@ Watch maps success, failure, notification, stop and retry the same way. A watch 
 Severity ladder to adopt:
 
 1. Reversible: do it and offer Undo in a toast (inbox bulk actions, remove from list, folder trash do this).
-2. Destructive with one object: `confirmationDialog` with a destructive button that repeats the verb, a message that says what is lost, and Cancel.
+2. Destructive with one object: `.accessibleConfirmationDialog` on Apple (rule 7 in section 1.2), with a destructive button that repeats the verb, a message that says what is lost, and Cancel.
 3. Needs extra choices (keep or remove the worktree): a content-height sheet.
 4. `.alert` for short prompts and text entry, except where the text needs what the alert would cover (below).
 
@@ -2108,8 +2110,8 @@ your permission" (section 5, "Notifications"); moving them to the card's words i
 - **Interface** is everything the person operates or scans rather than reads: buttons, top and bottom bars, toolbars, menus' own drawing, the tab bar, segmented controls, filter strips, list rows' labels and values, page headers, the calendar, widgets, a card's controls, settings rows, badges, previews and summaries in lists, search-result snippets. It is capped at `Theme.interfaceLargestTypeSize` (xxxLarge, the largest size that is not an accessibility size). `RootView` sets the cap on the environment's `dynamicTypeSize`, so no view has to ask for it; a view that needs a smaller cap (a glyph in a fixed circle) still names one.
 - **Reading content** keeps growing to AX5: a chat message's body (the user's and the assistant's, replies, quotes, and the same in an Agent session; code blocks follow the reply and scroll sideways), an Inbox item's body and detail, knowledge and file preview bodies, a to-do's description and plan, meeting minutes, transcript and the messages in a meeting's conversation, and what is being typed in a text field (the field's own buttons stay capped, its line limit stays). A tool row, a "Worked for…" fold header, expanded tool output, a diff and the terminal are interface (the terminal has its own text size).
 - A view lifts the cap with `.readingContent()` (`apple/Persona/DesignSystem/ReadingSize.swift`): it sets the size the reader chose, kept by `RootView` in `\.readingTypeSize`. Put it on the text, not on a whole screen. `scripts/test/test_apple_reading_content.py` lists the files that may use it; adding a file needs the reason there. Outside a reading container a view never sees an accessibility size, so it has no AX-only layout: `scripts/test/test_apple_ax_branches.py` lets only the files it lists mention `isAccessibilitySize` or `.accessibility1…5`.
-- The system draws its own menus, alerts, confirmation dialogs, share sheet and keyboard at the system's size; do not cap them.
-- Because the interface is capped, it needs no layout of its own for the accessibility sizes. Do not add one: no `isAccessibilitySize` branch and no `.accessibility1…5` in interface code (`PR 2` of #6448 removes the old ones). A control that still does not fit at xxLarge or xxxLarge uses the rules in section 1.2 (shorten, stack by the width that is there with `StackingButtonRow` or `firstFittingText`).
+- The system draws its own menus, alerts, confirmation dialogs, share sheet and keyboard at the system's size; do not cap them. On iOS, an action sheet is the one system-presentation exception to a simple trait cap: above xxxLarge its button capsules can follow the window's cap while their labels still use the application's larger size. `.accessibleConfirmationDialog` therefore keeps the existing confirmation dialog through xxxLarge and uses an alert above it, with the same title, message and actions and exactly one Cancel. This is a presentation choice inside `WindowTextSize`, not a cap on the system's label and not an accessibility-only page layout. visionOS has no window cap and keeps the confirmation dialog.
+- Because the interface is capped, it needs no layout of its own for the accessibility sizes. Do not add one: no `isAccessibilitySize` branch and no `.accessibility1…5` in interface code (`PR 2` of #6448 removes the old ones). The shared confirmation-presentation choice above is the only exception, and pages never make it themselves. A control that still does not fit at xxLarge or xxxLarge uses the rules in section 1.2 (shorten, stack by the width that is there with `StackingButtonRow` or `firstFittingText`).
 - Large Content Viewer: a capped control shows its name and icon large on a long press (`accessibilityShowsLargeContentViewer`); VoiceOver reads the whole content as before.
 - Screenshots: an interface screen is shot at the largest size up to xxxLarge (`simctl ui <udid> content_size extra-extra-extra-large`); only a screen with reading content is also shot at AX5 (`accessibility-extra-extra-extra-large`).
 - Text Size (Small / Standard / Large) moves the system's size first and the cap comes after: the interface is `min(moved size, xxxLarge)`, reading content is the moved size. At the system's xxxLarge and above, Large has no effect on the interface (it is at the cap) and still adds a step to reading content; Small always takes a step off both.
@@ -3331,3 +3333,7 @@ agent may have added a link. Manager/Todo/credential changes retire old results.
 New copy ships in English, Simplified Chinese and Japanese. Evidence:
 `web/src/ui/TaskRepositoryBindingsEditor.test.tsx` and
 `web/e2e/todo-repositories-browser.py`.
+
+## Lark topic group policy (#10238)
+
+Settings › Connectors › Lark bot › Topic groups serves owners who want one group to require their explicit bot mention. It reuses Group, Row, Switch, Button, the native select and settings input styles; policy defaults off. Each group shows its saved switch. Enrollment allows choosing the policy before adding the group; a strict first enrollment stays separate from the home choice. The home select shows the effective home or the private-chat fallback. Both writes wait for the existing acknowledged save; failures preserve saved values and enrollment drafts. No primary chat screen or model setting changes.
