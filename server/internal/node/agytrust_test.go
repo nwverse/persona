@@ -3,6 +3,7 @@ package node
 import (
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -126,5 +127,47 @@ func TestAgyTrustKeys(t *testing.T) {
 		if got := agyTrustKeys(tc.screen); !slices.Equal(got, tc.want) {
 			t.Errorf("%s: keys %v, want %v", name, got, tc.want)
 		}
+	}
+}
+
+// herdr reports agy by its process, and calls it idle, before agy's screen takes the terminal: the first message waits
+// for agy's input box (#11437), or the terminal echoes it and agy drops it.
+func TestAgyStartWaitsForAgyScreenBeforeTheFirstMessage(t *testing.T) {
+	withAgyTrustWait(t, 5*time.Second)
+	x := newWorkFirstFixture(t, agyAgent, func(submissions int, home string) any {
+		status := proto.StatusIdle
+		if submissions >= 1 {
+			status = proto.StatusWorking
+		}
+		return agentWithStatus(agyAgent, status)(submissions, home)
+	})
+	const shell = "~/work/example-project ❯ . ~/.persona/agent-start-example.sh\n"
+	x.f.setScreen("w1:p2", shell)
+	var drawn atomic.Bool
+	var reads atomic.Int32
+	x.f.after(func(c herdrCall) {
+		if c.Method != "pane.read" || drawn.Load() {
+			return
+		}
+		if reads.Add(1) == 4 { // agy draws its screen a moment after herdr saw its process
+			x.f.setScreen("w1:p2", agyIdleScreen)
+			drawn.Store(true)
+		}
+	})
+	var early atomic.Bool
+	x.f.after(func(c herdrCall) {
+		if c.Method == "agent.prompt" && !drawn.Load() {
+			early.Store(true)
+		}
+	})
+	x.start(t, agyAgent)
+	if early.Load() {
+		t.Fatal("the first message was typed while the pane still showed the shell")
+	}
+	if got := x.f.trace("agent.prompt"); len(got) != 1 {
+		t.Errorf("prompted %d times, want 1", len(got))
+	}
+	if got := x.f.trace("pane.send_keys"); len(got) != 0 {
+		t.Errorf("keys sent with no dialog: %v", got)
 	}
 }
