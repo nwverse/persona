@@ -59,6 +59,8 @@ type MachineConfig struct {
 	ClaudeGlobalHooks bool `json:"claude_global_hooks,omitempty"`
 	// UsageWindows false: the node does not read the agents' subscription rate-limit windows (hub/config.go, #2432).
 	UsageWindows *bool `json:"usage_windows,omitempty"`
+	// ExtraPath are directories in front of the node's PATH (hub/config.go, #10127).
+	ExtraPath []string `json:"extra_path,omitempty"`
 }
 
 // Machine is the manager's connection to one node: a local subprocess, `ssh host personad node --stdio`, a tailcat
