@@ -447,5 +447,7 @@ only while the paper is on screen and coalesces them.
 A to-do with more than 1000 such feed items serves the rounds that began within its newest 1000: its decisions, brief
 log and ledger reviews are cut at the same time, and the rounds that began earlier are left out, so every round served
 is whole and keeps its id as newer items come. An extension's token reads it without the answered cards, whose records
-hold what the owner typed into a card and do not say whose card it was, and not at all for a to-do opened from the
-health space or with a run there (`docs/extensions/extensions.md` "Never shown to extensions").
+hold what the owner typed into a card and do not say whose card it was, and not at all for a to-do that may hold the
+health space's words: one opened from or written to by a health conversation, one any of whose runs ever worked there
+(taken off it or not, done or not), and, since this fails closed, one with a conversation or run whose space cannot be
+told (`docs/extensions/extensions.md` "Never shown to extensions").

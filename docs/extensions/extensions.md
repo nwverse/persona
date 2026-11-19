@@ -802,11 +802,17 @@ Whatever scopes it was granted, an extension's token never sees:
   the health space (by its directory or its conversation's space), and a card without a directory whose conversation cannot be found
   are left out of `GET /api/v1/interactions` and `/interactions/history`.
 - **Values typed into a card's fields** (`resolution.values` in the history).
-- **A to-do's answered cards, and the conversation of a to-do in the health space** (`GET /api/v1/todos/{id}/timeline` and the
-  rounds on `GET /api/v1/todos/{id}`, `docs/assistant/todo-status-sop.md` "The to-do's timeline"): the timeline leaves out
-  every answered card, since its record holds what was typed into the card and does not say whose card it was. A to-do opened
-  from the health space, or one of whose runs works there, has no conversation: its timeline answers 404 as for a to-do that
-  does not exist, and its item carries the row alone.
+- **A to-do's answered cards, and the conversation of a to-do that may hold the health space's words**
+  (`GET /api/v1/todos/{id}/timeline` and the rounds on `GET /api/v1/todos/{id}`,
+  `docs/assistant/todo-status-sop.md` "The to-do's timeline"): the timeline leaves out every answered card, since its
+  record holds what was typed into the card and does not say whose card it was. A to-do has no conversation when it was
+  opened from a health conversation, when a health conversation wrote to it (a hand-off the owner confirmed included), or
+  when any run it ever had works in the space, taken off it or not, done or not. This is decided from what the manager
+  keeps of the to-do (the directory each run's link keeps, the conversations its history was written in, the record of a
+  deleted one), not only from what is live, and it fails closed: a conversation the hub does not list and has no deletion
+  record of, or a run whose link keeps no directory and whose session cannot be read, hides it too. Its timeline then
+  answers 404 as for a to-do that does not exist, and its item leaves out the rounds, recap and results; the row is the
+  one `GET /api/v1/todos` lists.
 
 The apps' and devices' credentials are not affected.
 
