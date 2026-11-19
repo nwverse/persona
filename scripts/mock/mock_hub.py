@@ -1797,6 +1797,11 @@ if os.environ.get("MOCK_AGENT_MARKS"):
         ("marks-traex", "traex", "TRAEX 的一个会话", "done", "done", 9),
         ("marks-amp", "amp", "amp 的一个会话", "idle", "idle", 70),
         ("marks-trae", "trae", "TRAE CLI 的一个会话", "working", "working", 3),
+        ("marks-grok", "grok", "Grok", "idle", "idle", 5),
+        ("marks-agy", "agy", "Antigravity CLI", "working", "working", 7),
+        ("marks-dsh", "dsh", "DeepSeek Harness", "done", "done", 8),
+        ("marks-kimi", "kimi", "Kimi CLI", "idle", "idle", 10),
+        ("marks-copilot", "copilot", "GitHub Copilot", "idle", "idle", 11),
     ]
     # the client each one runs in (#6390): the command-line ones carry the </> badge, the desktop app and the unknown none
     MARKS_SURFACES = {"marks-claude": "cli", "marks-codex": "desktop", "marks-trae": "cli"}
