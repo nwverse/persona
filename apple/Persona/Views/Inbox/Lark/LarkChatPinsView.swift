@@ -30,7 +30,7 @@ struct LarkPinPresentation: ViewModifier {
                         .environment(\.larkDisplay, display)
                 }
             }
-            .confirmationDialog("Pin This Message?", isPresented: Binding(get: { adding != nil }, set: { if !$0 { adding = nil } }), titleVisibility: .visible) {
+            .accessibleConfirmationDialog("Pin This Message?", isPresented: Binding(get: { adding != nil }, set: { if !$0 { adding = nil } }), titleVisibility: .visible, hasCancel: true) {
                 if let adding { Button("Pin [Lark Chat Pins View 638562]") { add(adding) } }
                 Button("Cancel", role: .cancel) {}
             } message: { Text("Chat members can find this message in the pinned list.") }
@@ -82,17 +82,15 @@ struct LarkChatPinsView: View {
             .navigationTitle("Pinned Messages")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done [Extension System Presentation c0b3fb]") { dismiss() }.lineLimit(1).accessibilityIdentifier("lark.pins.close")
-                }
+                SheetClose(id: "lark.pins.close") { dismiss() }
             }
-            .confirmationDialog("Unpin This Message?", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }), titleVisibility: .visible) {
+            .accessibleConfirmationDialog("Unpin This Message?", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }), titleVisibility: .visible, hasCancel: true) {
                 if let pin = removing {
                     Button("Unpin [Lark Chat Pins View f13ef8]", role: .destructive) { Task { _ = await pins.change(message: pin.messageID, pin: pin.id) } }
                 }
                 Button("Cancel", role: .cancel) {}
             } message: { Text("The message stays in the chat.") }
-            .task {
+            .tabActiveTask {
                 let changes = LarkSync.shared.changes(of: feed)
                 await pins.refresh()
                 for await _ in changes { await pins.refresh() }

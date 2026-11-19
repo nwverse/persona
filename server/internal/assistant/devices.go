@@ -8,6 +8,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/devices"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/link"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -68,6 +69,14 @@ type Devices interface {
 	// confirmed it handed card's notification to Notification Center: false at once while there is none
 	// (notifyInteraction).
 	LinkRang(ctx context.Context, card string, within time.Duration) bool
+	// HeldMessages are the owner's messages held for machine's Agents while it was away (internal/devices held.go,
+	// #10661), by session id, oldest first, worded in lang for their rows; nil when there are none.
+	HeldMessages(machine string, lang i18n.Lang) map[string][]proto.UndeliveredMessage
+	// HeldRetry and HeldDelete are Retry and Delete on held message msg of session sid, whatever its machine: the
+	// assistant's undelivered routes, which older apps call for every row, end there for one they do not keep.
+	// found is false when no machine holds such a message; err is an *rpc.Error coded for the app otherwise.
+	HeldRetry(ctx context.Context, sid, msg string) (found bool, err error)
+	HeldDelete(ctx context.Context, sid, msg string) (found bool, err error)
 }
 
 // localDeviceCall is a device.call the manager answers itself: a node's method on a machine it has. The hub still
@@ -114,7 +123,14 @@ func (s *Service) NodeAnswer(ctx context.Context, machine, method string, params
 		return s.agentsDefault(ctx, machine), true, nil
 	case "assistant.model":
 		_ = json.Unmarshal(params, &p)
-		if !s.assistantCaller(ctx, machine, p.SessionID) {
+		allowed := s.assistantCaller(ctx, machine, p.SessionID)
+		if !allowed {
+			// The main conversation may still run on its confirmed computer after the
+			// default computer changes. Only its kept external pick grants this scope.
+			pick, kept := s.modelPickOf(ctx, machine, p.SessionID)
+			allowed = kept && proto.IsExternalLauncher(pick.Launcher) && s.externalMainScope(ctx, machine, p.SessionID)
+		}
+		if !allowed {
 			return map[string]any{}, true, nil
 		}
 		out, err := s.SendParams(ctx, SendParams{MachineID: machine, SessionID: p.SessionID, Params: map[string]any{}})

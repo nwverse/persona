@@ -64,6 +64,23 @@ export interface Machine {
   trust?: "pending";
   /** What `error` is about, for words of our own: node_service_down / link_offline / never_connected / node_outdated. */
   error_code?: string;
+  /** Switching this ssh computer to Persona Link (#10662): set by a manager that can, for its ssh computers and for an
+   *  hour after a switch ended; absent from older hubs, which then offer nothing. */
+  link_switch?: MachineLinkSwitch;
+}
+
+/** Where switching an ssh computer to Persona Link stands (`proto.MachineLinkSwitch`): `available`, a switch can start
+ *  now, else `reason` says why not; `phase`, the current or last switch's ("" none), and a failed one's `error`, with
+ *  `rollback_unconfirmed` when the computer could not be shown to be back on SSH. Reasons and errors are codes the
+ *  apps put in their own words (lib/link-switch.ts). */
+export interface MachineLinkSwitch {
+  available: boolean;
+  reason?: string;
+  phase?: "" | "checking" | "installing" | "connecting" | "rolling_back" | "succeeded" | "failed";
+  error?: string;
+  rollback_unconfirmed?: boolean;
+  /** when `phase` last changed (the hub's clock) */
+  at?: string;
 }
 
 /** The hubs of this hub's interconnected group, from the signed-in hello (docs/archive/operations/plan-hub-mesh.md 2.6). */
@@ -185,6 +202,10 @@ export interface WorkState {
    *  (the closeout says merged and it is not) carries it with an empty `phase`. */
   closeout?: Closeout;
   interaction_id?: string;
+  /** The hub's triage found the turn done before anybody looked at it, less than three hours ago: listed as Just
+   *  finished (lib/agent-groups.ts justFinished, docs/protocol/agent-states.md "Just finished", #9751). Older hubs
+   *  never send it. */
+  just_finished?: boolean;
 }
 
 /** An agent's closeout (docs/assistant/agent-work.md "Closeout"): its own claim of where the work stands. `merged` and
@@ -348,7 +369,8 @@ export interface Session {
   /** Its latest turn ended in a model API error (the hub sets it while it is stopped, #1516): its task is interrupted. */
   turn_error?: string;
   /** What the agent's record says of turn_error: "transient" (worth a "Continue"), "user" (the user must act),
-   *  or "usage_limit" (a subscription limit, until it resets). */
+   *  or "usage_limit" (a subscription limit, until it resets). Or the hub's own word on a task Agent's turn with no
+   *  output (#10187): "no_output" or "stopped" (Persona's Stop interrupted it), turn_error then being its sentence. */
   turn_error_kind?: string;
   /** What is wrong, when the hub can tell from turn_error (docs/assistant/onboarding.md 5.2): not_logged_in / auth_failed /
    *  model_route / rate_limited / model_fallback_unavailable (the model Claude Code fell back to after a refusal can't
@@ -370,6 +392,10 @@ export interface Session {
   /** In a Persona chat, the last this many of `queued` came from other conversations: the assistant delivers them when
    *  the turn ends, and the strip's actions leave them alone (#4342). */
   queued_relayed?: number;
+  /** In a Persona chat, the owner's messages that could not go in and that the assistant keeps and sends again by
+   *  itself, oldest first (#10194, lib/undelivered.ts); in an Agent's chat, the ones held while its computer was away
+   *  (#10661, `computer` set on each). Drawn as the owner's bubbles marked not delivered. */
+  undelivered?: UndeliveredMessage[];
   subagents?: Subagent[];
   loop?: LoopInfo;
   /** The goal it works toward until it holds (Claude Code's /goal, a Codex thread goal; docs/integrations/agent-goal.md). */
@@ -377,6 +403,8 @@ export interface Session {
   /** Its own task list (Claude Code's TodoWrite / TaskCreate): how far along it is (docs/integrations/agent-goal.md "Plan"). */
   plan?: PlanInfo;
   background?: BackgroundTask[];
+  /** Recent shell / Monitor outcomes from the last day; absent on older hubs and omitted from list summaries. */
+  background_ended?: BackgroundTask[];
   /** Bounded list summaries omit task arrays; these scalars are authoritative when present. */
   waiting?: boolean;
   background_count?: number;
@@ -431,6 +459,9 @@ export interface Session {
   /** An assistant conversation moved out of the list (docs/assistant/assistant.md "Managing its own conversations"), or
    *  an archived agent (docs/protocol/protocol.md "Agent session archives": only the Archived list has those). */
   archived?: boolean;
+  /** The user-defined labels of an assistant conversation (docs/assistant/assistant.md "Conversation tags"), newest
+   *  write first's provenance aside; omitted when it carries none. An older hub never sends it. */
+  tags?: string[];
   /** The HTTP ports its processes listen on (docs/operations/ports.md): closing it would stop those servers, and they are
    *  the dev servers a preview offers (docs/web/preview.md). */
   ports?: Port[];
@@ -439,6 +470,9 @@ export interface Session {
   origin?: string;
   /** What it was opened for: the inbox item, the task, the conversation, the channel, the extension. */
   origin_ref?: string;
+  /** The extension whose token opened it, by id (docs/protocol/protocol.md "Origin of assistant chats"): noted when it
+   *  opened, never backfilled; absent for any other and on older hubs. */
+  opened_by?: string;
   /** The channels messages came into it from, newest first (docs/extensions/channels.md "Source markers"). */
   channels?: string[];
   todo?: { id: string; title: string };
@@ -518,6 +552,10 @@ export interface BackgroundTask {
   command?: string;
   output_file?: string;
   started_at?: string;
+  /** A retained outcome: completed / failed / killed / stopped; absent on older hubs and while running. */
+  status?: string;
+  ended_at?: string;
+  exit_code?: number;
   /** A Monitor: when it stops by itself. */
   expires_at?: string;
   /** A workflow: its run in Session.workflows. */
@@ -649,7 +687,7 @@ export interface Item {
   seq: number;
   ts?: string;
   role: "user" | "assistant" | "system";
-  kind: "text" | "thinking" | "tool_use" | "tool_result" | "notice" | "image" | "fold" | "recap";
+  kind: "text" | "thinking" | "tool_use" | "tool_result" | "notice" | "image" | "fold" | "recap" | "visualization";
   text?: string;
   tool_use_id?: string;
   tool_name?: string;
@@ -660,9 +698,14 @@ export interface Item {
   full_size?: number;
   queued?: boolean;
   wake?: boolean;
+  narration?: boolean;
+  codex_heartbeat_quiet?: boolean;
   task?: TaskNote;
   fold?: { items: number; tools: number; thoughts: number; until?: string; through_seq: number; through_id?: string; images?: FoldImage[]; tasks?: FoldTaskSnapshot[]; latest_thinking?: Item; supervision_user?: boolean; changes?: FoldChange[] | null; usage?: TokenUsage[]; sources?: FoldSource[] };
   image?: { mime: string; data?: string; lazy?: boolean; size?: number; width?: number; height?: number };
+  /** A Codex visualize marker (kind "visualization"): a self-contained HTML fragment on the node, fetched through the
+   *  session visualization route. `mode` is "wide" or absent; the bytes are never carried here. */
+  visualization?: { path: string; mode?: string; title?: string };
   /** Sent by another Claude session (cross-session messaging), not typed by you: its name. */
   from?: string;
   /** The client_msg_id of the message this came from, as the hub tied it (every item of it: the text, its images, a
@@ -831,9 +874,13 @@ export interface Interaction {
   tool_name?: string;
   questions?: Question[];
   plan?: string;
+  /** The permission mode a plan-mode session goes on in once this plan is approved (#3784). */
+  plan_then?: string;
   tool_input?: Record<string, unknown>;
   /** The outgoing text the server lets the user edit before Allow, only for a Claude Code Lark send/reply card. */
   editable_text?: string;
+  /** Script asks opt into Markdown for their summary or question; absent and unknown values stay plain (#10857). */
+  format?: "markdown" | (string & {});
   summary?: string;
   screen?: string;
   secret?: boolean;
@@ -870,6 +917,8 @@ export interface Interaction {
   /** Session.folded_side of the card's session (#7944): the side session whose chat the card is answered in. */
   folded_side?: string;
   elicitation?: Elicitation;
+  /** Whether this assistant-owned operation can take a non-final owner question. */
+  can_clarify?: boolean;
   /** What a permission card needs filled in before it is approved (a password): such a card is never approved in one tap. */
   fields?: { key: string; label: string; secret?: boolean }[];
   /** The assistant is deciding whether it may answer this question for the user (docs/assistant/assistant.md "Assistant
@@ -974,7 +1023,7 @@ export interface MachineMetrics {
   machine_id: string;
   online: boolean;
   system?: Machine["system"];
-  latest?: { t: number; cpu?: number; load?: number; mem_used?: number; mem_total?: number; net_rx?: number; net_tx?: number; disk_used?: number; disk_total?: number };
+  latest?: { t: number; cpu?: number; load?: number; mem_used?: number; mem_total?: number; net_rx?: number; net_tx?: number; disk_used?: number; disk_total?: number; battery_percent?: number; battery_charging?: boolean; temp_c?: number };
   points: MetricPoint[];
   /** Its tokens (docs/server/machines.md "Token usage"): absent from an older hub, or when its node never reported usage. */
   usage?: UsageCard;
@@ -993,6 +1042,12 @@ export interface SessionLive {
   thinking?: boolean;
   /** It just thought for this many seconds ("thought for 3s"). */
   thought_s?: number;
+  /** The model request error Claude is retrying, without the countdown or attempt suffix. */
+  retry_error?: string;
+  /** Current model request attempt, as shown on screen. */
+  retry_attempt?: number;
+  /** Maximum number of attempts, as shown on screen. */
+  retry_max?: number;
   /** When the node read it (RFC 3339). */
   at?: string;
 }
@@ -1003,4 +1058,24 @@ export interface LiveEvent {
   machine_id: string;
   session_id: string;
   live?: SessionLive | null;
+}
+
+/** One of Session.undelivered: an owner's message kept after it could not go in (proto.UndeliveredMessage). */
+export interface UndeliveredMessage {
+  /** Its client_msg_id. */
+  id: string;
+  text: string;
+  /** How many pictures it carries. */
+  images?: number;
+  at: string;
+  /** waiting: sent again by itself; failed: it gave up (Retry / Delete). */
+  state: "waiting" | "failed";
+  attempts?: number;
+  next_at?: string;
+  error?: string;
+  /** A failed message that can only be deleted. */
+  delete_only?: boolean;
+  /** Held for an Agent while its computer was away (#10661): that computer's name. `error` is then the whole line to
+   *  show under the bubble, and Retry / Delete go to the session's held routes (lib/undelivered-actions.ts). */
+  computer?: string;
 }

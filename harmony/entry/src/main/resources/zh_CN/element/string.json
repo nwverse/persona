@@ -4637,6 +4637,10 @@
       "value": "后台等待中"
     },
     {
+      "name": "agent_group_just_finished",
+      "value": "刚做完待看"
+    },
+    {
       "name": "agent_group_waiting",
       "value": "待唤醒"
     },

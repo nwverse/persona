@@ -148,6 +148,8 @@ type Device struct {
 	// (--model) and effort, which "Models" needs of the machine a launcher purpose runs on.
 	Version            string `json:"version,omitempty"`
 	ModelConfiguration bool   `json:"model_configuration,omitempty"`
+	// ExternalInventory is announced only by a node with an enabled, trusted local model adapter.
+	ExternalInventory bool `json:"external_inventory,omitempty"`
 	// ClaudeVersion is Claude Code's version there ("" when it has none or never said): 设置 › 模型供应商's built-in
 	// claude lists the machines that have it.
 	ClaudeVersion string `json:"claude_version,omitempty"`
@@ -226,12 +228,13 @@ const (
 	InteractionsAnswer = "interactions.answer"
 )
 
-// ModelBinding is what a purpose runs on: a provider (launcher.<name> for a launcher) with a model and effort.
+// ModelBinding is what a purpose runs on: a provider (launcher.<name> for a launcher) with a model and effort. A
+// binding an older hub stored with the main chat's "runtime" ("cli" or "agentsdk") reads without it, as the CLI every
+// assistant conversation runs on; the key is gone from the next write.
 type ModelBinding struct {
 	Provider string `json:"provider,omitempty"`
 	Model    string `json:"model,omitempty"`
 	Effort   string `json:"effort,omitempty"`
-	Runtime  string `json:"runtime,omitempty"` // main chat only: cli (default) or agentsdk; kept across a provider change
 	// ConfigDir is the main chat's only: the Claude profile its new conversations start in (#4633). None is Persona's
 	// own profile (the default); "legacy" is this computer's existing Claude Code setup. Kept across a provider change;
 	// an existing conversation keeps the profile it was started in.
@@ -316,6 +319,12 @@ type NotifyTodo struct {
 	// `response`. Left out by a hub from before them.
 	Options   []string `json:"options,omitempty"`
 	Responses []string `json:"responses,omitempty"`
+	// Ask is the decision's ask in the to-do's view (OwnerAsk.ID), which an answer from the notification names, and
+	// Lockscreen what its push may offer on the lock screen (OwnerAskLockscreen: answer, its options as actions;
+	// open_only, none, a tap opens it), from how risky answering it is (#10465). The hub forwards the options only
+	// with answer, and sends an older manager's push, which has neither, as before.
+	Ask        string `json:"ask,omitempty"`
+	Lockscreen string `json:"lockscreen,omitempty"`
 }
 
 // NotifyPush is the kind of the assistant's pushes.
@@ -418,9 +427,13 @@ type SessionView struct {
 	MachineID string `json:"machine_id"`
 	SessionID string `json:"session_id"`
 	// Title is "MMDD | kind | topic" or the user's own (titles.go); the main conversation's is always "Persona".
-	Title    string   `json:"title,omitempty"`
-	Archived bool     `json:"archived,omitempty"`
-	Queued   []string `json:"queued,omitempty"` // messages from other conversations waiting for its turn to end
+	Title    string `json:"title,omitempty"`
+	Archived bool   `json:"archived,omitempty"`
+	// Tags are the conversation's user-defined labels (assistant/conversation_tags.go); absent or empty for one without.
+	Tags   []string `json:"tags,omitempty"`
+	Queued []string `json:"queued,omitempty"` // messages from other conversations waiting for its turn to end
+	// Undelivered: the owner's messages it keeps after they could not go in (proto.Session.Undelivered, #10194).
+	Undelivered []proto.UndeliveredMessage `json:"undelivered,omitempty"`
 	// Origin is who opened the conversation (docs/protocol/protocol.md "Origin of assistant chats": user, channel, inbox, task, spawned,
 	// lark_agent, extension) and OriginRef what of (the inbox item, the task, the conversation, the channel, the
 	// extension); both "" while it is not known.

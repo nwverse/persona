@@ -18,7 +18,8 @@ enum class KnowledgeKind(val title: CoreText) {
     @SerialName("docs") Docs(CoreText.of(Key.KnowledgeDocs)),
     @SerialName("meetings") Meetings(CoreText.of(Key.KnowledgeMeetings)),
     @SerialName("events") Events(CoreText.of(Key.KnowledgeEvents)),
-    @SerialName("recordings") Recordings(CoreText.of(Key.KnowledgeRecordings));
+    @SerialName("recordings") Recordings(CoreText.of(Key.KnowledgeRecordings)),
+    @SerialName("topics") Topics(CoreText.of(Key.KnowledgeTopics));
 
     val wire: String get() = name.lowercase()
     companion object {
@@ -58,6 +59,28 @@ data class KnowledgeDetail(
     val segments: List<KnowledgeSegment>? = null,
     /** A recording's meeting minutes, once the hub wrote them (#2738, docs/assistant/meeting-minutes.md); `meta.minutes_state` says where newer ones stand. */
     val minutes: RecordingMinutes? = null,
+    /** A topic's knowledge points (topics only, docs/assistant/knowledge.md "Topics"). */
+    val points: List<TopicPoint>? = null,
+)
+
+/** A source a knowledge point was said in; [day] is YYYY-MM-DD. */
+@Serializable
+data class TopicSource(val kind: String = "", val id: String = "", val day: String? = null)
+
+/**
+ * One knowledge point of a topic. [path] is the subtopics below the topic, outermost first (0 to 2); [kind] is concept,
+ * decision, practice, pitfall, fact or question, and the hub may add more; [why] is a decision's reason or a pitfall's
+ * cause; [confirmed] is the day it was last confirmed (YYYY-MM-DD).
+ */
+@Serializable
+data class TopicPoint(
+    val id: String = "",
+    val path: List<String>? = null,
+    val kind: String = "",
+    val text: String = "",
+    val why: String? = null,
+    val sources: List<TopicSource>? = null,
+    @SerialName("when") val confirmed: String? = null,
 )
 
 /**
@@ -139,6 +162,30 @@ data class KnowledgeHit(val path: String, val line: String)
 @Serializable
 data class KnowledgeSearch(val hits: List<KnowledgeHit> = emptyList())
 
+/** One meeting hand-off as the hub keeps it, in `detail.meta.handoffs` and the write's answer (#8852). */
+@Serializable
+data class MeetingHandoff(
+    val id: String,
+    val at: String,
+    @SerialName("machine_id") val machineId: String,
+    @SerialName("session_id") val sessionId: String,
+    val title: String? = null,
+    val transcript: Boolean? = null,
+    /** `sent`, or `failed` with [problem]. */
+    val state: String,
+    val problem: String? = null,
+)
+
+/** The owner's choices for `POST /api/v1/recordings/{id}/handoff`; text and transcript are always on the wire. */
+@Serializable
+data class MeetingHandoffRequest(
+    @SerialName("machine_id") val machineId: String,
+    @SerialName("session_id") val sessionId: String,
+    val title: String,
+    val text: String,
+    val transcript: Boolean,
+)
+
 /** An immutable repository belongs to exactly one pairing generation. */
 interface KnowledgeRepository {
     val scope: HubScope
@@ -161,6 +208,10 @@ interface KnowledgeRepository {
      * as shown; `409 minutes_stale` when they were rewritten since (read them again first).
      */
     suspend fun addMinutesTodos(id: String, version: Int, actions: List<String>): Unit = throw UnsupportedOperationException("Minutes unavailable")
+
+    /** Hands a finished recording to an Agent; the answer is the try the hub kept, sent or failed. */
+    suspend fun handOff(id: String, request: MeetingHandoffRequest): MeetingHandoff =
+        throw UnsupportedOperationException("Meeting handoff unavailable")
 }
 
 /** The composition root clears this before disposing a pairing's HTTP client. */

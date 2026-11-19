@@ -32,6 +32,7 @@ import { keepView, NATIVE_UI_VERSION, readKeptView } from "../../lib/extension-v
 import type { UIRowControl } from "../../lib/extension-ui-v6";
 import { currentLanguage, t } from "../../i18n";
 import { SUBSCRIPTIONS_UI } from "../../lib/subscriptions-ui";
+import { ExtensionOwnerScope } from "../../lib/extension-owner";
 
 const inputClass =
   "h-8 w-full rounded-control bg-field px-2.5 text-[12.5px] text-ink shadow-inset-field outline-none placeholder:text-ink-3 focus:shadow-[inset_0_0_0_1px_var(--accent)] disabled:opacity-60";
@@ -146,7 +147,8 @@ const HELLO_NEGOTIATION_MS = 5000;
 // The native stream page and its schema validator are a chunk of their own: most pages are drawn over HTTP and never need it.
 const NativeExtensionUI = lazyPage(() => import("./NativeExtensionUI").then((m) => m.NativeExtensionUI));
 export function ExtensionUI({ remember, ...props }: Parameters<typeof LegacyExtensionUI>[0] & {
-  /** A full page: drawn at once from its last view while the extension draws it again (lib/extension-view-cache.ts). */
+  /** A full page, or a card on Overview (`compact`, #11091): drawn at once from its last view while the extension draws
+   *  it again (lib/extension-view-cache.ts). */
   remember?: boolean;
 }) {
   const supported = useStore((s) => canTryUIStream(s.features));
@@ -178,7 +180,7 @@ export function ExtensionUI({ remember, ...props }: Parameters<typeof LegacyExte
     const [extension, ui, state, language] = JSON.parse(page) as string[];
     return readKeptView({ extension, ui, state, language }, httpOnly ? [UI_VERSION] : [NATIVE_UI_VERSION, UI_VERSION], defaultId || undefined);
   }, [page, httpOnly, defaultId]);
-  const placeholder = kept ? <KeptView view={kept.view} native={kept.key.version === NATIVE_UI_VERSION} onWide={props.onWide} /> : undefined;
+  const placeholder = kept ? <KeptView view={kept.view} native={kept.key.version === NATIVE_UI_VERSION} compact={props.compact} onWide={props.onWide} /> : undefined;
   const onView = useCallback((view: UIView, version: number, manager = defaultKnown() ? defaultManager() : "") => {
     if (!page || !manager) return;
     const [extension, ui, state, language] = JSON.parse(page) as string[];
@@ -200,10 +202,21 @@ export function ExtensionUI({ remember, ...props }: Parameters<typeof LegacyExte
 
 /** The page's last view while its extension draws it again (docs/web/web.md "Extension pages on reload"): as it was, as
  *  wide, but nothing in it can be pressed or focused, and a quiet "Updating" in the page's top margin, so nothing moves
- *  when the drawing replaces it. `native`: drawn over the socket, which titles the page itself. */
-function KeptView({ view, native, onWide }: { view: UIView; native: boolean; onWide?: (wide: boolean) => void }) {
+ *  when the drawing replaces it. `native`: drawn over the socket, which titles the page itself. `compact`: a card's
+ *  (#11091), its sections laid out as the drawing's own in the card's column (`contents`), "Updating" for screen readers
+ *  only: the card's heading marks it (OverviewCard, by `data-kept-view`). */
+function KeptView({ view, native, compact, onWide }: { view: UIView; native: boolean; compact?: boolean; onWide?: (wide: boolean) => void }) {
   const wide = wideView(view);
   useEffect(() => onWide?.(wide), [wide, onWide]);
+  if (compact)
+    return (
+      <div className="contents" data-kept-view>
+        <p role="status" className="sr-only">{t("settings-extensionview.updating")}</p>
+        <div inert aria-busy="true" className="contents">
+          <ViewSections view={view} compact {...INERT} />
+        </div>
+      </div>
+    );
   return (
     <div className="relative" data-kept-view>
       <p role="status" className="absolute right-1 -top-5 flex items-center gap-1.5 text-label text-ink-3">
@@ -247,7 +260,8 @@ export function LegacyExtensionUI({
   const [loading, setLoading] = useState(false);
   const [values, setValues] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState("");
-  const [confirming, setConfirming] = useState<{ action: UIAction; destructive: boolean; values?: Record<string, string>; control?: { c: UIRowControl; value: string } } | null>(null);
+  // `done`: told whether the action asked about was done (a code component's act waits for it)
+  const [confirming, setConfirming] = useState<{ action: UIAction; destructive: boolean; values?: Record<string, string>; control?: { c: UIRowControl; value: string }; done?: (ok: boolean) => void } | null>(null);
   // UI version 6: a control's value the user chose, by its name, shown until the extension's answer is drawn; the ones on
   // their way more than a second (a small spinner); each control's request on its way and the latest change made meanwhile
   const [controls, setControls] = useState<Record<string, string>>({});
@@ -368,10 +382,11 @@ export function LegacyExtensionUI({
     else setStack((s) => s.slice(0, -1));
   };
 
-  const run = async (action: UIAction, extra?: Record<string, string>) => {
+  // resolves to whether the action was done: false when it did not go (a field not a number) or failed
+  const run = async (action: UIAction, extra?: Record<string, string>): Promise<boolean> => {
     if (action.push) {
       push(action.push);
-      return;
+      return true;
     }
     // the fields' values (when it submits), what the component sends, then what the action carries (UI version 4)
     const merged = { ...(action.submit ? submitValues(view, values) : {}), ...extra, ...action.values };
@@ -380,7 +395,7 @@ export function LegacyExtensionUI({
       const bad = view.sections.flatMap((s) => s.items).find((it) => it.type === "field" && it.kind === "number" && it.name && numberProblem(sent[it.name] ?? ""));
       if (bad) {
         toast(t("settings-extensionview.not_a_number", { field: bad.label || bad.name || "" }), "error");
-        return;
+        return false;
       }
     }
     setBusy(action.id);
@@ -401,11 +416,13 @@ export function LegacyExtensionUI({
       if (r.push) push(r.push);
       if (r.pop) pop();
       if (r.reload) load();
+      return true;
     } catch (e) {
       // an older one's "unsupported" does not take away a view drawn since; a press that failed still says so
       if (isUnsupported(e)) {
         if (mine === asked.current) (setUnsupported(true), onUnsupported?.());
       } else toast(t("settings-extensionview.action_failed", { error: errorText(e) }), "error");
+      return false;
     } finally {
       setBusy("");
     }
@@ -494,11 +511,16 @@ export function LegacyExtensionUI({
     else void run(action);
   };
   // a code hosting component's action (UI version 4): with its own values (a path, a line, a comment), confirmed first
-  // when it says so
-  const act = (action: UIAction, extra?: Record<string, string>) => {
-    if (busy) return;
-    if (action.confirm?.trim()) setConfirming({ action, destructive: false, values: extra });
-    else void run(action, extra);
+  // when it says so. It resolves to whether it was done (false: busy, cancelled at the confirmation or failed), so a
+  // box clears what was typed only once the extension has taken it.
+  const act = (action: UIAction, extra?: Record<string, string>): Promise<boolean> => {
+    if (busy) return Promise.resolve(false);
+    if (action.confirm?.trim()) return new Promise((done) => setConfirming({ action, destructive: false, values: extra, done }));
+    return run(action, extra);
+  };
+  const cancelConfirm = () => {
+    confirming?.done?.(false);
+    setConfirming(null);
   };
   // a segmented acts as soon as another choice is made: its own value goes along (the rest only when it submits)
   const choose = (item: UIItem, value: string) => {
@@ -673,21 +695,21 @@ export function LegacyExtensionUI({
       {confirming && (
         <Dialog
           open
-          onClose={() => setConfirming(null)}
+          onClose={cancelConfirm}
           width={400}
           title={t("settings-extensionview.confirm_title")}
           footer={
             <>
-              <Button tone="quiet" onClick={() => setConfirming(null)}>
+              <Button tone="quiet" onClick={cancelConfirm}>
                 {t("common.cancel")}
               </Button>
               <Button
                 tone={confirming.destructive ? "danger" : "primary"}
                 onClick={() => {
-                  const { action: a, values: v, control } = confirming;
+                  const { action: a, values: v, control, done } = confirming;
                   setConfirming(null);
                   if (control) applyControl(control.c, control.value);
-                  else void run(a, v);
+                  else void run(a, v).then((ok) => done?.(ok));
                 }}
               >
                 {t("settings-extensionview.ok")}
@@ -768,7 +790,10 @@ function LauncherSection({ place, launcher, machine }: { place: UIPlace; launche
         <Icon name="extension" size={11} className="shrink-0" />
         {place.title}
       </div>
-      <ExtensionUI extension={place.extension} ui={place.id} context={context} embedded onUnsupported={() => setGone(true)} />
+      {/* the extension's own id scopes what a graph's `key` keeps (lib/extension-owner.tsx) */}
+      <ExtensionOwnerScope owner={place.extension}>
+        <ExtensionUI extension={place.extension} ui={place.id} context={context} embedded onUnsupported={() => setGone(true)} />
+      </ExtensionOwnerScope>
     </div>
   );
 }

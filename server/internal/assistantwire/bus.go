@@ -92,6 +92,25 @@ const (
 	// CapabilityMCPWait: the manager accepts enum-only mcp.wait updates through devices.notify for an explicitly
 	// opted-in MCP call. The hub sends them only when this capability and the call's opaque id are both present.
 	CapabilityMCPWait = "mcp_wait_v1"
+	// CapabilityTodoView: the manager works out each to-do's view (#10226, TodoSummary): `view` on every row of
+	// GET /api/v1/todos and on GET /api/v1/todos/{id}, and the list's `counts` (docs/protocol/protocol.md, the to-dos
+	// rows). The hub lists the todo_view feature only while every manager whose to-dos it merges names it; until then
+	// clients keep their own rules, and draw a row without `view` as before.
+	CapabilityTodoView = "todo_view"
+	// CapabilityTodoPlaces: the manager answers GET /api/v1/todos/places, the To-dos sidebar's places with the list's
+	// counts (#10226, TodoPlaces). The hub lists the todo_places feature only while every manager whose to-dos it
+	// merges names it.
+	CapabilityTodoPlaces = "todo_places"
+	// CapabilityTodoAsks: the manager answers POST /api/v1/todos/{id}/asks/{ask}/answer, one route for every answer to a
+	// to-do's own asks, named by the ask ids of its view (#10465, TodoAskAnswer). The hub lists the todo_asks feature
+	// only while every manager whose to-dos it merges names it; until then clients answer through the accept,
+	// decision-dismiss and retry routes. It gates the route alone: the to-do count unit rides on its own payload.
+	CapabilityTodoAsks = "todo_asks"
+	// CapabilityTodoTimeline: the manager answers GET /api/v1/todos/{id}/timeline, a to-do's conversation grouped into
+	// rounds (#10465, TodoTimeline), and GET /api/v1/todos/{id} carries the rounds the paper shows, how many there are,
+	// the to-do's results and what changed since the owner looked (TodoItemDetail). The hub lists the todo_timeline
+	// feature only while every manager whose to-dos it merges names it; until then clients draw none of them.
+	CapabilityTodoTimeline = "todo_timeline"
 )
 
 // BodyStream is where MethodHTTPStreamed's body comes from: the relay the hub holds with ID (devicewire.RelayPath
@@ -164,6 +183,8 @@ const (
 	// conversation (Data: conversation_agent, launcher, launcher_agent, delivered "none"): the hub answers 409, nothing
 	// was sent, and the conversation keeps its agent (docs/assistant/assistant.md, #4662).
 	CodeLauncherOtherKind = "launcher_other_kind"
+	// CodeSupervisionRuntime means the runtime cannot receive separate supervision instructions. Nothing was sent.
+	CodeSupervisionRuntime = "assistant_supervision_runtime"
 	// CodeBodyIncomplete: MethodHTTPStreamed's body did not arrive whole (the relay was not there, broke or carried
 	// another size). Nothing ran: the hub sends the request again as MethodHTTP.
 	CodeBodyIncomplete = "body_incomplete"
@@ -212,6 +233,7 @@ var Routes = []string{
 	"POST /api/v1/sessions/{mid}/{sid}/unarchive",
 	"POST /api/v1/sessions/{mid}/{sid}/autoname",
 	"POST /api/v1/assistant/conversations/{id}/archive",
+	"PUT /api/v1/assistant/conversations/{id}/tags",
 	"DELETE /api/v1/assistant/conversations/{id}",
 	"GET /api/v1/assistant/conversations/{id}/always",
 	"GET /api/v1/assistant/standing-authorizations",
@@ -220,6 +242,8 @@ var Routes = []string{
 	"POST /api/v1/assistant/rule-suggestions/{id}/always",
 	"POST /api/v1/assistant/rule-suggestions/{id}/not-now",
 	"DELETE /api/v1/assistant/conversations/{id}/always/{hash}",
+	"POST /api/v1/assistant/conversations/{id}/undelivered/{msg}/retry",
+	"DELETE /api/v1/assistant/conversations/{id}/undelivered/{msg}",
 	"POST /api/v1/assistant/conversations/{id}/unarchive",
 	"POST /api/v1/assistant/conversations/{id}/stop",
 	"GET /api/v1/assistant/reporters",
@@ -239,6 +263,7 @@ var Routes = []string{
 	"POST /api/v1/assistant/route/agent",
 	"POST /api/v1/assistant/agents/{mid}/{sid}/supervisor",
 	"PUT /api/v1/assistant/directions/{id}/name",
+	"PUT /api/v1/assistant/directions/{id}/notes",
 	"GET /api/v1/assistant/conversations/{id}/feed",
 	"POST /api/v1/assistant/feed/{id}/dismiss",
 	"POST /api/v1/assistant/feed/{id}/undo-dismiss",
@@ -255,6 +280,7 @@ var Routes = []string{
 	"GET /api/v1/assistant/places",
 	"GET /api/v1/assistant/repositories",
 	"GET /api/v1/assistant/repositories/{id}",
+	"GET /api/v1/assistant/repositories/providers",
 	"POST /api/v1/assistant/repositories/preview",
 	"POST /api/v1/assistant/repositories",
 	"PUT /api/v1/assistant/repositories/{id}",
@@ -279,11 +305,20 @@ var Routes = []string{
 	"POST /api/v1/task-plans/{id}/start",
 	"POST /api/v1/task-plans/{id}/workspace-preview",
 	"POST /api/v1/task-plans/{id}/dismiss",
+	"DELETE /api/v1/todos/{id}/terminal-cleanup",
 	"GET /api/v1/task-trust",
 	"DELETE /api/v1/task-trust",
 	// The todos (the assistant's todos.go, docs/assistant/todos.md).
 	"GET /api/v1/todos",
+	"GET /api/v1/todos/places", // the To-dos places and counts (todo_view_routes.go, #10226); the literal wins over {id}
+	"GET /api/v1/todos/{id}",   // one to-do as the list has it, with its view
 	"GET /api/v1/todos/{id}/repositories",
+	"GET /api/v1/todos/{id}/workspace-rules",
+	"PUT /api/v1/todos/{id}/workspace-rules",
+	"POST /api/v1/todos/{id}/workspace-naming/preview",
+	"POST /api/v1/todos/{id}/workspace-naming/plans",
+	"GET /api/v1/todos/{id}/workspace-naming/plans/{operation_id}",
+	"POST /api/v1/assistant/workspace-naming/preview",
 	"PUT /api/v1/todos/{id}/repositories",
 	"PUT /api/v1/todos/{id}/repositories/{repo_id}/links",
 	"POST /api/v1/todos",
@@ -294,18 +329,25 @@ var Routes = []string{
 	"PUT /api/v1/todos/{id}/agents/{mid}/{sid}",
 	"DELETE /api/v1/todos/{id}/agents/{mid}/{sid}",
 	"GET /api/v1/todos/{id}/decisions",
+	"GET /api/v1/todos/{id}/timeline", // its conversation's rounds (todo_timeline.go, #10465)
 	"POST /api/v1/todos/{id}/decisions",
 	"PATCH /api/v1/todos/{id}/decisions/{did}",
 	"PUT /api/v1/todos/{id}/thread",
 	"DELETE /api/v1/todos/{id}/thread",
 	"PUT /api/v1/todos/{id}/seen", // Got it on a Just finished to-do, and its Undo (todo_seen.go, #5707)
 	"DELETE /api/v1/todos/{id}/seen",
+	"PUT /api/v1/todos/{id}/restored", // Restore on an inactive to-do, and Someday and back (todo_marks.go, #10226)
+	"PUT /api/v1/todos/{id}/someday",
+	"DELETE /api/v1/todos/{id}/someday",
 	"POST /api/v1/todos/{id}/accept",
 	"POST /api/v1/todos/{id}/decision-dismiss",
 	"POST /api/v1/todos/{id}/decision-undo-dismiss",
+	// Any answer to a to-do's own ask, by the id its view lists (todo_asks_routes.go, #10465).
+	"POST /api/v1/todos/{id}/asks/{ask}/answer",
 	"POST /api/v1/later/{id}/handled", // a question that can wait, marked handled (later.go)
 	"POST /api/v1/todos/{id}/done-check",
 	"POST /api/v1/todos/{id}/retry",
+	"POST /api/v1/todos/{id}/start/answer", // the startup question a task's start stopped on, answered (start_answer.go, #10365)
 	"POST /api/v1/todos/retitle",
 	"POST /api/v1/todos/import/reminders",
 	// Its settings and its main conversation (profile.go, start.go).
@@ -375,6 +417,8 @@ var Routes = []string{
 	"PUT /api/v1/recordings/{id}/private",
 	"POST /api/v1/recordings/{id}/just-me",
 	"POST /api/v1/recordings/{id}/followup",
+	// A meeting handed to an Agent after it (meeting_handoff.go there, #8852).
+	"POST /api/v1/recordings/{id}/handoff",
 	// Its photos (meeting_photos.go there, "Phase 3: photos").
 	"POST /api/v1/recordings/{id}/photos",
 	"GET /api/v1/recordings/{id}/photos",

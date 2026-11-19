@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { initI18n, t } from "../../i18n";
+import { formatDate, initI18n, t } from "../../i18n";
 import { reset } from "../../lib/store";
 import { assistantEntries } from "../../lib/assistant-entries";
 import type { Todo } from "../../lib/todos";
@@ -84,10 +84,46 @@ describe("task wait information", () => {
     expect(text("[data-wait-wake]")).toContain("Review is approved");
     await render(makeTodo({ kind: "date", target: "Release window", wake: "The date arrives", until: "2026-11-18T00:00:00Z", url: "https://example.test/calendar/3", recorded_by: "Supervisor" }));
     expect(host.querySelector('[data-wait-kind="date"]')).not.toBeNull();
-    expect(host.querySelector('[data-wait-contact-missing]')).not.toBeNull();
+    expect(host.querySelector('[data-wait-contact-missing]')).toBeNull();
     expect([...host.querySelectorAll<HTMLAnchorElement>("[data-wait-source]")].map(a => a.href)).toEqual(["https://example.test/calendar/3"]);
     await render(makeTodo({ kind: "external_event", target: "Deployment", wake: "Health check passes", url: "javascript:alert(1)" }));
+    expect(host.querySelector('[data-wait-contact-missing]')).toBeNull();
     expect(host.querySelectorAll("[data-wait-source]")).toHaveLength(0);
+  });
+
+  it("shows an external event's target, source, wake and fallback without a request line it cannot carry", async () => {
+    // The recorded target may describe a prompt to the owner in free text: it is shown as written, never read as a sent
+    // request or as an owner decision.
+    const todo = makeTodo({ kind: "external_event", target: "Read-only permission prompt already sent", wake: "The connector's preflight passes",
+      url: "https://example.test/connector/permissions/4", recorded_by: "Supervisor" });
+    todo.supervision!.parked!.waiting_on = "external_event";
+    await render(todo);
+    const info = host.querySelector<HTMLElement>('[data-task-wait-info="wait-1"]')!;
+    expect(info.dataset.waitKind).toBe("external_event");
+    expect(text("[data-wait-target]")).toBe(`${t("task-wait.kind_external_event")}${t("task-wait.target", { target: "Read-only permission prompt already sent" })}`);
+    expect([...host.querySelectorAll<HTMLAnchorElement>("[data-wait-source]")].map(a => a.href)).toEqual(["https://example.test/connector/permissions/4"]);
+    expect(text("[data-wait-wake]")).toContain("The connector's preflight passes");
+    expect(info.textContent).toContain(t("task-wait.fallback", { time: formatDate("2026-11-16T12:00:00.000Z", { dateStyle: "medium", timeStyle: "short" }) }));
+    for (const sel of ["[data-wait-contact]", "[data-wait-contact-missing]", "[data-wait-request]", "[data-testid='wait-reminder']"]) expect(host.querySelector(sel)).toBeNull();
+    expect(info.textContent).not.toContain(t("task-wait.contact_unknown"));
+  });
+
+  it("says a sent request is not recorded only for waits that can record one", async () => {
+    const missing = t("task-wait.contact_unknown");
+    for (const evidence of [
+      { kind: "person_reply", target: "Design team", wake: "They reply" },
+      { kind: "merge_review", target: "Review team", wake: "Approval and merge", ready: true, url: "https://github.com/example/demo/pull/7" },
+      undefined,
+    ]) {
+      await render(makeTodo(evidence));
+      expect(host.querySelector("[data-wait-contact]")).toBeNull();
+      expect(text("[data-wait-contact-missing]")).toBe(missing);
+    }
+    for (const kind of ["external_event", "date"]) {
+      await render(makeTodo({ kind, target: "Release", wake: "It ships", url: "https://example.test/release/2" }));
+      expect(host.querySelector(`[data-wait-kind="${kind}"]`)).not.toBeNull();
+      expect(host.querySelector("[data-wait-contact-missing]")).toBeNull();
+    }
   });
 
   it("keeps legacy missing evidence visibly unknown rather than inventing a contact, wake or source", async () => {
@@ -104,8 +140,99 @@ describe("task wait information", () => {
     const todo = makeTodo({ kind: "merge_review", target: "Review team", wake: "Review and merge", ready: true, url, contact: { ...contact, url } });
     await act(async () => root.render(<TaskWaitInfo todo={todo} merges={[{ url, state: "open", draft: false, review: "required", checks: "failure", conflicts: false, checked_at: new Date(NOW).toISOString() }]} />));
     expect(host.querySelectorAll(`a[href="${url}"]`)).toHaveLength(1);
+    expect(text("[data-wait-contact]")).toContain("Riley");
+    expect(host.querySelector("[data-wait-contact-missing]")).toBeNull();
     expect(host.querySelector("[data-pr-waiting-url]")?.textContent).toContain(t("assistant-tasks.pr_blocker_checks_failed"));
     expect(host.querySelector("[data-pr-waiting-url]")?.textContent).toContain(t("assistant-tasks.pr_blocker_review_required"));
+  });
+
+  it.each([
+    ["https://github.com/example/demo/pull/73", "PR #73"],
+    ["https://github.com/example/demo/issues/912", "issue #912"],
+    ["https://github.com/example/demo/issues/912#issuecomment-42", "Comment on #912"],
+    ["https://github.com/example/demo/pull/73#discussion_r42", "Comment on #73"],
+    ["https://github.com/example/demo/pull/73#pullrequestreview-42", "Comment on #73"],
+    ["https://github.com/example/demo/pull/73/files#r42", "Comment on #73"],
+    ["https://github.com.example.test/example/demo/pull/73", "github.com.example.test/example/demo/pull/73"],
+    ["https://example.test/evidence/7", "example.test/evidence/7"],
+  ])("names the GitHub source %s rather than numbering it", async (url, label) => {
+    await render(makeTodo({ kind: "external_event", target: "A review", wake: "A response arrives", url }));
+    const source = host.querySelector<HTMLAnchorElement>("[data-wait-source]")!;
+    expect(source.textContent).toBe(label);
+    expect(source.href).toBe(url);
+    expect(source.title).toBe(url);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["en", "Comment on #912"],
+    ["zh-Hans", "#912 \u4e0b\u7684\u7559\u8a00"],
+    ["ja", "#912 \u306e\u30b3\u30e1\u30f3\u30c8"],
+  ])("localizes a GitHub comment source in %s", async (locale, label) => {
+    await initI18n(locale);
+    await render(makeTodo({ kind: "external_event", target: "A reply", wake: "A response arrives",
+      url: "https://github.com/example/demo/issues/912#issuecomment-42" }));
+    expect(text("[data-wait-source]")).toBe(label);
+  });
+
+  it("shows the bound PR, not an older associated PR, in the actual parked row", async () => {
+    const url = "https://github.com/example/demo/pull/73";
+    const old = "https://github.com/example/demo/pull/7";
+    const todo = makeTodo({ kind: "external_event", target: "Review of the new PR", wake: "Review arrives", url }, {
+      origin: "conversation-1", pr_url: old,
+      pr_status: { url: old, state: "open", draft: false, review: "required", checks: "success", conflicts: false, checked_at: new Date(NOW).toISOString() },
+    });
+    const items = assistantEntries({ conversation: "conversation-1", main: "conversation-1", todos: [todo],
+      sessions: [], interactions: [], plans: {}, feed: [], now: NOW }).parked;
+    await act(async () => root.render(<ParkedTaskRows items={items} />));
+    expect([...host.querySelectorAll<HTMLAnchorElement>("[data-wait-source]")].map(a => [a.href, a.textContent]))
+      .toEqual([[url, "PR #73"]]);
+    expect(host.querySelector(`a[href="${old}"]`)).toBeNull();
+  });
+
+  it.each(["applink.feishu.cn", "applink.larksuite.com"])("names the matching recorded Lark topic on %s, never an unrelated topic", async (host) => {
+    const url = `https://${host}/client/thread/open?open_chat_id=oc_example_group&open_thread_id=omt_example_topic`;
+    const todo = makeTodo({ kind: "external_event", target: "Support team", wake: "The topic changes", url }, {
+      thread: { channel: "feishu", chat_id: "oc_example_group", thread_id: "omt_example_topic", title: "Release questions" },
+    });
+    await render(todo);
+    expect(text("[data-wait-source]")).toBe("Release questions");
+    todo.thread = { ...todo.thread!, thread_id: "omt_another_topic", title: "Unrelated topic" };
+    await render(todo);
+    expect(text("[data-wait-source]")).toBe("Lark conversation");
+    expect(text("[data-wait-source]")).not.toContain("Unrelated");
+    todo.thread = { ...todo.thread!, thread_id: "omt_example_topic", chat_id: "oc_another_group" };
+    await render(todo);
+    expect(text("[data-wait-source]")).toBe("Lark conversation");
+  });
+
+  it("keeps a recorded Lark group name in the contact link without duplicating the receipt", async () => {
+    const url = "https://applink.feishu.cn/client/chat/open?open_chat_id=oc_example_group";
+    const todo = makeTodo({ kind: "person_reply", target: "Support team", wake: "They reply", url,
+      contact: { ...contact, url, channel: "Release support group" } });
+    await render(todo);
+    expect(text("[data-wait-contact]")).toContain("Release support group");
+    expect(host.querySelectorAll(`a[href="${url}"]`)).toHaveLength(1);
+    expect(host.textContent).not.toContain("Source 1");
+  });
+
+  it("keeps PR blockers on the recorded object when its URL has a fragment or query", async () => {
+    const url = "https://github.com/example/demo/pull/73";
+    const receipt = `${url}?from=review#issuecomment-42`;
+    const todo = makeTodo({ kind: "merge_review", target: "Review team", wake: "Approval and merge", ready: true, url: receipt,
+      contact: { ...contact, url: receipt } });
+    await act(async () => root.render(<TaskWaitInfo todo={todo} merges={[
+      { url, state: "open", draft: false, review: "required", checks: "failure", conflicts: false, checked_at: new Date(NOW).toISOString() },
+    ]} />));
+    expect(host.querySelectorAll(`a[href="${receipt}"]`)).toHaveLength(1);
+    expect(host.querySelector(`a[href="${url}"]`)).toBeNull();
+    expect(host.querySelector("[data-pr-waiting-url]")?.textContent).toContain(t("assistant-tasks.pr_blocker_checks_failed"));
+  });
+
+  it.each([undefined, "", "not a URL", "javascript:alert(1)"])("omits an absent or unsafe source without an ordinal placeholder: %s", async (url) => {
+    await render(makeTodo({ kind: "external_event", target: "A version", wake: "Version changes", url }));
+    expect(host.querySelectorAll("[data-wait-source]")).toHaveLength(0);
+    expect(host.textContent).not.toContain("Source 1");
   });
 
   it("refreshes elapsed wait age from the current clock, not the task update time", async () => {

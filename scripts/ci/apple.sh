@@ -66,6 +66,9 @@ PY
 }
 trap cleanup EXIT
 printf 'apple-ci: output %s; SwiftPM cache %s\n' "$OUTPUT" "$SPM"
+# No source imports CallKit and no build setting links it, before anything is built (#9290, docs/operations/release.md
+# "No CallKit"); the built apps' binaries are checked after each build below.
+ci_run 'No CallKit in Apple sources and build settings' 120 python3 "$CI_ROOT/scripts/test/test_apple_no_callkit.py"
 
 # XcodeGen writes tracked plists/entitlements, and the normal config helper writes
 # Config.xcconfig. Generate in a snapshot, not over a developer's private files.
@@ -85,6 +88,8 @@ PY
 # These are explicitly public synthetic values; persona_config never opens the
 # developer's config. DEVELOPER_DIR already selected above wins in its env helper.
 export PERSONA_META_WEARABLES=NO
+# The whole project, with the watch app and the share extension (apple/lean-dev-build.yml is sim.sh's alone).
+unset PERSONA_LEAN_DEV_BUILD
 ci_run 'Build PersonaCore XCFramework before package resolution' 1200 "$SOURCE/native/app-core/scripts/build-apple.sh"
 ci_run 'Generate public unsigned Apple config' 60 python3 "$SOURCE/scripts/persona_config.py" xcconfig
 ci_run 'Generate Apple project' 120 xcodegen generate --spec "$SOURCE/apple/project.yml" --project "$SOURCE/apple"
@@ -154,6 +159,10 @@ if [ "$LANE" = all ] || [ "$LANE" = ios ]; then
   ci_run 'Unsigned iOS and embedded watch/extensions build' 1800 "${XCODE[@]}" -scheme Persona \
     -destination 'generic/platform=iOS' -derivedDataPath "$OUTPUT/ios-device" \
     -disableAutomaticPackageResolution "${UNSIGNED[@]}" build
+  # Every Mach-O in the device app (extensions, frameworks, the Watch app) and every architecture: none links CallKit,
+  # weakly or through a package (#9290). Device-only linker flags exist, so the simulator build cannot stand in for it.
+  ci_run 'No CallKit in the device build' 300 python3 "$CI_ROOT/scripts/release/check_no_callkit.py" \
+    "$OUTPUT/ios-device/Build/Products/Debug-iphoneos/Persona.app"
   # A phone's main thread has a 1 MB stack, the simulator's 8 MB: view functions with big fixed frames in this Debug
   # device build fail here (#6735; MainPagesStackTests measures the run-time part in the simulator).
   ci_run 'Debug view stack frames (device build)' 300 python3 "$CI_ROOT/scripts/ci/apple_stack_frames.py" \
@@ -181,6 +190,8 @@ if [ "$LANE" = all ] || [ "$LANE" = ios ]; then
   ci_run 'Build iOS offline unit tests' 1800 "${IOS_COMMON[@]}" \
     -destination 'generic/platform=iOS Simulator' ARCHS="$(uname -m)" ONLY_ACTIVE_ARCH=YES \
     "${IOS_UNIT_SELECTION[@]}" build-for-testing
+  ci_run 'No CallKit in the simulator build' 300 python3 "$CI_ROOT/scripts/release/check_no_callkit.py" \
+    "$OUTPUT/ios-tests/Build/Products/Debug-iphonesimulator/Persona.app"
 
   # Split the former 1000-second preparation budget into creation (100) and real
   # hosted readiness (900). A device state or running service is not a test gate.

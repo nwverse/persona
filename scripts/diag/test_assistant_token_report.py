@@ -75,6 +75,28 @@ class ClassifyTests(unittest.TestCase):
 
 
 class ReportTests(unittest.TestCase):
+    def test_cli_counts_each_resolved_transcript_path_once(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            nested = root / "nested"
+            nested.mkdir()
+            first = nested / "first.jsonl"
+            second = root / "second.jsonl"
+            for path in (first, second):
+                path.write_text(json.dumps(reply("m", output=17)) + "\n")
+            alias = root / "alias.txt"
+            alias.symlink_to(first)
+
+            def run(*paths):
+                with redirect_stdout(io.StringIO()) as out:
+                    self.assertEqual(report.main(["--json", *map(str, paths)]), 0)
+                return json.loads(out.getvalue())
+
+            unique = run(first, second)
+            self.assertEqual((unique["files"], unique["total"]["model_calls"], unique["total"]["output_tokens"]),
+                             (2, 2, 34))
+            self.assertEqual(run(first, root, nested, alias), unique)
+
     def run_lines(self, lines, since=None):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "conv.jsonl"
@@ -124,6 +146,35 @@ class ReportTests(unittest.TestCase):
         s = self.run_lines([user("hello"), no_id("u1", 5), no_id("u2", 9)])
         owner = s["by_kind"]["owner"]
         self.assertEqual((owner["model_calls"], owner["output_tokens"]), (2, 14))
+
+    def test_responses_without_message_ids_or_uuids_are_each_counted(self):
+        for extra in ({}, {"uuid": ""}):
+            with self.subTest(extra=extra):
+                lines = [user("hello")] + [reply("", output=7, requestId="req_1", **extra) for _ in range(24)]
+                # Freed JSON rows can reuse an object address; make that collision deterministic.
+                with patch.object(report, "id", return_value=1, create=True):
+                    s = self.run_lines(lines)
+                owner = s["by_kind"]["owner"]
+                self.assertEqual((owner["model_calls"], owner["output_tokens"]), (24, 168))
+                self.assertEqual((s["total"]["model_calls"], s["total"]["output_tokens"]), (24, 168))
+
+    def test_uuid_still_deduplicates_blocks_without_a_message_id(self):
+        s = self.run_lines([user("hello"),
+                            reply("", output=5, uuid="u1"), reply("", output=9, uuid="u1"),
+                            reply("", output=7, uuid="u2")])
+        owner = s["by_kind"]["owner"]
+        self.assertEqual((owner["model_calls"], owner["output_tokens"]), (2, 16))
+
+    def test_unidentified_lines_keep_since_and_sidechain_boundaries(self):
+        lines = [user("hello"), reply("", output=7, timestamp="2026-11-12T23:59:00Z"),
+                 reply("", output=7), reply("", output=7, isSidechain=True),
+                 reply("", output=7, isSidechain=True)]
+        with patch.object(report, "id", return_value=1, create=True):
+            s = self.run_lines(lines, since="2026-11-13")
+        owner = s["by_kind"]["owner"]
+        self.assertEqual((owner["model_calls"], owner["output_tokens"]), (1, 7))
+        self.assertEqual((s["sidechain"]["model_calls"], s["sidechain"]["output_tokens"]), (2, 14))
+        self.assertEqual((s["total"]["model_calls"], s["total"]["output_tokens"]), (1, 7))
 
     def test_supervision_event_manual_size(self):
         s = self.run_lines([user(SNAPSHOT + SUPERVISION), reply("m1", output=1)])

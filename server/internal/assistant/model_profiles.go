@@ -51,7 +51,7 @@ type ModelProfile struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	// Purposes: a category's choice (its record in the model configuration) by category id; an empty binding is
-	// "follow the default". The main chat's runtime is not a profile's.
+	// "follow the default". The profile the main chat's new conversations start in is not a profile's.
 	Purposes map[string]ModelBinding `json:"purposes,omitempty"`
 	// Launchers: model fields of providers added in Persona, by provider name.
 	Launchers map[string]LauncherModels `json:"launchers,omitempty"`
@@ -213,6 +213,13 @@ func (s *Service) readModelProfileState(ctx context.Context) (modelProfileState,
 
 // putModelProfileSettings requires an atomic store: a failed write must leave every setting untouched.
 func (s *Service) putModelProfileSettings(ctx context.Context, values map[string]any) error {
+	for _, value := range values {
+		if r, ok := value.(modelRecord); ok {
+			if err := checkExternalPurpose(r.Binding); err != nil {
+				return err
+			}
+		}
+	}
 	st := s.store()
 	if st == nil {
 		return i18n.Err("assistant-models.err_no_database")
@@ -264,7 +271,7 @@ func (s *Service) captureModels(ctx context.Context) (map[string]ModelBinding, m
 			return nil, nil, nil, err
 		}
 		b := r.Binding
-		b.Runtime, b.ConfigDir = "", ""
+		b.ConfigDir = ""
 		purposes[id] = b
 		effective, err := s.resolveModelRecord(ctx, id, &r)
 		if err != nil {
@@ -319,6 +326,9 @@ func (s *Service) tierModel(ctx context.Context, tier string) (ModelTier, error)
 	t, ok := p.Tiers[tier]
 	if !ok {
 		return ModelTier{}, errors.New("the model profile in use (" + cmp.Or(p.Name, p.ID) + ") has no tier " + strings.TrimSpace(tier) + "; its tiers: " + strings.Join(slices.Sorted(maps.Keys(p.Tiers)), ", "))
+	}
+	if proto.IsExternalLauncher(t.Launcher) {
+		return ModelTier{}, i18n.Err("external-adapter.purpose_unsupported")
 	}
 	return t, nil
 }

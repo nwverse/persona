@@ -95,6 +95,9 @@ func ProjectEfforts(levels, vocab []string) []string {
 // ModeBypass skips every permission prompt; a headless claude only takes it at start (--permission-mode).
 const ModeBypass = "bypassPermissions"
 
+// ModePlan permits investigation while requiring approval for changes and other non-read-only tools.
+const ModePlan = "plan"
+
 // ClaudeDefaultModeSetting is Claude Code's permissions.defaultMode, a key of Settings › Claude Code (node
 // claudeconfig.go): the mode a session started without --permission-mode runs in. The hub reads it for a planned
 // task with no mode of its own (assistant/tasks_permission.go).
@@ -171,9 +174,13 @@ type Session struct {
 	// started with --dangerously-skip-permissions, --allow-dangerously-skip-permissions or --permission-mode
 	// bypassPermissions, which put that mode in its shift+tab cycle (#1379). The node reads it off the claude process its
 	// hooks run under; false while unknown (no hook yet, a node too old to say).
-	BypassAvailable bool   `json:"bypass_available,omitempty"`
-	Title           string `json:"title"`
-	Cwd             string `json:"cwd"`
+	BypassAvailable bool `json:"bypass_available,omitempty"`
+	// Tags are the user-defined labels of an assistant conversation (assistant/conversation_tags.go), set by the user
+	// or the assistant. A pointer so a row without tags adds no size to Session's size class (session_size_test.go);
+	// nil and an empty slice both mean "no tags" and are omitted on the wire.
+	Tags  *[]string `json:"tags,omitempty"`
+	Title string    `json:"title"`
+	Cwd   string    `json:"cwd"`
 	// WorkspaceCwd is the node-verified physical directory for Cwd. Consumers
 	// matching workspace bindings prefer it and fall back to Cwd on older nodes.
 	WorkspaceCwd string `json:"workspace_cwd,omitempty"`
@@ -211,6 +218,10 @@ type Session struct {
 	AgentSurface string `json:"agent_surface,omitempty"`
 	Launcher     string `json:"launcher,omitempty"`
 	Model        string `json:"model,omitempty"`
+	// RequestedModel is the last model passed to a Persona-managed process.
+	// Nil means an older node or an observed session; an empty value means launcher default.
+	// Model remains the transcript-reported name, which a gateway may rewrite.
+	RequestedModel *string `json:"requested_model,omitempty"`
 	// PermissionMode and Effort are what Claude Code runs with now: default / acceptEdits / plan / auto /
 	// bypassPermissions, and low … max. Empty while unknown (before the first turn, Codex). A Codex thread the phone
 	// drives through its app-server has an Effort too (Codex's levels, see Efforts) but never a PermissionMode.
@@ -280,16 +291,18 @@ type Session struct {
 	Channels []string `json:"channels,omitempty"`
 	// Space / slot generalize where an agent lives in its host tool: for herdr a workspace and a tab
 	// (docs/protocol/agent-states.md). Agents sharing a space are shown together as one collaborating group.
-	SpaceKind  string `json:"space_kind,omitempty"` // herdr
-	SpaceID    string `json:"space_id,omitempty"`
-	SpaceName  string `json:"space_name,omitempty"`
-	SpaceIndex int    `json:"space_index,omitempty"`
+	SpaceKind string `json:"space_kind,omitempty"` // herdr
+	SpaceID   string `json:"space_id,omitempty"`
+	SpaceName string `json:"space_name,omitempty"`
+	// SpaceIndex and SlotIndex are small host-side ordinal numbers (a workspace's and a tab's place), so int32 is wide
+	// enough; keeping the two four-byte fields in one word leaves room in Session's size class (session_size_test.go).
+	SpaceIndex int32 `json:"space_index,omitempty"`
+	SlotIndex  int32 `json:"slot_index,omitempty"`
 	// ParentSpaceID is the space this one is nested under in its host, same kind and machine (Orca: a child
 	// worktree's parent, #2073); empty for a top-level space. Clients that know it fold the child under its parent.
 	ParentSpaceID string `json:"parent_space_id,omitempty"`
 	SlotID        string `json:"slot_id,omitempty"`
 	SlotName      string `json:"slot_name,omitempty"`
-	SlotIndex     int    `json:"slot_index,omitempty"`
 	// PaneIndex is the pane's 0-based place in its slot by layout, top left first: 0 is the pane the others were split
 	// from (the group's "Initiator" when an agent runs there). Absent (nil) when the host does not say where its panes sit
 	// (older nodes, hosts without layouts, a pane missing from the layout). A pointer so that 0 is sent.
@@ -335,6 +348,11 @@ type Session struct {
 	StateSince time.Time `json:"state_since,omitempty"`
 	// Queued is input typed while the agent works, waiting to be taken (shown above the composer, not in the chat).
 	Queued []string `json:"queued,omitempty"`
+	// Undelivered are the owner's messages to an assistant conversation that could not go in (its process did not
+	// start, its computer was away) and that its manager keeps and sends again by itself (#10194, docs/assistant/
+	// assistant.md "Messages that could not go in"); oldest first. Shown in the chat as the owner's own, marked not
+	// delivered, on every client. Behind a pointer: a Session stays in its allocation size class (see QueuedRelayed).
+	Undelivered *[]UndeliveredMessage `json:"undelivered,omitempty"`
 	// Background lists commands / agents Claude started in the background that have not reported back yet
 	// (the TUI's "2 shells still running").
 	Background []BackgroundTask `json:"background,omitempty"`
@@ -395,7 +413,9 @@ type Session struct {
 	TurnError string `json:"turn_error,omitempty"`
 	// TurnErrorKind is what the agent's record says of TurnError, when it says (Claude Code's error field, Codex's
 	// error kinds): TurnErrorTransient (worth a "Continue"), TurnErrorUser (the user must act) or TurnErrorUsageLimit
-	// (a subscription's usage limit, until it resets); empty: read off the text.
+	// (a subscription's usage limit, until it resets); empty: read off the text. Or the hub's own word on a task
+	// Agent's turn that had no output at all (SilentTurnKind: TurnErrorNoOutput, TurnErrorStopped), with TurnError
+	// the sentence for it in the user's language (#10187).
 	TurnErrorKind string `json:"turn_error_kind,omitempty"`
 	// TurnErrorResetsAt is when the subscription usage limit that ended the turn resets (TurnErrorKind
 	// TurnErrorUsageLimit): what the agent's record says (Claude Code's quotaLimits.resetsAt, the full window of a Codex
@@ -444,11 +464,6 @@ type Session struct {
 	FailureReason string `json:"failure_reason,omitempty"`
 	// ExternalURL opens the session where it lives outside Persona (a botmux session's Feishu topic).
 	ExternalURL string `json:"external_url,omitempty"`
-	// Runtime: an assistant conversation's runtime as it actually runs ("agentsdk"; "" is the CLI, #2455).
-	Runtime string `json:"runtime,omitempty"`
-	// RuntimeFallback: why an assistant conversation asked to run on the Agent SDK runs on the CLI instead (no
-	// Node.js 22+, no bridge package, no claude); "" when it runs as asked.
-	RuntimeFallback string `json:"runtime_fallback,omitempty"`
 	// Chat, Topic, Dispatched: a botmux session's Feishu chat, its topic's root message and the topics it dispatched
 	// (`botmux dispatch`), for the todos to follow (docs/assistant/todos.md "botmux following"); stripped by hub like SpawnFrom.
 	Chat       string   `json:"chat,omitempty"`
@@ -475,7 +490,15 @@ const (
 	TurnErrorTransient  = "transient"   // the model service failed for a moment: worth a "Continue"
 	TurnErrorUser       = "user"        // sign-in, context window, the model…: the user must act
 	TurnErrorUsageLimit = "usage_limit" // a subscription's usage limit: it goes on once the limit resets (TurnErrorResetsAt)
+	// The hub's word on a task Agent's turn that ended with no reply, tool call or image (#2349, #10187): no error the
+	// model service reported, and no "Done" either.
+	TurnErrorNoOutput = "no_output" // the model service answered nothing: interrupted, worth a "Continue"
+	TurnErrorStopped  = "stopped"   // Persona's own Stop interrupted it (its conversation was stopped): the owner's to go on with
 )
+
+// SilentTurnKind: kind is the hub's word on a turn with no output (TurnErrorNoOutput, TurnErrorStopped), not an error
+// the model service reported: nothing for Session Triage to ask the user about or to continue by itself.
+func SilentTurnKind(kind string) bool { return kind == TurnErrorNoOutput || kind == TurnErrorStopped }
 
 // Session.TurnErrorCode values (docs/assistant/onboarding.md 4.6).
 const (
@@ -484,6 +507,9 @@ const (
 	TurnErrorModelRoute               = "model_route"                // the model name is not one the service or gateway knows
 	TurnErrorRateLimited              = "rate_limited"               // too many requests, or a usage limit
 	TurnErrorModelFallbackUnavailable = "model_fallback_unavailable" // a refusal selected a model the service cannot use
+	// TurnErrorToolSearchUnsupported: the gateway refused Claude Code's on-demand tool loading (tool search, #10365). The
+	// node now starts that launcher and model with every tool loaded, so a retry works: not the user's to fix.
+	TurnErrorToolSearchUnsupported = "tool_search_unsupported"
 )
 
 // Codes a call refuses with when the assistant's conversation cannot start on a machine (docs/assistant/onboarding.md 4.6, 5.2):
@@ -493,8 +519,9 @@ const (
 	CodeMachinePending  = "machine_pending"  // the machine has not been confirmed as the user's yet
 	CodeClaudeMissing   = "claude_missing"   // Claude Code is not installed (or not on the launcher's PATH) there
 	CodeLauncherMissing = "launcher_missing" // the launcher (a ~/.zshrc function or alias) is not there
-	// CodeTerminalNotReady: the new tab's terminal would not take the start command (herdr's pane_send_failed); nothing
-	// ran, the tab is closed, a retry may work (node/typedstart.go). 503, retryable.
+	// CodeTerminalNotReady: the new tab's terminal would not take the start command (herdr's pane_send_failed), or the
+	// start line never showed in an Orca tab and never ran (node/startevidence.go, #10588); nothing ran, the tab is
+	// closed, a retry may work (node/typedstart.go). 503, retryable.
 	CodeTerminalNotReady = "terminal_not_ready"
 	// CodeAgentStartStalled: the agent opened but its session never became identifiable. This says nothing about
 	// launcher health and must not trigger an automatic retry or a health detour.
@@ -526,6 +553,11 @@ const (
 // open, docs/integrations/runtimes.md "What to implement", #8132). Nothing was read; the text is in the request's
 // language (apierr.Call). 409.
 const CodeNotLoaded = "not_loaded"
+
+// CodeTurnOverBackground is session.interrupt's answer when the Escape went to a session whose turn was already over
+// and only its background work (a background command, a subagent, a workflow) keeps it Working: nothing was
+// interrupted and that work goes on (#10828).
+const CodeTurnOverBackground = "turn_over_background"
 
 // CodeAgentStopped is what session.send refuses with for an Agent that has stopped and is read-only (node/stopped.go,
 // #4754): nothing was typed, and it takes no message until it is resumed (the user's Resume on its terminal page).
@@ -636,6 +668,31 @@ type ModelPick struct {
 	Model    string `json:"model,omitempty"`
 	Effort   string `json:"effort,omitempty"`
 }
+
+// UndeliveredMessage is one of Session.Undelivered: an owner's message its manager keeps after it could not go in.
+type UndeliveredMessage struct {
+	// ID is the message's client_msg_id: the bubble the sending app shows for it, and its once-only key when it goes.
+	ID     string    `json:"id"`
+	Text   string    `json:"text"`
+	Images int       `json:"images,omitempty"` // how many pictures it carries (they are kept and sent with it)
+	At     time.Time `json:"at"`               // when the owner sent it
+	// State is UndeliveredWaiting (it is sent again by itself) or UndeliveredFailed (it gave up: Retry or Delete).
+	State      string     `json:"state"`
+	Attempts   int        `json:"attempts,omitempty"`
+	NextAt     *time.Time `json:"next_at,omitempty"`     // when the next try is due while waiting
+	Error      string     `json:"error,omitempty"`       // why the last try did not go in, in the owner's language
+	DeleteOnly bool       `json:"delete_only,omitempty"` // a failure the owner can delete but cannot retry
+	// Computer is set on a message held for an Agent while its computer was away (#10661, internal/devices held.go):
+	// that computer's name. Error is then the whole line to show under the bubble ("Will send when … is back"), and
+	// Retry / Delete go to the session's held routes (POST /api/v1/sessions/{mid}/{sid}/held/{msg}/retry, DELETE …).
+	Computer string `json:"computer,omitempty"`
+}
+
+// UndeliveredMessage states.
+const (
+	UndeliveredWaiting = "waiting"
+	UndeliveredFailed  = "failed"
+)
 
 // QueueEdit is the answer to POST /api/v1/sessions/{mid}/{sid}/queue in a Persona conversation (node session.queue.edit,
 // docs/protocol/protocol.md): the messages that were queued before the edit, in order, and their photos for the composer

@@ -130,6 +130,8 @@
   "agents_title": "Agent 跟进",
   "agent_tasks": "Persona 开的每个 Agent 都有人跟进",
   "agent_tasks_hint": "不是从主对话派出去的 Agent 也会挂上一个不打扰的任务，有人验收结果、做完后关掉它；会多花一些模型调用",
+  "close_ended_terminals": "Agent 结束后关掉它的终端",
+  "close_ended_terminals_hint": "Persona 启动的 Agent 做完、被取消或自己退出后，顺手关掉它的终端标签页。正在忙的 Agent 和你自己开的终端不会被关；对话会保留，之后还能继续",
   "inbox_signals": "任务有新消息时告诉督办它的对话",
   "inbox_signals_hint": "收件箱的 AI 分身把别人发来的新消息关联到 Persona 跟进的任务时，督办这个任务的对话会在下一条督办消息里看到；需要打开 AI 分身；会多花一些模型调用",
   "archive_closed": "已关闭的会话多久后归档",
@@ -147,5 +149,7 @@
   "idle_close_unit": "小时",
   "main_supervises": "主对话自己督办它派出的任务",
   "main_supervises_hint": "默认关闭：Persona 派出的任务由内置的后台督办对话跟进和验收，主对话随时能回你；开启后改回由主对话自己跟进和验收",
-  "background_supervisor_model": "后台督办的模型"
+  "background_supervisor_model": "后台督办的模型",
+  "claude_interactive": "交互式 Claude Code",
+  "claude_interactive_footer": "默认关闭。打开后，Claude 对话在它所在的电脑上用真正的交互式 Claude Code 运行，代替打印模式（claude -p），说明、工具和设置都不变。有人反映用 Claude 订阅时打印模式消耗 5 小时额度更快；Anthropic 没有公开说明。风险：这样做是由 Persona 操作一个为人设计的程序，Anthropic 可能把它当成另一种用法，账号有被限制的可能。回复会一段一段出现，而不是逐字出现。需要那台电脑装有 tmux；交互式启动失败时，对话改用打印模式运行，上面的「运行在」会写明原因。"
 }

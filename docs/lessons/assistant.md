@@ -1,6 +1,21 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- Recover an untold completion by native turn identity, not transcript revision (#10686). Trailing transcript bookkeeping must not suppress an already judged signal. Revalidate the complete current ledger entry under its lock and enqueue without rewriting it, so an older recovery snapshot cannot replace a newer turn or judgment. Exercise both PostgreSQL-backed manager restart and stale-snapshot rejection, with replay disabled as a negative control.
+
+- A rendered prompt used as a source-snapshot fingerprint must compare with the call's captured language (#6272). Re-reading the current language while committing a valid model answer makes a preference change look like a concurrent source edit. Freeze the wrapper language, keep the source comparison, and test both a locale-only change and real source changes. Audit natural-language parsers too: a conservative Chinese uncertainty check must recognize uncertainty in newly supported English and Japanese outputs. Shared recording inputs must keep their recording-language contract rather than inheriting a non-recording wrapper accidentally.
+- Persist a complete delivery round before its first external send (#10393). Saving only when the call returns handles a returned error but loses the result if the manager exits inside the call, after task acceptance has committed. Keep the original timestamp/key and acceptance metadata on disk while retaining an in-memory claim to block overlapping sends. Every other book save must preserve that prepared record too; retry must not send from memory when its preparation could not be saved. Use a child-process exit at the real provider boundary and a fresh manager on the same disposable database to prove recovery, with the returned-error case as a control.
+- A review wake is not a completion verdict (#8373). PR events and judged-done candidates share the same signal. Keep its wording neutral, preserve the actual reason and criterion evidence, and leave acceptance gates and display grouping unchanged.
+
+- Snapshot display projections must not initialize the knowledge base (#10108). Publication already holds
+  `pubMu`; read an already-open engine and retain the canonical cached project-name fallback rather than calling
+  an accessor that may initialize storage. Let direction synchronization refresh project names asynchronously.
+  Keep a regression proving that building a snapshot leaves an unopened knowledge base unopened.
+
 - A terminal review covers its criteria, not every later scope (#6880). Explicitly replacing criteria on an open, previously accepted or cancelled task must invalidate its terminal supervision state; otherwise unfinished or unjudged follow-up work is silently suppressed. Keep review history and unchanged criteria's evidence. Metadata-only changes and ordinary follow-up conversation do not invalidate the review, and existing stale records still need a real supervisor review rather than an automatic migration.
+
+- A nearby empty turn is not proof that a PR event reached an Agent (#10050). Match the actual input and source association: an owner may have explicitly asked for no reply. Record external delivery provenance before sending, keep transport distinct from acknowledgement, and persist the bounded retry before making it. A feed write failing after the node accepts delivery does not undo that receipt: retain the event and wait for its actual turn, not a false redelivery failure. Pin redelivery and completion to the recorded recipient, including recovery while a peer works; another Agent's newer row is not this event's turn. Trim paged items to the current turn before interpreting a stop. A still-unhandled source must survive both duplicate completions and a manager reload, independently of ordinary Inbox signals; ordinary owner input must never spend its retry.
+
+- External-event escalations must keep their source and recipient identity (#10050). Render the failed source against that recorded recipient, not whichever Agent now has the newest reply. Its escalation also needs a task-bounded, per-source fingerprint: a process-local sent cache and short semantic window replay failures after a restart, and a successor Agent or ordinary Inbox message must not change that identity. Reuse delivery reservation rollback and keep unsent sources pending for revalidation, rather than merging them into rendered relay queues whose enqueue result does not prove persistence. Recover every eligible recorded recipient independently, with per-recipient look/backoff and serialized task reads; the first unreadable transcript must not monopolize recovery. An owner wait may discard a rendered signal, not its persisted source: restore it on the next sweep and deduplicate actual delivery durably instead of trusting a sent marker written before validation.
 
 - Process lifetime is not model-health evidence (#8480). Keep an observed completed answer and its original timestamp independently of the live session row. Otherwise releasing an idle process drops the only recovery evidence while an older failed probe remains, reviving an already repaired authentication error. Capture completed-turn evidence without requiring a client poll, scope it to the model binding, retire superseded probes and let newer failures win. Failed persistence must remain retryable.
 - A retry that puts a failed send back for the next digest must first ask whether the next try can succeed (#8518).
@@ -30,6 +45,11 @@
   back onto the presence window, or the cap is not authoritative. The gate is memory-only on purpose: a restart
   degrades to the persisted presence window. Update the time-window tests by shortening the new limits in lockstep
   with the presence timers instead of waiting real minutes.
+
+- A delivered Inbox note is not automatically a reason to wake its supervisor (#9916). Keep the routed task feed,
+  but suppress the successful copy only for active work, checking waits before and after the send. Preserve failed
+  delivery and parked/review fallbacks. Scope and claimed-owner requests need the Agent's full-thread judgment and
+  an urgent-by-default supervisor question, not a keyword classifier over a clipped preview.
 
 - Inbox handling chats are implementation details, not user-created conversations (#5723). `Untitled` suppresses
   automatic naming but does not hide a chat, and `titleFixed` still gives it the item's subject. Apply default
@@ -142,6 +162,7 @@
 - Stage user-filing handling closure in the row being saved and publish it only after that row commits (#1313). Clearing drafts and pending notes on the live item before saving requires more than restoring its done marker, and a concurrent delivery pass can send the stop note before rollback. Exclude pending filing markers from unrelated saves, including delivery acknowledgements. A bulk unchanged acknowledgement also requires a committed state; return pending ids as failed so clients retry. Filters must include every pending open state that can still commit, including intermediate reopens between closed endpoints, and retain older pending ownership when a newer save fails. Give filing its own pending ownership so an unrelated parent edit cannot prevent rollback; keep concurrent chain entries and test batch fallback with mixed row failures, nested draft aliases and delivery during the write.
 
 - Schedule admission must be durable before dispatch (#1287). Save a separate candidate task list while holding the schedule lock, then publish it and broadcast only after success. A failed user edit or due-run marker leaves the prior tasks recoverable. Results and conversation ownership from work already sent are different: keep them in memory when persistence fails, preserve their history IDs so watchers can still update them, and retry the current lists on later saves. A late result still belongs only to its run; it must neither overwrite a newer run's status nor recreate a deleted task.
+- A durable timer needs a fixed deadline and a crash policy, not just a saved callback (#1811). Persist scheduled usage-limit retries and task receipt rechecks before arming their local timers, restore overdue work promptly, and fence dispatch with a compare-and-swap claim. Reset every captured result on each CAS retry: a loser whose first attempt claimed the document must not return success from that stale attempt. Once a scheduled retry may have been sent, recover its claim as unknown rather than resending; receipt rechecks can replay through the durable turn ledger, but only while their exact task-agent link and reopen generation still match. Keep the original settlement's unreachable result instead of probing twice—the second probe can succeed and wrongly discard the retry.
 
 - A list bounded by a retention window is not bounded (2026-11-12, #5549). `GET /api/v1/inbox` listed every item done within three days, so one Clean up all of a few thousand items made it about 10,000 items and 21 MB: every app downloaded it again on each `inbox` push, and Android's bounded reader (4 MiB, 100,000 structural tokens) turned it down. Cap the done side by count on a deterministic key (`done_at`, then id, the history's order: a just-filed item is always kept, and the same items give the same bytes for the merged validator), let the delta report what falls past the cut as `removed`, keep it reachable by id and through the history, and test with more items than the cap. Clients that took the window as complete without a page (iOS `listDoneSpan`, the web's former `LIST_DONE_MS`) under-show until they page it too.
 - A capped display list is not an idempotency record (2026-11-15, #8424). A connector's `replied` state report repeats until new messages come, and its dedupe looked for a `self_replied` chain entry at the report's `last`; the chain keeps the newest 50 entries for display, so a conversation's later steps at the same position could push that entry out and the same report counted as another owner reply: another entry, note and wake, and a reset follow-up, suggestion and draft. Keep the key a dedupe needs in a field of its own (`InboxItem.RepliedOf`), read the old marker only for rows stored before it, and test by evicting the marker before replaying the report.
@@ -171,6 +192,8 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
 
 - A second opt-in model override shows where the first was keyed by ID (#4232). Setting the AI twin apart like Lark /agent needed no new server path, but every client special-cased `id == "lark.agent"` for its status words, reset label and effort rule, so the twin's row and editor would have kept a category's wording (no "Separately configured", "Restore Default" instead of "Follow Agents") while being an override. Recognize such a row by data (`parent: "agent.new"` and writable `fields`) and keep ID checks for wording that really is one purpose's. Server tests start the twin through its own path (`startInboxAgent`), not the conversation route, and check that a save writes only its own key.
 
+- Model recovery provenance belongs to a turn and a chain, not to conversation-wide mutable flags (#10909). Persist the original execution identity before recovery can overwrite session state; do not inherit it across an exhausted chain boundary. Classify a new pick without ending the old marker or hold, and commit that ending only at input delivery. A busy process must retain its own used/retry budget even when newer input joins it, then release that ownership when its chain finishes. For legacy markers, fallback-mutated session effort is not the original effort. Cover fresh/expired/aged/cold records, exact old-fallback picks, rejected and real newer delivery, older `from` and `to` turns, restart and launcher-scoped unavailable evidence.
+
 - Model-settings HTTP labels must use `requestCtxLang(ctx)`, not `s.lang(ctx)` (2026-11-06, #5057). The latter reads only the hub's language, so catalog-driven launcher role labels can still ignore a client's `Accept-Language`. Test sequential requests with a different hub language, both discovered-model and fallback-model paths, and unchanged model IDs. MCP-only refusals remain original model text; they must not become exemptions for real HTTP, push or approval-card copy.
 
 - A database-read failure for session triage settings must not return `200` with defaults (2026-11-06, #4553). Toggling one switch makes the client `PUT` the entire settings group; a failed read disguised as All Off would overwrite other enabled values. Preserve the read error and return `503` with a localized reason from the settings API. Only internal automatic triage keeps a default fallback. Do not cache failures; the next retry must read the database again. Regression tests inject read errors through a fake Store and check API failure, saved values after recovery, and unaffected internal fallback and `PUT`, without stopping the shared test database.
@@ -199,7 +222,7 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
 - Fake HOME is not isolation. Node follows launcher-selected `CLAUDE_CONFIG_DIR`; hardcoded profile launcher writes real transcripts, and cwd suffix `/.persona/assistant` makes real assistant chats appear in test hub, editable by test assistant (2026-11-01 chat-management tests). Copy launcher into fake HOME, redirect `CLAUDE_CONFIG_DIR` there, copy settings.json, define `_claude_launchers` in fake .bashrc, prompt only own created chats; delete full fake HOME afterward, keys included.
 - Unknown `assistant.send` session ID starts **blank new chat** rather than error if no transcript. Resume-or-report-failure calls (scheduled chats 2026-11-01) use `resume_only`; no process / transcript errors, hub creates / records new chat (`docs/assistant/assistant.md` “Scheduled tasks”). Busy state comes from hub working / needs_you and only listed sessions; retain long-lived chats in `keptSessions`, or 80 new transcripts on busy machine evict them.
 - **No per-message changing data in system prompt** (2026-11-01, `docs/assistant/assistant.md` “Live snapshots and prefix caching”). Prefix caching puts system / tools before history; one byte change rewrites hundreds of thousands of tokens after restart, first output 10 seconds to minutes. Snapshots accompany messages. Claude resume actually retains first system prompt until compaction, so old snapshot stale, not cache-invalidating. Real restart cache miss was **changed tools**: one removed MCP tool rewrites all, schema key order does not. Diagnose experimentally: copy real chat with new ID / temporary directory, change one thing per restart, inspect `message_start` cache_read_input_tokens.
-- Per-start compaction belongs in both the process environment and the final merged settings (#6481). Claude settings `env` can override the process, and the SDK recomputes provider environment after spawn. Preserve launcher settings / hooks, then pin the computed AUTO and MAX values last in both paths. A launcher AUTO value is not evidence of backend capacity. Match warm spares and restarts by explicit main-chat scope, not the assistant directory or model purpose; scheduled chats share both. Don't turn "nothing declared" into a Persona number (#3008, #3066): a guessed 200k, then fixed 200k / 400k targets, made 1M conversations compact at about 167k. The one Persona number left is explicit and narrow: `assistant.main_compact_window` (#7314) caps only the main conversation, only on a managed launcher that declares a larger window, and only when the manager sends it (absent or 0: no cap). Follow what the launcher declares, write nothing otherwise (Claude Code already holds AUTO to its own model window), and read the real window from `result.modelUsage.<model>.contextWindow` where Persona needs it (the idle threshold). Write values only where Persona owns the environment (a managed launcher): over a shell launcher they would override its own declarations.
+- Per-start compaction belongs in both the process environment and the final merged settings (#6481). Claude settings `env` can override the process. Preserve launcher settings / hooks, then pin the computed AUTO and MAX values last in both. A launcher AUTO value is not evidence of backend capacity. Match warm spares and restarts by explicit main-chat scope, not the assistant directory or model purpose; scheduled chats share both. Don't turn "nothing declared" into a Persona number (#3008, #3066): a guessed 200k, then fixed 200k / 400k targets, made 1M conversations compact at about 167k. The one Persona number left is explicit and narrow: `assistant.main_compact_window` (#7314) caps only the main conversation, only on a managed launcher that declares a larger window, and only when the manager sends it (absent or 0: no cap). Follow what the launcher declares, write nothing otherwise (Claude Code already holds AUTO to its own model window), and read the real window from `result.modelUsage.<model>.contextWindow` where Persona needs it (the idle threshold). Write values only where Persona owns the environment (a managed launcher): over a shell launcher they would override its own declarations.
 
 - Headless `claude -p` auto-compacts via `CLAUDE_CODE_AUTO_COMPACT_WINDOW`; idle compaction only interactive. `stream-json` `/compact` manually compacts. First resumed-process message sometimes does not compact, second does; one miss not proof unsupported.
 - `ssh_host` aliases exist only hub ~/.ssh/config. Giving remote assistant ssh <alias> supplies unusable command.
@@ -413,6 +436,10 @@ its task decision together before sending it to a hook. A plan approval must sel
 mode can fall back to bypass permissions on the node. Count confirmation dispatch at `tellUser`, not interaction
 creation or app presentation; quiet tasks and supervisor routing also show cards without ringing the user.
 
+## Supervisor assignment must respect the policy channel (#10338)
+
+A runtime-backed chat can plan work and receive owner replies. A task reviewer needs a separate policy channel on every supervised turn. Check the session's execution source when dispatch assigns the reviewer, including plans that waited for approval and scheduled chats listed as leaders. A permanent policy refusal ends that relay. The task and its worker reports stay available for review. Routing only at dispatch is not enough: tasks a runtime chat supervised before that, and digests already queued for it, must route around it when they are delivered (`digestTarget`), and the node must never shut the owner out because a policy came with an ordinary message: it refuses only the manager's supervision message (#11121).
+
 ## The supervision fingerprint only sees the agent's words (#6027)
 
 `digestFingerprint` (`supervise_dedup.go`) folds a signal into the one told in the last 30 minutes when its agent's
@@ -447,11 +474,13 @@ their own and kept a step at two until they used the same path, so never call `s
 that count events right after a write must wait with `todosTold` first. A pass that runs on a timer and looks only at
 open tasks takes them with `todosWhere`, not `todosOf(ctx, "*")`, which deep-copies every finished one too (27 MB per
 30 s at 4,000). The direction tree is not such a pass: a finished task decides whether a failed start in its row
-still counts, so it reads them all.
+still counts, so it reads them all. The To-dos view's pushes (`todo_view_push.go`) need the same answer without that
+copy: their recheck and clock read only the to-dos they are about and take supersession from each to-do's title, PR,
+plan and close alone (`projection.Superseded`).
 
 ## Disable ToolSearch per server, not for the whole assistant process (#5838)
 
-Setting `ENABLE_TOOL_SEARCH=false` for Persona's assistant also forced every claude.ai connector's tools into each request (one connector alone was hundreds of tools and most of the context), causing repeated compaction. Never set it to false. `personad mcp` marks only Persona tools with `_meta: {"anthropic/alwaysLoad": true}` when `PERSONA_ASSISTANT=1` (since #7317 only those the manager did not defer), and other servers keep Claude Code's normal deferred loading. The assistant's processes carry `ENABLE_TOOL_SEARCH=true` instead (#7317, below), which keeps that deferral. A regression test checks both the metadata and the process environment.
+Setting `ENABLE_TOOL_SEARCH=false` for Persona's assistant also forced every claude.ai connector's tools into each request (one connector alone was hundreds of tools and most of the context), causing repeated compaction. Never set it to false on Anthropic's own API (behind a gateway it is the right value: #10365, below). `personad mcp` marks only Persona tools with `_meta: {"anthropic/alwaysLoad": true}` when `PERSONA_ASSISTANT=1` (since #7317 only those the manager did not defer), and other servers keep Claude Code's normal deferred loading. The assistant's processes carry `ENABLE_TOOL_SEARCH=true` instead (#7317, below), which keeps that deferral. A regression test checks both the metadata and the process environment.
 ## A leader writes to an owner who has seen nothing else (#5842)
 
 Leaders spend most of their turns with the main chat, other leaders, scheduled runs and supervision messages (on one
@@ -497,7 +526,24 @@ Claude Code also holds tool search off for a conversation that once ran without 
 this conversation has run without ToolSearch, and stays so until it is compacted or cleared"), so conversations started
 before #5839 sent every tool, other servers' too, until their next compaction: about 8.7K tokens more per request on
 Claude Code 2.1.322. Any non-empty `ENABLE_TOOL_SEARCH` lifts the hold-off; the assistant sets exactly `true`, which
-keeps the default deferral (`false` is #5838).
+keeps the default deferral (`false` is #5838). Correction (#10365): `true` is the same mode as unset only on Anthropic's
+own API. Any value also lifts Claude Code's rule that keeps tool search off behind a Base URL that is not
+`api.anthropic.com`, so `true` for every conversation (#7371) sent deferred tools to gateways that refuse them; the
+"endpoint-refused fallback" #7371 relied on is not in the Claude Code the machines ran (2.1.291). The assistant now sets
+`true` only there (next lesson).
+
+## `ENABLE_TOOL_SEARCH=true` also lifts Claude Code's gateway rule (#10365)
+
+Claude Code keeps tool search off by itself when `ANTHROPIC_BASE_URL` is not `api.anthropic.com`, but only while the
+variable is unset: `true` (or any value) overrides that rule. #7371 set `true` on every assistant process, and on a
+gateway whose edge cannot represent `defer_loading` tools, `tool_reference` blocks or the `ToolSearch` tool, every
+conversation on some models failed with `400 request is not representable on this edge: ToolSearch is not supported`.
+Nothing caught it: the node's recovery takes a 400 as the user's, the hub had no code for it (the card said the request
+was malformed), and Test passed, since `claude -p` checks set nothing and kept Claude Code's rule. Set the variable by
+where the requests go (`toolSearchFor`): `true` on Anthropic's own API, `false` behind a known gateway (also in a managed
+provider's own environment, which may opt back in), nothing where the start cannot tell. Decide per (launcher, model):
+one gateway carried deferral for its Claude model and refused it for two others. Read the version you rely on: a
+behaviour measured on one Claude Code (2.1.322) is not proof for the one the machines run.
 
 ## A leader's split must be somewhere the owner can see (#5846)
 
@@ -509,6 +555,22 @@ To-dos SOP shelves it after 48 h untouched like any agent-made to-do (it leaves 
 and the stuck rule must not count a piece that never started, or every planned piece older than a day reported stuck.
 
 - Match Inbox PR/issue comments by full task URLs before the AI twin gate (#5578). A to-do may record its link only in `pr_url`, its title or its notes. Keep host, repository and PR/issue kind in the identity, leave ambiguous matches to the judge, and use a separate per-message signal cursor: the twin's `Of` cursor tracks handling, which does not run while it is off. Persist associations before forwarding them, and retain the existing supervision opt-in and exclusions.
+
+## Size a tool's text in tokens, not characters (#7316)
+
+Claude Code refuses an MCP tool's output past 25,000 tokens (`MAX_MCP_OUTPUT_TOKENS`, which Persona does not set) and
+saves it to a file instead, so a result over it costs the call and the reads that recover it: on one install, 54 `kb_get`
+failures in 30 days, all on projects, then about 70 Bash / Read / sub-agent calls. Characters are a poor measure. With
+Claude's tokenizer on knowledge-base text, CJK alone was 1.08 tokens a character, but Chinese mixed with English words,
+digits and markdown (summaries, logs, chat messages) cost up to a third more than "one token a CJK character, two ASCII
+characters a token"; indented JSON was 1.8 characters a token, numeric ids 2.2, English prose 3.1. "One token a CJK
+character, 3.5 ASCII characters a token" put whole `kb_get` results at two thirds of their real count. `kb_get`'s
+ceiling (`estTokens`, `assistant/kb_get_fit.go`) counts a rune past ASCII as 1.25 tokens and an ASCII byte as half of
+one, which stayed within 15% under the real count on all of these, and stops at 20,000. The size came from the data,
+not the model: linking a group chat to a project adds all its members to the project's people, so one project's
+meta.json held 3,708 ids, 92% of a 129,000-character result. Fold such lists in the tool's text rather than count on
+the store staying small.
+
 ## A source read by pages must settle what left the page (#5993)
 
 The Inbox's mail rounds read each account's newest 40 INBOX messages, and every rule that files a mail item (read
@@ -590,10 +652,12 @@ The manager waits 90 s for a relayed message (`drainRelays`) and kept it queued 
 written it after the first of two session-list rebuilds inside the send and was still building the second when the
 time ran out, so every later drain wrote it again: one conversation read the same message 32 times in an hour, and the
 messages queued behind it waited. A send in doubt is not a failure. Relays now carry one `once_id` per message
-(`relayMsgID`), which the node sends once (`sentLog`); a try in doubt first looks for the message's line in the
-conversation's latest turns (`relayArrived`: context blocks left out, no line older than the try, the sending
-conversation as its source), and one not found then is looked for again before the next try (`relayLanded`), which
-covers a line that lands late and a node restarted in between; and the send pushes the session list in the background, waiting for it only briefly
+(`relayMsgID`), which the node sends once while it remembers the id (`sentLog`). Save the attempt with the queued
+message before sending (#10690). Look for its line in the latest turns (`relayArrived`) using its text, time and
+sending conversation. A context-only relay also carries its `once_id` in its message-source metadata, so it can be
+found even if the transcript reader removes its original context. A failed read or
+a late transcript write can hide the line, so check again on a bounded schedule before retrying. The send pushes
+the session list in the background, waiting for it only briefly
 (`notifySessionsSoon`, `listPushWait`). The id is deliberately not a `client_msg_id`: a line tied to one reads as the
 owner's own message everywhere (its source label, task briefs, user-input counts, extensions). The web had the same
 blind spot for the owner's own sends: a send answered 502 `delivered: "unknown"` stayed a failed bubble unless the hub
@@ -647,6 +711,15 @@ When `session.start` never answers, the hub lists the machine and adopts the ses
 
 #3811 gave interval follow-ups in leader conversations a hidden 10-minute cadence while an open supervised todo had an active agent: `nextWithLeaderCadence` derived extra runs from `LastRun` while leaving the stored `At` / `EveryMinutes` on the original rule, and the run copy's `cadenceEvery` made `taskPrompt` print "每 10 分钟". The stored task still showed 30 minutes / 1 hour in `list_followups`, so nothing visible explained why a patrol the user asked for every 30 minutes fired every 10 minutes from its first run, and it became the main chat's biggest token sink. Lesson: a scheduler may have exactly one effective cadence, and it must be the one stored on the task and shown in every view and run prompt; an "accelerate while busy" rule that is invisible to both storage and UI is indistinguishable from a bug. If such a rule is ever wanted again, it must be an explicit, user-visible setting with its own stored field, not a second rule derived inside the scheduler. Keep interval advancement in one place (`runDue` advancing `At` by `EveryMinutes`); tests assert the prompt text states the configured interval even while supervised work is open.
 
+## Scheduled runs need observable to-do progress (#9755)
+
+- A successful scheduled run is not progress on its linked to-do (#9755). Compare transcript output, criterion
+  states and explicit progress-report content, not updated timestamps or the follow-up's own summary. Keep the
+  streak and baseline with the schedule, not only in capped shared history; test restart, history eviction,
+  replayed completions and failed persistence before emitting a supervisor signal or an owner decision. Keep the
+  first escalation attempt's identity across runs: its committed owner review repairs a lost final marker without
+  duplicating that decision or mistaking an unrelated owner question for its own.
+
 ## A stopped leader's own To-do does not list its workers (#8400)
 
 Workers planned by a task leader have separate To-dos: their `todo_agents.source` is `worker` and `via` is the leader's
@@ -687,3 +760,55 @@ answer retryable. Tests must check both the in-memory receipt and stored one, pl
 
 Restore the previous `DueAt` on acceptance-save failure, not an empty time: an owner message in the Agent chat uses
 that marker to pause the default. A later rejected answer must preserve both that pause and the dismissal.
+
+## Reserve a conversation for replacement in the same step as the check that nothing goes in (#7315)
+
+The background supervisor is replaced when its rounds outgrow it, and the first version checked that no queued message
+was going into the old one, released the relay book's lock, and only then started the replacement, which takes seconds.
+A session list pushed in that gap could drain the old one's queue into it (found in review): that round would run in a
+conversation archived moments later and no longer the background supervisor, so its `task_review` of a main-chat task
+would be refused, and a message queued before a manager restart, whose signals were not in memory, would leave the queue
+as delivered instead of moving to the replacement. A check that a resource is free is only good while the lock it was read under is held:
+mark the conversation as being replaced under that same lock (`relayBook.replacing`), have every drain and every direct
+delivery respect the mark (the direct ones queue), and clear it only where what waited has moved or the replacement
+failed, draining it again then (`TestNothingGoesIntoABackgroundSupervisorBeingReplaced`).
+
+## A queued supervision digest is not a snapshot of work that still needs review (#10424)
+
+An interruption and an unjudged turn can wait behind a busy supervisor while that task recovers and is accepted.
+Replaying only the rendered text then starts obsolete work or retries a refusal forever. Persist the structured signals
+with the relay, recheck the loaded task ledger immediately before delivery, and render only the surviving entries.
+A failed ledger read or checkpoint is unknown: keep the original queue. Move a changed conversation destination and
+remove its source entries in the same saved relay state. Do not change an uncertain send's text or destination: its
+old once-only identity may already have reached the node. Test both an entirely obsolete digest and a mixed one,
+including a real database reload into a new service; the in-memory signal map alone does not survive restart.
+
+## Manual compaction is not a main-only policy (#10064)
+
+The manual HTTP and node paths already accept side conversations, but all three client menus hid the action behind
+the main-chat check. Android also read and displayed only the main chat's progress. When extending a conversation
+action, trace its eligibility, request target and progress source together; progress must reset when the selected
+conversation changes. Keep automatic main-chat policy and the main-only clear/new actions separate. Menu regressions
+must exercise a real non-main selection and fail when the old guard is restored.
+
+## A check that passes must have sent what the chat sends (#10365)
+
+"Try it" ran `launchers.check` with the Main chat launcher's name alone: the launcher's default model, the login shell's
+profile, no tools, no tool search. The chat ran a picked or configured model in its own profile with Persona's tools,
+and failed with `model_route`; the check passed, its newer pass cleared the readiness card, and the next message failed
+again. Evidence about a model is about one request shape: resolve the probe's target with the send path's own code
+(`sendModel`, read-only), have the node build the check as the turn (`launchers.check` `assistant_turn`), and key the
+evidence and its reuse by machine, launcher and model, so a pass of something else, or of an older plain check, never
+outranks the real turn's failure (`TestReadinessProbeOtherModelDoesNotClearModelRoute`).
+
+## An agent's own slash command works only as the whole prompt (#10950)
+
+In an Antigravity conversation, sending `/compact` reached the model as `/compact/compact` and compacted nothing. The
+web composer was not at fault: the hub's `sent_messages` held `/compact` once for every send. The node put the
+`<persona-context>` block in front of the text, and `agy` runs a command only when it is the whole prompt; with a block
+before it, it records the line as plain text. Reproduced with `agy acp` alone: the block plus `/compact` is recorded as
+`/compact/compact`, the bare `/compact` writes a compaction checkpoint. `assistantSendRuntime` now sends a one-line
+slash-only message on its own, leaves the snapshot unsent for the next message, and after `/compact` forgets the
+snapshot the conversation has seen (`TestAssistantOnARuntimeSendsASlashCommandOnItsOwn`). The chat bubble showed the
+doubled text because the chat is drawn from the agent's own transcript: when a user bubble looks wrong, compare it with
+the hub's record of what was sent before looking at the client.

@@ -35,6 +35,17 @@ func launcherAgentType(name string) string {
 	return "claude"
 }
 
+// Managed wrappers need not be named after the CLI they run. An explicit type wins.
+func (n *Node) startAgentType(launcher, declared string) string {
+	if declared != "" {
+		return declared
+	}
+	if l, ok := n.managedLauncher(launcher); ok && l.AgentType() == traexAgent {
+		return traexAgent
+	}
+	return launcherAgentType(launcher)
+}
+
 func typedLaunchers(list []proto.Launcher) []agentLauncher {
 	out := make([]agentLauncher, 0, len(list))
 	seen := map[string]bool{}
@@ -70,7 +81,7 @@ func otherAgentCommand(launcher, resume, prompt string, shells ...string) string
 // break as a space (csh ends the command at one, quote open or not).
 func typedArg(text string, shells ...string) string {
 	text = strings.ReplaceAll(inertControls(text), "\t", " ")
-	if !takesAssign(shells...) {
+	if !takesAssign(startCommandShells(shells)...) {
 		text = strings.NewReplacer("\r\n", " ", "\r", " ", "\n", " ").Replace(text)
 	}
 	return text
@@ -92,22 +103,31 @@ func (n *Node) startOtherAgent(ctx context.Context, launch host.Launcher, cwd, l
 		existing[id] = true
 	}
 	n.mu.Unlock()
+	if kind == traexAgent && resume == "" {
+		// The host may report an old conversation before the new process claims its own.
+		for id := range n.traexThreads() {
+			existing[id] = true
+		}
+		for _, r := range rollouts(n.traexHome()) {
+			existing[r.id] = true
+		}
+	}
 	if err := n.settleShell(ctx, pane); err != nil { // the fresh shell at rest first (shellsettle.go, #2570)
 		return nil, n.startTabFailed(ctx, launch, created, ws, resume, err)
 	}
 	// A Codex wrapper is told to herdr as Codex (hostherdr.go); a compatible CLI is herdr's to detect. The node's
 	// directory in front, the assistant's environment left out (agentenv.go).
-	shells := paneShells(ctx, created)
+	shells := n.startPaneShells(ctx, launch, created)
 	// The first message keeps its line breaks only in a start file: typed out, the line may meet csh, which runs each
 	// line on its own (typedArg), and Orca does not say which shell it opened.
 	argShells := shells
 	if !n.typesStartFile(launch, shells...) {
 		argShells = nil
 	}
-	cmd := withHerdrAgent(typedHerdrAgent(launch, kind, shells...), otherAgentCommand(launcher, resume, prompt, argShells...))
+	cmd := withHerdrAgent(typedHerdrAgent(launch, kind, shells...), otherAgentCommand(n.launcherCommand(launcher), resume, prompt, argShells...))
 	// Not in the agent sandbox (agentsandbox.go).
 	n.notePaneStart(launcher)
-	done, err := n.runAgentCommand(ctx, launch, created, ws, "", n.agentCommand(cmd, shellQuote, shells...), shells...) // typedstart.go
+	done, err := n.runAgentCommand(ctx, launch, created, ws, "", n.agentStartCommand(cmd, shellQuote, shells...), shells...) // typedstart.go
 	if err != nil {
 		return nil, err
 	}
@@ -125,11 +145,16 @@ func (n *Node) startOtherAgent(ctx context.Context, launch host.Launcher, cwd, l
 		if err := n.refreshHosts(ctx); err != nil {
 			continue
 		}
+		confirmed := ""
+		if kind == traexAgent {
+			confirmed = n.traexLiveThread(pane, resume)
+		}
 		n.mu.Lock()
 		var id string
 		var agent host.Agent
 		for candidate, a := range n.agents {
 			if a.PaneID == pane && a.Agent == kind && candidate != "" &&
+				(kind != traexAgent || candidate == confirmed) &&
 				((resume == "" && !existing[candidate]) || candidate == resume) {
 				id, agent = candidate, a
 				break

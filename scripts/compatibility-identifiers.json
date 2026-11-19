@@ -55,6 +55,22 @@
       "path_tokens": [],
       "external_refs": []
     },
+    "android/core/data/src/test/kotlin/persona/core/data/PortDiscoveryMockServer.kt": {
+      "reason": "Exact discovery-request regression fixture retaining both protocol generations.",
+      "tokens": [
+        "jarvis-ports"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
+    "android/core/data/src/test/kotlin/persona/core/data/PortDiscoveryMockServerTest.kt": {
+      "reason": "Exact discovery-request regression fixture retaining both protocol generations.",
+      "tokens": [
+        "jarvis-ports"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
     "android/core/contracts/src/test/kotlin/persona/core/contracts/ProtocolCompatibilityTest.kt": {
       "reason": "Baseline regression fixture or exact compatibility assertion for a persisted contract.",
       "tokens": [
@@ -320,6 +336,14 @@
       "path_tokens": [],
       "external_refs": []
     },
+    "desktop/test/page-routes.test.ts": {
+      "reason": "Baseline regression fixture or exact compatibility assertion for a persisted contract.",
+      "tokens": [
+        "jarvis"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
     "docs/assistant/assistant.md": {
       "reason": "Published compatibility documentation naming exact historical MCP tool and settings aliases.",
       "tokens": [
@@ -372,6 +396,14 @@
         "jarvis",
         "jarvis_default",
         "jarvis_manager"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
+    "docs/operations/link.md": {
+      "reason": "Published upgrade, storage identity or compatibility documentation retained for existing installations.",
+      "tokens": [
+        ".jarvis"
       ],
       "path_tokens": [],
       "external_refs": []
@@ -554,7 +586,6 @@
         ".jarvis",
         "JARVIS_",
         "jarvis",
-        "jarvis-agent-sdk-runtime",
         "jarvis-context",
         "jarvis-dsh-runtime",
         "jarvis-paseo-runtime",
@@ -1018,7 +1049,6 @@
         "com.jarvis.node",
         "jarvis",
         "jarvis-",
-        "jarvis-agent-sdk-runtime",
         "jarvis-blob",
         "jarvis-check-",
         "jarvis-circuit",
@@ -1055,7 +1085,6 @@
         "X-Jarvis-Op-Id",
         "com.jarvis.node",
         "jarvis",
-        "jarvis-agent-sdk-runtime",
         "jarvis-context",
         "jarvis-dsh-runtime",
         "jarvis-file",
@@ -1129,6 +1158,24 @@
       "reason": "Baseline regression fixture or exact compatibility assertion for a persisted contract.",
       "tokens": [
         "JARVIS_HOME"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
+    "server/internal/node/powershell_start_test.go": {
+      "reason": "Goldens captured from main's start command, which still names the retained legacy MCP tools and unsets the legacy environment aliases.",
+      "tokens": [
+        "JARVIS_ASSISTANT",
+        "JARVIS_ASSISTANT_BIN",
+        "JARVIS_GUEST",
+        "JARVIS_SESSION_ID",
+        "JARVIS_SPACE",
+        "mcp__jarvis__report_to_supervisor",
+        "mcp__jarvis__task_plan",
+        "mcp__jarvis__task_review",
+        "mcp__jarvis__todo_bind_thread",
+        "mcp__jarvis__todo_decision_add",
+        "mcp__jarvis__todo_decisions"
       ],
       "path_tokens": [],
       "external_refs": []

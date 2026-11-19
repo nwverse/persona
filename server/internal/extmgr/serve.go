@@ -121,6 +121,7 @@ func (h *Manager) registerRoutes(api *http.ServeMux) {
 	h.messagingRoutes(api)
 	h.adminExtensionRoutes(api) // with the old /api/v1/admin/plugins paths
 	h.subscriptionRoutes(api)
+	h.avatarRoutes(api)
 	api.HandleFunc("POST /api/v1/error-reports", h.postErrorReports)
 	// The assistant's WebSocket routes, relayed like the extensions' (a relay stream), are the assistant's to answer.
 	for _, pattern := range assistantwire.SocketRoutes {
@@ -719,6 +720,23 @@ func (h *Manager) CallTool(ctx context.Context, machine, session, name string, a
 // ConnectorTool says whether name is a registered connector's tool (not Cua's or ego's).
 func (h *Manager) ConnectorTool(name string) bool {
 	return h.connectors != nil && h.connectors.Offers(name)
+}
+
+// ToolAccess classifies every tool CallTool can dispatch, without running it. Connector reads are declared by the
+// connector; its Actions are writes. Subscription dry runs only read, while save/run can change or notify. Computer,
+// browser and iPhone control are actions for this policy even when an individual invocation only observes.
+func (h *Manager) ToolAccess(name string) (known, readOnly bool) {
+	if h.connectors != nil && h.connectors.Offers(name) {
+		return true, h.connectors.ReadOnly(name)
+	}
+	switch {
+	case isComputerTool(name), isBrowserTool(name), isIPhoneTool(name):
+		return true, false
+	case isSubscriptionTool(name):
+		return true, name == "subscription_list" || name == "subscription_get" ||
+			name == "subscription_sources" || name == "subscription_dry_run"
+	}
+	return false, false
 }
 
 // AssistantSummary is the text a gated command's card shows, as its extension names what the ids are; false: none.

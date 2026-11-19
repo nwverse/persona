@@ -51,6 +51,7 @@ struct InteractiveAssistantViewCard: View {
             }
             if supported {
                 ExtensionViewStack(view: model.view, model: model, cards: false, titles: true, link: link)
+                    .environment(\.pluginUICompact, true)
                     .environment(\.assistantHTMLRendering, AssistantHTMLRenderingContext(version: model.version, fallback: model.root.fallback,
                         answered: model.record != nil || model.attempt != nil,
                         enabled: AssistantHTMLSafety.executionVerified && app.features(location.scope.group).contains("assistant_html_bridge"),
@@ -105,7 +106,7 @@ struct InteractiveAssistantViewCard: View {
         #endif
         .sheet(item: $openedFile) { FileViewer(ref: $0) }
         .sheet(item: $openedKnowledge) { entry in
-            NavigationStack { KnowledgeDetailView(entry: entry) }
+            NavigationStack { KnowledgeDetailView(entry: entry).toolbar { SheetClose { openedKnowledge = nil } } }
         }
         .onAppear { model.update(source, version: version, complete: complete); model.registered = registered }
         .onDisappear { model.decline() }

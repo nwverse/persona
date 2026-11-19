@@ -124,6 +124,15 @@ type Launcher interface {
 	NameAgent(ctx context.Context, pane PaneRef, name string) error
 }
 
+// EnvLauncher is a Launcher that can start the new pane's shell with extra environment ("KEY=VALUE"): herdr's
+// workspace.create / tab.create env, the Herdr App's terminal.run env. The node opens an Agent's terminal this way so
+// the shell's own startup files can tell it from one the user opened (PERSONA_AGENT, #10111) and skip the questions
+// that would stop the start (#10365).
+type EnvLauncher interface {
+	CreateSpaceEnv(ctx context.Context, cwd, label string, env []string) (*Created, error)
+	CreateSlotEnv(ctx context.Context, space, cwd, label string, env []string) (*Created, error)
+}
+
 // Organizer renames and closes.
 type Organizer interface {
 	RenameSpace(ctx context.Context, space, name string) error
@@ -312,11 +321,14 @@ type ReadOpts struct {
 	ANSI bool
 }
 
-// AgentSession is what an agent integration in the host reported about the pane's session (Kind "id": Value is the
-// session id; Kind "path": Value is the session's file, as herdr's pi integration reports it).
+// AgentSession is what an agent integration in the host reported about the pane's session. Source identifies the
+// reporting integration and Agent names the agent. Kind "id" carries the session ID in Value. Kind "path" carries
+// the session's file, as herdr's pi integration reports it.
 type AgentSession struct {
-	Kind  string
-	Value string
+	Source string
+	Agent  string
+	Kind   string
+	Value  string
 }
 
 // Agent is one pane as the node sees it: where it is, and the agent running in it with its state and session when the

@@ -14,20 +14,14 @@ import (
 )
 
 func TestAssistantUnselectedModeStartsBypass(t *testing.T) {
-	f := sdkTest(t)
-	id, err := f.n.assistantSend(context.Background(), "", t.TempDir(), "claude", "hello", nil, "", "", sdkExec(proto.AssistantRuntimeAgentSDK))
+	f := cliTest(t)
+	id, err := f.n.assistantSend(context.Background(), "", t.TempDir(), "claude", "hello", nil, "", "", cliExec())
 	if err != nil {
 		t.Fatal(err)
 	}
 	f.idle(t, id)
-	var start struct {
-		Options struct{ PermissionMode string }
-	}
-	if err := json.Unmarshal([]byte(f.file("start.json")), &start); err != nil {
-		t.Fatal(err)
-	}
-	if start.Options.PermissionMode != proto.ModeBypass {
-		t.Fatalf("startup mode = %q, want bypassPermissions", start.Options.PermissionMode)
+	if argv := f.file("cli-argv"); !strings.Contains(argv, "--permission-mode "+proto.ModeBypass) {
+		t.Fatalf("startup args %q, want --permission-mode bypassPermissions", argv)
 	}
 	if err := f.n.setModes(context.Background(), id, "default", ""); err != nil {
 		t.Fatal(err)
@@ -629,7 +623,7 @@ func assertAssistantBypassClassification(t *testing.T, command string, cards int
 			}
 			n.larkCfg.CLI = &proto.LarkCLI{Bin: "/nonexistent/lark-cli"}
 			// Seed metadata without starting the CLI or executing the classified commands.
-			n.larkRisks = map[string]string{"\x00docs +fetch": "read", "\x00docs +create": "write"}
+			n.larkRisks = map[string]string{"\x00docs +fetch": "read", "\x00docs +create": "write", "\x00im messages get": larkCLIMissing}
 			n.noteModes(testThread, proto.ModeBypass, "")
 			fh.answer = func(proto.Interaction) proto.Resolution { no := false; return proto.Resolution{Allow: &no} }
 			decision, want := "", "allow"

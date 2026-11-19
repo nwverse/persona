@@ -272,11 +272,12 @@ func TestSendParams(t *testing.T) {
 	f.agentModels = map[string][]proto.AgentModel{"side-l": {{ID: "m"}}}
 	s := newTestService(t, f)
 	setModel(t, s, "assistant", ModelBinding{Provider: "launcher.conv"})
-	if p, err := s.SendParams(ctx, SendParams{MachineID: "server", SessionID: "unlisted", Params: map[string]any{"text": "hi"}}); err != nil ||
-		len(p) != 3 || p["is_main"] != false || p["supervision_instructions"] != "" {
-		t.Fatalf("unlisted: %v %v", p, err)
+	p, err := s.SendParams(ctx, SendParams{MachineID: "server", SessionID: "unlisted", Params: map[string]any{"text": "hi"}})
+	_, attested := p["origin_known"]
+	if err != nil || len(p) != 3 || p["is_main"] != false || p["supervision_instructions"] != "" || attested {
+		t.Fatalf("unlisted and not yet backfilled must stay unknown: %v %v", p, err)
 	}
-	p, err := s.SendParams(ctx, SendParams{MachineID: "server", SessionID: "side", Params: map[string]any{"text": "hi"}})
+	p, err = s.SendParams(ctx, SendParams{MachineID: "server", SessionID: "side", Params: map[string]any{"text": "hi"}})
 	if err != nil || p["launcher"] != "conv" || p["model"] != nil || p["model_fingerprint"] == nil { // the main chat's
 		t.Fatalf("a gone launcher: %v %v", p, err)
 	}
@@ -418,7 +419,7 @@ func TestBoolSettingsSet(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		def  bool
-	}{{"main_tasks_quiet", true}, {"start_requested_tasks", true}, {"done_needs_delivery", false}, {"interject_background", false}, {"agent_tasks", false}, {"main_background_folded", true}, {"recent_task_chats", false}, {"inbox_signals", false}, {"main_supervises_own_tasks", false}} {
+	}{{"main_tasks_quiet", true}, {"start_requested_tasks", true}, {"done_needs_delivery", false}, {"interject_background", false}, {"agent_tasks", false}, {"close_ended_terminals", false}, {"main_background_folded", true}, {"recent_task_chats", false}, {"inbox_signals", false}, {"main_supervises_own_tasks", false}} {
 		key := "assistant." + c.name
 		get := func() string { out, _ := tool(`{"action":"get","key":"` + key + `"}`); return out }
 		set := func(value string) (string, bool) {

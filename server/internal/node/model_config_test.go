@@ -57,27 +57,13 @@ func TestModelFingerprintTracksManagedProviderChanges(t *testing.T) {
 	}
 }
 
-// The runtime (#2455) and every provider field are in the fingerprint; "cli" is the CLI as "" is, and a fingerprint
-// without a runtime is what it was before.
-func TestModelFingerprintTracksRuntimeAndProviderFields(t *testing.T) {
+// Every provider field (#2455) is in the fingerprint.
+func TestModelFingerprintTracksProviderFields(t *testing.T) {
 	n, _ := testNode(t)
 	base := proto.ManagedLauncher{Name: "p", Kind: "api", BaseURL: "https://gw.example.com", APIKey: "sk-test-k", Model: "m"}
 	opt := modelExecution{Model: "m", Fingerprint: "b"}
 	n.setManaged([]proto.ManagedLauncher{base})
 	plain := n.executionFingerprint("p", opt)
-	cli := opt
-	cli.Runtime = proto.AssistantRuntimeCLI
-	if n.executionFingerprint("p", cli) != plain {
-		t.Fatal(`"cli" differs from ""`)
-	}
-	sdk := opt
-	sdk.Runtime = proto.AssistantRuntimeAgentSDK
-	if n.executionFingerprint("p", sdk) == plain {
-		t.Fatal("runtime change reused old process")
-	}
-	if raw, _ := json.Marshal(opt); strings.Contains(string(raw), "Runtime") {
-		t.Fatalf("an empty runtime changes old fingerprints: %s", raw)
-	}
 	for name, change := range map[string]func(*proto.ManagedLauncher){
 		"models":         func(l *proto.ManagedLauncher) { l.Models = []proto.ProviderModel{{ID: "m", ContextWindow: 1000000}} },
 		"opus":           func(l *proto.ManagedLauncher) { l.OpusModel = "o" },
@@ -148,11 +134,11 @@ func TestAssistantModelComesFromTheHub(t *testing.T) {
 	n := codexTestNode(t)
 	fh := withFakeHub(t, n)
 	fh.mu.Lock()
-	fh.model = map[string]any{"launcher": "conv", "effort": "high", "model_fingerprint": "fp"}
+	fh.model = map[string]any{"launcher": "conv", "effort": "high", "model_fingerprint": "fp", "origin_known": true}
 	fh.mu.Unlock()
-	l, m := n.assistantModel(context.Background(), testThread)
-	if l != "conv" || m != (modelExecution{Effort: "high", UseEffort: true, Fingerprint: "fp"}) {
-		t.Fatalf("assistantModel = %q %+v", l, m)
+	l, m, answered := n.assistantModelDecision(context.Background(), testThread)
+	if l != "conv" || !answered || m != (modelExecution{Effort: "high", UseEffort: true, Fingerprint: "fp", OriginKnown: true}) {
+		t.Fatalf("assistantModel = %q %+v answered=%v", l, m, answered)
 	}
 	fh.mu.Lock()
 	got := fh.queried["assistant.model"]
@@ -161,9 +147,21 @@ func TestAssistantModelComesFromTheHub(t *testing.T) {
 		t.Fatalf("asked the hub about %q", got)
 	}
 	fh.mu.Lock()
-	fh.model = nil // an older hub: unknown method
+	fh.model = map[string]any{"origin": originInbox, "origin_known": true}
 	fh.mu.Unlock()
-	if l, m := n.assistantModel(context.Background(), testThread); l != "" || m != (modelExecution{}) {
-		t.Fatalf("without the hub's answer: %q %+v", l, m)
+	if _, m, answered := n.assistantModelDecision(context.Background(), testThread); !answered || m.Origin != originInbox || !m.OriginKnown {
+		t.Fatalf("the hub's Inbox attestation was lost: %+v answered=%v", m, answered)
+	}
+	fh.mu.Lock()
+	fh.model = map[string]any{} // a successful scope refusal is not an ordinary-origin decision
+	fh.mu.Unlock()
+	if l, m, answered := n.assistantModelDecision(context.Background(), testThread); l != "" || !answered || m != (modelExecution{}) {
+		t.Fatalf("with an empty hub answer: %q %+v answered=%v", l, m, answered)
+	}
+	fh.mu.Lock()
+	fh.model = nil // an older hub: unknown method, not an ordinary-origin decision
+	fh.mu.Unlock()
+	if l, m, answered := n.assistantModelDecision(context.Background(), testThread); l != "" || answered || m != (modelExecution{}) {
+		t.Fatalf("without the hub's answer: %q %+v answered=%v", l, m, answered)
 	}
 }

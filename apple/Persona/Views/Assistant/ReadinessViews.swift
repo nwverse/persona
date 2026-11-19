@@ -38,7 +38,10 @@ enum ReadinessRoute: Identifiable, Hashable {
         case "add_computer": return model.canAddComputer ? .addComputer : .machines
         case "confirm_computer": return model.pendingToConfirm().map { model.canConfirmComputer($0.group) } == true ? .confirmComputer : .machines
         case "wake_computer", "install_claude", "login_claude": return .help(action, machine: machine)
-        case "connect_model": return .providerWizard
+        case "connect_model":
+            let launcher = launcher?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let launcher, !launcher.isEmpty { return .provider(launcher) }
+            return .providerWizard
         case "edit_provider": return .provider(launcher)
         case "enable_tls", "open_admin":
             return model.config.map { .link($0.url.appending(path: "admin")) }
@@ -113,7 +116,7 @@ struct ReadinessSheets: ViewModifier {
                 MachinesView()
                     .navigationDestination(for: MachineDetailRoute.self) { MachineDetailView(ref: $0.ref) }
                     .navigationDestination(for: TerminalsRoute.self) { TerminalsView(only: $0.machine) }
-                    .toolbar { ToolbarItem(placement: .cancellationAction) { DoneButton { route = nil } } }
+                    .toolbar { SheetClose { route = nil } }
             }
         case .providerWizard:
             ProviderWizard(start: .pick) { model.readinessChanged() }
@@ -122,19 +125,11 @@ struct ReadinessSheets: ViewModifier {
                 Group {
                     if let name, !name.isEmpty { ModelLauncherDetailView(name: name) } else { ModelLaunchersView() }
                 }
-                .toolbar { ToolbarItem(placement: .cancellationAction) { DoneButton { route = nil } } }
+                .toolbar { SheetClose { route = nil } }
             }
         case .link, .addComputer, .confirmComputer:
             EmptyView()
         }
-    }
-}
-
-/// Done on a sheet's own stack.
-private struct DoneButton: View {
-    var action: () -> Void
-    var body: some View {
-        Button(action: action) { Text("Done [Extension System Presentation c0b3fb]").lineLimit(1) }
     }
 }
 
@@ -257,7 +252,7 @@ struct ReadinessHelpView: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
-        .toolbar { ToolbarItem(placement: .confirmationAction) { Button { dismiss() } label: { Text("OK [Recordings Section de32e2]").lineLimit(1) } } }
+        .toolbar { SheetClose { dismiss() } }
     }
 
     private var title: String {

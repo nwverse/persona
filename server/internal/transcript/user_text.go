@@ -89,6 +89,7 @@ func noticeKeyOf(s string) noticeKey {
 }
 
 func userText(mk func(int, string, string) proto.Item, s string, meta *Meta) []proto.Item {
+	s = StripInterject(s)
 	s = dropTagged(caveatRe, "<local-command-caveat>", dropTagged(pastedRe, "pasted_content", dropTagged(ContextRe, "-context>", dropTagged(ViewErrorsRe, "<persona-view-errors", s))))
 	trimmed := legacyLarkAgent(strings.TrimSpace(s))
 	if trimmed == "" {
@@ -188,8 +189,8 @@ func userText(mk func(int, string, string) proto.Item, s string, meta *Meta) []p
 		return []proto.Item{it}
 	}
 	if trimmed == "[Request interrupted by user]" || trimmed == "[Request interrupted by user for tool use]" {
-		meta.TurnOpen, meta.TurnClosed = false, true
 		it := mk(0, "system", proto.KindNotice)
+		meta.endTurn(it.Seq, it.TS)
 		it.Text = InterruptedNotice
 		return []proto.Item{it}
 	}

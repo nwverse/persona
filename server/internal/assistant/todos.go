@@ -118,13 +118,19 @@ type Todo struct {
 	// SeenAt: when the owner last looked at it in Just finished, by Got it or by opening it (#5707, todo_seen.go); a to-do
 	// seen since it got there is filed under Done (todo_triage.go). Absent when never seen.
 	SeenAt *time.Time `json:"seen_at,omitempty"`
+	// RestoredAt: when the owner last brought it back from Inactive; SomedayUntil: when a to-do the owner put off to
+	// Someday comes back, the year 9999 for no date (#10226, todo_marks.go). Absent when never restored, and while not
+	// put off. Clients that do not know them show the to-do as ever.
+	RestoredAt   *time.Time `json:"restored_at,omitempty"`
+	SomedayUntil *time.Time `json:"someday_until,omitempty"`
 	// InboxItem is the Inbox row it was made from (#6480); the to-do's page opens that row. Empty for any other to-do.
 	InboxItem string `json:"inbox_item,omitempty"`
 	// PartOf: the to-do whose request this one is a piece of; After: the pieces of that request it waits for
 	// (todo_pieces.go, docs/assistant/todos.md "Requests in pieces"). Both empty for a to-do that is no piece. Clients
 	// that do not know them show the to-do as ever.
-	PartOf string   `json:"part_of,omitempty"`
-	After  []string `json:"after,omitempty"`
+	PartOf               string   `json:"part_of,omitempty"`
+	After                []string `json:"after,omitempty"`
+	RequireAcceptedAfter bool     `json:"require_accepted_after,omitempty"`
 	// Brief: what was asked when the work was handed out, with its log, and Lineage: the to-dos that carried the work
 	// (#3822, task_brief.go). Filled in where the apps read the to-dos (withBrief); absent for a to-do with no brief.
 	Brief   *TaskBrief    `json:"brief,omitempty"`
@@ -141,6 +147,8 @@ type todoStore interface {
 	UpdateTodo(ctx context.Context, id string, title *string, notes *string, done *bool, updatedAt time.Time) (*db.TodoRow, error)
 	EditTodo(ctx context.Context, id string, e db.TodoEdit, updatedAt time.Time) (*db.TodoRow, error)
 	SeeTodo(ctx context.Context, id string, at *time.Time) (*db.TodoRow, error)
+	RestoreTodo(ctx context.Context, id string, at time.Time) (*db.TodoRow, error)
+	SetTodoSomeday(ctx context.Context, id string, until *time.Time) (*db.TodoRow, error)
 	ClaimTodoReminder(ctx context.Context, id string, remindAt, now time.Time) (bool, error)
 	RetitleTodo(ctx context.Context, id, from, to string, at time.Time) (*db.TodoRow, bool, error)
 	FailTodo(ctx context.Context, id, startError string, at time.Time) (*db.TodoRow, error)
@@ -192,13 +200,14 @@ type todoBook struct {
 	// under it before storing (todo_pieces.go). Automatic links take it for memory changes and again for background persistence, so a
 	// removed workspace cannot gain a late stored agent. Agent snapshots do not take it. Taken before mu, never
 	// while mu is held; node calls and change notifications run after it is released.
-	writing         sync.Mutex
-	loaded          bool
-	todos           map[string]*Todo
-	activeBySession map[[2]string]string  // (machine_id, session_id) -> the open todo it works for
-	snapshotSyncing map[[2]string]bool    // (machine_id, session_id) whose title is being written
-	spacesByKey     map[string]string     // "<machine_id>/<space>" -> todo_id
-	botmux          map[string]botmuxSeen // by machine: its botmux sessions' chats and dispatches (todo_sessions.go)
+	writing             sync.Mutex
+	loaded              bool
+	todos               map[string]*Todo
+	deletedRequestGates map[string]bool
+	activeBySession     map[[2]string]string  // (machine_id, session_id) -> the open todo it works for
+	snapshotSyncing     map[[2]string]bool    // (machine_id, session_id) whose title is being written
+	spacesByKey         map[string]string     // "<machine_id>/<space>" -> todo_id
+	botmux              map[string]botmuxSeen // by machine: its botmux sessions' chats and dispatches (todo_sessions.go)
 
 	tokensMu sync.Mutex
 	tokens   map[string]*tokenSync // by machine (todo_sessions.go)
@@ -209,7 +218,9 @@ type todoBook struct {
 	// reporting are the todos whose report back to their source is waiting for the outcome (todo_source.go).
 	reportMu  sync.Mutex
 	reporting map[string]time.Time
-	runMu     sync.Mutex // one report step at a time (sourceReportNow)
+	// reportWaits are the longest answer waits found for todos still waiting (todo_source_answer.go).
+	reportWaits map[string]time.Duration
+	runMu       sync.Mutex // one report step at a time (sourceReportNow)
 
 	// importing is held across a batch of imported reminders, and imports are their links when there is no store
 	// (todo_imports.go).
@@ -285,6 +296,14 @@ func (s *Service) loadTodosLocked(ctx context.Context) error {
 	tlist, err := st.ListTodos(ctx)
 	if err != nil {
 		return err
+	}
+	if gates, ok := st.(interface {
+		DeletedRequestGates(context.Context) (map[string]bool, error)
+	}); ok {
+		b.deletedRequestGates, err = gates.DeletedRequestGates(ctx)
+		if err != nil {
+			return err
+		}
 	}
 	slist, err := st.ListAllTodoSpaces(ctx)
 	if err != nil {
@@ -450,6 +469,7 @@ func (s *Service) todosPushSoon() {
 		p.mu.Lock()
 		p.armed = false
 		p.mu.Unlock()
+		s.todoViewPushed() // every app reads the list again from here (todo_view_push.go)
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		s.event(ctx, map[string]any{"type": "todos"})
@@ -500,6 +520,12 @@ func (s *Service) removeTodo(ctx context.Context, id string) error {
 
 	s.todos.mu.Lock()
 	if cur, ok := s.todos.todos[id]; ok {
+		if cur.RequireAcceptedAfter {
+			if s.todos.deletedRequestGates == nil {
+				s.todos.deletedRequestGates = make(map[string]bool)
+			}
+			s.todos.deletedRequestGates[id] = true
+		}
 		for _, a := range cur.Agents {
 			if a.ReleasedAt == nil && a.DismissedAt == nil {
 				delete(s.todos.activeBySession, [2]string{a.MachineID, a.SessionID})
@@ -626,6 +652,14 @@ func copyTodoLocked(t *Todo) Todo {
 		ca := *t.CancelledAt
 		out.CancelledAt = &ca
 	}
+	if t.RestoredAt != nil {
+		ra := *t.RestoredAt
+		out.RestoredAt = &ra
+	}
+	if t.SomedayUntil != nil {
+		su := *t.SomedayUntil
+		out.SomedayUntil = &su
+	}
 	out.Spaces = make([]TodoSpace, len(t.Spaces))
 	copy(out.Spaces, t.Spaces)
 	out.After = slices.Clone(t.After)
@@ -657,6 +691,7 @@ func copyTodoLocked(t *Todo) Todo {
 // that worked for it (latest released first).
 func formatTodo(t Todo) Todo {
 	out := t
+	out.Delivery = currentDelivery(t)
 	if out.Source != nil && out.Source.ReportFullReply {
 		source := *out.Source
 		source.ReportText = "" // the delivery payload is not part of the to-do list
@@ -694,6 +729,10 @@ func formatTodo(t Todo) Todo {
 	})
 	out.Agents = append(out.Agents, curr...)
 	out.Agents = append(out.Agents, past...)
+	if ownerDecisionReturned(out.Supervision) {
+		out.Supervision = out.Supervision.clone()
+		out.Supervision.State = "" // its old review stays in history; only a fresh review may ask the owner again
+	}
 	return out
 }
 
@@ -772,6 +811,20 @@ func (t Todo) Cancelled() bool {
 		return true
 	}
 	return false
+}
+
+// failedStart: its agent did not start, and it still waits on the owner. Such a to-do is stored done with its
+// start_error (#1077, failTodo), but nothing was done: the To-dos SOP keeps it open (todo-status-sop.md rule 1), a
+// retry or a plan's todo_id reopens it, and the assistant's snapshot counts it open while the app does. A cancelled one
+// is closed for good.
+func (t Todo) failedStart() bool {
+	return t.DoneAt != nil && t.StartError != "" && !t.Cancelled()
+}
+
+// closedForGood: done (by hand, by the hub's judge or a review) or cancelled, and not a failed start that still waits
+// on the owner. Only such a to-do is refused as "already done" where a failed start is taken up again.
+func (t Todo) closedForGood() bool {
+	return t.DoneAt != nil && !t.failedStart()
 }
 
 // AgentAborted reports whether the agent (machineID, sessionID) was let go, replaced or reassigned.
@@ -869,45 +922,27 @@ var errTodosUnavailable = errors.New("todos service unavailable")
 
 func (s *Service) todoRoutes() {
 	s.todoRepositoryRoutes()
+	s.workspaceNamingRoutes()
 	s.taskReviewDismissalRoutes()
 	s.todoDecisionRoutes()
 	s.todoThreadRoutes()
 	s.todoSeenRoutes()
+	s.todoMarkRoutes()
 	s.todoRetitleRoute()
 	s.todoImportRoutes()
+	s.todoViewRoutes()
+	s.todoAskRoutes()
+	s.todoTimelineRoutes()
 	// GET /api/v1/todos: list all todos (newest created_at first), agents sorted (active first, then released); a todo
-	// waiting for the owner carries its ask (todo_ask.go), an open one nobody works on why (tasks_orphan.go)
+	// waiting for the owner carries its ask (todo_ask.go), an open one nobody works on why (tasks_orphan.go); each its
+	// view, and the list its counts (todo_view_routes.go)
 	s.handle("GET /api/v1/todos", func(w http.ResponseWriter, r *http.Request) {
-		if err := s.ensureTodosLoaded(r.Context()); err != nil {
+		list, p, err := s.todosViewed(r.Context(), true)
+		if err != nil {
 			apierr.Write(w, http.StatusServiceUnavailable, errTodosUnavailable)
 			return
 		}
-		s.todos.mu.RLock()
-		list := make([]listedTodo, 0, len(s.todos.todos))
-		for _, t := range s.todos.todos {
-			list = append(list, listedTodo{Todo: formatTodo(copyTodoLocked(t))})
-		}
-		s.todos.mu.RUnlock()
-		if err := s.listDecisionReviews(r.Context(), list); err != nil {
-			apierr.Write(w, http.StatusServiceUnavailable, errTodosUnavailable)
-			return
-		}
-		asks := s.todoAsks(r.Context()) // once the todos are let go: it reads them itself
-		links := s.briefLinksNow()      // every lineage below is read from these, not from all the links each time
-		for i := range list {
-			list[i].Todo = s.withBriefFrom(list[i].Todo, links) // what was asked and who carried it (task_brief.go)
-			if a, ok := asks[list[i].ID]; ok {
-				list[i].Ask = &a
-			}
-			if o, ok := s.orphanOf(list[i].ID); ok && list[i].DoneAt == nil {
-				list[i].Orphaned = &o
-			}
-		}
-
-		sort.Slice(list, func(i, j int) bool {
-			return list[i].CreatedAt.After(list[j].CreatedAt)
-		})
-		apierr.WriteJSON(w, map[string]any{"todos": list})
+		apierr.WriteJSON(w, todosList{Todos: list, Counts: p.counts()})
 	})
 
 	// POST /api/v1/todos: create todo {title, notes, due_at | due_date, remind_at, priority, project, kind}; kind concern
@@ -923,11 +958,12 @@ func (s *Service) todoRoutes() {
 			return
 		}
 		var in struct {
-			Title              string          `json:"title"`
-			Notes              string          `json:"notes"`
-			Project            *string         `json:"project"`
-			Kind               string          `json:"kind"`
-			RepositoryBindings json.RawMessage `json:"repository_bindings"`
+			Title                string          `json:"title"`
+			Notes                string          `json:"notes"`
+			Project              *string         `json:"project"`
+			Kind                 string          `json:"kind"`
+			RequireAcceptedAfter *bool           `json:"require_accepted_after"`
+			RepositoryBindings   json.RawMessage `json:"repository_bindings"`
 			todoPlanIn
 		}
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -945,6 +981,17 @@ func (s *Service) todoRoutes() {
 			return
 		}
 		var plan db.TodoEdit
+		if in.RequireAcceptedAfter != nil {
+			if !fullRole(r) {
+				apierr.Write(w, http.StatusForbidden, errors.New("only the owner can change request prerequisite enforcement"))
+				return
+			}
+			if kind == db.KindConcern && *in.RequireAcceptedAfter {
+				apierr.Write(w, http.StatusBadRequest, errRequestGateRoot)
+				return
+			}
+			plan.RequireAcceptedAfter = in.RequireAcceptedAfter
+		}
 		if err := in.todoPlanIn.edit(&plan); err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
@@ -954,6 +1001,9 @@ func (s *Service) todoRoutes() {
 			return
 		}
 		bindings, err := parseCreateBindings(in.RepositoryBindings)
+		if err == nil {
+			err = s.resolveCreateBindings(r.Context(), bindings) // before the store, outside todos.writing
+		}
 		if err != nil {
 			taskRepositoriesError(w, err)
 			return
@@ -998,12 +1048,13 @@ func (s *Service) todoRoutes() {
 		}
 
 		var in struct {
-			Title   *string         `json:"title"`
-			Notes   *string         `json:"notes"`
-			Done    *bool           `json:"done"`
-			Project *string         `json:"project"`
-			PartOf  json.RawMessage `json:"part_of"`
-			After   json.RawMessage `json:"after"`
+			Title                *string         `json:"title"`
+			Notes                *string         `json:"notes"`
+			Done                 *bool           `json:"done"`
+			Project              *string         `json:"project"`
+			PartOf               json.RawMessage `json:"part_of"`
+			After                json.RawMessage `json:"after"`
+			RequireAcceptedAfter *bool           `json:"require_accepted_after"`
 			todoPlanIn
 		}
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -1011,6 +1062,11 @@ func (s *Service) todoRoutes() {
 			return
 		}
 		e := db.TodoEdit{Title: in.Title, Notes: in.Notes, Done: in.Done}
+		if in.RequireAcceptedAfter != nil && !fullRole(r) {
+			apierr.Write(w, http.StatusForbidden, errors.New("only the owner can change request prerequisite enforcement"))
+			return
+		}
+		e.RequireAcceptedAfter = in.RequireAcceptedAfter
 		if in.Title != nil {
 			t := strings.TrimSpace(*in.Title)
 			if t == "" {
@@ -1877,6 +1933,7 @@ func (s *Service) reopenTodo(ctx context.Context, id string) error {
 	row := &db.TodoRow{ID: cur.ID, Title: cur.Title, Notes: cur.Notes, CreatedAt: cur.CreatedAt, UpdatedAt: now,
 		Origin: cur.Origin, PlanID: cur.PlanID, ReopenedAt: &now, Quiet: cur.Quiet}
 	cur.keepPlan(row)
+	row.SomedayUntil = nil // reopened: out of Someday, as db.TodoEdit.Apply does on the store
 	if st := s.todoDB(); st != nil {
 		open := false
 		r, err := st.UpdateTodo(ctx, id, nil, nil, &open, now)
@@ -1909,6 +1966,7 @@ func (s *Service) reopenFailedTodo(ctx context.Context, id string) (Todo, bool, 
 	row := db.TodoRow{ID: cur.ID, Title: cur.Title, Notes: cur.Notes, CreatedAt: cur.CreatedAt, UpdatedAt: now,
 		Origin: cur.Origin, PlanID: cur.PlanID, ReopenedAt: &now}
 	cur.keepPlan(&row)
+	row.SomedayUntil = nil // retried: out of Someday, as db.RetryTodo does on the store
 	if st := s.todoDB(); st != nil {
 		r, ok, err := st.RetryTodo(ctx, id, now)
 		if err != nil {
@@ -1948,7 +2006,11 @@ func (s *Service) TodoHandoff(ctx context.Context, h TodoHandoff) (TodoHandoffRe
 	if strings.TrimSpace(text) != "" {
 		text = s.withTodoDecisions(ctx, h.TodoID, text)
 		if h.New {
-			text = s.withProjectContext(ctx, h.MachineID, h.Cwd, text) // a new agent: its project's background first
+			lead := ""
+			if t.Supervision != nil {
+				lead = t.Supervision.Supervisor
+			}
+			text = s.withProjectContext(ctx, h.MachineID, h.Cwd, lead, text) // a new agent: its project's background first
 		}
 	}
 	res := TodoHandoffResult{Found: true, Title: t.Title, DoneAt: t.DoneAt, Text: text}

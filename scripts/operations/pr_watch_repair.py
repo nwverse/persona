@@ -10,7 +10,7 @@ import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 
-from pr_watch_common import RepairAttemptError, WatchError, SHA, bounded, checked, gh_json, pr_snapshot, run, test_or_fix, verification_env
+from pr_watch_common import RepairAttemptError, WatchError, SHA, bounded, checked, gh_json, github_time, pr_snapshot, run, test_or_fix, verification_env
 from pr_watch_merge import linked_issue
 from pr_watch_review import argv_with_prefix
 from pr_watch_verify import verify
@@ -70,12 +70,13 @@ def failed_go_packages(worktree, text):
 
 
 def failure_signature(text):
-    """Compare a failed check identity and its specific diagnostic."""
+    """Compare failed lane labels and specific diagnostics, not test names alone."""
     signatures = []
     for line in (text or "").splitlines():
-        if re.search(r"(?:--- FAIL:|AssertionError|FileNotFoundError|ModuleNotFoundError|"
-                     r"No such file or directory|panic:|^FAIL\s+\S|baseline|not found)", line) and not line.startswith("--- FAIL:"):
+        if re.search(r"(?:^FAIL\s+\S|AssertionError|FileNotFoundError|ModuleNotFoundError|"
+                     r"No such file or directory|panic:|baseline|not found)", line):
             normalized = re.sub(r"0x[0-9a-fA-F]+", "<address>", line)
+            normalized = re.sub(r"\(\d+(?:\.\d+)?s, exit (\d+)\)", r"(exit \1)", normalized)
             normalized = normalized.replace("'plutil'", "plutil").replace('"plutil"', "plutil")
             signatures.append(normalized.strip())
     return set(signatures)
@@ -129,8 +130,7 @@ def main_failure_comparison(repo, pr, worktree, failure, timeout=600, git_root=N
             checked(["git", "worktree", "add", "--detach", str(base_worktree), pr["baseRefOid"]], cwd=git_root or worktree, timeout=180)
             result = run(command, cwd=base_worktree, timeout=timeout, environ=environ if environ is not None else verification_env())
             output = result.stdout + "\n" + result.stderr
-            ids = failure_test_ids(output)
-            reproduced = (result.returncode != 0 and ids and ids == failure_test_ids(failure)
+            reproduced = (result.returncode != 0
                           and bool(failure_signature(output) & failure_signature(failure)))
             return {"reproduced": reproduced, "command": command,
                     "output": bounded(output, 6000),
@@ -170,6 +170,13 @@ def main_failure_comparison(repo, pr, worktree, failure, timeout=600, git_root=N
         run(["git", "worktree", "remove", "--force", str(base_worktree)], cwd=git_root or worktree, timeout=90)
 
 
+def fetch_branch(branch):
+    """Fetch one branch into this worktree's FETCH_HEAD only. Worktrees share the
+    checkout's refs; an empty refmap keeps concurrent workers from racing to
+    update refs/remotes/origin/<branch> (#10584)."""
+    return ["git", "fetch", "-q", "--refmap=", "origin", "refs/heads/" + branch]
+
+
 def contains(worktree, ancestor, descendant):
     return run(["git", "merge-base", "--is-ancestor", ancestor, descendant], cwd=worktree).returncode == 0
 
@@ -178,7 +185,7 @@ def fetch_current_main(pr, worktree, base):
     """The base branch's tip now. Main moves every few minutes and a verification takes longer (#7840), so a repair
     merges the main it fetched as long as that still contains `base`, the one read before verifying; a rewritten main
     stops it."""
-    checked(["git", "fetch", "-q", "origin", "refs/heads/" + pr["baseRefName"]], cwd=worktree, timeout=180)
+    checked(fetch_branch(pr["baseRefName"]), cwd=worktree, timeout=180)
     tip = checked(["git", "rev-parse", "FETCH_HEAD"], cwd=worktree).strip()
     if tip != base and not contains(worktree, base, tip):
         raise WatchError("main was rewritten while preparing the repair")
@@ -244,7 +251,7 @@ def push_updated_head(repo, pr, worktree, updated_head):
     """Publish an already verified merge without changing its exact tree."""
     if checked(["git", "rev-parse", "HEAD"], cwd=worktree).strip() != updated_head:
         raise WatchError("verified merge head changed before publication")
-    checked(["git", "fetch", "-q", "origin", "refs/heads/" + pr["headRefName"]], cwd=worktree, timeout=180)
+    checked(fetch_branch(pr["headRefName"]), cwd=worktree, timeout=180)
     if checked(["git", "rev-parse", "FETCH_HEAD"], cwd=worktree).strip() != pr["headRefOid"]:
         raise WatchError("PR head moved before merging main; nothing was pushed")
     checked(["git", "push", "origin", "HEAD:refs/heads/" + pr["headRefName"]], cwd=worktree, timeout=180)
@@ -493,10 +500,16 @@ def repair_worker_argv(argv, worktree, home=None, writable_paths=(), edit_root=N
         home = repair_worker_home()
     worktree = str(Path(worktree).resolve())
     writable = [Path(worktree, safe_checkout_path(path)) for path in writable_paths]
-    env = {key: value for key, value in os.environ.items()
-           if key in ("PATH", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TERM",
-                      "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
-                      "http_proxy", "https_proxy", "all_proxy", "no_proxy") or key.startswith("ANTHROPIC_")}
+    env = {}
+    for key, value in os.environ.items():
+        if key in ("PATH", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TERM",
+                   "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+                   "http_proxy", "https_proxy", "all_proxy", "no_proxy") or key.startswith("ANTHROPIC_"):
+            env[key] = value
+        elif key.startswith("PR_WATCH_REPAIR_ENV_"):
+            # An explicit private environment can provide a CLI's existing
+            # configuration directory, never the whole maintainer HOME.
+            env[key[len("PR_WATCH_REPAIR_ENV_"):]] = value
     env.update({"HOME": str(home), "GIT_TERMINAL_PROMPT": "0", "GH_PROMPT_DISABLED": "1", "CI": "1",
                 "PATH": "/tools:/usr/local/bin:/usr/bin:/bin",
                 "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
@@ -517,11 +530,41 @@ def repair_worker_argv(argv, worktree, home=None, writable_paths=(), edit_root=N
               "--ro-bind-try", "/etc/resolv.conf", "/etc/resolv.conf",
               "--ro-bind-try", "/etc/nsswitch.conf", "/etc/nsswitch.conf",
               "--ro-bind-try", "/etc/hosts", "/etc/hosts",
+              # /tools must exist before its explicitly configured contents.
               "--tmpfs", "/tmp", "--tmpfs", "/tools",
               "--chdir", worktree]
+    # Read-only helper files come only from trusted local configuration. Each
+    # argument that names a mounted source is rewritten to its sandbox path.
+    # This supports interpreter adapters as well as the first executable.
+    mounted = {}
+    import shlex
+    for item in shlex.split(os.environ.get("PR_WATCH_REPAIR_MOUNTS", "")):
+        source, separator, destination = item.partition(":")
+        if not separator or not source or not destination:
+            raise WatchError("PR_WATCH_REPAIR_MOUNTS needs source:/tools/name entries")
+        if source.endswith("/"):
+            source = source.rstrip("/")
+            destination = destination.rstrip("/")
+            directory = True
+        else:
+            directory = False
+        source_path = Path(source).expanduser().resolve()
+        destination_path = Path(destination)
+        if (not destination_path.is_absolute() or ".." in destination_path.parts):
+            raise WatchError("repair mount destinations must be safe absolute paths")
+        if directory:
+            if not source_path.is_dir():
+                raise WatchError("repair mount directory is unavailable")
+        elif not source_path.is_file() or source_path.is_symlink():
+            raise WatchError("repair mounts must use regular files")
+        result.extend(["--ro-bind", str(source_path), str(destination_path)])
+        if not directory:
+            mounted[source] = str(destination_path)
+            mounted[str(source_path)] = str(destination_path)
     if executable:
         result.extend(["--ro-bind", str(Path(executable).resolve()), "/tools/repair-" + Path(executable).name])
         argv = ["/tools/repair-" + Path(executable).name] + list(argv[1:])
+    argv = [mounted.get(argument, argument) for argument in argv]
     if writable:
         if edit_root is None:
             raise WatchError("conflict repair needs a separate writable workspace")
@@ -622,9 +665,74 @@ def repair_with_model(repo, pr, worktree, failure, config):
         return diff
 
 
+def continuation_title(number):
+    return "fix: continue #%s verification repair" % number
+
+
+def continuation_contains_head(repo, fork_head, continuation_head):
+    if not isinstance(continuation_head, str) or not SHA.fullmatch(continuation_head):
+        raise WatchError("continuation PR has no valid head SHA")
+    if continuation_head == fork_head:
+        return True
+    status = checked(["gh", "api", "repos/%s/compare/%s...%s" % (repo, fork_head, continuation_head),
+                      "--jq", ".status"], timeout=90).strip()
+    return status in ("ahead", "identical")
+
+
+def existing_continuation(repo, pr):
+    """An open or merged continuation of this fork PR that already contains its
+    current head, whoever published it (#10881). Each watcher keeps private
+    state, so GitHub is the only shared record; another watcher's continuation
+    must not be duplicated. A fork head pushed after that continuation is not
+    contained in it and gets a fresh repair."""
+    title = continuation_title(pr["number"])
+    found = gh_json(["pr", "list", "--repo", repo, "--state", "all", "--limit", "50",
+                     "--search", '"%s" in:title' % title,
+                     "--json", "number,title,state,headRefOid"]) or []
+    candidates = [item for item in found
+                  if isinstance(item, dict) and item.get("title") == title
+                  and item.get("state") in ("OPEN", "MERGED")
+                  and isinstance(item.get("number"), int)
+                  and isinstance(item.get("headRefOid"), str) and SHA.fullmatch(item["headRefOid"])]
+    # Prefer a continuation that is still open; a merged one also covers the head.
+    candidates.sort(key=lambda item: (item["state"] != "OPEN", -item["number"]))
+    for item in candidates:
+        if continuation_contains_head(repo, pr["headRefOid"], item["headRefOid"]):
+            return item["number"]
+    return None
+
+
 def moved(latest, expected, follows_main):
     """The PR moved under a repair: its head always counts; its base counts unless the repair follows main."""
     return latest["headRefOid"] != expected["headRefOid"] or (not follows_main and latest["baseRefOid"] != expected["baseRefOid"])
+
+
+def find_continuation(repo, fork):
+    """Find a linked continuation that suppresses a new publication."""
+    number = fork["number"]
+    target = re.escape(repo)
+    reference = re.compile(r"\b(?:continue|continuation\s+of)\s+(?:#|%s#|https://github\.com/%s/pull/)%d\b"
+                           % (target, target, number), re.I)
+    candidates = gh_json(["pr", "list", "--repo", repo, "--state", "all", "--limit", "100",
+                          "--search", '"%d" in:title,body' % number,
+                          "--json", "number,title,body,state,mergedAt,headRefOid"])
+    if not isinstance(candidates, list):
+        raise WatchError("continuation search did not return a list of PRs")
+    merged = []
+    for candidate in candidates:
+        if candidate["number"] == number or not any(reference.search(candidate[field]) for field in ("title", "body")):
+            continue
+        if candidate["state"] == "OPEN" and continuation_contains_head(repo, fork["headRefOid"], candidate.get("headRefOid")):
+            return candidate["number"]
+        if candidate["state"] == "MERGED":
+            merged.append(candidate)
+    if merged:
+        latest = max(merged, key=lambda candidate: github_time(candidate["mergedAt"]))
+        committed_at = checked(["gh", "api", "repos/%s/commits/%s" % (repo, fork["headRefOid"]),
+                                "--jq", ".commit.committer.date"]).strip()
+        if github_time(latest["mergedAt"]) > github_time(committed_at):
+            return latest["number"]
+    return None
 
 
 def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None, allow_merge_only=False, original_pr=None):
@@ -632,7 +740,8 @@ def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None
 
     A merge of main into a fork (`allow_merge_only` with `original_pr`) follows main (#7840): main may move on from
     `base`, the main it merged, while the merged head is verified, as long as it still contains it. The continuation PR
-    is reviewed again on its own head; the PR's head must still be the one merged."""
+    is reviewed again on its own head; the PR's head must still be the one merged. Reusing a continuation returns its
+    number with None for checks, since this attempt did not publish a repair."""
     if not isinstance(verify_config, dict) or not verify_config:
         raise WatchError("automatic repair requires the repository's real verification configuration")
     follows_main = allow_merge_only and original_pr is not None
@@ -689,17 +798,20 @@ def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None
         latest = pr_snapshot(repo, identity_pr["number"])
         if moved(latest, identity_pr, follows_main):
             raise WatchError("PR head/base moved before the repair push was accepted")
-    checked(["git", "fetch", "-q", "origin", "refs/heads/" + pr["baseRefName"]], cwd=worktree, timeout=180)
+    checked(fetch_branch(pr["baseRefName"]), cwd=worktree, timeout=180)
     tip = checked(["git", "rev-parse", "FETCH_HEAD"], cwd=worktree).strip()
     if tip != base and not (follows_main and contains(worktree, base, tip)):
         raise WatchError("base moved before the repair push; nothing was pushed")
     if pr.get("isCrossRepository"):
+        continuation = find_continuation(repo, identity_pr)
+        if continuation is not None:
+            return continuation, None
         existing = gh_json(["pr", "list", "--repo", repo, "--head", branch, "--state", "open", "--json", "number"]) or []
         if existing:
             latest = pr_snapshot(repo, existing[0]["number"])
             if latest["headRefOid"] != head:
                 raise WatchError("continuation PR has an older or different head; repair it in a fresh branch")
-            return existing[0]["number"], results
+            return existing[0]["number"], None
         issues = linked_issue(pr.get("body", ""), repo)
         if not issues:
             raise WatchError("cannot open a continuation PR without an issue link")
@@ -713,7 +825,7 @@ def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None
             if remote != head:
                 raise WatchError("continuation branch exists at a different head; choose a fresh repair branch")
     if not pr.get("isCrossRepository"):
-        checked(["git", "fetch", "-q", "origin", "refs/heads/" + pr["headRefName"]], cwd=worktree, timeout=180)
+        checked(fetch_branch(pr["headRefName"]), cwd=worktree, timeout=180)
         remote_output = checked(["git", "ls-remote", "origin", "refs/heads/" + pr["headRefName"]], cwd=worktree, timeout=180).strip()
         if not remote_output:
             raise WatchError("contributor branch is absent; refusing to recreate it without an unchanged-head guarantee")
@@ -726,7 +838,7 @@ def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None
             issues[0], pr["number"], bounded(failure, 4000))
         owner = repo.split("/", 1)[0]
         created = gh_json(["api", "repos/%s/pulls" % repo, "--method", "POST", "--input", "-"],
-                          input_text=json.dumps({"title": "fix: continue #%s verification repair" % pr["number"],
+                          input_text=json.dumps({"title": continuation_title(pr["number"]),
                                                  "head": owner + ":" + branch, "base": pr["baseRefName"], "body": body}))
         actual = pr_snapshot(repo, created["number"])
         if actual["headRefOid"] != head:

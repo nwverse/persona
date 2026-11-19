@@ -175,17 +175,16 @@ struct FileViewer: View {
         NavigationStack {
             content
                 .navigationTitle(page?.file?.name ?? (ref.path as NSString).lastPathComponent)
-                .navigationSubtitle(model.machine(ref.machineRef)?.name ?? ref.machineID)
+                .navigationSubtitleWhenSupported(model.machine(ref.machineRef)?.name ?? ref.machineID)
                 .navigationBarTitleDisplayMode(.inline)
                 .pageToolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        if let back = history.last {
+                    // ‹ after following a file link, else the sheet's ✕ (#9653).
+                    if let back = history.last {
+                        ToolbarItem(placement: .topBarLeading) {
                             Button { history.removeLast(); ref = back } label: { Label("Back [Task Sheets 572cf4]", systemImage: Theme.Icon.back) }
-                        } else {
-                            Button("Done [Extension System Presentation c0b3fb]") { dismiss() }
-                                .lineLimit(1)
-                                .accessibilityIdentifier("file-close")
                         }
+                    } else {
+                        SheetClose(id: "file-close") { dismiss() }
                     }
                     #if os(iOS)
                     if page?.kind != .directory {

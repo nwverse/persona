@@ -26,13 +26,22 @@ struct SheetClose: ToolbarContent {
 
     var body: some ToolbarContent {
         ToolbarItem(placement: .cancellationAction) {
-            // The ink on the icon itself: a bar ignores a foreground style set on the button (docs/lessons/ios.md).
-            Button(role: .close, action: action) { ThemedIcon(Theme.Icon.close).sheetBarLabel() }
+            closeButton
                 .tint(Color.primary)
                 .disabled(disabled)
                 .keyboardShortcut(.cancelAction)
                 .accessibilityLabel(Text("Close"))
                 .accessibilityIdentifier(id)
+        }
+    }
+
+    @ViewBuilder private var closeButton: some View {
+        // The ink on the icon itself: a bar ignores a foreground style set on the button (docs/lessons/ios.md).
+        if #available(iOS 26.0, *) {
+            Button(role: .close, action: action) { ThemedIcon(Theme.Icon.close).sheetBarLabel() }
+        } else {
+            // iOS 18 has no close role (#6730): the same ✕ on a plain button.
+            Button(action: action) { ThemedIcon(Theme.Icon.close).sheetBarLabel() }
         }
     }
 }
@@ -42,13 +51,17 @@ struct SheetClose: ToolbarContent {
 /// A verb that says more (Send, Connect, Install) stays a word at `.confirmationAction`.
 struct SheetConfirm: ToolbarContent {
     private let id: String
+    private let name: String?
     private let disabled: Bool
     private let busy: Bool
     private let action: () -> Void
 
-    /// `busy`: a spinner in its place while the save runs.
-    init(id: String = "sheet-confirm", disabled: Bool = false, busy: Bool = false, action: @escaping () -> Void) {
+    /// `name`: what VoiceOver reads, the word the ✓ stands for (Save, Add); the system's Done without it. `busy`: a
+    /// spinner in its place while the save runs.
+    init(id: String = "sheet-confirm", name: String? = nil, disabled: Bool = false, busy: Bool = false,
+         action: @escaping () -> Void) {
         self.id = id
+        self.name = name
         self.disabled = disabled
         self.busy = busy
         self.action = action
@@ -59,9 +72,25 @@ struct SheetConfirm: ToolbarContent {
             if busy {
                 ProgressView().accessibilityIdentifier(id)
             } else {
-                Button(role: .confirm, action: action)
+                confirmButton
                     .disabled(disabled)
                     .accessibilityIdentifier(id)
+            }
+        }
+    }
+
+    @ViewBuilder private var confirmButton: some View {
+        if #available(iOS 26.0, *) {
+            if let name {
+                Button(role: .confirm, action: action).accessibilityLabel(Text(name))
+            } else {
+                Button(role: .confirm, action: action)
+            }
+        } else {
+            // iOS 18 has no confirm role (#6730): the word, as iOS 18's own sheets say it. A ✓ there read like the
+            // selection ticks of the form under it.
+            Button(action: action) {
+                if let name { Text(name).lineLimit(1) } else { Text("Done").lineLimit(1) }
             }
         }
     }
@@ -84,6 +113,13 @@ extension View {
         foregroundStyle(Color.primary)
     }
 
+    /// The way out of a page that only shows things (#9653): `SheetClose`'s ✕ at the top leading corner on the iPhone
+    /// and iPad, Done in a Mac sheet's bottom row. Nothing when `detailPresentation` pushed the page into a column
+    /// (`detailPushed`): there its ‹ goes back.
+    func sheetDone(_ done: @escaping () -> Void) -> some View {
+        modifier(SheetDone(done: done))
+    }
+
     /// Done for a sheet that only shows things, in a Mac sheet's bottom row (Esc too). Nothing on iOS: there the page
     /// keeps its own Close or the swipe down.
     func macSheetDone(_ done: @escaping () -> Void) -> some View {
@@ -91,6 +127,19 @@ extension View {
         toolbar { ToolbarItem(placement: .cancellationAction) { Button(action: done) { Text("Done [Extension System Presentation c0b3fb]").lineLimit(1) } } }
         #else
         self
+        #endif
+    }
+}
+
+private struct SheetDone: ViewModifier {
+    var done: () -> Void
+    @Environment(\.detailPushed) private var pushed
+
+    func body(content: Content) -> some View {
+        #if os(macOS)
+        content.macSheetDone(done)
+        #else
+        if pushed { content } else { content.pageToolbar { SheetClose(action: done) } }
         #endif
     }
 }
@@ -117,7 +166,7 @@ private struct SheetCancel: ViewModifier {
                 }
             }
             // On the content, not on the bar's button: the bar is hosted apart from the page.
-            .confirmationDialog("Discard Unsaved Changes?", isPresented: $asking, titleVisibility: .visible) {
+            .accessibleConfirmationDialog("Discard Unsaved Changes?", isPresented: $asking, titleVisibility: .visible, hasCancel: true) {
                 Button("Discard Changes", role: .destructive, action: cancel)
                 Button("Keep Editing", role: .cancel) {}
             } message: {

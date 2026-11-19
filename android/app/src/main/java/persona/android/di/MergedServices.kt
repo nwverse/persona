@@ -140,7 +140,7 @@ internal fun mergedInteractions(stacks: GroupStacks): InteractionCenter = object
 
 @OptIn(ExperimentalCoroutinesApi::class)
 internal fun mergedChats(stacks: GroupStacks, storage: ChatLocalStorage): ChatRepository =
-    object : ChatRepository, ChatLocalStorage by storage {
+    object : ChatRepository, StructuralChatRepository, ChatLocalStorage by storage {
         override fun observe(session: SessionKey) = stacks.stacks
             .map { list -> list.firstOrNull { it.names.owns(session.machineId) } }
             .distinctUntilChanged()
@@ -150,7 +150,17 @@ internal fun mergedChats(stacks: GroupStacks, storage: ChatLocalStorage): ChatRe
                     ?.catch { failure -> if (stack.current) throw failure }
                     ?: flowOf(ChatSnapshot(loading = false, verified = false))
             }
+        override fun observeStructure(session: SessionKey) = stacks.stacks
+            .map { list -> list.firstOrNull { it.names.owns(session.machineId) } }
+            .distinctUntilChanged()
+            .flatMapLatest { stack ->
+                stack?.repositories?.chats?.observeStructure(stack.names.raw(session))
+                    ?.catch { failure -> if (stack.current) throw failure }
+                    ?: flowOf(ChatSnapshot(loading = false, verified = false))
+            }
         override suspend fun loadOlder(session: SessionKey) = stacks.use(session) { it.repositories.chats.loadOlder(it.names.raw(session)) }
+        override suspend fun modeChanges(session: SessionKey): List<ModeChange> =
+            stacks.use(session) { it.repositories.chats.modeChanges(it.names.raw(session)) }
         override suspend fun expandFold(session: SessionKey, fromSeq: Int, toSeq: Int) =
             stacks.use(session) { it.repositories.chats.expandFold(it.names.raw(session), fromSeq, toSeq) }
         override suspend fun loadRange(session: SessionKey, fromSeq: Int, throughSeq: Int) =
@@ -185,7 +195,7 @@ internal fun mergedPreferences(stacks: GroupStacks): HubPreferences = object : H
 }
 
 /**
- * Machine management (machines page, engine, Claude Code / Codex settings) over every group (#634): each call goes to the group its machine id
+ * Machine management (machines page, engine, Claude Code / Codex / Antigravity settings) over every group (#634): each call goes to the group its machine id
  * names ([routes]: that group's service, already speaking merged ids), so another group's machine is no longer asked of the
  * selected group's hub. Hub-level services (model configuration, voice) stay with the selected group, like the other hub-level pages.
  * Subscription quota belongs to a hub too, but the merged overview shows every group's machines, so it lists every group's
@@ -214,6 +224,9 @@ internal fun mergedMachineManagement(
     override suspend fun codexSettings(machineId: String) = routes.on(machineId) { it.codexSettings(machineId) }
     override suspend fun setCodexSetting(machineId: String, key: String, value: kotlinx.serialization.json.JsonElement) =
         routes.on(machineId) { it.setCodexSetting(machineId, key, value) }
+    override suspend fun agySettings(machineId: String) = routes.on(machineId) { it.agySettings(machineId) }
+    override suspend fun setAgySetting(machineId: String, key: String, value: kotlinx.serialization.json.JsonElement) =
+        routes.on(machineId) { it.setAgySetting(machineId, key, value) }
     override suspend fun claudeDirs(machineId: String) = routes.on(machineId) { it.claudeDirs(machineId) }
     override suspend fun setBlockedClaudeDirs(machineId: String, blocked: List<String>) =
         routes.on(machineId) { it.setBlockedClaudeDirs(machineId, blocked) }

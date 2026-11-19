@@ -53,6 +53,7 @@ import persona.feature.settings.SettingsServices
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
@@ -66,6 +67,8 @@ class MainActivity : ComponentActivity() {
     @Inject lateinit var settingsServices: SettingsServices
     /** The hubs' channels, for the "From WeChat" marks on messages and conversations (docs/extensions/channels.md "Source markers"). */
     @Inject lateinit var channelDirectory: persona.core.contracts.api.ChannelDirectory
+    /** The installed extensions' icons, for the marks of conversations an extension opened (#10358). */
+    @Inject lateinit var openerIcons: persona.feature.assistant.OpenerIcons
     @Inject lateinit var connection: HubConnection
     @Inject lateinit var shell: AppServices
     @Inject lateinit var platformPairing: PlatformPairing
@@ -131,6 +134,7 @@ class MainActivity : ComponentActivity() {
                 LocalDeveloperTools provides launchAdapter?.tools,
                 persona.core.designsystem.LocalLanguageHost provides this@MainActivity,
                 persona.core.designsystem.LocalChannels provides channels,
+                persona.feature.assistant.LocalOpenerIcons provides openerIcons,
                 persona.core.designsystem.LocalLarkFeatures provides lark,
                 persona.core.designsystem.LocalHubFeatures provides features,
                 persona.core.designsystem.LocalManagerRoster provides managers,
@@ -157,7 +161,8 @@ class MainActivity : ComponentActivity() {
                     val ready by app.pairingReady.collectAsStateWithLifecycle()
                     val failed by app.pairingRestoreError.collectAsStateWithLifecycle()
                     val capsuleFullScreen by capsules.fullScreen.collectAsStateWithLifecycle()
-                    if (ready && capsuleFullScreen) persona.android.capsule.CapsuleFullScreen(capsules) {
+                    val capsulePresentation by capsules.presentation.collectAsStateWithLifecycle()
+                    if (ready && capsuleFullScreen && capsulePresentation != null) persona.android.capsule.CapsuleFullScreen(capsules) {
                         capsules.returnToCapsule()
                         moveTaskToBack(true)
                     }
@@ -179,13 +184,16 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         keepAmbientLightMoving()
         setIntent(intent)
-        if (intent.data != null || intent.hasExtra(EXTRA_SESSION) || intent.hasExtra("debug.openTab")) capsules.leaveFullScreen()
         handle(intent)
     }
 
     override fun onStart() {
         super.onStart()
-        (application as PersonaApp).hub.value?.kick()
+        val app = application as PersonaApp
+        lifecycleScope.launch {
+            app.pairingReady.first { it }
+            app.hub.value?.kick()
+        }
     }
 
     // Input that reaches this window keeps Glass's ambient light moving; five seconds after the last it holds still
@@ -217,6 +225,8 @@ class MainActivity : ComponentActivity() {
 
     private fun handle(intent: Intent?) {
         if (intent == null) return
+        val launchInput = launchAdapter?.read(intent)
+        if (leavesCapsuleFullScreen(intent, launchInput != null)) capsules.leaveFullScreen()
         intent.getStringExtra(EXTRA_CAPSULE_URL)?.let { url ->
             val target = android.net.Uri.parse(url)
             if (target.scheme == "https" && !target.host.isNullOrBlank()) pendingCapsuleUrl.value = url
@@ -226,7 +236,7 @@ class MainActivity : ComponentActivity() {
             pendingLockTest.value = true
             intent.removeExtra(LockScreenTests.EXTRA_LOCK_TEST)
         }
-        launchAdapter?.read(intent)?.let { input ->
+        launchInput?.let { input ->
             darkTheme.value = input.darkTheme
             shell.automation = input.automation
             shell.posture.value = input.posture
@@ -290,3 +300,14 @@ class MainActivity : ComponentActivity() {
         val pendingPairLink = mutableStateOf<String?>(null)
     }
 }
+
+/** Explicit notification, deep-link, capsule URL, lock-test and debug intents exit any lingering full-screen capsule mode. */
+internal fun leavesCapsuleFullScreen(intent: Intent?, hasLaunchInput: Boolean = false): Boolean =
+    intent != null && (
+        hasLaunchInput ||
+            intent.data != null ||
+            intent.hasExtra(MainActivity.EXTRA_SESSION) ||
+            intent.hasExtra(MainActivity.EXTRA_CAPSULE_URL) ||
+            intent.getBooleanExtra(LockScreenTests.EXTRA_LOCK_TEST, false) ||
+            intent.hasExtra("debug.openTab")
+        )

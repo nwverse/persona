@@ -31,6 +31,7 @@ type quickMeta struct {
 	goal         *proto.GoalInfo        // from backgroundTasks too: a goal is often set at the start of a long transcript
 	plan         *proto.PlanInfo        // from the same scan (bgPlan): a TodoWrite is often far back in a long turn
 	bg           []proto.BackgroundTask // from backgroundTasks: the tail alone misses tasks started earlier in a long turn
+	bgEnded      []proto.BackgroundTask // recent shell / Monitor outcomes from the same scan
 	bgWait       bool                   // bg and loop are not known yet (a big first read is running)
 	wf           []proto.Workflow       // workflow runs, as the transcript tells them (bgWorkflows)
 	wfScript     map[string]string      // their script files by run id
@@ -88,6 +89,8 @@ type quickMeta struct {
 	// turnOpen: a Codex rollout whose tail is inside a turn: the last turn it starts has not finished, or one turn
 	// fills the whole tail (a finished turn's task_complete is within a few KB of the end; real turns write MBs)
 	turnOpen bool
+	// turnActivityAt: newest timestamped line of the current open Codex turn in the tail (never carried from before/head).
+	turnActivityAt time.Time
 	// turnErr: the latest turn failed on the model service, as the agent's record says it (transcript.Meta.TurnError…:
 	// a Codex rollout's task_complete, #2185; Claude Code's own reply for a failed request, #1710).
 	turnErr turnFailure
@@ -158,9 +161,12 @@ func (n *Node) meta(path string, st os.FileInfo) quickMeta {
 	// 384 KB tail and scan the new bytes: a dozen busy agents with large transcripts kept a node reading ~20 MB/s.
 	// A growing file's meta is re-read at most every metaMinInterval; the list's rev comes from stat, so it stays exact.
 	if ok && (m.size == st.Size() && m.mtime.Equal(st.ModTime()) || time.Since(m.readAt) < metaMinInterval) {
+		// Retention advances even when the transcript does not. The scan itself stays cached.
+		m.bgEnded = recentBackgroundEnded(m.bgEnded)
 		if m.bgWait { // the background read may be done now
 			m.bg, m.loop, m.goal, m.bgWait = n.backgroundTasks(path)
 			m.wf, m.wfScript = n.bgWorkflows(path)
+			m.bgEnded = n.bgEnded(path)
 			m.ultracode, m.ultracodeAt = n.bgUltracode(path)
 			m.plan = n.bgPlan(path)
 			n.mergeModelFallback(path, &m)
@@ -191,6 +197,7 @@ func (n *Node) meta(path string, st os.FileInfo) quickMeta {
 	m.readAt = time.Now()
 	m.bg, m.loop, m.goal, m.bgWait = n.backgroundTasks(path)
 	m.wf, m.wfScript = n.bgWorkflows(path)
+	m.bgEnded = n.bgEnded(path)
 	m.ultracode, m.ultracodeAt = n.bgUltracode(path)
 	m.plan = n.bgPlan(path)
 	n.mergeModelFallback(path, &m)
@@ -251,14 +258,32 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 			whole += int64(len(lines[0]))
 			lines = lines[1:] // first line is partial
 		}
+		var codexTurnAt time.Time
 		for _, line := range lines {
 			if len(line) == 0 {
 				continue
 			}
-			if ts := lineTime(line); ts.After(m.contentAt) {
+			ts := lineTime(line)
+			if ts.After(m.contentAt) {
 				m.contentAt = ts
 			}
+			prevOpen, prevClosed := tm.TurnOpen, tm.TurnClosed
 			quickLine(line, &tm, &tail)
+			if tm.Codex {
+				switch {
+				case tm.TurnClosed && !prevClosed:
+					codexTurnAt = time.Time{}
+				case tm.TurnOpen && !prevOpen:
+					codexTurnAt = ts
+				case tm.TurnOpen || (off > 0 && !tm.TurnClosed):
+					if ts.After(codexTurnAt) {
+						codexTurnAt = ts
+					}
+				}
+			}
+		}
+		if tm.Codex && !tm.TurnClosed && (tm.TurnOpen || off > 0) {
+			m.turnActivityAt = codexTurnAt
 		}
 	}
 	if rest, ok := tail.Revoked(); ok { // Claude went on from a turn the node took for rewound (transcript.File.RewoundAt)
