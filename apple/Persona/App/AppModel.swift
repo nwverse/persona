@@ -172,6 +172,7 @@ final class AppModel {
         }
         countBadges()
         saveSnapshot()
+        resolveProvisionalChat()
     }
 
     /// The lists are folded again when a hub's hello says it folds side sessions now, or no longer.
@@ -323,6 +324,8 @@ final class AppModel {
     var sideLanding: SideLanding?
     /// Cancels deferred list resets even after a newer targeted open has already been consumed.
     @ObservationIgnored private(set) var agentsNavigationRevision = 0
+    /// An external link without a group can open the first hub before any hub has listed its sessions.
+    @ObservationIgnored private var provisionalChat: (key: SessionKey, latestAnswer: Bool, revision: Int)?
     /// An explicit Agents-tab selection returns to its list; targeted opens do not change this request.
     var agentsListReveal = 0
     /// Bumped each time the Inbox is entered at its root (the sidebar, a widget, a quick action, its tab on visionOS),
@@ -1660,11 +1663,37 @@ final class AppModel {
         }
     }
 
+    /// Keep an unqualified external open provisional until a hub supplies its row (#9167).
+    func openExternal(machineID: String, sessionID: String, group: String?, latestAnswer: Bool = false) {
+        let key = resolve(machineID: machineID, sessionID: sessionID, group: group)
+        open(key, latestAnswer: latestAnswer)
+        if group.flatMap(link) == nil, latest(key) == nil, openChat == key {
+            provisionalChat = (key, latestAnswer, agentsNavigationRevision)
+        }
+    }
+
+    private func resolveProvisionalChat() {
+        guard let pending = provisionalChat else { return }
+        guard pending.revision == agentsNavigationRevision, selectedTab == .chats else {
+            provisionalChat = nil
+            return
+        }
+        let key = resolve(machineID: pending.key.machineID, sessionID: pending.key.sessionID, group: nil)
+        guard latest(key) != nil else { return }
+        if key == pending.key { provisionalChat = nil; return }
+        // ChatsView consumes openChat when it pushes, before the view reports itself visible.
+        guard openChat == pending.key || visibleSession == pending.key else { return }
+        provisionalChat = nil
+        if latestAnswerFor == pending.key { latestAnswerFor = nil }
+        open(key, latestAnswer: pending.latestAnswer)
+    }
+
     /// Routes a notification / deep link to the right tab; `latestAnswer` lands on the start of the agent's last answer.
     /// A child whose parent row is already in hand opens that parent, with the child's card revealed. Anything else
     /// opens immediately. A child whose row is not loaded yet is looked up in the background (`refreshSessionDetail`),
     /// and moves to the parent only when that parent row exists.
     func open(_ key: SessionKey, latestAnswer: Bool = false, reveal: String? = nil) {
+        provisionalChat = nil
         // A side session lives in its parent's chat (#7944): its parent opens with the side shown over it, not with a
         // child's card revealed (`openChat` turns it into the parent and `sideLanding`).
         if reveal == nil, sideFold.home[key] == nil, let home = localChildHome(key), home.key != key {
@@ -2226,11 +2255,16 @@ final class AppModel {
         shown.append((owner, key))
         visibleSession = key
         NotificationActions.clearDelivered(key) // what it said is on screen now (#3449)
+        resolveProvisionalChat()
     }
 
     func hide(by owner: UUID) {
+        let previous = visibleSession
         shown.removeAll { $0.owner == owner }
         visibleSession = shown.last?.key
+        if let pending = provisionalChat, previous == pending.key, visibleSession != previous, openChat != pending.key {
+            provisionalChat = nil
+        }
     }
 
     /// Asks for everything after what the chat holds without holes (`covered`), or the last exchanges if nothing. Built
