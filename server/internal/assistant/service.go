@@ -482,7 +482,7 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 			if origin != "" {
 				p["origin"] = origin
 			}
-			if method == DeviceSessionSend {
+			if method == DeviceSessionSend || method == DeviceSessionSendOnce {
 				cfg := s.settings(ctx)
 				if id != "" && id == cfg.Main && device == cfg.mainRouteMachine() {
 					p["is_main"] = true // internal sends must not restart main on ordinary-chat compaction settings
@@ -491,7 +491,7 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 		}
 	}
 	roundKind := "" // the round the message starts, when it is one the owner did not start (owner_preempt.go)
-	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceSessionSend) {
+	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceSessionSend || method == DeviceSessionSendOnce) {
 		if text, ok := p["text"].(string); ok {
 			source, _ := p["message_source"].(*proto.MessageSource)
 			if id, _ := p["session_id"].(string); source != nil && method == DeviceAssistantSend {
@@ -509,7 +509,7 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 			}
 		}
 	}
-	if p, ok := params.(map[string]any); ok && method == DeviceSessionSend {
+	if p, ok := params.(map[string]any); ok && (method == DeviceSessionSend || method == DeviceSessionSendOnce) {
 		if id, _ := p["session_id"].(string); id != "" {
 			s.workTold(device, id) // the turn it starts is this manager's doing, not the owner's hand (setup_suggest.go)
 		}
@@ -527,12 +527,12 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 			p["interject_background"] = true // what the node does with a message that comes while it answers
 		}
 	}
-	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceSessionSend) && p["is_main"] == true {
+	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceSessionSend || method == DeviceSessionSendOnce) && p["is_main"] == true {
 		p["idle_compaction"] = assistantwire.IdleCompaction{
 			Enabled: s.idleAutoCompact(ctx), IdleMinutes: s.idleAutoCompactMinutes(ctx), ContextTokens: s.idleAutoCompactTokens(ctx),
 		}
 	}
-	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || method == DeviceSessionSend) {
+	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || method == DeviceSessionSend || method == DeviceSessionSendOnce) {
 		// The window the main conversation is held to (main_compact_window.go), as sendModel puts it: a start, a relay,
 		// an internal message and the spare warmed for its next start carry it with is_main, or the node starts it again
 		// on its launcher's window (and never adopts the spare).
@@ -856,6 +856,9 @@ func (s *Service) UserSpoke(ctx context.Context, r SessionRef) {
 
 func (s *Service) userSpokeText(ctx context.Context, r SessionRef, text string) {
 	s.availOwnerSpoke(r, time.Now()) // before anything else: what the conversation is doing as the message comes (availability.go)
+	if exitText(text) {
+		s.retireTodoWork([2]string{r.MachineID, r.SessionID}) // /exit or /quit starts no turn that could cancel the wake
+	}
 	s.agentDecisionSpoke(ctx, r, time.Now(), text)
 	s.ownerHeard(r.SessionID)
 	s.clearToolLoop([2]string{r.MachineID, r.SessionID}, loopUserInput)

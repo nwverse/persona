@@ -863,10 +863,7 @@ export const Composer = memo(function Composer({
     input.current?.focus({ preventScroll: true });
   };
 
-  const slashProps = {
-    rows, active, onHover: setActive, onPick: pick, onClose: closeSlash,
-    query, source: mention, machineId, within: box, memory: catalogMemory, ime: ime.tracker,
-  };
+  const slashProps = { memory: catalogMemory, rows, active, onHover: setActive, onPick: pick, onClose: closeSlash, query, source: mention, machineId, within: box, ime: ime.tracker };
   const commandPalette = () => <SlashPalette {...slashProps} active={Math.min(active, Math.max(rows.length - 1, 0))} />;
   return (
     <div

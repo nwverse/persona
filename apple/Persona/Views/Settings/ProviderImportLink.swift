@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// A provider import link handed to the app (#5428): `persona://provider/import?v=1&data=…`, the same cindy v1 payload
 /// as the web's `#import=` link and cindy's own scheme. The app never reads the payload itself — it sends the link text

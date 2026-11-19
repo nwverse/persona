@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 import Testing
 @testable import Persona
 
