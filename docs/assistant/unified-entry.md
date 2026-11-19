@@ -1117,8 +1117,13 @@ content, not memory: memory stays one for every conversation (#9440), and a dire
   or one never sent to since), the first save or clear records the block of the notes it replaces, which is what
   every send so far gave the leader. A conversation that is no leader any more is given no notes block, and an idle
   send records that, so a direction ended and made again does not bring back the block it had before. The node can
-  see work a moment before the manager does; in that moment its refusal stays as the safety net.
-- **Two editors** (#11392): a save may say which `notes_at` it started from (`null`: there were no notes); when the
+  see work before the manager's session row shows it (a moment, or longer on a computer with many sessions); in that
+  window its refusal stays as the safety net, and a block counts as in effect only once the node took the send that
+  carried it: when the node refuses that send or it fails before reaching the conversation, the block before it is put
+  back (`notesSendOutcome`: the manager's own sends by the node's answer, the owner's messages by the hub's
+  `session.assistant_sent` notice), so only that one message is refused, not every message until the turn ends.
+- **Two editors** (#11392): a save may say which `notes_at` it started from, as `GET /api/v1/assistant/leaders`
+  lists it (`null` there and here: there were no notes); when the
   notes changed since, it is refused with 409 `notes_changed` and the stored `notes` and `notes_at`, so a client can
   show both, and nothing changes. `notes_at` is written at millisecond precision and compared as an instant to the
   millisecond, so a client that parses the value and writes it again still matches; a value is never issued twice,

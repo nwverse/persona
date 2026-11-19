@@ -127,6 +127,9 @@ type directionBook struct {
 	armed  bool                  // a compare is scheduled
 	after  func(d time.Duration, f func())
 	now    func() time.Time // tests: the clock notes are saved by (nil: time.Now)
+	// pending: by conversation, the block in effect a send moved and the node has not yet been seen to take
+	// (notesSendOutcome); in memory only.
+	pending map[string]notesPending
 }
 
 // directionsLocked reads the book once; b.mu is held. A failed read leaves it unloaded: nothing is told or saved over it.
@@ -329,10 +332,10 @@ type leaderView struct {
 	assistantwire.LeaderChangedEvent
 	// Progress: the leader's latest own summary (leader_progress), nil before its first.
 	Progress *leaderProgress `json:"progress,omitempty"`
-	// Notes: what the owner wrote for the direction (direction_notes.go), NotesAt when; the leader and the
-	// direction's new Agents are given them.
+	// Notes: what the owner wrote for the direction (direction_notes.go), NotesAt when (null with no notes: the
+	// value a save sends back as notes_at, #11392); the leader and the direction's new Agents are given them.
 	Notes   string     `json:"notes,omitempty"`
-	NotesAt *time.Time `json:"notes_at,omitempty"`
+	NotesAt *time.Time `json:"notes_at"`
 	By      string     `json:"by"`
 	At      time.Time  `json:"at"`
 	EndedAt *time.Time `json:"ended_at,omitempty"`

@@ -267,10 +267,45 @@ func (s *Service) notesInEffect(ctx context.Context, id, block string, idle bool
 		return block
 	}
 	if d.NotesInEffect == nil || *d.NotesInEffect != block {
+		if b.pending == nil {
+			b.pending = map[string]notesPending{}
+		}
+		b.pending[id] = notesPending{prev: d.NotesInEffect, block: block}
 		d.NotesInEffect = &block
 		s.saveDirectionsLocked(ctx)
 	}
 	return block
+}
+
+// notesPending is a block in effect a send moved to block from prev (nil: none recorded), until the send's outcome is
+// known.
+type notesPending struct {
+	prev  *string
+	block string
+}
+
+// notesSendOutcome settles the block in effect the last send to conversation id moved (notesInEffect), once that
+// send's outcome is known (#11392). Taken by the node, the block stays. Not taken (the node refused it, as it refuses
+// a new policy for a process it already sees at work while the manager's session row still read idle, or it failed
+// before reaching the conversation), the block before it is put back, unless another send moved it since: the
+// process still runs on that one, so the next messages of the same turn are not refused too. The manager's own sends
+// are settled by their answer (call), the owner's by the hub's notice of how it sent them (ConversationSent).
+func (s *Service) notesSendOutcome(ctx context.Context, id string, taken bool) {
+	b := &s.directions
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	p, ok := b.pending[id]
+	if !ok {
+		return
+	}
+	delete(b.pending, id)
+	if taken || !b.loaded {
+		return
+	}
+	if d := b.m[id]; d != nil && d.NotesInEffect != nil && *d.NotesInEffect == p.block {
+		d.NotesInEffect = p.prev
+		s.saveDirectionsLocked(ctx)
+	}
 }
 
 // leadIdle: a send now finds leader conversation c idle, as its computer lists it: not starting, working, waiting on
