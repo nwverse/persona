@@ -267,11 +267,12 @@ jobs:
           python3 scripts/release/android_tag_release.py \
             --config "$RUNNER_TEMP/persona-android/android.json" \
             --worktree "$GITHUB_WORKSPACE" --commit "${{ needs.plan.outputs.commit }}" \
-            --version "${{ needs.plan.outputs.version }}" --receipt release/android-receipt.json
+            --version "${{ needs.plan.outputs.version }}" --receipt "$RUNNER_TEMP/android-receipt.json"
       - name: Verify the signed APK and Android index against the release plan
         run: |
           set -euo pipefail
           mkdir -p release/downloads
+          cp "$RUNNER_TEMP/android-receipt.json" release/android-receipt.json
           python3 - <<'PY'
           import hashlib,json,os,shutil
           from pathlib import Path
