@@ -80,6 +80,17 @@ the context tags, and Feishu routing uses the structured topic and run records.
    to require one of the existing Chinese kind identifiers and the same pipe delimiter. The first exchange,
    extension hint and rejected answer are quoted as data. These calls are private model requests.
 
+### To-do prompts
+
+The model phase covers the title and completion receipt. The title keeps its existing output language and length rules,
+and the receipt uses the owner's language for newly generated text while retaining its JSON field names and original
+evidence links. The title and receipt inputs retain task notes, machine names, paths and Agent replies as data.
+
+The delivery phase covers decision and project context in Agent handoffs and the Feishu topic-open and topic-reply
+messages. They read the owner's current locale at render time. Context tags, quote handling, to-do IDs, decision
+source records, and the `task_plan` contract are independent of the rendered language. Transcript stripping uses
+the context tags, and Feishu routing uses the structured topic and run records.
+
 ### Ratchet and acceptance
 
 `scripts/ci/prompt_language_ratchet.py` runs in the repository CI guards. It counts CJK-bearing `.md` templates

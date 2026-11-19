@@ -10,6 +10,7 @@ import { isAssistantDir } from '../../runtime-sdk/lib/identity.js'
 import { AgyAcpClient } from './acp.js'
 import { discoverModels, mapModels, SIGNIN_TIMEOUT } from './models.js'
 import { nativeErrorStep } from './errors.js'
+import { isPolicyDir, POLICY_DIR_NAME, policyDirOf, readPolicy, removePolicy, splitPolicy, SUPERVISION_ERROR_CODE, syncPolicy } from './policy.js'
 import {
   agyModeToPersona,
   cleanUserText,
@@ -37,6 +38,8 @@ const SIGNED_OUT = /\b(?:sign(?:ed)?|log(?:ged)?)[ -]?in\b/i
 export function createAgyRuntime(options = {}) {
   const home = options.home || homedir()
   const agyDir = options.agyDir || process.env.ANTIGRAVITY_CLI_CONFIG_DIR || join(home, '.gemini', 'antigravity-cli')
+  const policyRoot = options.policyRoot || join(agyDir, POLICY_DIR_NAME)
+  const skipPolicyDir = (p) => isPolicyDir(policyRoot, p)
   const personadBin = daemonBinary(home, options)
   const agyBin = options.agyBin || join(home, '.local', 'bin', 'agy')
   const log = options.log || ((m) => console.error(m))
@@ -284,6 +287,7 @@ export function createAgyRuntime(options = {}) {
       modelSwitch: true,
       launchers,
       assistant: true,
+      supervisionPolicy: true,
       socketPath: options.socketPath,
       instance: options.instance,
       log,
@@ -769,7 +773,7 @@ export function createAgyRuntime(options = {}) {
     if (cutChecks.has(rawId)) return cutChecks.get(rawId)
     const check = withAcp(async () => {
       try {
-        await acp.ensureSessionLoaded(rawId, sessionCwds.get(rawId) || home, [])
+        await acp.ensureSessionLoaded(rawId, sessionCwds.get(rawId) || home, [], extraDirsFor(rawId))
         const snapshot = await acp.nativeRequest('GetCascadeTrajectory', { cascadeId: rawId, disableRehydration: true })
         if (snapshot.trajectory?.cascadeId === rawId && (snapshot.trajectory.steps || []).length === count) {
           rememberCut(rawId, transcript, count)
@@ -900,7 +904,7 @@ export function createAgyRuntime(options = {}) {
       }
       if (!mtimeMs) mtimeMs = createdAt.get(rawId) || Date.now()
 
-      const cwd = sessionCwds.get(rawId) || workspacePathOf(native, workspacePathOf(summary, cwdByConv[rawId] || home))
+      const cwd = sessionCwds.get(rawId) || workspacePathOf(native, workspacePathOf(summary, cwdByConv[rawId] || home, skipPolicyDir), skipPolicyDir)
       // The node removes its temporary probe directory when the check ends. Keep those transcripts out after restarts.
       if (basename(cwd).startsWith('persona-check-') && !existsSync(cwd)) continue
       if (cwd) sessionCwds.set(rawId, cwd)
@@ -1080,12 +1084,40 @@ export function createAgyRuntime(options = {}) {
     }
   }
 
-  async function loadSession(rawId, cwd, servers) {
-    sessionConfiguration(rawId, await acp.ensureSessionLoaded(rawId, cwd, servers))
+  function extraDirsFor(rawId) {
+    try {
+      return readPolicy(policyRoot, rawId) ? [policyDirOf(policyRoot, rawId)] : []
+    } catch {
+      return []
+    }
+  }
+
+  function requireAdditionalDirectories() {
+    if (!acp.supportsAdditionalDirectories) {
+      throw new RpcError('Antigravity CLI does not support separate supervision policy directories', SUPERVISION_ERROR_CODE)
+    }
+  }
+
+  function validatePolicyParam(params) {
+    if (params?.supervision_instructions === undefined) return { hasPolicy: false, policy: '' }
+    if (typeof params.supervision_instructions !== 'string') {
+      throw new RpcError('Supervision policy must be a string', SUPERVISION_ERROR_CODE)
+    }
+    return { hasPolicy: true, policy: params.supervision_instructions }
+  }
+
+  async function loadSession(rawId, cwd, servers, additionalDirectories = []) {
+    sessionConfiguration(rawId, await acp.ensureSessionLoaded(rawId, cwd, servers, additionalDirectories))
   }
 
   /** Create a native session with the requested or configured options; a session that refuses them is closed. */
   async function openSession(params, cwd, isAsst) {
+    const { policy } = validatePolicyParam(params)
+    await acp.ensureStarted()
+    if (policy) {
+      requireAdditionalDirectories()
+      splitPolicy(policy)
+    }
     const res = await acp.newSession({ cwd, mcpServers: [] })
     const rawId = res.sessionId
     createdAt.set(rawId, Date.now())
@@ -1095,13 +1127,19 @@ export function createAgyRuntime(options = {}) {
     if (isAsst) assistants.add(pid)
 
     try {
-      await loadSession(rawId, cwd, mcpServersFor(pid, isAsst))
+      let extraDirs = []
+      if (policy) {
+        const dir = syncPolicy(policyRoot, rawId, policy)
+        if (dir) extraDirs = [dir]
+      }
+      await loadSession(rawId, cwd, mcpServersFor(pid, isAsst), extraDirs)
       await applySessionOptions(rawId, {
         model: params.model || configuredModel(),
         permission_mode: params.permission_mode || configuredMode(),
         effort: params.effort,
       })
     } catch (err) {
+      removePolicy(policyRoot, rawId)
       archived.add(rawId)
       await acp.closeSession(rawId)
       rt.sessionsChanged()
@@ -1143,6 +1181,7 @@ export function createAgyRuntime(options = {}) {
           mode: params.permission_mode,
           model: params.model,
           effort: params.effort,
+          ...(params.supervision_instructions !== undefined ? { supervision_instructions: params.supervision_instructions } : {}),
         })
       }
 
@@ -1202,14 +1241,40 @@ export function createAgyRuntime(options = {}) {
       const isAsst = Boolean(params.assistant) || assistants.has(pid) || isAssistantDir(cwd)
       if (isAsst) assistants.add(pid)
 
-      await retryStaleModels(async () => {
-        await loadSession(rawId, cwd, mcpServersFor(pid, isAsst))
-        await applySessionOptions(rawId, {
-          model: params.model,
-          permission_mode: params.mode,
-          effort: params.effort,
+      const { hasPolicy, policy: requestedPolicy } = validatePolicyParam(params)
+      let prevPolicy = ''
+      try {
+        prevPolicy = readPolicy(policyRoot, rawId)
+      } catch (err) {
+        if (hasPolicy) throw new RpcError(`Failed to read supervision policy: ${err.message}`, SUPERVISION_ERROR_CODE)
+      }
+      const nextPolicy = hasPolicy ? requestedPolicy : prevPolicy
+      if (hasPolicy && nextPolicy !== prevPolicy && (activeTurns.has(pid) || nativeWorking(readConversationStates().get(rawId)))) {
+        throw new RpcError('Wait for the current turn to finish before changing supervision policy', 'busy')
+      }
+
+      try {
+        await retryStaleModels(async () => {
+          await acp.ensureStarted()
+          if (nextPolicy) requireAdditionalDirectories()
+          let extraDirs = []
+          if (nextPolicy || prevPolicy) {
+            const dir = syncPolicy(policyRoot, rawId, nextPolicy)
+            if (dir) extraDirs = [dir]
+          }
+          await loadSession(rawId, cwd, mcpServersFor(pid, isAsst), extraDirs)
+          await applySessionOptions(rawId, {
+            model: params.model,
+            permission_mode: params.mode,
+            effort: params.effort,
+          })
         })
-      })
+      } catch (err) {
+        if (hasPolicy && nextPolicy !== prevPolicy) {
+          try { syncPolicy(policyRoot, rawId, prevPolicy) } catch {}
+        }
+        throw err
+      }
 
       if (rewinding.has(pid)) throw new RpcError('The conversation is being rewound', 'rewind_busy')
 
@@ -1402,6 +1467,7 @@ export function createAgyRuntime(options = {}) {
       clearExportPoll(rawId)
       unexportedTurns.delete(rawId)
       dirtyLiveSeqs.delete(toPersonaId(rawId))
+      removePolicy(policyRoot, rawId)
       await cancelTurn(rawId)
       await acp.closeSession(rawId)
       rt.sessionsChanged()
@@ -1488,7 +1554,7 @@ export function createAgyRuntime(options = {}) {
       }
       const cwd = sessionCwds.get(rawId) || home
       await retryStaleModels(async () => {
-        await loadSession(rawId, cwd, mcpServersFor(toPersonaId(rawId), assistants.has(toPersonaId(rawId))))
+        await loadSession(rawId, cwd, mcpServersFor(toPersonaId(rawId), assistants.has(toPersonaId(rawId))), extraDirsFor(rawId))
         await applySessionOptions(rawId, {
           model: params.model,
           permission_mode: params.permission_mode,
