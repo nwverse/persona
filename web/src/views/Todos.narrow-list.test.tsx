@@ -144,6 +144,7 @@ describe("side by side", () => {
     screen.width = 1280;
     await mount("/todos");
     expect(current()).toEqual(["a"]);
-    expect(loaded()).toEqual(["a"]);
+    // its page reads them once it has drawn, which a loaded machine can take past settle()
+    await vi.waitFor(() => expect(loaded()).toEqual(["a"]));
   });
 });
