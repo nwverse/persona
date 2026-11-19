@@ -17,6 +17,7 @@ import { initialLauncher, launcherBlock, usableFirst } from "../lib/launcher-hea
 import { defaultLabel, inlineTextStart, machineLaunchers, type LauncherDefault } from "../lib/launcher-models";
 import { providerLabel } from "../lib/provider-names";
 import { navigate } from "../lib/router";
+import { useMedia } from "../lib/viewport";
 import { settingsHref } from "./settings/nav";
 import { interactionAsk } from "../lib/inbox";
 import { usageLimitLabel } from "../lib/usage-limit";
@@ -463,13 +464,16 @@ export function TodosView({
     };
   }, [selectedId]);
 
+  // List and detail side by side (md and up, Tailwind's max-md: below it they take turns, as on a phone)
+  const split = !useMedia("(max-width: 767px)");
   // Active selected todo
   const activeTodo = useMemo(() => {
     if (activeId) {
       const found = todos.find((t) => t.id === activeId);
       if (found) return found;
     }
-    if (requestMode) return undefined;
+    // taking turns, nothing is open until a row is: no first row stands in, marked current with its detail loading unseen
+    if (requestMode || !split) return undefined;
     if (byStatus) {
       // the first row of an open section; none rather than one that would unfold a folded section (Shelved, Done)
       for (const sec of TRIAGE_SECTIONS) if (!FOLDED_SECTIONS.has(sec) && triaged.sections[sec].length) return triaged.sections[sec][0].lead;
@@ -478,7 +482,7 @@ export function TodosView({
     // by 常驻: the first row shown (a direction's, else an unfolded status section's below them), else the first completed one
     if (grouping === "direction") return directionSections[0]?.todos[0] ?? directionRest.find((s) => !FOLDED_SECTIONS.has(s.sec))?.groups[0].lead ?? filteredCompleted[0];
     return filteredUncompleted[0] ?? filteredCompleted[0];
-  }, [activeId, todos, filteredUncompleted, filteredCompleted, byStatus, requestMode, triaged, grouping, directionSections, directionRest]);
+  }, [activeId, todos, filteredUncompleted, filteredCompleted, byStatus, requestMode, split, triaged, grouping, directionSections, directionRest]);
 
   // The to-do open beside the calendar: the address's, while it is there.
   const selectedTodo = calendarOn && selectedId ? todos.find((td) => td.id === selectedId) : undefined;
@@ -993,7 +997,8 @@ export function TodosView({
               </Button>
             </div>
           )}
-          {activeTodo ? (
+          {/* taking turns, the detail is there only while shown: a to-do opened before and left keeps no hidden page */}
+          {activeTodo && (split || detailOnNarrow) ? (
             <TodoDetail
               key={`${owner}/${activeTodo.id}`}
               owner={owner}
