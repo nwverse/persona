@@ -3295,9 +3295,15 @@ Home/End, Enter takes the first match, Escape closes and returns the focus to
 its button), not a native `select`. Each repository's issues and PRs are link
 rows with their own **Add issue or PR** field: Enter adds, Escape cancels, and a
 URL of another repository is refused inline by `repositoryLinkView`, the same
-rule the manager applies. Directory aliases and source refs stay in the
-per-repository **Source options** disclosure; empty aliases and default branches
-need no setup. Saved-source changes (`removed`, `identity_changed`) and
+rule the manager applies. Public HTTP aliases, scheme case and repository-path
+case are normalized by the shared parser before that comparison; a self-hosted
+instance's scheme and port must match exactly. Two links that normalize to the
+same repository, kind and number are refused before create/save, with both
+entries kept for correction. Directory names and source refs are validated with
+the manager's rules before a create or save, and an invalid optional draft
+shows the field error and cannot be submitted. Directory aliases and source
+refs stay in the per-repository **Source options** disclosure; empty aliases
+and default branches need no setup. Saved-source changes (`removed`, `identity_changed`) and
 `unlisted` rows inferred from agent-added links are explained beneath their
 repository while the saved source stays. A to-do's `pr_url` is drawn inside
 this group as a link row with one line saying it predates the store, and never
