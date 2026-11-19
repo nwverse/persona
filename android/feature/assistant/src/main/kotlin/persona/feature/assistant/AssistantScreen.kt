@@ -400,6 +400,12 @@ fun AssistantScreen(
             navigator.navigate(ChatRoute(key.machineId, key.sessionId))
         }
     }
+
+    /** Opening a conversation from a list: a forward waiting for the new-conversation page is dropped with it (#3901). */
+    fun openFromList(key: SessionKey) {
+        persona.feature.chat.ForwardPlacements.home = emptyList()
+        openConversation(key)
+    }
     fun clearConversation() {
         openedMain = true
         viewingMainQueue = false
@@ -522,12 +528,16 @@ fun AssistantScreen(
         // An offline manager takes nothing: its page is history only until it is back.
         if (managers.offline != null) return
         if (sending || !draftReady) return
+        // A forward put on the new conversation's composer (#3901) goes with what is typed, or alone.
+        val forwards = if (resend == null && active == null) persona.feature.chat.ForwardPlacements.home else emptyList()
         // A failed first message holds the blank page until it is sent again or deleted (iOS).
-        if (resend == null && (active == null && firstMessage != null || !composer.hasContent && starterQuotes.isEmpty() || !composer.ready)) return
+        if (resend == null && (active == null && firstMessage != null ||
+                !(composer.hasContent || starterQuotes.isNotEmpty() || forwards.isNotEmpty()) || !composer.ready)) return
         val sentDraft = composer.draft.takeIf { resend == null }
         val sentQuotes = starterQuotes.takeIf { resend == null }.orEmpty()
         // The sessions picked with @ go in front of the words as <persona-context> tags, as in a chat (iOS `StarterDraft.message`).
-        val text = resend?.text ?: if (sentQuotes.isEmpty()) composer.message() else starterMentions.message(composer.message(), resources)
+        val typed = if (sentQuotes.isEmpty()) composer.message() else starterMentions.message(composer.message(), resources)
+        val text = resend?.text ?: if (forwards.isEmpty()) typed else persona.feature.chat.forwardMessage(typed, forwards, resources)
         // A launcher picked on the new-conversation page: a conversation of its own on it, then the message to it.
         val launcher = if (resend != null) resend.launcher else starterLauncher.takeIf { active == null && newChat?.space == null }
         val startWith = startConversationWith
@@ -550,6 +560,9 @@ fun AssistantScreen(
             firstMessage = FirstMessage(submitted, space = fresh?.space, launcher = launcher)
             failedStarts.write(page, null)
             if (sentDraft != null) { composer.clearIfUnchanged(sentDraft); draftEditor?.changed(composer.draft) }
+            // The pending bubble owns the forward now, as it owns the typed draft; a retry must not place it again.
+            if (forwards.isNotEmpty()) persona.feature.chat.ForwardPlacements.home =
+                persona.feature.chat.ForwardPlacements.home.filterNot { ref -> forwards.any { it.id == ref.id } }
             starterMentions.sent(sentQuotes)
         }
         // A start that failed keeps the message as a failed bubble with why, Resend and Delete (iOS #1368).
@@ -564,6 +577,8 @@ fun AssistantScreen(
         val operationId = requireNotNull(pendingClientId)
         val submittedChoice = managerChoice
         scope.launch {
+            // Set once the message is in the outbox: only then does a forward go off the composer for good.
+            var accepted = false
             try {
                 // Started once: a retry after the message failed sends to the same new conversation, while the
                 // launcher is still the one that started it.
@@ -595,9 +610,12 @@ fun AssistantScreen(
                     } else forManager?.let { error("managers unavailable") }
                 }
                 sendAssistantMessage(mainConversationSender, messageSender, target, submitted, operationId)
+                accepted = true
                 // Clear the submitted assistant's editor after commit, even while another assistant is shown.
                 if (sentDraft != null) {
                     composer.clearIfUnchanged(sentDraft)
+                    if (forwards.isNotEmpty()) persona.feature.chat.ForwardPlacements.home =
+                        persona.feature.chat.ForwardPlacements.home.filterNot { ref -> forwards.any { it.id == ref.id } }
                     draftEditor?.changed(composer.draft)
                 }
                 starterMentions.sent(sentQuotes)
@@ -619,6 +637,11 @@ fun AssistantScreen(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
+                // Nothing reached the outbox: the forward this send carried stays over the composer, to go again. A new
+                // conversation's failed bubble already owns it (it was taken off the composer above), and putting it
+                // back would send it twice: once from the bubble's Resend, once with the next message.
+                if (!accepted && !startsOne && forwards.isNotEmpty()) persona.feature.chat.ForwardPlacements.home =
+                    restoreForwards(forwards, persona.feature.chat.ForwardPlacements.home)
                 if (startsOne) failed(persona.core.designsystem.operationFeedback(error).text.resolve(resources))
                 else if (feedback?.failure(error) != true)
                     toast.show(persona.core.designsystem.FeedbackNotice(persona.core.designsystem.operationFeedback(error).text.resolve(resources), style = persona.core.designsystem.FeedbackStyle.Error))
@@ -771,7 +794,7 @@ fun AssistantScreen(
                 snapshot.mainSession?.let(::openConversation) ?: run { newConversation(); viewingMainQueue = true }
                 scope.launch { drawerOpen = false }
             },
-            onOpen = { openConversation(it); scope.launch { drawerOpen = false } },
+            onOpen = { openFromList(it); scope.launch { drawerOpen = false } },
             onInfo = {
                 if (it == AssistantInfo.Knowledge && onKnowledge != null) onKnowledge()
                 else if (pageManagement != null && it == AssistantInfo.Launcher) settingsOpen = true
@@ -802,7 +825,7 @@ fun AssistantScreen(
             found = foundChats, searchPartial = searchPartial,
         )
         ConversationHistoryDialogs(history, snapshot.conversations, scope,
-            onOpen = { openConversation(it); scope.launch { drawerOpen = false } },
+            onOpen = { openFromList(it); scope.launch { drawerOpen = false } },
             notice = { message ->
                 if (feedback?.notice(message, persona.core.designsystem.FeedbackStyle.Success) != true)
                     toast.show(persona.core.designsystem.FeedbackNotice(message, style = persona.core.designsystem.FeedbackStyle.Success))
@@ -900,6 +923,8 @@ fun AssistantScreen(
                         }
                         val mentions = if (mentionsHere) mentionSessions?.collectAsStateWithLifecycle()?.value
                             ?.let { starterMentionSource(it, folders) } else null
+                        // A forward waiting for the new conversation (#3901): its card over the composer, sent with it.
+                        val homeForwards = if (active == null) persona.feature.chat.ForwardPlacements.home else emptyList()
                         ChatComposer(uploadTarget, composer, working = false, sending = sending || !draftReady,
                             // The health page sends no files: an upload goes to the main chat's machine, outside the health space.
                             canClear = false, service = composerService?.takeIf { uploadTarget.machineId.isNotBlank() && !healthPage },
@@ -912,7 +937,8 @@ fun AssistantScreen(
                                 else stringResource(R.string.assistant_composer_placeholder, assistantName),
                             blockedLabel = blocking?.takeIf { active == null }?.let { stringResource(blockedSendLabel(it)) },
                             onBlocked = { blocking?.primaryAction()?.let { runReadinessAction(it) } },
-                            extraContent = starterQuotes.isNotEmpty(), assistantChat = true, mentions = mentions, onMention = starterMentions::add,
+                            extraContent = starterQuotes.isNotEmpty() || homeForwards.isNotEmpty(), assistantChat = true,
+                            mentions = mentions, onMention = starterMentions::add,
                             onMentionOpen = { mentionOpen = it },
                             // Glass: the model pill and its panel (#5055, the web's new-chat page): the pick is this chat's start.
                             modelPill = if (PersonaTheme.style == AppStyle.Glass && active == null && !healthPage && pageManagement != null &&
@@ -928,15 +954,23 @@ fun AssistantScreen(
                                     enabled = !sending)
                             }) else null,
                             // A new conversation's launcher, for it alone (iOS StarterComposer, web StarterLauncherChip); Glass's is the pill.
-                            accessory = if (active == null && !healthPage && pageManagement != null && startConversationWith != null && !demo) ({
-                                if (mentionsHere) StarterQuoteCards(starterMentions)
-                                if (PersonaTheme.style != AppStyle.Glass) StarterLauncherChip(starterLauncher, defaultLauncher, launchers, launchersFailed, enabled = !sending,
-                                    onOpen = { scope.launch { loadStarterLaunchers() } }) { picked ->
-                                    // Another launcher (or the default) does not reuse what the last one started.
-                                    if (picked != starterLauncher) starterStarted = null
-                                    starterLauncher = picked
+                            accessory = if (homeForwards.isNotEmpty() || starterQuotes.isNotEmpty() ||
+                                (active == null && !healthPage && pageManagement != null && startConversationWith != null && !demo)) ({
+                                homeForwards.forEach { ref ->
+                                    persona.feature.chat.ForwardComposerCard(ref, lines = if (homeForwards.size == 1) 2 else 1) {
+                                        persona.feature.chat.ForwardPlacements.home = persona.feature.chat.ForwardPlacements.home.filterNot { it.id == ref.id }
+                                    }
                                 }
-                            }) else if (starterQuotes.isNotEmpty()) ({ StarterQuoteCards(starterMentions) }) else null)
+                                if (active == null && !healthPage && pageManagement != null && startConversationWith != null && !demo) {
+                                    if (mentionsHere) StarterQuoteCards(starterMentions)
+                                    if (PersonaTheme.style != AppStyle.Glass) StarterLauncherChip(starterLauncher, defaultLauncher, launchers, launchersFailed, enabled = !sending,
+                                        onOpen = { scope.launch { loadStarterLaunchers() } }) { picked ->
+                                        // Another launcher (or the default) does not reuse what the last one started.
+                                        if (picked != starterLauncher) starterStarted = null
+                                        starterLauncher = picked
+                                    }
+                                } else if (starterQuotes.isNotEmpty()) StarterQuoteCards(starterMentions)
+                            }) else null)
                     }
                 }
             } }) else null,

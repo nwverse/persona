@@ -249,10 +249,8 @@
     <string name="chat_menu_select">選択</string>
     <string name="chat_menu_quote">引用</string>
     <string name="chat_menu_share">共有</string>
-    <string name="chat_menu_hand_to_persona">Personaに任せる</string>
     <string name="chat_menu_context">コンテキストにする</string>
     <string name="chat_menu_edit">編集</string>
-    <string name="chat_menu_handoff_ask">このメッセージを見て、どう対応すればよいか教えてください。</string>
     <string name="chat_menu_context_title">%1$s · メッセージ</string>
     <string name="chat_draft_read_failed">下書きを読み込めませんでした。入力内容はこのページに一時的に残ります</string>
     <string name="chat_draft_save_failed">下書きを保存できませんでした。入力内容はこのページに残っています。アプリを終了しないでください</string>

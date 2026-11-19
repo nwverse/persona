@@ -256,10 +256,8 @@
     <string name="chat_menu_select">Select</string>
     <string name="chat_menu_quote">Quote</string>
     <string name="chat_menu_share">Share</string>
-    <string name="chat_menu_hand_to_persona">Hand to Persona</string>
     <string name="chat_menu_context">Use as context</string>
     <string name="chat_menu_edit">Edit</string>
-    <string name="chat_menu_handoff_ask">Take a look at this message and tell me how to handle it.</string>
     <string name="chat_menu_context_title">%1$s · Message</string>
     <string name="chat_draft_read_failed">Couldn\'t read the draft; your typing stays on this page for now</string>
     <string name="chat_draft_save_failed">Couldn\'t save the draft. Your typing is still on this page; don\'t quit the app</string>
