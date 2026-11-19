@@ -369,6 +369,7 @@ func (n *Node) sendOutsidePriority(ctx context.Context, id, text string, images 
 		}
 	}
 	p.fromMode = n.peerAttest(ctx, c, id)
+	_, p.source = ctx.Value(sourceDeliveryKey{}).(string)
 	err = peerSendAt(ctx, p, id, text, priority)
 	var pe *errPeer
 	if asPeer(err, &pe) {
@@ -409,13 +410,14 @@ func (n *Node) sendOutsidePriority(ctx context.Context, id, text string, images 
 //     terminal goes in whatever its mode. bypass when the session's own transcript says bypassPermissions now
 //     (peerSessionClass); nothing otherwise (a session that prompts takes a message that states none; plan may be
 //     either class). A stale record can only make the session hold the message, never take more than its owner could.
-//   - anything else (supervision, another Agent's message, non-owner answers and stops): nothing. The node cannot bind such
-//     words to the permission mode they were written in, so a bypass session holds them for approval at the computer.
+//   - an Agent message on the source-permission delivery RPC: the source node captured its class when the words were produced, bound to the source process and call. It never becomes owner input.
+//   - anything without reliable source evidence (including older peers and non-owner controls): nothing.
 func (n *Node) peerAttest(ctx context.Context, c claudeProc, id string) string {
 	if ownerDeliveryOf(ctx) != nil && peerSessionClass(n, c, id) == peerModeBypass {
 		return peerModeBypass
 	}
-	return ""
+	mode, _ := ctx.Value(sourceDeliveryKey{}).(string)
+	return mode
 }
 
 // peerSessionClass is the from-mode class session id runs in, from the transcript in claude c's own config directory

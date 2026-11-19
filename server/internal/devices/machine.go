@@ -670,6 +670,20 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 	if nodeHas(info, nodeproto.OwnerControls) {
 		method = ownerControlMethod(ctx, method)
 	}
+	if method == "session.send" {
+		raw, err := json.Marshal(params)
+		if err != nil {
+			return err
+		}
+		rebuilt, source, err := sourcePermissionParams(ctx, raw, nodeHas(info, nodeproto.SourcePermissions))
+		if err != nil {
+			return err
+		}
+		params = json.RawMessage(rebuilt)
+		if source {
+			method = nodeproto.SourceSend
+		}
+	}
 	return p.Call(ctx, method, params, out)
 }
 
