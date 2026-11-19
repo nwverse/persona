@@ -225,6 +225,8 @@ def run(args):
                     assert finished_entry.evaluate("""e => { const b = e.getBoundingClientRect(), r = e.closest("[data-assistant-actionbar]").getBoundingClientRect();
                         return b.left >= r.left - 1 && b.right <= r.right + 1; }""")
                     finished_rows = bar.locator("[data-tray-finished] [data-task-slot]")
+                    # its rows come with the tray's first opening, in the Parked rows' chunk (FinishedTaskRows.tsx)
+                    expect(finished_rows).to_have_count(2)
                     assert finished_rows.evaluate_all("es => es.map(e => e.dataset.taskSlot)") == ["plan:demo-plan:0", "plan:demo-plan:3"]
                     assert finished_rows.evaluate_all("es => es.map(e => e.dataset.countsOpen)") == ["false", "false"]
                     fresh = finished_rows.nth(0)
