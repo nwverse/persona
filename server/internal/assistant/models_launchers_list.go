@@ -109,7 +109,7 @@ func (s *Service) launcherViewsFrom(ctx context.Context, zshrc []zshrcLaunchers,
 	managed := map[string]bool{}
 	for _, l := range stored {
 		managed[l.Name] = true
-		out = append(out, launcherView(l))
+		out = append(out, s.launcherView(l))
 	}
 	hidden := s.hiddenLaunchers(ctx)
 	byName := map[string]*LauncherView{}
