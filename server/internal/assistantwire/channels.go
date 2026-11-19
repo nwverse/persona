@@ -88,8 +88,8 @@ const (
 	// FeishuRecall: {message_id} → {}: one of the bot's messages in the owner's private chat withdrawn (Lark lets a
 	// bot withdraw its messages for a while after sending; past that the call fails).
 	FeishuRecall = "feishu.recall"
-	// FeishuCotCreate: {reply_to?} → {cot_id, message_id}: an agent message (the open platform's message_cot, a
-	// collapsible process) under the message replied to, else into the owner's chat.
+	// FeishuCotCreate: {reply_to?, chat_id?, in_thread?} → {cot_id, message_id}: an agent message (the open
+	// platform's message_cot, a collapsible process) under the message replied to, in its topic when in_thread is set.
 	FeishuCotCreate = "feishu.cot_create"
 	// FeishuCotAppend: {cot_id, message_id, events: [feishubot.CotEvent]} → {}.
 	FeishuCotAppend = "feishu.cot_append"
@@ -239,6 +239,8 @@ type FeishuFeatures struct {
 	// AnswerNewCard: a finished run's answer goes out as a new card and its progress card is folded, so the answer is
 	// the chat's newest message and Lark notifies on it (#5396).
 	AnswerNewCard bool `json:"answer_new_card"`
+	// TopicCot: a topic run also shows its thinking and tools in a native agent message beside the progress card.
+	TopicCot bool `json:"topic_cot"`
 }
 
 // FeishuStatus is feishu.status's answer.

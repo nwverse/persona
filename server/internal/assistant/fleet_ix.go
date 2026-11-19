@@ -107,13 +107,13 @@ func (s *Service) elicitationReachable(ix proto.Interaction) bool {
 // ---- telling ----
 
 // announce puts a new card on the apps (through the hub), pushes it, and gives it to the channels. A supervised task's
-// card goes to its supervisor first when leaders are configured (ask_route.go); a question the assistant may answer for
-// the user goes to it first (fleet_delegate.go).
+// parsed terminal question, and its other eligible cards when leaders are configured, go to the supervising conversation
+// first (ask_route.go); a question the assistant may answer for the user goes to it first (fleet_delegate.go).
 func (s *Service) announce(ix proto.Interaction) {
 	if s.approveStandingInteraction(ix) {
 		return
 	}
-	if !s.agentSupervisedSession(ix.MachineID, ix.SessionID) && s.routeAsk(ix) { // a worker's card stays the user's (task_leader.go)
+	if s.routeAsk(ix) {
 		return
 	}
 	if forget := s.delegable(ix); forget != nil {
@@ -1285,7 +1285,7 @@ func (s *Service) restoreRoute(ctx context.Context, ix proto.Interaction) bool {
 	if !routable(ix) {
 		return false
 	}
-	ladder, todo, home, ok := s.askLadder(ctx, ix.MachineID, ix.SessionID)
+	ladder, todo, home, ok := s.askLadder(ctx, ix)
 	if !ok {
 		return false
 	}
@@ -1303,6 +1303,15 @@ func (s *Service) restoreRoute(ctx context.Context, ix proto.Interaction) bool {
 	p.ix.Delegating = true
 	shown := p.ix
 	s.fleet.mu.Unlock()
+	if ix.Kind == proto.IxScreen {
+		// Detaching ended the earlier instance of this dialog. The first
+		// explicit escalation after reconnect must still be able to post it.
+		s.chans.mu.Lock()
+		if ended, ok := s.chans.ended[ix.ID]; ok && ended.Before(ix.CreatedAt) {
+			delete(s.chans.ended, ix.ID)
+		}
+		s.chans.mu.Unlock()
+	}
 	s.show(shown)
 	s.signalAsk(todo, ladder[0], ix, 0)
 	return true
