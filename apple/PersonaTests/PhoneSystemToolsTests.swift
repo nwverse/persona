@@ -314,10 +314,18 @@ struct PhoneSystemToolsTests {
     }
 
     #if os(iOS) && canImport(AlarmKit)
-    @Test func aTimersAttributesFitInsideActivityKitsLimit() throws {
+    /// The DEBUG sample requests its activity itself, where ActivityKit takes at most 4 KB of attributes; a timer's
+    /// with both states don't fit (~5.7 KB), so it keeps the one it draws (#11058). AlarmKit gets both.
+    @Test func theTimerSampleFitsInsideActivityKitsLimit() throws {
         guard #available(iOS 26.0, *) else { return }
-        let data = try JSONEncoder().encode(AlarmsTool.attributes(label: "Focus", timer: true))
-        #expect(data.count < 4096)
+        let running = AlarmsTool.attributes(label: "Focus", timer: true, only: .countdown)
+        let paused = AlarmsTool.attributes(label: "Focus", timer: true, only: .paused)
+        #expect(try JSONEncoder().encode(running).count < 4096)
+        #expect(try JSONEncoder().encode(paused).count < 4096)
+        #expect(running.presentation.countdown?.pauseButton != nil && running.presentation.paused == nil)
+        #expect(paused.presentation.paused != nil && paused.presentation.countdown == nil)
+        let timer = AlarmsTool.attributes(label: "Focus", timer: true).presentation
+        #expect(timer.countdown != nil && timer.paused != nil)
     }
     #endif
 

@@ -353,6 +353,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		prompt = withAttachments(prompt, s.handAttachments(ctx, t.AttachFrom, m.ID, t.Attachments, t.Mentioned))
 	}
 	params["cwd"], params["prompt"], params["tab_name"] = t.Cwd, prompt, s.tabName(ctx, t.Title)
+	if t.WaitInputID != "" {
+		params["client_msg_id"] = t.WaitInputID
+	}
 	if t.WorkspaceResolved != nil && t.WorkspaceResolved.WorkspaceID != "" {
 		params["workspace_id"] = t.WorkspaceResolved.WorkspaceID
 	}
