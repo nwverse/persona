@@ -1616,6 +1616,13 @@ The design of #2059 (web and iOS / iPad), with the user's choices there: the hub
 - **Folding**: each group folds to its title (a level below the section's: caption, regular, in every style, as iOS and the web) and count; Done's start folded except Just now and Today; what the user flipped is kept (`InboxPreferences.folds`, "section/key"). Group headers stay pinned at the top while their rows scroll under them (a background only while pinned).
 - **Selection**: a long-press on a row starts it (the Android convention); the bar becomes "N selected · Select all · Mark as done" with ← (or Back) to end it. Each group header gets a tick (none / some / all, `JTriCheckbox`) that picks the whole group, folded or not, and says how many it has picked; a section without groups has the tick on its own header. Agents' cards, done items and ones Persona is working on can't be picked (faded). Mark as done is one `POST /api/v1/inbox/bulk` per manager (`markAll`, with Undo). With one row picked the bar's **⋯** has what its long-press used to: Hand to AI, mutes and rules.
 - **Code**: the rules in `core/domain` (`InboxGroups`: time keys, source order, folds, ticks, Done's counts and spans; `InboxGroupsTest`), the rows' groups and titles and the history in `feature/inbox` (`InboxSections.kt`), the page in `InboxScreen`; `MessageItem` `checked` / `dimmed`, `JSectionHeader` `leading` / `sub`, `JTriCheckbox` / `JCheckMark` in the design system. Checked by `InboxGroupsShotsTest` (mock data: by source, by time, Done with two pages of history and Jump to, a selection marked done; every style, light and dark).
+- **Group actions (#10425)**: with two or more groups, FYI's and Collapsed's group titles offer the group or the whole
+  section, with the title's count and Clean up all's filter/search scope. They use `bulkTargets` and `markAll` with each
+  listed id and version, per manager, immediate removal, changed-only Undo and failure restoration. Needs you, In progress,
+  Done, selection and one-group sections are unchanged, including FYI's separate Mark-all-as-read section receipt. Every
+  text size uses the anchored `JMenu`; above 1×, `JMenu(multilineActions = true)` retains the full labels and scope. Tests:
+  `InboxGroupClearTest` (targets, filters, Undo, failure, en / zh-Hans / ja) and `InboxGroupClearShotsTest` (every style,
+  light / dark, 200% text, Japanese, visible characters).
 - **Not yet**: reopening an item of a non-default manager's history that the list no longer has goes to the default manager (the repository finds an item's manager in the list; #2974).
 
 ## Inbox section bar (#9053)
