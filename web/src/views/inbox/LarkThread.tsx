@@ -48,6 +48,9 @@ import { LarkTopicCard, LarkTopicDialog, useTopicReplies } from "./LarkTopicCard
 
 const PAGE = 30;
 
+/** The list shows its newest message: within a twentieth of a screen of its end (iOS larkFollowsEnd). */
+const atNewest = (el: HTMLElement) => screensFromEnd(el) < 0.05;
+
 export type { LarkReplyTarget };
 
 /** What the hub's Feishu extension lets the composer send: pictures and files, and those quoting or in a thread. */
@@ -215,6 +218,9 @@ function LarkThreadBody({ chat, pinsOpen = false, onPinsOpen }: LarkThreadProps)
   const [, setPagingTick] = useState(0);
   const latest = useRef<LarkPage | null>(null);
   const toEnd = useRef(false);
+  // Where the last scroll or placement left the list, and until when a jump's glide of its own is on its way.
+  const atEnd = useRef(false);
+  const gliding = useRef(0);
   const windowGen = useRef(0);
   const [jumpShown, setJumpShown] = useState(false);
   const [jumping, setJumping] = useState(false);
@@ -301,7 +307,7 @@ function LarkThreadBody({ chat, pinsOpen = false, onPinsOpen }: LarkThreadProps)
           if (gen !== windowGen.current) return;
           // A list showing its newest message keeps showing it as more come in (iOS larkFollowsEnd).
           const el = scroller.current;
-          const follow = Boolean(el && screensFromEnd(el) < 0.05);
+          const follow = Boolean(el && atNewest(el));
           setPage((cur) => {
             if (!cur) return cur;
             const messages = keepSameMessages(cur.messages, mergeMessages(cur.messages, r.messages ?? []));
@@ -334,30 +340,44 @@ function LarkThreadBody({ chat, pinsOpen = false, onPinsOpen }: LarkThreadProps)
     if (toEnd.current) {
       toEnd.current = false;
       el.scrollTop = el.scrollHeight;
-      return;
-    }
-    if (jumpTo.current) {
+    } else if (jumpTo.current) {
       const target = el.querySelector<HTMLElement>(`[data-mid="${CSS.escape(jumpTo.current)}"]`);
       jumpTo.current = null;
       if (target) el.scrollTop = Math.max(0, target.offsetTop - el.clientHeight / 3);
-      return;
-    }
-    if (anchor.current) {
+    } else if (anchor.current) {
       const a = anchor.current;
       anchor.current = null;
       const held = a.id ? el.querySelector<HTMLElement>(`[data-mid="${CSS.escape(a.id)}"]`) : null;
       if (held && a.offset !== undefined) el.scrollTop += held.getBoundingClientRect().top - el.getBoundingClientRect().top - a.offset;
       else el.scrollTop = a.top + (el.scrollHeight - a.height);
-      return;
-    }
-    if (placed.current) return;
-    placed.current = true;
-    const at = firstAtOrAfter(page.messages, land);
-    const target = at ? el.querySelector<HTMLElement>(`[data-mid="${CSS.escape(at.id)}"]`) : null;
-    if (target) el.scrollTop = Math.max(0, target.offsetTop - 64);
-    else el.scrollTop = el.scrollHeight;
-    if (at && focus && comparePosition(at.position, focus) === 0) setFlash((f) => ({ id: at.id, n: (f?.n ?? 0) + 1 }));
+    } else if (!placed.current) {
+      placed.current = true;
+      const at = firstAtOrAfter(page.messages, land);
+      const target = at ? el.querySelector<HTMLElement>(`[data-mid="${CSS.escape(at.id)}"]`) : null;
+      if (target) el.scrollTop = Math.max(0, target.offsetTop - 64);
+      else el.scrollTop = el.scrollHeight;
+      if (at && focus && comparePosition(at.position, focus) === 0) setFlash((f) => ({ id: at.id, n: (f?.n ?? 0) + 1 }));
+    } else return;
+    // a placement counts as where the reader is, before its scroll event says so
+    atEnd.current = atNewest(el);
   }, [page, land, focus]);
+
+  // At its newest message the list keeps it in view when the box gets shorter (the keyboard, a longer draft, a quote over
+  // the box) or the messages grow by themselves (a picture loading), as ChatView does. A placement still to land (an
+  // older page's anchor, a jump, the first one) and a jump's glide are left alone.
+  const hasPage = page !== null;
+  useEffect(() => {
+    const el = scroller.current;
+    const content = el?.firstElementChild;
+    if (!el || !content || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => {
+      if (!atEnd.current || !placed.current || anchor.current || jumpTo.current || toEnd.current || performance.now() < gliding.current) return;
+      el.scrollTop = el.scrollHeight;
+    });
+    ro.observe(el);
+    ro.observe(content);
+    return () => ro.disconnect();
+  }, [hasPage]);
 
   const loadNewer = useCallback(async () => {
     const p = pageRef.current;
@@ -422,6 +442,12 @@ function LarkThreadBody({ chat, pinsOpen = false, onPinsOpen }: LarkThreadProps)
   useEffect(() => {
     checkScroll();
   }, [page, checkScroll]);
+  // Only a scroll says where the reader is: a page that just grew under a reader at the end still counts as at it.
+  const onScroll = useCallback(() => {
+    const el = scroller.current;
+    if (el) atEnd.current = atNewest(el);
+    checkScroll();
+  }, [checkScroll]);
 
   // The newest messages, kept while the window reaches them, so "Back to latest" goes back without waiting for the hub.
   useEffect(() => {
@@ -462,9 +488,9 @@ function LarkThreadBody({ chat, pinsOpen = false, onPinsOpen }: LarkThreadProps)
         if (!kept) return { ...cur, ...r, messages: keepSameMessages(cur.messages, fresh) };
         const have = new Set(cur.messages.map((m) => m.id));
         if (fresh.some((m) => have.has(m.id))) return { ...cur, messages: keepSameMessages(cur.messages, mergeMessages(cur.messages, fresh)) };
-        return box && screensFromEnd(box) < 0.05 ? { ...cur, ...r, messages: keepSameMessages(cur.messages, fresh) } : cur;
+        return box && atNewest(box) ? { ...cur, ...r, messages: keepSameMessages(cur.messages, fresh) } : cur;
       });
-      if (!kept || (box && screensFromEnd(box) < 0.05)) toEnd.current = true;
+      if (!kept || (box && atNewest(box))) toEnd.current = true;
     } catch (e) {
       if (!kept) toast(errorText(e), "error");
     } finally {
@@ -484,6 +510,8 @@ function LarkThreadBody({ chat, pinsOpen = false, onPinsOpen }: LarkThreadProps)
     const have = first && !(comparePosition(position, first.position) < 0 && p.has_older) ? firstAtOrAfter(p.messages, position) : undefined;
     const row = have ? el.querySelector<HTMLElement>(`[data-mid="${CSS.escape(have.id)}"]`) : null;
     if (have && row) {
+      // a resize under the glide (the keyboard going away with the tap) does not pull it back to the end
+      gliding.current = performance.now() + 1000;
       el.scrollTo({ top: Math.max(0, row.offsetTop - 64), behavior: scrollBehavior() });
       light(have.id);
       return;
@@ -664,7 +692,7 @@ function LarkThreadBody({ chat, pinsOpen = false, onPinsOpen }: LarkThreadProps)
       }}
     >
       <div className="relative flex min-h-0 flex-1 flex-col">
-      <div ref={scroller} onScroll={checkScroll} className="min-h-0 flex-1 overflow-y-auto">
+      <div ref={scroller} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-[760px] px-2 py-3 sm:px-4">
           {page.has_older && (
             <OlderHeader auto={autoOlder} loading={paging.current.loading} problem={paging.current.problem} onLoad={() => void loadOlder(true)} />

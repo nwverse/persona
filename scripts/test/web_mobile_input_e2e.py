@@ -124,6 +124,53 @@ def crowded(page, what, min_chat=0.25, fold="还有 2 件"):
     ok(f"{what}: three cards, {fold}; the chat keeps {chat} px, the composer on screen")
 
 
+LARK_END = """() => { const el = [...document.querySelectorAll('.overflow-y-auto')].find((e) => e.querySelector('[data-mid]'));
+  const last = [...el.querySelectorAll('[data-mid]')].pop().getBoundingClientRect(); const box = el.getBoundingClientRect();
+  return { top: el.scrollTop, fromEnd: el.scrollHeight - el.clientHeight - el.scrollTop, last: last.bottom, bottom: box.bottom, boxTop: box.top }; }"""
+
+
+def lark_keyboard(browser, base, shots):
+    """A Feishu chat at its newest message keeps it in view as the iOS keyboard comes up and a five-line draft grows the
+    box; scrolled up, the same changes leave the list where the reader put it."""
+    lark = "main textarea[aria-label=飞书消息]"
+    draft = "\n".join(f"第 {i} 行" for i in range(1, 6))
+    for w, h in ((390, 844), (360, 740)):
+        ctx, page = phone(browser, w, h, ios=True)
+        login(page, base)
+        go(page, "/inbox/lark%3Af1%3A100")
+        page.wait_for_selector("[data-mid]")
+        page.wait_for_timeout(700)
+
+        def at_end(what):
+            s = page.evaluate(LARK_END)
+            if s["last"] > s["bottom"] + 1 or s["last"] <= s["boxTop"]:
+                fail(f"{w}: {what}: the newest message is out of view ({s})")
+            return s
+
+        page.locator(lark).tap()
+        page.evaluate("__kb(450, 0)")
+        page.wait_for_timeout(400)
+        at_end("the keyboard up")
+        if shots:
+            page.screenshot(path=os.path.join(shots, f"lark-kb-{w}.png"), clip={"x": 0, "y": 0, "width": w, "height": 450})
+        page.locator(lark).fill(draft)
+        page.wait_for_timeout(400)
+        at_end("a five-line draft")
+        # scrolled up, a longer draft does not pull the list back to its end
+        page.locator(lark).fill("")
+        page.wait_for_timeout(300)
+        page.evaluate("(() => { const el = [...document.querySelectorAll('.overflow-y-auto')].find((e) => e.querySelector('[data-mid]')); el.scrollTop -= 150; })()")
+        page.wait_for_timeout(300)
+        up = page.evaluate(LARK_END)
+        page.locator(lark).fill(draft)
+        page.wait_for_timeout(400)
+        moved = page.evaluate(LARK_END)
+        if abs(moved["top"] - up["top"]) > 1 or moved["fromEnd"] < 150:
+            fail(f"{w}: scrolled up, the draft moved the list ({up} -> {moved})")
+        ctx.close()
+        ok(f"{w}: the Feishu chat keeps its newest message in view with the keyboard up and a five-line draft; scrolled up, it stays")
+
+
 def run(base, shots):
     with sync_playwright() as p:
         browser = p.chromium.launch(channel="chrome")
@@ -350,6 +397,7 @@ def run(base, shots):
         if shots:
             page.screenshot(path=os.path.join(shots, "1280.png"))
         ctx.close()
+        lark_keyboard(browser, base, shots)
         browser.close()
     if ERRORS:
         fail(f"uncaught page errors: {ERRORS[:3]}")
