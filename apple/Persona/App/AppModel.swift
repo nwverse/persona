@@ -420,14 +420,15 @@ final class AppModel {
     /// Session whose chat is on screen; its completion pings are suppressed.
     var visibleSession: SessionKey? {
         didSet {
-            if heldInList != visibleSession { heldInList = nil }
+            if heldInList != visibleSession { heldInList = nil; heldJustFinished = false }
             // the recently opened conversations: the home screen menu's (#2191)
             if visibleSession != oldValue { RecentChatsStore.shared.shown(visibleSession) }
         }
     }
-    /// The open agent that was Unread and was marked seen by being open: the Agents list keeps it where it was until
+    /// The open agent that was Unread or Just finished: the Agents list keeps it in that section until
     /// its chat is left (`AgentListOrder.held`, #2213; user, 2026-11-05: it moves to Idle only after you leave).
     private(set) var heldInList: SessionKey?
+    private(set) var heldJustFinished = false
     private(set) var assistantConfig: APIClient.AssistantState? {
         didSet {
             if let g = hub?.group, let a = assistantConfig {
@@ -1034,6 +1035,7 @@ final class AppModel {
 
     /// Sign Out of everything: every group, every hub (Settings › Disconnect with one group, a revoked credential of this device).
     func unpair() {
+        forgetSeen()
         heldRetryReceipts.removeAll()
         LarkChatOutbox.forget()
         // No hub left to answer: the open questions are denied, their results have nowhere to go.
@@ -3645,10 +3647,28 @@ final class AppModel {
         sendSeen(key)
         // Optimistic: flip the local copy right away.
         if var list = sessionsByMachine[key.machineRef], let i = list.firstIndex(where: { $0.sessionID == key.sessionID }),
-           list[i].state == .unread {
-            if key == visibleSession { heldInList = key }
-            list[i].state = .idle
+           list[i].needsSeen() {
+            if key == visibleSession && (list[i].state == .unread || list[i].showsJustFinished(muted: isMuted(list[i]))) {
+                heldInList = key
+                heldJustFinished = list[i].state == .idle
+            }
+            list[i].markLocallySeen()
             sessionsByMachine[key.machineRef] = list
+            sessionLists.markSeen([key], model: self)
+        }
+    }
+
+    func keepSeen(in list: SessionListModel<Session>) {
+        guard !seenOutbox.marks.isEmpty else { return }
+        list.keepSeen { seenOutbox.marks[$0] != nil }
+    }
+
+    /// Retire marks and their held row when their pairing is forgotten. Reconnecting keeps both.
+    func forgetSeen(in groups: Set<String>? = nil) {
+        seenOutbox.forget(groups: groups)
+        if let heldInList, groups?.contains(heldInList.group) ?? true {
+            self.heldInList = nil
+            heldJustFinished = false
         }
     }
 
@@ -3665,10 +3685,14 @@ final class AppModel {
             socket.send(["type": "seen", "machine_id": key.machineID, "session_id": key.sessionID])
             scheduleSeenCheck()
         } else if let api = api(key.group) {
-            seenOutbox.sent(key, .http, at: Date())
+            let owner = link(key.group)
+            let markID = seenOutbox.sent(key, .http, at: Date())
             Task {
+                guard link(key.group) === owner else { return }
                 // A failed one waits for the socket to come back (`hello`).
-                if (try? await api.post("/api/v1/sessions/\(key.machineID)/\(key.sessionID)/seen")) != nil { seenOutbox.answered(key) }
+                if (try? await api.post("/api/v1/sessions/\(key.machineID)/\(key.sessionID)/seen")) != nil {
+                    seenOutbox.answered(key, markID: markID)
+                }
             }
         }
     }
@@ -3686,14 +3710,21 @@ final class AppModel {
 
     /// Mark All as Read: every finished-unread one of these, in one update of the list.
     func markSeen(_ keys: [SessionKey]) {
-        let unread = keys.filter { session($0)?.state == .unread }
+        let unread = keys.filter { key in sessionIndex[key].map { $0.needsSeen(muted: isMuted($0)) } == true }
         guard !unread.isEmpty else { return }
         for key in unread { sendSeen(key) }
         var lists = sessionsByMachine
-        for key in unread {
-            if let i = lists[key.machineRef]?.firstIndex(where: { $0.sessionID == key.sessionID }) { lists[key.machineRef]![i].state = .idle }
+        for (machine, keys) in Dictionary(grouping: unread, by: \.machineRef) {
+            guard var list = lists[machine] else { continue }
+            var remaining = Set(keys.map(\.sessionID))
+            for i in list.indices {
+                if remaining.isEmpty { break }
+                if remaining.remove(list[i].sessionID) != nil { list[i].markLocallySeen() }
+            }
+            lists[machine] = list
         }
         sessionsByMachine = lists
+        sessionLists.markSeen(unread, model: self)
         Haptics.success()
     }
 
@@ -3765,7 +3796,7 @@ final class AppModel {
         do {
             try await api.setModes(key, permissionMode: permissionMode, effort: effort, model: claudeModel)
             if var list = sessionsByMachine[key.machineRef], let i = list.firstIndex(where: { $0.sessionID == key.sessionID }) {
-                if let permissionMode { list[i].permissionMode = permissionMode }
+                if let permissionMode { SessionModes.applyOptimistic(&list[i], permissionMode: permissionMode) }
                 if let effort { list[i].effort = effort }
                 if let claudeModel { list[i].model = claudeModel } // the node lists the pick too until the transcript moves on
                 sessionsByMachine[key.machineRef] = list
@@ -4400,6 +4431,7 @@ final class AppModel {
     /// What the app holds about groups that are no longer there.
     func forgetGroups(_ gone: Set<String>, keepingPushKeys: Bool = false) {
         guard !gone.isEmpty else { return }
+        forgetSeen(in: gone)
         heldRetryReceipts = heldRetryReceipts.filter { !gone.contains($0.target.session.group) }
         if !keepingPushKeys { LarkChatOutbox.forget(groups: gone) }
         toolResults.forget(groups: gone)
