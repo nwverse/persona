@@ -566,6 +566,79 @@ func TestOriginReattestationRestartsClaudeToolPolicy(t *testing.T) {
 	}
 }
 
+// A fallback hold changes only the model choice. It must not restore the fallback's old origin and thereby deliver an
+// Inbox message to a process that still has the ordinary built-in SendMessage tool.
+func TestInboxReattestationOverridesActiveFallbackHold(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		hold, release func(*assistantProc)
+		wantBusy      bool
+	}{
+		{name: "idle", hold: func(*assistantProc) {}, release: func(*assistantProc) {}},
+		{name: "compacting", hold: func(p *assistantProc) { p.compacting = true }, release: func(p *assistantProc) { p.compacting = false }, wantBusy: true},
+		{name: "queued input", hold: func(p *assistantProc) {
+			p.written = []assistantInput{{queued: true, at: time.Now()}}
+		}, release: func(p *assistantProc) { p.written = nil }, wantBusy: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := cliTest(t)
+			cwd := t.TempDir()
+			from := modelExecution{Model: "primary-model", Fingerprint: "fp", Origin: "user", OriginKnown: true}
+			fallback := modelExecution{Model: "fallback-model", Fingerprint: "fp", Origin: "user", OriginKnown: true}
+			id, err := f.n.assistantSend(context.Background(), "", cwd, "claude", "Investigate", nil, "default", "", fallback)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.idle(t, id)
+			first := f.proc(id)
+			f.n.mu.Lock()
+			f.n.holdFallback(id, "claude", from, fallback)
+			f.n.mu.Unlock()
+			first.mu.Lock()
+			tc.hold(first)
+			first.mu.Unlock()
+			defer func() {
+				first.mu.Lock()
+				tc.release(first)
+				first.mu.Unlock()
+			}()
+			argvBefore, stdinBefore := f.file("cli-argv"), f.file("stdin.jsonl")
+			asked := from
+			asked.Origin, asked.OriginKnown, asked.OriginDecisionRequired = originInbox, true, true
+			_, err = f.n.assistantSend(context.Background(), id, cwd, "claude", "Continue as Inbox", nil, "default", "", asked)
+			if tc.wantBusy {
+				if !errors.Is(err, errAssistantOriginBusy) {
+					t.Fatalf("fallback-held working process error=%v, want errAssistantOriginBusy", err)
+				}
+				first.mu.Lock()
+				stillWorking := first.workingLocked()
+				first.mu.Unlock()
+				if !stillWorking || f.proc(id) != first || f.file("cli-argv") != argvBefore || f.file("stdin.jsonl") != stdinBefore {
+					t.Fatal("fallback hold let an Inbox message reach or replace the ordinary working process")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.idle(t, id)
+			second := f.proc(id)
+			lines := strings.Split(strings.TrimSpace(f.file("cli-argv")), "\n")
+			latest := lines[len(lines)-1]
+			if second == nil || second == first {
+				t.Fatalf("fallback hold retained the ordinary process for Inbox input; latest argv=%s", latest)
+			}
+			if !strings.Contains(latest, "--tools "+wantInboxClaudeBuiltins) || strings.Contains(latest, "SendMessage") {
+				t.Fatalf("fallback-held Inbox process has the wrong built-in tools: %s", latest)
+			}
+			st, _ := f.n.state.get(id)
+			if st.Origin != originInbox || !st.OriginKnown {
+				t.Fatalf("fallback-held Inbox state origin=%q known=%v", st.Origin, st.OriginKnown)
+			}
+		})
+	}
+}
+
 func TestOrdinaryOriginAliasesKeepClaudeProcess(t *testing.T) {
 	for _, busy := range []bool{false, true} {
 		t.Run(fmt.Sprintf("busy=%v", busy), func(t *testing.T) {
