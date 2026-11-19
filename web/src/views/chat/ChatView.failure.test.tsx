@@ -1065,6 +1065,37 @@ describe("sending in order, and with no row yet", () => {
   });
 });
 
+// A message Claude queued shows in the queue strip, not as a sending bubble too, a photo-only one included (#10871):
+// Claude's queue holds it as `[Image #1]` and its path, which no text matches.
+describe("a queued message is not drawn as a sending bubble too", () => {
+  const photo = { mime: "image/png", data: "iVBORw0KGgo=" };
+  const queued = (q: string[]) => ({ machine_id: "hub", session_id: "c1", title: "Conversation", cwd: "/code", state: "working", status: "working", queued: q }) as unknown as Session;
+  it.each([
+    ["with words", "Please check this screen", "[Image #1]\n\nPlease check this screen\n<attached_images>\npath: /tmp/a.png\n</attached_images>"],
+    ["a photo only", "", "[Image #1]\n<attached_images>\npath: /tmp/a.png\n</attached_images>"],
+  ])("%s", async (_, text, raw) => {
+    captured.session = queued([]);
+    reply = () => json({});
+    act(() => root.render(<ChatView mid="hub" sid="c1" />)); await flush();
+    await act(async () => void (await captured.onSend!({ text, images: [photo] }))); await flush();
+    expect(host.querySelector("[data-user-bubble][data-send-state]")).not.toBeNull(); // sending, until the queue says where it is
+    captured.session = queued([raw]);
+    act(() => root.render(<ChatView mid="hub" sid="c1" />)); await flush();
+    expect(host.querySelector("[data-user-bubble][data-send-state]")).toBeNull();
+  });
+  it("one queued photo hides one of two photo-only sends, not both", async () => {
+    captured.session = queued([]);
+    reply = () => json({});
+    act(() => root.render(<ChatView mid="hub" sid="c1" />)); await flush();
+    await act(async () => void (await captured.onSend!({ text: "", images: [photo] }))); await flush();
+    await act(async () => void (await captured.onSend!({ text: "", images: [photo] }))); await flush();
+    expect(host.querySelectorAll("[data-user-bubble][data-send-state]")).toHaveLength(2);
+    captured.session = queued(["[Image #1]\n<attached_images>\npath: /tmp/a.png\n</attached_images>"]);
+    act(() => root.render(<ChatView mid="hub" sid="c1" />)); await flush();
+    expect(host.querySelectorAll("[data-user-bubble][data-send-state]")).toHaveLength(1);
+  });
+});
+
 // The assistant could not start (#10194): the hub answers 202 delivered "later" and the manager keeps the message. The
 // page drops its own sending bubble and draws the row's kept message, on this device as on any other, marked not
 // delivered and sent by itself; a bare operation receipt (202 {"state":"unknown"}) is no delivery and stays in doubt.

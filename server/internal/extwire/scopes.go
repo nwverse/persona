@@ -118,6 +118,7 @@ var RouteScopes = map[string]string{
 	"GET /api/v1/todos/places":                                     ScopeTodosRead,
 	"GET /api/v1/todos/{id}":                                       ScopeTodosRead,
 	"GET /api/v1/todos/{id}/decisions":                             ScopeTodosRead,
+	"GET /api/v1/todos/{id}/timeline":                              ScopeTodosRead,
 	"POST /api/v1/todos":                                           ScopeTodosWrite,
 	"PATCH /api/v1/todos/{id}":                                     ScopeTodosWrite,
 	"POST /api/v1/todos/{id}/decisions":                            ScopeTodosWrite,

@@ -116,7 +116,7 @@ import { pickParts } from "./picking-parts";
 import type { MessagePick } from "../../lib/message-pick";
 import { foldHolding, lineOfItem, loadEarlierForSearch, untilStill, type ChatSearchHit, type SearchLoadOutcome } from "../../lib/chat-search";
 import { chatFiles } from "../../lib/mentions";
-import { sameMessage } from "../../lib/queue";
+import { pairPhotoOnly, sameMessage } from "../../lib/queue";
 import { OutboxBubbles } from "./OutboxBubbles";
 import { MainRuntimeSlot } from "../assistant/MainRuntimeSlot";
 import { AssistantFace, CompactionStrip, useAssistantMenu } from "../assistant/AssistantChat";
@@ -442,7 +442,11 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const sendFeedback = useMessageFeedback(mid, sid);
   // a message Claude queued shows in the queue strip, not as a sending bubble too (ChatView.swift chatScroll)
   const queued = session?.queued ?? [];
-  const shownPending = queued.length ? pending.filter((p) => !queued.some((q) => sameMessage(q, p.msg.text))) : pending;
+  // a photo-only one by its photos, as no words match it (#10871)
+  const photoOnly = useMemo(() => pairPhotoOnly(queued, pending.map((p) => ({ text: p.msg.text, images: p.msg.images?.length ?? 0,
+    carries: Boolean(p.msg.files?.length || p.msg.contexts?.length) }))), [queued, pending]);
+  const pairedPending = useMemo(() => new Set(photoOnly.values()), [photoOnly]);
+  const shownPending = queued.length ? pending.filter((p, i) => !pairedPending.has(i) && !queued.some((q) => sameMessage(q, p.msg.text))) : pending;
   // the owner's messages the assistant keeps after they could not go in, from the row: on every device (#10194)
   // (not one this page still draws as sending: the row can come before the send's answer)
   const keptUndelivered = shownUndelivered(session, tr.items, pending.map((p) => p.id));
@@ -452,11 +456,12 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // Both stay the same while `pending` does: the queue is drawn in the memoized composer.
   const queuedPhotos = useCallback((raw: string) => pending.find((p) => sameMessage(raw, p.msg.text))?.msg.images?.length ?? 0, [pending]);
   const withdrawn = useCallback((text: string) => {
-    const gone = pending.find((p) => !p.posting && sameMessage(text, p.msg.text));
+    const paired = photoOnly.get(text);
+    const gone = pending.find((p) => !p.posting && sameMessage(text, p.msg.text)) ?? (paired !== undefined && !pending[paired]?.posting ? pending[paired] : undefined);
     if (!gone) return;
     forgetOutgoing(outboxKey(mid, sid), gone.id);
     setPending((ps) => ps.filter((p) => p.id !== gone.id));
-  }, [pending, mid, sid]);
+  }, [pending, photoOnly, mid, sid]);
   const outgoing = shownPending.length + outbox.filter((e) => e.state !== "failed").length;
   const persona = usePersona();
   const state = session ? stateOf(session) : "unknown";

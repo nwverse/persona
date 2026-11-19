@@ -1,5 +1,6 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- Persist a complete delivery round before its first external send (#10393). Saving only when the call returns handles a returned error but loses the result if the manager exits inside the call, after task acceptance has committed. Keep the original timestamp/key and acceptance metadata on disk while retaining an in-memory claim to block overlapping sends. Every other book save must preserve that prepared record too; retry must not send from memory when its preparation could not be saved. Use a child-process exit at the real provider boundary and a fresh manager on the same disposable database to prove recovery, with the returned-error case as a control.
 - A review wake is not a completion verdict (#8373). PR events and judged-done candidates share the same signal. Keep its wording neutral, preserve the actual reason and criterion evidence, and leave acceptance gates and display grouping unchanged.
 
 - Snapshot display projections must not initialize the knowledge base (#10108). Publication already holds
@@ -758,6 +759,16 @@ as delivered instead of moving to the replacement. A check that a resource is fr
 mark the conversation as being replaced under that same lock (`relayBook.replacing`), have every drain and every direct
 delivery respect the mark (the direct ones queue), and clear it only where what waited has moved or the replacement
 failed, draining it again then (`TestNothingGoesIntoABackgroundSupervisorBeingReplaced`).
+
+## A queued supervision digest is not a snapshot of work that still needs review (#10424)
+
+An interruption and an unjudged turn can wait behind a busy supervisor while that task recovers and is accepted.
+Replaying only the rendered text then starts obsolete work or retries a refusal forever. Persist the structured signals
+with the relay, recheck the loaded task ledger immediately before delivery, and render only the surviving entries.
+A failed ledger read or checkpoint is unknown: keep the original queue. Move a changed conversation destination and
+remove its source entries in the same saved relay state. Do not change an uncertain send's text or destination: its
+old once-only identity may already have reached the node. Test both an entirely obsolete digest and a mixed one,
+including a real database reload into a new service; the in-memory signal map alone does not survive restart.
 
 ## Manual compaction is not a main-only policy (#10064)
 

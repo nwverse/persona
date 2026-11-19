@@ -219,21 +219,24 @@ func TestTodoRepositoryRoutesStayOnTheirManager(t *testing.T) {
 	}
 }
 
-// The To-dos view's reads (todo_view.go): one to-do goes to its own manager (byTodo), another manager's is refused; the
-// places are asked of the extension's own manager alone (mergedAsk), and naming another is refused.
+// The To-dos view's reads (todo_view.go): one to-do and its timeline go to its own manager (byTodo), another manager's
+// are refused; the places are asked of the extension's own manager alone (mergedAsk), and naming another is refused.
 func TestTodoViewRoutesStayOnTheirManager(t *testing.T) {
 	h, url, a, b := reachHub(t)
 	h.noteTodoOwner("todo-a", assistantwire.AssistantID)
 	h.noteTodoOwner("todo-b", "m-0b0b0b")
 	beforeA, beforeB := len(reached(a)), len(reached(b))
-	if code, out := extDo(t, url, "GET", "/api/v1/todos/todo-a", "", nil); code != http.StatusForbidden || !strings.Contains(out, codeOtherManager) {
-		t.Errorf("another manager's to-do: %d %s", code, clip(out, 200))
+	for _, path := range []string{"/api/v1/todos/todo-a", "/api/v1/todos/todo-a/timeline"} {
+		if code, out := extDo(t, url, "GET", path, "", nil); code != http.StatusForbidden || !strings.Contains(out, codeOtherManager) {
+			t.Errorf("another manager's to-do, %s: %d %s", path, code, clip(out, 200))
+		}
 	}
 	if code, out := extDo(t, url, "GET", "/api/v1/todos/places", "", map[string]string{ManagerHeader: assistantwire.AssistantID}); code != http.StatusForbidden ||
 		!strings.Contains(out, codeOtherManager) {
 		t.Errorf("another manager's places: %d %s", code, clip(out, 200))
 	}
-	for _, path := range []string{"/api/v1/todos/todo-b", "/api/v1/todos/places"} {
+	paths := []string{"/api/v1/todos/todo-b", "/api/v1/todos/todo-b/timeline", "/api/v1/todos/places"}
+	for _, path := range paths {
 		if code, out := extDo(t, url, "GET", path, "", nil); code != http.StatusOK {
 			t.Errorf("%s: %d %s", path, code, clip(out, 200))
 		}
@@ -242,8 +245,13 @@ func TestTodoViewRoutesStayOnTheirManager(t *testing.T) {
 		t.Errorf("A was reached: %v", got)
 	}
 	calls := reached(b)[beforeB:]
-	if len(calls) != 2 || !strings.Contains(calls[0], "/api/v1/todos/todo-b") || !strings.Contains(calls[1], "/api/v1/todos/places") {
-		t.Errorf("B got %v", calls)
+	if len(calls) != len(paths) {
+		t.Fatalf("B got %v", calls)
+	}
+	for i, path := range paths {
+		if !strings.Contains(calls[i], path) {
+			t.Errorf("B's call %d is %s, want %s", i, calls[i], path)
+		}
 	}
 }
 
@@ -318,6 +326,7 @@ func TestEveryExtensionRouteIsBounded(t *testing.T) {
 		"PUT /api/v1/assistant/start-defaults":             "manager",
 		"GET /api/v1/todos":                                "manager", "GET /api/v1/todos/{id}/decisions": "manager",
 		"GET /api/v1/todos/{id}": "manager", "GET /api/v1/todos/places": "manager", // TestTodoViewRoutesStayOnTheirManager
+		"GET /api/v1/todos/{id}/timeline":                     "manager", // TestTodoViewRoutesStayOnTheirManager
 		"GET /api/v1/todos/{id}/repositories":                 "manager", // associations stay with the todo's manager
 		"PUT /api/v1/todos/{id}/repositories":                 "manager",
 		"PUT /api/v1/todos/{id}/repositories/{repo_id}/links": "manager",
