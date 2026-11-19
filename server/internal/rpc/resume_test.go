@@ -823,3 +823,39 @@ func TestResumeHeldReaderLearnsAtOnce(t *testing.T) {
 		}
 	}
 }
+
+// A read loop slow over its lines (a handler blocking it for a while on each, the manager's state.put) is no silent
+// transport to the other side, however long the lines take in all: each frame is acknowledged as it is taken, not only
+// once the reader wants more bytes (#10829's review).
+func TestResumeSlowReadLoopIsNotSilence(t *testing.T) {
+	oldStale, oldCheck := resumeStale, resumeCheck
+	resumeStale, resumeCheck = 1500*time.Millisecond, 20*time.Millisecond
+	t.Cleanup(func() { resumeStale, resumeCheck = oldStale, oldCheck })
+	const events = 10
+	var handled atomic.Int32
+	l := newResumeLink(t, netshape.Config{}, 5*time.Second, true, true, func(h, n *Peer) {
+		h.OnEvent = func(string, json.RawMessage) {
+			time.Sleep(400 * time.Millisecond) // sleep-ok: a handler holding the read loop, well under resumeStale
+			handled.Add(1)
+		}
+	})
+	for i := range events {
+		if err := l.n.Notify("ev", map[string]int{"i": i}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for handled.Load() < events && time.Now().Before(deadline) {
+		select {
+		case err := <-l.nLost:
+			t.Fatalf("lost after %d of %d slow lines (%v): %v", handled.Load(), events, events*400*time.Millisecond, err)
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+	if handled.Load() < events {
+		t.Fatal("the lines were not all handled")
+	}
+	if l.n.Lost() || l.h.Lost() {
+		t.Fatal("a side took the transport for silent")
+	}
+}

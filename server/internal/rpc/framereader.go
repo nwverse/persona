@@ -26,7 +26,6 @@ type frameReader struct {
 	seq        uint64               // the last data frame read
 	seqAt      uint32               // when it was read (clockMS)
 	lastRead   atomic.Uint64        // seq, for a resume asked from another goroutine (resume.go)
-	allAcked   uint64               // the last frame ackAll was asked for
 	resumed    bool                 // the transport was replaced: frames read already come again, and are dropped
 	creditRead bool                 // a frame with credit was read since the last ack asked for
 	creditSeq  uint64               // the last of them
@@ -126,6 +125,11 @@ func (s *frameReader) frame(h frameHead, payload []byte) ([]byte, bool, error) {
 	s.resumed = false
 	s.seq, s.seqAt = h.seq, s.readAt
 	s.lastRead.Store(h.seq)
+	if s.ackAll != nil {
+		// Resuming: as each frame is taken, not before the next read, so a read loop slow over its lines (a handler
+		// that blocks it) is not taken for a silent transport by the other side (watchStale).
+		s.ackAll(s.seq, s.seqAt)
+	}
 	if creditLane(h.lane) {
 		s.creditRead, s.creditSeq, s.creditAt = true, h.seq, s.readAt
 	}
@@ -228,10 +232,6 @@ func (s *frameReader) fill() {
 		// Through the last frame with credit, not every frame read: its time is what the other side measures by.
 		s.ack(s.creditSeq, s.creditAt)
 		s.creditRead = false
-	}
-	if s.ackAll != nil && s.seq > s.allAcked {
-		s.ackAll(s.seq, s.seqAt) // resuming: every frame, so the other side lets go of what it kept
-		s.allAcked = s.seq
 	}
 	if s.start > 0 && (s.start == s.end || len(s.buf)-s.end < frameMax) {
 		copy(s.buf, s.buf[s.start:s.end])
