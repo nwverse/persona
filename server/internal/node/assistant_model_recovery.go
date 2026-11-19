@@ -295,13 +295,6 @@ func (n *Node) returnToConfiguredAt(ctx context.Context, id string, at time.Time
 // askedModel is the request before heldFallback, so an empty or literal default remains distinguishable from a concrete
 // model. ProbeFrom is deliberately never copied into the execution.
 func (n *Node) applyModelRecoveryReturn(ctx context.Context, id, askedModel string, execution modelExecution, holdExpired bool) modelExecution {
-	if execution.NewModelChoice {
-		// The explicit choice wins even when it names marker.To: that is a new pick, not the old hold asking to return.
-		// Retire only the old marker and hold; availability evidence for other models and launchers was not proved here.
-		n.forgetFallback(id)
-		n.clearModelRecovery(id)
-		return execution
-	}
 	marker := n.modelRecovery(id)
 	if !modelRecoverySwitched(marker) || !n.recoveryProtected(id) {
 		return execution

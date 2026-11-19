@@ -44,8 +44,7 @@ type assistantTurnRecovery struct {
 
 // newAssistantRecovery is a conversation's chain begun by a failure of launcher running execution (key and current as
 // recoverAssistantResultFor has them), stored on n. Refused again soon after a fallback answered, the same-model retry
-// is spent already: a resend carries the refused turns again (#3788). A record superseded by an explicit new choice is
-// not inherited, even when the new choice names the old fallback. n.mu is held.
+// is spent already: a resend carries the refused turns again (#3788). n.mu is held.
 func (n *Node) newAssistantRecovery(id, launcher string, execution modelExecution, key, current, replyModel string) *assistantTurnRecovery {
 	r := &assistantTurnRecovery{retried: map[string]bool{}, used: map[string]bool{}, launcher: launcher, from: execution}
 	if execution.Model == "" || execution.Model == "default" {
