@@ -21,10 +21,10 @@ final class SidebarRootsUITests: XCTestCase {
         continueAfterFailure = false
     }
 
-    @MainActor private func launch() {
+    @MainActor private func launch(_ extra: [String] = []) {
         app = XCUIApplication()
         app.launchArguments = ["-demo.on", "YES", "-newAssistant", "YES", "-tab", "assistant", "-dev.openChat", "",
-                               "-app.navigation", "sidebar", "-probes", "YES"]
+                               "-app.navigation", "sidebar", "-probes", "YES"] + extra
         app.launchPinned(navigation: false)
     }
 
@@ -615,10 +615,11 @@ final class SidebarRootsUITests: XCTestCase {
     /// One row of the whole sidebar is selected at a time, and it is the page's root (#11032): Main Chat picked; an Agent
     /// picked in the Agents list (its row, no longer Main Chat's), also after the column is folded and brought back; a
     /// place (Recordings); a Persona chat; Main Chat again. The column beside the page, laid over it (the open Duo
-    /// upright) and a phone's drawer. An Agent pushed from inside the main conversation:
-    /// `SecondaryPageBackTests.testAnAgentPushedFromTheMainConversationLeavesItSelected`.
+    /// upright) and a phone's drawer; By State, then an Agent By Repository. An Agent pushed from inside the main
+    /// conversation: `SecondaryPageBackTests.testAnAgentPushedFromTheMainConversationLeavesItSelected`.
     @MainActor func testOneRowIsSelectedAndItFollowsTheRoot() {
-        launch()
+        // By State, as the owner's list: before #11032 only By Repository shaded the open Agent (checked below).
+        launch(["-dev.grouping", "state"])
         _ = settled("conversation", "launch")
         // The app can come up on a new chat's page, which no row stands for: Main Chat picked first.
         pick("sidebar-main", "Main Chat")
@@ -641,7 +642,19 @@ final class SidebarRootsUITests: XCTestCase {
             let deadline = Date.now.addingTimeInterval(5)
             while Date.now < deadline, main.exists && main.isHittable { Thread.sleep(forTimeInterval: 0.2) }
             Thread.sleep(forTimeInterval: 0.8) // the column's slide
-            assertOneSelected("agents.row", containing: name, "the column folded and brought back over the Agent")
+            let openers = app.buttons.matching(NSPredicate(format: "identifier IN %@ OR label IN %@",
+                                                           ["chat-sidebar-button", "ToggleSidebar", "sidebar-show-button", "assistant-sidebar-button"],
+                                                           ["Show Sidebar", "显示边栏", "显示侧边栏"]))
+            if openers.allElementsBoundByIndex.contains(where: { $0.exists && $0.isHittable }) {
+                assertOneSelected("agents.row", containing: name, "the column folded and brought back over the Agent")
+            } else {
+                // The open Duo on its side: no button brings a folded column back over an Agent's chat, on main too
+                // (testFoldingTheSidebarKeepsTheChatsTop fails there the same way); the rest from a fresh launch.
+                XCTContext.runActivity(named: "no button brings the folded column back here; relaunched") { _ in }
+                app.terminate()
+                launch(["-dev.grouping", "state"])
+                _ = settled("conversation", "relaunch after the fold")
+            }
         }
 
         pick("sidebar-meeting-recording", "Recordings")
@@ -660,5 +673,15 @@ final class SidebarRootsUITests: XCTestCase {
         assertOneSelected("sidebar-main", "the main conversation picked again")
         shot("11032-4-main-again")
         // An Agent pushed from inside the main conversation keeps it selected: SecondaryPageBackTests (a task's card).
+
+        // By Repository: the same one row, in the same shade as the others (no longer the tree's own wash).
+        app.terminate()
+        launch(["-dev.grouping", "repo"])
+        _ = settled("conversation", "launch By Repository")
+        _ = pickAgent("an Agent By Repository")
+        let repoTitle = chatTitle()
+        let repoName = repoTitle.components(separatedBy: CharacterSet(charactersIn: ",，")).first ?? repoTitle
+        assertOneSelected("agents.row", containing: repoName, "an Agent picked By Repository")
+        shot("11032-5-agent-by-repository")
     }
 }
