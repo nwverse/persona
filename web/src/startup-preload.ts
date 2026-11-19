@@ -425,7 +425,12 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // extension's view (ExtensionSlots, the assistant's cards, an inbox item's body, the subscription pages, the launcher
 // sections), all in the first screen's static closure; the canvas itself is a chunk of its own (ViewBody10.tsx).
 // Main had 1,583 B of room; the budget stays.
-export const FIRST_SCREEN_BUDGET = 482_683;
+// #10904: the overview's task cards name who works on each task, the lead Agent's computer, model and effort and "+N"
+// for the others (lib/home-tasks.ts leadAgent; views/Home.tsx taskAgentLine over the model pill's pillView, modelList and
+// effortTitle, and home.task_agents_more). 96 B in ja, measured in one environment against main 969e278401 (ja
+// 482,659 B to 482,755 B; en 479,576 B to 479,680 B, zh-Hans 480,427 B to 480,519 B). Main had 24 B of room; the
+// budget takes the 72 B over.
+export const FIRST_SCREEN_BUDGET = 482_755;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
