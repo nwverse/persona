@@ -230,6 +230,48 @@ def long_press(page, ctx, tag):
     ok(f"{tag}: a tap outside closes it")
 
 
+SHOW_UNDO = """async () => { const m = await import('/src/ui/atoms.tsx'); const { t } = await import('/src/i18n/index.ts');
+  window.__undone = 0; m.toast('已归档', 'ok', { label: t('lib-agent-archives.undo'), run() { window.__undone++; } });
+  await new Promise((r) => setTimeout(r, 400));
+  const row = [...document.querySelectorAll('[aria-live=polite] > div:not([data-closing])')].pop(); const [undo, close] = row.querySelectorAll('button');
+  // the word itself (the button may reach past it on a touch screen)
+  const range = document.createRange(); range.selectNodeContents(undo); const u = range.getBoundingClientRect(), c = close.getBoundingClientRect();
+  return { label: undo.textContent, right: u.right, cy: u.top + u.height / 2, close: [c.left + c.width / 2, c.top + c.height / 2], height: row.offsetHeight }; }"""
+
+
+def toast_undo_edges(browser, base, token):
+    # A toast's Undo on a phone (#11442): real taps 1, 3 and 5 px past its word run it, not Close, for a short word and
+    # a wide one (ja); Close still closes from its own face; a toast with Undo is no taller than one without.
+    for lang, label in ((None, "撤销"), ("ja", "元に戻す")):
+        ctx, page = open_page(browser, base, token, 390, 844)
+        if lang:
+            page.evaluate(f"localStorage.setItem('persona.language', '{lang}')")
+            page.reload()
+            page.wait_for_selector("aside", state="attached", timeout=20000)
+        for d in (1, 3, 5):
+            u = page.evaluate(SHOW_UNDO)
+            if u["label"] != label:
+                fail(f"the toast's button reads {u['label']!r}, not {label!r}")
+            at = page.evaluate("([x, y]) => document.elementFromPoint(x, y)?.closest('button')?.textContent", [u["right"] + d, u["cy"]])
+            if at != label:
+                fail(f"{label}: {d} px right of it is {at!r}, not the button")
+            page.touchscreen.tap(u["right"] + d, u["cy"])
+            try:
+                page.wait_for_function("window.__undone === 1 && !document.querySelector('[aria-live=polite] > div:not([data-closing])')", timeout=3000)
+            except Exception:
+                fail(f"{label}: a tap {d} px right of it did not run it (runs: {page.evaluate('window.__undone')})")
+        ok(f"{label}: taps 1, 3 and 5 px right of it run it")
+        u = page.evaluate(SHOW_UNDO)
+        page.touchscreen.tap(*u["close"])
+        page.wait_for_function("!document.querySelector('[aria-live=polite] > div:not([data-closing])')", timeout=3000)
+        check(page.evaluate("window.__undone") == 0, f"{label}: a tap on Close closes it without running it")
+        page.wait_for_timeout(400)
+        plain = page.evaluate("""async () => { const m = await import('/src/ui/atoms.tsx'); m.toast('已复制', 'ok');
+          await new Promise((r) => setTimeout(r, 400)); return [...document.querySelectorAll('[aria-live=polite] > div:not([data-closing])')].pop().offsetHeight; }""")
+        check(u["height"] == plain, f"{label}: a toast with it is as tall as one without", (u["height"], plain))
+        ctx.close()
+
+
 def wide_dialog(browser, base, token, shots):
     ctx, page = open_page(browser, base, token, 1280, 820, mobile=False)
     open_new_agent(page, tap=False)
@@ -280,6 +322,7 @@ def main():
             box = page.evaluate("() => { const r = document.querySelector('[role=dialog]').getBoundingClientRect(); return [r.left, r.right, r.width]; }")
             check(box[0] > 0 and abs(box[2] - 520) < 1, "844×390: the dialog is the card, not a sheet", box)
             ctx.close()
+            toast_undo_edges(browser, base, a.token)
             wide_dialog(browser, base, a.token, a.shots)
         finally:
             browser.close()
