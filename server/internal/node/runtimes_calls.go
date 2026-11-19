@@ -143,6 +143,7 @@ type runtimeCallParams struct {
 	Text           string        `json:"text"`
 	Images         []proto.Image `json:"images"`
 	SinceSeq       int           `json:"since_seq"`
+	History        string        `json:"history"`
 	FoldWork       bool          `json:"fold_work"`
 	BeforeSeq      int           `json:"before_seq"`
 	LazyImages     bool          `json:"lazy_images"`
@@ -231,8 +232,12 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 		out, err := call(method, params)
 		return out, err, true
 	case "session.watch":
-		attempt := n.runtimes.watch(h, p.SessionID, p.SinceSeq, rpc.ConnContext(ctx))
-		_, err := call("session.watch", map[string]any{"session_id": p.SessionID, "since_seq": p.SinceSeq})
+		attempt := n.runtimes.watch(h, p.SessionID, p.SinceSeq, p.History, rpc.ConnContext(ctx))
+		params := map[string]any{"session_id": p.SessionID, "since_seq": p.SinceSeq}
+		if p.History != "" {
+			params["history"] = p.History
+		}
+		_, err := call("session.watch", params)
 		if err != nil {
 			n.runtimes.watchFailed(h, p.SessionID, attempt.token)
 		}

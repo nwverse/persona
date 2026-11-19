@@ -76,6 +76,100 @@ func TestRuntimeSessionPublishesCoalesce(t *testing.T) {
 	}
 }
 
+func TestRuntimeSessionPublishWaitsForBotmuxConfig(t *testing.T) {
+	old := botmuxBin
+	botmuxBin = func() string { return "/opt/botmux/bin/botmux" }
+	t.Cleanup(func() { botmuxBin = old })
+	w := &wireRec{}
+	n, _ := runtimeNodeTapped(t, nil, w)
+	_, h := listedRuntime(t, n, "configured")
+	waitFor(t, "initial runtime build", func() bool {
+		n.listPush.mu.Lock()
+		defer n.listPush.mu.Unlock()
+		return n.listPush.pushed > 0 && !n.listPush.building
+	})
+	if got := len(w.changed()); got != 0 {
+		t.Fatalf("published %d incomplete lists before botmux configuration", got)
+	}
+	configureNode(t, n, map[string]any{"botmux": false})
+	n.runtimeHost.event(h, "runtime.sessions", json.RawMessage(`{"sessions":[{"session_id":"configured","title":"ready"}]}`))
+	waitFor(t, "configured runtime list", func() bool { return len(w.changed()) > 0 })
+	waitFor(t, "configured build finished", func() bool {
+		n.listPush.mu.Lock()
+		defer n.listPush.mu.Unlock()
+		return !n.listPush.building
+	})
+}
+
+func TestRuntimeSessionPublishUsesRevs(t *testing.T) {
+	w := &wireRec{}
+	n, _ := runtimeNodeTapped(t, nil, w)
+	_, h := listedRuntime(t, n, "revision")
+	waitFor(t, "initial runtime build", func() bool {
+		n.listPush.mu.Lock()
+		defer n.listPush.mu.Unlock()
+		return n.listPush.pushed > 0 && !n.listPush.building
+	})
+	before := len(w.changed())
+	n.runtimeHost.event(h, "runtime.sessions", json.RawMessage(`{"sessions":[{"session_id":"revision","rev":5}]}`))
+	waitFor(t, "revision build finished", func() bool {
+		n.listPush.mu.Lock()
+		defer n.listPush.mu.Unlock()
+		return !n.listPush.building
+	})
+	if got := len(w.changed()); got != before {
+		t.Fatalf("revision-only update sent a full list: %d -> %d", before, got)
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, line := range w.lines {
+		var msg struct {
+			Event  string `json:"event"`
+			Params struct {
+				Revs map[string]int64 `json:"revs"`
+			} `json:"params"`
+		}
+		if err := json.Unmarshal(line, &msg); err != nil {
+			t.Fatal(err)
+		}
+		if msg.Event == "sessions.revs" && msg.Params.Revs["revision"] == 5 {
+			return
+		}
+	}
+	t.Fatal("revision-only update did not send sessions.revs")
+}
+
+func TestRuntimePublishSharesNotifyQueue(t *testing.T) {
+	w := &wireRec{}
+	n, _ := runtimeNodeTapped(t, nil, w)
+	_, h := listedRuntime(t, n, "mixed")
+	waitFor(t, "initial runtime build", func() bool {
+		n.listPush.mu.Lock()
+		defer n.listPush.mu.Unlock()
+		return n.listPush.pushed > 0 && !n.listPush.building
+	})
+	before := len(w.changed())
+	offlineCache.Lock()
+	n.publishSessionsSoon()
+	n.runtimeHost.event(h, "runtime.sessions", json.RawMessage(`{"sessions":[{"session_id":"mixed","rev":5}]}`))
+	n.notifySessionsSoon()
+	done := n.publishSessionsSoon()
+	offlineCache.Unlock()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("mixed list requests did not finish")
+	}
+	if got := len(w.changed()); got != before+1 {
+		t.Fatalf("full-list notification lost behind runtime revisions: %d -> %d", before, got)
+	}
+	n.listPush.mu.Lock()
+	defer n.listPush.mu.Unlock()
+	if n.listPush.pushed != 3 || n.listPush.building {
+		t.Fatalf("mixed requests built %d lists, building=%v", n.listPush.pushed, n.listPush.building)
+	}
+}
+
 func TestRuntimeRewindResetsRewatchCursor(t *testing.T) {
 	for _, tc := range []struct {
 		name, payload string
@@ -216,7 +310,7 @@ func TestRuntimeWatchHistoryLifecycle(t *testing.T) {
 				n.runtimeEvent(h, "session.items", json.RawMessage(fmt.Sprintf(`{"session_id":"lifecycle","history":"h","to_seq":%d,"items":[]}`, seq)))
 			}
 			if action != "unwatched" {
-				n.runtimes.watch(h, "lifecycle", 20, nil)
+				n.runtimes.watch(h, "lifecycle", 20, "", nil)
 			}
 			push(20)
 			switch action {
@@ -225,7 +319,7 @@ func TestRuntimeWatchHistoryLifecycle(t *testing.T) {
 			case "reset":
 				n.runtimes.resetWatches()
 			}
-			n.runtimes.watch(h, "lifecycle", 20, nil)
+			n.runtimes.watch(h, "lifecycle", 20, "", nil)
 			push(5)
 			if got := n.runtimes.lastPushed("lifecycle"); got != 5 {
 				t.Fatalf("new watch retained old history after %s: cursor %d, want 5", action, got)

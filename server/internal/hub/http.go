@@ -1229,7 +1229,7 @@ type (
 
 // itemsToSubscribers fans new items out, without image data to clients that load images on demand. moreAfter marks
 // a producer's capped replay batch, whose remaining items the client must fetch.
-func (h *Hub) itemsToSubscribers(machineID, sessionID string, items []proto.Item, span itemSpan, moreAfter, update bool) {
+func (h *Hub) itemsToSubscribers(machineID, sessionID string, items []proto.Item, span itemSpan, moreAfter bool) {
 	if h.conversationDeleted(machineID, sessionID) {
 		return
 	}
@@ -1240,9 +1240,6 @@ func (h *Hub) itemsToSubscribers(machineID, sessionID string, items []proto.Item
 		out := span.into(map[string]any{"type": "items", "machine_id": machineID, "session_id": sessionID, "items": items})
 		if moreAfter {
 			out["more_after"] = true
-		}
-		if update {
-			out["update"] = true
 		}
 		b, _ := marshalItems(out)
 		return b

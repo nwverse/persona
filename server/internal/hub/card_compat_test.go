@@ -261,7 +261,7 @@ func TestEachClientGetsTheRingOrAViewPushed(t *testing.T) {
 		addTestClient(h, c)
 		clients[a.name] = c
 	}
-	h.itemsToSubscribers("m1", "s1", []proto.Item{{ID: "a1", Seq: 1, Role: "assistant", Kind: proto.KindText, Text: ringReply}}, itemSpan{}, false, false)
+	h.itemsToSubscribers("m1", "s1", []proto.Item{{ID: "a1", Seq: 1, Role: "assistant", Kind: proto.KindText, Text: ringReply}}, itemSpan{}, false)
 	for _, a := range apps {
 		var e struct {
 			Items []proto.Item `json:"items"`

@@ -9,15 +9,18 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-func TestRuntimeItemsForwardUpdate(t *testing.T) {
+func TestRuntimeItemsKeepUpdateInternal(t *testing.T) {
 	for _, lazy := range []bool{false, true} {
 		t.Run(fmt.Sprintf("lazy=%v", lazy), func(t *testing.T) {
 			c := &client{out: make(chan []byte, 2), lazy: lazy, subs: map[[2]string]bool{{"m1", "s1"}: true}}
 			m := newMachine(&Hub{clients: map[*client]struct{}{c: {}}}, MachineConfig{ID: "m1"})
 			for _, update := range []bool{true, false} {
 				payload, err := json.Marshal(map[string]any{
-					"session_id": "s1", "items": []proto.Item{{ID: "i5", Seq: 5, Kind: proto.KindText, Text: "revised"}},
-					"history": "h1", "from_seq": 5, "to_seq": 5, "update": update,
+					"session_id": "s1", "items": []proto.Item{
+						{ID: "i5", Seq: 5, Kind: proto.KindText, Text: "revised"},
+						{ID: "i6", Seq: 6, Kind: proto.KindText, Text: "appended"},
+					},
+					"history": "h1", "from_seq": 5, "to_seq": 6, "update": update,
 				})
 				if err != nil {
 					t.Fatal(err)
@@ -27,12 +30,20 @@ func TestRuntimeItemsForwardUpdate(t *testing.T) {
 				if err := json.Unmarshal(wireReceive(t, c), &got); err != nil {
 					t.Fatal(err)
 				}
-				if update && got["update"] != true {
-					t.Fatalf("in-place update flag lost: %v", got)
+				if _, present := got["update"]; present {
+					t.Fatalf("internal update flag conflicts with the App envelope: %v", got)
 				}
-				if !update {
-					if _, present := got["update"]; present {
-						t.Fatalf("ordinary append includes update: %v", got)
+				if got["type"] != "items" || got["from_seq"] != float64(5) || got["to_seq"] != float64(6) {
+					t.Fatalf("item span changed: %v", got)
+				}
+				items, ok := got["items"].([]any)
+				if !ok || len(items) != 2 {
+					t.Fatalf("mixed batch lost items: %v", got)
+				}
+				for i, want := range []struct{ id, text string }{{"i5", "revised"}, {"i6", "appended"}} {
+					item, ok := items[i].(map[string]any)
+					if !ok || item["id"] != want.id || item["text"] != want.text {
+						t.Fatalf("mixed batch item %d changed: %v", i, items[i])
 					}
 				}
 			}
@@ -102,5 +113,25 @@ func TestRuntimeItemsHistoryPrunedWithCursor(t *testing.T) {
 				t.Fatalf("ended session retained cursors %v or histories %v", m.lastSeq, m.lastHistory)
 			}
 		})
+	}
+}
+
+func TestRuntimeWatchSendsKnownHistory(t *testing.T) {
+	n, m := newWatchNode(t)
+	m.addWatcher(context.Background(), "s1")
+	n.mu.Lock()
+	initial := n.history["s1"]
+	n.mu.Unlock()
+	if initial != nil {
+		t.Fatal("initial watch includes an unknown history")
+	}
+	m.onEvent("session.items", json.RawMessage(`{"session_id":"s1","items":[],"history":"h1","from_seq":0,"to_seq":20}`))
+	m.removeWatcher("s1")
+	m.addWatcher(context.Background(), "s1")
+	n.mu.Lock()
+	seq, history := n.since["s1"], n.history["s1"]
+	n.mu.Unlock()
+	if seq != 20 || history == nil || *history != "h1" {
+		t.Fatalf("rewatch lost its cursor identity: seq=%d history=%v", seq, history)
 	}
 }

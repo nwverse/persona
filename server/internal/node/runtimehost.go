@@ -446,7 +446,7 @@ func (rh *RuntimeHost) event(h *runtimeConn, event string, params json.RawMessag
 				}
 			}()
 		}
-		n.notifySessionsSoon()
+		n.publishSessionsSoon()
 		return
 	}
 	if n != nil {

@@ -628,11 +628,14 @@ func (b *runtimeRegistry) launcherRuntime(name string) *runtimeConn {
 	return b.launcherOwners()[name]
 }
 
-func (b *runtimeRegistry) watch(h *runtimeConn, id string, since int, parent context.Context) runtimeWatchAttempt {
+func (b *runtimeRegistry) watch(h *runtimeConn, id string, since int, history string, parent context.Context) runtimeWatchAttempt {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if cur, ok := b.watching[id]; !ok || since > cur {
+	if cur, ok := b.watching[id]; !ok || since > cur || history != "" && history != b.lastHistory[id] {
 		b.watching[id] = since
+	}
+	if history != "" {
+		b.lastHistory[id] = history
 	}
 	if parent != nil {
 		b.watchParents[id] = parent

@@ -674,13 +674,16 @@ func (m *Machine) syncWatchOnce(ctx context.Context, id string) bool {
 	m.mu.Lock()
 	want := m.watchers[id] > 0
 	state := m.nodeWatch[id]
-	since := m.lastSeq[id]
+	since, history := m.lastSeq[id], m.lastHistory[id]
 	m.mu.Unlock()
 	var method string
 	var params map[string]any
 	switch {
 	case want && state != nodeWatching:
 		method, params = "session.watch", map[string]any{"session_id": id, "since_seq": since}
+		if history != "" {
+			params["history"] = history
+		}
 	case !want && state != nodeUnwatched:
 		method, params = "session.unwatch", map[string]any{"session_id": id}
 		ctx = context.Background() // not the leaving app's connection
@@ -777,7 +780,6 @@ func (m *Machine) onEvent(event string, params json.RawMessage) {
 			SessionID string       `json:"session_id"`
 			Items     []proto.Item `json:"items"`
 			MoreAfter bool         `json:"more_after"`
-			Update    bool         `json:"update,omitempty"`
 			itemSpan
 		}
 		// A batch without items still matters when it has a span: it moves the apps' "complete up to" forward.
@@ -801,7 +803,7 @@ func (m *Machine) onEvent(event string, params json.RawMessage) {
 		}
 		m.mu.Unlock()
 		p.Items = m.hub.withInjected(p.Items)
-		m.hub.itemsToSubscribers(m.cfg.ID, p.SessionID, p.Items, p.itemSpan, p.MoreAfter, p.Update)
+		m.hub.itemsToSubscribers(m.cfg.ID, p.SessionID, p.Items, p.itemSpan, p.MoreAfter)
 	case "session.screen":
 		var p struct {
 			SessionID string `json:"session_id"`

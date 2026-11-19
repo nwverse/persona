@@ -202,23 +202,101 @@ test('mixed append batches preserve update in either order without leaking to la
   assert.equal(n.last('session.items').update, undefined)
 })
 
-test('watch catch-up reports empty histories at equal or lower cursors and resumes after rewind', async (t) => {
+test('watch catch-up signals a rewind without claiming its missing items are complete', async (t) => {
   const { page } = await import('../index.js')
-  for (const toSeq of [20, 5, 0]) {
+  for (const toSeq of [5, 0]) {
     await t.test(`cursor ${toSeq}`, async (t) => {
       const n = await startFakeNode(t)
-      const rt = createRuntime(minimal({ cursor: async () => toSeq, items: async (params) => page([], params, { history: 'rewritten', toSeq }) }), { runtime: 'toy', socketPath: n.path })
+      const all = Array.from({ length: toSeq }, (_, i) => ({ id: `i${i + 1}`, seq: i + 1, role: 'user', kind: 'text', text: `message ${i + 1}` }))
+      const requests = []
+      const rt = createRuntime(minimal({ cursor: async () => toSeq, items: async (params) => {
+        requests.push(params)
+        return page(all, params, { history: 'rewritten', toSeq })
+      } }), { runtime: 'toy', socketPath: n.path })
       t.after(() => rt.stop())
       rt.start()
       await n.ready
       await n.peer.call('session.watch', { session_id: 's1', since_seq: 20 })
-      assert.equal(n.all('session.items').length, 1, 'an empty history still reaches the watcher')
-      assert.equal(n.last('session.items').history, 'rewritten')
-      assert.equal(n.last('session.items').to_seq, toSeq)
-      if (toSeq < 20) assert.equal(n.last('session.items').from_seq, 0)
+      assert.equal(n.all('session.items').length, 1)
+      const batch = n.last('session.items')
+      assert.equal(batch.history, 'rewritten')
+      assert.equal(batch.to_seq, toSeq)
+      assert.equal(batch.from_seq, 20, 'a continuing batch from another history must trigger reload')
+      assert.deepEqual(batch.items, [])
+      assert.deepEqual(requests, [{ session_id: 's1', after_seq: 20 }], 'the catch-up response carries the real cursor')
+      const reloaded = await n.peer.call('session.items', { session_id: 's1', limit: 80 })
+      assert.deepEqual(reloaded.items, all, 'reload recovers every rewound message')
       rt.append('s1', { items: [{ id: 'next', seq: toSeq + 1 }], fromSeq: toSeq, toSeq: toSeq + 1, history: 'rewritten' })
       await until('content after rewind', () => n.all('session.items').length === 2)
       assert.equal(n.last('session.items').to_seq, toSeq + 1)
+    })
+  }
+})
+
+test('an idle watch reads one catch-up page without pushing an empty batch', async (t) => {
+  const { page } = await import('../index.js')
+  const n = await startFakeNode(t)
+  const requests = []
+  const rt = createRuntime(minimal({ items: async (params) => {
+    requests.push(params)
+    return page([{ id: 'last', seq: 20 }], params, { history: 'current', toSeq: 20 })
+  } }), { runtime: 'toy', socketPath: n.path })
+  t.after(() => rt.stop())
+  rt.start()
+  await n.ready
+  await n.peer.call('session.watch', { session_id: 's1', since_seq: 20 })
+  assert.deepEqual(requests, [{ session_id: 's1', after_seq: 20 }])
+  assert.deepEqual(n.all('session.items'), [])
+})
+
+test('rewatching a known history reports a same-length rewrite', async (t) => {
+  const { page } = await import('../index.js')
+  const n = await startFakeNode(t)
+  let history = 'old'
+  const rt = createRuntime(minimal({ items: async (params) => page([{ id: 'last', seq: 20 }], params, { history, toSeq: 20 }) }), { runtime: 'toy', socketPath: n.path })
+  t.after(() => rt.stop())
+  rt.start()
+  await n.ready
+  await n.peer.call('session.watch', { session_id: 's1', since_seq: 0 })
+  history = 'rewritten'
+  await n.peer.call('session.watch', { session_id: 's1', since_seq: 20 })
+  assert.equal(n.all('session.items').length, 1)
+  assert.equal(n.last('session.items').history, history)
+  assert.equal(n.last('session.items').from_seq, 20)
+  assert.equal(n.last('session.items').to_seq, 20)
+})
+
+test('watch history detects same-length rewrites after unwatch or reconnect', async (t) => {
+  const { page } = await import('../index.js')
+  for (const reconnect of [false, true]) {
+    await t.test(reconnect ? 'reconnect' : 'unwatch', async (t) => {
+      const n = await startFakeNode(t)
+      let history = 'old'
+      let reads = 0
+      const rt = createRuntime(minimal({ items: async (params) => {
+        reads++
+        return page([{ id: 'last', seq: 20 }], params, { history, toSeq: 20 })
+      } }), { runtime: 'toy', socketPath: n.path, retryMs: 20 })
+      t.after(() => rt.stop())
+      rt.start()
+      await n.ready
+      await n.peer.call('session.watch', { session_id: 's1', since_seq: 0 })
+      if (reconnect) {
+        const oldPeer = n.peer
+        oldPeer.close()
+        await until('runtime reconnects', () => n.peer !== oldPeer && n.hellos === 2)
+      } else {
+        await n.peer.call('session.unwatch', { session_id: 's1' })
+      }
+      reads = 0
+      await n.peer.call('session.watch', { session_id: 's1', since_seq: 20, history: 'old' })
+      assert.equal(reads, 1)
+      assert.deepEqual(n.all('session.items'), [], 'known unchanged history stays quiet')
+      await n.peer.call('session.unwatch', { session_id: 's1' })
+      history = 'rewritten'
+      await n.peer.call('session.watch', { session_id: 's1', since_seq: 20, history: 'old' })
+      assert.equal(n.all('session.items').length, 1, 'the supplied history survives a lost watch')
+      assert.deepEqual(n.last('session.items'), { session_id: 's1', items: [], history, from_seq: 20, to_seq: 20 })
     })
   }
 })
@@ -230,7 +308,7 @@ test('an explicit zero start resets append watermarks without a new history', as
   rt.start()
   await n.ready
   await n.peer.call('session.watch', { session_id: 's1' })
-  rt.append('s1', { items: [], fromSeq: 0, toSeq: 5, history: 'h' })
+  rt.append('s1', { items: Array.from({ length: 5 }, (_, i) => ({ id: `i${i + 1}`, seq: i + 1 })), fromSeq: 0, toSeq: 5, history: 'h' })
   await until('explicit reset', () => n.all('session.items').length === 1)
   assert.equal(n.last('session.items').to_seq, 5)
   rt.append('s1', { items: [{ id: 'next', seq: 6 }], fromSeq: 5, toSeq: 6, history: 'h' })
