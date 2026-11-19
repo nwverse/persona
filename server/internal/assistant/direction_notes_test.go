@@ -106,7 +106,7 @@ func TestDirectionNotesReachTheLeaderPolicy(t *testing.T) {
 	if got := mustSupervisionInstructions(t, s, ctx, "server", "conv_lead"); got != policy {
 		t.Fatal("a leader without notes has a different policy")
 	}
-	if _, err := s.setDirectionNotes(ctx, "conv_lead", "Readings: the store build number."); err != nil {
+	if _, _, err := s.setDirectionNotes(ctx, "conv_lead", "Readings: the store build number.", nil); err != nil {
 		t.Fatal(err)
 	}
 	got := mustSupervisionInstructions(t, s, ctx, "server", "conv_lead")
@@ -136,7 +136,7 @@ func TestDirectionNotesReachTheLeaderPolicy(t *testing.T) {
 	if again := mustSupervisionInstructions(t, s, ctx, "server", "conv_lead"); again != got {
 		t.Fatal("a project summary rewrite changed the leader's policy")
 	}
-	if _, err := s.setDirectionNotes(ctx, "conv_lead", ""); err != nil {
+	if _, _, err := s.setDirectionNotes(ctx, "conv_lead", "", nil); err != nil {
 		t.Fatal(err)
 	}
 	if back := mustSupervisionInstructions(t, s, ctx, "server", "conv_lead"); back != policy {
@@ -153,10 +153,10 @@ func TestDirectionNotesReachTheLeaderPolicy(t *testing.T) {
 func TestDirectionNotesReachNewAgents(t *testing.T) {
 	s, _ := notesEnv(t)
 	ctx := context.Background()
-	if _, err := s.setDirectionNotes(ctx, "conv_lead", "Readings: the store build number."); err != nil {
+	if _, _, err := s.setDirectionNotes(ctx, "conv_lead", "Readings: the store build number.", nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.setDirectionNotes(ctx, "conv_other", "Infra rule: back up first."); err != nil {
+	if _, _, err := s.setDirectionNotes(ctx, "conv_other", "Infra rule: back up first.", nil); err != nil {
 		t.Fatal(err)
 	}
 	got := s.withProjectContext(ctx, "box", "/code/weather/ios", "", "Fix the login page")
@@ -206,7 +206,7 @@ func TestDirectionNotesReachALeadersOwnTask(t *testing.T) {
 	}
 	b.m["lead1"] = &direction{MachineID: "server", Project: "another-project", By: directionByUser, At: time.Now(), Name: "Platform"}
 	b.mu.Unlock()
-	if _, err := s.setDirectionNotes(context.Background(), "lead1", "Heavy gates run on the shared runner."); err != nil {
+	if _, _, err := s.setDirectionNotes(context.Background(), "lead1", "Heavy gates run on the shared runner.", nil); err != nil {
 		t.Fatal(err)
 	}
 	raw, _ := json.Marshal(map[string]any{"tasks": []map[string]any{{
@@ -223,7 +223,9 @@ func TestDirectionNotesReachALeadersOwnTask(t *testing.T) {
 	f.mu.Lock()
 	p, _ := f.starts[0]["prompt"].(string)
 	f.mu.Unlock()
-	if !strings.HasPrefix(p, `<persona-context kind="context" title="方向 · Platform · 说明"`) || !strings.Contains(p, "Heavy gates run on the shared runner.") {
+	if !strings.HasPrefix(p, "Background: the login page crashes.") ||
+		!strings.Contains(p, `<persona-context kind="context" title="方向 · Platform · 说明"`) ||
+		!strings.Contains(p, "Heavy gates run on the shared runner.") {
 		t.Fatalf("first prompt = %q", p)
 	}
 }

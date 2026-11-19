@@ -141,7 +141,7 @@ type TriageConfig struct {
 	// TransientRetry: the initial value of the transient_retry switch (unset: on): "Continue" after a transient model
 	// error, as a rule, whether or not the triage itself is on.
 	TransientRetry *bool `json:"transient_retry,omitempty"`
-	// MaxRetries: "Continue" sent for one run of transient errors before leaving it to the user. Default 5.
+	// MaxRetries is retained for rolling compatibility; temporary model retries have no attempt limit.
 	MaxRetries int `json:"max_retries,omitempty"`
 	// RetryBaseSeconds: the first "Continue" after a transient error waits this long, each next one twice as long as
 	// the one before (a rate limit four times as long). Default 15.
@@ -243,6 +243,8 @@ var agentRoutes = []string{
 	"PUT /api/v1/agents/triage",
 	"GET /api/v1/agents/work/stats",
 	"POST /api/v1/tabs/autoname",
+	"POST /api/v1/sessions/{mid}/{sid}/review",
+	"GET /api/v1/sessions/{mid}/{sid}/review",
 }
 
 func init() { Routes = append(Routes, agentRoutes...) }

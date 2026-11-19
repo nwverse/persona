@@ -113,6 +113,26 @@ class ChatComposerServiceTest {
         assertEquals(2, attempts)
     }
 
+    @Test fun keptReplyIsNotAcceptedOrMarkedSent() = runBlocking {
+        val scope = HubScope("test-hub", "generation")
+        val session = SessionKey("machine", "session")
+        var accepted = 0
+        val transport = object : MessageTransport {
+            override val readyToSend = MutableStateFlow(true)
+            override val supportsClientOps = true
+            override suspend fun send(request: MessageRequest): MessageTransportResult = error("Unexpected delegate send")
+            override suspend fun onAccepted(session: SessionKey, reply: kotlinx.serialization.json.JsonObject?) { accepted++ }
+        }
+        val service = HttpChatComposerService(scope, transport, request = { _, _, _ ->
+            Response.Builder().request(Request.Builder().url("https://example.com/").build())
+                .protocol(Protocol.HTTP_1_1).code(202).message("kept")
+                .body("""{"delivered":"later","undelivered":{"id":"kept","text":"message","at":"2026-11-17T10:00:00Z","state":"waiting"}}""".toResponseBody()).build()
+        })
+        assertEquals(MessageTransportResult.Kept, service.send(MessageRequest(scope, session, "message", "kept")))
+        assertEquals(0, accepted)
+        assertNull(service.deliveries.value["kept"])
+    }
+
     @Test fun clearAndSendGoesUnderANewOperationIdTheHubHasNotAnswered() = runBlocking {
         val scope = HubScope("test-hub", "generation")
         val session = SessionKey("machine", "session")

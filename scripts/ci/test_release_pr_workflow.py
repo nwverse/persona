@@ -40,6 +40,14 @@ class ReleaseWorkflowTests(unittest.TestCase):
             self.assertIn("release-pr-" + name + "-", str(jobs[name]))
         self.assertNotIn("cli-web", jobs["cli-web"].get("environment", ""))
         self.assertNotIn("secrets.", str(jobs["cli-web"]))
+        self.assertEqual(jobs["android"]["steps"][2]["with"]["packages"], "platform-tools")
+        self.assertEqual(jobs["cli-web"]["steps"][5]["env"]["NODE_OPTIONS"], "--max-old-space-size=4096")
+        self.assertIn('--receipt "$RUNNER_TEMP/android-receipt.json"', str(jobs["android"]))
+        self.assertEqual(jobs["android"]["steps"][4]["with"]["path"], "${{ runner.temp }}/release-plan")
+        self.assertIn('RUNNER_TEMP', str(jobs["android"]))
+        self.assertNotIn("Path('release/plan.json')", str(jobs["android"]))
+        self.assertIn('release-pr-plan-${{ needs.plan.outputs.pr }}', str(jobs))
+        self.assertNotIn('release-pr-plan-${{ needs.plan.outputs.pr }}-${{ needs.plan.outputs.commit }}', str(jobs))
 
     def test_windows_requires_native_execution_and_authenticode(self):
         text = PR.read_text()
@@ -88,6 +96,11 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("refs/heads/main", text)
         self.assertEqual(self.publish["jobs"]["authorize"]["environment"], "persona-release")
         self.assertEqual(self.publish["jobs"]["cli-web"]["environment"], "persona-release")
+        source = self.publish["jobs"]["source"]
+        self.assertNotIn("environment", source)
+        self.assertIn("release:", str(source))
+        self.assertIn("needs.source.outputs.pr != ''", self.publish["jobs"]["authorize"]["if"])
+        self.assertIn("needs.source.outputs.pr", str(self.publish["jobs"]["authorize"]["outputs"]))
         self.assertNotIn("pull_request_target:", text)
 
     def test_immutable_tag_and_download_verification_precede_beta_pointer(self):

@@ -439,6 +439,12 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // Its rows, seeing a task on opening it and the tray's empty line come with the tray's first opening, in the chunk of
 // the Parked rows (FinishedTaskRows.tsx through ParkedTaskRow.tsx: no lazy entry of their own), which also took
 // lib/todo-seen.ts off the first screen; on it they cost 228 B. Main had 4,653 B of room; the budget stays.
+// #8578: directory-hidden Agents and their pending cards leave the lists, counts and attention events (lib/sessions.ts
+// directoryVisible / directoryVisibleCards, lib/attention.ts) and the Agents page gets its Hidden sessions button; the
+// inspection dialog and its hint (key temporary_view, outside the startup prefix "inspect") are a chunk of its own
+// (views/HiddenAgentSessionsDialog.tsx); pending cards' sessions are looked up until each is known (lib/store.ts
+// cardSessionRow). 549 B in ja, measured in one environment against main 0c97da818c (ja 479,051 B to 479,600 B; en
+// 476,160 B to 476,701 B, zh-Hans 476,915 B to 477,472 B), 3,131 B of room. The budget stays.
 // Keep the stricter existing limit while combining these changes.
 // #10904: the overview's task cards name who works on each task, the lead Agent's computer, model and effort and "+N"
 // for the others (lib/home-tasks.ts leadAgent; views/Home.tsx taskAgentLine over the model pill's pillView, modelList and
@@ -455,10 +461,16 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // Main had 4,560 B of room, so the budget is this ja size plus those 4,560 B.
 // #11090: a waiting to-do's label says what it waits on (lib/todo-wait-reason.ts waitReason and todoLook, read on the
 // first screen by Overview's task cards, the main chat's trays and the sidebar's By to-do rows; the seven
-// lib-state-labels waits_* words in place of task_waiting). 505 B in ja, measured in one environment against main
-// c4fc3ef324 (ja 479,301 B to 479,806 B; en 476,414 B to 476,898 B, zh-Hans 477,154 B to 477,624 B). Main had 3,430 B
-// of room; the budget stays (merged with #9745 above, it takes those 505 B of #9745's room).
-export const FIRST_SCREEN_BUDGET = 483_480;
+// lib-state-labels waits_* words in place of task_waiting). 621 B in ja, measured in one environment against main
+// 591ad5d369 (ja 480,763 B to 481,384 B; en 477,858 B to 478,422 B, zh-Hans 478,582 B to 479,142 B). Main had 2,717 B
+// of room; the budget stays (merged with #9778 below, those 621 B come out of the room main had).
+// #9778 (#9745's follow-up): what is on its way kept to the sign-in it was made under (a change sent, queued or not
+// taken under an earlier one dropped, its answer changing nothing) and a hello's read a push or another tab's change
+// overtook left alone (lib/start-page.ts, lib/overview-cards.ts), and Arrange cards opening a folded cards' section and
+// scrolling to it, its heading counting the cards shown (views/extensions/ExtensionSlots.tsx). 63 B in ja, measured in
+// one environment against main cacd8d75a6 (ja 480,670 B to 480,733 B; en 477,744 B to 477,807 B, zh-Hans 478,482 B to
+// 478,545 B). Main had 2,810 B of room, so the budget is this ja size plus those 2,810 B.
+export const FIRST_SCREEN_BUDGET = 483_543;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
