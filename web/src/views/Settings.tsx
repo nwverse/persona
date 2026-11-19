@@ -29,9 +29,11 @@ import { SavedPrompts } from "./settings/SavedPrompts";
 import { SourcesUI } from "./subscriptions/SourcesUI";
 import { useInboxSourcesShown } from "../lib/subscriptions";
 import { ModelConfiguration } from "./settings/ModelConfiguration";
+import { HiddenAgentDirs } from "./settings/HiddenAgentDirs";
 import { AgentSettings } from "./settings/AgentSettings";
 import { SidebarPagesGroup } from "./settings/SidebarPages";
 import { StartPageGroup } from "./settings/StartPage";
+import { AgentsDisplayRow } from "./settings/AgentsDisplayRow";
 import { AgentGroup } from "./settings/AgentGroup";
 import { AssistantSettings } from "./settings/AssistantSettings";
 import { PersonaPicker } from "./assistant/Persona";
@@ -360,7 +362,10 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
                   <ModelConfiguration open={sub} onOpen={(id) => pick("models", id)} onProviders={() => pick("models", null, "providers")} />
                 </section>
               </>}
-              {tab === "agents" && <AgentSections section={at.section} />}
+              {tab === "agents" && <>
+                <Group title={t("settings.agent_preferences")} anchor="agents-display"><AgentsDisplayRow /></Group>
+                <AgentSections section={at.section} />
+              </>}
               {tab === "channels" && (sub ? (twoCol ? (
                 <div className="flex gap-6">
                   <div className="w-[300px] shrink-0"><ChannelList openBeside={sub} onOpen={(id) => pick("channels", id)} onMarketItem={(market, id) => pick("extensions", routeSub({ kind: "item", market, id }))} /></div>
@@ -450,6 +455,7 @@ function AgentSections({ section }: { section: SettingsSection | null }) {
   };
   return (
     <>
+      <HiddenAgentDirs />
       {AGENT_KINDS.map((id) => {
         const shown = !closed.has(id);
         return (

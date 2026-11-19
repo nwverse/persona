@@ -40,6 +40,12 @@ class ReleaseWorkflowTests(unittest.TestCase):
             self.assertIn("release-pr-" + name + "-", str(jobs[name]))
         self.assertNotIn("cli-web", jobs["cli-web"].get("environment", ""))
         self.assertNotIn("secrets.", str(jobs["cli-web"]))
+        self.assertEqual(jobs["android"]["steps"][2]["with"]["packages"], "platform-tools")
+        self.assertEqual(jobs["cli-web"]["steps"][5]["env"]["NODE_OPTIONS"], "--max-old-space-size=4096")
+        self.assertIn('--receipt "$RUNNER_TEMP/android-receipt.json"', str(jobs["android"]))
+        self.assertEqual(jobs["android"]["steps"][4]["with"]["path"], "${{ runner.temp }}/release-plan")
+        self.assertIn('RUNNER_TEMP', str(jobs["android"]))
+        self.assertNotIn("Path('release/plan.json')", str(jobs["android"]))
 
     def test_windows_requires_native_execution_and_authenticode(self):
         text = PR.read_text()
@@ -50,9 +56,26 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("beta.yml", text)
         self.assertIn("latest.yml", text)
 
+    def test_pr_metadata_survives_the_clean_source_checkout(self):
+        text = PR.read_text()
+        self.assertIn("PR_JSON: ${{ runner.temp }}/release-pr.json", text)
+        self.assertIn("PR_LIST_JSON: ${{ runner.temp }}/release-pr-list.json", text)
+        self.assertIn("PR_REST_JSON: ${{ runner.temp }}/release-pr-rest.json", text)
+        self.assertNotIn("json.load(open(\"release-pr.json\"))", text)
+        self.assertNotIn("Path('release-pr.json')", text)
+        self.assertNotIn("> release-pr.json", text)
+        self.assertNotIn("> release-pr-list.json", text)
+        self.assertNotIn("> release-pr-rest.json", text)
+        self.assertIn('verify-pr --pr-json "$PR_JSON"', text)
+        self.assertIn("GIT_COMMIT: ${{ github.event.pull_request.merge_commit_sha || github.sha }}", text)
+        self.assertIn("COMMIT=\"$commit\" python3", text)
+        self.assertIn("--json number,title,state,isDraft,baseRefName", text)
+        self.assertNotIn("open(os.environ['PR_JSON'])", text)
+        self.assertIn('json.load(open(sys.argv[1]))', text)
+
     def test_main_without_a_merged_release_pr_has_no_build_plan(self):
         text = PR.read_text()
-        self.assertIn("Path('release-pr.json').write_text('{}')", text)
+        self.assertIn("Path(os.environ['PR_JSON']).write_text('{}')", text)
         self.assertNotIn("raise SystemExit(78)", text)
         self.assertIn("steps.source.outputs.number != '0'", str(self.pr["jobs"]["plan"]["steps"]))
         for name, job in self.pr["jobs"].items():
@@ -71,6 +94,11 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("refs/heads/main", text)
         self.assertEqual(self.publish["jobs"]["authorize"]["environment"], "persona-release")
         self.assertEqual(self.publish["jobs"]["cli-web"]["environment"], "persona-release")
+        source = self.publish["jobs"]["source"]
+        self.assertNotIn("environment", source)
+        self.assertIn("release:", str(source))
+        self.assertIn("needs.source.outputs.pr != ''", self.publish["jobs"]["authorize"]["if"])
+        self.assertIn("needs.source.outputs.pr", str(self.publish["jobs"]["authorize"]["outputs"]))
         self.assertNotIn("pull_request_target:", text)
 
     def test_immutable_tag_and_download_verification_precede_beta_pointer(self):
@@ -90,7 +118,16 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn("*/2 * * * *", text)
         self.assertIn("RELEASE_PR_TOKEN", text)
         self.assertIn("environment: persona-release", text)
-        self.assertIn("gh pr create", text)
+        self.assertIn("create_release_pr.py", text)
+        self.assertIn("RELEASE_PR_TOKEN", text)
+        self.assertIn("missing RELEASE_PR_TOKEN", text)
+        self.assertIn("git diff --cached --quiet", text)
+        self.assertNotIn("gh pr create", text)
+        self.assertIn("refs/heads/$branch", text)
+        self.assertIn("preserve its failed source", text)
+        self.assertIn("release-reserved.txt", text)
+        self.assertIn("--reserved $(tr '\\n' ' ' < release-reserved.txt)", text)
+        self.assertNotIn("--force", text)
         self.assertNotIn('refs/tags/$TAG', text)
         self.assertNotIn("gh release create", text)
 

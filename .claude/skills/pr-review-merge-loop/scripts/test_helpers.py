@@ -6,6 +6,7 @@ import runpy
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -187,6 +188,43 @@ class HelperTests(unittest.TestCase):
                     module["wait_transcript"](path, marker, schema, "w3:p1",
                                              "pr-review-r09-123-01234567.scope", 0.1)
             self.assertTrue(calls)
+
+    def test_interactive_slot_waits_for_release_and_refills(self):
+        module = runpy.run_path(str(HERE / "herdr_review.py"))
+        import fcntl
+        import threading
+        with tempfile.TemporaryDirectory(prefix="review-slot-wait-test-") as root:
+            path = Path(root) / "slot-00.lock"
+            held = path.open("a+")
+            fcntl.flock(held, fcntl.LOCK_EX)
+            calls = []
+
+            def release():
+                if held.closed:
+                    return
+                time.sleep(0.05)
+                fcntl.flock(held, fcntl.LOCK_UN)
+                held.close()
+
+            thread = threading.Thread(target=release)
+            thread.start()
+            self.addCleanup(release)
+            self.addCleanup(thread.join, timeout=2)
+            with patch.dict(module["acquire_slot"].__globals__, {"run": lambda slot, flags: calls.append(slot)}):
+                module["acquire_slot"](Path(root), 1, [])
+            thread.join(timeout=2)
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(calls, [0])
+
+    def test_interactive_slot_uses_another_free_slot_before_waiting(self):
+        module = runpy.run_path(str(HERE / "herdr_review.py"))
+        import fcntl
+        with tempfile.TemporaryDirectory(prefix="review-slot-choice-test-") as root:
+            held = (Path(root) / "slot-00.lock").open("a+")
+            fcntl.flock(held, fcntl.LOCK_EX)
+            self.addCleanup(held.close)
+            with patch.dict(module["acquire_slot"].__globals__, {"run": lambda slot, flags: slot}):
+                self.assertEqual(module["acquire_slot"](Path(root), 2, []), 1)
 
     def test_interactive_session_id_uses_the_padded_slot_path(self):
         module = runpy.run_path(str(HERE / "herdr_review.py"))

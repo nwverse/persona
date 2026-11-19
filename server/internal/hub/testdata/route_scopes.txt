@@ -122,6 +122,7 @@ todos.write          DELETE /api/v1/todos/{id}/spaces/{mid}/{space...}
 -                    GET /api/v1/agent-shares/{share_id}
 -                    GET /api/v1/agent-shares/{share_id}/messages
 agents.read          GET /api/v1/agents
+-                    GET /api/v1/agents/display-settings
 -                    GET /api/v1/agents/hidden
 -                    GET /api/v1/agents/outbox
 -                    GET /api/v1/agents/prefs
@@ -239,6 +240,7 @@ kb.read              GET /api/v1/kb/{kind}/{id}
 machines.read        GET /api/v1/machines
 machines.read        GET /api/v1/machines/{id}/metrics
 machines.read        GET /api/v1/machines/{id}/usage
+-                    GET /api/v1/machines/{mid}/agent-dirs/hidden
 -                    GET /api/v1/machines/{mid}/agy-settings
 -                    GET /api/v1/machines/{mid}/botmux
 -                    GET /api/v1/machines/{mid}/browser
@@ -321,6 +323,7 @@ agents.read          GET /api/v1/sessions/{mid}/{sid}/items/{iid}/full
 agents.read          GET /api/v1/sessions/{mid}/{sid}/items/{iid}/image
 agents.read          GET /api/v1/sessions/{mid}/{sid}/items/{iid}/visualization
 -                    GET /api/v1/sessions/{mid}/{sid}/mode-changes
+-                    GET /api/v1/sessions/{mid}/{sid}/review
 agents.read          GET /api/v1/sessions/{mid}/{sid}/screen
 -                    GET /api/v1/sessions/{mid}/{sid}/share-catalog
 -                    GET /api/v1/sessions/{mid}/{sid}/share-preview/{preview_id}
@@ -337,6 +340,7 @@ todos.read           GET /api/v1/todos
 todos.read           GET /api/v1/todos/places
 todos.read           GET /api/v1/todos/{id}
 todos.read           GET /api/v1/todos/{id}/decisions
+-                    GET /api/v1/todos/{id}/images/{image}
 todos.read           GET /api/v1/todos/{id}/repositories
 todos.read           GET /api/v1/todos/{id}/timeline
 todos.read           GET /api/v1/todos/{id}/workspace-naming/plans/{operation_id}
@@ -605,6 +609,7 @@ agents.control       POST /api/v1/sessions/{mid}/{sid}/queue
 agents.control       POST /api/v1/sessions/{mid}/{sid}/queue/send-now
 agents.control       POST /api/v1/sessions/{mid}/{sid}/rename
 -                    POST /api/v1/sessions/{mid}/{sid}/restore-model
+-                    POST /api/v1/sessions/{mid}/{sid}/review
 -                    POST /api/v1/sessions/{mid}/{sid}/rewind
 -                    POST /api/v1/sessions/{mid}/{sid}/screen/before
 agents.control       POST /api/v1/sessions/{mid}/{sid}/seen
@@ -655,6 +660,7 @@ todos.write          POST /api/v1/todos/{id}/workspace-naming/preview
 -                    PUT /api/v1/admin/password-login
 -                    PUT /api/v1/admin/usage-sources
 -                    PUT /api/v1/admin/usage-sources/{id}
+-                    PUT /api/v1/agents/display-settings
 -                    PUT /api/v1/agents/prefs
 -                    PUT /api/v1/agents/triage
 -                    PUT /api/v1/assistant
@@ -697,6 +703,7 @@ kb.write             PUT /api/v1/kb/{kind}/{id}
 -                    PUT /api/v1/launchers/{name}
 -                    PUT /api/v1/looks/current
 -                    PUT /api/v1/machines/{id}/name
+-                    PUT /api/v1/machines/{mid}/agent-dirs/hidden
 -                    PUT /api/v1/machines/{mid}/agy-settings
 -                    PUT /api/v1/machines/{mid}/botmux
 -                    PUT /api/v1/machines/{mid}/browser
