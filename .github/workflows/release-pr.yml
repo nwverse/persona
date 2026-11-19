@@ -48,7 +48,7 @@ jobs:
           if [[ "${{ github.event_name }}" = push ]]; then
             commit="${{ github.sha }}"
             gh api "repos/$REPOSITORY/commits/$commit/pulls" > "$PR_LIST_JSON"
-            python3 - <<'PY'
+            COMMIT="$commit" python3 - <<'PY'
           import json,os
           from pathlib import Path
           commit=os.environ['COMMIT']
@@ -72,7 +72,7 @@ jobs:
             gh pr view "$PR_NUMBER" --repo "$REPOSITORY" --json state,isDraft,baseRefName,headRefOid,headRepository,author,title,mergeCommit > "$PR_JSON"
             gh api "repos/$REPOSITORY/pulls/$PR_NUMBER" --jq '{merge_commit_sha}' > "$PR_REST_JSON"
             python3 - <<'PY'
-          import json
+          import json,os
           from pathlib import Path
           pr=json.loads(Path(os.environ['PR_JSON']).read_text())
           pr['mergeCommit']={'oid':json.loads(Path(os.environ['PR_REST_JSON']).read_text())['merge_commit_sha']}
