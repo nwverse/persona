@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { SESSIONS_HIERARCHY_FEATURE } from "../lib/child-sessions";
 import { homeKey } from "../lib/folded-rows";
-import { ago, interactionCanAnswer, sessionCan, sessionPreview, shortDuration, sourceSubtitle, sessionTitle, stateOf, tabLabel } from "../lib/format";
+import { ago, backgroundWaiting, interactionCanAnswer, sessionCan, sessionPreview, shortDuration, sourceSubtitle, sessionTitle, stateOf, tabLabel } from "../lib/format";
 import { usePendingLine } from "../lib/card-answer";
 import { cardState, requestRoute } from "../lib/card-focus";
 import { interactionAsk } from "../lib/inbox";
@@ -79,7 +79,7 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
     }
     return byMachine;
   }, [list, whole, hubAgentCounts, agentSessions]);
-  const now = useNow(5000, counts.working > 0);
+  const now = useNow(5000, counts.working > 0 || counts.waiting > 0);
 
   // the agents of one herdr tab are one row (#2320), filed under the most urgent of them; a card waiting counts as
   // something to do, and "Mark all as seen" marks every unread agent, wherever its tab is filed
@@ -221,6 +221,16 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
             </Group>
           )}
 
+          {/* working, but only waiting on background commands (#6045): apart from Working, as the sidebar's quick
+              filters and By status have them, timed from when the wait began (#10938) */}
+          {loaded && groups.waiting.length > 0 && (
+            <Group title={stateName("bg_waiting")} count={groups.waiting.length} grid>
+              {groups.waiting.map((g, i) => (
+                <GroupTask key={g.key} g={g} i={i} machine={name(g.lead.machine_id)} pill={<When>{g.lead.state_since ? shortDuration(now - Date.parse(g.lead.state_since)) : ""}</When>} />
+              ))}
+            </Group>
+          )}
+
           {loaded && groups.unread.length > 0 && (
             <Group
               title={stateName("unread")}
@@ -283,10 +293,11 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
   );
 }
 
-/** The line under the greeting: how many agents need you, work and finished unseen. With none of them, the cards
- *  that wait (a Persona conversation's, whose agent is not counted) are what needs you: never an empty sentence. */
-function summary(counts: { needs: number; working: number; unread: number }, cards: number): string {
-  const parts = [counts.needs && t("home.summary_needs", { count: counts.needs }), counts.working && stateCount("working", counts.working), counts.unread && stateCount("unread", counts.unread)].filter(Boolean);
+/** The line under the greeting: how many agents need you, work, only wait in the background (counted apart from the
+ *  working ones, #10938) and finished unseen. With none of them, the cards that wait (a Persona conversation's, whose
+ *  agent is not counted) are what needs you: never an empty sentence. */
+function summary(counts: { needs: number; working: number; waiting: number; unread: number }, cards: number): string {
+  const parts = [counts.needs && t("home.summary_needs", { count: counts.needs }), counts.working && stateCount("working", counts.working), counts.waiting && stateCount("bg_waiting", counts.waiting), counts.unread && stateCount("unread", counts.unread)].filter(Boolean);
   if (parts.length) return t("home.summary", { list: parts.join(t("home.summary_separator")) });
   return cards ? t("home.summary_cards", { count: cards }) : t("home.all_quiet");
 }
@@ -387,7 +398,7 @@ export function rowTags(title: string, parts: (string | false | null | undefined
 function SessionTask({ s, i, machine, pill, footer }: { s: Session; i: number; machine: string; pill: React.ReactNode; footer?: React.ReactNode }) {
   const title = sessionTitle(s);
   // the source is a tag once, not again in front of the latest words
-  return <TaskRow i={i} state={stateOf(s)} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} title={title} tags={rowTags(title, [sourceSubtitle(s), machine, s.space_name, tabLabel(s)])} detail={sessionPreview(s)} pill={pill} footer={footer} />;
+  return <TaskRow i={i} state={stateOf(s)} waiting={backgroundWaiting(s)} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} title={title} tags={rowTags(title, [sourceSubtitle(s), machine, s.space_name, tabLabel(s)])} detail={sessionPreview(s)} pill={pill} footer={footer} />;
 }
 
 // One tab's agents as one row (#2320): the "Lead"'s title (the first pane's when the panes are peers), the most urgent
@@ -401,15 +412,16 @@ function GroupTask({ g, i, machine, pill, footer }: { g: TabGroup; i: number; ma
     <TaskRow
       i={i}
       state={g.state}
+      waiting={backgroundWaiting(s)}
       to={paneRoute(s)}
       title={sessionTitle(head)}
       tags={rowTags(sessionTitle(head), [machine, s.space_name, tabLabel(s)])}
       detail={s === head ? preview : agentLabel(s) && preview ? t("home.agent_preview", { agent: agentLabel(s), preview }) : agentLabel(s) || preview}
       pill={
         <>
-          <span className="flex shrink-0 items-center gap-1 text-[11.5px] whitespace-nowrap text-ink-3 tabular-nums" title={g.sessions.map((x) => `${agentLabel(x)} · ${sessionTitle(x)} · ${STATE_LABEL[stateOf(x)]}`).join("\n")}>
+          <span className="flex shrink-0 items-center gap-1 text-[11.5px] whitespace-nowrap text-ink-3 tabular-nums" title={g.sessions.map((x) => `${agentLabel(x)} · ${sessionTitle(x)} · ${backgroundWaiting(x) ? stateName("bg_waiting") : STATE_LABEL[stateOf(x)]}`).join("\n")}>
             <span aria-hidden className="flex items-center gap-0.5">
-              {g.sessions.map((x) => <StatusMark key={x.session_id} state={stateOf(x)} size="sm" />)}
+              {g.sessions.map((x) => <StatusMark key={x.session_id} state={stateOf(x)} size="sm" waiting={backgroundWaiting(x)} />)}
             </span>
             <span className="max-sm:sr-only">{t("home.machine_agents", { count: g.sessions.length })}</span>
           </span>
@@ -558,7 +570,7 @@ function AnsweredLine({ ix, body }: { ix: Interaction; body: Resolution }) {
 // One Task Rows capsule, compact: status badge, the title alone on its line (it is what tells rows apart), then
 // where it runs as small tags and the latest words; when on the right. With `actions` (a card's one-tap answers) they
 // sit under it in the same capsule, outside the link, and its words take up to three lines: read before answering.
-function TaskRow({ i, state, done, to, title, tags, detail, pill, entry, actions, footer }: { i: number; state: AgentState; done?: boolean; to: Route; title: string; tags: string[]; detail?: string; pill: React.ReactNode; entry?: Record<string, unknown>; actions?: React.ReactNode; /** Under the row, the row itself drawn as without it (Continue, #6449). */ footer?: React.ReactNode }) {
+function TaskRow({ i, state, waiting, done, to, title, tags, detail, pill, entry, actions, footer }: { i: number; state: AgentState; /** Working, but only waiting in the background: the clock, not the spinner. */ waiting?: boolean; done?: boolean; to: Route; title: string; tags: string[]; detail?: string; pill: React.ReactNode; entry?: Record<string, unknown>; actions?: React.ReactNode; /** Under the row, the row itself drawn as without it (Continue, #6449). */ footer?: React.ReactNode }) {
   const below = actions ?? footer;
   const enter = { animation: `fade-up 420ms ${EASE} ${Math.min(i, 8) * 50}ms both` };
   const link = (
@@ -574,7 +586,7 @@ function TaskRow({ i, state, done, to, title, tags, detail, pill, entry, actions
           <Icon name="check" size={11} stroke={3.2} />
         </span>
       ) : (
-        <Badge state={state} />
+        <Badge state={state} waiting={waiting} />
       )}
       <span className="min-w-0 flex-1">
         <span className="block truncate text-[13.5px] leading-[18px] font-medium text-ink">{title}</span>
@@ -605,8 +617,8 @@ function TaskRow({ i, state, done, to, title, tags, detail, pill, entry, actions
   );
 }
 
-function Badge({ state }: { state: AgentState }) {
-  if (state === "working") {
+function Badge({ state, waiting = false }: { state: AgentState; waiting?: boolean }) {
+  if (state === "working" && !waiting) {
     const size = 20,
       stroke = 2,
       r = (size - stroke) / 2,
@@ -634,7 +646,7 @@ function Badge({ state }: { state: AgentState }) {
     );
   return (
     <span className="flex size-5 shrink-0 items-center justify-center">
-      <StatusMark state={state} />
+      <StatusMark state={state} waiting={waiting} />
     </span>
   );
 }
