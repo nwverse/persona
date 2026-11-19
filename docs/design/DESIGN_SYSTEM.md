@@ -2501,6 +2501,16 @@ submenu retired. Fast is a toggle showing the current value, and its label expla
 waits for native acknowledgment and the session push; turning Fast off is the reversible choice. Settings > Agents >
 Codex uses the existing agent-settings row for the native default. No account or session is automatically switched to Fast.
 
+The iOS main Assistant conversation offers the same current-session choice inside its existing composer Model / Thinking
+Effort menu (#10244), not in Settings and not on other chats. A native **Speed** section is present only when the session
+advertises the known tiers; **Standard** and **Fast** are localized plain labels rather than native display metadata.
+Fast's detail says **Uses more quota**, and a separate row says **Applies next turn**. Working leaves the choices
+available; an offline or read-only action is disabled beside a one-line reason, and an outstanding change says **Changing Speed…**. A pick sends only `service_tier` in its own
+request and never changes model or effort. The checked value is only the hub-acknowledged `service_tier`, never an
+optimistic pick or an inferred Standard; summary updates preserve it and the advertised tiers. Refusal and timeout show a
+visible error and leave the last acknowledged checkmark. The section reuses native menu switches and adds no token,
+component, style or navigation pattern.
+
 A new Persona conversation on the web reuses that same model flyout (#6240), inside Agents-facing customization rather
 than adding an everyday-facing setting. While the default manager is in use, the hub feature
 `assistant_start_service_tier` comes from that manager's hello, and a selected model whose native `service_tiers`

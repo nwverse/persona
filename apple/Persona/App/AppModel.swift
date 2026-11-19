@@ -3731,6 +3731,33 @@ final class AppModel {
         }
     }
 
+    /// Speed requests in flight, shared by every rendering of a chat's native menu. The menu closes on a pick, so this
+    /// cannot live in the view: reopening must show why the choices wait and must not issue the request twice.
+    private(set) var serviceTierChanges: Set<SessionKey> = []
+
+    /// Codex speed is different from an optimistic mode edit: only the hub's acknowledged session value moves the
+    /// selection. A refusal or an unconfirmed request keeps that value and is always said, including a timeout.
+    @discardableResult
+    func setServiceTier(_ key: SessionKey, tier: String) async -> Bool {
+        guard !serviceTierChanges.contains(key), allowSend(key), let api = api(key.group) else { return false }
+        serviceTierChanges.insert(key)
+        defer { serviceTierChanges.remove(key) }
+        do {
+            try await api.setServiceTier(key, tier: tier)
+            Haptics.success()
+            return true
+        } catch {
+            if !error.isCancellation {
+                let reason = error.isTimeout
+                    ? String(localized: "The hub didn't respond. Try again later.")
+                    : error.localizedDescription
+                toast = Toast(String(localized: "Couldn't change Speed: \(reason)"), style: .error)
+                Haptics.error()
+            }
+            return false
+        }
+    }
+
     // MARK: Claude Code's ultracode switch (#1307, docs/apple/ios.md "Claude Code ultracode")
 
     /// What this device asked of a session's ultracode switch (`Ultracode.Ask`), until the session moved past it.
