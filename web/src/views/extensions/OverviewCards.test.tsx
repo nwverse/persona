@@ -378,6 +378,13 @@ describe("Overview's own sections (#10905)", () => {
     expect(host.querySelectorAll("section")).toHaveLength(1);
   });
 
+  it("the cards moved above every section: Loading still comes where the sections begin, under them", () => {
+    // the cards it does not name come after the one it names, so all of them are above the sections
+    arrange([{ extension: "example-gateway", id: "today" }, ...SECTIONS.map((x) => ({ section: x }))]);
+    act(() => root.render(body(false, { start: <i data-mark="loading" /> })));
+    expect(drawnOrder()).toEqual([...CARD_KEYS, "mark:loading", ...SECTIONS]);
+  });
+
   it("a hidden section is not drawn, the card after Unread still is; Needs you and Stuck are drawn whatever the list says", () => {
     arrange(SECTIONS.map((x) => (x === "in_progress" || x === "working" ? { section: x } : { section: x, hidden: true })));
     act(() => root.render(body(false, { after: { unread: <i data-mark="quiet" /> } })));
