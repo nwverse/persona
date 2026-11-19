@@ -927,7 +927,7 @@ type SuperviseInbox struct {
 	Item, Title, Sender, Preview string
 	Count                        int
 	// URL is a GitHub PR's or issue's address; ToAgent is "sent" once the note reached the task's agent (InboxToAgent,
-	// #7346), "" when the supervisor is the only one told.
+	// #7346), "unhandled" when its bounded retry failed, "" when only the supervisor is told.
 	URL, ToAgent string
 }
 
@@ -936,6 +936,7 @@ type SuperviseInbox struct {
 type InboxToAgent struct {
 	Sender, Preview, URL string
 	Count                int
+	Event                string // server-authored delivery identity, absent for legacy callers
 }
 
 // RenderInboxToAgent is that note.
@@ -1250,6 +1251,7 @@ type SuperviseCloseout struct {
 	Artifacts         []string
 	// CheckedMerged, CheckedDeployed: what the hub found itself, "yes", "no" or "" when it could not tell.
 	CheckedMerged, CheckedDeployed string
+	LocalDeployment                bool
 }
 
 // Route is the system prompt of assistant.route (assistant/route): is a New chat's first message a direction or a quick
