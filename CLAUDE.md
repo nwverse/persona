@@ -230,7 +230,8 @@ The full list is in `docs/lessons/`; read the file for the area you touch first.
 - **Minimum compiler is Xcode 26.0 (Swift 6.2)**: wrap newer-SDK APIs in `#if compiler(>=6.4)` with the old behavior in `#else`
   (`#available` covers only runtime). Build with 26.0 when you have it; otherwise note the Xcode you used and "26.0 not verified" in the
   PR. Raising the minimum is the user's decision (`docs/lessons/ios.md`, "Minimum compatible compiler").
-- The watch app targets watchOS 10 and compiles all of `Shared/`: only watchOS 10 APIs, with `#available` fallbacks (`Color.blended`, not `Color.mix`).
+- The watch app targets watchOS 10 and compiles all of `Shared/`: only watchOS 10 APIs, with `#available` fallbacks (`Color.blended`, not `Color.mix`);
+  `sim.sh` leaves the watch out, so check a `Shared/` change with `sim.sh --with-watch` (it says so; `docs/operations/testing.md`, "Development builds").
 - The iPhone and iPad app targets iOS 18.6 (#6730): an iOS 26 API gets `if #available(iOS 26.0, *)` with the older behavior, or a
   `SystemCompat.swift` helper; toolbar items choose on the view, since `ToolbarContentBuilder` can't (`docs/lessons/ios.md`, "iOS 18.6 floor").
 - Someone else's redeploy can wipe the hub's memory at any time: flows that span requests must be self-contained or persisted.
