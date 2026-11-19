@@ -252,7 +252,13 @@ final class SecondaryPageBackTests: XCTestCase {
                                                        ["assistant-sidebar-button", "sidebar-drawer-button", "chat-sidebar-button",
                                                         "sidebar-show-button", "ToggleSidebar"],
                                                        ["Show Sidebar", "显示边栏", "显示侧边栏"]))
-        openers.allElementsBoundByIndex.first { $0.exists && $0.isHittable }?.tap()
+        // Right after a pop the button can read as not hittable for a moment: after the pop has settled, at its frame.
+        let deadline = Date.now.addingTimeInterval(3)
+        while Date.now < deadline, !openers.allElementsBoundByIndex.contains(where: { $0.exists && $0.isHittable }) { usleep(200_000) }
+        let opener = openers.allElementsBoundByIndex.first { $0.exists && $0.isHittable } ?? openers.firstMatch
+        if let frame = (try? opener.snapshot())?.frame, !frame.isEmpty {
+            app.windows.firstMatch.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: frame.midX, dy: frame.midY)).tap()
+        }
         XCTAssertTrue(main.waitForExistence(timeout: 5) && main.isHittable, "\(step): the sidebar did not come out:\n\(app.debugDescription)")
     }
 
