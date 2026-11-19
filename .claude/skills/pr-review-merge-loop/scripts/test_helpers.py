@@ -27,35 +27,177 @@ class HelperTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             module["forwarded_flags"](["--model", "other"], {"--model"})
 
-    def test_reviewer_scope_wraps_visible_shell_without_moving_redirections(self):
+    def test_interactive_socket_keeps_large_prompt_out_of_argv(self):
         module = runpy.run_path(str(HERE / "herdr_review.py"))
-        argv = module["reviewer_command"](
-            "python3 -I wrapper.py resources.json --slot", 7,
-            "pr-review-r07-123-01234567.scope",
-            {"CPUQuota": "400%", "CPUWeight": 20, "MemoryHigh": 5 * 1024**3,
-             "MemoryMax": 6 * 1024**3, "TasksMax": 512})
-        self.assertEqual(argv[:5], ["/usr/bin/systemd-run", "--user", "--scope",
-                                   "--unit=pr-review-r07-123-01234567", "--collect"])
-        self.assertIn("MemoryMax=6442450944", argv)
-        self.assertEqual(argv[-8:], ["python3", "-I", "wrapper.py", "resources.json", "7", "--",
-                                    "zsh", "-lic"])
-        launch = "cc_k3 -p < /private/prompt.txt > /private/result.json"
-        self.assertEqual(argv + [launch], [*argv, launch])
-        explicit = module["reviewer_command"]("python3 -I wrapper.py resources.json", 2,
-                                              "pr-review-r02-123-01234567.scope", {})
-        self.assertEqual(explicit[-8:], ["python3", "-I", "wrapper.py", "resources.json", "2", "--",
-                                        "zsh", "-lic"])
-        with self.assertRaises(RuntimeError):
-            module["scoped_reviewer"]("", 7, "refract-worker-222.scope", {})
-        with self.assertRaises(RuntimeError):
-            module["scoped_reviewer"]("", 7, "pr-review-r07-123-01234567.scope",
-                                       {"ExecStartPost": "true"})
+        payload = (("Review exact diff\n" + "+ changed 行\n") * 9000) + "final schema and marker"
+        self.assertGreater(len(payload.encode("utf-8")), 131_072)
+        connection = unittest.mock.Mock()
+        connection.recv.side_effect = [b'{"id":"probe","result":{"type":"submitted"}}\n']
+        transport = module["socket_request"]
+        def fake_request(request, timeout=90):
+            return transport(request, timeout=timeout, socket_factory=lambda *_: connection)
+        with patch.dict(module["command"].__globals__,
+                        {"_config": {"socket_path": "/test/herdr.sock"}, "socket_request": fake_request}):
+            result = module["command"](
+                "agent", "prompt", "w6:p1", payload, "--wait", "--until", "working",
+                "--until", "blocked", "--timeout", "120000")
+        self.assertEqual(result, {"type": "submitted"})
+        request = json.loads(connection.sendall.call_args.args[0])
+        self.assertEqual(request["method"], "agent.prompt")
+        self.assertEqual(request["params"]["text"], payload)
+        self.assertEqual(request["params"]["wait"],
+                         {"timeout_ms": 120000, "until": ["working", "blocked"]})
+        connection.connect.assert_called_once_with("/test/herdr.sock")
+        connection.close.assert_called_once_with()
 
-    def test_reviewer_scope_lifetime_does_not_wait_for_stale_agent_rows(self):
+    def test_interactive_socket_translates_existing_cli_arguments(self):
+        module = runpy.run_path(str(HERE / "herdr_review.py"))
+        cases = [
+            (("tab", "create", "--workspace", "w6", "--cwd", "/work", "--label", "pr-r00", "--no-focus"),
+             {"method": "tab.create", "params": {"workspace_id": "w6", "cwd": "/work",
+                                                   "label": "pr-r00", "focus": False}}),
+            (("tab", "close", "w6:t1"), {"method": "tab.close", "params": {"tab_id": "w6:t1"}}),
+            (("pane", "send-keys", "w6:p1", "down", "enter"),
+             {"method": "pane.send_keys", "params": {"pane_id": "w6:p1", "keys": ["down", "enter"]}}),
+            (("pane", "read", "w6:p1", "--source", "recent-unwrapped", "--lines", "200", "--format", "text"),
+             {"method": "pane.read", "params": {"pane_id": "w6:p1", "source": "recent_unwrapped",
+                                                 "lines": 200, "format": "text"}}),
+            (("agent", "list"), {"method": "agent.list", "params": {}}),
+        ]
+        for args, expected in cases:
+            with self.subTest(args=args):
+                request = unittest.mock.Mock(return_value={})
+                with patch.dict(module["command"].__globals__, {"socket_request": request}):
+                    module["command"](*args)
+                sent = request.call_args.args[0]
+                self.assertEqual(sent["method"], expected["method"])
+                self.assertEqual(sent["params"], expected["params"])
+
+    def test_interactive_terminal_reads_typed_socket_result(self):
+        module = runpy.run_path(str(HERE / "herdr_review.py"))
+        with patch.dict(module["terminal_text"].__globals__,
+                        {"_config": {"result_lines": 200}, "command": unittest.mock.Mock(
+                            return_value={"type": "pane_read", "read": {"text": "review result\n"}})}) as mocked:
+            self.assertEqual(module["terminal_text"]("w6:p1"), "review result\n")
+            self.assertEqual(mocked["command"].call_args.args[:3], ("pane", "read", "w6:p1"))
+
+    def test_interactive_socket_enforces_transport_bounds(self):
+        module = runpy.run_path(str(HERE / "herdr_review.py"))
+        with patch.dict(module["socket_request"].__globals__,
+                        {"_config": {"socket_path": "/test/herdr.sock"}}):
+            with self.assertRaisesRegex(RuntimeError, "2 MiB"):
+                module["socket_request"]({"id": "large", "method": "agent.prompt",
+                                          "params": {"target": "w6:p1", "text": "x" * 2_100_000}})
+            connection = unittest.mock.Mock()
+            connection.recv.return_value = b"x" * 65536
+            with self.assertRaisesRegex(RuntimeError, "4 MB"):
+                module["socket_request"]({"id": "large-response", "method": "agent.list", "params": {}},
+                                          socket_factory=lambda *_: connection)
+            connection.close.assert_called_once_with()
+
+    def test_interactive_reviewer_keeps_visible_cli_and_validates_result(self):
+        module = runpy.run_path(str(HERE / "herdr_review.py"))
+        launch, schema = module["interactive_command"]("cc_k3", [
+            "-p", "--output-format", "json", "--json-schema",
+            '{"type":"object","properties":{"findings":{"type":"array"}},"required":["findings"]}',
+            "--no-session-persistence", "--tools", "Read", "--safe-mode", "--setting-sources", "",
+            "--strict-mcp-config", "--permission-mode", "plan", "--disable-slash-commands"])
+        self.assertEqual(launch, "cc_k3")
+        self.assertIn('"findings"', schema)
+        marker = "PR_REVIEW_RESULT_0123456789abcdef01234567"
+        screen = ("❯ Review prompt\n  " + marker + "\n  old prompt marker\n"
+                  "● " + marker + '\n  {"findings":[]}\n  ' + marker + "\n✻ done")
+        self.assertEqual(module["terminal_result"](screen, marker, schema), {"findings": []})
+        with self.assertRaises(RuntimeError):
+            module["terminal_result"]("❯ " + marker + "\n" + marker, marker, schema)
+        with self.assertRaises(RuntimeError):
+            module["terminal_result"](screen.replace('"findings"', '"other"'), marker, schema)
+
+    def test_interactive_scope_waits_for_registration_before_exit(self):
+        module = runpy.run_path(str(HERE / "herdr_review.py"))
+        with patch.dict(module["wait_scope_start"].__globals__, {
+                "scope_state": unittest.mock.Mock(
+                    side_effect=[("not-found", "inactive"), ("loaded", "active")])}), \
+                patch.object(module["time"], "sleep", return_value=None):
+            module["wait_scope_start"]("pr-review-r00.scope", module["time"].monotonic() + 5)
+
+    def test_interactive_workspace_trust_uses_down_before_prompt(self):
+        module = runpy.run_path(str(HERE / "herdr_review.py"))
+        responses = iter([
+            {"agents": [{"pane_id": "w3:p1", "agent": "claude", "agent_status": "idle"}]},
+            {"agents": [{"pane_id": "w3:p1", "agent": "claude", "agent_status": "idle"}]},
+        ])
+        calls = []
+        def fake_command(*args, **kwargs):
+            calls.append(args)
+            if args[:2] == ("agent", "list"):
+                return next(responses)
+            return {}
+        globals_ = module["wait_agent"].__globals__
+        screens = ["Quick safety check\n❯ No, exit\n  Yes, I trust this folder", ""]
+        with patch.dict(globals_, {
+                "_config": {},
+                "scope_running": unittest.mock.Mock(return_value=True),
+                "terminal_text": unittest.mock.Mock(side_effect=screens),
+                "command": fake_command}):
+            module["wait_agent"]("w3:p1", "pr-review-r00-123-01234567.scope", timeout=5)
+        self.assertIn(("pane", "send-keys", "w3:p1", "down", "enter"), calls)
+
+    def test_interactive_danger_confirmation_uses_down(self):
+        module = runpy.run_path(str(HERE / "herdr_review.py"))
+        responses = iter([
+            {"agents": [{"pane_id": "w3:p1", "agent": "claude", "agent_status": "blocked"}]},
+            {"agents": [{"pane_id": "w3:p1", "agent": "claude", "agent_status": "idle"}]},
+        ])
+        calls = []
+        def fake_command(*args, **kwargs):
+            calls.append(args)
+            if args[:2] == ("agent", "list"):
+                return next(responses)
+            return {}
+        with patch.dict(module["wait_agent"].__globals__, {
+                "_config": {"startup_warning": "WARNING: Claude Code running in Bypass Permissions",
+                            "startup_acceptance": "Yes, I accept"},
+                "scope_running": unittest.mock.Mock(return_value=True),
+                "terminal_text": unittest.mock.Mock(side_effect=[
+                    "WARNING: Claude Code running in Bypass Permissions\n❯ No, exit\n  Yes, I accept", ""]),
+                "command": fake_command}):
+            module["wait_agent"]("w3:p1", "pr-review-r00.scope", timeout=5)
+        self.assertIn(("pane", "send-keys", "w3:p1", "down", "enter"), calls)
+
+    def test_reviewer_scope_wraps_visible_shell(self):
+        module = runpy.run_path(str(HERE / "herdr_review.py"))
+        argv = module["reviewer_command"](7, "pr-review-r07.scope", {
+            "CPUQuota": "400%", "CPUWeight": 20, "MemoryHigh": "5G",
+            "MemoryMax": "6G", "TasksMax": 512}, "cc_k3")
+        self.assertEqual(argv, [
+            "/usr/bin/systemd-run", "--user", "--scope", "--unit=pr-review-r07", "--collect",
+            "-p", "CPUQuota=400%", "-p", "CPUWeight=20", "-p", "MemoryHigh=5G",
+            "-p", "MemoryMax=6G", "-p", "TasksMax=512", "zsh", "-lic", "cc_k3"])
+        with self.assertRaises(RuntimeError):
+            module["scoped_reviewer"](7, "refract-worker-222.scope", {})
+        with self.assertRaises(RuntimeError):
+            module["scoped_reviewer"](7, "pr-review-r07.scope", {"ExecStartPost": "true"})
+        with self.assertRaises(RuntimeError):
+            module["scoped_reviewer"](7, "pr-review-r07.scope", {"MemoryMax": 6442450944})
+
+    def test_interactive_scope_waits_for_agent_completion_after_markers(self):
+        module = runpy.run_path(str(HERE / "herdr_review.py"))
+        marker = "PR_REVIEW_RESULT_0123456789abcdef01234567"
+        screen = "● " + marker + '\n  {"findings":[]}\n  ' + marker
+        with patch.dict(module["wait_result"].__globals__, {
+                "terminal_text": unittest.mock.Mock(return_value=screen),
+                "command": unittest.mock.Mock(return_value={
+                    "agents": [{"pane_id": "w3:p1", "agent_status": "done"}]}),
+                "scope_running": unittest.mock.Mock(return_value=True)}):
+            self.assertEqual(module["wait_result"]("w3:p1", "pr-review-r00-123-01234567.scope", marker, 5), screen)
+
+    def test_scope_state_handles_collected_units(self):
         module = runpy.run_path(str(HERE / "herdr_review.py"))
         result = subprocess.CompletedProcess(["systemctl"], 0, "LoadState=not-found\nActiveState=inactive\n", "")
         with patch.object(module["subprocess"], "run", return_value=result) as run:
-            module["wait_scope"]("pr-review-r00-123-01234567.scope", module["time"].monotonic() + 10)
+            self.assertEqual(module["scope_state"]("pr-review-r00-123-01234567.scope"),
+                             ("not-found", "inactive"))
         self.assertIn("pr-review-r00-123-01234567.scope", run.call_args.args[0])
 
     def test_reviewer_closes_its_tab_once(self):
