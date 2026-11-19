@@ -74,8 +74,8 @@ var (
 	heldCheckWait    = 20 * time.Second // reading a session's latest turns for a message that may have arrived
 )
 
-// heldCheckTries is how many times a transcript read for a message that may have arrived may fail before the message
-// is left to the owner (unconfirmed).
+// heldCheckTries is how many times in a row a transcript read for a message that may have arrived may fail before the
+// message is left to the owner (unconfirmed).
 const heldCheckTries = 3
 
 // heldTryOver: a try begun at tried, by any manager, is over by now (a try takes heldSendTimeout at most).
@@ -112,7 +112,7 @@ type heldRow struct {
 	// arrived: one read per connection.
 	checked time.Time
 	// checking: its transcript is being read (heldCheck): it holds the later ones back and a Retry answers 409; a Delete
-	// may go (the read's own writes then find nothing). failedReads: reads that failed since its last Retry.
+	// may go (the read's own writes then find nothing). failedReads: reads that failed in a row (since its last Retry).
 	checking    bool
 	failedReads int
 	// stale: the store still has it as being sent, while what was decided of it here is its state (a write after
@@ -683,8 +683,9 @@ const (
 )
 
 // heldActOn is what the session's head r (headLocked) needs now, given what its node offers (heldOn). One that may
-// have arrived has the transcript read on a connection that lists its session: failed (unclear), once per connection;
-// retried after that (checkFirst), until a read answers (heldCheckTries at most). Neither is ever sent by it: a read
+// have arrived has the transcript read: failed (unclear), once per connection that lists its session; retried after
+// that (checkFirst), once its node takes a message (listed, or heldListWait into the connection: a session that never
+// comes back is not waited for), until a read answers (heldCheckTries at most). Neither is ever sent by it: a read
 // that does not find it is no proof it did not arrive. An expired one is left to heldExpire.
 func heldActOn(r *heldRow, head heldHead, listed time.Time, ready bool, now time.Time) heldAction {
 	switch {
@@ -694,7 +695,7 @@ func heldActOn(r *heldRow, head heldHead, listed time.Time, ready bool, now time
 		}
 	case head != heldHeadSend:
 	case r.checkFirst(): // the owner's decision: it does not expire
-		if !listed.IsZero() {
+		if ready {
 			return heldDoCheck // a read that answers ends it: there, or left to the owner
 		}
 	case r.expired(now):
@@ -877,6 +878,11 @@ func (d *Devices) heldCheck(ctx context.Context, m *Machine, machine, session st
 		}
 		return false
 	}
+	h.mu.Lock()
+	if r := h.rowLocked(machine, seq); r != nil {
+		r.failedReads = 0 // read: only failures in a row leave it to the owner
+	}
+	h.mu.Unlock()
 	if !slices.ContainsFunc(res.Items, func(it proto.Item) bool { return it.Role == "user" && it.ClientMsgID == id }) {
 		d.logf("[%s] %s: a held message that may have arrived is not in its latest turns", machine, session)
 		if retried {
@@ -1111,11 +1117,11 @@ func (d *Devices) heldExpire(ctx context.Context) {
 		behind := map[string]bool{}
 		for _, r := range rows {
 			switch {
-			case r.awaitsOwner():
-				behind[r.SessionID] = true
-			case r.State != db.HeldWaiting || r.taken() || r.stale || r.checkFirst():
+			case r.awaitsOwner(), r.checkFirst():
 				// A retried one to be looked for is the owner's decision already: it does not expire (a Delete
-				// still works), and the expiry would drop its mark.
+				// still works, and the expiry would drop its mark), and the later ones wait behind it.
+				behind[r.SessionID] = true
+			case r.State != db.HeldWaiting || r.taken() || r.stale:
 			case behind[r.SessionID] && now.Sub(r.HeldAt) >= heldBlockedRenew:
 				r.busy = true // neither sent nor changed by the owner meanwhile
 				dues = append(dues, due{machine, r.Seq, true})
