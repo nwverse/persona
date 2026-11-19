@@ -72,8 +72,10 @@ var (
 	// heldBlockedRenew: a message held behind one that may have arrived waits for the owner, not for its computer: its
 	// wait starts again this often, so it has nearly a whole day once the owner decides.
 	heldBlockedRenew = time.Hour
-	heldCheckWait    = 20 * time.Second // reading a session's latest turns for a message that may have arrived
+	heldCheckWait    = 20 * time.Second // reading echo evidence for a message that may have arrived
 )
+
+var errEchoStatusUnsupported = errors.New("node does not support held-message echo checks")
 
 // heldCheckTries is how many times in a row a transcript read for a message that may have arrived may fail before the
 // message is left to the owner (unconfirmed).
@@ -133,8 +135,8 @@ func newHeldRow(op db.HeldOperation) *heldRow {
 // unclear: a try of it may have arrived; the later ones of its session wait behind it.
 func (r *heldRow) unclear() bool { return r.State == db.HeldFailed && r.Failure == db.HeldUnclear }
 
-// checkFirst: the owner retried it after a try that may have arrived: the session's transcript is read when its
-// computer is back; there, it leaves the rows, else it is left to the owner (unconfirmed). It is never sent by that.
+// checkFirst reports whether the owner retried an unclear send. The node's echo evidence decides whether it
+// arrived, can be sent again, or still needs the owner's decision.
 func (r *heldRow) checkFirst() bool { return r.State == db.HeldWaiting && r.Failure == db.HeldUnclear }
 
 // awaitsOwner: it may have arrived (unclear, unconfirmed): the owner decides, and the later ones of its session wait
@@ -695,8 +697,7 @@ const (
 // heldActOn is what the session's head r (headLocked) needs now, given what its node offers (heldOn). One that may
 // have arrived has the transcript read: failed (unclear), once per connection that lists its session; retried after
 // that (checkFirst), once its node takes a message (listed, or heldListWait into the connection: a session that never
-// comes back is not waited for), until a read answers (heldCheckTries at most). Neither is ever sent by it: a read
-// that does not find it is no proof it did not arrive. An expired one is left to heldExpire.
+// comes back is not waited for), until a read answers (heldCheckTries at most). An expired one is left to heldExpire.
 func heldActOn(r *heldRow, head heldHead, listed time.Time, ready bool, now time.Time) heldAction {
 	switch {
 	case head == heldHeadUnclear:
@@ -706,7 +707,7 @@ func heldActOn(r *heldRow, head heldHead, listed time.Time, ready bool, now time
 	case head != heldHeadSend:
 	case r.checkFirst(): // the owner's decision: it does not expire
 		if ready {
-			return heldDoCheck // a read that answers ends it: there, or left to the owner
+			return heldDoCheck
 		}
 	case r.expired(now):
 	case ready:
@@ -764,6 +765,7 @@ func (d *Devices) heldSend(ctx context.Context, machine, session string) {
 	h := &d.held
 	st := d.heldStore()
 	key := machine + "/" + session
+	var checkedUnseen int64
 	for {
 		m := d.machineByID(machine)
 		var listed time.Time
@@ -777,6 +779,9 @@ func (d *Devices) heldSend(ctx context.Context, machine, session string) {
 		act := heldDoNothing
 		if ctx.Err() == nil && r != nil {
 			act = heldActOn(r, head, listed, ready, now)
+			if act == heldDoCheck && r.checkFirst() && r.Seq == checkedUnseen {
+				act = heldDoSend
+			}
 		}
 		if act == heldDoNothing {
 			delete(h.sending, key) // decided with the rows locked: what comes after this goes with the next wake
@@ -796,14 +801,19 @@ func (d *Devices) heldSend(ctx context.Context, machine, session string) {
 				r.checked = listed // a failed one: read once on this connection, whatever comes of it
 			}
 			h.mu.Unlock()
-			if !d.heldCheck(ctx, m, machine, session, seq, id, retried) { // not read: the next wake reads again
+			read, resend := d.heldCheck(ctx, m, machine, session, seq, id, retried)
+			if !read { // the next wake reads again
 				h.mu.Lock()
 				delete(h.sending, key)
 				h.mu.Unlock()
 				return
 			}
-			continue // the head is looked at again: arrived, the next ones go
+			if resend {
+				checkedUnseen = seq
+			}
+			continue // look at the current head again, which the owner could have deleted during the check
 		}
+		checkedUnseen = 0
 		r.State = db.HeldSending // from now on Delete answers that it is being sent
 		h.mu.Unlock()
 		sctx, cancel := heldStoreCtx(ctx)
@@ -834,8 +844,9 @@ func (d *Devices) heldSend(ctx context.Context, machine, session string) {
 		}
 		h.mu.Unlock()
 		d.heldChanged(machine)
-		outcome, reason := d.heldDeliver(ctx, claim.Call, lang)
-		if !d.heldSettle(ctx, machine, session, seq, outcome, reason) {
+		checkUnseen := claim.Failure == db.HeldUnclear
+		outcome, reason := d.heldDeliver(ctx, claim.Call, lang, checkUnseen)
+		if !d.heldSettle(ctx, machine, session, seq, outcome, reason, checkUnseen) {
 			h.mu.Lock()
 			delete(h.sending, key)
 			h.mu.Unlock()
@@ -844,15 +855,9 @@ func (d *Devices) heldSend(ctx context.Context, machine, session string) {
 	}
 }
 
-// heldCheck reads the session's latest turns for message id (seq), which may have arrived (the caller marked it
-// checking): a user line the node tied to its client_msg_id there (the node ties a typed line to the message it typed
-// by its words, node/echo.go echoFits; nothing here compares words), it did arrive and leaves the rows as sent. Not
-// there: no proof it did not arrive (the hub hands a node back its ties for a day, the node keeps them a day, only the
-// latest turns are read, some runtimes never tie a line), so one the owner retried is left to the owner
-// (unconfirmed), and a failed one stays as it is. Not read: false, and after heldCheckTries such reads it is left to
-// the owner too. The row may be deleted meanwhile (the owner's Delete): what is written then finds nothing. Nothing
-// is ever sent here.
-func (d *Devices) heldCheck(ctx context.Context, m *Machine, machine, session string, seq int64, id string, retried bool) (read bool) {
+// heldCheck drops a message seen by the node. An explicit retry may send again only after a known-unseen answer.
+// Unknown leaves an explicit retry unconfirmed. A failed read is retried up to heldCheckTries times.
+func (d *Devices) heldCheck(ctx context.Context, m *Machine, machine, session string, seq int64, id string, retried bool) (read, resend bool) {
 	h := &d.held
 	defer func() {
 		h.mu.Lock()
@@ -862,17 +867,9 @@ func (d *Devices) heldCheck(ctx context.Context, m *Machine, machine, session st
 		h.mu.Unlock()
 		d.heldChanged(machine)
 	}()
-	var err error
-	var res struct {
-		Items []proto.Item `json:"items"`
-	}
-	if m == nil {
-		err = errOffline
-	} else {
-		cctx, cancel := context.WithTimeout(ctx, heldCheckWait)
-		err = m.call(cctx, "session.items", map[string]any{"session_id": session, "turns": 3, "lazy_images": true}, &res)
-		cancel()
-	}
+	cctx, cancel := context.WithTimeout(ctx, heldCheckWait)
+	state, err := heldEchoState(cctx, m, session, id)
+	cancel()
 	if err != nil {
 		d.logf("[%s] %s: a held message that may have arrived: its transcript could not be read: %v", machine, session, err)
 		h.mu.Lock()
@@ -886,19 +883,21 @@ func (d *Devices) heldCheck(ctx context.Context, m *Machine, machine, session st
 		if tries >= heldCheckTries {
 			d.heldUnconfirmed(ctx, machine, session, seq, retried)
 		}
-		return false
+		return false, false
 	}
 	h.mu.Lock()
 	if r := h.rowLocked(machine, seq); r != nil {
 		r.failedReads = 0 // read: only failures in a row leave it to the owner
 	}
 	h.mu.Unlock()
-	if !slices.ContainsFunc(res.Items, func(it proto.Item) bool { return it.Role == "user" && it.ClientMsgID == id }) {
-		d.logf("[%s] %s: a held message that may have arrived is not in its latest turns", machine, session)
+	if state == proto.EchoKnownUnseen {
+		return true, retried
+	}
+	if state != proto.EchoSeen {
 		if retried {
 			d.heldUnconfirmed(ctx, machine, session, seq, true)
 		}
-		return true
+		return true, false
 	}
 	sctx, scancel := heldStoreCtx(ctx)
 	defer scancel()
@@ -906,17 +905,41 @@ func (d *Devices) heldCheck(ctx context.Context, m *Machine, machine, session st
 	ok, err := d.heldStore().DeleteHeldOperation(sctx, seq, db.HeldFailed, db.HeldWaiting)
 	if err != nil {
 		d.logf("[%s] %s: a held message that arrived stays: %v", machine, session, err)
-		return true
+		return true, false
 	}
 	if !ok { // the store has it otherwise (gone: deleted meanwhile): followed
 		d.heldSync(ctx, machine, seq)
-		return true
+		return true, false
 	}
 	h.mu.Lock()
 	h.dropLocked(machine, seq)
 	h.mu.Unlock()
 	d.logf("[%s] %s: a held message that may have arrived is in its transcript: taken as sent", machine, session)
-	return true
+	return true, false
+}
+
+// heldEchoState falls back to the latest turns on older nodes and when the new check has no evidence. A page can
+// only prove arrival through a matching client_msg_id on a user item.
+func heldEchoState(ctx context.Context, m *Machine, session, id string) (proto.SessionEchoState, error) {
+	if m == nil {
+		return proto.EchoUnknown, errOffline
+	}
+	var status proto.SessionEchoStatus
+	err := m.call(ctx, proto.MethodSessionEchoStatus, proto.SessionEchoParams{SessionID: session, ClientMsgID: id}, &status)
+	if err != nil && !errors.Is(err, errEchoStatusUnsupported) {
+		return proto.EchoUnknown, err
+	}
+	if status.State == proto.EchoKnownUnseen || status.State == proto.EchoSeen {
+		return status.State, nil
+	}
+	var page struct {
+		Items []proto.Item `json:"items"`
+	}
+	err = m.call(ctx, "session.items", map[string]any{"session_id": session, "turns": 3, "lazy_images": true}, &page)
+	if err == nil && slices.ContainsFunc(page.Items, func(it proto.Item) bool { return it.Role == "user" && it.ClientMsgID == id }) {
+		return proto.EchoSeen, nil
+	}
+	return proto.EchoUnknown, err
 }
 
 // heldUnconfirmed leaves message seq, which may have arrived and was not found or not read, to the owner: failed,
@@ -948,8 +971,9 @@ func (d *Devices) heldUnconfirmed(ctx context.Context, machine, session string, 
 // heldTry is a held message's delivery, in its context (heldDeliveryKey): callNode notes whether it called the node
 // and what that call answered, so the outcome is judged on the node's call alone.
 type heldTry struct {
-	called bool
-	err    error
+	called      bool
+	checkUnseen bool
+	err         error
 }
 
 // heldDeliveryKey marks a held message's delivery in its context (a *heldTry): its share receipt is settled only by an
@@ -959,7 +983,7 @@ type heldDeliveryKey struct{}
 // heldDeliver sends held call raw as the hub sent it (its caller, submission and share authority with it), and says
 // what came of it, judged on the node's call alone: stopped before the node was asked (its preparation here failed),
 // nothing was written and it is refused, with why; the node took it, it was delivered whatever came after.
-func (d *Devices) heldDeliver(ctx context.Context, raw json.RawMessage, lang string) (heldOutcome, string) {
+func (d *Devices) heldDeliver(ctx context.Context, raw json.RawMessage, lang string, checkUnseen bool) (heldOutcome, string) {
 	l := i18n.Lang(lang)
 	var p devicewire.NodeCall
 	if err := json.Unmarshal(raw, &p); err != nil {
@@ -989,7 +1013,7 @@ func (d *Devices) heldDeliver(ctx context.Context, raw json.RawMessage, lang str
 			return heldSignedOut, ""
 		}
 	}
-	try := &heldTry{}
+	try := &heldTry{checkUnseen: checkUnseen}
 	cctx = i18n.With(context.WithValue(cctx, heldDeliveryKey{}, try), l)
 	_, err := d.callNode(cctx, p)
 	switch {
@@ -1026,11 +1050,12 @@ func heldSettles(ctx context.Context, err error) bool {
 type heldOutcome int
 
 const (
-	heldDelivered heldOutcome = iota
-	heldNotSent               // nothing written: it waits again
-	heldRefused               // the node refused it, nothing typed
-	heldUnclear               // it may have arrived: never sent again by itself
-	heldSignedOut             // its sending credential was revoked
+	heldDelivered   heldOutcome = iota
+	heldNotSent                 // nothing written: it waits again
+	heldRefused                 // the node refused it, nothing typed
+	heldUnclear                 // it may have arrived: never sent again by itself
+	heldEchoUnknown             // the guarded retry lacks negative evidence: left to the owner
+	heldSignedOut               // its sending credential was revoked
 )
 
 // heldOutcomeOf is what a node call that ended with err did, and the node's words for a refusal.
@@ -1041,6 +1066,9 @@ func heldOutcomeOf(err error) (heldOutcome, string) {
 	if heldNotWritten(err) {
 		return heldNotSent, ""
 	}
+	if errors.Is(err, errEchoStatusUnsupported) {
+		return heldEchoUnknown, ""
+	}
 	var re *rpc.Error
 	if !errors.As(err, &re) {
 		return heldUnclear, "" // the connection dropped with it out, its time ran out, the manager stopped during it
@@ -1050,6 +1078,8 @@ func heldOutcomeOf(err error) (heldOutcome, string) {
 	}
 	_ = json.Unmarshal(re.Data, &data)
 	switch {
+	case re.Code == proto.CodeEchoUnconfirmed:
+		return heldEchoUnknown, ""
 	case data.Delivered == "unknown", re.Code == devicewire.CodeNodeClosed, re.Code == devicewire.CodeDeadline:
 		return heldUnclear, ""
 	case re.Code == "" && (re.Message == rpc.ErrClosed.Error() || re.Message == context.DeadlineExceeded.Error() ||
@@ -1061,7 +1091,7 @@ func heldOutcomeOf(err error) (heldOutcome, string) {
 
 // heldSettle keeps what delivery seq did; false: the session's delivery stops here (nothing written: its computer
 // went; or it may have arrived, and the later ones wait behind it).
-func (d *Devices) heldSettle(ctx context.Context, machine, session string, seq int64, outcome heldOutcome, reason string) bool {
+func (d *Devices) heldSettle(ctx context.Context, machine, session string, seq int64, outcome heldOutcome, reason string, checkUnseen bool) bool {
 	h := &d.held
 	st := d.heldStore()
 	sctx, cancel := heldStoreCtx(ctx)
@@ -1097,8 +1127,13 @@ func (d *Devices) heldSettle(ctx context.Context, machine, session string, seq i
 	switch outcome {
 	case heldNotSent:
 		state, reason = db.HeldWaiting, ""
+		if checkUnseen {
+			failure = db.HeldUnclear // the next connection must check the original send again
+		}
 	case heldRefused:
 		failure = db.HeldRefused
+	case heldEchoUnknown:
+		failure, reason = db.HeldUnconfirmed, ""
 	case heldSignedOut:
 		failure = db.HeldSignedOut
 	default:

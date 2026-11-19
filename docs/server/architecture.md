@@ -128,6 +128,15 @@ Where the business type needs fields of its own, it stays a separate type with t
 3. The node waits for the agent to be ready (`agent wait`); if it is blocked (trust folder, etc.), the screen is pushed to the phone as a `screen` interaction. Once ready, the first message is sent.
 4. The node starts tailing the transcript, and events are pushed through the hub to subscribed apps.
 
+### Retrying a held Agent message
+
+The hub forwards the owner's Retry to the devices manager, which owns the held queue and claims each send in its
+database. If the last attempt may have arrived, the manager asks the node for echo evidence for that session and
+message ID. The node can confirm a match from its echo record. It can authorize another attempt when the live Agent
+is idle and the transcript covers the original send through a later turn end. The node rechecks with the session's
+input lock held before replacing an ambiguous send receipt. With an unknown result or an older node, the manager can
+still confirm delivery from a matching ID in recent turns.
+
 ### Answering questions / approving plans
 1. claude calls AskUserQuestion → PreToolUse lets Claude draw its terminal dialog → the following PermissionRequest connects `personad hook` to node.sock and sends an `interaction` → the node hands it to the manager (`interaction.create`), which records it and has the hub push it to the app / watch (including a local notification).
 2. The user picks on the phone → hub → manager → node → PermissionRequest outputs `updatedInput.answers` → claude continues. If the person answers in the terminal first, PostToolUse withdraws the waiting phone card instead.

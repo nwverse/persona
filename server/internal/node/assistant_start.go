@@ -325,7 +325,12 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 	}
 	configDir := n.assistantConfigDir(launcher, execution.ConfigDir)
 	configPath := n.assistantConfigPath(execution.ConfigDir)
-	if err := os.MkdirAll(configPath, 0o700); err != nil {
+	if n.guestOf(id) != nil {
+		// Guests never load owner source settings; only create their private profile.
+		if err := os.MkdirAll(configPath, 0o700); err != nil {
+			return nil, err
+		}
+	} else if err := n.prepareAssistantProfile(configPath); err != nil {
 		return nil, err
 	}
 	args := []string{"-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
