@@ -116,6 +116,9 @@ func TestNewConversationStartsInTheMainChatsProfile(t *testing.T) {
 		{"guest", StartParams{Text: "hello", Untitled: true, GuestTools: []string{}}, false, nil},
 		{"codex", StartParams{Text: "hello", Untitled: true, Launcher: "codex"}, false, nil},
 		{"older node", StartParams{Text: "hello", Untitled: true}, true, nil},
+		// A purpose that inherits from Agents, not the main chat, starts there too: an extension's /agent (#10859).
+		{"lark.agent", StartParams{Text: "hello", Untitled: true, Purpose: "lark.agent"}, false, assistantConfigDirLegacy},
+		{"lark.agent guest", StartParams{Text: "hello", Untitled: true, Purpose: "lark.agent", GuestTools: []string{}}, false, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFakeHub().withMachine()
