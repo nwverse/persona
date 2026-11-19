@@ -1464,13 +1464,11 @@ internal fun AssistantDrawer(
         }
         if (switcher != null) switcher(headPadding, headTrailing, plainHead) else plainHead()
         LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 12.dp.dense)) {
-            // The first row is the main conversation, as "Persona" with the app's mark, then a line (#2004, the same on
-            // every platform): it is listed nowhere else, has no pin of its own, and is on show whatever the text search.
-            // An exact tag filter also applies to this row; its session keeps its own id and title, only the label differs.
+            // The main conversation is first and listed only once, including during text search.
+            // An exact tag filter also applies to this row.
             if (activeTag == null || groups.main != null) item(key = "persona") {
                 val mainHit = found?.firstOrNull { it.session.key == groups.main?.key }?.hit
-                PersonaRow(groups.main, selected = shadeConversations && groups.main != null && groups.main.key == active, hasMain = hasMain,
-                    name = assistantName,
+                MainConversationRow(groups.main, selected = shadeConversations && groups.main != null && groups.main.key == active, hasMain = hasMain,
                     onMain = {
                         val main = groups.main
                         if (main != null && mainHit != null) MessageJumps.request(main.machineId, main.sessionId, mainHit.itemId)
@@ -1772,24 +1770,21 @@ internal fun conversationActions(
     }
 
 /**
- * The drawer's first row: the main conversation ([main]; null before it has started, or not yet loaded), read as
- * Persona's name after the app's mark. Beside it what it waits on (its pending count, else working / needs you /
- * unread); its menu (⋯ or a long press) copies its session id and its diagnostics, and ends it while it runs (iOS
- * `mainItem`). It cannot be pinned, renamed, archived or swiped.
+ * The drawer's main conversation, with its pending count or status. Its menu copies the session ID and
+ * diagnostics, and can end the session while it runs.
  */
 @Composable
-private fun PersonaRow(main: Session?, selected: Boolean, hasMain: Boolean, name: String, onMain: () -> Unit, onEnd: (() -> Unit)?, onCopy: () -> Unit,
+private fun MainConversationRow(main: Session?, selected: Boolean, hasMain: Boolean, onMain: () -> Unit, onEnd: (() -> Unit)?, onCopy: () -> Unit,
     onEditTags: (() -> Unit)? = null, onDiagnostics: (() -> Unit)? = null, said: AnnotatedString? = null) {
     var menu by remember { mutableStateOf(false) }
     val status = main?.conversationStatus()
     val pending = main?.pendingInteractions ?: 0
+    val title = stringResource(R.string.assistant_main_conversation)
     Column {
-        JRow(name, onClick = onMain, onLongClick = main?.let { { menu = true } }, selected = selected,
-            // "Main chat" under the name keeps the row readable as a conversation, not a brand heading (#6327, as the web, #6293).
-            // A search that found this chat shows that sentence instead, and only then.
-            subtitle = if (said == null) stringResource(if (main == null && !hasMain) R.string.assistant_start_main else R.string.assistant_main_chat) else null,
+        JRow(title, onClick = onMain, onLongClick = main?.let { { menu = true } }, selected = selected,
+            subtitle = if (main == null && !hasMain) stringResource(R.string.assistant_start_main) else null,
             subtitleMark = said,
-            leading = { JAppMark(Tokens.Space.xl) }, chevron = false,
+            leadingIcon = PersonaIcons.home, chevron = false,
             trailing = if (main == null) null else ({
                 Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {
                     if (pending > 0) JBadge(pending)
@@ -1801,7 +1796,7 @@ private fun PersonaRow(main: Session?, selected: Boolean, hasMain: Boolean, name
             Modifier.padding(start = rowTitleStart, end = rowPadding, bottom = Tokens.Space.xs))
     }
     if (menu && main != null) JActionSheet(
-        title = name, onDismiss = { menu = false },
+        title = title, onDismiss = { menu = false },
         actions = conversationActions(androidx.compose.ui.platform.LocalResources.current, leader = false, live = main.isLive,
             onLeader = null, onCopy = onCopy, onEnd = onEnd, onEditTags = onEditTags, onDiagnostics = onDiagnostics,
             glass = PersonaTheme.style == AppStyle.Glass),

@@ -266,7 +266,7 @@ function followsDefaultOf(assistant: AssistantInfo | null, session: Session): bo
 export function useAssistantTurnFix(session: Session | undefined, on: boolean): TurnFix | null {
   const assistant = useStore((s) => s.assistant);
   const kept = useStore((s) => hubHas(s.features, ASSISTANT_MODEL_PICK_FEATURE));
-  const fix = on ? turnErrorFix(session?.turn_error_code) : null;
+  const fix = on ? turnErrorFix(session?.turn_error_code, session?.launcher) : null;
   if (!fix || !session || fix.action !== "pick_model") return fix;
   const { machine_id: mid, session_id: sid } = session;
   fix.onPickModel = () => requestModelPicker(assistantPickerKey(mid, sid));

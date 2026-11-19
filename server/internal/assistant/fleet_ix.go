@@ -921,6 +921,22 @@ func (s *Service) pendingCards() ([]proto.Interaction, map[string]bool) {
 	return out, told
 }
 
+// pendingOf are the pending interactions of the sessions in want (by computer, the session ids), by computer and
+// session, as they are held, in no order: without the task each agent works for (withTask), which a to-do's view
+// does not read. A list read copies only its runs' few cards this way, never the whole fleet's.
+func (s *Service) pendingOf(want map[string]map[string]bool) map[[2]string][]proto.Interaction {
+	out := map[[2]string][]proto.Interaction{}
+	s.fleet.mu.Lock()
+	defer s.fleet.mu.Unlock()
+	for _, p := range s.fleet.interactions {
+		if want[p.ix.MachineID][p.ix.SessionID] {
+			k := [2]string{p.ix.MachineID, p.ix.SessionID}
+			out[k] = append(out[k], p.ix)
+		}
+	}
+	return out
+}
+
 // pendingIx is one pending interaction; false when it is not pending.
 func (s *Service) pendingIx(id string) (proto.Interaction, bool) {
 	s.fleet.mu.Lock()
@@ -1045,7 +1061,13 @@ func (s *Service) ixInAssistant(ctx context.Context, ix proto.Interaction) bool 
 
 // honest is r without an Always the card does not keep (AlwaysHonored false): an older app, or one that does not
 // read the field, may still send it, and the answer's history must not say "always allowed" for a grant no one keeps.
+// An approved plan likewise uses the mode its start recorded, not an older client's hard-coded mode.
 func honest(ix proto.Interaction, r proto.Resolution) proto.Resolution {
+	if ix.Kind == proto.IxPlan && r.Approve != nil && *r.Approve {
+		if mode := proto.PlanAfterMode(ix.PlanThen); mode != "" {
+			r.Mode = mode
+		}
+	}
 	if ix.AlwaysHonored != nil && !*ix.AlwaysHonored {
 		r.Always = false
 	}
@@ -1083,6 +1105,7 @@ func toolTitle(l i18n.Lang, tool string) string {
 // search"), any other "Persona · agent read". "" for every other tool: the apps name those themselves. Without input,
 // the tool alone ("Report to supervisor"; Interaction.ToolNameTitle).
 func personaToolTitle(l i18n.Lang, name string, input json.RawMessage) string {
+	name = compat.CanonicalMCPToolName(name)
 	rest, ok := strings.CutPrefix(name, "mcp__")
 	i := strings.LastIndex(rest, "__")
 	if !ok || i <= 0 || !compat.IsMCPServer(strings.TrimPrefix(rest[:i], "plugin_")) || rest[i+2:] == "" {
