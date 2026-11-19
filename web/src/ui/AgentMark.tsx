@@ -27,11 +27,11 @@ import geminiMark from "./brands/gemini.svg";
 import opencodeMark from "./brands/opencode.svg";
 import piMark from "./brands/pi.svg";
 import traeMark from "./brands/trae.svg";
-import grokMark from "./brands/grok.svg";
-import agyMark from "./brands/agy.svg";
-import dshMark from "./brands/dsh.svg";
-import kimiMark from "./brands/kimi.svg";
-import copilotMark from "./brands/copilot.svg";
+import grokMark from "./brands/grok.svg?no-inline";
+import agyMark from "./brands/agy.svg?no-inline";
+import dshMark from "./brands/dsh.svg?no-inline";
+import kimiMark from "./brands/kimi.svg?no-inline";
+import copilotMark from "./brands/copilot.svg?no-inline";
 
 // `fit`: the share of the box the mark is drawn at. Round and full-bleed shapes fill it; a square or a tall one is
 // pulled in so it does not look bigger than its neighbours (iOS: `Theme.Brand.optical`).
