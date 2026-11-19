@@ -82,8 +82,8 @@ func (n *Node) knownSession(id string) bool {
 // startingSession reports whether a session without a transcript may not have written its first line yet, so a read
 // of its history answers an empty page rather than not_found: it runs (a live agent, an assistant process, an external
 // start under way), waits for its first message, has a start in progress or one that failed within the time a failed
-// start stays listed (startFailedFor), or was started less than the start bound (startWait) ago. Any other session
-// without one, known or not, had something to read that is gone, or never got a message (#11388).
+// start stays listed (startFailedFor), or was started less than the start bound (startWait) ago. A read of any other
+// session without one is not_found (readErr): what it had to read is gone, or it never got a message (#11388).
 func (n *Node) startingSession(id string) bool {
 	n.mu.Lock()
 	_, proc := n.procs[id]
