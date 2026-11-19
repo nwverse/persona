@@ -79,13 +79,14 @@ fun LargeWindowComposer(
     onBlocked: () -> Unit = {},
     useShellSurface: Boolean = false,
     modelPill: (@Composable (ModelPillWidth) -> Unit)? = null,
+    upload: ComposerAttachmentUpload? = null,
     wrapPlaceholder: Boolean = false,
 ) {
     val largeWindow = LocalLargeWindowInput.current
     val composer: @Composable () -> Unit = {
         ChatComposer(
             session = session, state = state, working = working, sending = sending, canClear = canClear,
-            service = service, uploadDestination = uploadDestination, onSend = onSend, onCommand = onCommand, onNotice = onNotice,
+            service = service, uploadDestination = uploadDestination, upload = upload, onSend = onSend, onCommand = onCommand, onNotice = onNotice,
             extraContent = extraContent, assistantChat = assistantChat, enabled = enabled, placeholder = placeholder, leading = leading,
             accessory = accessory, modeHint = modeHint, onOverlay = onOverlay, visible = visible,
             agentName = agentName, canInterrupt = canInterrupt, mentions = mentions, onMention = onMention,
