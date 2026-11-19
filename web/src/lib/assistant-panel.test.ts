@@ -112,6 +112,12 @@ describe("the setup a Persona chat's next message runs on", () => {
 });
 
 describe("the panel's providers", () => {
+  it("names the configured default launcher exactly as the hub does, with a readable default model", () => {
+    const { providers } = assistantPanel(assistantSetup(chat({ isMain: true }), info), info, listOf);
+    expect(providers.find((p) => p.id === "claude")).toMatchObject({ isDefault: true, defaultModel: "opus 5.5" });
+    expect(providers.find((p) => p.id === "relay")?.isDefault).toBe(false);
+  });
+
   it("what can run Persona chats, each with its list; what can't, off with the hub's reason (not hidden)", () => {
     const { providers, state } = assistantPanel(assistantSetup(chat({ isMain: true }), info), info, listOf, { typed: true });
     expect(providers.map((p) => [p.id, p.name, p.engine, p.unavailable ?? ""])).toEqual([

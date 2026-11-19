@@ -132,6 +132,9 @@ internal fun AgentsScreen(
     var menu by remember { mutableStateOf(false) }
     var searchVisible by rememberSaveable { mutableStateOf(false) }
     val homeChrome = LocalHomeChrome.current != null
+    val layout = LocalWindowLayout.current
+    val optionsInSelectedTab = homeChrome && PersonaTheme.style == AppStyle.Glass && !layout.expanded && !layout.tabletop &&
+        connection == ConnectionState.Online
     val firstPageIncomplete = !page.loaded && page.list.groups.isEmpty()
     var newAgent by rememberSaveable { mutableStateOf(false) }
     var historyMachine by rememberSaveable { mutableStateOf<String?>(null) }
@@ -405,10 +408,12 @@ internal fun AgentsScreen(
             listScroll = listTapScroll(listTapMotion),
             actions = {
                 if (LocalHomeChrome.current == null) JIconButton(PhIcons.ListChecks, stringResource(R.string.agents_action_todos), { navigator.navigate(persona.core.navigation.TodosRoute) })
-                JIconButton(if (homeChrome) PhIcons.NotePencil else PhIcons.Plus, stringResource(R.string.agents_action_new_session), { newSession() })
+                JIconButton(if (homeChrome) PhIcons.NotePencil else PhIcons.Plus, stringResource(R.string.agents_action_new_session), { newSession() },
+                    expandOnHomePress = optionsInSelectedTab)
                 if (LocalHomeChrome.current == null) JIconButton(PhIcons.SlidersHorizontal, stringResource(R.string.agents_action_list_settings), { menu = true })
-                // With the home chrome the grouping pill picks only the grouping; the rest of the list's settings sit behind ⋯.
-                else JIconButton(PersonaIcons.moreMenu, stringResource(R.string.agents_action_list_settings), { menu = true })
+                // On the compact Glass home the selected tab opens list settings. While offline the tab explains the connection.
+                else if (!optionsInSelectedTab) JIconButton(PersonaIcons.moreMenu, stringResource(R.string.agents_action_list_settings), { menu = true },
+                    expandOnHomePress = false)
             },
         ) {
             val tapScope = ListTapLazyScope(this, listTapMotion, listState, page.tapEpoch)

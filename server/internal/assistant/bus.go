@@ -120,8 +120,10 @@ func NewBusHub(o BusOptions) *BusHub {
 		id = assistantwire.AssistantID
 	}
 	b.client = &bus.Client{
-		// The manager's extensions stop waiting for a card when their caller does (extmgr's interactions.wait).
-		Cancels: map[string]bool{assistantwire.MethodApp: true},
+		// The manager's extensions stop waiting for a card when their caller does (extmgr's interactions.wait). A switch
+		// to Persona Link that gave up on the hub's begin (its time ran out) has the hub give it up too, so it changes
+		// nothing the manager no longer waits for (internal/devices link_switch.go).
+		Cancels: map[string]bool{assistantwire.MethodApp: true, devicewire.MethodLinkSwitchBegin: true},
 		Hub:     o.Hub, Token: o.Token, HTTPClient: o.HTTPClient, Logf: o.Logf, Backoff: o.Backoff,
 		StopWhenRevoked: o.StopWhenRevoked, StopWhenRejected: o.StopWhenRejected,
 		// The hub's own manager (its child, or the built-in one's service dialing the hub's local address) is on the
@@ -136,12 +138,17 @@ func NewBusHub(o BusOptions) *BusHub {
 					assistantwire.CapabilityMeetingHighlights, assistantwire.CapabilityMeetingNotes, assistantwire.CapabilityMeetingEcho, assistantwire.CapabilityMeetingTranscription,
 					assistantwire.CapabilityRecordingDay, assistantwire.CapabilityAssistantSearch, assistantwire.CapabilityHTTPBodyStream, assistantwire.CapabilityAssistantStartServiceTier,
 					assistantwire.CapabilityMCPWait, assistantwire.CapabilitySessionsSideFold, assistantwire.CapabilityRemoteImages, assistantwire.CapabilityTodoView,
-					assistantwire.CapabilityTodoPlaces, devicewire.SharingCapability}}
+					assistantwire.CapabilityTodoPlaces, assistantwire.CapabilityTodoAsks, devicewire.SharingCapability}}
 		},
 		OnHello: b.onHello,
 		// A node's tool call that its caller stopped waiting for ends at the hub too (fleet_tools.go).
 		OnRequest: b.answer,
 		OnEvent: func(event string, params json.RawMessage) {
+			// Credential revocation goes to both managers and can write to their stores.
+			if event == bus.EventCredentialRevoked {
+				b.queueEvent(event, params)
+				return
+			}
 			if o.Devices != nil && o.Devices.Event(event, params) {
 				return // the computers' (devices.go), in the order they came
 			}
@@ -191,6 +198,11 @@ func (b *BusHub) Serve(ctx context.Context, svc *Service) error {
 
 // Connected: the connection to the hub is up now (the knowledge base closes while it is not, kb.go).
 func (b *BusHub) Connected() bool { return b.client.Peer() != nil }
+
+// CredentialRevoked checks the hub's credential status for a kept message's sender.
+func (b *BusHub) CredentialRevoked(ctx context.Context, id string) (bool, error) {
+	return bus.CredentialRevoked(ctx, b.client.Call, id)
+}
 
 // onHello keeps the hub's answer to manager.hello. A new connection: the hub shows nothing of the assistant until it
 // reports the whole of it again.
@@ -816,6 +828,17 @@ func (b *BusHub) event(ctx context.Context, ev busEvent) error {
 	s := b.service()
 	decode := func(v any) error { return json.Unmarshal(ev.params, v) }
 	switch ev.name {
+	case bus.EventCredentialRevoked:
+		var p bus.DeviceCredential
+		if err := decode(&p); err != nil {
+			return err
+		}
+		if p.ID != "" {
+			s.undeliveredCredentialRevoked(ctx, p.ID)
+			if b.opts.Devices != nil {
+				b.opts.Devices.Event(ev.name, ev.params)
+			}
+		}
 	case assistantwire.EventUserSpoke:
 		var p assistantwire.UserSpokeParams
 		if err := decode(&p); err != nil {

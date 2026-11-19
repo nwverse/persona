@@ -23,6 +23,9 @@ import (
 const acceptanceKey = "assistant.acceptance"
 
 type acceptAsk struct {
+	// prepared is the complete conclusion behind an in-flight claim. Saves keep it instead of the empty claim,
+	// while this process still excludes the claim from retries and duplicate initial posts.
+	prepared  *acceptAsk
 	MessageID string   `json:"message_id"`         // the first card ("" while none went out, see NoCard)
 	Messages  []string `json:"messages,omitempty"` // every card asking it (the first and the reminders)
 	// Earlier are the cards of the task's rounds before this one (#4853): dead, so a press or a reply on one is answered
@@ -112,7 +115,8 @@ func acceptCardKey(id string, asked time.Time) string {
 // settles the work, not the telling: the card is how the owner hears of it, so it still goes out, saying the supervisor
 // checked it (#9253). The owner's own pass, or a decision settled, leaves nothing to tell.
 func acceptCardDue(a *acceptAsk) bool {
-	return a != nil && !a.AskedAt.IsZero() && a.MessageID == "" && !a.NoCard && (a.AcceptedAt.IsZero() || a.BySupervisor)
+	return a != nil && !a.AskedAt.IsZero() && a.MessageID == "" && !a.NoCard && (a.AcceptedAt.IsZero() || a.BySupervisor) &&
+		a.RecheckAt.IsZero()
 }
 
 type acceptBook struct {
@@ -169,7 +173,17 @@ func (s *Service) saveAcceptErrLocked(ctx context.Context) error {
 		return nil
 	}
 	if st := s.store(); st != nil {
-		return st.PutSetting(ctx, acceptanceKey, s.accept.asks)
+		asks := make(map[string]*acceptAsk, len(s.accept.asks))
+		for id, a := range s.accept.asks {
+			if a != nil && a.prepared != nil {
+				prepared := *a.prepared
+				prepared.Earlier = a.Earlier // an earlier round's in-flight retry may have added its card meanwhile
+				asks[id] = &prepared
+			} else {
+				asks[id] = a
+			}
+		}
+		return st.PutSetting(ctx, acceptanceKey, asks)
 	}
 	return nil
 }

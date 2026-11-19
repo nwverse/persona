@@ -272,7 +272,14 @@ export const Answer = memo(function Answer({ item, streaming, mid, sid, fade, no
     );
   }
   return (
-    <MessageActions text={text} ts={item?.ts} itemId={item?.id} bar={bar} usage={bar ? usage : undefined} usageMs={bar ? usageMs : undefined}>
+    <MessageActions text={text} ts={item?.ts} itemId={item?.id} bar={bar} usage={bar ? usage : undefined} usageMs={bar ? usageMs : undefined}
+      translationSource={item?.full_size ? {
+        key: JSON.stringify([mid, sid, item.id, item.text, item.full_size, noCloseout]),
+        load: async () => {
+          const complete = await full.getText();
+          return noCloseout ? stripCloseout(complete) : complete;
+        },
+      } : undefined}>
       {cut && <p className="mb-1 text-[13px] leading-[1.384615] text-ink-2" data-cut-short>{t("chat-messageactions.cut_short")}</p>}
       <div className={ANSWER} data-answer data-items={item?.id}>
         {/* the cards in it are this item's blocks (ui/AssistantCard.tsx): `<item id>/<n>` */}
