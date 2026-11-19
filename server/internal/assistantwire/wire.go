@@ -89,6 +89,8 @@ type Placement struct {
 	// Standby: this hub is a member of a mesh group, whose center runs the scheduled tasks (docs/server/mesh.md).
 	Standby        bool `json:"standby,omitempty"`
 	MemoryDreaming bool `json:"memory_dreaming,omitempty"`
+	// CompleteAgentlessTodos lets a supervising conversation complete its own agentless memo without another card.
+	CompleteAgentlessTodos bool `json:"complete_agentless_todos,omitempty"`
 }
 
 // DeviceCall is device.call's params. Device is a machine id, or DeviceAll for DeviceDevicesList.
