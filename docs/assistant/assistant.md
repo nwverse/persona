@@ -1292,6 +1292,46 @@ other conversations) goes through one per-conversation queue (`assistant.relay`,
 - **Not covered**: a meeting's feed (`meeting_feed.go`) is the live words of a meeting the owner had the conversation
   attend, so it is not held. Interrupting a round already running is F2 of the proposal.
 
+## Replies where it wrote as the user (#10777)
+
+A conversation of the assistant (the main chat, a leader or a side conversation) that wrote into a Lark chat in the
+user's name used to hear that the other side answered only when a follow-up or a patrol happened to look again: the
+answer reached Persona through the Inbox alone, and none of the Inbox's routes lead back to the conversation that wrote
+(`server/internal/assistant/chat_reply.go`).
+
+- **What opens it.** The send itself, as the sent-as-user ledger records it (`docs/extensions/connectors.md` "Sent as
+  the user"): a message the node's gate let into a chat (`POST /conversations/<chat>/messages`, or `images`, `files`,
+  `attachments`), or a connector's send whose target names the chat, with the machine and conversation that asked. A
+  recalled message counts as not sent. A reply to one message (`/messages/<id>/replies`) is recorded without the chat
+  and opens nothing; neither does a reaction, an edit or a read receipt.
+- **What tells it.** The Lark connector's (`lark`) batches of other people's new messages in a chat
+  (`docs/assistant/inbox.md` "Event grouping"), read in `collectSource` before they are related to events; a bot's chat
+  is left out. Each conversation of this manager's machine that wrote a message into the batch's chat in the last 24
+  hours (`chatReplyWindow`), before the batch's newest message, gets the messages it was not told yet. Not told: a
+  conversation of another machine, an archived or deleted one, the Inbox's own conversations (the AI twin hears of the
+  chat through its item) and the background supervisor.
+- **How.** Through the conversation's relay queue, as `chat_reply` ("Messages from the system wait for the owner"): it
+  waits for a running turn and for the owner, ranks with everything else, and is no hop of any chain. The text
+  (`server/internal/prompts/assistant/chat_reply.md`, in the owner's language) names the chat, when the conversation last
+  wrote there, how many new messages there are and, in a group, who wrote the newest, and puts the messages in a
+  `<persona-context kind="quoted-message">` block as other people's words: not the owner's instructions, nor their
+  consent to anything. To write there again the conversation goes through the gate and its confirmation as before. The
+  queue above the composer shows it as the chat's new messages, without their words.
+- **Once, and spaced.** Each message reaches a conversation once, by the connector's message ids: the connector hands a
+  batch again until it is in an event, and a batch can grow meanwhile, so only its new messages count, and the text says
+  when it repeats some told before. One conversation hears of one chat at most once every 10 minutes (`chatReplyGap`): a
+  batch within that waits in the queue until the 10 minutes are over (the message's `due`), and the batches after it
+  merge into the one waiting (the count added up, the texts put together, the newest 3000 characters kept). What was
+  told is remembered in memory: after a manager restart, a batch not yet in an event may be told once more; one still
+  queued is not, since the queued message keeps its message ids (`chat` in `assistant.relay`).
+- **Unchanged.** The Inbox's own handling of the batch (triage, the AI twin, `inbox_signals`), the connector's
+  hand-over timing, the gate and its cards. There is no setting: the window and the spacing are fixed.
+- **Not covered.** Task Agents that write as the user (#9763 wakes a task's Agent on follow-ups in a topic bound to the
+  task; they are left out here so that one answer does not wake the same Agent twice), a single topic within a chat,
+  replies to one message, and the lark-cli source, whose ledger rows name a different chat id.
+- **Compatibility.** `chat` is an optional field of a queued message: a previous version drops it on its next save, after
+  which the message goes in as it is and a later batch queues a message of its own.
+
 ## Messages that could not go in (#10194)
 
 The owner's own message must never vanish. When the owner writes to one of the assistant's conversations while it
