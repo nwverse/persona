@@ -757,4 +757,4 @@ localized refusals (`assistant_service_tier_start_only`, `assistant_service_tier
 capability gets 501 `assistant_service_tier_manager_outdated` before relaying; a node without `assistant_service_tier`
 returns 409 `node_outdated`. An older hub ignores the unknown field, so the web neither offers nor sends it there. The
 start choice is one-shot, not execution-fingerprint or recovery state; later changes still use `session.speed`.
-New Agent starts have no speed setting.
+New terminal Agent starts have a separate `speed` contract for Codex Fast / Ultrafast and Claude Code fast mode, including catalog validation, start-only semantics and the `session_start_speed` compatibility gate; see [Launchers](launchers.md) "Speed". The New Agent form itself still has no speed control.
