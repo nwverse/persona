@@ -43,6 +43,11 @@
   degrades to the persisted presence window. Update the time-window tests by shortening the new limits in lockstep
   with the presence timers instead of waiting real minutes.
 
+- A delivered Inbox note is not automatically a reason to wake its supervisor (#9916). Keep the routed task feed,
+  but suppress the successful copy only for active work, checking waits before and after the send. Preserve failed
+  delivery and parked/review fallbacks. Scope and claimed-owner requests need the Agent's full-thread judgment and
+  an urgent-by-default supervisor question, not a keyword classifier over a clipped preview.
+
 - Inbox handling chats are implementation details, not user-created conversations (#5723). `Untitled` suppresses
   automatic naming but does not hide a chat, and `titleFixed` still gives it the item's subject. Apply default
   archiving in the common session snapshot, not only after starting or finishing: restored chats and follow-up
@@ -641,10 +646,12 @@ The manager waits 90 s for a relayed message (`drainRelays`) and kept it queued 
 written it after the first of two session-list rebuilds inside the send and was still building the second when the
 time ran out, so every later drain wrote it again: one conversation read the same message 32 times in an hour, and the
 messages queued behind it waited. A send in doubt is not a failure. Relays now carry one `once_id` per message
-(`relayMsgID`), which the node sends once (`sentLog`); a try in doubt first looks for the message's line in the
-conversation's latest turns (`relayArrived`: context blocks left out, no line older than the try, the sending
-conversation as its source), and one not found then is looked for again before the next try (`relayLanded`), which
-covers a line that lands late and a node restarted in between; and the send pushes the session list in the background, waiting for it only briefly
+(`relayMsgID`), which the node sends once while it remembers the id (`sentLog`). Save the attempt with the queued
+message before sending (#10690). Look for its line in the latest turns (`relayArrived`) using its text, time and
+sending conversation. A context-only relay also carries its `once_id` in its message-source metadata, so it can be
+found even if the transcript reader removes its original context. A failed read or
+a late transcript write can hide the line, so check again on a bounded schedule before retrying. The send pushes
+the session list in the background, waiting for it only briefly
 (`notifySessionsSoon`, `listPushWait`). The id is deliberately not a `client_msg_id`: a line tied to one reads as the
 owner's own message everywhere (its source label, task briefs, user-input counts, extensions). The web had the same
 blind spot for the owner's own sends: a send answered 502 `delivered: "unknown"` stayed a failed bubble unless the hub
