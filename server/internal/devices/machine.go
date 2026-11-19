@@ -152,8 +152,14 @@ type Machine struct {
 	firstOnce sync.Once
 	// pending counts the node's questions waiting on the phone (interaction.create): no switching paths meanwhile.
 	pending int
-	// notes are the hub's one-way events waiting for the node (notes.go; their own lock, not m.mu).
-	notes nodeNotes
+	// notes are the hub's one-way events waiting for the node, bulkNotes a forwarded port's bytes (notes.go; their own
+	// locks, not m.mu).
+	notes, bulkNotes nodeNotes
+	noteBytes        atomic.Int64 // what both hold together (maxNoteBytes)
+	// frameFails are when recent connections ended on malformed frames; lanesOffUntil, until when lanes are not asked
+	// for (conn.go noteFrameFailure). Under mu.
+	frameFails    []time.Time
+	lanesOffUntil time.Time
 	// opened is what the hub has open on the node through the bus connection of the moment (hubopen.go).
 	opened hubOpened
 	// claudeDirsMu serializes the read-modify-writes of the remembered and blocked Claude config dirs (claudedirs.go).
