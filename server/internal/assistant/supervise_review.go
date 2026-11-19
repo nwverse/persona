@@ -607,12 +607,27 @@ func (s *Service) sendToTask(ctx context.Context, t Todo, text string) (string, 
 // sendToTaskAs is sendToTask; with wait, a closed agent's resume and send is waited for too (up to 5 minutes), so the
 // caller learns whether the text reached it (inboxToAgent, #7346).
 func (s *Service) sendToTaskAs(ctx context.Context, t Todo, text string, wait bool) (string, error) {
+	return s.sendTaskInput(ctx, t, text, wait, nil)
+}
+
+func (s *Service) sendTaskInput(ctx context.Context, t Todo, text string, wait bool, event *taskInboxEvent) (string, error) {
 	agents := s.taskAgents(ctx, t)
 	if len(agents) == 0 {
 		return "", errors.New("the task has no agent")
 	}
+	if event != nil && event.Retried {
+		agents = slices.DeleteFunc(agents, func(c proto.Session) bool {
+			return c.MachineID != event.Machine || c.SessionID != event.Session
+		})
+		if len(agents) == 0 {
+			return "", errors.New("the event's agent is no longer available")
+		}
+	}
 	live, _ := liveTaskAgents(agents)
 	if len(live) == 0 { // stopped agents are read-only (#4754): Persona's follow-ups start nothing (tasks_successor.go)
+		if event != nil && event.Retried {
+			return "", errors.New("the event's agent is stopped and read-only")
+		}
 		return "", errTaskAgentsStopped
 	}
 	c := pickTaskAgent(live)
@@ -628,11 +643,28 @@ func (s *Service) sendToTaskAs(ctx context.Context, t Todo, text string, wait bo
 		if cur.DoneAt != nil || cur.ReopenedAt != nil && (t.ReopenedAt == nil || !cur.ReopenedAt.Equal(*t.ReopenedAt)) {
 			return db.ErrTodoCompleted
 		}
+		if event != nil {
+			if !event.Retried {
+				event.Machine, event.Session = c.MachineID, c.SessionID
+			}
+			duplicate, err := s.recordTaskInboxEvent(ctx, *event)
+			if err != nil {
+				return err
+			}
+			if duplicate {
+				return nil
+			}
+		}
 		if err := s.call(ctx, c.MachineID, DeviceSessionSend, map[string]any{"session_id": c.SessionID, "text": text}, nil); err != nil {
 			return err
 		}
 		_, err := s.appendFeed(ctx, t.Origin, feedRouted, t.ID, map[string]string{"text": text, "from": routedFromAssistant,
 			"machine_id": c.MachineID, "session_id": c.SessionID}) // the run it told (#10465)
+		if err != nil && event != nil {
+			// The node already accepted this event; a feed failure cannot revoke delivery.
+			s.logf("task %s: external-event delivery feed: %v", t.ID, err)
+			return nil
+		}
 		return err
 	}
 	if c.Status == proto.StatusOffline && wait {

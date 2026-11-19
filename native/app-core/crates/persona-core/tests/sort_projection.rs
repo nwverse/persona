@@ -726,6 +726,82 @@ fn nested_rows_and_folded_children_match_ios_counts() {
 }
 
 #[test]
+fn search_retains_parent_when_nested_subtask_matches() {
+    // iOS retains a prepared root when any task below it admits the query. Pinning the offline parent makes its
+    // otherwise invisible inventory membership observable in the one section that can render an offline row.
+    let input: Input = serde_json::from_value(serde_json::json!({
+        "sessions": [
+            {"machine_id": "machine-a", "session_id": "e", "title": "ordinary parent", "state": "offline", "status": "offline", "nested_match": true},
+        ],
+        "machines": [{"id": "machine-a", "name": "Machine A"}],
+        "pins": {"sessions": ["machine-a/e"]}, "mutes": {},
+        "settings": {"grouping": "state", "quick": "all", "query": "needle", "inventory": true},
+    }))
+    .expect("nested search input");
+    let actual = serde_json::to_value(persona_core::sort::project(&input)).expect("projection");
+    assert_eq!(
+        actual["groups"],
+        serde_json::json!([{
+            "id": "pinned", "title": "置顶", "rows": ["machine-a/e"],
+            "visible_rows": ["machine-a/e"], "folded": false,
+        }]),
+        "the matching nested row retains its parent, not a flattened subtask row"
+    );
+    assert_eq!(actual["filtered"], serde_json::json!(["machine-a/e"]));
+    assert_eq!(actual["unpinned"], serde_json::json!([]));
+}
+
+#[test]
+fn search_keeps_promoted_subtask_root_when_parent_cannot_render() {
+    // A live subtask is an independent root when no rendered ancestor is live or pinned. Parent identity alone must
+    // not fold that root back into an offline parent (regression control for the prepared-input contract).
+    let input: Input = serde_json::from_value(serde_json::json!({
+        "sessions": [
+            {"machine_id": "machine-a", "session_id": "e", "title": "ordinary parent", "state": "offline", "status": "offline"},
+            {"machine_id": "machine-a", "session_id": "child", "title": "needle", "state": "working", "status": "idle", "source_kind": "runtime", "nested_subtask": true, "parent_session_id": "e"},
+        ],
+        "machines": [{"id": "machine-a", "name": "Machine A"}],
+        "pins": {}, "mutes": {},
+        "settings": {"grouping": "state", "quick": "all", "query": "needle", "inventory": true},
+    }))
+    .expect("promoted subtask input");
+    let actual = serde_json::to_value(persona_core::sort::project(&input)).expect("projection");
+    assert_eq!(
+        actual["groups"],
+        serde_json::json!([{
+            "id": "state/working", "title": "工作中", "rows": ["machine-a/child"],
+            "visible_rows": ["machine-a/child"], "folded": false,
+        }])
+    );
+    assert_eq!(actual["filtered"], serde_json::json!(["machine-a/child"]));
+    assert_eq!(actual["unpinned"], serde_json::json!(["machine-a/child"]));
+}
+
+#[test]
+fn missing_machine_stays_in_filtered_inventory_without_a_group() {
+    // Inventory membership is independent of whether the machine registry can supply a section. The Needs You quick
+    // filter also removes the registered Working row, leaving only the unregistered, unpinned session.
+    let input: Input = serde_json::from_value(serde_json::json!({
+        "sessions": [
+            {"machine_id": "machine-a", "session_id": "working", "state": "working"},
+            {"machine_id": "machine-missing", "session_id": "orphan", "state": "needs_you"},
+        ],
+        "machines": [{"id": "machine-a", "name": "Machine A"}],
+        "pins": {}, "mutes": {},
+        "settings": {"grouping": "machine", "quick": "needsYou", "inventory": true},
+    }))
+    .expect("missing machine input");
+    let actual = serde_json::to_value(persona_core::sort::project(&input)).expect("projection");
+    assert_eq!(actual["filtered"], serde_json::json!(["machine-missing/orphan"]));
+    assert_eq!(actual["unpinned"], serde_json::json!(["machine-missing/orphan"]));
+    assert_eq!(
+        actual["groups"],
+        serde_json::json!([]),
+        "an absent registry entry emits no machine section"
+    );
+}
+
+#[test]
 fn fixture_assertion_catches_a_wrong_sort_comparison() {
     let document: Value =
         serde_json::from_str(&fs::read_to_string(fixture_dir().join("ordering.json")).expect("ordering"))
