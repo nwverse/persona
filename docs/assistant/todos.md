@@ -599,6 +599,26 @@ effective from the next judgment and next dispatched task. When on:
 - **Never closed by the judge**: a rework round (the supervisor was promised the next review, and asked for more than `done_when` says), a task that was reopened or was ever accepted or cancelled before, and a task the supervisor reviewed while the judge was deciding. `live` counts only when the judge itself says so, never on the Agent's delivery line alone; checks that do not come one per criterion with each criterion copied in its place count as not met.
 - When the independent review (`supervise_autoreview.go`) starts for a task, it runs first and its result waits for `task_review`; the judge's check does not close it.
 
+## Close a task's tab after acceptance
+
+When starting a new task from a plan, an owner API client can set `close_tab_on_accept: true` on that task in the
+`tasks` array sent to `POST /api/v1/task-plans/{id}/start`. Omit it to keep the tab on acceptance. The plan shows the
+recorded choice. To withdraw it, send `DELETE /api/v1/todos/{id}/terminal-cleanup`. The request returns
+`{"terminal_cleanup":"skipped"}` until the manager has given the node its final authorization to close, including
+while the node is still checking the tab. An authorized close returns 409. This is a per-task choice.
+
+Only a supervisor or main conversation's `task_review` that saves `accepted` with outcome `done` uses that choice.
+Tasks still waiting for the owner's verification keep their tabs. The original Claude Code or Codex tab must have
+been created for this start on Herdr, with the same agent process still in its only pane. The node checks focus,
+terminal viewers, drafts, queued input, interactions and work again. If there is no other tab in that workspace,
+cleanup skips the close so the workspace remains open. Eligible cleanup uses the dispatch consent with no extra
+phone card. The transcript, files and worktree remain available.
+
+The `task_review` result and plan report `closed` when the node confirms the close, `skipped` when cleanup was
+ineligible or could not be sent, and `pending` if the close may have been sent but its result is unknown. Repeating
+the review reports the recorded result and does not send another close or conclusion. Ordinary archive-and-close
+still asks for confirmation.
+
 ## Stop Agents of completed tasks
 
 Completing a to-do stops Persona's automatic follow-ups for its linked Agents, including when a turn ends after
