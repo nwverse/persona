@@ -4725,6 +4725,10 @@
       "value": "This Agent has stopped. Resume it in its terminal to send a message."
     },
     {
+      "name": "agent_delete_held_title",
+      "value": "Delete this held message?"
+    },
+    {
       "name": "agent_delivery_updating",
       "value": "Waiting for a delivery update."
     },

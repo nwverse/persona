@@ -714,6 +714,14 @@ export struct Conversation {
       }, (_item: SheetInfo, index: number) => String(this.actionsRequest) + ':' + String(index))
     }
   }
+  private confirmHeldDelete(message: ChatMessage): void {
+    const model = this.model, generation = model.connectionGeneration(), scope = model.scope(), visibility = this.revisionVisibilityRevision;
+    const current = (): boolean => this.sendCurrent() && this.model === model && model.owns(generation, scope) && this.revisionVisibilityRevision === visibility;
+    if (!current() || !model.canActOnHeld(message, false)) return;
+    this.getUIContext().showAlertDialog({ title: tr('agent_delete_held_title'), message: message.text,
+      primaryButton: { value: tr('cancel'), defaultFocus: true, action: () => {} },
+      secondaryButton: { value: tr('delete'), action: () => model.actOnHeld(message, false, current) } });
+  }
   @Builder heldStatus(message: ChatMessage) {
     Column({ space: Tokens.fine }) {
       Text(message.held!.line || tr(message.held!.state === 'failed' ? 'agent_delivery_failed' : 'agent_delivery_waiting').replace('{computer}', () => message.held!.computer))
@@ -727,7 +735,7 @@ export struct Conversation {
           .onClick(() => this.model.actOnHeld(message, true, () => this.sendCurrent())).id('chat.held.retry.' + message.held!.id)
         if (this.model.offersHeldAction(message, false)) Button(tr('cancel')).buttonStyle(ButtonStyleMode.TEXTUAL)
           .constraintSize({ minHeight: Tokens.touch, minWidth: Tokens.touch }).enabled(this.model.canActOnHeld(message, false))
-          .onClick(() => this.model.actOnHeld(message, false, () => this.sendCurrent())).id('chat.held.cancel.' + message.held!.id)
+          .onClick(() => this.confirmHeldDelete(message)).id('chat.held.cancel.' + message.held!.id)
       }.width('100%')
     }.alignItems(HorizontalAlign.End).width('100%')
   }

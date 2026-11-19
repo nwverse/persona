@@ -4725,6 +4725,10 @@
       "value": "此 Agent 已停止。请在终端中恢复后再发送消息。"
     },
     {
+      "name": "agent_delete_held_title",
+      "value": "删除这条待送达的消息？"
+    },
+    {
       "name": "agent_delivery_updating",
       "value": "正在等待送达状态更新。"
     },

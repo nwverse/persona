@@ -102,6 +102,52 @@ function heldFixture() {
   return {model, held, update};
 }
 
+function heldDeleteView(model) {
+  const source = readFileSync(new URL('../entry/src/main/ets/components/Conversation.ets',import.meta.url),'utf8');
+  assert.match(source,/onClick\(\(\) => this\.confirmHeldDelete\(message\)\)\.id\('chat\.held\.cancel\.'/);
+  const method = source.match(/^  private confirmHeldDelete\(message: ChatMessage\): void \{[\s\S]*?^  \}/m);
+  assert.ok(method);
+  const View = new Function('tr','return '+stripTypeScriptTypes('class HeldView { '+method[0]+' }'))(key=>key);
+  const view = new View();
+  view.model=model; view.sendCurrent=()=>true; view.revisionVisibilityRevision=1;
+  view.getUIContext=()=>({showAlertDialog:dialog=>{view.dialog=dialog;}});
+  return view;
+}
+
+test('held Agent native delete confirmation keeps the held message on dismissal and deletes only once on confirmation',async()=>{
+  const {model,held,update}=heldFixture(), view=heldDeleteView(model), calls=[];
+  const entry=held('op/1','failed','Might not have arrived. Retry checks the chat first.'); update([entry]);
+  model.repository.call=async(path,method,_body,_id,admit)=>{ assert.ok(admit()); calls.push([path,method]); return {ok:true}; };
+  model.refresh=async()=>{};
+  const message=model.messages[0]; view.confirmHeldDelete(message);
+  assert.equal(view.dialog.title,'agent_delete_held_title'); assert.equal(view.dialog.message,message.text);
+  assert.equal(view.dialog.primaryButton.value,'cancel'); assert.equal(view.dialog.secondaryButton.value,'delete');
+  assert.ok(view.dialog.primaryButton.defaultFocus);
+  assert.equal(calls.length,0); await view.dialog.primaryButton.action();
+  assert.deepEqual(model.selected.data().undelivered,[entry]); assert.equal(calls.length,0);
+  view.confirmHeldDelete(model.messages[0]); await Promise.all([view.dialog.secondaryButton.action(),view.dialog.secondaryButton.action()]);
+  assert.deepEqual(calls,[['/api/v1/sessions/my%20laptop/chat%2Fone/held/op%2F1','DELETE']]);
+  assert.equal(model.messages.length,0);
+});
+
+test('held Agent native delete confirmation rechecks manager state, ownership and visible route',async()=>{
+  for(const change of ['row','removed','reconnect','hidden-and-shown','route','read-only','model']) {
+    const {model,held,update}=heldFixture(), view=heldDeleteView(model), entry=held('x');
+    update([entry]); let deletes=0;
+    model.repository.call=async()=>{deletes++;return {ok:true};};
+    model.refresh=async()=>{};
+    view.confirmHeldDelete(model.messages[0]);
+    if(change==='row')update([held('x','failed','Not sent.')]);
+    if(change==='removed')update([]);
+    if(change==='reconnect')model.generation++;
+    if(change==='hidden-and-shown')view.revisionVisibilityRevision++;
+    if(change==='route')view.sendCurrent=()=>false;
+    if(change==='read-only')update([entry],{read_only:true});
+    if(change==='model')view.model=heldFixture().model;
+    await view.dialog.secondaryButton.action(); assert.equal(deletes,0,change);
+  }
+});
+
 test('held Agent rows show the exact manager line once and give way to the same transcript operation', () => {
   const {model, held, update} = heldFixture();
   const first = held('wire/one', 'waiting', 'Will check the chat when Desk is back.', {images:2});
