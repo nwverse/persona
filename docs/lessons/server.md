@@ -2013,7 +2013,12 @@ A connection that outlives its transport (protocol.md "Resuming") changes what s
   writer only inside the peer's lock, once the resume is taken.
 - **A kept connection must not hold its hooks.** A hook's event written on a lost connection waits for the resume, and
   an agent waits on every hook: hook events go through an ordered queue the hook does not wait on while the transport
-  is lost, and what the connection never sent goes to the spool, as standby would have kept it.
+  is lost, and what the connection never sent goes to the spool, as standby would have kept it. What the hook sends
+  next must still wait for that event: a card goes on the interactive lane, which is written before the events lane,
+  so a card asked for while the event waited reached the manager first.
+- **Acknowledge a frame when it is taken, not when more bytes are wanted.** Acknowledgements asked for only before a
+  read let a read loop slow over its lines (a handler blocking it per line) look silent to the other side, whose
+  silence check then dropped every computer's transport at once.
 - **A token rotated when its answer is written is lost with the answer.** The manager that never read the answer asks
   again with the token it has: that one stays taken until the new transport carries a byte.
 - **A side that decides the transport is dead must tell the other.** One side's silence check fired while the other's
