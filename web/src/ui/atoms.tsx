@@ -1106,7 +1106,12 @@ export function Dialog({
       inert={exit.leaving || undefined}
       className="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-black/25 px-4 pt-[12vh] pb-8 backdrop-blur-[2px] dark:bg-black/45 max-sm:top-(--kb-top) max-sm:bottom-auto max-sm:h-(--kb-h) max-sm:items-end max-sm:overflow-hidden max-sm:p-0"
       style={{ animation: "fade-in 140ms ease-out both" }}
-      onMouseDown={(e) => e.target === e.currentTarget && onClose()}
+      onMouseDown={(e) => {
+        if (e.target !== e.currentTarget) return;
+        // The default mousedown focus change would blur the opener just after closing restores focus.
+        e.preventDefault();
+        onClose();
+      }}
     >
       {/* A column either way, so a tall body scrolls between the title and the footer: the card stops short of the
           backdrop's bottom padding (12vh above it, pb-8 below), the sheet at 90% of what the keyboard leaves. */}

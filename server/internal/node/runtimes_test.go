@@ -25,6 +25,7 @@ import (
 
 // runtimeHub is the hub end of a node under test: the events it got and how it answers interactions.
 type runtimeHub struct {
+	modeSets []proto.ModeSetEvent
 	mu       sync.Mutex
 	events   []string
 	lists    [][]proto.Session
@@ -100,6 +101,10 @@ func runtimeNodeTapped(t *testing.T, shared *RuntimeHost, tap io.Writer) (*Node,
 		defer end.mu.Unlock()
 		end.events = append(end.events, event)
 		switch event {
+		case proto.EventModeSet:
+			var e proto.ModeSetEvent
+			_ = json.Unmarshal(params, &e)
+			end.modeSets = append(end.modeSets, e)
 		case "sessions.changed":
 			var p struct {
 				Sessions []proto.Session `json:"sessions"`

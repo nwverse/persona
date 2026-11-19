@@ -70,6 +70,38 @@ func TestHerdrCoreListsClaudeTerminals(t *testing.T) {
 	}
 }
 
+// A terminal another terminal started is a side session under the session of its nearest listed ancestor terminal
+// (terminal.parent): it keeps its own state, and the manager draws it under that row.
+func TestHerdrCoreLinksStartedTerminals(t *testing.T) {
+	n, _, hc, home := hcNode(t)
+	for _, id := range []string{sidA, sidB, sidC} {
+		writeTranscript(t, home, hcCwd, id, time.Now().Add(-time.Minute), `{"type":"custom-title","customTitle":"x"}`)
+	}
+	writeClaudePID(t, home, 4242, sidA)
+	writeClaudePID(t, home, 4343, sidB)
+	writeClaudePID(t, home, 4444, sidC)
+	lead := hcTerminal("t1", "claude-code", "idle", 4242, "claude", hcCwd, "", "", "")
+	shell := hcTerminal("t2", "", "", 5000, "zsh", hcCwd, "", "", "")
+	shell["parent"] = "t1"
+	child := hcTerminal("t3", "claude-code", "working", 4343, "claude", hcCwd, "", "", "")
+	child["parent"] = "t2"
+	grandchild := hcTerminal("t4", "claude-code", "done", 4444, "claude", hcCwd, "", "", "")
+	grandchild["parent"] = "t3"
+	hc.setTerminals(lead, shell, child, grandchild)
+
+	m := byID(listSessions(t, n))
+	leadRow, childRow, grandchildRow := m[sidA], m[sidB], m[sidC]
+	if got := childRow.ParentAgentID(); got != sidA {
+		t.Errorf("child parent_agent_id = %q, want %q", got, sidA)
+	}
+	if got := grandchildRow.ParentAgentID(); got != sidB {
+		t.Errorf("grandchild parent_agent_id = %q, want %q", got, sidB)
+	}
+	if got := leadRow.ParentAgentID(); got != "" {
+		t.Errorf("lead parent_agent_id = %q", got)
+	}
+}
+
 func TestHerdrCoreStatusAndAgent(t *testing.T) {
 	cases := []struct {
 		app, state, fg string // fg: the foreground's argv[0], "" for none

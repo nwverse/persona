@@ -174,15 +174,16 @@ function OverviewCard({ place, i, span = "half", hidden = false, edit }: { place
   const view = useRef<HTMLDivElement>(null);
   const [cut, setCut] = useState(false);
   const page = to !== null;
+  const limited = page && !hidden && !edit;
   useEffect(() => {
     const el = view.current;
-    if (!el || !page || typeof ResizeObserver === "undefined") return;
+    if (!el || !limited || typeof ResizeObserver === "undefined") return;
     const check = () => setCut(el.offsetHeight > (el.parentElement?.clientHeight ?? Infinity) + 1);
     const ro = new ResizeObserver(check);
     ro.observe(el);
     check();
     return () => ro.disconnect();
-  }, [page, gone, hidden]);
+  }, [limited, gone]);
   if (gone) return null;
   // the whole card opens the page; a button, a row or the chart inside it keeps its own click
   const open = (e: React.MouseEvent) => {
@@ -236,14 +237,14 @@ function OverviewCard({ place, i, span = "half", hidden = false, edit }: { place
       {!hidden && (
         <div className="contents" inert={edit !== undefined}>
           {/* `remember`: a card drawn before is there at once, as tall as it was, while its extension draws it again (#11091) */}
-          <div data-card-view data-cut={cut || undefined} className={cx(to && `${CARD_MAX} overflow-hidden`, cut && CARD_FADE)}>
+          <div data-card-view data-cut={limited && cut ? true : undefined} className={cx(limited && `${CARD_MAX} overflow-hidden`, limited && cut && CARD_FADE)}>
             <div ref={view} className="flex flex-col">
               <Suspense fallback={<Loading />}>
                 <OwnerScope extension={place.extension}><ExtensionUI extension={place.extension} ui={place.id} context={context} compact remember onMissing={() => setGone(true)} /></OwnerScope>
               </Suspense>
             </div>
           </div>
-          {cut && to && (
+          {limited && cut && to && (
             // at the card's foot, also when its row neighbour makes the card taller than its own view
             <a data-card-see-all href={href(to)} onClick={(e) => onLinkClick(e, to)} className="group mt-auto flex items-center gap-1 px-4 pt-1.5 pb-1 text-label text-ink-3 outline-none hover:text-ink-2 focus-visible:underline">
               {t("extensions-extensionslots.card_see_all")}
