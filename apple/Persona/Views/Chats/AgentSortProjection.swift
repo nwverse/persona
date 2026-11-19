@@ -428,13 +428,9 @@ nonisolated final class AgentSortShadow: @unchecked Sendable {
             report(.init(rule: "grouping-scope", input: input, presentation: presentation))
             return
         }
-        guard !settings.multiHub || settings.hub.isEmpty else {
-            report(.init(rule: "hub-filter", input: input, presentation: presentation))
-            return
-        }
         guard settings.searchScope == .all, !settings.searchAsCode,
               settings.harness.isEmpty, settings.project.isEmpty, settings.model.isEmpty,
-              !settings.pinnedOnly, settings.multiHub == false || settings.hub.isEmpty else {
+              !settings.pinnedOnly else {
             report(.init(rule: "search-scope", input: input, presentation: presentation))
             return
         }
@@ -487,7 +483,7 @@ nonisolated private enum AgentSortCoreInput {
         let forest = CodexTasks.build(AgentListProjection.preparedSessions(input),
                                       ownRows: input.settings.filter == .all ? [] : input.settings.kept, runs: runs)
         let visible = forest.roots
-        return visible.sorted { $0.key.path < $1.key.path }
+        return visible
     }
 
     static func encode(_ input: AgentListProjection.Input,

@@ -1,5 +1,14 @@
 # Lessons: web UI and interactions
 
+## A folded launcher must retain its identity (#10249)
+
+When replacing a launcher rail, do not promote the current launcher's models into a separate Recommended group or
+cap its rows in a second view: both hide the account behind another navigation step. Keep one disclosure per launcher,
+reuse the existing row/setup projection, and flatten search without duplicating recommended or favorite models.
+On touch screens the model-ID line may replace the usual second line; search must keep the launcher name as well,
+or identical model names from different accounts become indistinguishable. Test typed-ID picks against their named
+launcher, not only the ID, and keep failed picks out of Recent.
+
 ## A lazy waiting row needs a lazy ordering boundary (#9390)
 
 Ordering an unopened tray from its shared classifier imports the age computation on the first screen even when the
@@ -1412,3 +1421,12 @@ approval (bypass permissions mode holds Persona's peer messages) read as "Not se
 owner retyped it on the computer. Keep the node's code on the entry and word the bubble from it (`entryReason`, also for
 entries kept from before), draw an uncertain one as waiting (caution color, no "Not sent"), and make a Check that finds
 nothing new say so. The node tells held from merely unconfirmed by the session's permission mode (`peer_held`).
+
+## A terminal menu must own focus before taking typing keys (#10239)
+
+An open Menu listens in the window's capture phase. Merely hiding pane controls from session rows does not make its
+N, I and Backspace accelerators safe: a program or a field can regain focus while the menu is still open. The terminal
+toolbar opts into Menu's focus scope, accepts keys only from its own trigger or menu levels, and explicitly focuses the
+trigger when opening. Check a real xterm textarea and a non-editable element as well as ordinary search input. Raw
+pane addresses also need to resolve a listed Agent before closing, or they would fall back to a shell confirmation
+and lose the busy-Agent warning.
