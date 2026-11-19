@@ -257,8 +257,9 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 		return proto.Session{}, badRequest(fmt.Errorf("space %q: health or none", p.Space))
 	}
 	if p.Origin == OriginInbox {
-		// The handling chat investigates and suggests; it never needs the assistant's bypass mode.
-		p.PermissionMode = proto.ModePlan
+		// Default keeps the explicit Persona MCP allowlist effective: Plan rejects MCP before consulting it. The
+		// manager/node origin policy, not the launcher's permission mode, prevents externally visible work.
+		p.PermissionMode = "default"
 	} else if p.PermissionMode == "" && p.GuestTools == nil {
 		p.PermissionMode = s.settings(ctx).DefaultPermissionMode
 		if p.PermissionMode == "" {
@@ -1126,7 +1127,7 @@ func (s *Service) sendParamsOwn(ctx context.Context, p SendParams) (map[string]a
 	delete(params, "origin") // only the manager's origin book may attest an Inbox conversation
 	if s.isInboxModelCall(ctx, p.MachineID, p.SessionID, "") {
 		// A node reload does not restore the node's in-memory origin field. Re-attest it on every later send so the
-		// first resumed process is clamped to Plan and its Lark gate cannot fall back to an ordinary conversation.
+		// first resumed process is clamped to non-bypass default and its Lark gate cannot fall back to an ordinary conversation.
 		params["origin"] = OriginInbox
 	}
 	text, _ := params["text"].(string)
@@ -1196,6 +1197,12 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 	delete(p, "external")
 	cfg := s.settings(ctx)
 	p["is_main"] = cfg.Main != "" && cfg.Main == sid && cfg.mainRouteMachine() == machine
+	delete(p, "idle_compaction")
+	if p["is_main"] == true {
+		p["idle_compaction"] = assistantwire.IdleCompaction{
+			Enabled: s.idleAutoCompact(ctx), IdleMinutes: s.idleAutoCompactMinutes(ctx), ContextTokens: s.idleAutoCompactTokens(ctx),
+		}
+	}
 	putMainCompactWindow(cfg, p)
 	if cfg.InterjectBackground != nil && *cfg.InterjectBackground {
 		p["interject_background"] = true
@@ -1250,8 +1257,13 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 			}
 		}
 	}
-	if l == "" && !followsSetting {
-		if c, known := s.session(ctx, machine, sid); known {
+	if l == "" {
+		c, known := s.session(ctx, machine, sid)
+		if known && c.SourceKind == proto.SourceRuntime {
+			// The node resumes the session on the runtime that owns it, even for scheduled chats and leaders.
+			return nil
+		}
+		if known && !followsSetting {
 			l = c.Launcher // no launcher picked: the one this conversation runs
 			if l != "" {
 				p["launcher"] = l
@@ -1338,6 +1350,7 @@ func (s *Service) isTaskConversation(ctx context.Context, machine, sid string) b
 // conversation has no title to change; a Codex one keeps the assistant's title (its tab is still renamed). The node
 // renames; a new title is the user's from now on. An extension's (p.Extension, as the hub's auth found it) is only a
 // hint (titleHinted): the hub still names a conversation it started, as it names the others.
+// An active direction updates its canonical name instead, preserving the ordinary title.
 func (s *Service) Rename(ctx context.Context, p RenameParams) (json.RawMessage, error) {
 	params := p.Params
 	if params == nil {
@@ -1351,7 +1364,9 @@ func (s *Service) Rename(ctx context.Context, p RenameParams) (json.RawMessage, 
 	if c, found := s.session(ctx, p.MachineID, p.SessionID); found && !c.Assistant {
 		return s.renameAgent(ctx, p, c)
 	}
-	if c, _ := s.session(ctx, p.MachineID, p.SessionID); c.Agent == "codex" {
+	directionTitle := strings.TrimSpace(title) != "" && p.Extension == "" &&
+		p.MachineID == s.settings(ctx).MachineID && s.isLeader(ctx, p.SessionID)
+	if c, _ := s.session(ctx, p.MachineID, p.SessionID); c.Agent == "codex" || directionTitle {
 		delete(params, "title") // only the assistant's title for Codex (its conversation_rename does the same)
 	}
 	out := json.RawMessage(`{"ok":true}`)
@@ -1363,6 +1378,10 @@ func (s *Service) Rename(ctx context.Context, p RenameParams) (json.RawMessage, 
 		}
 	}
 	switch {
+	case directionTitle:
+		if err := s.setDirectionName(ctx, p.SessionID, title, directionByUser); err != nil {
+			return nil, err
+		}
 	case strings.TrimSpace(title) == "":
 	case p.Extension != "":
 		s.titleHinted(p.MachineID, p.SessionID, title)

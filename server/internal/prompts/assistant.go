@@ -264,6 +264,9 @@ type SnapshotOwner struct {
 type SnapshotOpenTodo struct {
 	ID, Title, Link string
 	Owner           SnapshotOwner
+	// Failed: its agent did not start, and it still waits on the owner (stored done with its start error, counted open
+	// as the app's To-dos count it).
+	Failed bool
 }
 
 // SnapshotReport is a supervised task's agent's latest report: its kind (progress, question, blocked, done), the step
@@ -463,6 +466,7 @@ func RenderAssistantContext(c AssistantContext) string { return render("assistan
 // TaskRun is the message a scheduled task's run starts with (assistant/task_run).
 type TaskRun struct {
 	Label          string
+	TodoID         string
 	Once, Interval bool   // neither: daily
 	Every          string // interval: "30 minutes"
 	Late           string // "" when on time; else how late ("25 minutes")
@@ -506,6 +510,10 @@ type BriefFacts struct {
 	// InboxWaiting and InboxDue are read-only follow-up facts for the model only; neither is on the card or in the push.
 	InboxWaiting, InboxDue []BriefFollow
 	Leaders                []BriefLeader // one per direction (#3609)
+	// Directions are the deterministic per-direction wait lists, main included. Every direction keeps all owner-wait
+	// rows and folds only its non-owner tail; More says how many rows the direction link holds beyond it.
+	Directions       []BriefDirection
+	DisabledRoutines []BriefDisabledRoutine
 	// Briefs: the open pieces of work that need the owner or changed since the last briefing, in their own words;
 	// BriefsDone: those that ended since, once, with each criterion's result (#3822).
 	Briefs, BriefsDone []BriefTask
@@ -598,11 +606,40 @@ type BriefTask struct {
 type BriefCriterion struct{ Criterion, State, Change string }
 
 // BriefLeader is one direction in the briefing's facts: its name, its open tasks, those waiting for the owner, those
-// stuck over a day, and its leader's latest summary of the day (empty parts: none).
+// past their inactivity thresholds, and its leader's latest summary of the day (empty parts: none).
 type BriefLeader struct {
 	Name                     string
 	Open, Waiting, Stuck     int
 	Reached, Doing, NeedsYou string
+}
+
+// BriefDirection is one direction's open-work count and deterministic wait rows. Main and leader directions alike keep
+// every owner-wait row; only the non-owner tail is folded into More. Line is ready to read in the owner's language.
+type BriefDirection struct {
+	ID, Name, Link             string
+	Owner                      bool
+	Open, Active, Undispatched int
+	Waits                      []BriefWait
+	More                       int
+}
+
+// BriefWait is one stopped task or unanswered card. Kind is needs_user, review, question, permission, private,
+// parked, capacity, orphaned, overdue or stalled. Since/Until are zero when the ledger did not record them.
+type BriefWait struct {
+	TodoID, InteractionID string
+	Title, Kind           string
+	Since                 time.Time
+	Until                 time.Time
+	WaitingOn, Reason     string
+	Link, Line            string
+}
+
+// BriefDisabledRoutine is a disabled daily report or patrol. DisabledAt is nil for routines saved before the hub
+// recorded the transition; Line says "disable time not recorded" rather than substituting LastRun.
+type BriefDisabledRoutine struct {
+	ID, Title, Direction, Kind string
+	DisabledAt                 *time.Time
+	Link, Line                 string
 }
 
 // BriefFailed is one thing that did not go through: a task whose agent did not start, a scheduled run that failed
@@ -673,12 +710,25 @@ type TaskNotice struct {
 	Earlier        []string // what else it went through since the last notice ("waiting on the user", "done"), oldest first
 	Ask            string   // needs: what it asks
 	Text           string   // what its agent said last, or why it did not start
+	// Files: the files it handed over, with where each is on the conversation's computer (task_files.go, #10511); the
+	// agent named them in its reply, and the manager copied them here. They are kept out of Text's clip.
+	Files []TaskFile
+	// RetryWith: failed because of its launcher there, the launcher the assistant may start it with instead when the
+	// user asks (task_retry's launcher; only the web's card has a button for it, #10365).
+	RetryWith string
 	// Reporting: the notice goes into the conversation that opened the task (one started with report_tasks, such as
 	// a Feishu /agent's, #3192), not the main conversation.
 	Reporting bool
 }
 
 func RenderTaskNotice(n TaskNotice) string { return render("assistant/task_notice", n) }
+
+// TaskFile is one file a task handed over (task_files.go, #10511), as the task notice and a supervision message list
+// it: Path is where the conversation finds it (its copy, else the original). Error says why it did not come; Path is
+// then where it stayed, on the Agent's computer.
+type TaskFile struct {
+	Name, Path, Error string
+}
 
 // SpawnNotice tells the conversation that opened another with conversation_new that the other failed, or ended a turn
 // without reporting back with conversation_send (#4669): once per opened conversation.
@@ -700,6 +750,19 @@ type TaskEnded struct {
 }
 
 func RenderTaskEnded(n TaskEnded) string { return render("assistant/task_ended", n) }
+
+// ChatReply tells a conversation that wrote into a Lark chat as the user that others wrote there since (#10777): the
+// chat's name (Group: a group, else a direct chat with that person), when the conversation last wrote there (local
+// "01-02 15:04"), how many new messages and who wrote the newest, whether Context also repeats messages it was told
+// before (Earlier), and the messages' text, which goes in a context block as someone else's words.
+type ChatReply struct {
+	Language                     string // answerLanguage: "" Chinese, "English", "日本語"
+	Title, Sender, Sent, Context string
+	Group, Earlier               bool
+	Count                        int
+}
+
+func RenderChatReply(d ChatReply) string { return render("assistant/chat_reply", d) }
 
 // AskTodoAnswer is the message to the conversation whose ask_user question became a to-do (#1617): the user's call on it
 // (Thread: said in the to-do's Lark topic), or that the to-do was closed without one (Dropped). The questions and choices
@@ -759,7 +822,7 @@ type Supervise struct {
 	BackgroundEscalated bool
 	// Side: it goes to an ordinary side conversation, for the tasks that conversation handed out itself.
 	Side bool
-	// LeaderStuck: an entry is a leader's task stuck over a day (sigLeaderStuck), told the main conversation (#3609).
+	// LeaderStuck: an entry is a leader's task past its inactivity threshold (sigLeaderStuck), told the main conversation (#3609).
 	LeaderStuck bool
 	// Overdue: an entry is a task past its brief's clock (#3822).
 	Overdue bool
@@ -814,10 +877,16 @@ type SuperviseEntry struct {
 	Said        string
 	Evidence    []string
 	Step, Steps int
+	// Files: the files its agent handed over, with where each is on this conversation's computer (task_files.go,
+	// #10511). The manager copied them here when the agent's turn ended; they are kept out of Last's clip.
+	Files []TaskFile
 	// failed with its tab kept (#2570): until when (local "15:04"), the question its shell waits on, the tab's last
 	// lines, and how many retries are left; KeptUntil "" when the start failed for good.
 	KeptUntil, Question, Screen string
 	RetriesLeft                 int
+	// RetryWith: failed because of its launcher on that computer, the other launchers there task_retry may start it
+	// with (PlanTask.RetryWith, #10365), the first suggested.
+	RetryWith []string
 	// ask: the cards waiting, and the task's decisions in effect (prompts/todo/decisions.md, rendered), which
 	// parked_due and park_decided carry too; escalated: the cards a leader gave the user.
 	Asks      []SuperviseAsk
@@ -950,8 +1019,8 @@ func RenderTaskDoneWhen(criteria []string) string {
 	return render("assistant/task_done_when", struct{ Criteria []string }{criteria})
 }
 
-// RenderTaskGoal is a task's done_when as one checkable condition, for a Claude Code /goal typed before the task's
-// first message (docs/integrations/agent-goal.md "A goal set at the start"): one line, trimmed.
+// RenderTaskGoal is a task's done_when as one checkable condition, for the Claude Code or Codex /goal typed after the
+// task's first message (docs/integrations/agent-goal.md "A goal set at the start"): one line, trimmed.
 func RenderTaskGoal(criteria []string) string {
 	return strings.TrimSpace(render("assistant/task_goal", struct{ Criteria []string }{criteria}))
 }
@@ -1085,13 +1154,9 @@ func RenderTaskAttachments(a TaskAttachments) string {
 	return strings.TrimRight(render("assistant/task_attachments", a), "\n")
 }
 
-// SideConversation preserves the provenance of a non-owner's message to a tasked Agent.
-type SideConversation struct {
-	From, Text string
-}
-
-func RenderSideConversation(in SideConversation) string {
-	return render("assistant/side_conversation", in)
+// RenderSideConversation marks a separate request for an Agent assigned to a task.
+func RenderSideConversation(text string) string {
+	return render("assistant/side_conversation", text)
 }
 
 // TaskDoneInput is the task as it was handed out and what its agents said when they stopped (assistant/task_done_input).
