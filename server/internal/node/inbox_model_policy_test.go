@@ -120,6 +120,14 @@ func TestInboxClaudeReadOnlyLocalResourceRules(t *testing.T) {
 	if err := os.Symlink(linkedData, filepath.Join(n.dir, "data")); err != nil {
 		t.Fatal(err)
 	}
+	// A link's target is allowed by its physical path: macOS's temporary directory is behind a link.
+	for _, dir := range []*string{&linkedSkill, &linkedData} {
+		physical, err := filepath.EvalSymlinks(*dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		*dir = physical
+	}
 	const id = "inbox-read-only-resources"
 	n.state.put(id, sessionState{Origin: originInbox})
 	flags := n.claudeAssistantMCPAndTools(id, cwd, true)
