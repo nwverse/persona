@@ -53,7 +53,7 @@ func TestInboxReplayRetainsSelectionBesideOlderOrNewerThreadRow(t *testing.T) {
 	}
 }
 
-func TestInboxReplayBoundarySurvivesStorageAndOrdinaryCollection(t *testing.T) {
+func TestInboxOrdinaryCollectionAdvancesLatestStoredReplay(t *testing.T) {
 	h := newInboxHub(t)
 	ctx := context.Background()
 	if err := h.inboxReady(ctx); err != nil {
@@ -92,7 +92,7 @@ func TestInboxReplayBoundarySurvivesStorageAndOrdinaryCollection(t *testing.T) {
 	third.At = at.Add(2 * time.Second)
 	third.Tags = []connector.Tag{{Key: connector.TagSender, Value: "ou_example_third"}}
 	round := assistantwire.InboxRound{Sources: []assistantwire.InboxSource{{ID: "larkcli",
-		Things: []connector.InboxThing{first, second, third},
+		Things: []connector.InboxThing{first, second},
 	}}}
 	if err := h.InboxCollected(ctx, round); err != nil {
 		t.Fatal(err)
@@ -101,30 +101,72 @@ func TestInboxReplayBoundarySurvivesStorageAndOrdinaryCollection(t *testing.T) {
 	for _, id := range ids {
 		if string(itemState(h.inbox.items[id])) != before[id] {
 			h.inbox.mu.Unlock()
-			t.Fatalf("normal polling absorbed a stored replay row: %s", id)
+			t.Fatalf("ordinary collection changed a replayed activity on exact redelivery: %s", id)
 		}
 	}
-	latest := h.inbox.items[replayWriteFailureItemID(third)]
-	if len(h.inbox.items) != 3 || latest == nil || latest.Last != third.Last || latest.Count != 1 {
-		h.inbox.mu.Unlock()
-		t.Fatal("a newer ordinary move did not start its own thread row")
-	}
-	doneAt := time.Now().UTC()
-	h.inbox.items[ids[1]].done(doneAt, "user")
-	// A completed recovered row must not stop normal accumulation of a later ID.
 	h.inbox.mu.Unlock()
 	fourth := third
 	fourth.Last, fourth.At = "om_fourth", at.Add(3*time.Second)
-	round.Sources[0].Things = []connector.InboxThing{fourth}
+	stale := second
+	stale.Done = connector.DoneReplied
+	round.Sources[0].Things = []connector.InboxThing{third, fourth, stale}
 	if err := h.InboxCollected(ctx, round); err != nil {
 		t.Fatal(err)
 	}
 	h.inbox.mu.Lock()
+	latest := h.inbox.items[ids[1]]
+	advanced := len(h.inbox.items) == 2 && latest != nil && latest.Last == fourth.Last && latest.Count == 3 &&
+		latest.open() && !latest.Connector.Replay && slices.Equal(latest.Connector.Tags, fourth.Tags)
+	olderKept := string(itemState(h.inbox.items[ids[0]])) == before[ids[0]]
+	h.inbox.mu.Unlock()
+	if !advanced || !olderKept {
+		t.Fatalf("ordinary activity did not advance just the latest stored replay: advanced=%v older_kept=%v", advanced, olderKept)
+	}
+	if last, saved := replayWriteFailureStoredLast(h.st, ids[1]); !saved || last != fourth.Last {
+		t.Fatal("ordinary activity did not persist the advanced thread row")
+	}
+}
+
+func TestInboxReplayDoesNotEscalateOrdinaryFollowup(t *testing.T) {
+	h := newInboxHub(t)
+	ctx := context.Background()
+	if err := h.inboxReady(ctx); err != nil {
+		t.Fatal(err)
+	}
+	h.setConfig(func(c *assistantwire.InboxConfig) { c.Agent.Enabled = true })
+	h.inbox.handing.Lock()
+	t.Cleanup(h.inbox.handing.Unlock)
+
+	at := time.Now().Add(-4 * 24 * time.Hour)
+	selected := replayWriteFailureThing("thread:selected", "om_selected", "mention", connector.TierAction)
+	sentinel := replayWriteFailureThing("thread:sentinel", "om_sentinel", "mention", connector.TierAction)
+	selected.At, sentinel.At = at, at
+	followup := selected
+	followup.Last, followup.At = "om_followup", at.Add(time.Second)
+	func() {
+		h.inbox.triaging.Lock()
+		defer h.inbox.triaging.Unlock()
+		if err := h.InboxCollected(ctx, replayWriteFailureRound(selected, sentinel)); err != nil {
+			t.Fatal(err)
+		}
+		round := assistantwire.InboxRound{
+			Sources: []assistantwire.InboxSource{{ID: "larkcli", Things: []connector.InboxThing{followup}}},
+		}
+		if err := h.InboxCollected(ctx, round); err != nil {
+			t.Fatal(err)
+		}
+	}()
+	waitFor(t, "the still-selected replay item was queued", func() bool {
+		h.inbox.mu.Lock()
+		defer h.inbox.mu.Unlock()
+		it := h.inbox.items[replayWriteFailureItemID(sentinel)]
+		return it != nil && it.Agent != nil && it.Agent.State == AgentQueued
+	})
+	h.inbox.mu.Lock()
 	defer h.inbox.mu.Unlock()
-	if latest.Last != fourth.Last || latest.Count != 2 ||
-		h.inbox.items[ids[0]].Last != first.Last || h.inbox.items[ids[1]].Last != second.Last ||
-		!h.inbox.items[ids[1]].DoneAt.Equal(doneAt) {
-		t.Fatal("ordinary collection lost the replay boundary or its completion evidence")
+	it := h.inbox.items[replayWriteFailureItemID(selected)]
+	if it == nil || it.Last != followup.Last || it.Agent != nil {
+		t.Fatalf("ordinary followup inherited the earlier replay's escalation: %+v", it)
 	}
 }
 

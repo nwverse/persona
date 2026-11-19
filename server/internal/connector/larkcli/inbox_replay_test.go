@@ -3,10 +3,12 @@ package larkcli
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/connector"
 	adapter "github.com/nwverse/persona/server/internal/larkcli"
@@ -160,6 +162,44 @@ func TestInboxReplayRejectsUnknownOrOutsideSourceTimestamp(t *testing.T) {
 				"2030-01-01T00:05:00Z", []string{m.MessageID})
 			if err == nil || len(items) != 0 {
 				t.Fatalf("unsafe source time accepted: items=%+v err=%v", items, err)
+			}
+		})
+	}
+}
+
+func TestInboxReplayRespectsSourceTimestampPrecision(t *testing.T) {
+	minute := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	from := minute.Add(58 * time.Second)
+	to := minute.Add(time.Minute)
+	earlier := from.Add(-time.Second)
+	for _, tc := range []struct {
+		name, source string
+		keep         bool
+	}{
+		{"precise before start", earlier.Format(time.RFC3339), false},
+		{"wall clock seconds before start", earlier.In(cliLocation()).Format("2006-01-02 15:04:05"), false},
+		{"epoch seconds before start", fmt.Sprint(earlier.Unix()), false},
+		{"epoch milliseconds before start", fmt.Sprint(from.Add(-time.Millisecond).UnixMilli()), false},
+		{"precise at start", from.Format(time.RFC3339), true},
+		{"precise in final second", to.Add(-time.Millisecond).Format(time.RFC3339Nano), true},
+		{"precise at end", to.Format(time.RFC3339), false},
+		{"overlapping minute", minute.In(cliLocation()).Format("2006-01-02 15:04"), true},
+		{"previous minute", minute.Add(-time.Minute).In(cliLocation()).Format("2006-01-02 15:04"), false},
+		{"minute at end", to.In(cliLocation()).Format("2006-01-02 15:04"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := addressedMessage("om_example_request", "ou_example_peer", "Example Peer", `"Please help"`, "",
+				[]adapter.Mention{{ID: "cli_example"}})
+			m.CreateTime = tc.source
+			c := addressedTestConnector(t, []adapter.Message{m}, []adapter.Message{m})
+			items, err := c.ReplayMessages(context.Background(), m.ChatID, from.Format(time.RFC3339),
+				to.Format(time.RFC3339), []string{m.MessageID})
+			if tc.keep {
+				if err != nil || len(items) != 1 || items[0].Last != m.MessageID {
+					t.Fatalf("in-window message missing: items=%+v err=%v", items, err)
+				}
+			} else if err == nil || len(items) != 0 {
+				t.Fatalf("out-of-window source timestamp accepted: %q, items=%+v err=%v", tc.source, items, err)
 			}
 		})
 	}

@@ -202,7 +202,7 @@ func TestRecoveredReplayQueuesOnlySelectedOldActionWithOriginalDate(t *testing.T
 
 	h.inbox.handing.Lock()
 	t.Cleanup(func() { h.inbox.handing.Unlock() })
-	h.Service.handleRecoveredInbox(ctx, []string{selected.ID})
+	h.Service.handleRecoveredInbox(ctx, []inboxMove{{selected.ID, selected.Last}})
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
 		h.inbox.mu.Lock()
@@ -240,7 +240,7 @@ func TestRecoveredReplayDoesNothingWhenTwinIsDisabled(t *testing.T) {
 	h.inbox.items[selected.ID] = selected
 	h.inbox.mu.Unlock()
 
-	h.Service.handleRecoveredInbox(ctx, []string{selected.ID})
+	h.Service.handleRecoveredInbox(ctx, []inboxMove{{selected.ID, selected.Last}})
 	h.inbox.mu.Lock()
 	defer h.inbox.mu.Unlock()
 	if selected.Agent != nil || selected.Handling != nil || !selected.UpdatedAt.Equal(updated) {

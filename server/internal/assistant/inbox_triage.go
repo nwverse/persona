@@ -107,9 +107,9 @@ func (s *Service) triageInbox(ctx context.Context) {
 // fallback tier (and no summary). When its connection is held the item stays untriaged. An item without a fallback
 // (a connector's thing its rules leave to the model) keeps what it shows until a pass gets an answer. It returns the
 // change, settled (inbox_rollback.go); nil when the item was left as it was.
-func (s *Service) triage(ctx context.Context, it *InboxItem) *inboxWrite {
-	last, v := s.askTriage(ctx, it, 90*time.Second)
-	if ctx.Err() != nil {
+func (s *Service) triage(ctx context.Context, it *InboxItem, onlyLast ...string) *inboxWrite {
+	last, v := s.askTriage(ctx, it, 90*time.Second, onlyLast...)
+	if ctx.Err() != nil || (len(onlyLast) > 0 && last != onlyLast[0]) {
 		return nil
 	}
 	b := &s.inbox
@@ -262,10 +262,15 @@ type triageVerdict struct {
 
 // askTriage asks the model about one item, under the item's own rules when its source sent some (they replace
 // inbox.rules; the default criteria stay underneath). last is the Last it asked about.
-func (s *Service) askTriage(ctx context.Context, it *InboxItem, timeout time.Duration) (last string, v triageVerdict) {
+func (s *Service) askTriage(ctx context.Context, it *InboxItem, timeout time.Duration, onlyLast ...string) (last string, v triageVerdict) {
 	b := &s.inbox
 	b.mu.Lock()
-	last, input, rules := it.Last, b.triageInput(it), strings.TrimSpace(it.Rules)
+	last = it.Last
+	if len(onlyLast) > 0 && last != onlyLast[0] {
+		b.mu.Unlock()
+		return last, v
+	}
+	input, rules := b.triageInput(it), strings.TrimSpace(it.Rules)
 	b.mu.Unlock()
 	return last, s.triageModel(ctx, input, rules, timeout)
 }

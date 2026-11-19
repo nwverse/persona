@@ -60,8 +60,13 @@ func (c *Connector) ReplayMessages(ctx context.Context, chatID, start, end strin
 		}
 		for _, message := range page.Messages {
 			if wanted[message.MessageID] && message.ChatID == chatID {
-				at := messageTime(message)
-				if at.IsZero() || at.Before(from.Truncate(time.Minute)) || !at.Before(to) {
+				at, minuteOnly := parseMessageTime(message)
+				meetsStart := !at.Before(from)
+				if minuteOnly {
+					// Search has the exact bounds. The printed minute must overlap the requested window.
+					meetsStart = at.Add(time.Minute).After(from)
+				}
+				if at.IsZero() || !meetsStart || !at.Before(to) {
 					return nil, fmt.Errorf("replay message has no valid timestamp inside the requested window")
 				}
 				found[message.MessageID] = message

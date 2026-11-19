@@ -1133,27 +1133,34 @@ func mentionsAll(message adapter.Message) bool {
 }
 
 func messageTime(message adapter.Message) time.Time {
+	at, _ := parseMessageTime(message)
+	return at
+}
+
+// parseMessageTime also reports whether the CLI only identified the containing minute.
+func parseMessageTime(message adapter.Message) (time.Time, bool) {
 	value := strings.TrimSpace(message.CreateTime)
 	if value == "" {
-		return time.Time{}
+		return time.Time{}, false
 	}
 	if t, err := time.Parse(time.RFC3339Nano, value); err == nil {
-		return t.UTC()
+		return t.UTC(), false
 	}
 	// lark-cli 1.0.99 prints message times as local wall-clock minutes ("2006-01-02 15:04") in the time zone of the
 	// machine running it, which is the hub's. Without this the Inbox cursor never moved past its first two minutes.
-	for _, layout := range []string{"2006-01-02 15:04:05", "2006-01-02 15:04"} {
+	const wallMinute = "2006-01-02 15:04"
+	for _, layout := range []string{wallMinute + ":05", wallMinute} {
 		if t, err := time.ParseInLocation(layout, value, cliLocation()); err == nil {
-			return t.UTC()
+			return t.UTC(), layout == wallMinute
 		}
 	}
 	if n, err := strconv.ParseInt(value, 10, 64); err == nil && n > 0 {
 		if len(value) >= 13 {
-			return time.UnixMilli(n).UTC()
+			return time.UnixMilli(n).UTC(), false
 		}
-		return time.Unix(n, 0).UTC()
+		return time.Unix(n, 0).UTC(), false
 	}
-	return time.Time{}
+	return time.Time{}, false
 }
 
 func after(message, previous adapter.Message) bool {

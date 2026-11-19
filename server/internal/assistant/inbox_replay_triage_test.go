@@ -10,7 +10,56 @@ import (
 	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/proto"
 )
+
+func TestInboxReplayProcessesNewPluginItems(t *testing.T) {
+	model, client := newTriageModel(t, "ok", `{"tier":"action","summary":"Selected request","reason":"Synthetic verdict"}`)
+	h, _ := admitHub(t, client)
+	h.setConfig(func(c *assistantwire.InboxConfig) {
+		c.Agent.Enabled = true
+		c.Extensions = []string{"larkcli"}
+	})
+	ctx := context.Background()
+	if err := h.inboxReady(ctx); err != nil {
+		t.Fatal(err)
+	}
+	setSettings(t, h.Service, func(s *Settings) { s.Main = "m1" })
+	h.f.setSessions("server", proto.Session{SessionID: "m1", Assistant: true, Status: proto.StatusIdle})
+	unselected := replayWriteFailureSeed(t, h, "thread:unselected", "om_unselected", "bot_handoff", TierFYI)
+	dm := replayWriteFailureThing("thread:selected-dm", "om_selected_dm", KindDM, "")
+	dm.At, dm.Context = time.Now().UTC().Add(-4*24*time.Hour), "Selected plugin request without a fallback"
+	handoff := replayWriteFailureThing("thread:selected-handoff", "om_selected_handoff", "bot_handoff", connector.TierFYI)
+	dmID, handoffID := replayWriteFailureItemID(dm), replayWriteFailureItemID(handoff)
+	h.inbox.handing.Lock()
+	t.Cleanup(h.inbox.handing.Unlock)
+
+	if err := h.InboxCollected(ctx, replayWriteFailureRound(dm, handoff)); err != nil {
+		t.Fatal(err)
+	}
+	if last, ok := replayWriteFailureStoredLast(h.st, dmID); !ok || last != dm.Last {
+		t.Fatal("the selected plugin request without a fallback was not saved")
+	}
+	waitFor(t, "selected plugin triage, escalation and handoff", func() bool {
+		h.inbox.mu.Lock()
+		it, forwarded := h.inbox.items[dmID], h.inbox.items[handoffID]
+		ready := it != nil && it.TriagedAt == dm.Last && it.Agent != nil && it.Agent.State == AgentQueued &&
+			forwarded != nil && len(forwarded.Handoffs) == 1
+		h.inbox.mu.Unlock()
+		return ready && len(toMain(h.f)) > 0
+	})
+	h.inbox.botHandoff.Lock()
+	h.inbox.botHandoff.Unlock()
+	h.inbox.mu.Lock()
+	sentUnselected := len(unselected.Handoffs) != 0
+	h.inbox.mu.Unlock()
+	if sentUnselected || len(toMain(h.f)) != 1 {
+		t.Fatal("the replay did not keep handoff scoped to the selection")
+	}
+	if calls := model.asked(); len(calls) != 1 || !strings.Contains(calls[0].User, dm.Context) {
+		t.Fatalf("triage did not process just the selected plugin request: %+v", calls)
+	}
+}
 
 func TestRecoveredReplayTriagesOnlySelectedOldDMBeforeQueuing(t *testing.T) {
 	for _, tc := range []struct {
@@ -146,7 +195,7 @@ func TestRecoveredReplayIncompleteTriageBlocksPreexistingAction(t *testing.T) {
 				h.inbox.srcMu.Unlock()
 				h.inbox.handing.Lock()
 				t.Cleanup(func() { h.inbox.handing.Unlock() })
-				h.handleRecoveredInbox(ctx, []string{target.ID, sentinel.ID})
+				h.handleRecoveredInbox(ctx, []inboxMove{{target.ID, target.Last}, {sentinel.ID, sentinel.Last}})
 				waitFor(t, "recovery reached escalation after incomplete triage", func() bool {
 					h.inbox.mu.Lock()
 					defer h.inbox.mu.Unlock()
@@ -164,7 +213,7 @@ func TestRecoveredReplayIncompleteTriageBlocksPreexistingAction(t *testing.T) {
 				if tc.mode == "busy" || tc.mode == "quota" {
 					pauseOver(t, client)
 				}
-				h.handleRecoveredInbox(ctx, []string{target.ID})
+				h.handleRecoveredInbox(ctx, []inboxMove{{target.ID, target.Last}})
 				waitFor(t, "a later explicit recovery retried triage and honored policy", func() bool {
 					h.inbox.mu.Lock()
 					defer h.inbox.mu.Unlock()
@@ -204,7 +253,7 @@ func TestRecoveredReplayIncompleteTriageDoesNotStartLegacyQueuedItem(t *testing.
 	h.inbox.srcMu.Lock()
 	h.inbox.builtin["larkcli"] = true
 	h.inbox.srcMu.Unlock()
-	h.handleRecoveredInbox(ctx, []string{target.ID, sentinel.ID})
+	h.handleRecoveredInbox(ctx, []inboxMove{{target.ID, target.Last}, {sentinel.ID, sentinel.Last}})
 	waitFor(t, "the ready selected item reached the start pass", func() bool {
 		h.inbox.mu.Lock()
 		defer h.inbox.mu.Unlock()

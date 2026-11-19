@@ -26,7 +26,7 @@ type InboxConnector struct {
 	RuleTier string `json:"rule_tier,omitempty"`
 	// OwnerAssigned preserves a source-verified responsibility card's sender-mute exception.
 	OwnerAssigned bool `json:"owner_assigned,omitempty"`
-	// Replay retains this exact move instead of accumulating later moves of its thread.
+	// Replay identifies an exact recovered move until ordinary activity advances the row.
 	Replay bool `json:"replay,omitempty"`
 	// Tags are what the thread is about (its repository, chat, sender…): what it can be muted by.
 	Tags []connector.Tag `json:"tags,omitempty"`
@@ -94,14 +94,22 @@ func (b *inboxBook) applyConnector(id, name string, things []connector.InboxThin
 	}
 	type move struct{ thread, last string }
 	selected := make(map[move]*InboxItem, len(things))
+	recoveredOpen := map[string]*InboxItem{}
 	for _, t := range things {
 		selected[move{t.Thread, t.Last}] = nil
 	}
 	b.each(func(it *InboxItem) {
-		if it.Source == id && it.Connector != nil && (scoped || it.Connector.Replay) {
-			key := move{it.Connector.Thread, it.Last}
-			if prior, ok := selected[key]; ok && (prior == nil || newerItem(it, prior)) {
-				selected[key] = it
+		if it.Source != id || it.Connector == nil || (!scoped && !it.Connector.Replay) {
+			return
+		}
+		thread := it.Connector.Thread
+		key := move{thread, it.Last}
+		if prior, ok := selected[key]; ok && (prior == nil || newerItem(it, prior)) {
+			selected[key] = it
+		}
+		if !scoped && it.DoneAt == nil {
+			if prior := recoveredOpen[thread]; prior == nil || newerItem(it, prior) {
+				recoveredOpen[thread] = it
 			}
 		}
 	})
@@ -115,7 +123,7 @@ func (b *inboxBook) applyConnector(id, name string, things []connector.InboxThin
 			}
 		}
 		if it.Connector.Replay && it.DoneAt == nil {
-			// The recovery boundary survives storage and later ordinary collection.
+			// An ordinary move must establish that it follows a recovered one before advancing it.
 			return "", false
 		}
 		return it.Connector.Thread, true
@@ -123,6 +131,9 @@ func (b *inboxBook) applyConnector(id, name string, things []connector.InboxThin
 	for _, t := range things {
 		open, done := index.openFor(t.Thread)
 		if exact := selected[move{t.Thread, t.Last}]; exact != nil {
+			if exact.Last != t.Last {
+				continue // ordinary activity already advanced this recovered row in the same batch
+			}
 			if exact.Connector.OwnerAssigned != t.OwnerAssigned || !slices.Equal(exact.Connector.Tags, t.Tags) ||
 				scoped && exact.DoneAt == nil && !exact.Connector.Replay {
 				b.roundWrite(exact)
@@ -138,9 +149,15 @@ func (b *inboxBook) applyConnector(id, name string, things []connector.InboxThin
 			open, done = exact, nil
 		} else if scoped {
 			open = nil // only the exact selected message may be changed; keep the completed-thread guard
+		} else if recovered := recoveredOpen[t.Thread]; recovered != nil && recovered.DoneAt == nil &&
+			recovered.Connector.Replay && t.At.After(recovered.UpdatedAt) &&
+			(open == nil || newerItem(recovered, open)) &&
+			(done == nil || (t.Last != done.Last && t.At.After(done.UpdatedAt))) {
+			open = recovered
 		}
 		if t.Done != "" {
 			if open != nil && b.settleThing(open, t, now) {
+				index.note(open)
 				if !containsItem(changed, open) {
 					changed = append(changed, open)
 				}
@@ -155,6 +172,7 @@ func (b *inboxBook) applyConnector(id, name string, things []connector.InboxThin
 				b.roundWrite(open)
 				open.Count += moveCount(t)
 				fillConnectorItem(open, t)
+				index.note(open)
 				b.noteReceived(open, prev, nil)
 				if t.Tier != "" {
 					b.noteTriaged(open)

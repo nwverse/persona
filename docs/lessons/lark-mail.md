@@ -49,6 +49,8 @@ When mainline hides the send button for an empty composer, attachment drafts sti
   history-based settlement pass; otherwise an on-call card followed by a bot handoff silently becomes done.
   Exact-ID recovery must leave the live cursor and deduplication state alone, and must not promote unselected
   context into activity. Test the card and handoff together, including source positions used by topic replies.
+- Validate precise source times against the exact half-open replay bounds. A CLI wall-clock minute represents
+  the whole minute, so require that minute to overlap the requested search window.
 - A thread list can omit its root and identify bot mentions by open ID while search uses app ID. Do not assume a
   synthetic thread fixture containing the root proves real handoff context. Resolve the bot's open ID from its
   binding and the root's ID from the source reply, then read that root explicitly as the user.

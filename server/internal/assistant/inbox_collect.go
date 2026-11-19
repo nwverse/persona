@@ -128,9 +128,11 @@ func (s *Service) InboxCollected(ctx context.Context, r assistantwire.InboxRound
 	b.settleRound()
 	ws := b.roundSaved(changed)
 	var replayIDs []string
+	var replayMoves []inboxMove
 	for id := range batch.only {
 		if it := b.items[id]; it != nil && it.open() { // the mute pass may have filed a selected item
 			replayIDs = append(replayIDs, id)
+			replayMoves = append(replayMoves, inboxMove{id, it.Last})
 		}
 	}
 	b.batch = nil
@@ -142,7 +144,7 @@ func (s *Service) InboxCollected(ctx context.Context, r assistantwire.InboxRound
 	if r.Replay {
 		if len(replayIDs) > 0 {
 			s.handoffLarkMentions(ctx, replayIDs...)
-			s.handleRecoveredInbox(ctx, replayIDs)
+			s.handleRecoveredInbox(ctx, replayMoves)
 		}
 		// Recovery must not wake or maintain any unrelated Inbox item.
 		return nil
@@ -161,11 +163,14 @@ func (s *Service) InboxCollected(ctx context.Context, r assistantwire.InboxRound
 	return nil
 }
 
+// inboxMove identifies one activity even if ordinary polling advances its row.
+type inboxMove struct{ id, last string }
+
 // An explicit recovery may name an older request than the twin's normal age
-// limit. Queue only the selected items, retaining their actual source time and
-// the user's existing twin enablement, policy and concurrency limits.
-func (s *Service) handleRecoveredInbox(ctx context.Context, ids []string) {
-	if len(ids) == 0 {
+// limit. Queue only the selected activities, retaining their actual source time
+// and the user's existing twin enablement, policy and concurrency limits.
+func (s *Service) handleRecoveredInbox(ctx context.Context, moves []inboxMove) {
+	if len(moves) == 0 {
 		return
 	}
 	go func() {
@@ -174,22 +179,23 @@ func (s *Service) handleRecoveredInbox(ctx context.Context, ids []string) {
 		// Built-in recoveries are already admitted, but unruled messages still
 		// need normal triage before escalation. Do not run the global pass.
 		b.triaging.Lock()
-		var ready []string
-		for _, id := range ids {
+		var ready []inboxMove
+		for _, move := range moves {
 			b.mu.Lock()
-			it := b.items[id]
-			needsTriage := it != nil && it.open() && !it.handled() && it.TriagedAt != it.Last && it.Context != ""
+			it := b.items[move.id]
+			needsTriage := it != nil && it.Last == move.last && it.open() && !it.handled() &&
+				it.TriagedAt != it.Last && it.Context != ""
 			b.mu.Unlock()
 			if needsTriage {
-				if w := s.triage(ctx, it); w != nil {
+				if w := s.triage(ctx, it, move.last); w != nil {
 					s.saveWrites(ctx, []*inboxWrite{w}, "its recovered triage")
 				}
 			}
 			b.mu.Lock()
-			it = b.items[id]
+			it = b.items[move.id]
 			// Legacy queued records also need a saved model or rule tier before the start pass can take them.
-			if it != nil && it.open() && (it.handled() || it.tiered()) {
-				ready = append(ready, id)
+			if it != nil && it.Last == move.last && it.open() && (it.handled() || it.tiered()) {
+				ready = append(ready, move)
 			}
 			b.mu.Unlock()
 		}

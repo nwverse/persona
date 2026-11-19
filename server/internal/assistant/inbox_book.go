@@ -292,9 +292,10 @@ func (b *inboxBook) has(id string) bool {
 }
 
 // add keeps an item a collection starts (from: the source it came from), under b.mu. A plugin connector's, while a
-// round runs, goes to the round's batch and enters the list once triaged (admitInbox); any other straight in.
+// normal round runs, goes to the round's batch and enters the list once triaged (admitInbox).
+// Explicit recovery saves its selected items first so the scoped triage and handoff can find them.
 func (b *inboxBook) add(from string, it *InboxItem) {
-	if b.batch == nil || !b.fromExtension(from) {
+	if b.batch == nil || b.batch.only != nil || !b.fromExtension(from) {
 		b.items[it.ID] = it
 		return
 	}
