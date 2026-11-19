@@ -893,6 +893,31 @@ The app's crashes and ANRs go to the hub's `error_reports` (format and rules: [p
 - **Content**: exception types, messages (`message` ≤ 1 KB), frames (class, method, source file name, line; `in_app` for `persona.*`), at most 5 causes × 64 frames, the release (`versionName`), build (`versionCode`), Android version and `Build.MODEL`. Breadcrumbs are the last 20 navigations through `AppNavigator` (route type names and tab names, never route arguments); pages that switch content without the navigator leave no breadcrumb.
 - **Queue and sending**: one JSON file a report in `files/error-reports/`, at most 50, at most 7 days old. Sent only to the selected group's hub (the one the hub-level pages show), whenever its connection is online and its hello's `features` has `error_reports`; online without it, the queue is deleted. Batches of ≤ 20 reports and < 240 KB through the connection's authenticated route (same token and `X-Persona-Client`), on `Dispatchers.IO`. 2xx deletes the batch (and `{"enabled": false}` deletes the rest); 4xx drops it, except 408 / 429; 5xx or no answer keeps it for the next time.
 
+## Developing Persona diagnostics (#9618)
+
+Settings › About has the device-local **Developing Persona** switch and **Export Diagnostics…** page. The shared ZIP,
+retention, scrubbing and category contract is in [developing-persona.md](../operations/developing-persona.md); this
+section only maps Android's production wiring to it.
+
+`app/dev/DevelopingPersona.kt` owns the switch and system observers. `:core:data`'s `DevRecorder`, `DevStore` and
+`DevPackage` own counters, bounded JSONL files and export. `:core:contracts`' `DevProbe` is a no-op while recording is
+off; `app/navigation/DevScreens.kt` tracks the visible tab and overlay with fixed page names, never route arguments.
+`DevHttpInterceptor` and the existing WebSocket listener supply byte/frame counts without payloads. Existing error
+reports also go to the local store while recording is on; other `ApplicationExitInfo` reasons become local `app` exit
+events without changing what the hub receives.
+
+Share File uses a non-exported FileProvider limited to `cache/dev-exports`. Send to Agent uses the existing Forward
+targets and upload endpoint, writes an uploaded file attachment and note into the structured draft, then opens the
+chat for the owner to send (`feature/chat/DiagnosticsHandoff.kt`, `app/dev/DiagnosticsShareActivity.kt`). There is no
+automatic message send or new hub API.
+
+The behavior tests are `DevScrubTest`, `DevProbeTest`, `DevStoreTest`, `DevRecorderTest`, `DevPackageTest`,
+`DevHttpInterceptorTest`, `DevSocketProbeTest`, `DevErrorCopyTest`, `DevelopingPersonaTest`,
+`DevelopingPersonaShareTest`, `DiagnosticsHandoffTest`, `DiagnosticsShareViewModelTest` and
+`DevelopingDiagnosticsPagesTest`. `DevelopingDiagnosticsShotsTest` and `DiagnosticsShareShotsTest` write native JVM
+Compose captures in all three styles, languages, light/dark, phone/tablet widths and default/large text. They check
+layout (including non-ellipsized labels), not physical-device sensors, ANR traces, logcat or the system share sheet.
+
 ## Release shrinking
 
 The release build runs R8 with shrinking and optimization but without obfuscation (`android/app/build.gradle.kts`,

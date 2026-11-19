@@ -80,6 +80,17 @@ the context tags, and Feishu routing uses the structured topic and run records.
    to require one of the existing Chinese kind identifiers and the same pipe delimiter. The first exchange,
    extension hint and rejected answer are quoted as data. These calls are private model requests.
 
+### To-do prompts
+
+The model phase covers the title and completion receipt. The title keeps its existing output language and length rules,
+and the receipt uses the owner's language for newly generated text while retaining its JSON field names and original
+evidence links. The title and receipt inputs retain task notes, machine names, paths and Agent replies as data.
+
+The delivery phase covers decision and project context in Agent handoffs and the Feishu topic-open and topic-reply
+messages. They read the owner's current locale at render time. Context tags, quote handling, to-do IDs, decision
+source records, and the `task_plan` contract are independent of the rendered language. Transcript stripping uses
+the context tags, and Feishu routing uses the structured topic and run records.
+
 ### Ratchet and acceptance
 
 `scripts/ci/prompt_language_ratchet.py` runs in the repository CI guards. It counts CJK-bearing `.md` templates
@@ -136,6 +147,7 @@ localize Persona Link's client UI; they do not supply the language of model prom
 | `assistant/route_agent.md` | Which leader's direction a new agent's work belongs to (JSON: a leader id or none), reading `route_input.md` with the agent's first message; purpose `assistant.route`, 2 s, a failure leaves it under Persona (`docs/assistant/unified-entry.md` "New agent goes under a leader") | `assistant/agent_route.go` |
 | `assistant/lost_tasks.md` | Tell the chat which background tasks were lost after personad restarts | `node/assistant.go` |
 | `assistant/interject.md` | `<persona-context>` with any message sent while a Claude chat was still answering (#4883): one sentence in the user's language on what it is doing and how long or what it waits for, before the next tool call, then answer the message; says the foreground work moved to the background only when it did (`Interject.Background`) (`docs/assistant/assistant.md`, "Interjecting while it answers") | `node/assistant_interject.go` |
+| `assistant/answer_again.md` | Requests one written reply from an Assistant conversation using the user's prior turn and its results, with instructions to avoid tools and repeated actions | `assistant/missing_reply.go` |
 | `assistant/usage_retry.md` | Continue the turn after repairing the transcript when a gateway reports impossible usage and Claude Code replies "Prompt is too long" (only `<persona-context>`, hidden by the app; `docs/assistant/assistant.md`, "Impossible gateway usage") | `node/assistant_usage.go` |
 | `assistant/main_handoff.md` | `<persona-context>` before the first message in a new main chat: old main chat ID, latest compaction summary, and subsequent messages (`docs/assistant/assistant.md`, "New main chat") | `assistant/start.go` `renderHandoff` `startMain` |
 | `assistant/codex_memory.md`, `codex_instructions.md` | Developer instructions when Codex runs the assistant: memory shared with Claude (directory, format, current index; snapshots accompany messages) | `node/assistant_codex_memory.go`, `node/assistant_codex_thread.go` |
@@ -277,6 +289,8 @@ Tool **lists and order** remain in code (the two functions above look up `prompt
 add its name to the list, write its handler, and use `UPDATE_GOLDEN=1` to update the `mcp_tools.*` / `mail_tools` goldens. `TestEveryMCPToolIsUsed` catches tool files with no provider. `TestMCPToolsTableListsEveryTool` keeps the table above in sync: every `mcp/<dir>/` needs a row that lists all of its tools.
 
 For to-dos, shared assistant instructions cover routing and responsibility; parameter formats, defaults and operation rules live in each tool's description/schema. Keep rules needed by task Agents in the association tools themselves: those callers do not receive the assistant's shared instructions. When consolidating text, preserve schema constraints and inspect both the tool snapshots and every affected shared-instruction variant before updating the size baseline through its guarded updater.
+
+`agent_start`, `agent_send` and `task_plan` each keep their own compact `wait_seconds` guidance: health conversations receive these tools but use `health_claude_md.md`, not the shared `assistant/claude_md.md`. Moving the common rules only into shared assistant instructions would leave health callers without them; any further consolidation must preserve the complete inline-observation contract in every tool.
 
 Device `phone_*` tools (contacts, calendar, reminders, photos, health, location, device info, clipboard, local notifications) execute on the phone. When the app connects to the hub, it sends its tool list
 (names, descriptions, schemas); the hub stores it in Postgres and adds optional `queue_if_offline` guidance and a schema parameter to confirmed writes before listing them to Agents (`setPhoneTools` / `phoneToolList` in `hub/hub.go`, `docs/apple/phone-tools.md`). The hub removes that parameter before forwarding a call. Its own `phone_write_queue_list` and `phone_write_queue_cancel` tools live in `mcp/phone/` and require no App release.

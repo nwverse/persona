@@ -253,21 +253,8 @@ export function stepsToItems(steps, opts = {}) {
           ts,
         }
         items.push(opts.full ? resItem : light(resItem))
-        if (Array.isArray(step.media)) {
-          step.media.forEach((m, mi) => {
-            if (m && typeof m.mime_type === 'string' && m.mime_type.startsWith('image/')) {
-              items.push({
-                id: `${line}#img${mi}`,
-                seq,
-                role: 'user',
-                kind: 'image',
-                mime: m.mime_type,
-                lazy: true,
-                ts,
-              })
-            }
-          })
-        }
+        // Omit tool-result step.media: Antigravity runtimes have no session.image handler (matching agytranscript.go),
+        // and Read/view_file image thumbnails are already resolved from tool_input.file_path via ViewedImages.
         break
       }
       case 'ERROR_MESSAGE': {
@@ -408,17 +395,21 @@ export function transcriptStatus(steps, summary) {
   return 'unknown'
 }
 
-export function workspacePathOf(summary, fallbackCwd = '') {
+export function workspacePathOf(summary, fallbackCwd = '', skip = null) {
   if (Array.isArray(summary?.WorkspaceURIs) && summary.WorkspaceURIs.length > 0) {
-    const u = String(summary.WorkspaceURIs[0])
-    if (u.startsWith('file://')) {
-      try {
-        return decodeURIComponent(new URL(u).pathname)
-      } catch {
-        return u.slice('file://'.length)
+    for (const raw of summary.WorkspaceURIs) {
+      const u = String(raw)
+      let p = u
+      if (u.startsWith('file://')) {
+        try {
+          p = decodeURIComponent(new URL(u).pathname)
+        } catch {
+          p = u.slice('file://'.length)
+        }
       }
+      if (skip && skip(p)) continue
+      return p
     }
-    return u
   }
   return fallbackCwd
 }
