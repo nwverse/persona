@@ -54,8 +54,9 @@ internal class KnowledgeViewModel(
     connection: KnowledgeConnection,
     private val dispatcher: CoroutineDispatcher = Dispatchers.Default,
     edits: StateFlow<Int> = KnowledgeEdits.revision,
+    initialKind: KnowledgeKind = KnowledgeKind.Projects,
 ) : ViewModel() {
-    private val filter = MutableStateFlow(KnowledgeFilter())
+    private val filter = MutableStateFlow(KnowledgeFilter(kind = initialKind))
     /** Names of the entries lists have shown, per pairing: search hits carry little more than an id. */
     private val names = mutableMapOf<String, KnowledgeEntry>()
     private var namesScope: HubScope? = null
