@@ -315,7 +315,9 @@ def check_fast_plans(path_list, root=ROOT):
     """{path: [check-fast's plan lines for that path alone]} from one check-fast --dry-run --each."""
     with tempfile.TemporaryDirectory(prefix="affected-drift-") as temporary:
         _stub_tools(temporary)
-        env = dict(os.environ, PATH=temporary + os.pathsep + os.environ.get("PATH", ""))
+        # A dry run takes no slot, but this runs in CI's Scripts tests job, and a lane that starts check-fast turns
+        # the slots off (docs/operations/testing.md "Heavy build slots"; test_heavy_slot.py holds the lanes to it).
+        env = dict(os.environ, PATH=temporary + os.pathsep + os.environ.get("PATH", ""), PERSONA_HEAVY_SLOTS="0")
         result = subprocess.run(["bash", str(root / "scripts/test/check-fast.sh"), "--dry-run", "--changed-from", "-",
                                  "--each"], input="".join(p + "\n" for p in path_list), cwd=root, env=env,
                                 capture_output=True, text=True, timeout=3600)

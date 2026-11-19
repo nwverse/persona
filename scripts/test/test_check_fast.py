@@ -371,6 +371,30 @@ class CheckFastScriptsTests(ScriptsRepoTestCase):
         self.assertIn("queued: scripts/app/test_android_new_tool.py", out)
         self.assertIn("queued: android i18n", out)
 
+    def test_a_ci_lane_or_watcher_file_runs_the_slot_callers_test(self):
+        # test_heavy_slot.py reads these: a CI lane or a watcher step that names a script taking a slot must set
+        # PERSONA_HEAVY_SLOTS=0. A new lane script once broke it with nothing local running it (#11026).
+        self.commit_on_top("scripts/test/test_heavy_slot.py", PASSING, "base")
+        readers = (".github/workflows/scripts.yml", "scripts/ci/lane.sh", "scripts/ci/lane.py",
+                   "scripts/operations/watch.py", "scripts/operations/pr-watch.example.json",
+                   "scripts/operations/persona-pr-watch.service", ".claude/skills/pr-review-merge-loop/scripts/run.py",
+                   ".claude/skills/main-verify-fix-loop/SKILL.md")
+        others = ("scripts/tools/other.py", ".github/CODEOWNERS", "scripts/operations/notes.txt", ".claude/settings.json",
+                  "scripts/ci/test_lane.py")  # test_heavy_slot.py skips test_* files
+        self.write("listed.txt", "".join(p + "\n" for p in readers + others))
+        code, out = self.check_fast("--dry-run", "--changed-from", "listed.txt", "--each")
+        self.assertEqual(0, code, out)
+        plans, current = {}, None
+        for line in out.splitlines():
+            if line.startswith("== "):
+                current = plans.setdefault(line[3:], [])
+            elif current is not None:
+                current.append(line.strip())
+        self.assertEqual(sorted(readers + others), sorted(plans), out)
+        for path, lines in plans.items():
+            with self.subTest(path=path):
+                self.assertEqual(path in readers, "queued: scripts/test/test_heavy_slot.py" in lines, out)
+
     def test_a_go_trimpath_change_also_runs_the_suites_of_its_callers(self):
         # server.sh and check-fast.sh compose GOFLAGS with the helper (#10614); test_ci.py and test_check_fast_inputs.py
         # run them.

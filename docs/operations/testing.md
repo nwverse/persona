@@ -266,7 +266,9 @@ CI does not set `PERSONA_HEAVY_SLOTS=0`. No hosted lane (`.github/workflows/`, `
 main watchers' checks run a script that takes a slot: they run their commands directly, so they never queue behind
 local builds. A runner has one job, where a slot would only make that job's own steps wait for each other, so a lane
 or a watcher step that starts to run one of these scripts sets `PERSONA_HEAVY_SLOTS=0`;
-`scripts/test/test_heavy_slot.py` fails until it does. It reads the CI lanes, `scripts/operations/` (the watchers'
+`scripts/test/test_heavy_slot.py` fails until it does. `scripts/ci/affected_drift.py`, which the Scripts tests job runs
+through its test, starts `check-fast.sh --dry-run`: a plan takes no slot, and it sets the switch for that run all the
+same. `test_heavy_slot.py` reads the CI lanes, `scripts/operations/` (the watchers'
 scripts, example configs and services) and both watcher skills under `.claude/skills/` (their scripts and `SKILL.md`).
 The `xcode-slot` runner that `scripts/release/release.sh` and `sim.sh`'s Rust core build use when it is installed
 (`PERSONA_XCODE_RUNNER`, `docs/operations/release.md`) is a separate lock.
@@ -360,6 +362,7 @@ Path mapping:
 | `spec/**`, `schema/**` read by a runtime package | In addition to other checks in this table, the tests of each `integrations/<pkg>` and of `sdk/ts` whose files name the changed path or a directory it is in, outside a comment line (`integrations/runtime-sdk` reads `spec/fixtures/input-clip/cases.json`, `sdk/ts` reads `schema/extension/examples/`). Found at run time with `git grep`; CI's runtimes lane runs for all of `spec/` and `schema/` |
 | `android/**`, `scripts/app/*android*` (including both `test_android_*` self-tests) | `scripts/app/android_i18n_check.py` and Android checker unittests (i18n, token and motion baselines; no Gradle build) |
 | `.github/**` | `scripts/test/pr_needs_issue_test.mjs` |
+| `.github/workflows/*.yml`, `scripts/ci/*.sh`, `scripts/ci/*.py`, `scripts/operations/*.py`, `scripts/operations/*watch*.json`, `scripts/operations/*watch*.service`, `.claude/skills/pr-review-merge-loop/**`, `.claude/skills/main-verify-fix-loop/**` (not `test_*` files) | Also `scripts/test/test_heavy_slot.py`: a CI lane or a watcher step that names a script taking a heavy slot must set `PERSONA_HEAVY_SLOTS=0` ("Heavy build slots" above). A new lane script once broke it with nothing local running it (#11026) |
 | `schema/**` | `scripts/test/test_extension_schema.py`, `scripts/test/test_sdk_bundle.py`, plus `go test ./...` in sdk/go (the same three checks as CI's Extension schema job) |
 | `schema/wire/**`, `spec/fixtures/**`, `scripts/gen/extension_schema.py`, `scripts/test/test_extension_schema.py` | Also `scripts/test/test_wire_schema.py`: every sample the shared fixtures keep for a wire schema holds to it at any depth, and the generated wire types are current (it imports the extension test's validator). CI's guards step always runs it |
 | `spec/fixtures/todo-detail/**`, `spec/fixtures/todo-layout/**`, `spec/fixtures/todo-view/README.md`, `spec/fixtures/agent-names/**`, `schema/wire/todo-view.schema.json`, `server/internal/assistant/todos.go`, `server/internal/assistant/todo_ask.go`, `scripts/test/test_wire_schema.py`, `scripts/test/test_extension_schema.py` | Also `scripts/test/test_todo_fixtures.py`: the to-do page and window fixtures hold to their READMEs' rules, the view schema, the todo-view line keys, the agent names and the fields the hub writes on a listed to-do (it imports the wire and extension schema tests) |

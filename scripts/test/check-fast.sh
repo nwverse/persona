@@ -93,6 +93,10 @@
 #                              also test_ci.py, test_check_fast_inputs.py and scripts/ci/test_affected_drift.py, this
 #                              script and scripts/operations/pr_watch_verify.py also test_affected_drift.py, and each
 #                              scripts/operations/pr_watch_*.py also scripts/operations/test_pr_watch.py
+#   .github/workflows/*.yml, scripts/ci/*.{sh,py}, scripts/operations/*.py, *watch*.{json,service} there,
+#   .claude/skills/{pr-review-merge-loop,main-verify-fix-loop}/**
+#                              also scripts/test/test_heavy_slot.py: a CI lane or watcher step that names a script
+#                              taking a slot must set PERSONA_HEAVY_SLOTS=0 (#11026)
 #   docs/**, any *.md          scripts/test/test_doc_paths.py and test_doc_go_paths.py (paths quoted in the docs, the
 #                              CLAUDE.md doc index), test_doc_sections.py (section names quoted after a doc path),
 #                              test_doc_wire.py (the wire lists in protocol.md, extensions.md)
@@ -1134,6 +1138,17 @@ else
       scripts/heavy_slot.py) script_test_add scripts/test/test_check_fast_inputs.py ;;
       scripts/check-fast.sh|scripts/test/check-fast.sh|scripts/test/test_check_fast.py)
         script_test_add scripts/test/test_check_fast_guards.py; script_test_add scripts/test/test_check_fast_inputs.py ;;
+    esac
+    # test_heavy_slot.py reads CI's lanes, the operations scripts (the watchers among them), their example configs and
+    # services, and both watcher skills: one that names a script taking a slot must set PERSONA_HEAVY_SLOTS=0
+    # (docs/operations/testing.md "Heavy build slots"). A new lane script once broke it unseen (#11026). It skips
+    # test_* files, as this does.
+    case "${f##*/}:$f" in
+      test_*) ;;
+      *:.github/workflows/*.yml|*:scripts/ci/*.sh|*:scripts/ci/*.py|*:scripts/operations/*.py|\
+      *:scripts/operations/*watch*.json|*:scripts/operations/*watch*.service|*:.claude/skills/pr-review-merge-loop/*|\
+      *:.claude/skills/main-verify-fix-loop/*)
+        script_test_add scripts/test/test_heavy_slot.py ;;
     esac
     # The three selections of what a change affects (#11026): CI's lanes (paths.py, tested in test_ci.py and, for the
     # web plan and the lanes a plan names, test_check_fast_inputs.py), this script and the watcher's lanes;
