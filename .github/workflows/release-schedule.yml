@@ -67,6 +67,14 @@ jobs:
             echo "Release PR already exists for $version; do not duplicate it."
             exit 0
           fi
+          if git ls-remote --exit-code "https://github.com/$REPOSITORY.git" "refs/heads/$branch" >/dev/null 2>&1; then
+            # A previous failed scheduler owns this version. Never overwrite its different source: allocate the next one.
+            echo "$branch has no open PR; preserve its failed source and select a new immutable version."
+            reserved="$(git ls-remote --heads "https://github.com/$REPOSITORY.git" 'refs/heads/release/*' | cut -f2 | sed 's#refs/heads/release/##')"
+            version="$(python3 scripts/operations/release_pr.py --repository "$REPOSITORY" --channel beta next-version --stable-tag "$stable" --reserved $reserved)"
+            branch="release/$version"
+            title="release: v$version"
+          fi
           if git ls-remote --exit-code "https://github.com/$REPOSITORY.git" "refs/tags/v$version" >/dev/null 2>&1; then
             echo "Version tag v$version already exists; do not reuse it." >&2
             exit 1

@@ -105,6 +105,7 @@ fun ChatComposer(
      * gets how much room the composer has ([ModelPillWidth], the web's container rules). Null: none.
      */
     modelPill: (@Composable (ModelPillWidth) -> Unit)? = null,
+    wrapPlaceholder: Boolean = false,
 ) {
     val context = LocalContext.current
     val compactShell = useShellSurface && PersonaTheme.style == AppStyle.Glass
@@ -540,7 +541,7 @@ fun ChatComposer(
             decorationBox = { field ->
                 Box {
                     if (state.value.text.isEmpty()) Text(if (working && enabled && !homeAssistant) stringResource(R.string.chat_composer_placeholder_working) else composerPlaceholder,
-                        style = PersonaTheme.type.body, color = PersonaTheme.palette.ink3, maxLines = if (compactShell) 1 else 2,
+                        style = PersonaTheme.type.body, color = PersonaTheme.palette.ink3, maxLines = if (wrapPlaceholder) growLines else if (compactShell) 1 else 2,
                         overflow = TextOverflow.Ellipsis)
                     field()
                 }

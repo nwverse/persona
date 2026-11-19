@@ -3461,3 +3461,14 @@ New copy ships in English, Simplified Chinese and Japanese. Evidence:
 ## Lark topic group policy (#10238)
 
 Settings › Connectors › Lark bot › Topic groups serves owners who want one group to require their explicit bot mention. It reuses Group, Row, Switch, Button, the native select and settings input styles; policy defaults off. Each group shows its saved switch. Enrollment allows choosing the policy before adding the group; a strict first enrollment stays separate from the home choice. The home select shows the effective home or the private-chat fallback. Both writes wait for the existing acknowledged save; failures preserve saved values and enrollment drafts. No primary chat screen or model setting changes.
+
+## Shared botmux display setting (#10241)
+
+For people using Agents, Web Settings › Agents reuses `Row`, `Switch`,
+`SettingsHint` and `RowFailed` for **Show botmux sessions in Agents**. The row
+shows the acknowledged shared value; a save disables the switch and shows Saving,
+a failure keeps the last acknowledged value and offers Retry. A nearby Computers
+link explains the independent per-computer inventory switch. The sidebar's
+botmux chip is removed; its Lark group quick filter is absent when its count is
+zero. Complete and paged lists exclude the same hosts before grouping and counts.
+This requested interaction change adds no component, theme or motion pattern.

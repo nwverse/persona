@@ -95,6 +95,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("missing RELEASE_PR_TOKEN", text)
         self.assertIn("git diff --cached --quiet", text)
         self.assertNotIn("gh pr create", text)
+        self.assertIn("refs/heads/$branch", text)
+        self.assertIn("preserve its failed source", text)
+        self.assertIn("--reserved $reserved", text)
+        self.assertNotIn("--force", text)
         self.assertNotIn('refs/tags/$TAG', text)
         self.assertNotIn("gh release create", text)
 

@@ -3101,3 +3101,15 @@ Compared item by item with iOS as the reference and Android for comparison. #297
 Phone data tools (`phone_*`, the "This iPhone" connector), Live Activities / Dynamic Island, Apple Watch, push notifications and notification actions, phone / watch recording and transcription,
 Siri / Shortcuts / Spotlight, taking photos, saving to Photos, iPad / iPhone Duo layouts, "Persona on Mac is signed in": these all depend on system capabilities or hardware with no browser equivalent.
 Demo mode (viewable without a hub) is not done on the web: the hub hosts the web app, so if it opens, there is a hub.
+
+### Shared botmux visibility
+
+Settings › Agents owns **Show botmux sessions in Agents** (#10241).
+The shared value is read from the paired hub's default manager on reconnect and
+Agents refresh; browser storage is only legacy migration input, retained on
+failures. The sidebar has no botmux toggle. Complete lists exclude botmux before
+filtering/grouping; paged lists send `exclude_pane_source=feishu`. Empty Lark group
+filters disappear and a stale selection resolves to All without changing the
+shared display preference. Saving uses the acknowledged server value with local
+pending feedback and recoverable errors. The per-computer switch still controls
+inventory, and hidden rows remain usable for to-do attribution and dispatch.
