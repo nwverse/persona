@@ -385,7 +385,7 @@ struct PlanTaskRow: View {
 
     static func permissionLabel(_ mode: String) -> String {
         switch mode {
-        case "acceptEdits": String(localized: "Can edit files")
+        case "acceptEdits": String(localized: "Auto-Edit")
         case "plan": String(localized: "Plan first")
         case "auto": String(localized: "Auto [Plan Card Permission]", comment: "A planned task's permission mode: the agent judges the risk itself")
         case "bypassPermissions": String(localized: "Allow Everything")

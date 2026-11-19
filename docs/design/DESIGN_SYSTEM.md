@@ -445,6 +445,10 @@ on-demand model panel, not the everyday Assistant home (#6887).
   chevron; Full access tints the words `red`, Auto-review `mode-acts`; under a 300 px composer (a 320 px phone) only
   the symbol. A mode not reported yet is named by no value: the raised hand and "Permission mode", no tooltip (#5756). Its menu is the shared `Menu` (300 px) with each mode's symbol, name and check; descriptions are tooltips
   (`MenuItem.tip`), except a disabled row's reason and a row asking again, which stay under the name.
+- Permission mode names on every client (#10363) come from `spec/fixtures/permission-modes/names.json`: Default
+  permissions, Auto accept edits, Plan mode, Auto-review and Full access in en, zh-Hans and ja. Pickers, settings,
+  planned tasks, answered-plan labels and confirmations use those names; approval-action phrases, launcher-default
+  choices and unset/default-behavior labels stay distinct. The fixture README names each client's drift check.
 - Web under the box (#5324): the source and folder line at the left (12 px `ink-3`, a folder mark, truncating, full
   values on hover; an ⓘ menu at phone width), the context meter at the right.
 - Web `/` palette (#5325, `web/src/views/chat/SlashPalette.tsx`; cindy's slash command palette, followed at the owner's
