@@ -2487,3 +2487,99 @@ func TestHeldUnsureRepairLeavesAHoldUnderWay(t *testing.T) {
 		t.Fatalf("sent %v", got)
 	}
 }
+
+// The reviewer's case, its first half: a retried one to be looked for whose session is not listed (a runtime Agent
+// gone from the list) is the owner's decision; days on, it has not expired, and the one behind it is renewed, not
+// failed as if its computer were away.
+func TestHeldBehindARetriedOneDoesNotExpire(t *testing.T) {
+	st := newHeldMem()
+	t0 := time.Date(2026, 11, 19, 9, 0, 0, 0, time.UTC)
+	putHeld(t, st, "s1", "a", db.HeldFailed, db.HeldUnclear, t0)
+	b := putHeld(t, st, "s1", "b", db.HeldWaiting, "", t0)
+	var mu sync.Mutex
+	now := t0.Add(time.Hour)
+	d, _ := heldDevicesAt(t, st, time.Hour, func() time.Time { mu.Lock(); defer mu.Unlock(); return now })
+	n := &heldNode{listed: []string{"s2"}}
+	up := make(chan struct{})
+	laterMachine(t, d, "mac", "Laptop", n, up)
+	close(up)
+	eventually(t, 5*time.Second, "connected", func() bool { listed, _ := d.machineByID("mac").heldOn("s2"); return !listed.IsZero() })
+	if found, err := d.HeldRetry(context.Background(), "s1", "a"); !found || err != nil {
+		t.Fatalf("retry: %v %v", found, err)
+	}
+	mu.Lock()
+	now = t0.Add(49 * time.Hour)
+	mu.Unlock()
+	heldTicks(t, d, 1)
+	rows := st.all()
+	if rows[0].State != db.HeldWaiting || rows[0].Failure != db.HeldUnclear {
+		t.Fatalf("a %+v", rows[0])
+	}
+	if r := st.snapshot()[b]; r.State != db.HeldWaiting || !r.HeldAt.Equal(t0.Add(49*time.Hour)) {
+		t.Fatalf("b %+v", r)
+	}
+	if got := n.sent(); len(got) != 0 {
+		t.Fatalf("sent %v", got)
+	}
+}
+
+// Its second half: once its node has taken messages for heldListWait without listing the session, the retried one is
+// looked for anyway; reads that fail (no such session) leave it to the owner after heldCheckTries; nothing is sent.
+func TestHeldRetriedOneOfAnUnlistedSessionIsLookedFor(t *testing.T) {
+	old := heldListWait
+	heldListWait = 0 // the connection is old enough at once
+	t.Cleanup(func() { heldListWait = old })
+	st := newHeldMem()
+	at := time.Now().Add(-time.Hour)
+	putHeld(t, st, "s1", "a", db.HeldFailed, db.HeldUnclear, at)
+	putHeld(t, st, "s1", "b", db.HeldWaiting, "", at)
+	d, _ := heldDevices(t, st, time.Hour)
+	n := &heldNode{listed: []string{"s2"}, itemsFail: errors.New("no such session")}
+	up := make(chan struct{})
+	laterMachine(t, d, "mac", "Laptop", n, up)
+	if found, err := d.HeldRetry(context.Background(), "s1", "a"); !found || err != nil {
+		t.Fatalf("retry: %v %v", found, err)
+	}
+	close(up)
+	eventually(t, 5*time.Second, "looked for", func() bool { return n.itemReads() == 1 })
+	heldIdle(t, d)
+	heldTicks(t, d, heldCheckTries)
+	if r := st.all()[0]; r.State != db.HeldFailed || r.Failure != db.HeldUnconfirmed {
+		t.Fatalf("a %+v", st.all())
+	}
+	if got, reads := n.sent(), n.itemReads(); len(got) != 0 || reads != heldCheckTries {
+		t.Fatalf("sent %v, %d reads", got, reads)
+	}
+}
+
+// Only reads that fail in a row leave a message that may have arrived to the owner: one that read fine in between
+// (not there) starts the count again, across connections days apart.
+func TestHeldOnlyFailedReadsInARowLeaveItToTheOwner(t *testing.T) {
+	st := newHeldMem()
+	a := putHeld(t, st, "s1", "a", db.HeldFailed, db.HeldUnclear, time.Now().Add(-time.Hour))
+	d, _ := heldDevices(t, st, time.Hour)
+	n := &heldNode{}
+	up := make(chan struct{})
+	laterMachine(t, d, "mac", "Laptop", n, up)
+	close(up)
+	eventually(t, 5*time.Second, "read on connecting", func() bool { return n.itemReads() == 1 })
+	heldIdle(t, d)
+	// Connections 2 (fails), 3 (fails), 4 (reads: not there), 5 (fails): a new connection reads it once again.
+	for i, fail := range []bool{true, true, false, true} {
+		n.mu.Lock()
+		if fail {
+			n.itemsErr = errors.New("transcript not found")
+		}
+		n.mu.Unlock()
+		d.held.mu.Lock()
+		d.held.rowLocked("mac", a).checked = time.Time{} // as a new connection: not read on it yet
+		d.held.mu.Unlock()
+		heldTicks(t, d, 1)
+		if reads := n.itemReads(); reads != i+2 {
+			t.Fatalf("connection %d: %d reads", i+2, reads)
+		}
+	}
+	if r := st.all()[0]; r.State != db.HeldFailed || r.Failure != db.HeldUnclear {
+		t.Fatalf("left to the owner after failures not in a row: %+v", r)
+	}
+}
