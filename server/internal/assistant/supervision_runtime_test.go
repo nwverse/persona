@@ -327,3 +327,37 @@ func TestRuntimeQueuedSupervisionMovesToOwnSupervisor(t *testing.T) {
 		}
 	}
 }
+
+// A leader conversation on a runtime (a scheduled chat listed in assistant.leaders) is routed around, so the route's
+// supervisor has to be able to review what it supervised.
+func TestRuntimeLeaderTasksAreReviewedByBackgroundSupervisor(t *testing.T) {
+	ctx := context.Background()
+	s, f := newQuietService(t)
+	off := false
+	s.noBackground = false
+	setSettings(t, s, func(v *Settings) {
+		v.MainSupervisesOwnTasks = &off
+		v.BackgroundSupervisor, v.BackgroundSupervisorMachineID = "background", "server"
+		v.Leaders = []string{"agy-lead"}
+	})
+	persona := proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Agent: "claude", Status: proto.StatusIdle}
+	background := proto.Session{SessionID: "background", MachineID: "server", Assistant: true, Agent: "codex", Status: proto.StatusIdle}
+	lead := proto.Session{SessionID: "agy-lead", MachineID: "server", Assistant: true, SourceKind: proto.SourceRuntime, Agent: "agy", Launcher: "agy", Status: proto.StatusIdle}
+	f.setSessions("server", persona, background, lead)
+	f.mu.Lock()
+	f.known[background.SessionID] = true
+	f.mu.Unlock()
+	todo, err := s.newTodo(ctx, "Check", "", lead.SessionID, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool { v.Supervisor = lead.SessionID; return true }); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.digestTarget(ctx, s.settings(ctx), superviseSignal{Todo: todo.ID, Kind: sigReview}); got != background.SessionID {
+		t.Fatalf("signal goes to %q, want the background supervisor", got)
+	}
+	if !s.backgroundSupervises(ctx, background.SessionID, todoNow(s, todo.ID)) {
+		t.Fatal("the background supervisor may not review the task it is told about")
+	}
+}

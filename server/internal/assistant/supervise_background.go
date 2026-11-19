@@ -84,7 +84,11 @@ func (s *Service) backgroundSupervises(ctx context.Context, self string, t Todo)
 		return false
 	}
 	sup := t.Supervision.Supervisor
-	return !s.isLeader(ctx, sup) && !s.isLeaderRef(sup)
+	if s.isLeaderRef(sup) {
+		return false
+	}
+	// A leader conversation on a runtime cannot be told anything (digestTarget): its tasks are this route's to review.
+	return !s.isLeader(ctx, sup) || s.runtimeConversation(ctx, s.settings(ctx).MachineID, sup)
 }
 
 // followUpWords tells conversation self, in the answer of the tool that just made an agent its supervised task
