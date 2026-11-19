@@ -1250,6 +1250,7 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   launcher's own model rows may keep the description alone. A sign-in, key or model-availability error that offers a
   repair names the affected launcher in its title, and the repair opens that launcher's provider settings. This is a
   content rule, not a new badge, token or visual style.
+  Preset descriptions and a truncated model's full-ID line retain the launcher name too.
   Launcher summaries retain each provider's full name as their accessible name and tooltip; the former provider rail
   and its shortened captions are replaced by the shared column (#10249).
 - Model families (`web/src/lib/model-families.ts`, `docs/web/web.md` "Model pill and model panel"): inside a provider
@@ -3429,6 +3430,39 @@ extension names its source under the address and, when that source is off or gon
 pill and one `data-repository-note` line on what still works on this page (it stays saved and its details can be
 edited). A source whose extension was renamed is still the saved repository's: the hub keeps the id it was saved
 with, so the page matches it to the listed source with the same contribution that claims its host.
+
+## Scheduled task execution options
+
+The web task editor serves people scheduling specialist work as an optional **Execution options** group, closed by
+default and placed before the prompt. Its title and configuration share one compact line, with ellipsis and a full
+text tooltip when narrow. Its disclosure always shows the effective launcher name, agent backend,
+model and thinking effort; repeated launcher/backend names are shown once. It reuses `Field`, native selects,
+`ModelPicker`, semantic surface/text tokens and the existing dialog. Every untouched control explicitly follows
+Assistant, with known inherited values shown. Selecting another launcher uses that agent's defaults for model and
+effort. Empty choices retain dynamic inheritance rather than pinning a copied value. Task list rows use the same
+formatter and resolved `execution` context, including inherited model and effort; older responses without that
+context keep their legacy display and need no new fields. The selected computer is shown
+inside the group. Launcher and model discovery use that computer's chat-compatible capabilities; the model catalog
+is only requested when the group opens. A working directory
+is an existing path on that computer, explained under the field. Switching execution context may start a new chat;
+the hint says earlier chats are retained. Failed saves retain the draft, and saving/running disables the controls.
+If Run now saves successfully but running fails, the open form accepts the saved execution pins and revision.
+Fields edited while saving keep their newer input; untouched execution fields take the canonical saved values.
+A later unrelated save stays sparse, and explicitly clearing a choice still restores inheritance.
+Continuing the original chat requires empty task execution choices, including the computer and directory. The shared
+form validation explains this and disables Save and Run now; clearing saved choices restores inheritance without
+requiring that computer to be online. Toggling the original chat back on revalidates the current choices.
+Launcher discovery failure or a missing saved launcher keeps the saved choice visible as unavailable, while the
+Assistant inheritance option remains selectable. Selecting it explicitly clears launcher, model and effort together;
+discovery alone never changes saved choices. Computer-scoped defaults come from that computer's launcher response.
+A saved model alias uses its folded catalog row's capabilities and default thinking effort without rewriting the saved ID.
+Defaults, model and launcher catalogs are keyed to the current assistant and their exact execution context; stale
+responses cannot replace the current catalog. Discovery reads and the task save target the same assistant. Task
+inheritance is requested explicitly, leaving ordinary Assistant picker defaults unchanged.
+While model discovery is pending, the picker is disabled. A failed read leaves the saved selection visible and the
+launcher inheritance recovery control usable, with no rows from the previous context.
+Run history has a separate disclosure for its execution configuration, outside the button opening the conversation.
+This is a secondary form extension; primary screens, themes and chat input remain unchanged.
 
 ## Optional repository associations
 
