@@ -44,19 +44,36 @@ jobs:
           set -euo pipefail
           if [[ "${{ github.event_name }}" = push ]]; then
             commit="${{ github.sha }}"
-            gh pr list --repo "$REPOSITORY" --state merged --search "$commit" --json number,state,isDraft,baseRefName,headRefOid,headRepository,author,title,mergeCommit > release-pr-list.json
+            gh api "repos/$REPOSITORY/commits/$commit/pulls" > release-pr-list.json
             python3 - <<'PY'
           import json,os
           from pathlib import Path
           commit=os.environ['COMMIT']
-          candidates=[p for p in json.loads(Path('release-pr-list.json').read_text()) if (p.get('mergeCommit') or {}).get('oid')==commit and p.get('title','').startswith('release:')]
+          candidates=[p for p in json.loads(Path('release-pr-list.json').read_text()) if p.get('state')=='closed' and (p.get('merge_commit_sha') or p.get('mergeCommit',{}).get('oid'))==commit and p.get('title','').startswith('release:') and p.get('user',{}).get('login')=='chyroc']
           if len(candidates)!=1:
               print('No unique merged release PR for this main commit; not a release run')
               raise SystemExit(78)
           Path('release-pr.json').write_text(json.dumps(candidates[0]))
+          pr=json.loads(Path('release-pr.json').read_text())
+          pr['state']='MERGED'
+          pr['isDraft']=pr.get('draft',False)
+          pr['baseRefName']=pr.get('base',{}).get('ref','main')
+          pr['headRefOid']=pr.get('head',{}).get('sha','')
+          pr['headRepository']={'nameWithOwner':pr.get('head',{}).get('repo',{}).get('full_name','')}
+          pr['author']=pr.get('user',{})
+          pr['mergeCommit']={'oid':pr.get('merge_commit_sha')}
+          Path('release-pr.json').write_text(json.dumps(pr))
           PY
           else
             gh pr view "$PR_NUMBER" --repo "$REPOSITORY" --json state,isDraft,baseRefName,headRefOid,headRepository,author,title,mergeCommit > release-pr.json
+            gh api "repos/$REPOSITORY/pulls/$PR_NUMBER" --jq '{merge_commit_sha}' > release-pr-rest.json
+            python3 - <<'PY'
+          import json
+          from pathlib import Path
+          pr=json.loads(Path('release-pr.json').read_text())
+          pr['mergeCommit']={'oid':json.loads(Path('release-pr-rest.json').read_text())['merge_commit_sha']}
+          Path('release-pr.json').write_text(json.dumps(pr))
+          PY
           fi
           printf 'number=%s\n' "$(python3 -c 'import json; print(json.load(open("release-pr.json"))["number"])')" >> "$GITHUB_OUTPUT"
           channel=release
@@ -538,6 +555,14 @@ jobs:
         run: |
           set -euo pipefail
           gh pr view "$PR_NUMBER" --repo "$REPOSITORY" --json state,isDraft,baseRefName,headRefOid,headRepository,author,title,mergeCommit > release/merge-pr.json
+          gh api "repos/$REPOSITORY/pulls/$PR_NUMBER" --jq '{merge_commit_sha}' > release/merge-pr-rest.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          pr=json.loads(Path('release/merge-pr.json').read_text())
+          pr['mergeCommit']={'oid':json.loads(Path('release/merge-pr-rest.json').read_text())['merge_commit_sha']}
+          Path('release/merge-pr.json').write_text(json.dumps(pr))
+          PY
           python3 - <<'PY'
           import json,os
           from pathlib import Path

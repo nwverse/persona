@@ -24,17 +24,16 @@ def require_verified(repository, number, head, title, runner=None):
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
         raise ReleaseMergeError("release repository must be owner/name")
     try:
-        data = json.loads(runner(["gh", "pr", "view", str(number), "--repo", repository,
-                                 "--json", "state,isDraft,baseRefName,headRefOid,headRepository,author,title,mergeCommit"], text=True))
-        if data.get("state") != "OPEN" or data.get("isDraft") is not False:
+        data = json.loads(runner(["gh", "api", f"repos/{repository}/pulls/{number}"], text=True))
+        if data.get("state") != "open" or data.get("draft") is not False:
             raise ReleaseMergeError("release PR is not open and non-draft")
-        if data.get("baseRefName") != "main" or data.get("headRefOid") != head:
+        if (data.get("base") or {}).get("ref") != "main" or (data.get("head") or {}).get("sha") != head:
             raise ReleaseMergeError("release PR source moved or is not main")
-        if (data.get("headRepository") or {}).get("nameWithOwner") != repository:
+        if (data.get("head") or {}).get("repo", {}).get("full_name") != repository:
             raise ReleaseMergeError("release PR must be in the protected repository")
-        if (data.get("author") or {}).get("login") != "chyroc":
+        if (data.get("user") or {}).get("login") != "chyroc":
             raise ReleaseMergeError("release PR author is not the administrator")
-        merge_commit = (data.get("mergeCommit") or {}).get("oid", "")
+        merge_commit = data.get("merge_commit_sha", "")
         if not SHA.fullmatch(merge_commit):
             raise ReleaseMergeError("release PR has no proposed merge result yet; resolve conflicts first")
         checks = json.loads(runner(["gh", "api", f"repos/{repository}/commits/{merge_commit}/check-runs"], text=True))

@@ -14,12 +14,11 @@ MERGE = "b" * 40
 
 class ReleaseMergeGateTests(unittest.TestCase):
     def pr(self):
-        return {"state": "OPEN", "isDraft": False, "baseRefName": "main", "headRefOid": COMMIT,
-                "headRepository": {"nameWithOwner": "nwverse/persona"}, "author": {"login": "chyroc"},
-                "title": "release: v0.9.2-beta.2", "mergeCommit": {"oid": MERGE}}
+        return {"state": "open", "draft": False, "base": {"ref": "main"}, "head": {"sha": COMMIT, "repo": {"full_name": "nwverse/persona"}},
+                "user": {"login": "chyroc"}, "title": "release: v0.9.2-beta.2", "merge_commit_sha": MERGE}
 
     def successful(self, command, **kwargs):
-        if command[:2] == ["gh", "pr"]:
+        if command[:2] == ["gh", "api"] and "/pulls/" in command[2]:
             return json.dumps(self.pr())
         if "check-runs" in command[2]:
             return json.dumps({"check_runs": [{"name": "All available release-PR checks passed", "head_sha": MERGE,
@@ -38,14 +37,14 @@ class ReleaseMergeGateTests(unittest.TestCase):
     def test_failed_missing_or_stale_verification_blocks_merge(self):
         for change in ("failed", "pending", "missing", "expired", "fork", "actor", "head"):
             def response(command, **kwargs):
-                if command[:2] == ["gh", "pr"]:
+                if command[:2] == ["gh", "api"] and "/pulls/" in command[2]:
                     data = self.pr()
                     if change == "fork":
-                        data["headRepository"]["nameWithOwner"] = "fork/persona"
+                        data["head"]["repo"]["full_name"] = "fork/persona"
                     elif change == "actor":
-                        data["author"]["login"] = "other"
+                        data["user"]["login"] = "other"
                     elif change == "head":
-                        data["headRefOid"] = "c" * 40
+                        data["head"]["sha"] = "c" * 40
                     return json.dumps(data)
                 if "check-runs" in command[2]:
                     if change == "missing":

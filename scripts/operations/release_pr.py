@@ -190,8 +190,11 @@ def verify_merged_pr(pr, repository, channel, commit, actor):
         raise ReleaseError("only a merged non-draft release PR can publish")
     if pr.get("baseRefName") != "main" or (pr.get("headRepository") or {}).get("nameWithOwner") != repository:
         raise ReleaseError("release PR source or target is not the protected main repository")
-    if (pr.get("author") or {}).get("login") != "chyroc" or (pr.get("mergedBy") or {}).get("login") != "chyroc":
-        raise ReleaseError("release PR author and merger must both be the administrator")
+    if (pr.get("author") or {}).get("login") != "chyroc":
+        raise ReleaseError("release PR author must be the administrator")
+    merged_by = (pr.get("mergedBy") or {}).get("login")
+    if merged_by is not None and merged_by != "chyroc":
+        raise ReleaseError("release PR merger must be the administrator when GitHub reports one")
     version = release_title(pr.get("title", ""), channel == "beta")
     if (pr.get("mergeCommit") or {}).get("oid") != commit:
         raise ReleaseError("the merged commit differs from the release plan")

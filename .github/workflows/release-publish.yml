@@ -52,15 +52,24 @@ jobs:
           set -euo pipefail
           mkdir -p release
           if [[ "$PR_NUMBER" = 0 ]]; then
-            gh pr list --repo "$REPOSITORY" --state merged --search "$HEAD_SHA" --json number,state,isDraft,baseRefName,headRefOid,headRepository,author,mergedBy,mergeCommit,title > release/merged-pr-list.json
+            gh api "repos/$REPOSITORY/commits/$HEAD_SHA/pulls" > release/merged-pr-list.json
             python3 - <<'PY'
           import json,os
           from pathlib import Path
           commit=os.environ['HEAD_SHA']
-          candidates=[p for p in json.loads(Path('release/merged-pr-list.json').read_text()) if (p.get('mergeCommit') or {}).get('oid')==commit and p.get('title','').startswith('release:')]
+          candidates=[p for p in json.loads(Path('release/merged-pr-list.json').read_text()) if p.get('state')=='closed' and (p.get('merge_commit_sha') or p.get('mergeCommit',{}).get('oid'))==commit and p.get('title','').startswith('release:') and p.get('user',{}).get('login')=='chyroc']
           if len(candidates)!=1:
               raise SystemExit('No unique administrator release PR for this verified main commit; not publishing')
           Path('release/merged-pr.json').write_text(json.dumps(candidates[0]))
+          pr=json.loads(Path('release/merged-pr.json').read_text())
+          pr['state']='MERGED'
+          pr['isDraft']=pr.get('draft',False)
+          pr['baseRefName']=pr.get('base',{}).get('ref','main')
+          pr['headRepository']={'nameWithOwner':pr.get('head',{}).get('repo',{}).get('full_name','')}
+          pr['author']=pr.get('user',{})
+          pr['mergedBy']=pr.get('merged_by',{})
+          pr['mergeCommit']={'oid':pr.get('merge_commit_sha')}
+          Path('release/merged-pr.json').write_text(json.dumps(pr))
           PY
           else
             gh pr view "$PR_NUMBER" --repo "$REPOSITORY" --json state,isDraft,baseRefName,headRefOid,headRepository,author,mergedBy,mergeCommit,title > release/merged-pr.json
