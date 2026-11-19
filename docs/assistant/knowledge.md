@@ -214,7 +214,10 @@ moving the archive into the user's zone ("Time zones") is the archive lane's fir
 lane's writes. The steps' backoffs (a failed source put off, `retryWait`) live with the manager's knowledge base, not the
 engine, so they carry over when the hub's settings change and a new engine is built; a lane already running finishes
 its run with the engine it started with. Each lane run that called the model, or took longer than a round, logs one line: `kb: <lane> lane: <duration>, <n> model call(s),
-<n> failed, <n> put off` (put off: a paused connection, "Upstream rate limits" in [model-config.md](model-config.md)). While the
+<n> failed, <n> put off` (put off: a paused connection, "Upstream rate limits" in [model-config.md](model-config.md)). A call with
+no model set up for it (no provider with a key for the step's purpose) is neither a call nor a failure: the lane logs
+`kb: <lane> lane: no model is set up for <purpose> …` once for each purpose, and `kb: <lane> lane: a model answers <purpose>
+again` once a call for that purpose gets an answer (a failed call is no answer) (#10435; before, such a lane logged "1 model call(s), 1 failed" every 2 minutes). While the
 assistant is not connected, the knowledge base closes once no lane runs; a lane started goes on to the end of its run, as a round did.
 
 1. **Archive**: every 2 minutes (5 seconds after a Lark live event), inspect the 100 recently active chats in Lark's Messages list, reading only when the list timestamp is newer than the last archive.
@@ -240,7 +243,7 @@ assistant is not connected, the knowledge base closes once no lane runs; a lane 
    At most 8 chats per round, most relevant first. Direct-chat / email tags propagate to the other person; a person's `summary.md` is assembled from metadata and direct-chat context without a model call.
    When the model declines the batch (a `refusal` stop reason, e.g. a safety classifier), it would decline it again: the batch is marked covered without a new summary and the chat continues with later messages.
    Any other failure puts the chat off for 10 minutes, doubled with each failure in a row up to 6 hours (`compress_failures` / `compress_retry_at` in `meta.json`, cleared on success);
-   a paused model connection does not count. Before this, a chat whose batch the model refused was sent again every round, every two minutes for days.
+   a paused model connection, or no model set up for it, does not count: the chat stays due without a log line of its own, and the round's compression stops there (#10435; before, no model counted as a failure of each chat, put it off up to 6 hours and logged a line for each). Before this, a chat whose batch the model refused was sent again every round, every two minutes for days.
 3. **Evolution (evo)**: merge projects mentioned in compression into `projects/` (names or aliases equal after stripping punctuation and case are merged; otherwise create), append progress to `log.md`
    and mark dirty. Only aliases belonging to this project are accepted: names / aliases of other unmerged projects, single characters or two-letter abbreviations, and generic terms are rejected; at most 12 automatic aliases per project
    (#2546: previously, several projects accumulated hundreds of aliases after a week and crossed into each other). Manual aliases from `kb_update` have no limit; `remove_aliases` deletes them. If several unmerged projects match a name,
@@ -845,7 +848,7 @@ Metadata of all six entity types can include `pinned` (user-confirmed facts) and
 - Historical associations and summaries remain on disk; linked-entity rosters and project deduplication member counts omit ignored/self accounts without deleting those records. `kb.list` for people omits ignored accounts before ranking and pagination, so totals and offsets count only listed people; self accounts remain listed. Ignored accounts can still be explicitly read by ID with `kb.get` and corrected with `kb.update`. This does not synchronize `self` into the separate encrypted `kb.owner` record.
 - Manual writes lock fields touched by default, including person `note` and `status`, summaries, project descriptions and associations. Background writes reread current protected fields at write time so corrections made during a model call cannot be overwritten by stale objects.
 - `lock: false` adds no locks in this update, letting extensions choose continued background maintenance; it does not remove existing locks. Legacy `locked` tag protection remains effective.
-- `remove_people`, `remove_chats`, `remove_projects`, `remove_aliases` remove associations or project aliases, not entities. A batch adds first then removes, so removal wins; existing reverse associations are removed too. `remove_aliases` applies to projects.
+- `remove_people`, `remove_chats`, `remove_projects`, `remove_aliases` remove associations or project aliases, not entities. A batch adds first then removes, so removal wins; existing reverse associations are removed too. `remove_aliases` applies to projects. The user's removals also keep that one link out of automatic writes ("Removed links" below).
 - Automatic deduplication skips manually protected projects and associations. Explicit merging retains existing merge precedence, updates locked reverse associations and concatenates both pinned values; the source remains a merged record with its original protected metadata readable.
 
 For example, remove a project member while recording a confirmed fact:
@@ -855,6 +858,18 @@ For example, remove a project member while recording a confirmed fact:
 ```
 
 This is not a cross-file transaction and adds neither `If-Match` nor a revision log. Write failures return errors; do not automatically retry a failure as a new user confirmation.
+
+### Removed links (#10333)
+
+Removing one wrong person or chat used to lock the **whole** list on both entries, so a project stopped picking up new people and chats for good. Now a removal by the user keeps out just that link (`kb/exclude.go`):
+
+- **Recorded on both entries**: the user's `remove_people` / `remove_chats` / `remove_projects` (app, assistant `kb_update`, HTTP `PUT`, `kb.update` without an extension) add the id to the entry's `excluded` under the list it left, and the entry's own id to the other one's, for example `"excluded": {"people": ["alice"], "chats": ["team-chat"]}` on project `billing-migration` and `"excluded": {"projects": ["billing-migration"]}` on `alice` and `team-chat`. Items are named as in the project's `items` (`docs/<id>`). Only ids of existing entries are recorded.
+- **Automatic writes** (compression, project linking, connectors, history import, merges: every `putEntity` without `manual`) leave excluded ids out of the list they write and keep `excluded` as it is on disk; everything else in the list is added and removed as before. Linking a chat by hand brings its people except the ones the user took off the project.
+- **Extensions** cannot make an excluded link: `kb.update` drops it from `people` / `chats` / `projects`, applies the rest, and names it in `ignored`. An extension's own removals exclude nothing.
+- **Linking again by hand** lifts the exclusion on both entries. `allow_people` / `allow_chats` / `allow_projects` (user paths only: HTTP `PUT` and `kb_update`) lift it without linking, so Persona may link it again on its own. They follow the kind's lists (projects: people, chats; chats: people, projects; people: chats, projects; docs, meetings, events and recordings: projects); others land in `ignored`.
+- **Whole-list lock**: `lock_lists: true` also locks the lists a removal touches, on both entries (`locked_fields`), as before. `lock_lists: false` keeps out only the removed link. Unset, a removal locks as `lock` says (unset or `true` locks): what older clients asked for, so they keep getting it. The web and assistant `kb_update` send `false` unless the user asks for the lock. Existing `locked_fields` keep their meaning; nothing is migrated.
+- **Detail**: `GET /api/v1/kb/{kind}/{id}` (and `kb.get`) adds `removed`, the excluded links named as `links` are, for the app to list with Allow again.
+- **Merges** keep what the user removed from either project off the kept one, both ways, unless the kept project links it; the merge record (`merge.excluded`) lets an unmerge give it back. Forgetting a source drops its ids from `excluded` too.
 
 ### Who holds a field (#6100)
 
@@ -883,6 +898,8 @@ Every write path (`kb.update`, HTTP `PUT`, the assistant's `kb_update`) takes on
 | docs, meetings, events | `note`, `projects` / `remove_projects` |
 | topics | `name`, `note`, `aliases` / `remove_aliases` (`summary` is refused: it is written from the points) |
 | recordings | `projects` / `remove_projects` |
+
+The user's paths (HTTP `PUT`, `kb_update`) also take `lock_lists` and the kind's `allow_*` lists ("Removed links" above); `kb.update` from an extension takes neither.
 
 A person's `summary` and `log` used to be dropped without a word (and `summary` was even locked, for nothing): summary.md is written from what is known of the person. What an extension knows of them goes in its `profile`.
 
@@ -958,7 +975,7 @@ and a disabled knowledge base (`kb.enabled: false`) returns 503 as before.
 | Endpoint | Purpose |
 | --- | --- |
 | `GET /api/v1/kb/{kind}?tag=` | Sorted list (`items`) and common tags (`tags`); kind is projects / chats / people / docs / meetings / events / recordings / topics (topics: the most points first, `extra` is the count; docs, meetings and events: `extra` is the link and `source` the connector that supplied it, #8872) |
-| `GET /api/v1/kb/{kind}/{id}` | `detail` (meta, summary, project timeline, last 7 days' chat messages, a topic's `points`); projects also include `agents` |
+| `GET /api/v1/kb/{kind}/{id}` | `detail` (meta, summary, project timeline, last 7 days' chat messages, a topic's `points`, the links the user removed as `removed`); projects also include `agents` |
 | `PUT /api/v1/kb/{kind}/{id}` | Edit (fields as in `kb_update`); create a project if absent |
 | `DELETE /api/v1/kb/projects/{id}` | Soft-delete a project ("Deleting a project" above); returns its trash entry (`id`, `kind`, `slug`, `name`, `deleted_at`, `unlinked`); 404 for unknown or merged projects |
 | `GET /api/v1/kb-trash` | Deleted projects, newest first (`items`: trash entries) |
