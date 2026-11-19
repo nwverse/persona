@@ -424,6 +424,150 @@ def offline(browser, base, token, shots):
     ok("unreachable: 离线 with 重试 instead of loading forever; 重试 brings the page back")
 
 
+# iOS: the keyboard shrinks the visual viewport only; a stand-in the page follows (as web_mobile_input_e2e.py's).
+PALETTE_VV = """(() => {
+  const et = new EventTarget();
+  const vv = { height: innerHeight, width: innerWidth, offsetTop: 0, offsetLeft: 0, scale: 1, pageTop: 0,
+    addEventListener: et.addEventListener.bind(et), removeEventListener: et.removeEventListener.bind(et) };
+  Object.defineProperty(window, 'visualViewport', { get: () => vv });
+  window.__kb = (h, top = 0) => { vv.height = h; vv.offsetTop = top; et.dispatchEvent(new Event('resize')); };
+})();"""
+
+
+def palette_back(browser, base, token):
+    """The search palette on a phone (#11442): Back closes it first, from /agents and from the drawer, and a pick leaves no
+    copy of the page under the new one; it fits above the keyboard; a gone tab and an ambiguous /s/ link have the header."""
+    ctx, page = phone(browser)
+    ctx.add_init_script(PALETTE_VV)
+    sign_in(page, base, token)
+    field = page.locator("[role=dialog] input[role=combobox]")
+
+    def back_to(path, what):
+        page.go_back()
+        page.wait_for_function(f"location.pathname === {path!r}")
+        expect(field).to_have_count(0)
+        page.wait_for_timeout(300)
+        assert not is_open(page), f"{what}: the drawer is open"
+
+    def agents():
+        page.goto(base + "/persona")
+        page.locator('main header nav[aria-label="切换页面"]').get_by_role("link", name="Agents").tap()
+        page.wait_for_function("location.pathname === '/agents'")
+        expect(page.locator("main header").get_by_role("button", name="搜索会话")).to_be_visible()
+
+    agents()
+    page.locator("main header").get_by_role("button", name="搜索会话").tap()
+    expect(field).to_be_visible()
+    back_to("/agents", "Back from the palette")
+    back_to("/persona", "the next Back")
+    ok("/agents › search › Back: the palette closes on /agents; the next Back goes to /persona")
+
+    # from the drawer: Search closes it and the palette takes its place, so one Back closes the palette
+    agents()
+    side_button(page).tap()
+    page.wait_for_timeout(400)
+    page.locator("aside").get_by_role("button", name="搜索会话").tap()
+    expect(field).to_be_visible()
+    page.wait_for_timeout(400)
+    assert not is_open(page), "the drawer stayed open under the palette"
+    back_to("/agents", "Back from the drawer's palette")
+    # and a pick goes to its page; one Back comes back here, the next to /persona (no dead copy of /agents between)
+    side_button(page).tap()
+    page.wait_for_timeout(400)
+    page.locator("aside").get_by_role("button", name="搜索会话").tap()
+    field.fill("设置")
+    page.get_by_role("option", name="设置", exact=True).tap()
+    page.wait_for_function("location.pathname === '/settings'")
+    page.wait_for_timeout(500)
+    back_to("/agents", "Back from the picked page")
+    back_to("/persona", "the next Back")
+    ok("drawer › search: Back closes the palette and stays; a pick, then one Back lands on /agents and the next on /persona")
+
+    # Saved searches hands over to its sheet: Back returns to the search, the next Back closes it
+    agents()
+    page.locator("main header").get_by_role("button", name="搜索会话").tap()
+    page.locator("[role=dialog]").get_by_role("button", name="已保存的搜索").tap()
+    expect(page.get_by_role("button", name="返回搜索")).to_be_visible()
+    expect(field).to_have_count(0)
+    page.go_back()
+    expect(field).to_be_visible()
+    expect(page.get_by_role("button", name="返回搜索")).to_have_count(0)
+    assert page.evaluate("location.pathname") == "/agents"
+    page.wait_for_timeout(300)
+    back_to("/agents", "Back from the search after Saved searches")
+    back_to("/persona", "the next Back")
+    ok("Saved searches: Back goes back to the search, then closes it; no entry left behind")
+
+    # a command that opens a sheet (New agent) reuses the palette's entry: Back closes the sheet and stays
+    agents()
+    page.locator("main header").get_by_role("button", name="搜索会话").tap()
+    field.fill(">新建 Agent")
+    page.get_by_role("option", name="新建 Agent").first.tap()
+    sheet = page.locator("[role=dialog][aria-modal=true]").filter(has_not=page.locator("input[role=combobox]"))
+    expect(sheet).to_be_visible()
+    page.wait_for_timeout(300)
+    page.go_back()
+    expect(sheet).to_have_count(0)
+    page.wait_for_timeout(500)
+    assert page.evaluate("location.pathname") == "/agents"
+    back_to("/persona", "Back after the command's sheet")
+    ok("> New agent: its sheet takes the palette's entry; Back closes it, the next Back goes to /persona")
+
+    # reloaded with it open, the first Back leaves the page (its entry is settled at start, lib/back-close.ts)
+    agents()
+    page.locator("main header").get_by_role("button", name="搜索会话").tap()
+    expect(field).to_be_visible()
+    page.reload()
+    expect(page.locator("main header").get_by_role("button", name="搜索会话")).to_be_visible()
+    page.wait_for_timeout(800)
+    page.go_back()
+    page.wait_for_function("location.pathname === '/persona'")
+    ok("reloaded with the palette open, the first Back leaves /agents")
+
+    # the keyboard up: the card stays above it and its last row scrolls into view; down, nothing moved
+    page.goto(base + "/agents")
+    page.locator("main header").get_by_role("button", name="搜索会话").tap()
+    expect(field).to_be_visible()
+    page.wait_for_timeout(500)
+    card = "() => { const r = document.querySelector('[role=dialog][aria-modal=true]').getBoundingClientRect(); return [r.top, r.bottom, r.height]; }"
+    before = page.evaluate(card)
+    page.evaluate("__kb(500)")
+    page.wait_for_timeout(300)
+    page.evaluate("() => { const l = document.querySelector('[role=dialog][aria-modal=true] .overflow-y-auto'); l.scrollTop = l.scrollHeight; }")
+    page.wait_for_timeout(200)
+    last = page.evaluate("() => { const o = [...document.querySelectorAll('[role=dialog] [role=option]')]; return o.length ? o[o.length - 1].getBoundingClientRect().bottom : null; }")
+    top, bottom, _ = page.evaluate(card)
+    assert last is not None and last <= 500, f"the last row ends at {last}, under the keyboard at 500"
+    assert bottom <= 500, f"the card ends at {bottom}, under the keyboard at 500"
+    page.evaluate("__kb(844)")
+    page.wait_for_timeout(300)
+    after = page.evaluate(card)
+    assert after == before, (before, after)
+    ok(f"keyboard up: the card ends at {bottom:.0f} and its last row at {last:.0f}, above the keyboard (500); down, it is where it was")
+    ctx.close()
+
+    # a gone tab and an ambiguous /s/ prefix: the header with the sidebar button, a 44 px target
+    ctx, page = phone(browser)
+    sign_in(page, base, token)
+    for path, text in (("/t/server/w9/" + quote("w9:t9", safe=""), "这个标签页已经不在了"), (f"/s/server/{CODEX[:8]}", "选一个打开")):
+        page.goto(base + path)
+        expect(page.locator("main").get_by_text(text)).to_be_visible()
+        btn = page.locator("main header").get_by_role("button", name="侧边栏")
+        expect(btn).to_be_visible()
+        b = btn.bounding_box()
+        cx, cy = b["x"] + b["width"] / 2, b["y"] + b["height"] / 2
+        for dx, dy in ((21, 0), (-21, 0), (0, 21), (0, -21)):
+            assert page.evaluate(f"() => document.elementFromPoint({cx + dx}, {cy + dy})?.closest('button')?.getAttribute('aria-label')") == "侧边栏", (path, dx, dy)
+        btn.tap()
+        page.wait_for_timeout(400)
+        assert is_open(page), path
+        page.go_back()
+        page.wait_for_timeout(500)
+        assert not is_open(page), path
+    ok("a gone tab and an ambiguous /s/ link have the header's sidebar button (44 px to a finger), which opens the drawer")
+    ctx.close()
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("base")
@@ -444,6 +588,7 @@ def main():
         pane_tabs(browser, base, a.token, a.shots)
         lazy_pages(browser, base, a.token)
         offline(browser, base, a.token, a.shots)
+        palette_back(browser, base, a.token)
         browser.close()
     print("PASS web mobile shell e2e")
 

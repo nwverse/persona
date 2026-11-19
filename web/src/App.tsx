@@ -407,6 +407,13 @@ function Shell() {
   });
   // Back closes it first
   useCloseOnBack(drawer, close, narrow);
+  // Its Search hands over to the palette: closed in the same commit, the drawer's history entry becomes the palette's
+  // (lib/back-close.ts), so one Back closes the palette, and a pick's page replaces it with no copy of this page left under.
+  // (A wide screen has no drawer open to close.)
+  const searchFromSidebar = useCallback(() => {
+    close();
+    openPalette("jump");
+  }, [close]);
   // Esc closes it (a menu or a dialog over it closes first); Tab stays in it, like a dialog's
   useEffect(() => {
     if (!a11y.modal) return;
@@ -584,7 +591,7 @@ function Shell() {
         )}
         style={{ transitionTimingFunction: EASE }}
       >
-        {rail ? <SidebarRail route={route} onSearch={() => openPalette("jump")} onNewAgent={openNewAgent} /> : <Sidebar route={route} onSearch={() => openPalette("jump")} onNewAgent={openNewAgent} onNavigate={close} workspaceActions={workspaceActions} />}
+        {rail ? <SidebarRail route={route} onSearch={() => openPalette("jump")} onNewAgent={openNewAgent} /> : <Sidebar route={route} onSearch={searchFromSidebar} onNewAgent={openNewAgent} onNavigate={close} workspaceActions={workspaceActions} />}
         {!narrow && !rail && <SidebarResize column={sidebarId} />}
       </div>
       {/* the scrim fades out as well as in; a drag sets its opacity as it goes (lib/drawer.ts) */}
@@ -659,10 +666,22 @@ function Offline({ onToggleSidebar, trying }: { onToggleSidebar: () => void; try
 // A tab link whose tab is gone (closed, or herdr restarted with new ids) and no pane to fall back to.
 function TabGone({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-      <p className="text-[13px] text-ink-2">{t("app.tab_gone")}</p>
-      <button type="button" onClick={onToggleSidebar} className="whitespace-nowrap rounded-control px-2.5 py-1.5 text-[12.5px] font-medium text-accent-ink hover:bg-hover lg:hidden">{t("app.open_sidebar")}</button>
+    <div className="flex h-full flex-col">
+      <SidebarHeader onToggleSidebar={onToggleSidebar} />
+      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+        <p className="text-[13px] text-ink-2">{t("app.tab_gone")}</p>
+      </div>
     </div>
+  );
+}
+
+// A page with no header of its own gets Offline's: the sidebar button where every page has it. A wide screen shows the
+// sidebar itself, and the page stays as it was there.
+function SidebarHeader({ onToggleSidebar }: { onToggleSidebar: () => void }) {
+  return (
+    <header className="flex h-14 shrink-0 items-center px-3 sm:px-4 lg:hidden">
+      <IconButton icon="sidebar" label={t("app.sidebar")} onClick={onToggleSidebar} />
+    </header>
   );
 }
 
@@ -674,25 +693,27 @@ function SessionChoices({ mid, sid, onToggleSidebar }: { mid: string; sid: strin
   const link = resolveSessionLink(all, mid, sid, loaded);
   const candidates = link.kind === "ambiguous" ? link.candidates : [];
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-      <p className="text-[13px] text-ink-2">{t("app.session_choices", { count: candidates.length, sid })}</p>
-      <ul className="flex w-full max-w-96 flex-col gap-1">
-        {candidates.map((s) => {
-          const to = sessionLinkRoute(all, s);
-          return (
-            <li key={s.session_id}>
-              <a href={href(to)} onClick={(e) => onLinkClick(e, to)} className="flex flex-col items-start gap-0.5 rounded-control px-3 py-2 text-left hover:bg-hover">
-                <span className="w-full truncate text-[13px] font-medium text-ink">{sessionTitle(s)}</span>
-                <span className="w-full truncate font-mono text-[11.5px] text-ink-3">{s.session_id}</span>
-                {(s.cwd || s.activity_at || s.updated_at) && (
-                  <span className="w-full truncate text-[11.5px] text-ink-3">{[shortPath(s.cwd), ago(s.activity_at || s.updated_at)].filter(Boolean).join(" · ")}</span>
-                )}
-              </a>
-            </li>
-          );
-        })}
-      </ul>
-      <button type="button" onClick={onToggleSidebar} className="whitespace-nowrap rounded-control px-2.5 py-1.5 text-[12.5px] font-medium text-accent-ink hover:bg-hover lg:hidden">{t("app.open_sidebar")}</button>
+    <div className="flex h-full flex-col">
+      <SidebarHeader onToggleSidebar={onToggleSidebar} />
+      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+        <p className="text-[13px] text-ink-2">{t("app.session_choices", { count: candidates.length, sid })}</p>
+        <ul className="flex w-full max-w-96 flex-col gap-1">
+          {candidates.map((s) => {
+            const to = sessionLinkRoute(all, s);
+            return (
+              <li key={s.session_id}>
+                <a href={href(to)} onClick={(e) => onLinkClick(e, to)} className="flex flex-col items-start gap-0.5 rounded-control px-3 py-2 text-left hover:bg-hover">
+                  <span className="w-full truncate text-[13px] font-medium text-ink">{sessionTitle(s)}</span>
+                  <span className="w-full truncate font-mono text-[11.5px] text-ink-3">{s.session_id}</span>
+                  {(s.cwd || s.activity_at || s.updated_at) && (
+                    <span className="w-full truncate text-[11.5px] text-ink-3">{[shortPath(s.cwd), ago(s.activity_at || s.updated_at)].filter(Boolean).join(" · ")}</span>
+                  )}
+                </a>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
     </div>
   );
 }
