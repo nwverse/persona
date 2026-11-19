@@ -51,9 +51,10 @@ import (
 // process can be idle, so it only stands for an agent that reports none: there it never waits past a 200K window.
 const assistantIdleCompact = standardWindow / 4 * 3
 
-// assistantAllowedTools run without asking: Persona's own tools (the hub asks the phone itself before the ones that
-// send something on the user's behalf — mail_send, phone writes; Feishu writes through an extension's gated command pass larkgate.go). Without this every notify_user or
-// schedule_followup waited for a tap on the phone, so a follow-up firing at night just stalled.
+// assistantAllowedTools run without asking outside Plan mode: Persona's own tools (the hub asks the phone itself before the ones that
+// send something on the user's behalf — mail_send, phone writes; Feishu writes through an extension's gated command pass larkgate.go).
+// Plan rejects MCP before consulting this list. Without the list every notify_user or schedule_followup waited for a tap on the phone,
+// so a follow-up firing at night just stalled.
 const assistantAllowedTools = "mcp__persona"
 
 // assistantBuiltinTools keeps the headless assistant's file, shell, web, skill and sub-agent capabilities without
@@ -416,7 +417,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		}
 	}
 	if origin == originInbox && guest == nil {
-		mode = proto.ModePlan // an Inbox handling chat investigates and suggests, never runs in bypass mode
+		// Plan rejects MCP before consulting allowedTools, which stalls investigation and inbox_suggest. Default keeps
+		// Persona's explicit MCP allowlist effective; the manager/node origin policy remains the outbound boundary.
+		mode = "default"
 	}
 	if guest != nil {
 		if refs, err := assistantskills.References(text); err != nil || len(refs) != 0 {
