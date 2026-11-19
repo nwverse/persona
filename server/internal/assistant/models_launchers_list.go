@@ -495,6 +495,9 @@ func (s *Service) askLauncherModels(ctx context.Context, machine, name string, r
 	if purpose := launcherPurpose(ctx); purpose != "" {
 		params["purpose"] = purpose
 	}
+	if host, _ := ctx.Value(launcherModelHostKey{}).(string); host != "" {
+		params["host"] = host
+	}
 	if err := s.call(ctx, machine, assistantwire.DeviceLaunchersModels, s.launcherParams(ctx, machine, name, params), &res); err != nil {
 		return res, err
 	}

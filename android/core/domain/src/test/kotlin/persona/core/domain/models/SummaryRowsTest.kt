@@ -17,6 +17,7 @@ import persona.core.contracts.UndeliveredMessage
  */
 class SummaryRowsTest {
     private val full = Session(machineId = "mac", sessionId = "c1", assistant = true, launcher = "team", permissionMode = "plan",
+        bypassAvailable = true, bypassPending = true,
         effort = "high", model = "sonnet", compaction = SessionCompaction("done"), modelPick = ModelPick("team", "sonnet"),
         pendingSwitch = PendingSwitch("work"), runtime = "agentsdk")
 
@@ -26,6 +27,8 @@ class SummaryRowsTest {
         val merged = summary.keepingDetails(full)
         assertEquals("team", merged.launcher)
         assertEquals("plan", merged.permissionMode)
+        assertEquals(true, merged.bypassAvailable)
+        assertEquals(false, merged.bypassPending)
         assertEquals(SessionCompaction("done"), merged.compaction)
         assertEquals("agentsdk", merged.runtime)
         assertEquals(PendingSwitch("work"), merged.pendingSwitch)
