@@ -2097,9 +2097,10 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 				}
 				return map[string]any{"items": []proto.Item{}, "has_more": false}, nil
 			}
-			if p.BeforeSeq > 0 && !p.UserInputs && n.knownSession(p.SessionID) {
-				// An older page of a session the node knows: the end of its history, as before #11388. Only the latest
-				// page says why there is none; released apps ask an older page again on an error (#11450).
+			if session, _, _ := strings.Cut(p.SessionID, subagentSep); p.BeforeSeq > 0 && !p.UserInputs && n.knownSession(session) {
+				// An older page of a session the node knows (or of its subagent): the end of its history, as before
+				// #11388. Only the latest page says why there is none; released apps ask an older page again on an
+				// error (#11450).
 				return map[string]any{"items": []proto.Item{}, "has_more": false}, nil
 			}
 			return nil, n.readErr(p.SessionID, err)

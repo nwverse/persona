@@ -47,13 +47,14 @@ func (n *Node) readErr(id string, err error) error {
 // for): proto.NotFoundNoTranscript for a session it knows (knownSession), proto.NotFoundUnknownSession for one it has
 // no record of. A subagent ("<session>@<agent>") goes by its session. None until the node's records have come from the
 // hub on this connection (recordsLoaded: a session missing from them may still be Persona's), nor for a session an
-// Agent runtime runs: one whose transcript the runtime names (runtimetranscript.go), and any of a runtime's own ids,
-// whose history is the runtime's and comes back with it when it is not connected now (#11450).
+// Agent runtime runs: one whose transcript the runtime names (runtimetranscript.go), and any of a runtime's own ids or
+// their subagents', whose history is the runtime's and comes back with it when it is not connected now (#11450).
 func (n *Node) readReason(id, missing string) string {
 	if parent, _, ok := splitSubagent(id); ok && parent == missing {
 		id = parent
 	}
-	if id != missing || runtimeSessionID(id) || n.runtimes.transcriptOf(id) != "" {
+	session, _, _ := strings.Cut(id, subagentSep)
+	if id != missing || runtimeSessionID(session) || n.runtimes.transcriptOf(id) != "" {
 		return ""
 	}
 	if n.knownSession(id) {

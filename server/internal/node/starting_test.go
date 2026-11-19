@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -172,8 +173,7 @@ func TestAsyncStartsStopWithTheirNode(t *testing.T) {
 
 // More sessions that may not have written their first line yet, which a read answers with an empty page and not
 // no_transcript (#11450): a thread a Codex app-server has loaded, which has no rollout before its first message; a
-// Codex waiting row whose record still names its pane, before a host refresh lists it again after a reconnect; a
-// session whose only, refused, turn healClaudeRefusalTranscript removed with its file before starting it again.
+// Codex waiting row whose record still names its pane, before a host refresh lists it again after a reconnect.
 func TestItemsOfMoreSessionsThatHaveNotWrittenYet(t *testing.T) {
 	n, home := testNode(t)
 	long := time.Now().Add(-time.Hour).UTC()
@@ -213,45 +213,64 @@ func TestItemsOfMoreSessionsThatHaveNotWrittenYet(t *testing.T) {
 	empty("a Codex waiting row", row)
 	n.state.setPane(row, "")
 	gone("a Codex waiting row that left its pane", row)
-
-	// A conversation whose only turn was refused: the heal removes its file before it is started again.
-	n.paths, n.metas = map[string]string{}, map[string]quickMeta{}
-	n.state.put(pruneID, sessionState{Launcher: "claude", Cwd: home + "/.persona/assistant", StartedAt: long})
-	n.paths[pruneID] = writePruneFile(t, refusalTurnLines("one"))
-	if pruned, clean := n.healClaudeRefusalTranscript(pruneID); !pruned || clean {
-		t.Fatalf("pruned=%v clean=%v", pruned, clean)
-	}
-	empty("a conversation started again after its refused turn was removed", pruneID)
 }
 
-// A synchronous start (a Resume always is) keeps the record's first start time and may have no transcript yet: while
-// it runs, a read of the session is an empty page; a start that failed takes that back (#11450).
+// A synchronous start (a Resume always is) keeps the record's first start time and may have no transcript yet, or
+// have just lost it to healClaudeRefusalTranscript (a conversation whose only turn was refused): while it runs, a read
+// of the session is an empty page; a start that failed takes that back, the heal's removal included (#11450). The fake
+// herdr holds the start at its typed line, so the read runs while it is under way whatever the machine's load.
 func TestItemsOfASessionWhileItsResumeRuns(t *testing.T) {
-	n, f, home := herdrNode(t)
-	cwd := mkdir(t, filepath.Join(home, "proj"))
-	const id = "33333333-2222-3333-4444-555555555555"
-	n.state.put(id, sessionState{Launcher: "claude", Cwd: cwd, StartedAt: time.Now().Add(-time.Hour).UTC()})
-	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
-	n.claudeStart, n.claudeReady = time.Second, time.Second // the fake shell never runs claude: the start fails
-	read := func() (any, error) {
-		return n.handle(context.Background(), "session.items", json.RawMessage(`{"session_id":"`+id+`","turns":2}`))
-	}
-	if _, err := read(); notFoundReason(err) != proto.NotFoundNoTranscript {
-		t.Fatalf("before the Resume: %v", err)
-	}
-	done := make(chan error, 1)
-	go func() {
-		_, err := request(t, n, "session.start", map[string]any{"resume_session_id": id})
-		done <- err
-	}()
-	waitFor(t, "the Resume to begin", func() bool { return n.startsBegun.within(id, time.Minute) })
-	if res, err := read(); err != nil {
-		t.Errorf("while the Resume runs: want an empty page, got %v %v", res, err)
-	}
-	if err := <-done; err == nil {
-		t.Fatal("the Resume should fail without claude")
-	}
-	if _, err := read(); notFoundReason(err) != proto.NotFoundNoTranscript {
-		t.Errorf("after the Resume failed: want not_found no_transcript, got %v", err)
+	for _, refused := range []bool{false, true} {
+		t.Run(map[bool]string{false: "no transcript", true: "only a refused turn"}[refused], func(t *testing.T) {
+			n, f, home := herdrNode(t)
+			cwd := mkdir(t, filepath.Join(home, "proj"))
+			const id = "33333333-2222-3333-4444-555555555555"
+			n.state.put(id, sessionState{Launcher: "claude", Cwd: cwd, StartedAt: time.Now().Add(-time.Hour).UTC()})
+			if refused {
+				writeTranscript(t, home, cwd, id, time.Now().Add(-time.Hour), refusalTurnLines("one")...)
+			}
+			f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+			n.claudeStart, n.claudeReady = 200*time.Millisecond, 200*time.Millisecond // the fake shell never runs claude
+			reached, release := make(chan struct{}), make(chan struct{})
+			var once sync.Once
+			f.after(func(c herdrCall) {
+				if c.Method != "pane.send_input" {
+					return
+				}
+				once.Do(func() {
+					close(reached)
+					select {
+					case <-release:
+					case <-time.After(10 * time.Second):
+					}
+				})
+			})
+			read := func() (any, error) {
+				return n.handle(context.Background(), "session.items", json.RawMessage(`{"session_id":"`+id+`","turns":2}`))
+			}
+			done := make(chan error, 1)
+			go func() {
+				_, err := request(t, n, "session.start", map[string]any{"resume_session_id": id})
+				done <- err
+			}()
+			select {
+			case <-reached:
+			case <-time.After(10 * time.Second):
+				t.Fatal("the Resume never typed its line")
+			}
+			if refused && n.transcriptPath(id) != "" {
+				t.Error("the refused turn's file is still there")
+			}
+			if res, err := read(); err != nil {
+				t.Errorf("while the Resume runs: want an empty page, got %v %v", res, err)
+			}
+			close(release)
+			if err := <-done; err == nil {
+				t.Fatal("the Resume should fail without claude")
+			}
+			if _, err := read(); notFoundReason(err) != proto.NotFoundNoTranscript {
+				t.Errorf("after the Resume failed: want not_found no_transcript, got %v", err)
+			}
+		})
 	}
 }

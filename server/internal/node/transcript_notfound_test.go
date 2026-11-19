@@ -116,6 +116,9 @@ func TestReadsGiveNoReasonTheyCannotKnow(t *testing.T) {
 	if err := read(runtime); rpcCode(err) != codeNotFound || err.Error() != fmt.Sprintf(words, runtime) || notFoundReason(err) != "" {
 		t.Errorf("a runtime's conversation while it is away: want not_found without a reason, got %q %v", notFoundReason(err), err)
 	}
+	if err := read(runtime + subagentSep + "a1"); rpcCode(err) != codeNotFound || notFoundReason(err) != "" {
+		t.Errorf("a runtime's subagent: want not_found without a reason, got %q %v", notFoundReason(err), err)
+	}
 
 	const unknown = "99999999-2222-3333-4444-555555555555"
 	n.stateReady = make(chan struct{}) // the first load failed (loading is over) and is tried again
@@ -128,9 +131,9 @@ func TestReadsGiveNoReasonTheyCannotKnow(t *testing.T) {
 	}
 }
 
-// An older page (before_seq) of a session the node knows, with no transcript, ends paging with an empty page and
-// has_more false, as before #11388: released apps ask an older page again on an error. The latest page says why there
-// is none, and an unknown id is not_found either way (#11450).
+// An older page (before_seq) of a session the node knows (or of its subagent), with no transcript, ends paging with an
+// empty page and has_more false, as before #11388: released apps ask an older page again on an error. The latest page
+// says why there is none, and an unknown id is not_found either way (#11450).
 func TestAnOlderPageOfAGoneTranscriptEndsPaging(t *testing.T) {
 	n, home := testNode(t)
 	const known, unknown = "11111111-2222-3333-4444-555555555555", "99999999-2222-3333-4444-555555555555"
@@ -139,9 +142,11 @@ func TestAnOlderPageOfAGoneTranscriptEndsPaging(t *testing.T) {
 		return n.handle(context.Background(), "session.items", json.RawMessage(`{"session_id":"`+id+`",`+params+`}`))
 	}
 	for _, params := range []string{`"before_seq":40,"turns":2`, `"before_seq":40,"limit":80`} {
-		res, err := page(known, params)
-		if b, _ := json.Marshal(res); err != nil || string(b) != `{"has_more":false,"items":[]}` {
-			t.Errorf("%s: want an empty last page, got %s %v", params, b, err)
+		for _, id := range []string{known, known + subagentSep + "a1"} { // the session's chat and its subagent's
+			res, err := page(id, params)
+			if b, _ := json.Marshal(res); err != nil || string(b) != `{"has_more":false,"items":[]}` {
+				t.Errorf("%s of %s: want an empty last page, got %s %v", params, id, b, err)
+			}
 		}
 		if _, err := page(unknown, params); notFoundReason(err) != proto.NotFoundUnknownSession {
 			t.Errorf("%s of an unknown id: want unknown_session, got %v", params, err)
