@@ -329,7 +329,7 @@ func errNoAppSpace(space string) error {
 // Run submits command to the shell in the pane (terminal.send: a paste, then enter). It is refused, with nothing
 // typed, unless the shell is what runs there: anything else in front would take the command as its input.
 func (h *herdrCoreHost) Run(ctx context.Context, pane host.PaneRef, command string) error {
-	t, err := h.c.Get(ctx, pane.ID)
+	t, err := h.get(ctx, pane.ID)
 	if err != nil {
 		return inputErr(err)
 	}
