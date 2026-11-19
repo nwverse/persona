@@ -3,10 +3,10 @@
 // says nothing and this shows nothing). Available: one button, a confirmation, "Starting…" at once, then the steps as
 // the list reports them, and how it ended; not available: why, in plain words. The page passes its own request (the
 // app's `api` or the admin page's `adminApi`) and its own way to read its machine list again (lib/link-switch.ts).
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { t } from "../../i18n";
 import { tRich } from "../../i18n/rich";
-import { LINK_SWITCH_STEPS, linkSwitchNotice, linkSwitchRunning, shownLinkSwitch, startLinkSwitch, useLinkSwitchAttempt, type LinkSwitchNotice } from "../../lib/link-switch";
+import { LINK_SWITCH_STEPS, linkSwitchNotice, linkSwitchRunning, retireLinkSwitch, shownLinkSwitch, startLinkSwitch, useLinkSwitchAttempt, type LinkSwitchNotice } from "../../lib/link-switch";
 import type { MachineLinkSwitch } from "../../lib/types";
 import { Button, cx, Dialog, Spinner } from "../../ui/atoms";
 import { Steps } from "../../ui/Steps";
@@ -72,6 +72,8 @@ export function LinkSwitch({ machineId, name, state, post, refresh, user, classN
 }) {
   const attempt = useLinkSwitchAttempt(machineId);
   const [asking, setAsking] = useState(false);
+  // once the list has caught up with a start made here, only the list speaks
+  useEffect(() => retireLinkSwitch(machineId, state ?? undefined), [machineId, state, attempt]);
   if (!state) return null;
   const shown = shownLinkSwitch(state, attempt) ?? state;
   if (!shown.available && !shown.phase && !attempt && PASSING.has(shown.reason ?? "")) return null;
@@ -139,7 +141,7 @@ export function LinkSwitch({ machineId, name, state, post, refresh, user, classN
   return (
     <div
       className={cx(
-        "flex items-center gap-2 rounded-[8px] py-1.5 pl-2.5 pr-1.5 text-label",
+        "flex items-center gap-2 rounded-control py-1.5 pl-2.5 pr-1.5 text-label",
         // under way: the inset fill, so the steps' field circles read on it
         tone === "failed" ? "bg-red-tint text-red" : tone === "done" ? "bg-green-tint text-green" : tone === "busy" ? "bg-inset text-ink-2 shadow-hairline" : tone === "quiet" ? "bg-field text-ink-3" : "bg-field text-ink-2",
         className,
