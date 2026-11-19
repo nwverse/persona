@@ -23,6 +23,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.After
@@ -142,6 +143,20 @@ class DiagnosticsShareViewModelTest {
         } finally { fixture.close() }
     }
 
+    @Test fun restoredPairingRecoversThePendingShare() = runTest {
+        val fixture = Fixture(pairingInitiallyMissing = true)
+        try {
+            assertTrue(!fixture.model.paired)
+            fixture.current.value = fixture.bindings
+            runCurrent()
+            assertTrue(fixture.model.paired)
+            assertNull(fixture.model.error)
+            fixture.model.prepare(fixture.target)
+            assertEquals(DiagnosticsOpenChat(fixture.target), fixture.model.openChat)
+            assertEquals(1, fixture.composer.uploads.size)
+        } finally { fixture.close() }
+    }
+
     @Test fun anArchiveOutsideTheExportDirectoryIsRejected() = runTest {
         val fixture = Fixture(readArchive = false)
         try {
@@ -160,6 +175,7 @@ class DiagnosticsShareViewModelTest {
         agentAvailable: Boolean = true,
         readArchive: Boolean = true,
         recentTargetFailure: Boolean = false,
+        pairingInitiallyMissing: Boolean = false,
     ) {
         val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<Application>()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -172,7 +188,7 @@ class DiagnosticsShareViewModelTest {
             hubScope, scope, drafts, unused(), unused(), composer, unused(), unused(), unused(),
             mainUploadTarget = { SessionKey("main-machine", "main-session") },
         )
-        val current = MutableStateFlow<ChatAppBindings?>(bindings)
+        val current = MutableStateFlow<ChatAppBindings?>(if (pairingInitiallyMissing) null else bindings)
         val agent = MutableStateFlow<ChatAppBindings?>(if (agentAvailable) bindings else null)
         private val temp = Files.createTempDirectory("diagnostics-view-model").toFile()
         private val store = if (recentTargetFailure) object : DataStore<Preferences> {

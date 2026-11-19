@@ -211,7 +211,7 @@ and knowledge base (moved from hub 2026-11-04: engine, loops, files in the data 
 
 **Computers belong to the assistant** (2026-11-04, [machines.md](../server/machines.md) ("Who connects to computers")): the assistant process also manages all computers, with `internal/devices` connecting each (hub no longer does).
 Messages with hub live in `server/internal/devicewire`, over the same bus (`docs/protocol/protocol.md` ("Computers (devices.*)")); `assistant/devices.go` hands hub `devices.*` calls and events to it. `BusHub` has only a few calls:
-node-owned methods in the table's `device.call` go directly in-process to that computer's node, without hub (errors remain `apierr.ErrOffline`, `rpc.ErrClosed`, node `rpc.Error`); hub-owned methods (`assistantwire.HubDeviceMethods`: `devices.list`, `interactions.list`, `sessions.list`, `session.get`, and channel `session.follow` / `session.unfollow` / `session.send_once`) still ask hub.
+node-owned methods in the table's `device.call` go directly in-process to that computer's node, without hub (errors remain `apierr.ErrOffline`, `rpc.ErrClosed`, node `rpc.Error`); hub-owned methods (`assistantwire.HubDeviceMethods`: `devices.list`, `interactions.list`, `sessions.list`, `session.get`, channel `session.follow` / `session.unfollow` / `session.send_once`, and guarded `assistant.answer_again`) still ask hub.
 node requests `assistant.model` and `assistant.context` are also answered directly in-process (`Service.NodeAnswer`), not forwarded by hub; the manager tells nodes the snapshot's `profile.keep` (above).
 
 **hub accesses the assistant only through** `assistant.Handler` (`assistant/handler.go`; hub's `assistantRemote`, same messages), one message per method: App requests (assistant `assistantwire.Routes`, bus `http.request`, forwarded unchanged; caller role in `X-Persona-Role`, overriding any client-supplied value),
@@ -1287,6 +1287,30 @@ Migration: first startup without `assistant.tasks` moves `assistant.routines` / 
 then clears old follow-ups so an older hub can't rerun them; thereafter reads only the new table. Failed Postgres reads save nothing (formerly defaults overwrote).
 Legacy App `routines` / `followups` APIs still read / write this table (`docs/protocol/protocol.md`).
 
+## Missing final replies (#10427)
+
+When a user message in the main or an ordinary Assistant conversation completes with no written reply, Persona
+asks the Assistant once for a reply based on the results it already has. The chat shows a system line for the follow-up.
+If the follow-up still has no answer, or delivery fails, a saved chat notice tells the user to try sending the
+message again. This recovery is automatic.
+
+The manager reads the settled transcript. A blank or tool-only ending counts as missing, as does a whole reply
+that matches the existing channel list: `No response requested`, `no content`, `(no content)`, or `[no content]`,
+ignoring capitalization, whitespace around the reply, and trailing sentence punctuation. An ordinary answer,
+including a refusal with an explanation, stands on its own. A successfully displayed question or notification
+also counts as a user-visible outcome. Stops, existing model errors, queued work, and inputs from supervision,
+scheduled tasks or other conversations are excluded. The original transcript stays available.
+
+The input must be tied to a verified app send or to the verified start and first transcript page of a new
+conversation. Direct app requests authenticated with the older owner credential qualify for reply recovery.
+Secret hand-offs still require their full-device provenance. If that evidence is unavailable for recovery,
+for example across a manager restart before the first look,
+recovery may be skipped. An intentional request for silence or for exactly
+one of the listed strings can cause one extra model turn. Other vague or unhelpful replies are outside the check.
+The follow-up asks for text only and tells the model to avoid tools and repeated work. Normal tool permissions
+still apply. The send is tied to the original turn and the node checks that the conversation is still idle at
+the same transcript tail before delivering it.
+
 ## Background rounds
 
 Many main-chat rounds are not started by the user: another Persona conversation hands work over with `conversation_send` /
@@ -1299,7 +1323,12 @@ folding and visibility rule as the main chat. The owner's messages and the answe
 It is the same `assistant.main_background_folded` switch (on unless turned off); an ordinary side conversation is
 unchanged. The hub's mid-turn interject note (`prompts/assistant/interject.md`,
 `<persona-context kind="context" title="插话">`) is model instructions and never renders as a quote in the owner's
-bubble on any client, while staying in the model's input:
+bubble on any client. It stays in the model's input.
+
+A known runtime placeholder at the end of a verified background input is projected as folded work on transcript
+pages and live item updates. The transcript keeps the original words and the item ID. A normal background
+completion with only a placeholder or no written reply adds no finished push. Substantive replies and
+explicit user-facing actions still follow the usual visibility rules.
 
 - **Which rounds**: in the main conversation, a round whose first input has the message source (`Item.source.kind`, else
   the `persona-context kind="message-source"` metadata or the hub's `injected` mark, read by each client's `sourceOf`)
@@ -1317,10 +1346,10 @@ bubble on any client, while staying in the model's input:
   `server/internal/transcript/fold_supervision.go`): a round that used `ask_user` or `notify_user` successfully, a pending
   `ask_user` while it runs, a `task_review` with an `accepted` or `needs_user` verdict card, or a `supervision_finish`
   with user visibility. A completed round with a nonblank final reply also stays open, even if delivery tools were
-  unavailable. The full reply uses the ordinary reply bubble so its formatting and links remain available. Its work
-  keeps the usual collapsed summary. Intermediate narration, generated quiet-heartbeat acknowledgements and empty
-  turns stay folded. A successful silent finish keeps its round folded unless an explicit user-visible action promoted it.
-  This changes the chat display only and sends no push.
+  unavailable, unless it settled with silent visibility. The full reply uses the ordinary reply bubble so its
+  formatting and links remain available. Its work keeps the usual collapsed summary. Intermediate narration,
+  generated quiet-heartbeat acknowledgements and empty turns stay folded. A successful silent finish keeps its round
+  folded unless an explicit user-visible action promoted it. This changes the chat display only and sends no push.
 - **Needs you** keeps its entry and its count. While folding is on and its rows come from more than one supervising
   conversation (a task's `origin`), they are grouped under that conversation's title, this conversation's own first;
   the rows and their order within a group are unchanged.
