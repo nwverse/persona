@@ -181,8 +181,13 @@ class AboutVersionMatrixTest {
                         textWidths[selectedWidth to selectedScale] = generatedRow.textLayout(version).size.width.toFloat()
                     }
                     if (selectedScale == 1f && !longValue && present && selectedStyle == AppStyle.Glass && !selectedDark) {
-                        heights.getOrPut(density) { mutableMapOf() }[selectedWidth] =
-                            rule.onNodeWithTag("density-probe").fetchSemanticsNode().boundsInRoot.height.toInt()
+                        val expectedGap = Tokens.Space.Standard.l.dense
+                        assertEquals("$label real density-scaled token", if (density == LayoutDensity.Standard) 16.dp else 8.dp, expectedGap)
+                        val probe = rule.onNodeWithTag("density-probe").fetchSemanticsNode()
+                        assertEquals("$label real token pixel height", with(rule.density) { expectedGap.toPx() }, probe.boundsInRoot.height)
+                        val group = rule.onNodeWithTag("comparison-group").fetchSemanticsNode().boundsInRoot
+                        assertTrue("$label probe must be outside the captured three-row group", probe.boundsInRoot.bottom <= group.top)
+                        heights.getOrPut(density) { mutableMapOf() }[selectedWidth] = probe.boundsInRoot.height.toInt()
                     }
                 }
         for (selectedWidth in listOf(360, 640)) {
@@ -292,8 +297,8 @@ class AboutVersionMatrixTest {
     @Composable
     private fun ComparisonRows(version: String, commit: BuildCommit?, generated: Boolean = false) {
         Column(Modifier.background(PersonaTheme.palette.background).padding(Tokens.Space.m)) {
+            Box(Modifier.fillMaxWidth().height(Tokens.Space.Standard.l.dense).testTag("density-probe"))
             Column(Modifier.testTag("comparison-group")) {
-                Box(Modifier.fillMaxWidth().height(Tokens.Space.l.dense).testTag("density-probe"))
                 JGroupItem(GroupPosition.of(0, 3)) {
                     if (generated) {
                         AboutVersionRow(ImmutableAboutVersionModel(AboutVersionSnapshot(version), LocalResources.current),

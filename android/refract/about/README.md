@@ -73,9 +73,11 @@ and dark, en/zh-Hans/ja, and standard/2x text. `AboutVersionMatrixTest` extends 
 640dp regular component widths, Standard/Compact density, actual Compose font scales 1x/2x and independent short/long
 Version values. It captures complete three-row groups: handwritten Version/Build/Commit beside generated Version with
 native Build/Commit. The pairs must be nonempty and byte-identical, and present/unknown Commit groups must differ;
-the main matrix also checks the injected font scale and a measured text-width difference. It compares the rows' actual
-Compose semantics, checks single-line long-value layout, the native Commit's copy action label, full-value clipboard
-result and unknown no-op, and measures 48dp minimum touch bounds. It also exercises the missing-version fallback,
+the main matrix also checks the injected font scale and a measured text-width difference. A separate gap outside the
+captured group measures the real `Tokens.Space.Standard.l.dense`; this verifies shared density scaling without implying that
+the fixed-minimum About row height must shrink. The test compares the rows' actual Compose semantics, checks
+single-line long-value layout, the native Commit's copy action label, full-value clipboard result and unknown no-op,
+and measures 48dp minimum touch bounds. It also exercises the missing-version fallback,
 the unchanged three-row rollback and the existing native Commit tests. Captures go to build output or
 `-Dpersona.shots=<dir>` and are attached to the PR, never committed. These are **Native JVM Compose component captures
 and semantics**, not device/emulator, system-bar, navigation, accessibility-service or performance evidence. A
