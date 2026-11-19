@@ -32,6 +32,10 @@ func (s *Service) toolTaskPlanFrom(ctx context.Context, machine, sessionID strin
 // taskPlanFrom is task_plan from sessionID: a conversation (scope nil), or the agent of the task leader's task in scope,
 // which plans workers beneath that task only and starts them at once (task_leader.go).
 func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, args json.RawMessage, scope *leaderScope) (string, error) {
+	wait, err := agentWaitDuration(args)
+	if err != nil {
+		return "", err
+	}
 	var a struct{ Tasks []PlanTask }
 	lead := "" // the leader conversation the main conversation hands the plan to (task_plan's supervisor, #3608)
 	if scope != nil {
@@ -77,6 +81,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	modes := map[string]string{} // each computer's Claude Code default mode, read once for this plan
 	for i := range a.Tasks {
 		t := &a.Tasks[i]
+		t.WaitInputID = ""
 		asked := strings.TrimSpace(t.Permission) // the caller's own, before read-only replaces it
 		if t.Readonly {
 			asked = ""
@@ -85,6 +90,9 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		t.TodoID, t.Error, t.ErrorCode, t.ErrorArgs, t.RetryWith = "", "", "", nil, nil
 		t.WorkspaceResolved, t.ReservedTodoID, t.WorkspaceInferred = nil, "", false
 		t.OwnerStarted = false // the hub's: only the owner's Start on the card sets it (startPlan)
+		t.RequestGate, t.Queue = "", nil
+		t.CloseTabOnAccept, t.TerminalTarget, t.TerminalCleanup = false, taskTerminalTarget{}, ""
+		t.TerminalAuthorized = false
 		// The hub's too: the scheduled round this plan comes from is the hub's to tell (scheduledRoundOf, #8045).
 		t.Schedule, t.ScheduleTitle, t.ScheduleBasis = "", "", ""
 		// Reroute is hub-owned: drop any reroute a model passes in task_plan args, so healthyPlace seeds it only from a
@@ -212,6 +220,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			if err := s.planPieces(&a.Tasks[i]); err != nil {
 				return "", fmt.Errorf("task %d: %w", i+1, err)
 			}
+			a.Tasks[i].RequestGate = s.planRequestGate(a.Tasks[i])
 		}
 	}
 	if err := s.planBriefs(ctx, machine, sessionID, a.Tasks); err != nil {
@@ -234,6 +243,9 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 				a.Tasks[i].Schedule, a.Tasks[i].ScheduleTitle, a.Tasks[i].ScheduleBasis = round.ID, round.labelIn(s.lang(ctx)), round.grantBasis()
 			}
 		}
+	}
+	if wait > 0 && len(a.Tasks) == 1 && scope == nil {
+		a.Tasks[0].WaitInputID = "wait_" + randomHex(16)
 	}
 	dups := s.planDuplicates(ctx, a.Tasks) // before the plan's own todos exist
 	now := time.Now().UTC()
@@ -274,7 +286,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	if inRound {
 		granted = func() func(PlanTask) bool { return s.scheduleGrantCover(ctx, round, machine, sessionID) }
 	}
-	if health || !s.planStartsAtOnceUnder(ctx, p.Tasks, granted) {
+	if health || slices.ContainsFunc(p.Tasks, func(task PlanTask) bool { return task.RequestGate != "" }) || !s.planStartsAtOnceUnder(ctx, p.Tasks, granted) {
 		s.event(ctx, map[string]any{"type": "task_plan", "plan": s.planWithSuggestion(ctx, p, s.lang(ctx))})
 		// A card below the answer is easy to miss: push it as well.
 		titles := make([]string, 0, len(p.Tasks))
@@ -308,6 +320,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		return "", err
 	}
 	var b strings.Builder
+	supervisor := ""
 	fmt.Fprintf(&b, "Queued %d task(s) for dispatch without asking (read-only, asked for by the user, a kind the user trusts, or one "+
 		"the user lets this scheduled task start):\n", len(started.Tasks))
 	for _, t := range started.Tasks {
@@ -315,35 +328,51 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			fmt.Fprintf(&b, "- %s on %s: dispatch failed: %s\n", t.Title, t.Machine, t.Error)
 		} else {
 			fmt.Fprintf(&b, "- %s → todo %s on %s (dispatching)\n", t.Title, t.TodoID, t.Machine)
+			if todo, ok := s.todoNow(t.TodoID); ok && todo.Supervision != nil {
+				supervisor = todo.Supervision.Supervisor
+			}
 		}
 	}
 	b.WriteString("This is not confirmation that any agent started. Startup can still fail; the task cards and context snapshot show the outcome.")
-	background := s.backgroundOn(s.settings(ctx)) // who follows up a task no leader supervises (supervise_background.go)
+	cfg := s.settings(ctx)
+	background := s.backgroundOn(cfg)
 	switch {
-	case lead != "":
-		fmt.Fprintf(&b, " Leader conversation %s supervises them: their supervision messages go there, and it reviews them with task_review.", lead)
+	case supervisor == "":
+	case supervisor != sessionID && supervisor != cfg.Main:
+		fmt.Fprintf(&b, " Leader conversation %s supervises them: their supervision messages go there, and it reviews them with task_review.", supervisor)
 	case background && s.isBackground(ctx, sessionID):
 		b.WriteString(" You follow them up as the background supervisor: a supervision message comes when one needs you (review it with task_review).")
 	case background && s.isMain(ctx, sessionID):
 		b.WriteString(" The background supervisor follows them up: their supervision messages go to it and it reviews them with " +
 			"task_review, so none comes to you for them. You still hear of a start that failed and of what it hands to the user, " +
 			"and may review any of them yourself (task_review).")
-	case s.supervises(ctx, sessionID):
+	case supervisor == sessionID:
 		b.WriteString(" You supervise them: a supervision message comes when one needs you (review it with task_review).")
+	case background:
+		b.WriteString(" The background supervisor follows them up (their supervision messages and task_review); this conversation " +
+			"gets a one-line notice with the task's link when each one ends.")
 	default:
-		// A live side conversation supervises what it hands out; one that cannot be told anything leaves its task to
-		// the main conversation's follow-up (defaultPlanSupervisor), which is the background supervisor's while it is on.
-		if sup, ok := s.defaultPlanSupervisor(ctx, sessionID, ""); ok && sup == sessionID {
-			b.WriteString(" You supervise them: a supervision message comes when one needs you (review it with task_review).")
-		} else if ok && background {
-			b.WriteString(" The background supervisor follows them up (their supervision messages and task_review); this conversation " +
-				"gets a one-line notice with the task's link when each one ends.")
-		} else if ok {
-			b.WriteString(" The main conversation supervises them (its supervision messages and task_review); this conversation " +
-				"gets a one-line notice with the task's link when each one ends.")
-		}
+		b.WriteString(" The main conversation supervises them (its supervision messages and task_review); this conversation " +
+			"gets a one-line notice with the task's link when each one ends.")
 	}
 	b.WriteString(dups)
+	if wait > 0 && len(started.Tasks) == 1 && scope == nil && started.Tasks[0].Error == "" {
+		t := started.Tasks[0]
+		return s.waitAgentReply(ctx, b.String(), t.WaitInputID, wait, func(ctx context.Context) (string, string, error) {
+			todo, ok, err := s.todo(ctx, t.TodoID)
+			if !ok || err != nil {
+				return "", "", nil
+			}
+			if todo.StartError != "" {
+				return "", "", errors.New(todo.StartError)
+			}
+			if len(todo.Agents) > 0 {
+				a := todo.Agents[len(todo.Agents)-1]
+				return a.MachineID, a.SessionID, nil
+			}
+			return "", "", nil
+		}), nil
+	}
 	return b.String(), nil
 }
 

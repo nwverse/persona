@@ -228,3 +228,148 @@ test('owned ACP turns publish the user prompt, working state and live tool steps
   assert.equal(finalPage.items[0].client_msg_id, 'msg-1')
   assert.equal(finalPage.items.at(-1).text, 'Inspection complete.')
 })
+
+test('live thinking chunks, parallel tool updates and settling keep history stable without rewriting prior turns (#11129)', { timeout: 25_000 }, async (t) => {
+  const { node, directory, update, promptCount } = await fixture(t)
+  const prior = [
+    { ...userStep(0, 'Old prompt 1'), created_at: '2026-01-01T00:00:00Z' },
+    { ...replyStep(1, 'Old answer 1'), created_at: '2026-01-01T00:00:01Z' },
+    { ...userStep(2, 'Old prompt 2'), created_at: '2026-01-01T00:00:02Z' },
+    { ...replyStep(3, 'Old answer 2'), created_at: '2026-01-01T00:00:03Z' },
+  ]
+  transcripts(directory, prior, prior)
+  await node.peer.call('session.unwatch', { session_id: SESSION })
+  await node.peer.call('session.watch', { session_id: SESSION })
+
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Investigate the jump.', client_msg_id: 'msg-jump' })
+  await promptCount(1)
+  await until('live turn user prompt pushed', () => node.last('session.items')?.to_seq === 5)
+
+  const liveHistory = node.last('session.items').history
+  const startBatchCount = node.all('session.items').length
+  // Seed simulated client state from the initial live page before incremental updates begin.
+  const mergedById = new Map((await node.peer.call('session.items', { session_id: SESSION })).items.map((it) => [it.id, it]))
+  let covered = 5
+
+  // 1. Multiple thinking chunks separated beyond the 150ms throttle update the same thinking item in place.
+  update({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'Step 1: ' } })
+  await until('first thinking chunk pushed', () => node.last('session.items')?.items?.some((it) => it.kind === 'thinking' && it.text === 'Step 1:'))
+  const firstThought = node.last('session.items').items.find((it) => it.kind === 'thinking')
+  assert.equal(node.last('session.items').history, liveHistory)
+
+  update({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'reading runtime.js.' } })
+  await until('second thinking chunk updates same item', () =>
+    node.last('session.items')?.items?.some((it) => it.id === firstThought.id && it.text === 'Step 1: reading runtime.js.'),
+  )
+  const secondThoughtBatch = node.last('session.items')
+  assert.equal(secondThoughtBatch.history, liveHistory)
+  assert.equal(secondThoughtBatch.from_seq, firstThought.seq)
+  assert.equal(secondThoughtBatch.to_seq, firstThought.seq)
+  assert.deepEqual(secondThoughtBatch.items.map((it) => it.id), [firstThought.id])
+
+  // 2. Parallel tool calls, an in-place argument update, and out-of-order completion stay incremental and paired.
+  update({ sessionUpdate: 'tool_call', toolCallId: 'tc-1', name: 'read_file', rawInput: {} })
+  update({ sessionUpdate: 'tool_call', toolCallId: 'tc-2', name: 'run_command', rawInput: { CommandLine: 'ls' } })
+  await until('both parallel tool calls pushed', () => {
+    const allLive = node.all('session.items').slice(startBatchCount).flatMap((b) => b.items)
+    return allLive.some((it) => it.kind === 'tool_use' && it.tool_name === 'Read') &&
+      allLive.some((it) => it.kind === 'tool_use' && it.tool_name === 'Bash')
+  })
+
+  update({ sessionUpdate: 'tool_call_update', toolCallId: 'tc-1', status: 'in_progress', rawInput: { Path: '/tmp/a.js' } })
+  await until('tool call input updated in place', () =>
+    node.all('session.items').slice(startBatchCount).flatMap((b) => b.items)
+      .some((it) => it.kind === 'tool_use' && it.tool_name === 'Read' && it.tool_input?.file_path === '/tmp/a.js'),
+  )
+
+  update({ sessionUpdate: 'tool_call_update', toolCallId: 'tc-2', status: 'completed', rawOutput: 'ok-2' })
+  update({ sessionUpdate: 'tool_call_update', toolCallId: 'tc-1', status: 'failed', rawOutput: 'err-1' })
+  await until('both out-of-order tool results pushed', () => {
+    const allLive = node.all('session.items').slice(startBatchCount).flatMap((b) => b.items)
+    return allLive.some((it) => it.kind === 'tool_result' && it.text === 'ok-2') &&
+      allLive.some((it) => it.kind === 'tool_result' && it.text === 'err-1' && it.is_error === true)
+  })
+
+  // 3. A second thinking phase after tools appends chronologically without mutating the first thinking item.
+  update({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'Step 2: wrapping up.' } })
+  await until('second thinking block pushed', () =>
+    node.all('session.items').slice(startBatchCount).flatMap((b) => b.items)
+      .some((it) => it.kind === 'thinking' && it.text === 'Step 2: wrapping up.'),
+  )
+
+  // 4. Streaming final text and ending the turn before disk export settles incrementally under the same history.
+  update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Fixed cleanly.' } })
+  await until('final reply streams', () => node.last('session.delta')?.text === 'Fixed cleanly.')
+  update({ end: true })
+  await until('settled reply pushed incrementally', () =>
+    node.last('session.items')?.items?.some((it) => it.role === 'assistant' && it.kind === 'text' && it.text === 'Fixed cleanly.'),
+  )
+
+  const liveBatches = node.all('session.items').slice(startBatchCount)
+  assert.ok(liveBatches.length >= 4, `expected multiple incremental batches, got ${liveBatches.length}`)
+  for (const batch of liveBatches) {
+    assert.equal(batch.history, liveHistory, 'live progress and settling must not mutate history')
+    assert.ok(batch.from_seq > 0, `expected incremental continuation batch, got from_seq=${batch.from_seq}`)
+    assert.ok(batch.from_seq <= covered, `batch must remain continuous (from_seq=${batch.from_seq} > covered=${covered})`)
+    assert.equal(batch.items.some((it) => it.seq <= 4), false, 'prior turns must not be re-transmitted during live updates')
+    for (const it of batch.items) mergedById.set(it.id, it)
+    covered = Math.max(covered, batch.to_seq)
+  }
+
+  const merged = [...mergedById.values()].sort((a, b) => a.seq - b.seq)
+  assert.deepEqual(merged.slice(0, 4).map((it) => it.text), ['Old prompt 1', 'Old answer 1', 'Old prompt 2', 'Old answer 2'])
+  const thoughts = merged.filter((it) => it.kind === 'thinking')
+  assert.deepEqual(thoughts.map((it) => it.text), ['Step 1: reading runtime.js.', 'Step 2: wrapping up.'])
+  const readUse = merged.find((it) => it.kind === 'tool_use' && it.tool_name === 'Read')
+  const bashUse = merged.find((it) => it.kind === 'tool_use' && it.tool_name === 'Bash')
+  const resultsByCall = new Map(merged.filter((it) => it.kind === 'tool_result').map((it) => [it.tool_use_id, it]))
+  assert.equal(readUse.tool_input.file_path, '/tmp/a.js')
+  assert.equal(resultsByCall.get(readUse.tool_use_id)?.text, 'err-1')
+  assert.equal(resultsByCall.get(readUse.tool_use_id)?.is_error, true)
+  assert.equal(resultsByCall.get(bashUse.tool_use_id)?.text, 'ok-2')
+  assert.equal(resultsByCall.get(bashUse.tool_use_id)?.is_error, false)
+  assert.equal(merged.at(-1).text, 'Fixed cleanly.')
+
+  // 5. Only once native transcript_full.jsonl actually flushes does history transition back to canonical disk history.
+  const flushed = [
+    ...prior,
+    { ...userStep(4, 'Investigate the jump.'), created_at: '2026-01-01T00:00:04Z' },
+    { ...replyStep(5, 'Fixed cleanly.'), thinking: 'Step 1: reading runtime.js.\nStep 2: wrapping up.', created_at: '2026-01-01T00:00:05Z' },
+  ]
+  transcripts(directory, flushed, flushed)
+  await until('native disk export replaces synthetic settled history once', () => {
+    const latest = node.last('session.items')
+    return latest && latest.history !== liveHistory && !latest.history.includes(':settled:') && latest.to_seq === 6
+  })
+  assert.equal(node.last('session.items').from_seq, 0)
+  assert.equal(node.last('session.items').items.at(-1).text, 'Fixed cleanly.')
+})
+
+test('trailing thinking chunks arriving right before turn completion are not dropped on settle (#11129)', { timeout: 20_000 }, async (t) => {
+  const { node, update, promptCount } = await fixture(t)
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Quick check.' })
+  await promptCount(1)
+  await until('user prompt pushed', () => node.last('session.items')?.to_seq === 1)
+  const liveHistory = node.last('session.items').history
+
+  update({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'First half' } })
+  await until('first thinking chunk pushed', () => node.last('session.items')?.items?.some((it) => it.kind === 'thinking' && it.text === 'First half'))
+  const thoughtItem = node.last('session.items').items.find((it) => it.kind === 'thinking')
+  const afterFirstThought = node.all('session.items').length
+
+  // Immediately append a second thinking chunk and end the turn before the 150ms thought throttle fires.
+  update({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: ' + second half.' } })
+  update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'All good.' } })
+  update({ end: true })
+
+  await until('settled batch includes final reply', () =>
+    node.last('session.items')?.items?.some((it) => it.role === 'assistant' && it.kind === 'text' && it.text === 'All good.'),
+  )
+  const followBatches = node.all('session.items').slice(afterFirstThought)
+  for (const batch of followBatches) assert.equal(batch.history, liveHistory)
+  const updatedThought = followBatches.flatMap((b) => b.items).findLast((it) => it.id === thoughtItem.id)
+  assert.equal(updatedThought?.text, 'First half + second half.')
+  const page = await node.peer.call('session.items', { session_id: SESSION })
+  assert.equal(page.history, liveHistory)
+  assert.equal(page.items.find((it) => it.id === thoughtItem.id)?.text, 'First half + second half.')
+})

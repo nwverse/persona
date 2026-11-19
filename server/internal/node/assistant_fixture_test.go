@@ -17,7 +17,13 @@ import (
 // control-mode-error.json or control-effort-error.json, held while control-hold exists, after the lines in
 // control-extra.jsonl, exiting at control-exit), and plays a fixed turn for each user message (no result while
 // $CLI_FAKE_DIR/hold exists).
-const fakeCLI = `printf '%s\n' "$*" >> "$CLI_FAKE_DIR/cli-argv"
+const fakeCLI = `case " $* " in
+  *" auth status "*)
+    printf '%s\n' "$*" >> "$CLI_FAKE_DIR/cli-auth-argv"
+    echo '{"loggedIn":true}'
+    exit 0 ;;
+esac
+printf '%s\n' "$*" >> "$CLI_FAKE_DIR/cli-argv"
 printf '%s\n' "$CLAUDE_CONFIG_DIR" > "$CLI_FAKE_DIR/cli-profile"
 echo '{"type":"system","subtype":"init"}'
 while IFS= read -r line; do
@@ -63,8 +69,17 @@ type cliFixture struct {
 
 // cliTest is a node whose assistant conversations run fakeCLI as the machine's claude, with a fake hub.
 func cliTest(t *testing.T) *cliFixture {
+	return cliTestHome(t, fakeClaudeHome)
+}
+
+// cliTestBash runs a regression through the production bash fallback instead of skipping on a host without zsh.
+func cliTestBash(t *testing.T) *cliFixture {
+	return cliTestHome(t, fakeClaudeHomeBash)
+}
+
+func cliTestHome(t *testing.T, home func(*testing.T, string)) *cliFixture {
 	t.Helper()
-	fakeClaudeHome(t, fakeCLI)
+	home(t, fakeCLI)
 	dir := t.TempDir()
 	t.Setenv("CLI_FAKE_DIR", dir)
 	n := codexTestNode(t)

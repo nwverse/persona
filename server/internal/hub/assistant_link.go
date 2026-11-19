@@ -91,6 +91,10 @@ func (h *Hub) assistantRoutesRelayed(api *http.ServeMux) {
 			by = h.byTodo
 		}
 		var relay http.HandlerFunc = func(w http.ResponseWriter, r *http.Request) { h.forwardOwned(w, r, by) }
+		todoKind, todoReceipt := todoReceiptRoutes[pattern]
+		if todoReceipt { // relayed as a send: one cut off on the way may have been taken (todo_receipts.go)
+			relay = h.todoRelay(todoKind, by)
+		}
 		if pattern == "GET /api/v1/machines/{mid}/launchers/{name}/start-options" {
 			next := relay
 			relay = h.withMachine(func(w http.ResponseWriter, r *http.Request, m *Machine) {
@@ -106,6 +110,9 @@ func (h *Hub) assistantRoutesRelayed(api *http.ServeMux) {
 		}
 		if kind, ok := meetingReceiptRoutes[pattern]; ok {
 			relay = h.withBodyIDReceipt(kind, relay) // meeting_receipts.go
+		}
+		if todoReceipt {
+			relay = h.withTodoReceipt(todoKind, relay) // todo_receipts.go
 		}
 		api.HandleFunc(pattern, relay)
 	}

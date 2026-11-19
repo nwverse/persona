@@ -63,6 +63,40 @@ func (s *Service) defaultPlanSupervisor(ctx context.Context, conversation, paren
 	return main, main != "" && main != conversation
 }
 
+// planTaskSupervisor resolves the reviewer before a plan starts. A runtime-backed conversation can dispatch work,
+// but the main conversation's supervision route must take over when the intended reviewer cannot receive policy.
+func (s *Service) planTaskSupervisor(ctx context.Context, conversation string, task PlanTask) (string, error) {
+	if task.Parent != "" {
+		return conversation, nil
+	}
+	supervisor := conversation
+	if s.supervises(ctx, conversation) {
+		if s.isLeader(ctx, task.Supervisor) {
+			supervisor = task.Supervisor
+		}
+	} else {
+		supervisor, _ = s.defaultPlanSupervisor(ctx, conversation, "")
+	}
+	cfg := s.settings(ctx)
+	machine := cfg.MachineID
+	if supervisor == cfg.Main {
+		machine = cfg.mainRouteMachine()
+	}
+	if !s.runtimeConversation(ctx, machine, supervisor) {
+		return supervisor, nil
+	}
+	if cfg.Main == "" {
+		return "", planInvalid{i18n.Err("assistant-conversations.supervision_reviewer_required")}
+	}
+	if supervisor != cfg.Main && !s.runtimeConversation(ctx, cfg.mainRouteMachine(), cfg.Main) {
+		return cfg.Main, nil
+	}
+	if background := s.ownSupervisor(cfg); background != cfg.Main && !s.runtimeConversation(ctx, cfg.MachineID, background) {
+		return cfg.Main, nil
+	}
+	return "", planInvalid{i18n.Err("assistant-conversations.supervision_reviewer_required")}
+}
+
 // digestTo is the conversation signal g goes to, with cfg the settings in effect: the one it names (To), else its task's
 // supervisor when that is a leader or another side conversation, unless the main conversation handles it (its needs_user,
 // a start to remedy, a task waiting for the user); else, for a task whose ledger names the main conversation, the
@@ -98,6 +132,20 @@ func (s *Service) digestTo(cfg Settings, g superviseSignal) string {
 		return cfg.Main
 	}
 	return lead
+}
+
+// digestTarget is digestTo, except that a conversation hosted by an external runtime is never the target: it has no
+// separate policy channel, so a supervision message to it would be refused (CodeSupervisionRuntime) and only end in a
+// "did not send" notice. What it supervises from before its tasks went to the main conversation's route (planTaskSupervisor)
+// is followed up by that route now: the background supervisor while it is on, else the main conversation (ownSupervisor).
+func (s *Service) digestTarget(ctx context.Context, cfg Settings, g superviseSignal) string {
+	to := s.digestTo(cfg, g)
+	if to == "" || to == cfg.Main || to == cfg.BackgroundSupervisor || !s.runtimeConversation(ctx, cfg.MachineID, to) {
+		return to
+	}
+	own := s.ownSupervisor(cfg)
+	s.logf("supervise: %s runs on a runtime that cannot take supervision policy: its signal goes to %s", short(to), short(own))
+	return own
 }
 
 // escalatedIn: one of the entries is a leader's needs_user.
