@@ -14,7 +14,13 @@ const timer = setInterval(() => {
   const commands = readFileSync(`${directory}/updates.jsonl`, 'utf8').split('\n').filter(Boolean)
   for (const line of commands.slice(consumed)) {
     const { sessionId: target = sessionId, ...update } = JSON.parse(line)
-    if (update.end) {
+    if (update.permission) {
+      send({ id: update.permission, method: 'session/request_permission', params: {
+        sessionId: target,
+        toolCall: { toolCallId: 'read', title: 'read_file', rawInput: { Path: 'result.txt' } },
+        options: [{ optionId: 'allow', kind: 'allow_once' }],
+      } })
+    } else if (update.end) {
       send({ id: prompt, result: { stopReason: 'end_turn' } })
       prompt = undefined
     } else {
@@ -28,6 +34,10 @@ const input = createInterface({ input: process.stdin })
 input.on('line', (line) => {
   const request = JSON.parse(line)
   appendFileSync(`${directory}/calls.jsonl`, `${line}\n`)
+  if (request.method === 'initialize') {
+    send({ id: request.id, result: { agentCapabilities: { sessionCapabilities: { additionalDirectories: true } } } })
+    return
+  }
   if (request.method === 'session/set_model' && request.params.modelId === 'invalid-model') {
     send({ id: request.id, error: { code: -32000, message: 'Unknown model: invalid-model' } })
     return

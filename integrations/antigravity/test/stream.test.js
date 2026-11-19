@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict'
-import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { packageHash } from '../../runtime-sdk/lib/package.js'
 import { startFakeNode, until } from '../../runtime-sdk/testing/fake-node.js'
+import { PACKAGE_NAME } from '../install.mjs'
 import { createAgyRuntime } from '../lib/runtime.js'
 import { AgyAcpClient } from '../lib/acp.js'
 
@@ -176,6 +178,65 @@ test('autonomous wakes retire after inactivity without native export', async (t)
   await chunk('Awake again.')
 })
 
+test('an autonomous wake stays live while its permission card awaits an answer', async (t) => {
+  const { node, calls, update, chunk, runtime } = await fixture(t, { autonomousIdleMs: 300, exportPollMs: 20 })
+  const permissionId = 'wake-permission'
+  const answer = () => calls().find((call) => call.id === permissionId)?.result?.outcome
+  let answerCard
+  node.resolve = () => new Promise((resolve) => { answerCard = resolve })
+  await chunk('Waiting for permission.')
+  update({ permission: permissionId })
+  await until('permission card reaches the phone', () => answerCard)
+  await new Promise((resolve) => setTimeout(resolve, 400))
+  assert.equal(answer(), undefined, 'the wake must not cancel the card after its inactivity deadline')
+  assert.equal(runtime.idle(), false)
+
+  answerCard({ allow: true })
+  await until('ACP permission answer', () => answer())
+  assert.deepEqual(answer(), { outcome: 'selected', optionId: 'allow' })
+  await new Promise((resolve) => setTimeout(resolve, 60))
+  assert.equal(runtime.idle(), false, 'answering the card gives the wake a fresh inactivity window')
+  await chunk('Continuing.', 'Waiting for permission.Continuing.')
+  await until('wake settles after the answer and subsequent inactivity', () => runtime.idle() && node.last('session.delta')?.text === '')
+})
+
+test('empty updates cannot start an autonomous wake', async (t) => {
+  const { node, update, runtime } = await fixture(t)
+  const before = node.all('session.delta').length
+  update({ sessionUpdate: 'agent_message_chunk', content: { text: ' \n ' } })
+  update({ sessionUpdate: 'agent_thought_chunk', content: { text: ' \t ' } })
+  update({ sessionUpdate: 'tool_call_update', status: 'completed' })
+  update({ sessionUpdate: 'session_info_update', title: 'Updates delivered' })
+  await until('ACP updates delivered', () => node.last('runtime.sessions')?.sessions[0]?.title === 'Updates delivered')
+  assert.notEqual(sessionStatus(node), 'working')
+  assert.equal(node.all('session.delta').length, before)
+  assert.equal(runtime.idle(), true)
+})
+
+test('an installed update exits as soon as the autonomous wake retires', async (t) => {
+  const store = mkdtempSync(join(tmpdir(), 'agy-wake-update-'))
+  t.after(() => rmSync(store, { recursive: true, force: true }))
+  const exits = []
+  const { node, directory, chunk } = await fixture(t, {
+    idleCheckMs: 10_000, retryMs: 20, exportPollMs: 20,
+    update: { name: PACKAGE_NAME, hash: 'running', store, exit: (hash) => exits.push(hash) },
+  })
+  await chunk('Wake reply.')
+  const files = [{ path: 'antigravity/companion.mjs', data: Buffer.from('export {}\n') }]
+  const hash = packageHash(files)
+  node.offer = { name: PACKAGE_NAME, hash, files: files.map((file) => ({ ...file, data: file.data.toString('base64') })) }
+  node.peer.close(new Error('node upgraded'))
+  await until('package installed while wake is active', () => {
+    try { return readlinkSync(join(store, 'current')) === hash } catch { return false }
+  })
+  assert.deepEqual(exits, [])
+  const steps = [replyStep(0, 'Wake reply.')]
+  transcripts(directory, steps, steps)
+  nativeState(directory, 'IDLE', 1)
+  await until('wake retirement triggers exit without waiting for the idle poll', () => exits.length, 1500)
+  assert.deepEqual(exits, [hash])
+})
+
 test('a user send takes over an autonomous wake without waiting for it', async (t) => {
   const { node, update, chunk, promptCount, runtime } = await fixture(t)
   update({ sessionUpdate: 'tool_call', toolCallId: 'read', name: 'read_file' })
@@ -188,6 +249,18 @@ test('a user send takes over an autonomous wake without waiting for it', async (
   await until('user turn settles independently', () => node.last('session.delta')?.text === '' && sessionStatus(node) !== 'working' && runtime.idle())
   const page = await node.peer.call('session.items', { session_id: SESSION })
   assert.deepEqual(page.items.map((item) => item.text), ['Next request.', 'User reply.'])
+})
+
+test('a policy-changing send cannot resume AGY during an autonomous wake', async (t) => {
+  const { node, calls, chunk } = await fixture(t)
+  await chunk('Background progress.')
+  const resumes = calls().filter((call) => call.method === 'session/resume').length
+  await assert.rejects(node.peer.call('session.send', {
+    session_id: SESSION, text: 'Next request.', supervision_instructions: 'Ask before editing files.',
+  }), /Wait for the current turn to finish before changing supervision policy/)
+  assert.equal(calls().filter((call) => call.method === 'session/resume').length, resumes)
+  assert.equal(calls().some((call) => call.method === 'session/prompt'), false)
+  assert.equal(node.last('session.delta').text, 'Background progress.')
 })
 
 test('interrupt settles an autonomous wake even when the native summary still says running', async (t) => {
@@ -218,13 +291,56 @@ test('an autonomous wake preserves a previous unexported reply through interrupt
   assert.deepEqual(node.last('session.items').items.map((item) => item.text), ['Run the workflow.', 'Workflow started.'])
 
   await chunk('Workflow finished.')
-  const complete = [userStep(0, 'Run the workflow.'), replyStep(1, 'Workflow started.'),
-    { step_index: 2, type: 'SYSTEM_MESSAGE', content: 'The workflow finished.' }, replyStep(3, 'Workflow finished.')]
+  const complete = [userStep(0, 'Run the workflow.'), { step_index: 1, type: 'SYSTEM_MESSAGE', content: 'Progress update.' },
+    replyStep(2, 'Workflow started.'), { step_index: 3, type: 'SYSTEM_MESSAGE', content: 'The workflow finished.' }, replyStep(4, 'Workflow finished.')]
   transcripts(directory, complete, complete)
-  nativeState(directory, 'IDLE', 4)
-  await until('both replies are exported', () => runtime.idle() && node.last('session.items')?.to_seq === 4)
+  nativeState(directory, 'IDLE', 5)
+  await until('both replies are exported despite a mid-prompt system message', () => runtime.idle() && node.last('session.items')?.to_seq === 5)
   const final = await node.peer.call('session.items', { session_id: SESSION })
   assert.deepEqual(final.items.map((item) => item.text), ['Run the workflow.', 'Workflow started.', 'Workflow finished.'])
+})
+
+test('a text-only wake does not rewrite the unexported prompt history', async (t) => {
+  const { node, update, chunk, promptCount, runtime } = await fixture(t)
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Run the workflow.' })
+  await promptCount(1)
+  await chunk('Workflow started.')
+  update({ end: true })
+  await until('prompt reply held until export', () => runtime.idle() && node.last('session.items')?.items.some((item) => item.text === 'Workflow started.'))
+  const prior = await node.peer.call('session.items', { session_id: SESSION })
+  await chunk('Workflow finished.')
+  assert.deepEqual(await node.peer.call('session.items', { session_id: SESSION }), prior)
+})
+
+test('a late export of one wake cannot settle the next wake', async (t) => {
+  const { node, directory, update, chunk, runtime } = await fixture(t, { autonomousIdleMs: 800, exportPollMs: 20 })
+  const announce = (toolCallId) => update({ sessionUpdate: 'tool_call', toolCallId, name: 'read_file' })
+  announce('first-read')
+  await chunk('Workflow finished.')
+  await until('first wake times out unexported', () => runtime.idle() && node.last('session.delta')?.text === '')
+
+  announce('second-read')
+  await chunk('Workflow finished.')
+  const first = [{ step_index: 0, type: 'SYSTEM_MESSAGE' },
+    { ...replyStep(1, ''), tool_calls: [{ name: 'read_file' }] }, replyStep(2, 'Workflow finished.')]
+  transcripts(directory, first, first)
+  nativeState(directory, 'IDLE', 3)
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  assert.equal(runtime.idle(), false, 'the earlier wake exported the same tool and reply')
+  assert.equal(node.last('session.delta').text, 'Workflow finished.')
+
+  const next = [...first, { step_index: 3, type: 'SYSTEM_MESSAGE' }, replyStep(4, 'Workflow finished.')]
+  transcripts(directory, next, next)
+  nativeState(directory, 'IDLE', 5)
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  assert.equal(runtime.idle(), false, 'the second wake cannot borrow the first wake\'s tool call')
+
+  const complete = [...next.slice(0, -1), { ...replyStep(4, ''), tool_calls: [{ name: 'read_file' }] }, replyStep(5, 'Workflow finished.')]
+  transcripts(directory, complete, complete)
+  nativeState(directory, 'IDLE', 6)
+  await until('second wake settles with its own export', () => runtime.idle() && node.last('session.delta')?.text === '', 400)
+  const final = await node.peer.call('session.items', { session_id: SESSION })
+  assert.equal(final.items.filter((item) => item.kind === 'tool_use').length, 2)
 })
 
 test('unknown and archived sessions cannot start autonomous work', async (t) => {

@@ -52,6 +52,7 @@ export function createAgyRuntime(options = {}) {
   const activeTurns = new Map() // personaId -> { streamingText, startedAt }
   const promptTurns = new Map() // the prompt executing, before any queued successor
   const autonomousTurns = new Map()
+  const missedWakes = new Map()
   const unexportedTurns = new Map() // agyId -> { baseMaxIndex, seq, steps, hasReply, base } settled turns awaiting native transcript export
   const exportPolls = new Map() // agyId -> interval watching for a settled turn's native transcript flush
   const sentMsgIds = new Map() // `${agyId}:${stepIndex}` -> { text, clientMsgId }
@@ -326,7 +327,7 @@ export function createAgyRuntime(options = {}) {
         break
       case 'agent_thought_chunk': {
         const chunk = upd.content?.text
-        const turn = typeof chunk === 'string' && chunk && liveTurnForUpdate(rawId, pid)
+        const turn = typeof chunk === 'string' && chunk && liveTurnForUpdate(rawId, pid, Boolean(chunk.trim()))
         if (turn) {
           let changed = false
           if (turn.activeThoughtStep) {
@@ -371,7 +372,7 @@ export function createAgyRuntime(options = {}) {
             probe.text += chunk
             break
           }
-          const turn = liveTurnForUpdate(rawId, pid)
+          const turn = liveTurnForUpdate(rawId, pid, Boolean(chunk.trim()))
           if (turn) {
             if (turn.newMessage) turn.streamingText = ''
             turn.newMessage = false
@@ -393,9 +394,8 @@ export function createAgyRuntime(options = {}) {
         break
       }
       case 'tool_call_update': {
-        const turn = liveTurnForUpdate(rawId, pid)
-        if (!turn) break
-        if (upd.toolCallId) {
+        const turn = upd.toolCallId && liveTurnForUpdate(rawId, pid)
+        if (turn) {
           const existing = turn.liveToolsById.get(upd.toolCallId) ||
             (autonomousTurns.get(pid) === turn && recordLiveTool(pid, turn, upd))
           if (existing && (upd.rawInput || upd.input)) {
@@ -434,8 +434,8 @@ export function createAgyRuntime(options = {}) {
               existing.resultStep = resultStep
             }
           }
+          syncTranscriptAppend(rawId)
         }
-        syncTranscriptAppend(rawId)
         break
       }
       default:
@@ -554,6 +554,8 @@ export function createAgyRuntime(options = {}) {
     } finally {
       asks.delete(ac)
       if (asks.size === 0 && permissionAsks.get(rawId) === asks) permissionAsks.delete(rawId)
+      const wake = autonomousTurns.get(pid)
+      if (wake) wake.lastUpdate = Date.now()
       if (want) setImmediate(() => { void maybeExit() })
     }
 
@@ -711,17 +713,13 @@ export function createAgyRuntime(options = {}) {
     const curMax = maxStepIndex(transcript.steps)
     const pid = toPersonaId(rawId)
     const turn = liveTurnOf(pid)
-    if (turn && turn.exportedBaseMax !== undefined) {
-      const extra = [...turn.priorPending, ...turn.liveSteps]
-      if (extra.length > 0) {
-        return {
-          ...transcript,
-          steps: [...turn.base.steps, ...extra],
-          // Live and settled unexported steps share one synthetic history epoch until native export flushes to disk,
-          // so thinking/tool progress and settling never trigger full-history rewrites.
-          history: `${turn.base.history}:settled:${turn.historySeq ?? turn.seq}`,
-          synthetic: true,
-        }
+    if (turn?.liveSteps.length) {
+      return {
+        ...transcript,
+        steps: [...turn.base.steps, ...turn.priorPending, ...turn.liveSteps],
+        // Live and settled prompt steps share a history epoch until native export flushes to disk.
+        history: `${turn.base.history}:settled:${turn.historySeq ?? turn.seq}`,
+        synthetic: true,
       }
     }
     const pending = unexportedTurns.get(rawId)
@@ -1226,16 +1224,19 @@ export function createAgyRuntime(options = {}) {
     return promptTurns.get(pid) || autonomousTurns.get(pid)
   }
 
-  function liveTurnForUpdate(rawId, pid) {
+  function liveTurnForUpdate(rawId, pid, start = true) {
     if (stopped || archived.has(rawId) || checkTurns.has(rawId)) return undefined
     const prompt = promptTurns.get(pid)
     if (prompt) return prompt
     if (activeTurns.has(pid) || rewinding.has(pid) || cancelling.has(rawId) || !sessionCwds.has(rawId)) return undefined
     let turn = autonomousTurns.get(pid)
     if (!turn) {
+      if (!start) return undefined
       turn = { seq: nextTurnSeq++, streamingText: '' }
       prepareLiveTurn(rawId, turn)
       turn.historySeq = turn.seq
+      const { base, steps, ...pending } = unexportedTurns.get(rawId) ?? {}
+      turn.wakeCursor = missedWakes.get(rawId) ?? { after: turn.exportedBaseMax, skip: 0, pending: pending.seq ? pending : undefined }
       autonomousTurns.set(pid, turn)
       if (!lastPushedSeq.has(pid)) lastPushedSeq.set(pid, 0)
       staleWorkingAt.delete(rawId)
@@ -1249,22 +1250,33 @@ export function createAgyRuntime(options = {}) {
   }
 
   function pollAutonomousTurn(rawId, turn) {
+    if (permissionAsks.get(rawId)?.size) return
     const native = readConversationStates().get(rawId)
     if (native && !nativeWorking(native) && native.step_count > turn.exportedBaseMax) {
       const { steps } = exportedTranscriptOf(rawId)
       const first = steps.findIndex((step, index) => (step.step_index ?? index) > turn.exportedBaseMax)
       if (first >= 0 && native.step_count > maxStepIndex(steps)) {
-        const wake = steps.findIndex((step, index) => index >= first && step.type === 'SYSTEM_MESSAGE')
-        const pending = unexportedTurns.get(rawId)
-        if (wake >= 0 && pending && pendingReplaced(pending, steps.slice(0, wake))) unexportedTurns.delete(rawId)
-        const exported = steps.slice(wake >= 0 ? wake + 1 : first)
-        if (!unexportedTurns.has(rawId) && autonomousExported(turn, exported)) {
+        const { after, skip, pending } = turn.wakeCursor
+        let remaining = skip
+        let prior = pending
+        const wake = steps.findIndex((step, index) => {
+          if (step.type !== 'SYSTEM_MESSAGE' || (step.step_index ?? index) <= after ||
+              (prior && !pendingReplaced(prior, steps.slice(0, index)))) return false
+          if (prior && prior.seq === unexportedTurns.get(rawId)?.seq) unexportedTurns.delete(rawId)
+          prior = undefined
+          return remaining-- === 0
+        })
+        if ((wake >= 0 || (!skip && !pending)) && autonomousExported(turn, steps.slice(Math.max(first, wake + 1)))) {
+          missedWakes.delete(rawId)
           retireAutonomousTurn(rawId)
           return
         }
       }
     }
-    if (Date.now() - turn.lastUpdate >= autonomousIdleMs) retireAutonomousTurn(rawId, native)
+    if (Date.now() - turn.lastUpdate >= autonomousIdleMs) {
+      missedWakes.set(rawId, { ...turn.wakeCursor, skip: turn.wakeCursor.skip + 1 })
+      retireAutonomousTurn(rawId, native)
+    }
   }
 
   function autonomousExported(turn, steps) {
@@ -1294,6 +1306,7 @@ export function createAgyRuntime(options = {}) {
       syncTranscriptAppend(rawId)
       rt.sessionsChanged(0)
     }
+    if (want) setImmediate(() => { void maybeExit() })
     return true
   }
 
@@ -1319,6 +1332,7 @@ export function createAgyRuntime(options = {}) {
   }
 
   function beginLiveTurn(rawId, pid, turn) {
+    missedWakes.delete(rawId)
     clearExportPoll(rawId)
     prepareLiveTurn(rawId, turn)
     if (turn.userText) {
@@ -1360,7 +1374,7 @@ export function createAgyRuntime(options = {}) {
       if (hasPolicy) throw new RpcError(`Failed to read supervision policy: ${err.message}`, SUPERVISION_ERROR_CODE)
     }
     let nextPolicy = hasPolicy ? requestedPolicy : prevPolicy
-    if (hasPolicy && nextPolicy !== prevPolicy && (activeTurns.has(pid) || nativeWorking(readConversationStates().get(rawId)))) {
+    if (hasPolicy && nextPolicy !== prevPolicy && (hasLiveWork(pid) || nativeWorking(readConversationStates().get(rawId)))) {
       throw new RpcError('Wait for the current turn to finish before changing supervision policy', 'busy')
     }
 
@@ -1595,6 +1609,7 @@ export function createAgyRuntime(options = {}) {
     const rawId = ownedId(params.session_id)
     return busyCall(async () => {
       archived.add(rawId)
+      missedWakes.delete(rawId)
       clearExportPoll(rawId)
       unexportedTurns.delete(rawId)
       dirtyLiveSeqs.delete(toPersonaId(rawId))
@@ -1660,6 +1675,7 @@ export function createAgyRuntime(options = {}) {
         throw new RpcError('The native conversation changed during rewind. Reload its history', 'rewind_failed')
       }
       rememberCut(rawId, readTranscript(brainDirOf(rawId), true), target.index)
+      missedWakes.delete(rawId)
       // Native exports retain the old branch until replacement steps arrive. Its durable summary supplies the cut.
       const deadline = Date.now() + 5000
       while (readConversationStates().get(rawId)?.step_count !== target.index) {
@@ -1758,6 +1774,7 @@ export function createAgyRuntime(options = {}) {
     clearTimeout(catalogTimer)
     catalogAbort.abort()
     for (const pid of autonomousTurns.keys()) retireAutonomousTurn(toAgyId(pid))
+    missedWakes.clear()
     rt.stop()
     // A turn's transcript poll would otherwise keep running; acp.stop() fails the prompts themselves.
     for (const tail of activeTurns.values()) {
