@@ -59,8 +59,10 @@ func TestAssistantLaterMessagesKeepManagerDir(t *testing.T) {
 			f.idle(t, id)
 			check := func(round string, starts int) {
 				t.Helper()
+				// The folder is what this test is about. Each message attests its own origin (#11170): a later one
+				// that names none records none, wherever it runs.
 				st, ok := n.state.get(id)
-				if !ok || st.Cwd != dir || st.Origin != tc.origin {
+				if !ok || st.Cwd != dir || round == "first message" && st.Origin != tc.origin {
 					t.Fatalf("%s: recorded cwd=%q origin=%q, want %q %q", round, st.Cwd, st.Origin, dir, tc.origin)
 				}
 				if p := f.proc(id); p == nil || p.cwd != dir {
