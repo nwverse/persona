@@ -533,7 +533,6 @@ describe("the model panel", () => {
     act(() => button("Codex").click());
     type(search(), "vendor/new-1");
     expect(rows().map((r) => r.textContent)).toEqual([expect.stringContaining("使用「vendor/new-1」")]);
-    expect(row("vendor/new-1").textContent).toContain("Claude");
     expect(row("使用「vendor/new-1」").textContent).toContain("Claude · 列表里没有，按输入的 ID 使用");
     key(search(), "Enter");
     await flush();
