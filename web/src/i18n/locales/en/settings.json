@@ -109,6 +109,7 @@
   "kind_cli": "Other (web / command line)",
   "kind_web": "Web",
   "role_answer": "Answer only",
+  "role_scoped": "Scoped access",
   "revoked_ago": "revoked {time}",
   "used_ago": "used {time}",
   "added_ago": "added {time}",

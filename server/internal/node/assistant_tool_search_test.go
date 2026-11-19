@@ -247,7 +247,7 @@ func TestToolSearchRefusalIsRememberedPerLauncherAndModel(t *testing.T) {
 // carry tool search does unless its start turned tool search off in both its environment and its --settings env
 // (always-refuse: whatever its start did), and answers otherwise, a 503 first when 503-first exists. It says it has
 // no background task (tasks names one when that file exists) and keeps what each start had in tool-search.
-const toolSearchCLI = `printf '%s\n' "$*" >> "$CLI_FAKE_DIR/cli-argv"
+const toolSearchCLI = fakeCLIAuthStatus + `printf '%s\n' "$*" >> "$CLI_FAKE_DIR/cli-argv"
 settings=; prev=
 for a in "$@"; do [ "$prev" = --settings ] && settings=$a; prev=$a; done
 off=no
