@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -27,7 +28,9 @@ var errSwitched = errors.New("moved to a better path")
 type nodeConn struct {
 	path       *nodePath
 	via        string // the transport it took: local | ssh | tailcat | link | service | hub
-	pipe       *nodePipe
+	pipeMu     sync.Mutex
+	pipeNow    *nodePipe // the transport in use, which a resume replaces (resume.go)
+	ctx        context.Context
 	peer       *rpc.Peer
 	info       proto.NodeInfo
 	served     chan error
@@ -41,7 +44,14 @@ type nodeConn struct {
 func (c *nodeConn) close() {
 	c.peer.Close(errors.New("closed"))
 	c.cancel()
-	c.pipe.close()
+	c.pipe().close()
+}
+
+// pipe is the transport in use.
+func (c *nodeConn) pipe() *nodePipe {
+	c.pipeMu.Lock()
+	defer c.pipeMu.Unlock()
+	return c.pipeNow
 }
 
 // run keeps the machine connected through its best path until ctx ends.
@@ -89,8 +99,8 @@ func (m *Machine) run(ctx context.Context) {
 		next := m.takeNext()
 		planned := next != nil
 		lasted := time.Since(start)
-		m.d.logf("[%s] connection ended: via=%s lasted=%s planned=%t restarting=%t reason=%q %s", m.cfg.ID, conn.via,
-			lasted.Round(time.Second), planned, conn.restarting.Load(), dropReason(err), conn.peer.LaneStats())
+		m.d.logf("[%s] connection ended: via=%s lasted=%s planned=%t restarting=%t reason=%q %s%s", m.cfg.ID, conn.via,
+			lasted.Round(time.Second), planned, conn.restarting.Load(), dropReason(err), conn.peer.LaneStats(), m.resumeCounts())
 		if errors.Is(err, rpc.ErrFrame) {
 			m.noteFrameFailure(err)
 		}
@@ -265,8 +275,9 @@ func (m *Machine) establishViaOnce(ctx context.Context, p *nodePath, via string,
 		"file.zip":               true,
 	}
 	// Every event goes on to the hub, the forwarded ports' bytes among them (the hub is their end, ports.go there).
-	c := &nodeConn{path: p, via: via, pipe: l, peer: peer, served: make(chan error, 1), cancel: cancel}
+	c := &nodeConn{path: p, via: via, pipeNow: l, ctx: cctx, peer: peer, served: make(chan error, 1), cancel: cancel}
 	peer.OnClose = func(err error, inflight []string) { m.logCutOff(via, err, inflight) }
+	peer.OnLost = func(err error) { m.resumeConn(c, err) } // a node that keeps it: resume.go
 	peer.OnRequest = func(ctx context.Context, method string, params json.RawMessage) (any, error) {
 		if method == "state.load" {
 			var barrier struct {
@@ -325,6 +336,9 @@ func (m *Machine) establishViaOnce(ctx context.Context, p *nodePath, via string,
 	if off := m.lanesOff(); err == nil && nodeHas(c.info, nodeproto.NodeLanes) && !off.IsZero() {
 		m.d.logf("[%s] lanes over %s: not asked until %s (frames broke this computer's connections)", m.cfg.ID, via, off.Format(time.TimeOnly))
 	} else if err == nil && nodeHas(c.info, nodeproto.NodeLanes) {
+		if nodeHas(c.info, nodeproto.NodeResume) { // asked for with lanes (resume.go)
+			peer.EnableResume(resumeWindow)
+		}
 		// Before anything else goes out, so nothing large is on its way while the two sides switch, and within a wait of
 		// its own: the handshake is done. A refusal leaves lines, the connection working as with an older node; an
 		// answer later than the wait still switches both sides when it comes (OnLanes above says so).
@@ -409,7 +423,7 @@ func (m *Machine) serve(ctx context.Context, c *nodeConn) error {
 	if trigger == "" {
 		trigger = "first"
 	}
-	m.d.logf("[%s] connected over %s: %s %s/%s herdr %s claude %s (trigger: %s) lanes=%s", m.cfg.ID, where, info.Hostname, info.OS, info.Arch, info.HerdrVersion, info.ClaudeVersion, trigger, onOff(c.peer.Framed()))
+	m.d.logf("[%s] connected over %s: %s %s/%s herdr %s claude %s (trigger: %s) lanes=%s%s", m.cfg.ID, where, info.Hostname, info.OS, info.Arch, info.HerdrVersion, info.ClaudeVersion, trigger, onOff(c.peer.Framed()), resumeOn(c.peer))
 	m.tellLinks(true, "")
 	compat := compatOf(info)
 	if compat.Incompatible != "" {
@@ -424,13 +438,25 @@ func (m *Machine) serve(ctx context.Context, c *nodeConn) error {
 	sctx, scancel := context.WithCancel(ctx)
 	defer scancel()
 	if c.via == "tailcat" && p.src == m {
-		go m.watchTailcat(sctx, c.peer, c.pipe.activity)
+		go m.watchTailcat(sctx, c)
 	}
-	if a := c.pipe.activity; a != nil {
+	if c.pipe().activity != nil {
 		// Once ctx ends (the hub stopping, the entry removed) watchTailcat is gone: this is what fails a write still
 		// stuck on a dead connection, so run returns and the manager's wait for its workers ends.
-		defer context.AfterFunc(ctx, func() { _ = a.Close() })()
+		defer context.AfterFunc(ctx, func() {
+			if a := c.pipe().activity; a != nil {
+				_ = a.Close()
+			}
+		})()
 	}
+	m.mu.Lock()
+	m.cutConn = c.cut // a ping that finds the transport dead cuts it, to resume (resume.go)
+	m.mu.Unlock()
+	defer func() {
+		m.mu.Lock()
+		m.cutConn = nil
+		m.mu.Unlock()
+	}()
 
 	// A node this manager cannot drive stays connected, so it shows and can be updated (machine.call refuses the
 	// rest), but is neither configured nor listed nor watched: what it would answer is not known.
@@ -507,7 +533,7 @@ func (m *Machine) serve(ctx context.Context, c *nodeConn) error {
 		p.src.mu.Unlock()
 	}
 	if errors.Is(err, io.EOF) {
-		if msg := c.pipe.lastErr(); msg != "" {
+		if msg := c.pipe().lastErr(); msg != "" {
 			err = fmt.Errorf("node exited: %s", msg)
 		} else {
 			err = errors.New("node exited")

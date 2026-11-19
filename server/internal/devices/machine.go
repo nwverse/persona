@@ -160,6 +160,10 @@ type Machine struct {
 	// for (conn.go noteFrameFailure). Under mu.
 	frameFails    []time.Time
 	lanesOffUntil time.Time
+	// cutConn closes the transport of the connection being served, which the node keeps for a resume (resume.go);
+	// resumes counts this computer's drops and how they ended. Under mu.
+	cutConn func()
+	resumes resumeCounts
 	// opened is what the hub has open on the node through the bus connection of the moment (hubopen.go).
 	opened hubOpened
 	// claudeDirsMu serializes the read-modify-writes of the remembered and blocked Claude config dirs (claudedirs.go).

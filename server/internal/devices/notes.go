@@ -83,7 +83,13 @@ func (m *Machine) writeNotes(n *nodeNotes) {
 		if p == nil {
 			continue
 		}
-		watch := watchNote(p.LastWrite, func() {
+		written := func() time.Time { // a connection waiting to be resumed writes nothing, and is not stalled (resume.go)
+			if p.Suspended() {
+				return time.Now()
+			}
+			return p.LastWrite()
+		}
+		watch := watchNote(written, func() {
 			m.d.logf("[%s] its node took nothing for %s: connecting it again", m.cfg.ID, noteStall)
 			p.Close(errors.New("the node stopped taking events"))
 		})
