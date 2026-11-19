@@ -122,6 +122,7 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
 
 - Run release privacy preflight with the actual selected build config (#1245): a scan without `PERSONA_CONFIG` can miss account-specific inputs. Generic provisioning profile labels already published in the default mapping or deployment fixture are not private merely because an account selects them. Classify only those exact literal labels under `app_store.provisioning_profiles`, reading the already published `origin/main` definitions rather than allowing a working-tree or unpublished commit to approve its own new label; keep custom/near-match labels, values under another key and explicit `private-words.txt` entries protected. Parse historical fixture data without executing it, and never work around the failure by dropping signing overrides, renaming registered resources or disabling the source/bundle privacy gates. Compound release commands use `set -euo pipefail` and stop on a rejected preflight before commit, push, archive or upload.
 
+- Signing a raw release binary does not update an archive made before signing (#10128). Recompress every signed binary before calculating `SHA256SUMS` and the manifest. Regression tests must decompress the artifact selected for upload and compare it with the signed raw bytes; command ordering and matching manifest hashes alone can still publish the pre-signing executable.
 - Separate code-signature verification from simulator entitlement context (#6192). An unsigned run had Keychain and saved-pairing failures; the final ad-hoc signed run passed those unchanged assertions. However, its embedded signature and ordinary `.xcent` were empty while `*-Simulated.xcent` contained three configured Keychain access groups. Check both and verify the actual signature; do not infer effective simulator entitlements solely from `codesign -d --entitlements`, or treat a signing difference as a proven root cause. Keep failed evidence, preserve persistence assertions, and do not extend simulator results to production Keychain access-group continuity or change registered profiles.
 - GUI send acceptance needs run-unique messages and appearance-scoped synthetic histories (#6192). Reusing the same old-hub conversation both scrolled the original seed outside the visible tail and left same-name replies that could falsely satisfy a later send assertion. Use fresh synthetic regular/main conversations for each appearance, give sends a unique suffix and retain the exact suffix across the cold relaunch. Keep the no-pairing-reinjection assertion, all history/main checks and previous failure evidence; do not delete old messages or weaken the expected reply.
 - Mirrored transport bytes must be compared from the same envelope (#6192). Calling a computed recording receipt dictionary twice performs two JSON encodings whose object-key ordering may differ. Capture one dictionary, then compare its canonical and compatibility values; separately test decoding and invalid-canonical precedence. Do not change production serialization or relax the same-envelope byte equality assertion.
@@ -148,6 +149,9 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
 - Goroutines that outlive a test must not call `t.Logf` or read global switches changed after the test ends (2026-11-06, #4822). `computer.nolock` / `computer.cursor` send in their own goroutines; late logging panics (`Log in goroutine after ... has completed`). A fake Mac node reading global `fakeNodesBuiltin` per request sees changes from the preceding test's cleanup, letting late requests fail an already-finished test. Guard logging with a lock and `over` flag set by `t.Cleanup`; fake nodes capture the switch once at creation.
 
 - Assistant tests swap a service's hub with `setHub`, never `s.hub = h` (2026-11-11, #4006). The inbox's "Needs you" teller (`tellInboxNeedsYou`) reads `s.hub` on a goroutine of its own, and a test's service starts one at its first inbox read, so a plain assignment raced with it under `-race`. The teller reads the hub only under `needsYouMu`, and `setHub` swaps it under that lock. The teller is not the only reader: a timer armed while the service is set up (`directionsSoon`, which reads `s.hub` through `hello`) can fire during the test, on a `synctest` bubble's clock too, and nothing orders it after a swap. Where a test only needs a fake behavior, the fake hub does it under `f.mu` (`hangChannel`) and the hub is never swapped. A test with two racing readers can report one in a combined run and the other when run alone, so check each test in separate processes of its own. In the same run, two leader retry tests ended before their retry ran because `sendsTo` also counts sends the fake refused; the retry goroutine then read a package timing their cleanup restored. Such timings belong on the `Service` (`leaderResume`, like `taskRetry`), and a wait must see the effect it names (`deliveredTo`, the sends the fake took).
+
+- Prepared approval result counts need a resumable fake conversation and settled delivery lanes (#10455). Listing `s1` is not enough: the fake also needs `known["s1"]` for `resume_only`, or it records a refused direct try and its asynchronous queued retry as two sends. Mark the conversation known and wait for approval delivery plus relay draining before asserting exactly one terminal result; waiting for the first visible result hides the duplicate.
+
 - A fake's one-shot hook keyed only by machine runs for whoever lists that machine next, a background goroutine included (2026-11-18, #10331). `TestACardMessageReopensOnlyItsOwnTask` armed `fakeHub.afterList["box"]` for the card message's own look at the task's agents. The acceptance before it had started the todo-token sync (`syncTodoTokens`), which lists the same machine; on a busy machine that list was still out when the hook was armed, took it and ran it in the background, so the card message never did (6 of 1000 runs at `-cpu 4`). Tie such a hook to the call under test (a context value the test sets, `listHooked`), not to whichever call comes next. To find who took one, print `debug.Stack()` where the hook fires and run until it fails.
 
 - The assistant bus writes `m.sessions` and `h.clients`; tests modifying them need the same lock (2026-11-06, #4822). `takeFleetSessions` writes `fleet.sessions` under `m.mu`. Direct test assignment to `n.m.sessions` produces DATA RACE with `-race -count=30` and can be overwritten by an old list still in transit. Use `editSessions` (first `settleAssistant`, then edit under `m.mu`) and `appClient(h)`, not direct assignment.
@@ -1090,6 +1094,16 @@ Use an executable fixture that logs calls and returns the documented result: 0 f
 
 In a UTF-8 locale, `/usr/bin/awk` on macOS (version 20200816) stops at the first invalid byte sequence with `towc: multibyte conversion failure`, prints the record's raw bytes and exits 2; gawk and mawk on Linux read on, so CI never sees it. `install.sh` read every launchd file with awk, and vendors often ship binary property lists: each printed its bytes, and the Python tests reading the script's output with `text=True` crashed with `UnicodeDecodeError`. An awk that reads files it did not write runs with `LC_ALL=C`; plain substring matches mean the same in bytes. The Mac in hand may have no binary plist at all: the regression test writes one with `plistlib` (`FMT_BINARY`) into its own home.
 
+## mawk holds a pipe's lines until 4 KiB or EOF (2026-11-19, #11017)
+
+mawk, the awk of Debian and Ubuntu (and so most likely of the hosted Linux runners, which install no gawk), reads a
+pipe in 4 KiB blocks and handles no line until a block fills or the input ends; `fflush()` only flushes its output.
+macOS awk, busybox awk and gawk handle each line as it arrives, so a filter meant to show a line live works on a Mac
+and stays silent on Linux until the producer exits: check-fast's "waiting for a go slot" line came out after the whole
+wait. `mawk -W interactive` fixes mawk but other awks reject it. A filter that must react to a line at once reads it in
+bash (`IFS= read -r`, which takes a pipe a byte at a time) and hands the rest to `cat`; check the live behaviour in a
+Debian container, not only on the Mac.
+
 ## Import guards read source files, not `go list` (2026-11-06, #5814)
 
 `go list -deps` resolves imports for the host's GOOS / GOARCH and no build tags, so a `server/internal` import in a `_darwin.go` file, a `//go:build public` file (release builds use the tags of `server/build-tags.txt`, `public` among them) or a `//go:build ignore` generator passed the plugin guard on Linux. A guard that must hold for every build parses each `.go` file's imports with `go/parser` (`parser.ImportsOnly`), whatever its constraints, and keeps `go list` as a second view of indirect dependencies, run for every GOOS / GOARCH pair the server ships and every set of build tags it is built with (with `CGO_ENABLED=0`, as the builds are made): an `_arm64.go` file is as invisible to an amd64 host as a `_darwin.go` file is to Linux, and a `// +build !public` line still counts.
@@ -1254,3 +1268,21 @@ that open with a TLS record (first byte `0x16`) and replays that byte before for
 - Wrap the replayed connection by embedding the `net.Conn` interface, not `*net.TCPConn`. Embedding the concrete type
   promotes `WriteTo`, which `io.Copy` uses instead of the overriding `Read`, so the replayed byte is silently dropped
   and every forwarded TLS handshake fails.
+
+- A fresh test repository's first branch is whatever the machine's `init.defaultBranch` says (#11017): `main` on one
+  machine, `master` on another. A test that then runs `git branch main` or `git checkout -b master` fails only where
+  the setting matches. Name the first branch (`git init --initial-branch=<name>`, or `git branch -M` after the first
+  commit), and run the suite with `GIT_CONFIG_GLOBAL` pointing at a file that sets `init.defaultBranch` to `main`, then
+  to `master`.
+
+- A test that waits for a signal to end a command must give the command far longer to live than the wait (#11017). A
+  command that sleeps 20 s under a 20 s wait passes when the signal is lost and fails on a slow machine when it was
+  not, so the result says nothing. Let it sleep ten times the wait, keep the wait generous, and on a timeout say which
+  side stalled: the command never got the signal, or it got it and its parent had not exited yet.
+
+- A signal test passes alone and hangs when its runner started it with that signal ignored (#11026). A non-interactive
+  bash starts its background jobs with SIGINT and SIGQUIT ignored, and `nohup` or a detached shell ignores SIGHUP; a
+  signal ignored when a shell starts can never be trapped there, so the script under test never sees it.
+  `test_check_fast.py`'s SIGINT tests time out when check-fast runs that suite (each check is a background job), and
+  its SIGHUP tests when the caller ignores HUP; run on its own the suite passes. Run signal suites in the foreground,
+  or reset the signal to its default in the child (`preexec_fn`) before blaming the change.

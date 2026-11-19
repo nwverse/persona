@@ -999,6 +999,13 @@ nonisolated struct SessionChildren: Codable, Hashable, Sendable {
     }
 }
 
+/// A native Codex speed choice advertised for this session. Labels stay localized in the client; these are wire metadata.
+nonisolated struct SessionServiceTier: Codable, Hashable, Sendable {
+    var id: String
+    var name: String
+    var description: String? = nil
+}
+
 nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     var machineID: String
     var sessionID: String
@@ -1070,6 +1077,10 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// The levels `effort` may be set to when they are not Claude Code's (`SessionModes.effortOptions`): a Codex thread
     /// the hub drives through its app-server, where only the effort changes (node/codex_effort.go). Nil elsewhere.
     var efforts: [String]? = nil
+    /// The native Codex speed the hub last acknowledged (`service_tier`), nil while unknown. Never an optimistic pick.
+    var serviceTier: String? = nil
+    /// The native speed choices this session advertises (`service_tiers`), including `default` for Standard.
+    var serviceTiers: [SessionServiceTier]? = nil
     /// The launcher / model / effort picked for this assistant conversation (#5033, `model_pick`); nil: it follows the
     /// Main chat default or keeps what it runs. Only the manager names it, on assistant conversations.
     var modelPick: ModelPick? = nil
@@ -1465,6 +1476,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         case listWaiting = "waiting", listBackgroundCount = "background_count", listRunningSubagents = "running_subagents", listRunningWorkflows = "running_workflows"
         case listBackgroundTasksCount = "background_tasks_count", listWorkflowProgress = "workflow_progress"
         case title, cwd, status, launcher, model, agent, effort, efforts, capabilities, attached
+        case serviceTier = "service_tier", serviceTiers = "service_tiers"
         case modelPick = "model_pick"
         case canFork = "can_fork"
         case sourceKind = "source_kind", sourceThreadID = "source_thread_id", sourceInstanceID = "source_instance_id",
@@ -1540,6 +1552,8 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         bypassAvailable = (try? c.decodeIfPresent(Bool.self, forKey: .bypassAvailable)).flatMap { $0 } ?? false
         effort = try c.decodeIfPresent(String.self, forKey: .effort)
         efforts = try c.decodeIfPresent([String].self, forKey: .efforts)
+        serviceTier = try c.decodeIfPresent(String.self, forKey: .serviceTier)
+        serviceTiers = try c.decodeIfPresent([SessionServiceTier].self, forKey: .serviceTiers)
         // The conversation's own pick (#5033): an odd one never drops the session, which then follows its default.
         modelPick = (try? c.decodeIfPresent(ModelPick.self, forKey: .modelPick)).flatMap { $0 }
         contextTokens = try? c.decodeIfPresent(Int.self, forKey: .contextTokens) // an odd one never drops the session
@@ -1658,10 +1672,20 @@ nonisolated struct UndeliveredMessage: Codable, Hashable, Sendable, Identifiable
     var nextAt: Date? = nil
     var error: String? = nil
     var deleteOnly: Bool? = nil
+    /// An Agent message held by its computer's manager. Its error is the complete status line.
+    var computer: String? = nil
+
+    static let agentHoldFeature = "agent_message_hold"
+    var heldForComputer: Bool { computer?.isEmpty == false }
+    var heldStatus: String? {
+        guard heldForComputer else { return nil }
+        if let error, !error.isEmpty { return error }
+        return gaveUp ? String(localized: "Delivery status unknown") : String(localized: "Waiting to send")
+    }
 
     /// The hub's names (`proto.UndeliveredMessage`): one enum, #10775 (`delete_only`) and #10440 (`next_at`) each added one.
     private enum CodingKeys: String, CodingKey {
-        case id, text, images, at, state, attempts, error
+        case id, text, images, at, state, attempts, error, computer
         case nextAt = "next_at", deleteOnly = "delete_only"
     }
 

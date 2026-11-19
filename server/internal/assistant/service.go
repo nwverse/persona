@@ -455,24 +455,38 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 	}
 	if method != DeviceSessionGet && method != "session.unwatch" {
 		if err := s.conversationParamsAvailable(ctx, device, params); err != nil {
-			return err
+			return beforeNodeWrite(method, err)
 		}
 	}
-	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || method == DeviceSessionSend) {
+	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || method == DeviceSessionSend || method == DeviceSessionSendOnce) {
 		id, _ := p["session_id"].(string)
 		if err := s.putSupervisionInstructions(ctx, device, id, p); err != nil {
-			return err
+			return beforeNodeWrite(method, err)
 		}
-		if method == DeviceSessionSend {
-			// Inbox continuations use session.send, not assistant.send's SendParams. Re-attest the manager's persisted
-			// origin on this real path too; caller input can neither downgrade an Inbox conversation nor invent one.
-			delete(p, "origin")
-			if s.isInboxModelCall(ctx, device, id, "") {
-				p["origin"] = OriginInbox
+		if method == DeviceAssistantSend || method == DeviceSessionSend || method == DeviceSessionSendOnce {
+			// Initial assistant.send starts do not pass through SendParams, and Inbox continuations use session.send.
+			// The hub forwards session.send_once to the same node entry, so attest it here before that forwarding too.
+			// Attest the explicit ordinary/unknown decision on every manager-owned node send.
+			newConversation := method == DeviceAssistantSend && id == ""
+			startOrigin := ""
+			if newConversation {
+				startOrigin, _ = p["origin"].(string)
+			} else {
+				delete(p, "origin") // an existing conversation trusts only the manager's origin book
 			}
-			cfg := s.settings(ctx)
-			if id != "" && id == cfg.Main && device == cfg.mainRouteMachine() {
-				p["is_main"] = true // internal sends must not restart main on ordinary-chat compaction settings
+			origin, originKnown := s.managerOriginDecision(ctx, device, id, startOrigin, newConversation)
+			delete(p, "origin_known")
+			if originKnown {
+				p["origin_known"] = true
+			}
+			if origin != "" {
+				p["origin"] = origin
+			}
+			if method == DeviceSessionSend {
+				cfg := s.settings(ctx)
+				if id != "" && id == cfg.Main && device == cfg.mainRouteMachine() {
+					p["is_main"] = true // internal sends must not restart main on ordinary-chat compaction settings
+				}
 			}
 		}
 	}
@@ -538,7 +552,7 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 				if method == DeviceAssistantSend {
 					s.recordManagerSend(device, p, nil, err) // a failed start or resume all the same (north_star.go)
 				}
-				return err
+				return beforeNodeWrite(method, err)
 			}
 		}
 	}
@@ -554,7 +568,7 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 	}
 	raw, err := json.Marshal(params)
 	if err != nil {
-		return err
+		return beforeNodeWrite(method, err)
 	}
 	p := DeviceCall{Device: device, Method: method, Params: raw}
 	res, ok, err := s.localFleetDeviceCall(ctx, p) // what the hub answered before the nodes' events were the manager's
@@ -562,7 +576,7 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 		res, err = s.hub.DeviceCall(ctx, p)
 	}
 	if err == nil && method != DeviceSessionGet && method != "session.unwatch" {
-		err = s.conversationParamsAvailable(ctx, device, params)
+		err = afterNodeWrite(method, s.conversationParamsAvailable(ctx, device, params))
 	}
 	if err == nil {
 		round.sent(s, res) // whose round it is, for the owner's next message (owner_preempt.go)
@@ -573,7 +587,7 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 	if err != nil || out == nil || len(res) == 0 {
 		return err
 	}
-	return json.Unmarshal(res, out)
+	return afterNodeWrite(method, json.Unmarshal(res, out))
 }
 
 // appCall is an AppCall whose answer is read into out (nil: not read).

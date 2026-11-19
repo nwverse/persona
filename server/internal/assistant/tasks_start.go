@@ -1074,6 +1074,9 @@ func (s *Service) continueTask(ctx context.Context, cur Todo) (json.RawMessage, 
 	if cut.SessionID == "" {
 		return s.todoView(ctx, cur.ID)
 	}
+	if proto.UnrecoverableTurnErrorCode(cut.TurnError) != "" || cut.TurnErrorKind == proto.TurnErrorUnrecoverable {
+		return nil, i18n.Err("assistant-agents_work.conversation_invalid")
+	}
 	at := s.cutRow(cut) // the turn picked, by the identity it shows by: every check below goes by it
 	m, ok := s.device(ctx, cut.MachineID)
 	if !ok || !m.Reachable {
@@ -1102,6 +1105,7 @@ func (s *Service) continueTask(ctx context.Context, cur Todo) (json.RawMessage, 
 		}
 		var err error
 		if started, err = s.startTaskSuccessor(ctx, cur, cut, continueText); err != nil {
+			_, st.uncertain = errors.AsType[*uncertainTaskStart](err)
 			return nil, err
 		}
 		return s.todoView(ctx, cur.ID)

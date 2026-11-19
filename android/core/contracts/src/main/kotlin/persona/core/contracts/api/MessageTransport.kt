@@ -25,11 +25,13 @@ data class MessageRequest(
     /** The user's message that carries out the session's waiting launcher switch first (`apply_switch`, #5035). */
     val applySwitch: Boolean = false,
 ) {
-    val headers: Map<String, String> get() = ProtocolCompatibility.operationHeaders(opId)
+    val headers: Map<String, String> get() = ProtocolCompatibility.operationHeaders(opId) + ("X-Persona-Features" to AgentMessageHoldFeature)
 }
 
 sealed interface MessageTransportResult {
     data object Accepted : MessageTransportResult
+    /** The manager has custody. Only a later transcript echo proves arrival at the Agent. */
+    data object Held : MessageTransportResult
     /** Only use this when no request bytes could have reached the hub. */
     data object NotSent : MessageTransportResult
     data object NoReceipt : MessageTransportResult

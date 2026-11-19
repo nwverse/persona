@@ -330,11 +330,14 @@ extension Session {
         row.background = old.background
         row.subagents = old.subagents
         row.workflows = old.workflows
+        if !row.assistant, row.undelivered == nil { row.undelivered = old.undelivered }
         row.queued = old.queued
         row.ports = old.ports
         row.permissionMode = old.permissionMode
         row.effort = old.effort
         row.efforts = old.efforts
+        row.serviceTier = old.serviceTier
+        row.serviceTiers = old.serviceTiers
         row.ultracode = old.ultracode
         row.launcher = old.launcher
         row.suggestion = old.suggestion

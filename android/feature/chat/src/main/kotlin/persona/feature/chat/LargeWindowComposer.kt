@@ -80,6 +80,7 @@ fun LargeWindowComposer(
     useShellSurface: Boolean = false,
     modelPill: (@Composable (ModelPillWidth) -> Unit)? = null,
     upload: ComposerAttachmentUpload? = null,
+    wrapPlaceholder: Boolean = false,
 ) {
     val largeWindow = LocalLargeWindowInput.current
     val composer: @Composable () -> Unit = {
@@ -90,7 +91,7 @@ fun LargeWindowComposer(
             accessory = accessory, modeHint = modeHint, onOverlay = onOverlay, visible = visible,
             agentName = agentName, canInterrupt = canInterrupt, mentions = mentions, onMention = onMention,
             onMentionTask = onMentionTask, onMentionOpen = onMentionOpen, onModel = onModel, loop = loop,
-            blockedLabel = blockedLabel, onBlocked = onBlocked, useShellSurface = useShellSurface, modelPill = modelPill,
+            blockedLabel = blockedLabel, onBlocked = onBlocked, useShellSurface = useShellSurface, modelPill = modelPill, wrapPlaceholder = wrapPlaceholder,
         )
     }
 

@@ -3161,6 +3161,31 @@ _TODO_LIST = os.environ.get("MOCK_TODO_LIST", "")
 if _TODO_LIST:
     TODOS_INIT[:] = _todo_list_fixture(_TODO_LIST)
 
+# MOCK_TODO_BADGE=1 (#11085, docs/assistant/todos.md "Sidebar and main navigation"): only these to-dos, for the sidebar's
+# To-dos badge. A goal of the owner's whose two pieces (`part_of`) Agents are working on, and an errand of the owner's
+# no Agent was ever on: the To-dos page's Not done is 4, the badge 1 (the errand), where it used to say 4 as well.
+if os.environ.get("MOCK_TODO_BADGE") == "1":
+    def _badge_agent(n, title, last):
+        sid = f"c3d5e7f9-0000-4000-8000-{11085000 + n:012d}"
+        SESSIONS.append(sess("macbook", sid, title, "/Users/me/code/settings", "working", "working", "settings", 8, "1", n, 3, last))
+        return {"machine_id": "macbook", "session_id": sid, "linked_at": ago(minutes=40), "released_at": None, "title": title,
+                "cwd": "/Users/me/code/settings", "agent": "claude", "start_error": "", "source": "spawned", "via": ""}
+
+    def _badge_todo(tid, title, minutes, **kw):
+        t = {"id": tid, "title": title, "notes": "", "done_at": None, "created_at": ago(minutes=minutes + 60),
+             "updated_at": ago(minutes=minutes), "origin": "", "spaces": [], "agents": [], "priority": ""}
+        t.update(kw)
+        return t
+
+    TODOS_INIT[:] = [
+        _badge_todo("tb_goal", "设置页改版上线", 30),
+        _badge_todo("tb_search", "设置页：分组和搜索", 3, part_of="tb_goal", origin="conv_demo",
+                    agents=[_badge_agent(1, "设置页分组和搜索", "在给每个分组补搜索关键词。")]),
+        _badge_todo("tb_dark", "设置页：深色模式配色", 3, part_of="tb_goal", origin="conv_demo",
+                    agents=[_badge_agent(2, "设置页深色配色", "在核对深色模式下的对比度。")]),
+        _badge_todo("tb_errand", "给家里的 NAS 换硬盘", 90),
+    ]
+
 # MOCK_TODO_CONCERNS=1 (#3582): one concern working, one waiting for its report in Other open, and one closed by its
 # report, for the To-dos list's light / dark captures. "only" keeps just these to-dos so the working one is within
 # Home's six cards, and links it to its Agent's space for the Space page capture. The dedicated agent keeps the rest of
@@ -9188,9 +9213,13 @@ if MOCK_TASKS:
     # error (the hub's turn_error) and its receipt is interrupted; "Continue" (POST …/retry) makes it work and then finish.
     if os.environ.get("MOCK_TASKS_CUT") == "1":
         _cut_text = "API Error: Connection lost mid-response. The response above may be incomplete."
+        if os.environ.get("MOCK_TASKS_INVALID") == "1":
+            _cut_text = "This conversation was compacted natively by <account>: the compaction is sealed (encrypted) to that account and can't go to it now"
         for _s in SESSIONS:
             if _s["session_id"] == RELEASE:
                 _s.update(last_text=_cut_text, turn_error=_cut_text)
+                if os.environ.get("MOCK_TASKS_INVALID") == "1":
+                    _s.update(turn_error_kind="unrecoverable", turn_error_code="compaction_sealed")
         ITEMS[RELEASE] = ITEMS.get(RELEASE, []) + [it("assistant", "text", 3, text=_cut_text)]
         CUT_SESSION = copy.deepcopy(next(x for x in SESSIONS if x["session_id"] == RELEASE))  # GET /mock/cut puts it back
         for _f in TASK_FEED[ASK1]:
@@ -9261,8 +9290,9 @@ if MOCK_TASKS:
             TASK_FEED[ASK1].append(_feed("feed_receipt_review_%d" % _n, 0.2 - _n / 100, "receipt", _tid,
                                         {"title": _title, "state": "done", "summary": "检查结果已整理好，等待验收。",
                                          "review": {"state": "awaiting", "criteria": _n}}))
-    # MOCK_TASKS_FINISHED=1 (#8237): two handed-out tasks closed in the last hour and not looked at since, so In Progress
-    # lists them under Just Finished: one the hub closed with its reason, one its review accepted, each with its receipt.
+    # MOCK_TASKS_FINISHED=1 (#8237, #10922): handed-out tasks closed in the last hours, each with its receipt, so the
+    # Finished entry lists them: two not looked at since (new, the To-dos page's Just Finished): one the hub closed with
+    # its reason, one its review accepted; and one the owner already opened, which Finished still lists, as Done.
     if os.environ.get("MOCK_TASKS_FINISHED") == "1":
         for _tid, _title, _min, _extra, _summary in [
             ("todo_done_login", "修复登录页闪退", 12, {"done_by": "auto", "done_reason": "改好了：登录页不再闪退，PR #43 已合并"},
@@ -9271,6 +9301,9 @@ if MOCK_TASKS:
                 "supervisor": ASK1, "state": "accepted", "round": 0, "done_when": [], "updated_at": ago(minutes=40),
                 "reviews": [{"at": ago(minutes=40), "verdict": "accepted", "note": "写好了：7 个 PR 分成新功能、修复和其他三组"}]}},
              "发布说明分好了三组，放在 docs/release-notes.md。"),
+            ("todo_done_faq", "更新常见问题页", 150, {"done_by": "auto", "done_reason": "改好了：常见问题页补了三条付款问题",
+                                                    "seen_at": ago(minutes=100)},
+             "常见问题页补了三条付款相关的问答。"),
         ]:
             _todo = dict(_task_todo(_tid, _title, "", "macbook", "", "/Users/me/code/example", _min + 30, ""), agents=[],
                          done_at=ago(minutes=_min), **_extra)
@@ -19023,7 +19056,7 @@ def summary_row(s):
     subagents or workflows arrays; counts and the newest running run's progress, without its agents and phases."""
     runs = [w for w in s.get("workflows") or [] if w.get("running")]
     bg = s.get("background") or []
-    out = {k: v for k, v in s.items() if k not in ("background", "subagents", "workflows", "queued")}
+    out = {k: v for k, v in s.items() if k not in ("background", "subagents", "workflows", "queued", "service_tier", "service_tiers")}
     out["background_count"] = len(bg)
     out["running_subagents"] = sum(1 for a in s.get("subagents") or [] if a.get("running"))
     out["running_workflows"] = len(runs) or (0 if s.get("workflows") else sum(1 for b in bg if b.get("kind") == "workflow"))
@@ -21060,10 +21093,30 @@ PERSONAL_STATE = {"state": "unconfigured" if PERSONAL_AGENTS == "unconfigured" e
 PERSONAL_HIDDEN = {}  # session id -> when (ms)
 PERSONAL_PREFS = {"pins": [], "view": {}, "sections": [], "assign": {}}
 PERSONAL_PREF_FAIL = {"status": 0}
-# The user's navigation choices (#9071, GET / PUT /api/v1/navigation): the start page. Empty until something is stored;
-# MOCK_NAVIGATION=off is a hub (or a default manager) from before, which answers 404 and keeps nothing.
+# The user's navigation choices (#9071, GET / PUT /api/v1/navigation): the start page, the sidebar's pages and Overview's
+# extension cards (#9745). Empty until something is stored; MOCK_NAVIGATION=off is a hub (or a default manager) from
+# before, which answers 404 and keeps nothing; MOCK_NAVIGATION=no-overview a default manager from before the cards
+# (#9351's): a PUT of only them is 400, and the record it answers never has them.
 NAVIGATION = {}
 NAVIGATION_START = re.compile(r"(?:[a-z][a-z0-9-]{0,63}|p:[^/\x00-\x20\x7f]{1,128}/[^/\x00-\x20\x7f]{1,128})")
+NAVIGATION_CARD_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")  # an extension's id and a UI contribution's
+
+
+def navigation_overview_ok(cards):
+    """Whether `cards` is Overview's arrangement as the manager takes it (server/internal/assistant/navigation.go)."""
+    if not isinstance(cards, list) or len(cards) > 256:
+        return False
+    seen = set()
+    for c in cards:
+        if not isinstance(c, dict) or not all(isinstance(c.get(k), str) and NAVIGATION_CARD_ID.fullmatch(c[k]) for k in ("extension", "id")):
+            return False
+        if not isinstance(c.get("hidden", False), bool) or c.get("span", "half") not in ("half", "full", ""):
+            return False
+        key = (c["extension"], c["id"])
+        if key in seen:
+            return False
+        seen.add(key)
+    return True
 
 def personal_prefs():
     return dict(PERSONAL_PREFS, hidden=dict(PERSONAL_HIDDEN))
@@ -25200,6 +25253,11 @@ def markets_route(handler, p, body):
         ui += [u for u in INBOX_ITEM_UI if placement in ("", u["placement"])]
         if volc_mock.ENABLED and PLUGINS.get(volc_mock.EXT, {}).get("enabled") and placement in ("", "plugin_page", "extension_page"):
             ui += PLUGINS[volc_mock.EXT]["ui"]
+        if OVERVIEW_CARDS and placement in ("", "overview_card"):
+            # made-up cards for arranging Overview (#9745), after example-gateway's as the hub orders them (by extension)
+            ui += [{"plugin": ext, "plugin_name": name, "id": i, "title": title, "placement": "overview_card", "size": "compact"}
+                   for ext, name, i, title in (("example-quota", "Example Quota", "left", "Quota left"), ("example-today", "Example Today", "needs", "Needs me"),
+                                               ("example-today", "Example Today", "agenda", "Agenda"))]
         if COLUMNS_MODE and placement in ("", "nav_page"):
             ui += [{"plugin": "example-today", "plugin_name": "Example Today", "id": "today", "title": "Today",
                     "placement": "nav_page", "size": "full", "icon": "calendar",
@@ -27503,12 +27561,16 @@ class H(BaseHTTPRequestHandler):
             if os.environ.get("MOCK_NAVIGATION") == "off": return self.send_json({"error": "not found"}, 404)
             body = json.loads(self.last_body or b"{}")
             start, pages = body.get("start"), body.get("pages")
-            if (start is None and pages is None) or (start is not None and (not isinstance(start, str) or (start and not NAVIGATION_START.fullmatch(start)))) \
-                    or (pages is not None and not isinstance(pages, dict)):
-                return self.send_json({"error": "start or pages, of their shapes"}, 400)
+            overview = None if os.environ.get("MOCK_NAVIGATION") == "no-overview" else body.get("overview")
+            if os.environ.get("MOCK_NAVIGATION") == "no-overview" and start is None and pages is None:
+                return self.send_json({"error": "start or pages is required"}, 400)  # #9351's own words
+            if (start is None and pages is None and overview is None) or (start is not None and (not isinstance(start, str) or (start and not NAVIGATION_START.fullmatch(start)))) \
+                    or (pages is not None and not isinstance(pages, dict)) or (overview is not None and not navigation_overview_ok(overview)):
+                return self.send_json({"error": "start, pages or overview, of their shapes"}, 400)
             event = {"type": "navigation"}
             if start is not None: NAVIGATION["start"] = event["start"] = start
             if pages is not None: NAVIGATION["pages"] = event["pages"] = pages
+            if overview is not None: NAVIGATION["overview"] = event["overview"] = overview
             for c in list(CLIENTS.values()):
                 try: c["send"](event)
                 except Exception: pass
@@ -29932,6 +29994,8 @@ def features():
 MOCK_HELP.append("MOCK_BG_MONITOR=1  The widget chat's Background tasks also list a running Monitor whose output file is not known yet (#10852); GET /mock/monitor_event names it, as its first event would")
 MOCK_HELP.append("MOCK_SIDEBAR_GROUPS=1  (with MOCK_EXTENSIONS=1 MOCK_EXTENSION_COLUMNS=1) Today, Lark and Calendar name the sidebar group 工作台, Assets 资产 and Home devices 家里 (#9071)")
 MOCK_HELP.append("MOCK_NAVIGATION=off  A hub (or default manager) from before the start page (#9071): GET / PUT /api/v1/navigation answer 404, so the web keeps the choice in the browser")
+MOCK_HELP.append("MOCK_NAVIGATION=no-overview  A default manager from before Overview's card arrangement (#9745): a PUT of only `overview` is 400 and no answer has it, so the web keeps the arrangement in the browser")
+MOCK_HELP.append("MOCK_OVERVIEW_CARDS=1  (with MOCK_EXTENSIONS=1) Three more made-up Overview cards beside the gateway's 今天的用量: Quota left (example-quota), Needs me and Agenda (example-today), for arranging them (#9745)")
 MOCK_HELP.append("MOCK_EXTENSION_COLUMNS=1  (with MOCK_EXTENSIONS=1) A made-up extension's Today page, UI version 8's columns layout (#9158): a full-width Needs me card with its rows two a line, then Calendar | Lark today and WeChat | Running Agents, each with an icon, a link beside its title, a summary and a link at the bottom")
 MOCK_HELP.append("MOCK_EXTENSION_GRAPH=1  (with MOCK_EXTENSIONS=1) A made-up Work page, UI version 10's graph (#9727): a 200-node tree of work in states with groups, progress, a folded part and a selected step; a node pushes its own page; each draw moves one step to Done; an overview card shows the graph as a still preview")
 MOCK_HELP.append("MOCK_EXTENSION_GAUGE=1  (with MOCK_EXTENSIONS=1) A made-up gateway's Quota page, UI version 9's gauge (#9337): a row of status tiles, then a card of three rings (5 hours, This week, Fable this week; the last one low, in amber) with the reset times in its footer")
@@ -30519,6 +30583,10 @@ _plugins_route_without_extensions = plugins_route
 
 
 def plugins_route(handler, p, body):
+    if PLUGINS_MODE and OVERVIEW_CARDS and p in _OVERVIEW_CARD_VIEWS:
+        OVERVIEW_CARD_RENDERS.append(p)
+        handler.send_json({"view": _OVERVIEW_CARD_VIEWS[p]})
+        return True
     if PLUGINS_MODE and COLUMNS_MODE and p == "/api/v1/extensions/example-today/-/ui/today":
         return mock_today(handler, body)
     if PLUGINS_MODE and GAUGE_MODE and p == "/api/v1/extensions/example-quota/-/ui/quota":
@@ -30691,6 +30759,25 @@ def mock_today(handler, body):
     else:
         handler.send_json({"view": _today_view()})
     return True
+
+
+# MOCK_OVERVIEW_CARDS=1 (with MOCK_EXTENSIONS=1): made-up Overview cards to arrange (#9745), each a compact view: a
+# quota's three numbers, a short list of what waits, the day's agenda. All names and numbers are invented.
+OVERVIEW_CARDS = os.environ.get("MOCK_OVERVIEW_CARDS") == "1"
+OVERVIEW_CARD_RENDERS = []  # the cards' render requests, in order (a test reads them from the module)
+_OVERVIEW_CARD_VIEWS = {
+    "/api/v1/extensions/example-quota/-/ui/left": {"sections": [{"items": [
+        {"type": "stat_grid", "stats": [{"label": "5 hours", "value": "4.69", "detail": "94% left", "tone": "positive"},
+                                        {"label": "This week", "value": "38.20", "detail": "76% left"},
+                                        {"label": "Fable this week", "value": "0.62", "detail": "12% left", "tone": "caution"}]}]}]},
+    "/api/v1/extensions/example-today/-/ui/needs": {"sections": [{"items": [
+        {"type": "row", "key": "travel", "title": "Approve the travel request", "subtitle": "Approval · from Robin", "badge": {"text": "Today", "tone": "caution"}},
+        {"type": "row", "key": "review", "title": "Reply about the design review", "subtitle": "Chat · Kai asked 2 h ago"},
+        {"type": "row", "key": "report", "title": "Sign the quarterly report", "subtitle": "Document · due Friday"}]}]},
+    "/api/v1/extensions/example-today/-/ui/agenda": {"sections": [{"items": [
+        {"type": "row", "key": "sync", "title": "Weekly sync", "subtitle": "Room 4 · 6 people", "value": "14:00"},
+        {"type": "row", "key": "robin", "title": "1:1 with Robin", "subtitle": "Video call", "value": "16:30"}]}]},
+}
 
 
 # MOCK_EXTENSION_GRAPH=1 (with MOCK_EXTENSIONS=1): UI version 10's graph (#9727), a made-up "Work" page: a header, then
@@ -31932,9 +32019,105 @@ if MODEL_PICK_MODE and MODEL_GATEWAY_MODE:
         ]}
 
 
+MODEL_SPEED_FIELDS = ("agent", "launcher", "model", "effort", "efforts", "service_tier", "service_tiers",
+                      "status", "state", "capabilities")
+MODEL_SPEED_BASE = None
+MODEL_SPEED_MODE = ""
+MODEL_SPEED_PENDING = None
+MODEL_SPEED_GATE = threading.Event()
+MODEL_SPEED_LOG = []
+
+
+def model_speed_reset():
+    """Restore the ordinary model-picker main chat and clear the current-session speed fixture."""
+    global MODEL_SPEED_BASE, MODEL_SPEED_MODE, MODEL_SPEED_PENDING, MODEL_SPEED_GATE
+    main = next((s for s in ASSISTANT if s["session_id"] == ASK1), None)
+    if main is not None:
+        if MODEL_SPEED_BASE is None:
+            MODEL_SPEED_BASE = {k: copy.deepcopy(main[k]) for k in MODEL_SPEED_FIELDS if k in main}
+        for k in MODEL_SPEED_FIELDS:
+            if k in MODEL_SPEED_BASE: main[k] = copy.deepcopy(MODEL_SPEED_BASE[k])
+            else: main.pop(k, None)
+    MODEL_SPEED_MODE = ""
+    MODEL_SPEED_PENDING = None
+    MODEL_SPEED_GATE.set()  # release a request a failed test left waiting before the next fixture starts
+    MODEL_SPEED_GATE = threading.Event()
+    del MODEL_SPEED_LOG[:]
+
+
+def model_speed_configure(mode):
+    """MOCK_MODEL_PICK speed=<case>: a Codex main chat with synthetic acknowledged speed state."""
+    global MODEL_SPEED_MODE
+    MODEL_SPEED_MODE = mode
+    main = next((s for s in ASSISTANT if s["session_id"] == ASK1), None)
+    if main is None: return
+    main.update(agent="codex", launcher="codex", model="gpt-5.5-codex", effort="medium",
+                efforts=["low", "medium", "high", "xhigh"],
+                model_pick={"launcher": "codex", "model": "gpt-5.5-codex", "effort": "medium"},
+                status="working" if mode == "working" else "idle", state="working" if mode == "working" else "idle")
+    if mode == "no-tier":
+        main.pop("service_tier", None)
+        main.pop("service_tiers", None)
+    else:
+        main.update(service_tier="default", service_tiers=[
+            {"id": "default", "name": "Standard"},
+            {"id": "priority", "name": "Fast", "description": "Increased usage"},
+        ])
+
+
+def model_speed_acknowledge():
+    """Release the tier held back by speed=ack, as the native session push would acknowledge it."""
+    global MODEL_SPEED_PENDING
+    main = next((s for s in ASSISTANT if s["session_id"] == ASK1), None)
+    if main is not None and MODEL_SPEED_PENDING is not None:
+        main["service_tier"] = MODEL_SPEED_PENDING
+        MODEL_SPEED_PENDING = None
+        push_machine(main["machine_id"])
+    MODEL_SPEED_GATE.set()
+
+
+def model_speed_modes(handler, p, body):
+    """The speed fixture's running /modes calls, including independent effort changes. False outside it."""
+    global MODEL_SPEED_PENDING
+    if not MODEL_SPEED_MODE or handler.command != "POST": return False
+    m = re.fullmatch(r"/api/v1/sessions/([^/]+)/([^/]+)/modes", p)
+    if not m or m.group(2) != ASK1: return False
+    main = next((s for s in ASSISTANT if s["session_id"] == ASK1), None)
+    if main is None: return False
+    req = json.loads(body or b"{}")
+    MODEL_SPEED_LOG.append({"method": handler.command, "path": p, "body": req})
+    if "service_tier" in req:
+        if set(req) != {"service_tier"}:
+            return handler.send_json({"error": "service_tier must be its own request"}, 400) or True
+        tier = req["service_tier"]
+        if tier not in {t["id"] for t in main.get("service_tiers") or []}:
+            return handler.send_json({"error": "This model cannot apply the requested service tier",
+                                      "code": "service_tier_unsupported"}, 409) or True
+        if MODEL_SPEED_MODE == "refusal":
+            return handler.send_json({"error": "Codex refused the speed change", "code": "service_tier_refused"}, 409) or True
+        if MODEL_SPEED_MODE == "timeout":
+            return handler.send_json({"error": "The speed change was not confirmed", "code": "timeout"}, 504) or True
+        if MODEL_SPEED_MODE == "pending":
+            gate = MODEL_SPEED_GATE
+            MODEL_SPEED_PENDING = tier
+            if not gate.wait(15):
+                MODEL_SPEED_PENDING = None
+                return handler.send_json({"error": "The speed change was not confirmed", "code": "timeout"}, 504) or True
+        elif MODEL_SPEED_MODE == "ack":
+            MODEL_SPEED_PENDING = tier
+        else:
+            main["service_tier"] = tier
+            push_machine(main["machine_id"])
+        return handler.send_json({"ok": True}) or True
+    main.update({k: v for k, v in req.items() if k in ("permission_mode", "effort", "model") and v})
+    push_machine(main["machine_id"])
+    return handler.send_json({"ok": True}) or True
+
+
 def model_pick_reset():
     global MODEL_PICK_DEFAULT
     MODEL_PICK_DEFAULT = MODEL_PICK_HOME
+    model_speed_reset()
     for s in ASSISTANT:
         s.pop("model_pick", None)
     if MODEL_PICK_MODE == "picked":
@@ -31956,14 +32139,20 @@ def model_pick_route(handler, p, body):
     if p == "/mock/model_pick":
         if query.get("reset"):
             model_pick_reset()
+            if not query.get("speed"): push_machine(ASSISTANT_CONFIG["machine_id"])
+        if query.get("speed"):
+            model_speed_configure(query["speed"][0])
             push_machine(ASSISTANT_CONFIG["machine_id"])
+        if query.get("speed_ack"):
+            model_speed_acknowledge()
         if query.get("default"):
             MODEL_PICK_DEFAULT = query["default"][0]
             main = next((s for s in ASSISTANT if s["session_id"] == ASK1), None)
             if main is not None:
                 main["rev"] = (main.get("rev") or 0) + 1
             push_machine(ASSISTANT_CONFIG["machine_id"])
-        return handler.send_json({"requests": MODEL_PICK_LOG, "default": MODEL_PICK_DEFAULT}) or True
+        return handler.send_json({"requests": MODEL_PICK_LOG, "default": MODEL_PICK_DEFAULT,
+                                  "speed_requests": MODEL_SPEED_LOG}) or True
     if handler.command == "GET" and re.fullmatch(r"/api/v1/machines/[^/]+/launchers", p) and query.get("purpose") == ["assistant"]:
         return handler.send_json({
             "launchers": [dict(l) for l in MODEL_PICK_LAUNCHERS],
@@ -31975,6 +32164,7 @@ def model_pick_route(handler, p, body):
                 {"name": "gpt-direct", "display_name": "GPT direct", "kind": "api", "api": "responses", "code": "api_protocol", "reason": MODEL_PICK_REASONS["api_protocol"][lang]},
                 {"name": "far-gw", "display_name": "Far gateway", "kind": "launcher", "code": "launcher_out_of_scope", "reason": MODEL_PICK_REASONS["launcher_out_of_scope"][lang]},
             ]}) or True
+    if model_speed_modes(handler, p, body): return True
     m = re.fullmatch(r"/api/v1/assistant/conversations/([^/]+)/model", p)
     if not m or handler.command not in ("PUT", "DELETE"): return False
     s = next((x for x in ASSISTANT if x["session_id"] == m.group(1)), None)
@@ -32021,7 +32211,9 @@ def features():
 MOCK_HELP.append("MOCK_MODEL_PICK=1|picked|otherkind  Persona 对话自己的模型（#5033）：features 带 assistant_model_pick；主对话的启动器（?purpose=assistant）带默认和 unavailable"
                  "（一个 Responses 直连 API、一个不对这台电脑开放的服务商）；PUT / DELETE /api/v1/assistant/conversations/{id}/model 记下或清掉 model_pick。"
                  "picked：第二个对话一开始就有自己的选择；otherkind：当前主对话跑 Codex、默认仍是 Claude（#4662）。"
-                 "GET /mock/model_pick 看请求，?reset=1 复原；?default=claude|codex|gone 改启动器列表的默认")
+                 "GET /mock/model_pick 看请求，?reset=1 复原；?default=claude|codex|gone 改启动器列表的默认。"
+                 "reset=1&speed=idle|working|no-tier|ack|pending|refusal|timeout：主对话的 Codex 当前 Speed；speed_requests 记每个 /modes 的 method/path/body；"
+                 "ack 先不确认，pending 最多等 15 秒，?speed_ack=1 推送并放行；refusal 409，timeout 504；不带 speed 的 reset 还原普通模型选择")
 MOCK_HELP.append("MOCK_MODEL_PICK_GROUPS=1  配合 MOCK_MODEL_PICK：几个同为 claude- 开头的启动器（claude-aster / claude-max / claude-desktop）和 codex，看模型面板分组栏的短名")
 MOCK_HELP.append("MOCK_MODEL_FAMILIES=1  配合 MOCK_MODEL_PICK：多个模型家族的长模型列表（claude-max 的 Claude 全系、codex 的 GPT-6、混合厂商的本机网关 aster、work-claude、agy），截模型面板用；主对话默认 claude-max")
 MOCK_HELP.append("MOCK_ASSISTANT_LAUNCHER_FIXTURE=1  配合 MOCK_MODEL_PICK：读取 spec/fixtures/assistant-launchers/cases.json，三端共用同一组启动器候选；默认 runtime、无显式模型，managed Codex 只在 unavailable")

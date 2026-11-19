@@ -109,6 +109,7 @@ fun ChatComposer(
      */
     modelPill: (@Composable (ModelPillWidth) -> Unit)? = null,
     upload: ComposerAttachmentUpload? = null,
+    wrapPlaceholder: Boolean = false,
 ) {
     val context = LocalContext.current
     val performUpload: ComposerAttachmentUpload = upload ?: { uploadService, uploadSession, attachment, onStaged ->
@@ -547,7 +548,7 @@ fun ChatComposer(
             decorationBox = { field ->
                 Box {
                     if (state.value.text.isEmpty()) Text(if (working && enabled && !homeAssistant) stringResource(R.string.chat_composer_placeholder_working) else composerPlaceholder,
-                        style = PersonaTheme.type.body, color = PersonaTheme.palette.ink3, maxLines = if (compactShell) 1 else 2,
+                        style = PersonaTheme.type.body, color = PersonaTheme.palette.ink3, maxLines = if (wrapPlaceholder) growLines else if (compactShell) 1 else 2,
                         overflow = TextOverflow.Ellipsis)
                     field()
                 }

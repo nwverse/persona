@@ -41,7 +41,7 @@ import { Icon } from "../ui/icons";
 import { MarkSeenDialog } from "./AgentMenus";
 import { answeredLookup, answeredSessions } from "./assistant/answered-lookup";
 import { resolve } from "./chat/Interactions";
-import { OverviewCards } from "./extensions/ExtensionSlots";
+import { OverviewArrangeButton, OverviewCards } from "./extensions/ExtensionSlots";
 import { TodoStageBar } from "./TodoStageBar";
 import { t } from "../i18n";
 import { markAllSeenLabel, STATE_LABEL, stateCount, stateName } from "../lib/state-labels";
@@ -116,12 +116,15 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
   // Back from a card opened here lands where the reader was, not at the top (#5133)
   const scroller = useRef<HTMLDivElement>(null);
   useScrollMemory(scroller, "/overview");
+  // the extensions' cards being arranged (#9745): their order, which are hidden, how wide
+  const [arranging, setArranging] = useState(false);
 
   return (
     <div className="flex h-full flex-col">
       <header className="flex h-14 shrink-0 items-center gap-2 border-b border-line px-3 sm:px-4 lg:border-transparent">
         <IconButton icon="sidebar" label={t("home.sidebar")} onClick={onToggleSidebar} className="lg:hidden" />
         <span className="flex-1" />
+        <OverviewArrangeButton on={arranging} onClick={() => setArranging((on) => !on)} />
         {!noMachines && (
           <Button tone="secondary" icon="plus" onClick={onNewAgent}>
             {t("home.new_agent")}
@@ -145,13 +148,6 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
               {loaded && markAllAt === "summary" && markAll}
             </div>
           </div>
-
-          {/* the extensions' cards (docs/extensions/extensions.md"UI slots" overview_card), under the agents' summary */}
-          <OverviewCards />
-
-          {/* Before the first snapshot the socket streams the machines' agents and cards in one by one, each moving the
-              groups already painted, and "Loading" then went from over them: until it is in only "Loading", then all at once. */}
-          {!loaded && <Loading label={t("common.loading")} />}
 
           {/* the headline counts agents, this counts cards: say so when one agent has several cards waiting */}
           {loaded && (interactions.length > 0 || held.length > 0) && (
@@ -262,6 +258,10 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
             </div>
           )}
 
+          {/* Before the first snapshot the socket streams the machines' agents and cards in one by one, each moving the
+              groups already painted, and "Loading" then went from over them: until it is in only "Loading", then all at once. */}
+          {!loaded && <Loading label={t("common.loading")} />}
+
           {loaded && machines.length > 0 && (
             <Group title={t("home.computers")} count={machines.length} right={<a href={href({ name: "machines" })} onClick={(e) => onLinkClick(e, { name: "machines" })} className="text-[12px] text-ink-3 hover:text-ink-2">{t("home.monitor")}</a>}>
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 @min-[60rem]:grid-cols-3 @min-[84rem]:grid-cols-4 @min-[110rem]:grid-cols-5">
@@ -289,6 +289,11 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
               </div>
             </Group>
           )}
+
+          {/* the extensions' cards (docs/extensions/extensions.md "UI slots" overview_card), last: under everything about
+              the owner's agents (what needs them, what is running, what just finished) and the computers, so no number
+              of cards pushes those off the first screen (#11147; #11092 had them under Needs you and Stuck only) */}
+          <OverviewCards editing={arranging} onDone={() => setArranging(false)} />
         </div>
       </div>
       <MarkSeenDialog list={confirmSeen} onClose={() => setConfirmSeen(null)} />
