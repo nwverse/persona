@@ -51,7 +51,7 @@ class DictationSessionTest {
         first.result("Final only"); first.result("Repeated")
         assertEquals(listOf("Final only"), phone.saved)
         phone.mic.tap(); phone.listener.partial("Second"); phone.mic.tap()
-        phone.mic.tap(); advanceTimeBy(1501)
+        phone.mic.tap(); phone.mic.cover(); advanceTimeBy(1501)
         assertEquals(listOf("Final only", "Second"), phone.saved)
         phone.mic.hold(); assertEquals(3, phone.starts); phone.mic.release(true)
     }
@@ -77,6 +77,7 @@ class DictationSessionTest {
         val phone = Phone(this, allowed = false)
         phone.mic.hold(); assertNotNull(phone.ask); phone.mic.release(false); phone.ask!!(true)
         assertEquals(0, phone.starts)
+        phone.mic.tap(); phone.mic.cover(); phone.ask!!(true); assertEquals(0, phone.starts)
         phone.mic.tap(); phone.ask!!(false); assertEquals(listOf(true), phone.errors); assertEquals(0, phone.starts)
         phone.mic.tap(); phone.ask!!(true); assertTrue(phone.mic.listening); assertEquals(1, phone.starts)
         phone.listener.failed(true); advanceTimeBy(401); assertTrue(phone.mic.listening); assertEquals(2, phone.starts)

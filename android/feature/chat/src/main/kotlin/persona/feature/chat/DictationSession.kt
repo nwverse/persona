@@ -48,6 +48,12 @@ internal class DictationSession(
         if (listening) stop()
     }
 
+    fun cover() {
+        requested = null
+        // Once the mic has stopped, its outstanding final still belongs to this draft.
+        if (listening) finish(true)
+    }
+
     fun hold() { if (!active && requested == null) begin(Mode.Hold) }
 
     fun release(cancel: Boolean) {

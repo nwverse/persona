@@ -40,12 +40,15 @@ class DictationLifecycleTest {
     @get:Rule val rule = createComposeRule()
     private val app get() = ApplicationProvider.getApplicationContext<Application>()
 
-    @Test fun anAgentChatCoverKeepsHeardWordsAndStopsListeningUntilTheNextTap() {
+    private val composer = ChatComposerState()
+    private var covered by mutableStateOf(false)
+
+    private fun words(text: String) = Bundle().apply { putStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION, arrayListOf(text)) }
+
+    private fun showAgentChat() {
         ShadowSpeechRecognizer.setIsOnDeviceRecognitionAvailable(true)
         shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
         val key = SessionKey("computer", "agent")
-        val composer = ChatComposerState()
-        var covered by mutableStateOf(false)
         val chats = object : ChatRepository {
             override fun observe(session: SessionKey) = MutableStateFlow(ChatSnapshot(loading = false))
             override suspend fun loadOlder(session: SessionKey) {}
@@ -71,13 +74,33 @@ class DictationLifecycleTest {
                     chrome = ChatChromeBindings(covered = covered), composerState = composer)
             }
         }
+    }
+
+    @Test fun anAgentChatCoverKeepsHeardWordsAndStopsListeningUntilTheNextTap() {
+        showAgentChat()
         rule.onNodeWithContentDescription("Dictate").performClick()
         val speech = shadowOf(ShadowSpeechRecognizer.getLatestSpeechRecognizer())
-        fun words(text: String) = Bundle().apply { putStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION, arrayListOf(text)) }
         rule.runOnIdle { speech.triggerOnPartialResults(words("before opening files")); covered = true }
         rule.waitForIdle()
         assertTrue(speech.isDestroyed)
         rule.runOnIdle { speech.triggerOnResults(words("from the covering page")); covered = false }
+        rule.onNodeWithContentDescription("Dictate").assertExists()
+        assertEquals("before opening files", composer.value.text)
+        rule.onNodeWithContentDescription("Stop dictation").assertDoesNotExist()
+    }
+
+    @Test fun aStoppedRecordingDeliversItsFinalOnlyResultToTheSameCoveredChat() {
+        showAgentChat()
+        rule.onNodeWithContentDescription("Dictate").performClick()
+        val speech = shadowOf(ShadowSpeechRecognizer.getLatestSpeechRecognizer())
+        rule.onNodeWithContentDescription("Stop dictation").performClick()
+        rule.runOnIdle { covered = true }
+        rule.waitForIdle()
+        assertFalse(speech.isDestroyed)
+        rule.runOnIdle { speech.triggerOnResults(words("before opening files")) }
+        rule.waitForIdle()
+        assertTrue(speech.isDestroyed)
+        rule.runOnIdle { covered = false }
         rule.onNodeWithContentDescription("Dictate").assertExists()
         assertEquals("before opening files", composer.value.text)
         rule.onNodeWithContentDescription("Stop dictation").assertDoesNotExist()

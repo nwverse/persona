@@ -83,13 +83,14 @@ fun LargeWindowComposer(
     covered: Boolean = false,
 ) {
     val largeWindow = LocalLargeWindowInput.current
-    val dictate = rememberComposerDictation(session, state, visible && enabled && !covered, onNotice)
+    val dictate = rememberComposerDictation(session, state, visible && enabled, onNotice)
+    if (covered) SideEffect { dictate?.session?.cover() }
     val composer: @Composable () -> Unit = {
         ChatComposer(
             session = session, state = state, working = working, sending = sending, canClear = canClear,
             service = service, uploadDestination = uploadDestination, onSend = onSend, onCommand = onCommand, onNotice = onNotice,
             extraContent = extraContent, assistantChat = assistantChat, enabled = enabled, placeholder = placeholder, leading = leading,
-            accessory = accessory, modeHint = modeHint, onOverlay = onOverlay, visible = visible, dictate = dictate,
+            accessory = accessory, modeHint = modeHint, onOverlay = onOverlay, visible = visible, dictate = dictate.takeUnless { covered },
             agentName = agentName, canInterrupt = canInterrupt, mentions = mentions, onMention = onMention,
             onMentionTask = onMentionTask, onMentionOpen = onMentionOpen, onModel = onModel, loop = loop,
             blockedLabel = blockedLabel, onBlocked = onBlocked, useShellSurface = useShellSurface, modelPill = modelPill, wrapPlaceholder = wrapPlaceholder,
