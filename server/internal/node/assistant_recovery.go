@@ -303,13 +303,6 @@ func (n *Node) recoverAssistantResult(p *assistantProc, failed bool, result stri
 // recoverAssistantResultFor optionally requires the recovery that captured a pending result to still own the session.
 // That identity check prevents a result delayed by process replacement from restarting a turn the user has cancelled.
 func (n *Node) recoverAssistantResultFor(p *assistantProc, expected *assistantTurnRecovery, failed bool, result string, kinds ...string) bool {
-	if failed && (modelretry.Temporary(result) || modelretry.Permanent(result) || slices.Contains(kinds, assistantModelServiceFailure) || len(kinds) > 0 && kinds[0] == proto.TurnErrorTransient) &&
-		!assistantSafeguardsRefusal(result) && !assistantModelUnavailable(result) && !assistantwire.ToolSearchRefused(result) {
-		// Publish the stopped turn to the manager's durable due-wake scheduler.
-		// Keep the existing unavailable-model, safeguards and tool-search recovery
-		// paths out of this new scheduler; they have their own bounded recovery contracts.
-		return false
-	}
 	if proto.IsExternalLauncher(p.launcher) {
 		return false // an explicit adapter pick never enters automatic model recovery
 	}
@@ -319,9 +312,17 @@ func (n *Node) recoverAssistantResultFor(p *assistantProc, expected *assistantTu
 	missing := failed && assistantModelUnavailable(result)
 	unavailable := missing && n.recoverySwitched(p.id)
 	p.mu.Lock()
+	strict := p.model.Strict
 	transient404 := missing && !unavailable && p.replyModel != "" && !p.repliedAt.IsZero() &&
 		time.Since(p.repliedAt) < assistantAnsweredRecently
 	p.mu.Unlock()
+	if failed && (!strict || modelretry.Permanent(result)) &&
+		(modelretry.Temporary(result) || modelretry.Permanent(result) || slices.Contains(kinds, assistantModelServiceFailure) || len(kinds) > 0 && kinds[0] == proto.TurnErrorTransient) &&
+		!assistantSafeguardsRefusal(result) && !assistantModelUnavailable(result) && !assistantwire.ToolSearchRefused(result) {
+		// Ordinary service failures go to the manager's durable scheduler. Strict task turns keep their
+		// bounded same-model retry here, where the exact execution and existing retry budget are known.
+		return false
+	}
 	ordinary := unavailable || transient404 || assistantRecoverable(failed, result, kinds)
 	// The endpoint refused Claude Code's tool search (#10365): remembered for the launcher and model, so their next
 	// start loads every tool, and the turn resent once in such a process, unseen. A process that started that way and

@@ -41,7 +41,9 @@ while IFS= read -r line; do
         while [ ! -f "$CLI_FAKE_RETRY_RESULT_GATE" ]; do sleep 0.01; done
       fi
       printf '{"type":"stream_event","event":{"type":"message_start","message":{"model":"%s","usage":{"input_tokens":5}}},"parent_tool_use_id":null}\n' "$model"
-      if [ "$count" -le 1 ]; then
+      if [ -n "$CLI_FAKE_RETRY_RESULT_GATE" ] && [ "$count" -le 2 ]; then
+        echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"API Error: 503 no eligible upstream account is currently available"}'
+      elif [ "$count" -le 1 ]; then
         echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"API Error: safeguards flagged"}'
       else
         echo '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"answered by fallback"}},"parent_tool_use_id":null}'

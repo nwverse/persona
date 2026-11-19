@@ -1056,8 +1056,19 @@ func TestTaskExecutionEachTurnCanRetryWithoutModelFallback(t *testing.T) {
 		if recovery != nil {
 			t.Errorf("turn %d left its exhausted recovery on the idle process", turn)
 		}
+		rows := f.n.assistantSessions()
+		if len(rows) != 1 || rows[0].SessionID != id || rows[0].TurnErrorKind != proto.TurnErrorUser || !strings.Contains(rows[0].TurnError, "503") {
+			t.Fatalf("turn %d exposed a failure for generic continuation: %+v", turn, rows)
+		}
 	}
 	if strings.Contains(f.file("cli-argv"), "--model fallback-model") {
 		t.Fatal("task silently changed models")
+	}
+	ctx := withClientMsgID(t.Context(), "model-retry:"+id+":1:1")
+	if _, err := f.n.assistantSend(ctx, id, "", "", "Continue", nil, "", ""); !errors.Is(err, errAssistantRecoveryCancelled) {
+		t.Fatalf("stale manager continuation was not refused: %v", err)
+	}
+	if count := strings.Count(f.file("user.jsonl"), `"type":"user"`); count != 6 {
+		t.Fatalf("stale manager continuation reached the conversation: %d total sends", count)
 	}
 }
