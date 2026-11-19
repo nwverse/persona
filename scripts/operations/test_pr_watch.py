@@ -3044,7 +3044,7 @@ class WatcherTests(unittest.TestCase):
                 self.assertEqual(watcher.review_executor._max_workers, 16)
 
     def test_reviewer_concurrency_is_bounded_and_refills_ready_work(self):
-        self.config["reviewer"]["concurrency"] = 16
+        self.config["reviewer_concurrency"] = 16
         watcher = pr_watch.Watcher(self.config, verbose=False)
         watcher.start_workers()
         self.addCleanup(watcher.stopping.set)
@@ -3084,7 +3084,7 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(peak, 16)
         self.assertEqual(len(completed), 18)
         for count in (0, 21):
-            self.config["reviewer"]["concurrency"] = count
+            self.config["reviewer_concurrency"] = count
             with self.assertRaisesRegex(pr_watch_common.WatchError, "reviewer concurrency"):
                 pr_watch.Watcher(self.config, verbose=False).start_workers()
 
@@ -3104,6 +3104,19 @@ class WatcherTests(unittest.TestCase):
                                             "workers must be between 1 and 20"):
                     watcher.start_workers()
                 self.assertEqual(watcher.workers, [])
+
+    def test_reviewer_default_does_not_change_the_evidence_fingerprint(self):
+        path = self.root / "config.json"
+        raw = {"repositories": [{"name": "example/one", "checkout": str(self.root), "verify": {}}],
+               "reviewer": {}, "workers": 20, "poll_seconds": 60, "state": str(self.root / "state.json")}
+        path.write_text(json.dumps(raw))
+        baseline = pr_watch.fingerprint("configuration", 0, "0" * 40, "config", pr_watch.load_config(path))
+        raw["reviewer"]["concurrency"] = 16
+        path.write_text(json.dumps(raw))
+        configured = pr_watch.load_config(path)
+        self.assertNotIn("concurrency", configured["reviewer"])
+        self.assertEqual(configured["reviewer_concurrency"], 16)
+        self.assertEqual(pr_watch.fingerprint("configuration", 0, "0" * 40, "config", configured), baseline)
 
     def test_config_has_no_implicit_merge_or_repositories(self):
         path = self.root / "config.json"

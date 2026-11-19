@@ -80,13 +80,13 @@ def load_config(path):
     reviewer = dict(reviewer)
     reviewer.setdefault("timeout_seconds", 3600)
     reviewer.setdefault("repair_timeout_seconds", 3600)
-    reviewer.setdefault("concurrency", 16)
+    concurrency = reviewer.pop("concurrency", 16)
     webhook = raw.get("webhook", {})
     if not isinstance(webhook, dict):
         raise WatchError("webhook config must be an object")
     repository_policy = [{key: value for key, value in item.items() if key != "reviewer"}
                          for item in raw["repositories"]]
-    return {"repositories": repos, "reviewer": reviewer, "webhook": webhook,
+    return {"repositories": repos, "reviewer": reviewer, "reviewer_concurrency": concurrency, "webhook": webhook,
             "repository_policy": repository_policy,
             "poll_seconds": int(raw.get("poll_seconds", 60)), "workers": int(raw.get("workers", 2)),
             "state": raw.get("state", str(Path(path).parent / "state.json"))}
@@ -1032,7 +1032,7 @@ query($owner: String!, $name: String!, $number: Int!, $pageSize: Int!,
             with self.review_executor_lock:
                 if self.review_executor is None:
                     self.review_executor = ThreadPoolExecutor(
-                        max_workers=self.config["reviewer"].get("concurrency", 16),
+                        max_workers=self.config.get("reviewer_concurrency", 16),
                         thread_name_prefix="semantic-reviewer")
         return self.review_executor.submit(
             semantic_review, repo, pr, worktree, self.config["reviewer"]).result()
@@ -1693,7 +1693,7 @@ query($owner: String!, $name: String!, $number: Int!, $pageSize: Int!,
         if not 1 <= count <= 20:
             raise WatchError("workers must be between 1 and 20")
         self.workers = [threading.Thread(target=self.worker, daemon=True) for _ in range(count)]
-        concurrency = self.config["reviewer"].get("concurrency", 16)
+        concurrency = self.config.get("reviewer_concurrency", 16)
         if not 1 <= concurrency <= 20:
             raise WatchError("reviewer concurrency must be between 1 and 20")
         self.review_executor = ThreadPoolExecutor(

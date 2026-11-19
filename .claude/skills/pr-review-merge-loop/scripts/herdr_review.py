@@ -546,19 +546,24 @@ def acquire_slot(root, slots, flags):
     The lock itself is the bound: no extra interactive agent is created while
     waiting. Each request still has the watcher's overall review timeout.
     """
-    for slot in range(slots):
-        lock = (root / ("slot-%02d.lock" % slot)).open("a+")
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX)
-        except BaseException:
-            lock.close()
-            raise
-        try:
-            return run(slot, flags)
-        finally:
-            fcntl.flock(lock, fcntl.LOCK_UN)
-            lock.close()
-    raise RuntimeError("reviewer slots must be positive")
+    while True:
+        for slot in range(slots):
+            lock = (root / ("slot-%02d.lock" % slot)).open("a+")
+            try:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    lock.close()
+                    continue
+                try:
+                    return run(slot, flags)
+                finally:
+                    fcntl.flock(lock, fcntl.LOCK_UN)
+                    lock.close()
+            except BaseException:
+                lock.close()
+                raise
+        time.sleep(0.1)
 
 
 def main():
