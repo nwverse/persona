@@ -90,7 +90,11 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn("*/2 * * * *", text)
         self.assertIn("RELEASE_PR_TOKEN", text)
         self.assertIn("environment: persona-release", text)
-        self.assertIn("gh pr create", text)
+        self.assertIn("create_release_pr.py", text)
+        self.assertIn("RELEASE_PR_TOKEN", text)
+        self.assertIn("missing RELEASE_PR_TOKEN", text)
+        self.assertIn("git diff --cached --quiet", text)
+        self.assertNotIn("gh pr create", text)
         self.assertNotIn('refs/tags/$TAG', text)
         self.assertNotIn("gh release create", text)
 

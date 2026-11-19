@@ -13,6 +13,7 @@ import (
 	approvalops "github.com/nwverse/persona/server/internal/approval"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/compat"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -613,6 +614,7 @@ func (s *Service) resolveApproved(ctx context.Context, id string, r proto.Resolu
 
 func (s *Service) resolveAnswer(ctx context.Context, id string, r proto.Resolution, remember bool, authorization *standingResolution,
 	approver *assistantwire.HandoffApprover) error {
+	r.ModeActor = nil // provenance is never taken from an answer body
 	s.fleet.mu.Lock()
 	prepared := s.fleet.interactions[id]
 	isPrepared := prepared != nil && prepared.prepared != nil
@@ -656,6 +658,12 @@ func (s *Service) resolveAnswer(ctx context.Context, id string, r proto.Resoluti
 		}
 	}
 	if p != nil {
+		if p.ix.Kind == proto.IxPlan {
+			r.ModeActor = devicewire.ModeActorOf(ctx)
+			if r.ModeActor == nil && r.AnsweredBy == proto.AnsweredByAssistant {
+				r.ModeActor = devicewire.AssistantModeActor()
+			}
+		}
 		r.Values = declaredValues(p.ix, r.Values)
 		r = honest(p.ix, r)
 	}

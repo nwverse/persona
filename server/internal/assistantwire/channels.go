@@ -57,6 +57,12 @@ const (
 	// guard — a message id already delivered is not sent again, one whose send was cut off is refused.
 	DeviceSessionSendOnce = "session.send_once"
 
+	// DeviceAssistantAnswerAgain is a node send that must match the completed transcript tail.
+	// The manager and node both use this distinct method, so an older peer cannot
+	// silently ignore the guard. The hub claims the client_msg_id before forwarding.
+	DeviceAssistantAnswerAgain = "assistant.answer_again"
+	CodeAnswerAgainChanged     = "assistant_answer_again_changed"
+
 	// AppFeishu is the Feishu bot's transport (the open platform, as the paired owner's bot).
 	AppFeishu = "feishu"
 	// FeishuStatusGet: {} → FeishuStatus.
