@@ -62,3 +62,8 @@ const (
 // LinkSwitchCodeSucceeded is end(rolled_back)'s answer for an operation the hub saw succeed: nothing is undone, the
 // switch stays done.
 const LinkSwitchCodeSucceeded = "already_succeeded"
+
+// LinkSwitchCodeRolledBackGone is end(rolled_back)'s answer when the hub has undone the switch (its code and credential
+// revoked, the end recorded) but the computer is no longer this manager's (moved or removed since): the rollback is
+// taken, and the manager cleans up what it set up on the computer as after {}.
+const LinkSwitchCodeRolledBackGone = "rolled_back_gone"

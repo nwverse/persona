@@ -164,9 +164,12 @@ const (
 	LinkSwitchReasonInterrupted     = "interrupted"      // the manager restarted during the switch
 	LinkSwitchReasonUnknown         = "unknown"
 
-	// LinkSwitchReasonUnsafePermissions: ~/.persona or its bin may be written by other users (others, or a group other
-	// than the user's own private group), who could swap the program the switch runs.
+	// LinkSwitchReasonUnsafePermissions: the home folder, ~/.persona or its bin is not the user's own, or may be written by
+	// other users (others, or a group other than the user's own private group), who could swap the program the switch runs.
 	LinkSwitchReasonUnsafePermissions = "unsafe_permissions"
+	// LinkSwitchReasonHubUnanswered: undoing a failed switch needed the hub, which did not answer within the manager's
+	// bound (or does not know the call): the computer may still be set to Persona Link.
+	LinkSwitchReasonHubUnanswered = "hub_unanswered"
 )
 
 // MachineLink is a live persona-link: its build, the hub URL it went to and since when.
