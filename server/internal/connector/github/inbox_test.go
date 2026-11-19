@@ -350,3 +350,26 @@ func messageLastTime(t *testing.T, last string) string {
 	}
 	return head.At.UTC().Format(time.RFC3339)
 }
+
+func TestInboxNotificationIncludesInlineReviewFeedback(t *testing.T) {
+	f := &fakeNotifications{
+		prs: map[string]string{
+			api12: strings.Replace(openPR(""), "{", `{"review_comments":1,`, 1),
+			"/repos/example-org/example-repo/issues/12": `{"comments":0}`,
+		},
+		comments: map[string]string{
+			api12 + "/reviews":  `[{"id":8,"user":{"login":"example-reviewer[bot]","type":"Bot"},"state":"COMMENTED","body":"","submitted_at":"` + fixtureAt(9*time.Hour) + `"}]`,
+			api12 + "/comments": `[{"id":9,"user":{"login":"example-reviewer[bot]","type":"Bot"},"body":"Cover the empty result before returning.","created_at":"` + fixtureAt(9*time.Hour) + `"}]`,
+		},
+		notifications: "[" + note("1", "author", "PullRequest", "https://api.github.com"+api12, t2) + "]",
+	}
+	c := f.server(t)
+	if _, moved, err := c.poll(context.Background()); err != nil || !moved {
+		t.Fatalf("poll moved=%v err=%v", moved, err)
+	}
+	item := things(t, c)["example-org/example-repo#12"]
+	if !strings.Contains(item.Preview, "Cover the empty result") || !strings.Contains(item.Context, "Cover the empty result") ||
+		!strings.Contains(item.Sender, "example-reviewer") || item.ThreadState != "open" {
+		t.Fatalf("inline-only review was not surfaced: %+v", item)
+	}
+}

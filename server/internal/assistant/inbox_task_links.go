@@ -200,13 +200,14 @@ func (s *Service) linkInboxTaskURLs(ctx context.Context) {
 	}
 	idx := &inboxTaskIndex{byRef: map[string][]string{}, bare: map[uint64][]Todo{}, open: map[string]Todo{}}
 	acceptedPRs := map[string]Todo{}
+	followAcceptedPRs := s.inboxSignalsOn(ctx)
 	s.todos.mu.RLock()
 	for _, t := range s.todos.todos {
 		if t.Cancelled() || isAskTodo(t.ID) {
 			continue
 		}
 		if t.DoneAt != nil {
-			if taskAcceptedForFeedback(*t) {
+			if followAcceptedPRs && taskAcceptedForFeedback(*t) {
 				for _, raw := range append(slices.Clone(t.PRs), t.PRURL) {
 					if u := triageNormalizePRURL(raw); u != "" {
 						if other, ok := acceptedPRs[u]; !ok || t.DoneAt.After(*other.DoneAt) {
@@ -300,6 +301,7 @@ func (s *Service) linkInboxTaskURLs(ctx context.Context) {
 // suggestion stays. Saved like any item write; a failed save undoes it.
 func (s *Service) fileTaskDone(ctx context.Context, items []*InboxItem) {
 	b := &s.inbox
+	followAcceptedPRs := s.inboxSignalsOn(ctx)
 	pending := map[string]bool{}
 	s.todos.mu.RLock()
 	for _, task := range s.todos.todos {
@@ -325,7 +327,7 @@ func (s *Service) fileTaskDone(ctx context.Context, items []*InboxItem) {
 		}
 		b.mu.Lock()
 		if b.items[it.ID] == it && taskDoneFileable(it) && it.Agent.TodoID == id &&
-			!acceptedPRFeedback(t, inboxOpenPR(it)) {
+			(!followAcceptedPRs || !acceptedPRFeedback(t, inboxOpenPR(it))) {
 			now := time.Now()
 			w := beginWrite(it)
 			it.done(now, doneByManager)

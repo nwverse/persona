@@ -11,7 +11,7 @@
    这件事的由来（不是用户直接要的）：{{if eq . "leader"}}主管对话{{else if eq . "routine"}}定时任务{{else if eq . "hub"}}Persona 自己{{else}}助手{{end}}发起{{with $e.StartedWhy}}，理由：{{.}}{{end}}{{end}}{{with $e.Dropped}}
    范围调整时已去掉的标准：{{range $j, $c := .}}{{if $j}}；{{end}}{{$c}}{{end}}{{end}}{{if $.Fresh}}{{with $e.LastReview}}
    上次结论（{{.At}}）：{{.Verdict}}{{with .Note}}，{{.}}{{end}}{{end}}{{end}}{{with $e.Inbox}}
-   收件箱事件 {{.Item}}「{{.Title}}」{{with .Sender}}，最新一条是 {{.}} 发的{{end}}{{with .Preview}}：「{{.}}」{{end}}{{with .URL}}（{{.}}）{{end}}{{if .AfterAcceptance}}。待办已验收，PR 仍在评审。请查看这条反馈，保留原验收记录{{end}}{{if eq .ToAgent "sent"}}；hub 已经把要点和链接直接发给它的 Agent（它收到了），这里是副本{{end}}{{end}}{{with $e.Recommend}}
+   收件箱事件 {{.Item}}「{{.Title}}」{{with .Sender}}，最新一条是 {{.}} 发的{{end}}{{with .Preview}}：「{{.}}」{{end}}{{with .URL}}（{{.}}）{{end}}{{if .AfterAcceptance}}。待办已验收，PR 尚未关闭。请查看这条反馈，保留原验收记录{{end}}{{if eq .ToAgent "sent"}}；hub 已经把要点和链接直接发给它的 Agent（它收到了），这里是副本{{end}}{{end}}{{with $e.Recommend}}
    {{if $e.Background}}后台督办对话{{else}}leader {{end}}推荐：{{.}}{{end}}{{with $e.Decision}}
    当时发给用户的决定（why_owner={{.WhyOwner}}{{if .NeverDefault}}，不会默认执行{{end}}）：{{.Question}}{{with .Background}}
    - 任务来历（hub 记的）：{{.}}{{end}}{{range .Options}}
