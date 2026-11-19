@@ -3001,9 +3001,13 @@ effort fields are gone. What the panel gained for it, each part optional and abs
   `--line-strong` border, no glow) at the start, the bubble and accessible value "Model default"; a click or key picks a
   level.
 - Lines under the first message box: one 11.5 px line each, a 12 px icon first: a pick dropped on another computer
-  (`info`, `ink-3`), a list that couldn't be read (`warning`, `--orange`), what runs this time can't start here (`warning`,
-  `--orange`, the "Used this time" pill, How to fix), the preset picked (`layers`, `ink-3`; `warning` in `--orange` when
-  something of it can't be applied).
+  (`info`, `ink-3`), the computer's launchers that couldn't be read (`warning`, `--orange`, the reason in `ink-3`, Retry
+  in `--accent-ink`; #10952), a list that couldn't be read (`warning`, `--orange`), what runs this time can't start here
+  (`warning`, `--orange`, the "Used this time" pill, How to fix), the preset picked (`layers`, `ink-3`; `warning` in
+  `--orange` when something of it can't be applied).
+- Launchers that couldn't be read (#10952): the pill leaves its spinner for its failed state (the red `warning` and
+  "Model loading failed"), and a click on it reads them again, as Retry on the line under the box does; Start still runs
+  the computer's default.
 
 Reason: one place to choose a model for chats and new Agents (principle 4), the engine visible without a field of its
 own (principle 2), the default as one row that can always be gone back to (principles 1 and 3). The deviations from
