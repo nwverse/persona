@@ -330,6 +330,15 @@ later without sending.
 
 ### Transient errors: automatic continuation
 
+- An unrecoverable conversation error overrides a runtime's generic transient kind and any upstream status.
+  Account-sealed native compaction is `turn_error_code: compaction_sealed`, `turn_error_kind: unrecoverable`:
+  the context belongs to another account, so the conversation is invalid. Clients explain the reason and direct
+  the owner to a new conversation instead of offering Continue. The manager neither schedules another retry nor
+  sends a retry queued before the cause was recognized. Adding permanent causes extends
+  `proto.UnrecoverableTurnErrorCode` and the clients' error parsers, with positive and negative regression cases.
+- An old interrupted participant does not override another participant that is working or waiting to resume.
+  Interrupted task rows stay out of Needs you when the task is parked or closed. Archive visibility still follows
+  new activity; it is not a substitute for the task-state filter.
 - On by default and independent of the main switch (`transient_retry`, #3208): it is a rule, with no triage model call. With the main switch off, only
   turns that a transient error ended are followed (`workActive`), and the lists show only the continuation on its way (`transientPending`); everything else stays as without triage.
 - Exponential backoff (`retryBackoff`): `retry_base_seconds` (default 15) doubled for each attempt, so 15 s, 30 s, 60 s, 120 s, 240 s; a rate limit (429, "rate limit",

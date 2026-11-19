@@ -1,5 +1,18 @@
 # Lessons: Claude Code, Codex, and herdr
 
+## An account-sealed compaction needs a new conversation, not Continue (#10399)
+
+- Classify the permanent cause before trusting a runtime's generic transient kind or a gateway's status. Cancel
+  continuations already queued before the cause was recognized; hiding the button alone does not stop them.
+- Archiving is visibility, not invalidation: a newer transcript restores it. Derive obsolete interruption rows from
+  the linked task's current participants, parking and close state, and keep the same cases on every client.
+- Error detection also runs on every ordinary session's last answer. Compare a case-insensitive prefix without
+  lowercasing whole answers; an extra allocation per row broke the 8,200-session list's allocation budget.
+- For mock screenshots, combine `MOCK_TASKS=1 MOCK_TASKS_CUT=1 MOCK_TASKS_INVALID=1` with the mock hub. This is UI
+  evidence only, not deployment or proof that a real account-sealed conversation has disappeared from Needs you.
+- Keep permanent compaction errors separate from retryable tool-search refusals when merging error handling.
+  Preserve both wire codes and both failed-turn tests; loading all tools can fix tool search, not account-sealed context.
+
 ## A deferred action on an agent belongs to its process, not its session id (#10296)
 
 - A session id outlives its Claude Code process: the owner quits and resumes, Persona's Resume starts a new one, a crash is resumed. A queued restart into Full access, keyed by session id alone for a day, quit a claude that resumed the conversation later in Default and restarted it in Full access.

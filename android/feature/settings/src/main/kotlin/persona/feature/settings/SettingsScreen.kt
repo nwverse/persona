@@ -94,6 +94,7 @@ private fun SettingsContent(
     var tunnelPage by tunnelPageState
     val pairingDiagnosticsState = rememberSaveable(initialPage) { mutableStateOf(false) }
     var pairingDiagnostics by pairingDiagnosticsState
+    var diagnosticsExport by rememberSaveable(initialPage) { mutableStateOf(false) }
     // Model providers's own steps when they open in place: one provider, adding one, importing from ~/.zshrc.
     val providerState = rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
     var provider by providerState
@@ -352,7 +353,12 @@ private fun SettingsContent(
         knowledgeSelection = knowledgeSelection, knowledgeSelectionAvailable = knowledgeSelectionAvailable,
         translationValue = translationValue, hubUpdateStatusState = hubUpdateStatusState,
         slotsState = slotsState, slotCards = slotCards, detailKey = detailKey,
-        back = back, openPage = ::open, deviceFeedback = deviceFeedback, connectorItems = connectorItems,
+        back = back, openPage = ::open, openDiagnosticsExport = {
+            if (onBack == null) {
+                parents = parents + page
+                page = "about-export"
+            } else diagnosticsExport = true
+        }, deviceFeedback = deviceFeedback, connectorItems = connectorItems,
         onNavigate = onNavigate, onClose = onClose, onDemo = onDemo, onExitDemo = onExitDemo,
     )
     // Routed Back leaves a page in one step. Pairing handles its own steps before returning to Settings or Hubs.
@@ -364,6 +370,13 @@ private fun SettingsContent(
     BackHandler(page == "managers" && manager != null) { manager = null }
     BackHandler(page == "providers" && (provider != null || providerStep != null)) { if (providerStep != null) providerStep = null else provider = null }
     BackHandler(page == "hubs" && tunnelPage != null) { tunnelPage = null }
+    if (diagnosticsExport && onBack != null) {
+        val close = { diagnosticsExport = false }
+        BackHandler(onBack = close)
+        JFullScreen(onDismiss = close) {
+            services.developing?.let { DevelopingDiagnosticsExportPage(it, onBack = close) }
+        }
+    }
     if (pairingDiagnostics && (page == "pair" || page == "hubs-add")) {
         val close = { pairingDiagnostics = false }
         JFullScreen(onDismiss = close) { DiagnosticsScreen(services, onBack = close, footer = deviceFeedback) }
@@ -427,6 +440,7 @@ private fun SettingsPageContent(
     detailKey: androidx.navigation3.runtime.NavKey?,
     back: () -> Unit,
     openPage: (SettingsPage) -> Unit,
+    openDiagnosticsExport: () -> Unit,
     deviceFeedback: @Composable () -> Unit,
     connectorItems: LazyListScope.() -> Unit,
     onNavigate: ((androidx.navigation3.runtime.NavKey) -> Unit)?,
@@ -566,8 +580,9 @@ private fun SettingsPageContent(
             item { PersonaSettings(demo = services.demo) }
             item { deviceFeedback() }
         }
+        "about-export" -> services.developing?.let { DevelopingDiagnosticsExportPage(it, onBack = back) }
         "about" -> JListPage(title = stringResource(R.string.settings_home_about), onBack = back) {
-            item { AboutSettingsPage() }
+            item { AboutSettingsPage(developing = services.developing, onExport = openDiagnosticsExport) }
             item { JGroupItem(GroupPosition.Single, Modifier.padding(top = Tokens.Space.m)) {
                 JRow(stringResource(R.string.settings_update_check), subtitle = updateSubtitle, subtitleLines = 6, value = when {
                     busy -> stringResource(R.string.settings_update_checking)
