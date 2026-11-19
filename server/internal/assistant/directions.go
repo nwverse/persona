@@ -54,11 +54,14 @@ type direction struct {
 	// Progress: the leader's latest own summary (leader_progress, #3679).
 	Progress *leaderProgress `json:"progress,omitempty"`
 	// Notes: what the owner wrote for this direction (#10086, direction_notes.go), "" none; NotesAt when, at
-	// millisecond precision (older records: finer).
-	Notes   string     `json:"notes,omitempty"`
-	NotesAt *time.Time `json:"notes_at,omitempty"`
-	// NotesInEffect: the notes block the leader's policy carries now (notesInEffect, #11392), set by the last send that
-	// found the leader idle; nil before any did.
+	// millisecond precision (older records: finer). NotesLastAt: the last NotesAt issued, kept when the notes are
+	// cleared, so a later save never issues it again (nil on older records: NotesAt is).
+	Notes       string     `json:"notes,omitempty"`
+	NotesAt     *time.Time `json:"notes_at,omitempty"`
+	NotesLastAt *time.Time `json:"notes_last_at,omitempty"`
+	// NotesInEffect: the notes block the conversation was last given (notesInEffect, #11392): set by a send that found
+	// it idle (its leader's block, or "" once it is no leader) and, before any did, by the first notes save while it
+	// leads (the block of the notes before that save); nil while unknown.
 	NotesInEffect *string `json:"notes_in_effect,omitempty"`
 }
 
@@ -123,6 +126,7 @@ type directionBook struct {
 	m      map[string]*direction // by leader conversation id
 	armed  bool                  // a compare is scheduled
 	after  func(d time.Duration, f func())
+	now    func() time.Time // tests: the clock notes are saved by (nil: time.Now)
 }
 
 // directionsLocked reads the book once; b.mu is held. A failed read leaves it unloaded: nothing is told or saved over it.

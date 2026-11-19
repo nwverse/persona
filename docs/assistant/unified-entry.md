@@ -1113,12 +1113,16 @@ content, not memory: memory stays one for every conversation (#9440), and a dire
   `notesInEffect`, `leadIdle`). Until then every send keeps the notes block it has, so saving notes while the leader
   works no longer gets the owner's next message refused (the node refuses a send that would change the policy of a
   process at work). The block in effect is kept with the direction's record (`assistant.directions`,
-  `notes_in_effect`), so a manager restart does not change it. The node can see work a moment before the manager does;
-  in that moment its refusal stays as the safety net.
+  `notes_in_effect`), so a manager restart does not change it. Before any send has recorded it (a leader from before,
+  or one never sent to since), the first save or clear records the block of the notes it replaces, which is what
+  every send so far gave the leader. A conversation that is no leader any more is given no notes block, and an idle
+  send records that, so a direction ended and made again does not bring back the block it had before. The node can
+  see work a moment before the manager does; in that moment its refusal stays as the safety net.
 - **Two editors** (#11392): a save may say which `notes_at` it started from (`null`: there were no notes); when the
   notes changed since, it is refused with 409 `notes_changed` and the stored `notes` and `notes_at`, so a client can
   show both, and nothing changes. `notes_at` is written at millisecond precision and compared as an instant to the
-  millisecond, so a client that parses the value and writes it again still matches. A save without it is not checked.
+  millisecond, so a client that parses the value and writes it again still matches; a value is never issued twice,
+  also across a clear (`notes_last_at` on the record). A save without it is not checked.
 - **New Agents for the direction** get them before the project background (template `todo/direction`): an Agent the
   leader starts (`agent_start`) or supervises (a task it plans, a to-do it supervises handed to a new Agent), and an
   Agent whose directory belongs to the direction's kb project, whoever starts it. At most two directions' notes, the

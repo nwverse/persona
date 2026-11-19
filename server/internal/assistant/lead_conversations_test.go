@@ -364,3 +364,126 @@ func TestLeadersApprovalComparesTheWholeList(t *testing.T) {
 		t.Fatalf("approved: %s %v", out, leaders())
 	}
 }
+
+// listLeads lists rows as Persona conversations on the assistant's computer (and nothing else there).
+func listLeads(f *fakeHub, rows ...proto.Session) {
+	for i := range rows {
+		rows[i].MachineID, rows[i].Assistant = "server", true
+	}
+	f.setSessions("server", rows...)
+}
+
+// dispatchedPolicy is the role policy conversation id's next message is sent with.
+func dispatchedPolicy(t *testing.T, s *Service, id string) string {
+	t.Helper()
+	p := map[string]any{"session_id": id, "text": "go on"}
+	if err := s.putSupervisionInstructions(context.Background(), "server", id, p); err != nil {
+		t.Fatal(err)
+	}
+	return p["supervision_instructions"].(string)
+}
+
+// A direction ended and made again does not bring back the notes block it had before it ended: once unpinned, an idle
+// send restarts the conversation on the plain policy (it still supervises its task), so after the owner clears the
+// notes and pins it again, a message that finds it working is sent on that plain policy, with no role change for the
+// node to refuse.
+func TestDirectionNotesInEffectFollowTheConversationAcrossItsEnd(t *testing.T) {
+	s, f := notesEnv(t)
+	ctx := context.Background()
+	plain := prompts.RenderSupervisionInstructions()
+	todo, err := s.createTodo(ctx, "Ship the build", "", "conv_lead", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.superviseTodo(ctx, todo.ID, "conv_lead", []string{"Shipped"}, 30)
+	listLeads(f, proto.Session{SessionID: "conv_lead", Status: proto.StatusIdle})
+	if _, _, err := s.setDirectionNotes(ctx, "conv_lead", "Readings: the store build number.", nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := dispatchedPolicy(t, s, "conv_lead"); !strings.Contains(got, "Readings: the store build number.") {
+		t.Fatalf("lead: %q", got)
+	}
+	if ended, err := s.endDirection(ctx, "conv_lead"); err != nil || !ended {
+		t.Fatalf("end: %v %v", ended, err)
+	}
+	if got := dispatchedPolicy(t, s, "conv_lead"); got != plain {
+		t.Fatalf("unpinned: %q", got)
+	}
+	if _, _, err := s.setDirectionNotes(ctx, "conv_lead", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.makeDirection(ctx, "conv_lead", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	listLeads(f, proto.Session{SessionID: "conv_lead", Status: proto.StatusWorking})
+	if got := dispatchedPolicy(t, s, "conv_lead"); got != plain {
+		t.Fatalf("pinned again while it works: the policy changed to %q", strings.TrimPrefix(got, plain))
+	}
+}
+
+// A lead with no block in effect recorded yet (from before #11392, or never sent to since) keeps what it runs on when
+// the owner's first save or first clear comes while it works; the first idle send then carries the notes as they are.
+func TestDirectionNotesFirstSaveWhileTheLeadWorks(t *testing.T) {
+	s, f := notesEnv(t)
+	ctx := context.Background()
+	plain := prompts.RenderSupervisionInstructions()
+	// conv_other has notes from before any block in effect was recorded: every send so far carried them.
+	at := time.Now().UTC()
+	s.directions.mu.Lock()
+	s.directions.m["conv_other"].Notes, s.directions.m["conv_other"].NotesAt = "Infra rule: back up first.", &at
+	s.directions.mu.Unlock()
+	withOld := plain + "\n\n" + prompts.RenderDirectionNotes(s.directionPrompt(ctx, "conv_other"))
+	listLeads(f, proto.Session{SessionID: "conv_lead", Status: proto.StatusWorking},
+		proto.Session{SessionID: "conv_other", Status: proto.StatusWorking})
+	if _, _, err := s.setDirectionNotes(ctx, "conv_lead", "Readings: v1.", nil); err != nil { // its first notes
+		t.Fatal(err)
+	}
+	if _, _, err := s.setDirectionNotes(ctx, "conv_other", "", nil); err != nil { // its first clear
+		t.Fatal(err)
+	}
+	if got := dispatchedPolicy(t, s, "conv_lead"); got != plain {
+		t.Fatalf("first save while it works: %q", strings.TrimPrefix(got, plain))
+	}
+	if got := dispatchedPolicy(t, s, "conv_other"); got != withOld {
+		t.Fatalf("first clear while it works: %q", strings.TrimPrefix(got, plain))
+	}
+	listLeads(f, proto.Session{SessionID: "conv_lead", Status: proto.StatusIdle},
+		proto.Session{SessionID: "conv_other", Status: proto.StatusIdle})
+	if got := dispatchedPolicy(t, s, "conv_lead"); !strings.Contains(got, "Readings: v1.") {
+		t.Fatalf("idle: %q", got)
+	}
+	if got := dispatchedPolicy(t, s, "conv_other"); got != plain {
+		t.Fatalf("idle after the clear: %q", got)
+	}
+}
+
+// A notes_at is never issued twice, also across a clear: an editor that opened the notes before the clear is refused
+// even when the next save comes in the same millisecond as the one it read, and an older record keeps its time too.
+func TestNotesAtIsNeverIssuedTwiceAcrossAClear(t *testing.T) {
+	s, _ := notesEnv(t)
+	clock := time.Date(2026, 11, 20, 1, 2, 3, 0, time.UTC)
+	s.directions.mu.Lock()
+	s.directions.now = func() time.Time { return clock }
+	s.directions.mu.Unlock()
+	first := putNotesAnswer(t, s, `{"notes":"Readings: A."}`, http.StatusOK)
+	putNotesAnswer(t, s, `{"notes":""}`, http.StatusOK)
+	second := putNotesAnswer(t, s, `{"notes":"Readings: B."}`, http.StatusOK)
+	if !second.NotesAt.After(*first.NotesAt) {
+		t.Fatalf("issued again: %v then %v", first.NotesAt, second.NotesAt)
+	}
+	stale := putNotesAnswer(t, s, `{"notes":"Readings: C.","notes_at":"`+first.NotesAt.Format(time.RFC3339Nano)+`"}`, http.StatusConflict)
+	if stale.Notes != "Readings: B." {
+		t.Fatalf("stale editor: %+v", stale)
+	}
+	// An older record has only NotesAt: cleared and saved again at the same instant, it still moves on.
+	old := clock.Add(time.Hour)
+	s.directions.mu.Lock()
+	d := s.directions.m["conv_lead"]
+	d.Notes, d.NotesAt, d.NotesLastAt = "Readings: old.", &old, nil
+	s.directions.now = func() time.Time { return old }
+	s.directions.mu.Unlock()
+	putNotesAnswer(t, s, `{"notes":""}`, http.StatusOK)
+	if again := putNotesAnswer(t, s, `{"notes":"Readings: D."}`, http.StatusOK); !again.NotesAt.After(old) {
+		t.Fatalf("older record issued again: %v", again.NotesAt)
+	}
+}

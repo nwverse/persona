@@ -83,6 +83,14 @@ func nextNotesAt(prev *time.Time, now time.Time) time.Time {
 // (notesInEffect), no other conversation's.
 func (s *Service) setDirectionNotes(ctx context.Context, id, notes string, from *notesFrom) (string, *time.Time, error) {
 	notes = cleanDirectionNotes(notes)
+	// What a current leader was told of its direction before this save: the baseline notesInEffect keeps while it
+	// works when no send has recorded one yet (a leader from before #11392, or one never sent to since). Read before
+	// the lock, since directionPrompt reads the record itself, and used only if the notes are still the ones it read.
+	var before *prompts.DirectionNotes
+	if slices.Contains(s.settings(ctx).Leaders, id) {
+		p := s.directionPrompt(ctx, id)
+		before = &p
+	}
 	b := &s.directions
 	b.mu.Lock()
 	if !s.directionsLocked(ctx) {
@@ -104,12 +112,24 @@ func (s *Service) setDirectionNotes(ctx context.Context, id, notes string, from 
 		b.mu.Unlock()
 		return notes, at, nil
 	}
+	if d.NotesInEffect == nil && before != nil && before.Notes == d.Notes {
+		// Until this save every send rendered the notes as they were, so that is what the leader runs on.
+		block := prompts.RenderDirectionNotes(*before)
+		d.NotesInEffect = &block
+	}
 	d.Notes = notes
+	if d.NotesLastAt == nil {
+		d.NotesLastAt = d.NotesAt // an older record
+	}
 	if notes == "" {
-		d.NotesAt = nil
+		d.NotesAt = nil // NotesLastAt stays: the next save comes after it
 	} else {
-		at := nextNotesAt(d.NotesAt, time.Now())
-		d.NotesAt = &at
+		now := time.Now
+		if b.now != nil {
+			now = b.now
+		}
+		at := nextNotesAt(d.NotesLastAt, now())
+		d.NotesAt, d.NotesLastAt = &at, &at
 	}
 	at := d.NotesAt
 	s.saveDirectionsLocked(ctx)
@@ -206,7 +226,14 @@ func directionLang(l i18n.Lang) string {
 // direction's block after them, as notesInEffect has it for a send that finds the leader idle or not. Not a leader, or
 // no notes: the policy as it is.
 func (s *Service) leaderPolicy(ctx context.Context, id, policy string, idle bool) string {
-	if policy == "" || id == "" || !slices.Contains(s.settings(ctx).Leaders, id) {
+	if policy == "" || id == "" {
+		return policy
+	}
+	if !slices.Contains(s.settings(ctx).Leaders, id) {
+		// No leader now (an ended direction that still supervises its tasks): no notes block. A send that finds it
+		// idle records that, so a direction made again starts from what the conversation runs on, not from the block
+		// it had before it ended (#11392).
+		s.notesInEffect(ctx, id, "", idle)
 		return policy
 	}
 	if block := s.notesInEffect(ctx, id, prompts.RenderDirectionNotes(s.directionPrompt(ctx, id)), idle); block != "" {
@@ -215,11 +242,13 @@ func (s *Service) leaderPolicy(ctx context.Context, id, policy string, idle bool
 	return policy
 }
 
-// notesInEffect is the notes block leader id's policy carries on this send (#11392). A send that finds the leader idle
-// takes block, the notes as they are now, and keeps it with the direction's record as the block in effect; any other
-// send takes the block in effect, so notes saved while the leader works wait for its first idle send instead of
-// changing the policy of a process at work (the node refuses that send, and the owner's message was not kept). Kept
-// in the record, it outlives a manager restart. A record without one yet (from before, or none) takes block.
+// notesInEffect is the notes block conversation id's policy carries on this send (#11392). A send that finds it idle
+// takes block (a leader's notes as they are now; "" for a conversation that is no leader) and keeps it with the
+// direction's record as the block in effect; any other send takes the block in effect, so notes saved while the
+// leader works wait for its first idle send instead of changing the policy of a process at work (the node refuses
+// that send, and the owner's message was not kept). Kept in the record, it outlives a manager restart. A record
+// without one yet takes block: no send recorded one and no notes were saved since (setDirectionNotes sets the
+// baseline), so block is what every send gave it.
 func (s *Service) notesInEffect(ctx context.Context, id, block string, idle bool) string {
 	b := &s.directions
 	b.mu.Lock()
