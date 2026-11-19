@@ -42,7 +42,9 @@ type PlanTask struct {
 	WaitInputID string `json:"wait_input_id,omitempty"`
 	Title       string `json:"title"`
 	Prompt      string `json:"prompt"`
-	Machine     string `json:"machine"`
+	// Context supplies relevant facts the manager cannot resolve from the project.
+	Context string `json:"context,omitempty"`
+	Machine string `json:"machine"`
 	// InboxItem explicitly names the handed-off item this task is for, never the conversation's latest item.
 	InboxItem string `json:"inbox_item,omitempty"`
 	// InboxHandoff is the hub-owned operation validated when the plan was made.
@@ -65,6 +67,7 @@ type PlanTask struct {
 	Launcher          string `json:"launcher,omitempty"`
 	Model             string `json:"model,omitempty"`
 	Effort            string `json:"effort,omitempty"`
+	Speed             string `json:"speed,omitempty"`
 	Tier              string `json:"tier,omitempty"`
 	Permission        string `json:"permission,omitempty"`
 	// Ultracode: the agent starts with Claude Code's ultracode on (#12). A pointer so that an edit from the card can

@@ -342,6 +342,8 @@ func (s *Service) launcherRoutes() {
 			apierr.Call(w, err)
 			return
 		}
+		// A node from before the cleanup still answers with the terminal's escapes and startup noise in it.
+		cleanCheck(&res)
 		if res.OK {
 			s.recordTestPassed(ctx, machine, r.PathValue("name"), res, observed)
 		}
@@ -552,6 +554,9 @@ func (s *Service) machineLauncherRoutes() {
 		if _, ok := s.device(ctx, mid); !ok {
 			apierr.Write(w, http.StatusNotFound, errUnknownMachine)
 			return
+		}
+		if host := r.URL.Query().Get("host"); launcherPurpose(ctx) == "" && (host == "agy" || proto.IsEngineHost(host)) {
+			ctx = context.WithValue(ctx, launcherModelHostKey{}, host)
 		}
 		res, err := s.askLauncherModels(ctx, mid, r.PathValue("name"), r.URL.Query().Get("refresh") == "1")
 		if err != nil {

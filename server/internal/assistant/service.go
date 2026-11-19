@@ -193,19 +193,20 @@ type Service struct {
 	// briefsOptional: task_plan takes a task without done_when / expect_minutes (briefRequired). Only the tests of
 	// what a plan does once it exists set it; the hub never does.
 	briefsOptional bool
-	background     backgroundBook // supervise_background.go
-	autoRuns       autoReviewBook // supervise_autoreview.go
-	reports        reportBook     // reports.go
-	upReports      reportRate     // agent_control.go: report_to_supervisor
-	noteRate       reportRate     // todo_decisions.go: todo_decision_add
-	dispatch       dispatchBook   // dispatch.go: dispatch_start, dispatch_read
-	admission      admissionBook  // admission.go: execution-agent resource and direction gate
-	adoptMu        sync.Mutex     // agent_control.go: one agent_supervise at a time
-	placeBook      placeBook      // places.go
-	accept         acceptBook     // acceptance.go
-	pushQuiet      quietSwitch    // push_quiet.go: the hub's low-distraction switch as last read
-	deploy         deployProbe    // deploy_check.go: is the work in the running hub
-	parkReplies    parkReplyBook  // park_reply.go: bounded source reads for explicitly bound person replies
+	background     backgroundBook    // supervise_background.go
+	autoRuns       autoReviewBook    // supervise_autoreview.go
+	sessionReviews sessionReviewBook // agents_session_review.go
+	reports        reportBook        // reports.go
+	upReports      reportRate        // agent_control.go: report_to_supervisor
+	noteRate       reportRate        // todo_decisions.go: todo_decision_add
+	dispatch       dispatchBook      // dispatch.go: dispatch_start, dispatch_read
+	admission      admissionBook     // admission.go: execution-agent resource and direction gate
+	adoptMu        sync.Mutex        // agent_control.go: one agent_supervise at a time
+	placeBook      placeBook         // places.go
+	accept         acceptBook        // acceptance.go
+	pushQuiet      quietSwitch       // push_quiet.go: the hub's low-distraction switch as last read
+	deploy         deployProbe       // deploy_check.go: is the work in the running hub
+	parkReplies    parkReplyBook     // park_reply.go: bounded source reads for explicitly bound person replies
 
 	reviewDismissals taskReviewDismissalBook // task_review_dismissals.go
 	repoRootsMu      sync.Mutex              // pr_number_ref.go: one write of the repository roots at a time
@@ -365,6 +366,7 @@ func New(o Options) *Service {
 	s.briefRoutes()
 	s.todoRoutes()
 	s.agentRoutes()
+	s.sessionReviewRoutes()
 	s.workspaceBoardRoutes()
 	s.navigationRoutes() // navigation.go: the page the apps open on
 	s.channelRoutes()
@@ -482,7 +484,7 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 			if origin != "" {
 				p["origin"] = origin
 			}
-			if method == DeviceSessionSend {
+			if method == DeviceSessionSend || method == DeviceSessionSendOnce {
 				cfg := s.settings(ctx)
 				if id != "" && id == cfg.Main && device == cfg.mainRouteMachine() {
 					p["is_main"] = true // internal sends must not restart main on ordinary-chat compaction settings
@@ -491,7 +493,7 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 		}
 	}
 	roundKind := "" // the round the message starts, when it is one the owner did not start (owner_preempt.go)
-	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceSessionSend) {
+	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceSessionSend || method == DeviceSessionSendOnce) {
 		if text, ok := p["text"].(string); ok {
 			source, _ := p["message_source"].(*proto.MessageSource)
 			if id, _ := p["session_id"].(string); source != nil && method == DeviceAssistantSend {
@@ -509,7 +511,7 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 			}
 		}
 	}
-	if p, ok := params.(map[string]any); ok && method == DeviceSessionSend {
+	if p, ok := params.(map[string]any); ok && (method == DeviceSessionSend || method == DeviceSessionSendOnce) {
 		if id, _ := p["session_id"].(string); id != "" {
 			s.workTold(device, id) // the turn it starts is this manager's doing, not the owner's hand (setup_suggest.go)
 		}
@@ -527,12 +529,12 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 			p["interject_background"] = true // what the node does with a message that comes while it answers
 		}
 	}
-	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceSessionSend) && p["is_main"] == true {
+	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceSessionSend || method == DeviceSessionSendOnce) && p["is_main"] == true {
 		p["idle_compaction"] = assistantwire.IdleCompaction{
 			Enabled: s.idleAutoCompact(ctx), IdleMinutes: s.idleAutoCompactMinutes(ctx), ContextTokens: s.idleAutoCompactTokens(ctx),
 		}
 	}
-	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || method == DeviceSessionSend) {
+	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || method == DeviceSessionSend || method == DeviceSessionSendOnce) {
 		// The window the main conversation is held to (main_compact_window.go), as sendModel puts it: a start, a relay,
 		// an internal message and the spare warmed for its next start carry it with is_main, or the node starts it again
 		// on its launcher's window (and never adopts the spare).
@@ -838,6 +840,9 @@ func (s *Service) snapshot(ctx context.Context) Snapshot {
 	snap.Work = s.workReport(ctx) // before the cards: they are read back with it
 	snap.Partial = snap.Partial || snap.Work == nil
 	snap.Interactions = append(s.pendingQuestions(), s.workCards()...)
+	reviewInteractions, reviewOK := s.sessionReviewInteractions(ctx)
+	snap.Interactions = append(snap.Interactions, reviewInteractions...)
+	snap.Partial = snap.Partial || !reviewOK
 	snap.Sessions = make([]SessionView, 0, len(views))
 	for _, v := range views {
 		snap.Sessions = append(snap.Sessions, *v)
@@ -856,6 +861,9 @@ func (s *Service) UserSpoke(ctx context.Context, r SessionRef) {
 
 func (s *Service) userSpokeText(ctx context.Context, r SessionRef, text string) {
 	s.availOwnerSpoke(r, time.Now()) // before anything else: what the conversation is doing as the message comes (availability.go)
+	if exitText(text) {
+		s.retireTodoWork([2]string{r.MachineID, r.SessionID}) // /exit or /quit starts no turn that could cancel the wake
+	}
 	s.agentDecisionSpoke(ctx, r, time.Now(), text)
 	s.ownerHeard(r.SessionID)
 	s.clearToolLoop([2]string{r.MachineID, r.SessionID}, loopUserInput)
@@ -908,8 +916,9 @@ func (s *Service) turnEnded(ctx context.Context, r SessionRef, meeting bool) {
 	if !meeting {
 		s.availTurnEnded(ctx, r.MachineID, r.SessionID, time.Now()) // an assistant conversation's round (availability.go)
 		s.afterSettle(context.WithoutCancel(ctx), s.taskTurnSettled, r.MachineID, r.SessionID)
-		// A review's reviewer answered (supervise_autoreview.go).
+		// A review's reviewer answered (supervise_autoreview.go, agents_session_review.go).
 		go s.autoReviewTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID)
+		go s.sessionReviewTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID)
 		go s.workTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID)    // its triage (agents_work_turns.go)
 		go s.channelTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID) // a channel's answer, the sync mirror
 	}

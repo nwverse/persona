@@ -98,8 +98,10 @@ func (n *Node) failedCodexSession(ctx context.Context, pane string, began time.T
 // Archive is attempted only after the launch's own pane has closed successfully.
 func (n *Node) closeFailedCodexStart(ctx context.Context, start codexAbandonedStart) error {
 	if err := closeCodexStart(ctx, start); err != nil {
+		n.logf("codex failed start pane %s: close failed: %v", start.created.Pane.String(), err)
 		return err
 	}
+	n.logf("codex failed start pane %s: closed", start.created.Pane.String())
 	if start.session == "" {
 		return nil
 	}
@@ -115,6 +117,7 @@ func (n *Node) closeFailedCodexStart(ctx context.Context, start codexAbandonedSt
 	for {
 		_, err := n.nativeArchive(cleanup, start.session, true)
 		if err == nil {
+			n.logf("codex failed start pane %s: native archive done for %s", start.created.Pane.String(), start.session)
 			n.unclaimCodexThread(start.session)
 			n.notifySessions()
 			return nil

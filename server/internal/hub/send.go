@@ -272,16 +272,23 @@ func (h *Hub) sendMessageOnce(w http.ResponseWriter, r *http.Request, m *Machine
 		if fresh {
 			hand.New, hand.MachineID, hand.Cwd = true, m.cfg.ID, start.cwd
 		}
-		decided, ok := h.todoHandoff(r.Context(), w, hand)
+		decided, images, ok := h.todoHandoff(r.Context(), w, hand)
 		if !ok {
 			return
 		}
 		if isText {
 			p["text"] = decided
+			if strings.TrimSpace(decided) != "" {
+				mergeTodoImages(p, images)
+			}
 		}
 	} else if fresh {
-		p["text"] = h.todoStartText(r.Context(), assistantwire.TodoHandoff{TodoID: start.todoID, Text: text, New: true,
+		decided, images := h.todoStartText(r.Context(), assistantwire.TodoHandoff{TodoID: start.todoID, Text: text, New: true,
 			MachineID: m.cfg.ID, Cwd: start.cwd})
+		p["text"] = decided
+		if strings.TrimSpace(decided) != "" {
+			mergeTodoImages(p, images)
+		}
 	}
 	if s, ok := m.session(sid); ok && (m.isAssistant(s) || isText && strings.TrimSpace(text) != "") {
 		// The manager also observes owner messages to Agents before delivery, so a task's decision default can pause.

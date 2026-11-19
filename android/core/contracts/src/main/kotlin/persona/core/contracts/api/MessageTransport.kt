@@ -30,7 +30,9 @@ data class MessageRequest(
 
 sealed interface MessageTransportResult {
     data object Accepted : MessageTransportResult
-    /** The manager has custody. Only a later transcript echo proves arrival at the Agent. */
+    /** The assistant kept the message to send later; its session row, not the local outbox, draws it now. */
+    data object Kept : MessageTransportResult
+    /** An offline Agent's manager has custody. Only a later transcript echo proves arrival. */
     data object Held : MessageTransportResult
     /** Only use this when no request bytes could have reached the hub. */
     data object NotSent : MessageTransportResult

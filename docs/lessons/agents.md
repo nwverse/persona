@@ -1,5 +1,11 @@
 # Lessons: Claude Code, Codex, and herdr
 
+## A one-start speed must not become a resume default (#11141)
+
+- Codex's per-start `service_tier` belongs only in the initial argv; validate it against the selected model's catalog rather than trusting Codex to refuse an unadvertised tier.
+- Claude Code fast mode needs `"fastMode": true` in the effective single `--settings` file. Give the initial command a merged copy and keep the base `claudeLaunch` spec for herdr's `resume_argv`, or an automatic resume silently inherits the billable choice. A shell function that supplies its own `--settings` cannot be merged: refuse fast mode rather than appending a fast-only file that would discard the function's credentials and model.
+- A new `session.start` field needs its own node capability: older nodes otherwise accept it and start at the launcher's speed. Faster speed on a resume or another runtime is a coded refusal before approval or launch.
+
 ## An account-sealed compaction needs a new conversation, not Continue (#10399)
 
 - Classify the permanent cause before trusting a runtime's generic transient kind or a gateway's status. Cancel
@@ -12,6 +18,7 @@
   evidence only, not deployment or proof that a real account-sealed conversation has disappeared from Needs you.
 - Keep permanent compaction errors separate from retryable tool-search refusals when merging error handling.
   Preserve both wire codes and both failed-turn tests; loading all tools can fix tool search, not account-sealed context.
+
 
 ## A deferred action on an agent belongs to its process, not its session id (#10296)
 
@@ -1259,6 +1266,20 @@ settings and session metadata for defaults and current values. A fixed catalog h
 external sessions. Treat ACP configuration responses and notifications as authoritative, publish acknowledged partial
 changes, and propagate failures. Native `auto` is distinct from full permission bypass.
 
+## ACP mode success is not the applied agy mode (#10980)
+
+agy can accept `session/set_mode` yet apply `default` because native Auto is unavailable. Treat the direct mode result or
+`current_mode_update` as the answer, not a model's trailing `config_option_update`; otherwise accepted Auto can be mistaken
+for a refusal. When Auto is refused, apply the existing `bypassPermissions` path through native `accept-edits`, wait for
+that fallback before answering a permission, publish the final mode and emit one notice. An acknowledgement of `auto` can
+precede a delayed `default`, so only a newer non-Auto choice ends that correlation. Serialize the fallback with newer
+explicit mode changes, reapply an explicit mode if native settings diverge from it, and recheck interruption after every
+fallback wait. Keep whether a mode was explicit or came from agy's settings: explicit choices survive settings changes,
+while settings-derived sessions reread and reapply `configuredMode()` before the next prompt. A notice sent only with
+`rt.append` disappears on refetch; keep it in the item projection at a stable sequence as later native steps arrive, and
+retain the native step index separately for output files and client-message bindings. Cover direct and notification
+refusals, repeated starts, all three asking modes, settings changes, notice reloads and en / zh-Hans / ja localization.
+
 ## Runtime availability checks need the runtime's authentication context (#3790)
 
 An SSH node and a local companion can have different credential access. A model list and session start succeeding in
@@ -1476,6 +1497,8 @@ can contain multiple workspaces sharing a directory; importing a pin into `pins.
 the timestamp on the workspace catalog and match machine, source and source ID. An unpin must also release retained
 old sessions even if pin and unpin happen before the coalesced catalog push: a session push can observe the temporary
 pin while the final catalog bytes equal the earlier unpinned snapshot.
+
+- **Separate assignment data from framework policy (#10200).** Let the manager supply matching project background once; callers add only facts it cannot resolve. Preserve attachment suffixes when a launcher falls back to first-message rules. A dedicated instruction channel must survive resume and must suppress duplicate SessionStart closeout guidance. Never replace a configured Codex developer policy to obtain a cleaner transcript: fall back conservatively. Herdr refuses apostrophes even inside quoted restore arguments; encode them as TOML Unicode escapes, and use a persistent file for Claude's multiline policy. One new closeout can carry delivery, gate and responsible party while both historical formats remain readable.
 
 ## A transcript directory is not the selected launcher's sign-in
 

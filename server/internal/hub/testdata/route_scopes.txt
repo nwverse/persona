@@ -322,6 +322,7 @@ agents.read          GET /api/v1/sessions/{mid}/{sid}/items/{iid}/full
 agents.read          GET /api/v1/sessions/{mid}/{sid}/items/{iid}/image
 agents.read          GET /api/v1/sessions/{mid}/{sid}/items/{iid}/visualization
 -                    GET /api/v1/sessions/{mid}/{sid}/mode-changes
+-                    GET /api/v1/sessions/{mid}/{sid}/review
 agents.read          GET /api/v1/sessions/{mid}/{sid}/screen
 -                    GET /api/v1/sessions/{mid}/{sid}/share-catalog
 -                    GET /api/v1/sessions/{mid}/{sid}/share-preview/{preview_id}
@@ -338,6 +339,7 @@ todos.read           GET /api/v1/todos
 todos.read           GET /api/v1/todos/places
 todos.read           GET /api/v1/todos/{id}
 todos.read           GET /api/v1/todos/{id}/decisions
+-                    GET /api/v1/todos/{id}/images/{image}
 todos.read           GET /api/v1/todos/{id}/repositories
 todos.read           GET /api/v1/todos/{id}/timeline
 todos.read           GET /api/v1/todos/{id}/workspace-naming/plans/{operation_id}
@@ -606,6 +608,7 @@ agents.control       POST /api/v1/sessions/{mid}/{sid}/queue
 agents.control       POST /api/v1/sessions/{mid}/{sid}/queue/send-now
 agents.control       POST /api/v1/sessions/{mid}/{sid}/rename
 -                    POST /api/v1/sessions/{mid}/{sid}/restore-model
+-                    POST /api/v1/sessions/{mid}/{sid}/review
 -                    POST /api/v1/sessions/{mid}/{sid}/rewind
 -                    POST /api/v1/sessions/{mid}/{sid}/screen/before
 agents.control       POST /api/v1/sessions/{mid}/{sid}/seen

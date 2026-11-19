@@ -54,7 +54,7 @@ def features():
     return ["error_codes", "client_hello", "heartbeat", "app_ping", "client_msg_id", "send_refusals",
             "screen_dialog", "resumable_interactions", "secret_prompts", "request_id", "file_upload", "upload_attachment",
             "tls", "endpoints", "connectors", "lark_attachments", "file_stream", "file_thumb", "git_blob", "task_push", "task_inbox",
-            "machine_rename"] + ([] if os.environ.get("MOCK_MANAGERS") == "0" else ["sessions_manager"]) + (["git_write"] if os.environ.get("MOCK_GIT_WRITE") and os.environ.get("MOCK_GIT_WRITE_FEATURE") != "0" else []) + (["git_review"] if os.environ.get("MOCK_REVIEW") else []) + (["terminal_stream"] if TERMINAL_STREAM else []) + (
+            "machine_rename"] + ([] if os.environ.get("MOCK_MANAGERS") == "0" else ["sessions_manager"]) + (["git_write"] if os.environ.get("MOCK_GIT_WRITE") and os.environ.get("MOCK_GIT_WRITE_FEATURE") != "0" else []) + (["git_review"] if os.environ.get("MOCK_REVIEW") else []) + (["session_review"] if os.environ.get("MOCK_AGENT_REVIEW") else []) + (["terminal_stream"] if TERMINAL_STREAM else []) + (
                 ["terminal_control", "terminal_scroll", "terminal_click", "terminal_mouse"] if TERMINAL_CONTROL else []) + (
                 ["terminal_panes", "pane_new_space"] if os.environ.get("MOCK_TERMINAL_PANES") else []) + (["herdr_client"] + ([] if os.environ.get("MOCK_TERMINAL_FULL_NOFOCUS") else ["herdr_focus"]) if TERMINAL_FULL else []) + (
                 ["assistant_compact", "assistant_main_new", "assistant_main_clear"] if os.environ.get("MOCK_MAIN_ACTIONS") == "1" else []) + (
@@ -66,7 +66,8 @@ def features():
                 ["preview"] if os.environ.get("MOCK_PREVIEW") else []) + (
                 ["task_cron"] if os.environ.get("MOCK_CRON") == "1" else []) + (
                 [] if os.environ.get("MOCK_TODO_SEEN") == "off" else ["todo_seen"]) + (
-                [] if os.environ.get("MOCK_LOOK_UPLOADS") == "off" else ["look_uploads"])
+                [] if os.environ.get("MOCK_LOOK_UPLOADS") == "off" else ["look_uploads"]) + (
+                [] if os.environ.get("MOCK_TODO_IMAGES") == "off" else ["todo_images"])
 
 
 def identity():
@@ -903,6 +904,13 @@ if os.environ.get("MOCK_BYPASS_AVAILABLE") == "1":
 # agent waits until it is idle) the "restart" comes up in it, with bypass_available. Any other mode drops it: the mode it
 # runs in calls it off (cancelled, #11089), another replaces it.
 BYPASS_RESTART_SECONDS = float(os.environ.get("MOCK_BYPASS_RESTART_SECONDS") or 6)
+
+# MOCK_BYPASS_PENDING=1 (#6513): the widget agent (working, in Auto-Edit) already has Allow All picked and waits for its
+# turn to end before the restart (bypass_pending), so the apps' pending state can be screenshotted without a pick. It
+# stays pending: the restart above never runs for it.
+if os.environ.get("MOCK_BYPASS_PENDING") == "1":
+    for _s in SESSIONS:
+        if _s["session_id"] == WIDGET: _s["bypass_pending"] = True
 
 
 # The machine's record of permission mode changes (#10297, GET /api/v1/sessions/{mid}/{sid}/mode-changes): what /modes
@@ -3186,6 +3194,57 @@ if os.environ.get("MOCK_TODO_BADGE") == "1":
         _badge_todo("tb_errand", "给家里的 NAS 换硬盘", 90),
     ]
 
+# MOCK_TODO_WAITS=1 (#11090, docs/assistant/todos.md "State calculation rules"): only these to-dos, one per thing a
+# waiting to-do can wait on, each with one Agent whose turn ended while something brings it back (task Waiting): a
+# decision only the owner can make and work held for their OK (Waiting on you, in the attention color; the sidebar's
+# badge 2), another Agent's merge, a merge behind CI, an outside review, its own background work, the hub's retry after
+# a moment's model failure, and a wait the hub checks back on without naming it (Paused, nothing needed from you). The
+# words are made up.
+if os.environ.get("MOCK_TODO_WAITS") == "1":
+    def _wait_agent(n, title, last, work=None, **kw):
+        sid = f"c3d5e7f9-0000-4000-8000-{11090000 + n:012d}"
+        state = "working" if kw.get("background_working") else "idle"
+        SESSIONS.append(sess("macbook", sid, title, "/Users/me/code/site", "done", state, "site", 9, "1", n, 4 + n, last,
+                             **({"work": work} if work else {}), **kw))
+        return {"machine_id": "macbook", "session_id": sid, "linked_at": ago(minutes=50), "released_at": None, "title": title,
+                "cwd": "/Users/me/code/site", "agent": "claude", "start_error": "", "source": "spawned", "via": ""}
+
+    def _wait_todo(tid, title, minutes, agent, **kw):
+        t = {"id": tid, "title": title, "notes": "", "done_at": None, "created_at": ago(minutes=minutes + 60),
+             "updated_at": ago(minutes=minutes), "origin": "conv_demo", "spaces": [], "agents": [agent], "priority": ""}
+        t.update(kw)
+        return t
+
+    def _blocked(on, line, wait="", wake=10, **kw):
+        w = {"phase": "blocked", "on": on, "line": line, **kw}
+        if wait:
+            w["wait"] = wait
+        if wake:
+            w["wake_at"] = ago(minutes=-wake)
+        return w
+
+    TODOS_INIT[:] = [
+        _wait_todo("tw_decide", "博客首页改版", 2, _wait_agent(1, "博客首页", "两种封面都做好了，等你挑一个。",
+                   _blocked("external", "等预览部署好", "预览部署")),
+                   ask={"outcome": "decide", "verdict": "🤔 首页封面用大图还是网格？", "asked_at": ago(minutes=2),
+                        "question": "首页封面用大图还是网格？", "recommend": "大图",
+                        "options": [{"label": "大图", "leads_to": "首屏只放一篇"}, {"label": "网格", "leads_to": "首屏放六篇"}]}),
+        _wait_todo("tw_held", "设置页上线", 3, _wait_agent(2, "设置页", "已合入，后台在跑上线前检查。", background_working=True),
+                   delivery={"state": "merged", "gate": "上线前要你确认", "unblock": "user", "at": ago(minutes=3)}),
+        _wait_todo("tw_prereq", "登录页接入新接口", 4, _wait_agent(3, "登录页", "接口那边的 PR 合入后我再 rebase。",
+                   _blocked("agent", "等接口那边的 Agent 合入", "接口 PR 合入"))),
+        _wait_todo("tw_merge", "修复导出报表", 5, _wait_agent(4, "导出报表", "PR 已推上去，CI 绿了就合并。",
+                   _blocked("external", "等 CI 跑完再合并", "CI 跑完")),
+                   delivery={"state": "pr", "gate": "CI", "unblock": "other", "at": ago(minutes=5)}),
+        _wait_todo("tw_review", "提交商店审核", 6, _wait_agent(5, "商店审核", "已提交，等审核结果。",
+                   _blocked("external", "等商店审核结果", "审核结果", wake=60))),
+        _wait_todo("tw_bg", "整理崩溃日志", 7, _wait_agent(6, "崩溃日志", "崩溃日志在后台归类，跑完我再汇总。", background_working=True)),
+        _wait_todo("tw_retry", "生成周报", 8, _wait_agent(7, "周报", "模型服务暂时出错，稍后自动重试。",
+                   _blocked("transient", "模型服务暂时出错，自动重试", wake=1, attempts=1, max=3))),
+        _wait_todo("tw_unknown", "同步日历", 9, _wait_agent(8, "同步日历", "先停在这里，过会儿再看。",
+                   _blocked("external", "", wake=30))),
+    ]
+
 # MOCK_TODO_CONCERNS=1 (#3582): one concern working, one waiting for its report in Other open, and one closed by its
 # report, for the To-dos list's light / dark captures. "only" keeps just these to-dos so the working one is within
 # Home's six cards, and links it to its Agent's space for the Space page capture. The dedicated agent keeps the rest of
@@ -3345,6 +3404,10 @@ def decorated_session(s):
     else:
         s_copy.pop("todo", None)
     return s_copy
+
+
+# Uploaded to-do images (#11084): bytes by (to-do id, image id), kept only by this synthetic hub.
+TODO_IMAGE_DATA = {}
 
 
 def format_todo(t):
@@ -10690,6 +10753,8 @@ def mock_interactions():
     with REQUEST_LOCK:
         seen = {x["id"] for x in INTERACTIONS}
         out = list(INTERACTIONS) + [x for x in MOCK_INTERACTIONS if x["id"] not in seen]
+        if AGENT_REVIEW and (review_card := mock_agent_review.card()) is not None and review_card["id"] not in seen:
+            out.append(review_card)
         # MOCK_TASKS_NO_ASKS=1: the tasks' agents ask nothing, so the conversation shows above the composer whole.
         if os.environ.get("MOCK_TASKS_NO_ASKS") == "1":
             out = [x for x in out if x.get("session_id") not in (TESTS, WIDGET, RELEASE)]
@@ -10937,6 +11002,8 @@ def renew_requests(minutes):
 def resolve_mock_interaction(request_id, resolution):
     with REQUEST_LOCK:
         request = next((r for r in mock_interactions() if r["id"] == request_id), None)
+        if AGENT_REVIEW and request_id.startswith("review_"):
+            mock_agent_review.note_answer(resolution)
         if request is not None:
             for lst in (MOCK_INTERACTIONS, INTERACTIONS):
                 lst[:] = [x for x in lst if x["id"] != request_id]
@@ -15947,18 +16014,18 @@ def _link_payload(data):
 
 
 def _paste_link(t):
-    """(drafts, notes) of an import link (t trimmed), None when t is no link: one word, cindy:// or an http(s) address
-    whose fragment has import. A link going on after a blank is one a chat app broke: refused whole."""
+    """(drafts, notes) of an import link (t trimmed), None when t is no link: one word, cindy://, persona:// or an
+    http(s) address whose fragment has import. A link going on after a blank is one a chat app broke: refused whole."""
     word = re.split(r"\s", t, maxsplit=1)[0]
-    head = word[:8].lower()
-    if not head.startswith(("cindy://", "http://", "https://")): return None
-    cindy = head.startswith("cindy://")
-    part = word[len("cindy://"):] if cindy else word.partition("#")[2]  # what follows cindy://, a web link's fragment
-    if not cindy and "import" not in _link_query(part)[0]: return None
+    head = word[:10].lower()
+    if not head.startswith(("cindy://", "persona://", "http://", "https://")): return None
+    scheme = "persona://" if head.startswith("persona://") else "cindy://" if head.startswith("cindy://") else ""
+    part = word[len(scheme):] if scheme else word.partition("#")[2]  # what follows the scheme, a web link's fragment
+    if not scheme and "import" not in _link_query(part)[0]: return None
     try:
         if word != t: _link_bad()  # which part of a broken link is its data is unknown
         if len(part.encode()) > LINK_MOST: _link_bad(code="link_too_long")
-        if cindy:
+        if scheme:
             path, sep, q = part.partition("?")
             if not sep or path != "provider/import" or "#" in part: _link_bad()
             data = _link_data(q, "data", True)
@@ -20979,6 +21046,10 @@ MOCK_REPO = "code/weather"
 # MOCK_REVIEW=1 (#151): git/review answers for this checkout (mock_review.py), with the files its review shows on disk.
 # Not `REVIEW`: that is the PR #42 review agent's session id, which later code (MOCK_AGENT_LIVE, MOCK_IMAGES…) still uses.
 GIT_REVIEW = bool(os.environ.get("MOCK_REVIEW"))
+AGENT_REVIEW = bool(os.environ.get("MOCK_AGENT_REVIEW"))
+if AGENT_REVIEW:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import mock_agent_review
 if GIT_REVIEW:
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import mock_review
@@ -25273,6 +25344,8 @@ def markets_route(handler, p, body):
                     "placement": "nav_page", "size": "full", "icon": "gauge"}]
         if GRAPH_MODE and placement in ("", "nav_page"):
             ui += [{"plugin": "example-work", "plugin_name": "Example Work", "id": "work", "title": "Work",
+                    "placement": "nav_page", "size": "full", "icon": "branch"},
+                   {"plugin": "example-work", "plugin_name": "Example Work", "id": "control-room", "title": "Control room",
                     "placement": "nav_page", "size": "full", "icon": "branch"}]
         if GRAPH_MODE and placement in ("", "overview_card"):
             ui += [{"plugin": "example-work", "plugin_name": "Example Work", "id": "work-card", "title": "Work",
@@ -26226,8 +26299,16 @@ if OWN_SERVICE_SKIP:
 class H(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
+    def parse_request(self):
+        self.network_checked = False  # bad_network, once each request on a kept-alive connection
+        return super().parse_request()
+
     def bad_network(self):
-        """True when the hub is "down" (the connection is closed without an answer); otherwise waits out the delay."""
+        """True when the hub is "down" (the connection is closed without an answer); otherwise waits out the delay.
+        Once a request: a domain route that hands it on (scripts/mock/mock_domains.py) has already waited."""
+        if getattr(self, "network_checked", False):
+            return False
+        self.network_checked = True
         if time.time() < NET["down_until"]:
             self.close_connection = True
             return True
@@ -26388,6 +26469,8 @@ class H(BaseHTTPRequestHandler):
             return self.send_json({"ok": True, "sent": fs_changed(mid, [path] if add else [], git), "path": path})
         if p == "/mock/review" and GIT_REVIEW:
             return self.send_json(mock_review.control(q))
+        if p == "/mock/agent-review" and AGENT_REVIEW:
+            return self.send_json(mock_agent_review.control(q))
         if p == "/mock/git-write" and os.environ.get("MOCK_GIT_WRITE"):
             global GIT_W
             if q.get("reset"): GIT_W = git_write_fresh()
@@ -26636,6 +26719,20 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/v1/todos": return self.send_json({"todos": sorted_todos()})
         if p.startswith("/api/v1/todos/") and p.endswith("/decisions") and p.count("/") == 5:
             return self.send_json(*todo_decisions_route("GET", unquote(p.split("/")[4]), None, q, {}))
+        m = re.fullmatch(r"/api/v1/todos/([^/]+)/images/([^/]+)", p)
+        if m:
+            tid, image_id = m.groups()
+            raw = TODO_IMAGE_DATA.get((tid, image_id))
+            if raw is None: return self.send_json({"error": "image not found"}, 404)
+            todo = next((x for x in TODOS if x["id"] == tid), {})
+            meta = next((x for x in todo.get("images", []) if x["id"] == image_id), {})
+            self.send_response(200)
+            self.send_header("Content-Type", meta.get("mime") or "application/octet-stream")
+            self.send_header("Content-Length", str(len(raw)))
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Cache-Control", "private, no-store")
+            self.end_headers(); self.wfile.write(raw)
+            return True
         if p.startswith("/api/v1/todos/") and p.count("/") == 4:
             tid = p.split("/")[4]
             t = next((x for x in TODOS if x["id"] == tid), None)
@@ -26644,6 +26741,9 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/v1/interactions":
             HELLO["request_client"] = self.headers.get("X-Persona-Client")
             return self.send_json({"interactions": out_by_machine(mock_interactions())})
+        review_match = AGENT_REVIEW and re.fullmatch(r"/api/v1/sessions/([^/]+)/([^/]+)/review", p)
+        if review_match:
+            return self.send_json(mock_agent_review.state())
         if p == "/api/v1/fleet":
             return self.send_json({"fleet": mock_fleet() if MOCK_FLEET else {"phase": "", "needsYou": 0, "working": 0, "unread": 0, "items": []}})
         if p == "/api/v1/interactions/history":
@@ -26702,7 +26802,6 @@ class H(BaseHTTPRequestHandler):
             ARCHIVE_CLOSE["mode"] = q.get("close", [""])[0]
             return self.send_json({"close": ARCHIVE_CLOSE["mode"], "archived": [x["session_id"] for x in ARCHIVED_AGENTS]})
         if p == "/mock/reset":  # MachinePagesTests: each test starts from the same machines
-            DOMAINS.reset()
             BOTMUX_ON.clear()
             TAB_NAMES.clear()  # TerminalsRenameUITests: the tabs' own names again
             machine_alerts.reset()  # cleaned caches and launcher checks (#8037)
@@ -26774,6 +26873,7 @@ class H(BaseHTTPRequestHandler):
                 QUEUED_PHOTOS["请看图片"] = [photo for _ in range(int(q.get("photos", ["1"])[0] or 1))]
                 QUEUE_EDITS.clear()
                 push_machine(ASSISTANT[0]["machine_id"])
+            DOMAINS.reset()  # last, so a domain's hook can put back what the reset above rebuilt
             return self.send_json({"ok": True})
         if p == "/mock/session_close":
             if "fail" in q: SESSION_CLOSE["fail"] = q["fail"][0] == "1"
@@ -27821,6 +27921,20 @@ class H(BaseHTTPRequestHandler):
             }
             err = apply_todo_plan(new_todo, body)
             if err: return self.send_json({"error": err}, 400)
+            images = []
+            for position, image in enumerate(body.get("images") or []):
+                image_id = image.get("id") or str(uuid.uuid4())
+                try:
+                    raw = base64.b64decode(image.get("data") or "", validate=True)
+                except (ValueError, TypeError):
+                    return self.send_json({"error": "image data must be base64"}, 400)
+                if not raw or image.get("mime") not in ("image/png", "image/jpeg"):
+                    return self.send_json({"error": "image must be PNG or JPEG"}, 400)
+                TODO_IMAGE_DATA[(new_todo["id"], image_id)] = raw
+                images.append({"id": image_id, "mime": image["mime"], "width": 1, "height": 1,
+                               "name": image.get("name") or "", "size": len(raw),
+                               "url": f"/api/v1/todos/{new_todo['id']}/images/{image_id}"})
+            if images: new_todo["images"] = images
             TODOS.insert(0, new_todo)
             push_todos()
             return self.send_json({"todo": new_todo})
@@ -29139,6 +29253,10 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/v1/bots/feishu/test": return self.send_json({"ok": True})
         if p.startswith("/api/v1/interactions/") and p.endswith("/reanswer") and p.count("/") == 5:
             return self.send_json(*mock_reanswer(p.split("/")[4], json.loads(self.last_body or b"{}")))
+        review_match = AGENT_REVIEW and re.fullmatch(r"/api/v1/sessions/([^/]+)/([^/]+)/review", p)
+        if review_match:
+            body, status = mock_agent_review.start(review_match[1], review_match[2])
+            return self.send_json(body, status)
         if p.startswith("/api/v1/interactions/") and p.endswith("/resolve"):  # notification buttons (UI test reads it back)
             # MOCK_RESOLVE=slow holds every answer for 6 s before it goes through; =fail refuses it with a 400 (nothing is
             # resolved): an answer being sent, and one that failed (#6279). GET /mock/resolve-mode?mode=ok|slow|fail switches it.
@@ -30594,6 +30712,8 @@ def plugins_route(handler, p, body):
     if PLUGINS_MODE and GRAPH_MODE and p in ("/api/v1/extensions/example-work/-/ui/work",
                                              "/api/v1/extensions/example-work/-/ui/work-card"):
         return mock_work(handler, body, card=p.endswith("-card"))
+    if PLUGINS_MODE and GRAPH_MODE and p == "/api/v1/extensions/example-work/-/ui/control-room":
+        return mock_control_room(handler, body)
     if PLUGINS_MODE and p == "/api/v1/extensions/showcase/-/ui/motion":
         handler.send_json({"view": _motion_view(_MOTION_STEP[0])})
         return True
@@ -30854,6 +30974,82 @@ def mock_work(handler, body, card=False):
     if card:
         view = {"title": "Work", "sections": [{"key": "work", "items": [_work_graph(_WORK_DRAWS[0])]}]}
     handler.send_json({"view": view})
+    return True
+
+
+# MOCK_EXTENSION_GRAPH=1, the "control room" page (#11234): a made-up parallel workflow with the inspector and timeline
+# fields in full — one root, a Plan, a Parallel Sweep fanning out to thirty workers and three grouped candidates, and a
+# Verify stage with its verifier. The timestamps span the last eighteen minutes and two workers are still running (no
+# ended_at), so the wall-clock timeline draws a real fan-out with stragglers; the verifier, still running with its
+# feedback, is selected and carries facts and session links. Thirty-eight nodes, all names invented, every URL a
+# placeholder host. Tapping a node pushes its own page, as on the Work page.
+def _control_room_graph():
+    now = int(time.time())
+    base = now - 18 * 60
+    nodes, edges = [], []
+
+    def add(nid, title, parent=None, at=0, **extra):
+        nodes.append({"id": nid, "title": title, "started_at": base + at, **extra,
+                      "action": {"id": "open", "values": {"id": nid}, "push": {"ui": "work", "state": nid}}})
+        if parent:
+            edges.append({"from": parent, "to": nid})
+
+    add("root", "Ship the billing release", subtitle="3 stages · 36 steps", icon="list",
+        badge={"text": "Running", "tone": "caution"}, tone="caution", progress=0.62,
+        facts=[{"label": "Owner", "value": "Dev box"}, {"label": "Attempts", "value": "2"}],
+        detail="Three stages run at once; the verifier reviews both attempts before sign-off.")
+    add("plan", "Plan", "root", at=0, ended_at=base + 95, icon="list", tone="positive",
+        badge={"text": "Done", "tone": "positive"})
+    add("sweep", "Parallel Sweep", "root", at=70, icon="branch", tone="caution",
+        badge={"text": "Running", "tone": "caution"}, progress=0.5,
+        detail="Thirty workers and three candidate fixes sweep the flaky checkout path together.")
+    add("verify", "Verify", "root", at=95, icon="check", badge={"text": "Reviewing", "tone": "caution"},
+        detail="Two attempts are compared; the faster one moves on.")
+    for i in range(1, 31):
+        nid = f"w{i:02d}"
+        started = 140 + (i - 1) * 26
+        running = i in (27, 30)
+        extra = {
+            "icon": "list",
+            "subtitle": "Checkout retry path",
+            "facts": [{"label": "Files", "value": str(2 + i % 5)}, {"label": "Tests", "value": "passing" if i % 7 else "1 failing"}],
+        }
+        if running:
+            extra.update(tone="caution", badge={"text": "Running", "tone": "caution"}, progress=0.45)
+        elif i == 14:
+            extra.update(tone="danger", badge={"text": "Failed", "tone": "danger"},
+                         detail="Retries storm past 40 in one second; the backoff is capped too low.")
+        else:
+            extra.update(tone="positive", badge={"text": "Done", "tone": "positive"})
+            extra["ended_at"] = base + started + 55 + (i * 7) % 70
+        add(nid, f"Worker {i:02d}", "sweep", at=started, **extra)
+    for i in range(1, 4):
+        add(f"c{i}", f"Candidate {i}", "sweep", at=330 + i * 40, group="Candidates", icon="branch", tone="caution",
+            badge={"text": "Candidate", "tone": "caution"}, subtitle="Same task, a different way",
+            detail=f"Attempt {i} narrows the retry window instead of widening it.")
+    add("v1", "Verifier", "verify", at=now - base - 130, icon="check", tone="danger",
+        badge={"text": "Blocked", "tone": "danger"}, progress=0.7,
+        subtitle="Reviews both attempts",
+        facts=[{"label": "Attempt 1", "value": "fails on retries"}, {"label": "Attempt 2", "value": "still running"},
+               {"label": "Verdict", "value": "waiting"}],
+        detail="Attempt 1 fails on the retry storm; attempt 2 is still running. Sign-off waits for it.")
+    nodes[-1]["links"] = [
+        {"title": "Attempt 1 · Work session", "url": "https://hub.example.com/s/dev-box/session-work-1"},
+        {"title": "Attempt 1 · Verifier session", "url": "https://hub.example.com/s/dev-box/session-verify-1"},
+        {"title": "Attempt 2 · Work session", "url": "https://hub.example.com/s/dev-box/session-work-2"}]
+    return {"type": "graph", "key": "control-room", "nodes": nodes, "edges": edges, "selected": "v1"}
+
+
+def mock_control_room(handler, body):
+    request = json.loads(body) if body else {}
+    node = (request.get("values") or {}).get("id") if request.get("action") == "open" else None
+    if node:
+        handler.send_json({"view": _work_view(0, node)})
+        return True
+    handler.send_json({"view": {"title": "Control room", "refresh_after": 30, "sections": [{"key": "control-room", "items": [
+        {"type": "header", "title": "Ship the billing release", "subtitle": "3 stages · 38 nodes · 2 running",
+         "badges": [{"text": "Running", "tone": "caution"}]},
+        _control_room_graph()]}]}})
     return True
 
 
