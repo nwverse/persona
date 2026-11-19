@@ -2439,6 +2439,7 @@ final class AppModel {
                 InboxStore.shared.reload()
                 TodoStore.shared.reload()
                 TasksStore.shared.reconnected()
+                SavedPromptStore.shared.reload()
             }
         }
         if plan.refetch { AgentSync.shared.schedule() }
@@ -2885,6 +2886,9 @@ final class AppModel {
             if isHub { InboxStore.shared.reload() }
         case .todos:
             if isHub { TodoStore.shared.reload() }
+        case .savedPrompts(let manager):
+            // another device changed the list: only the shown assistant's is read again (#9436)
+            if isHub, SavedPromptStore.concerns(eventManager: manager, shownManager: api?.shownManager) { SavedPromptStore.shared.reload() }
         case .personas:
             // The new tier's package is downloaded whole before the face changes (PersonaStore.load). The list changed
             // just now: a refresh already under way may have asked before, so it is read again after that one (#2405).
@@ -3053,6 +3057,7 @@ final class AppModel {
         case .agents: "agents"
         case .inbox: "inbox"
         case .todos: "todos"
+        case .savedPrompts: "assistant_saved_prompts"
         case .personas: "personas"
         case .look: "look"
         case .managers: "managers"
@@ -4347,6 +4352,8 @@ final class AppModel {
         InboxStore.shared.reload()
         TodoStore.shared.forget()
         TodoStore.shared.reload()
+        SavedPromptStore.shared.forget()
+        SavedPromptStore.shared.reload()
         followScope()
         // The avatar is the new hub's from now, before its list is read below: a card tapped meanwhile goes to it.
         personas.switchHub(api)
@@ -4382,6 +4389,9 @@ final class AppModel {
         if switched {
             if let a = assistantCurrent, let s = session(a), s.assistant, !s.isHealth, !assistantShows(s.manager) { assistantCurrent = assistantMain }
             assistantSwitches += 1
+            // the "/" list offers the new assistant's saved prompts, never the one before's (#9436)
+            SavedPromptStore.shared.forget()
+            SavedPromptStore.shared.reload()
         }
         let newChat = assistantNewChat
         Task {

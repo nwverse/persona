@@ -331,7 +331,8 @@ extension AlarmsTool {
     /// `-showAlarmSample`: on a device, asks for AlarmKit, cancels the alarms Persona set before, starts a 25-minute
     /// "Focus" timer as the tool does and, for `paused`, pauses it 3 s later. On the simulator (which cannot ring a
     /// timer and whose AlarmKit prompt varies by runtime), draws the same activity directly through ActivityKit with
-    /// the tool's own `attributes(label:timer:)`, so screenshots never depend on a system prompt.
+    /// the tool's own `attributes(label:timer:only:)` for the state it shows, so screenshots never depend on a system
+    /// prompt.
     static func showSample(paused: Bool) {
         Task {
             #if targetEnvironment(simulator)
@@ -356,7 +357,9 @@ extension AlarmsTool {
             ? .paused(.init(totalCountdownDuration: 1500, previouslyElapsedDuration: 301))
             : .countdown(.init(totalCountdownDuration: 1500, previouslyElapsedDuration: 0, startDate: now, fireDate: now.addingTimeInterval(1500)))
         let state = AlarmPresentationState(alarmID: UUID(), mode: mode)
-        if let activity = try? Activity.request(attributes: attributes(label: "Focus", timer: true), content: .init(state: state, staleDate: nil)) {
+        // The tool's own attributes, cut to the state drawn: both states are over ActivityKit's 4 KB for an app (#11058).
+        let sample = attributes(label: "Focus", timer: true, only: paused ? .paused : .countdown)
+        if let activity = try? Activity.request(attributes: sample, content: .init(state: state, staleDate: nil)) {
             sampleActivityID = activity.id
         }
     }
@@ -373,10 +376,16 @@ extension AlarmsTool {
         return id
     }
 
+    /// One of a timer's two states, for the DEBUG sample (`attributes(label:timer:only:)`).
+    enum TimerState { case countdown, paused }
+
     /// AlarmKit attributes with `Theme.accent` resolved once: a dynamic `Theme.accent` encodes to ~5.7 KB each (~23 KB
-    /// across the buttons and tint), exceeding ActivityKit's 4 KB limit. Resolving once keeps real timers and the DEBUG
-    /// sample on the exact same payload.
-    static func attributes(label: String, timer: Bool) -> AlarmAttributes<PersonaAlarmData> {
+    /// across the buttons and tint). A timer's still come to ~5.7 KB: each string carries its bundle and a sandbox
+    /// token (~0.5 KB), and each colour is an archived UIColor (~0.5 KB). AlarmKit's daemon starts the real ones and may
+    /// exceed 4 KB (docs/apple/live-activity.md "Alarms and timers (AlarmKit)"). An activity the app requests itself takes
+    /// at most 4 KB of attributes, so the DEBUG sample passes `only`, the one timer state it draws, and leaves out the
+    /// other (#11058); what it keeps is what a real timer gets in that state.
+    static func attributes(label: String, timer: Bool, only: TimerState? = nil) -> AlarmAttributes<PersonaAlarmData> {
         let accent = Color(Theme.accent.resolve(in: EnvironmentValues()))
         let title = LocalizedStringResource(stringLiteral: label)
         func button(_ text: String, _ symbol: String) -> AlarmButton {
@@ -387,8 +396,10 @@ extension AlarmsTool {
         if timer {
             presentation = AlarmPresentation(
                 alert: alert,
-                countdown: AlarmPresentation.Countdown(title: title, pauseButton: button(String(localized: "Pause [Persona Alarm]"), Theme.Icon.pause)),
-                paused: AlarmPresentation.Paused(title: title, resumeButton: button(String(localized: "Resume [Persona Alarm]"), Theme.Icon.run)))
+                countdown: only == .paused ? nil
+                    : AlarmPresentation.Countdown(title: title, pauseButton: button(String(localized: "Pause [Persona Alarm]"), Theme.Icon.pause)),
+                paused: only == .countdown ? nil
+                    : AlarmPresentation.Paused(title: title, resumeButton: button(String(localized: "Resume [Persona Alarm]"), Theme.Icon.run)))
         } else {
             presentation = AlarmPresentation(alert: alert)
         }

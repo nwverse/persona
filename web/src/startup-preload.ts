@@ -433,7 +433,12 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // environment against main b6b333e7e4. Main then went 16 B over (de8b2b4c41: en 479,423 B, ja 482,542 B, zh-Hans
 // 480,269 B); merged with it: en 474,792 B, ja 477,789 B, zh-Hans 475,645 B, 4,737 B of room. The budget stays.
 // Keep the stricter existing limit while combining these changes.
-export const FIRST_SCREEN_BUDGET = 482_526;
+// #10904: the overview's task cards name who works on each task, the lead Agent's computer, model and effort and "+N"
+// for the others (lib/home-tasks.ts leadAgent; views/Home.tsx taskAgentLine over the model pill's pillView, modelList and
+// effortTitle, and home.task_agents_more). 205 B in ja, measured in one environment against main e7a12f7323 (ja
+// 482,497 B to 482,702 B; en 479,378 B to 479,585 B, zh-Hans 480,224 B to 480,422 B). Main had 29 B of room, so the
+// budget is this ja size plus those 29 B.
+export const FIRST_SCREEN_BUDGET = 482_731;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
