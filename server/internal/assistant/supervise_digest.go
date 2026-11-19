@@ -618,7 +618,7 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 		// The files it handed over, copied to this conversation's computer (task_files.go, #10511); the receipt path
 		// usually did it already, and a copy here only fills in after a restart.
 		s.deliverTaskFiles(ctx, t, last.MachineID, s.conversationMachine(ctx, s.taskReceiver(ctx, t), ""), text)
-		e.Files = taskFileLines(s.taskFilesNow(t.ID))
+		e.Files = taskFilePrompts(s.taskFilesNow(t.ID))
 		if c, arts, ok := closeout.Parse(text); ok {
 			e.Closeout = &prompts.SuperviseCloseout{Status: c.Status, Waiting: c.Waiting, Merged: c.Merged, Deployed: c.Deployed,
 				Did: c.Did, Verified: c.Verified, Missing: c.Missing}

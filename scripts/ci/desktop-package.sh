@@ -49,3 +49,12 @@ else
   printf 'desktop-package: no signing certificate supplied; producing an explicitly unsigned development package\n'
   ci_run 'Desktop unsigned package' 2400 npm --prefix desktop run dist:unsigned -- "${args[@]}"
 fi
+if [[ "$target" == mac ]]; then
+  images=(desktop/release/Persona-*-mac-universal.dmg)
+  if [[ ${#images[@]} -ne 1 || ! -f "${images[0]}" ]]; then
+    printf 'desktop-package: FAIL expected exactly one universal macOS DMG\n' >&2
+    exit 1
+  fi
+  ci_run 'Desktop macOS 15 universal artifact' 180 python3 scripts/release/check_macos_artifact.py \
+    desktop/release/mac-universal/Persona.app "${images[0]}"
+fi
