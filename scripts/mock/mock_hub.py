@@ -900,7 +900,8 @@ if os.environ.get("MOCK_BYPASS_AVAILABLE") == "1":
 # Full access by a restart (#6476, node/mode_restart.go): Allow All picked for a terminal Claude Code whose process has
 # no bypass flag (bypass_available false) is not refused. Its row says a restart waits (bypass_pending) and keeps the
 # mode it runs in; once its turn is over (here: MOCK_BYPASS_RESTART_SECONDS, default 6, after an idle pick; a working
-# agent waits until it is idle) the "restart" comes up in it, with bypass_available. Any other mode drops it.
+# agent waits until it is idle) the "restart" comes up in it, with bypass_available. Any other mode drops it: the mode it
+# runs in calls it off (cancelled, #11089), another replaces it.
 BYPASS_RESTART_SECONDS = float(os.environ.get("MOCK_BYPASS_RESTART_SECONDS") or 6)
 
 
@@ -927,7 +928,8 @@ def bypass_restart(s, mode):
     """True when s takes mode by a restart (queued here); a pick of another mode drops one that waits."""
     if mode != "bypassPermissions":
         if mode and s.pop("bypass_pending", None):
-            note_mode_change(s, "restart_dropped", "bypassPermissions", reason="replaced")
+            note_mode_change(s, "restart_dropped", "bypassPermissions",
+                             reason="cancelled" if mode == s.get("permission_mode") else "replaced")
         return False
     if s.get("assistant") or s.get("agent") not in (None, "claude") or not s.get("pane_id") or s.get("bypass_available") \
             or s.get("permission_mode") == "bypassPermissions":
@@ -29244,7 +29246,8 @@ class H(BaseHTTPRequestHandler):
                     if bypass_restart(s, body.get("permission_mode")):
                         applied = {k: v for k, v in body.items() if k != "permission_mode"}
                         push_machine(s["machine_id"])
-                    if body.get("permission_mode"):
+                    # a pick of the mode it runs in already changed nothing: no row, as the manager keeps none (#11089)
+                    if body.get("permission_mode") and not (applied is body and body["permission_mode"] == before):
                         note_mode_change(s, "set", body["permission_mode"], **{"from": before, "applied": "now" if applied is body else "restart",
                                                                               "actor_kind": "device", "device_name": "Phone"})
                     s.update({k: v for k, v in applied.items() if k in ("permission_mode", "effort", "model") and v})
