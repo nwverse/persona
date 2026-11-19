@@ -104,7 +104,7 @@ jobs:
           PR_JSON: ${{ runner.temp }}/release-pr.json
           PR_NUMBER: ${{ steps.source.outputs.number }}
           MERGE_COMMIT: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
-          GIT_COMMIT: ${{ github.sha }}
+          GIT_COMMIT: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
         run: |
           set -euo pipefail
           if [[ "${{ github.event_name }}" = push ]]; then

@@ -61,6 +61,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn("> release-pr-list.json", text)
         self.assertNotIn("> release-pr-rest.json", text)
         self.assertIn('verify-pr --pr-json "$PR_JSON"', text)
+        self.assertIn("GIT_COMMIT: ${{ github.event.pull_request.merge_commit_sha || github.sha }}", text)
+        self.assertIn("COMMIT=\"$commit\" python3", text)
 
     def test_main_without_a_merged_release_pr_has_no_build_plan(self):
         text = PR.read_text()
