@@ -11,6 +11,8 @@ import persona.core.designsystem.failureReasonText
 import persona.feature.chat.ChatLinkContext
 import persona.feature.chat.ComposerUploadLimiter
 import persona.feature.chat.ForwardMessage
+import persona.feature.chat.ForwardPlacements
+import persona.feature.chat.RestoredPhotos
 import persona.feature.chat.R as ChatR
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -36,10 +38,10 @@ internal data class AgentSpacePreset(val machineId: String, val workspaceId: Str
 /**
  * What a caller fills in ahead (the knowledge base's "Open Agent"): [machineId] and [cwd] are picked when that machine is
  * online, [prompt] starts the first message; all of it can still be changed. [context] goes before the first message as it
- * is (a forwarded message's block, #3901).
+ * is (a forwarded message's block, #3901). [forwardedPhotos] is the matching in-memory handoff from that forward.
  */
 internal data class NewAgentPrefill(val machineId: String? = null, val cwd: String? = null, val prompt: String? = null,
-    val context: String? = null)
+    val context: String? = null, val forwardedPhotos: RestoredPhotos = ForwardPlacements.takeNewAgent(context))
 
 /** The forward block a required first message may stand in for: one the card can read. Null for no context, or unreadable. */
 internal fun usableForward(context: String?): String? =
@@ -290,6 +292,7 @@ internal class NewAgentViewModel(
     private var workspacesJob: Job? = null
     private val uploadJobs = mutableMapOf<String, Job>()
     private val uploadLimiter = ComposerUploadLimiter()
+    private var prefillPhotos = prefill?.forwardedPhotos ?: RestoredPhotos()
     init {
         // Whether the folder is in a Git repository, a moment after it stops changing (iOS `loadRepo`): New Agent's
         // worktree switch shows only then, and never for a tab in an existing space.
@@ -309,6 +312,8 @@ internal class NewAgentViewModel(
                 val pending = store.pending(service.scope)
                 val recents = recentSetups()
                 if (pending != null) {
+                    prefillPhotos.attachments.forEach { uploads?.discard?.invoke(it) }
+                    prefillPhotos = RestoredPhotos()
                     val r = pending.request
                     // Another agent's mode and effort are its launcher's own picks (#8261), never Claude Code's.
                     val claude = r.agentType == null
@@ -379,6 +384,13 @@ internal class NewAgentViewModel(
             tiers = emptyList(), profile = null, pickedTier = null, recent = emptyList(),
             browser = null, browsing = false, loading = true, error = null, models = NewAgentModels(), model = "", pickedSetup = null,
             workspaces = emptyList(), workspace = null, folderBeforeWorkspace = "", providerMode = "", providerEffort = "") }
+        val forwarded = prefillPhotos
+        if (forwarded.attachments.isNotEmpty() || forwarded.lost > 0) {
+            prefillPhotos = RestoredPhotos()
+            val lost = forwarded.lost + attach(forwarded.attachments, showLimit = false)
+            if (lost > 0) notice(AgentText(if (lost == 1) ChatR.string.chat_forward_photos_lost_one
+                else ChatR.string.chat_forward_photos_lost_other, lost))
+        }
         loadWorkspaces(id)
         machineJob = viewModelScope.launch {
             try {
@@ -772,13 +784,13 @@ internal class NewAgentViewModel(
     /** What the form's toast says (iOS `model.toast`): a pick not taken, an upload that failed. */
     val notices: Flow<AgentText> = noticeChannel.receiveAsFlow()
     fun notice(text: AgentText) { noticeChannel.trySend(text) }
-    /** Picked photos and files join the form and go to the computer picked, three at a time. */
-    fun attach(picked: List<persona.feature.chat.ComposerAttachment>) {
+    /** Picked photos and files join the form and go to the computer picked, three at a time. Returns how many did not fit. */
+    fun attach(picked: List<persona.feature.chat.ComposerAttachment>, showLimit: Boolean = true): Int {
         val uploads = uploads
         val current = state.value
         if (uploads == null || picked.isEmpty() || current.locked || !current.takesAttachments || current.machineId.isEmpty()) {
             picked.forEach { uploads?.discard?.invoke(it) }
-            return
+            return picked.size
         }
         var files = fileRoom()
         var media = photoRoom()
@@ -788,11 +800,12 @@ internal class NewAgentViewModel(
         }
         val refused = picked.filterNot { it in accepted }
         refused.forEach(uploads.discard)
-        if (refused.isNotEmpty()) notice(AgentText(
+        if (showLimit && refused.isNotEmpty()) notice(AgentText(
             if (refused.any { it.media }) R.string.agents_attach_photo_limit else ChatR.string.chat_composer_file_limit))
-        if (accepted.isEmpty()) return
+        if (accepted.isEmpty()) return refused.size
         mutable.update { it.copy(attachments = it.attachments + accepted, attachedOn = it.machineId, attachNote = null) }
         accepted.forEach { upload(it.id) }
+        return refused.size
     }
     /** A failed file stays in the form; Retry goes through the same three-slot pump. */
     fun retryAttachment(id: String) {
@@ -826,6 +839,8 @@ internal class NewAgentViewModel(
         gone.forEach { uploads?.discard?.invoke(it) }
     }
     override fun onCleared() {
+        prefillPhotos.attachments.forEach { uploads?.discard?.invoke(it) }
+        prefillPhotos = RestoredPhotos()
         clearAttachments()
         super.onCleared()
     }

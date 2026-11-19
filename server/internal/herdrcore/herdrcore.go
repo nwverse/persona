@@ -39,7 +39,7 @@ type Client struct {
 // New is a client of the herdr-core server this user's hc would talk to.
 func New() *Client { return &Client{Socket: SocketPath()} }
 
-// SocketPath is where herdr-core listens. On Windows that is a named pipe, \\.\pipe\herdr-core-<user>-<session>
+// SocketPath is where herdr-core listens. On Windows that is a named pipe, \\.\pipe\herdr-core-<user>-<session>.sock
 // (pipeName), not a file. Elsewhere it is a unix socket by hc's own rules (unixSocketPath).
 func SocketPath() string { return socketPath() }
 
@@ -55,15 +55,16 @@ func sessionName() string {
 	return session
 }
 
-// pipeName is the named pipe herdr-core serves its API on, on Windows: herdr-core-<user>-<session> in the pipe
-// namespace, the user being %USERNAME% (a core of another user or session is another pipe). "" when either is empty.
-// Taken from the Windows build of hc 0.1.21 (it builds the name from USERNAME and the session) and a running core
-// there (`\\.\pipe\herdr-core-alice-default`).
+// pipeName is the named pipe herdr-core serves its API on, on Windows: herdr-core-<user>-<session>.sock in the pipe
+// namespace (the unix socket's file name, prefixed), the user being %USERNAME% (a core of another user or session is
+// another pipe). "" when either is empty. Taken from the Windows build of hc 0.1.21 (it builds the name from USERNAME
+// and the session) and a running core there (`\\.\pipe\herdr-core-alice-default.sock`, beside its holder's
+// `herdr-core-alice-default.holder.<id>.sock`).
 func pipeName(user, session string) string {
 	if user == "" || session == "" {
 		return ""
 	}
-	return `\\.\pipe\herdr-core-` + user + "-" + session
+	return `\\.\pipe\herdr-core-` + user + "-" + session + ".sock"
 }
 
 // unixSocketPath is where herdr-core listens off Windows, by hc's own rules (paths.rs): $HC_SOCKET, else `socket` in

@@ -438,10 +438,9 @@ on-demand model panel, not the everyday Assistant home (#6887).
   `composer` container whose width sets the pill's and the picker's modes ("Model pill and unified model panel" in 3.8).
 - Web + / @ panel (#5324, `ComposerPanel.tsx`): one panel for both entries, 480 px and never wider than the composer
   (full width on phones), 12 px corners, `line` border, raised shadow, at most 400 px tall. From the + it covers the box
-  from its bottom left with a pill search box on top; from a typed @ it sits above the box. Rows: a 24 px **Add** header
-  (12 px medium, `ink-3`), action rows (14 px icon and words, a check on a checked one), 44 px resource rows (16 px
-  icon, 14 px name that truncates, 12 px `ink-3` meta at the right, up to 240 px); the slash menu's glide fill marks the
-  active row. Empty: three 44 px pulsing rows while reading, "No matching items" for a query with nothing.
+  from its bottom left with a pill search box on top. Typing @ anchors it above the box when space permits. A 24 px
+  header (12 px medium, `ink-3`) names each populated group. Rows are 36 px tall (44 px on touch), with a 16 px icon,
+  a 14 px name and 12 px secondary text. The slash menu's glide fill marks the active row. A quiet status line reports pending data while local options stay usable. An empty search shows "No matching items".
 - Web permission picker (#5324, `PermissionPicker.tsx`): the mode's symbol (14 px), its name (13 px, truncates) and a
   chevron; Full access tints the words `red`, Auto-review `mode-acts`; under a 300 px composer (a 320 px phone) only
   the symbol. A mode not reported yet is named by no value: the raised hand and "Permission mode", no tooltip (#5756). Its menu is the shared `Menu` (300 px) with each mode's symbol, name and check; descriptions are tooltips
@@ -461,15 +460,14 @@ on-demand model panel, not the everyday Assistant home (#6887).
   types in `ink-3`) 8 px beside the panel, right or left, or a line under the rows when neither side has room. Empty:
   **No matching commands**, 40 px, centered, `ink-3`. No key hint line. Ranking, keys and deviations: `docs/web/web.md`
   ("Input (Prompt Bar)").
-- Web `/` palette skill rows (#6171): where the `@` panel can select skills, the palette lists the commands first, then
-  matching skills ranked by the same exact / prefix / containing name rule with description matches last. The existing
-  25-row cap covers both groups and never drops a command for a skill. A skill row reuses the `@` row's spark icon,
-  readable name, description and source in the palette's 36 px row (44 px on touch), rather than reading as a command.
-  Picking one removes `/word` and adds the same opaque skill reference and removable chip as `@`; it never inserts
-  invocation text. The catalog is read only on palette opening, commands render before it answers, late rows do not move
-  the active row, and loading / unavailable / unsupported environments keep commands available with at most the quiet
-  skill status line. The empty state is **No matching commands or skills** where skills can be listed. This is a second
-  entry to the existing skill-selection interaction, not a new component pattern or runtime command.
+- Web skill selection (#11247): the Assistant and Agent composers use the same up-to-480 px menu for `@` and `/`.
+  Group headings, scrolling, the glide highlight, skill rows and the detail card come from the same picker. All enabled
+  skills in the scoped catalog can be browsed or searched. The slash menu keeps up to 25 ranked commands first.
+  A skill row shows its name and short description. The focused skill's detail shows the full description and the source
+  supplied by the node, including any visible directory. It fits beside the list where space permits and scrolls beneath
+  the list on a phone. The list fits the space around the composer and the keyboard. Selecting a skill adds an opaque
+  context chip. Opening either picker refreshes the inventory and can display the composer's last same-scope result
+  while waiting. Fresh results preserve the selected identity while it is available.
 - Editing state (web, #4503): editing the last message puts its words and quotes back into the box under a one-line bar at the box's top, above the context chips and quote bars. The bar has an accent pencil, **Editing last message** (`ink-2`, medium), a truncating hint (`ink-3`, precise pointers only) and a × with the quote bar's 24 px look. It is the only sign of the state, and the text field stays the same field. The irreversible step (the rewind) waits for an explicit send, which the bar's hint names. Esc or × leaves with nothing changed (`docs/web/web.md` "Pages", **Edit last message**).
 - Queued messages (web, #5327): drawn as cindy's pending queue at the owner's request (where cindy and the older design
   differ, cindy wins for this area). They sit in the composer's `top` slot, first in the card, flush with its border and
@@ -621,6 +619,11 @@ on-demand model panel, not the everyday Assistant home (#6887).
   screen). Markdown rendered with `askImages` (Inbox connector and Lark threads) keeps a run its size with Load image
   over it; a hub without `remote_images` keeps every picture behind a click (#8162's gate), loaded from its host with
   no Referer.
+  Android (#9476) uses a 240 dp single and a 480 dp maximum column in Glass, Brief and Board. Inline pictures use the
+  measured text line height, including at large system text sizes. A tap opens that reply’s pictures in the existing
+  viewer, including inline and overflow pictures. Each third-party thumbnail and previously unopened gallery page
+  asks before loading. Mail keeps its Show images action. A pairing that has yet to advertise `remote_images` waits
+  for a tap and uses a separate HTTPS reader. WebView link preloading skips picture-bearing replies.
 - No shared bubble component exists. Messages, Tasks and Lark rebuild it with different paddings and gutters (DS-20).
 - Web: user bubble 14 px radius; replies unboxed. Android: 20 dp in Glass, max width 86%.
 - Web reply bar (#5314, `ReplyBar`; the owner's requested alignment with cindy's `MessageActionBar`, 2026-11-12): only
@@ -1308,6 +1311,17 @@ Explicit review-before-install is intentional even with Undo: uploaded instructi
 so selecting a file must not silently change behavior. Success refreshes the list and offers a bounded, unchanged-new-
 package-only Undo with retained recovery files; `docs/operations/hub-update.md` defines the state and discovery limits.
 
+**Web to-do images** (#11084): the existing New to-do `Dialog` takes JPEG/PNG images through the shared attachment
+picker and `AttachmentTray`; selection shows local thumbnails immediately, with an accessible Remove on each. Create is
+one single-flight busy action, with its failure inline in the dialog. Retry keeps every field, selected file and the
+operation ID; cancel releases the previews. The to-do detail uses the same tray and existing `ImageViewer` for zoom and
+download, not another gallery. Private image bytes are fetched with the to-do's credentials and manager, three at a
+time, with localized Retry on failure and object URLs released when replaced or closed. The no-image dialog and detail
+keep their previous layout and behavior. When `todo_images` is absent because any manager is too old to persist images,
+the picker is hidden and an image-less create is never sent. All controls use the existing 44 px touch expansion and en, zh-Hans and ja
+copy. The assistant manager owns persistence and handoff; the Web client does not invent a temporary upload or a local
+machine path.
+
 `EmptyStateView` (`apple/Persona/DesignSystem/Components.swift:385`): symbol, title, one-sentence message, optional prominent action. 92 uses. System `ContentUnavailableView` is used in about 22 other places and looks different (DS-15). Search results may use `ContentUnavailableView.search`. Web has no shared empty state outside admin; Android has `JEmptyState`. An offline current assistant (several assistants) takes the place of a merged list's empty state with its own: the assistant avatar faded with its offline mark, "<name> is offline" and when it last synced (web `OfflineState` in `web/src/views/ManagerParts.tsx`; Android `JAssistantOffline`, a `JEmptyState` whose `leading` slot holds `JManagerAvatar`; `docs/assistant/managers.md` "Clients").
 
 ### 3.10 Loading and error states
@@ -1439,6 +1453,8 @@ The widget extension doesn't build `Theme`: Persona's widgets take their colors,
 
 `UsageCalendarCard` and `UsageCalendarPage` (`feature/assistant/UsageCalendar.kt`) are the daily-token counterpart of the Machine monitoring charts. They compare magnitude over time, so they use one hue rather than categorical series colors: the current theme accent in four quantile steps, with `sunken` for no usage. Text, dates, legends and breakdown rows stay in the ordinary ink tokens. The exact number and the four token kinds are available by selecting a day; the details page also lists every computer and kind in text, so color is never the only way to read a value.
 
+On the detail page, each agent’s seven-day total adds input, output, cache write and cache read. Each positive total gets a grouped row with its Android agent mark, its name and a localized short number. The meter below the name compares the total to the largest agent on the same scale across rows. Historical usage gets a labeled row without a mark. At large text sizes the name can wrap above the meter. TalkBack reads the name and exact count together.
+
 The daily grid is Monday-first, seven rows per week, with the current week last and a thin outline on today. A day with usage ranks among only the days with usage: `ceil(4 × rank / count)`, where rank includes every equal or smaller day, gives steps 1–4; no usage is step 0. The hourly grid uses the same quantile rule among its hours and retains repeated clock-change hours by timestamp. Small chart cells are not the sole controls: selected days have 48dp previous / next buttons and an exact spoken value, while the card's non-cell area opens the details page. Home reads while resumed and keeps the previous devices section until real data arrives; it never substitutes an all-zero calendar for a failed or unsupported read.
 
 Month labels have their own visible header above the scrolling weeks. The header follows the scroll position and keeps only the latest complete labels that fit the width and text scale; it never clips a month to a partial word. Weekday labels keep their full localized glyphs inside a dedicated column, while the day cells themselves stay the same size at every text size.
@@ -1499,7 +1515,7 @@ before common choices. It introduces no visual style, color palette, model defau
 | Long press on a message | your own folded long message opens in place, with no bar (#5676); otherwise a lifted menu with an action bar, over the whole page dimmed (a page's floating top bar included); a message taller than the room shows the part pressed and scrolls inside, the bar fixed; a selection handle held within `Theme.Lift.edgeScroll` of its top or bottom edge scrolls it on, up to `Theme.Lift.edgeScrollSpeed`; its selected words take touches `Theme.Lift.handleReach` past them, so a handle's knob over the first line or under the last can be dragged (#5291); the edit menu over selected words goes above them, or below when there is no room, never over the words or either handle (`Theme.Lift.handleReach` of room for each handle's knob, #6005); a message only on this device ends the bar in a red Delete (Don't Send while it waits), Undo in a toast (#4626); a sent message the chat can pick ends the bar in a row of its own under a hairline, Select Messages (#9468), as wide as the actions, which stay as they were |
 | Swipe an Inbox row | one trailing swipe from the end: Done, or Move Back on a done item (the Done section's rows); none towards the start, none while picking items or while the row's write is out. A full swipe on iOS; on Android the swipe component's threshold. VoiceOver and TalkBack have the same action on the row (#4210) |
 | Select Text on a message (Select on Android) | selects the message's words where the message is, the system's way: handles to drag and the system's edit menu, which has Copy and, where the chat quotes, Quote (not for a message only on this device). iOS (`LiftSelection.swift`, #603, #2962): the lifted copy of the message draws its words again in a text view laid out like them, because MarkdownUI cannot select; Select Text selects all of them, a second long press the word under the finger; the bar steps aside for the edit menu, Copy and Quote close the lift, and a tap on the dimmed chat or one that clears the selection brings the bar back. Android (#4210 T5, `MessageSelection.kt`): nothing is lifted. The message's words are put in a `SelectionContainer` where they are and all selected (`SelectionState.selectAll()`); a code block, a list and a quote are among them, a code block's title bar and a card are not. A long press on a word of the selected message picks that word, as iOS's second long press does (Compose has no public way to start with the word under the finger; Select takes the whole message, as iOS's Select Text does). Copy puts the words on the clipboard as the chat shows them (no thin spaces round inline code, a list item's marker on its line); Quote adds them over the composer as a quote of the picked words (`part="selection"`, "Quoting selected text · name"). The message has no long press, swipe to quote or inline-code copy while it lasts. It ends when nothing is selected any more (a tap on the words, Copy, Quote), when a tap starts outside the message (a drag is a scroll and does not; the tap goes on to what it hit), on Back, and when the message has gone from the screen; a press on another message ends it too. Select no longer opens a full-screen reader; the reader stays where else it opens (a long message's "View full text", a code block, a thought, a plan, a tool's raw input and output) |
-| Tap or hold a mic (iOS: the composer's, the BeautifulUI style's and Health's composer, a to-do's notes, #9619; the meeting page's Talk, #9658) | a tap starts dictation and a second tap in the same place stops it, the words kept and nothing sent (the composer's tap opens the dictation bar, ■ where the mic was, section 3.1). Touched and held for `Theme.Hold.delay` (0.3 s) it dictates only while held: letting go keeps the words, sliding left 150 pt (100 pt, or a 400 pt/s flick, as the finger lifts) drops them; the composer shows the strip with the red dot, the time and "‹ Slide to cancel", the other mics their listening face. One touch is a tap or a hold, never both: a tap never starts a hold, letting go of a hold is no tap (`MicPress`). No slide up to lock: the tap is the hands-free way. A touch the system takes away, or the mic leaving the screen under the finger, keeps what was heard. VoiceOver's activation is the tap. Talk differs where it must: its span opens as the finger lands (a tap keeps it open), and it has no slide to cancel (section "Meeting page", Talk). Not yet: Android's mics (tap only, #9657) |
+| Tap or hold a mic (iOS: the composer's, the BeautifulUI style's and Health's composer, a to-do's notes, #9619; the meeting page's Talk, #9658; Android chat and to-do notes, #9657) | a tap starts dictation and a second tap in the same place stops it, the words kept and nothing sent (the composer's tap opens the dictation bar, ■ where the mic was, section 3.1). Touched and held for `Theme.Hold.delay` (0.3 s) it dictates only while held: letting go keeps the words, sliding left 150 pt (100 pt, or a 400 pt/s flick, as the finger lifts) drops them; the composer shows the strip with the red dot, the time and "‹ Slide to cancel", the other mics their listening face. One touch is a tap or a hold, never both: a tap never starts a hold, letting go of a hold is no tap (`MicPress`). No slide up to lock: the tap is the hands-free way. A touch the system takes away, or the mic leaving the screen under the finger, keeps what was heard. VoiceOver's activation is the tap. Talk differs where it must: its span opens as the finger lands (a tap keeps it open), and it has no slide to cancel (section "Meeting page", Talk). Android measures slides in dp and flicks in dp/s. The phone’s voice-input activity handles taps on devices that only have that activity. |
 | Touch and hold the composer's + (iPhone) | system menu of the attach panel's More list; a tap still opens the panel, whose More tab is the plain alternative (#3225) |
 | Tap a photo in the + panel's grid | its ring (and a 45 pt corner round it) picks it, as before; the rest of the photo opens it in the image editor. VoiceOver's activation picks, Edit is an action (#4963) |
 | Drag in the image editor | Box and Pen draw (Box is the default tool); in Crop, a corner or edge within 22 pt resizes the crop, inside moves it. Crop's shapes, Rotate and Reset are the controls that need no drag (#4963). The web's the same in CSS pixels, a mouse's cursor showing which handle it would take (#4991) |
@@ -2134,6 +2150,7 @@ your permission" (section 5, "Notifications"); moving them to the card's words i
   space's tabs color each agent by its state. The web's top bar says no state (#5421, cindy's): the running status bar
   over the composer says it while the Agent works, the pending cards while it needs you, and its row in the sidebar always.
 - A row shows its most urgent state, in the order `AgentListOrder` ranks them.
+- A waiting to-do is named by what it waits on, never one "Waiting" for all (#11090, web): **Waiting on you** in Needs you's attention color only when it waits on the owner by the sidebar badge's predicate, every other wait and an unknown one ("Paused (nothing needed from you)") in a neutral tone; the words are in `docs/protocol/i18n.md` ("Agent states").
 - A failed run has no state of its own. It shows its state like any other run, and its row's line 2 says what failed, in red.
 - A Codex opened with no first message (`awaiting_first_message`) has no state of its own either. It is idle, never Needs You or unread, and sends no push.
   Its row's line 2 says "Waiting for its first message" (web `sidebar.codex_waiting` through `rowLine`, Apple `Session.listPreview`).
@@ -2983,8 +3000,11 @@ stopped changing for 0.7 s, it runs once for that input. An address being typed 
 field to something else on the page (not when the window loses focus), the step is left, or a paste fills all of it,
 so a key never goes to a half-typed host; until then the form says leaving the field starts the check. It never runs
 on opening something already saved, only after the fields the form names as its connection change (the provider
-wizard: address, key, sign-in method); fields that play no part in the connection (a name) never block or repeat it.
-Each part runs whatever an earlier part said, since one part failing does not prove another will (a key may chat
+wizard: address, key, sign-in method, request headers); fields that play no part in the connection (a name) never block or repeat it.
+The optional request-header editor stays visible on the custom gateway's Connect step before the check, in add and edit,
+with configured names but never saved values and with the selected runtime's support or limitation beside it. Reserved or
+unsupported headers stop the check instead of letting it imply a launch would send them. A header-only edit invalidates
+old results and starts the same 0.7 s check. Each part runs whatever an earlier part said, since one part failing does not prove another will (a key may chat
 without listing models); a part that is running or passed is not sent again. A line says it will check by itself, then
 shows progress with a spinner, then the result; a failure keeps the server's words and offers to run that part again
 (Retry on the Connect step). Manual buttons, where the form has them, and the note that a test may cost a little stay;
@@ -3308,7 +3328,9 @@ that view in its link mode: no text area, a row with the link icon saying it was
 text, that nothing is saved until Save, with **Paste something else** (the status line's action) to go back to the text
 area. The link is read at once and its drafts, choices and notes look exactly like a paste's, so the wizard does not
 grow a second way to review a provider; a refused link is one plain line about what is wrong with it, never its
-content. Copying a link starts from the provider's dialog: a ⋯ `IconButton` before Edit opens a `Menu` (one row, **Copy
+content. Android uses this same link mode for `persona://provider/import` (#5428). iOS has no paste step, so the hub's
+returned draft opens its existing connection form directly. On both phone apps the link itself is never shown and is
+dropped when the wizard closes. Copying a link starts from the provider's dialog: a ⋯ `IconButton` before Edit opens a `Menu` (one row, **Copy
 import link**), and the row opens a `Dialog` in place of the provider's (Edit does the same), with one line on what the
 link brings, a `Switch` **Put a key in the link** that is off, and **Copy link** as the one primary button. Turning the
 switch on widens what the link exposes, so, as in "Sharing a conversation publicly" (4.9), the key field comes with an
@@ -3457,3 +3479,14 @@ New copy ships in English, Simplified Chinese and Japanese. Evidence:
 ## Lark topic group policy (#10238)
 
 Settings › Connectors › Lark bot › Topic groups serves owners who want one group to require their explicit bot mention. It reuses Group, Row, Switch, Button, the native select and settings input styles; policy defaults off. Each group shows its saved switch. Enrollment allows choosing the policy before adding the group; a strict first enrollment stays separate from the home choice. The home select shows the effective home or the private-chat fallback. Both writes wait for the existing acknowledged save; failures preserve saved values and enrollment drafts. No primary chat screen or model setting changes.
+
+## Shared botmux display setting (#10241)
+
+For people using Agents, Web Settings › Agents reuses `Row`, `Switch`,
+`SettingsHint` and `RowFailed` for **Show botmux sessions in Agents**. The row
+shows the acknowledged shared value; a save disables the switch and shows Saving,
+a failure keeps the last acknowledged value and offers Retry. A nearby Computers
+link explains the independent per-computer inventory switch. The sidebar's
+botmux chip is removed; its Lark group quick filter is absent when its count is
+zero. Complete and paged lists exclude the same hosts before grouping and counts.
+This requested interaction change adds no component, theme or motion pattern.

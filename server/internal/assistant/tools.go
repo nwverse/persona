@@ -13,6 +13,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/compat"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -419,7 +420,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if a.Task != nil {
 			text, err = s.withStandingAuthorizations(ctx, am.ID, c.Cwd, text)
 			if err != nil {
-				return "", task.sendFailed(ctx, s, err)
+				return "", task.sendFailed(ctx, s, rpc.NotSent(err))
 			}
 		}
 		// The user's attachments, copied to the agent's computer when it is another one: the text ends with them, the
@@ -482,13 +483,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 				s.progressMade(am.ID, c.SessionID, time.Now()) // the supervisor told it something: a new stretch (supervise_progress.go)
 			}
 			if err != nil {
-				if errCode(err) == proto.CodeCompactFailed {
+				if errCode(err) == proto.CodeCompactFailed && !sendUnknown(err) {
 					return "", task.sendFailed(ctx, s, compactFailed(c, am, err, false))
-				}
-				if note.reopens() && sendUnknown(err) {
-					// Its own wait ran out, or the link dropped, while the node may still type it in: the model reads
-					// the agent before it sends the text twice.
-					err = fmt.Errorf("%w (it may still arrive; check with agent_read before sending again)", err)
 				}
 				return "", task.sendFailed(ctx, s, err)
 			}
@@ -853,27 +849,76 @@ func startResultUnknown(err error) bool {
 		errors.Is(err, rpc.ErrClosed) || errors.As(err, &re) && re.Message == rpc.ErrClosed.Error()
 }
 
-// sendUnknown: a session.send or session.start that failed though its text may have reached the agent: its answer
-// never came back (startResultUnknown), or the node's error says the text may have arrived or did (nodeMayHaveTaken).
-// Not when the manager's own connection says it never went out (rpc.ErrNotSent: the caller's wait ran out, or the
-// connection closed, before it was written, or the node's not-started refusals outlasted the retries).
+// sendUnknown reports whether a failed node write may have taken effect. An explicit delivery result takes
+// precedence over the transport's words. An uncoded error relayed across the bus keeps only its message.
 func sendUnknown(err error) bool {
-	return (startResultUnknown(err) || nodeMayHaveTaken(err)) && !errors.Is(err, rpc.ErrNotSent)
+	if _, ok := errors.AsType[*completedNodeWriteError](err); ok {
+		return true // a later validation error describes a different operation
+	}
+	if err == nil || errors.Is(err, rpc.ErrNotSent) {
+		return false
+	}
+	switch nodeDelivered(err) {
+	case "none":
+		return false
+	case "unknown", "yes":
+		return true
+	}
+	var re *rpc.Error
+	if errors.As(err, &re) {
+		if re.Code != "" {
+			return re.Code == devicewire.CodeDeadline || re.Code == devicewire.CodeNodeClosed
+		}
+		return noSendAnswer(re.Message)
+	}
+	return startResultUnknown(err) || noSendAnswer(err.Error())
 }
 
-// nodeMayHaveTaken: err is the node's, and its delivered says the text may have arrived ("unknown": typing failed part
-// way, or a Claude's inbox read it but the session has not confirmed it yet, peer_unconfirmed) or did ("yes"). A refusal
-// says "none" (nothing was typed); an error that says neither is read by its kind alone (startResultUnknown).
+// Only the transport's complete, canonical message substitutes for a lost Go error type.
+func noSendAnswer(message string) bool {
+	return message == context.DeadlineExceeded.Error() || message == context.Canceled.Error() || message == rpc.ErrClosed.Error()
+}
+
+// A node already answered a write successfully, but the manager could not validate or decode the answer.
+// Keep the original error for diagnostics without turning it into permission to send again.
+type completedNodeWriteError struct{ error }
+
+func (e *completedNodeWriteError) Unwrap() error { return e.error }
+
+func tracksNodeWrite(method string) bool {
+	return method == DeviceSessionSend || method == DeviceSessionStart || method == devicewire.MethodCloseTaskTerminal
+}
+
+func beforeNodeWrite(method string, err error) error {
+	if tracksNodeWrite(method) {
+		return rpc.NotSent(err)
+	}
+	return err
+}
+
+func afterNodeWrite(method string, err error) error {
+	if err != nil && tracksNodeWrite(method) {
+		return &completedNodeWriteError{err}
+	}
+	return err
+}
+
+// nodeMayHaveTaken counts only a delivery the node itself marked as possible or confirmed.
 func nodeMayHaveTaken(err error) bool {
+	d := nodeDelivered(err)
+	return d == "unknown" || d == "yes"
+}
+
+func nodeDelivered(err error) string {
 	var re *rpc.Error
 	if !errors.As(err, &re) || len(re.Data) == 0 {
-		return false
+		return ""
 	}
 	var d struct {
 		Delivered string `json:"delivered"`
 	}
 	_ = json.Unmarshal(re.Data, &d)
-	return d.Delivered == "unknown" || d.Delivered == "yes"
+	return d.Delivered
 }
 
 // liveSendWait bounds a send to an agent that runs when the send may reopen its accepted task (agent_send), and the
