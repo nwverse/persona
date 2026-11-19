@@ -596,4 +596,104 @@ final class SidebarRootsUITests: XCTestCase {
         let shown = settled("agent", "the column brought back")
         XCTAssertEqual(shown.transitions, second.transitions, "bringing the column back moved the page: \(second) → \(shown)")
     }
+
+    /// A sidebar row that says it is selected (`isSelected`): the main conversation, a place, a Persona chat or an Agent's
+    /// row; not the Agents' quick filters or other controls in the column.
+    private struct Selected: CustomStringConvertible {
+        var id: String
+        var label: String
+        var description: String { "\(id) \"\(label)\"" }
+    }
+
+    @MainActor private func selectedRows() -> [Selected] {
+        guard let root = try? app.snapshot() else { return [] }
+        var found: [Selected] = []
+        func walk(_ e: XCUIElementSnapshot) {
+            let id = e.identifier
+            let row = id.hasPrefix("sidebar-") || id == "agents.row" || id == "agents.compactRow"
+            if row, e.isSelected { found.append(Selected(id: id, label: e.label)) }
+            e.children.forEach(walk)
+        }
+        walk(root)
+        return found
+    }
+
+    /// Exactly one row of the sidebar is selected, `id` (whose label holds `text`): the column brought out first unless
+    /// `bringOut` is false (a pushed page has Back alone, which would pop it).
+    @MainActor private func assertOneSelected(_ id: String, containing text: String? = nil, bringOut: Bool = true, _ step: String) {
+        if bringOut { reveal(element("sidebar-main")) }
+        func right(_ rows: [Selected]) -> Bool {
+            rows.count == 1 && rows[0].id == id && (text.map { rows[0].label.contains($0) } ?? true)
+        }
+        var rows = selectedRows()
+        let deadline = Date.now.addingTimeInterval(5)
+        while !right(rows), Date.now < deadline {
+            Thread.sleep(forTimeInterval: 0.3)
+            rows = selectedRows()
+        }
+        XCTAssertTrue(right(rows), "\(step): the selected rows are \(rows), not \(id) \(text ?? "") alone:\n\(app.debugDescription)")
+    }
+
+    /// One row of the whole sidebar is selected at a time, and it is the page's root (#11032): the main conversation at
+    /// launch; an Agent picked in the Agents list (its row, no longer the main conversation's), also after the column is
+    /// folded and brought back; a place (Recordings); the main conversation again; and an Agent opened from inside the
+    /// main conversation (a drill-down, pushed) leaves the main conversation selected. The column beside the page, laid
+    /// over it (the open Duo upright) and a phone's drawer.
+    @MainActor func testOneRowIsSelectedAndItFollowsTheRoot() {
+        launch()
+        _ = settled("conversation", "launch")
+        assertOneSelected("sidebar-main", "launch on the main conversation")
+        shot("11032-0-main")
+
+        _ = pickAgent("an Agent")
+        let title = chatTitle()
+        let name = title.components(separatedBy: CharacterSet(charactersIn: ",，")).first ?? title
+        XCTAssertFalse(name.isEmpty, "the Agent's chat has no title")
+        assertOneSelected("agents.row", containing: name, "an Agent picked in the sidebar")
+        shot("11032-1-agent")
+
+        // Folded beside the page and brought back: the same row.
+        let fold = element("sidebar-fold-column")
+        if fold.exists && fold.isHittable {
+            fold.tap()
+            let main = element("sidebar-main")
+            let deadline = Date.now.addingTimeInterval(5)
+            while Date.now < deadline, main.exists && main.isHittable { Thread.sleep(forTimeInterval: 0.2) }
+            Thread.sleep(forTimeInterval: 0.8) // the column's slide
+            assertOneSelected("agents.row", containing: name, "the column folded and brought back over the Agent")
+        }
+
+        pick("sidebar-meeting-recording", "Recordings")
+        _ = settled("recordings", "Recordings from the Agent")
+        assertOneSelected("sidebar-meeting-recording", "a place picked")
+        shot("11032-2-place")
+
+        pick("sidebar-main", "the main conversation")
+        let before = settled("conversation", "the main conversation from Recordings")
+        assertOneSelected("sidebar-main", "the main conversation picked again")
+
+        // An Agent opened from inside the main conversation (a waiting Agent's card): pushed, the selection stays.
+        let card = app.buttons.matching(identifier: "shell-needs-agent").firstMatch
+        let beside = element("sidebar-main").exists && element("sidebar-main").isHittable
+        for _ in 0..<6 where card.waitForExistence(timeout: 3) && !card.isHittable {
+            app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.7))
+                .press(forDuration: 0.05, thenDragTo: app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.4)))
+        }
+        XCTAssertTrue(card.exists && card.isHittable, "no waiting Agent's card on the main conversation:\n\(app.debugDescription)")
+        card.tap()
+        let pushed = settled("conversation", "an Agent opened from the main conversation")
+        XCTAssertEqual(pushed.path, 1, "the Agent's chat was not pushed on the main conversation: \(pushed)")
+        XCTAssertEqual(pushed.transitions, before.transitions + 1, "the Agent's chat did not push: \(before) → \(pushed)")
+        // Where the column stays beside the page it is read as it is; laid over the page or in a drawer it is away, and
+        // the pushed page's Back would pop: the root (the probe) is what it shades.
+        if beside, element("sidebar-main").isHittable {
+            assertOneSelected("sidebar-main", bringOut: false, "an Agent pushed from the main conversation")
+        }
+        shot("11032-3-pushed")
+        let back = app.buttons.matching(NSPredicate(format: "identifier == 'chevron.left' OR identifier == 'BackButton' OR label IN %@", ["返回", "Back"]))
+        back.allElementsBoundByIndex.first { $0.exists && $0.isHittable }?.tap()
+        let popped = settled("conversation", "Back from the pushed Agent")
+        XCTAssertEqual(popped.path, 0, "Back did not go back to the main conversation: \(popped)")
+        assertOneSelected("sidebar-main", "back on the main conversation")
+    }
 }
