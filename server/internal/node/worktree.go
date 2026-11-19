@@ -375,7 +375,8 @@ func (n *Node) worktreeCreate(ctx context.Context, kind, workspace, cwd, branch,
 	// A host that ran git on this computer wrote the links under the home's real path; nothing to do when the host's
 	// git (herdr's, in its own environment) or worktreeByGit already wrote the home's spelling (worktree_links.go).
 	n.portableWorktreeLinks(cmp.Or(created.Path, dest))
-	_ = n.refreshHosts(ctx, h) // the new workspace is in the layout the terminal page lists
+	n.markWorktreeShell(ctx, h, created) // an Agent's worktree: its first shell is Persona's (finished_close.go)
+	_ = n.refreshHosts(ctx, h)           // the new workspace is in the layout the terminal page lists
 	res = proto.WorktreeCreateResult{WorkspaceID: created.SpaceID, TabID: created.SlotID, Path: dest, Branch: branch}
 	if h.Kind() == host.Orca {
 		res.ParentWorkspaceID = parent
@@ -436,6 +437,7 @@ func (n *Node) worktreeCreateAutomatic(ctx context.Context, kind, workspace, cwd
 	if err != nil {
 		return res, errors.New(gitFailure(err))
 	}
+	n.markWorktreeShell(ctx, h, created)
 	_ = n.refreshHosts(ctx, h)
 	res = proto.WorktreeCreateResult{WorkspaceID: created.SpaceID, TabID: created.SlotID, Path: created.Path,
 		Branch: created.Branch, ParentWorkspaceID: parent}
@@ -468,13 +470,36 @@ func (n *Node) worktreeByGit(ctx context.Context, h host.Host, repo worktreeRepo
 	return c, nil
 }
 
-// gitFailure is the line git gave as the reason ("fatal: …"), else the error as it is; one short line for a toast.
+// gitFailure is the line git gave as the reason ("fatal: …"), after an earlier line that names the cause when there
+// is one (gitCause), else the error as it is; one short line for a toast.
 func gitFailure(err error) string {
 	msg := err.Error()
-	for _, line := range strings.Split(msg, "\n") {
+	lines := strings.Split(msg, "\n")
+	for i, line := range lines {
 		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "fatal: "); ok {
+			if cause := gitCause(lines[:i]); cause != "" && !strings.Contains(rest, cause) {
+				return clip(cause + "; " + rest)
+			}
 			return clip(rest)
 		}
 	}
 	return clip(msg)
+}
+
+// gitCause is what lines (git's output before its fatal line) say of why git stopped: a program the shell could not
+// run (bash and zsh say "command not found", dash "not found"), else the last "error: …" line; "" for neither. A filter
+// git-lfs installs fails as "git-lfs filter-process: git-lfs: command not found", and what git says after it ("the
+// remote end hung up unexpectedly", "a.bin: smudge filter lfs failed") does not name git-lfs (#10127).
+func gitCause(lines []string) string {
+	cause := ""
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.Contains(line, "command not found") || strings.HasSuffix(line, ": not found") {
+			return line
+		}
+		if rest, ok := strings.CutPrefix(line, "error: "); ok {
+			cause = rest
+		}
+	}
+	return cause
 }

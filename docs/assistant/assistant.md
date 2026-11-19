@@ -87,7 +87,7 @@ Changing trust does not erase context already delivered to a computer or termina
 | Control Persona itself | `persona_settings` (`list` first, an assistant tool, `assistant/settings_tool.go`: About Me, default launcher, and `main_tasks_quiet` are assistant-owned settings, read / written by it with its own phone confirmation cards; other settings belong to hub, listed through `app.call settings.list`, read / written through `app.tool persona_settings`, with hub confirmation): read / write triage rules (global `inbox.rules` and per-plugin-source `inbox.rules.<plugin>` for sources declaring `triage_rules`, overriding global when present), every configurable extension's form settings (`extension.<id>`: `get` lists each field, `set` changes only the fields given, each shown before → after on the card, #2385), inbox task-linking rules (`inbox.agent_rules`: which running task a needs-you item belongs to; what the AI twin takes on is inbox policies. Reading or changing it says when the AI twin is off, #5865), About Me, default launcher, "Main chat tasks notify only in main chat" (`assistant.main_tasks_quiet`), per-machine muted Claude config directories (`agents.blocked_claude_dirs`), low-distraction mode for every device (`notifications.low_distraction`, the hub's push grading switch, #8157; `docs/server/server.md` "Push grading (push urgency filtering, `hub/lnmode.go`)"), and add / remove mail accounts. Changes first show a phone confirmation card; added-account passwords / authorization codes are entered on the phone card, never through the model or chat / interaction history. After approval, hub tests IMAP / SMTP and encrypts / saves only if both work. Gmail requires Google sign-in in the App; launchers are written to unified model configuration while retaining existing model and effort |
 | Live snapshot | Each message to the assistant starts with `<persona-context>` (not system prompt, see "Live snapshots and prefix caching"): time (phone timezone), online computers, Needs you / Unread / Working Agents, unread connector chats and @me, today's upcoming meetings, scheduled follow-ups, and up to five open Inbox matters being followed by check time. Agents and tasks include web links: hub `public_url` (default `http://<hostname>:18660` when unset) plus `/s/<machine>/<session id>`, `/todos?id=<to-do id>`; the assistant uses Markdown links when mentioning them. Omit if hub can't supply the address (#2194). The main conversation's task lists (task details, open-task index, waiting to be verified or approved) hold every task; a leader's or side conversation's hold only the ones it handed out or supervises (#8666, `docs/assistant/todos.md`). Include only changes since this chat's previous snapshot (time always included): changed sections, and inside the task details, the Agents section and the unread chats only the rows that changed (#9078). hub gives each source 3 seconds, reuses reads for 45 seconds, and messages wait at most 1.5 seconds for fresh data, not at all while reads take longer than that (#8948) |
 | Faster | When the App displays a new-chat page, `POST /api/v1/assistant/warm` starts a spare node process (`spare`, valid for 10 minutes), used directly by new chats. `personad mcp` marks the Persona tools assistant conversations use often `anthropic/alwaysLoad`; the rest, and other MCP servers' tools, keep Claude Code's ordinary ToolSearch deferral (#5838, #7317): the manager picks them (`coreTools`, `assistant/tool_loading.go`), adding `leader_progress`, `todo_create`, `ask_escalate` and `direction_name` for current leader conversations from their session id; tool loading does not expand caller permissions. `assistant.load_all_tools` (`persona_settings`, off by default) loads every Persona tool up front again, in running conversations too: the change wakes each `personad mcp`'s tool watch (`assistant/mcp_tools_changes.go`), which sends the new list (`notifications/tools/list_changed`); a `personad mcp` older than tool refresh keeps its list until its process restarts. On Anthropic's own API the assistant's processes carry `ENABLE_TOOL_SEARCH=true`, so a conversation that once ran without ToolSearch defers too instead of loading every tool until its next compaction; behind a gateway they carry `false` and load every tool, and a gateway's refusal of tool search is resent once that way and remembered (#10365, `docs/integrations/claude-integration.md` "Tool search behind a gateway (#10365)") |
-| Memory | Claude Code auto memory (`~/.claude/projects/<encoded directory>/memory/*.md`); App Settings can view / edit / delete it (node `assistant.memory`). Codex and DSH read / write the same memory ("Codex", "Agent runtime (DSH)" below), so changing launchers doesn't lose it. Health chats have a separate health space and separate memory (`docs/assistant/health.md`) |
+| Memory | Claude Code auto memory (`~/.claude/projects/<encoded directory>/memory/*.md`); App Settings can view / edit / delete it (node `assistant.memory`). Codex and DSH read / write the same memory ("Codex", "Agent runtime (DSH)" below), so changing launchers doesn't lose it, and a Claude conversation in any profile is told to use it too ("One memory" below). Health chats have a separate health space and separate memory (`docs/assistant/health.md`) |
 | About Me | App edits go to settings `assistant.notes`, override `assistant.notes` in the manager's `manager.json`, and append to CLAUDE.md |
 | Phone not in foreground | No phone connected during a `phone_*` call → hub sends a silent push (`content-available`, `persona_wake`) → App connects WS in the background to execute, disconnects after 25 seconds; wait up to 20 seconds. The App proactively disconnects WS on backgrounding, or a suspended socket makes hub think it is online and calls wait 2 minutes. Once disconnected, nothing else in the background reopens it (network recovery, refresh completion, reconnect backoff, `LiveConnection.suspended`, 2026-11-02); only this silent push (`wake()`) connects. The same push with `persona_wake: "widgets"` wakes a phone whose Home Screen widgets show other agent counts than the hub's (`server/internal/hub/widget_wake.go`, #5721): the app connects, writes the widgets again and disconnects |
 
@@ -804,6 +804,65 @@ Current main chat's first message on 11-01 after 46 idle hours: 254k rewritten, 
   A section left out keeps its heading and its count and names the tool that lists it (`assistant/snapshot_omitted.md`), or says to open the Inbox in the App for Inbox follow-ups: never "none", never missing, since the node sends only changed sections and a missing one would read as unchanged. Never left out: agents waiting for the user or for a reply, running workflows, plan cards waiting for "Start", failed scheduled runs, the calendar and @me chats. If that is still too long, the block is cut and ends with `assistant/snapshot_cut.md`.
 - The live snapshot puts the open-to-do total and `todo_list` entrance immediately after the time, before Agent details, so a hard cut still leaves a way to find the work. After the urgent Agent lists it carries an ID/title index of up to 100 open to-dos, regardless of origin or age (a question to-do is left to its own snapshot line only while that line shows it; once its ask record is pruned it is listed like any other); beyond that it keeps the total and points to `todo_list`. Under budget pressure titles and links are dropped from this index before the separate task-detail section is omitted. Full task details remain limited to 12, with open work ahead of recent closed conversation tasks. Showing a personal to-do does not enroll it for supervision or start an Agent.
 
+## Local request source diagnostics
+
+For people maintaining an Assistant installation, `scripts/diag/assistant_token_report.py --request-breakdown`
+adds a read-only, local source-size report to the existing token diagnostic (#10151). It is off by default: no hub
+setting, background capture, network request or runtime logging is added. Omit the flag to get the existing report.
+The primary Assistant screens and model behavior are unchanged.
+
+```sh
+python3 scripts/diag/assistant_token_report.py --request-breakdown --json scripts/diag/testdata/request_breakdown.jsonl
+python3 scripts/diag/assistant_token_report.py --request-breakdown --json /path/to/local/transcripts
+```
+
+The first command is a synthetic capture with fresh, follow-up, resume and compaction samples. The resume sample's
+1,300-byte tool result dominates; the follow-up includes observed cache reads. The fresh sample deliberately has
+unknown provider usage. These are reproducible fixtures, not measurements of a live installation.
+
+Two boundaries are reported separately:
+
+- `anthropic_request_content` / `responses_request_content`: a complete request object exported locally by the caller.
+  Each JSONL line has `type: "request"`, `runtime: "anthropic"` (Messages) or `"responses"` (OpenAI Responses), and
+  `request` containing the unmodified request object. Optional `usage` is the corresponding provider response's usage
+  object; `lifecycle` may be `fresh`, `followup`, `resume` or `compaction`; optional ISO `timestamp` supports `--since`.
+  This script does not intercept requests or configure a runtime to export them. Use a caller's existing local export
+  when available; some runtimes do not expose their assembled request. Captures contain private material and stay local;
+  only the aggregate report is suitable for sharing. No request ids, tool names, arguments, messages, attachment names
+  or URLs are emitted.
+- `claude_transcript_inventory` / `codex_transcript_inventory`: the content visible in a transcript, counted once per
+  observed block (Claude duplicate response blocks are deduplicated; Codex event mirrors are ignored). This is an
+  inventory across the selected file/time window, **not** a reconstruction of any request's retained context. A
+  compaction marker says `contains_compaction`; it does not prove which history survives. Runtime-owned instructions,
+  tool schemas, current request and retained history remain unknown (`null`, or `?` in text). Codex's recorded base
+  instructions and system/developer messages are exposed only as `observed_instruction_bytes`, a partial inventory.
+  Existing per-kind provider usage stays alongside the inventory in the token report, without inferred joins to requests.
+
+Byte definitions (separate from provider token counters):
+
+- Text is UTF-8 bytes; structured values use compact JSON with sorted keys, Unicode preserved, and no extra spaces.
+  The measurement is content size, not HTTP wire size or tokenizer output. Message role/id envelopes, transport
+  options and provider-owned additions are excluded; request wire bytes and provider context tokens remain unknown.
+- `instructions` measures exported system/developer instructions; `tool_schemas` measures the exported `tools` array.
+  Omitted fields in a complete request export count as zero; unavailable transcript fields count as unknown.
+- `snapshot_or_events` measures `<persona-context>…</persona-context>` blocks including their wrappers.
+  `current_message` is the last user message's remaining text; `history` is other message text. Both may contain
+  Persona event text outside those explicit blocks: no arbitrary content is guessed to be an event or instruction.
+- `tool_results` measures returned text/structured content, excluding separately counted attachments. The largest
+  result is reported only as the stable `tool_results` category and its byte size, never by tool name or call id.
+- `attachments` measures serialized image/file blocks (references, metadata or encoded data as recorded), not decoded
+  media size or image tokens. `other_content` covers remaining blocks, including tool calls and their arguments.
+  Source buckets are disjoint; `observed_content_bytes` is their observed sum (including separately reported observed
+  instructions for an incomplete transcript inventory). `items` counts measured text chunks/structured values, not
+  model calls (the tools array is one value). `dominant_sources` lists the largest observed buckets, ties included;
+  it may include partially observed instructions and does not rank unavailable runtime-owned content.
+- Provider usage counters are copied only when observed as nonnegative integers. Missing counters are unknown, not
+  zero. Anthropic input and cache counters keep their native definitions; Responses input includes cached tokens.
+  They are not derived from byte sizes or made comparable by assuming a bytes-per-token ratio.
+
+Compare runs with the same boundary and input scope. Changing one synthetic source changes only that source's size;
+`python3 scripts/diag/test_request_breakdown.py` checks this, known-size inputs, lifecycle samples, unknowns and privacy.
+
 ## Compaction
 
 Long assistant chats can grow to hundreds of thousands of tokens. After the prompt cache expires, restarting rewrites the whole context; compacting while the cache is warm keeps that restart affordable.
@@ -817,6 +876,51 @@ Long assistant chats can grow to hundreds of thousands of tokens. After the prom
 - **Codex**: a managed launcher's declared window is passed as `-c model_auto_compact_token_limit`, capped by declared `model_context_window` values (launcher arguments, `config.toml`; the smallest across profiles); for the main conversation, also held to `assistant.main_compact_window` (above), which is passed even when the launcher declares only a context window. Otherwise nothing is passed, and Codex compacts by what the launcher's own flags and `config.toml` set, else its model's default. Do not raise Codex's `model_context_window`. `thread/compact/start` exists; idle compaction is still not integrated. **A turn whose compactions make no room is stopped (#10278)**: when what survives a compaction (instructions, tool declarations, the retained request) is above the model's compaction limit, Codex compacts before every step and the turn never ends (one recorded turn: 42 compactions in 31 minutes, each request after one 166–173k tokens against a 124,518-token window). The node reads each request's usage (`thread/tokenUsage/updated`: `last.inputTokens`, `modelContextWindow`); a request right after an automatic compaction that still takes 90% of the window or more made no room, and the second such compaction in a row interrupts the turn (`turn/interrupt`, as Stop) and ends it as the user's to act on (`turn_error_kind: user`, the reason in `node-codex-assistant.compaction_loop_stopped`). If the turn ran on a model the bounded recovery switched to, that switch is dropped, so the next message goes to the configured model instead of the same fallback (`assistant_codex_compaction_loop.go`). A compaction that made room resets the count; the user's own Compact context is not counted.
 - **Scope history (#6481, #3008, #3028, #7314)**: the assistant manager still sends `is_main` with starts and messages (relays get it in `Service.call`). Alone it changes no compaction limit; the main conversation's window comes with `main_compact_window` (above). The node records both with the conversation, and both are part of the execution fingerprint (the window only on a managed launcher), so warm spares and restarts still match by main scope and window.
 - **Rolling upgrades and activation**: the rule is the node's; the main conversation's window also needs the manager that sends it. Update **the resident node's personad binary**; the new limits apply on the next assistant-process start; an idle existing process is resumed with the new policy on its next marked message, while active background tasks are not killed. A hub-only deploy or a download-channel publication without installing the node update is not enough. Publishing and deployment remain separate, approval-gated operations.
+
+### Idle-aware unattended delivery
+
+The main chat can receive supervision, scheduled follow-ups and messages from other conversations while the user is
+away. Before delivering one of these non-user messages, a Claude node can compact the existing conversation in place
+(#8658). This does not change the launcher's window or replace the model's automatic compaction or the idle-process
+reclamation rule above. Other conversations, Codex and external runtimes keep their existing behavior.
+
+Three advanced assistant settings are available through `persona_settings` (changes need the usual user approval),
+and through the assistant settings API:
+
+| Setting | Default | Allowed values |
+| --- | --- | --- |
+| `assistant.idle_auto_compact` | `true` | `true` or `false`; `false` disables this additional compaction |
+| `assistant.idle_auto_compact_minutes` | `30` | Whole minutes, 1-1440 |
+| `assistant.idle_auto_compact_tokens` | `300000` | Whole tokens, 10000-10000000 |
+
+Both limits must be reached. Idle means time since the last **user message received**, not time since the assistant
+last answered: unattended rounds do not restart that clock. Context means the last actual main-model request's
+`input_tokens + cache_read_input_tokens + cache_creation_input_tokens`, or the post-compaction token count, not the
+cumulative totals in `result.usage` or `modelUsage`. Unknown context never triggers compaction.
+
+The manager attaches `idle_compaction: {enabled, idle_minutes, context_tokens}` to the main chat's `assistant.send`
+and `session.send` calls. The node uses structured `message_source` (or the existing protected source metadata), not
+keywords in the message, to distinguish unattended messages. Older nodes ignore the optional policy; a missing
+policy from an older manager leaves delivery unchanged. Upgrade the main chat's node as well as the manager to use
+this feature.
+
+The node sends `/compact` through the same path as manual compaction and reports it in `session.compaction`. The
+unattended message is written only after the compaction command ends, not merely when its boundary is reported.
+A failed compaction still allows the original message through. Delivery waits at most 30 seconds, below the manager's
+90-second relay deadline; a still-running compaction returns a retryable `compacting` refusal and leaves the original
+message unsent in the sender's existing queue. Further unattended retries refuse immediately while compaction is in
+flight, without issuing another `/compact` or consuming another attempt. Delivery can resume after the real result,
+not merely its boundary. The compaction itself retains its separate ten-minute limit. A cancelled request or exited
+process also leaves the message unsent for the existing retry path.
+
+The idle clock, last actual context and attempt latch are kept in the node's existing Postgres-backed session
+record. User activity resets the clock on receipt, even while a send lock is held. A context reduction also restarts
+the idle interval. Dropping below the token threshold rearms compaction; context must then grow back over it and the
+new interval must elapse. Otherwise there is at most one attempt per idle interval, including failed attempts and
+node restarts. The manager carries this node-owned state opaquely through `db.NodeSession` and the existing
+`node_model` settings row, including the policy, idle timestamp, last actual context and attempt latch; no new table
+or migration is needed. A newly observed conversation or a changed policy starts a conservative fresh idle interval rather
+than guessing when the user last spoke.
 
 ### Impossible gateway usage (2026-11-06, #3300)
 
@@ -836,6 +940,7 @@ before the next message, Claude Code thinks the window is exceeded and auto-comp
 User selects "Compact context" in main-chat menu: `POST /api/v1/assistant/conversations/{id}/compact` → node `assistant.compact` (`node/assistant_compact.go`).
 
 - Same path as idle compaction: write `/compact` into an existing process, or start with `--resume` (chat's previous launcher / model); Codex uses `thread/compact/start`; runtime chats unsupported.
+  A Codex Agent on an app-server takes the same call when sent `/compact` alone (#10188, [codex.md](../integrations/codex.md) "Sessions on the daemon (app-server route)").
   A guest conversation (a meeting's room too, which the manager compacts in long meetings: [meeting-minutes.md](meeting-minutes.md) "Long meetings: lean batches and compaction (#8253)") resumes as on any message, with its guest flags and settings from its record; one whose launcher runs another agent by now is refused, nothing started (#8253). The manager compacting a room sends `only_running: true`: a process that is not running is refused with `not_running` instead of being started only to be compacted (an older node ignores the field).
   Answering or already compacting returns 409, not queued: users can't see when a `/compact` queued behind a turn begins.
 - Progress lives in node session state (hub Postgres), sent with session lists as `compaction`: `running` → `done` on `compact_boundary` (Codex `thread/compacted` / `contextCompaction`);
@@ -1028,6 +1133,48 @@ If the hub cannot register the dispatched run or monitor its conversation, it di
 A user edit takes precedence over updates from a run that started before that edit. The editor sends the note's
 revision when changing its text. If a run already saved a newer note, the hub rejects the stale edit so the user can
 review the new note before changing it. Saving another task field keeps the current note.
+
+**Progress on a linked to-do** (#9755): `schedule_followup` with `every` or recurring `cron`, and `schedule_routine`,
+accept an explicit `todo_id`. Only a conversation allowed to supervise that open to-do can set the association;
+titles and the latest task never imply a link. Omission on an edit keeps it; an empty string clears it and its
+progress state. One-shot follow-ups cannot opt in. Existing unlinked schedules stay unchanged; attach an existing
+schedule through an authorized `schedule_routine` edit. This is not permission to create or widen recurring work.
+
+Each dispatched linked run starts with its to-do ID. When its watched turn settles, the hub records `todo_progress`
+on its `ScheduleRun` in `assistant.runs`: `progress`, `no_progress`, `unknown` or `inactive`, with the to-do ID,
+consecutive assessable no-progress count and the run's explanation. Skipped or unstarted attempts are `not_run`;
+a newer completed run makes a late older unassessed result `superseded`. A still-running, unassessed run is `pending`.
+
+The baseline is the previous assessment, or a before-dispatch snapshot on the first run. Observable progress is
+any changed nonempty last Agent answer on a current unreleased, undismissed task Agent, a state change of an
+existing acceptance criterion, or changed content/steps in an explicit `report_to_supervisor` `progress` report.
+Answers are read from transcript text, not truncated session previews; runtime API errors, the schedule's own
+conversation, tool activity, timestamps, notes, evidence-only criterion edits, display paraphrases and repeated
+identical reports do not count. These are observable changes, not a judgment that an artifact is useful or that the
+work is accepted. Criterion rewording alone does not count.
+
+One assessed no-progress run queues an existing blocked supervisor signal. At two, the existing actionable
+`needs_user` review puts **Change approach / Keep waiting**, the explanation and the cost of waiting in Needs you,
+including for `push: asked`. Choosing another approach asks for a proposal within existing permissions, not
+permission to spend, send or widen scope. The decision's 24-hour deadline only revisits it; the hub never applies
+the proposed strategy change by default. Existing notification preferences and decision routing still apply.
+For a worker supervised by a task-leader Agent, the conversation above that leader reviews the decision through
+its existing authority; the worker stays supervised by its leader.
+Another pending owner decision is never overwritten; a failed escalation is retried on a later assessment.
+The first escalation attempt's run identity is saved with the assessment before creating its review. If the
+review succeeded but the final escalation-marker write failed, later assessments or restart replays recognize
+that exact pending review and repair the marker without replacing the decision or claiming another owner question.
+
+Observed progress resets the streak. Unreadable evidence is `unknown`: it does not increment or clear the
+previous known count, and it preserves the last readable evidence. An initially unreadable baseline must become
+readable before it can establish a no-progress run; later recovery can still prove progress against known evidence.
+Closed, cancelled, superseded or paused work is inactive, clears the streak and is not reopened or escalated.
+The latest evidence, run identity, count and escalation markers live with the schedule in `assistant.tasks`,
+survive restart and do not depend on the shared 200-run display history. Replaying a completion does not count
+it twice. Writes must succeed before escalation; signal and owner-card delivery reuse their existing mechanisms,
+not a separate scheduler outbox.
+A failed run-history write retains the assessment already committed with its schedule and retries the history
+write without counting the run again. Only an assessment that could not be committed is recorded as `error`.
 
 Deployment: update hub and node together (`resume_only` is new; old node ignores it and creates a new chat under a missing old id).
 
@@ -1705,6 +1852,54 @@ The apps find an assistant chat by what was said in it through `GET /api/v1/assi
 - **Privacy**: full devices only (a read-only role gets 403), not an extension scope, not a tool the model can call; the query is never logged. The rows go with their chat; dropping the manager's database drops them.
 - **Reading it again** (#6340): `personad assistant search-reindex` (the built-in manager; `persona-manager assistant search-reindex`) or `personad manager search-reindex [--dir D]` (a manager made in the app, `--dir` left out when the computer has one) empties both tables in the database the manager runs on and counts the reset (`db.ResetSearch`, the manager setting `assistant_search.reset`). The built-in manager's database is its own once its data moved there, else the hub's (`builtinDatabaseNow`, as `builtinDatabase` decides at its start); another manager's is its `manager.json`'s, never the hub's. A running manager sees the count move at its next sweep (`searchLoad`): it empties what it wrote meanwhile from its old cursors, drops the cursors it held and reads every chat again from the start, so it need not be stopped; a stopped one reads them when it starts. A database without the index (a manager from before chat search) is left as it is. There is no separate `--purge`: the manager always fills the index again from the transcripts, so emptying it and rebuilding it are the same act.
 - **Not yet**: the earlier stretches of a chat that moved between Claude Code and Codex are not indexed, only the session it runs in now.
+
+## One memory
+
+The assistant has one memory, the one the Memory page shows (#9440). Claude Code keeps auto memory under the config
+directory, and assistant conversations run in more than one Claude profile ("Claude assistant profile compatibility"
+above), so without this each profile would keep its own.
+
+- **The directory** (`node/memory.go` `memoryDir`): for the assistant's own directory it is always
+  `<the node's default Claude config directory>/projects/<encoded assistant directory>/memory`, whichever directories
+  exist. The Memory page, Codex and the other runtimes (`memory_dir`) and dreaming resolve it there.
+- **Claude Code**: every assistant start's settings carry `autoMemoryDirectory` with that directory
+  (`assistantCompactionSettings`). Claude Code takes the key from `--settings` before the profile's own settings, and
+  knows it from 2.1.74; an older one ignores it and keeps writing to its profile's copy, which the merge below still
+  brings in. Writes to `.md` files in the directory need no permission, as in the default location (read from Claude
+  Code 2.1.325's permission rule; not measured in a live conversation).
+- **Not changed**: a guest conversation and a meeting's room get no directory and keep auto memory off. The Health
+  space keeps its own memory where Claude Code puts it (`docs/assistant/health.md`), with no new setting and no merge.
+- **The copies other profiles hold** (`node/memory_merge.go`) are merged before the directory is handed to a
+  conversation, the Memory page or dreaming, under the lock the memory API takes. The check runs each time (under a
+  millisecond with twenty notes), because a conversation that was already running keeps the settings it started with
+  until it restarts. A note only a copy has is copied in with its modification time and its `MEMORY.md` line. The
+  same file name with the same bytes is left. The same file name with different content keeps the one modified
+  later. Notes with different names about the same matter are both kept: reconciling them is not this merge's job.
+- **Nothing is deleted.** The other copies are never written. Each run first saves the memory as it was (`before/`;
+  a memory directory that is itself a link is followed, so the backup holds its notes),
+  then for each note the copy's version (`copies/<n>/`) before it is merged and the version it took the place of
+  (`replaced/<n>/`), in `<data dir>/memory-merge/<encoded directory>/<UTC time>/`. The run's manifest records each note
+  as soon as its merge, backups and `MEMORY.md` line are done. A note whose bytes a run has recorded is skipped, so each
+  version is compared once: a note deleted or changed on the Memory page does not come back, a second run does nothing,
+  and undoing a merge by hand (copy `before/` back over the memory directory, older times and all) stays undone.
+- **Failures**: a note that cannot be merged is not recorded and is tried again ten minutes later, by itself; the notes
+  after it and the other copies are merged meanwhile. A run interrupted part way leaves its unrecorded notes to the next.
+- **Concurrent writers**: the model writes memory with its own file tools, outside the node's lock. The merge creates a
+  new note only if the name is still free, replaces a note only if it has not changed since it was compared (time, size
+  and bytes, read again just before the rename), and re-reads `MEMORY.md` just before replacing it. A new note is
+  written and synced under a temporary name first and published by a hard link, or a rename that refuses to replace
+  where there are no links, so it appears whole; a file system with neither gets it written in place, and a failed
+  write takes it away again. A note still changing after three attempts is recorded as the memory's only if the
+  memory holds a version not older than the copy's; if not, it is left for the next check. A `MEMORY.md` line
+  belongs to the note its link points to (the whole file name), not to a note its description mentions.
+- **Telling the user** (`assistant/memory_merge.go`): every ten minutes the manager asks the node for its runs
+  (`assistant.memory`, op `merges`). For a run it has not told about (`persona_settings` key `assistant.memory_merge`, the
+  last run told for each computer, so moving the assistant to another computer and back tells only what is new) it
+  writes `memory-merge.md` into the memory directory in the user's language and sends one P1 push. The report lists
+  the notes brought in and, for each conflict, both modification times, which version was kept and the full text of
+  the other. It is not in `MEMORY.md`, so no conversation loads it; the Memory page lists it like any note, and the
+  user deletes it when done. A node that does not know the op answers an error and nothing is told until it does.
+- **Rollback**: without the setting each profile reads its own directory again, exactly as it left it.
 
 ## Memory dreaming
 

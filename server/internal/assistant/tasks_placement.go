@@ -326,6 +326,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	case t.Parent != "":
 		prompt += "\n\n" + prompts.RenderTaskWorker()
 	}
+	// Files for the user are named by path, never pasted into the reply (task_files.go, #10511). Always asked for,
+	// unlike the closeout form below, which depends on a switch.
+	prompt += "\n\n" + prompts.RenderTaskFiles(answerLanguage(s.hello(ctx).Locale))
 	// The closeout's form, up front (agents_closeout_brief.go): after the delivery line when both are asked for.
 	delivery := !t.Readonly && s.doneNeedsDelivery(ctx)
 	brief := s.closeoutBrief(ctx, delivery)
@@ -337,7 +340,8 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	}
 	// The project background, and the decisions of the todo and its continuation ancestors (a task started again may
 	// have some), go before the prompt (#2820, #1618); the tab is named from the title.
-	prompt = s.withProjectContext(ctx, m.ID, t.Cwd, t.Supervisor, s.withTodoDecisions(ctx, t.TodoID, prompt))
+	// The direction's notes go by who follows the task up (#10623): a leader's own plan names it only in the ledger.
+	prompt = s.withProjectContext(ctx, m.ID, t.Cwd, s.taskSupervisorOf(t), s.withTodoDecisions(ctx, t.TodoID, prompt))
 	prompt, err = s.withStandingAuthorizations(ctx, m.ID, t.Cwd, prompt)
 	if err != nil {
 		return "", "", err
