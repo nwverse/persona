@@ -174,16 +174,20 @@ struct CallFollowUpTests {
         capture.callGate = { nil }
         let started = replay.play(tape, audioFile: audio)
         var played = false
+        var stopped = false
         if started {
             await Self.waitUntil { replay.audio?.isPlaying == true }
             played = replay.audio?.isPlaying == true
             _ = capture.stop()
+            // stopWithoutMicrophone resets the replay's recorder synchronously; another suite may use it after the await.
+            stopped = capture.state == .idle && capture.recordingID == nil
             await Self.waitUntil { !replay.running }
         }
-        let cleaned = !replay.running && replay.audio == nil && capture.state == .idle && capture.recordingID == nil
+        let cleaned = stopped && !replay.running && replay.audio == nil && capture.recordingID != MeetingReplay.id
         replay.clearEnded()
         try #require(started, "ordinary replay did not start")
         try #require(played, "ordinary replay audio did not play")
+        try #require(stopped, "ordinary replay did not stop its recording")
         try #require(cleaned, "ordinary replay did not finish cleanly")
         print("MeetingReplayCallGate: ordinary playback and cleanup passed")
     }
