@@ -212,8 +212,8 @@ switch the detail without a push when a sidebar item is chosen; only drilling do
 - **Each root keeps its drill-down** while the user is elsewhere (`SidebarPageRoots`, a pure value with unit tests,
   `PersonaTests/SidebarPageRootsTests`); picking the root in front goes back to it (the tab-bar rule); another conversation
   picked while the conversation is in front starts at its root without a pop. Another assistant or hub forgets every root.
-- **The shaded row follows the root**, also while drilled in (`UnifiedSidebar.atRoot`, `shownPlace`; an Agent's row from
-  the root).
+- **The shaded row follows the root**, also while drilled in (`UnifiedSidebar.atRoot`, `shownPlace`, `shownAgent`): one
+  row of the whole column at a time, an Agent's in every grouping, all in one shade (`SidebarSelectedShade`, #11032).
 - **Motion**: a switch is never animated (the open Duo upright: the column sliding away is the only motion); a drill-down's
   push and a re-pick's pop are.
 - **Structure**: `AssistantView` (embedded) stays the stack's root, so the sidebar's requests and routes keep landing there,

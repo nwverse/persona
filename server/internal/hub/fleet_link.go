@@ -619,7 +619,15 @@ func (h *Hub) fleetRoutesRelayed(api *http.ServeMux) {
 			writeErr(w, http.StatusForbidden, errors.New("this device can only answer with a card's own choices"))
 			return
 		}
-		if pr := principalOf(r.Context()); pr.Role == roleExtension {
+		pr := principalOf(r.Context())
+		if pr.Role == roleScoped {
+			ix, pending := h.pendingInteraction(r.PathValue("id"))
+			if !pending || !h.scopedQuestion(ix) || res.Approve != nil || res.Allow != nil || res.Mode != "" || res.Always || len(res.Keys) > 0 || len(res.PreKeys) > 0 {
+				scopedPermissionDenied(w, "")
+				return
+			}
+		}
+		if pr.Role == roleExtension {
 			if why, mode, mid, sid := h.extensionResolveRefused(pr, r.PathValue("id"), res); why != "" { // extension_modes.go
 				h.refuseExtensionMode(w, r, pr, mid, sid, mode, why)
 				return

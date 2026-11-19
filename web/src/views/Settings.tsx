@@ -119,6 +119,7 @@ interface DeviceToken {
   name: string;
   kind: string;
   role: string;
+  scopes?: string[];
   created_at?: string;
   last_seen?: string;
   /** Set once revoked: the hub keeps listing it (lib/devices.ts). */
@@ -1360,6 +1361,7 @@ function Devices() {
     }
   };
   const kind: Record<string, string> = { phone: t("settings.kind_phone"), watch: t("settings.kind_watch"), other: t("settings.kind_cli"), web: t("settings.kind_web") };
+  const roles: Record<string, string> = { answer: t("settings.role_answer"), scoped: t("settings.role_scoped") };
   const { active, revoked } = splitDevices(data?.tokens ?? [], data?.current);
 
   // A revoked credential is shown greyed, with when it was revoked and no "Revoke" (iOS DeviceCredentials.swift).
@@ -1370,7 +1372,7 @@ function Devices() {
         <div className="flex items-center gap-2">
           <span className={cx("truncate text-[13px]", gone ? "text-ink-3" : "text-ink")}>{tok.name || tok.id}</span>
           {tok.id === data?.current && <Pill tone="green">{t("settings.this_browser")}</Pill>}
-          {tok.role !== "full" && <Pill>{tok.role === "answer" ? t("settings.role_answer") : tok.role}</Pill>}
+          {tok.role !== "full" && <Pill>{roles[tok.role] ?? tok.role}</Pill>}
         </div>
         <div className="mt-0.5 truncate text-[11.5px] text-ink-3">
           {kind[tok.kind] ?? tok.kind}
@@ -1378,6 +1380,9 @@ function Devices() {
           {!gone && tok.last_seen ? ` · ${t("settings.used_ago", { time: ago(tok.last_seen) })}` : ""}
           {tok.created_at ? ` · ${t("settings.added_ago", { time: ago(tok.created_at) })}` : ""}
         </div>
+        {tok.scopes?.length ? (
+          <div className="mt-0.5 break-words text-xs text-ink-3">{tok.scopes.join(" · ")}</div>
+        ) : null}
       </div>
       {!gone && tok.id !== data?.current && (
         <RowConfirm

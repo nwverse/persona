@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -312,7 +312,7 @@ func waitCompaction(ctx context.Context, probe func() compactProgress, poll, gra
 var compactMarks = [][]byte{[]byte(`"subtype":"compact_boundary"`), []byte(`"type":"compacted"`), []byte(`"type":"context_compacted"`)}
 
 // compactErrorRE: what Claude Code writes when its /compact fails ("Error during compaction: …").
-var compactErrorRE = regexp.MustCompile(`(?i)error (?:during|while) compact[^"\\]{0,200}`)
+var compactErrorRE = lazyre.New(`(?i)error (?:during|while) compact[^"\\]{0,200}`)
 
 // compactionSince reads transcript path from offset off: whether a compaction record is there, and the error the
 // runtime wrote about a failed one.
