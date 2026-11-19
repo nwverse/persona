@@ -59,13 +59,16 @@ func TestInboxReplayKeepsSelectedRulesWithBoundedContext(t *testing.T) {
 				}) {
 				t.Fatalf("bounded context changed the selected activity or rules: %+v", item)
 			}
-			if strings.Count(item.Context, markNew) != 1 ||
-				!strings.Contains(item.Context, at.In(cliLocation()).Format("01-02 15:04")) ||
-				!strings.Contains(item.Context, "Unselected later context") {
-				t.Fatalf("selected context lost its time, divider or later context: %q", item.Context)
+			current, background, ok := strings.Cut(item.Context, "Background history (context only, not new requests):")
+			if !ok || !strings.Contains(current, "Current messages (new activity):") ||
+				!strings.Contains(current, at.Format(time.RFC3339)) ||
+				strings.Contains(current, "Unselected later context") ||
+				!strings.Contains(background, "Unselected later context") {
+				t.Fatalf("selected activity and background were not kept separate: %q", item.Context)
 			}
 			for i := range 8 {
-				if got, want := strings.Contains(item.Context, fmt.Sprintf("old-%d ", i)), i >= 8-contextEarlierKeep; got != want {
+				// The later unselected message occupies one of the retained background slots.
+				if got, want := strings.Contains(background, fmt.Sprintf("old-%d ", i)), i >= 9-contextEarlierKeep; got != want {
 					t.Fatalf("background %d presence=%v, want %v: %q", i, got, want, item.Context)
 				}
 			}
@@ -82,7 +85,8 @@ func TestInboxHandoffPromptKeepsContextWindowAndConfirmation(t *testing.T) {
 	for _, want := range []string{
 		"This is a handoff, not a new request for the owner.",
 		"Any reply to Lark requires the owner's confirmation.",
-		markNew,
+		"Current messages (new activity):",
+		"Background history (context only, not new requests):",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("handoff prompt lost %q: %s", want, prompt)

@@ -237,7 +237,7 @@ func TestInboxAddressedCardAndOwnerHandoffStayOpen(t *testing.T) {
 
 func TestInboxAddressedHandoffFetchesRootOmittedByThreadList(t *testing.T) {
 	root := addressedMessage("om_example_root", "cli_example_monitor", "Example Monitor",
-		`"<card>On-call: Example User\nRoot alert details</card>"`, "omt_example_topic", nil)
+		`"<card>On-call: Example User\nRoot alert details</card>"`, "", nil)
 	root.MsgType, root.CreateTime = "interactive", "2029-12-31T23:59:00Z"
 	request := addressedMessage("om_example_request", "ou_example_user", "Example User",
 		`"@Example Bot check this alert"`, "omt_example_topic", []adapter.Mention{{ID: "cli_example"}})
