@@ -289,6 +289,8 @@ add its name to the list, write its handler, and use `UPDATE_GOLDEN=1` to update
 
 For to-dos, shared assistant instructions cover routing and responsibility; parameter formats, defaults and operation rules live in each tool's description/schema. Keep rules needed by task Agents in the association tools themselves: those callers do not receive the assistant's shared instructions. When consolidating text, preserve schema constraints and inspect both the tool snapshots and every affected shared-instruction variant before updating the size baseline through its guarded updater.
 
+`agent_start`, `agent_send` and `task_plan` each keep their own compact `wait_seconds` guidance: health conversations receive these tools but use `health_claude_md.md`, not the shared `assistant/claude_md.md`. Moving the common rules only into shared assistant instructions would leave health callers without them; any further consolidation must preserve the complete inline-observation contract in every tool.
+
 Device `phone_*` tools (contacts, calendar, reminders, photos, health, location, device info, clipboard, local notifications) execute on the phone. When the app connects to the hub, it sends its tool list
 (names, descriptions, schemas); the hub stores it in Postgres and adds optional `queue_if_offline` guidance and a schema parameter to confirmed writes before listing them to Agents (`setPhoneTools` / `phoneToolList` in `hub/hub.go`, `docs/apple/phone-tools.md`). The hub removes that parameter before forwarding a call. Its own `phone_write_queue_list` and `phone_write_queue_cancel` tools live in `mcp/phone/` and require no App release.
 Descriptions live in iOS `apple/Persona/PhoneTools/*Tool.swift` (collected by `PhoneToolRegistry.swift`) and Android
