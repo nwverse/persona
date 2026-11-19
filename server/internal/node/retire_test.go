@@ -82,7 +82,7 @@ func TestHerdrRetire(t *testing.T) {
 }
 
 // session.retire stops an idle agy in its pane with the same two Ctrl+C presses and keeps the pane (#11087); a working
-// one is refused, and a work agent the node cannot quit that way (cursor) still is.
+// one is refused, and a work agent the node cannot quit that way (cursor) is never stopped.
 func TestHerdrRetireAgy(t *testing.T) {
 	n, f, home := herdrNode(t)
 	t.Setenv("ANTIGRAVITY_CLI_CONFIG_DIR", "")
@@ -105,11 +105,19 @@ func TestHerdrRetireAgy(t *testing.T) {
 	}
 	idle, busy, other := idOf(agyTestPane), idOf("w1:p2"), idOf("w1:p3")
 
-	for _, id := range []string{busy, other} {
-		_, err := request(t, n, "session.retire", map[string]any{"session_id": id})
-		if code, _ := refusalOf(t, err); code != notRetirable {
-			t.Errorf("%s: code %q", id, code)
-		}
+	// The agy rows are pane-derived (otherSession), never a hex session id: still accepted while agy runs in the pane.
+	if idle != otherSession(host.Agent{Agent: agyAgent, PaneID: agyTestPane}) {
+		t.Fatalf("agy row id = %q", idle)
+	}
+	_, err := request(t, n, "session.retire", map[string]any{"session_id": busy})
+	if code, _ := refusalOf(t, err); code != notRetirable {
+		t.Errorf("working agy: code %q", code)
+	}
+	if _, err := request(t, n, "session.retire", map[string]any{"session_id": other}); err == nil {
+		t.Errorf("cursor: retired")
+	}
+	if got := withoutAgentReports(f.trace("pane.send_keys")); len(got) != 0 {
+		t.Fatalf("keys sent before the idle agy's retire: %v", got)
 	}
 	quitsOn(f, agyTestPane, idle, []any{working, cursor}, shellPane(agyTestPane, "w1:t1", "w1", cwd, idle))
 	res, err := request(t, n, "session.retire", map[string]any{"session_id": idle})
