@@ -150,7 +150,7 @@ import Observation
         guard let model else { return [] }
         let query = selected
         return model.scoped(model.allSessions).filter { row in
-            row.group == group && !row.assistant && (query.machine.isEmpty || row.machineID == query.machine) &&
+            row.group == group && !row.assistant && (query.includeHidden || row.hiddenByDirectory != true) && (query.machine.isEmpty || row.machineID == query.machine) &&
                 (query.text.isEmpty || [row.title, row.cwd, row.lastText ?? "", row.spaceName ?? "", row.slotName ?? ""]
                     .contains { $0.localizedCaseInsensitiveContains(query.text) })
         }
