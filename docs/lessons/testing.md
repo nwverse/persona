@@ -1278,3 +1278,10 @@ that open with a TLS record (first byte `0x16`) and replays that byte before for
   command that sleeps 20 s under a 20 s wait passes when the signal is lost and fails on a slow machine when it was
   not, so the result says nothing. Let it sleep ten times the wait, keep the wait generous, and on a timeout say which
   side stalled: the command never got the signal, or it got it and its parent had not exited yet.
+
+- A signal test passes alone and hangs when its runner started it with that signal ignored (#11026). A non-interactive
+  bash starts its background jobs with SIGINT and SIGQUIT ignored, and `nohup` or a detached shell ignores SIGHUP; a
+  signal ignored when a shell starts can never be trapped there, so the script under test never sees it.
+  `test_check_fast.py`'s SIGINT tests time out when check-fast runs that suite (each check is a background job), and
+  its SIGHUP tests when the caller ignores HUP; run on its own the suite passes. Run signal suites in the foreground,
+  or reset the signal to its default in the child (`preexec_fn`) before blaming the change.
