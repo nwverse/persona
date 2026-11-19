@@ -189,6 +189,20 @@ export function triage(todo: Todo, lookup: SessionLookup | undefined, now: numbe
   return at("other", "rest");
 }
 
+/** When a to-do the triage filed with the finished ones (Just finished or Done) finished, ms: the moment its rule reads
+ *  above — its close, its accepting review, its deploy — else its last move (a finished turn the owner has seen since).
+ *  The Assistant's Finished entry lists what finished less than JUST_DONE_MS ago, seen or not (#10922). 0 when nothing
+ *  says. */
+export function finishedAt(todo: Todo, t: Triage): number {
+  switch (t.rule) {
+    case "closed": return ms(todo.done_at);
+    case "accepted": return ms(latestReview(todo.supervision)?.at);
+    case "deployed": return ms(todo.delivery?.at) || t.last;
+    case "superseded": return ms(todo.done_at) || t.last;
+    default: return t.last;
+  }
+}
+
 /** Whether a to-do counts toward the header's open count: not closed, not accepted or deployed, not shelved. A finished
  *  turn nobody looked at yet (Just finished, still open) counts: only a review or the user closes a to-do. One the owner
  *  has seen since (rule 9a, in Done) does not. */

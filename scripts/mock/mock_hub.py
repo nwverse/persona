@@ -9234,8 +9234,9 @@ if MOCK_TASKS:
             TASK_FEED[ASK1].append(_feed("feed_receipt_review_%d" % _n, 0.2 - _n / 100, "receipt", _tid,
                                         {"title": _title, "state": "done", "summary": "检查结果已整理好，等待验收。",
                                          "review": {"state": "awaiting", "criteria": _n}}))
-    # MOCK_TASKS_FINISHED=1 (#8237): two handed-out tasks closed in the last hour and not looked at since, so In Progress
-    # lists them under Just Finished: one the hub closed with its reason, one its review accepted, each with its receipt.
+    # MOCK_TASKS_FINISHED=1 (#8237, #10922): handed-out tasks closed in the last hours, each with its receipt, so the
+    # Finished entry lists them: two not looked at since (new, the To-dos page's Just Finished): one the hub closed with
+    # its reason, one its review accepted; and one the owner already opened, which Finished still lists, as Done.
     if os.environ.get("MOCK_TASKS_FINISHED") == "1":
         for _tid, _title, _min, _extra, _summary in [
             ("todo_done_login", "修复登录页闪退", 12, {"done_by": "auto", "done_reason": "改好了：登录页不再闪退，PR #43 已合并"},
@@ -9244,6 +9245,9 @@ if MOCK_TASKS:
                 "supervisor": ASK1, "state": "accepted", "round": 0, "done_when": [], "updated_at": ago(minutes=40),
                 "reviews": [{"at": ago(minutes=40), "verdict": "accepted", "note": "写好了：7 个 PR 分成新功能、修复和其他三组"}]}},
              "发布说明分好了三组，放在 docs/release-notes.md。"),
+            ("todo_done_faq", "更新常见问题页", 150, {"done_by": "auto", "done_reason": "改好了：常见问题页补了三条付款问题",
+                                                    "seen_at": ago(minutes=100)},
+             "常见问题页补了三条付款相关的问答。"),
         ]:
             _todo = dict(_task_todo(_tid, _title, "", "macbook", "", "/Users/me/code/example", _min + 30, ""), agents=[],
                          done_at=ago(minutes=_min), **_extra)

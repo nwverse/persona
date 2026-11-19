@@ -42,7 +42,7 @@ was made (#8193, as iOS's `FeedLine`), with **Start**, **Edit** (computer, model
 from the feed item's own `plan` when the store has none; it stays a row in the Pending tray as well, and a dismissed one
 reads as its one-line outcome. Since #8237 the hand-off card is the task's only card (#5569's conclusion cards are gone):
 a failed start says why in plain words (`lib/start-failure.ts`; the raw error stays in the task's details), a turn the
-model service cut off says so with why, In progress lists what just finished under **Just finished** (uncounted), and
+model service cut off says so with why, the **Finished** entry lists what finished in the last 24 hours, seen or not (#10922), and
 Needs you's rows carry Retry, Remove and Continue ("Receipts" in `../assistant/unified-entry.md`). A failed start's row
 (why by its plan task's code first, and **Use … instead** where the hub suggests another launcher, #10365:
 `views/assistant/FailedTaskRow.tsx`, `lib/start-retry.ts`) is not part of the first screen: it comes with the tray's

@@ -212,6 +212,9 @@ top of the list (#5707). Now the owner files it:
 - **Opening it** counts too: the iPhone marks it seen when its page opens (the list behind has it in Done on the way
   back); the web when the page leaves it (another to-do, the list, another page), so its row does not move while it is
   read. Nothing is said about it. The Mac (frozen) and Android do neither yet; both file what another device marked.
+- **In the Assistant's tray** (#10922) opening a row of its Finished entry marks the task seen on every client, and
+  the row stays there, as Done, until 24 hours after the task finished: seeing a task changes only whether it is new
+  (`docs/assistant/unified-entry.md` "Needs you and In progress").
 - The mark is the to-do's `seen_at` on the hub (`PUT` / `DELETE /api/v1/todos/{id}/seen`, feature `todo_seen`), so every
   device agrees. It is not activity: `updated_at` stays, so it neither shelves nor unshelves anything. A client of a hub
   without `todo_seen` offers neither.

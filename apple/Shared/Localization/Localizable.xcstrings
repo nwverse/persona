@@ -69486,6 +69486,29 @@
       },
       "extractionState" : "manual"
     },
+    "Finished [Action Bar]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Finished"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完了"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已完成"
+          }
+        }
+      }
+    },
     "Finished phase [Workflow Phase]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -70424,6 +70447,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "不连 hub"
+          }
+        }
+      }
+    },
+    "Nothing finished in the last 24 hours" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nothing finished in the last 24 hours"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "直近 24 時間に完了したタスクはありません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近 24 小时没有完成的任务"
           }
         }
       }
