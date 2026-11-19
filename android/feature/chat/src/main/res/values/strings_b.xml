@@ -97,6 +97,7 @@
     <string name="chat_composer_attachment_gone">The attachment is gone or lost its read permission. Remove it and pick it again</string>
     <string name="chat_composer_upload_failed">Upload failed. Try again; your text is kept</string>
     <string name="chat_composer_add">Add attachments and quick messages</string>
+    <string name="chat_composer_hide_keyboard">Hide keyboard</string>
     <string name="chat_composer_dictate">Dictate</string>
     <string name="chat_composer_interrupt_requested">Interrupt requested; queued messages are kept</string>
     <string name="chat_composer_interrupt_unknown">Interrupt not confirmed yet. Check the terminal before doing anything else</string>

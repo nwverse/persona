@@ -191,6 +191,7 @@ private fun ChatPage(
     val controls = remember(key, chrome.actions, renamer, interactions) {
         ChatChromeState(res, chrome.actions, scope, sessions::refresh, onBack, renamer, interactions)
     }
+    val headerMenuOpen = remember(key) { mutableStateOf(false) }
     var headerOverlay by remember { mutableStateOf(false) }
     var modeOverlay by remember { mutableStateOf(false) }
     var pillOverlay by remember { mutableStateOf(false) }
@@ -211,8 +212,6 @@ private fun ChatPage(
     val assistantTrays = pageTrays.assistantTrays
     var trayApproving by pageTrays.trayApproving
     var traySending by pageTrays.traySending
-    var trayPlan by pageTrays.trayPlan
-    var traySchedule by pageTrays.traySchedule
     val traySendIds = pageTrays.traySendIds
     val inboxDrafts by pageTrays.inboxDrafts
     var traySchedules by pageTrays.traySchedules
@@ -373,6 +372,9 @@ private fun ChatPage(
     // waits for its turn.
     val glass = PersonaTheme.style == AppStyle.Glass
     val agentChat = renderStyle != ChatRenderStyle.Assistant
+    val window = LocalWindowLayout.current
+    val compactGlassAgent = glass && agentChat && !embedded && !LocalLargeWindowInput.current &&
+        !window.expanded && !window.tabletop && LocalSplitDetail.current == null
     val errorLine = snapshot.error?.takeIf { glass && agentChat }
     // Persona's conversation says it too, by Persona's name (#4339 C18): a new conversation's first message waits there.
     val personaName = persona.core.designsystem.LocalPersonaName.current
@@ -390,7 +392,6 @@ private fun ChatPage(
     val currentLinesByKey by pageReader.currentLinesByKey
     val list = pageReader.list
     var reportedSeen by pageReader.reportedSeen
-    val newestVisibleItem by pageReader.newestVisibleItem
     val readThrough = pageReader.readThrough
     val context = pageReader.context
     val pairingLoader = pageReader.pairingLoader
@@ -654,27 +655,7 @@ private fun ChatPage(
             }
         }
     }
-    trayPlan?.let { plan -> taskHost?.let { host ->
-        JSheet(onDismiss = { trayPlan = null }, title = plan.tasks.firstOrNull()?.title, scrollable = true) {
-            PlanCard(plan, host)
-        }
-    } }
-    traySchedule?.let { schedule ->
-        JSheet(onDismiss = { traySchedule = null }, title = schedule.title, scrollable = true) {
-            Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
-                Text(schedule.prompt, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink)
-                schedule.lastStatus?.let { Text(it, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3) }
-                schedule.lastError?.let { JNotice(it, status = Status.NeedsYou) }
-                schedule.nextRun?.let { Text(stringResource(R.string.chat_tray_next_run, it), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3) }
-                val machineId = schedule.runMachineId ?: schedule.machineId
-                val sessionId = schedule.runSessionId ?: schedule.lastSessionId ?: schedule.sessionId
-                if (machineId != null && sessionId != null) JButton(stringResource(R.string.chat_task_detail_open_chat), {
-                    traySchedule = null
-                    chrome.onOpenSession?.invoke(GroupKeys.key(GroupKeys.rawKey(SessionKey(machineId, sessionId)), GroupKeys.namespaceOf(key.machineId)))
-                })
-            }
-        }
-    }
+    AssistantTrayDetailSheets(key, pageTrays, taskHost, chrome.onOpenSession)
     // Drawn whatever the composer area shows: a read-only assistant conversation's task cards open their sheet too. A
     // wide window's page is drawn over the chat instead (below).
     if (pushedDetail == null) taskHost?.let { AssistantTaskSheets(it) }
@@ -880,7 +861,8 @@ private fun ChatPage(
                                         onTerminal = agentTerminal, onTerminalHelp = if (hasTerminal && terminal == null) ({ terminalHelp = true }) else null,
                                         onResumeInTerminal = resumeInTerminal,
                                         turnStart = runningSince,
-                                        sides = childCards.sides, sideRollup = childCards.sideRollup, onOpenSide = chrome.onOpenSide)
+                                        sides = childCards.sides, sideRollup = childCards.sideRollup, onOpenSide = chrome.onOpenSide,
+                                        menuOpen = headerMenuOpen)
                                     // The space's other tabs under the title (iOS SiblingTabs); not for the assistant's conversation.
                                     if (tabs && session != null && onOpenSibling != null) {
                                         ChatSiblingTabs(session, siblingSessions, onOpenSibling, trailing = activityPill)
@@ -892,7 +874,11 @@ private fun ChatPage(
                                 }
                             }
                             if (foldsHeader) JFoldingHeader({ headerFold.fold }, onRange = { headerFold.range = it }, onTouch = headerFold::touched,
-                                full = header, compact = { ChatSlimHeader(session, status, connection, onBack, onOpen = headerFold::open) })
+                                full = header, compact = {
+                                    ChatSlimHeader(session, status, connection, onBack,
+                                        onMore = if (compactGlassAgent) ({ headerMenuOpen.value = true }) else null,
+                                        onOpen = headerFold::open)
+                                })
                             else header()
 
                             ChatTasks(projection.tasks, lines, chatList,
@@ -984,7 +970,7 @@ private fun ChatPage(
                                             if (interaction.sessionKey == key) requestFolds.open(interaction.id)
                                             else taskTodos.firstOrNull { todo -> todo.activeAgents.any { it.key == raw } }
                                                 ?.let { todo -> openTask(host, todo) } ?: run { host.sheet.value = TaskSheet.Agent(raw) }
-                                        }, onSend = ::sendTray, onSchedule = { traySchedule = it }, onPlan = { trayPlan = it },
+                                        }, onSend = ::sendTray, onSchedule = { pageTrays.traySchedule.value = it }, onPlan = { pageTrays.trayPlan.value = it },
                                         backgroundRecords = host.backgroundRecords.isNotEmpty(), onBackground = host.onOpenBackground,
                                         under = computerPill?.let { pill -> { pill(Modifier) } },
                                         groupByOrigin = foldsBackground)
@@ -1012,6 +998,7 @@ private fun ChatPage(
                                     onSend = { send() }, onCommand = { send(it) }, onNotice = { notice = it },
                                     extraContent = linkContexts.isNotEmpty(),
                                     assistantChat = assistantChat,
+                                    useShellSurface = compactGlassAgent,
                                     enabled = canSend, placeholder = when {
                                         !canSend -> READ_ONLY.text()
                                         // "Ask Persona…", as the assistant's blank page and iOS say (#4339 C18).
@@ -1210,8 +1197,9 @@ private fun ChatPage(
                                     spoken = if (opensSheet) planStepText(res, anchor.plan.todos) else null,
                                     onClickLabel = if (opensSheet) stringResource(R.string.chat_plan_pill_opens) else null)
                             }
-                            if (!chatList.followsEnd) JumpToLatest(timeline.newMessageCount(snapshot.items, newestVisibleItem, readThrough,
-                                defer = snapshot.streamingItemIds.isNotEmpty()),
+                            if (!chatList.followsEnd) ChatJumpToLatest(
+                                timeline, timelineVersion, snapshot.items, pageReader.newestVisibleItem, readThrough,
+                                deferCount = snapshot.streamingItemIds.isNotEmpty(),
                                 onClick = chatList::returnToLatest,
                                 modifier = Modifier.align(Alignment.BottomEnd).padding(end = horizontalPadding, bottom = padding.calculateBottomPadding() + 16.dp.dense))
                         }
@@ -1263,6 +1251,56 @@ private fun ChatPage(
             }
         }
     }
+}
+
+@Composable
+private fun AssistantTrayDetailSheets(
+    key: SessionKey,
+    pageTrays: ChatPageTrays,
+    taskHost: AssistantTaskHost?,
+    onOpenSession: ((SessionKey) -> Unit)?,
+) {
+    var trayPlan by pageTrays.trayPlan
+    var traySchedule by pageTrays.traySchedule
+    trayPlan?.let { plan -> taskHost?.let { host ->
+        JSheet(onDismiss = { trayPlan = null }, title = plan.tasks.firstOrNull()?.title, scrollable = true) {
+            PlanCard(plan, host)
+        }
+    } }
+    traySchedule?.let { schedule ->
+        JSheet(onDismiss = { traySchedule = null }, title = schedule.title, scrollable = true) {
+            Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
+                Text(schedule.prompt, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink)
+                schedule.lastStatus?.let { Text(it, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3) }
+                schedule.lastError?.let { JNotice(it, status = Status.NeedsYou) }
+                schedule.nextRun?.let { Text(stringResource(R.string.chat_tray_next_run, it), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3) }
+                val machineId = schedule.runMachineId ?: schedule.machineId
+                val sessionId = schedule.runSessionId ?: schedule.lastSessionId ?: schedule.sessionId
+                if (machineId != null && sessionId != null) JButton(stringResource(R.string.chat_task_detail_open_chat), {
+                    traySchedule = null
+                    onOpenSession?.invoke(GroupKeys.key(GroupKeys.rawKey(SessionKey(machineId, sessionId)), GroupKeys.namespaceOf(key.machineId)))
+                })
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChatJumpToLatest(
+    timeline: ChatTimeline,
+    timelineVersion: Int,
+    items: List<Item>,
+    newestVisibleItem: State<Item?>,
+    readThrough: Item?,
+    deferCount: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier,
+) {
+    // A changing visible row only invalidates this button. Freeze and follow change the timeline in place.
+    val count by remember(timeline, timelineVersion, items, newestVisibleItem, readThrough, deferCount) {
+        derivedStateOf { timeline.newMessageCount(items, newestVisibleItem.value, readThrough, defer = deferCount) }
+    }
+    JumpToLatest(count, onClick, modifier)
 }
 
 /** The contexts the next message carries, over the composer (a chat's, and New chat's sessions picked with @); a longer list scrolls. */

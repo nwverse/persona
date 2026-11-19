@@ -93,6 +93,7 @@
     <string name="chat_composer_attachment_gone">附件读不了了（文件没了或没权限）。移除后重新选一次</string>
     <string name="chat_composer_upload_failed">上传失败，请重试；输入已保留</string>
     <string name="chat_composer_add">添加附件和快捷指令</string>
+    <string name="chat_composer_hide_keyboard">收起键盘</string>
     <string name="chat_composer_dictate">听写</string>
     <string name="chat_composer_interrupt_requested">已请求中断，排队消息仍会保留</string>
     <string name="chat_composer_interrupt_unknown">中断结果待确认，请查看终端后再操作</string>

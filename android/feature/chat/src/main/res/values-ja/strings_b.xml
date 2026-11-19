@@ -93,6 +93,7 @@
     <string name="chat_composer_attachment_gone">添付ファイルが無効になったか、読み取り権限がなくなりました。削除してもう一度選んでください</string>
     <string name="chat_composer_upload_failed">アップロードに失敗しました。もう一度お試しください。入力内容は残っています</string>
     <string name="chat_composer_add">添付ファイルとクイックメッセージを追加</string>
+    <string name="chat_composer_hide_keyboard">キーボードを閉じる</string>
     <string name="chat_composer_dictate">音声入力</string>
     <string name="chat_composer_interrupt_requested">中断をリクエストしました。待機中のメッセージは残ります</string>
     <string name="chat_composer_interrupt_unknown">中断の結果を確認中です。ターミナルを確認してから操作してください</string>
