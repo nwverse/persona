@@ -106,9 +106,11 @@ export function OverviewCards({ editing = false, onDone }: { editing?: boolean; 
     // a card is never wider than one of the overview's two columns of rows below it (Home's GRID.rows, from 60rem of
     // the page) unless the user made it a full row: alone at 1920 px it stretched its chart to 1540 px of sparse bars,
     // and to 1300 px at 1680. While arranging, the hidden cards count where they stand.
+    // a card is as tall as its own content (items-start, as Home's GRID.rows): stretched to its row neighbour's height, one
+    // row of numbers beside a long list was a tall, mostly empty surface (#11093)
     <section
       aria-label={t("extensions-extensionslots.extensions")}
-      className={cx("grid grid-cols-1 gap-3 @min-[60rem]:grid-cols-2", halvesPaired(drawn, editing) && "md:grid-cols-2")}
+      className={cx("grid grid-cols-1 items-start gap-3 @min-[60rem]:grid-cols-2", halvesPaired(drawn, editing) && "md:grid-cols-2")}
     >
       {editing && (
         <Suspense fallback={null}>
