@@ -701,7 +701,7 @@ The reason the switch failed is shown in plain words either way.
 
 - a second start (`in_progress`);
 - **Redeploy** of its node;
-- moving the computer to another manager, or removing it (`link_switch_in_progress`).
+- moving the computer to another manager, removing it, or removing its manager (`link_switch_in_progress`).
 
 A device signed in with a pairing code it has not traded yet cannot start a switch (403). The manager writes down each step before it takes it (setting `link_switch.<machine id>`; the pairing
 link is never kept). A manager that restarts during a switch finishes it if the computer connects through Persona Link before the
