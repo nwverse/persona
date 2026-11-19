@@ -678,6 +678,9 @@ moment is cut off, as when a node restarts.
       its stdin. The link never goes on a command line, into a log, an API answer or the manager's store. The installer redeems
       the code, adds the node service `personad-node` only when the computer has none (an existing one is left unchanged), starts
       `persona-link.service`, and waits for the connection.
+      Just before the installer runs, the same command checks again for a node service, or the backup of one
+      (`node-switch.backup`) that the installer may put back. If it finds one, it leaves a marker so a rollback never removes
+      that service. Where `timeout` exists, the installer gets 150 s, so it cannot outlive the SSH command and race a rollback.
 3. **Connecting** (90 s): done when the computer's node answers through Persona Link. If the installer failed before it
    paired (no `link.json`), nothing can connect, and the switch fails at once.
 
@@ -685,7 +688,8 @@ moment is cut off, as when a node restarts.
 
 - Before the hub step, the manager removes the staged file.
 - After the hub step, the hub revokes this switch's code and the credential it was traded for (the link closes with 4002) and
-  puts the kind back to `ssh`. Over SSH, the manager then removes only what this switch installed: the connector with its
+  puts the kind back to `ssh`. It does so only when it can show that this switch began: its own record, an audit row, or
+  the code's hash. It changes nothing for a switch it saw succeed. Over SSH, the manager then removes only what this switch installed: the connector with its
   `link.json` and unit (`persona-link uninstall --purge`), and the node service only if the computer had none before
   (`persona-link node uninstall`). Both run only through the program this switch sent, recognized by its SHA-256, never
   through a `persona-link` found there. It then waits up to 2 minutes for the computer to answer over SSH again.
@@ -693,8 +697,13 @@ moment is cut off, as when a node restarts.
 
 The reason the switch failed is shown in plain words either way.
 
-**Restarts and repeats**: only one switch per computer runs at a time; a second start is refused (409 `in_progress`), and so is
-**Redeploy** of its node. The manager writes down each step before it takes it (setting `link_switch.<machine id>`; the pairing
+**Restarts and repeats**: only one switch per computer runs at a time. While one runs, the hub refuses with 409:
+
+- a second start (`in_progress`);
+- **Redeploy** of its node;
+- moving the computer to another manager, or removing it (`link_switch_in_progress`).
+
+A device signed in with a pairing code it has not traded yet cannot start a switch (403). The manager writes down each step before it takes it (setting `link_switch.<machine id>`; the pairing
 link is never kept). A manager that restarts during a switch finishes it if the computer connects through Persona Link before the
 deadline, and otherwise rolls it back.
 
