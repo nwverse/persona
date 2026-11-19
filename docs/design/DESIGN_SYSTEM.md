@@ -2418,6 +2418,19 @@ back (principle 3), and a toast at every opening would be noise for something th
 The same rule as a chosen look whose extension is switched off ("the choice stays: the default only shows meanwhile",
 `server/internal/hub/looks.go` `looksGone`). It reuses Settings' `Row`, its hint line and a native select; no new component.
 
+## Arranging cards in place (#9745)
+
+Overview's extension cards (web) are arranged where they are drawn, not in a settings list: the result is a layout (which
+card is wide, which sit side by side), and a list would show neither widths nor neighbours. Overview's top bar has
+**Arrange cards** (`IconButton` with the `grid` icon, `aria-pressed` while on) beside **New agent**, only while there are
+cards. The edit state reuses the sidebar pages editor's pieces (`web/src/views/settings/SidebarPages.tsx`): the `grip`
+handle and an HTML drag onto another item, which takes its place; ↑ / ↓ `IconButton`s at 26 px for the keyboard and touch;
+a native select for the width (**Half row** / **Full row**); `Switch` for shown or hidden; the hub footer's words for where
+it is kept; and **Reset** with Undo in a toast (4.4). Each card keeps its surface and its content, made `inert`; its head
+becomes the controls, which wrap under the name on a narrow card. A hidden card is drawn only while arranging, as its
+hairline outline (`shadow-hairline`, no surface) with "Hidden: not loaded" in `--ink-3` under its name; the card a dragged
+one would land on has a 2 px inset `--accent` ring. No new token or component (`web/src/views/extensions/OverviewArrange.tsx`).
+
 ## Values a form fills in by itself (#4975)
 
 Where a form can work out a value from what the user already gave it (the web provider wizard's Claude Code tiers, read

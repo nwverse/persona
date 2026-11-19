@@ -1,9 +1,11 @@
 // The extensions' places among the web's own pages (docs/extensions/extensions.md "UI slots"): a nav_page's full page (/extension/<id>/<ui>,
-// its entry is on the sidebar), the cards on "Overview" (overview_card) and the sections on a machine's page
-// (machine_section). Each draws the extension's declarative View with ExtensionUI; the list comes from lib/extension-slots.ts.
+// its entry is on the sidebar), the cards on "Overview" (overview_card, as the user arranged them: lib/overview-cards.ts)
+// and the sections on a machine's page (machine_section). Each draws the extension's declarative View with ExtensionUI;
+// the list comes from lib/extension-slots.ts.
 import { Suspense, useMemo, useState } from "react";
 import { uiIcon, type UIIcon, type UIPlace, type UITone } from "../../lib/extension-ui";
 import { useExtensionPlace, useExtensionSlot } from "../../lib/extension-slots";
+import { arrangeCards, halvesPaired, useOverviewPrefs, type ArrangedCard, type CardSpan } from "../../lib/overview-cards";
 import { href, navigate, onLinkClick, type Route } from "../../lib/router";
 import { useKnownDefault } from "../../lib/manager-choice";
 import { useStore } from "../../lib/store";
@@ -18,6 +20,9 @@ import { ExtensionOwnerScope } from "../../lib/extension-owner";
 // titles, and the first screen draws no extension UI. A page, a card and a section each wait under their own Suspense
 // (the page keeps its top bar) with the Loading that ExtensionUI shows while it asks for its view.
 const ExtensionUI = lazyPage(() => import("../settings/ExtensionView").then((m) => m.ExtensionUI));
+// Arranging Overview's cards (#9745) is its own chunk too: the first screen draws the cards, never their editor (its
+// heading, and each card's controls and drag).
+const OverviewArrange = lazyPage(() => import("./OverviewArrange").then((m) => m.OverviewArrange));
 
 // Whose extension is being drawn (ExtensionView knows it, the items it draws do not): the graph's per-key store is
 // scoped by it through a context (lib/extension-owner.tsx), so two extensions using the same key never share what it
@@ -79,17 +84,39 @@ export function ExtensionNavPage({ extension, ui, onToggleSidebar }: { extension
   );
 }
 
-/** The cards on "Overview" (overview_card), one row under the agents' summary: one card full width, more two a row;
- *  on a page wide enough for two columns of rows, a lone card takes one of them. */
-export function OverviewCards() {
+/** Overview's button that starts and ends arranging its cards (#9745), beside New agent; none while there is no card. */
+export function OverviewArrangeButton({ on, onClick }: { on: boolean; onClick: () => void }) {
   const cards = useExtensionSlot("overview_card");
-  if (!cards.length) return null;
+  if (!cards.length && !on) return null;
+  return <IconButton icon="grid" label={t("home.arrange_cards")} pressed={on} onClick={onClick} />;
+}
+
+/** The cards on "Overview" (overview_card), one row under the agents' summary, as the user arranged them
+ *  (lib/overview-cards.ts): in their order, a hidden one not drawn (nor asked for), each half a row or the whole row.
+ *  Half-row cards go two a row once there are two of them; one alone fills the row, and on a page wide enough for two
+ *  columns of rows takes one of them. `editing`: the cards are being arranged (dragged, moved with their arrows,
+ *  widened, hidden or shown), the hidden ones drawn in their place without their content. */
+export function OverviewCards({ editing = false, onDone }: { editing?: boolean; onDone?: () => void }) {
+  const cards = useExtensionSlot("overview_card");
+  const prefs = useOverviewPrefs();
+  const arranged = useMemo(() => arrangeCards(cards, prefs), [cards, prefs]);
+  const drawn = editing ? arranged : arranged.filter((c) => !c.hidden);
+  if (!drawn.length) return null;
   return (
     // a card is never wider than one of the overview's two columns of rows below it (Home's GRID.rows, from 60rem of
-    // the page): alone at 1920 px it stretched its chart to 1540 px of sparse bars, and to 1300 px at 1680
-    <section aria-label={t("extensions-extensionslots.extensions")} className={cx("grid grid-cols-1 gap-3 @min-[60rem]:grid-cols-2", cards.length > 1 && "md:grid-cols-2")}>
-      {cards.map((c, i) => (
-        <OverviewCard key={`${c.extension}/${c.id}`} place={c} i={i} />
+    // the page) unless the user made it a full row: alone at 1920 px it stretched its chart to 1540 px of sparse bars,
+    // and to 1300 px at 1680. While arranging, the hidden cards count where they stand.
+    <section
+      aria-label={t("extensions-extensionslots.extensions")}
+      className={cx("grid grid-cols-1 gap-3 @min-[60rem]:grid-cols-2", halvesPaired(drawn, editing) && "md:grid-cols-2")}
+    >
+      {editing && (
+        <Suspense fallback={null}>
+          <OverviewArrange cards={arranged} onDone={() => onDone?.()} />
+        </Suspense>
+      )}
+      {drawn.map((c, i) => (
+        <OverviewCard key={c.key} place={c.card} i={i} span={c.span} hidden={c.hidden} edit={editing ? arranged : undefined} />
       ))}
     </section>
   );
@@ -97,8 +124,12 @@ export function OverviewCards() {
 
 const INTERACTIVE = "a,button,input,select,textarea,label,[role=radio],[role=switch],[tabindex]";
 
-function OverviewCard({ place, i }: { place: UIPlace; i: number }) {
+/** One card; `edit`: the cards being arranged, this one among them (its controls and drag are the editor's). */
+function OverviewCard({ place, i, span = "half", hidden = false, edit }: { place: UIPlace; i: number; span?: CardSpan; hidden?: boolean; edit?: readonly ArrangedCard<UIPlace>[] }) {
   const [gone, setGone] = useState(false);
+  // its entrance plays once: a card moved while arranging is moved in the DOM, which would play it again (and keep the
+  // card invisible for its delay), so once played it is dropped; the card looks the same after it either way
+  const [entered, setEntered] = useState(false);
   const context = useMemo(() => ({ size: "compact" as const }), []);
   const to = place.opens ? pageRoute(place.extension, place.opens) : null;
   // whose card it is, unless its title already is that name
@@ -110,27 +141,52 @@ function OverviewCard({ place, i }: { place: UIPlace; i: number }) {
     if (window.getSelection()?.toString()) return;
     navigate(to);
   };
+  // its own head: the title (a link to the page it opens) and the extension's name; while arranging, the same words
+  // until the editor's controls are in
+  const head = (link: boolean) => (
+    <div className="flex min-w-0 items-center gap-2 px-4 pt-3 pb-0.5">
+      {to && link ? (
+        <a href={href(to)} onClick={(e) => onLinkClick(e, to)} className="group flex min-w-0 flex-1 items-center gap-1 outline-none focus-visible:underline">
+          <span className="truncate text-[13px] font-medium text-ink">{place.title}</span>
+          <Icon name="chevronRight" size={12} stroke={2.2} className="shrink-0 text-ink-3 transition-transform duration-150 group-hover:translate-x-0.5" />
+        </a>
+      ) : (
+        <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink">{place.title}</span>
+      )}
+      {name && <span data-extension-name className="max-w-[45%] shrink-0 truncate text-[11px] text-ink-3">{name}</span>}
+    </div>
+  );
   return (
     <div
       data-extension-card={`${place.extension}/${place.id}`}
-      onClick={open}
-      className={cx("flex min-w-0 flex-col rounded-card bg-surface pb-1.5 shadow-card", to && "cursor-pointer transition-colors hover:bg-inset")}
-      style={{ animation: `fade-up 420ms ${EASE} ${Math.min(i, 6) * 50}ms both` }}
+      onClick={edit ? undefined : open}
+      className={cx(
+        "flex min-w-0 flex-col rounded-card pb-1.5",
+        span === "full" && "col-span-full",
+        // a hidden card, drawn only while arranging, is its outline: nothing of it is loaded
+        hidden ? "shadow-hairline" : "bg-surface shadow-card",
+        !edit && to && "cursor-pointer transition-colors hover:bg-inset",
+        // while arranging, the editor marks the card being dragged and the one it would land on
+        edit && "data-[drag=from]:opacity-50 data-[drag=over]:shadow-[inset_0_0_0_2px_var(--accent)]",
+      )}
+      style={entered ? undefined : { animation: `fade-up 420ms ${EASE} ${Math.min(i, 6) * 50}ms both` }}
+      onAnimationEnd={(e) => e.target === e.currentTarget && setEntered(true)}
     >
-      <div className="flex min-w-0 items-center gap-2 px-4 pt-3 pb-0.5">
-        {to ? (
-          <a href={href(to)} onClick={(e) => onLinkClick(e, to)} className="group flex min-w-0 flex-1 items-center gap-1 outline-none focus-visible:underline">
-            <span className="truncate text-[13px] font-medium text-ink">{place.title}</span>
-            <Icon name="chevronRight" size={12} stroke={2.2} className="shrink-0 text-ink-3 transition-transform duration-150 group-hover:translate-x-0.5" />
-          </a>
-        ) : (
-          <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink">{place.title}</span>
-        )}
-        {name && <span data-extension-name className="max-w-[45%] shrink-0 truncate text-[11px] text-ink-3">{name}</span>}
-      </div>
-      <Suspense fallback={<Loading />}>
-        <OwnerScope extension={place.extension}><ExtensionUI extension={place.extension} ui={place.id} context={context} compact onMissing={() => setGone(true)} /></OwnerScope>
-      </Suspense>
+      {edit ? (
+        <Suspense fallback={head(false)}>
+          <OverviewArrange cards={edit} card={place} />
+        </Suspense>
+      ) : (
+        head(true)
+      )}
+      {/* while arranging, what the card draws stays (nothing is asked again) but takes no click or focus */}
+      {!hidden && (
+        <div className="contents" inert={edit !== undefined}>
+          <Suspense fallback={<Loading />}>
+            <OwnerScope extension={place.extension}><ExtensionUI extension={place.extension} ui={place.id} context={context} compact onMissing={() => setGone(true)} /></OwnerScope>
+          </Suspense>
+        </div>
+      )}
     </div>
   );
 }

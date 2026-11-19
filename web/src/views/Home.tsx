@@ -38,7 +38,7 @@ import { Icon } from "../ui/icons";
 import { MarkSeenDialog } from "./AgentMenus";
 import { answeredLookup, answeredSessions } from "./assistant/answered-lookup";
 import { resolve } from "./chat/Interactions";
-import { OverviewCards } from "./extensions/ExtensionSlots";
+import { OverviewArrangeButton, OverviewCards } from "./extensions/ExtensionSlots";
 import { TodoStageBar } from "./TodoStageBar";
 import { t } from "../i18n";
 import { markAllSeenLabel, STATE_LABEL, stateCount, stateName } from "../lib/state-labels";
@@ -113,12 +113,15 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
   // Back from a card opened here lands where the reader was, not at the top (#5133)
   const scroller = useRef<HTMLDivElement>(null);
   useScrollMemory(scroller, "/overview");
+  // the extensions' cards being arranged (#9745): their order, which are hidden, how wide
+  const [arranging, setArranging] = useState(false);
 
   return (
     <div className="flex h-full flex-col">
       <header className="flex h-14 shrink-0 items-center gap-2 border-b border-line px-3 sm:px-4 lg:border-transparent">
         <IconButton icon="sidebar" label={t("home.sidebar")} onClick={onToggleSidebar} className="lg:hidden" />
         <span className="flex-1" />
+        <OverviewArrangeButton on={arranging} onClick={() => setArranging((on) => !on)} />
         {!noMachines && (
           <Button tone="secondary" icon="plus" onClick={onNewAgent}>
             {t("home.new_agent")}
@@ -144,7 +147,7 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
           </div>
 
           {/* the extensions' cards (docs/extensions/extensions.md"UI slots" overview_card), under the agents' summary */}
-          <OverviewCards />
+          <OverviewCards editing={arranging} onDone={() => setArranging(false)} />
 
           {/* Before the first snapshot the socket streams the machines' agents and cards in one by one, each moving the
               groups already painted, and "Loading" then went from over them: until it is in only "Loading", then all at once. */}

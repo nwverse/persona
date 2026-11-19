@@ -117,6 +117,7 @@ export function IconButton({
   className = "",
   disabled,
   iconSize = 15,
+  pressed,
   buttonRef,
 }: {
   icon: IconName;
@@ -128,6 +129,8 @@ export function IconButton({
   className?: string;
   disabled?: boolean;
   iconSize?: number;
+  /** A button that turns a mode on and off (Overview's Arrange cards): whether it is on (aria-pressed, drawn as `active`). */
+  pressed?: boolean;
   /** The button itself (not forwarded through `ref`: these buttons are plain, and a named prop keeps the call sites explicit). */
   buttonRef?: React.Ref<HTMLButtonElement>;
 }) {
@@ -136,13 +139,14 @@ export function IconButton({
       type="button"
       ref={buttonRef}
       aria-label={label}
+      aria-pressed={pressed}
       title={label}
       disabled={disabled}
       onClick={onClick}
       onKeyDown={onKeyDown}
       className={cx(
         "touch-hit flex shrink-0 items-center justify-center rounded-[8px] transition-[background-color,color,transform] duration-150 enabled:active:scale-[0.94] disabled:opacity-40",
-        active ? "bg-hover text-ink" : "text-ink-3 enabled:hover:bg-hover enabled:hover:text-ink",
+        active || pressed ? "bg-hover text-ink" : "text-ink-3 enabled:hover:bg-hover enabled:hover:text-ink",
         className,
       )}
       style={{ width: size, height: size }}
