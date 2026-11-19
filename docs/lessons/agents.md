@@ -1190,6 +1190,18 @@ distinguishes even repeated prompts with identical timestamps. Preserve prefix a
 pairing too, and invalidate old cached pages once. Test normal runtime pages and full-item reads across append and
 complete-file replacement; fresh sessions and distinct sequential prompts do not exercise reused identities.
 
+## AGY exports parallel results as they finish; a late step is not a rewind, and a call without a result must not shift the rest (#11086)
+
+Parallel calls are exported in completion order, so a call that fails at once (unknown tool, invalid arguments) lands
+before its sibling's result: `228` (two calls), `230` (INVALID), `229`. Reading the lower index as a rewind popped
+`230`, started a new branch and left the second call without a result. The readers also paired results with calls
+through a queue that nothing reset, so one orphan call shifted every later result onto the call before its own, and the
+newest calls ended with no result, which the hub does not fold and the web draws as running tools. A step whose index
+no retained step has is a late arrival: insert it in step order, keep the branch (item IDs) and change the content
+revision so watchers re-read. A planner step, a prompt or an error closes the calls before it. `integrations/antigravity/lib/map.js`
+and `server/internal/node/agytranscript.go` must stay in step. Test with a real export's shape (the swapped lines,
+an interrupted call, a system message between results) and compare each result with its own call, not only the counts.
+
 ## An installed CLI is not an explicit runtime override (#9181)
 
 Plain AGY discovery joined the shell launcher cache and shadowed its connected assistant-capable companion. New
