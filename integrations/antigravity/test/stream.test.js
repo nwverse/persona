@@ -168,15 +168,42 @@ test('autonomous wakes stream work and settle only once native work is idle and 
 })
 
 test('autonomous wakes retire after inactivity without native export', async (t) => {
-  const { node, directory, update, chunk, runtime } = await fixture(t, { autonomousIdleMs: 350, exportPollMs: 20 })
+  const { node, directory, update, chunk, runtime } = await fixture(t, { autonomousIdleMs: 600, exportPollMs: 20, exportSettleTimeoutMs: 100 })
   nativeState(directory, 'IDLE', 0)
   update({ sessionUpdate: 'tool_call_update', toolCallId: 'read', name: 'read_file', status: 'completed', rawOutput: 'Found it.' })
   await until('a tool update can start the wake', () => node.last('session.items')?.items.some((item) => item.kind === 'tool_result'), 1000)
   await chunk('Still awake.')
   await until('inactivity retires the stream and working status', () => node.last('session.delta')?.text === '' && sessionStatus(node) !== 'working' && runtime.idle(), 1500)
   assert.deepEqual((await node.peer.call('session.items', { session_id: SESSION })).items, [])
+  await new Promise((resolve) => setTimeout(resolve, 150))
   await chunk('Awake again.')
+  const complete = [{ step_index: 0, type: 'SYSTEM_MESSAGE' }, replyStep(1, 'Awake again.')]
+  transcripts(directory, complete, complete)
+  nativeState(directory, 'IDLE', 2)
+  await until('first normal export settles after the ephemeral wake expires', () => runtime.idle() && node.last('session.delta')?.text === '', 300)
 })
+
+for (const status of ['RUNNING', 'IDLE']) {
+  test(`a wake resumes after a long tool pause with native status ${status}`, async (t) => {
+    const { node, directory, update, chunk, runtime } = await fixture(t, { autonomousIdleMs: 600, exportPollMs: 20 })
+    nativeState(directory, status, 0)
+    update({ sessionUpdate: 'tool_call', toolCallId: 'slow-tool', name: 'run_command' })
+    await until('slow tool is live', () => node.last('session.items')?.items.some((item) => item.kind === 'tool_use'))
+    await until('stream retires during the tool pause', () => runtime.idle() && sessionStatus(node) !== 'working')
+    if (status === 'IDLE') {
+      update({ sessionUpdate: 'tool_call_update', toolCallId: 'slow-tool', status: 'completed', rawOutput: 'Finished.' })
+      await until('resumed tool is complete', () => node.last('session.items')?.items.some((item) => item.kind === 'tool_result'))
+    }
+    await chunk('Command finished.')
+
+    const complete = [{ step_index: 0, type: 'SYSTEM_MESSAGE' },
+      { ...replyStep(1, ''), tool_calls: [{ name: 'run_command' }] },
+      { step_index: 2, type: 'GENERIC', status: 'DONE', content: 'Finished.' }, replyStep(3, 'Command finished.')]
+    transcripts(directory, complete, complete)
+    nativeState(directory, 'IDLE', 4)
+    await until('the single native wake export settles the resumed stream', () => runtime.idle() && node.last('session.delta')?.text === '', 300)
+  })
+}
 
 test('an autonomous wake stays live while its permission card awaits an answer', async (t) => {
   const { node, calls, update, chunk, runtime } = await fixture(t, { autonomousIdleMs: 300, exportPollMs: 20 })
@@ -313,7 +340,7 @@ test('a text-only wake does not rewrite the unexported prompt history', async (t
 })
 
 test('a late export of one wake cannot settle the next wake', async (t) => {
-  const { node, directory, update, chunk, runtime } = await fixture(t, { autonomousIdleMs: 800, exportPollMs: 20 })
+  const { node, directory, update, chunk, runtime } = await fixture(t, { autonomousIdleMs: 1300, exportPollMs: 20, exportSettleTimeoutMs: 500 })
   const announce = (toolCallId) => update({ sessionUpdate: 'tool_call', toolCallId, name: 'read_file' })
   announce('first-read')
   await chunk('Workflow finished.')
@@ -325,8 +352,8 @@ test('a late export of one wake cannot settle the next wake', async (t) => {
     { ...replyStep(1, ''), tool_calls: [{ name: 'read_file' }] }, replyStep(2, 'Workflow finished.')]
   transcripts(directory, first, first)
   nativeState(directory, 'IDLE', 3)
-  await new Promise((resolve) => setTimeout(resolve, 100))
-  assert.equal(runtime.idle(), false, 'the earlier wake exported the same tool and reply')
+  await new Promise((resolve) => setTimeout(resolve, 550))
+  assert.equal(runtime.idle(), false, 'expiry does not reassign the earlier wake with the same tool and reply')
   assert.equal(node.last('session.delta').text, 'Workflow finished.')
 
   const next = [...first, { step_index: 3, type: 'SYSTEM_MESSAGE' }, replyStep(4, 'Workflow finished.')]

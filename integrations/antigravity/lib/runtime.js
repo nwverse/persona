@@ -394,7 +394,7 @@ export function createAgyRuntime(options = {}) {
         break
       }
       case 'tool_call_update': {
-        const turn = upd.toolCallId && liveTurnForUpdate(rawId, pid)
+        const turn = upd.toolCallId && liveTurnForUpdate(rawId, pid, true, upd.toolCallId)
         if (turn) {
           const existing = turn.liveToolsById.get(upd.toolCallId) ||
             (autonomousTurns.get(pid) === turn && recordLiveTool(pid, turn, upd))
@@ -1224,19 +1224,31 @@ export function createAgyRuntime(options = {}) {
     return promptTurns.get(pid) || autonomousTurns.get(pid)
   }
 
-  function liveTurnForUpdate(rawId, pid, start = true) {
+  function missedWake(rawId, now) {
+    const missed = missedWakes.get(rawId)
+    if (missed?.expiresAt > now && missed.skip) return missed
+    if (missed) missedWakes.delete(rawId)
+  }
+
+  function liveTurnForUpdate(rawId, pid, start = true, toolCallId) {
     if (stopped || archived.has(rawId) || checkTurns.has(rawId)) return undefined
     const prompt = promptTurns.get(pid)
     if (prompt) return prompt
     if (activeTurns.has(pid) || rewinding.has(pid) || cancelling.has(rawId) || !sessionCwds.has(rawId)) return undefined
+    const now = Date.now()
     let turn = autonomousTurns.get(pid)
+    const missed = missedWake(rawId, now) ?? turn?.observedMissed
+    if (toolCallId && missed?.toolIds.includes(toolCallId)) {
+      missed.skip--
+      missed.toolIds = []
+    }
     if (!turn) {
       if (!start) return undefined
       turn = { seq: nextTurnSeq++, streamingText: '' }
       prepareLiveTurn(rawId, turn)
       turn.historySeq = turn.seq
       const { base, steps, ...pending } = unexportedTurns.get(rawId) ?? {}
-      turn.wakeCursor = missedWakes.get(rawId) ?? { after: turn.exportedBaseMax, skip: 0, pending: pending.seq ? pending : undefined }
+      turn.wakeCursor = { after: turn.exportedBaseMax, skip: 0, pending: turn.priorPending.length ? pending : undefined }
       autonomousTurns.set(pid, turn)
       if (!lastPushedSeq.has(pid)) lastPushedSeq.set(pid, 0)
       staleWorkingAt.delete(rawId)
@@ -1245,18 +1257,21 @@ export function createAgyRuntime(options = {}) {
       turn.pollTimer = setInterval(() => pollAutonomousTurn(rawId, turn), exportPollMs)
       turn.pollTimer.unref?.()
     }
-    turn.lastUpdate = Date.now()
+    turn.lastUpdate = now
     return turn
   }
 
   function pollAutonomousTurn(rawId, turn) {
     if (permissionAsks.get(rawId)?.size) return
+    const now = Date.now()
+    const missed = missedWake(rawId, now)
+    const cursor = missed ?? (turn.observedMissed?.skip ? turn.observedMissed : turn.wakeCursor)
     const native = readConversationStates().get(rawId)
     if (native && !nativeWorking(native) && native.step_count > turn.exportedBaseMax) {
       const { steps } = exportedTranscriptOf(rawId)
       const first = steps.findIndex((step, index) => (step.step_index ?? index) > turn.exportedBaseMax)
       if (first >= 0 && native.step_count > maxStepIndex(steps)) {
-        const { after, skip, pending } = turn.wakeCursor
+        const { after, skip, pending } = cursor
         let remaining = skip
         let prior = pending
         const wake = steps.findIndex((step, index) => {
@@ -1264,7 +1279,9 @@ export function createAgyRuntime(options = {}) {
               (prior && !pendingReplaced(prior, steps.slice(0, index)))) return false
           if (prior && prior.seq === unexportedTurns.get(rawId)?.seq) unexportedTurns.delete(rawId)
           prior = undefined
-          return remaining-- === 0
+          if (remaining-- === 0) return true
+          turn.observedMissed = cursor
+          return false
         })
         if ((wake >= 0 || (!skip && !pending)) && autonomousExported(turn, steps.slice(Math.max(first, wake + 1)))) {
           missedWakes.delete(rawId)
@@ -1273,8 +1290,12 @@ export function createAgyRuntime(options = {}) {
         }
       }
     }
-    if (Date.now() - turn.lastUpdate >= autonomousIdleMs) {
-      missedWakes.set(rawId, { ...turn.wakeCursor, skip: turn.wakeCursor.skip + 1 })
+    if (now - turn.lastUpdate >= autonomousIdleMs) {
+      if (!nativeWorking(native)) {
+        const next = missed ?? turn.wakeCursor
+        missedWakes.set(rawId, { ...next, skip: next.skip + 1, expiresAt: next.expiresAt ?? now + exportSettleTimeoutMs,
+          toolIds: [...turn.liveToolsById.keys()] })
+      }
       retireAutonomousTurn(rawId, native)
     }
   }
