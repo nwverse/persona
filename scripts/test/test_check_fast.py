@@ -272,8 +272,9 @@ class CheckFastScriptsTests(ScriptsRepoTestCase):
         found = {str(p.relative_to(self.repo)): is_suite(p) for p in self.repo.joinpath("scripts").rglob("test_*.py")}
         dedicated = {"scripts/test/test_external_service_refs.py", "scripts/test/test_sdk_bundle.py",
                      "scripts/test/test_extension_schema.py"}
-        expected = sorted(p for p, suite in found.items()
-                          if suite and p not in dedicated and not p.startswith("scripts/app/test_android_"))
+        dedicated.update("scripts/app/test_android_%s.py" % name  # job_i18n runs these four
+                         for name in ("i18n_check", "token_baseline", "motion_baseline", "slot_order"))
+        expected = sorted(p for p, suite in found.items() if suite and p not in dedicated)
         bin_dir = Path(self.toolchain_without_node_and_go())
         (bin_dir / "python3").unlink()
         (bin_dir / "python3").write_text(FAKE_PYTHON)
@@ -337,6 +338,62 @@ class CheckFastScriptsTests(ScriptsRepoTestCase):
                 self.assertEqual(1, code, out)
                 self.assertIn("FAIL     scripts/ci/test_changed_ratchets.py", out)
                 self.assertIn("FAIL     scripts/test/test_merge_pr_sh.py", out)
+
+    def test_a_changed_module_runs_the_suites_that_import_it(self):
+        # From the suite's own directory, or from one it names (it puts scripts/<dir> on sys.path to import from it).
+        # A suite that imports a module of that name without naming its directory imports another one (#11026).
+        self.commit_on_top("scripts/tools/helper.py", "VALUE = 1\n", "base")
+        self.commit_on_top("scripts/tools/test_uses_helper.py", "import helper\n" + FAILING, "base")
+        self.commit_on_top("scripts/ci/test_named.py", 'import sys\nsys.path.insert(0, "scripts/tools")\n'
+                           "from helper import VALUE\n" + FAILING, "base")
+        self.commit_on_top("scripts/release/test_unrelated.py", "import os, helper\n" + FAILING, "base")
+        self.write("scripts/tools/helper.py", "VALUE = 2\n")
+        code, out = self.check_fast()
+        self.assertEqual(1, code, out)
+        self.assertIn("FAIL     scripts/tools/test_uses_helper.py", out)
+        self.assertIn("FAIL     scripts/ci/test_named.py", out)
+        self.assertNotIn("test_unrelated.py", out)
+        self.assertNotIn("scripts/tools/test_other.py", out)
+
+    def test_a_suite_a_dedicated_check_runs_schedules_that_check(self):
+        # test_external_service_refs.py imports compatibility_identifiers.py and runs as its own check; four of the
+        # scripts/app/test_android_* suites run in the android check, the others as suites.
+        self.commit_on_top("scripts/test/compatibility_identifiers.py", "NAMES = []\n", "base")
+        self.commit_on_top("scripts/test/test_external_service_refs.py",
+                           "from compatibility_identifiers import NAMES\n" + PASSING, "base")
+        self.commit_on_top("scripts/app/test_android_new_tool.py", PASSING, "base")
+        self.write("scripts/test/compatibility_identifiers.py", "NAMES = ['x']\n")
+        self.write("scripts/app/android_new_tool.py", "# changed\n")
+        code, out = self.check_fast("--dry-run", "--base", "base")
+        self.assertEqual(0, code, out)
+        self.assertIn("queued: external service refs", out)
+        self.assertNotIn("queued: scripts/test/test_external_service_refs.py", out)
+        self.assertIn("queued: scripts/app/test_android_new_tool.py", out)
+        self.assertIn("queued: android i18n", out)
+
+    def test_a_ci_lane_or_watcher_file_runs_the_slot_callers_test(self):
+        # test_heavy_slot.py reads these: a CI lane or a watcher step that names a script taking a slot must set
+        # PERSONA_HEAVY_SLOTS=0. A new lane script once broke it with nothing local running it (#11026).
+        self.commit_on_top("scripts/test/test_heavy_slot.py", PASSING, "base")
+        readers = (".github/workflows/scripts.yml", "scripts/ci/lane.sh", "scripts/ci/lane.py",
+                   "scripts/operations/watch.py", "scripts/operations/pr-watch.example.json",
+                   "scripts/operations/persona-pr-watch.service", ".claude/skills/pr-review-merge-loop/scripts/run.py",
+                   ".claude/skills/main-verify-fix-loop/SKILL.md")
+        others = ("scripts/tools/other.py", ".github/CODEOWNERS", "scripts/operations/notes.txt", ".claude/settings.json",
+                  "scripts/ci/test_lane.py")  # test_heavy_slot.py skips test_* files
+        self.write("listed.txt", "".join(p + "\n" for p in readers + others))
+        code, out = self.check_fast("--dry-run", "--changed-from", "listed.txt", "--each")
+        self.assertEqual(0, code, out)
+        plans, current = {}, None
+        for line in out.splitlines():
+            if line.startswith("== "):
+                current = plans.setdefault(line[3:], [])
+            elif current is not None:
+                current.append(line.strip())
+        self.assertEqual(sorted(readers + others), sorted(plans), out)
+        for path, lines in plans.items():
+            with self.subTest(path=path):
+                self.assertEqual(path in readers, "queued: scripts/test/test_heavy_slot.py" in lines, out)
 
     def test_a_go_trimpath_change_also_runs_the_suites_of_its_callers(self):
         # server.sh and check-fast.sh compose GOFLAGS with the helper (#10614); test_ci.py and test_check_fast_inputs.py

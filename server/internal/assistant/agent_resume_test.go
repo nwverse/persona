@@ -30,6 +30,44 @@ func resumingNode(f *fakeHub) {
 	})
 }
 
+func TestAgentSendUncertainResume(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		full       bool
+		failedCall string
+	}{
+		{"with first message", false, DeviceSessionStart},
+		{"before first message", true, DeviceSessionStart},
+		{"after compaction", true, DeviceSessionSend},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, f := newQuietService(t)
+			row := stoppedBoxAgent("sec00001")
+			if tc.full {
+				row.ContextTokens, row.ContextWindow = 190000, 200000
+			}
+			f.setSessions("box", row)
+			resumingNode(f)
+			f.answerNode(tc.failedCall, func(string, json.RawMessage) (any, error) { return nil, nodeAfterWrite })
+			_, err := runJSON(t, s, "conv1", "agent_send", map[string]any{"machine": "box", "session_id": row.SessionID,
+				"text": "Check the figures", "resume": true, "resume_why": "Use the existing context", "task": map[string]any{"title": "Figures"}})
+			want := "check with agent_read before sending again"
+			if tc.full && tc.failedCall == DeviceSessionStart {
+				want = "may have resumed without a first message"
+			}
+			if !errors.Is(err, nodeAfterWrite) || !strings.Contains(err.Error(), want) || strings.Contains(err.Error(), "start a replacement") {
+				t.Fatalf("resume returned %v; want %q", err, want)
+			}
+			if starts, sends := len(startCalls(f)), sessionSends(f); starts != 1 || (sends == 1) != (tc.failedCall == DeviceSessionSend) || sends > 1 {
+				t.Fatalf("starts = %d, sends = %d", starts, sends)
+			}
+			if _, kept := s.openTodoOfAgent("box", row.SessionID); !kept {
+				t.Fatal("lost supervision of the possibly resumed agent")
+			}
+		})
+	}
+}
+
 // startCalls are the session.start params the nodes were asked for.
 func startCalls(f *fakeHub) []map[string]any {
 	f.mu.Lock()
