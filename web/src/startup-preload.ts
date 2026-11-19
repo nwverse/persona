@@ -397,8 +397,8 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // spacing classes the CSS already has (a new one took 44 B). The budget stays.
 // 2026-11-17 (#9847): #9784 landed on a main that had moved since its measurement and added 270 B in ja, not 112 B
 // (main 6fc9e85a00~1: ja 482,373 B; 6fc9e85a00: ja 482,643 B, en 479,549 B, zh-Hans 480,379 B), 117 B over the budget,
-// so main stopped building. The budget is main's ja size plus 40 B; taking those bytes back off the first screen is
-// separate work.
+// so main stopped building and raised its budget to 482,683 B. This branch keeps the existing 482,526 B limit;
+// equivalent first-screen rendering changes recover the required room without changing the guard.
 // #10226: Developing Persona's To-dos view shadow reads today's triage through App's module (App.tsx re-exports three of
 // lib/todo-triage.ts's functions; a direct import from the recorder's chunk split lib/todo-triage.ts into a chunk of its
 // own, about 700 B). 49 B in each language, measured in one environment against main d5050affc5 (ja 482,098 B to
@@ -452,7 +452,9 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // with the start page, one change on its way at a time and pushes heard during it settled once the hub pushed it, a
 // read a later hello or another sign-in overtook left alone (lib/start-page.ts). The editor (its heading, each card's
 // controls, the drag and the edits) is a chunk of its own (views/extensions/OverviewArrange.tsx, lib/overview-edit.ts).
-// Main had 4,560 B of room, so the budget is this ja size plus those 4,560 B.
+// Main had 4,560 B of room, so its budget became this ja size plus those 4,560 B. This branch keeps its stricter
+// existing 482,526 B limit; the merged overview and extension cards must fit within that existing room, with the same
+// measurement and enforcement.
 // #11090: a waiting to-do's label says what it waits on (lib/todo-wait-reason.ts waitReason and todoLook, read on the
 // first screen by Overview's task cards, the main chat's trays and the sidebar's By to-do rows; the seven
 // lib-state-labels waits_* words in place of task_waiting). 621 B in ja, measured in one environment against main
@@ -463,8 +465,9 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // overtook left alone (lib/start-page.ts, lib/overview-cards.ts), and Arrange cards opening a folded cards' section and
 // scrolling to it, its heading counting the cards shown (views/extensions/ExtensionSlots.tsx). 63 B in ja, measured in
 // one environment against main cacd8d75a6 (ja 480,670 B to 480,733 B; en 477,744 B to 477,807 B, zh-Hans 478,482 B to
-// 478,545 B). Main had 2,810 B of room, so the budget is this ja size plus those 2,810 B.
-export const FIRST_SCREEN_BUDGET = 483_543;
+// 478,545 B). Main had 2,810 B of room, so its budget became this ja size plus those 2,810 B (483,543 B). This branch
+// keeps its stricter existing 482,526 B limit; #9778's 63 B fit within that existing room.
+export const FIRST_SCREEN_BUDGET = 482_526;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;

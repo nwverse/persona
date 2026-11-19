@@ -14,6 +14,7 @@ import (
 
 // modelExecution is non-secret per-turn execution metadata supplied by the hub.
 type modelExecution struct {
+	Strict bool `json:",omitempty"` // scheduled execution never substitutes another model or agent
 	Model  string
 	Effort string
 	// Speed is a one-shot Agent start choice, resolved only against the actual terminal dispatch. FastMode is the

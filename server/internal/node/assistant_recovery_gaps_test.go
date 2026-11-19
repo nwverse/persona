@@ -37,6 +37,9 @@ while IFS= read -r line; do
       count=$(cat "$CLI_FAKE_DIR/attempts" 2>/dev/null || echo 0)
       count=$((count+1))
       echo "$count" > "$CLI_FAKE_DIR/attempts"
+      if [ "$count" -eq 2 ] && [ -n "$CLI_FAKE_RETRY_RESULT_GATE" ]; then
+        while [ ! -f "$CLI_FAKE_RETRY_RESULT_GATE" ]; do sleep 0.01; done
+      fi
       printf '{"type":"stream_event","event":{"type":"message_start","message":{"model":"%s","usage":{"input_tokens":5}}},"parent_tool_use_id":null}\n' "$model"
       if [ "$count" -le 1 ]; then
         echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"API Error: safeguards flagged"}'

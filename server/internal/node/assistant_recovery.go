@@ -456,6 +456,11 @@ func (n *Node) recoverAssistantResultFor(p *assistantProc, expected *assistantTu
 		r.retried[key] = true
 	}
 	same := !r.retried[key]
+	if !same && execution.Strict {
+		// Leave the chain for the result handler to clear from both the Node and the process.
+		n.mu.Unlock()
+		return false
+	}
 	if same {
 		r.retried[key] = true
 	}
