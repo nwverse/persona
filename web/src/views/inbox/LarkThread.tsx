@@ -23,7 +23,7 @@ import { quoteSummary, showsBody, showsHistory, useLarkDisplay, useLarkDisplaySt
 import { keepSameMessages, keepSameStates } from "../../lib/lark-reuse";
 import type { LarkPerson } from "../../lib/lark-people";
 import { canAddPin, changeChatPin, needsRecheck, pinProblemText, type ChatPinTarget } from "../../lib/lark-pins";
-import { firstAtOrAfter, historyProblem, type HistoryProblem, latestOf, nearTop, newMessagesLineAt, OlderPaging, screensFromEnd, showsJumpToLatest, showsJumpUp } from "../../lib/lark-history";
+import { atNewest, firstAtOrAfter, historyProblem, type HistoryProblem, latestOf, nearTop, newMessagesLineAt, OlderPaging, showsJumpToLatest, showsJumpUp } from "../../lib/lark-history";
 import { initialCursor, LarkReadTracker } from "../../lib/lark-read";
 import { clickLink, linkHref, prefetchLink } from "../../lib/links";
 import { isResumed } from "../../lib/reconnect";
@@ -37,7 +37,7 @@ import { Button, cx, Dialog, Loading, Spinner, toast } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { scrollBehavior } from "../../ui/stream/motion";
 import { ImageViewer } from "../chat/ImageViewer";
-import { MessageBar, Monogram } from "./InboxParts";
+import { MessageBar, Monogram, useFollowEnd } from "./InboxParts";
 import { LarkEditHistoryDialog } from "./LarkEditHistory";
 import { LarkComposer, type LarkComposerHandle, type LarkReplyTarget } from "./LarkComposer";
 import { CardButtons, FilePart, ProfileDialog, ReactionPicker, Reactions, ReadMarkView, VideoPart, VoicePart } from "./LarkExtras";
@@ -47,9 +47,6 @@ import { isSummaryCard, LarkSummaryCard } from "./LarkSummaryCard";
 import { LarkTopicCard, LarkTopicDialog, useTopicReplies } from "./LarkTopicCard";
 
 const PAGE = 30;
-
-/** The list shows its newest message: within a twentieth of a screen of its end (iOS larkFollowsEnd). */
-const atNewest = (el: HTMLElement) => screensFromEnd(el) < 0.05;
 
 export type { LarkReplyTarget };
 
@@ -365,19 +362,11 @@ function LarkThreadBody({ chat, pinsOpen = false, onPinsOpen }: LarkThreadProps)
   // At its newest message the list keeps it in view when the box gets shorter (the keyboard, a longer draft, a quote over
   // the box) or the messages grow by themselves (a picture loading), as ChatView does. A placement still to land (an
   // older page's anchor, a jump, the first one) and a jump's glide are left alone.
-  const hasPage = page !== null;
-  useEffect(() => {
-    const el = scroller.current;
-    const content = el?.firstElementChild;
-    if (!el || !content || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(() => {
-      if (!atEnd.current || !placed.current || anchor.current || jumpTo.current || toEnd.current || performance.now() < gliding.current) return;
-      el.scrollTop = el.scrollHeight;
-    });
-    ro.observe(el);
-    ro.observe(content);
-    return () => ro.disconnect();
-  }, [hasPage]);
+  useFollowEnd(
+    scroller,
+    () => atEnd.current && placed.current && !anchor.current && !jumpTo.current && !toEnd.current && performance.now() >= gliding.current,
+    page !== null,
+  );
 
   const loadNewer = useCallback(async () => {
     const p = pageRef.current;

@@ -3,7 +3,7 @@ import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useReducer, us
 import { createPortal } from "react-dom";
 import "./ModelPanel.css";
 import { t } from "../../i18n";
-import { useCloseOnBack } from "../../lib/back-close";
+import { afterBack, useCloseOnBack } from "../../lib/back-close";
 import {
   engineChoices,
   engineSetup,
@@ -85,8 +85,6 @@ const GAP = 6;
 const EDGE = 8;
 /** A star just saved stays filled this long on the row it was saved from. */
 const STAR_FLASH_MS = 700;
-/** How long the Back that takes the panel's entry off may take before Configure models goes on anyway. */
-const LEAVE_MS = 500;
 
 interface Geometry {
   left: number;
@@ -270,14 +268,8 @@ export function ModelPanel({ anchor, onClose, providers, state, scope, onPick, o
   // may also close a sheet under it and navigate, which would otherwise leave the sheet's entry under the new page.
   const leave = (go: () => void) => {
     onClose();
-    if (!narrow) return go();
-    const run = () => {
-      clearTimeout(timer);
-      removeEventListener("popstate", run);
-      go();
-    };
-    const timer = setTimeout(run, LEAVE_MS);
-    addEventListener("popstate", run);
+    if (narrow) afterBack(go);
+    else go();
   };
   const help = onHelp && ((provider: string) => leave(() => onHelp(provider)));
   useEffect(() => {

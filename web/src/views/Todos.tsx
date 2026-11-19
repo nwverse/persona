@@ -17,7 +17,7 @@ import { initialLauncher, launcherBlock, usableFirst } from "../lib/launcher-hea
 import { defaultLabel, inlineTextStart, machineLaunchers, type LauncherDefault } from "../lib/launcher-models";
 import { providerLabel } from "../lib/provider-names";
 import { navigate } from "../lib/router";
-import { useMedia } from "../lib/viewport";
+import { ONE_PANE, useMedia } from "../lib/viewport";
 import { settingsHref } from "./settings/nav";
 import { interactionAsk } from "../lib/inbox";
 import { usageLimitLabel } from "../lib/usage-limit";
@@ -465,7 +465,7 @@ export function TodosView({
   }, [selectedId]);
 
   // List and detail side by side (md and up, Tailwind's max-md: below it they take turns, as on a phone)
-  const split = !useMedia("(max-width: 767px)");
+  const split = !useMedia(ONE_PANE);
   // Active selected todo
   const activeTodo = useMemo(() => {
     if (activeId) {

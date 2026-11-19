@@ -1274,7 +1274,7 @@ function toastLift(box: HTMLElement, rows: Iterable<HTMLElement>): { lift: strin
 
 /** Keeps `--toast-lift` on `box` up to date while `on` (a toast shows on a narrow screen), and only then: what it
  *  keeps clear of may grow (the composer's lines), come or go (a sheet, a chat), or move with the keyboard. Writes the
- *  style itself, at most once a frame, with no React state. Returns the measure, for a list change to run at once. */
+ *  style itself, at most once a frame, with no React state; a change to the list is measured at once. */
 function useToastLift(box: React.RefObject<HTMLDivElement | null>, rows: React.RefObject<Map<number, HTMLDivElement>>, on: boolean) {
   const measure = useRef<(() => void) | null>(null);
   useLayoutEffect(() => {
@@ -1296,7 +1296,8 @@ function useToastLift(box: React.RefObject<HTMLDivElement | null>, rows: React.R
       }
       if (resize && (watched.length !== seen.length || watched.some((w, i) => w !== seen[i]))) {
         resize.disconnect();
-        resize.observe(el);
+        // its border box: the lift written into its padding does not come back as a resize to measure again
+        resize.observe(el, { box: "border-box" });
         watched.forEach((w) => resize.observe(w));
         seen = watched;
       }
@@ -1325,14 +1326,18 @@ function useToastLift(box: React.RefObject<HTMLDivElement | null>, rows: React.R
       el.style.removeProperty("--toast-lift");
     };
   }, [box, rows, on]);
-  return measure;
+  // every render, ahead of Toasts' glides: a new toast shows clear of the composer from its first frame, and the glides
+  // see where it went
+  useLayoutEffect(() => {
+    measure.current?.();
+  });
 }
 
 export function Toasts() {
   const [, force] = useState(0);
   const box = useRef<HTMLDivElement>(null);
   const rows = useRef(new Map<number, HTMLDivElement>());
-  const lift = useToastLift(box, rows, useMedia(NARROW_QUERY) && toasts.length > 0);
+  useToastLift(box, rows, useMedia(NARROW_QUERY) && toasts.length > 0);
   // where each row was on screen just before the list changed, and the glides and exits that are running
   const before = useRef(new Map<number, number>());
   const glides = useRef(new Map<number, Animation>());
@@ -1352,8 +1357,6 @@ export function Toasts() {
     };
   }, []);
   useLayoutEffect(() => {
-    // placed first: a new toast shows clear of the composer from its first frame, and the glides below see where it went
-    lift.current?.();
     // a row the list change moved slides from where it was to its new place, by transform only
     for (const item of toasts) {
       const el = rows.current.get(item.id);

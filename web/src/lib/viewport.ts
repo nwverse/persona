@@ -129,6 +129,8 @@ export function enterSends(e: { key: string; shiftKey: boolean; altKey?: boolean
 
 /** The narrow layout (below lg: the sidebar is a drawer, the side panel covers the page): Tailwind's `max-lg:`, kept in step. */
 export const NARROW = "(max-width: 1023px)";
+/** Below md (Tailwind's `max-md:`, kept in step): a list and its detail take turns instead of sitting side by side. */
+export const ONE_PANE = "(max-width: 767px)";
 /** A phone on its side: little height for anything above the composer. */
 export const SHORT = "(max-height: 500px)";
 /** A phone-width screen (Tailwind's max-sm): Dialog is a bottom sheet, Settings a list of categories. */
