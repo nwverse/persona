@@ -106,6 +106,11 @@ const (
 	// only while every manager whose to-dos it merges names it; until then clients answer through the accept,
 	// decision-dismiss and retry routes. It gates the route alone: the to-do count unit rides on its own payload.
 	CapabilityTodoAsks = "todo_asks"
+	// CapabilityTodoTimeline: the manager answers GET /api/v1/todos/{id}/timeline, a to-do's conversation grouped into
+	// rounds (#10465, TodoTimeline), and GET /api/v1/todos/{id} carries the rounds the paper shows, how many there are,
+	// the to-do's results and what changed since the owner looked (TodoItemDetail). The hub lists the todo_timeline
+	// feature only while every manager whose to-dos it merges names it; until then clients draw none of them.
+	CapabilityTodoTimeline = "todo_timeline"
 )
 
 // BodyStream is where MethodHTTPStreamed's body comes from: the relay the hub holds with ID (devicewire.RelayPath
@@ -318,6 +323,7 @@ var Routes = []string{
 	"PUT /api/v1/todos/{id}/agents/{mid}/{sid}",
 	"DELETE /api/v1/todos/{id}/agents/{mid}/{sid}",
 	"GET /api/v1/todos/{id}/decisions",
+	"GET /api/v1/todos/{id}/timeline", // its conversation's rounds (todo_timeline.go, #10465)
 	"POST /api/v1/todos/{id}/decisions",
 	"PATCH /api/v1/todos/{id}/decisions/{did}",
 	"PUT /api/v1/todos/{id}/thread",

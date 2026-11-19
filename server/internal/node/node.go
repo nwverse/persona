@@ -256,6 +256,12 @@ type Node struct {
 	autoCompanions bool
 	// keeper: a resident node's conversations between hub connections (assistant_keep.go); nil without one.
 	keeper *assistantKeeper
+	// Resuming (attach_resume.go): a resident node keeps a connection whose transport ended resumeWindow for the
+	// manager to take back; onPeer is told the connection's peer once it is made.
+	resumeWindow time.Duration
+	onPeer       func(*rpc.Peer)
+	// hookOut sends a resident node's hook events without holding the hooks (hook_outbox.go).
+	hookOut hookOutbox
 	// replayed is closed once what standby took while no manager was connected went to this one (spool_replay.go): new
 	// hooks wait for it, so the manager hears them after the older ones. nil (tests' Nodes): nothing waits.
 	replayed chan struct{}
@@ -477,6 +483,15 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 	// A manager that knows lanes asks for them after node.info (docs/protocol/protocol.md "Lanes"): pongs and answers
 	// then pass file chunks and updates on the way.
 	n.peer.EnableLanes(nodeproto.ControlLane, nodeproto.BulkLane)
+	if n.resumeWindow > 0 { // a resident node's: the connection outlives a transport that ends (attach_resume.go)
+		n.peer.EnableResume(n.resumeWindow)
+		n.peer.OnLost = func(err error) {
+			n.logger.Printf("connection lost (%v): kept %s for the manager to resume", err, n.resumeWindow)
+		}
+	}
+	if n.onPeer != nil {
+		n.onPeer(n.peer)
+	}
 	if n.external != nil {
 		peer := n.peer
 		n.external.SetOnChange(func() { _ = peer.Notify("launchers.changed", map[string]any{}) })
@@ -557,6 +572,8 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 	n.startTodoTokensReconciler(ctx)
 	defer n.starts.close()
 	defer n.switches().leave(n) // the records of a switch still running go to the next connection's Node
+	// First once the connection ended: the hook events it never sent are in the spool before the next one replays it.
+	defer n.hookOut.wait(5 * time.Second)
 	return n.peer.Serve(ctx, r)
 }
 
