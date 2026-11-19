@@ -97,35 +97,44 @@ export function OverviewArrangeButton({ on, onClick }: { on: boolean; onClick: (
  *  each half a row or the whole row. Half-row cards go two a row once there are two of them; one alone fills the row,
  *  and on a page wide enough for two columns of rows takes one of them. `editing`: the cards are being arranged
  *  (dragged, moved with their arrows, widened, hidden or shown), the hidden ones drawn in their place without content.
- *  A section like the page's others, with their heading (its name and how many), and it folds (#11148): kept per
- *  browser with the sidebar's folds (`fold:overview-cards`), open until the owner folds it. Folded, no card is mounted,
- *  so none is asked for either. */
+ *  A section like the page's others, with their heading (its name and how many cards it shows), and it folds (#11148):
+ *  kept per browser with the sidebar's folds (`fold:overview-cards`), open until the owner folds it. Folded, no card is
+ *  mounted, so none is asked for either. Arranging the cards opens it, and its fold button is away meanwhile. */
 export function OverviewCards({ editing = false, onDone }: { editing?: boolean; onDone?: () => void }) {
   const cards = useExtensionSlot("overview_card");
   const prefs = useOverviewPrefs();
   const arranged = useMemo(() => arrangeCards(cards, prefs), [cards, prefs]);
-  const drawn = editing ? arranged : arranged.filter((c) => !c.hidden);
+  const shown = useMemo(() => arranged.filter((c) => !c.hidden), [arranged]);
+  const drawn = editing ? arranged : shown;
   const [folded, toggle] = useFolded("overview-cards", false, { all: false });
+  const open = editing || !folded;
   const grid = useId();
-  if (!cards.length) return null;
+  // the section is the page's last block and the button that arranges it is at the page's top: arranging brings it in
+  const section = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (editing) section.current?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+  }, [editing]);
+  if (!drawn.length) return null;
   return (
-    <section aria-label={t("extensions-extensionslots.extensions")} data-overview-cards>
-      <div className={cx("flex items-baseline gap-2", !folded && !editing && "mb-2.5")}>
+    <section ref={section} aria-label={t("extensions-extensionslots.extensions")} data-overview-cards>
+      <div className={cx("flex items-baseline gap-2", open && "mb-2.5")}>
         <h2 className="text-meta font-medium text-ink">{t("extensions-extensionslots.extensions")}</h2>
-        <span className="text-label text-ink-3 tabular-nums">{cards.length}</span>
+        <span className="text-label text-ink-3 tabular-nums">{shown.length}</span>
         <span className="flex-1" />
-        <button type="button" aria-expanded={!folded} aria-controls={folded || editing ? undefined : grid} onClick={toggle} className="shrink-0 whitespace-nowrap rounded-control px-1.5 text-label text-ink-3 transition-colors hover:bg-hover hover:text-ink-2">
-          {folded ? t("extensions-extensionslots.cards_expand") : t("extensions-extensionslots.cards_collapse")}
-        </button>
+        {!editing && (
+          <button type="button" aria-expanded={!folded} aria-controls={folded ? undefined : grid} onClick={toggle} className="shrink-0 whitespace-nowrap rounded-control px-1.5 text-label text-ink-3 transition-colors hover:bg-hover hover:text-ink-2">
+            {folded ? t("extensions-extensionslots.cards_expand") : t("extensions-extensionslots.cards_collapse")}
+          </button>
+        )}
       </div>
-      {!folded && (
+      {open && (
         // a card is never wider than one of the overview's two columns of rows above it (Home's GRID.rows, from 60rem
         // of the page) unless the user made it a full row: alone at 1920 px it stretched its chart to 1540 px of
         // sparse bars, and to 1300 px at 1680. While arranging, the hidden cards count where they stand.
         // the cards of a row are one height (the grid's default stretch): each as tall as its own content left a gap
         // under the shorter one in every row, and the rows read as ragged (#11093 tried it, #11109 took it back)
         <div
-          id={editing ? undefined : grid}
+          id={grid}
           className={cx("grid grid-cols-1 gap-3 @min-[60rem]:grid-cols-2", halvesPaired(drawn, editing) && "md:grid-cols-2")}
         >
           {editing && (

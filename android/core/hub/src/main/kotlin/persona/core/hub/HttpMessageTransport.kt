@@ -105,7 +105,12 @@ class HttpMessageTransport(
         if (reply?.get("state")?.jsonPrimitive?.contentOrNull in setOf("pending", "unknown"))
             return MessageTransportResult.NoReceipt
         if (status in 200..299) {
-            if (reply?.get("delivered") == JsonPrimitive("later")) return MessageTransportResult.Held
+            if (reply?.get("delivered")?.jsonPrimitive?.contentOrNull == "later") {
+                val kept = reply?.get("undelivered") as? JsonObject
+                // An offline Agent names its computer. Assistant conversations do not; a bare replay stays Held as upstream.
+                return if (kept == null || kept["computer"] != null) MessageTransportResult.Held
+                    else MessageTransportResult.Kept
+            }
             onAccepted(target, reply)
             return MessageTransportResult.Accepted
         }

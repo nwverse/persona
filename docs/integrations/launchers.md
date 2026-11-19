@@ -18,7 +18,7 @@ Code: `server/internal/assistant/models_launchers.go` (owned by the manager; hub
 - Deleting a ~/.zshrc launcher **only hides it in Persona** (settings `launchers.hidden`), leaving the file unchanged; it disappears from new-chat and assistant pickers. Hiding the built-in `claude` works the same way (#4384): it leaves the pickers, while a start that names it, or a default that runs it (Model settings set to “Claude Code default”), still runs it. The same holds for a hidden ~/.zshrc or PATH launcher (#4659): Model configuration (the main chat, Agents) or a conversation that names it keeps running it (`withUnhidden` in `assistant/models_launchers.go`), and only a launcher really gone from the computer gives way to another. A profile tier that names a hidden launcher stays among New Agent's presets (#4661), and the hide confirmation lists what still names it (`GET /api/v1/launchers/{name}/uses`).
 - **Importing aliases** (`GET` / `POST /api/v1/launchers/import`; rules in `docs/assistant/model-config.md`, “Importing providers from shell aliases”): the claude aliases of a computer's `~/.zshrc`, `~/.bashrc` and `~/.bash_aliases` become Persona-managed providers with all their settings: one per gateway and key, or one per alias when the aliases differ and the user keeps them apart (`split`). Variables Persona has no field for go into the provider's sealed environment; credentials, values the shell would expand and names tied to one computer are left out and named in the preview, never with their values. An imported provider is `own_service: use`. With `hide_aliases` the import also hides each imported alias in Persona, as deleting would, but only when nothing uses it (Model configuration, a scheduled task, a model profile or its Agent presets) and every computer that lists it gets the provider in its place with the same account (same address and key); the others stay, with the reason.
 - **Starting from what the user already has** (#5193; rules in `docs/assistant/model-config.md`, “Starting a provider from a pasted configuration”): the wizard's first step also offers **Paste a configuration** (`POST /api/v1/launchers/import/parse` reads a shell alias or exports, Claude Code's `settings.json`, a `curl` line or a provider in the cindy v1 format into drafts that prefill the wizard; nothing is saved until the user does) and, when a computer has some, **Found on your computers**: the rc-file claude aliases that point at a gateway and are neither hidden nor imported yet, each opening the import above for that alias only (`alias`). Both need the hub's `launcher_import_parse`.
-- **Import links** (#5420, “Import links” below): a link a gateway's key page or another Persona user hands over (`<web address>/settings?tab=models#import=…`, or cindy's `cindy://provider/import?v=1&data=…` pasted into **Paste a configuration**) opens the same wizard filled in, through the same parse route; a provider's ⋯ menu copies one (no key unless the user pastes one into it).
+- **Import links** (#5420, #5428, “Import links” below): a link a gateway's key page or another Persona user hands over (`<web address>/settings?tab=models#import=…`, `persona://provider/import?v=1&data=…` opened on iOS or Android, or cindy's `cindy://provider/import?v=1&data=…` pasted into **Paste a configuration**) opens the same wizard filled in, through the same parse route; a provider's ⋯ menu copies one (no key unless the user pastes one into it).
 - Persona-managed entries win name collisions (shadowing the ~/.zshrc entry). Names may contain only letters, digits, `_`, and `-`, and cannot be `claude`.
 
 ## Sync state (#2854)
@@ -274,7 +274,9 @@ Supported since herdr 0.7.1 (Linux) / 0.7.5 (macOS); ignored by older herdr and 
 
 ## Work agents: pi, the Cursor CLI, the Antigravity CLI
 
-pi, the Cursor CLI (`cursor-agent`) and the Antigravity CLI (`agy`) are agents the user works with, started in a herdr pane the way Claude and Codex are (`server/internal/node/workagent.go`). A machine lists each as a launcher when its program is on the login shell's PATH (`pi`, `cursor-agent`, `agy`), so New Agent and `task_plan` / `agent_start` offer it there and nowhere else. `launcher` is the agent's name (`pi`, `cursor`, `agy`); `model` is passed as `--model` (a provider and model, such as `ag-chat/cursor/grok-4.7` for pi). They take no permission mode and no ultracode, and an effort picked for Claude is ignored rather than refusing the start.
+pi, the Cursor CLI (`cursor-agent`) and the Antigravity CLI (`agy`) are agents the user works with, started in a herdr pane the way Claude and Codex are (`server/internal/node/workagent.go`). A machine lists each as a launcher when its program is on the login shell's PATH (`pi`, `cursor-agent`, `agy`), so New Agent and `task_plan` / `agent_start` offer it there and nowhere else. `launcher` is the agent's name (`pi`, `cursor`, `agy`); `model` is passed as `--model` (a provider and model, such as `ag-chat/cursor/grok-4.7` for pi). They take no permission mode or ultracode.
+
+For herdr starts, the Antigravity model picker reads the local launcher's `models` output and uses the standard catalog cache and refresh. Picking an effort passes `--effort` with one of `low`, `medium`, `high`, `xhigh` or `max`. Leaving an override unset uses the launcher's default. pi and Cursor keep their own effort.
 
 The first message is never typed into the pane:
 
@@ -293,6 +295,16 @@ What these agents do not do here, and why:
 - No phone approval cards for cursor and agy. pi's come from its extension; the other two have no Persona hook, so their own dialogs stay on the terminal.
 - Supervision (`report_to_supervisor`, done checks) reaches an agent Persona can send to. pi qualifies once its extension is in; cursor and agy qualify for a message through herdr, and nothing more.
 - **No read-only start.** Claude Code runs a read-only task with `bypassPermissions` and the constraint written into its first message, and Codex with `--sandbox read-only`; these three have neither, and a prompt-only constraint would not hold an agent whose own tools write files. So a `task_plan` task with `readonly: true` for one of them is refused when it is planned (#8316, `server/internal/assistant/tasks_placement.go` `readonlyLauncherRefusal`): `readonly_unsupported`, naming that computer's Claude Code and Codex launchers, so the task can be planned writable or on one of them. Nothing is saved or started, it is never started writable, and Persona does not substitute another launcher. The same check runs before a start (a card edited to one of them, a plan saved earlier), and the node still refuses a plan-mode start of theirs that reaches it, before any pane opens (`readonly_unsupported`, `server/internal/node/control.go`).
+
+## Speed
+
+A new terminal Agent can take an explicit `speed`: `standard`, `fast` or `ultrafast`. The assistant supplies it on `agent_start` or a `task_plan` task, or stores it on an Agent preset (`ModelTier.speed`, edited through `persona_settings` key `model_profiles.tiers`). An explicit start value wins over the preset. A different launcher or model leaves the preset's speed behind, just as a different model leaves its effort behind. Omitted and `standard` send no override: the launcher's own setting applies, and no machine or global Codex / Claude Code default changes.
+
+- **Codex:** `fast` becomes `-c service_tier=priority`; `ultrafast` becomes `-c service_tier=ultrafast`. Before launch the node checks that the selected model's own catalog advertises that native tier. An invalid or unadvertised choice is refused rather than letting Codex run it silently; the rollout's `turn_context` records the native `service_tier`.
+- **Claude Code:** `fast` adds `"fastMode": true` to a merged, per-start `--settings` file, preserving the launcher's effective settings. `ultrafast` is refused. If a shell function supplies `--settings` that cannot be merged, `fast` is refused before launch rather than replacing them. Claude Code itself falls back to standard when its account or model cannot run fast mode (currently fast mode requires Opus on the first-party API with usage credits), so Persona cannot guarantee the faster output speed.
+- **Everything else and resumes:** faster speed is refused before approval or launch. This includes work agents, traex, omp, external runtimes, Paseo providers, desktop apps and every resume. A node without `session_start_speed` returns `node_outdated` for `fast` or `ultrafast` instead of silently starting standard.
+
+Speed is start-only: it is not kept in the execution fingerprint or herdr's automatic-resume command, and a later resume uses the launcher's own setting. The current New Agent form and plan cards do not show or edit speed; the launcher-list and worker-preset responses expose it for clients and extensions.
 
 ## Running Persona-managed launchers
 
@@ -586,7 +598,7 @@ A Persona-managed provider has two names. `name` is its **startup ID**: ASCII (`
 
 A provider can travel as a link: a gateway's key page offers one to its signed-in user, or someone shares a provider
 they already have. The payload is cindy's v1 provider import JSON (the format cindy documents for its import links), so one
-payload works in both apps. Persona reads two carriers:
+payload works in every client. Persona reads three carriers:
 
 - **Persona's web link**: `<web address>/settings?tab=models#import=<data>`, optionally with `&v=1` in the fragment.
   The data sits after `#`, so the browser never sends it to the hub and it is in no access log. At load the web takes
@@ -598,18 +610,26 @@ payload works in both apps. Persona reads two carriers:
   the hub that reloads the page gets the link put back in the address bar first, and one that sends the browser
   elsewhere to sign in drops it (open the link again). A browser's own history may still have recorded the address
   when it was opened; that is one reason a copied link carries no key unless the user puts one in.
+- **Persona's app link** (#5428): `persona://provider/import?v=1&data=<data>` opens Settings › Model providers on iOS,
+  iPadOS and Android. The app sends the whole link to `POST /api/v1/launchers/import/parse`, never decoding or validating
+  the payload itself, and opens the existing provider wizard with the returned draft, or shows the refusal in plain words.
+  iOS opens the prefilled connection form. Android uses the same review as **Paste a configuration**, in a link mode that
+  hides the link text and offers **Paste something else**; **Continue** opens the prefilled form. The link stays in memory
+  only while that wizard is open, is never shown or logged, and nothing is saved before Save. A hub too old to have the
+  parse route's link support answers 404, and either app says it can't open import links yet (without depending on whether
+  its first hello has arrived).
 - **cindy's link**: `cindy://provider/import?v=1&data=<data>`, pasted into **Paste a configuration** (a browser does
-  not open it). The legacy `xdt-maker://` scheme is not read. Persona's web link pasted there reads the same way, so
-  someone with their own hub can use a link made on another one.
+  not open it). The legacy `xdt-maker://` scheme is not read. Persona's app link pasted there reads the same way, as does
+  Persona's web link, so someone with their own hub can use a link made on another one.
 
 `data` is the payload's UTF-8 JSON in base64url without padding. The manager (`assistant/models_import_link.go`)
 checks a link as cindy does and refuses the whole link on the first problem, with one note and no draft:
 
 | Rule | Note |
 | --- | --- |
-| cindy's: exactly `provider/import`, no fragment, only `v` and `data`, each once. The web's: only `import` (once) and `v` (at most once) in the fragment. A link with a blank inside (a messenger wrapped it) | `link_invalid` |
+| An app scheme's: exactly `provider/import`, no fragment, only `v` and `data`, each once. The web's: only `import` (once) and `v` (at most once) in the fragment. A link with a blank inside (a messenger wrapped it) | `link_invalid` |
 | `v` other than `1` (the web's: absent means 1) | `link_version`, named when it is a number |
-| more than 32 768 bytes after `cindy://` or in the fragment; data of more than 24 576 bytes decoded | `link_too_long` |
+| more than 32 768 bytes after `cindy://` or `persona://` or in the web fragment; data of more than 24 576 bytes decoded | `link_too_long` |
 | data that is empty, not canonical base64url (padding, `+`, `/`, stray bits), not UTF-8 or not a JSON object | `link_invalid` |
 | a field v1 does not define (a batch `{providers}` is a file's, not a link's) | `link_field`, with its path when that is a plain word |
 | a value v1 refuses: `kind`, `name` (60 at most), `endpoints` (1 to 8), `protocol`, an http(s) `baseUrl` without a user, query or fragment and with a port of 65 535 at most, `modelsUrl` on the same origin, `requestPath`, `targets`, models (256 at most, distinct, thinking levels only with `reasoning`), headers (24 at most, only with an API key), keys (4 KiB at most, 1 KiB for a built-in slot, no line breaks or control characters), no sign-in only on loopback addresses, two endpoints tied for one agent | `link_invalid`, with the field's path |
@@ -644,7 +664,8 @@ under a warning that anyone who gets the link can use the key and that links pas
 history; the key lives only in the dialog and the copied text.
 
 Hello feature `launcher_import_link`: the parse route reads links. A web app on an older hub says the hub can't open
-import links yet instead of sending one.
+import links yet instead of sending one. The phone apps send the opened link to the parse route even if the first hello
+has not arrived; its 404 gives the same message.
 
 ## Adding from extensions
 

@@ -40,6 +40,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
             self.assertIn("release-pr-" + name + "-", str(jobs[name]))
         self.assertNotIn("cli-web", jobs["cli-web"].get("environment", ""))
         self.assertNotIn("secrets.", str(jobs["cli-web"]))
+        self.assertEqual(jobs["android"]["steps"][2]["with"]["packages"], "platform-tools")
+        self.assertEqual(jobs["cli-web"]["steps"][5]["env"]["NODE_OPTIONS"], "--max-old-space-size=4096")
 
     def test_windows_requires_native_execution_and_authenticode(self):
         text = PR.read_text()
@@ -61,6 +63,11 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn("> release-pr-list.json", text)
         self.assertNotIn("> release-pr-rest.json", text)
         self.assertIn('verify-pr --pr-json "$PR_JSON"', text)
+        self.assertIn("GIT_COMMIT: ${{ github.event.pull_request.merge_commit_sha || github.sha }}", text)
+        self.assertIn("COMMIT=\"$commit\" python3", text)
+        self.assertIn("--json number,title,state,isDraft,baseRefName", text)
+        self.assertNotIn("open(os.environ['PR_JSON'])", text)
+        self.assertIn('json.load(open(sys.argv[1]))', text)
 
     def test_main_without_a_merged_release_pr_has_no_build_plan(self):
         text = PR.read_text()
@@ -83,6 +90,11 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("refs/heads/main", text)
         self.assertEqual(self.publish["jobs"]["authorize"]["environment"], "persona-release")
         self.assertEqual(self.publish["jobs"]["cli-web"]["environment"], "persona-release")
+        source = self.publish["jobs"]["source"]
+        self.assertNotIn("environment", source)
+        self.assertIn("release:", str(source))
+        self.assertIn("needs.source.outputs.pr != ''", self.publish["jobs"]["authorize"]["if"])
+        self.assertIn("needs.source.outputs.pr", str(self.publish["jobs"]["authorize"]["outputs"]))
         self.assertNotIn("pull_request_target:", text)
 
     def test_immutable_tag_and_download_verification_precede_beta_pointer(self):

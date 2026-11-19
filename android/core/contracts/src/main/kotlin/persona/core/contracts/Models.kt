@@ -452,7 +452,11 @@ data class Session(
      * process by the node; #1379, #3957). False while unknown and from older hubs: then Allow Everything is a start's choice.
      */
     @SerialName("bypass_available") val bypassAvailable: Boolean = false,
-    /** Allow Everything takes effect by a restart after the current turn (#6476). */
+    /**
+     * Allow Everything was picked for this terminal Claude Code while it cannot reach it with shift+tab: the node restarts
+     * the session in it once its turn is over (#6476, docs/integrations/claude-integration.md "Full access by a restart").
+     * Until then the session still runs in [permissionMode]. False from older hubs.
+     */
     @SerialName("bypass_pending") val bypassPending: Boolean = false,
     @SerialName("assistant") val assistant: Boolean = false,
     /** An assistant conversation put away (POST /api/v1/assistant/conversations/{id}/archive): kept, not listed. */
@@ -1159,6 +1163,8 @@ data class Interaction(
     @SerialName("tool_name_title") val toolNameTitle: String? = null,
     /** The rule a question a supervisor passed up suggests (#4929); the card comes again without it once it was answered. */
     val suggestion: RuleSuggestion? = null,
+    /** A prepared approval whose current deadline is authoritative while the hub keeps it pending; absent on older hubs. */
+    @SerialName("can_clarify") val canClarify: Boolean = false,
 ) {
     val sessionKey: SessionKey get() = SessionKey(machineId, sessionId)
     /** A supported following mode; absent, plan and unknown values keep the legacy approval choices (#3784). */

@@ -105,8 +105,8 @@ describe("the + (#5324)", () => {
     expect(texts.slice(2).join("|")).toContain("Composer.tsx");
     expect(texts.join("|")).toContain("src/");
     expect(texts.join("|")).toContain("Fix the login page");
-    // cindy's 44 px resource rows
-    expect(option("Composer.tsx").className).toContain("h-[44px]");
+    // Compact pointer rows keep a full touch target.
+    expect(option("Composer.tsx").className).toContain("[@media(pointer:coarse)]:h-11");
   });
 
   it("closes on a touch outside it, not only a mouse press (#11237)", async () => {

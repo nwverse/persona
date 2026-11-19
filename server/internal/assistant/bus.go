@@ -138,7 +138,7 @@ func NewBusHub(o BusOptions) *BusHub {
 					assistantwire.CapabilityMeetingHighlights, assistantwire.CapabilityMeetingNotes, assistantwire.CapabilityMeetingEcho, assistantwire.CapabilityMeetingTranscription,
 					assistantwire.CapabilityRecordingDay, assistantwire.CapabilityAssistantSearch, assistantwire.CapabilityHTTPBodyStream, assistantwire.CapabilityAssistantStartServiceTier,
 					assistantwire.CapabilityMCPWait, assistantwire.CapabilitySessionsSideFold, assistantwire.CapabilityRemoteImages, assistantwire.CapabilityTodoView,
-					assistantwire.CapabilityTodoPlaces, assistantwire.CapabilityTodoAsks, assistantwire.CapabilityTodoTimeline, devicewire.SharingCapability}}
+					assistantwire.CapabilityTodoPlaces, assistantwire.CapabilityTodoAsks, assistantwire.CapabilityTodoTimeline, assistantwire.CapabilityTodoImages, devicewire.SharingCapability}}
 		},
 		OnHello: b.onHello,
 		// A node's tool call that its caller stopped waiting for ends at the hub too (fleet_tools.go).
@@ -727,6 +727,9 @@ func serveHTTP(ctx context.Context, s http.Handler, p assistantwire.HTTPRequest,
 	}
 	if p.OwnerAnswer {
 		ctx = devicewire.WithOwnerAnswer(ctx)
+	}
+	if p.ClarificationProof != "" {
+		ctx = assistantwire.WithClarificationProof(ctx, p.ClarificationProof)
 	}
 	if p.HandoffApprover != nil { // set by the hub only, never from a header (secret_handoff.go there)
 		ctx = assistantwire.WithHandoffApprover(ctx, *p.HandoffApprover)

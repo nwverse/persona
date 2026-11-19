@@ -1440,8 +1440,8 @@ internal fun AssistantDrawer(
     fullWindowSearch: Boolean = false,
     onFullSearch: () -> Unit = {},
     /**
-     * The place row that stays shaded while that place is the page's root (iOS `shownPlace`).
-     * Null: the phone drawer, which shades the open conversation as before.
+     * The row that stays shaded for the visible root (iOS `shownPlace`), including an Agent on either tab.
+     * Null: the compact Persona drawer, which shades the open conversation as before.
      */
     shadedPlace: String? = null,
     /** Folds the sidebar column from its own header while it sits beside the page; null in a drawer or floating overlay. */
@@ -1604,7 +1604,7 @@ internal fun AssistantDrawer(
                 // With the hub's direction tree a lead folds open to its to-dos and their Agents (#4352, DirectionRows.kt).
                 DirectionLeadRows(groups.tree?.direction(session.sessionId)?.takeUnless { it.secretary },
                     groups.names[session.sessionId] ?: session.conversationTitle(conversationWords()),
-                    GroupPosition.of(index, groups.directions.size), onOpenTodo, onOpenAgent) { position, disclosure ->
+                    GroupPosition.of(index, groups.directions.size), onOpenTodo, onOpenAgent, shadedPlace) { position, disclosure ->
                     ConversationRow(session, selected = shadeConversations && session.key == active,
                         position = position,
                         onOpen = { onOpen(session.key) }, onEnd = onEnd?.let { action -> { action(session) } },
