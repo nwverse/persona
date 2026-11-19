@@ -328,60 +328,87 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(self.watcher.state.get("example/one", 7)["outcome"], "stale_closed")
 
     def test_stale_activity_graphql_paginates_every_collection(self):
+        def connection(nodes, next_cursor):
+            return {"nodes": nodes, "pageInfo": {"hasNextPage": next_cursor is not None,
+                                                   "endCursor": next_cursor}}
         pages = {
-            None: {
-                "comments": {"nodes": [{"createdAt": "2026-11-01T01:00:00Z", "body": "one"}],
-                             "pageInfo": {"hasNextPage": True, "endCursor": "comments-1"}},
-                "reviews": {"nodes": [{"createdAt": "2026-11-01T02:00:00Z"}],
-                            "pageInfo": {"hasNextPage": False, "endCursor": None}},
-                "reviewThreads": {"nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None}},
+            "comments": {
+                None: connection([{"createdAt": "2026-11-01T01:00:00Z", "body": "one"}], "comments-1"),
+                "comments-1": connection([{"createdAt": "2026-11-02T01:00:00Z", "body": "two"}], None),
             },
-            "comments-1": {
-                "comments": {"nodes": [{"createdAt": "2026-11-02T01:00:00Z", "body": "two"}],
-                             "pageInfo": {"hasNextPage": False, "endCursor": None}},
-                "reviews": {"nodes": [{"createdAt": "2026-11-03T02:00:00Z"}],
-                            "pageInfo": {"hasNextPage": True, "endCursor": "reviews-1"}},
-                "reviewThreads": {"nodes": [{"comments": {
-                    "nodes": [{"createdAt": "2026-11-04T03:00:00Z", "body": "inline"}],
-                    "pageInfo": {"hasNextPage": False, "endCursor": None}}}],
-                    "pageInfo": {"hasNextPage": True, "endCursor": "threads-1"}},
+            "reviews": {
+                None: connection([{"createdAt": "2026-11-01T02:00:00Z"}], "reviews-1"),
+                "reviews-1": connection([{"createdAt": "2026-11-03T02:00:00Z"}], "reviews-2"),
+                "reviews-2": connection([{"createdAt": "2026-11-05T02:00:00Z"}], None),
             },
-            "reviews-1": {
-                "comments": {"nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None}},
-                "reviews": {"nodes": [{"createdAt": "2026-11-05T02:00:00Z"}],
-                            "pageInfo": {"hasNextPage": False, "endCursor": None}},
-                "reviewThreads": {"nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None}},
-            },
-            "threads-1": {
-                "comments": {"nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None}},
-                "reviews": {"nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None}},
-                "reviewThreads": {"nodes": [{"comments": {
-                    "nodes": [{"createdAt": "2026-11-06T03:00:00Z", "body": "later inline"}],
-                    "pageInfo": {"hasNextPage": False, "endCursor": None}}}],
-                    "pageInfo": {"hasNextPage": False, "endCursor": None}},
+            "reviewThreads": {
+                None: connection([], "threads-1"),
+                "threads-1": connection([{"comments": connection(
+                    [{"createdAt": "2026-11-04T03:00:00Z", "body": "inline"}], None)}], "threads-2"),
+                "threads-2": connection([{"comments": connection(
+                    [{"createdAt": "2026-11-06T03:00:00Z", "body": "later inline"}], None)}], None),
             },
         }
-        next_page = {None: "comments-1", "comments-1": "reviews-1", "reviews-1": "threads-1", "threads-1": None}
         calls = []
         def response(argv, **kwargs):
             self.assertEqual(argv, ["api", "graphql", "--input", "-"])
             payload = json.loads(kwargs["input_text"])
             variables = payload["variables"]
-            self.assertEqual(variables["number"], 7)
-            self.assertEqual(variables["pageSize"], 100)
-            cursor = variables["threadsCursor"]
             calls.append(payload)
-            page = pages[cursor]
-            if next_page[cursor] and cursor != "threads-1":
-                page["reviewThreads"]["pageInfo"] = {"hasNextPage": True, "endCursor": next_page[cursor]}
-            return {"data": {"repository": {"pullRequest": page}}}
+            data = {}
+            for field, needed, collection in (("comments", "needComments", "comments"),
+                                              ("reviews", "needReviews", "reviews"),
+                                              ("threads", "needThreads", "reviewThreads")):
+                if variables[needed]:
+                    data[collection] = pages[collection][variables[field + "Cursor"]]
+            return {"data": {"repository": {"pullRequest": data}}}
         with patch.object(pr_watch, "gh_json", side_effect=response):
             activity = self.watcher.stale_activity("example/one", 7)
         self.assertEqual([len(activity[key]) for key in ("comments", "reviews", "inline")], [2, 3, 2])
-        self.assertEqual(len(calls), 4)
+        self.assertEqual(len(calls), 3)
         self.assertTrue(all("comments(first: $pageSize" in call["query"] for call in calls))
         self.assertIsNone(calls[0]["variables"]["commentsCursor"])
         self.assertEqual(calls[1]["variables"]["commentsCursor"], "comments-1")
+        self.assertEqual(calls[-1]["variables"]["threadsCursor"], "threads-2")
+        self.assertTrue(any(not call["variables"]["needComments"] for call in calls[1:]))
+        self.assertEqual(calls[-1]["variables"]["reviewsCursor"], "reviews-2")
+
+    def test_stale_activity_does_not_restart_completed_collections(self):
+        calls = []
+        def response(argv, **kwargs):
+            payload = json.loads(kwargs["input_text"])
+            calls.append(payload)
+            data = {}
+            if payload["variables"]["needComments"]:
+                done = payload["variables"]["commentsCursor"] == "comments-1"
+                data["comments"] = {"nodes": [] if done else [{"createdAt": "2026-11-01T01:00:00Z", "body": "one"}],
+                                    "pageInfo": {"hasNextPage": False,
+                                                 "endCursor": None if done else "comments-1"}}
+            if payload["variables"]["needReviews"]:
+                done = payload["variables"]["reviewsCursor"] == "reviews-1"
+                data["reviews"] = {"nodes": [] if done else [{"createdAt": "2026-11-01T02:00:00Z"}],
+                                   "pageInfo": {"hasNextPage": False,
+                                                "endCursor": None if done else "reviews-1"}}
+            if payload["variables"]["needThreads"]:
+                done = payload["variables"]["threadsCursor"] == "threads-1"
+                data["reviewThreads"] = {"nodes": [] if done else [{"comments": {
+                    "nodes": [{"createdAt": "2026-11-01T03:00:00Z", "body": "inline"}],
+                    "pageInfo": {"hasNextPage": False, "endCursor": None}}}],
+                    "pageInfo": {"hasNextPage": False if done else True,
+                                 "endCursor": None if done else "threads-1"}}
+            return {"data": {"repository": {"pullRequest": data}}}
+        with patch.object(pr_watch, "gh_json", side_effect=response):
+            activity = self.watcher.stale_activity("example/one", 7)
+        self.assertEqual([len(activity[key]) for key in ("comments", "reviews", "inline")], [1, 1, 1])
+        self.assertEqual(calls[-1]["variables"]["needComments"], False)
+        self.assertEqual(calls[1]["variables"]["needReviews"], False)
+        self.assertEqual(calls[-1]["variables"]["threadsCursor"], "threads-1")
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(all("needComments" in call["variables"] for call in calls))
+        self.assertTrue(all("needReviews" in call["variables"] for call in calls))
+        self.assertTrue(all("needThreads" in call["variables"] for call in calls))
+        self.assertEqual([call["variables"]["commentsCursor"] for call in calls],
+                         [None, False])
 
     def test_stale_activity_requires_complete_cursor_pages(self):
         response = {"data": {"repository": {"pullRequest": {
@@ -392,6 +419,42 @@ class WatcherTests(unittest.TestCase):
         with patch.object(pr_watch, "gh_json", return_value=response):
             with self.assertRaisesRegex(pr_watch_common.WatchError, "pagination"):
                 self.watcher.stale_activity("example/one", 7)
+
+    def test_stale_enabled_settled_heads_still_need_cleanup(self):
+        evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
+        self.watcher.repositories["example/one"]["close_stale"] = True
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key,
+                               base=SHA_BASE, format=1, outcome="repair_exhausted",
+                               repair_exhausted=True, failure_posted=True)
+        self.assertFalse(self.watcher.unchanged_head_complete_or_waiting("example/one", 7, SHA_A))
+        self.watcher.state.annotate("example/one", 7, outcome="merged")
+        self.assertTrue(self.watcher.unchanged_head_complete_or_waiting("example/one", 7, SHA_A))
+
+    def test_review_only_blocking_findings_can_still_stale_close(self):
+        self.watcher.repositories["example/one"].update(merge=False, close_stale=True)
+        evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
+        finding = {"path": "x.py", "line": 1, "severity": "P0", "summary": "blocking", "suggestion": "fix"}
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key,
+                               base=SHA_BASE, format=1, outcome="findings", semantic="findings",
+                               findings=[finding], review_posted=True)
+        old = pr_watch_common.github_time("2026-11-01T00:00:00Z")
+        snapshot = pr(createdAt="2026-11-01T00:00:00Z", updatedAt="2026-11-01T00:00:00Z")
+        current = dict(snapshot)
+        def github(argv, **kwargs):
+            if argv[1:3] == ["pr", "edit"]:
+                return subprocess.CompletedProcess(argv, 0, "", "")
+            if argv[1:3] == ["pr", "close"]:
+                current["state"] = "CLOSED"
+                return subprocess.CompletedProcess(argv, 0, "", "")
+            self.fail(argv)
+        with patch.object(self.watcher, "stale_progress_at", return_value=old) as activity, \
+                patch.object(pr_watch, "pr_snapshot", side_effect=lambda *args: dict(current)), \
+                patch.object(pr_watch, "run", side_effect=github), \
+                patch.object(pr_watch.time, "time", return_value=old + 8 * 86400):
+            self.watcher.process("example/one", 7)
+        self.assertEqual(activity.call_count, 2)
+        self.assertEqual(current["state"], "CLOSED")
+        self.assertEqual(self.watcher.state.get("example/one", 7)["outcome"], "stale_closed")
 
     def test_discovery_skips_settled_heads_but_retries_expired_and_new_heads(self):
         evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A

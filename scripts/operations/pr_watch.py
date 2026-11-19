@@ -334,6 +334,10 @@ class Watcher:
         old = self.state.get(repo, number)
         if old.get("head") != sha or old.get("format") != FORMAT_VERSION:
             return False
+        if self.repositories[repo].get("close_stale", False):
+            # A settled head is precisely what stale cleanup must keep checking.
+            # Preserve only terminal states that already skip that cleanup.
+            return old.get("outcome") in ("merged", "continuation")
         return (old.get("retry_after", 0) > time.time()
                 or old.get("outcome") in ("merged", "continuation", "repair_published")
                 or old.get("outcome") == "merge_failed" and old.get("blocking")
@@ -837,18 +841,19 @@ class Watcher:
         owner, name = repository(repo).split("/", 1)
         query = """
 query($owner: String!, $name: String!, $number: Int!, $pageSize: Int!,
-      $commentsCursor: String, $reviewsCursor: String, $threadsCursor: String) {
+      $commentsCursor: String, $reviewsCursor: String, $threadsCursor: String,
+      $needComments: Boolean!, $needReviews: Boolean!, $needThreads: Boolean!) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
-      comments(first: $pageSize, after: $commentsCursor) {
+      comments(first: $pageSize, after: $commentsCursor) @include(if: $needComments) {
         nodes { createdAt body }
         pageInfo { hasNextPage endCursor }
       }
-      reviews(first: $pageSize, after: $reviewsCursor) {
+      reviews(first: $pageSize, after: $reviewsCursor) @include(if: $needReviews) {
         nodes { createdAt: submittedAt }
         pageInfo { hasNextPage endCursor }
       }
-      reviewThreads(first: $pageSize, after: $threadsCursor) {
+      reviewThreads(first: $pageSize, after: $threadsCursor) @include(if: $needThreads) {
         nodes {
           comments(first: 100) {
             nodes { createdAt body }
@@ -867,6 +872,9 @@ query($owner: String!, $name: String!, $number: Int!, $pageSize: Int!,
         for _ in range(1000):
             variables = {"owner": owner, "name": name, "number": number, "pageSize": 100}
             variables.update({field + "Cursor": value for field, value in cursors.items()})
+            variables.update({"needComments": cursors["comments"] is not False,
+                              "needReviews": cursors["reviews"] is not False,
+                              "needThreads": cursors["threads"] is not False})
             response = gh_json(["api", "graphql", "--input", "-"],
                                input_text=json.dumps({"query": query, "variables": variables}), timeout=90)
             try:
@@ -878,6 +886,10 @@ query($owner: String!, $name: String!, $number: Int!, $pageSize: Int!,
             pending = False
             for field in ("comments", "reviews", "threads"):
                 collection = "reviewThreads" if field == "threads" else field
+                if cursors[field] is False:
+                    if collection in data:
+                        raise WatchError("stale activity repeated a completed collection")
+                    continue
                 connection = data.get(collection)
                 if not isinstance(connection, dict) or not isinstance(connection.get("nodes"), list):
                     raise WatchError("stale activity has an invalid " + collection + " collection")
@@ -907,7 +919,7 @@ query($owner: String!, $name: String!, $number: Int!, $pageSize: Int!,
                     cursors[field] = cursor
                     pending = True
                 else:
-                    cursors[field] = None
+                    cursors[field] = False
             if not pending:
                 return activity
         raise WatchError("stale activity exceeded its bounded GraphQL pagination")
@@ -1023,7 +1035,7 @@ query($owner: String!, $name: String!, $number: Int!, $pageSize: Int!,
         if old.get("outcome") == "continuation" and old.get("head") == head:
             return
         evidence_key = repo + "#" + str(number) + "@" + pr["baseRefOid"] + ".." + head
-        if old.get("head") == head and old.get("format") == FORMAT_VERSION:
+        if old.get("head") == head and old.get("format") == FORMAT_VERSION and not config.get("close_stale", False):
             if old.get("retry_after", 0) > time.time() \
                     and old.get("verification_policy") == VERIFICATION_POLICY_VERSION:
                 return
