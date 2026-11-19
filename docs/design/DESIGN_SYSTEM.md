@@ -667,17 +667,19 @@ on-demand model panel, not the everyday Assistant home (#6887).
   reads "Claude Code → Codex · <badge>". That exchange draws no model change divider. Follows cindy's agent switch card
   at the user's request (2026-11-12), with the model's name instead of its raw id and the badge always shown
   (`docs/web/web.md`, "Engine switch divider").
-- Mode change line (web `ModeChangeDivider`, iOS `ModeChangeLine`, #10297): a permission mode change the hub recorded
+- Mode change line (web `ModeChangeDivider`, iOS `ModeChangeLine`, Android `ModeChangeDivider`, #10297): a permission mode change the hub recorded
   (`docs/protocol/protocol.md` "Session mode changes"), at the end of the exchange it happened in, in an Agent's chat
-  only. The compaction divider's look: hairlines either side (web `--line-strong`, iOS `Theme.cardStroke` / separator) of
-  one line of words (web `text-submeta` `--ink-3`, iOS `Theme.Font.label` secondary), not a control. Words: who (the
+  only. The compaction divider's look: hairlines either side (web `--line-strong`, iOS `Theme.cardStroke` / separator,
+  Android `PersonaTheme.palette.line` / `Tokens.Size.line`) of one line of words (web `text-submeta` `--ink-3`, iOS
+  `Theme.Font.label` secondary, Android `PersonaTheme.type.micro` `ink3`), not a control. Words: who (the
   device's name; "The hub"; "A device"), the modes in quotes (zh-Hans and ja 「」, en “ ”), a pick that waits for a
   restart says so, and what became of the restart says why in plain words from the node's reason code; no reason, no
-  colon. Hairlines only where the words fit on one line with at least 16 px / `Theme.Space.l` of rule each side;
-  otherwise the words alone, wrapped and centered (the owner, 2026-11-18: rules beside the first of two lines read as
-  crooked, rules a pixel or two long as dots). The web loads its code and words (`chat-modes`) with an Agent's chat,
-  off the first screen. The record is read when the chat opens and when its mode changes, never on a timer, a refresh
-  or the app back in front.
+  colon. Hairlines only where the words fit on one line with at least 16 px / `Theme.Space.l` / `Tokens.Space.l` of
+  rule each side; otherwise the words alone, wrapped and centered (the owner, 2026-11-18: rules beside the first of
+  two lines read as crooked, rules a pixel or two long as dots). The web loads its code and words (`chat-modes`) with
+  an Agent's chat, off the first screen. A frozen window shows only changes up to its last shown item; newer changes wait
+  with the newer transcript. The record is read when the chat opens and when its mode or waiting restart
+  changes, never on a timer, a refresh or the app back in front.
 
 ### 3.3 Cards and surfaces
 

@@ -379,6 +379,7 @@ internal fun ChatLineContent(
     lastUserId: String? = null, onLastLine: (Int) -> Unit = {},
     onFullText: (Item) -> Unit,
     style: ChatRenderStyle = ChatRenderStyle.Agent,
+    agentSession: persona.core.contracts.Session? = null,
     textUpdates: Map<String, ChatTextUpdate> = emptyMap(),
     liveText: Map<String, StateFlow<String>> = emptyMap(),
     streamingItemIds: Set<String> = emptySet(),
@@ -443,6 +444,7 @@ internal fun ChatLineContent(
         }
         is ChatLine.Recaps -> RecapLine(line.items.map { it.item })
         is ChatLine.Viewed -> ViewedImagesRow(line.images, session, loader)
+        is ChatLine.ModeChange -> ModeChangeDivider(line.change, agentSession)
         // Glass: where the replies' model changed (#5055, ModelChanges.mark), as the transcript names both.
         is ChatLine.ModelChange -> {
             val from = persona.core.domain.lines.ModelChanges.replyModelName(line.from)
