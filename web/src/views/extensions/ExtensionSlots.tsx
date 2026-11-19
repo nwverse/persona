@@ -79,8 +79,8 @@ export function ExtensionNavPage({ extension, ui, onToggleSidebar }: { extension
   );
 }
 
-/** The cards on "Overview" (overview_card), under the agents' summary and what waits for the owner (Needs you, Stuck;
- *  #11092): one card full width, more two a row;
+/** The cards on "Overview" (overview_card), the page's last block, under the agents' sections and the computers
+ *  (#11147): one card full width, more two a row;
  *  on a page wide enough for two columns of rows, a lone card takes one of them. */
 export function OverviewCards() {
   const cards = useExtensionSlot("overview_card");
