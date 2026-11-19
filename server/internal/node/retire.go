@@ -339,7 +339,7 @@ func (n *Node) resumeOtherWith(ctx context.Context, id string, st sessionState, 
 		if argv, err = n.codexReadonlyArgs(st.Launcher, argv, st.AppMode); err != nil {
 			return err // Refuse conflicting permissions before creating a workspace, tab or attachment.
 		}
-		argv = codexExecutionArgs(argv, modelExecution{Model: st.Model})
+		argv = codexExecutionArgs(argv, n.codexOwnEffort(ctx, argv, codexPaneEnv(launch), st.Cwd, modelExecution{Model: st.Model, Effort: st.ModelEffort}))
 		if home, thread, ok := n.codexThread(id); ok && codexArchived(home, n.codexPath(id)) {
 			// Restore through Codex itself before its TUI can block the first prompt on an archive confirmation.
 			restored, err := n.codexArchive(ctx, id, home, thread, false)
@@ -460,6 +460,7 @@ func (n *Node) newTab(ctx context.Context, launch host.Launcher, cwd, ws, tabNam
 		return nil, fmt.Errorf("创建终端标签页失败：%w", err)
 	}
 	markPersonaTab(ctx, launch, created.Pane, id)
+	markTaskTerminal(ctx, launch, created.Pane)
 	n.agentTerminalOpened(launch, created.Pane) // finished_close.go
 	return created, nil
 }

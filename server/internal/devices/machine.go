@@ -59,6 +59,8 @@ type MachineConfig struct {
 	ClaudeGlobalHooks bool `json:"claude_global_hooks,omitempty"`
 	// UsageWindows false: the node does not read the agents' subscription rate-limit windows (hub/config.go, #2432).
 	UsageWindows *bool `json:"usage_windows,omitempty"`
+	// ExtraPath are directories in front of the node's PATH (hub/config.go, #10127).
+	ExtraPath []string `json:"extra_path,omitempty"`
 }
 
 // Machine is the manager's connection to one node: a local subprocess, `ssh host personad node --stdio`, a tailcat
@@ -150,8 +152,16 @@ type Machine struct {
 	firstOnce sync.Once
 	// pending counts the node's questions waiting on the phone (interaction.create): no switching paths meanwhile.
 	pending int
-	// notes are the hub's one-way events waiting for the node (notes.go; their own lock, not m.mu).
-	notes nodeNotes
+	// notes are the hub's one-way events waiting for the node, bulkNotes a forwarded port's bytes (notes.go; their own
+	// locks, not m.mu).
+	notes, bulkNotes nodeNotes
+	noteBytes        atomic.Int64 // what both hold together (maxNoteBytes)
+	// frameFails are when recent connections ended on malformed frames; lanesOffUntil, until when lanes are not asked
+	// for (conn.go noteFrameFailure). Under mu.
+	frameFails    []time.Time
+	lanesOffUntil time.Time
+	// resumes counts this computer's dropped connections that could resume, and how they ended (resume.go). Under mu.
+	resumes resumeCounts
 	// opened is what the hub has open on the node through the bus connection of the moment (hubopen.go).
 	opened hubOpened
 	// claudeDirsMu serializes the read-modify-writes of the remembered and blocked Claude config dirs (claudedirs.go).
@@ -226,9 +236,9 @@ func (m *Machine) snapshot() proto.Machine {
 	d := m.d
 	engine := d.engineOf(m.cfg.ID) // before m.mu: it may read settings
 	choice := d.engineChoiceOf(m.cfg.ID)
-	m.mu.Lock()
-	info := m.info
-	m.mu.Unlock()
+	info, online, deploying := m.linkSwitchFacts()
+	// Switching to Persona Link (link_switch.go): before m.mu, as it reads the hub's handover.
+	linkSwitch := d.linkSwitchView(m, info, online, deploying)
 	// The build its platform resolves to (packages.go: the hub's own, or the newest release this manager drives), and
 	// why none can be sent; before m.mu, as they read the hub's handover.
 	version, noPackage := d.hubVersion(), error(nil)
@@ -256,6 +266,10 @@ func (m *Machine) snapshot() proto.Machine {
 		icon = "laptop"
 	}
 	blocked := m.canDeployLocked()
+	if blocked == nil && linkSwitch != nil && linkSwitch.Reason == proto.LinkSwitchReasonInProgress {
+		blocked = errLinkSwitchDeploy
+	}
+	onlyPackage := blocked == nil && noPackage != nil // the node could take an update; the hub has none for it
 	if blocked == nil {
 		blocked = noPackage
 	}
@@ -284,13 +298,14 @@ func (m *Machine) snapshot() proto.Machine {
 		NodeVersion: m.info.Version, NodeMismatch: m.online && nodeMismatch(version, m.info),
 		NodeProtocol: m.info.Protocol, NodeIncompatible: incompatible,
 		Deploying: m.deploying, DeployError: deployErr,
-		CanDeploy: &canDeploy, DeployReason: deployReason, DeployPhase: m.deployPhase,
+		CanDeploy: &canDeploy, DeployReason: deployReason, DeployNoPackage: onlyPackage, DeployPhase: m.deployPhase,
 		Transport: m.via, TailcatPath: m.path, Tailcat: m.cfg.TailcatAddr != "",
 		Engine: engine, Engines: engines, EngineHosts: choice.Hosts, EngineDefault: choice.Default,
 		EngineSuggested: suggested, EngineSetsUnsupported: setsUnsupported, Link: link, System: d.metrics.system(m.cfg.ID),
 		Clipboard:    m.clipboardStateLocked(clipboardOn),
 		FileTransfer: m.fileTransferState(fileTransferOn),
 		ClaudePlugin: m.info.ClaudePlugin,
+		LinkSwitch:   linkSwitch,
 	}
 }
 
@@ -318,6 +333,9 @@ func (m *Machine) reconnect() {
 	}
 }
 
+// defaultRemoteBin is the program an ssh machine's node runs when its entry names none (remote_bin).
+const defaultRemoteBin = "~/.persona/bin/personad"
+
 func (m *Machine) command(ctx context.Context) *exec.Cmd {
 	if m.nodeCmd != nil {
 		return m.nodeCmd(ctx)
@@ -328,7 +346,7 @@ func (m *Machine) command(ctx context.Context) *exec.Cmd {
 	}
 	bin := m.cfg.RemoteBin
 	if bin == "" {
-		bin = "~/.persona/bin/personad"
+		bin = defaultRemoteBin
 	}
 	host := m.cfg.SSHHost
 	if host == "" {
@@ -813,6 +831,7 @@ func (m *Machine) onEvent(event string, params json.RawMessage) {
 		defer m.sessionsEventMu.Unlock() // held through OnEvent and forward below
 		if list, ok := m.decodeSessions(params); ok {
 			m.setSessions(list)
+			m.d.heldWake(m.cfg.ID) // a message held for a session listed now goes (held.go)
 		}
 	case "sessions.revs":
 		var p struct {

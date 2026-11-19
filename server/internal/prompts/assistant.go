@@ -466,6 +466,7 @@ func RenderAssistantContext(c AssistantContext) string { return render("assistan
 // TaskRun is the message a scheduled task's run starts with (assistant/task_run).
 type TaskRun struct {
 	Label          string
+	TodoID         string
 	Once, Interval bool   // neither: daily
 	Every          string // interval: "30 minutes"
 	Late           string // "" when on time; else how late ("25 minutes")
@@ -605,7 +606,7 @@ type BriefTask struct {
 type BriefCriterion struct{ Criterion, State, Change string }
 
 // BriefLeader is one direction in the briefing's facts: its name, its open tasks, those waiting for the owner, those
-// stuck over a day, and its leader's latest summary of the day (empty parts: none).
+// past their inactivity thresholds, and its leader's latest summary of the day (empty parts: none).
 type BriefLeader struct {
 	Name                     string
 	Open, Waiting, Stuck     int
@@ -709,6 +710,9 @@ type TaskNotice struct {
 	Earlier        []string // what else it went through since the last notice ("waiting on the user", "done"), oldest first
 	Ask            string   // needs: what it asks
 	Text           string   // what its agent said last, or why it did not start
+	// Files: the files it handed over, with where each is on the conversation's computer (task_files.go, #10511); the
+	// agent named them in its reply, and the manager copied them here. They are kept out of Text's clip.
+	Files []TaskFile
 	// RetryWith: failed because of its launcher there, the launcher the assistant may start it with instead when the
 	// user asks (task_retry's launcher; only the web's card has a button for it, #10365).
 	RetryWith string
@@ -718,6 +722,13 @@ type TaskNotice struct {
 }
 
 func RenderTaskNotice(n TaskNotice) string { return render("assistant/task_notice", n) }
+
+// TaskFile is one file a task handed over (task_files.go, #10511), as the task notice and a supervision message list
+// it: Path is where the conversation finds it (its copy, else the original). Error says why it did not come; Path is
+// then where it stayed, on the Agent's computer.
+type TaskFile struct {
+	Name, Path, Error string
+}
 
 // SpawnNotice tells the conversation that opened another with conversation_new that the other failed, or ended a turn
 // without reporting back with conversation_send (#4669): once per opened conversation.
@@ -739,6 +750,19 @@ type TaskEnded struct {
 }
 
 func RenderTaskEnded(n TaskEnded) string { return render("assistant/task_ended", n) }
+
+// ChatReply tells a conversation that wrote into a Lark chat as the user that others wrote there since (#10777): the
+// chat's name (Group: a group, else a direct chat with that person), when the conversation last wrote there (local
+// "01-02 15:04"), how many new messages and who wrote the newest, whether Context also repeats messages it was told
+// before (Earlier), and the messages' text, which goes in a context block as someone else's words.
+type ChatReply struct {
+	Language                     string // answerLanguage: "" Chinese, "English", "日本語"
+	Title, Sender, Sent, Context string
+	Group, Earlier               bool
+	Count                        int
+}
+
+func RenderChatReply(d ChatReply) string { return render("assistant/chat_reply", d) }
 
 // AskTodoAnswer is the message to the conversation whose ask_user question became a to-do (#1617): the user's call on it
 // (Thread: said in the to-do's Lark topic), or that the to-do was closed without one (Dropped). The questions and choices
@@ -798,7 +822,7 @@ type Supervise struct {
 	BackgroundEscalated bool
 	// Side: it goes to an ordinary side conversation, for the tasks that conversation handed out itself.
 	Side bool
-	// LeaderStuck: an entry is a leader's task stuck over a day (sigLeaderStuck), told the main conversation (#3609).
+	// LeaderStuck: an entry is a leader's task past its inactivity threshold (sigLeaderStuck), told the main conversation (#3609).
 	LeaderStuck bool
 	// Overdue: an entry is a task past its brief's clock (#3822).
 	Overdue bool
@@ -853,6 +877,9 @@ type SuperviseEntry struct {
 	Said        string
 	Evidence    []string
 	Step, Steps int
+	// Files: the files its agent handed over, with where each is on this conversation's computer (task_files.go,
+	// #10511). The manager copied them here when the agent's turn ended; they are kept out of Last's clip.
+	Files []TaskFile
 	// failed with its tab kept (#2570): until when (local "15:04"), the question its shell waits on, the tab's last
 	// lines, and how many retries are left; KeptUntil "" when the start failed for good.
 	KeptUntil, Question, Screen string
@@ -900,7 +927,7 @@ type SuperviseInbox struct {
 	Item, Title, Sender, Preview string
 	Count                        int
 	// URL is a GitHub PR's or issue's address; ToAgent is "sent" once the note reached the task's agent (InboxToAgent,
-	// #7346), "" when the supervisor is the only one told.
+	// #7346), "unhandled" when its bounded retry failed, "" when only the supervisor is told.
 	URL, ToAgent string
 }
 
@@ -909,6 +936,7 @@ type SuperviseInbox struct {
 type InboxToAgent struct {
 	Sender, Preview, URL string
 	Count                int
+	Event                string // server-authored delivery identity, absent for legacy callers
 }
 
 // RenderInboxToAgent is that note.
@@ -992,8 +1020,8 @@ func RenderTaskDoneWhen(criteria []string) string {
 	return render("assistant/task_done_when", struct{ Criteria []string }{criteria})
 }
 
-// RenderTaskGoal is a task's done_when as one checkable condition, for a Claude Code /goal typed before the task's
-// first message (docs/integrations/agent-goal.md "A goal set at the start"): one line, trimmed.
+// RenderTaskGoal is a task's done_when as one checkable condition, for the Claude Code or Codex /goal typed after the
+// task's first message (docs/integrations/agent-goal.md "A goal set at the start"): one line, trimmed.
 func RenderTaskGoal(criteria []string) string {
 	return strings.TrimSpace(render("assistant/task_goal", struct{ Criteria []string }{criteria}))
 }
@@ -1127,13 +1155,9 @@ func RenderTaskAttachments(a TaskAttachments) string {
 	return strings.TrimRight(render("assistant/task_attachments", a), "\n")
 }
 
-// SideConversation preserves the provenance of a non-owner's message to a tasked Agent.
-type SideConversation struct {
-	From, Text string
-}
-
-func RenderSideConversation(in SideConversation) string {
-	return render("assistant/side_conversation", in)
+// RenderSideConversation marks a separate request for an Agent assigned to a task.
+func RenderSideConversation(text string) string {
+	return render("assistant/side_conversation", text)
 }
 
 // TaskDoneInput is the task as it was handed out and what its agents said when they stopped (assistant/task_done_input).
