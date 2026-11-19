@@ -1,4 +1,5 @@
 {
+  "full_access_required": "Filing a session under a direction needs a device with full access.",
   "machine_not_found": "This computer is not available to this assistant.",
   "session_not_found": "This session is not available to this assistant.",
   "direction_not_found": "This direction does not exist.",

@@ -3,7 +3,7 @@ package assistant
 import (
 	"cmp"
 	"context"
-	"encoding/json"
+	"errors"
 	"maps"
 	"net/http"
 	"slices"
@@ -20,8 +20,26 @@ const (
 	directionEndedTasksMaxPage = 100
 )
 
-// directionSession is one owner-filed or leader-opened session. State is the listed session's state, offline when its
-// computer could not be read, or not_listed (including a quiet or reversibly hub-deleted session).
+// Where a placed session stands when its own state cannot be shown (directionLook.standing). A session's own states
+// are the session rows' (proto.StateWorking …, "offline" among them: a stopped session on a connected computer).
+const (
+	// standingComputerOffline: its computer is not connected now; the session is shown as filed, its state unknown.
+	standingComputerOffline = "computer_offline"
+	// standingNotListed: its computer is connected and does not list the session: archived, quiet enough to have left
+	// the list, or no longer on that computer.
+	standingNotListed = "not_listed"
+	// standingComputerRemoved: its computer is no longer one of this manager's computers.
+	standingComputerRemoved = "computer_removed"
+)
+
+// How a session got into a direction: the owner filed it, or the direction's leader conversation opened it.
+const (
+	directionSourceOwner  = "owner"
+	directionSourceLeader = "leader"
+)
+
+// directionSession is one owner-filed or leader-opened session. State is its own state when its computer is connected
+// and lists it, else one of the standings above.
 type directionSession struct {
 	MachineID string     `json:"machine_id"`
 	SessionID string     `json:"session_id"`
@@ -50,6 +68,9 @@ type directionReadResult struct {
 	Sessions   []directionSession   `json:"sessions"`
 	EndedTasks []directionEndedTask `json:"ended_tasks"`
 	More       bool                 `json:"more"`
+	// SessionsUnavailable: what places sessions (the filing book, the recorded openers, the deletion record) could not
+	// be read, so Sessions is empty rather than partial; the ended tasks do not depend on it.
+	SessionsUnavailable bool `json:"sessions_unavailable,omitempty"`
 }
 
 type directionCandidate struct {
@@ -57,6 +78,7 @@ type directionCandidate struct {
 	machine   string
 	session   string
 	title     string
+	parent    string // an owner filing's Parent
 	source    string
 	at        time.Time
 }
@@ -90,149 +112,296 @@ func (s *Service) serveDirectionRead(w http.ResponseWriter, r *http.Request) {
 	}
 	out := directionReadResult{ID: id, Name: name, EndedAt: record.EndedAt, Notes: record.Notes, NotesAt: record.NotesAt,
 		Progress: record.Progress, Sessions: []directionSession{}, EndedTasks: []directionEndedTask{}}
-	tb, _, _ := s.directionTreeParts(ctx, time.Now())
-	groups, err := tb.directionSessionGroups(ctx, cfg)
-	if err != nil {
-		apierr.Write(w, http.StatusServiceUnavailable, errDirectionUnavailable)
-		return
-	}
-	if sessions := groups[id]; sessions != nil {
-		out.Sessions = sessions
-	}
 	query := r.URL.Query()
 	limit, _ := strconv.Atoi(query.Get("limit"))
 	if limit <= 0 {
 		limit = directionEndedTasksPage
 	}
+	tb := s.directionOwners()
 	tasks, more, cursorOK := tb.directionEndedTasks(id, query.Get("title"), query.Get("before"), min(limit, directionEndedTasksMaxPage))
 	if !cursorOK {
 		directionFilingRefusal(w, r, http.StatusConflict, "ended_task_not_found", errDirectionEndedTaskCursor)
 		return
 	}
 	out.EndedTasks, out.More = tasks, more
+	if sessions, err := s.directionReadSessions(ctx, cfg, id); err != nil {
+		s.logf("direction %s sessions: %v", id, err)
+		out.SessionsUnavailable = true
+	} else if sessions != nil {
+		out.Sessions = sessions
+	}
 	apierr.WriteJSON(w, out)
 }
 
-// directionSessionGroups applies the placement order to every filed and leader-opened session. An Agent on an open
-// supervised task follows that task instead of its old filing. The full read includes these owner/leader sessions;
-// open-task Agents remain represented by their task rather than being duplicated here.
-func (tb *treeBuild) directionSessionGroups(ctx context.Context, cfg Settings) (map[string][]directionSession, error) {
-	s := tb.s
+// directionReadSessions are direction id's sessions, quiet ones included: only its own are placed, and only their
+// computers are asked.
+func (s *Service) directionReadSessions(ctx context.Context, cfg Settings, id string) ([]directionSession, error) {
+	rules, err := s.directionRulesNow(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
 	records, err := s.directionSessionRecords(ctx)
 	if err != nil {
 		return nil, err
 	}
+	look := newDirectionLook(s, nil)
+	placed, err := s.directionPlacements(ctx, rules, records, func(d string) bool { return d == id }, look)
+	if err != nil {
+		return nil, err
+	}
+	return look.sessionRows(ctx, placed)[id], nil
+}
+
+// directionSessionGroups are the current directions' sessions, placed as the read places them, on the computers this
+// build listed and on the others, asked once.
+func (tb *treeBuild) directionSessionGroups(ctx context.Context, cfg Settings) (map[string][]directionSession, error) {
+	s := tb.s
+	rules, err := s.directionRulesNow(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	records, err := s.directionSessionRecords(ctx)
+	if err != nil {
+		return nil, err
+	}
+	look := newDirectionLook(s, tb)
+	placed, err := s.directionPlacements(ctx, rules, records, func(d string) bool { return slices.Contains(tb.leads, d) }, look)
+	if err != nil {
+		return nil, err
+	}
+	return look.sessionRows(ctx, placed), nil
+}
+
+// directionRules is what places sessions besides the book and the recorded openers, read once per answer: the
+// conversations never placed (directionSpecialSessions), the ids that are or were directions, and the Agents rule 1
+// gives to their task. The to-dos are loaded.
+type directionRules struct {
+	cfg       Settings
+	special   map[[2]string]bool
+	known     map[string]bool
+	followers taskFollowers
+}
+
+func (s *Service) directionRulesNow(ctx context.Context, cfg Settings) (directionRules, error) {
+	special, known, err := s.directionSpecialSessions(ctx, cfg)
+	if err != nil {
+		return directionRules{}, err
+	}
+	return directionRules{cfg: cfg, special: special, known: known, followers: s.taskFollowers()}, nil
+}
+
+// directionPlacements places the filed and leader-opened sessions of the directions keep accepts, by the rules of
+// #11391, first match wins, never by folder or project and never by a model: (1) an Agent on an open supervised task,
+// or a sub-agent session under one, follows its task and is placed here in no direction; (2) the owner's filing (the
+// session's one entry, directionEntries; an empty one keeps it on its own); (3) a conversation a direction's leader
+// conversation opened. A leader conversation, the main conversation, the background supervisor and a deleted
+// conversation are never placed. The read, the write's limit and the tree all place sessions here; look lists the
+// computers of the placed sessions, once each.
+func (s *Service) directionPlacements(ctx context.Context, rules directionRules, records map[string]directionFiling,
+	keep func(direction string) bool, look *directionLook) ([]directionCandidate, error) {
 	origins, err := s.directionOriginRecords(ctx)
 	if err != nil {
 		return nil, err
 	}
-	special, knownDirections, err := s.directionSpecialSessions(ctx, cfg)
-	if err != nil {
-		return nil, err
-	}
-	supervised := map[[2]string]bool{}
-	for _, id := range tb.open {
-		t := tb.todos[id].Todo
-		if t.Supervision == nil || t.Supervision.Supervisor == "" {
-			continue
-		}
-		for _, a := range t.Agents {
-			if a.active() {
-				supervised[[2]string{s.canonical(a.MachineID), a.SessionID}] = true
-			}
-		}
-	}
+	entries := s.directionEntries(records)
 	var candidates []directionCandidate
-	seen := map[[2]string]bool{}
-	for _, key := range slices.Sorted(maps.Keys(records)) {
-		record := records[key]
-		var tuple [2]string
-		if json.Unmarshal([]byte(key), &tuple) != nil {
+	for _, k := range slices.SortedFunc(maps.Keys(entries), directionKeyOrder) {
+		e := entries[k]
+		if e.Direction == "" || !keep(e.Direction) || rules.special[k] {
 			continue
 		}
-		machine, sid := s.canonical(tuple[0]), tuple[1]
-		k := [2]string{machine, sid}
-		if record.Direction == "" || special[k] || supervised[k] || seen[k] {
-			continue
-		}
-		seen[k] = true
-		candidates = append(candidates, directionCandidate{direction: record.Direction, machine: machine, session: sid,
-			title: record.Title, source: "owner", at: record.At})
+		candidates = append(candidates, directionCandidate{direction: e.Direction, machine: k[0], session: k[1], title: e.Title,
+			parent: e.Parent, source: directionSourceOwner, at: e.At})
 	}
 	for _, sid := range slices.Sorted(maps.Keys(origins)) {
 		origin := origins[sid]
-		if origin.Origin != OriginSpawned || !knownDirections[origin.Ref] {
+		if origin.Origin != OriginSpawned || !rules.known[origin.Ref] || !keep(origin.Ref) {
 			continue
 		}
-		machine := s.canonical(cmp.Or(origin.MachineID, cfg.MachineID))
-		k := [2]string{machine, sid}
-		if _, filed := records[runtimeListID(machine, sid)]; filed || special[k] || supervised[k] || seen[k] {
+		k := [2]string{s.canonical(cmp.Or(origin.MachineID, rules.cfg.MachineID)), sid}
+		if _, filed := entries[k]; filed || rules.special[k] {
 			continue
 		}
-		seen[k] = true
-		candidates = append(candidates, directionCandidate{direction: origin.Ref, machine: machine, session: sid,
-			source: "leader", at: origin.At})
+		candidates = append(candidates, directionCandidate{direction: origin.Ref, machine: k[0], session: sid,
+			source: directionSourceLeader, at: origin.At})
 	}
-	visible := candidates[:0]
-	for _, candidate := range candidates {
-		if candidate.machine == cfg.MachineID {
-			_, deleted, err := s.deletedConversation(ctx, candidate.machine, candidate.session)
-			if err != nil {
-				return nil, err
-			}
-			if deleted {
-				continue
-			}
-		}
-		visible = append(visible, candidate)
+	if len(candidates) == 0 {
+		return nil, nil
 	}
-	candidates = visible
-	machines := map[string]bool{}
-	for _, candidate := range candidates {
-		machines[candidate.machine] = true
+	deleted, err := s.directionDeleted(ctx)
+	if err != nil {
+		return nil, err
 	}
-	machineErrors := map[string]error{}
-	for _, machine := range slices.Sorted(maps.Keys(machines)) {
-		if tb.listed[machine] {
+	placed := candidates[:0]
+	for _, c := range candidates {
+		k := [2]string{c.machine, c.session}
+		if deleted[k] {
 			continue
 		}
-		list, err := s.sessions(ctx, machine)
-		if err != nil {
-			machineErrors[machine] = err
+		look.list(ctx, c.machine)
+		if rules.followers.follows(k, look.parentOf(c)) {
 			continue
 		}
-		tb.listed[machine] = true
-		for _, row := range list {
-			tb.sessions[[2]string{machine, row.SessionID}] = row
+		placed = append(placed, c)
+	}
+	return placed, nil
+}
+
+func directionKeyOrder(a, b [2]string) int {
+	return cmp.Or(cmp.Compare(a[0], b[0]), cmp.Compare(a[1], b[1]))
+}
+
+// directionDeleted are the deleted assistant conversations, by canonical computer and id: the deletion record read
+// once, whichever computer a conversation was on.
+func (s *Service) directionDeleted(ctx context.Context) (map[[2]string]bool, error) {
+	b := &s.deletedConversations
+	b.mu.Lock()
+	if err := s.loadDeletedConversations(ctx); err != nil {
+		b.mu.Unlock()
+		return nil, err
+	}
+	rows := slices.Collect(maps.Values(b.rows))
+	b.mu.Unlock()
+	out := make(map[[2]string]bool, len(rows))
+	for _, row := range rows {
+		out[[2]string{s.canonical(row.Machine), row.ID}] = true
+	}
+	return out, nil
+}
+
+// directionHeld is how many sessions the owner filed direction holds besides session except, as the read places them
+// (the write's limit, under the book's lock with the book as records has it).
+func (s *Service) directionHeld(ctx context.Context, rules directionRules, records map[string]directionFiling, direction string,
+	except [2]string) (int, error) {
+	placed, err := s.directionPlacements(ctx, rules, records, func(d string) bool { return d == direction }, newDirectionLook(s, nil))
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, c := range placed {
+		if c.source == directionSourceOwner && [2]string{c.machine, c.session} != except {
+			n++
 		}
 	}
-	titles, _ := s.conversationTitles()
+	return n, nil
+}
+
+// directionLook is what placing and standing ask of the computers, each computer once: its sessions as listed now
+// (shared with a tree build's), and whether it is one of this manager's computers and connected.
+type directionLook struct {
+	s        *Service
+	rows     map[[2]string]proto.Session
+	listed   map[string]bool
+	failed   map[string]error
+	computer map[string]string
+}
+
+func newDirectionLook(s *Service, tb *treeBuild) *directionLook {
+	l := &directionLook{s: s, rows: map[[2]string]proto.Session{}, listed: map[string]bool{}, failed: map[string]error{},
+		computer: map[string]string{}}
+	if tb != nil {
+		l.rows, l.listed = tb.sessions, tb.listed
+	}
+	return l
+}
+
+// list reads machine's sessions, once.
+func (l *directionLook) list(ctx context.Context, machine string) {
+	if l.listed[machine] || l.failed[machine] != nil {
+		return
+	}
+	rows, err := l.s.sessions(ctx, machine)
+	if err != nil {
+		l.failed[machine] = err
+		return
+	}
+	l.listed[machine] = true
+	for _, row := range rows {
+		l.rows[[2]string{machine, row.SessionID}] = row
+	}
+}
+
+// parentOf is placement rule 1's parent of a session on c's computer: its row's, else for c itself the parent its
+// filing kept.
+func (l *directionLook) parentOf(c directionCandidate) func(sid string) string {
+	return func(sid string) string {
+		if row, ok := l.rows[[2]string{c.machine, sid}]; ok {
+			return row.ParentSessionID
+		}
+		return cond(sid == c.session, c.parent, "")
+	}
+}
+
+// computerState is "" when machine is one of this manager's computers and connected (online or reachable, the rule
+// the readiness check has for a computer that is offline), standingComputerOffline or standingComputerRemoved.
+// Connected or not is the computer's own connection, never whether its list could be read: the manager answers a
+// disconnected computer's list from what it last listed. Without the manager's own fleet (a hub answers the lists)
+// its list decides (standing).
+func (l *directionLook) computerState(machine string) string {
+	if st, ok := l.computer[machine]; ok {
+		return st
+	}
+	st := ""
+	if l.s.fleetOn() {
+		d, ok := l.s.devs.Summary(machine)
+		switch {
+		case !ok:
+			st = standingComputerRemoved
+		case !d.Online && !d.Reachable:
+			st = standingComputerOffline
+		}
+	}
+	l.computer[machine] = st
+	return st
+}
+
+// standing is where placed session c stands (directionSession.State), its row when its computer listed one (for its
+// title), and whether its computer shows it deleted since, which leaves it out.
+func (l *directionLook) standing(ctx context.Context, c directionCandidate) (state string, row proto.Session, found, deleted bool) {
+	l.list(ctx, c.machine)
+	row, found = l.rows[[2]string{c.machine, c.session}]
+	if found && row.IsDeleted() {
+		return "", row, found, true
+	}
+	if st := l.computerState(c.machine); st != "" {
+		return st, row, found, false
+	}
+	switch err := l.failed[c.machine]; {
+	case errors.Is(err, ErrNoDevice):
+		return standingComputerRemoved, row, found, false
+	case err != nil:
+		return standingComputerOffline, row, found, false
+	case !found || row.Archived:
+		return standingNotListed, row, found, false
+	}
+	return triageStateOf(row), row, found, false
+}
+
+// sessionRows are the placed sessions' rows by direction, in computer and session order.
+func (l *directionLook) sessionRows(ctx context.Context, placed []directionCandidate) map[string][]directionSession {
+	titles, _ := l.s.conversationTitles()
 	groups := map[string][]directionSession{}
-	for _, candidate := range candidates {
-		at := candidate.at.UTC()
-		row := directionSession{MachineID: candidate.machine, SessionID: candidate.session, Title: candidate.title,
-			Source: candidate.source, At: &at}
-		if live, ok := tb.sessions[[2]string{candidate.machine, candidate.session}]; ok {
-			row.State = triageStateOf(live)
-			if row.Title == "" || candidate.source == "leader" {
-				row.Title = live.Title
-			}
-		} else if machineErrors[candidate.machine] != nil {
-			row.State = "offline"
-		} else {
-			row.State = "not_listed"
+	for _, c := range placed {
+		state, live, found, deleted := l.standing(ctx, c)
+		if deleted {
+			continue
+		}
+		at := c.at.UTC()
+		row := directionSession{MachineID: c.machine, SessionID: c.session, Title: c.title, Source: c.source, At: &at, State: state}
+		if found && (row.Title == "" || c.source == directionSourceLeader) {
+			row.Title = live.Title
 		}
 		if row.Title == "" {
-			row.Title = titles[candidate.session].title
+			row.Title = titles[c.session].title
 		}
-		groups[candidate.direction] = append(groups[candidate.direction], row)
+		groups[c.direction] = append(groups[c.direction], row)
 	}
 	for direction := range groups {
 		slices.SortFunc(groups[direction], func(a, b directionSession) int {
 			return cmp.Or(cmp.Compare(a.MachineID, b.MachineID), cmp.Compare(a.SessionID, b.SessionID))
 		})
 	}
-	return groups, nil
+	return groups
 }
 
 // directionEndedTasks uses the same raw ownership resolution as the open tree. Only done/cancelled tasks are included;
@@ -277,15 +446,22 @@ func (tb *treeBuild) directionEndedTasks(direction, title, before string, limit 
 	return page, end < len(all), true
 }
 
-// directionTreeSessionRows leaves quiet sessions to the single-direction read and never duplicates an Agent already
-// listed under an open to-do (including an owner's own, unsupervised to-do).
-func (tb *treeBuild) directionTreeSessionRows(groups map[string][]directionSession) {
+// directionTreeSessionRows keeps a direction's sessions that are at work or wait on the owner, and none the tree lists
+// under a task already: an Agent of a task, one under it (its sub-agent sessions included) and an owner's own,
+// unsupervised to-do's. Quiet sessions, and those whose computer is offline or that are not listed, are left to the
+// single-direction read.
+func (tb *treeBuild) directionTreeSessionRows(groups map[string][]directionSession, tree directionTree) {
 	onTask := map[[2]string]bool{}
-	for _, id := range tb.open {
-		for _, a := range tb.todos[id].Agents {
-			if a.active() {
-				onTask[[2]string{tb.s.canonical(a.MachineID), a.SessionID}] = true
-			}
+	var mark func(agents []treeAgent)
+	mark = func(agents []treeAgent) {
+		for _, a := range agents {
+			onTask[[2]string{tb.s.canonical(a.MachineID), a.SessionID}] = true
+			mark(a.Children)
+		}
+	}
+	for _, d := range tree.Directions {
+		for _, t := range d.Tasks {
+			mark(t.Agents)
 		}
 	}
 	for direction, sessions := range groups {

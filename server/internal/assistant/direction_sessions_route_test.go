@@ -19,14 +19,26 @@ import (
 // filing book's implementation, so an older manager fails at the missing routes rather than at future symbols.
 const directionSessionsSettingKey = "assistant.direction_sessions"
 
+// directionFilingAnswer: Direction and Previous are null when the book has no entry (#11458).
 type directionFilingAnswer struct {
-	Status    int    `json:"-"`
-	Direction string `json:"direction"`
-	Previous  string `json:"previous"`
-	Changed   bool   `json:"changed"`
-	Code      string `json:"code"`
-	Error     string `json:"error"`
-	Raw       string `json:"-"`
+	Status    int     `json:"-"`
+	Direction *string `json:"direction"`
+	Previous  *string `json:"previous"`
+	Changed   bool    `json:"changed"`
+	Code      string  `json:"code"`
+	Error     string  `json:"error"`
+	Raw       string  `json:"-"`
+}
+
+// directionNull is how the answers' null is shown in the tests' messages.
+const directionNull = "<null>"
+
+// directionValue is a nullable answer field, directionNull for null.
+func directionValue(v *string) string {
+	if v == nil {
+		return directionNull
+	}
+	return *v
 }
 
 type directionSessionView struct {
@@ -56,6 +68,8 @@ type directionReadAnswer struct {
 	Sessions   []directionSessionView   `json:"sessions"`
 	EndedTasks []directionEndedTaskView `json:"ended_tasks"`
 	More       bool                     `json:"more"`
+	// SessionsUnavailable (#11458): what places sessions could not be read; the ended tasks are still there.
+	SessionsUnavailable bool `json:"sessions_unavailable"`
 }
 
 // directionFilingEnv has two current directions, a main chat, a background supervisor, ordinary chats in this
@@ -99,7 +113,12 @@ func directionFilingSetSessions(e *todoEventEnv, extra ...proto.Session) {
 
 func directionFilingPut(s *Service, role, lang, machine, session, direction string) directionFilingAnswer {
 	body, _ := json.Marshal(map[string]string{"direction": direction})
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/assistant/sessions/"+machine+"/"+session+"/direction", strings.NewReader(string(body)))
+	return directionFilingPutBody(s, role, lang, machine, session, string(body))
+}
+
+// directionFilingPutBody is the write with body as it is ({"direction":null} takes the entry out).
+func directionFilingPutBody(s *Service, role, lang, machine, session, body string) directionFilingAnswer {
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/assistant/sessions/"+machine+"/"+session+"/direction", strings.NewReader(body))
 	if role != "" {
 		r.Header.Set(RoleHeader, role)
 	}
@@ -120,10 +139,29 @@ func directionFilingMustPut(t *testing.T, s *Service, machine, session, directio
 	if out.Status != http.StatusOK {
 		t.Fatalf("file %s/%s: got %d, want 200: %s", machine, session, out.Status, out.Raw)
 	}
-	if out.Direction != direction {
-		t.Fatalf("file %s/%s: direction %q, want %q: %s", machine, session, out.Direction, direction, out.Raw)
+	if directionValue(out.Direction) != direction {
+		t.Fatalf("file %s/%s: direction %q, want %q: %s", machine, session, directionValue(out.Direction), direction, out.Raw)
 	}
 	return out
+}
+
+// directionFilingMustRemove takes the session's entry out ({"direction":null}).
+func directionFilingMustRemove(t *testing.T, s *Service, machine, session string) directionFilingAnswer {
+	t.Helper()
+	out := directionFilingPutBody(s, roleFull, "", machine, session, `{"direction":null}`)
+	if out.Status != http.StatusOK || out.Direction != nil {
+		t.Fatalf("remove %s/%s: got %d: %s", machine, session, out.Status, out.Raw)
+	}
+	return out
+}
+
+// directionUndo repeats the write with the answer's previous: null takes the entry out again.
+func directionUndo(t *testing.T, s *Service, machine, session string, filed directionFilingAnswer) directionFilingAnswer {
+	t.Helper()
+	if filed.Previous == nil {
+		return directionFilingMustRemove(t, s, machine, session)
+	}
+	return directionFilingMustPut(t, s, machine, session, *filed.Previous)
 }
 
 func directionReadGet(t *testing.T, s *Service, role, path string) (int, directionReadAnswer, string) {
@@ -187,7 +225,7 @@ func directionFilingFleetEnv(t *testing.T, st *fleetMem) *fleetTest {
 	t.Helper()
 	ft := newFleetTestOn(t, st)
 	ft.st = st
-	ft.s.devs = &aliasDevs{fleetDevs: ft.d, alias: map[string]string{"old-mac": "mac"}}
+	ft.s.devs = &aliasDevs{fleetDevs: ft.d, alias: map[string]string{"old-mac": "mac", "a-mac": "mac"}}
 	ft.f.hello.Assistant.MachineID = "mac"
 	ft.f.hello.Assistant.Machines = []string{"mac"}
 	setSettings(t, ft.s, func(v *Settings) {
@@ -211,7 +249,7 @@ func TestDirectionFilingPersistsMovesOnOwnAndUndoAcrossRestart(t *testing.T) {
 	st := ft.st
 
 	first := directionFilingMustPut(t, ft.s, "old-mac", "chat-a", "conv_lead_a")
-	if first.Previous != "" || !first.Changed {
+	if first.Previous != nil || !first.Changed {
 		t.Fatalf("first filing: %+v", first)
 	}
 	var book map[string]struct {
@@ -241,7 +279,7 @@ func TestDirectionFilingPersistsMovesOnOwnAndUndoAcrossRestart(t *testing.T) {
 	}
 
 	moved := directionFilingMustPut(t, ft.s, "old-mac", "chat-a", "conv_lead_b")
-	if moved.Previous != "conv_lead_a" || !moved.Changed {
+	if directionValue(moved.Previous) != "conv_lead_a" || !moved.Changed {
 		t.Fatalf("move: %+v", moved)
 	}
 	ft = directionFilingFleetEnv(t, st)
@@ -250,12 +288,12 @@ func TestDirectionFilingPersistsMovesOnOwnAndUndoAcrossRestart(t *testing.T) {
 	}
 
 	// Undo is the same write with the previous effective placement.
-	undo := directionFilingMustPut(t, ft.s, "old-mac", "chat-a", moved.Previous)
-	if undo.Direction != "conv_lead_a" || undo.Previous != "conv_lead_b" || !undo.Changed {
+	undo := directionUndo(t, ft.s, "old-mac", "chat-a", moved)
+	if directionValue(undo.Direction) != "conv_lead_a" || directionValue(undo.Previous) != "conv_lead_b" || !undo.Changed {
 		t.Fatalf("undo move: %+v", undo)
 	}
 	onOwn := directionFilingMustPut(t, ft.s, "old-mac", "chat-a", "")
-	if onOwn.Previous != "conv_lead_a" || !onOwn.Changed {
+	if directionValue(onOwn.Previous) != "conv_lead_a" || !onOwn.Changed {
 		t.Fatalf("on its own: %+v", onOwn)
 	}
 	// Make the on-own choice observable: without that record this recorded origin would put the chat under A.
@@ -264,8 +302,8 @@ func TestDirectionFilingPersistsMovesOnOwnAndUndoAcrossRestart(t *testing.T) {
 	if got := directionMustRead(t, ft.s, "", "conv_lead_a"); slices.Contains(directionSessionIDs(got.Sessions), "chat-a") {
 		t.Fatalf("on-own did not survive restart and override origin: %+v", got.Sessions)
 	}
-	restored := directionFilingMustPut(t, ft.s, "old-mac", "chat-a", onOwn.Previous)
-	if restored.Previous != "" || !restored.Changed {
+	restored := directionUndo(t, ft.s, "old-mac", "chat-a", onOwn)
+	if directionValue(restored.Previous) != "" || !restored.Changed {
 		t.Fatalf("undo on-own: %+v", restored)
 	}
 	if got := directionMustRead(t, ft.s, "", "conv_lead_a"); !slices.Contains(directionSessionIDs(got.Sessions), "chat-a") {
@@ -310,7 +348,7 @@ func TestDirectionFilingWriteFailureIsAtomic(t *testing.T) {
 		t.Fatalf("failed save leaked into the new direction: %+v", got.Sessions)
 	}
 	retry := directionFilingMustPut(t, e.s, "server", "chat-a", "conv_lead_b")
-	if retry.Previous != "conv_lead_a" || !retry.Changed {
+	if directionValue(retry.Previous) != "conv_lead_a" || !retry.Changed {
 		t.Fatalf("retry after failed save: %+v", retry)
 	}
 }
@@ -488,13 +526,27 @@ func TestDirectionFilingPreviousIgnoresNonDirectionOrigin(t *testing.T) {
 	// conversation_new records any opener, not only a direction. An ordinary opener was not a direction placement.
 	e.s.originSet(context.Background(), "server", "chat-opened", OriginSpawned, "chat-b", "")
 	filed := directionFilingMustPut(t, e.s, "server", "chat-opened", "conv_lead_a")
-	if filed.Previous != "" {
-		t.Fatalf("ordinary opener became an invalid previous direction: %+v", filed)
+	if filed.Previous != nil {
+		t.Fatalf("ordinary opener became a previous direction: %s", filed.Raw)
 	}
-	undo := directionFilingMustPut(t, e.s, "server", "chat-opened", filed.Previous)
-	if undo.Direction != "" || undo.Previous != "conv_lead_a" || !undo.Changed {
-		t.Fatalf("undo did not restore the ordinary opener's standalone placement: %+v", undo)
+	undo := directionUndo(t, e.s, "server", "chat-opened", filed)
+	if undo.Direction != nil || directionValue(undo.Previous) != "conv_lead_a" || !undo.Changed {
+		t.Fatalf("undo did not restore the ordinary opener's placement: %s", undo.Raw)
 	}
+	if directionBookHas(t, e.s, "server", "chat-opened") {
+		t.Fatalf("undo of a first filing left an entry: %s", directionBookSnapshot(t, e.s))
+	}
+}
+
+// directionBookHas: the stored book has an entry under machine/session's own key.
+func directionBookHas(t *testing.T, s *Service, machine, session string) bool {
+	t.Helper()
+	var book map[string]json.RawMessage
+	if _, err := s.store().Setting(context.Background(), directionSessionsSettingKey, &book); err != nil {
+		t.Fatal(err)
+	}
+	_, ok := book[runtimeListID(machine, session)]
+	return ok
 }
 
 func TestDirectionFilingAddsNoMCPToolAndSessionsChangeDoesNotFile(t *testing.T) {

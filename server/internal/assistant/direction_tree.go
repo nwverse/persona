@@ -128,6 +128,8 @@ type directionTreeBook struct {
 	run    sync.Mutex                      // one build and compare at a time
 	timer  *time.Timer                     // a real-clock comparison not yet run (tests can stop it during teardown)
 	runs   sync.WaitGroup                  // scheduled real-clock comparisons; fixtures wait before closing their store
+	// machines: the computers of the direction sessions in the tree built last (directionSessionsOn).
+	machines map[string]bool
 }
 
 // directionTreeRoutes: GET /api/v1/assistant/directions/tree is the tree as it is now.
@@ -169,7 +171,8 @@ func (s *Service) directionTreeSoon() {
 	b.mu.Unlock()
 }
 
-// directionTreeSessions: the sessions of machine d changed; the tree is built again when an open task's Agent is there.
+// directionTreeSessions: the sessions of machine d changed, or its computer went away (NodeDetached); the tree is built
+// again when that can change it: an open task's Agent is there, or a direction's session may be (directionSessionsOn).
 func (s *Service) directionTreeSessions(d DeviceSessions) {
 	s.todos.mu.RLock()
 	on := false
@@ -180,21 +183,46 @@ func (s *Service) directionTreeSessions(d DeviceSessions) {
 		}
 	}
 	s.todos.mu.RUnlock()
-	if !on {
-		records, err := s.directionSessionRecords(context.Background())
-		if err == nil {
-			for key := range records {
-				var tuple [2]string
-				if json.Unmarshal([]byte(key), &tuple) == nil && s.canonical(tuple[0]) == s.canonical(d.MachineID) {
-					on = true
-					break
-				}
+	if on || s.directionSessionsOn(context.Background(), d.MachineID, d.Sessions) {
+		s.directionTreeSoon()
+	}
+}
+
+// directionSessionsOn: a session of a current direction's may be on machine: the tree told last lists one there, the
+// owner filed one there, or a session of list (the machine's) was opened by a current direction's leader conversation.
+func (s *Service) directionSessionsOn(ctx context.Context, machine string, list []proto.Session) bool {
+	machine = s.canonical(machine)
+	b := &s.dtree
+	b.mu.Lock()
+	told := b.machines[machine]
+	b.mu.Unlock()
+	if told {
+		return true
+	}
+	cfg := s.settings(ctx)
+	current := func(id string) bool { return id != "" && id != cfg.Main && slices.Contains(cfg.Leaders, id) }
+	if records, err := s.directionSessionRecords(ctx); err == nil {
+		for k, e := range s.directionEntries(records) {
+			if k[0] == machine && current(e.Direction) {
+				return true
 			}
 		}
 	}
-	if on {
-		s.directionTreeSoon()
+	if len(list) == 0 {
+		return false
 	}
+	var opened []string // the computers the sessions of list a current direction opened were opened on
+	o := &s.origins
+	o.mu.Lock()
+	if s.originsLocked(ctx) {
+		for i := range list {
+			if origin := o.m[list[i].SessionID]; origin != nil && origin.Origin == OriginSpawned && current(origin.Ref) {
+				opened = append(opened, cmp.Or(origin.MachineID, cfg.MachineID))
+			}
+		}
+	}
+	o.mu.Unlock()
+	return slices.ContainsFunc(opened, func(m string) bool { return s.canonical(m) == machine })
 }
 
 // directionTreeSync builds the tree and tells the apps {"type":"directions"} when it is not the one they were last told
@@ -209,14 +237,21 @@ func (s *Service) directionTreeSync(ctx context.Context) {
 	}
 	b.run.Lock()
 	defer b.run.Unlock()
-	raw, err := json.Marshal(s.directionTree(ctx, time.Now()))
+	tree := s.directionTree(ctx, time.Now())
+	raw, err := json.Marshal(tree)
 	if err != nil {
 		return
 	}
 	sum := sha256.Sum256(raw)
+	machines := map[string]bool{}
+	for _, d := range tree.Directions {
+		for _, session := range d.Sessions {
+			machines[session.MachineID] = true
+		}
+	}
 	b.mu.Lock()
 	same := b.told && b.digest == sum
-	b.digest, b.told = sum, true
+	b.digest, b.told, b.machines = sum, true, machines
 	b.mu.Unlock()
 	if !same {
 		s.event(ctx, map[string]any{"type": "directions"})
@@ -274,7 +309,7 @@ func (s *Service) directionTree(ctx context.Context, now time.Time) directionTre
 		s.logf("direction sessions: %v", err)
 		return out
 	}
-	tb.directionTreeSessionRows(groups)
+	tb.directionTreeSessionRows(groups, out)
 	for i := range out.Directions {
 		if !out.Directions[i].Secretary {
 			out.Directions[i].Sessions = groups[out.Directions[i].ID]
@@ -283,24 +318,12 @@ func (s *Service) directionTree(ctx context.Context, now time.Time) directionTre
 	return out
 }
 
-// directionTreeParts is the shared build behind the tree and the single-direction read. The read uses taskOwner for
-// ended tasks too; the tree still limits those raw owners to current leaders in directionOf.
+// directionTreeParts is the tree's build. The single-direction read builds only the part taskOwner needs
+// (directionOwners); the tree limits those raw owners to current leaders in directionOf.
 func (s *Service) directionTreeParts(ctx context.Context, now time.Time) (*treeBuild, Settings, map[string]string) {
 	cfg := s.settings(ctx)
 	leads, names := s.currentLeaders(ctx, cfg)
-
-	s.todos.mu.RLock()
-	all := make([]listedTodo, 0, len(s.todos.todos))
-	for _, t := range s.todos.todos {
-		raw := copyTodoLocked(t)
-		shown := formatTodo(raw)
-		// formatTodo uses "review" for older clients' cancellation labels. Keep the stored marker in this internal
-		// projection so the single-direction read can distinguish cancellation from ordinary completion.
-		shown.DoneBy = raw.DoneBy
-		all = append(all, listedTodo{Todo: shown})
-	}
-	s.todos.mu.RUnlock()
-	slices.SortFunc(all, func(a, b listedTodo) int { return cmp.Compare(a.ID, b.ID) })
+	all := s.treeTodos()
 	asks := s.todoAsks(ctx) // once the to-dos are let go: it reads them itself
 	var undone []Todo
 	for i := range all {
@@ -314,6 +337,33 @@ func (s *Service) directionTreeParts(ctx context.Context, now time.Time) (*treeB
 	lists, reached := s.agentSessionLists(ctx, undone)
 	tb := newTreeBuild(s, cfg.Main, leads, all, lists, reached, now, s.location(ctx))
 	return tb, cfg, names
+}
+
+// treeTodos are every to-do as the tree reads them, by id.
+func (s *Service) treeTodos() []listedTodo {
+	s.todos.mu.RLock()
+	all := make([]listedTodo, 0, len(s.todos.todos))
+	for _, t := range s.todos.todos {
+		raw := copyTodoLocked(t)
+		shown := formatTodo(raw)
+		// formatTodo uses "review" for older clients' cancellation labels. Keep the stored marker in this internal
+		// projection so the single-direction read can distinguish cancellation from ordinary completion.
+		shown.DoneBy = raw.DoneBy
+		all = append(all, listedTodo{Todo: shown})
+	}
+	s.todos.mu.RUnlock()
+	slices.SortFunc(all, func(a, b listedTodo) int { return cmp.Compare(a.ID, b.ID) })
+	return all
+}
+
+// directionOwners is the part of a tree build taskOwner needs, for the single-direction read's ended tasks: every
+// to-do and the task leaders' Agents. It places no task and asks no computer.
+func (s *Service) directionOwners() *treeBuild {
+	tb := &treeBuild{s: s, todos: map[string]listedTodo{}, leaderAgent: map[[2]string][]string{}}
+	for _, t := range s.treeTodos() {
+		tb.index(t)
+	}
+	return tb
 }
 
 // treeBuild is one build of the tree: the to-dos placed, the sessions by machine and id, and what is nested where.
@@ -336,6 +386,17 @@ type treeBuild struct {
 	workerAt map[string]treeAttach
 	// workersUnder: the worker tasks under each (leader task, leader Agent).
 	workersUnder map[treeAttach][]string
+}
+
+// index adds to-do t, and the leader Agents it has.
+func (tb *treeBuild) index(t listedTodo) {
+	tb.todos[t.ID] = t
+	for _, a := range t.Agents {
+		if a.Source == sourceLeader {
+			k := [2]string{a.MachineID, a.SessionID}
+			tb.leaderAgent[k] = append(tb.leaderAgent[k], t.ID)
+		}
+	}
 }
 
 type treeAttach struct {
@@ -367,15 +428,9 @@ func newTreeBuild(s *Service, main string, leads []string, all []listedTodo, lis
 	}
 	tb.placed = triagePlace(all, look, now, loc)
 	for _, t := range all {
-		tb.todos[t.ID] = t
+		tb.index(t)
 		if triageCountsAsOpen(t.Todo, tb.placed[t.ID]) {
 			tb.open = append(tb.open, t.ID)
-		}
-		for _, a := range t.Agents {
-			if a.Source == sourceLeader {
-				k := [2]string{a.MachineID, a.SessionID}
-				tb.leaderAgent[k] = append(tb.leaderAgent[k], t.ID)
-			}
 		}
 	}
 	for _, id := range tb.open {
