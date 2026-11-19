@@ -12399,6 +12399,8 @@ if os.environ.get("MOCK_MAIL_INBOX") == "off":
     LEGACY_CONNECTORS[1]["inbox"] = False
 
 # Telegram (the Telegram extension, #1704; docs/archive/extensions/plan-telegram.md): the user's own account, signed in from Settings › Connectors › Telegram a step at a time.
+# Its two inbox rows carry their conversations' pictures (connector.avatar_url, the avatars route serves made-up ones, #10923);
+# GET /mock/telegram_avatars?mode=before lists them as an older hub did, without.
 # All made up: api_id 1234567 (a hash of 32 zeros is refused), any phone starting with +, the code 12345, the 2FA
 # password example-password. MOCK_TELEGRAM=off|signed_out|signed_in|2fa|limited (unset: no Telegram connector at all;
 # limited: signed in and waiting out a flood wait Telegram asked for);
@@ -13068,6 +13070,25 @@ def avatars_area(h, p):
     h.send_header("Cache-Control", "private, max-age=31536000, immutable")
     h.end_headers(); h.wfile.write(data)
     return True
+
+
+# GET /mock/telegram_avatars?mode=before|1 (MOCK_TELEGRAM_INBOX, #10923): the Telegram rows as a hub before the avatars
+# route lists them (no connector.avatar_url: every app draws the initial), or with their pictures.
+TG_AVATARS = {"u1": "a.u1.501", "c2": "a.c2.900"}
+
+
+def telegram_avatars_area(h, method, p):
+    if not os.environ.get("MOCK_TELEGRAM_INBOX") or method != "GET" or p != "/mock/telegram_avatars":
+        return False
+    mode = parse_qs(urlparse(h.path).query).get("mode", ["1"])[0] or "1"
+    for x in INBOX:
+        c = x.get("connector") or {}
+        if x.get("source") == "telegram" and c.get("thread") in TG_AVATARS:
+            if mode == "before":
+                c.pop("avatar_url", None)
+            else:
+                c["avatar_url"] = avatar_path("telegram", TG_AVATARS[c["thread"]])
+    return h.send_json({"mode": mode}) or True
 
 
 def telegram_area(h, method, p, raw):
@@ -27003,6 +27024,7 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/v1/lark/unread-count": return self.send_json({"count": 4})
         if telegram_area(self, "GET", p, b""): return
         if avatars_area(self, p): return
+        if telegram_avatars_area(self, "GET", p): return
         if larkcli_thread_area(self, "GET", p): return
         if plugin_connector_area(self, "GET", p, b""): return
         if triage_route(self, "GET", p, b""): return
