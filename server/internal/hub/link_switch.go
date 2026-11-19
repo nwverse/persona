@@ -389,6 +389,24 @@ func (h *Hub) linkSwitchBusy(mid string) error {
 	return nil
 }
 
+// managerSwitching is errLinkSwitchInProgress while a computer manager id carries switches (it is not removed, which
+// would hand its computers to the carrier mid-switch), else nil.
+func (h *Hub) managerSwitching(id string) error {
+	s := &h.linkSwitch
+	s.mu.Lock()
+	ids := make([]string, 0, len(s.run))
+	for mid := range s.run {
+		ids = append(ids, mid)
+	}
+	s.mu.Unlock()
+	for _, mid := range ids {
+		if h.entryOwner(mid) == id {
+			return errLinkSwitchInProgress
+		}
+	}
+	return nil
+}
+
 // swapMachineKind sets computer mid's entry kind to kind, every other key as it was, when check (given the entry as
 // it is now) says yes: in its manager's own list for one it keeps (machines_kept.go), else in hub.json, then in the
 // running hub at once (kindLive). check's error is the answer, nothing written. h.machineAdd is held.

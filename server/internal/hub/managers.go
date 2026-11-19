@@ -704,6 +704,9 @@ func (h *Hub) managerRoutes(api *http.ServeMux) {
 		// are done; the ones after find it gone (ownership_moves.go).
 		drop := r.URL.Query().Get("drop_machines") == "1"
 		err := h.removingManager(func() error {
+			if err := h.managerSwitching(id); err != nil { // its manager runs the switch (link_switch.go)
+				return err
+			}
 			// What it keeps in its own list is in its manager.json only (machines_kept.go): moved away first, or
 			// dropped on purpose. Checked with the moves held off, from a record that was read.
 			if keeps, known := h.keepsAnyKnown(r.Context(), id); !drop && (keeps || !known) {
@@ -723,6 +726,9 @@ func (h *Hub) managerRoutes(api *http.ServeMux) {
 			return nil
 		})
 		switch {
+		case errors.Is(err, errLinkSwitchInProgress): // 409 link_switch_in_progress
+			writeAddMachineErr(w, err)
+			return
 		case errors.Is(err, errKeepsMachines):
 			writeErrCode(w, http.StatusConflict, "keeps_machines", i18n.Err("hub-admin_machines.keeps_machines"))
 			return
