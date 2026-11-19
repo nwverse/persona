@@ -1,5 +1,6 @@
 // Skill-aware / palette and its loading/error view. This module loads on / intent, never with the idle command palette.
 // Command-only markup mirrors SlashPalette.tsx; SlashPalette.test.tsx compares both views.
+import type { ImeState } from "../../lib/ime";
 import { Suspense, useEffect, useId, useLayoutEffect, useReducer, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import type { ComposerCommand as Command } from "../../lib/extension-prompts";
 import { cx, EASE } from "../../ui/atoms";
@@ -51,6 +52,9 @@ export type SlashPaletteInput = {
   source?: MentionSource;
   machineId?: string;
   within: React.RefObject<HTMLElement | null>;
+  /** The composer's own input-method state (`useComposition().tracker`, lib/ime.ts). The palette mounts just after a
+   *  composition ends, so a state of its own would miss that end and take Safari's committing Enter as a pick. */
+  ime?: { readonly current: ImeState };
   /** The skill stage's chunk or catalog state; loading also suppresses a premature empty message. */
   status?: "loading" | "error" | "partial";
 };
