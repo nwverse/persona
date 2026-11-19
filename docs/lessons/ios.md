@@ -31,6 +31,26 @@ of the app on its main thread: 55–70 ms each with the `assistant` perf suite's
 app switching on a cue (`FrameProbe.switchPages`, `testTabSwitchAssistantAgentsByCue`) and the test only sleeping; keep
 the tapping test for the tap's own path.
 
+## A machine's heartbeat used to tell every reader of `machines` (2026-11-18, #10231)
+
+A busy hub pushes the machines with a new `lastSeen` all the time. `AppModel.machines` was replaced on each push, so
+every body that read `machines` for anything ran again: a chat's subtitle (#1337), the Agents list (#1495), and after
+#9623 every Agents row, whose long-press menu read the machines (for Screen) in the row's body. `.contextMenu { … }`
+and `Menu(content:)` run their content when the view holding them runs its body, not when the menu opens. The first
+two were fixed where they read; the third came in through a new reader, about twice the main-thread time of the list
+under pushes. Nothing looked wrong in a single frame, and the typing and scrolling perf tests did not show it.
+
+Now the rule is in the model: a list that differs only in `lastSeen` is stored without telling who read `machines`,
+and what shows `lastSeen` reads `lastSeen(_:)` (`NamedMachineTests/aHeartbeatDoesNotTellWhoReadTheMachines`). The Agent
+menu's facts are built only by `AgentActionMenuReader` (their initializer from the model is `fileprivate`), so a row or
+header cannot observe what its menu reads. `RenderBudgetTests` has a `heartbeat` push with a budget of 0, run by hand
+with its mock hub (hosted CI runs no UI tests).
+
+To find such a cost, `sample` the app's main thread on an optimized build while the mock hub pushes
+(`/mock/churn`), with no UI test attached, and look for row bodies (`KeyedRow.body`) under the push. The typing perf
+tests are mostly XCTest's own work (`UIKeyboardTaskQueue`, accessibility snapshots), so a regression in them is not
+the app's until a sample says so.
+
 ## Scroll perf tests: which page did the test actually measure (#8824)
 
 `PerfAgentsTests/testAgentChatScrollLongHistory` opens its chat, after a fresh install, in one of two states: with the
@@ -133,6 +153,16 @@ the fix and 448 KB after; the Assistant page went from 906 to 573 KB and a conve
 ## Keep a control's accessibility identifier off its surrounding container (#7033)
 
 A SwiftUI container's `accessibilityIdentifier` can replace the identifiers on a nested `Menu` and `ScrollView`, while the buttons inside the scroll view keep theirs. The Agents capsule looked correct and its filters remained queryable, but its grouping icon was exposed under the capsule's identifier instead of `agents.grouping`. Put identifiers on the actionable controls, not on their surrounding capsule, and test both the menu's identity and its fixed frame after a horizontal drag.
+
+## Headings that must line up across a list's sections (2026-11-19, #10551)
+
+The Sidebar layout's Agents heading sat 12 pt further below Persona Chats than Persona Chats below Pages: the list's
+default section spacing came between the Persona rows' section and the Agents' one, and the Agents heading's own row was
+a 44 pt frame around its top padding with its words centred over its buttons. Hidden headers and separators do not remove
+that gap; `.listSectionSpacing(.custom(0))` on the section before it does. Give headings that should look alike one
+box (`SidebarHeadingBox`) and keep a heading's buttons out of its height, then measure the rows (`XCUIElement.cells`),
+not the headings' own elements: a SwiftUI button that is a row's only element reported the whole 52 pt cell, its
+neighbour with a tally its 44 pt label.
 
 ## A bar button's color goes on its label, not on the button (2026-11-17, #9653)
 
@@ -943,7 +973,10 @@ Use an invalidation revision as the task key and handle the flag after completio
 - The hub continuously pushes lists, machines and steps; every push reevaluates consumers. Do not attach active controls to them (`docs/archive/apple/live-updates.md`):
   toolbars in data-driven views are resubmitted to UIKit each push, resetting open overflow-menu scroll position even with unchanged content. `ChatsView` handles navigation / toolbar, `AgentsList` handles the list
   (after splitting, `ChatsView.body` must read `searching`, otherwise chats opened from search retain the system navigation bar, `SearchOpenTests`);
-  closure environment values in body (`.environment(\.openFile) { … }`) are new each time, reevaluating every reading row (all visible work steps per push); use once-created `ChatActions`;
+  closure environment values in body (`.environment(\.openFile) { … }`) are new each time, reevaluating every reading row (all visible work steps per push); use once-created `ChatActions`.
+  A closure read from the environment is reported changed each time SwiftUI looks, even the same one handed down once (`_printChanges`): a list moving windows, a tab switch or anything above
+  that makes SwiftUI look at a row's inputs again runs every row that reads one. Hand an object down instead, one for the life of the view that makes it (`FileOpener`, `SpaceOpener`,
+  `SplitShowList`, #10303); a `Binding(get:set:)` and a binding through `Bindable` are reported changed the same way, a `@State` binding is not;
   observe `model.session(key)` per session (`SessionCell`), not all-machine lists. Keep fullscreen viewers and row expansion state on the page, not lazy rows.
   Measure with `LiveUpdateTests` (`/mock/churn` continuous pushes, `-perfCounts YES` reporting body counts and main-thread time per round).
 - Badges (pending count, Inbox Needs you) change almost every push; their consumers must not contain pages or menus (2026-11-01, TestFlight 70 "it's back", `docs/archive/apple/live-updates.md`):
@@ -1021,6 +1054,15 @@ Use an invalidation revision as the task key and handle the flag after completio
 - NavigationStack root `.task` / `onAppear` reruns after pushing and returning: do not unconditionally restore saved defaults, overwriting choices just made on a child page (new-chat launcher reverting to the previous selection).
 - Put environment values for pushed pages (e.g. `feishuOpen`) on NavigationStack itself; pushed pages do not inherit values attached only to root content.
 - Hiding the navigation bar (`.toolbarVisibility(.hidden, for: .navigationBar)`) also disables edge-swipe Back; enable `interactivePopGestureRecognizer` yourself.
+- iOS 26's swipe back from anywhere on a page (`interactiveContentPopGestureRecognizer`) cannot be switched back on the same way (#9971).
+  UIKit gives it no touch at all on a page that hides the system's Back, with its bar or by `navigationBarBackButtonHidden`: the recognizer
+  stays enabled with your delegate, but it is not in `UITouch.gestureRecognizers` and no delegate method is called (logged on the
+  iPad simulator, iOS 27.1; the swipe did nothing on the iPhone and open Duo simulators too). The page below showing its bar, the system's bar
+  shown with its Back hidden, and a page without the chat's own gestures made no difference; showing the system's Back did. Only a page with the system's Back gets it:
+  under iPhone Duo's side bars the Agents chat and a task's page use it (`ChatView.systemBack`); with their own header they have the edge swipe.
+  Two more things kept it from a page that did show the system's Back: a scroll view that cannot scroll sideways still began its pan on a
+  sideways drag (`ContentPopPriority` makes it wait), and a SwiftUI `DragGesture` over the whole page (a sheet's edge-swipe close, left on
+  when the page was pushed) took the drag. A Back shown only after the page came (the chat back from files / Git) did not bring the swipe back.
 - If root hides the navigation bar and a pushed page has active search, swiping Back while searching leaves UIKit's bar on root (root title, ~106 pt high),
   while SwiftUI thinks it remains hidden (2026-11-01 new shell: Knowledge search → assistant edge swipe pushed the shell bar down ~106 pt; old switcher `position` hit an empty bar).
   Closing search on the pushed page when `isPresented` becomes false is too late. On root return, call UIKit `setNavigationBarHidden(true)` again (`AssistantView.RootBarHidden`).
@@ -1494,15 +1536,15 @@ Use an invalidation revision as the task key and handle the flag after completio
   New system reply editors are `TextView`, as is notification body; wait for Send then choose the lowest editor, not a fixed `TextField` query (#1862).
 - Root swapping to a full extension page dismantles `ShellWindowHooks` and closes its toast window; enable `ToastOverlay` in RootView during system extension pages. Writing `AppModel.toast` alone does not prove visibility; foreground-action regression asserts the toast actually appears (#1862).
 - DEBUG argument names must not match Swift identifiers: enum cases enter Release reflection `strings` and trigger `release.sh` false positives
-  (`Tab.workbench` collided with `-workbench`, renamed `-openWorkbench`). Use `open…` / `show…` names unlike type members and register in `release.sh`.
+  (`Tab.workbench` collided with `-workbench`, renamed `-openWorkbench`). Use `open…` / `show…` names unlike type members and add them to `scripts/release/debug_switches.txt`.
   Stored properties also collide (2026-10-31, `AgentsListMenu.Actions`.openMonitor vs `-openMonitor` stopped TestFlight 50). For new properties,
-  first build locally `xcodebuild build -configuration Release -destination generic/platform=iOS CODE_SIGNING_ALLOWED=NO` and run `release.sh` `strings` checks on `Release-iphoneos/Persona.app/Persona`.
+  first build locally `xcodebuild build -configuration Release -destination generic/platform=iOS CODE_SIGNING_ALLOWED=NO` and run `python3 scripts/release/debug_switches.py check` on `Release-iphoneos/Persona.app/Persona`.
   It happened again with `WorkspaceSidebarCard.openAgent` vs `-openAgent` (2026-11-09, #1675 stopped TestFlight 214, renamed `selectAgent` in #2179):
   name closure properties `select…` / `on…`, not `open…` / `show…`. `@State` / `@Binding` / `@Environment` properties are stored as `_name` and never collide.
   And again on 2026-11-15 with `openAgent` (two views) and `openMachines` (#8306), so it is now a check:
   `python3 scripts/test/test_apple_release_switch_names.py` reads the app's sources outside `#if DEBUG` (the conditions as a
-  device Release archive sees them) for stored properties, enum cases, `@objc` names and string literals equal to a name on
-  `release.sh`'s list. It runs with the other `scripts/test/test_apple*.py` checks before merge.
+  device Release archive sees them) for stored properties, enum cases, `@objc` names and string literals equal to a name in
+  `scripts/release/debug_switches.txt`. It runs with the other `scripts/test/test_apple*.py` checks before merge.
 - Launch-argument defaults are `strings` (`-dev.compact YES` is "YES"). Read booleans / numbers with `bool(forKey:)` / `integer(forKey:)` / `double(forKey:)` like AppStorage,
   not `object(forKey:) as? Bool`, which silently falls back (#1473 `StoredValue` broke `-dev.compact YES`; `CompactListShots` showed cards instead of compact rows, #2147).
 - Live Activities (`docs/apple/live-activity.md`): ActivityKit uses default JSONDecoder for `content-state`; `Date` values start 2001; pass Unix-second numbers.
@@ -2354,6 +2396,7 @@ but UIKit still had a page with only Agents Back and empty content.
 - Measuring: resting states pixel by pixel against master (screenshots of each state, diffed); motion from the app writing each block's place every frame (`SearchTrace`, a CADisplayLink reading presentation layers). The simulator's home indicator strip differs from one screenshot to the next (~6400 px): leave it out.
 - The shell's chrome grows with the text (`shellScaled`, the top bar up to XXXL: 50 → 60 pt tall), the navigation bar, the shell's room and the field's band do not. A timing worked out at the standard size (the bar gone by 0.35 of the field's way) let the field into the bar's rows at XXXL while the bar was still ~8 % there (#4928): derive such timings from where things are drawn, and run motion tests at a larger size too. A 60 Hz trace can step over a crossing that lasts one frame; check the geometry, not only the frames.
 - A `withAnimation { } completion:` can run before anything has moved. Opening the search from `keyboardWillShow` during the first keyboard of a launch, the change reached the list's `ListShift` (and the field) only in an update after the ~0.4 s stall. The transaction had nothing animating when it committed, so the completion ran at once (80 ms after the start, the slide still 270 ms away) and switched the list's layout early: a 54 pt jump in one frame, in about half the historical tab-navigation runs (#5999; the shell did not fail in any run). Do what has to wait for a move when the animated value itself arrives (`ListShift.arrived`), and guard against a stale arrival (`AgentsHeader.rising`).
+- On a busy main thread, sibling `Animatable` modifiers can miss the same Boolean's animation: the list came down while the floating field stayed in the bar's row, or the reinserted shell bar stayed transparent forever (#10166). The field and list keep their native animations; `Rise` publishes its actual progress, and the bar uses the later of its own and that published progress, so neither a missed animation nor a queued update can fade it back while the field is still in its row. `resting` makes the bar fully visible when the close leaves the floating state. A tab return while a close is in flight leaves a pending refold that runs when `floating` clears, rather than consuming the one-shot fold. The UI test keeps the raw trace on failure and verifies the page round trip; a folded field's marker can still exist in the trace because the marker does not know the list clips it.
 
 ## On an iPad the chat's sideways scroll views are inset by the sidebar (2026-11-06, #5737)
 
@@ -2929,6 +2972,19 @@ iOS 27.0 only Japanese failed, on 27.2 zh-Hans already did.
 - Give new information a line of its own instead of lengthening a line that is already the widest, and look at the
   screenshot at xxxLarge (`-UIPreferredContentSizeCategoryName UICTContentSizeCategoryXXXL`) before calling it done.
 
+## A Mac framework can lack an iPhone symbol dyld needs (#9948)
+
+- An iPhone app on an Apple silicon Mac loads the Mac's frameworks. If a symbol the app imports strongly is exported by
+  the iPhone SDK but not the Mac's framework, dyld ends the launch before app code runs; an `@available` check cannot
+  help. LiveCommunicationKit's Mac framework lacked two `ConversationManagerDelegate` audio-callback descriptors.
+- Link such a framework with `weak: true` in `apple/project.yml` and put an `isiOSAppOnMac` cut before every path that
+  could construct or touch its types. Weak binding alone is not a feature fallback: urgent calls also omit their
+  Settings entry and VoIP registration on a Mac, while iPhone and iPad keep the same factory and registration.
+- `scripts/release/check_mac_imports.py <path to Persona.app>/Persona` compares the executable's strong imports with
+  MacOSX.sdk TBD exports, preferring `System/iOSSupport`. `release.sh` runs it before export and upload. Inspect the
+  Mach-O (`xcrun dyld_info -imports`, `otool -l`) after linking: source inspection proves neither weak imports nor the
+  `LC_LOAD_WEAK_DYLIB` load command.
+
 ## One `import CallKit` gets the build rejected for China (2026-11-16, #9290)
 
 - App Review rejects a build offered in China when any binary in it links `CallKit.framework`. That includes a weak
@@ -2967,6 +3023,12 @@ coordinate space (`onGeometryChange` into a store that redraws nothing), read th
 (`onScrollGeometryChange`), work out the least offset that clears the fade (`CapsuleReveal.offset`, pure and tested),
 and set it through `ScrollPosition.scrollTo(x:)`. `InboxSectionBarUITests.testAChosenChoiceComesWhollyIntoViewAtTheLargestText`
 checks the chip's frame against the strip's.
+
+## Confirmation-dialog labels ignore the window's text-size traits (2026-11-18, #8127)
+
+- On iOS 27 at AX5, the window's xxxLarge trait override reaches an action sheet's title, message and button capsules, but its button labels still use the application's uncapped size. Plain string titles and custom labels draw alike; `lineLimit`, `dynamicTypeSize` on a label, and environment or scene trait overrides do not change that label. An alert's labels and capsules stay consistent.
+- Pages use `.accessibleConfirmationDialog`: the original confirmation dialog through xxxLarge, an alert above it on iOS. The alert needs exactly one Cancel. Since a generic `ViewBuilder` cannot reveal whether its actions already contain one, each call says `hasCancel: true` only for an existing cancel action; otherwise the shared modifier adds Cancel. `ConfirmationDialogRuleTests` keeps pages on that rule.
+- XCTest sees two nested button elements with the capsule's frame and no static-text element for the action label, at both ordinary and AX5 sizes. For a frame assertion, the DEBUG `-probes YES` element `probe.confirmation-dialog-labels` reads the presented `UIAlertController`'s real `UILabel` frames. Compare those with the XCTest button frame; do not assert containment between the two nested buttons, which stays equal even while the glyphs overflow.
 
 ## A place chosen again while in front keeps its page and its state (2026-11-16, #9053)
 
@@ -3034,3 +3096,9 @@ The lens then jumped on by 33–50 ms of its 0.65 s glide in one frame, by up to
 - A mutating method on an observed struct property tells every reader even when it changes nothing (the Observation macro only
   skips an equal value on a plain assignment): `UnifiedSidebar.forget` reset roots that were already at the conversation on every
   choice of the Agents tab and redrew everything reading them, in the frame the switch is drawn in. Check first.
+
+## Machines metrics need a manager scope as well as a hub scope (2026-11-18, #4031)
+
+- `GET /api/v1/metrics` answers for the default manager unless the request names one by the established header or query. Fan out once per installed, online manager, keep the default's request bare, and merge machine IDs in roster order. A failed manager keeps its last-good snapshot; only a success, including an empty one, replaces it. A routed `no_manager` 404 is not evidence that monitoring is unsupported.
+- Keep the request's hub and manager scopes distinct: a settings page keeps its one captured manager rather than widening to the whole roster, and a roster restored from a snapshot cannot name managers until this launch confirms it. Fence late answers by both pairing and read generation.
+- The mock must enforce the same manager scoping or the UI fixture hides the bug. Each assistant's Machines page lists only its own computers, so a UI regression selects the non-default assistant before requiring that computer's numbers. `MachineMetricsLoadingTests`, `MachineMetricsStoreTests` and `MachinesPageTests/testNonDefaultManagerMetricsInLightAndDark` cover the request, cache, cancellation and visible-sample contracts.

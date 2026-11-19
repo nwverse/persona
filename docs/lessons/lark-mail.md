@@ -2,6 +2,12 @@
 
 Pitfalls, odd behavior and the trade-offs made at the time (originally in `CLAUDE.md`; index in `docs/lessons/README.md`). Put new lessons in the matching section; if none fits, start a new one.
 
+## Lark system events are not new conversation requests
+
+A new message ID and timestamp do not establish new human activity (#9789). Consume system events and unidentified senders without creating or updating Inbox things, including the direct-chat sweep and history promotion path. Keep real attachments and independently authored bot notifications. When fetching conversation history for triage, retain timestamps and distinguish the incoming batch from background: an empty system event otherwise disappears from flattened context and makes an old request look current. An already collected follow-up remains background; promoting an unindexed follow-up must not rewind Last when another group of the same chat is processed in the same round.
+
+Coalesce the entire incoming batch by conversation key before constructing an Inbox thing: interleaved chats must not turn an earlier new request into background or discard it when history cannot be read. Incoming message IDs own current/history membership even when history has different timestamps, positions or thread metadata. Empty attachments need the same bounded, normalized fallback in their preview and model context; localize the visible preview rather than exposing an arbitrary source type.
+
 ## Saving mail attachments
 
 - Enforce a save limit while spooling, not after writing the attachment to disk (#9398). Keep reading and hashing the
@@ -175,3 +181,7 @@ Pinned chats on the home page and normal paging both need to be bound to the act
   not feed alone. That's also why the hub doesn't guess the account from the feed (when an old client opens another account's chat, the default account is used: better to fail to read than to send under the wrong identity).
 - Resource URLs (avatars, images, files) for added accounts come from the Lark gateway with `ol_account` already in them; the hub rewrites them to `/api/v1/lark/media/…?ol_account=N`, and passing that back unchanged is correct;
   when the App adds an account to such URLs, it must not overwrite the `ol_account` already there.
+
+## Group delivery is not permission to trigger (#10238)
+
+A platform's mention scope may coexist with broader message scopes. Enforce per-group mention-only policy before the bot's own settings commands as well as assistant handoff; a command reply is already an observable side effect. Match structured open IDs, fail closed while the bot identity is unknown, and read the policy after a queued message gets its turn. Keep omitted boolean edits distinct from false so older clients cannot silently loosen a saved policy. A strict first enrollment must not become the fallback home for unrelated requests.

@@ -1,6 +1,7 @@
+import { decisionSourceLabel } from "../lib/todo-decision-label";
 import { NewTodoRepositoryBindings, TodoRepositoryBindings, useRepositoryRequestContext } from "../ui/TaskRepositoryBindingsEditor";
+import { cleanRepositoryDraft, createTodoWithRepositories, repositoryDuplicateLink, validRepositoryDraft, type CreateRepositoryBindings, type RepositoryCatalog } from "../lib/task-repositories";
 import { hasRequestPieces } from "../lib/request-pieces";
-import { createTodoWithRepositories, type CreateRepositoryBindings } from "../lib/task-repositories";
 import { defaultManager, useShownManager } from "../lib/manager-choice";
 // Beautiful UI Todos View: left list (sorted by status & created_at), right detail, handover dialog.
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type InputHTMLAttributes, type ReactNode, type RefObject } from "react";
@@ -28,7 +29,6 @@ import { dropTodo, refresh, refreshTodos, useStore, withTaskRows } from "../lib/
 import {
   addTodoDecision,
   createTodo,
-  decisionSourceLabel,
   DECISIONS_FIRST,
   type DecisionsView,
   deleteTodo,
@@ -117,6 +117,7 @@ import { UltraMark } from "./chat/Ultracode";
 import { boundThread, threadLine, threadName, todoThreadsOn, unbindTodoThread } from "../lib/todo-thread";
 import { setTodoSeen, todoSeenOn } from "../lib/todo-seen";
 import { retryKey, retryTask, useFeed } from "../lib/feed";
+import { planTaskOf, retryLauncher, retryOnLauncher } from "../lib/start-retry";
 import { dueOn, duePatch, todoRowMenu } from "./todo-row-menu";
 
 /** What this browser was last on (#2029): the list or the calendar, the calendar's mode, and whether it shows done ones. */
@@ -1936,6 +1937,8 @@ const TodoRequestGraph = lazy(() => import("./TodoRequestGraph"));
 const TaskBriefPanel = lazy(() => import("./assistant/TaskBrief").then((m) => ({ default: m.TaskBriefPanel })));
 const TaskBriefHistory = lazy(() => import("./assistant/TaskBrief").then((m) => ({ default: m.TaskBriefHistory })));
 const BriefResultExtras = lazy(() => import("./assistant/TaskBrief").then((m) => ({ default: m.BriefResultExtras })));
+// the question a failed start's tab stopped on, answered on its page (#10365): only for such a failure
+const ShellQuestion = lazy(() => import("./ShellQuestionCard"));
 
 // The existing review UI lives with this lazy page, not the first screen's card badges.
 const MARK: Record<CheckMark, { icon: "check" | "x" | "clock" | "minus"; className: string; label: () => string }> = {
@@ -2109,13 +2112,20 @@ function TodoDetail({
   };
 
   // A task whose agent never started, waiting on the owner (#3713, audit item 13): open, as its row reads, with why it
-  // did not start; Retry when the hub can start it again from its plan (POST …/retry), else Hand to agent.
+  // did not start; Retry for any a conversation handed out (POST …/retry: the hub finds the plan that binds it, one a
+  // plan took over through todo_id has no plan id of its own, #8770, and says when there is none), and Hand to agent.
+  // Its launcher could not start there: "Use … instead" on the computer's other launcher comes first (#10365). Its
+  // tab's shell stopped on a question: the answers are offered here too, and the task then starts in that tab.
   const failedStart = open && Boolean(todo.start_error);
-  const canRetry = failedStart && Boolean(todo.plan_id && todo.origin);
+  const canRetry = failedStart && Boolean(todo.origin);
+  const features = useStore((s) => s.features);
+  const failedTask = useFeed((s) => (canRetry ? planTaskOf(todo, s.plans) : undefined));
+  const instead = retryLauncher(failedTask, features);
   // the main chat's task card's Retry (lib/feed retryTask): one on its way at a time from either, and the to-do the hub
   // reopens shows at once; its agent starts in the background and the list says how the start goes
   const retrying = useFeed((s) => Boolean(s.busy[retryKey(todo.id)]));
-  const retry = () => retryTask(todo).catch((e) => toast(t("todos.action_failed", { error: errorText(e) }), "error"));
+  const retry = (launcher?: string) =>
+    (launcher ? retryOnLauncher(todo, launcher) : retryTask(todo)).catch((e) => toast(t("todos.action_failed", { error: errorText(e) }), "error"));
   const status = todoStatus(todo, lookup);
   const statusInfo = TODO_STATUS_INFO[shownStatus(todo, status)];
   // The to-do's own PR, parsed once here (the list row and the repository section's fallback share it).
@@ -2197,6 +2207,7 @@ function TodoDetail({
           {t("todos.start_failed", { error: todo.start_error ?? "" })}
         </p>
       )}
+      {failedTask?.error_code === "shell_waiting" && <Suspense fallback={null}><ShellQuestion todo={todo} task={failedTask} className="mt-3" /></Suspense>}
       {isAutoDone(todo) && (
         <p className="mt-2 text-[12.5px] leading-[1.6] text-ink-3">
           {todo.done_reason ? t("todos.auto_done_reason", { reason: todo.done_reason }) : t("todos.auto_done")}
@@ -2449,9 +2460,22 @@ function TodoDetail({
           failed start is open: Retry (or Hand to agent, which reopens it first) and Complete, which closes it for good as
           its row's checkbox does. */}
       <div className="mt-8 flex flex-wrap items-center gap-2.5 border-t border-line pt-4">
-        {canRetry && (
+        {instead && (
           <Button
             tone="accent"
+            icon="retry"
+            busy={retrying}
+            disabled={retrying}
+            onClick={() => void retry(instead)}
+            testId="todo-retry-launcher"
+            className="h-8.5 px-3.5 text-meta whitespace-nowrap"
+          >
+            {t("assistant-task-actions.use_launcher_instead", { launcher: instead })}
+          </Button>
+        )}
+        {canRetry && (
+          <Button
+            tone={instead ? "secondary" : "accent"}
             icon="retry"
             busy={retrying}
             disabled={retrying}
@@ -2774,7 +2798,7 @@ function DecisionsSection({ todo, lookup }: { todo: Todo; lookup: ReturnType<typ
  *  (lib/shortcuts.ts keeps Mod+Enter for dialogs); a multi-line field keeps Enter for its new lines. The form's own
  *  submit decides, so one busy or incomplete stays as it is. */
 function submitOnModEnter(e: React.KeyboardEvent<HTMLFormElement>) {
-  if (e.key !== "Enter" || !(e.metaKey || e.ctrlKey) || composing(e.nativeEvent)) return;
+  if (e.defaultPrevented || e.key !== "Enter" || !(e.metaKey || e.ctrlKey) || composing(e.nativeEvent)) return;
   e.preventDefault();
   e.currentTarget.requestSubmit();
 }
@@ -2878,12 +2902,18 @@ function NewTodoDialog({
 }) {
   const repositoryContext = useRepositoryRequestContext(manager, owner);
   const [repositoryBindings, setRepositoryBindings] = useState<CreateRepositoryBindings>();
+  const [repositoryCatalog, setRepositoryCatalog] = useState<RepositoryCatalog>();
+  const creating = useRef(false);
   const [title, setTitle] = useState("");
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
   const [dueDay, setDueDay] = useState("");
   const [dueTime, setDueTime] = useState("");
   const [allDay, setAllDay] = useState(true);
+  const repositoryIdentities = useMemo(() => new Map((repositoryCatalog?.repositories ?? []).map((entry) => [entry.id, entry] as const)), [repositoryCatalog]);
+  const cleanBindings = repositoryBindings ? cleanRepositoryDraft(repositoryBindings.repositories) : [];
+  const duplicateLinks = repositoryBindings ? repositoryDuplicateLink(cleanBindings, repositoryIdentities) : false;
+  const bindingsValid = !repositoryBindings || validRepositoryDraft(cleanBindings, repositoryIdentities);
 
   useEffect(() => {
     if (open) {
@@ -2909,11 +2939,12 @@ function NewTodoDialog({
 
   const submit = async (e?: React.FormEvent) => {
     e?.preventDefault();
-    if (!title.trim() || busy || !repositoryContext.isCurrent()) return;
+    if (!title.trim() || creating.current || !bindingsValid || !repositoryContext.isCurrent()) return;
+    creating.current = true;
     setBusy(true);
     try {
       const todo = repositoryBindings
-        ? await createTodoWithRepositories(repositoryContext, title, notes, due(), repositoryBindings)
+        ? await createTodoWithRepositories(repositoryContext, title, notes, due(), repositoryBindings, repositoryIdentities)
         : await createTodo(title, notes, due());
       if (!repositoryContext.isCurrent()) return;
       await refreshTodos();
@@ -2926,6 +2957,7 @@ function NewTodoDialog({
     } catch (err) {
       if (repositoryContext.isCurrent()) toast(t("todos.create_failed", { error: errorText(err) }), "error");
     } finally {
+      creating.current = false;
       setBusy(false);
     }
   };
@@ -2985,13 +3017,14 @@ function NewTodoDialog({
           />
         </div>
 
-        <NewTodoRepositoryBindings context={repositoryContext} value={repositoryBindings} onChange={setRepositoryBindings} pending={busy} />
+        <NewTodoRepositoryBindings context={repositoryContext} value={repositoryBindings} onChange={setRepositoryBindings} pending={busy} onCatalog={setRepositoryCatalog} />
+        {!bindingsValid && <p role="alert" className="text-submeta text-red">{t(duplicateLinks ? "task-repositories.duplicate_link" : "task-repositories.draft_invalid")}</p>}
 
         <div className="mt-2 flex justify-end gap-2">
           <Button tone="secondary" disabled={busy} onClick={onClose}>
             {t("common.cancel")}
           </Button>
-          <Button tone="accent" type="submit" disabled={!title.trim() || busy} busy={busy}>
+          <Button tone="accent" type="submit" disabled={!title.trim() || busy || !bindingsValid} busy={busy}>
             {t("todos.create")}
           </Button>
         </div>
