@@ -224,6 +224,9 @@ func triageReviewState(t Todo) string {
 	if t.Supervision == nil {
 		return ""
 	}
+	if ownerDecisionReturned(t.Supervision) {
+		return ""
+	}
 	st := t.Supervision.State
 	if st == reviewUserCheck && t.DoneAt != nil {
 		return reviewAccepted
