@@ -108,6 +108,7 @@ internal suspend fun createChatWiring(
         repositories.chats.trackActions(HttpChatActions(connection)), repositories.chats.trackComposer(composer),
         PersistentChatRecoveryService(HttpChatRecoveryService(connection), data.operations, HubChatTransport(connection)),
         RoutedAssistantManagement(data, connection, ::current), data.messages,
+        mainUploadTarget = { data.messages.prepareMainConversation() },
         draftVersions = { key -> combine(repositories.chats.observe(key), repositories.sessions.sessions) { chat, sessions ->
             val session = sessions.firstOrNull { it.key == key }
             DraftSessionVersion(chat.history, session?.let {
