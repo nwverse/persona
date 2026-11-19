@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { cspFor, previewDocument, relativeRefs, sandboxFor } from "./html-preview";
 
 describe("HTML preview policy", () => {
-  it("is locked down until the user opens it up, and never same-origin", () => {
+  it("keeps scripts and network off by default", () => {
     const off = { scripts: false, network: false };
     expect(sandboxFor(off)).toBe("allow-popups allow-popups-to-escape-sandbox");
     expect(cspFor(off)).toContain("default-src 'none'");
@@ -12,6 +12,16 @@ describe("HTML preview policy", () => {
     expect(cspFor({ scripts: true, network: false })).toContain("default-src 'none'"); // inline scripts, still no network
     expect(cspFor({ scripts: false, network: true })).toBe("");
     for (const p of [off, { scripts: true, network: true }]) expect(sandboxFor(p)).not.toContain("allow-same-origin");
+  });
+
+  it("makes only an offline, script-free selection frame same-origin", () => {
+    const off = { scripts: false, network: false };
+    expect(sandboxFor(off, true)).toContain("allow-same-origin");
+    expect(sandboxFor(off, true)).not.toMatch(/allow-scripts|allow-forms/);
+    for (const policy of [{ scripts: true, network: false }, { scripts: false, network: true }, { scripts: true, network: true }]) {
+      expect(sandboxFor(policy, true)).not.toContain("allow-same-origin");
+    }
+    expect(previewDocument("<p>selection</p>", off)).toContain("script-src 'none'; form-action 'none'");
   });
 
   it("puts the policy first, after the doctype", () => {

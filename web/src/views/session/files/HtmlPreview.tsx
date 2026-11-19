@@ -1,17 +1,22 @@
 // An HTML file shown as a page (docs/web/web.md "HTML preview", #1413): in a sandboxed frame with scripts and the network
 // off; each can be turned on for this file while it is open. lib/html-preview.ts has the policy.
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { fileDownloadURL, READ_TIMEOUT_MS } from "../../../lib/api";
 import { inlineSiblings } from "../../../lib/html-inline";
 import { previewDocument, relativeRefs, sandboxFor } from "../../../lib/html-preview";
 import { cx, IconButton, Loading } from "../../../ui/atoms";
 import { t } from "../../../i18n";
+import { FileSelection, type FileCommentTarget } from "./FileSelection";
 
-export function HtmlPreview({ html, title, mid, path }: { html: string; title: string; mid: string; path: string }) {
+export function HtmlPreview({ html, title, mid, path, comment }: { html: string; title: string; mid: string; path: string; comment?: FileCommentTarget }) {
   const [scripts, setScripts] = useState(false);
   const [network, setNetwork] = useState(false);
   const [reloads, setReloads] = useState(0);
   const policy = { scripts, network };
+  const frame = useRef<HTMLIFrameElement>(null);
+  const selectable = Boolean(comment && !scripts && !network);
+  // Changing the sandbox policy requires a new browsing context before any scripts can run.
+  const frameKey = `${reloads}:${scripts}:${network}:${selectable}`;
   const local = useMemo(() => relativeRefs(html), [html]);
   // files beside the page, read from the machine and put into it: the frame has no address to load them from
   const [inlined, setInlined] = useState<{ html: string; loaded: number; missing: number } | null>(null);
@@ -71,14 +76,16 @@ export function HtmlPreview({ html, title, mid, path }: { html: string; title: s
           <Loading label={t("session-files-htmlpreview.loading_local", { count: local })} />
         </div>
       ) : (
-      <iframe
-        key={`${reloads}:${scripts}:${network}`}
-        title={title}
-        // never allow-same-origin: the page cannot reach this one, its storage or its token
-        sandbox={sandboxFor(policy)}
-        srcDoc={srcDoc}
-        className="min-h-0 w-full flex-1 border-0 bg-white"
-      />
+        <Fragment key={frameKey}>
+          <iframe
+            ref={frame}
+            title={title}
+            sandbox={sandboxFor(policy, selectable)}
+            srcDoc={srcDoc}
+            className="min-h-0 w-full flex-1 border-0 bg-white"
+          />
+          {selectable && comment && <FileSelection view={frame} file={comment} />}
+        </Fragment>
       )}
     </>
   );

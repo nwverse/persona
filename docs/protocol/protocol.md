@@ -5230,6 +5230,8 @@ At most one quote block starts a message (the quoted words; for a task card, the
 The user's typed text
 ```
 
+When the selected text is from a Web file preview, a `File: <path>` line follows the quoted text, before the blank line. Source selections append the line or range to the path, as in `File: /work/src/app.ts:12-14`. Older clients read the same quote and show the location with the note.
+
 Limits: comments up to 4000 characters, attached code up to 60 lines (extra lines are counted in `Truncated` but not included); the fence has one more backtick than the longest run in the code. Numbers follow the order of comments above the input, starting at 1.
 On reading back, web only recognizes blocks after the first block whose first line is `Comment N` / `Code comment N` / `Element comment N` (`splitQuotes`), so ordinary `> ` quotes are unaffected; editing a sent message puts comments back above the input. The iOS app writes and reads the same blocks (`MessageComments`) and draws them as cards in sent bubbles; both are checked against `spec/fixtures/comments`.
 
