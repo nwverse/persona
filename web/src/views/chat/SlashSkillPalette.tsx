@@ -1,7 +1,7 @@
 // Skill-aware second stage of the / palette, loaded only after the palette opens.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { imeKey, type ImeState } from "../../lib/ime";
 import { rankCommands } from "../../lib/composer-commands";
+import { imeKey, type ImeState } from "../../lib/ime";
 import type { ComposerCommand as Command } from "../../lib/extension-prompts";
 import type { MentionSkill } from "../../lib/skill-mentions";
 import { SkillDetail, SkillRow } from "./SkillRow";

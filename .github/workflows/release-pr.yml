@@ -191,6 +191,8 @@ jobs:
           RELEASE_CHANNEL: ${{ needs.plan.outputs.channel }}
           RUSTUP_TOOLCHAIN: '1.98.0'
           PERSONA_RELEASE_BUILD: ${{ needs.plan.outputs.build }}
+          # The hosted TypeScript project needs more than Node's default 2 GB; keep the first-screen budget unchanged.
+          NODE_OPTIONS: '--max-old-space-size=4096'
         run: scripts/release/publish.sh
       - name: Bind the verified downloads to the release plan
         run: |
@@ -230,6 +232,9 @@ jobs:
           distribution: temurin
           java-version: '21'
       - uses: android-actions/setup-android@v3
+        with:
+          # The default also installs the legacy `tools` package, which the SDK repository no longer has.
+          packages: platform-tools
       - name: Install the reviewed Android SDK, NDK and Rust targets
         run: |
           set -euo pipefail
