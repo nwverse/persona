@@ -67,7 +67,7 @@ import PersonaWire
                 let core = try ProjectionFixture.project(fixture.input, fixture.name, using: PersonaCoreProjections.sort)
                 let coreComparable = try AgentSortComparable(core: try JSONDecoder().decode(AgentSortCoreProjection.self, from: Data(PersonaCoreProjections.sort(inputJSON: AgentSortProjectionAdapter.coreInput(input, presentation: snapshot.presentation, now: snapshot.now)).utf8)), input: input, presentation: snapshot.presentation)
                 let differences = AgentSortComparable.differences(native: native, core: coreComparable)
-                let known = ["machine_uses_registry_order": Set(["quick-filter", "pin-membership"])] // #9221
+                let known: [String: Set<String>] = [:]
                 if let expected = known[fixture.name], expected == Set(differences) {
                     withKnownIssue("Tracked core discrepancy for \(fixture.name)") {
                         #expect(differences == [], "\(fixture.name)")
@@ -442,6 +442,71 @@ import PersonaWire
         #expect(AgentListProjection.build(input).base.map(\.key) == [side.key], "a missing parent leaves the side visible")
         let orphanCore = try AgentSortComparable(core: JSONDecoder().decode(AgentSortCoreProjection.self, from: Data(PersonaCoreProjections.sort(inputJSON: AgentSortProjectionAdapter.coreInput(input)).utf8)), input: input)
         #expect(AgentSortComparable.differences(native: AgentSortComparable(native: input), core: orphanCore) == [])
+    }
+
+    @Test func nestedSubtaskSearchRetainsPreparedParentThroughRealCABI() throws {
+        let parent = try session(.object(["machine_id": .string("machine-a"), "session_id": .string("e"), "title": .string("ordinary parent"), "state": .string("offline"), "status": .string("offline")]))
+        let child = try session(.object(["machine_id": .string("machine-a"), "session_id": .string("child"), "title": .string("needle"), "state": .string("working"), "status": .string("idle"), "source_kind": .string("runtime"), "is_subagent": .bool(true), "parent_session_id": .string("e")]))
+        let machine = try JSON.decoder.decode(Machine.self, from: Data(#"{"id":"machine-a","name":"Machine A","kind":"local","online":true}"#.utf8))
+        var settings = AgentListProjection.Settings(grouping: "state", query: "needle")
+        settings.preferences[""] = .init()
+        settings.preferences[""]!.pins.sessions = ["machine-a/e"]
+        let input = AgentListProjection.Input(sessions: [parent, child], machines: [machine], settings: settings)
+        let nativeProjection = AgentListProjection.build(input)
+        #expect(nativeProjection.filtered.map(\.key.path) == ["machine-a/e"])
+        #expect(nativeProjection.pinnedAgents.map(\.key.path) == ["machine-a/e"])
+        let output = try PersonaCoreProjections.sort(inputJSON: AgentSortProjectionAdapter.coreInput(input))
+        let core = try AgentSortComparable(core: JSONDecoder().decode(AgentSortCoreProjection.self, from: Data(output.utf8)), input: input)
+        #expect(core.filtered == ["machine-a/e"])
+        #expect(core.groups.map(\.id) == ["pinned"])
+        #expect(core.groups.first?.rows == ["machine-a/e"])
+        #expect(AgentSortComparable.differences(native: AgentSortComparable(native: input), core: core) == [])
+    }
+
+    @Test func promotedSubtaskSearchDoesNotRetainItsOfflineParent() throws {
+        let parent = try session(.object(["machine_id": .string("machine-a"), "session_id": .string("e"), "title": .string("ordinary parent"), "state": .string("offline"), "status": .string("offline")]))
+        let child = try session(.object(["machine_id": .string("machine-a"), "session_id": .string("child"), "title": .string("needle"), "state": .string("working"), "status": .string("idle"), "source_kind": .string("runtime"), "is_subagent": .bool(true), "parent_session_id": .string("e")]))
+        let machine = try JSON.decoder.decode(Machine.self, from: Data(#"{"id":"machine-a","name":"Machine A","kind":"local","online":true}"#.utf8))
+        let settings = AgentListProjection.Settings(grouping: "state", query: "needle")
+        let input = AgentListProjection.Input(sessions: [parent, child], machines: [machine], settings: settings)
+        let nativeProjection = AgentListProjection.build(input)
+        #expect(nativeProjection.filtered.map(\.key.path) == ["machine-a/child"])
+        let native = AgentSortComparable(native: input, projection: nativeProjection)
+        #expect(native.groups.map(\.id) == ["state/working"])
+        let output = try PersonaCoreProjections.sort(inputJSON: AgentSortProjectionAdapter.coreInput(input, projection: nativeProjection))
+        let core = try AgentSortComparable(core: JSONDecoder().decode(AgentSortCoreProjection.self, from: Data(output.utf8)), input: input)
+        #expect(core.filtered == ["machine-a/child"])
+        #expect(core.groups.map(\.id) == ["state/working"])
+        #expect(core.groups.first?.rows == ["machine-a/child"])
+        #expect(AgentSortComparable.differences(native: native, core: core) == [])
+    }
+
+    @Test func missingMachineStaysInInventoryWithoutMachineSectionThroughRealCABI() throws {
+        let registered = try session(.object(["machine_id": .string("machine-a"), "session_id": .string("working"), "state": .string("working"), "status": .string("idle")]))
+        let orphan = try session(.object(["machine_id": .string("machine-missing"), "session_id": .string("orphan"), "state": .string("needs_you"), "status": .string("idle")]))
+        let machine = try JSON.decoder.decode(Machine.self, from: Data(#"{"id":"machine-a","name":"Machine A","kind":"local","online":true}"#.utf8))
+        let settings = AgentListProjection.Settings(grouping: "machine", filter: .needsYou)
+        let input = AgentListProjection.Input(sessions: [registered, orphan], machines: [machine], settings: settings)
+        let native = AgentSortComparable(native: input)
+        #expect(native.filtered == ["machine-missing/orphan"])
+        #expect(native.unpinned == ["machine-missing/orphan"])
+        #expect(native.groups.contains { $0.id == "machine/machine-missing" } == false)
+        let output = try PersonaCoreProjections.sort(inputJSON: AgentSortProjectionAdapter.coreInput(input))
+        let core = try AgentSortComparable(core: JSONDecoder().decode(AgentSortCoreProjection.self, from: Data(output.utf8)), input: input)
+        #expect(core.filtered == ["machine-missing/orphan"])
+        #expect(core.unpinned == ["machine-missing/orphan"])
+        #expect(core.groups.contains { $0.id == "machine/machine-missing" } == false)
+        #expect(AgentSortComparable.differences(native: native, core: core) == [])
+    }
+
+    @Test func coreComparisonUsesInventoryInsteadOfRenderedGroups() throws {
+        let orphan = try session(.object(["machine_id": .string("machine-missing"), "session_id": .string("orphan"), "state": .string("needs_you"), "status": .string("idle")]))
+        let input = AgentListProjection.Input(sessions: [orphan], machines: [], settings: .init(grouping: "machine"))
+        let document = #"{"counts":{"needsYou":1,"unread":0,"working":0,"backgroundWaiting":0},"groups":[],"unread_shown":[],"filtered":["machine-missing/orphan"],"unpinned":["machine-missing/orphan"]}"#
+        let core = try AgentSortComparable(core: JSONDecoder().decode(AgentSortCoreProjection.self, from: Data(document.utf8)), input: input)
+        #expect(core.groups.isEmpty)
+        #expect(core.filtered == ["machine-missing/orphan"])
+        #expect(core.unpinned == ["machine-missing/orphan"])
     }
 
     private func waitForIdle(_ shadow: AgentSortShadow) async throws {

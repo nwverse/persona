@@ -19,7 +19,7 @@ type superviseFingerprint struct {
 	Hash      string    `json:"hash"`
 	At        time.Time `json:"at"`
 	Permanent bool      `json:"permanent,omitempty"`
-	// Todo bounds inactivity and daily-summary fingerprints by the task's lifetime.
+	// Todo bounds inactivity, daily-summary and unhandled-event fingerprints by the task's lifetime.
 	// Other non-permanent kinds retain the short semantic-deduplication window.
 	Todo string `json:"todo,omitempty"`
 }
@@ -32,6 +32,12 @@ func digestFingerprint(e prompts.SuperviseEntry, g superviseSignal) (string, str
 	}
 	if g.Kind == sigPRConflict || g.Kind == sigDraftPR {
 		// Keep every task/PR/head independently, including a head that returns after another one.
+		key, _ := json.Marshal([]string{g.Todo, g.Kind, g.Key})
+		sum := sha256.Sum256(key)
+		return string(key), hex.EncodeToString(sum[:])
+	}
+	if g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled" {
+		// An unhandled source is not new when its recipient or last reply changes.
 		key, _ := json.Marshal([]string{g.Todo, g.Kind, g.Key})
 		sum := sha256.Sum256(key)
 		return string(key), hex.EncodeToString(sum[:])
@@ -140,6 +146,9 @@ func (s *Service) reserveSupervisionDelivery(ctx context.Context, entries []prom
 		if signals[i].Kind == sigAllStopped || signals[i].Kind == sigParkedSummary {
 			fingerprint.Todo = signals[i].Todo
 		}
+		if g := signals[i]; g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled" {
+			fingerprint.Todo = g.Todo
+		}
 		next[key] = fingerprint
 		out, kept = append(out, entry), append(kept, signals[i])
 	}
@@ -207,7 +216,7 @@ func (s *Service) forgetSupervision(ctx context.Context, signals []superviseSign
 	b.dedup = next
 }
 
-// Task-scoped fingerprints are bounded by open tasks, not elapsed time. Load once
+// Task-bound fingerprints are bounded by open tasks, not elapsed time. Load once
 // after restart; reservations keep the same cache current under dedupMu.
 func (s *Service) pruneAllStoppedDedup(ctx context.Context) {
 	b := &s.supervise
