@@ -165,7 +165,7 @@ function OverviewCard({ place, i }: { place: UIPlace; i: number }) {
       </div>
       {cut && to && (
         // at the card's foot, also when its row neighbour makes the card taller than its own view
-        <a data-card-see-all href={href(to)} onClick={(e) => onLinkClick(e, to)} className="group mt-auto flex items-center gap-1 px-4 pt-1.5 pb-1 text-[12px] text-ink-3 outline-none hover:text-ink-2 focus-visible:underline">
+        <a data-card-see-all href={href(to)} onClick={(e) => onLinkClick(e, to)} className="group mt-auto flex items-center gap-1 px-4 pt-1.5 pb-1 text-label text-ink-3 outline-none hover:text-ink-2 focus-visible:underline">
           {t("extensions-extensionslots.card_see_all")}
           <Icon name="chevronRight" size={11} stroke={2.2} className="shrink-0 transition-transform duration-150 group-hover:translate-x-0.5" />
         </a>
