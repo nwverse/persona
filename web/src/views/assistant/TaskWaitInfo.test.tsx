@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatDate, initI18n, t } from "../../i18n";
 import { reset } from "../../lib/store";
 import { assistantEntries } from "../../lib/assistant-entries";
-import type { Todo } from "../../lib/todos";
+import { todoStatusLabel, TODO_STATUS_INFO, type Todo } from "../../lib/todos";
 import { ParkedTaskRows } from "./ParkedTaskRow";
 import { TaskWaitInfo } from "./TaskWaitInfo";
 
@@ -57,6 +57,8 @@ describe("task wait information", () => {
     });
     const first = toDo("candidate-a", "Check the sign-in screen");
     const second = toDo("candidate-b", "Check saved settings");
+    expect(todoStatusLabel(first, "follow_up")).toBe(TODO_STATUS_INFO.waiting.label);
+    expect(todoStatusLabel(first, "needs_you")).toBe(TODO_STATUS_INFO.needs_you.label);
     const entries = assistantEntries({ conversation: "conversation-1", main: "conversation-1", todos: [first, second],
       sessions: [], interactions: [], plans: {}, feed: [], now: NOW });
     expect(entries.parked).toHaveLength(2);
