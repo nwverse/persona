@@ -208,6 +208,13 @@ describe("the overview", () => {
     });
   });
 
+  it("offers the Cards and Rows display switch on the Computers heading, with Cards selected by default", () => {
+    const html = render([], [], { machines: [mac] });
+    expect(html).toContain('role="radiogroup" aria-label="显示方式"');
+    expect(html).toMatch(/role="radio" aria-checked="true" data-selected="true"[^>]*>卡片<\/button>/);
+    expect(html).toMatch(/role="radio" aria-checked="false" data-selected="false"[^>]*>行<\/button>/);
+  });
+
   it("never builds an empty sentence: with only a card whose agent is not counted, it says how many requests wait (audit item 30)", () => {
     const other = { id: "q3", machine_id: "mac", session_id: "assistant-1", kind: "question" } as Interaction;
     const html = render([], [other]);
