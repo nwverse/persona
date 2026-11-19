@@ -29,7 +29,7 @@ vi.mock("../lib/sessions", async (importOriginal) => {
 });
 
 // the extensions' overview cards are not this test's
-vi.mock("./extensions/ExtensionSlots", () => ({ OverviewCards: () => null }));
+vi.mock("./extensions/ExtensionSlots", () => ({ OverviewCards: () => <section data-overview-cards="" /> }));
 // a card's answer stays on its way until the test lets it end
 const op = vi.hoisted(() => ({ finish: (_: unknown) => {} }));
 vi.mock("../lib/ops", async (importOriginal) => ({ ...(await importOriginal<typeof import("../lib/ops")>()), apiOp: () => new Promise((done) => { op.finish = done; }) }));
@@ -258,6 +258,24 @@ describe("the overview", () => {
     const row = html.slice(heading(html, "工作中"));
     expect(row.split('data-state="bg_waiting"').length - 1).toBe(1);
     expect(row).toContain("后台等待中");
+  });
+
+  it("puts what waits for the owner above the extensions' cards, and the cards above the rest (#11092)", () => {
+    const cards = (html: string) => html.indexOf("data-overview-cards");
+    const asking = agent(1, 0, "needs_you");
+    const html = render([asking, agent(2, 0, "needs_you"), agent(3, 0, "working"), agent(4, 0, "unread")], [{ id: "i1", kind: "permission", machine_id: "mac", session_id: asking.session_id, tool_name: "Bash" } as Interaction]);
+    const at = [heading(html, "需要你"), heading(html, "卡住了，要你去看"), cards(html), heading(html, "工作中"), heading(html, "完成未看"), heading(html, "电脑")];
+    expect(at.every((x) => x > -1)).toBe(true);
+    expect(at).toEqual([...at].sort((a, b) => a - b));
+    // nothing waits: the cards are right under the summary, before every section
+    const calm = render([agent(3, 0, "working")]);
+    expect(cards(calm)).toBeGreaterThan(-1);
+    expect(cards(calm)).toBeLessThan(heading(calm, "工作中"));
+    // before the first snapshot: the cards, then only 加载中
+    const early = render([agent(3, 0, "working")], [], { loaded: false });
+    expect(cards(early)).toBeGreaterThan(-1);
+    expect(cards(early)).toBeLessThan(early.indexOf("加载中"));
+    render([], [], { loaded: true });
   });
 
   it("does not say nothing needs you above a waiting card", () => {

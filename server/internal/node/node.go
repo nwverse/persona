@@ -1574,6 +1574,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		var opts sendOpts
 		_ = json.Unmarshal(params, &opts)
 		sctx = withClientMsgID(sctx, opts.ClientMsgID) // a runtime's message goes under it (assistant_runtime.go)
+		sctx = withSupervisionDelivery(sctx, p.MessageSource)
 		send := func() (string, error) {
 			return n.assistantSend(sctx, p.SessionID, p.Cwd, p.Launcher, p.Text, p.Images, p.PermissionMode, p.Effort, (modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, ServiceTier: p.ServiceTier, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: n.externalRuntime(p.SessionID, p.Launcher, p.Runtime), External: p.External, IsMain: p.IsMain, MainCompactWindow: p.MainCompact, FollowsSetting: p.FollowsSetting, ConfigDir: p.ConfigDir, Origin: p.Origin, Interject: p.Interject, Interactive: p.Interactive}).withSupervision(p.SupervisionInstructions))
 		}
@@ -1671,6 +1672,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			}
 		}
 		ctx = context.WithValue(ctx, sendTraceKey{}, opts.ClientMsgID)
+		ctx = withSupervisionDelivery(ctx, p.MessageSource)
 		ctx, waits := withComputerWait(ctx) // claudebg.go: an outside Claude took it behind a dialog
 		ctx, queued := withSendQueued(ctx)  // codex_desktop_queue.go: it waits behind the turn under way
 		var owner *ownerDelivery
