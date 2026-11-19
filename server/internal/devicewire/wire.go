@@ -340,6 +340,8 @@ type NodeCall struct {
 	MachineID  string          `json:"machine_id"`
 	Method     string          `json:"method"`
 	Params     json.RawMessage `json:"params,omitempty"`
+	// StreamVersion is an offer for port.dial. The manager passes it into the node's params.
+	StreamVersion int `json:"stream_version,omitempty"`
 	// TimeoutMS bounds the call on the manager's side too, a little before the caller gives up: the manager's
 	// CodeDeadline answer comes back in time.
 	TimeoutMS int64 `json:"timeout_ms,omitempty"`
@@ -361,6 +363,29 @@ type NodeCall struct {
 	// messages (no Hold) is refused, nothing written, while older ones of its session are held, instead of overtaking
 	// them (codeHeldAhead, delivered none). Nil from an older hub; an older manager ignores it.
 	Ordered bool `json:"ordered,omitempty"`
+}
+
+const (
+	MethodPortDial = "port.dial"
+	// PortStreamHalfCloseV1 supports directional EOF on forwarded TCP streams.
+	PortStreamHalfCloseV1 = 1
+)
+
+// PortDial opens a stream to a port on the node. The hub offers StreamVersion only for an endpoint with CloseWrite.
+type PortDial struct {
+	ID            string `json:"id"`
+	Port          int    `json:"port"`
+	KeepAwake     bool   `json:"keep_awake,omitempty"` // keep a watched screen awake
+	Pair          string `json:"pair,omitempty"`       // ties a screen stream to screen.dial
+	Link          bool   `json:"link,omitempty"`       // use screen session framing
+	Attach        bool   `json:"attach,omitempty"`     // rejoin a live screen session
+	StreamVersion int    `json:"stream_version,omitempty"`
+}
+
+// PortDialReply confirms the stream version or the use of screen session framing.
+type PortDialReply struct {
+	Link          int `json:"link,omitempty"`
+	StreamVersion int `json:"stream_version,omitempty"`
 }
 
 // Hold is NodeCall.Hold.

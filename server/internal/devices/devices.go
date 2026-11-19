@@ -731,8 +731,20 @@ func (d *Devices) callNode(ctx context.Context, p devicewire.NodeCall) (json.Raw
 		snapshot = new(sessionSnapshot)
 	}
 	modeSID, modeFrom, modeTo, recordMode := m.modeSetFrom(p, params) // the record of mode changes (mode_changes.go)
+	var nodeParams any = params
+	if p.Method == devicewire.MethodPortDial {
+		var dial devicewire.PortDial
+		if err := json.Unmarshal(params, &dial); err != nil {
+			return nil, &rpc.Error{Code: "invalid_params", Message: "port.dial: " + err.Error()}
+		}
+		dial.StreamVersion = 0
+		if p.StreamVersion == devicewire.PortStreamHalfCloseV1 {
+			dial.StreamVersion = p.StreamVersion
+		}
+		nodeParams = dial
+	}
 	var out json.RawMessage
-	err := m.callWithSnapshot(ctx, p.Method, params, &out, snapshot)
+	err := m.callWithSnapshot(ctx, p.Method, nodeParams, &out, snapshot)
 	if try, ok := ctx.Value(heldDeliveryKey{}).(*heldTry); ok {
 		try.called, try.err = true, err // a held delivery is judged on this call alone (held.go)
 	}

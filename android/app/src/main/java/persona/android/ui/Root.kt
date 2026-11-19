@@ -285,6 +285,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
         sidebarOverlayShown.value = false
     }
     val settingsSheetStack = rememberNavBackStack(SettingsRoute)
+    persona.android.navigation.TrackDevScreen(selected, stacks.getValue(selected).lastOrNull(), settingsOpened, settingsSheetStack.lastOrNull())
     // Where each stack's Inbox list goes when an item is opened from outside it (#9053): one per stack, so a list kept
     // composed in a hidden tab never takes another stack's landing.
     val inboxLandings = remember(session.identity) { AppTab.entries.associateWith { InboxLanding() } }

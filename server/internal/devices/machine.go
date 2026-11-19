@@ -681,6 +681,9 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 	if nodeHas(info, nodeproto.OwnerControls) {
 		method = ownerControlMethod(ctx, method)
 	}
+	if dial, ok := params.(devicewire.PortDial); method == devicewire.MethodPortDial && ok && dial.ID != "" {
+		return m.callPortDial(ctx, p, dial, out)
+	}
 	return p.Call(ctx, method, params, out)
 }
 

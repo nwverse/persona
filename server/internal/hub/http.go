@@ -69,7 +69,7 @@ func (h *Hub) routes() http.Handler {
 	h.nodeUpdateRelayRoutes(api)
 	api.HandleFunc("GET /api/v1/interactions", func(w http.ResponseWriter, r *http.Request) {
 		ixs := visibleInteractions(h.pendingInteractions(), h.requestHasElicitation(r))
-		if extensionToken(r) { // an extension's token: its manager's cards only, none private (extension_private.go)
+		if restrictedAgentData(r) {
 			em := extensionManager(r)
 			ixs = slices.DeleteFunc(ixs, func(ix proto.Interaction) bool {
 				return em != "" && cmp.Or(ix.Manager, assistantwire.AssistantID) != em || h.hiddenFromExtensions(ix)
@@ -305,6 +305,10 @@ func (h *Hub) auth(next http.Handler) http.Handler {
 			// Its manager's machines, sessions and cards only (ownership.go extensionReach).
 			if err := h.extensionReach(r, p); err != nil {
 				writeErrCode(w, http.StatusForbidden, codeOtherManager, err)
+				return
+			}
+		} else if p.Role == roleScoped {
+			if !h.authorizeScopedDevice(w, r, p) {
 				return
 			}
 		} else if !allowed(p, r.Method, r.URL.Path) {
@@ -829,7 +833,16 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 	}
 	// Resuming with a permission mode changes that session's mode: an extension's token, only of a conversation its
 	// extension opened (extension_modes.go).
-	if pr := principalOf(r.Context()); pr.Role == roleExtension && p.ResumeSessionID != "" && p.PermissionMode != "" {
+	pr := principalOf(r.Context())
+	if pr.Role == roleScoped && (p.PermissionMode != "" || p.ResumeSessionID != "") && !slices.Contains(pr.Scopes, extwire.ScopeAgentsPermissionMode) {
+		scopedPermissionDenied(w, extwire.ScopeAgentsPermissionMode)
+		return
+	}
+	if pr.Role == roleScoped && p.ResumeSessionID != "" && !h.scopedPublicSession(p.MachineID, p.ResumeSessionID) {
+		writeErr(w, http.StatusNotFound, errDeleteUnknown)
+		return
+	}
+	if pr.Role == roleExtension && p.ResumeSessionID != "" && p.PermissionMode != "" {
 		if why := h.extensionModeRefused(pr, p.MachineID, p.ResumeSessionID, map[string]any{"permission_mode": p.PermissionMode}); why != "" {
 			h.refuseExtensionMode(w, r, pr, p.MachineID, p.ResumeSessionID, p.PermissionMode, why)
 			return
@@ -1147,6 +1160,9 @@ func (h *Hub) broadcastTo(typ string, b []byte, elicitation bool) {
 	}
 	forms := map[i18n.Lang][]byte{}
 	for c := range h.clients {
+		if c.role == roleScoped && typ != "sessions" {
+			continue
+		}
 		if elicitation && !c.has("elicitation") {
 			continue
 		}
@@ -1316,7 +1332,7 @@ func (h *Hub) serveWS(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(r.Context())
 	who := principalOf(r.Context())
 	c := &client{cancel: cancel, done: ctx.Done(), hub: h, conn: conn, out: make(chan []byte, 512), subs: map[[2]string]bool{}, since: time.Now(),
-		device: who.ID, role: who.Role, delta: wantsFeature(r, featureSessionsDelta), listMode: wantsFeature(r, featureSessionsList), have: map[string]map[string][]byte{},
+		device: who.ID, role: who.Role, delta: who.Role != roleScoped && wantsFeature(r, featureSessionsDelta), listMode: who.Role != roleScoped && wantsFeature(r, featureSessionsList), have: map[string]map[string][]byte{},
 		urlFeatures: urlFeatures(r), acceptLang: i18n.FromRequest(r), meta: clientMeta{updates: make(chan heartbeatConfig, 512), done: ctx.Done()}}
 	c.traffic = h.requestTrafficAttribution(r, who)
 	c.uiConnection = randomHex(24)
@@ -1381,7 +1397,11 @@ func (h *Hub) serveWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.clients[c] = struct{}{}
-	h.helloLocked(c, hello, stream, after, resuming)
+	if c.role == roleScoped {
+		c.sendJSON(hello)
+	} else {
+		h.helloLocked(c, hello, stream, after, resuming)
+	}
 	h.mu.Unlock()
 	go h.fleetClientsChanged() // an app that takes elicitations (fleet_link.go)
 
@@ -1474,6 +1494,9 @@ func (h *Hub) onClientMessage(ctx context.Context, c *client, data []byte) {
 	if json.Unmarshal(data, &msg) != nil {
 		return
 	}
+	if c.role == roleScoped && !scopedSocketCommand(msg.Type) {
+		return
+	}
 	h.mu.Lock()
 	c.activeAt = time.Now()
 	h.mu.Unlock()
@@ -1524,6 +1547,9 @@ func (h *Hub) onClientMessage(ctx context.Context, c *client, data []byte) {
 	case "subscribe":
 		m := h.localMachine(msg.MachineID)
 		if m == nil {
+			return
+		}
+		if c.role == roleScoped && !h.scopedPublicSession(m.cfg.ID, msg.SessionID) {
 			return
 		}
 		if m.conversationDeleted(msg.SessionID) {
