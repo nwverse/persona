@@ -938,9 +938,11 @@ VITEST_RELATED = "web|npx --no -- vitest related --run --passWithNoTests "
 WEB_FULL = ["web|run check:deps", "web|run typecheck", "web|test"]
 
 # A web tree that reads files outside web/ in each form the scan knows (#10619). reads.test.ts reads through fs and a
-# Vite glob, so it always runs; build.test.mjs builds through a Vite config, whose reads no import of the test shows,
-# so it always runs too; tiers.ts is a module that reads through fs, so its importers always run; stream.ts and
-# frame-host.ts read through Vite query imports, so they join when a file they name changes.
+# Vite glob, so it always runs; async-reads.test.ts reads only through node:fs/promises, so it always runs too;
+# build.test.mjs builds through a Vite config, whose reads no import of the test shows, so it always runs too;
+# tiers.ts is a module that reads through fs, so its importers always run; stream.ts and frame-host.ts read through
+# Vite query imports, so they join when a file they name changes. The config names a setup file (setupFiles, a list)
+# and a global setup (globalSetup, one path): what they reach runs the whole suite (#10715).
 WEB_TREE = {
     "web/src/lib/reads.test.ts": (
         'import { readFileSync } from "node:fs";\n'
@@ -952,6 +954,8 @@ WEB_TREE = {
         'const view = (name: string) => readFileSync(new URL(`../../../schema/extension/examples/View.v8-${name}.json`, import.meta.url));\n'
         'const joined = join(__dirname, "..", "..", "..", "spec", "fixtures", "joined", "x.json");\n'
         '// Comments name spec/fixtures/other without reading it.\n'),
+    "web/src/lib/async-reads.test.ts": ('import { readFile } from "node:fs/promises";\n'
+                                        'const css = await readFile(new URL("../styles.css", import.meta.url), "utf8");\n'),
     "web/scripts/build.test.mjs": ('import { build } from "vite";\n'
                                    'await build({ configFile: new URL("../vite.config.ts", import.meta.url).pathname });\n'),
     "web/src/lib/tiers.ts": ('import { readdirSync } from "node:fs";\n'
@@ -964,7 +968,17 @@ WEB_TREE = {
     "web/src/lib/store.ts": "export const store = {};\n",
     "web/src/i18n/index.ts": "export const t = (key: string) => key;\n",
     "web/src/startup.ts": "export const startup = 1;\n",
-    "web/vite.config.ts": 'import { startup } from "./src/startup";\nexport default { startup };\n',
+    "web/vite.config.ts": ('import { startup } from "./src/startup";\n'
+                           'export default { startup, test: { globalSetup: "scripts/global.mjs",'
+                           ' setupFiles: ["src/setup/test-setup.ts"] } };\n'),
+    "web/scripts/global.mjs": 'import { env } from "../src/setup/global-env.ts";\nexport default () => env;\n',
+    "web/src/setup/global-env.ts": "export const env = {};\n",
+    "web/src/setup/test-setup.ts": 'import { catalog } from "./catalog";\nimport { t } from "../i18n";\n',
+    "web/src/setup/catalog.ts": ('import { names } from "./names.js";\n'
+                                 'export const catalog = import.meta.glob("../locales/*.json");\n'),
+    "web/src/setup/names.ts": "export const names = [];\n",
+    "web/src/setup/other.ts": "export const other = 1;\n",
+    "web/src/locales/en.json": "{}\n",
     "spec/fixtures/forward/cases.json": "{}\n",
     "spec/fixtures/inbox/now.json": "{}\n",
     "spec/fixtures/tiers/a.json": "{}\n",
@@ -985,7 +999,9 @@ WEB_TREE_INPUTS = [
     "spec/fixtures/tiers/**",
 ]
 # The files every related run starts from on top of the changed ones, relative to web/.
-WEB_TREE_READERS = ["scripts/build.test.mjs", "src/lib/reads.test.ts", "src/lib/tiers.ts"]
+WEB_TREE_READERS = [
+    "scripts/build.test.mjs", "src/lib/async-reads.test.ts", "src/lib/reads.test.ts", "src/lib/tiers.ts",
+]
 
 
 @unittest.skipUnless(shutil.which("timeout") or shutil.which("gtimeout"), "check-fast.sh needs GNU timeout")
@@ -1088,7 +1104,7 @@ class CheckFastWebInputsTests(unittest.TestCase):
     def test_a_view_change_runs_its_related_tests_and_the_readers(self):
         self.write("web/src/views/View.tsx", "export const View = () => 'changed';\n")
         out, npm_calls = self.check_fast()
-        self.assertIn("check-fast: web tests: vitest related, 1 changed file(s) and 3 that read files from disk", out)
+        self.assertIn("check-fast: web tests: vitest related, 1 changed file(s) and 4 that read files from disk", out)
         self.assertEqual(self.related("src/views/View.tsx"), npm_calls, out)
         self.assertIn("PASS     web", out)
 
@@ -1117,6 +1133,26 @@ class CheckFastWebInputsTests(unittest.TestCase):
         out, npm_calls = self.check_fast()
         self.assertIn("check-fast: web tests: the whole suite, web/package-lock.json is outside web/src", out)
         self.assertEqual(["web|ci", *WEB_FULL], npm_calls, out)
+
+    def test_what_the_vitest_setup_files_reach_runs_the_whole_suite(self):
+        # Every test runs the setup files first, but vitest related follows only a test's own imports (#10715).
+        for path in ("web/src/setup/test-setup.ts",  # the setup file
+                     "web/src/setup/catalog.ts",     # a module it imports
+                     "web/src/setup/names.ts",       # a module that one imports, as ./names.js
+                     "web/src/locales/en.json",      # a file that one reads through a Vite glob
+                     "web/src/setup/global-env.ts"):  # a module the global setup imports
+            with self.subTest(path=path):
+                self.write(path, "// changed\n")
+                try:
+                    out, npm_calls = self.check_fast()
+                finally:
+                    self.restore()
+                self.assertIn(f"check-fast: web tests: the whole suite, {path} is part of the vitest setup", out)
+                self.assertEqual(WEB_FULL, npm_calls, out)
+        # A module beside them that no setup file reaches runs its related tests.
+        self.write("web/src/setup/other.ts", "export const other = 2;\n")
+        _, npm_calls = self.check_fast()
+        self.assertEqual(self.related("src/setup/other.ts"), npm_calls)
 
     def test_all_runs_the_whole_web_suite(self):
         self.write("web/src/views/View.tsx", "export const View = () => 'changed';\n")
@@ -1168,6 +1204,31 @@ class CheckFastWebInputsTests(unittest.TestCase):
         out, npm_calls = self.check_fast()
         self.assertIn("queued: web\n", out)
         self.assertEqual(self.related("src/old.ts"), npm_calls, out)  # vitest related starts from the old path
+
+
+class WebFileTests(unittest.TestCase):
+    """Which files the scan counts as reading through node's fs (WebFile.fs): they run on every related run."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.paths = load_paths()
+
+    def test_each_fs_module_counts(self):
+        # fs/promises once never matched: the scan looked for a quoted "fs" before trying its pattern (#10715).
+        for text in ('import { readFile } from "node:fs/promises";\n',
+                     "import { readdir } from 'fs/promises';\n",
+                     'const { readFile } = await import("node:fs/promises");\n',
+                     'import { readdirSync } from "node:fs";\n',
+                     "import * as fs from 'fs';\n",
+                     "const text = readFileSync(path, 'utf8');\n"):
+            with self.subTest(text=text):
+                self.assertTrue(self.paths.WebFile("web/src/lib/a.test.ts", text).fs)
+
+    def test_other_names_ending_in_fs_do_not(self):
+        for text in ('const routes = { "/agents/prefs": {} };\n', 'import { refs } from "./refs";\n',
+                     'import { vol } from "memfs";\n', "const label = 'fs/promises is a node module';\n"):
+            with self.subTest(text=text):
+                self.assertFalse(self.paths.WebFile("web/src/lib/a.test.ts", text).fs)
 
 
 class WebPlanTests(unittest.TestCase):
@@ -1222,10 +1283,16 @@ class WebPlanTests(unittest.TestCase):
 
     def test_shared_entry_points_run_the_whole_suite(self):
         for path in ("web/src/lib/store.ts", "web/src/lib/api.ts", "web/src/ui/atoms.tsx", "web/src/i18n/index.ts",
-                     "web/src/i18n/test-setup.ts", "web/vite.config.ts", "web/tsconfig.json", "web/package.json",
-                     "web/package-lock.json", "web/scripts/installed-deps.mjs"):
+                     "web/src/i18n/test-setup.ts", "web/src/admin/catalog.ts", "web/vite.config.ts",
+                     "web/tsconfig.json", "web/package.json", "web/package-lock.json",
+                     "web/scripts/installed-deps.mjs"):
             with self.subTest(path=path):
                 self.assertEqual("full", self.paths.web_plan([path, "web/src/views/chat/ChatView.tsx"])[0])
+
+    def test_what_the_vitest_setup_file_imports_runs_the_whole_suite(self):
+        # web/src/i18n/test-setup.ts loads the admin catalog before every test, though no test needs to import it.
+        self.assertEqual(("full", "web/src/admin/catalog.ts is part of the vitest setup", []),
+                         self.paths.web_plan(["web/src/admin/catalog.ts"]))
 
 
 if __name__ == "__main__":

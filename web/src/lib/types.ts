@@ -64,6 +64,23 @@ export interface Machine {
   trust?: "pending";
   /** What `error` is about, for words of our own: node_service_down / link_offline / never_connected / node_outdated. */
   error_code?: string;
+  /** Switching this ssh computer to Persona Link (#10662): set by a manager that can, for its ssh computers and for an
+   *  hour after a switch ended; absent from older hubs, which then offer nothing. */
+  link_switch?: MachineLinkSwitch;
+}
+
+/** Where switching an ssh computer to Persona Link stands (`proto.MachineLinkSwitch`): `available`, a switch can start
+ *  now, else `reason` says why not; `phase`, the current or last switch's ("" none), and a failed one's `error`, with
+ *  `rollback_unconfirmed` when the computer could not be shown to be back on SSH. Reasons and errors are codes the
+ *  apps put in their own words (lib/link-switch.ts). */
+export interface MachineLinkSwitch {
+  available: boolean;
+  reason?: string;
+  phase?: "" | "checking" | "installing" | "connecting" | "rolling_back" | "succeeded" | "failed";
+  error?: string;
+  rollback_unconfirmed?: boolean;
+  /** when `phase` last changed (the hub's clock) */
+  at?: string;
 }
 
 /** The hubs of this hub's interconnected group, from the signed-in hello (docs/archive/operations/plan-hub-mesh.md 2.6). */

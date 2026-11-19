@@ -1,6 +1,6 @@
-// One row of the model panel's list (#5032, after Cindy's UnifiedModelRow), two lines. The first: the provider's mark,
+// One row of the model panel's list (#5032, after Cindy's UnifiedModelRow), two lines. The first: the Agent's mark (#5497),
 // the model's name, a star and Customize that show under the pointer (or on keyboard focus, or always on a touch screen),
-// and on the right what a pick applies: the Agent's mark, the effort, ⚡ for Fast. The second: where it comes from (All,
+// and on the right what a pick applies: the effort, ⚡ for Fast. The second: where it comes from (All,
 // Recent, Favorites) or what the model is (a provider's own view). The model that runs now has a whole-row fill and no
 // check mark. Enter or Space picks it, ← or a right-click opens its setup flyout. A name cut short shows the model's whole
 // ID as its second line (a touch screen has no tooltip), and a touch screen adds the full ID to the provider's line.
@@ -9,7 +9,6 @@ import { t } from "../../i18n";
 import { priceTier, shownEffort, type PanelRow } from "../../lib/model-panel";
 import { effortTitle } from "../../lib/session-actions";
 import { agentName } from "../../lib/agent-kind";
-import { AgentMark } from "../AgentMark";
 import { cx } from "../atoms";
 import { Icon, type IconName } from "../icons";
 import { ProviderMark } from "./ProviderMark";
@@ -144,7 +143,7 @@ export function Row({ row, second, describes, keepSecond, asButton, blocked, cus
     >
       <div className="flex min-w-0 items-center gap-2">
         <span className="flex size-[18px] shrink-0 items-center justify-center text-ink-2">
-          <ProviderMark name={provider.name} />
+          <ProviderMark engine={provider.engine} label={provider.engineLabel} size={16} />
         </span>
         <span ref={nameEl} title={row.kind === "typed" ? model.id : name} className={cx("min-w-0 truncate leading-5 font-medium", model.custom && stars && "font-mono")}>{name}</span>
         {row.latest && <span data-row-latest className="shrink-0 text-submeta leading-5 text-ink-3">{t("ui-modelpanel.latest")}</span>}
@@ -183,7 +182,6 @@ export function Row({ row, second, describes, keepSecond, asButton, blocked, cus
         )}
         <span className="ml-auto flex shrink-0 items-center">
           <span title={setupTitle} data-row-setup className="flex max-w-[118px] shrink-0 items-center gap-1 truncate text-[12px] text-ink-3">
-            <AgentMark agent={provider.engine} label={provider.engineLabel} size={12} decorative className="shrink-0" />
             {effort && <span className="truncate">{effortTitle(effort)}</span>}
             {row.setup.fast && <Icon name="bolt" size={11} className="shrink-0 fill-current" />}
           </span>

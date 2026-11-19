@@ -630,6 +630,9 @@ on-demand model panel, not the everyday Assistant home (#6887).
   13 px, at most 420 px, 500 ms into a hover, never pinned by a pointer). A Persona conversation shows only "≈ $0.12"
   and one plain line, and nothing without a cost (super rules 0 and 4). On touch screens the text ends the copy + ⋯
   row: a tap holds the card or the tooltip, and a second tap on the text or a press elsewhere closes it.
+  Translate (#8650) loads a hub-paged reply's full text before requesting its translation: the original and its
+  full-text loading/retry control stay visible until the complete translation succeeds. Show original restores
+  the cached complete reply, not an unmarked prefix; failure to load the full text never sends a partial translation.
   Details: `docs/web/web.md` ("Reply bar").
 - Web hover bar beside your own bubble (pointer only: the time, Copy message, Quote, Edit, ⋯): left of the bubble, 6 px
   away, where it fits inside what shows the chat. Where a narrow window leaves a wide bubble no room there, the same
@@ -1147,16 +1150,18 @@ chat (#5033), where the panel only offers models and says plainly which one the 
 
 - Pill (`web/src/views/chat/ModelPill.tsx`): 30 px tall capsule, 10 px side padding, 4 px gaps, 13 px text
   (`ink`), no frame at rest; hover and open draw a 1 px `--line-strong` border on `--hover`. Contents in order: the
-  provider's letter tile (15 px, 4 px radius, 1 px border in the text colour, 10 px semibold, `ink-2`, 6 px before the
-  name), the model name (truncates), the engine's `AgentMark` at 12 px (the separator: no "·"), the effort label without a
+  mark of the Agent the launcher runs (#5497: `AgentMark` at 15 px, `ink-2` for the one-colour marks, 4 px before the
+  name; an Agent with no mark of its own gets the generic `agent` icon, never a letter, unless its runtime names it
+  (#8142), when it is drawn as the Agents list draws it), the model name (truncates), the
+  effort label 4 px after it without a
   tier colour (English "Extra" for "Very high"; the full name on hover), a filled bolt for Fast and the workflow
   `UltraMark` (`ink-2`), a 14 px chevron (`ink-2`). Widths by the composer card (`@container/composer`): ≥ 600 px 72–320 px;
   < 600 px the width its words need (name ≤ 108 px without a trailing bracketed qualifier, a context size kept as a short
   mark, "Opus 5.5 1M"; the whole name in the tooltip;
   shrinking only when the row is short, the name truncating first, the effort only once the name has no room); < 520 px 12 px text, marks a step smaller; < 420 px 64 px, the
-  tile and chevron only. States: loading (a 13 px `Spinner` and "Loading model…"), failed (the `warning` icon in `--red`),
+  mark and chevron only. States: loading (a 13 px `Spinner` and "Loading model…"), failed (the `warning` icon in `--red`),
   pending (#5035, a switch to another launcher that the next message carries out: a 12 px clock in `ink-3` first, then
-  the target launcher's tile and its name in `ink-3` up to 96 px, hidden under 600 px, before the target's model and
+  the target engine's mark and the launcher's name in `ink-3` up to 96 px, hidden under 600 px, before the target's model and
   effort; the engine's name in its place when the engine changes; the tooltip "Current: …" over "Next message: …"),
   disabled (50% opacity, no pointer), and a label (not a button) where nothing can be switched. The click keeps the caret
   in the message box.
@@ -1187,12 +1192,13 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   Only the current launcher starts expanded; with no current launcher all start collapsed. Each launcher summary names
   the launcher, Agent kind, known default model, catalog model count (excluding a synthetic Default row), Current or
   configured Default status, known weekly quota and any supplied failure reason. No launcher is hidden in another bucket.
-  Disclosure uses the existing chevron, letter tile, role colors and text tokens; Agent mark rollout remains #5497.
+  Disclosure uses the existing chevron, the launcher's Agent mark (#5497), role colors and text tokens.
   Expanded launchers reuse model Row, family folds and Flyout, including Favorite, effort, Fast and engine controls.
   Search is flat: matching launcher summaries, then matching model rows naming their launcher even on touch screens;
   typed-ID rows explicitly name the launcher they send. Why: identical letter tiles and a separate rail hid the account
   and model choices from people comparing several launchers. The single column exposes that information progressively.
-  Rows have two lines with hover-revealed Favorite and Customize; the model that runs has a static selected fill, no
+  Rows have two lines led by the Agent's mark (16 px, the launcher summaries too; the right side holds only effort and
+  Fast) with hover-revealed Favorite and Customize; the model that runs has a static selected fill, no
   check. Customize opens a 264 px flyout to the panel's left: the effort slider, Fast, the engine, an exact catalog
   reference-price line where known, and a footer that says whether the setup is the recommended one, customized or
   saved. A launcher summary adds its weekly-remaining bar only when the existing launcher quota answer supplies a
@@ -1224,7 +1230,7 @@ chat (#5033), where the panel only offers models and says plainly which one the 
 - Tokens: the effort levels have one colour each in both themes (`--effort-low` / `--effort-minimal` #2AAE5B,
   `--effort-medium` #14B8A6, `--effort-high` #3B82F6, `--effort-xhigh` #4F46E5, `--effort-max` #8B5CF6, Codex's ultra on
   max) and `--fast` (#3B9EFF), used inside the flyout only: the pill never colours its effort or its bolt.
-- Deviations from Cindy: letter tiles instead of vendor logos; price and quota appear only where the catalog / launcher
+- Deviations from Cindy: the Agent's mark instead of model-vendor logos (launchers of one Agent share it; #5497); price and quota appear only where the catalog / launcher
   answer supplies them; ↑↓ also move between rows; providers and engines that can't be switched to (an older hub, a chat
   that can't switch) are listed with their rows off and the reason; a pending switch to another launcher of the same
   engine names the launcher rather than the engine; the engine warning line wraps rather than truncating; "Switch Agent?"
@@ -1288,6 +1294,7 @@ package-only Undo with retained recovery files; `docs/operations/hub-update.md` 
 | Load failure on a settings page | `LoadProblem` (`apple/Persona/DesignSystem/SettingsForm.swift:73`), no Retry |
 | List read failure (web) | `ListError` (`web/src/ui/ListError.tsx`): a red `role="alert"` line saying what could not be read and why, with **Retry** under it, in place of the rows; the paged session lists and the sidebar's Agents list (its complete list, and By to-do's unread to-dos) draw it, so a failed read never leaves a list blank or on "Loading…" |
 | Persistent notice | `NoticeBanner` |
+| A short server-driven process (web) | `Steps` (`web/src/ui/Steps.tsx`): one line per step, the current one with a spinner and `aria-current="step"`, done ones ticked green, a stop crossed red, the rest numbered and quiet. The step comes from what the hub pushes, never a local timer. Used by the alert sheet's Redeploy and by **Switch to Persona Link** on the machine detail and the admin Machines row (#10662: confirmation dialog, "Starting…" at once, then the steps, then the result in plain words; nothing shown for an older hub) |
 | Transient result | `Toast` shown by `ToastCapsule` (`apple/Persona/DesignSystem/Toasts.swift:7`) |
 | Chat API failure | Web: `ErrorNotice` (`web/src/ui/ErrorNotice.tsx`), a neutral card with the red mark only and **Error details**; the error the chat stopped on is its banner over the composer with its actions (Retry, Fix it, Edit last message) and ✕, an older one the record in the chat; apps: `APIErrorCard` with details and Retry. While a model request is still retrying, the web's run status bar and Apple's `SessionLiveRetryNote` instead show the plain classified reason, observed error as secondary detail and localized current/max attempt, cleared on recovery, turn end or unwatch (#887) |
 | Chat loading and waiting | iOS `ChatSkeleton` (five rounded bars of `Theme.Size.markS`, the first at the trailing edge, breathing between `Fill.well` and `Fill.chip`) while a chat's first page loads, its load error as a danger line at the chat's newest end, and `TypingIndicator` ("Claude is getting ready…", three pulsing dots) under your message until its turn's work line comes; Android `ChatSkeleton` and the error line on Glass, `TypingLine` in every style (#4339 C9) |
@@ -1863,7 +1870,7 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   item it comes from, the Agent and its computer, where it runs and what it is asked, never a reference or a value. Like the
   password card it is answered on the card only: no quick answer on a row, a notification, the Live Activity, the watch or
   Siri, and no key approves it (`docs/extensions/secret-providers.md` "In the apps").
-- **Task-review decisions (web, #4808)**: reuse the answerable decision row, its recommendation tag, the `Button` action group and the draft's Later / Don't handle labels. The two secondary actions stay on a separate footer so they never displace the recommended choice; the footer follows the tray's scrolling edge and uses the existing 44 px button minimum. Later defers only this browser session and this review round. Don't handle persists a dismissal of this exact review, offers receipt-scoped Undo, leaves the task open and takes no option; a dismissed review cannot take its timed default. A new review is visible again. The web hides the row and updates its count optimistically; a confirmed same-round dismissal stays hidden across reads and reloads, while a failed write restores the row with an error. An old Agent runtime error does not override dismissal or Later for that review; an actual Agent input request keeps its home visible. Old reviews without an acceptance ask show their original explanation and these same controls, never invented choices or an acceptance button with a made-up round. This is a requested correction to the existing row, not a new style or setting.
+- **Task-review decisions (web, #4808)**: reuse the answerable decision row, its recommendation tag, the `Button` action group and the draft's Later / Don't handle labels. The two secondary actions stay on a separate footer so they never displace the recommended choice; the footer follows the tray's scrolling edge and uses the existing 44 px button minimum. Later defers only this browser session and this review round. Don't handle persists a dismissal of this exact review, offers receipt-scoped Undo, leaves the task open and takes no option; a dismissed review cannot take its timed default. A new review is visible again. The web hides the row and updates its count optimistically; a confirmed same-round dismissal stays hidden across reads and reloads, while a failed write restores the row with an error. An old Agent runtime error does not override dismissal or Later for that review; an actual Agent input request keeps its home visible. Old reviews without an acceptance ask initially show their original explanation and these same controls, never invented choices or an acceptance button with a made-up round. Once a stale decision goes back for rechecking, or an undecidable old review goes back for restatement, that round leaves Needs you and cannot be answered until a fresh supervisor review re-issues it; a fixed-response round keeps its existing visibility. This is a requested correction to the existing row, not a new style or setting.
 - **Questions**: one at a time, with single choice, multiple choice, Other and voice. An unsent answer is kept as a draft per request. On iOS, a long assistant `ask_user` or hook question form's choices (or its review) own one vertical scroll while Previous / Next / Submit stay outside it and visible in the actual pending-card area, in both interface styles. One such card never needs a second, outer scroll; that is reserved for moving between several cards. Dragging through choices only scrolls and never picks one. When the interaction advertises `can_cancel`, a visible **Skip** text action with at least a 44 pt target leads that action row, on the review too; it is not the card's fold mark. Skip sends only `{"cancel":true}`, is disabled while an answer or another Skip is in flight, and leaves the card and its picks in place with the error and Retry on failure. Success removes the card and gives the receipt **Question closed without an answer**. Persona's own main-conversation `ask_user` has no terminal handoff; an Agent's question keeps it. Cards without `can_cancel` have no Skip and keep their existing layout.
 - **A card this client can't answer** (web #7497, Android `approvalBlockedReason`; iOS in #6868): the session's
   capabilities withhold `approve` (a Codex thread Persona hasn't joined, a subagent its parent drives, an unknown
