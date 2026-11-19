@@ -599,17 +599,22 @@ final class SidebarRootsUITests: XCTestCase {
 
     /// Exactly one row of the sidebar is selected, `id` (whose label holds `text`), with the column brought out first.
     @MainActor private func assertOneSelected(_ id: String, containing text: String? = nil, _ step: String) {
+        bringOut()
+        app.assertOneSelectedSidebarRow(id, containing: text, step)
+    }
+
+    /// The column brought out after a pick or a launch: a pick slides a column laid over the page (or a drawer) away, and
+    /// the conversation's sidebar button can read as not hittable under the page's top for a moment, so it is tapped at
+    /// its frame once that has passed.
+    @MainActor private func bringOut() {
         let main = element("sidebar-main")
-        // A pick slides a column laid over the page (or a drawer) away: brought out again once it has gone.
         if !(main.exists && main.isHittable) || app.windows.firstMatch.frame.width < 900 { Thread.sleep(forTimeInterval: 1.0) }
-        // The conversation's sidebar button can read as not hittable under the page's top for a moment: tapped at its frame.
         let button = element("assistant-sidebar-button")
         if !(main.exists && main.isHittable), button.exists, let frame = (try? button.snapshot())?.frame, !frame.isEmpty {
             app.windows.firstMatch.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: frame.midX, dy: frame.midY)).tap()
             _ = main.waitForExistence(timeout: 3)
         }
         reveal(main)
-        app.assertOneSelectedSidebarRow(id, containing: text, step)
     }
 
     /// One row of the whole sidebar is selected at a time, and it is the page's root (#11032): Main Chat picked; an Agent
@@ -654,6 +659,7 @@ final class SidebarRootsUITests: XCTestCase {
                 app.terminate()
                 launch(["-dev.grouping", "state"])
                 _ = settled("conversation", "relaunch after the fold")
+                bringOut()
             }
         }
 
@@ -678,6 +684,7 @@ final class SidebarRootsUITests: XCTestCase {
         app.terminate()
         launch(["-dev.grouping", "repo"])
         _ = settled("conversation", "launch By Repository")
+        bringOut()
         _ = pickAgent("an Agent By Repository")
         let repoTitle = chatTitle()
         let repoName = repoTitle.components(separatedBy: CharacterSet(charactersIn: ",，")).first ?? repoTitle
