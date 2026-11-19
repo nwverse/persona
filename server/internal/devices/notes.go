@@ -11,10 +11,10 @@ import (
 // The hub's one-way events for a node (devices.notify: terminal input, a forwarded port's bytes) come in on the bus's
 // read loop, which must not wait for any one computer: they are queued per machine and written by one writer each, in
 // the order they came, so a computer slow to take them holds up only its own. One whose write stalls noteStall, or
-// that lets maxNoteBytes pile up, is connected again (what ran on the connection ends, as with any dropped one). A
-// forwarded port's streams queue apart from the rest (portNote): on a framed connection their bytes wait for credit,
-// and terminal input behind them would wait with them. A stall is no progress at all: on a framed connection a note
-// can wait for credit while the connection writes everything else.
+// that lets maxNoteBytes pile up in both queues together, is connected again (what ran on the connection ends, as with
+// any dropped one). A forwarded port's streams queue apart from the rest (portNote): on a framed connection their bytes
+// wait for credit, and terminal input behind them would wait with them. A stall is no progress at all: on a framed
+// connection a note can wait for credit while the connection writes everything else.
 var (
 	noteStall    = 30 * time.Second
 	maxNoteBytes = 32 << 20
@@ -43,15 +43,14 @@ func (m *Machine) queueNote(event string, params json.RawMessage) {
 	if portNote(event) {
 		n = &m.bulkNotes
 	}
-	n.mu.Lock()
-	if n.bytes+len(params) > maxNoteBytes {
-		dropped := len(n.q)
-		n.q, n.bytes = nil, 0
-		n.mu.Unlock()
+	if m.noteBytes.Add(int64(len(params))) > int64(maxNoteBytes) {
+		dropped := m.notes.drop() + m.bulkNotes.drop()
+		m.noteBytes.Add(-int64(len(params)))
 		m.d.logf("[%s] its node takes no events (%d waiting): connecting it again", m.cfg.ID, dropped)
 		m.reconnect()
 		return
 	}
+	n.mu.Lock()
 	n.q = append(n.q, nodeNote{event: event, params: params})
 	n.bytes += len(params)
 	start := !n.writing
@@ -75,6 +74,7 @@ func (m *Machine) writeNotes(n *nodeNotes) {
 		n.q[0] = nodeNote{}
 		n.q = n.q[1:]
 		n.bytes -= len(e.params)
+		m.noteBytes.Add(-int64(len(e.params)))
 		n.mu.Unlock()
 		m.mu.Lock()
 		p := m.peer

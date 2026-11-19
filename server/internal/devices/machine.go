@@ -153,6 +153,7 @@ type Machine struct {
 	// notes are the hub's one-way events waiting for the node, bulkNotes a forwarded port's bytes (notes.go; their own
 	// locks, not m.mu).
 	notes, bulkNotes nodeNotes
+	noteBytes        atomic.Int64 // what both hold together (maxNoteBytes)
 	// opened is what the hub has open on the node through the bus connection of the moment (hubopen.go).
 	opened hubOpened
 	// claudeDirsMu serializes the read-modify-writes of the remembered and blocked Claude config dirs (claudedirs.go).
