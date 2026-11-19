@@ -48,7 +48,7 @@ import java.time.Instant
 
 /**
  * The Persona tab's history drawer drawn on the JVM with Robolectric's native graphics (no emulator), in every style,
- * light and dark: the main conversation first, as "Persona" with Persona's face, and "More" without "Profile".
+ * light and dark: the main conversation first with the home icon, and "More" without "Profile".
  * Assistant details remain available from the Persona toolbar, not settings. Each is written as a PNG to `build/drawer-shots/` (or
  * `-Dpersona.shots=<dir>`) to look at.
  */
@@ -104,22 +104,14 @@ class AssistantDrawerShotsTest {
                 }
             }
         }
-        // The main conversation reads "Persona" (the session keeps its own title), with a small 主对话 under it so it
-        // reads as a chat (#6327, as the web, #6293), and "Profile" is gone.
         rule.onAllNodesWithText("主对话").assertCountEquals(1)
         rule.onAllNodesWithText("资料页").assertCountEquals(0)
         rule.onAllNodesWithText("认识 Persona").assertCountEquals(0)
-        // #2004 on every platform: the first row is the main conversation as "Persona" with the app's mark, then a
-        // line; Persona is not listed again (no header of its own, no second main row).
-        rule.onAllNodesWithText("Persona").assertCountEquals(1)
-        val persona = rule.onNodeWithText("Persona").fetchSemanticsNode().boundsInRoot
-        // The texts themselves, not the row they merge into.
-        val name = rule.onNodeWithText("Persona", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
-        val mark = rule.onNodeWithText("主对话", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
-        assertTrue("主对话 is under Persona", name.bottom <= mark.top)
+        rule.onAllNodesWithText("Persona").assertCountEquals(0)
+        val mainRow = rule.onNodeWithText("主对话").fetchSemanticsNode().boundsInRoot
         val search = rule.onNodeWithText("搜索对话").fetchSemanticsNode().boundsInRoot
-        assertTrue("Persona is above the search", persona.bottom <= search.top && mark.bottom <= search.top)
-        rule.onNodeWithText("Persona").performClick()
+        assertTrue("Main conversation is above search", mainRow.bottom <= search.top)
+        rule.onNodeWithText("主对话").performClick()
         assertTrue(mainTapped)
         assertEquals(null, opened)
         rule.onNodeWithText("启动器").performScrollTo().performClick()
@@ -145,10 +137,29 @@ class AssistantDrawerShotsTest {
         style = AppStyle.Glass; dark = false
         mainTapped = false
         groups = ConversationGroups(null, emptyList(), recent)
-        rule.onAllNodesWithText("Persona").assertCountEquals(1)
+        rule.onAllNodesWithText("主对话").assertCountEquals(1)
         rule.onNodeWithText("开始主对话").performClick()
         assertTrue(mainTapped)
         capture("drawer-no-main-glass-light")
+    }
+
+    @Test @Config(fontScale = 2f)
+    fun drawsTheMainRowAtLargestTextSize() {
+        var dark by mutableStateOf(false)
+        rule.setContent {
+            PersonaTheme(darkTheme = dark, reduceMotion = true, style = AppStyle.Glass) {
+                Box(Modifier.testTag("shot").width(400.dp).height(800.dp).background(PersonaTheme.palette.background)) {
+                    AssistantDrawer("", {}, ConversationGroups(main, listOf(pinned), recent),
+                        active = null, hasMain = true, onEnd = null, onMain = {}, onOpen = {}, onInfo = {},
+                        onNew = {}, onSettings = {})
+                }
+            }
+        }
+        rule.onNodeWithText("主对话").assertExists()
+        capture("drawer-glass-light-large-text")
+        dark = true
+        androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
+        capture("drawer-glass-dark-large-text")
     }
 
     @Test fun navigationPagesAddTrailingChevronsAndKeepBadges() {
@@ -500,7 +511,7 @@ class AssistantDrawerShotsTest {
         rule.onNodeWithText("周末去哪儿").assertExists()
         rule.onNodeWithText("已归档").assertExists()
         rule.onNodeWithText("较早的对话还在整理，可能有些暂时搜不到。").assertExists()
-        rule.onAllNodesWithText("Persona").assertCountEquals(1)
+        rule.onAllNodesWithText("主对话").assertCountEquals(1)
         for (s in AppStyle.entries) for (d in listOf(false, true)) {
             style = s; dark = d
             androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()

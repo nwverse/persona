@@ -43,6 +43,11 @@ import (
 type Node struct {
 	runtimeUsage runtimeUsageReports
 
+	// The assistant's one memory (memory_merge.go), both under memoryMu: per project key, the other profiles' notes
+	// already merged, and when a merge that failed is tried again.
+	memoryMerged     map[string]map[string]bool
+	memoryMergeRetry map[string]time.Time
+
 	memoryMu     sync.Mutex
 	Version      string
 	skillImports assistantskills.Importer
@@ -247,7 +252,8 @@ type Node struct {
 	runtimeSock string
 	// runtimeHost: the runtime socket this Node lists runtimes from — the resident node's, shared by its Nodes
 	// (attach.go), or its own for the one connection it serves (runtimehost.go).
-	runtimeHost *RuntimeHost
+	runtimeHost    *RuntimeHost
+	autoCompanions bool
 	// keeper: a resident node's conversations between hub connections (assistant_keep.go); nil without one.
 	keeper *assistantKeeper
 	// replayed is closed once what standby took while no manager was connected went to this one (spool_replay.go): new
@@ -364,9 +370,18 @@ func New(version string) (*Node, error) {
 	if err != nil {
 		return nil, err
 	}
-	// ssh sessions get a minimal PATH; herdr and claude usually live in ~/.local/bin.
+	// ssh sessions get a minimal PATH; herdr and claude usually live in ~/.local/bin. Tools a version manager installs
+	// (git-lfs through mise, #10127) come after the rest (toolpath.go).
+	// A later hub connection of a resident node starts from the PATH the last New made, without hub.json's directories
+	// (withoutExtraPath): those already lead with these, and the configure that follows puts hub.json's back.
 	extra := []string{filepath.Join(home, ".local/bin"), filepath.Join(home, "bin"), filepath.Join(home, "go/bin"), "/opt/homebrew/bin", "/usr/local/bin", "/usr/local/go/bin"}
-	os.Setenv("PATH", strings.Join(append(extra, os.Getenv("PATH")), string(os.PathListSeparator)))
+	path, resident := withoutExtraPath(os.Getenv("PATH"))
+	if !resident {
+		path = strings.Join(append(extra, path), string(os.PathListSeparator))
+	}
+	path = withDirsAfter(path, versionManagerShims(home, os.Getenv))
+	os.Setenv("PATH", path)
+	resetExtraPath(path)
 	dir, err := identity.PrepareHome(home)
 	if err != nil {
 		return nil, err
@@ -438,6 +453,7 @@ func New(version string) (*Node, error) {
 
 // ServeStdio runs the node protocol on stdin/stdout until the hub disconnects.
 func (n *Node) ServeStdio(ctx context.Context) error {
+	n.autoCompanions = true
 	return n.Serve(ctx, os.Stdin, os.Stdout)
 }
 
@@ -501,7 +517,10 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 	} else if rh, err := n.listenRuntimeSocket(ctx); err != nil { // runtimes (runtimes.go): beside the engine, whichever it is
 		n.logger.Printf("runtime socket: %v", err)
 	} else {
-		defer rh.detach(n)
+		defer func() {
+			rh.setAgyBridge(false)
+			rh.detach(n)
+		}()
 	}
 	ln, err := n.listenHookSocket(ctx)
 	if err != nil {
@@ -1092,9 +1111,15 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			// ClaudeLiveReplies: the Agents' starts load the live replies plugin (Settings › Claude Code, hooksplugin.go,
 			// #1309); nil (an older hub) leaves it as it is, on at first.
 			ClaudeLiveReplies *bool `json:"claude_live_replies"`
+			// ExtraPath: directories at the front of the node's PATH (hub.json machines[].extra_path, toolpath.go);
+			// nil (an older hub, a call that says nothing of it) leaves PATH as it is, [] takes them out.
+			ExtraPath *[]string `json:"extra_path"`
 		}
 		if err := json.Unmarshal(params, &c); err != nil {
 			return nil, err
+		}
+		if c.ExtraPath != nil { // before herdr_autostart: a herdr server the node starts next has them too
+			n.setExtraPath(*c.ExtraPath)
 		}
 		if c.HubFeatures != nil || c.MachineID != "" {
 			n.hubPersonaContracts.Store(c.HubFeatures != nil && slices.Contains(*c.HubFeatures, nodeproto.PersonaContracts))
