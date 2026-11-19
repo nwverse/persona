@@ -375,14 +375,9 @@ type HeldAnswer struct {
 	Undelivered *proto.UndeliveredMessage `json:"undelivered,omitempty"`
 }
 
-// Actor is who asked the hub for a call (NodeCall.Actor): the kind of token ("device", "hub" for the hub's own
-// token, "extension") and, for a device, its id and name as the hub knows them; an extension's id. Display only.
-type Actor struct {
-	Kind       string `json:"kind"`
-	DeviceID   string `json:"device_id,omitempty"`
-	DeviceName string `json:"device_name,omitempty"`
-	Extension  string `json:"extension,omitempty"`
-}
+// Actor is display-only provenance for NodeCall and plan decisions: a device, hub token, extension, or internal
+// assistant. It is shared with the node contract so a plan reports the actor supplied by its manager.
+type Actor = proto.ModeActor
 
 // RequestEnd is devices.request_end's params.
 type RequestEnd struct {

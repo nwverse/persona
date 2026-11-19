@@ -166,6 +166,7 @@ func newFakeCodex(t *testing.T, n *Node, cwd string) (*assistantProc, *codexConn
 
 // fakeHub answers the node's calls the way the hub would: the Feishu gate config, the snapshot, and the phone's answers.
 type fakeHub struct {
+	modeSets  []proto.ModeSetEvent
 	mu        sync.Mutex
 	asked     []proto.Interaction
 	answer    func(proto.Interaction) proto.Resolution
@@ -281,6 +282,14 @@ func withFakeHub(t *testing.T, n *Node) *fakeHub {
 		return map[string]any{}, nil
 	}
 	hub.OnEvent = func(event string, params json.RawMessage) {
+		if event == proto.EventModeSet {
+			var e proto.ModeSetEvent
+			_ = json.Unmarshal(params, &e)
+			fh.mu.Lock()
+			fh.modeSets = append(fh.modeSets, e)
+			fh.mu.Unlock()
+			return
+		}
 		if event == "sessions.changed" {
 			var p struct {
 				Sessions []proto.Session `json:"sessions"`

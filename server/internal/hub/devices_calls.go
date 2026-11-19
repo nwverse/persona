@@ -155,6 +155,12 @@ func deviceError(id string, err error) error {
 // modesActor is who asks for a session.modes call, for the manager's record of mode changes (#10297): the device and
 // its name, the hub's own token, or an extension. Display only; the request was checked before it got here.
 func modesActor(ctx context.Context) *devicewire.Actor {
+	if a := devicewire.ModeActorOf(ctx); a != nil {
+		return a
+	}
+	if _, ok := callerOf(ctx); ok {
+		return devicewire.AssistantModeActor()
+	}
 	pr := principalOf(ctx)
 	switch {
 	case pr.Role == roleExtension:

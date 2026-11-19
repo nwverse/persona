@@ -712,6 +712,9 @@ func serveHTTP(ctx context.Context, s http.Handler, p assistantwire.HTTPRequest,
 	if p.ShareAuthority != nil {
 		ctx = devicewire.WithShareAuthority(ctx, *p.ShareAuthority)
 	}
+	if p.ModeActor != nil {
+		ctx = devicewire.WithModeActor(ctx, p.ModeActor)
+	}
 	if p.OwnerAnswer {
 		ctx = devicewire.WithOwnerAnswer(ctx)
 	}
