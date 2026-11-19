@@ -236,10 +236,23 @@ func (h *Hub) applyDeviceStatesFrom(owner string, st devicewire.States) {
 		if known := h.knownEntry(id) != nil; known && h.entryOwner(id) != owner || !known && owner != devicesOwner {
 			continue
 		}
+		// What it is called and how it is reached: hub.json's entry says for one of this hub's own in hub.json (the
+		// manager follows it a moment later; mirrorConfig), the manager for one it keeps (machines_kept.go) and for a
+		// member's (the member renamed it).
+		name, kind := s.Machine.Name, s.Machine.Kind
+		if own := h.cfgEntry(id); own != nil && !s.Derived {
+			name, kind = cmp.Or(own.Name, id), own.Kind
+		}
+		kindChanged := false
 		if m == nil || !m.managed {
 			// Its entry stays as it was made (it is read without m.mu everywhere, as when the hub connected it).
 			m = newMachine(h, h.mirrorConfig(s))
 			m.managed, m.peer = true, &busNode{h: h, id: id, done: make(chan struct{})}
+		} else if kindName(kind) != kindName(m.kind()) {
+			// Switched to Persona Link, or back (link_switch.go): the same computer, reached another way. What ran
+			// through the old way ends as when its connection ends.
+			m.setKind(kind)
+			kindChanged = true
 		}
 		m.mu.Lock()
 		m.owner = owner
@@ -249,13 +262,7 @@ func (h *Hub) applyDeviceStatesFrom(owner string, st devicewire.States) {
 		// online is the node connected now, as it was when the hub connected it (self-update waits for it, the node
 		// updates go to it); the manager's warm start is warmUntil, as the hub's own was (the apps see both as online).
 		m.snap, m.info, m.online, m.err = &snap, s.Info, s.Connected, s.Machine.Error
-		// What it is called: hub.json's entry says for one of this hub's own in hub.json (the manager follows it a moment
-		// later), the manager for one it keeps (machines_kept.go) and for a member's (the member renamed it).
-		if mc := h.cfgEntry(id); mc != nil && !s.Derived {
-			m.setName(cmp.Or(mc.Name, id))
-		} else {
-			m.setName(snap.Name)
-		}
+		m.setName(name)
 		if s.Machine.LastSeen.After(m.lastSeen) {
 			m.lastSeen = s.Machine.LastSeen
 		}
@@ -263,8 +270,8 @@ func (h *Hub) applyDeviceStatesFrom(owner string, st devicewire.States) {
 		m.connected, m.connectedAt = s.Connected, s.ConnectedAt
 		m.warmUntil = s.WarmUntil
 		c := change{m: m}
-		c.ended = wasConn && (!s.Connected || !s.ConnectedAt.Equal(wasAt))
-		c.began = s.Connected && (!wasConn || !s.ConnectedAt.Equal(wasAt))
+		c.ended = wasConn && (!s.Connected || !s.ConnectedAt.Equal(wasAt) || kindChanged)
+		c.began = s.Connected && (!wasConn || !s.ConnectedAt.Equal(wasAt) || kindChanged)
 		if c.ended || s.Connected && !wasConn {
 			c.oldMux, m.streams = m.streams, nil
 		}
