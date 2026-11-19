@@ -700,6 +700,45 @@ func TestLinkSwitchRollbackAfterTheComputerMoved(t *testing.T) {
 	}
 }
 
+// A switch that succeeded is not rolled back by a stale record of its manager: already_succeeded, nothing revoked,
+// its kind kept, with or without its code's hash, from another manager, and after this hub restarted (the audit says).
+func TestLinkSwitchRollbackAfterSuccessIsRefused(t *testing.T) {
+	h, _, _ := switchHub(t)
+	ctx := context.Background()
+	op := newSwitchOp()
+	got, err := busBegin(h, nil, devicewire.LinkSwitchBegin{MachineID: "lsw-bare", Operation: op, SSHHost: "bare.example"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, out := redeem(t, h, pairTokenOf(t, got.Link), `{}`)
+	if code != 200 {
+		t.Fatalf("redeem %d", code)
+	}
+	cred := out["token"].(string)
+	if err := busEnd(h, nil, devicewire.LinkSwitchEnd{MachineID: "lsw-bare", Operation: op, PairHash: got.PairHash,
+		Outcome: devicewire.LinkSwitchSucceeded}); err != nil {
+		t.Fatal(err)
+	}
+	other := &busConn{ident: db.BusIdentity{ID: "m-0d0d0d"}}
+	tries := func() {
+		t.Helper()
+		for _, c := range []struct {
+			name string
+			conn *busConn
+			hash string
+		}{{"with its hash", nil, got.PairHash}, {"without", nil, ""}, {"from another manager", other, got.PairHash}} {
+			refusedWith(t, c.name, busEnd(h, c.conn, devicewire.LinkSwitchEnd{MachineID: "lsw-bare", Operation: op, PairHash: c.hash,
+				Outcome: devicewire.LinkSwitchRolledBack}), devicewire.LinkSwitchCodeSucceeded)
+		}
+		if _, ok := h.authenticate(ctx, cred); !ok || diskKind(t, h, "lsw-bare") != "link" || h.cfgEntry("lsw-bare").Kind != kindLink {
+			t.Fatal("a succeeded switch was undone")
+		}
+	}
+	tries()
+	h.linkSwitch = linkSwitches{} // this hub restarted
+	tries()
+}
+
 // While a computer switches, it is neither moved to another manager nor removed: 409 link_switch_in_progress, in the
 // asker's language. Once the switch ended, both may go ahead.
 func TestLinkSwitchHoldsTheComputer(t *testing.T) {
