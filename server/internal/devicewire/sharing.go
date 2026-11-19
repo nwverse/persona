@@ -133,3 +133,18 @@ type ShareProjection struct {
 	Omitted   int                      `json:"omitted_messages"`
 	Omissions []string                 `json:"omissions"`
 }
+
+type modeActorKey struct{}
+
+// WithModeActor carries display-only provenance from a trusted bus request.
+func WithModeActor(ctx context.Context, a *Actor) context.Context {
+	return context.WithValue(ctx, modeActorKey{}, a)
+}
+
+func ModeActorOf(ctx context.Context) *Actor {
+	a, _ := ctx.Value(modeActorKey{}).(*Actor)
+	return a
+}
+
+// AssistantModeActor identifies an internal assistant request in existing timeline clients.
+func AssistantModeActor() *Actor { return &Actor{Kind: "assistant", DeviceName: "Persona"} }

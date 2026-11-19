@@ -147,7 +147,7 @@ class OutboxMessageSender(
 
     override val outbox = store.entries.map { entries ->
         entries.filter { it.state !in hidden }.map {
-            OutboxMessage(it.clientMessageId, it.session, it.text, it.state.delivery, it.error, it.mainTarget, it.createdAt)
+            OutboxMessage(it.clientMessageId, it.session, it.text, it.state.delivery, it.error, it.mainTarget, it.createdAt, it.opId)
         }
     }.stateIn(scope, SharingStarted.Eagerly, emptyList())
 
@@ -473,7 +473,7 @@ class OutboxMessageSender(
                 if (!MessageEcho.candidate(item) || (session to item.id) in claimed) continue
                 val entry = pending.firstOrNull { MessageEcho.carries(item, it.clientMessageId) ||
                     it.opId?.let { op -> MessageEcho.carries(item, op) } == true }
-                    ?: pending.firstOrNull { MessageEcho.arrived(it.text, it.createdAt, item) } ?: continue
+                    ?: pending.firstOrNull { it.state != OutboxState.Held && MessageEcho.arrived(it.text, it.createdAt, item) } ?: continue
                 pending.remove(entry)
                 val moved = store.transition(entry.clientMessageId, reconcilable, OutboxState.Shown)
                 // A restored Shown row is only display state; this newly observed transcript item is fresh evidence.
@@ -496,7 +496,7 @@ class OutboxMessageSender(
                 if (entry.state in uncertain) store.transition(entry.clientMessageId, uncertain, OutboxState.Verifying)
                 val evidence = try {
                     transport.reconcile(request(entry), entry.createdAt,
-                        entries.count { it.session == entry.session && it.text == entry.text } == 1)
+                        entry.state != OutboxState.Held && entries.count { it.session == entry.session && it.text == entry.text } == 1)
                 } catch (cancelled: CancellationException) { throw cancelled }
                 catch (_: Exception) { null }
                 when (evidence) {
@@ -507,7 +507,7 @@ class OutboxMessageSender(
                     }
                     is MessageEvidence.Receipt -> {
                         // A late success can settle manual review; an unknown receipt must keep that choice visible.
-                        val from = if (evidence.result == MessageTransportResult.Accepted)
+                        val from = if (evidence.result == MessageTransportResult.Accepted || evidence.result == MessageTransportResult.Held)
                             uncertain + OutboxState.NeedsConfirmation else uncertain
                         settle(entry, from, evidence.result)
                     }
@@ -748,11 +748,11 @@ class OutboxMessageSender(
         /** Delivery unknown, with or without the review deadline passed: the user decides (confirm or discard). */
         private val undecided = reviewable + OutboxState.NeedsConfirmation
         private val settled = setOf(OutboxState.Sent, OutboxState.Shown)
-        private val reconcilable = uncertain + OutboxState.Sent + OutboxState.NeedsConfirmation
+        private val reconcilable = uncertain + OutboxState.Sent + OutboxState.NeedsConfirmation + OutboxState.Held
         /** Read-only catch-up may also find late evidence for an already shown message; transcript matching may not. */
         private val catchUpStates = reconcilable + OutboxState.Shown
         private val dispatchable = setOf(OutboxState.Queued, OutboxState.WaitingForNetwork)
-        private val hidden = setOf(OutboxState.Cancelled, OutboxState.Shown)
+        private val hidden = setOf(OutboxState.Cancelled, OutboxState.Shown, OutboxState.Held)
         private val refusals = setOf("agent_stopped", "input_draft", "dialog_open", "codex_not_ready", "codex_first_text", "codex_waiting", "op_id_reused", "invalid", "stale_session")
         /** A message that keeps coming back waiting while the link is up goes again this often (iOS retryOutboxSoon). */
         private const val StallRetryMillis = 10_000L
@@ -763,6 +763,7 @@ class OutboxMessageSender(
         fun newOperationId(): String = java.util.UUID.randomUUID().toString()
 
         fun classify(result: MessageTransportResult): OutboxState = when (result) {
+            MessageTransportResult.Held -> OutboxState.Held
             MessageTransportResult.Accepted -> OutboxState.Sent
             MessageTransportResult.NotSent -> OutboxState.WaitingForNetwork
             MessageTransportResult.NoReceipt -> OutboxState.Unknown

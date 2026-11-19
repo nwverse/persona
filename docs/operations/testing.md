@@ -454,6 +454,12 @@ What it does not see: a suite that runs or reads a script by its path instead of
 
 Simulator limits: computer-use can't click simulators while the screen is locked; use DEBUG launch arguments to open pages directly. Push, real HealthKit data and WatchConnectivity sync need devices.
 
+## Android Inbox Agent handoff to a named manager
+
+Run `python3 scripts/test/android-named-inbox-handoff.py --report /tmp/persona-handoff.json` from the repository root with Docker, Go and the Android build toolchain available. The fixture creates a loopback hub, two managers with separate PostgreSQL stores, and two controlled target machines. Seed data and credentials live in its temporary directory.
+
+The fixture runs `persona.core.data.NamedManagerInboxHandoffLiveTest` in `:core:data:testDebugUnitTest`. The Android repository reads the merged Inbox and hands the named manager's item to the target session. Each of two attempts uses a fresh Room outbox and reply journal so the same operation crosses HTTP twice. The session-message route names the manager's machine, and the Inbox record request names the manager. The test compares the complete returned handoff, including the original Agent chain entry. The report includes the request and response hashes for each observed route, delivery counts for both machines, and handoff and chain counts from both databases. Ordinary Android test runs skip this fixture unless `PERSONA_ANDROID_HANDOFF_FIXTURE` names its private configuration file.
+
 ## Android screenshots
 
 `./scripts/app/android.sh shots -s emulator-<port> --out <directory>` installs a separate test package on a dedicated emulator and auto-pairs to anonymized `scripts/mock/mock_hub.py`,

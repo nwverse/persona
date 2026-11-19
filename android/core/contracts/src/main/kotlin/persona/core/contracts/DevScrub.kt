@@ -48,7 +48,7 @@ object DevScrub {
         // A URL keeps only its path. Origins, queries and fragments can carry accounts, hosts and pairing secrets.
         Regex("""(?i)\b[a-z][a-z0-9+.-]*://[^\s/?#'"<>()]*([^\s?#'"<>()]*)[^\s'"<>()]*""") to "$1",
         Regex("""(/[^\s'"<>()?#]*)[?#][^\s'"<>()]*""") to "$1",
-        Regex("""\b(Bearer|Basic|Token)\s+[A-Za-z0-9._~+/=-]+""") to "$1 <redacted>",
+        Regex("""(?i)\b(Bearer|Basic|Token)\s+[A-Za-z0-9._~+/=-]+""") to "$1 <redacted>",
         Regex("""(?i)\b(access_token|refresh_token|id_token|token|api_key|apikey|key|secret|client_secret|password|passwd|pwd|cookie|set-cookie|authorization|auth|session_token|signature|sig)(\s*[=:]\s*)("[^"]*"|'[^']*'|[^\s,;&'"]+)""") to "$1$2<redacted>",
         Regex("""\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+""") to "<redacted>",
         Regex("""[\w.+-]+@[\w-]+(?:\.[\w-]+)+""") to "<email>",

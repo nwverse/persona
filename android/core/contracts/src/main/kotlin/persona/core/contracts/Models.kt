@@ -652,6 +652,8 @@ data class Session(
      * waits. [launcher] stays the one it runs on until then. Summary rows leave it out.
      */
     @SerialName("pending_switch") val pendingSwitch: PendingSwitch? = null,
+    /** The manager's current queue. A complete session row without the field has no held messages. */
+    val undelivered: List<HeldAgentMessage>? = null,
 ) {
     val key: SessionKey get() = SessionKey(machineId, sessionId)
     /** A chat of the health space ([space]), which the assistant's own lists leave out. */
