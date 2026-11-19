@@ -116,6 +116,11 @@ iOS / Android have both entry points (Android Machines is under Agents: **List s
 
 Windows: herdr has native Windows support since 0.9.5; except live terminal, capabilities match above. Orca works too. See [windows.md](../operations/windows.md), "herdr."
 
+Antigravity CLI panes can show chat history after the hook installed by `herdr integration install antigravity-cli`
+reports the pane's conversation ID. Persona reads that conversation's local `transcript.jsonl` from the node's Antigravity data
+directory and uses the reported ID to restore Persona-started panes with `agy --conversation`. Until herdr
+reports a usable ID, the pane remains accessible through the terminal and can still receive prompts.
+
 Orca's native Claude chats (structured, no terminal) connect through node's bridge: list, state, send text / images, interrupt, close,
 answer approvals / questions, change permission / thinking (no plan mode); no screen reads, keys, or live terminal. Chats appear only after their first message;
 Codex chats not listed in this version. See `docs/plans/plan-orca-support.md` ("Structured sessions").

@@ -216,7 +216,9 @@ type todoBook struct {
 	// reporting are the todos whose report back to their source is waiting for the outcome (todo_source.go).
 	reportMu  sync.Mutex
 	reporting map[string]time.Time
-	runMu     sync.Mutex // one report step at a time (sourceReportNow)
+	// reportWaits are the longest answer waits found for todos still waiting (todo_source_answer.go).
+	reportWaits map[string]time.Duration
+	runMu       sync.Mutex // one report step at a time (sourceReportNow)
 
 	// importing is held across a batch of imported reminders, and imports are their links when there is no store
 	// (todo_imports.go).
@@ -903,6 +905,7 @@ var errTodosUnavailable = errors.New("todos service unavailable")
 
 func (s *Service) todoRoutes() {
 	s.todoRepositoryRoutes()
+	s.workspaceNamingRoutes()
 	s.taskReviewDismissalRoutes()
 	s.todoDecisionRoutes()
 	s.todoThreadRoutes()

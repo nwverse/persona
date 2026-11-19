@@ -223,7 +223,9 @@ func TestQueuedDigestUncertainDeliveryKeepsIdentity(t *testing.T) {
 			s, f, tasks := queuedDigestFixture(t, "Accepted example", "Actionable example")
 			s.relays.mu.Lock()
 			msg := s.relays.st.Queue["conv1"][0]
-			s.relays.doubted = map[string]time.Time{relayMsgID("conv1", msg): time.Now().Add(-time.Second)}
+			msg.TriedAt = time.Now().Add(-time.Second)
+			msg.Looks = relayLookLimit - 1
+			s.relays.st.Queue["conv1"][0] = msg
 			s.relays.mu.Unlock()
 			if landed {
 				f.mu.Lock()
@@ -242,7 +244,13 @@ func TestQueuedDigestUncertainDeliveryKeepsIdentity(t *testing.T) {
 			} else {
 				s.relays.mu.Lock()
 				defer s.relays.mu.Unlock()
-				if len(s.relays.st.Queue["conv1"]) != 1 || s.relays.st.Queue["conv1"][0] != msg {
+				q := s.relays.st.Queue["conv1"]
+				if len(q) != 1 || q[0].Looks != relayLookLimit || q[0].LookAfter.IsZero() {
+					t.Fatalf("want an uncertain payload after the final check, got %+v", q)
+				}
+				got := q[0]
+				got.Looks, got.LookAfter = msg.Looks, msg.LookAfter
+				if got != msg {
 					t.Fatal("uncertain payload changed")
 				}
 			}
