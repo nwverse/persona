@@ -458,7 +458,7 @@ func (s *Service) toolTodoDone(ctx context.Context, machine, self, name string, 
 		return "", fmt.Errorf("%s is a concern: it closes only when you report its outcome to the user with concern_report", t.ID)
 	}
 	supervisor := supervisorOf(t)
-	direct := complete && self != "" && s.hello(ctx).Assistant.CompleteAgentlessTodos && !todoHasAgents(t) &&
+	direct := complete && self != "" && t.PlanID == "" && s.hello(ctx).Assistant.CompleteAgentlessTodos && !todoHasAgents(t) &&
 		(supervisor == self || supervisor == "" && t.Origin == self)
 	if todoHasWork(t) && !direct {
 		key := "assistant-todos.reopen_card"

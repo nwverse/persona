@@ -1085,7 +1085,7 @@ An approved start is remembered across manager restarts and rechecked by the tas
 | `todo_complete` / `todo_reopen` | Mark done / open again | Only for a task, or a to-do agents work on (completing closes its agents) |
 | `todo_delete` | Delete for good | Always |
 
-With the advanced manager setting `assistant.complete_agentless_todos` enabled (default `false`), the supervising conversation can complete its own memo without a confirmation card when no Agent is attached. A memo originating in that conversation and having no supervision ledger also qualifies. Another conversation, a to-do with an Agent, every reopen, and health-space outbound confirmation keep their existing behavior. The setting is documented in `docs/operations/config.md` ("manager.json").
+With the advanced manager setting `assistant.complete_agentless_todos` enabled (default `false`), the supervising conversation can complete its own memo without a confirmation card when no Agent is attached. A memo originating in that conversation and having no supervision ledger also qualifies. Another conversation, a planned task (with or without an attached Agent), every reopen, and health-space outbound confirmation keep their existing behavior. The setting is documented in `docs/operations/config.md` ("manager.json").
 
 A to-do it makes is the user's own (no `origin`), except a piece of a request it will hand out ("Requests in pieces"): work for an agent still goes through `task_plan`. In a health conversation, anything that writes asks first (`confirmOutbound`, `health.md`). The generated CLAUDE.md tells the assistant to use `todo_create` when the user says to note a to-do or to remind them of something.
 

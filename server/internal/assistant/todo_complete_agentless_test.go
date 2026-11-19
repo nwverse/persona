@@ -71,6 +71,7 @@ func TestTodoCompleteAgentlessSupervisor(t *testing.T) {
 		{"another supervisor", "conv1", "todo_complete", Todo{ID: "todo_other_supervisor", Title: "Memo", Origin: "conv1", Supervision: &Supervision{Supervisor: "conv2"}}, false},
 		{"another originating conversation", "conv1", "todo_complete", Todo{ID: "todo_other_origin", Title: "Memo", Origin: "conv2"}, false},
 		{"attached Agent", "conv1", "todo_complete", Todo{ID: "todo_agent", Title: "Task", Origin: "conv1", Supervision: &Supervision{Supervisor: "conv1"}, Agents: []TodoAgent{{MachineID: "server", SessionID: "agent1"}}}, false},
+		{"planned task without an attached Agent", "conv1", "todo_complete", Todo{ID: "todo_planned", Title: "Task", Origin: "conv1", PlanID: "plan_1", Supervision: &Supervision{Supervisor: "conv1"}}, false},
 		{"reopen", "conv1", "todo_reopen", Todo{ID: "todo_reopen", Title: "Memo", Origin: "conv1", DoneAt: &done, Supervision: &Supervision{Supervisor: "conv1"}}, false},
 		{"health-space outbound confirmation", "conv1", "todo_complete", Todo{ID: "todo_health", Title: "Memo", Origin: "conv1", Supervision: &Supervision{Supervisor: "conv1"}}, true},
 	} {
