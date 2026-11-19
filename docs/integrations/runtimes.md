@@ -95,7 +95,7 @@ Call the SDK when things happen:
 | --- | --- |
 | (no call needed) | The list only needs recent sessions: node still recognizes older unlisted sessions as yours (ones listed before are remembered; ones never listed get one `items` query), and calls are still routed to you, so `send` / `items` must handle sessions not in the list |
 | `rt.sessionsChanged()` | Sessions added or removed, a turn started / ended, a rename |
-| `rt.append(id, {items, fromSeq, toSeq, history})` | New content was persisted (when no one is watching, the SDK just has the list refresh `rev`). `items` can be empty: content not shown in the chat must still advance seq |
+| `rt.append(id, {items, fromSeq, toSeq, history, update})` | New content was persisted (when no one is watching, the SDK just has the list refresh `rev`). `items` can be empty: content not shown in the chat must still advance seq. Set `update: true` to replace existing items by id without advancing seq; a batch keeps the flag if any append sets it |
 | `rt.stream(id, text)` / `rt.streamEnd(id)` | The full text being generated / that segment ended (the SDK throttles to at most once every 120 ms) |
 | `rt.workspacesChanged(list)` | Its workspaces changed (one made, renamed or archived, a branch moved): the whole list, which the SDK also tells every node it connects to later. Only with `createWorkspace` and `prepareWorkspace` ("Workspaces" below) |
 | `rt.ask(interaction, {signal})` | A person must decide: the card goes to the phone and waits for an answer. Returns a `Resolution`; `{dismiss: true}` = handed back to the computer (tapped on the phone, expired, no hub), for the runtime's own UI. Meanwhile the session shows "Needs you" automatically |
@@ -129,6 +129,7 @@ Not in the SDK (used by only one runtime, or the two read different things): eac
   with ids `<seq>#<index>`. DSH's event seq starts at 0, so it maps to seq + 1. **Ids are unique only within a session**: across sessions, and especially across two branches split from the same session,
   the same id is different content. Anything a client caches by id (render results, parse results) must key on the session too (#372).
 - **history**: the identity of the session's content (`docs/protocol/protocol.md` ("Continuity of items")). It changes when content is rewritten (branch, reset), and the App refetches the whole page; it stays the same on pure appends. A batch with a new history doesn't need a larger seq (switching back to a branch with the same count, shorter after a rollback); the SDK pushes it anyway and continues from its `toSeq`.
+  An explicit `fromSeq: 0` also resets the cursor, even with the same history. Node and Hub retain the new cursor for reconnects. Watch catch-up reports a new history even when the page is empty or its cursor has not grown.
 - **Item kinds** follow what the App already has: `text` (user / assistant), `thinking`, `tool_use` (`tool_name`, `tool_input`, `tool_use_id`), `tool_result`
   (`tool_use_id`, `is_error`), `image` (`lazy: true` placeholder, data via `image`), `notice` (system: interrupt, error, compaction).
 - **Tool names match Claude's**: the App draws commands, diffs and files for `Bash`, `Read`, `Edit`, `Write`, `Grep`, `Glob`, `WebFetch`, `WebSearch`, `TodoWrite`,

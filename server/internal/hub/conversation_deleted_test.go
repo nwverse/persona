@@ -67,7 +67,7 @@ func TestPersonaDeletedTransport(t *testing.T) {
 	for len(c.out) > 0 {
 		<-c.out
 	}
-	h.itemsToSubscribers(n.m.cfg.ID, id, []proto.Item{{Text: "must not be sent"}}, itemSpan{}, false)
+	h.itemsToSubscribers(n.m.cfg.ID, id, []proto.Item{{Text: "must not be sent"}}, itemSpan{}, false, false)
 	h.sendBacklog(context.Background(), c, n.m, id, 0)
 	for len(c.out) > 0 {
 		if raw := <-c.out; strings.Contains(string(raw), `"type":"items"`) {

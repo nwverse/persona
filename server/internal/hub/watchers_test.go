@@ -21,6 +21,7 @@ import (
 type watchNode struct {
 	mu          sync.Mutex
 	watched     map[string]bool
+	since       map[string]int
 	calls       []string
 	failWatch   int // the next n session.watch calls fail
 	failUnwatch int // the next n session.unwatch calls fail
@@ -32,7 +33,7 @@ type watchNode struct {
 
 func newWatchNode(t *testing.T) (*watchNode, *Machine) {
 	t.Helper()
-	n := &watchNode{watched: map[string]bool{}, entered: make(chan struct{}, 4), release: make(chan struct{})}
+	n := &watchNode{watched: map[string]bool{}, since: map[string]int{}, entered: make(chan struct{}, 4), release: make(chan struct{})}
 	ctx, cancel := context.WithCancel(context.Background())
 	h2nR, h2nW := io.Pipe()
 	n2hR, n2hW := io.Pipe()
@@ -41,6 +42,7 @@ func newWatchNode(t *testing.T) (*watchNode, *Machine) {
 	nodeSide.OnRequest = func(_ context.Context, method string, params json.RawMessage) (any, error) {
 		var p struct {
 			SessionID string `json:"session_id"`
+			SinceSeq  int    `json:"since_seq"`
 		}
 		_ = json.Unmarshal(params, &p)
 		n.mu.Lock()
@@ -63,6 +65,7 @@ func newWatchNode(t *testing.T) (*watchNode, *Machine) {
 		case fail:
 			return nil, errors.New("node busy")
 		case method == "session.watch":
+			n.since[p.SessionID] = p.SinceSeq
 			if !n.watched[p.SessionID] {
 				n.watched[p.SessionID] = true
 			}

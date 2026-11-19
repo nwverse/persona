@@ -162,6 +162,7 @@ test('in-place item updates under the same history go out without advancing seq 
     from_seq: 5,
     to_seq: 5,
     history: 'h1',
+    update: true,
   })
   // Without update: true, a same-seq append is still ignored as already pushed.
   rt.append('s1', { items: [{ id: '5#0', seq: 5, kind: 'thinking', text: 'ignored' }], fromSeq: 5, toSeq: 5, history: 'h1' })
@@ -176,7 +177,65 @@ test('in-place item updates under the same history go out without advancing seq 
     from_seq: 5,
     to_seq: 5,
     history: 'h1',
+    update: true,
   })
+})
+
+test('mixed append batches preserve update in either order without leaking to later batches', async (t) => {
+  const n = await startFakeNode(t)
+  const rt = createRuntime(minimal({ cursor: async () => ({ history: 'h', to_seq: 5 }) }), { runtime: 'toy', socketPath: n.path })
+  t.after(() => rt.stop())
+  rt.start()
+  await n.ready
+  await n.peer.call('session.watch', { session_id: 's1' })
+  for (const updateFirst of [true, false]) {
+    const from = updateFirst ? 5 : 6
+    const append = { items: [{ id: `i${from + 1}`, seq: from + 1 }], fromSeq: from, toSeq: from + 1, history: 'h' }
+    const update = { items: [{ id: `i${from}`, seq: from, text: 'revised' }], toSeq: from, history: 'h', update: true }
+    for (const a of updateFirst ? [update, append] : [append, update]) rt.append('s1', a)
+    await until('mixed batch', () => n.all('session.items').length === (updateFirst ? 1 : 2))
+    assert.equal(n.last('session.items').update, true)
+    assert.equal(n.last('session.items').items.length, 2)
+  }
+  rt.append('s1', { items: [], fromSeq: 7, toSeq: 8, history: 'h' })
+  await until('plain batch', () => n.all('session.items').length === 3)
+  assert.equal(n.last('session.items').update, undefined)
+})
+
+test('watch catch-up reports empty histories at equal or lower cursors and resumes after rewind', async (t) => {
+  const { page } = await import('../index.js')
+  for (const toSeq of [20, 5, 0]) {
+    await t.test(`cursor ${toSeq}`, async (t) => {
+      const n = await startFakeNode(t)
+      const rt = createRuntime(minimal({ cursor: async () => toSeq, items: async (params) => page([], params, { history: 'rewritten', toSeq }) }), { runtime: 'toy', socketPath: n.path })
+      t.after(() => rt.stop())
+      rt.start()
+      await n.ready
+      await n.peer.call('session.watch', { session_id: 's1', since_seq: 20 })
+      assert.equal(n.all('session.items').length, 1, 'an empty history still reaches the watcher')
+      assert.equal(n.last('session.items').history, 'rewritten')
+      assert.equal(n.last('session.items').to_seq, toSeq)
+      if (toSeq < 20) assert.equal(n.last('session.items').from_seq, 0)
+      rt.append('s1', { items: [{ id: 'next', seq: toSeq + 1 }], fromSeq: toSeq, toSeq: toSeq + 1, history: 'rewritten' })
+      await until('content after rewind', () => n.all('session.items').length === 2)
+      assert.equal(n.last('session.items').to_seq, toSeq + 1)
+    })
+  }
+})
+
+test('an explicit zero start resets append watermarks without a new history', async (t) => {
+  const n = await startFakeNode(t)
+  const rt = createRuntime(minimal({ cursor: async () => ({ history: 'h', to_seq: 20 }) }), { runtime: 'toy', socketPath: n.path })
+  t.after(() => rt.stop())
+  rt.start()
+  await n.ready
+  await n.peer.call('session.watch', { session_id: 's1' })
+  rt.append('s1', { items: [], fromSeq: 0, toSeq: 5, history: 'h' })
+  await until('explicit reset', () => n.all('session.items').length === 1)
+  assert.equal(n.last('session.items').to_seq, 5)
+  rt.append('s1', { items: [{ id: 'next', seq: 6 }], fromSeq: 5, toSeq: 6, history: 'h' })
+  await until('content after reset', () => n.all('session.items').length === 2)
+  assert.equal(n.last('session.items').to_seq, 6)
 })
 
 test('a capped watch catch-up says there is more after its last batch', async (t) => {
