@@ -294,7 +294,7 @@ func (s *Service) workWake(ctx context.Context, v *workView, k [2]string, now ti
 			return
 		}
 		e.Retries++
-		text, kind = prompts.RenderAgentLimitContinue(), "limit_continued"
+		text, kind = prompts.RenderAgentLimitContinue(answerLanguage(s.hello(ctx).Locale)), "limit_continued"
 	case e.Work.On == proto.WaitTransient:
 		e.Retries = min(e.Retries+1, 1<<30)
 		text, kind = continueText, "continued"

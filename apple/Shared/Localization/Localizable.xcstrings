@@ -8436,29 +8436,6 @@
         }
       }
     },
-    "%lld just finished [Home Widgets]" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld just finished"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld 个刚完成"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld件が完了"
-          }
-        }
-      }
-    },
     "%lld knowledge points" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -83717,7 +83694,7 @@
       },
       "extractionState" : "manual"
     },
-    "Just Finished" : {
+    "Just finished [State Names]" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
@@ -83730,29 +83707,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "刚做完待看"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "完了したばかり"
-          }
-        }
-      }
-    },
-    "Just Finished [Home Widgets]" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Just Finished"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "刚完成"
           }
         },
         "ja" : {
