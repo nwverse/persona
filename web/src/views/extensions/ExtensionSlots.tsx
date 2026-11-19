@@ -8,7 +8,7 @@ import { href, navigate, onLinkClick, type Route } from "../../lib/router";
 import { useKnownDefault } from "../../lib/manager-choice";
 import { useStore } from "../../lib/store";
 import { t } from "../../i18n";
-import { cx, EASE, IconButton, Loading } from "../../ui/atoms";
+import { cx, EASE, IconButton, Loading, Spinner } from "../../ui/atoms";
 import { Icon, type IconName } from "../../ui/icons";
 import { lazyPage } from "../../lib/lazy-page";
 import { NEW_ICON_GLYPH } from "./icon-map";
@@ -79,7 +79,8 @@ export function ExtensionNavPage({ extension, ui, onToggleSidebar }: { extension
   );
 }
 
-/** The cards on "Overview" (overview_card), one row under the agents' summary: one card full width, more two a row;
+/** The cards on "Overview" (overview_card), under the agents' summary and what waits for the owner (Needs you, Stuck;
+ *  #11092): one card full width, more two a row;
  *  on a page wide enough for two columns of rows, a lone card takes one of them. */
 export function OverviewCards() {
   const cards = useExtensionSlot("overview_card");
@@ -87,6 +88,8 @@ export function OverviewCards() {
   return (
     // a card is never wider than one of the overview's two columns of rows below it (Home's GRID.rows, from 60rem of
     // the page): alone at 1920 px it stretched its chart to 1540 px of sparse bars, and to 1300 px at 1680
+    // the cards of a row are one height (the grid's default stretch): each as tall as its own content left a gap under
+    // the shorter one in every row, and the rows read as ragged (#11093 tried it, #11109 took it back)
     <section aria-label={t("extensions-extensionslots.extensions")} className={cx("grid grid-cols-1 gap-3 @min-[60rem]:grid-cols-2", cards.length > 1 && "md:grid-cols-2")}>
       {cards.map((c, i) => (
         <OverviewCard key={`${c.extension}/${c.id}`} place={c} i={i} />
@@ -114,7 +117,7 @@ function OverviewCard({ place, i }: { place: UIPlace; i: number }) {
     <div
       data-extension-card={`${place.extension}/${place.id}`}
       onClick={open}
-      className={cx("flex min-w-0 flex-col rounded-card bg-surface pb-1.5 shadow-card", to && "cursor-pointer transition-colors hover:bg-inset")}
+      className={cx("group/card flex min-w-0 flex-col rounded-card bg-surface pb-1.5 shadow-card", to && "cursor-pointer transition-colors hover:bg-inset")}
       style={{ animation: `fade-up 420ms ${EASE} ${Math.min(i, 6) * 50}ms both` }}
     >
       <div className="flex min-w-0 items-center gap-2 px-4 pt-3 pb-0.5">
@@ -126,10 +129,15 @@ function OverviewCard({ place, i }: { place: UIPlace; i: number }) {
         ) : (
           <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink">{place.title}</span>
         )}
+        {/* its last view is on screen while it is drawn again (KeptView): a quiet mark, only once that takes a moment */}
+        <span aria-hidden data-card-updating className="hidden shrink-0 group-has-[[data-kept-view]]/card:inline-flex" style={{ animation: `fade-in 200ms ${EASE} 600ms both` }}>
+          <Spinner size={10} />
+        </span>
         {name && <span data-extension-name className="max-w-[45%] shrink-0 truncate text-[11px] text-ink-3">{name}</span>}
       </div>
+      {/* `remember`: a card drawn before is there at once, as tall as it was, while its extension draws it again (#11091) */}
       <Suspense fallback={<Loading />}>
-        <OwnerScope extension={place.extension}><ExtensionUI extension={place.extension} ui={place.id} context={context} compact onMissing={() => setGone(true)} /></OwnerScope>
+        <OwnerScope extension={place.extension}><ExtensionUI extension={place.extension} ui={place.id} context={context} compact remember onMissing={() => setGone(true)} /></OwnerScope>
       </Suspense>
     </div>
   );

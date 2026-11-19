@@ -10,8 +10,9 @@ import (
 	"github.com/nwverse/persona/server/internal/identity"
 )
 
-// managerDirCLI is fakeCLI that also notes the directory each process runs in (one line per start).
-const managerDirCLI = `pwd -P >> "$CLI_FAKE_DIR/cli-pwd"
+// managerDirCLI is fakeCLI that also notes the directory each process runs in (one line per start). The sign-in
+// probe a cold start makes first (claude auth status, claudeauth.go) runs elsewhere and is no start.
+const managerDirCLI = `case " $* " in *" auth status "*) ;; *) pwd -P >> "$CLI_FAKE_DIR/cli-pwd" ;; esac
 ` + fakeCLI
 
 // A conversation of a manager runs in that manager's assistant directory (identity.AssistantDirName) on every message,

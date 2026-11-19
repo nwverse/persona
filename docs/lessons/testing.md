@@ -792,7 +792,7 @@ Retain allow/deny assertions for data directories, private tmp, and proxy. Negat
 
 - Three-page-shell right-swipe regressions must end at the same height as the message row, not drag from a top row to window center. Header changes can make that path exceed 45°, testing vertical scrolling instead. Use a horizontal in-row path, then verify the target page; such failures do not prove missing paging capability.
 
-- New `proto.Features` capabilities also require updating shared hello/manifest wire samples (`go test ./internal/hub -run '^TestWireSamples$' -update`). Check the diff contains only intended flags; capability-handler-only tests miss protocol-snapshot failures.
+- A new or removed feature flag no longer changes the shared hello and health wire samples: they carry a fixed list (`wireFeatures` in `server/internal/hub/wire_samples_test.go`, #11022), and `TestHelloAndHealthCarryTheHubsFeatures` checks the real one. Other new hello or health fields still need `go test ./internal/hub -run '^TestWireSamples$' -update`; check the diff contains only the intended fields.
 
 - SwiftUI Form Toggle accessibility frames can span the row. Taps at row fractions 0.88 or 0.95 can still miss on different devices (no POST). Select internal `toggle.switches.firstMatch`, wait for enabled/hittable, tap center, and assert values after service response. After adding system-message fixtures, locate quoted messages by ID, not the last array item, so mock 500s are not blamed on live sync.
 - Collapsed shell status rows retain the previous toast for transition; XCUITest nodes can still `exists` while video shows nothing. To wait until later long presses are unobstructed, assert not `hittable`, not destroyed.
@@ -1090,6 +1090,16 @@ Use an executable fixture that logs calls and returns the documented result: 0 f
 
 In a UTF-8 locale, `/usr/bin/awk` on macOS (version 20200816) stops at the first invalid byte sequence with `towc: multibyte conversion failure`, prints the record's raw bytes and exits 2; gawk and mawk on Linux read on, so CI never sees it. `install.sh` read every launchd file with awk, and vendors often ship binary property lists: each printed its bytes, and the Python tests reading the script's output with `text=True` crashed with `UnicodeDecodeError`. An awk that reads files it did not write runs with `LC_ALL=C`; plain substring matches mean the same in bytes. The Mac in hand may have no binary plist at all: the regression test writes one with `plistlib` (`FMT_BINARY`) into its own home.
 
+## mawk holds a pipe's lines until 4 KiB or EOF (2026-11-19, #11017)
+
+mawk, the awk of Debian and Ubuntu (and so most likely of the hosted Linux runners, which install no gawk), reads a
+pipe in 4 KiB blocks and handles no line until a block fills or the input ends; `fflush()` only flushes its output.
+macOS awk, busybox awk and gawk handle each line as it arrives, so a filter meant to show a line live works on a Mac
+and stays silent on Linux until the producer exits: check-fast's "waiting for a go slot" line came out after the whole
+wait. `mawk -W interactive` fixes mawk but other awks reject it. A filter that must react to a line at once reads it in
+bash (`IFS= read -r`, which takes a pipe a byte at a time) and hands the rest to `cat`; check the live behaviour in a
+Debian container, not only on the Mac.
+
 ## Import guards read source files, not `go list` (2026-11-06, #5814)
 
 `go list -deps` resolves imports for the host's GOOS / GOARCH and no build tags, so a `server/internal` import in a `_darwin.go` file, a `//go:build public` file (release builds use the tags of `server/build-tags.txt`, `public` among them) or a `//go:build ignore` generator passed the plugin guard on Linux. A guard that must hold for every build parses each `.go` file's imports with `go/parser` (`parser.ImportsOnly`), whatever its constraints, and keeps `go list` as a second view of indirect dependencies, run for every GOOS / GOARCH pair the server ships and every set of build tags it is built with (with `CGO_ENABLED=0`, as the builds are made): an `_arm64.go` file is as invisible to an amd64 host as a `_darwin.go` file is to Linux, and a `// +build !public` line still counts.
@@ -1254,3 +1264,14 @@ that open with a TLS record (first byte `0x16`) and replays that byte before for
 - Wrap the replayed connection by embedding the `net.Conn` interface, not `*net.TCPConn`. Embedding the concrete type
   promotes `WriteTo`, which `io.Copy` uses instead of the overriding `Read`, so the replayed byte is silently dropped
   and every forwarded TLS handshake fails.
+
+- A fresh test repository's first branch is whatever the machine's `init.defaultBranch` says (#11017): `main` on one
+  machine, `master` on another. A test that then runs `git branch main` or `git checkout -b master` fails only where
+  the setting matches. Name the first branch (`git init --initial-branch=<name>`, or `git branch -M` after the first
+  commit), and run the suite with `GIT_CONFIG_GLOBAL` pointing at a file that sets `init.defaultBranch` to `main`, then
+  to `master`.
+
+- A test that waits for a signal to end a command must give the command far longer to live than the wait (#11017). A
+  command that sleeps 20 s under a 20 s wait passes when the signal is lost and fails on a slow machine when it was
+  not, so the result says nothing. Let it sleep ten times the wait, keep the wait generous, and on a timeout say which
+  side stalled: the command never got the signal, or it got it and its parent had not exited yet.
