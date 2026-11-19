@@ -286,3 +286,31 @@ func TestMainChatPointsAnAgentLauncherAtTheAssistantDeclaredForIt(t *testing.T) 
 		t.Fatalf("the declared assistant runtime: %v %v", p, err)
 	}
 }
+
+// Plain CLI fallbacks for agy and omp (Source "zshrc", Assistant false when their companion runtime is away) stay out
+// of the assistant picker and in unavailable; once the companion connects with Assistant true, agy is offered.
+func TestPlainAgyAndOmpRequireConnectedAssistantRuntime(t *testing.T) {
+	f := newFakeHub().withMachine()
+	f.launcherList = []proto.Launcher{
+		{Name: "claude"},
+		{Name: "agy", Source: "zshrc", Agent: "agy"},
+		{Name: "omp", Source: "zshrc", Agent: "omp"},
+	}
+	s := newTestService(t, f)
+	putLaunchers(t, s, storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "agy-gw", Agent: "agy", BaseURL: "https://gw.example", Model: "m1"}})
+	if got := strings.Join(pickerNames(t, s, "assistant"), ","); got != "claude" {
+		t.Fatalf("assistant without runtime: %s", got)
+	}
+	if got := strings.Join(pickerNames(t, s, "agent.new"), ","); got != "claude,agy,omp,agy-gw" {
+		t.Fatalf("agent.new without runtime: %s", got)
+	}
+
+	f.launcherList = []proto.Launcher{
+		{Name: "claude"},
+		{Name: "agy", Source: "agy", Agent: "agy", Assistant: true},
+		{Name: "omp", Source: "zshrc", Agent: "omp"},
+	}
+	if got := strings.Join(pickerNames(t, s, "assistant"), ","); got != "claude,agy,agy-gw" {
+		t.Fatalf("assistant with agy runtime: %s", got)
+	}
+}

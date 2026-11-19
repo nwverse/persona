@@ -15,6 +15,25 @@ requesting context or submitting model input, and keep the new conversation idle
 in the session record until the first successful delivery. A manager test with a fake node cannot catch this: exercise
 the real node against a recording CLI and runtime, including prewarmed sessions, whitespace, images and node restart.
 
+## Progress snapshots must be JSONB-safe (#9755)
+
+A Go map key joined with NUL marshals to `\u0000`, which PostgreSQL JSONB rejects with `22P05`.
+Hash a structured machine/session pair instead, validate snapshot strings before saving, and remove NUL from
+model-written summaries without altering literal backslash-u0000 text. Exercise multiple Agent answers against
+real PostgreSQL: an in-memory JSON store accepts the very payload the production database refuses.
+If saving an assessment fails, expose the error and signal supervision without counting undurable evidence.
+A history-write failure must not suppress escalation from an assessment already committed with its schedule.
+Progress also depends on identity and evidence quality, not just timestamps: use the persisted conversation origin
+to exclude every past patrol conversation, and retain per-Agent unreadable markers so a first successful read cannot
+invent progress. Retain older known evidence so partial node failures cannot hide a real change, without suppressing
+newly linked workers' genuine output. Equal-time runs need their distinct
+IDs and dispatch order when recovering a delayed history write. Recover a watcher's evicted history row under the
+same ID, within the existing cap; history retention must not determine whether a completed run is assessed.
+Runtime failures and their automatic retries belong to the scheduler's failure handling, not the no-progress count.
+Distinguish an assessment commit failure from its history projection failing: keep a committed result and its count
+while retrying the latter. A task-leader Agent reference is not a conversation identity; use the existing authority
+of the conversation above that leader for scheduler-triggered worker decisions, without taking over the worker.
+
 ## Journal recovery before changing live update files (#6921)
 
 A fence saying an update started cannot restore a Web directory renamed before `pending.json`
@@ -501,10 +520,13 @@ cost is smaller than a broken image. When something has to be listed by hand in 
 
 ## Sharing frontiers and migration lanes (#3604)
 
-- Migration numbers are global across the hub and manager sets, even though their
-  files live in separate directories. Inventory both sets in every worktree;
-  distinct filenames with the same numeric prefix still collide. Renumber only
-  unpublished migrations, never an applied migration or the guard.
+- Hand-picked migration numbers were global across the hub and manager sets, even
+  though their files live in separate directories: distinct filenames with the same
+  prefix collided. New migrations are named by the UTC second they are written
+  (`docs/lessons/workflow.md`), so nobody picks a number, and two files of one second
+  may be one in each set since each records its own part (one file in both sets is
+  still refused); move only an unpublished migration to another second, never an
+  applied migration or the guard.
 - Future publication needs an immutable enable-window frontier **and** a moving
   verified scan checkpoint. Using the previous scan's EOF as the window boundary
   drops a new pending turn when it completes on a later scan. Preserve first-seen
@@ -2697,6 +2719,18 @@ nothing ran the old build after the new one.
   it. When a fence refuses a live, authenticated client, either let it prove the move or tell it plainly what to do;
   and check what a "looks unused" revocation still owns before treating it as cleanup.
 
+## A restore check must not start what it checks (2026-11-18, #10497)
+
+- Starting a restored hub or manager to see whether the restore worked changes the state under test: startup marks
+  pending client operations unknown, expires stale interactions, drains the manager's outbox and starts connectors,
+  extensions and nodes. Read the restored databases with `default_transaction_read_only=on` instead, and prove the
+  setting holds with one guarded write that must fail with SQLSTATE 25006 (psql prints the SQLSTATE only with
+  `VERBOSITY=verbose`; matching the message text would also accept unrelated failures).
+- Killing a `docker run` client on a timeout leaves its container running. Name every container, and remove it by name
+  (`docker rm --force`) after the client exits or is killed; then check with `docker container inspect` that it is gone.
+- `backup verify` passing says nothing about tasks, approvals or outboxes: the drill's `--checks verify-only` passes a
+  restore whose approval was resolved afterwards, which the read-only acceptance fails.
+
 ## A new screenshot is not an old resolved exchange (#9124)
 
 Triage reads `[Image: ...]` as text, not the image's contents. Preserve the newest message separately from the
@@ -2711,3 +2745,44 @@ those inputs. Compare those callers' rendered input bytes, not just triage's gol
 The tier criteria are shared with event grouping. Describe each event's assigned new activity and unresolved
 requests, not one "current new message" for an entire batch. A mixed-event regression should keep a new request
 and screenshot separate from another event's final acknowledgement, while retaining each event's overall tier.
+
+## Moving an element to the front with `slices.Delete` in the same expression (2026-11-19, #10659)
+
+`append([]T{s[i]}, slices.Delete(s, i, i+1)...)` sometimes reads `s[i]` after `Delete` ran. Go doesn't fix the order
+between an index expression and a call in the same expression, and `Delete` clears the slot it frees, so the moved
+element came out as a zero value (a nil func in `link.dialActive`'s route list, which panicked). Copy the element into a variable
+first, then delete and insert.
+
+`golang.org/x/net/http/httpproxy.FromEnvironment` reads `https_proxy` before `HTTPS_PROXY` (lower case first) in the
+version this repository uses. Older notes and reviews often say upper case first. Check the module's source before
+documenting an order.
+
+## Switching an ssh computer to Persona Link over ssh (#10662)
+
+- Every gate on the Persona Link path checks the entry's kind: making a code for an existing computer, redeeming it, the hub
+  taking `/api/v1/link`, and the manager taking the relayed link. A switch that pairs first and changes the kind later would
+  have to widen one of them. Change the kind first, in one hub step with the code (`devices.link_switch.begin`). The cost
+  is a few seconds offline, while the old ssh connection ends and the new link comes up.
+- `persona-link install` is meant for a person at the computer. It does not refuse an existing `link.json`. It always restarts
+  the connector, and exits 0 when the link connects even if its node step failed. `persona-link node uninstall` removes
+  any `personad-node.service`, whoever wrote it. A remote flow must find out what is there before it starts, record that, and
+  undo only what it added. It judges success by the node answering over the new link, not by the installer's exit code.
+- Without linger (`/var/lib/systemd/linger/<user>`), the user's systemd manager ends with the last session. Over ssh, that
+  session is the switch's own. The connector would start, connect, and stop again once the installer's ssh session closed.
+  Refuse instead.
+- ssh reads `~/.ssh/config` from the passwd entry's home directory, not from `$HOME`. To keep a test hub's ssh off the
+  user's config and keys, put a wrapper named `ssh` that runs `/usr/bin/ssh -F <own config>` first on its PATH
+  (`scripts/test/link_switch_e2e.py`).
+- systemd as PID 1 in a container needs a writable cgroup. Plain `docker run` (cgroup v2, private namespace) exits 255 with
+  "Failed to create /init.scope control group: Read-only file system". `--privileged --cgroupns=private` works, and
+  `loginctl enable-linger` then gives `testuser` a user manager reachable over ssh.
+- **A rollback must not take away the only way back.** The first version gave up asking the hub to end a failed switch after
+  2 minutes, then removed Persona Link from the computer anyway. The hub still said `kind: link`, and nothing asked again, so
+  the computer had neither a link nor SSH. Undo the side that decides how the computer is reached (the hub's entry) first,
+  and keep asking until it answers. Remove things from the computer only after that. `scripts/test/link_switch_e2e.py
+  --scenario hub_pause` stops the hub's slot process for 150 s to check this.
+- **Proof that something began must be written before it begins, under the same lock as anything that reads it.** An end
+  read "has it begun?" before taking the lock its begin held, a begin wrote its audit row after changing the kind, and the
+  guards against moving a switching computer were checked in memory and acted on without a lock. Each of these could leave
+  the computer at `kind: link` with nobody able to undo it. Write the intent row first and decide under the lock. Keep what
+  must survive a restart in the database.

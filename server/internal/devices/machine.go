@@ -59,6 +59,8 @@ type MachineConfig struct {
 	ClaudeGlobalHooks bool `json:"claude_global_hooks,omitempty"`
 	// UsageWindows false: the node does not read the agents' subscription rate-limit windows (hub/config.go, #2432).
 	UsageWindows *bool `json:"usage_windows,omitempty"`
+	// ExtraPath are directories in front of the node's PATH (hub/config.go, #10127).
+	ExtraPath []string `json:"extra_path,omitempty"`
 }
 
 // Machine is the manager's connection to one node: a local subprocess, `ssh host personad node --stdio`, a tailcat
@@ -226,9 +228,9 @@ func (m *Machine) snapshot() proto.Machine {
 	d := m.d
 	engine := d.engineOf(m.cfg.ID) // before m.mu: it may read settings
 	choice := d.engineChoiceOf(m.cfg.ID)
-	m.mu.Lock()
-	info := m.info
-	m.mu.Unlock()
+	info, online, deploying := m.linkSwitchFacts()
+	// Switching to Persona Link (link_switch.go): before m.mu, as it reads the hub's handover.
+	linkSwitch := d.linkSwitchView(m, info, online, deploying)
 	// The build its platform resolves to (packages.go: the hub's own, or the newest release this manager drives), and
 	// why none can be sent; before m.mu, as they read the hub's handover.
 	version, noPackage := d.hubVersion(), error(nil)
@@ -256,6 +258,9 @@ func (m *Machine) snapshot() proto.Machine {
 		icon = "laptop"
 	}
 	blocked := m.canDeployLocked()
+	if blocked == nil && linkSwitch != nil && linkSwitch.Reason == proto.LinkSwitchReasonInProgress {
+		blocked = errLinkSwitchDeploy
+	}
 	onlyPackage := blocked == nil && noPackage != nil // the node could take an update; the hub has none for it
 	if blocked == nil {
 		blocked = noPackage
@@ -292,6 +297,7 @@ func (m *Machine) snapshot() proto.Machine {
 		Clipboard:    m.clipboardStateLocked(clipboardOn),
 		FileTransfer: m.fileTransferState(fileTransferOn),
 		ClaudePlugin: m.info.ClaudePlugin,
+		LinkSwitch:   linkSwitch,
 	}
 }
 
@@ -319,6 +325,9 @@ func (m *Machine) reconnect() {
 	}
 }
 
+// defaultRemoteBin is the program an ssh machine's node runs when its entry names none (remote_bin).
+const defaultRemoteBin = "~/.persona/bin/personad"
+
 func (m *Machine) command(ctx context.Context) *exec.Cmd {
 	if m.nodeCmd != nil {
 		return m.nodeCmd(ctx)
@@ -329,7 +338,7 @@ func (m *Machine) command(ctx context.Context) *exec.Cmd {
 	}
 	bin := m.cfg.RemoteBin
 	if bin == "" {
-		bin = "~/.persona/bin/personad"
+		bin = defaultRemoteBin
 	}
 	host := m.cfg.SSHHost
 	if host == "" {

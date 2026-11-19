@@ -17,6 +17,8 @@ server/internal/hub/testdata/route_scopes.txt merge=union
 server/internal/hub/testdata/hub_routes_allowed.txt merge=union
 # guarded by TestHubStoreStaysSmall (server/internal/hub/architecture_guard_test.go)
 server/internal/hub/testdata/hub_store_methods.txt merge=union
+# guarded by test_the_list_is_sorted_unique_and_well_formed (scripts/release/test_debug_switches.py)
+scripts/release/debug_switches.txt merge=union
 
 # Generated outputs: GitHub folds their diffs. Resolve a conflict in one by rerunning its generator, never by hand. Only
 # files a generator in this repository rewrites from the checkout belong here, each pattern matching a tracked file.
