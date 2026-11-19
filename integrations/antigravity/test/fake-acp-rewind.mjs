@@ -25,6 +25,9 @@ const server = createServer(async (req, res) => {
     return
   }
   if (method === 'GetCascadeTrajectorySteps') {
+    while (JSON.parse(readFileSync(`${directory}/trajectory.json`, 'utf8')).holdErrors) {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
     res.end(JSON.stringify({ steps: (snapshot.trajectory.steps || []).slice(params.stepOffset) }))
     return
   }

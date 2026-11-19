@@ -95,7 +95,11 @@ internal object ChatLinks {
     fun toPreload(items: List<Item>, now: Instant): List<String> {
         val cutoff = now.minus(Duration.ofMinutes(15))
         return items.asReversed().asSequence().take(40)
-            .filter { it.role == "assistant" && it.kind == "text" && (parseTime(it.ts) ?: Instant.EPOCH).isAfter(cutoff) }
+            .filter { it.role == "assistant" && it.kind == "text" && it.source == null && it.from.isNullOrBlank() &&
+                (parseTime(it.ts) ?: Instant.EPOCH).isAfter(cutoff) }
+            // WebView preloads go directly to the site. A picture-bearing reply, even one still arriving or
+            // using a reference-style image, only retrieves its pictures through the reply image reader.
+            .filterNot { "![" in it.text.orEmpty() }
             .flatMap { item -> matches(item.text.orEmpty()).asSequence().map { it.url } }
             .filter { url -> runCatching { URI(url).host }.getOrNull()?.contains('.') == true }
             .distinct().take(3).toList()

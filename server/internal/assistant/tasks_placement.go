@@ -358,6 +358,17 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if len(t.Attachments)+len(t.Mentioned) > 0 {
 		prompt = withAttachments(prompt, s.handAttachments(ctx, t.AttachFrom, m.ID, t.Attachments, t.Mentioned))
 	}
+	// A to-do's stored pictures go with every start for it, as they go with the app's manual handoffs (#11084).
+	// The node decodes them on this machine; any pictures the owner attached to this turn stay in the prompt too.
+	if t.TodoID != "" {
+		if current, ok := s.todoNow(t.TodoID); ok && len(current.Images) > 0 {
+			rows, err := s.todoImageContents(ctx, current)
+			if err != nil {
+				return "", "", err
+			}
+			params["images"] = todoProtoImages(rows)
+		}
+	}
 	params["cwd"], params["prompt"], params["tab_name"] = t.Cwd, prompt, s.tabName(ctx, t.Title)
 	if t.WaitInputID != "" {
 		params["client_msg_id"] = t.WaitInputID

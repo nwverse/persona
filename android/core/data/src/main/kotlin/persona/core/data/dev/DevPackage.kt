@@ -92,13 +92,13 @@ object DevPackage {
         val files = store.eventFiles()
         val cutoff = now.minusSeconds(DevStore.eventAgeSeconds)
         val eventLines = files.flatMap { file ->
-            file.readLines().filter { line ->
-                val event = event(line) ?: return@filter false
-                if (event.at < cutoff) return@filter false
+            file.readLines().mapNotNull { line ->
+                val event = event(line) ?: return@mapNotNull null
+                if (event.at < cutoff) return@mapNotNull null
                 val category = if (event.kind in energyKinds) DevCategory.Energy else DevCategory.Logs
-                category in categories
+                if (category in categories) event.at to line else null
             }
-        }
+        }.sortedBy { it.first }.map { it.second }
         File(folder, "events.jsonl").writeText(jsonLines(eventLines))
 
         val errorLines = if (DevCategory.Errors in categories) store.errorLines(now) else emptyList()

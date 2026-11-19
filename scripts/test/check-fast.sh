@@ -86,8 +86,9 @@
 #                              test_release_debug_guard.py and scripts/test/test_apple_release_switch_names.py;
 #                              scripts/test/go_trimpath.sh also scripts/ci/test_ci.py and
 #                              scripts/test/test_check_fast_inputs.py (they run server.sh and check-fast.sh with it);
-#                              scripts/heavy_slot.py also scripts/test/test_check_fast_inputs.py (it runs check-fast.sh
-#                              with it); check-fast.sh (either path) and scripts/test/test_check_fast.py also
+#                              scripts/heavy_slot.py also scripts/test/test_check_fast_inputs.py and test_android_sh.py
+#                              (they run check-fast.sh and android.sh with it); check-fast.sh (either path) and
+#                              scripts/test/test_check_fast.py also
 #                              scripts/test/test_check_fast_guards.py and test_check_fast_inputs.py (the rest of
 #                              check-fast.sh's tests, which import test_check_fast.py's fixtures); scripts/ci/paths.py
 #                              also test_ci.py, test_check_fast_inputs.py and scripts/ci/test_affected_drift.py, this
@@ -108,9 +109,12 @@
 #                              test_apple_no_callkit.py (no CallKit import or link setting, #9290; also for
 #                              scripts/persona_config.py, whose xcconfig it reads); the iOS/macOS builds and tests
 #                              are skipped with a note (they need a Mac)
-#   apple/project.yml, apple/{lean-dev-build,watch-and-share}.yml, scripts/app/{sim,ui-test}.sh,
-#   scripts/release/release.sh, scripts/ci/apple.sh
-#                              also scripts/test/test_apple_dev_build.py (the development build's switch and stamp, #10713)
+#   apple/project.yml, apple/{app-entitlements,watch-and-share,lean-dev-build,siri-calls}.yml,
+#   scripts/app/{sim,ui-test,perf-test,share-from-apps,lean-build-note,island_peer}.sh,
+#   scripts/diag/stream-scroll/run-ios.sh, scripts/release/release.sh, scripts/ci/apple.sh,
+#   native/iphone-bridge/build.sh
+#                              also scripts/test/test_apple_dev_build.py (the development build's switch and stamp, the
+#                              scripts that generate a project or build the Rust core, the lean build's note; #10713)
 #   native/app-core/scripts/build-apple.sh
 #                              scripts/test/test_app_core_apple_build.py (the shared XCFramework cache, #10713)
 #   deploy/docker/**, docs/operations/docker.md, Dockerfile
@@ -141,6 +145,11 @@
 # the Android gradle build (scripts/app/android.sh), or the full server suite against real Postgres
 # (scripts/test/test-server.sh).
 set -uo pipefail
+# A caller that closed stderr (2>&-) would make every redirection that copies it fail: each job subshell's 4>&2, so no
+# check could report and every one would end "no status" (#11250). Open it on /dev/null instead: the checks run, only
+# the live slot lines are lost, and no pipe or file opened later can take the free fd 2 (bash leaves a process
+# substitution's pipe there). Copying fd 2 fails only when it is closed, and the error message then goes nowhere.
+: 9>&2 || exec 2>/dev/null
 
 CALLER_DIR=$PWD  # a relative --changed-from file is read from here
 cd "$(dirname "$0")/../.."
@@ -888,9 +897,10 @@ else
         # also covers nested paths such as scripts/hooks/foo.sh, not only files directly under scripts/.
         PRNEEDS=1; EXTSCHEMA=1 ;;
       apple/*) APPLE=1 ;;
-      # The suites guarding docs, markdown and deploy/docker (and the root Dockerfile) are added with the scripts/
-      # unittests below.
+      # The suites guarding docs, markdown and deploy/docker (and the root Dockerfile), and the suites of two native/
+      # build scripts, are added with the scripts/ unittests below.
       docs/*|deploy/docker/*|Dockerfile|*.md) ;;
+      native/app-core/scripts/build-apple.sh|native/iphone-bridge/build.sh) ;;  # their suites, below too
       *) UNMAPPED=1; UNMAPPED_FILES+=("$f") ;;
     esac
   done <<< "$CHANGED"
@@ -937,18 +947,56 @@ if [ "$ALL" -eq 0 ]; then
   done <<< "$CHANGED"
 fi
 
+# search <what> <output file> <git grep arguments...> runs git grep into the file; no match leaves it empty. Any other
+# failure stops the plan (exit 2): the checks the search would have found are not run otherwise, and nothing would
+# say so. One alternation of every changed client path once grew past what git grep compiles on a large apple/ diff,
+# and every Go reader of those files was dropped without a word (#11250).
+search() {
+  local _what=$1 _out=$2 _rc
+  shift 2
+  git grep "$@" > "$_out" 2> "$WORK/search.err"
+  _rc=$?
+  [ "$_rc" -le 1 ] && return 0
+  echo "check-fast: searching $_what failed (git grep exit $_rc): $(head -c 300 "$WORK/search.err" | tr '\n' ' ')" >&2
+  echo "check-fast: no plan made; the checks that read the changed files cannot be picked" >&2
+  exit 2
+}
+
 # server_readers prints the package directory (relative to server/) of each server _test.go that matches the extended regex $1
 # outside a // comment line. Finding them at run time keeps a new reader mapped without an edit here.
 server_readers() {
-  git grep -nE "$1" -- 'server/*_test.go' 2>/dev/null \
-    | grep -vE '^[^:]*:[0-9]+:[[:space:]]*//' | cut -d: -f1 | sort -u \
+  search "the server tests for $1" "$WORK/search.out" -nE "$1" -- 'server/*_test.go'
+  LC_ALL=C grep -vE '^[^:]*:[0-9]+:[[:space:]]*//' "$WORK/search.out" | cut -d: -f1 | sort -u \
     | while IFS= read -r _file; do _dir=$(dirname "$_file"); printf '%s\n' "${_dir#server/}"; done | sort -u
+}
+
+# client_named writes CLIENT_NAMED once a run: "<path><tab><package dir>" for each whole "apple/…" or "android/…"
+# string in a server _test.go outside a // comment line, the text between its quotes, so a longer string that only
+# mentions a file ("apple/Shared/Models.swift: Fold") names that longer string. A plan matches the changed client paths
+# against it, so a diff of thousands of client files still costs one search.
+CLIENT_NAMED=""; CLIENT_NAMED_READ=0
+client_named() {
+  [ "$CLIENT_NAMED_READ" -eq 1 ] && return 0
+  CLIENT_NAMED="$WORK/client-named.txt"
+  search "the server tests for the client sources they name" "$WORK/client-grep.txt" \
+    -nE '"(apple|android)/[^"]*"' -- 'server/*_test.go'
+  LC_ALL=C grep -vE '^[^:]*:[0-9]+:[[:space:]]*//' "$WORK/client-grep.txt" | LC_ALL=C awk '
+    {
+      file = $0; sub(/:.*/, "", file)
+      dir = file; sub(/\/[^\/]*$/, "", dir); sub(/^server\//, "", dir)
+      text = $0; sub(/^[^:]*:[0-9]+:/, "", text)
+      while (match(text, /"(apple|android)\/[^"]*"/)) {
+        print substr(text, RSTART + 1, RLENGTH - 2) "\t" dir
+        text = substr(text, RSTART + RLENGTH)
+      }
+    }' | LC_ALL=C sort -u > "$CLIENT_NAMED"
+  CLIENT_NAMED_READ=1
 }
 
 # Repository inputs that server tests read (the extra paths in server-test.yml's filter): a change to one also runs go
 # test on the packages that read it. Each regex matches the input as a path string or as filepath.Join elements.
 if [ "$ALL" -eq 0 ]; then
-  READER_RES=(); _client=""
+  READER_RES=(); _client=0
   while IFS= read -r f; do
     _re=""
     case "$f" in
@@ -958,13 +1006,10 @@ if [ "$ALL" -eq 0 ]; then
       integrations/*/*) _re='integrations/|"integrations"' ;;
       scripts/test/server_test_env.py) _re='server_test_env\.py' ;;
       docs/*) _re=$(printf '%s' "$f" | sed 's/[][\.^$*+?(){}|]/\\&/g') ;;  # docs/example-guide.md -> docs/example-guide\.md
-      # Client sources the Go contract tests read (internal/proto reads "apple/Shared/Models.swift"): only a test that
-      # names the whole path in quotes counts, not a longer string that mentions it ("apple/Shared/Models.swift: Fold").
-      apple/*|android/*) _client="${_client:+$_client|}$(printf '%s' "$f" | sed 's/[][\.^$*+?(){}|]/\\&/g')" ;;
+      apple/*|android/*) _client=1 ;;  # below
     esac
     [ -n "$_re" ] && { arr_has "$_re" "${READER_RES[@]:-}" || READER_RES+=("$_re"); }
   done <<< "$CHANGED"
-  [ -n "$_client" ] && READER_RES+=("\"($_client)\"")
   for _re in "${READER_RES[@]:-}"; do
     [ -n "$_re" ] || continue
     readers_of "$_re"
@@ -972,6 +1017,16 @@ if [ "$ALL" -eq 0 ]; then
       [ -n "$_g" ] && { arr_has "$_g" "${GO_GROUPS[@]:-}" || GO_GROUPS+=("$_g"); }
     done < "$READERS_FILE"
   done
+  # Client sources the Go contract tests read (internal/proto reads "apple/Shared/Models.swift"): only a test that names
+  # the whole path in quotes counts, not a longer string that mentions it (client_named).
+  if [ "$_client" -eq 1 ]; then
+    client_named
+    printf '%s\n' "$CHANGED" | LC_ALL=C grep -E '^(apple|android)/' > "$WORK/client-changed.txt"
+    while IFS= read -r _g; do
+      [ -n "$_g" ] && { arr_has "$_g" "${GO_GROUPS[@]:-}" || GO_GROUPS+=("$_g"); }
+    done < <(LC_ALL=C awk -F '\t' 'NR == FNR { changed[$0] = 1; next } $1 in changed { print $2 }' \
+               "$WORK/client-changed.txt" "$CLIENT_NAMED" | LC_ALL=C sort -u)
+  fi
 fi
 
 # runtime_named prints "<package> <path>" for each shared fixture or schema path (spec/..., schema/...) a file of an
@@ -979,8 +1034,9 @@ fi
 # (../../../spec/fixtures/input-clip/cases.json, ../../../schema/extension/examples/). CI's runtimes lane runs for all
 # of spec/ and schema/; check-fast runs the packages that read the changed path.
 runtime_named() {
-  git grep -nE '(spec|schema)/[A-Za-z0-9_.-]' -- 'integrations/*' 'sdk/ts/*' 2>/dev/null \
-    | grep -vE '^[^:]*:[0-9]+:[[:space:]]*(//|\*|#)' \
+  search "the runtime packages for the fixtures and schemas they name" "$WORK/runtime-grep.txt" \
+    -nE '(spec|schema)/[A-Za-z0-9_.-]' -- 'integrations/*' 'sdk/ts/*'
+  LC_ALL=C grep -vE '^[^:]*:[0-9]+:[[:space:]]*(//|\*|#)' "$WORK/runtime-grep.txt" \
     | while IFS= read -r _line; do
         case "$_line" in
           integrations/*/*) _pkg=${_line#integrations/}; _pkg="integrations/${_pkg%%/*}" ;;
@@ -993,7 +1049,11 @@ runtime_named() {
 
 # A changed spec/ or schema/ path also runs the runtime packages that read it: the path itself, or a directory it is in.
 if [ "$ALL" -eq 0 ] && printf '%s\n' "$CHANGED" | grep -qE '^(spec|schema)/'; then
-  if [ "$RUNTIME_NAMED_READ" -eq 0 ]; then RUNTIME_NAMED=$(runtime_named); RUNTIME_NAMED_READ=1; fi
+  # Not in $( ): a failed search must stop this shell, not a subshell.
+  if [ "$RUNTIME_NAMED_READ" -eq 0 ]; then
+    runtime_named > "$WORK/runtime-named.txt"
+    RUNTIME_NAMED=$(cat "$WORK/runtime-named.txt"); RUNTIME_NAMED_READ=1
+  fi
   while IFS= read -r f; do
     case "$f" in spec/*|schema/*) ;; *) continue ;; esac
     while read -r _pkg _path; do
@@ -1031,12 +1091,14 @@ script_test_add() {
     scripts/app/test_android_i18n_check.py|scripts/app/test_android_token_baseline.py|\
     scripts/app/test_android_motion_baseline.py|scripts/app/test_android_slot_order.py) ANDROID=1; return 0 ;;
   esac
+  # Already added: every file of a large diff adds the same few suites again, and the grep below is a process each.
+  arr_has "$1" "${SCRIPT_TESTS[@]:-}" && return 0
   [ -f "$1" ] || return 0
   if ! grep -q unittest "$1"; then
     arr_has "SKIP  $1 (not a unittest suite)" "${INFO[@]:-}" || INFO+=("SKIP  $1 (not a unittest suite)")
     return 0
   fi
-  arr_has "$1" "${SCRIPT_TESTS[@]:-}" || SCRIPT_TESTS+=("$1")
+  SCRIPT_TESTS+=("$1")
 }
 
 # The scripts/ unittests a change needs (#3968): each changed scripts/<dir>/test_*.py, and for each changed script
@@ -1055,15 +1117,16 @@ script_importers() {
   local _dir _mod _t
   _dir=$(dirname "$1"); _mod=$(basename "$1" .py)
   case "$_mod" in ""|*[!A-Za-z0-9_]*) return 0 ;; esac  # android-shards.py cannot be imported by name
-  git grep -lE "^[[:space:]]*(from[[:space:]]+$_mod[[:space:]]+import|import[[:space:]]+([A-Za-z0-9_]+[[:space:]]*,[[:space:]]*)*$_mod([[:space:],]|\$))" \
-      -- 'scripts/*test_*.py' 2>/dev/null \
-    | while IFS= read -r _t; do
-        case "${_t##*/}" in test_*.py) ;; *) continue ;; esac
-        [ "$_t" != "$1" ] || continue
-        if [ "$(dirname "$_t")" = "$_dir" ] || grep -qF "$_dir" "$_t" || grep -qE "/[[:space:]]*\"${_dir##*/}\"" "$_t"; then
-          printf '%s\n' "$_t"
-        fi
-      done
+  search "the scripts suites that import $1" "$WORK/importers-grep.txt" \
+    -lE "^[[:space:]]*(from[[:space:]]+$_mod[[:space:]]+import|import[[:space:]]+([A-Za-z0-9_]+[[:space:]]*,[[:space:]]*)*$_mod([[:space:],]|\$))" \
+    -- 'scripts/*test_*.py'
+  while IFS= read -r _t; do
+    case "${_t##*/}" in test_*.py) ;; *) continue ;; esac
+    [ "$_t" != "$1" ] || continue
+    if [ "$(dirname "$_t")" = "$_dir" ] || grep -qF "$_dir" "$_t" || grep -qE "/[[:space:]]*\"${_dir##*/}\"" "$_t"; then
+      printf '%s\n' "$_t"
+    fi
+  done < "$WORK/importers-grep.txt"
 }
 
 if [ "$ALL" -eq 1 ]; then
@@ -1081,7 +1144,12 @@ else
         case "$f" in *.sh) for _t in scripts/*/"test_${_name}_sh.py"; do script_test_add "$_t"; done ;; esac ;;
     esac
     # The suites that import a changed module, wherever they are (script_importers).
-    case "$f" in scripts/*.py) while IFS= read -r _t; do script_test_add "$_t"; done < <(script_importers "$f") ;; esac
+    # Through a file, not < <( ): a failed search must stop this shell, not a subshell.
+    case "$f" in
+      scripts/*.py)
+        script_importers "$f" > "$WORK/importers.txt"
+        while IFS= read -r _t; do script_test_add "$_t"; done < "$WORK/importers.txt" ;;
+    esac
     # The Linux suites in CI's Scripts tests job that guard files outside scripts/; a file can need several.
     case "$f" in
       docs/*|*.md)
@@ -1101,9 +1169,16 @@ else
     case "$f" in apple/*|scripts/persona_config.py) script_test_add scripts/test/test_apple_no_callkit.py ;; esac
     # The development build (#10713): the switch that leaves the watch app and the share extension out, who sets it,
     # the Release-only commit stamp; and the Rust core's XCFramework cache shared between worktrees.
+    # test_apple_dev_build.py reads the project and the includes its xcodegen dumps turn on, every script that
+    # generates a project or builds the Rust core it names, and the note a lean build prints (#11250). Its two searches
+    # of the whole tree (who sets the switch, who runs xcodegen generate) also see a new caller; that one is not mapped.
     case "$f" in
-      apple/project.yml|apple/lean-dev-build.yml|apple/watch-and-share.yml|scripts/app/sim.sh|scripts/app/ui-test.sh|\
-      scripts/release/release.sh|scripts/ci/apple.sh) script_test_add scripts/test/test_apple_dev_build.py ;;
+      apple/project.yml|apple/app-entitlements.yml|apple/watch-and-share.yml|apple/lean-dev-build.yml|\
+      apple/siri-calls.yml|scripts/app/sim.sh|scripts/app/ui-test.sh|scripts/app/perf-test.sh|\
+      scripts/app/share-from-apps.sh|scripts/app/lean-build-note.sh|scripts/app/island_peer.sh|\
+      scripts/diag/stream-scroll/run-ios.sh|scripts/release/release.sh|scripts/ci/apple.sh|\
+      native/iphone-bridge/build.sh)
+        script_test_add scripts/test/test_apple_dev_build.py ;;
       native/app-core/scripts/build-apple.sh) script_test_add scripts/test/test_app_core_apple_build.py ;;
     esac
     # test_gen_tokens.py checks the token sources against the iOS values and the committed Android Tokens.kt (#4209).
@@ -1135,7 +1210,9 @@ else
         script_test_add scripts/ci/test_changed_ratchets.py; script_test_add scripts/test/test_merge_pr_sh.py ;;
       scripts/test/go_trimpath.sh)
         script_test_add scripts/ci/test_ci.py; script_test_add scripts/test/test_check_fast_inputs.py ;;
-      scripts/heavy_slot.py) script_test_add scripts/test/test_check_fast_inputs.py ;;
+      # test_android_sh.py runs android.sh with the helper (#11250).
+      scripts/heavy_slot.py)
+        script_test_add scripts/test/test_check_fast_inputs.py; script_test_add scripts/test/test_android_sh.py ;;
       scripts/check-fast.sh|scripts/test/check-fast.sh|scripts/test/test_check_fast.py)
         script_test_add scripts/test/test_check_fast_guards.py; script_test_add scripts/test/test_check_fast_inputs.py ;;
     esac
@@ -1385,16 +1462,18 @@ for _i in "${!JOB_NAME[@]}"; do
       fi
     fi
   fi
+  # The log's tail is a command's output, which need not be UTF-8: macOS sed stops at the first byte that is not
+  # ("illegal byte sequence") in a UTF-8 locale, so it runs with LC_ALL=C.
   case "$_kind" in
     PASS) echo "PASS     ${JOB_NAME[$_i]} (${_seconds}s$_waited)"; N_PASS=$((N_PASS+1)) ;;
     SKIP) echo "SKIP     ${JOB_NAME[$_i]}: $_detail"; N_SKIP=$((N_SKIP+1)) ;;
     FAIL)
       echo "FAIL     ${JOB_NAME[$_i]} (${_seconds}s$_waited, $_detail); log: ${JOB_LOG[$_i]}"
-      sed 's/^/         /' "${JOB_LOG[$_i]}" | tail -n 25
+      LC_ALL=C sed 's/^/         /' "${JOB_LOG[$_i]}" | tail -n 25
       N_FAIL=$((N_FAIL+1)) ;;
     TIMEOUT)
       echo "TIMEOUT  ${JOB_NAME[$_i]} (${_seconds}s$_waited, $_detail); log: ${JOB_LOG[$_i]}"
-      sed 's/^/         /' "${JOB_LOG[$_i]}" | tail -n 25
+      LC_ALL=C sed 's/^/         /' "${JOB_LOG[$_i]}" | tail -n 25
       N_TIMEOUT=$((N_TIMEOUT+1)) ;;
   esac
 done

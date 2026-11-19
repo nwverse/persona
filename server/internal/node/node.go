@@ -954,7 +954,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			}
 		}
 	}
-	if n.codexBlocked(p.SessionID) && (strings.HasPrefix(method, "session.") || strings.HasPrefix(method, "terminal.") || method == "assistant.send" || method == "assistant.permissions.reset") {
+	if n.codexBlocked(p.SessionID) && (strings.HasPrefix(method, "session.") || strings.HasPrefix(method, "terminal.") || method == "assistant.send" || method == assistantwire.DeviceAssistantAnswerAgain || method == "assistant.permissions.reset") {
 		return nil, refusal("identity_conflict", "会话 ID 与另一来源重复，不能判断操作目标；未读取或发送", nil)
 	}
 	if n.codexBlocked(p.ResumeSessionID) && devicewire.IsSessionStart(method) {
@@ -1361,6 +1361,16 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	case "session.start.options":
 		return n.workSessionOptions(ctx, p.Name, p.ConfiguredAgent, p.Host, p.Configured, true)
 	case "session.start", devicewire.MethodStartWorkSession:
+		if method == "session.start" && strings.TrimSpace(p.Prompt) != "" && len(p.Images) > 0 &&
+			(p.ResumeSessionID == "" || p.AgentType != ompAgent && launcherAgentType(p.Launcher) != ompAgent) {
+			paths, err := n.saveImages(p.Images)
+			if err != nil {
+				return nil, err
+			}
+			// The first prompt uses the same attachment block as session.send; firstPrompt adds keepImagePaths for Claude.
+			// An omp resume instead carries the images in ompResumeParams, so they never arrive twice.
+			p.Prompt = strings.TrimSpace(p.Prompt) + "\n\n<attached_images>\n" + strings.Join(paths, "\n") + "\n</attached_images>"
+		}
 		// Optional tool waits correlate the first input through the existing echo ledger.
 		// Capture the resume boundary before launching, so an identical historical input cannot match.
 		var echoOpts sendOpts
@@ -1566,11 +1576,25 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return n.taskDirectory(p.Path)
 	case "assistant.execution":
 		return n.assistantExecution(ctx, p.SessionID), nil
-	case "assistant.send":
+	case "assistant.send", assistantwire.DeviceAssistantAnswerAgain:
 		if p.ResumeOnly && !n.assistantResumable(p.SessionID) {
 			return nil, fmt.Errorf("conversation %s is gone", p.SessionID)
 		}
 		sctx := withSkillOwner(ctx, p.SkillOwner)
+		if method == assistantwire.DeviceAssistantAnswerAgain {
+			var guard struct {
+				After       string `json:"answer_again_after"`
+				OnceID      string `json:"once_id"`
+				ClientMsgID string `json:"client_msg_id"`
+			}
+			if err := json.Unmarshal(params, &guard); err != nil {
+				return nil, err
+			}
+			if p.SessionID == "" || p.NewSessionID != "" || guard.After == "" || guard.OnceID == "" || guard.ClientMsgID != "" {
+				return nil, errors.New("assistant.answer_again needs a guarded send to an existing Assistant conversation")
+			}
+			sctx = context.WithValue(sctx, answerAgainAfterKey{}, guard.After)
+		}
 		if p.NewSessionID != "" {
 			// A start under a given id (a meeting's room, its follow-up: made once, also across a restart). One the
 			// node has already is that conversation: nothing is sent again.

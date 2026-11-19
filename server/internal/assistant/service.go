@@ -455,13 +455,13 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 	}
 	if method != DeviceSessionGet && method != "session.unwatch" {
 		if err := s.conversationParamsAvailable(ctx, device, params); err != nil {
-			return err
+			return beforeNodeWrite(method, err)
 		}
 	}
 	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || method == DeviceSessionSend || method == DeviceSessionSendOnce) {
 		id, _ := p["session_id"].(string)
 		if err := s.putSupervisionInstructions(ctx, device, id, p); err != nil {
-			return err
+			return beforeNodeWrite(method, err)
 		}
 		if method == DeviceAssistantSend || method == DeviceSessionSend || method == DeviceSessionSendOnce {
 			// Initial assistant.send starts do not pass through SendParams, and Inbox continuations use session.send.
@@ -552,7 +552,7 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 				if method == DeviceAssistantSend {
 					s.recordManagerSend(device, p, nil, err) // a failed start or resume all the same (north_star.go)
 				}
-				return err
+				return beforeNodeWrite(method, err)
 			}
 		}
 	}
@@ -568,7 +568,7 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 	}
 	raw, err := json.Marshal(params)
 	if err != nil {
-		return err
+		return beforeNodeWrite(method, err)
 	}
 	p := DeviceCall{Device: device, Method: method, Params: raw}
 	res, ok, err := s.localFleetDeviceCall(ctx, p) // what the hub answered before the nodes' events were the manager's
@@ -576,7 +576,7 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 		res, err = s.hub.DeviceCall(ctx, p)
 	}
 	if err == nil && method != DeviceSessionGet && method != "session.unwatch" {
-		err = s.conversationParamsAvailable(ctx, device, params)
+		err = afterNodeWrite(method, s.conversationParamsAvailable(ctx, device, params))
 	}
 	if err == nil {
 		round.sent(s, res) // whose round it is, for the owner's next message (owner_preempt.go)
@@ -587,7 +587,7 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 	if err != nil || out == nil || len(res) == 0 {
 		return err
 	}
-	return json.Unmarshal(res, out)
+	return afterNodeWrite(method, json.Unmarshal(res, out))
 }
 
 // appCall is an AppCall whose answer is read into out (nil: not read).

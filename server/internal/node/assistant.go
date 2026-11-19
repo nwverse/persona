@@ -329,6 +329,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		return "", externalAdapterError(ctx, ctx.Err())
 	}
 	timing.mark("typing_locked", true)
+	if err := n.answerAgainCurrent(ctx, id); err != nil {
+		return "", err
+	}
 	recovery, restart := assistantRecoveryOf(ctx)
 	if recovery != nil {
 		n.mu.Lock()
@@ -1584,6 +1587,15 @@ func (n *Node) notifySessions() {
 // more build after it, so the last list pushed has them all, and sends in a row build one list at a time. The channel
 // closes once a list built after the ask has gone out.
 func (n *Node) notifySessionsSoon() <-chan struct{} {
+	return n.scheduleSessionsSoon(true)
+}
+
+// publishSessionsSoon coalesces runtime lists while keeping publish's startup guard and revision-only pushes.
+func (n *Node) publishSessionsSoon() <-chan struct{} {
+	return n.scheduleSessionsSoon(false)
+}
+
+func (n *Node) scheduleSessionsSoon(notify bool) <-chan struct{} {
 	done := make(chan struct{})
 	if n.peer == nil {
 		close(done)
@@ -1593,6 +1605,7 @@ func (n *Node) notifySessionsSoon() <-chan struct{} {
 	b.mu.Lock()
 	if b.building {
 		b.again = true
+		b.nextNotify = b.nextNotify || notify
 		b.next = append(b.next, done) // the build running began before this ask: the one after it answers
 		b.mu.Unlock()
 		return done
@@ -1602,7 +1615,11 @@ func (n *Node) notifySessionsSoon() <-chan struct{} {
 	b.mu.Unlock()
 	go func() {
 		for {
-			n.notifySessions()
+			if notify {
+				n.notifySessions()
+			} else {
+				n.publish(n.sessionList(context.Background(), false))
+			}
 			b.mu.Lock()
 			b.pushed++
 			for _, c := range b.current {
@@ -1614,6 +1631,7 @@ func (n *Node) notifySessionsSoon() <-chan struct{} {
 				b.mu.Unlock()
 				return
 			}
+			notify, b.nextNotify = b.nextNotify, false
 			b.again, b.current, b.next = false, b.next, nil
 			b.mu.Unlock()
 		}
@@ -1624,12 +1642,13 @@ func (n *Node) notifySessionsSoon() <-chan struct{} {
 // listPush is notifySessionsSoon's state: a build running, an ask that came during it, who waits for which build,
 // and how many builds went out.
 type listPush struct {
-	mu       sync.Mutex
-	building bool
-	again    bool
-	current  []chan struct{} // closed when the build running now has gone out
-	next     []chan struct{} // closed when the build after it has
-	pushed   int
+	mu         sync.Mutex
+	building   bool
+	again      bool
+	nextNotify bool            // an assistant ask requires the next build to send all changed fields
+	current    []chan struct{} // closed when the build running now has gone out
+	next       []chan struct{} // closed when the build after it has
+	pushed     int
 }
 
 // listPushWait is how long a send waits for the list that shows its conversation working, so its answer goes after
