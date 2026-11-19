@@ -446,6 +446,61 @@ func TestTodoAskDeclineNewerReview(t *testing.T) {
 	sc.s.waitWorkEvents()
 }
 
+// A conclusion that says the work cannot be done, come after a review that waits on the owner, takes Don't handle and
+// its Undo like a decision: found among the asks the view lists while the to-do's action lock is held, which must not
+// wait on itself.
+func TestTodoAskDeclineCannotWithReview(t *testing.T) {
+	sc := todoAskScene(t, "decision")
+	s := sc.s
+	s.accept.mu.Lock()
+	s.accept.asks[sc.row] = &acceptAsk{Conclusion: true, Outcome: outcomeCannot, NoCard: true, AskedAt: time.Now().UTC(),
+		Reason: "The ryokan takes no bookings from abroad"}
+	s.saveAcceptLocked(context.Background())
+	s.accept.mu.Unlock()
+	own := askDecisionPrefix + viewRound(t, s, sc.row, askDecisionPrefix)
+	if own == sc.own {
+		t.Fatalf("the row still lists the decision's ask %s", own)
+	}
+	rec := answerTodoAsk(s, sc.row, own, `{"outcome":"decline"}`)
+	var declined assistantwire.TodoAskAnswered
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &declined) != nil ||
+		declined.Outcome != assistantwire.TodoAskOutcomeDeclined || declined.Receipt == "" {
+		t.Fatalf("decline: %d %s", rec.Code, rec.Body)
+	}
+	if slices.Contains(rowAsks(t, s, sc.row), own) {
+		t.Fatalf("declined, the row still lists %s", own)
+	}
+	undo, _ := json.Marshal(assistantwire.TodoAskAnswer{Outcome: assistantwire.TodoAskAnswerOutcomeUndo, Receipt: declined.Receipt})
+	if rec := answerTodoAsk(s, sc.row, own, string(undo)); rec.Code != http.StatusOK || !slices.Contains(rowAsks(t, s, sc.row), own) {
+		t.Fatalf("undo: %d %s; the row lists %v", rec.Code, rec.Body, rowAsks(t, s, sc.row))
+	}
+	s.waitWorkEvents()
+}
+
+// A decision handed back to its supervisor to recheck its facts (a day old) has left the view, so every answer the
+// route takes for it is stale and nothing reaches the Agent: the route reads the same rounds the view does.
+func TestTodoAskRecheckRoundIsStale(t *testing.T) {
+	for _, body := range []string{`{"option":"Kaede"}`, `{"option":"Ryokan Hanami"}`, `{"text":"Tsuki, please"}`,
+		`{"response":"explain_first"}`, `{"outcome":"decline"}`, `{"outcome":"later"}`} {
+		t.Run(body, func(t *testing.T) {
+			sc := todoAskScene(t, "decision")
+			sc.s.sweepDecisionAges(time.Now().Add(decisionRecheckAfter + time.Minute))
+			if a := askOf(sc.s, sc.row); a == nil || a.RecheckAt.IsZero() {
+				t.Fatalf("the round was not handed back: %+v", a)
+			}
+			sent := len(sentToAgent(sc.f))
+			if rec := answerTodoAsk(sc.s, sc.row, sc.own, body); rec.Code != http.StatusConflict ||
+				!strings.Contains(rec.Body.String(), "ask_stale") {
+				t.Fatalf("%d %s", rec.Code, rec.Body)
+			}
+			if got := len(sentToAgent(sc.f)) - sent; got != 0 {
+				t.Fatalf("the Agent heard %d answers", got)
+			}
+			sc.s.waitWorkEvents()
+		})
+	}
+}
+
 // Two Retries at once, from two devices: one starts the to-do's Agent again, the other is told it is stale, and one
 // start goes out. -race runs it.
 func TestTodoAskRetriesOnce(t *testing.T) {
