@@ -430,7 +430,8 @@ func TestRecoveryWithoutModelAnswerPreservesStoredCwd(t *testing.T) {
 				t.Fatal(err)
 			}
 			const id = "11111111-1111-4111-8111-11111111111a"
-			cwd := filepath.Join(t.TempDir(), ".persona", "assistant")
+			// The fake CLI writes the shell's $PWD, the physical path: macOS's temporary directory is behind a link.
+			cwd := filepath.Join(physicalTempDir(t), ".persona", "assistant")
 			if err := os.MkdirAll(cwd, 0o700); err != nil {
 				t.Fatal(err)
 			}
