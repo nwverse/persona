@@ -12,10 +12,13 @@ When an installed Link is present, the desktop's local setup page can show its r
 
 After sign-in, **Settings › General › This computer** opens that same local options window through the additive `openLocalSettings` bridge capability. A normal browser and an older desktop without the method do not show the entry. The hub renderer can request only that the window open: it receives no Link command, local status, hub address or credential. The separate local window retains its own origin-checked preload for the fixed operations. Merely opening or closing it does not navigate or destroy the signed-in hub window. If the person explicitly chooses **Continue** for a different hub, the shell waits for the old hub window to close and creates a new window with that hub's own persistent session; merely saving the global address cannot leave the old page denied by IPC. The acceptance smoke checks both boundaries, the absent-Link explanation and the second hub's sign-in; it does not perform real pairing.
 
+If a saved hub cannot be reached at launch, the shell keeps its address, generation and persistent per-hub session instead of treating the profile as a new install. The same local setup window shows a plain connection failure with **Retry** and **Local settings**. Retry submits the unchanged address through the existing validated setup bridge and persists nothing when the load fails; Local settings reveals the existing form and desktop options. Closing setup during a pending attempt retires that attempt without reopening a window, and quitting cannot reopen recovery. A late failure from an older generation cannot clear a replacement hub or its IPC owner.
+
 ## Existing web behavior
 
 - The desktop loads only the configured hub origin (including its reverse-proxy prefix). Other HTTP/HTTPS links open in the system browser. Authentication, service-worker permission actions, notification text/tags/deduplication/withdrawal, quiet hours and the Needs-you count stay in the existing web code.
 - Native notification clicks return to the existing SPA route. Native display failure keeps the browser fallback. Signing out clears the previous account's native notices.
+- `persona://` links open a page of the route table in the window (`docs/protocol/deep-links.md`, #9931): `persona://open<path>` (the hub's web path after `persona://open`) and the first form `persona://open?route=<path>` go through the same route as a notification click, with only the query keys a page reads (no `hub`, no token). The web app opens the path or says it is no page. A port, a user name, a fragment, or a route that does not start with a single `/` or would leave the hub is refused (`src/urls.ts` `parseDeepLink`, checked against `spec/fixtures/deep-links/cases.json`). The packaged app lists the scheme in `electron-builder.yml` `protocols`, so macOS hands it these links (its Info.plist `CFBundleURLTypes`); Windows registers it at run time. Pairing links (`persona://pair`, `persona://link`) are data as before, never automatic pairing. A route that comes before the page listens for it (the link that started the app, a notification or island click while the page reloads) waits in the main process until the page's app calls `onOpenNotification`; only the latest one waits (`src/page-routes.ts`, #10282).
 - `register_desktop` uses the existing authenticated web socket, never a token in the Electron main process. An active, unlocked, recently used desktop with notifications may register. Locking, idling or disabling notifications withdraws it. New hubs use `unregister_desktop`; older hubs use socket-close withdrawal and reconnect only when active and notifying again. Resume alone does not mean unlocked; only the actual unlock event restores presence.
 - Standard platform TLS validation is used. There is no broad certificate bypass and no unverified saved-pin shortcut.
 
@@ -109,7 +112,7 @@ The check by a person on a real Mac is section 9 of [mac-acceptance.md](mac-acce
 
 ## Packaging and verification
 
-`electron-builder.yml` defines universal macOS DMG/ZIP and Windows NSIS artifacts. `electron-builder.unsigned.yml` uses a temporary development app ID and explicitly disables certificate discovery/signing and notarization. It is for development only. Unsigned artifacts do not prove signed distribution, notarization or installation.
+`electron-builder.yml` defines universal macOS DMG/ZIP and Windows NSIS artifacts. The macOS app declares macOS 15.0 as its minimum. Electron's prebuilt executable has an older Mach-O floor, so `desktop/scripts/macos-after-pack.cjs` rewrites it to 15.0 while retaining its SDK and linker metadata, then the fuse writer restores the development bundle's ad-hoc signatures before electron-builder's normal release-signing step. After either a signed or unsigned Mac package build, `scripts/ci/desktop-package.sh` runs `scripts/release/check_macos_artifact.py`: the app and every bundled `.appex` must declare 15.0 and contain x86_64 and arm64 slices whose own minimum is 15.0, and `hdiutil verify` must accept the DMG. The check reads the packaged metadata and Mach-O build versions without mounting the image. `electron-builder.unsigned.yml` uses a temporary development app ID and explicitly disables certificate discovery/signing and notarization. It is for development only. Unsigned artifacts do not prove signed distribution, notarization or installation.
 
 CI has a Linux job (policy tests, the web client's build and the headless acceptance smoke), macOS universal packaging and Windows NSIS jobs, each with the acceptance smoke on its own runner and its screenshots uploaded (`persona-desktop-<os>-smoke`). Windows is built on Windows, not via a failed Wine cross-build. The package steps run whether or not the smoke passed, so each reports its own verdict. The Linux job builds the web client once (`scripts/ci/desktop-web.sh`) and hands the bundle to the other two jobs. The desktop lane needs that bundle, not the web lane's verdict: when the only thing that failed in the web build is its first-screen size budget, checked after every file is written, the script warns and the smoke runs on the complete bundle; any other build failure fails the job. The development workflow builds unsigned packages only and never receives signing credentials; signing and notarization run only in the release workflow. Signed artifacts require explicitly supplied credentials and an authorized run; no certificate is purchased, inferred from App Store signing or sought from a private key store. The secrets and what each must contain are listed under "What the owner must provide" below.
 
@@ -166,20 +169,20 @@ The update state lives in the tray menu, between **Open Persona** and **Quit Per
 
 ### How a release publishes desktop packages
 
-A stable `v<major>.<minor>.<patch>` tag runs `.github/workflows/release.yml` (`docs/operations/release.md`, "Desktop packages on version tags"). Behind the same administrator-only gate as the hub image, it:
+A stable `v<major>.<minor>.<patch>` tag or a `v<major>.<minor>.<patch>-beta.<N>` tag runs `.github/workflows/release.yml` (`docs/operations/release.md`, "Desktop packages on version tags"). Behind the same administrator-only gate as the hub image, it:
 
 1. decides per platform whether every signing secret below is configured (`scripts/ci/desktop-release-gate.sh`; only whether a secret exists reaches the script, never its value);
 2. builds on native runners with `scripts/ci/desktop-package.sh`: the universal macOS DMG and ZIP, signed and notarized, and the Windows NSIS installer, signed. The package version is the tag without its `v`; the app ID comes from the `PERSONA_DESKTOP_APP_ID` secret and is never written in the repository;
 3. verifies the result (`codesign` and Gatekeeper's `spctl` on macOS, `Get-AuthenticodeSignature` on Windows);
 4. attaches the packages and their block maps to the GitHub Release the workflow already created, and only then the update metadata (`latest-mac.yml`, `latest.yml`), so an installed app never reads metadata naming a package that is not there yet.
 
-**A release never ships an unsigned package as if it were final.** When a platform's secrets are missing, that platform is skipped, the run's summary names the missing secrets, and the hub image and GitHub Release are published as before. In release mode the package script refuses to build without a certificate or with the placeholder app ID instead of falling back to the unsigned development build. Prerelease tags (`v1.3.0-rc1`) publish no desktop packages: installed apps follow the latest stable Release only.
+**A release never ships an unsigned package as if it were final.** When a platform's secrets are missing, that platform is skipped, the run's summary names the missing secrets, and the hub image and GitHub Release are published as before. In release mode the package script refuses to build without a certificate or with the placeholder app ID instead of falling back to the unsigned development build. Stable and beta desktop channels are distinct: stable versions use `latest.yml` / `latest-mac.yml`; beta versions use `beta.yml` / `beta-mac.yml` on their immutable prerelease, so the stable update channel does not opt into prereleases. The separate hub beta setting does not silently change a desktop's update channel.
 
 Between the moment the Release is created and the moment its desktop metadata is attached, the newest Release has no update metadata. A check in that window fails quietly and the next scheduled one succeeds.
 
 ### What the owner must provide
 
-No certificate exists yet, so no release has published desktop packages. Before adding credentials, the owner must create the `persona-desktop-release` GitHub Environment with required reviewer approval restricted to the administrator, and configure these as **Environment secrets**, not repository secrets. The environment restricts their use to the release jobs on stable version tags. The development Desktop workflow never receives them. None is ever committed, and nobody should look for them in a key store.
+No certificate exists yet, so no release has published desktop packages. Before adding credentials, the owner must create the `persona-desktop-release` GitHub Environment with required reviewer approval restricted to the administrator, and configure these as **Environment secrets**, not repository secrets. The environment restricts their use to the release jobs on version tags. The development Desktop workflow never receives them. None is ever committed, and nobody should look for them in a key store.
 
 | Secret | What it is |
 | --- | --- |
@@ -214,6 +217,8 @@ The exported helpers in `desktop/scripts/update-test-receipts.mjs` read `app-upd
 The Desktop workflow runs it on all three systems (`update` job in `.github/workflows/desktop-test.yml`) and uploads `result.json` and the app's log.
 
 Not proven by this test: a signed build updating from a published GitHub Release, the macOS install, notarization, and the tray entries as drawn on screen (their text and order are unit-tested; no screenshot of a native menu is taken).
+
+On macOS, `desktop/src/app-menu.ts` reproduces Electron's default application menu with native roles and the same order; only About, Hide and Quit take labels from `desktop/src/locales` (Quit reuses `tray_quit`), unchanged role labels stay with Electron, and the About panel is explicitly named Persona. This does not change `app.name` or the profile folder. `desktop/test/app-menu.test.ts` checks all three languages, the complete item/role order and the macOS-only decision; a development run compares `Menu.getApplicationMenu()` before and after. Like the tray entries, the native application menu is not screenshotted.
 
 # Acceptance evidence
 
@@ -296,7 +301,10 @@ passing is not first-install acceptance. Do not relax fuses or the existing orig
 green.
 
 The notch island's page failed the same way in every packaged app, not only on a first run: its window was on screen and
-empty. It now loads from its own scheme ("Island at the MacBook notch"); the setup page's path is still the claim's above.
+empty. It now loads from its own scheme ("Island at the MacBook notch"). The setup page now likewise loads from its own
+scheme (`persona-setup://app/setup.html`, `desktop/src/setup-page.ts`), which serves only `setup.html`, `setup.css` and
+`setup.cjs` from `dist/setup/` on the default session with `grantFileProtocolExtraPrivileges: false` unchanged. Full
+signed-release, macOS and physical-device acceptance under #6770 remain separate.
 
 ## Owner actions and decisions still required
 

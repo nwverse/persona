@@ -2,12 +2,24 @@ package hub
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
+
+func TestAgyPaneNoticeLocalization(t *testing.T) {
+	const key = "node-engine.agy_pane_integration"
+	notice := proto.Item{ID: "agy#0", Seq: 1, Role: "system", Kind: proto.KindNotice, Text: i18n.T(i18n.Default, key)}
+	for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
+		got := localizedItems(lang, []proto.Item{notice})[0].Text
+		if got != i18n.T(lang, key) || !strings.Contains(got, "herdr integration install antigravity-cli") {
+			t.Errorf("%s: unexpected pane notice %q", lang, got)
+		}
+	}
+}
 
 // userLine is a transcript line with a user message saying s, as Claude Code writes it.
 func userLine(t *testing.T, s string) []proto.Item {
@@ -62,6 +74,38 @@ func TestLocalizedTranscriptItems(t *testing.T) {
 		if items[0].Text != zh {
 			t.Fatal("the node's items were written to")
 		}
+	}
+}
+
+func TestLocalizedCodexHeartbeatAnswer(t *testing.T) {
+	const zh = "心跳检查已完成，无新动态"
+	const line = `{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"AgentMessage","phase":"final_answer","content":[{"type":"text","text":"<heartbeat><automation_id>sample-check</automation_id><decision>DONT_NOTIFY</decision></heartbeat>"}]}}}`
+	items := transcript.ParseLine(1, []byte(line), &transcript.Meta{})
+	if len(items) != 1 || items[0].Text != zh {
+		t.Fatalf("parsed heartbeat: %+v", items)
+	}
+	items = append(items, proto.Item{ID: "ordinary", Seq: 2, Kind: proto.KindText, Role: "assistant", Text: zh})
+	// The node sends parsed items across JSON; both replies have identical text, but only one has provenance.
+	wire, err := json.Marshal(items)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var received []proto.Item
+	if err := json.Unmarshal(wire, &received); err != nil {
+		t.Fatal(err)
+	}
+	for lang, want := range map[i18n.Lang]string{
+		i18n.ZhHans: zh,
+		i18n.En:     "Heartbeat check complete. No updates.",
+		i18n.Ja:     "ハートビートチェックが完了しました。新着情報はありません",
+	} {
+		got := localizedItems(lang, received)
+		if got[0].Text != want || got[1].Text != zh {
+			t.Errorf("%s: heartbeat %q, ordinary %q; want %q and %q", lang, got[0].Text, got[1].Text, want, zh)
+		}
+	}
+	if received[0].Text != zh {
+		t.Fatal("localization mutated the shared input items")
 	}
 }
 

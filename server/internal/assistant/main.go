@@ -23,6 +23,7 @@ import (
 
 	"github.com/nwverse/persona/sdk/go/wire"
 
+	approvalops "github.com/nwverse/persona/server/internal/approval"
 	"github.com/nwverse/persona/server/internal/assistant/repositorystore"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
@@ -364,6 +365,8 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 		Own:         func(ctx context.Context, machine string) map[string]json.RawMessage { return ext.Own(ctx, machine) },
 		OnConnected: func(machine string) { ext.NodeConnected(machine) },
 		OnEvent:     func(machine, event string, params json.RawMessage) bool { return ext.NodeEvent(machine, event, params) },
+		// The messages held for a machine's Agents changed (devices held.go): its rows again, nothing else of a list.
+		HeldChanged: func(machine string) { svc.publishSessions(machine) },
 		// A node's new connection gets the launchers added in Persona, with their keys (models_launchers_push.go).
 		// Not one waiting to be confirmed: it gets them when it is (trustChanged, machine_trust.go).
 		NodeCalls: func(ctx context.Context, machine string) []devicewire.NodeCall {
@@ -396,6 +399,9 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 		LauncherReferences: func(ctx context.Context) []extmgr.LauncherReference { return svc.launcherReferences(ctx) },
 		AssistantMachine:   func() string { return svc.mainMachine(context.Background()) },
 		Ask:                func(ctx context.Context, ix proto.Interaction) (proto.Resolution, error) { return svc.AskCard(ctx, ix) },
+		AskPrepared: func(ctx context.Context, ix proto.Interaction, op approvalops.Operation) (approvalops.Outcome, error) {
+			return svc.AskPreparedCard(ctx, ix, op)
+		},
 		DialRelay: func(ctx context.Context, query string) (*websocket.Conn, error) {
 			return bus.DialAt(ctx, hub, token, httpClient, devicewire.RelayPath, query)
 		},

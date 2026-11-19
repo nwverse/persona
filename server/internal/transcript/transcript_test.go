@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -619,10 +620,19 @@ func TestBackgroundTasks(t *testing.T) {
 
 	// Finishing: queued as a notification (never shows in the input queue), absorbed as an attachment → a notice.
 	note := "<task-notification>\n<task-id>b85polnoj</task-id>\n<status>completed</status>\n<summary>Background command \"Upload\" completed (exit code 0)</summary>\n</task-notification>"
-	q, _ := json.Marshal(map[string]any{"type": "queue-operation", "operation": "enqueue", "content": note})
+	q, _ := json.Marshal(map[string]any{"type": "queue-operation", "operation": "enqueue", "timestamp": "2026-10-25T07:41:02Z", "content": note})
 	ParseLine(7, q, meta)
 	if len(meta.Queue) != 0 || len(meta.Background) != 1 {
 		t.Fatalf("queue %v background %+v", meta.Queue, meta.Background)
+	}
+	if len(meta.BackgroundEnded) != 1 {
+		t.Fatalf("ended tasks: %+v", meta.BackgroundEnded)
+	}
+	ended := meta.BackgroundEnded[0]
+	if ended.ID != "b85polnoj" || ended.Status != "completed" || ended.ExitCode == nil || *ended.ExitCode != 0 ||
+		ended.EndedAt == nil || !ended.EndedAt.Equal(time.Date(2026, 10, 25, 7, 41, 2, 0, time.UTC)) ||
+		ended.StartedAt != sh.StartedAt || ended.Command != sh.Command || ended.OutputFile != sh.OutputFile {
+		t.Fatalf("ended shell: %+v", ended)
 	}
 	att, _ := json.Marshal(map[string]any{"type": "attachment", "uuid": "x", "attachment": map[string]any{
 		"type": "queued_command", "prompt": "<task-notification>\n<task-id>a3497dfa0fb026376</task-id>\n<summary>Agent done</summary>\n</task-notification>",
@@ -633,6 +643,73 @@ func TestBackgroundTasks(t *testing.T) {
 	}
 	if len(meta.Background) != 0 {
 		t.Fatalf("still running: %+v", meta.Background)
+	}
+	if len(meta.BackgroundEnded) != 1 { // agent history stays in the subagent / notice paths
+		t.Fatalf("agent entered command history: %+v", meta.BackgroundEnded)
+	}
+}
+
+func TestBackgroundTaskOutcomeRetention(t *testing.T) {
+	start := time.Date(2026, 11, 18, 8, 0, 0, 0, time.UTC)
+	end := start.Add(93 * time.Second)
+	meta := &Meta{Background: []proto.BackgroundTask{{ID: "shell", Kind: "shell", Command: "make test", Description: "Tests", OutputFile: "/tmp/task.out", StartedAt: start}}}
+	meta.taskFinished(`<task-notification><task-id>shell</task-id><status>failed</status><summary>Background command "Tests" failed with exit code 23</summary></task-notification>`, end)
+	if len(meta.Background) != 0 || len(meta.BackgroundEnded) != 1 {
+		t.Fatalf("running %+v ended %+v", meta.Background, meta.BackgroundEnded)
+	}
+	failed := meta.BackgroundEnded[0]
+	if failed.Status != "failed" || failed.ExitCode == nil || *failed.ExitCode != 23 || failed.EndedAt == nil || !failed.EndedAt.Equal(end) ||
+		failed.Command != "make test" || failed.OutputFile != "/tmp/task.out" || !failed.StartedAt.Equal(start) {
+		t.Fatalf("failed task: %+v", failed)
+	}
+
+	// Reusing an id clears its old outcome instead of showing it for the new run.
+	meta.pend("tu2", proto.BackgroundTask{Kind: "shell", Command: "make test again", StartedAt: end.Add(time.Second)})
+	meta.backgroundStarted("tu2", "Command running in background with ID: shell. Output is being written to: /tmp/new.out", false, end.Add(time.Second))
+	if len(meta.BackgroundEnded) != 0 || len(meta.Background) != 1 || meta.Background[0].Command != "make test again" {
+		t.Fatalf("id reuse: running %+v ended %+v", meta.Background, meta.BackgroundEnded)
+	}
+
+	// A denied stop leaves the command running. Only a successful result records the stop.
+	meta.trackBackground("stop", "TaskStop", json.RawMessage(`{"task_id":"shell"}`), end.Add(2*time.Second))
+	meta.backgroundStarted("stop", "Permission denied", true, end.Add(2*time.Second))
+	if len(meta.Background) != 1 || len(meta.BackgroundEnded) != 0 {
+		t.Fatalf("denied stop: running %+v ended %+v", meta.Background, meta.BackgroundEnded)
+	}
+	meta.trackBackground("stop2", "TaskStop", json.RawMessage(`{"task_id":"shell"}`), end.Add(3*time.Second))
+	meta.backgroundStarted("stop2", "Stopped background task shell", false, end.Add(3*time.Second))
+	if len(meta.Background) != 0 || len(meta.BackgroundEnded) != 1 {
+		t.Fatalf("stop: running %+v ended %+v", meta.Background, meta.BackgroundEnded)
+	}
+	stopped := meta.BackgroundEnded[0]
+	if stopped.Status != "stopped" || stopped.ExitCode != nil || stopped.EndedAt == nil || !stopped.EndedAt.Equal(end.Add(3*time.Second)) {
+		t.Fatalf("stopped task: %+v", stopped)
+	}
+
+	// A Monitor's stop result can arrive before its terminal notification with the output path and exit code.
+	meta.Background = []proto.BackgroundTask{{ID: "monitor", Kind: "monitor", Command: "tail -f log", StartedAt: start}}
+	stoppedAt := end.Add(4 * time.Second)
+	meta.finishBackground("monitor", "stopped", nil, "", stoppedAt)
+	meta.taskFinished(`<task-notification><task-id>monitor</task-id><status>stopped</status><summary>Monitor "Logs" stopped (exit code 137)</summary><output-file>/tmp/monitor.out</output-file></task-notification>`, stoppedAt.Add(time.Second))
+	if len(meta.BackgroundEnded) != 2 {
+		t.Fatalf("late notification duplicated outcome: %+v", meta.BackgroundEnded)
+	}
+	monitor := meta.BackgroundEnded[1]
+	if monitor.Status != "stopped" || monitor.ExitCode == nil || *monitor.ExitCode != 137 || monitor.OutputFile != "/tmp/monitor.out" ||
+		monitor.EndedAt == nil || !monitor.EndedAt.Equal(stoppedAt) {
+		t.Fatalf("late Monitor notification: %+v", monitor)
+	}
+
+	// History is bounded independently of the active list; the oldest outcomes are dropped.
+	meta.Background = nil
+	meta.BackgroundEnded = nil
+	for i := range backgroundEndedKept + 2 {
+		id := strconv.Itoa(i)
+		meta.Background = append(meta.Background, proto.BackgroundTask{ID: id, Kind: "shell", StartedAt: start})
+		meta.finishBackground(id, "completed", nil, "", end.Add(time.Duration(i)*time.Second))
+	}
+	if len(meta.BackgroundEnded) != backgroundEndedKept || meta.BackgroundEnded[0].ID != "2" || meta.BackgroundEnded[len(meta.BackgroundEnded)-1].ID != strconv.Itoa(backgroundEndedKept+1) {
+		t.Fatalf("bounded history: %+v", meta.BackgroundEnded)
 	}
 }
 
@@ -1082,14 +1159,32 @@ func TestLongToolOutputIsCutForPages(t *testing.T) {
 }
 
 // A message with a picture typed while the agent worked is absorbed mid-turn as a queued_command whose prompt is
-// blocks: the picture is part of the message (it used to be dropped, and the phone showed the text alone).
+// blocks: the picture is part of the message (it used to be dropped, and the phone showed the text alone). Newer
+// Claude Code puts the pictures first: each item still has an id of its own, in block order, or an app merging by
+// id keeps the picture and loses the text (#10854).
 func TestQueuedPromptKeepsItsImages(t *testing.T) {
-	line := `{"type":"attachment","uuid":"a1","attachment":{"type":"queued_command","commandMode":"prompt","prompt":[` +
-		`{"type":"text","text":"[Image #1]看这个"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0KGgo="}}]}}`
-	items, _ := parse(t, line)
-	if len(items) != 2 || items[0].Kind != proto.KindText || !items[0].Queued ||
-		items[1].Kind != proto.KindImage || !items[1].Queued || items[1].Image == nil || items[1].ID != "a1#1" {
-		t.Fatalf("items = %+v", items)
+	const img = `{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0KGgo="}}`
+	for _, c := range []struct {
+		name   string
+		blocks string
+		want   []string // id and kind of each item, in order
+	}{
+		{"text first", `{"type":"text","text":"[Image #1]看这个"},` + img, []string{"a1#0 text", "a1#1 image"}},
+		{"picture first", img + `,{"type":"text","text":"看这个"}`, []string{"a1#0 image", "a1#1 text"}},
+		{"two pictures first", img + `,` + img + `,{"type":"text","text":"看这两个"}`, []string{"a1#0 image", "a1#1 image", "a1#2 text"}},
+	} {
+		line := `{"type":"attachment","uuid":"a1","attachment":{"type":"queued_command","commandMode":"prompt","prompt":[` + c.blocks + `]}}`
+		items, _ := parse(t, line)
+		var got []string
+		for _, it := range items {
+			got = append(got, it.ID+" "+it.Kind)
+			if !it.Queued || it.Kind == proto.KindImage && it.Image == nil || it.Kind == proto.KindText && !strings.Contains(it.Text, "看这") {
+				t.Errorf("%s: item %+v", c.name, it)
+			}
+		}
+		if !slices.Equal(got, c.want) {
+			t.Errorf("%s: items %q, want %q", c.name, got, c.want)
+		}
 	}
 }
 

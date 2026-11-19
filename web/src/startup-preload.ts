@@ -387,11 +387,58 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // outbox's unseen rows in lib/seen-outbox.ts) adds 112 B in ja, measured in one environment against main 7f756aa00a (ja
 // 482,373 B to 482,485 B; en 479,275 B to 479,391 B, zh-Hans 480,079 B to 480,221 B). Main had 153 B of room; the
 // budget stays.
+// #9053: the Inbox section bar adds 9 B in each language, measured in one environment against main a2531b0b62 (ja
+// 482,485 B to 482,494 B; en 479,391 B to 479,400 B, zh-Hans 480,221 B to 480,230 B): two of atoms' hard-coded sizes
+// become the named one they equal, which pays the font ratchet for CountBadge's. Everything else is in the Inbox page's
+// chunk: CountBadge (ui/CountBadge.tsx; 131 B in atoms against main 094253763d), its Needs-you tone in the existing
+// --attention utility the sidebar's counts use until #4653 brings the blue (its text token was 29 B in the token table
+// alone, more in the CSS), the grouping button with its mark (IconButton's menu attributes and the icon set's mark took
+// 43 B), the bar's own copies of the edge fade's widths and the arrow keys' step (up to 131 B in the App chunk), and
+// spacing classes the CSS already has (a new one took 44 B). The budget stays.
 // 2026-11-17 (#9847): #9784 landed on a main that had moved since its measurement and added 270 B in ja, not 112 B
 // (main 6fc9e85a00~1: ja 482,373 B; 6fc9e85a00: ja 482,643 B, en 479,549 B, zh-Hans 480,379 B), 117 B over the budget,
 // so main stopped building. The budget is main's ja size plus 40 B; taking those bytes back off the first screen is
 // separate work.
-export const FIRST_SCREEN_BUDGET = 482_683;
+// #10226: Developing Persona's To-dos view shadow reads today's triage through App's module (App.tsx re-exports three of
+// lib/todo-triage.ts's functions; a direct import from the recorder's chunk split lib/todo-triage.ts into a chunk of its
+// own, about 700 B). 49 B in each language, measured in one environment against main d5050affc5 (ja 482,098 B to
+// 482,147 B; en 478,979 B to 479,028 B, zh-Hans 479,841 B to 479,890 B). The budget stays.
+// 2026-11-18 (#10538): #10524 (ja 482,147 B to 482,619 B) and #10504 (to 482,722 B) left main's ja first screen 39 B over
+// the budget, so main stopped building. The main conversation's readiness help (views/assistant/ReadinessHelp.tsx, a
+// lazyOverlay started once something that opens it is on screen) and its assistant-readiness words left the first screen:
+// ja 482,722 B to 481,367 B, en 479,634 B to 478,331 B, zh-Hans 480,477 B to 479,146 B, measured in one environment
+// against main 51eb4b6a47. The budget stays.
+// #10358: a conversation an extension opened is marked with that extension's own icon and, while the icon is drawn,
+// named after it. The icon and the installed extensions it is picked from are a lazy chunk (ui/OpenerTile.tsx,
+// lib/opener-icons.ts); the first screen keeps OriginMark's check for an opener, the lazy entry, the opener handed to
+// the first message's line and the name the mark tells its row and that line. 251 B in each language, measured in one
+// environment against main 4732e71a5 (ja 481,367 B to 481,618 B; en 478,331 B to 478,582 B, zh-Hans 479,146 B to
+// 479,397 B), much of it the lazy entry's preload list: its chunks' names in the App chunk's dependency table, which
+// renumbers the entries of every lazy import after it, so the count moves with main (117 B against affb08b4d, 258 B
+// against c53addf40; before the names: 45 B against 04cffd3d4, 198 B against c2fec3548, 155 B against bda346e8c). Main
+// had 1,316 B of room; the budget stays.
+// #9727: UI version 10's graph adds 759 B in every language, measured in one environment against main b90d75a42 (ja
+// 481,100 B to 481,859 B; en 478,017 B to 478,776 B, zh-Hans 478,868 B to 479,627 B): the reading of a view's graph
+// (lib/extension-ui.ts readGraph and the UIGraph fields), its one-line lazy entry and Suspense case in
+// views/extensions/ViewBody.tsx with the fallback that keeps a card's height while the canvas's chunk loads, and the
+// graph's owner as a React context (lib/extension-owner.tsx) with its provider at every surface that draws an
+// extension's view (ExtensionSlots, the assistant's cards, an inbox item's body, the subscription pages, the launcher
+// sections), all in the first screen's static closure; the canvas itself is a chunk of its own (ViewBody10.tsx).
+// Main had 1,583 B of room; the budget stays.
+// #11040: main had 29 B of ja room. The voice call's UI (its bar, the thread's captions, the ended row and the dialog on
+// why a call cannot start: views/chat/voice/VoiceCall.tsx, loaded with the call's code) and 97 of the 101 voice strings
+// left the first screen, and startup entries only lazy chunks read (chat-navrail but target_failed, the
+// chat-interactions fields and input toggle, assistant-history.sidebar, agentspage.new_agent) went to the rest of the
+// catalog: ja 482,497 B to 477,736 B (en 479,378 B to 474,739 B, zh-Hans 480,224 B to 475,592 B), measured in one
+// environment against main b6b333e7e4. Main then went 16 B over (de8b2b4c41: en 479,423 B, ja 482,542 B, zh-Hans
+// 480,269 B); merged with it: en 474,792 B, ja 477,789 B, zh-Hans 475,645 B, 4,737 B of room. The budget stays.
+// Keep the stricter existing limit while combining these changes.
+// #10904: the overview's task cards name who works on each task, the lead Agent's computer, model and effort and "+N"
+// for the others (lib/home-tasks.ts leadAgent; views/Home.tsx taskAgentLine over the model pill's pillView, modelList and
+// effortTitle, and home.task_agents_more). 205 B in ja, measured in one environment against main e7a12f7323 (ja
+// 482,497 B to 482,702 B; en 479,378 B to 479,585 B, zh-Hans 480,224 B to 480,422 B). Main had 29 B of room, so the
+// budget is this ja size plus those 29 B.
+export const FIRST_SCREEN_BUDGET = 482_731;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
@@ -616,6 +663,11 @@ export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_
 // environment. The idle renderer (ViewBody6.tsx's TileView) gains a gauge tile's label and meter role, the ring's
 // space while it loads and the lazy registration of ViewBody9.tsx; the ring itself (about 1 KB) loads on intent with
 // the first tile that has a gauge. Main's 60 B of room is kept on top.
+// UI version 10 (#9727) takes 166 B of idle room: main b90d75a42 sends 44,626 B at idle, the same tree with #9727
+// 44,792 B, in one environment. The idle renderer (ViewBody.tsx) gains the graph's case with its Suspense fallback of
+// the kept height and the lazy registration of ViewBody10.tsx (whose chunk name it embeds), and the launcher sections
+// (ExtensionView.tsx's chunk) gain the owner's context provider; the canvas itself (about 8 KB) loads on intent with
+// the first view that has a graph. Main had 1,437 B of room; the budget stays.
 export const IDLE_TIER_BUDGET = 46_063;
 
 const gzip = promisify(gzipCompress);

@@ -111,6 +111,9 @@ extension Theme {
         static let permissions = "lock.shield"
         /// The two little arrows after a value that opens a menu of choices.
         static let choices = "chevron.up.chevron.down"
+        /// The small chevron after an action's words that opens a menu of how far it goes (a pull-down, as UIKit draws
+        /// one): a group title's Mark All Seen in the Inbox (#10422). A value's menu of choices is `choices`.
+        static let pullDown = expand
         static let effort = "gauge.with.dots.needle.50percent"
         /// The effort level left to the model (its own default, Thinking Effort › Auto).
         static let effortAuto = "gauge.with.dots.needle.bottom.50percent"
@@ -401,7 +404,7 @@ extension Theme {
         /// A Moments (Feishu Moments) post in the inbox: the company's public feed.
         static let moments = "newspaper"
         static let folder = "folder"
-        /// Home: Back to Main Chat (the main conversation), a repository's main checkout in the Agents list's By Repository (as Orca
+        /// Home: the main conversation (Back to Main Chat, its row in the sidebar and in search results, #9973), a repository's main checkout in the Agents list's By Repository (as Orca
         /// and the web mark it), and the computer's home folder in the file page's path bar.
         static let home = "house"
         /// Home accessories and scenes (HomeKit, #2285).
@@ -617,6 +620,20 @@ extension Theme {
         static let voiceCaptions = "captions.bubble"
         /// Voice: the voice Persona speaks in.
         static let voiceTimbre = "person.wave.2"
+        /// Call Persona (#9290): a phone call to Persona through the system's call UI, from the main conversation's +.
+        /// An outgoing handset, apart from Voice Chat's `voiceChannel` beside it (the chat's own voice, in the app).
+        static let callPersona = "phone.arrow.up.right"
+        /// The call screen's Speaker: the call's sound on the loudspeaker, a toggle (its round control fills when on), the
+        /// Phone app's glyph for it. Not `voiceSpeaking` (Persona speaking) nor `answersAloud` (the meeting room's answers
+        /// said out loud).
+        static let callSpeaker = "speaker.wave.3"
+        /// The call screen's Audio: picks where the call's sound goes (the system's route picker) when Bluetooth, a car
+        /// or headphones are there; the system's own glyph for it.
+        static let callAudioRoute = "airplay.audio"
+        /// The call screen's Minimize: down to the bar that returns to the call (the call goes on).
+        static let callMinimise = expand
+        /// The voice bar's way back to a system call's full screen (the call screen).
+        static let callExpand = enlarge
         /// Pairing a device or a bot with a one-time code.
         static let pairing = "link.badge.plus"
         /// Settings › Connectors: the data sources Persona reads and acts in (this device, mail, Lark).
@@ -834,6 +851,15 @@ extension Theme {
         static let openAI = "brand-openai"
         /// TRAE's mark (Simple Icons' trae.svg), a template image: it takes the foreground color.
         static let trae = "brand-trae"
+        static let opencode = "brand-opencode"
+        static let pi = "brand-pi"
+        static let gemini = "brand-gemini"
+        static let cursor = "brand-cursor"
+        static let grok = "brand-grok"
+        static let agy = "brand-agy"
+        static let dsh = "brand-dsh"
+        static let kimi = "brand-kimi"
+        static let copilot = "brand-copilot"
         static let lark = "brand-lark"
         /// GitHub's mark (primer/octicons mark-github), a template image: it takes the foreground color.
         static let github = "brand-github"
@@ -857,7 +883,11 @@ extension Theme {
         /// they fit the box: a round or wide mark fills it (1), a full square looks bigger than a circle of the same
         /// width, so it is drawn smaller, as on Material's keyline grid (18 of 24 for a square, 20 for a circle).
         static func optical(_ asset: String) -> CGFloat {
-            asset == microsoft ? 0.88 : 1
+            switch asset {
+            case microsoft, opencode, pi, kimi: 0.88
+            case cursor: 0.92
+            default: 1
+            }
         }
 
         /// Marks whose artwork is a circle: they fill a round badge (`BrandBadge`); any other shape is drawn at

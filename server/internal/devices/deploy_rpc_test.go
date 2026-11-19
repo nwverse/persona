@@ -25,6 +25,7 @@ import (
 type updatingNode struct {
 	mu          sync.Mutex
 	machine     *Machine
+	peer        *rpc.Peer
 	data        []byte
 	expected    []byte
 	begin       int
@@ -150,6 +151,8 @@ func linkedDeployFixture(t *testing.T, kind string) (*Devices, *Machine, *updati
 	toHub, hubIn := io.Pipe()
 	m.peer = rpc.New("hub", nodeIn)
 	nodePeer := rpc.New("node", hubIn)
+	n.peer = nodePeer
+	m.peer.OnEvent = m.onEvent
 	nodePeer.OnRequest = n.handle
 	ctx, cancel := context.WithCancel(context.Background())
 	h.mu.Lock()
@@ -193,14 +196,22 @@ func TestLinkedDeployCapabilities(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			_, m, _, _ := linkedDeployFixture(t, kind)
 			m.info.NodeUpdate = false
-			if s := m.snapshot(); s.CanDeploy == nil || *s.CanDeploy || !strings.Contains(s.DeployReason, "升级一次") {
-				t.Fatalf("old node: %+v", s)
+			if s := m.snapshot(); s.CanDeploy == nil || *s.CanDeploy || !strings.Contains(s.DeployReason, "升级一次") || s.DeployNoPackage {
+				t.Fatalf("old node: %+v", s) // the node itself blocks the update, not a missing package (#10566)
 			}
 			if err := m.startDeploy(); err == nil || !strings.Contains(err.Error(), "升级一次") {
 				t.Fatalf("old node start: %v", err)
 			}
+			// No build for its platform either: the node's own block still decides (#10566).
+			arch := m.info.Arch
+			m.info.Arch = "mips"
+			_, _ = m.d.resolvedTargetKnown(context.Background(), m.info)
+			if s := m.snapshot(); *s.CanDeploy || s.DeployNoPackage || !strings.Contains(s.DeployReason, "升级一次") {
+				t.Fatalf("old node, no build either: %+v", s)
+			}
+			m.info.Arch = arch
 			m.info.NodeUpdate = true
-			if s := m.snapshot(); s.CanDeploy == nil || !*s.CanDeploy {
+			if s := m.snapshot(); s.CanDeploy == nil || !*s.CanDeploy || s.DeployNoPackage {
 				t.Fatalf("capable node: %+v", s)
 			}
 			m.online = false
@@ -458,6 +469,40 @@ func TestLinkedDeployPersistsRejectedInstallation(t *testing.T) {
 	defer n.mu.Unlock()
 	if n.confirms != 0 || n.aborts != 1 {
 		t.Fatalf("confirms=%d aborts=%d", n.confirms, n.aborts)
+	}
+}
+
+func TestLinkedDeployPreflightFailureEndsConfirmation(t *testing.T) {
+	h, m, n, bin := linkedDeployFixture(t, kindLink)
+	h.opts.Store = newMemStore()
+	n.stayOld = true
+	if err := m.startRPCDeployment(nodePackage{Version: h.hubVersion(), path: bin}, nil); err != nil {
+		t.Fatal(err)
+	}
+	waitMachine(t, m, 5*time.Second, func(s proto.Machine) bool { return s.DeployPhase == "confirming" })
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	for _, failure := range []proto.NodeUpdatePreflightFailure{
+		{ID: "old-update", Error: "stale failure"},
+		{ID: "update-one", Error: "exit status 23"},
+	} {
+		if err := n.peer.NotifyContext(ctx, nodeproto.EventUpdatePreflightFailed, failure); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := waitMachine(t, m, 5*time.Second, func(s proto.Machine) bool { return !s.Deploying })
+	if s.DeployPhase != "" || s.DeployError != "exit status 23" || s.NodeVersion != "old-build" || !s.Online {
+		t.Fatalf("snapshot = %+v", s)
+	}
+	var saved nodeDeployRecord
+	found, err := h.opts.Store.Setting(ctx, m.deployRecordKey(), &saved)
+	if err != nil || !found || saved.State != "failed" || saved.Error != s.DeployError || saved.Phase != "" {
+		t.Fatalf("record = %+v, found = %t, error = %v", saved, found, err)
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.commits != 1 || n.confirms != 0 || n.aborts != 0 {
+		t.Fatalf("commits = %d, confirms = %d, aborts = %d", n.commits, n.confirms, n.aborts)
 	}
 }
 

@@ -7,6 +7,49 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* The Web shell columns share this gutter with the width budget in lib/layout.ts. */
+@media (width >= 64rem) {
+  [data-app-shell] {
+    --panel-gap: 6px;
+    background: var(--inset);
+  }
+
+  [data-sidebar-column] {
+    flex-shrink: 0;
+    margin-right: var(--panel-gap);
+    border-right: 0;
+  }
+
+  [data-app-shell] > aside {
+    margin-left: var(--panel-gap);
+    border-left: 0;
+    border-radius: var(--radius-card);
+  }
+
+  [data-app-shell] > main {
+    background: var(--page);
+  }
+
+  /* The sidebar's usage dialog may extend beyond the rounded background. */
+  [data-sidebar-column] > aside {
+    border-radius: var(--radius-card);
+  }
+
+  [data-app-shell] > main,
+  [data-app-shell] > aside > div:not([role="separator"]) {
+    border-radius: var(--radius-card);
+    overflow: clip;
+  }
+
+  [data-sidebar-column] > [role="separator"] {
+    right: calc(-0.25rem - var(--panel-gap) / 2);
+  }
+
+  [data-app-shell] > aside > [role="separator"] {
+    left: calc(-0.25rem - var(--panel-gap) / 2);
+  }
+}
+
 /* Shared by every sidebar grouping, below the measured Persona row. */
 .sidebar-group-heading {
   position: sticky;
@@ -263,6 +306,10 @@
   --font-mono: "JetBrains Mono", "SF Mono", "DejaVu Sans Mono", "Liberation Mono", ui-monospace, Menlo, Consolas, monospace;
 }
 
+/* @theme inline expands utility families to literals; resolve the runtime preference for these utilities too. */
+.font-sans { font-family: var(--font-sans); }
+.font-mono { font-family: var(--font-mono); }
+
 body {
   background: var(--page);
   color: var(--ink);
@@ -302,6 +349,14 @@ body {
 :root { --sidebar-row: 32px; --sidebar-row-pad: 4px; --sidebar-indent: 12px; }
 @utility sidebar-indent { padding-inline-start: var(--sidebar-indent); }
 @utility sidebar-row { min-height: var(--sidebar-row); padding-block: var(--sidebar-row-pad); line-height: 18px; }
+/* The sidebar's top-level headings (#10637): Pages, Persona chats, Personal Agents and Agents each take a box this tall,
+   whatever they carry beside their title, so they stand evenly apart, folded or not (iOS's SidebarHeadingBox, #10561).
+   24px is the tallest control a heading carries, the Agents title row's fold-all button (`size-6`); a touch screen's 44
+   is that button's there (`size-11`) and a touch row's. The height is the content box's: a heading's room under it
+   (`pb-1`) comes on top, and its controls are centred in it, never setting its height. */
+:root { --sidebar-heading: 24px; }
+@media (pointer: coarse) { :root { --sidebar-heading: 44px; } }
+@utility sidebar-heading { box-sizing: content-box; height: var(--sidebar-heading); }
 /* The machine page's load chart (iOS MetricColor.load): its own hue, apart from CPU / memory / network. */
 :root { --chart-load: #e87ba4; }
 .dark { --chart-load: #d55181; }
@@ -405,7 +460,7 @@ button:disabled { cursor: default; }
    draw Chinese in a serif (NSimSun on Windows; Linux falls back to Noto CJK on its own). The monospaced faces come first:
    a CJK face has proportional Latin letters. Its ink is a step quieter than --ink, a long way from --ink-2 (iOS
    Theme.Reply.codeInk; theme-contrast.test.ts keeps it readable). */
-.prose-j code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", "PingFang SC", "Microsoft YaHei", monospace; font-size: .94em; color: color-mix(in srgb, var(--ink) 55%, var(--ink-2)); }
+.prose-j code { font-family: var(--font-inline-code, ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", "PingFang SC", "Microsoft YaHei", monospace); font-size: .94em; color: color-mix(in srgb, var(--ink) 55%, var(--ink-2)); }
 .prose-j pre { margin: .7em 0; background: var(--inset); border-radius: 10px; box-shadow: var(--shadow-hairline); padding: 10px 12px; overflow-x: auto; font-size: 12.5px; line-height: 1.6; }
 .prose-j pre code { font-family: var(--font-mono); font-size: inherit; }
 /* A code block with its title bar (#2984, CodeBar): the box is the wrap's, the pre sits in it. */
@@ -485,26 +540,8 @@ button:disabled { cursor: default; }
 :root { --mode-plans-tint: color-mix(in srgb, var(--mode-plans) 12%, transparent); --mode-acts-tint: color-mix(in srgb, var(--mode-acts) 12%, transparent); --mode-allows-tint: color-mix(in srgb, var(--mode-allows) 12%, transparent); }
 @theme inline { --color-mode-plans: var(--mode-plans); --color-mode-acts: var(--mode-acts); --color-mode-allows: var(--mode-allows); --color-mode-plans-tint: var(--mode-plans-tint); --color-mode-acts-tint: var(--mode-acts-tint); --color-mode-allows-tint: var(--mode-allows-tint); }
 
-/* The unified model panel (#5032, after Cindy's model selector; ui/model-panel). An effort level's color says how
- * strong the level is, not how light the page is, so it is the same in light and dark, taken by the level itself
- * (lib/model-panel.ts effortColor): a model whose top is High ends blue, and purple is only the true top (Codex's Ultra
- * takes Max's). Fast's blue shows only in the setup flyout (rows and the pill draw Fast in their own ink); the star
- * turns gold under the pointer and once saved. The panel opens out of the pill (--model-panel-morph, the design system's
- * ease) and its content fades in after it; its rows' hover glides between them. */
-:root {
-  --effort-minimal: #2aae5b; --effort-low: #2aae5b; --effort-medium: #14b8a6; --effort-high: #3b82f6; --effort-xhigh: #4f46e5; --effort-max: #8b5cf6;
-  --fast: #3b9eff; --fast-tint: color-mix(in srgb, var(--fast) 16%, transparent);
-  --favorite-star: #d99a06;
-  --model-panel-morph: 220ms; --model-panel-fade: 140ms; --model-panel-fade-delay: 50ms; --model-panel-glide: 80ms; --model-panel-ease: var(--ease-out-strong);
-  --effort-move: 200ms; --effort-resize: 150ms; --effort-ease: var(--ease-link);
-}
-.dark { --favorite-star: #e8b425; }
+/* Panel-only values and motion load with ui/model-panel/ModelPanel.css (#10249). */
 @theme inline { --color-fast: var(--fast); --color-fast-tint: var(--fast-tint); --color-favorite-star: var(--favorite-star); }
-/* From the pill's shape (--model-panel-from, set where it opens) to the panel; the clip ends past the panel's edges so
-   its shadow is whole, and goes when the animation does. */
-@keyframes model-panel-morph{0%{clip-path:var(--model-panel-from);transform:translateY(var(--model-panel-shift,0px))}to{clip-path:inset(-32px round 44px);transform:none}}
-@keyframes model-panel-content{0%{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
-@media (prefers-reduced-motion: reduce) { :root { --model-panel-fade-delay: 0ms; } }
 
 /* ── Phones (#1996) ─────────────────────────────────────── */
 /* The chat's reading sizes: 15 / 14 on wide screens, 16 / 15 on a phone (the user's call: iOS reads at 17, but tool rows
@@ -541,6 +578,11 @@ section[data-segment] { contain-intrinsic-block-size: auto var(--seg-est, 0px); 
     &::before { content: ""; position: absolute; top: min(0px, calc(50% - 22px)); bottom: min(0px, calc(50% - 22px)); left: min(0px, calc(50% - 22px)); right: min(0px, calc(50% - 22px)); }
   }
 }
+/* An extension's graph on a page (UI version 10, #9727): the canvas is 70% of the page's visible height, at least 320
+   and at most 900 px (docs/extensions/extensions.md "Drawing, on every app"); in a card, a still preview fitted into
+   200 px (graph-preview, views/extensions/ViewBody10.tsx). */
+@utility graph-canvas { height: clamp(320px, 70dvh, 900px); }
+@utility graph-preview { height: 200px; }
 /* iOS zooms the page into any focused field under 16px: on touch screens none is. Unlayered on purpose, so it wins
    over the text-[13px] utilities. */
 @media (pointer: coarse) {

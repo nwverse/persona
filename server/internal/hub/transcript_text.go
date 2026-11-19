@@ -73,6 +73,8 @@ func localizedItem(l i18n.Lang, it proto.Item) (proto.Item, bool) {
 	case it.Kind == proto.KindText && it.Role == "user" && it.From != "":
 		set(&it.From, fromName(l, it.From))
 		set(&it.Text, teammateText(l, it.Text))
+	case it.Kind == proto.KindText && it.Role == "assistant" && it.CodexHeartbeatQuiet:
+		set(&it.Text, tt(l, "codex_heartbeat_quiet"))
 	case it.Kind == proto.KindText && it.Role == "assistant" && strings.Contains(it.Text, codexNewChatLink):
 		set(&it.Text, strings.ReplaceAll(it.Text, codexNewChatLink, "["+tt(l, "open_new_chat")+"](persona://session/"))
 	case it.Kind == proto.KindToolResult && strings.Contains(it.Text, loadedToolPrefix):
@@ -132,6 +134,8 @@ func noticeText(l i18n.Lang, s string) string {
 		return tt(l, "schedule_fired")
 	case strings.HasPrefix(s, transcript.PaseoScheduleNotice+"："):
 		return tt(l, "schedule_fired_what", i18n.Args{"what": strings.TrimPrefix(s, transcript.PaseoScheduleNotice+"：")})
+	case s == i18n.T(i18n.Default, "node-engine.agy_pane_integration"):
+		return i18n.T(l, "node-engine.agy_pane_integration")
 	}
 	return s
 }

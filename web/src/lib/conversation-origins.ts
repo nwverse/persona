@@ -6,7 +6,7 @@ import { t } from "../i18n";
 import type { IconName } from "../ui/icons";
 import type { BrandId } from "./connectors";
 import { byTime } from "./times";
-import type { Item, Session } from "./types";
+import type { AssistantInfo, Item, Session } from "./types";
 
 /** The sidebar's groups of automatic conversations, in its order; `other` is any origin this page doesn't know. */
 export const AUTO_ORIGINS = ["inbox", "task", "lark_agent", "spawned", "extension", "other"] as const;
@@ -39,6 +39,12 @@ export function originMarkLabel(o: AutoOrigin): string {
   return (EXTERNAL_ORIGINS as readonly string[]).includes(o) ? externalFrom(o as ExternalOrigin) : originLabel(o);
 }
 
+/** The words for an origin's mark and the line under the opening message: "From <name>" while the mark draws the icon of
+ *  the extension `name` names (#10358, OriginMark's `onName`), else the origin's own (originMarkLabel). */
+export function openerFrom(o: AutoOrigin, name: string | undefined): string {
+  return name ? t("chat-segmentview.from", { name }) : originMarkLabel(o);
+}
+
 /** Each group's mark (OriginMark), on the rows of the conversations in it: the sidebar's and All chats' (#5195). */
 export const ORIGIN_ICON: Record<AutoOrigin, IconName> = { inbox: "inbox", task: "clock", lark_agent: "at", spawned: "fork", extension: "extension", other: "more" };
 /** A group with a brand of its own draws its mark instead of the icon (#3758). */
@@ -47,6 +53,14 @@ export const ORIGIN_BRAND: Partial<Record<AutoOrigin, BrandId>> = { lark_agent: 
 /** The conversations an extension opened (#3758): Lark /agent's and any other extension's. */
 export const EXTERNAL_ORIGINS = ["lark_agent", "extension"] as const;
 export type ExternalOrigin = (typeof EXTERNAL_ORIGINS)[number];
+
+/** The extension that opened an external conversation, by id (#10358): its `opened_by`, else its `origin_ref`, which for
+ *  these two origins is that extension too (the hub's start notes both, server/internal/assistant/start.go
+ *  requestOrigin); undefined for any other origin and for one nobody noted (a conversation the backfill judged). */
+export function openerOf(origin: string | undefined, s: Pick<Session, "opened_by" | "origin_ref"> | undefined): string | undefined {
+  if (!(EXTERNAL_ORIGINS as readonly string[]).includes(origin ?? "")) return undefined;
+  return s?.opened_by?.trim() || s?.origin_ref?.trim() || undefined;
+}
 
 /** Where an external conversation came from, by its origin with the spaces trimmed; undefined for every other one (the
  *  user's own, a channel's /new, the inbox's, a task's, one spawned from a chat, an origin this page doesn't know). */
@@ -116,4 +130,17 @@ export function recentConversations(conversations: readonly Session[], main: str
     .filter((c) => c.session_id !== main && !lead.has(c.session_id) && !c.archived
       && (withTasks || (!(background && c.session_id === background) && autoOrigin(c, background) !== "task")))
     .sort((a, b) => byTime(b.updated_at, a.updated_at) || (a.session_id < b.session_id ? -1 : a.session_id > b.session_id ? 1 : 0));
+}
+
+/** The assistant's conversations in `rows` (its machine's, as the session list or a push brings them) that the held
+ *  answer of GET /api/v1/assistant does not list (#10190): one made elsewhere while the page is open (an integration's
+ *  POST /api/v1/assistant/conversations, a chat started on the phone), or the background supervisor the hub made or
+ *  replaced since (#5082). Not the main conversation or the named background supervisor, and none the answer leaves out
+ *  anyway (archived, deleted, another space's). Only reading the answer again brings such a conversation into Recent
+ *  and All chats with everything it gives one (lib/store.ts does, once for each). */
+export function unlistedConversations(assistant: Pick<AssistantInfo, "main" | "background_supervisor" | "conversations">, rows: readonly Session[]): string[] {
+  const candidates = rows.filter((s) => s.assistant && !s.archived && !s.deleted && !s.space);
+  if (!candidates.length) return [];
+  const listed = new Set([assistant.main, assistant.background_supervisor, ...assistant.conversations.map((c) => c.session_id)]);
+  return candidates.filter((s) => !listed.has(s.session_id)).map((s) => s.session_id);
 }

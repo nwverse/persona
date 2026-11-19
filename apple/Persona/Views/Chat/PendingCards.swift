@@ -16,6 +16,18 @@ import SwiftUI
         guard let chrome else { return fixedHeader }
         return chrome.height - min(max(chrome.collapse, 0), chrome.maxCollapse)
     }
+    /// The two places of cards over the composer as shown: the conversation's own (`PendingCards`) and, in Persona's
+    /// conversation, its tasks' oldest question (`TaskQuestions`). 0 while one is not on screen. They share the room
+    /// the conversation leaves them (`cardsRoom`, #9392).
+    var stackShown: CGFloat = 0
+    var taskShown: CGFloat = 0
+
+    /// The room the cards may take over the composer, both places together: the page less what the footer holds besides
+    /// them (`rest`), the header and the list's floor. With the keyboard down the conversation keeps `cardThreadRoom` too,
+    /// under the header as it stands open (#6277); with it up the cards take the conversation's room (#1912).
+    func cardsRoom(rest: CGFloat, keyboard: Bool) -> CGFloat {
+        keyboard ? height - rest - header - listFloor : height - rest - fixedHeader - listFloor - Theme.Size.cardThreadRoom
+    }
 }
 
 extension EnvironmentValues {
@@ -34,6 +46,9 @@ extension EnvironmentValues {
     /// The cards' area is the only cap on a question's form: a lone question card that may grow past half the page
     /// (`PendingCards.growsAlone`, #6277). Otherwise 55% of the page would be the cap in its place.
     @Entry var cardTakesArea = false
+    /// The card takes only the answers that send its Agent nothing (`Interaction.isLocalChoice`, the dismiss): a manager
+    /// work card whose Agent has stopped (#6839). Every other choice and the typed answer are disabled.
+    @Entry var cardLocalOnly = false
 }
 
 /// The agent's pending cards (questions, permissions) above the composer. Where they fit they are laid out as they
@@ -45,8 +60,10 @@ struct PendingCards: View {
         var interaction: Interaction
         /// Answerable from here (the session lets the phone approve); debug samples always are.
         var enabled: Bool
+        /// Only its put-off choices and its dismiss are (`cardLocalOnly`).
+        var localOnly = false
         /// Why its session doesn't let the app answer it, said under the greyed card (#6868). Nil on one it can answer,
-        /// and on a terminal dialog's step answered already (greyed until the next one comes, #2970).
+        /// on a manager work card with local answers (#6839), and on a terminal dialog's answered step (#2970).
         var blocked: AnswerBlock? = nil
         /// Whose card it is when it is not the chat's own session's (a side session's, #7944): a line under its title.
         var from: String? = nil
@@ -101,6 +118,7 @@ struct PendingCards: View {
                     ForEach(over ? Self.urgentFirst(cards) : cards) { card in
                         VStack(alignment: .leading, spacing: Theme.Space.s) {
                             InteractionPanel(interaction: card.interaction, from: card.from).disabled(!card.enabled)
+                                .environment(\.cardLocalOnly, card.localOnly)
                                 .chatMark("chat.card." + card.interaction.id)
                             if let blocked = card.blocked {
                                 CardBlockedLine(block: blocked, key: card.interaction.sessionKey)
@@ -132,7 +150,10 @@ struct PendingCards: View {
             // As tall as the cards as measured, at most the cap; before the first measure, its own size.
             .frame(height: height(over: over, cap: cap, keyboard: keyboard))
             .fixedSize(horizontal: false, vertical: contentHeight == 0)
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { shown = $0 }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
+                shown = h
+                if abs(room.stackShown - h) >= 1 { room.stackShown = h }
+            }
         }
         .environment(\.cardRoom, containerLength)
         .environment(\.cardFits, keyboard ? cap - Theme.Space.l - Theme.Space.s - lineRoom : 0)
@@ -148,9 +169,11 @@ struct PendingCards: View {
         .onChange(of: cards.map(\.id)) { old, new in
             if over, !Set(new).isSubset(of: Set(old)) { withAnimation(Theme.Motion.standard) { position.scrollTo(edge: .top) } }
         }
-        .onChange(of: room.footer - shown, initial: true) { _, o in
+        // What the footer holds besides both places of cards: a task's question over the entries takes its share too.
+        .onChange(of: room.footer - shown - room.taskShown, initial: true) { _, o in
             if abs(o - footerRest) >= 1 { footerRest = o }
         }
+        .onDisappear { room.stackShown = 0 }
     }
 
     /// The cards' mask: while they scroll, clear at the area's top and bottom edges and opaque from the cards' margins
@@ -184,16 +207,23 @@ struct PendingCards: View {
         #endif
     }
 
+    /// A task's question shows over the entries in Persona's conversation (`TaskQuestions`): the two share the room, each
+    /// at most half of it, as Android's do (#9392). Before, the question had no cap at all and took the whole page.
+    private var sharesRoom: Bool { room.taskShown > 0 }
+
+    /// What the footer holds besides both places of cards; before the first measure, the footer as it stands.
+    private var rest: CGFloat { footerRest > 0 ? footerRest : room.footer - shown - room.taskShown }
+
     private var cap: CGFloat {
         let half = room.height * Self.share
+        let shared = max(Theme.Size.tapTarget, room.cardsRoom(rest: rest, keyboard: keyboardRoom) / 2)
         guard keyboardRoom else {
             // A lone question takes the page down to the conversation's `cardThreadRoom` over the list's floor, never less
             // than its half. Only from values the card does not move, so the cap settles at once (#1580): the header as it
             // stands open (`fixedHeader`, not the fold, which moves with the list's height) and what the footer holds
             // besides the cards (`footerRest`, not the footer as measured, which moves with the cap).
             if growsAlone {
-                let rest = footerRest > 0 ? footerRest : room.footer - shown
-                return max(half, room.height - rest - room.fixedHeader - room.listFloor - Theme.Size.cardThreadRoom)
+                return sharesRoom ? shared : max(half, room.cardsRoom(rest: rest, keyboard: false))
             }
             // In a voice call the bar is taller than the composer it replaces (at large text sizes, much taller), and the
             // conversation's last rows are the call's captions: the cards give up what of their half would leave the
@@ -203,14 +233,13 @@ struct PendingCards: View {
             // What the footer holds besides the cards comes from the bar's own height (`VoiceBarRoom`) and the count's,
             // never from the footer as measured: that moves with the cap, and a cap within a point of half flipped between
             // the two every frame.
-            guard inCall, room.height > 0 else { return half }
+            guard inCall, room.height > 0 else { return sharesRoom ? min(half, shared) : half }
             let others = VoiceBarRoom.shared.height + countHeight + Theme.Space.s * 3 + Theme.Space.m
             let fits = room.height - room.fixedHeader - room.listFloor - Theme.Size.voiceThreadRoom - others
             return max(Theme.Size.tapTarget, min(half, fits))
         }
         // Before the first measure (a card arriving with the keyboard up), the footer as it stands: the cards are not in it yet.
-        let rest = footerRest > 0 ? footerRest : room.footer - shown
-        return max(Theme.Size.tapTarget, room.height - rest - room.header - room.listFloor)
+        return sharesRoom ? shared : max(Theme.Size.tapTarget, room.cardsRoom(rest: rest, keyboard: true))
     }
 
     /// A voice call is on in the cards' conversation (docs/assistant/voice.md 6.2).

@@ -15,6 +15,9 @@ const (
 	CodeRestarting  = "node_restarting"
 )
 
+// EventUpdatePreflightFailed reports a refused resident reload for a committed node update.
+const EventUpdatePreflightFailed = "node.update.preflight_failed"
+
 // PersonaContracts is the optional bidirectional naming capability. It does not
 // change the node protocol floor or become a required capability.
 const PersonaContracts = "persona_contracts_v1"
@@ -27,6 +30,10 @@ const MCPWait = "mcp_wait_v1"
 // ManagerUpdateInventory is the optional read-only local update.inventory
 // contract. A legacy peer remains compatible, but cannot produce idle evidence.
 const ManagerUpdateInventory = "manager_update_inventory_v1"
+
+// ExternalLauncherInventory is optional source-scoped discovery from a trusted node-local adapter registration.
+// It is announced dynamically only while that registration is enabled, never as execution authority.
+const ExternalLauncherInventory = "external_launcher_inventory_v1"
 
 // Version is the node protocol this code speaks. Raise it only for a change an older peer cannot follow (a method
 // whose params or results changed meaning); additions go in as capabilities instead.
@@ -46,6 +53,8 @@ const MinManagerVersion = 1
 const (
 	// Sessions: sessions.list / session.watch / session.unwatch / session.start / session.send and the session events.
 	Sessions = "sessions"
+	// SessionEchoStatus supports checking and conditionally resending a held message by its client_msg_id.
+	SessionEchoStatus = "session_echo_status"
 	// ModelConfiguration: assistant.send / assistant.warm / session.start / session.send take a launcher's model and
 	// model_fingerprint (docs/assistant/model-config.md). Older nodes said so with node.info's model_configuration.
 	ModelConfiguration = "model_configuration"
@@ -76,7 +85,7 @@ const (
 	// Ultracode: session.start takes ultracode and session.ultracode switches it (docs/protocol/protocol.md "Claude Code
 	// ultracode"). A node without it would start a session and drop the field without a word.
 	Ultracode = "ultracode"
-	// StartGoal: session.start takes goal, a Claude Code /goal condition typed after the first message is in
+	// StartGoal: session.start takes goal, a Claude Code or Codex /goal typed after the first message is in
 	// (docs/integrations/agent-goal.md "A goal set at the start"). A node without it would start the session and drop
 	// the goal without a word.
 	StartGoal = "start_goal"
@@ -136,6 +145,52 @@ const (
 	// groups, folders, rebuildable caches, tools) and the emptying of caches from its own catalog
 	// (docs/server/machines.md "Diagnosis and cleanup"). Without it the manager answers node_outdated.
 	MachineDiagnose = "machine_diagnose"
+	// StartContinue: start.continue, an answer to the startup question a start's new tab stopped on (shell_waiting),
+	// typed into the kept tab while the question is still there, and the start run again there under the same id
+	// (docs/protocol/protocol.md "Answering a start's question"). Without it the manager answers node_outdated.
+	StartContinue = "start_continue"
+	// LauncherCheckAssistantTurn: launchers.check takes assistant_turn (with conversation, config_dir, model and effort)
+	// and runs a Claude Code launcher's check as the assistant runs that conversation's turn: its profile, environment,
+	// Persona's MCP server and tool flags (docs/assistant/onboarding.md "Main-chat readiness"). Its answer says so
+	// (assistant_turn); an older node runs the plain check, which proves nothing about the main chat's own failure.
+	LauncherCheckAssistantTurn = "launcher_check_assistant_turn"
+	// StartAnswer: start.answer, the same answer typed into a failed start's kept tab by its pane, for a planned task
+	// the hub starts again in that tab itself (docs/protocol/protocol.md "Answering a start's question"). Without it
+	// the manager answers node_outdated.
+	StartAnswer = "start_answer"
+	// AssistantToolSearchFallback: an assistant turn a gateway refused for Claude Code's tool search is resent once with
+	// every tool loaded, and that launcher and model start so from then on (docs/integrations/claude-integration.md
+	// "Tool search behind a gateway"). Only then do the hub's words for tool_search_unsupported say Persona now sends
+	// every tool there; an older node keeps tool search on, and a retry meets the same refusal.
+	AssistantToolSearchFallback = "assistant_tool_search_fallback"
+	// NodeLanes: the node answers rpc.lanes and frames its connection when the manager asks, its messages on the lanes of
+	// ControlLane and BulkLane (docs/protocol/protocol.md "Lanes"). Without it the manager never asks, and the connection
+	// stays JSON lines.
+	NodeLanes = "node_lanes_v1"
+	// NodeResume: a resident node keeps a framed connection whose transport ended for ResumeWindow and takes it back
+	// when the manager comes again with its token (rpc.Peer.EnableResume, docs/protocol/protocol.md "Resuming"). Only
+	// a resident node announces it: one started for the connection ends with it. Without it the manager never asks.
+	NodeResume = "node_resume_v1"
+)
+
+// ResumeWindowSeconds is how long the manager tries to resume a dropped connection that can resume, from when it
+// noticed the drop: the machine shows as connected meanwhile and its calls wait, as during a reconnect.
+const ResumeWindowSeconds = 30
+
+// ResumeKeepSeconds is how long a resident node keeps such a connection for the manager, from when it noticed the drop.
+// The node may notice first (it read the end, or its silence check fired) while nothing told the manager: its next
+// ping comes up to 30 s later and its silence check takes 15 s more, then it tries. The node keeps it past all that.
+const ResumeKeepSeconds = 60
+
+// ControlLane and BulkLane say which messages of a framed node connection go on those lanes (rpc.Peer.EnableLanes,
+// docs/protocol/protocol.md "Lanes"): a method names a request and its answer, an event itself. Every other request and
+// answer goes on the interactive lane, every other event on the events lane, rpc.cancel on control. Both ends use these
+// lists; a name one end does not know only changes the order its own side writes in.
+var (
+	// ControlLane: the heartbeat, and the port streams' credit, which bulk waits for.
+	ControlLane = []string{"ping", "stream.ack"}
+	// BulkLane: what carries a file's or a package's bytes, and a forwarded port's.
+	BulkLane = []string{"file.chunk", "file.read", "file.upload.chunk", "node.update.chunk", "stream.data"}
 )
 
 // Error codes in the manager's answers to a resident node's replayed notifications (a notify with spool_id,
@@ -165,7 +220,7 @@ const (
 const RestartExitCode = 75
 
 // Announced is what a node built from this code announces.
-var Announced = []string{OwnerControls, SessionSkills, ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, MCPWait, Sessions, ModelConfiguration, AssistantConfigDir, AssistantSupervisionInstructions, AssistantServiceTier, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, Clipboard, SecretEnv, LauncherSwitch, ModelHTTP, EngineSwitch, ModelRun, LauncherSwitchNow, LauncherSwitchIdle, PaneCwd, NodeUpdateIdle, PaneNewSpace, MachineDiagnose, StartGoal}
+var Announced = []string{OwnerControls, SessionSkills, ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, MCPWait, Sessions, SessionEchoStatus, ModelConfiguration, AssistantConfigDir, AssistantSupervisionInstructions, AssistantServiceTier, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, Clipboard, SecretEnv, LauncherSwitch, ModelHTTP, EngineSwitch, ModelRun, LauncherSwitchNow, LauncherSwitchIdle, PaneCwd, NodeUpdateIdle, PaneNewSpace, MachineDiagnose, StartGoal, StartContinue, LauncherCheckAssistantTurn, StartAnswer, AssistantToolSearchFallback, NodeLanes}
 
 // ShareProjection is the bounded complete-source sharing projection, not light Items.
 const ShareProjection = "share_projection.v1"

@@ -92,6 +92,21 @@ class HttpDeviceSettings(
         }))
     }
 
+    override suspend fun browserLogin(id: String, hub: String, allow: Boolean?): BrowserLoginDetails {
+        val data = request("auth", "browser-login", "approve", method = "POST", body = buildJsonObject {
+            put("id", id); put("hub", hub); allow?.let { put("allow", it) }
+            if (allow == true) put("show_number", true)
+        })
+        return BrowserLoginDetails(
+            name = data.getValue("name").jsonPrimitive.content,
+            source = data.getValue("source").jsonPrimitive.content,
+            ageSeconds = data.getValue("age_seconds").jsonPrimitive.int,
+            state = data.text("state"),
+            network = data.text("network"),
+            number = data.text("number"),
+        )
+    }
+
     override suspend fun pairCode(): AppPairCode {
         val data = request("auth", "pair-codes", method = "POST", body = buildJsonObject { put("web", webBase(base)) })
         val token = data.text("token")?.takeIf(String::isNotBlank) ?: throw HubFailure(HubError.Protocol)

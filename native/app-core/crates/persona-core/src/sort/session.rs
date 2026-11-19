@@ -7,6 +7,9 @@ use serde::Deserialize;
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 pub struct WorkState {
     pub phase: String,
+    /// Current work summary searched by iOS's conversation, assistant and errors scopes.
+    #[serde(default)]
+    pub line: Option<String>,
     #[serde(default)]
     pub on: Option<String>,
     #[serde(default)]
@@ -64,6 +67,10 @@ pub struct Session {
     #[serde(default)]
     pub asks: Option<String>,
     #[serde(default)]
+    pub goal: Option<GoalInfo>,
+    #[serde(default)]
+    pub todo: Option<TodoInfo>,
+    #[serde(default)]
     pub space_id: Option<String>,
     #[serde(default)]
     pub space_name: Option<String>,
@@ -103,6 +110,12 @@ pub struct Session {
     /// Already folded by the client's SideFold/ChildSessions input preparation, not a child to fold again.
     #[serde(default)]
     pub nested_subtask: bool,
+    /// Prepared CodexTasks descendants. They participate in query admission but never become separate rows or counts.
+    #[serde(default)]
+    pub search_subtasks: Vec<Session>,
+    /// The client's prepared input found a nested row that admits the current query.
+    #[serde(default)]
+    pub nested_match: bool,
     #[serde(default)]
     pub children: Option<Children>,
     #[serde(default)]
@@ -111,6 +124,18 @@ pub struct Session {
     pub pane_index: Option<i64>,
     #[serde(default)]
     pub space_kind: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct GoalInfo {
+    #[serde(default)]
+    pub objective: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct TodoInfo {
+    #[serde(default)]
+    pub title: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]

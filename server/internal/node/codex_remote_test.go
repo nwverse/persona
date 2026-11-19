@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -33,7 +34,10 @@ type remoteFixture struct {
 	drop          string
 	reject        string
 	rejectCode    int    // the error code a rejected call gets; 0: -32600
+	rejectMessage string // the error text a rejected call gets; empty: "rejected"
 	hangup        string // a call to it closes the connection instead of an answer
+	// slowRead: threads whose thread/read is never answered, as an app-server too slow for it.
+	slowRead      map[string]bool
 	resumeRequest bool
 	ephemeral     string
 	// active: thread/read and thread/resume say a turn runs in the threads (status "active"), as while one does.
@@ -70,7 +74,7 @@ func (f *remoteFixture) serve(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.got = append(f.got, m)
 		ids := append([]string(nil), f.threads...)
-		drop, reject, code, ephemeral, hangup := f.drop, f.reject, f.rejectCode, f.ephemeral, f.hangup
+		drop, reject, code, rejectMessage, ephemeral, hangup := f.drop, f.reject, f.rejectCode, f.rejectMessage, f.ephemeral, f.hangup
 		models, model, effort, archive := f.models, f.threadModel, f.threadEffort, f.archive
 		background := f.backgroundReply
 		backgroundPages := f.backgroundPages
@@ -106,7 +110,10 @@ func (f *remoteFixture) serve(w http.ResponseWriter, r *http.Request) {
 			archive(m.Method, p.ThreadID)
 		}
 		if m.Method == reject {
-			f.push(map[string]any{"id": m.ID, "error": map[string]any{"code": code, "message": "rejected"}})
+			if rejectMessage == "" {
+				rejectMessage = "rejected"
+			}
+			f.push(map[string]any{"id": m.ID, "error": map[string]any{"code": code, "message": rejectMessage}})
 			continue
 		}
 		var p map[string]any
@@ -139,6 +146,12 @@ func (f *remoteFixture) serve(w http.ResponseWriter, r *http.Request) {
 				result = map[string]any{"data": ids}
 			}
 		case "thread/read":
+			f.mu.Lock()
+			slow := f.slowRead[thread]
+			f.mu.Unlock()
+			if slow {
+				continue
+			}
 			if thread == ephemeral {
 				// What Codex 0.166's TUI leaves loaded after naming a thread.
 				d = map[string]any{"id": thread, "ephemeral": true, "path": nil, "threadSource": "thread_title", "cwd": f.home, "status": map[string]any{"type": "active", "activeFlags": []string{}}}
@@ -396,6 +409,56 @@ func TestCodexRemoteOwnerConflictAndStdioRefuse(t *testing.T) {
 	}
 }
 
+func TestCodexRemoteActiveWriterIsAnUndeliveredConflict(t *testing.T) {
+	for _, method := range []string{"thread/resume", "turn/start"} {
+		t.Run(method, func(t *testing.T) {
+			n := remoteTestNode(t)
+			home := t.TempDir()
+			owner, _ := connectRemoteFixture(t, n, home, "owner", remoteRaw)
+			other, _ := connectRemoteFixture(t, n, home, "other")
+			id := n.registerCodex(home, remoteRaw, "")
+			owner.mu.Lock()
+			owner.reject = method
+			owner.rejectMessage = "thread " + remoteRaw + " already has an active writer"
+			owner.mu.Unlock()
+
+			err := n.send(context.Background(), id, "follow up once", nil, sendOpts{})
+			code, data := refusalOf(t, err)
+			if code != "codex_writer_busy" || data["delivered"] != "none" {
+				t.Fatalf("active writer refusal = %s %v (%v)", code, data, err)
+			}
+			if !strings.Contains(err.Error(), "原 Codex") || !strings.Contains(fmt.Sprint(data["detail"]), "active writer") {
+				t.Fatalf("conflict does not explain recovery and retain its diagnostic: %v %v", err, data)
+			}
+			wantStarts := 1
+			if method == "thread/resume" {
+				wantStarts = 0
+			}
+			if owner.count(method) != 1 || owner.count("turn/start") != wantStarts {
+				t.Fatalf("owning writer calls: resume=%d start=%d", owner.count("thread/resume"), owner.count("turn/start"))
+			}
+			if other.count("thread/resume")+other.count("turn/start") != 0 {
+				t.Fatal("active writer fell back to a competing app-server")
+			}
+		})
+	}
+}
+
+func TestCodexRemoteOtherInvalidRequestStaysUnknown(t *testing.T) {
+	n := remoteTestNode(t)
+	home := t.TempDir()
+	f, _ := connectRemoteFixture(t, n, home, "one", remoteRaw)
+	id := n.registerCodex(home, remoteRaw, "")
+	f.mu.Lock()
+	f.reject = "turn/start"
+	f.rejectMessage = "another invalid request"
+	f.mu.Unlock()
+	_, data := refusalOf(t, n.send(context.Background(), id, "follow up once", nil, sendOpts{}))
+	if data["delivered"] != "unknown" {
+		t.Fatalf("an unrelated invalid request became safe to retry: %v", data)
+	}
+}
+
 func TestCodexRemoteUnknownDeliveryNoRetry(t *testing.T) {
 	n := remoteTestNode(t)
 	home := t.TempDir()
@@ -600,5 +663,135 @@ func TestCodexRemoteFailedReadKeepsThread(t *testing.T) {
 	c.mu.Unlock()
 	if kept {
 		t.Fatal("an unloaded thread was kept")
+	}
+}
+
+func (f *remoteFixture) readCount(thread string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, m := range f.got {
+		var p struct {
+			ThreadID string `json:"threadId"`
+		}
+		if m.Method == "thread/read" && json.Unmarshal(m.Params, &p) == nil && p.ThreadID == thread {
+			n++
+		}
+	}
+	return n
+}
+
+// Threads whose thread/read never answers time out on their own: the other threads are still read and listed, the
+// refresh writes one log line, a known thread keeps its last copy, and a timed-out thread is not read again at once.
+func TestCodexRemoteSlowReadsTimeOutAlone(t *testing.T) {
+	n := remoteTestNode(t)
+	logs := &syncBuffer{}
+	home := t.TempDir()
+	f, c := connectRemoteFixture(t, n, home, "one", remoteRaw)
+	n.logger = log.New(logs, "", 0)
+	c.mu.Lock()
+	c.readWait = time.Second
+	c.mu.Unlock()
+	const newSlow = "99999999-8888-7777-6666-555555555555"
+	fast := []string{remoteOther, "aaaaaaaa-0000-0000-0000-000000000001", "aaaaaaaa-0000-0000-0000-000000000002", "aaaaaaaa-0000-0000-0000-000000000003", "aaaaaaaa-0000-0000-0000-000000000004"}
+	f.mu.Lock()
+	f.threads = append([]string{remoteRaw, newSlow}, fast...)
+	f.slowRead = map[string]bool{remoteRaw: true, newSlow: true}
+	f.mu.Unlock()
+
+	start := time.Now()
+	if err := c.refresh(); err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Fatalf("refresh took %v", took)
+	}
+	c.mu.Lock()
+	_, kept := c.threads[remoteRaw]
+	_, listed := c.threads[newSlow]
+	var missing []string
+	for _, raw := range fast {
+		if _, ok := c.threads[raw]; !ok {
+			missing = append(missing, raw)
+		}
+	}
+	c.mu.Unlock()
+	if !kept || listed || len(missing) > 0 {
+		t.Fatalf("known slow kept %v, new slow listed %v, fast threads missing %v", kept, listed, missing)
+	}
+	if lines := strings.Count(logs.String(), "\n"); lines != 1 || !strings.Contains(logs.String(), "2 of 7 threads (2 timed out") {
+		t.Fatalf("log = %q, want one summary line", logs.String())
+	}
+	c.mu.Lock()
+	at := c.slow[remoteRaw].at
+	c.mu.Unlock()
+	if at.Sub(start) < time.Second {
+		t.Fatalf("backoff counted from %v after the refresh started, want from after the read timed out", at.Sub(start))
+	}
+
+	// The next refresh, before the backoff is over: the slow threads are not asked again, the others are.
+	if err := c.refresh(); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.readCount(remoteRaw) + f.readCount(newSlow); got != 2+1 { // remoteRaw was read once at connect
+		t.Fatalf("slow threads read %d times, want 3", got)
+	}
+	if f.readCount(remoteOther) < 2 {
+		t.Fatal("a fast thread was not read again")
+	}
+	c.mu.Lock()
+	_, kept = c.threads[remoteRaw]
+	c.mu.Unlock()
+	if !kept {
+		t.Fatal("a known thread waiting after a timeout was dropped")
+	}
+	if lines := strings.Count(logs.String(), "\n"); lines != 1 {
+		t.Fatalf("log = %q, want nothing new while the slow threads wait", logs.String())
+	}
+}
+
+// A refresh whose own time runs out stops asking: threads not read in time keep their last copy and are not backed off
+// as slow, while those whose own read timed out are.
+func TestCodexRemoteRefreshBudgetStopsReads(t *testing.T) {
+	n := remoteTestNode(t)
+	logs := &syncBuffer{}
+	f, c := connectRemoteFixture(t, n, t.TempDir(), "one", remoteRaw)
+	n.logger = log.New(logs, "", 0)
+	c.mu.Lock()
+	c.readWait, c.refreshWait = time.Second, 1600*time.Millisecond
+	c.mu.Unlock()
+	slow := []string{remoteRaw}
+	for i := range 9 {
+		slow = append(slow, fmt.Sprintf("bbbbbbbb-0000-0000-0000-%012d", i))
+	}
+	f.mu.Lock()
+	f.threads = slow
+	f.slowRead = map[string]bool{}
+	for _, raw := range slow {
+		f.slowRead[raw] = true
+	}
+	f.mu.Unlock()
+
+	if err := c.refresh(); err != nil {
+		t.Fatal(err)
+	}
+	c.mu.Lock()
+	_, kept := c.threads[remoteRaw]
+	backedOff := len(c.slow)
+	_, first := c.slow[remoteRaw]
+	c.mu.Unlock()
+	if !kept {
+		t.Fatal("a known thread was dropped")
+	}
+	if backedOff != codexReadWorkers || !first {
+		t.Fatalf("%d threads backed off (first %v), want the %d whose own read timed out", backedOff, first, codexReadWorkers)
+	}
+	for _, raw := range slow[2*codexReadWorkers:] {
+		if got := f.readCount(raw); got != 0 {
+			t.Fatalf("%s asked %d times after the refresh ran out of time", raw, got)
+		}
+	}
+	if !strings.Contains(logs.String(), "(4 timed out, 6 not read in time") {
+		t.Fatalf("log = %q", logs.String())
 	}
 }

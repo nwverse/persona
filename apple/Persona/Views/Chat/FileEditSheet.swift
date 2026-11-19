@@ -22,7 +22,7 @@ struct FileEditSheet: View {
             }
             .ignoresSafeArea(.container, edges: .bottom)
             .navigationTitle(edit.name)
-            .navigationSubtitle(edit.dirty ? String(localized: "Edited") : model.machine(edit.ref.machineRef)?.name ?? edit.ref.machineID)
+            .navigationSubtitleWhenSupported(edit.dirty ? String(localized: "Edited") : model.machine(edit.ref.machineRef)?.name ?? edit.ref.machineID)
             .navigationBarTitleDisplayMode(.inline)
             .pageToolbar {
                 SheetClose(id: "editor.cancel") { edit.dirty ? discarding = true : dismiss() }
@@ -30,7 +30,7 @@ struct FileEditSheet: View {
             }
         }
         .interactiveDismissDisabled(edit.dirty)
-        .confirmationDialog("Discard your changes?", isPresented: $discarding, titleVisibility: .visible) {
+        .accessibleConfirmationDialog("Discard your changes?", isPresented: $discarding, titleVisibility: .visible, hasCancel: true) {
             Button("Discard Changes", role: .destructive) { dismiss() }
             Button("Keep Editing", role: .cancel) {}
         } message: {

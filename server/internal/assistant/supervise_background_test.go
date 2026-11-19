@@ -102,7 +102,7 @@ func TestBackgroundSupervisorFollowsUpTheMainConversationsTasks(t *testing.T) {
 	listBackground(t, s, f, bg)
 	waitFor(t, "the background supervisor's message", func() bool { return len(f.noticesTo(bg)) == 1 })
 	n := f.noticesTo(bg)[0]
-	for _, want := range []string{"📋 督办：你派出去的任务有 1 个要你处理", "这是 Persona 的督办消息", "你是后台督办对话", "signal=review", "hub 判断做完了，等你验收", "pull/7"} {
+	for _, want := range []string{"📋 督办：你派出去的任务有 1 个要你处理", "这是 Persona 的督办消息", "你是后台督办对话", "signal=review", "待逐项复核，不代表完成", "pull/7"} {
 		if !strings.Contains(n, want) {
 			t.Errorf("the background supervisor's message lacks %q:\n%s", want, n)
 		}
@@ -290,7 +290,7 @@ func TestMainSupervisesOwnTasksSetting(t *testing.T) {
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	agentTurn(s, f, proto.StatusDone, "做完了", 0)
 	waitFor(t, "the main conversation's message", func() bool { return len(f.noticesTo("conv1")) == 1 })
-	if n := f.noticesTo("conv1")[0]; strings.Contains(n, "后台督办") || !strings.Contains(n, "hub 判断做完了，等你验收") {
+	if n := f.noticesTo("conv1")[0]; strings.Contains(n, "后台督办") || !strings.Contains(n, "待逐项复核，不代表完成") {
 		t.Fatalf("the main conversation's message:\n%s", n)
 	}
 	if got := s.settings(ctx).BackgroundSupervisor; got != "" || len(conversationStarts(f)) != 0 {
@@ -338,7 +338,7 @@ func TestBackgroundSupervisorThatCannotStartFallsBackToMain(t *testing.T) {
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	agentTurn(s, f, proto.StatusDone, "做完了", 0)
 	waitFor(t, "the main conversation's message", func() bool { return len(f.noticesTo("conv1")) == 1 })
-	if n := f.noticesTo("conv1")[0]; !strings.Contains(n, "hub 判断做完了，等你验收") || strings.Contains(n, "你是后台督办对话") {
+	if n := f.noticesTo("conv1")[0]; !strings.Contains(n, "待逐项复核，不代表完成") || strings.Contains(n, "你是后台督办对话") {
 		t.Fatalf("the main conversation's message:\n%s", n)
 	}
 	if got := s.settings(ctx).BackgroundSupervisor; got != "" {
@@ -847,7 +847,8 @@ func TestOwnerPresenceAndTheBackgroundSupervisorsQueue(t *testing.T) {
 	agentTurn(s, f, proto.StatusDone, "做完了", 0)
 	bg := backgroundID(t, s)
 	listBackground(t, s, f, bg)
-	waitFor(t, "the background supervisor's message", func() bool { return len(f.noticesTo(bg)) == 1 })
+	// Until its drain is over, the delivered message is still at the head of the queue.
+	waitFor(t, "the background supervisor's message", func() bool { return len(f.noticesTo(bg)) == 1 && !drainingNow(s, bg) })
 	if _, present := s.ownersPresent(time.Now())[bg]; present {
 		t.Fatal("the owner counts as present in the background supervisor without having written there")
 	}
@@ -862,7 +863,9 @@ func TestOwnerPresenceAndTheBackgroundSupervisorsQueue(t *testing.T) {
 		t.Fatalf("while the owner writes there: %d queued, %d sent", n, f.sentTo(bg))
 	}
 	// Quiet again: one goes in per turn, and the one that waits on a decision goes before the one that came first.
-	waitFor(t, "the first held message once the owner is quiet", func() bool { return f.sentTo(bg) == 2 && s.queuedFor(bg) == 1 })
+	waitFor(t, "the first held message once the owner is quiet", func() bool {
+		return f.sentTo(bg) == 2 && s.queuedFor(bg) == 1 && !drainingNow(s, bg)
+	})
 	b := &s.relays
 	b.mu.Lock()
 	left := slices.Clone(b.st.Queue[bg])

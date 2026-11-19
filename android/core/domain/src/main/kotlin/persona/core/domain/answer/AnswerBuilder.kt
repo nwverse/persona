@@ -139,6 +139,7 @@ internal object KotlinAnswerBuilder {
                 AnswerRequirement.SingleQuestionSingleChoice -> interaction.questions?.let {
                     it.size == 1 && !it.single().multiSelect
                 } != true
+                AnswerRequirement.QuestionNotIrreversible -> interaction.reversible == false
                 AnswerRequirement.PlainDialogOption -> action != AnswerAction.ScreenOption ||
                     screenOptions(interaction).firstOrNull { it.key == draft.option }?.kind != ScreenOptionKind.Plain
                 AnswerRequirement.AlwaysOffered -> !interaction.offersAlways
@@ -166,7 +167,8 @@ internal object KotlinAnswerBuilder {
         }
 
         return when (action) {
-            AnswerAction.ApproveAll, AnswerAction.ApproveEdits, AnswerAction.ApproveStepwise -> resolved(Resolution(approve = true, mode = policy.mode))
+            AnswerAction.ApproveAll, AnswerAction.ApproveEdits, AnswerAction.ApproveStepwise -> resolved(Resolution(
+                approve = true, mode = interaction.recordedPlanThen ?: policy.mode))
             AnswerAction.Reject -> resolved(Resolution(approve = false, feedback =
                 if (context.entry == AnswerEntry.Notification) draft.feedback.trim() else draft.feedback))
             AnswerAction.Allow -> resolved(Resolution(allow = true,

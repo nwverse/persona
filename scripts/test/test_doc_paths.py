@@ -46,6 +46,7 @@ SKIP_FILES = {
 GENERATED = {
     "apple/Config.xcconfig",
     "apple/PersonaOptIn.entitlements",  # written by persona_config.py xcconfig when an opt-in entitlement is on
+    "apple/PersonaSiriCalls.entitlements",  # written by xcodegen with app.siri_calls on (apple/siri-calls.yml), git-ignored
     "apple/Persona.xcodeproj",
     "android/app/build/outputs/apk/debug/app-debug.apk",
     "android/local.properties",  # each machine's own SDK location (sdk.dir), git-ignored

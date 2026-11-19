@@ -66,7 +66,7 @@ class AssistantLinesTest {
     }
 
     @Test fun quickResultKeepsAnAndroidCalendarEventsFields() {
-        val call = call("phone_calendar_create_event", """{"id":"E1","title":"Dentist","start":"2026-11-13T15:30:00Z","end":"2026-11-13T16:00:00Z","calendar":"Personal"}""")
+        val call = call("phone_calendar_create_event", """{"id":"E1","title":"Dentist","start":"2026-11-13T15:30:00Z","end":"2026-11-13T16:00:00Z","calendar":"Personal","source_device_name":"Pixel 9","source_device_platform":"android"}""")
         val result = QuickResult.of(call)
         assertNotNull(result)
         assertEquals(false, result!!.reminder)
@@ -74,8 +74,41 @@ class AssistantLinesTest {
         assertEquals("Dentist", result.title)
         assertEquals("2026-11-13T15:30:00Z", result.time)
         assertEquals("Personal", result.place)
+        assertEquals("Pixel 9", result.sourceDeviceName)
+        assertEquals("android", result.sourceDevicePlatform)
         // The id is not a number, so it is not an event this phone's calendar can be asked to delete.
         assertNull(result.itemId)
+    }
+
+    @Test fun quickResultKeepsOtherKnownSourceIdentities() {
+        val iphone = QuickResult.of(call("phone_reminders_create",
+            """{"id":"R1","title":"Call","due":"2026-11-13T15:30:00Z","list":"Personal","source_device_name":"Work iPhone","source_device_platform":"ios"}"""))
+        assertNotNull(iphone)
+        assertEquals("Work iPhone", iphone!!.sourceDeviceName)
+        assertEquals("ios", iphone.sourceDevicePlatform)
+        assertEquals("Call", iphone.title)
+        assertEquals("Personal", iphone.place)
+
+        val harmony = QuickResult.of(call("phone_calendar_create_event",
+            """{"id":"E2","title":"Review","source_device_name":"Mate 70","source_device_platform":"harmony"}"""))
+        assertNotNull(harmony)
+        assertEquals("Mate 70", harmony!!.sourceDeviceName)
+        assertEquals("harmony", harmony.sourceDevicePlatform)
+        assertEquals("Review", harmony.title)
+    }
+
+    @Test fun quickResultLeavesMissingOrBlankSourceIdentityUnknown() {
+        for (raw in listOf(
+            """{"id":"E1","title":"Dentist"}""",
+            """{"id":"E1","title":"Dentist","source_device_name":"","source_device_platform":""}""",
+            """{"id":"E1","title":"Dentist","source_device_name":"  ","source_device_platform":"\t"}""",
+        )) {
+            val result = QuickResult.of(call("phone_calendar_create_event", raw))
+            assertNotNull(raw, result)
+            assertNull(raw, result!!.sourceDeviceName)
+            assertNull(raw, result.sourceDevicePlatform)
+            assertEquals(raw, "Dentist", result.title)
+        }
     }
 
     @Test fun quickResultKeepsTheCreatedItemsIdForUndo() {
@@ -127,6 +160,11 @@ class AssistantLinesTest {
         assertEquals(Interruption(CoreText.of(CoreText.Key.ApiConnection), true), Interruption.of(s("unread", cut)))
         assertEquals(Interruption(CoreText.of(CoreText.Key.ApiLogin), false), Interruption.of(s("unread", "API Error: 401 authentication_error")))
         assertNull(Interruption.of(s("working", cut)))
+        // A turn with no output is the hub's own sentence, never a model service error (#10187).
+        for (kind in listOf("no_output", "stopped")) {
+            val quiet = Session(machineId = "m", sessionId = "s", state = "unread", turnError = "随对话一起停下了", turnErrorKind = kind)
+            assertEquals(Interruption(CoreText.plain("随对话一起停下了"), true, plain = true), Interruption.of(quiet))
+        }
         fun receipt(body: String) = FeedItem("r", kind = "receipt", body = JsonCodec.parseToJsonElement(body))
         assertEquals("interrupted", (receiptState(receipt("""{"state":"interrupted","summary":"模型服务出错，中断了"}"""))).zhAny())
         assertEquals("interrupted", (receiptState(receipt("""{"state":"done","summary":"$cut"}"""))).zhAny())
