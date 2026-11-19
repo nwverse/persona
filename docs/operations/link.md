@@ -691,13 +691,17 @@ moment is cut off, as when a node restarts.
   code and the credential it was traded for (the link closes with 4002) and puts the kind back to `ssh`.
   - **Until the hub answers**, the manager touches nothing on the computer. Persona Link stays installed, so the computer
     is not left with neither a link nor SSH. The switch shows as rolling back while the manager asks again: after 1 s, then
-    twice as long each time, up to every minute, for as long as the manager runs, and again after it restarts.
+    twice as long each time, up to every minute, and again after a restart. The asking is bounded to one hour from the
+    first try, a limit a restart does not reset. After that the manager stops and leaves the computer as it is. The
+    switch ends failed with `hub_unanswered`, saying it could not be undone, and **Redeploy** and automatic updates are
+    no longer held. A hub that does not know the call (`unknown_method`, an older build) ends it the same way at once.
   - **When the hub has confirmed**, the manager removes over SSH only what this switch installed: the connector with its
     `link.json` and unit (`persona-link uninstall --purge`), and the node service only if the computer had none before
     (`persona-link node uninstall`). Both run only through the program this switch sent, recognized by its SHA-256, never
     through a `persona-link` found there. Then it waits up to 2 minutes for the computer to answer over SSH again.
-- **If the hub refuses to undo it** (it cannot tie the request to this switch, or the computer belongs to another manager
-  now), the manager stops asking and leaves Persona Link on the computer.
+- **If the hub refuses to undo it** (it cannot tie the request to this switch), the manager stops asking and leaves Persona
+  Link on the computer. If the hub has undone the switch but the computer is another manager's by now, or has been
+  removed, it answers `rolled_back_gone`, and the manager cleans up as for any confirmed rollback.
 - **If any step cannot be confirmed**, the result says the switch could not be undone for sure, rather than that it was.
 
 The reason the switch failed is shown in plain words either way.
@@ -738,8 +742,10 @@ manager that restarts during a switch carries on as follows:
 
 If the manager stops waiting for the hub's `begin`, the hub gives up the begin when it has not taken the computer yet.
 
-**The computer's own files**: the check, the transfer and the install refuse (`unsafe_permissions`) when `~/.persona` or its
-`bin` can be written by other users. A group-writable one is accepted only when the group is the user's own private group.
+**The computer's own files**: the check, the transfer and the install refuse (`unsafe_permissions`) unless the home folder,
+`~/.persona` and its `bin` belong to the user, and none of them can be written by other users. A group-writable one is
+accepted only when the group is the user's own private group. The message says how to fix it, for example
+`chmod go-w ~ ~/.persona ~/.persona/bin`.
 After the build is put in place, its SHA-256 is checked once more before it runs.
 
 | Route | Who | Answer |
