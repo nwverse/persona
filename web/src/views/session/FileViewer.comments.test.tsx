@@ -18,9 +18,12 @@ const MID = "test-machine";
 const SID = "file-comment-session";
 const KEY = `${MID}/${SID}`;
 const CWD = "/work";
+const VISIBLE_TAIL = "endOfVisibleCode";
+const DISPLAYED_LINE = "x".repeat(4000 - VISIBLE_TAIL.length) + VISIBLE_TAIL;
+const HIDDEN_TAIL = "hiddenSourceBeyondTheDisplayedLine";
 const FILES = {
   markdown: { name: "notes.md", mime: "text/markdown", text: "# Review notes\n\nCheck the example." },
-  source: { name: "example.ts", mime: "text/plain", text: "const before = 0;\n  const first = 42;\n  const second = 7;" },
+  source: { name: "example.ts", mime: "text/plain", text: `const before = 0;\n  const first = 42;\n  const second = 7;\n${DISPLAYED_LINE}${HIDDEN_TAIL}` },
   html: { name: "page.html", mime: "text/html", text: "<!doctype html><h2>Rendered chart</h2>" },
 };
 type Kind = keyof typeof FILES;
@@ -112,17 +115,23 @@ function textAt(el: Element, offset: number) {
   throw new Error("Missing text in source row");
 }
 
+const sourceText = (line: number) => host.querySelector(`[data-line="${line}"] [data-file-code-text]`)!;
+
+async function waitForPill() {
+  for (let i = 0; i < 8 && !pill(); i++) await act(async () => { await new Promise((done) => setTimeout(done, 5)); });
+}
+
 async function pick(kind: Kind) {
   await show(kind);
   if (kind === "source") {
-    const a = textAt(host.querySelector('[data-line="2"] [data-file-code-text]')!, 2);
-    const b = textAt(host.querySelector('[data-line="3"] [data-file-code-text]')!, 14);
+    const a = textAt(sourceText(2), 2);
+    const b = textAt(sourceText(3), 14);
     select(a.node, a.offset, b.node, b.offset);
   } else {
     const heading = kind === "html" ? htmlText() : host.querySelector("[data-testid=file-markdown] h1")!.firstChild!;
     select(heading, 0, heading, (heading as Text).length);
   }
-  for (let i = 0; i < 8 && !pill(); i++) await act(async () => { await new Promise((done) => setTimeout(done, 5)); });
+  await waitForPill();
   expect(pill(), `Comment action for ${kind}`).not.toBeNull();
 }
 
@@ -195,5 +204,38 @@ describe("selection comments from the Agent's file panel", () => {
     expect(frame()).not.toBe(before);
     expect(frame()!.getAttribute("sandbox")).toContain("allow-scripts");
     expect(frame()!.getAttribute("sandbox")).not.toContain("allow-same-origin");
+  });
+
+  it.each([
+    { description: "one line ending inside the marker", first: 4, endpoint: "marker" },
+    { description: "one line ending after the marker", first: 4, endpoint: "text wrapper" },
+    { description: "two lines ending inside the marker", first: 3, endpoint: "marker" },
+    { description: "two lines ending at the boundary after the truncated row", first: 3, endpoint: "row" },
+  ])("sends only visible source for $description", async ({ first, endpoint }) => {
+    await show("source");
+    const text = sourceText(4);
+    const marker = text.lastElementChild!.firstChild!;
+    const start = textAt(sourceText(first), first === 4 ? DISPLAYED_LINE.length - VISIBLE_TAIL.length : 2);
+    const end = endpoint === "marker" ? marker : endpoint === "row" ? text.parentElement! : text;
+    const endOffset = endpoint === "marker" ? 6 : end.childNodes.length;
+    select(start.node, start.offset, end, endOffset);
+    await waitForPill();
+    expect(pill()).not.toBeNull();
+    act(() => pill()!.click());
+    writeNote(1, "Check this range.");
+    const selected = first === 4 ? [VISIBLE_TAIL] : ["const second = 7;", DISPLAYED_LINE];
+    const location = first === 4 ? "4" : "3-4";
+    expect(await send()).toBe([
+      "> Comment 1", "> Selected text:", ...selected.map((line) => `> > ${line}`),
+      `> File: /work/example.ts:${location}`, "> ", "> Check this range.",
+    ].join("\n"));
+  });
+
+  it("does not offer a source comment for the truncation marker alone", async () => {
+    await show("source");
+    const marker = sourceText(4).lastElementChild!.firstChild!;
+    select(marker, 2, marker, 6);
+    await waitForPill();
+    expect(pill()).toBeNull();
   });
 });

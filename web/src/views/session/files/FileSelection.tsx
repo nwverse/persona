@@ -9,12 +9,17 @@ import { CommentPill, isCommentShortcut } from "../../chat/CommentPill";
 export type FileCommentTarget = Omit<Extract<Panel, { kind: "file" }>, "kind" | "line" | "to">;
 
 function codeEdge(node: Node, offset: number) {
-  const span = (node.nodeType === Node.ELEMENT_NODE ? node as Element : node.parentElement)?.closest("[data-file-code-text]");
-  const line = Number(span?.closest("[data-line]")?.getAttribute("data-line"));
-  if (!span || !line) return null;
+  const element = node.nodeType === Node.ELEMENT_NODE ? node as Element : node.parentElement;
+  const row = element?.closest("[data-line]");
+  const span = row?.querySelector("[data-file-code-text]");
+  const line = Number(row?.getAttribute("data-line"));
+  if (!span || !line || (node !== row && !span.contains(node))) return null;
   const prefix = span.ownerDocument.createRange();
   prefix.selectNodeContents(span);
-  prefix.setEnd(node, offset);
+  const marker = span.querySelector("[data-file-truncation-marker]");
+  if (marker) prefix.setEndBefore(marker);
+  // Endpoints in or beyond the marker stop at the last visible source character.
+  if (prefix.comparePoint(node, offset) <= 0) prefix.setEnd(node, offset);
   return { line, offset: prefix.toString().length };
 }
 
@@ -26,7 +31,10 @@ function selectedCode(range: Range, lines: readonly string[], maxWidth: number) 
   const last = end.offset === 0 && end.line > start.line ? end.line - 1 : end.line;
   const text = lines.slice(start.line - 1, last).map((raw, index) => {
     const line = start.line + index;
-    return raw.slice(line === start.line ? start.offset : 0, line === end.line ? end.offset : maxWidth);
+    const visibleLength = Math.min(raw.length, maxWidth);
+    const from = line === start.line ? Math.min(start.offset, visibleLength) : 0;
+    const to = line === end.line ? Math.min(end.offset, visibleLength) : visibleLength;
+    return raw.slice(from, to);
   }).join("\n");
   return { text, line: start.line, to: last };
 }

@@ -617,7 +617,7 @@ function CodeRow({ n, digits, text, tokens, cut, mark, picked, gutter }: { n: nu
       />
       <span data-file-code-text className="pr-6 pl-3 whitespace-pre text-ink">
         {parts}
-        {cut && <span className="text-ink-3 select-none">{t("session-files-fileview.line_cut", { max: MAX_LINE })}</span>}
+        {cut && <span data-file-truncation-marker className="text-ink-3 select-none">{t("session-files-fileview.line_cut", { max: MAX_LINE })}</span>}
       </span>
     </div>
   );
