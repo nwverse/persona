@@ -88,14 +88,15 @@ func dial(ctx context.Context, c *Config) (*link, error) {
 // dialVia races eps for the link: straight to the hub, or through outbound proxy p when it is set (proxied); every
 // stream later opened on the link takes the same route. eps is already in its intended race order.
 func dialVia(ctx context.Context, c *Config, eps []Endpoint, p *url.URL) (*link, error) {
-	l, ep, err := race(ctx, eps, func(ctx context.Context, ep Endpoint) (*link, error) {
+	candidates := ranked(eps)
+	l, ep, err := race(ctx, candidates, func(ctx context.Context, ep Endpoint) (*link, error) {
 		var local netip.Addr
 		hc := hubClient(c, p, func(raw net.Conn) {
 			if a, err := netip.ParseAddrPort(raw.LocalAddr().String()); err == nil {
 				local = a.Addr().Unmap()
 			}
 		})
-		conn, resp, err := diagnosticDial(ctx, wsURL(ep.URL, Path), &websocket.DialOptions{HTTPClient: hc, HTTPHeader: bearer(c.Token)}, "control", ep.Kind, slices.Index(eps, ep)+1)
+		conn, resp, err := diagnosticDial(ctx, wsURL(ep.URL, Path), &websocket.DialOptions{HTTPClient: hc, HTTPHeader: bearer(c.Token)}, "control", ep.Kind, slices.Index(candidates, ep)+1)
 		if err != nil {
 			return nil, handshakeError(resp, err)
 		}
