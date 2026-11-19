@@ -15,21 +15,80 @@ import (
 	"time"
 )
 
+// signal wakes the waiters of a test's counts: more is closed at the next change.
+type signal struct {
+	mu   sync.Mutex
+	more chan struct{}
+}
+
+func (s *signal) changed() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.more != nil {
+		close(s.more)
+		s.more = nil
+	}
+}
+
+// until returns once done says so, looking again at each change; it fails the test after within.
+func (s *signal) until(t *testing.T, what string, within time.Duration, done func() bool) {
+	t.Helper()
+	deadline := time.NewTimer(within)
+	defer deadline.Stop()
+	for {
+		s.mu.Lock()
+		if s.more == nil {
+			s.more = make(chan struct{})
+		}
+		more := s.more
+		s.mu.Unlock()
+		if done() {
+			return
+		}
+		select {
+		case <-more:
+		case <-deadline.C:
+			t.Fatalf("%s: not within %s", what, within)
+		}
+	}
+}
+
+// events counts something a test waits for: dials, tries, probes.
+type events struct {
+	signal
+	n atomic.Int32
+}
+
+func (e *events) add() {
+	e.n.Add(1)
+	e.changed()
+}
+
+func (e *events) count() int { return int(e.n.Load()) }
+
+// waitFor returns once there were n of them.
+func (e *events) waitFor(t *testing.T, what string, n int, within time.Duration) {
+	t.Helper()
+	e.until(t, fmt.Sprintf("%d %s (%d so far)", n, what, e.count()), within, func() bool { return e.count() >= n })
+}
+
 // logLines keeps a client's log for a test to look at.
 type logLines struct {
-	mu    sync.Mutex
+	signal
+	lmu   sync.Mutex
 	lines []string
 }
 
 func (l *logLines) logf(format string, args ...any) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	l.lmu.Lock()
 	l.lines = append(l.lines, fmt.Sprintf(format, args...))
+	l.lmu.Unlock()
+	l.changed()
 }
 
 func (l *logLines) count(part string) int {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	l.lmu.Lock()
+	defer l.lmu.Unlock()
 	n := 0
 	for _, line := range l.lines {
 		if strings.Contains(line, part) {
@@ -40,21 +99,15 @@ func (l *logLines) count(part string) int {
 }
 
 func (l *logLines) all() []string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	l.lmu.Lock()
+	defer l.lmu.Unlock()
 	return append([]string(nil), l.lines...)
 }
 
-// waitFor returns once a line with part was logged, failing the test after within.
-func (l *logLines) waitFor(t *testing.T, part string, within time.Duration) {
+// waitFor returns once n lines with part were logged.
+func (l *logLines) waitFor(t *testing.T, part string, n int, within time.Duration) {
 	t.Helper()
-	deadline := time.Now().Add(within)
-	for l.count(part) == 0 {
-		if time.Now().After(deadline) {
-			t.Fatalf("no %q in the log within %s", part, within)
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	l.until(t, fmt.Sprintf("%d of %q in the log", n, part), within, func() bool { return l.count(part) >= n })
 }
 
 // tryEnded is what Run logs after each try that failed.
@@ -75,16 +128,11 @@ func freeAddr(t *testing.T) string {
 // listenAt listens at addr (a port freeAddr gave or a server let go).
 func listenAt(t *testing.T, addr string) net.Listener {
 	t.Helper()
-	var err error
-	for range 50 {
-		var l net.Listener
-		if l, err = net.Listen("tcp", addr); err == nil {
-			return l
-		}
-		time.Sleep(10 * time.Millisecond)
+	l, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Fatalf("listen again at %s: %v", addr, err)
 	}
-	t.Fatalf("listen again at %s: %v", addr, err)
-	return nil
+	return l
 }
 
 // serveOn serves h on l.
@@ -94,6 +142,16 @@ func serveOn(l net.Listener, h http.Handler) *httptest.Server {
 	srv.Listener = l
 	srv.Start()
 	return srv
+}
+
+// countingClient dials as net.Dialer does, one connection per request, and counts the dials: the full tries' and
+// the probes'.
+func countingClient(dials *events) *http.Client {
+	return &http.Client{Transport: &http.Transport{DisableKeepAlives: true,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			dials.add()
+			return (&net.Dialer{}).DialContext(ctx, network, addr)
+		}}}
 }
 
 // runClient runs c until the test ends, then cancels it and waits for Run to return.
@@ -116,16 +174,28 @@ func runClient(t *testing.T, c *Client) (ctx context.Context, cancel context.Can
 	return ctx, cancel, done
 }
 
+// stop cancels Run and waits for it to return.
+func stop(t *testing.T, cancel context.CancelFunc, ran <-chan error) {
+	t.Helper()
+	cancel()
+	select {
+	case <-ran:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return after its context ended")
+	}
+}
+
 // A client whose backoff is at its cap (a laptop that slept through failed tries) is back within moments of the hub
 // answering again, not after the rest of its minute: one full try, once the probe finds the port.
 func TestClientReconnectsSoonAfterTheHubComesBack(t *testing.T) {
 	addr := freeAddr(t)
+	var dials events
 	var log logLines
 	c := &Client{Hub: "http://" + addr, Token: "t", HelloMethod: "manager.hello", Logf: log.logf,
-		Backoff: time.Minute, MaxBackoff: time.Minute, probeEvery: 20 * time.Millisecond}
+		HTTPClient: countingClient(&dials), Backoff: time.Minute, MaxBackoff: time.Minute, probeEvery: 20 * time.Millisecond}
 	ctx, _, _ := runClient(t, c)
-	log.waitFor(t, "again in 1m0s", 5*time.Second)
-	time.Sleep(100 * time.Millisecond) // a few probes find nothing
+	log.waitFor(t, "again in 1m0s", 1, 5*time.Second)
+	dials.waitFor(t, "dials (the try, then probes that find nothing)", 3, 5*time.Second)
 
 	f := &fakeHub{}
 	srv := serveOn(listenAt(t, addr), f)
@@ -144,34 +214,26 @@ func TestClientReconnectsSoonAfterTheHubComesBack(t *testing.T) {
 	}
 }
 
-// countingDial dials as net.Dialer does and counts the dials: the full tries' and the probes'.
-func countingDial(n *atomic.Int32) func(context.Context, string, string) (net.Conn, error) {
-	return func(ctx context.Context, network, addr string) (net.Conn, error) {
-		n.Add(1)
-		return (&net.Dialer{}).DialContext(ctx, network, addr)
-	}
-}
-
 // A hub that stays out of reach gets only probes between full tries, and the full tries keep the backoff's pace.
 func TestClientProbesWhileTheHubStaysDown(t *testing.T) {
-	var dials atomic.Int32
+	var dials events
 	var log logLines
 	c := &Client{Hub: "http://" + freeAddr(t), Token: "t", HelloMethod: "manager.hello", Logf: log.logf,
-		HTTPClient: &http.Client{Transport: &http.Transport{DialContext: countingDial(&dials)}},
-		Backoff:    100 * time.Millisecond, MaxBackoff: 200 * time.Millisecond,
+		HTTPClient: countingClient(&dials), Backoff: 100 * time.Millisecond, MaxBackoff: 200 * time.Millisecond,
 		probeOver: time.Nanosecond, probeEvery: 10 * time.Millisecond}
+	began := time.Now()
 	_, cancel, ran := runClient(t, c)
-	time.Sleep(time.Second)
-	cancel()
-	<-ran
+	log.waitFor(t, tryEnded, 4, 10*time.Second)
+	took := time.Since(began)
+	stop(t, cancel, ran)
 	tries := log.count(tryEnded)
-	probes := int(dials.Load()) - tries
-	t.Logf("%d full tries, %d probes", tries, probes)
-	// Waits of 100 ms, then 200 ms: about six tries in the second.
-	if tries < 3 || tries > 8 {
-		t.Fatalf("%d full tries in a second with waits of 100–200 ms", tries)
+	probes := dials.count() - tries
+	t.Logf("%d full tries in %s, %d probes", tries, took.Round(time.Millisecond), probes)
+	// Four tries take the waits of 100, 200 and 200 ms between them.
+	if took < 450*time.Millisecond {
+		t.Fatalf("4 full tries within %s, faster than the backoff's 500 ms", took)
 	}
-	if probes < 3*tries {
+	if probes < 3*(tries-1) {
 		t.Fatalf("%d probes between %d full tries, want several in each wait", probes, tries)
 	}
 	if log.count("the hub answers again") != 0 {
@@ -188,7 +250,7 @@ func TestClientKeepsBackoffWhenThePortAnswersButNotTheBus(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer l.Close()
-	var tries, probes atomic.Int32
+	var tries, probes events
 	go func() {
 		for {
 			conn, err := l.Accept()
@@ -199,9 +261,9 @@ func TestClientKeepsBackoffWhenThePortAnswersButNotTheBus(t *testing.T) {
 				defer conn.Close()
 				_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 				if n, _ := conn.Read(make([]byte, 512)); n > 0 { // a try's request: hang up on it
-					tries.Add(1)
+					tries.add()
 				} else { // a probe says nothing
-					probes.Add(1)
+					probes.add()
 				}
 			}()
 		}
@@ -210,17 +272,18 @@ func TestClientKeepsBackoffWhenThePortAnswersButNotTheBus(t *testing.T) {
 	c := &Client{Hub: "http://" + l.Addr().String(), Token: "t", HelloMethod: "manager.hello", Logf: log.logf,
 		Backoff: 100 * time.Millisecond, MaxBackoff: 200 * time.Millisecond,
 		probeOver: time.Nanosecond, probeEvery: 10 * time.Millisecond}
+	began := time.Now()
 	_, cancel, ran := runClient(t, c)
-	time.Sleep(time.Second)
-	cancel()
-	<-ran
-	time.Sleep(50 * time.Millisecond) // the last connections counted
-	n, p := int(tries.Load()), int(probes.Load())
-	t.Logf("%d full tries, %d probes", n, p)
-	if n < 3 || n > 8 {
-		t.Fatalf("%d full tries in a second with waits of 100–200 ms (a try every probe would be dozens)", n)
+	tries.waitFor(t, "full tries", 4, 10*time.Second)
+	took := time.Since(began)
+	probes.waitFor(t, "probes (one in each wait so far)", 3, 5*time.Second)
+	stop(t, cancel, ran)
+	n, p := tries.count(), probes.count()
+	t.Logf("%d full tries in %s, %d probes", n, took.Round(time.Millisecond), p)
+	if took < 450*time.Millisecond {
+		t.Fatalf("4 full tries within %s, faster than the backoff's 500 ms (a try every probe would take 30 ms)", took)
 	}
-	if p < 1 || p > n+1 {
+	if p > n+1 {
 		t.Fatalf("%d probes for %d waits, want one a wait", p, n)
 	}
 	if log.count("the hub answers again") != 0 {
@@ -229,7 +292,7 @@ func TestClientKeepsBackoffWhenThePortAnswersButNotTheBus(t *testing.T) {
 }
 
 // A refused token waits MaxBackoff whole, even when the hub goes away and comes back during the wait: only someone
-// fixing the token helps, and the probe would only bring its next refusal sooner.
+// fixing the token helps, and a probe would only bring the next refusal sooner. It does not probe at all.
 func TestClientRejectedTokenKeepsItsWait(t *testing.T) {
 	addr := freeAddr(t)
 	f := &fakeHub{}
@@ -242,33 +305,41 @@ func TestClientRejectedTokenKeepsItsWait(t *testing.T) {
 		f.ServeHTTP(w, r)
 	}))
 	defer srv.Close()
+	var dials events
 	var log logLines
 	c := &Client{Hub: "http://" + addr, Token: "t", HelloMethod: "manager.hello", Logf: log.logf,
-		Backoff: 10 * time.Millisecond, MaxBackoff: time.Minute, probeEvery: 10 * time.Millisecond}
+		HTTPClient: countingClient(&dials), Backoff: 10 * time.Millisecond, MaxBackoff: 300 * time.Millisecond,
+		probeOver: time.Nanosecond, probeEvery: 10 * time.Millisecond}
 	runClient(t, c)
-	log.waitFor(t, "again in 1m0s", 5*time.Second)
-	time.Sleep(50 * time.Millisecond)
+	log.waitFor(t, "again in 300ms", 1, 5*time.Second)
+	refused := time.Now()
 
+	var again events
 	f2 := &fakeHub{}
 	f2.refuse.Store(true)
 	f2.plain.Store(true)
-	srv2 := serveOn(listenAt(t, addr), f2)
+	srv2 := serveOn(listenAt(t, addr), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f2.ServeHTTP(w, r)
+		again.add()
+	}))
 	defer srv2.Close()
-	time.Sleep(500 * time.Millisecond)
-	if n := f.dials.Load() + f2.dials.Load(); n != 1 {
-		t.Fatalf("%d tries with a refused token within half a second, want 1 (every %s)", n, c.MaxBackoff)
+	again.waitFor(t, "tries after the refusal", 1, 5*time.Second)
+	if took := time.Since(refused); took < 250*time.Millisecond {
+		t.Fatalf("tried again %s after the refusal, before its wait of %s", took, c.MaxBackoff)
+	}
+	if n := dials.count(); n != 2 {
+		t.Fatalf("%d dials for two tries with a refused token, want no probes between them", n)
 	}
 }
 
 // Run returns as soon as its context ends: between probes, and in the middle of one that hangs.
 func TestClientPauseEndsWithItsContext(t *testing.T) {
 	t.Run("between probes", func(t *testing.T) {
-		var log logLines
-		c := &Client{Hub: "http://" + freeAddr(t), Token: "t", HelloMethod: "manager.hello", Logf: log.logf,
-			Backoff: time.Minute, MaxBackoff: time.Minute, probeEvery: 20 * time.Millisecond}
+		var dials events
+		c := &Client{Hub: "http://" + freeAddr(t), Token: "t", HelloMethod: "manager.hello",
+			HTTPClient: countingClient(&dials), Backoff: time.Minute, MaxBackoff: time.Minute, probeEvery: 20 * time.Millisecond}
 		_, cancel, ran := runClient(t, c)
-		log.waitFor(t, tryEnded, 5*time.Second)
-		time.Sleep(50 * time.Millisecond)
+		dials.waitFor(t, "dials (the try, then probes)", 3, 5*time.Second)
 		cancel()
 		select {
 		case err := <-ran:
