@@ -189,7 +189,7 @@ func (s *Service) queueNotice(id string, n *quietNotice, to string, msg relayMsg
 // retryWith: a failed start's launcher its card offers instead.
 func renderNotice(n *quietNotice, reporting bool, retryWith string) string {
 	return prompts.RenderTaskNotice(prompts.TaskNotice{Title: n.todo.Title, Machine: n.machine, State: n.state, Earlier: n.earlier,
-		Ask: n.ask, Text: n.text, Files: taskFileLines(n.files), Reporting: reporting, RetryWith: retryWith})
+		Ask: n.ask, Text: n.text, Files: taskFilePrompts(n.files), Reporting: reporting, RetryWith: retryWith})
 }
 
 // replaceQueuedNotice: a notice about the same task still waits in the queue: msg takes its place (true).
