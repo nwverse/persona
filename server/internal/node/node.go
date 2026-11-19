@@ -1671,8 +1671,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			}
 		}
 		ctx = context.WithValue(ctx, sendTraceKey{}, opts.ClientMsgID)
-		ctx, waits := withComputerWait(ctx) // claudebg.go: an outside Claude took it behind a dialog
-		ctx, queued := withSendQueued(ctx)  // codex_desktop_queue.go: it waits behind the turn under way
+		ctx, waits := withComputerWait(ctx)    // claudebg.go: an outside Claude took it behind a dialog
+		ctx, queued := withSendQueued(ctx)     // codex_desktop_queue.go: it waits behind the turn under way
+		ctx, compacted := withCompactNote(ctx) // compact_before_send.go: compacted first, or held for it (#11137)
 		var owner *ownerDelivery
 		if opts.OwnerInput && ownerInputExact(params) {
 			ctx, owner = withOwnerDelivery(ctx) // ccplugin.go: which way the owner's message went in
@@ -1690,6 +1691,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 					_, err := n.assistantSend(withSkillOwner(withClientMsgID(ctx, opts.ClientMsgID), p.SkillOwner), p.SessionID, "", p.Launcher, p.Text, p.Images, "", "", (modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: n.externalRuntime(p.SessionID, p.Launcher, p.Runtime), External: p.External, IsMain: p.IsMain, MainCompactWindow: p.MainCompact, FollowsSetting: p.FollowsSetting, ConfigDir: p.ConfigDir, Origin: p.Origin, Interject: p.Interject, Interactive: p.Interactive}).withSupervision(p.SupervisionInstructions))
 					return err
 				}
+				if opts.CompactIfFull { // compact_before_send.go (#11137)
+					return n.sendCompacting(ctx, p.SessionID, p.Text, p.Images, opts)
+				}
 				return n.send(ctx, p.SessionID, p.Text, p.Images, opts)
 			})
 		})
@@ -1702,6 +1706,12 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		}
 		if *queued {
 			res["queued"] = true
+		}
+		if compacted.held {
+			res["compact_after_turn"] = true
+		}
+		if compacted.done {
+			res["compacted"] = true
 		}
 		if owner != nil && owner.as != "" {
 			res["delivered_as"] = owner.as
