@@ -201,6 +201,26 @@ class HttpChatActionsTest {
         }
     }
 
+    @Test fun undeliveredRetryAndDeleteUseTheSelectedAssistantConversationAndMessage() = runBlocking {
+        MockWebServer().use { server ->
+            val actions = actions(server)
+            val session = Session(machineId = "machine", sessionId = "conversation/with#separator", assistant = true)
+            val messageId = "message/with#separator"
+            server.enqueue(MockResponse().setBody("{}"))
+            actions.retryUndelivered(session, messageId)
+            val retry = server.takeRequest()
+            assertEquals("POST", retry.method)
+            assertEquals("/api/v1/assistant/conversations/conversation%2Fwith%23separator/undelivered/message%2Fwith%23separator/retry", retry.path)
+
+            server.enqueue(MockResponse().setBody("{}"))
+            actions.deleteUndelivered(session, messageId)
+            val delete = server.takeRequest()
+            assertEquals("DELETE", delete.method)
+            assertEquals("/api/v1/assistant/conversations/conversation%2Fwith%23separator/undelivered/message%2Fwith%23separator", delete.path)
+            assertEquals(2, server.requestCount)
+        }
+    }
+
     @Test fun attachPostsToTheSessionAndVerifiesTheAttachedFlag() = runBlocking {
         MockWebServer().use { server ->
             val actions = actions(server)

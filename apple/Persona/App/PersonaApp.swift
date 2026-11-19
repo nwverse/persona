@@ -61,6 +61,7 @@ struct PersonaApp: App {
                     #endif
                     if let link = ExtensionSystemLink(url: url) { model.openExtension(link); return }
                     if SentSettingsLink.matches(url) { model.openSentRecords(); return }
+                    if let link = ProviderImportLink.text(url) { model.openProviderImport(link); return } // a gateway's or a shared provider import link (#5428)
                     if IPhoneSetupLink.matches(url) { model.openIPhoneSetup(); return }
                     // The web sign-in page's code, read by the Camera app: only the scanner in Settings › Devices
                     // approves a browser (#10293), so a link says where to scan it and does nothing else.

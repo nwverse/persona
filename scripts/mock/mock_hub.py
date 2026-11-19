@@ -66,7 +66,8 @@ def features():
                 ["preview"] if os.environ.get("MOCK_PREVIEW") else []) + (
                 ["task_cron"] if os.environ.get("MOCK_CRON") == "1" else []) + (
                 [] if os.environ.get("MOCK_TODO_SEEN") == "off" else ["todo_seen"]) + (
-                [] if os.environ.get("MOCK_LOOK_UPLOADS") == "off" else ["look_uploads"])
+                [] if os.environ.get("MOCK_LOOK_UPLOADS") == "off" else ["look_uploads"]) + (
+                [] if os.environ.get("MOCK_TODO_IMAGES") == "off" else ["todo_images"])
 
 
 def identity():
@@ -3186,6 +3187,57 @@ if os.environ.get("MOCK_TODO_BADGE") == "1":
         _badge_todo("tb_errand", "给家里的 NAS 换硬盘", 90),
     ]
 
+# MOCK_TODO_WAITS=1 (#11090, docs/assistant/todos.md "State calculation rules"): only these to-dos, one per thing a
+# waiting to-do can wait on, each with one Agent whose turn ended while something brings it back (task Waiting): a
+# decision only the owner can make and work held for their OK (Waiting on you, in the attention color; the sidebar's
+# badge 2), another Agent's merge, a merge behind CI, an outside review, its own background work, the hub's retry after
+# a moment's model failure, and a wait the hub checks back on without naming it (Paused, nothing needed from you). The
+# words are made up.
+if os.environ.get("MOCK_TODO_WAITS") == "1":
+    def _wait_agent(n, title, last, work=None, **kw):
+        sid = f"c3d5e7f9-0000-4000-8000-{11090000 + n:012d}"
+        state = "working" if kw.get("background_working") else "idle"
+        SESSIONS.append(sess("macbook", sid, title, "/Users/me/code/site", "done", state, "site", 9, "1", n, 4 + n, last,
+                             **({"work": work} if work else {}), **kw))
+        return {"machine_id": "macbook", "session_id": sid, "linked_at": ago(minutes=50), "released_at": None, "title": title,
+                "cwd": "/Users/me/code/site", "agent": "claude", "start_error": "", "source": "spawned", "via": ""}
+
+    def _wait_todo(tid, title, minutes, agent, **kw):
+        t = {"id": tid, "title": title, "notes": "", "done_at": None, "created_at": ago(minutes=minutes + 60),
+             "updated_at": ago(minutes=minutes), "origin": "conv_demo", "spaces": [], "agents": [agent], "priority": ""}
+        t.update(kw)
+        return t
+
+    def _blocked(on, line, wait="", wake=10, **kw):
+        w = {"phase": "blocked", "on": on, "line": line, **kw}
+        if wait:
+            w["wait"] = wait
+        if wake:
+            w["wake_at"] = ago(minutes=-wake)
+        return w
+
+    TODOS_INIT[:] = [
+        _wait_todo("tw_decide", "博客首页改版", 2, _wait_agent(1, "博客首页", "两种封面都做好了，等你挑一个。",
+                   _blocked("external", "等预览部署好", "预览部署")),
+                   ask={"outcome": "decide", "verdict": "🤔 首页封面用大图还是网格？", "asked_at": ago(minutes=2),
+                        "question": "首页封面用大图还是网格？", "recommend": "大图",
+                        "options": [{"label": "大图", "leads_to": "首屏只放一篇"}, {"label": "网格", "leads_to": "首屏放六篇"}]}),
+        _wait_todo("tw_held", "设置页上线", 3, _wait_agent(2, "设置页", "已合入，后台在跑上线前检查。", background_working=True),
+                   delivery={"state": "merged", "gate": "上线前要你确认", "unblock": "user", "at": ago(minutes=3)}),
+        _wait_todo("tw_prereq", "登录页接入新接口", 4, _wait_agent(3, "登录页", "接口那边的 PR 合入后我再 rebase。",
+                   _blocked("agent", "等接口那边的 Agent 合入", "接口 PR 合入"))),
+        _wait_todo("tw_merge", "修复导出报表", 5, _wait_agent(4, "导出报表", "PR 已推上去，CI 绿了就合并。",
+                   _blocked("external", "等 CI 跑完再合并", "CI 跑完")),
+                   delivery={"state": "pr", "gate": "CI", "unblock": "other", "at": ago(minutes=5)}),
+        _wait_todo("tw_review", "提交商店审核", 6, _wait_agent(5, "商店审核", "已提交，等审核结果。",
+                   _blocked("external", "等商店审核结果", "审核结果", wake=60))),
+        _wait_todo("tw_bg", "整理崩溃日志", 7, _wait_agent(6, "崩溃日志", "崩溃日志在后台归类，跑完我再汇总。", background_working=True)),
+        _wait_todo("tw_retry", "生成周报", 8, _wait_agent(7, "周报", "模型服务暂时出错，稍后自动重试。",
+                   _blocked("transient", "模型服务暂时出错，自动重试", wake=1, attempts=1, max=3))),
+        _wait_todo("tw_unknown", "同步日历", 9, _wait_agent(8, "同步日历", "先停在这里，过会儿再看。",
+                   _blocked("external", "", wake=30))),
+    ]
+
 # MOCK_TODO_CONCERNS=1 (#3582): one concern working, one waiting for its report in Other open, and one closed by its
 # report, for the To-dos list's light / dark captures. "only" keeps just these to-dos so the working one is within
 # Home's six cards, and links it to its Agent's space for the Space page capture. The dedicated agent keeps the rest of
@@ -3345,6 +3397,10 @@ def decorated_session(s):
     else:
         s_copy.pop("todo", None)
     return s_copy
+
+
+# Uploaded to-do images (#11084): bytes by (to-do id, image id), kept only by this synthetic hub.
+TODO_IMAGE_DATA = {}
 
 
 def format_todo(t):
@@ -15947,18 +16003,18 @@ def _link_payload(data):
 
 
 def _paste_link(t):
-    """(drafts, notes) of an import link (t trimmed), None when t is no link: one word, cindy:// or an http(s) address
-    whose fragment has import. A link going on after a blank is one a chat app broke: refused whole."""
+    """(drafts, notes) of an import link (t trimmed), None when t is no link: one word, cindy://, persona:// or an
+    http(s) address whose fragment has import. A link going on after a blank is one a chat app broke: refused whole."""
     word = re.split(r"\s", t, maxsplit=1)[0]
-    head = word[:8].lower()
-    if not head.startswith(("cindy://", "http://", "https://")): return None
-    cindy = head.startswith("cindy://")
-    part = word[len("cindy://"):] if cindy else word.partition("#")[2]  # what follows cindy://, a web link's fragment
-    if not cindy and "import" not in _link_query(part)[0]: return None
+    head = word[:10].lower()
+    if not head.startswith(("cindy://", "persona://", "http://", "https://")): return None
+    scheme = "persona://" if head.startswith("persona://") else "cindy://" if head.startswith("cindy://") else ""
+    part = word[len(scheme):] if scheme else word.partition("#")[2]  # what follows the scheme, a web link's fragment
+    if not scheme and "import" not in _link_query(part)[0]: return None
     try:
         if word != t: _link_bad()  # which part of a broken link is its data is unknown
         if len(part.encode()) > LINK_MOST: _link_bad(code="link_too_long")
-        if cindy:
+        if scheme:
             path, sep, q = part.partition("?")
             if not sep or path != "provider/import" or "#" in part: _link_bad()
             data = _link_data(q, "data", True)
@@ -26644,6 +26700,20 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/v1/todos": return self.send_json({"todos": sorted_todos()})
         if p.startswith("/api/v1/todos/") and p.endswith("/decisions") and p.count("/") == 5:
             return self.send_json(*todo_decisions_route("GET", unquote(p.split("/")[4]), None, q, {}))
+        m = re.fullmatch(r"/api/v1/todos/([^/]+)/images/([^/]+)", p)
+        if m:
+            tid, image_id = m.groups()
+            raw = TODO_IMAGE_DATA.get((tid, image_id))
+            if raw is None: return self.send_json({"error": "image not found"}, 404)
+            todo = next((x for x in TODOS if x["id"] == tid), {})
+            meta = next((x for x in todo.get("images", []) if x["id"] == image_id), {})
+            self.send_response(200)
+            self.send_header("Content-Type", meta.get("mime") or "application/octet-stream")
+            self.send_header("Content-Length", str(len(raw)))
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Cache-Control", "private, no-store")
+            self.end_headers(); self.wfile.write(raw)
+            return True
         if p.startswith("/api/v1/todos/") and p.count("/") == 4:
             tid = p.split("/")[4]
             t = next((x for x in TODOS if x["id"] == tid), None)
@@ -27829,6 +27899,20 @@ class H(BaseHTTPRequestHandler):
             }
             err = apply_todo_plan(new_todo, body)
             if err: return self.send_json({"error": err}, 400)
+            images = []
+            for position, image in enumerate(body.get("images") or []):
+                image_id = image.get("id") or str(uuid.uuid4())
+                try:
+                    raw = base64.b64decode(image.get("data") or "", validate=True)
+                except (ValueError, TypeError):
+                    return self.send_json({"error": "image data must be base64"}, 400)
+                if not raw or image.get("mime") not in ("image/png", "image/jpeg"):
+                    return self.send_json({"error": "image must be PNG or JPEG"}, 400)
+                TODO_IMAGE_DATA[(new_todo["id"], image_id)] = raw
+                images.append({"id": image_id, "mime": image["mime"], "width": 1, "height": 1,
+                               "name": image.get("name") or "", "size": len(raw),
+                               "url": f"/api/v1/todos/{new_todo['id']}/images/{image_id}"})
+            if images: new_todo["images"] = images
             TODOS.insert(0, new_todo)
             push_todos()
             return self.send_json({"todo": new_todo})

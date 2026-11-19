@@ -36,6 +36,7 @@ import persona.core.designsystem.*
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import persona.core.domain.ChatTaps
 import persona.core.domain.chatBubbles
+import persona.core.domain.shownUndelivered
 import persona.core.domain.lines.ChatLine
 import persona.core.domain.models.AgentModelPanel
 import persona.core.domain.lines.isLiveStatus
@@ -74,6 +75,9 @@ import kotlinx.coroutines.withContext
 // Finish the fade in the existing gap below the tab strip, without changing the chat's content padding.
 private val TabbedChatScrollEdgeStyle = ScrollEdgeStyle.Gradient.copy(overlap = Tokens.Space.Standard.s)
 
+/** A successful assistant action shown while the row is unchanged; any newer authoritative value replaces it. */
+private data class UndeliveredEdit(val before: UndeliveredMessage, val shown: UndeliveredMessage?)
+
 /** Guidance supplied by the Assistant host for its main conversation's composer. */
 val LocalMainChatGuidance = androidx.compose.runtime.compositionLocalOf<(@Composable () -> Unit)?> { null }
 
@@ -105,6 +109,7 @@ fun ChatScreen(
     historySession: Session? = null,
     /** The host already knows this is Health; do not briefly route its files as ordinary attachments while the row loads. */
     healthChat: Boolean = false,
+    composerUpload: ComposerAttachmentUpload? = null,
 ) {
     PersonaTheme(darkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f) {
         LaunchedEffect(sessionKey, chrome.childSessionId) {
@@ -122,7 +127,7 @@ fun ChatScreen(
             ChatPage(sessionKey, repository, pageSender, interactions, sessions, onBack, onTerminal, onResumeInTerminal, chrome,
                 scopedReadingKey, anchorStore ?: local?.anchors,
                 renderStyle, textUpdates,
-                composerService, composerState ?: rememberChatComposerState(), onDraftChanged, onContextCleared, statusBindings,
+                composerService, composerUpload, composerState ?: rememberChatComposerState(), onDraftChanged, onContextCleared, statusBindings,
                 embedded, showTopBar, historyReadOnly, historyFooter, historySession, healthChat)
         }
     }
@@ -136,7 +141,7 @@ private fun ChatPage(
     onTerminal: ((SessionKey) -> Unit)?, onResumeInTerminal: ((SessionKey) -> Unit)?, chrome: ChatChromeBindings,
     readingKey: ChatReadingKey?, anchorStore: ChatAnchorStore?,
     renderStyle: ChatRenderStyle, textUpdates: Map<String, ChatTextUpdate>,
-    composerService: ChatComposerService?, composer: ChatComposerState,
+    composerService: ChatComposerService?, composerUpload: ComposerAttachmentUpload?, composer: ChatComposerState,
     onDraftChanged: ((ChatComposerDraft) -> Unit)?, onContextCleared: ((SessionKey) -> Unit)?,
     statusBindings: ChatStatusBindings,
     embedded: Boolean, showTopBar: Boolean,
@@ -161,7 +166,7 @@ private fun ChatPage(
     val writtenAt by pageSources.writtenAt
     val sendReceipts = pageSources.sendReceipts
     val pageSession = rememberChatPageSession(key, chrome, renderStyle, historyReadOnly, historyFooter, historySession, res,
-        sessionList, adoptedSessions)
+        sessionList, adoptedSessions, sendReceipts.filter { it.state == "kept" })
     val child = pageSession.child
     val workflowAgent = pageSession.workflowAgent
     val historyOnly = pageSession.historyOnly
@@ -238,17 +243,29 @@ private fun ChatPage(
         heldChatMessages(undelivered, snapshot.items, pageRequests.messages)
     }
     val messages = held.outbox
+    val keptSession = session.takeIf { renderStyle == ChatRenderStyle.Assistant || session?.assistant == true }
+    var undeliveredEdits by remember(key) { mutableStateOf<Map<String, UndeliveredEdit>>(emptyMap()) }
+    val keptMessages = shownUndelivered(keptSession, snapshot.items, messages).mapNotNull { message ->
+        val edit = undeliveredEdits[message.id]
+        when {
+            edit == null -> message
+            edit.before == message -> edit.shown
+            else -> message
+        }
+    }
+    // A successful action is visible while the row is unchanged; any newer authoritative value replaces it.
+    LaunchedEffect(session?.undelivered) {
+        val current = session?.undelivered.orEmpty()
+        undeliveredEdits = undeliveredEdits.filter { (id, edit) ->
+            current.firstOrNull { it.id == id } == edit.before
+        }
+    }
     val composerDeliveries by pageRequests.composerDeliveries
     var linkContexts by rememberSaveable(stateSaver = ChatLinkContextsSaver) { mutableStateOf(emptyList<ChatLinkContext>()) }
     var conversationLauncher by rememberSaveable(key.path, chrome.assistantManagement) { mutableStateOf<String?>(null) }
     var conversationModel by rememberSaveable(key.path, chrome.assistantManagement) { mutableStateOf<String?>(null) }
     // Forward placements arrive over the composer; the message action and forward-sheet UI lives in ChatMessageActions.
     val placedForwards = ForwardPlacements.waiting(key)
-    LaunchedEffect(placedForwards, readOnly, canSend) {
-        if (placedForwards == null || readOnly || !canSend) return@LaunchedEffect
-        ForwardPlacements.take(key).forEach { linkContexts = withQuote(linkContexts, it) }
-        composer.focusRequest++
-    }
     // /model in the "/" list asked for the "Mode" sheet: a one-off, cleared once the sheet opened (not replayed when the bar returns).
     var openModes by remember { mutableStateOf(false) }
     // The host's failure notice whose "Retry" went out: hidden until the list catches up; back if that send failed.
@@ -261,6 +278,7 @@ private fun ChatPage(
     // The shell presents transient notices once; persistent sync errors stay inline.
     val feedback = persona.core.designsystem.LocalAppFeedback.current
     val deliveryActions = remember(sender) { ChatDeliveryActions(sender) }
+    var undeliveredBusy by remember(key) { mutableStateOf(emptySet<String>()) }
     val clearingPaneState = rememberSaveable { mutableStateOf<String?>(null) }
     var clearingPane by clearingPaneState
     val timelineFollow = remember { mutableStateOf<(() -> Unit)?>(null) }
@@ -276,6 +294,38 @@ private fun ChatPage(
     var sendingId by interactionController.sendingId
     fun removed(message: OutboxMessage) = interactionController.removed(message)
     fun deliveryAction(message: OutboxMessage, action: DeliveryAction) = interactionController.deliveryAction(message, action)
+    fun undeliveredAction(message: UndeliveredMessage, action: DeliveryAction) {
+        val service = chrome.actions ?: return
+        val target = session ?: return
+        if (message.id in undeliveredBusy) return
+        val before = undeliveredEdits[message.id]?.before ?: message
+        undeliveredBusy = undeliveredBusy + message.id
+        scope.launch {
+            try {
+                when (action) {
+                    DeliveryAction.Retry -> {
+                        service.retryUndelivered(target, message.id)
+                        undeliveredEdits = undeliveredEdits + (message.id to UndeliveredEdit(before, message.copy(
+                            state = "waiting", attempts = 0, nextAt = null, error = null)))
+                    }
+                    DeliveryAction.Delete -> {
+                        service.deleteUndelivered(target, message.id)
+                        undeliveredEdits = undeliveredEdits + (message.id to UndeliveredEdit(before, null))
+                    }
+                    else -> return@launch
+                }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                if (feedback?.failure(e) != true)
+                    notice = res.getString(R.string.chat_undelivered_action_failed, operationFeedback(e).text.resolve(res))
+            } finally {
+                // Summary rows omit undelivered. Reload the complete row even when rev and receipts are unchanged.
+                try { pageSession.refreshDetail() } catch (e: CancellationException) { throw e } catch (_: Exception) { }
+                try { sessions.refresh() } catch (e: CancellationException) { throw e } catch (_: Exception) { }
+                undeliveredBusy = undeliveredBusy - message.id
+            }
+        }
+    }
     val currentDraftCallback by rememberUpdatedState(onDraftChanged)
     LaunchedEffect(composer) { snapshotFlow { composer.draft }.collect { currentDraftCallback?.invoke(it) } }
     LaunchedEffect(sessionList, clearingPane) {
@@ -419,6 +469,27 @@ private fun ChatPage(
     var reportedSeen by pageReader.reportedSeen
     val readThrough = pageReader.readThrough
     val context = pageReader.context
+    LaunchedEffect(placedForwards, readOnly, canSend) {
+        if (placedForwards == null || readOnly || !canSend) return@LaunchedEffect
+        val fresh = mutableListOf<ForwardPlacement>()
+        val duplicates = mutableListOf<RestoredPhotos>()
+        ForwardPlacements.take(key).forEach { placement ->
+            val next = withQuote(linkContexts, placement.ref)
+            if (next.size == linkContexts.size) duplicates += placement.photos
+            else {
+                linkContexts = next
+                fresh += placement
+            }
+        }
+        duplicates.forEach { discardForwardedPhotos(context, it) }
+        val rejected = attachForwardedPhotos(context, composer, fresh.map(ForwardPlacement::photos))
+        val lost = fresh.sumOf { it.photos.lost } + rejected.size
+        if (lost > 0) {
+            val message = forwardedPhotoNotice(res, lost)
+            if (feedback?.notice(message) != true) notice = message
+        }
+        composer.focusRequest++
+    }
     val pairingLoader = pageReader.pairingLoader
     val loader = pageReader.loader
     val markdownCache = pageReader.markdownCache
@@ -695,8 +766,9 @@ private fun ChatPage(
     val turnFix = if (renderStyle == ChatRenderStyle.Assistant) TurnErrorFix.of(session?.turnErrorCode) else null
     val fixModel = chrome.onFixModel?.let { open -> { action: persona.core.designsystem.ReadinessActionId -> open(action, session?.launcher, session?.manager) } }
     // Nothing is up over the page: the header may fold by itself (iOS waits while a sheet or menu is presented).
-    val headerBusy by rememberUpdatedState(chrome.covered || overlay || chromeOverlay || linkVisible || statusSheet || activitySheet ||
-        terminalHelp || taskPageVisible || fullText != null || search.visible || pushedDetail != null)
+    val pageCovered = chrome.covered || overlay || linkVisible || statusSheet || activitySheet || terminalHelp ||
+        taskPageVisible || fullText != null || search.visible || pushedDetail != null
+    val headerBusy by rememberUpdatedState(pageCovered || chromeOverlay)
     LaunchedEffect(headerFold, foldsHeader, reduceMotion) {
         if (!foldsHeader || reduceMotion) return@LaunchedEffect
         while (true) {
@@ -1005,10 +1077,11 @@ private fun ChatPage(
                                     // /clear and /model type into Claude's pane: Claude in a terminal engine only (positive check).
                                     canClear = clearingPane == null && session?.canTypeClaudeCommands == true,
                                     service = composerService, uploadDestination = if (healthChat || session?.isHealth == true) "health" else null,
+                                    upload = composerUpload,
                                     onSend = { send() }, onCommand = { send(it) }, onNotice = { notice = it },
                                     extraContent = linkContexts.isNotEmpty(),
                                     assistantChat = assistantChat,
-                                    useShellSurface = compactGlassAgent,
+                                    useShellSurface = compactGlassAgent, covered = pageCovered,
                                     enabled = canSend, wrapPlaceholder = offlineHint != null, placeholder = when {
                                         !canSend -> READ_ONLY.text()
                                         // "Ask Persona…", as the assistant's blank page and iOS say (#4339 C18).
@@ -1078,6 +1151,8 @@ private fun ChatPage(
                         scope, timeline, timelineVersionState, currentItems, pageReader.newestVisibleItem, readThrough, snapshot,
                         deferCount = snapshot.streamingItemIds.isNotEmpty(), placed = placed, pendingDay = pendingDay,
                         heldRows = held.rows, heldActions = heldActions.takeUnless { readOnly },
+                        undeliveredRows = keptMessages, undeliveredBusy = undeliveredBusy,
+                        onUndeliveredAction = if (readOnly || chrome.actions == null) null else ::undeliveredAction,
                         composerDeliveries = composerDeliveries, deliveryActions = deliveryActions, readOnly = readOnly,
                         onDeliveryAction = if (readOnly) null else ::deliveryAction, sendReceipts = sendReceipts, canSend = canSend,
                         onStatusDetails = { statusSheet = true }, terminal = terminal, composerService = composerService,
