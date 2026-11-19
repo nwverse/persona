@@ -164,6 +164,10 @@ export const overviewChosen = () => getOverviewPrefs().length > 0;
 let revision = 0;
 export const overviewRevision = () => revision;
 
+// Bumped by each change another tab made to this sign-in's copy: a hello's read begun before it is older (lib/start-page.ts).
+let elsewhere = 0;
+export const overviewElsewhere = () => elsewhere;
+
 // The hub's copy is told each change made here (lib/start-page.ts), not the ones it sent (adoptOverview).
 let told: ((p: OverviewEntry[]) => void) | null = null;
 export const onOverviewSaved = (f: (p: OverviewEntry[]) => void) => void (told = f);
@@ -193,11 +197,12 @@ function keep(p: OverviewEntry[]) {
   changed();
 }
 
-// Whether the hub keeps the arrangement: null until it is known, false where its default manager answered a change of
-// it without taking it (a manager from before the field; a hub without the route at all is lib/start-page.ts's).
+// Whether the hub keeps the arrangement: null until it is known (again for another sign-in), false where its default
+// manager answered a change of it without taking it (a manager from before the field; a hub without the route at all is
+// lib/start-page.ts's).
 let kept: boolean | null = null;
 export const overviewKept = () => kept;
-export function noteOverviewKept(on: boolean) {
+export function noteOverviewKept(on: boolean | null) {
   if (kept !== on) {
     kept = on;
     changed();
@@ -246,7 +251,10 @@ if (typeof window !== "undefined") {
     }
     if (e.key === null || e.key.endsWith(`:${KEY}`)) {
       const ours = e.key === scopedKey(feedCacheScope(), KEY);
-      if (e.key === null ? !!prefs?.length : ours && e.oldValue !== e.newValue) revision++;
+      if (e.key === null ? !!prefs?.length : ours && e.oldValue !== e.newValue) {
+        revision++;
+        elsewhere++;
+      }
       prefs = null;
       getOverviewPrefs(); // read again now: a clear after this knows whether this sign-in held a copy
       changed();

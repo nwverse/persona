@@ -822,6 +822,168 @@ describe("Overview's cards (#9745)", () => {
       expect(hub).toMatchObject({ overview: newer });
     });
 
+    // review of #9778, P1: a hello's read began before a newer push, or another tab's change, and was answered after it
+    it("a hello's read answered after a newer push from another device does not put the older arrangement back", async () => {
+      const { cards, hello } = await loaded();
+      hub = { overview: arrangement };
+      const read = holdNext(); // the hub's arrangement as it was when the read began
+      await hello();
+      hub = { overview: newer };
+      Socket.last.push({ type: "navigation", overview: newer });
+      await flush();
+      expect(cards.getOverviewPrefs()).toEqual(newer);
+      await read();
+      expect(cards.getOverviewPrefs()).toEqual(newer);
+      expect(puts$()).toEqual([]);
+    });
+
+    it("nor after another tab took a newer one", async () => {
+      // the storage listeners of this load's modules only: an earlier test's, still on the window, would read the copy
+      // under its own sign-in and clear this one's
+      const tabs: EventListener[] = [];
+      const add = window.addEventListener.bind(window);
+      vi.spyOn(window, "addEventListener").mockImplementation((type: string, l: EventListenerOrEventListenerObject, o?: boolean | AddEventListenerOptions) =>
+        type === "storage" ? void tabs.push(l as EventListener) : add(type, l, o),
+      );
+      const { cards, hello } = await loaded();
+      hub = { overview: arrangement };
+      const read = holdNext();
+      await hello();
+      const key = await copyKey();
+      localStorage.setItem(key, JSON.stringify(newer));
+      const e = new StorageEvent("storage", { key, oldValue: null, newValue: JSON.stringify(newer) });
+      tabs.forEach((l) => l(e));
+      expect(cards.getOverviewPrefs()).toEqual(newer);
+      await read();
+      expect(cards.getOverviewPrefs()).toEqual(newer);
+      expect(puts$()).toEqual([]);
+    });
+
+    // review of #9778, P1: what was on its way was this browser's, not the sign-in's
+    describe("signing in as someone else while a change is on its way", () => {
+      const signInAgain = () => localStorage.setItem("persona.token", "another-token");
+
+      it("a change queued under the first is not sent under the second, nor is its answer waited for there", async () => {
+        const { cards, hello } = await loaded();
+        const first = holdNext();
+        cards.saveOverview(arrangement);
+        await flush();
+        cards.saveOverview(newer); // queued behind the first
+        await flush();
+        signInAgain();
+        await first();
+        expect(puts$().map(([, i]) => body(i))).toEqual([{ overview: arrangement }]);
+        expect(cards.getOverviewPrefs()).toEqual([]);
+        expect(localStorage.getItem(await copyKey())).toBeNull();
+        // the second's hello and pushes are taken at once, and a change made under it goes at once
+        await hello();
+        expect(cards.getOverviewPrefs()).toEqual(arrangement);
+        Socket.last.push({ type: "navigation", overview: newer });
+        await flush();
+        expect(cards.getOverviewPrefs()).toEqual(newer);
+        cards.saveOverview([...arrangement].reverse());
+        await flush();
+        expect(puts$().map(([, i]) => body(i))).toEqual([{ overview: arrangement }, { overview: [...arrangement].reverse() }]);
+      });
+
+      it("the second's hello while the first's change is still on its way reads the second's arrangement", async () => {
+        const { cards, hello } = await loaded();
+        const first = holdNext();
+        cards.saveOverview(arrangement);
+        await flush();
+        signInAgain();
+        hub = { overview: newer };
+        await hello();
+        expect(cards.getOverviewPrefs()).toEqual(newer);
+        await first();
+        expect(cards.getOverviewPrefs()).toEqual(newer);
+        expect(puts$()).toHaveLength(1);
+      });
+
+      it("a change made under the second while the first's is on its way goes at once, and stays when the first's ends", async () => {
+        const { cards } = await loaded();
+        const first = holdNext();
+        cards.saveOverview(arrangement);
+        await flush();
+        cards.saveOverview([...arrangement].reverse()); // queued under the first: not sent under the second either
+        await flush();
+        signInAgain();
+        cards.saveOverview(newer);
+        await flush();
+        expect(puts$().map(([, i]) => body(i))).toEqual([{ overview: arrangement }, { overview: newer }]);
+        await first();
+        expect(puts$()).toHaveLength(2);
+        expect(cards.getOverviewPrefs()).toEqual(newer);
+      });
+
+      it("nor does the first's failure leave a change for the second to send again", async () => {
+        const { cards, hello } = await loaded();
+        const first = holdNext(true);
+        cards.saveOverview(arrangement);
+        await flush();
+        signInAgain();
+        await first();
+        hub = { overview: newer };
+        await hello();
+        expect(cards.getOverviewPrefs()).toEqual(newer);
+        expect(puts$()).toHaveLength(1);
+        expect(hub).toMatchObject({ overview: newer });
+      });
+
+      it("nor does a change the first's hub did not take go again under the second", async () => {
+        const { cards, hello } = await loaded();
+        const first = holdNext(true);
+        cards.saveOverview(arrangement);
+        await first(); // not taken: it would go again at the first's next hello
+        signInAgain();
+        hub = { overview: newer };
+        await hello();
+        expect(cards.getOverviewPrefs()).toEqual(newer);
+        expect(puts$()).toHaveLength(1);
+        expect(hub).toMatchObject({ overview: newer });
+      });
+
+      it("nor does the first's answer say for the second whether its manager keeps the arrangement", async () => {
+        const { cards } = await loaded();
+        let release!: () => void;
+        const held = new Promise<void>((r) => (release = r));
+        queue.push(async () => (await held, Response.json({}))); // a manager from before the field: no field in its answer
+        cards.saveOverview(arrangement);
+        await flush();
+        signInAgain();
+        release();
+        await flush();
+        expect(cards.overviewKept()).toBeNull();
+        cards.saveOverview(newer);
+        await flush();
+        expect(puts$().map(([, i]) => body(i))).toEqual([{ overview: arrangement }, { overview: newer }]);
+      });
+
+      it("nor what the first's manager said before: the second's changes go until its own hub says otherwise", async () => {
+        const { cards } = await loaded();
+        queue.push(async () => Response.json({})); // a manager from before the field
+        cards.saveOverview(arrangement);
+        await flush();
+        expect(cards.overviewKept()).toBe(false);
+        signInAgain();
+        cards.saveOverview(newer);
+        await flush();
+        expect(puts$().map(([, i]) => body(i))).toEqual([{ overview: arrangement }, { overview: newer }]);
+      });
+
+      it("a push the first's socket passes on before the second's hello is not taken into the second's copy", async () => {
+        const { cards, hello } = await loaded();
+        signInAgain();
+        Socket.last.push({ type: "navigation", overview: arrangement });
+        await flush();
+        expect(cards.getOverviewPrefs()).toEqual([]);
+        expect(localStorage.getItem(await copyKey())).toBeNull();
+        hub = { overview: newer };
+        await hello();
+        expect(cards.getOverviewPrefs()).toEqual(newer);
+      });
+    });
+
     it("nor one answered after signing in as someone else, under that account's copy", async () => {
       const { cards, hello } = await loaded();
       hub = { overview: arrangement };
