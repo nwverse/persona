@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/compat"
@@ -29,7 +30,7 @@ import (
 // toolNames are the tools only assistant conversations get; their descriptions and schemas are in prompts/mcp
 // (docs/assistant/prompts.md).
 var toolNames = []string{"ask_user", "notify_user", "supervision_finish", "schedule_followup", "schedule_routine", "schedule_state_set", "delete_routine", "list_followups",
-	"cancel_followup", "list_places", "save_place", "machines_list", "agents_list", "agent_read", "agent_send", "agent_switch", "agents_switch", "agent_interrupt", "agent_start", "agent_supervise", "agent_archive", "agent_unarchive", "agent_autoname", "agent_autoname_receipt", "interaction_answer", "ask_escalate", "inbox_suggest", "inbox_draft",
+	"cancel_followup", "list_places", "save_place", "machines_list", "agents_list", "agent_read", "agent_send", "agent_switch", "agents_switch", "agent_interrupt", "agent_start", "agent_supervise", "agent_transfer", "agent_archive", "agent_unarchive", "agent_autoname", "agent_autoname_receipt", "interaction_answer", "ask_escalate", "inbox_suggest", "inbox_draft",
 	"inbox_folders", "inbox_move", "inbox_post", "kb_search", "kb_list", "kb_get", "kb_update", "kb_history_plan", "kb_history_status", "kb_history_stop", "kb_history_resume", "persona_settings", "secret_run", "skill_import",
 	"model_profiles_list", "model_profile_get", "model_profile_switch", "model_profile_rollback",
 	"repositories_list", "repository_get", "repository_add", "view_show", "view_update", "view_get",
@@ -408,7 +409,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 				if err := exitRefused(c, t, a.Text, len(atts)); err != nil {
 					return "", err
 				}
-				text = prompts.RenderSideConversation(prompts.SideConversation{From: self, Text: a.Text})
+				text = prompts.RenderSideConversation(a.Text)
 			}
 		}
 		if a.Task != nil {
@@ -448,6 +449,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			}
 			err = s.call(lctx, am.ID, DeviceSessionSend, params, &sent)
 			note.sent(lctx, err) // an unknown answer counts for the agent's next turn: it may still arrive
+			if err == nil {
+				s.progressMade(am.ID, c.SessionID, time.Now()) // the supervisor told it something: a new stretch (supervise_progress.go)
+			}
 			if err != nil {
 				if note.reopens() && sendUnknown(err) {
 					// Its own wait ran out, or the link dropped, while the node may still type it in: the model reads
@@ -485,6 +489,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		return s.toolAgentInterrupt(ctx, machine, self, args) // agent_control.go
 	case "agent_supervise":
 		return s.toolAgentSupervise(ctx, self, args)
+	case "agent_transfer":
+		return s.toolAgentTransfer(ctx, self, args) // agent_route.go: the App's Move to path
 	case "agent_archive", "agent_unarchive":
 		return s.toolAgentArchive(ctx, machine, self, args, name == "agent_archive") // agent_archive_tools.go
 	case "agent_autoname":
@@ -615,7 +621,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		// The tab is named from the prompt as written; the agent gets its project's background before it (#2820).
 		params := map[string]any{"cwd": a.Cwd, "launcher": a.Launcher, "model": a.Model, "effort": a.Effort, "tab_name": s.tabName(sctx, a.Prompt)}
 		prompt := s.withCloseoutBrief(sctx, a.Prompt, false)
-		params["prompt"] = s.withProjectContext(sctx, am.ID, a.Cwd, prompt)
+		params["prompt"] = s.withProjectContext(sctx, am.ID, a.Cwd, self, prompt)
 		if a.Ultracode {
 			params["ultracode"] = true
 		}
@@ -1238,8 +1244,9 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 			session = ix.FoldedUnder
 		}
 		k := [2]string{ix.MachineID, session}
-		what += " (interaction_id=" + ix.ID + ")"
-		pending[k] = append(pending[k], clip(what, 400))
+		// The id goes after the clip: a long request must not cut it off, or interaction_answer has nothing to answer.
+		id := " (interaction_id=" + ix.ID + ")"
+		pending[k] = append(pending[k], clip(what, max(400-utf8.RuneCountInString(id), 1))+id)
 	}
 	type row struct {
 		m Device
@@ -1272,7 +1279,7 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 					continue
 				}
 			case "active":
-				if c.State != proto.StateNeedsYou && c.State != proto.StateWorking && c.State != proto.StateUnread && !c.AwaitsReply {
+				if st := agentsListState(c); st != proto.StateNeedsYou && st != proto.StateWorking && st != proto.StateUnread && !c.AwaitsReply {
 					continue // a seen one still asking the user is active too (#5096)
 				}
 			case "done":
@@ -1284,7 +1291,7 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 					continue
 				}
 			default:
-				if c.State != state {
+				if agentsListState(c) != state {
 					continue
 				}
 			}
@@ -1302,7 +1309,7 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 	}
 	order := map[string]int{proto.StateNeedsYou: 0, proto.StateWorking: 1, proto.StateUnread: 2, proto.StateIdle: 3}
 	sort.SliceStable(rows, func(i, j int) bool {
-		oi, oj := order[rows[i].c.State], order[rows[j].c.State]
+		oi, oj := order[agentsListState(rows[i].c)], order[agentsListState(rows[j].c)]
 		if oi != oj {
 			return oi < oj
 		}
@@ -1317,7 +1324,7 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 	}
 	for _, r := range rows {
 		c := r.c
-		fmt.Fprintf(&b, "- [%s] %s · machine=%s session_id=%s · %s", stateNames[c.State], agentLabel(c), r.m.ID, c.SessionID, c.Cwd)
+		fmt.Fprintf(&b, "- [%s] %s · machine=%s session_id=%s · %s", agentsListLabel(c), agentLabel(c), r.m.ID, c.SessionID, c.Cwd)
 		if c.SourceKind != "" {
 			fmt.Fprintf(&b, " · source=%s instance=%s", c.SourceKind, c.SourceInstanceID)
 			if c.Capabilities == nil || !c.Capabilities.Send {
@@ -1424,4 +1431,30 @@ func sendParams(session, text string, dismissNotice bool) map[string]any {
 		p["dismiss_notice"] = true
 	}
 	return p
+}
+
+// silentRow: c stopped on the hub's own word that its turn had no output (silent_turns.go, #10187): not finished, and
+// the owner's to continue, as the apps' Needs-you tray has an interrupted task.
+func silentRow(c proto.Session) bool {
+	return c.TurnError != "" && proto.SilentTurnKind(c.TurnErrorKind) && (c.State == proto.StateUnread || c.State == proto.StateIdle)
+}
+
+// agentsListState is c's state as agents_list filters and sorts it: a silentRow is needs_you, as the snapshot groups it
+// (snapshotAgentGroup), never "done, not seen".
+func agentsListState(c proto.Session) string {
+	if silentRow(c) {
+		return proto.StateNeedsYou
+	}
+	return c.State
+}
+
+// agentsListLabel is how agents_list names c's state: as the apps' rows do, a silentRow as what it is.
+func agentsListLabel(c proto.Session) string {
+	switch {
+	case !silentRow(c):
+		return stateNames[c.State]
+	case c.TurnErrorKind == proto.TurnErrorStopped:
+		return "被停下了，没做完" // i18n-ignore: agents_list output for the model, as the lines around it
+	}
+	return "中断了，没做完" // i18n-ignore: agents_list output for the model, as the lines around it
 }

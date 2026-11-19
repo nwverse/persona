@@ -14,6 +14,11 @@ import (
 // The operation must not apply; the owner needs a fresh card.
 var ErrStale = errors.New("the proposal is stale; ask for a fresh approval")
 
+// ErrNotApplied says execution had not started, so no side effect is possible.
+// It is for validation and durability failures before Apply, never for an Apply
+// error whose side effects are unknown.
+var ErrNotApplied = errors.New("the operation was not applied")
+
 // Operation is one immutable proposal and its owner-specific apply path. Apply
 // must recheck current state immediately before changing anything. Discard
 // releases any owner-side handle without applying; it is optional for direct
@@ -39,3 +44,8 @@ type Outcome struct {
 
 // ClarifyingText explicitly prevents the model from issuing an equivalent card.
 const ClarifyingText = "The owner asked a question about this approval. Nothing changed. The original approval card remains valid and is still pending; answer the question, and do not retry the tool or create another approval. A later message will report the original card's final outcome."
+
+// WaitingText is the original tool call's non-final result when the owner has not answered within the card's decision
+// window: the card stays pending on the owner's apps (the Persona app and the web), where they can still approve it,
+// whether or not a notification reached them.
+const WaitingText = "The owner has not answered this approval yet. Nothing changed. The approval card stays pending in the Persona app and on the web, where the owner can still allow or deny it, even if no notification reached their devices; do not retry the tool or create another approval. A later message will report the original card's final outcome."

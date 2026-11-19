@@ -167,7 +167,8 @@ cd android && ./gradlew :core:rustcore:test
 Android's production packaging lives in `:core:rustcore-android`, leaving the JVM/JNI replay above intact. Its pinned
 NDK 29.0.14206865 / direct LLVM build, ABI sizes, uncompressed 16 KB packaging and real device fixture replay are
 described in `android/core/rustcore-android/README.md`. `scripts/build-android.sh` produces both ABIs without
-`cargo-ndk`; the Gradle task declares the core inputs so unchanged sources do not recompile Rust.
+`cargo-ndk` (`PERSONA_ANDROID_ABIS` and `PERSONA_ANDROID_CARGO_PROFILE` narrow a debug build; debug packages use the
+`android-dev` profile); the Gradle task declares the core inputs so unchanged sources do not recompile Rust.
 
 ## Android continuity adapter (#7448)
 
@@ -235,10 +236,16 @@ count; never titles, identifiers, paths, query text or exception messages.
 
 The shared `agents_list` fixture contract remains unchanged. `presentation_rows` is a separate opt-in for the compact By
 Project tab rows (#9292), and the adapter passes the production-prepared parent rows, nested-row counting flags and
-folded-child counts (#9136). A single frozen `now` drives both sides of `since:`; timestamps retain fractional seconds.
-Unsupported grouping, hub/source filters and extended search scopes are explicitly reported, not silently treated as
-parity. The unregistered-machine and matching-parent core discrepancy remains tracked as #9221. This is a DEBUG shadow,
-not approval to replace Swift with the core.
+folded-child counts (#9136). The core applies the production `multiHub` / selected-`hub` setting before counts and quick
+filters, retaining hub-qualified paths when two hubs have the same machine/session short ID. A single frozen `now`
+drives both sides of `since:`; timestamps retain fractional seconds.
+The adapter preserves the production filtered traversal for `unread_shown`, independently of By Project display order.
+Compact presentation rows reuse the computed group order rather than session-ID input order (#9335).
+Unsupported grouping, source filters and extended search scopes are explicitly reported, not silently treated as parity.
+With `inventory`, the core returns `filtered` and `unpinned` root ids independently of renderable groups. A nested row
+that admits the query retains its prepared parent through `nested_match`; an unregistered-machine session stays in the
+inventory without inventing a machine section. The DEBUG comparison consumes these arrays directly, and legacy fixture
+outputs omit them unless requested (#9221). This is a DEBUG shadow, not approval to replace Swift with the core.
 
 ## Android Agents-list adapter and sort shadow (#8954)
 

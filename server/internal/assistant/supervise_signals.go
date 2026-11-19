@@ -19,6 +19,7 @@ const (
 	sigUnjudged      = "unjudged"       // its agents stopped, and the judge could not say whether the work is finished
 	sigNeedsYou      = "needs_you"      // an agent waits for an answer
 	sigStalled       = "stalled"        // working, but nothing moved for long
+	sigNoProgress    = "no_progress"    // working, its session moves, but only waits and repeats: no real progress (supervise_progress.go)
 	sigAllStopped    = "all_stopped"    // every current participant stopped with nothing scheduled to resume it
 	sigInterrupted   = "interrupted"    // the model service cut its turn off
 	sigFailed        = "failed"         // its agent did not start
@@ -74,6 +75,8 @@ type superviseSignal struct {
 	Report      string
 	Evidence    []string
 	Step, Steps int
+	// no_progress: the tool calls the hub saw in the stretch, and how many were waits or repeats (supervise_progress.go).
+	Calls, Waits int
 	// Orphan: why nobody works on it (sigOrphaned): orphanError, orphanClosed or orphanOffline.
 	Orphan string
 	// To is the conversation it goes to when that is not digestTo's to say: a card's rung (sigAsk), the main
@@ -118,6 +121,9 @@ func (g superviseSignal) id() string {
 	}
 	if g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "sent" {
 		return g.Todo + "|" + g.Kind + ":agent_copy" // delivered copies never absorb an earlier failed delivery
+	}
+	if g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled" {
+		return g.Todo + "|" + g.Kind + ":unhandled@" + g.Key
 	}
 	return g.Todo + "|" + g.Kind
 }
@@ -244,7 +250,10 @@ func (s *Service) signal(g superviseSignal) {
 	}
 	b.mu.Lock()
 	b.init()
-	if b.sent[g.id()] == g.Key {
+	// This early cache is not an unhandled source's delivery receipt: an owner wait
+	// can discard the entry before dispatch. Its durable fingerprint deduplicates delivery.
+	unhandled := g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled"
+	if b.sent[g.id()] == g.Key && !unhandled {
 		b.mu.Unlock()
 		return
 	}
@@ -418,6 +427,7 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 	s.handOverUnreviewed(ctx, now) // a review a side conversation left waiting goes to the main one's follow-up (side_handover.go)
 	routed := s.routedSessions()
 	s.pruneTurns(ctx) // the turns' ledger: read before the first signal (what was told before a restart is not told again), closed tasks off it
+	s.recoverTaskInboxEvents(ctx)
 	// Only the open tasks: everything below passes the finished ones by, and there can be thousands of them.
 	tasks := s.todosWhere(ctx, "*", func(t *Todo) bool { return t.DoneAt == nil })
 	s.pruneAllStoppedDedup(ctx)
@@ -433,12 +443,21 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 		agents := s.taskAgentsIn(ctx, t, lists)
 		group := s.allStoppedGroup(ctx, t, groups[t.ID], lists)
 		allStopped := false
+		stalled := map[string]bool{}
 		for _, g := range watchSignals(t, agents, now, group) {
 			allStopped = allStopped || g.Kind == sigAllStopped
+			stalled[g.Session] = stalled[g.Session] || g.Kind == sigStalled
 			if g.Kind == sigNeedsYou && routed[[2]string{g.Machine, g.Session}] {
 				continue // its card is with the supervisor as an ask already
 			}
 			s.signal(g)
+		}
+		if !allStopped && t.Supervision.state(t) == "" { // going on: neither parked nor with the owner nor waiting for review
+			for _, c := range currentTaskAgents(agents, supersededAgents(t, agents)) {
+				if g, ok := s.noProgressSignal(t, c, now); ok && !stalled[c.SessionID] {
+					s.signal(g)
+				}
+			}
 		}
 		if g, ok := s.orphanSignal(t); ok && !allStopped { // a fresh complete group outranks the minute pass's orphan snapshot
 			s.signal(g)

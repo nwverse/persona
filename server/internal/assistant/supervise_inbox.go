@@ -85,7 +85,7 @@ func (s *Service) superviseInbox(ctx context.Context, items []*InboxItem, linked
 }
 
 // inboxToAgent sends what someone else wrote on a task's GitHub thread straight to the task's agent (#7346): a line of
-// it and the thread's URL, as someone else's words for the agent to read there itself (sendToTaskAs, waiting for an
+// it and the thread's URL, as someone else's words for the agent to read there itself (sendTaskInput, waiting for an
 // agent closed after a stretch of work to resume, up to 5 minutes; its turn ends the task's parking). Confirmed
 // delivery to active work stays in the task's routed feed and log, without another supervisor turn. Parked/review/
 // owner waits still need the supervisor, as does a failed delivery. The Agent reports scope or authority questions
@@ -97,9 +97,18 @@ func (s *Service) inboxToAgent(ctx context.Context, g superviseSignal) {
 	if t, ok := s.todoNow(g.Todo); ok && taskOpen(t) {
 		v := t.Supervision
 		active := v != nil && (v.state(t) == "" || v.state(t) == reviewRework) && v.Waits == nil
-		_, err := s.sendToTaskAs(ctx, t, prompts.RenderInboxToAgent(prompts.InboxToAgent{Sender: in.Sender,
-			Preview: in.Preview, URL: in.URL, Count: in.Count}), true)
+		e := taskInboxEvent{ID: namedClientID("task inbox\n" + t.ID + "\n" + g.Key), Key: g.Key, Todo: t.ID, Inbox: in}
+		e.Prompt = prompts.RenderInboxToAgent(prompts.InboxToAgent{Sender: in.Sender,
+			Preview: in.Preview, URL: in.URL, Count: in.Count, Event: e.ID})
+		_, err := s.sendTaskInput(ctx, t, e.Prompt, true, &e)
 		if err != nil {
+			_ = s.updateTaskInboxEvents(ctx, func(events map[string]taskInboxEvent) bool {
+				if cur, ok := events[e.ID]; ok && !cur.Retried {
+					delete(events, e.ID) // the unchanged supervisor fallback owns failed initial delivery
+					return true
+				}
+				return false
+			})
 			s.logf("task %s: inbox %s not sent to its agent: %v", t.ID, in.Item, err)
 		} else {
 			in.ToAgent = "sent"

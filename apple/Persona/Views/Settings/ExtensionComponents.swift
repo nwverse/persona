@@ -269,7 +269,7 @@ struct ExtensionEmpty: View {
             .listRowBackground(Color.clear)
             .accessibilityIdentifier("plugin-ui-empty")
             .disabled(model?.managesConfirmation == true && empty.button.map { model?.isEnabled($0.action) != true } == true)
-            .confirmationDialog(empty.button?.action.confirm ?? "", isPresented: $asking, titleVisibility: .visible) {
+            .accessibleConfirmationDialog(empty.button?.action.confirm ?? "", isPresented: $asking, titleVisibility: .visible, hasCancel: true) {
                 Button { run() } label: { Text(empty.button?.title ?? String(localized: "OK [Interactive Assistant View Card fac2a6]")).lineLimit(1) }
                     .accessibilityIdentifier("plugin-ui-confirm")
                 Button("Cancel", role: .cancel) {}
@@ -615,7 +615,7 @@ struct ExtensionActionButton<Content: View>: View {
         .tint(destructive ? Theme.danger : nil)
         .disabled(!model.isEnabled(action))
         .accessibilityIdentifier(identifier ?? "plugin-ui-action-\(action.id)")
-        .confirmationDialog(action.confirm ?? "", isPresented: $asking, titleVisibility: .visible) {
+        .accessibleConfirmationDialog(action.confirm ?? "", isPresented: $asking, titleVisibility: .visible, hasCancel: true) {
             Button(role: destructive ? .destructive : nil) { run() } label: { Text(title.isEmpty ? String(localized: "OK [Interactive Assistant View Card fac2a6]") : title).lineLimit(1) }
                 .accessibilityIdentifier("plugin-ui-confirm")
             Button("Cancel", role: .cancel) {}

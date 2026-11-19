@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 import PersonaWire
-#if DEBUG
+#if DEBUG && os(iOS) // PersonaCore is linked into the iPhone app only (apple/project.yml)
 import OSLog
 import PersonaCore
 #endif
@@ -18,11 +18,12 @@ nonisolated struct AgentSortProjectionAdapter: Sendable {
         AgentListProjection.scopeKey(scope)
     }
 
-    #if DEBUG
+    #if DEBUG && os(iOS)
     static func coreInput(_ input: AgentListProjection.Input,
                           settings: AgentListProjection.Settings? = nil,
-                          presentation: AgentSortPresentation = .init(), now: Date? = nil) throws -> String {
-        try AgentSortCoreInput.encode(input, settings: settings, presentation: presentation, now: now)
+                          presentation: AgentSortPresentation = .init(), now: Date? = nil,
+                          projection: AgentListProjection? = nil) throws -> String {
+        try AgentSortCoreInput.encode(input, settings: settings, presentation: presentation, now: now, projection: projection)
     }
     #endif
 
@@ -100,11 +101,13 @@ nonisolated struct AgentSortCoreProjection: Decodable, Sendable {
     let counts: [String: Int]
     let groups: [Group]
     let unread: [String]
+    let filtered: [String]?
+    let unpinned: [String]?
     let rows: [Row]?
     let quietTitle: String??
     let hasQuietTitle: Bool
     enum CodingKeys: String, CodingKey {
-        case counts, groups, rows
+        case counts, groups, rows, filtered, unpinned
         case unread = "unread_shown"
         case quietTitle = "quiet_title"
     }
@@ -115,6 +118,8 @@ nonisolated struct AgentSortCoreProjection: Decodable, Sendable {
         groups = try container.decode([Group].self, forKey: .groups)
         rows = try container.decodeIfPresent([Row].self, forKey: .rows)
         unread = try container.decode([String].self, forKey: .unread)
+        filtered = try container.decodeIfPresent([String].self, forKey: .filtered)
+        unpinned = try container.decodeIfPresent([String].self, forKey: .unpinned)
         hasQuietTitle = container.contains(.quietTitle)
         quietTitle = hasQuietTitle ? try container.decodeIfPresent(String.self, forKey: .quietTitle) : nil
     }
@@ -148,9 +153,9 @@ nonisolated struct AgentSortComparable: Equatable, Sendable {
          settings: AgentListProjection.Settings? = nil, presentation: AgentSortPresentation = .init(), now: Date? = nil) {
         let settings = settings ?? input.settings
         let projection = projection ?? AgentListProjection.build(input, now: now)
-        filtered = projection.filtered.filter { $0.state.isLive || input.settings.pinned($0.key) }.map(\.key.path)
+        filtered = projection.filtered.map(\.key.path)
         matching = filtered.sorted()
-        unpinned = projection.filtered.filter { !input.settings.pinned($0.key) && $0.state.isLive }.map(\.key.path)
+        unpinned = projection.filtered.filter { !input.settings.pinned($0.key) }.map(\.key.path)
         pinned = projection.pinnedAgents.map(\.key.path)
         unread = projection.unread.map(\.path)
         filterCounts = ["needsYou", "unread", "working", "backgroundWaiting"].reduce(into: [String: Int]()) { result, name in
@@ -175,9 +180,9 @@ nonisolated struct AgentSortComparable: Equatable, Sendable {
     init(core document: AgentSortCoreProjection, input: AgentListProjection.Input,
          settings: AgentListProjection.Settings? = nil, presentation: AgentSortPresentation = .init()) {
         filterCounts = document.counts.filter { ["needsYou", "unread", "working", "backgroundWaiting"].contains($0.key) }
-        filtered = document.groups.flatMap(\.rows)
+        filtered = document.filtered ?? document.groups.flatMap(\.rows)
         matching = filtered.sorted()
-        unpinned = document.groups.filter { $0.id != "pinned" }.flatMap(\.rows)
+        unpinned = document.unpinned ?? document.groups.filter { $0.id != "pinned" }.flatMap(\.rows)
         pinned = document.groups.first { $0.id == "pinned" }?.rows ?? []
         unread = document.unread
         active = document.groups.filter { $0.parent != "quiet" }.map(\.id)
@@ -324,7 +329,7 @@ nonisolated struct ShadowToken: Equatable, Sendable {
     var presentation: AgentSortPresentation
 }
 
-#if DEBUG
+#if DEBUG && os(iOS)
 /// A cheap launch-owned switch. The view submits immutable snapshots; this object never publishes view state.
 @MainActor final class AgentSortShadowObserver {
     private var worker: AgentSortShadow?
@@ -355,7 +360,7 @@ nonisolated struct ShadowToken: Equatable, Sendable {
 }
 #endif
 
-#if DEBUG
+#if DEBUG && os(iOS)
 /// A latest-only serial queue. The worker converts and calls Rust off the main actor; production never waits for it.
 nonisolated final class AgentSortShadow: @unchecked Sendable {
     typealias Report = @Sendable (AgentSortShadowMismatch) -> Void
@@ -428,13 +433,9 @@ nonisolated final class AgentSortShadow: @unchecked Sendable {
             report(.init(rule: "grouping-scope", input: input, presentation: presentation))
             return
         }
-        guard !settings.multiHub || settings.hub.isEmpty else {
-            report(.init(rule: "hub-filter", input: input, presentation: presentation))
-            return
-        }
         guard settings.searchScope == .all, !settings.searchAsCode,
               settings.harness.isEmpty, settings.project.isEmpty, settings.model.isEmpty,
-              !settings.pinnedOnly, settings.multiHub == false || settings.hub.isEmpty else {
+              !settings.pinnedOnly else {
             report(.init(rule: "search-scope", input: input, presentation: presentation))
             return
         }
@@ -446,7 +447,7 @@ nonisolated final class AgentSortShadow: @unchecked Sendable {
         compared += 1
         lock.unlock()
         let json: String
-        do { json = try AgentSortCoreInput.encode(input, settings: settings, presentation: presentation, now: now) }
+        do { json = try AgentSortCoreInput.encode(input, settings: settings, presentation: presentation, now: now, projection: projection) }
         catch {
             report(.init(rule: "input-encode-error", input: input, presentation: presentation))
             return
@@ -487,13 +488,14 @@ nonisolated private enum AgentSortCoreInput {
         let forest = CodexTasks.build(AgentListProjection.preparedSessions(input),
                                       ownRows: input.settings.filter == .all ? [] : input.settings.kept, runs: runs)
         let visible = forest.roots
-        return visible.sorted { $0.key.path < $1.key.path }
+        return visible
     }
 
     static func encode(_ input: AgentListProjection.Input,
                        settings: AgentListProjection.Settings? = nil,
                        presentation: AgentSortPresentation = .init(),
-                       now: Date? = nil) throws -> String {
+                       now: Date? = nil, projection: AgentListProjection? = nil) throws -> String {
+        let nativeProjection = projection ?? AgentListProjection.build(input, now: now)
         let sessions = try prepareSessions(input).map { session -> [String: Any] in
             var object = try JSONSerialization.jsonObject(with: JSON.encoder.encode(session)) as? [String: Any] ?? [:]
             object["state"] = ChildSessions.foldedState(session).rawValue
@@ -508,6 +510,7 @@ nonisolated private enum AgentSortCoreInput {
             object["seen_at"] = session.seenAt.map(AgentSortProjectionAdapter.coreTimestamp)
             object["background_waiting"] = session.waitsInBackground
             object["nested_subtask"] = session.isNestedSubtask
+            object["nested_match"] = nativeProjection.taskMatches[session.key]?.isEmpty == false
             if let children = session.children {
                 object["children"] = ["working": children.working, "needs_you": children.needsYou,
                                       "sides": children.sides, "sides_working": children.sidesWorking,
@@ -545,6 +548,7 @@ nonisolated private enum AgentSortCoreInput {
                 "kept": settings.kept.map(\.path).sorted(), "folded": presentation.folded.sorted(),
                 "expanded_idle": presentation.expandedIdle.sorted(), "expanded_quiet": presentation.expandedQuiet.sorted(),
                 "compact": presentation.compact, "presentation_rows": presentation.compact,
+                "inventory": true,
                 "held": settings.held?.path as Any, "now": referenceTime.map(AgentSortProjectionAdapter.coreTimestamp) as Any,
             ],
         ]
