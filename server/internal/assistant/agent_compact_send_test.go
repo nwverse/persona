@@ -218,3 +218,57 @@ func TestNotNearlyFullBehavesAsBefore(t *testing.T) {
 		t.Fatalf("session.send: %v", sessionSendCalls(f))
 	}
 }
+
+// A Codex thread nothing runs (codex_history: the node resumes it with codex resume in a new tab) and a Codex on its
+// app-server are compacted like a Claude Code agent: resumed without a first message, then the text with
+// compact_if_full. The Codex App's chats, a Claude outside Persona's terminals and other runtimes are refused, each
+// saying why.
+func TestResumeOfANearlyFullCodexCompactsBeforeTheText(t *testing.T) {
+	for _, kind := range []string{"codex_history", "codex_app_server"} {
+		t.Run(kind, func(t *testing.T) {
+			s, f := newQuietService(t)
+			c := stoppedBoxAgent("codx0001")
+			c.Agent, c.SourceKind, c.ContextTokens, c.ContextWindow = "codex", kind, 428111, 475000
+			f.setSessions("box", c)
+			resumingNode(f)
+			f.answerNode(DeviceSessionSend, func(string, json.RawMessage) (any, error) {
+				return map[string]any{"ok": true, "compacted": true}, nil
+			})
+			res, err := runJSON(t, s, "conv1", "agent_send", map[string]any{"machine": "box", "session_id": "codx0001",
+				"text": "which base does the mirror have?", "resume": true, "resume_why": "it set up the gate machine", "task": map[string]any{"title": "接着做"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			starts, sends := startCalls(f), sessionSendCalls(f)
+			if len(starts) != 1 || starts[0]["prompt"] != nil || len(sends) != 1 || sends[0]["compact_if_full"] != true || !startedBeforeSent(f) {
+				t.Fatalf("started %v, sent %v", starts, sends)
+			}
+			if !strings.Contains(res, "nearly full (428111 of 475000 tokens)") {
+				t.Fatalf("receipt: %s", res)
+			}
+		})
+	}
+	for _, c := range []struct {
+		name, agent, source, space, want string
+	}{
+		{"codex app", "codex", "codex_history", "codex_app", "Codex App chat"},
+		{"claude outside", "claude", proto.SourceClaudeTerminal, "", "Claude outside Persona's terminals"},
+		{"identity conflict", "codex", "identity_conflict", "", "identity_conflict session"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s, f := newQuietService(t)
+			x := nearlyFull(stoppedBoxAgent("full0001"))
+			x.Agent, x.SourceKind, x.SpaceKind = c.agent, c.source, c.space
+			f.setSessions("box", x)
+			resumingNode(f)
+			_, err := runJSON(t, s, "conv1", "agent_send", map[string]any{"machine": "box", "session_id": "full0001",
+				"text": "go on", "resume": true, "resume_why": "needs its context", "task": map[string]any{"title": "接着做"}})
+			if err == nil || !strings.Contains(err.Error(), c.want) || !strings.Contains(err.Error(), "cannot be compacted") {
+				t.Fatalf("refusal: %v", err)
+			}
+			if len(startCalls(f)) != 0 || len(sessionSendCalls(f)) != 0 {
+				t.Fatalf("started %v, sent %v", startCalls(f), sessionSendCalls(f))
+			}
+		})
+	}
+}
