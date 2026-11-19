@@ -2367,8 +2367,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		}
 		if err := n.syncAssistantSkills(dir); err != nil {
 			n.logger.Printf("assistant: skills: %v", err)
-		} else if a.WorkGuideMD != "" && assistantskills.WorkGuideInstalled(filepath.Join(dir, ".claude", "skills")) &&
-			assistantskills.WorkGuideInstalled(filepath.Join(dir, ".agents", "skills")) {
+		} else if a.WorkGuideMD != "" && assistantskills.WorkGuideReady(dir) {
 			a.ClaudeMD = a.WorkGuideMD
 		}
 		// The same instructions for both agents: Claude reads CLAUDE.md, Codex AGENTS.md.

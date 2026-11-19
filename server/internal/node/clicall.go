@@ -284,8 +284,13 @@ func (n *Node) signedInConnectors(cwd string) []string {
 func (n *Node) skillSelection(cwd string) assistantskills.Selection {
 	key := assistantPrepareDir(cwd)
 	n.mu.Lock()
-	defer n.mu.Unlock()
-	state := n.assistantPrepared[key]
+	state, prepared := n.assistantPrepared[key]
+	n.mu.Unlock()
+	if !prepared {
+		// A resumed process may precede the first prepare after a node restart.
+		// Only Persona's own installation stamp can carry the guide across it.
+		state.workGuide = assistantskills.WorkGuideInstalled(filepath.Join(cwd, ".claude", "skills"))
+	}
 	return assistantskills.Selection{Connectors: slices.Clone(state.connectors), WorkGuide: state.workGuide}
 }
 

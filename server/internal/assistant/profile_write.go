@@ -190,6 +190,7 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 			mainMachine = before.MachineID
 		}
 	}
+	guideChanged := false
 	errGuideChanged := errors.New("work guide setting changed")
 	if _, err := s.updateSettings(ctx, func(v *Settings) error {
 		if in.WorkGuide != nil && in.ExpectedWorkGuide != nil && *in.ExpectedWorkGuide != v.workGuideOn() {
@@ -261,6 +262,7 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 			v.MainCompactWindow = in.MainCompactWindow
 		}
 		if in.WorkGuide != nil {
+			guideChanged = v.workGuideOn() != *in.WorkGuide
 			v.WorkGuide = in.WorkGuide
 		}
 		if in.RecentTaskChats != nil {
@@ -350,6 +352,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		apierr.Write(w, http.StatusInternalServerError, err)
 		return
+	}
+	if guideChanged {
+		s.mcpChanges.notify()
 	}
 	s.settingsChanged(ctx)
 	if in.MeetingTranscriptionExtension != nil {

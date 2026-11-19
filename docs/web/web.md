@@ -2089,7 +2089,9 @@ entry.
 
 **Work management guide on demand** (#11055, `web/src/lib/labs-work-guide.ts`). This switch applies to the selected
 Assistant across devices and defaults to off. Enabling it moves the workflows for to-dos, delegation, supervision and
-review into the built-in `persona-work` skill. Switching it off restores the full startup instructions. After either
+review into the built-in `persona-work` skill. On a fresh chat, the MCP server offers `work_tools_search` and adds
+only the work tools requested by name to that connection. Switching it off restores the full startup instructions
+and the original MCP list, including the existing load-all or deferred-loading preference. After either
 change, the form asks the user to start a new chat. Existing chats may retain earlier guidance and tool information.
 
 **Terminal renderer** (`web/src/lib/labs-terminal.ts` over `web/src/lib/labs.ts`). Single pane terminals

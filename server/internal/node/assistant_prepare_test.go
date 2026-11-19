@@ -261,6 +261,35 @@ func TestWorkGuidePrepareAndRollback(t *testing.T) {
 	}
 }
 
+// A resumed process can start before the reconnected manager prepares this directory again.
+func TestWorkGuideSurvivesNodeRestart(t *testing.T) {
+	t.Setenv("PERSONA_SKILLS_DIR", t.TempDir())
+	t.Setenv("PERSONA_PLUGIN_SKILLS_DIR", t.TempDir())
+	n, _ := testNode(t)
+	n.dir, n.bin, n.logger = t.TempDir(), "/opt/example/personad", log.New(io.Discard, "", 0)
+	for _, guide := range []string{"read the guide", ""} {
+		params, _ := json.Marshal(map[string]string{"dir": ".persona/assistant", "claude_md": "full", "work_guide_md": guide})
+		out, err := n.handle(t.Context(), "assistant.prepare", params)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cwd := out.(map[string]any)["cwd"].(string)
+		n.assistantPrepared = nil
+		args, _ := n.codexAssistantArgs("test", n.dir, cwd)
+		if slices.Contains(args, "features.mcp_tool_list_changed=true") != (guide != "") {
+			t.Fatal("wrong Codex discovery mode", args)
+		}
+		for _, runtime := range []string{".claude", ".agents"} {
+			dir := filepath.Join(cwd, runtime, "skills")
+			n.syncRuntimeSkillDir(cwd, dir)
+			_, err := os.Stat(filepath.Join(dir, "persona-work", "references", "record.md"))
+			if guide != "" && err != nil || guide == "" && !os.IsNotExist(err) {
+				t.Fatalf("guide=%q resumed %s: %v", guide, runtime, err)
+			}
+		}
+	}
+}
+
 func TestWorkGuidePrepareWithLocalCodexSkill(t *testing.T) {
 	t.Setenv("PERSONA_SKILLS_DIR", t.TempDir())
 	t.Setenv("PERSONA_PLUGIN_SKILLS_DIR", t.TempDir())

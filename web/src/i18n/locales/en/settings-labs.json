@@ -19,10 +19,10 @@
   "terminal_renderer_rollback": "Choose Standard. If WebGL stops working in a terminal, that terminal switches back to Standard by itself, and so does this setting.",
   "work_area": "Assistant",
   "work_title": "Work management guide on demand",
-  "work_hint": "Let your assistant look up instructions when you ask it to remember, delegate or review work.",
+  "work_hint": "Let your assistant look up the guide and tools it needs for to-dos, delegation and reviews.",
   "work_scope": "This assistant, across your devices.",
   "work_activation": "Start a new chat to apply your choice fully. An open chat may keep its earlier instructions and tool information.",
-  "work_rollback": "Turn this off to include the usual guidance in new chats. Your to-dos and tasks stay as they are.",
+  "work_rollback": "Turn this off and start a new chat to restore the usual instructions and tool loading.",
   "work_saved": "Saved. Start a new chat to fully apply this choice.",
   "work_unsupported": "Update this assistant to change this setting."
 }

@@ -219,6 +219,12 @@ func WorkGuideInstalled(dir string) bool {
 	return slices.Contains(installedNames(stamp), workGuideName) && workGuideFilePresent(dir)
 }
 
+// WorkGuideReady reports whether the assistant workspace can use compact instructions in both runtimes.
+func WorkGuideReady(cwd string) bool {
+	return cwd != "" && WorkGuideInstalled(filepath.Join(cwd, ".claude", "skills")) &&
+		WorkGuideInstalled(filepath.Join(cwd, ".agents", "skills"))
+}
+
 func workGuideFilePresent(dir string) bool {
 	st, err := os.Stat(filepath.Join(dir, workGuideName, "SKILL.md"))
 	return err == nil && st.Mode().IsRegular()
