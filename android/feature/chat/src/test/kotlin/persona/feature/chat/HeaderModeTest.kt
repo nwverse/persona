@@ -170,9 +170,13 @@ class HeaderModeTest {
         assertFalse(SessionModes.bypassRestarts(paned().copy(agent = "codex")))
         assertFalse(SessionModes.bypassRestarts(paned().copy(agent = "agy")))
         assertFalse(SessionModes.bypassRestarts(paned().copy(assistant = true)))
-        // a node that says no terminal, or no modes
-        assertFalse(SessionModes.bypassRestarts(paned().copy(capabilities = persona.core.contracts.SessionCapabilities(send = true, terminal = false))))
-        assertFalse(SessionModes.bypassRestarts(paned().copy(capabilities = persona.core.contracts.SessionCapabilities(send = true, terminal = true, modes = false))))
+        // partial capabilities without send/terminal still allow restart for an eligible paned Claude (#7996 review)
+        assertTrue(SessionModes.bypassRestarts(paned().copy(capabilities = SessionCapabilities(modes = true))))
+        assertTrue(SessionModes.bypassRestarts(paned().copy(capabilities = SessionCapabilities(rewind = true))))
+        // explicit modes refusal, sourced session without terminal, or offline session
+        assertFalse(SessionModes.bypassRestarts(paned().copy(capabilities = SessionCapabilities(modes = false))))
+        assertFalse(SessionModes.bypassRestarts(paned().copy(sourceKind = "claude_cli", capabilities = SessionCapabilities(send = true, terminal = false))))
+        assertFalse(SessionModes.bypassRestarts(paned().copy(status = "offline")))
         // disabled with its reason where it can't
         assertEquals(SessionModes.BYPASS, SessionModes.bypassUnavailable(claude("default"))?.id)
     }

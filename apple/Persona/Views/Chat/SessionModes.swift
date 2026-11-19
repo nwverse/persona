@@ -121,11 +121,17 @@ nonisolated enum SessionModes {
         offered && !attached && isPermissionsCommand(draft)
     }
 
+    struct CommandRow: Identifiable, Hashable {
+        var option: Option
+        var enabled: Bool
+        var id: String { option.id }
+    }
+
     /// The mode list `/permissions` opens: every mode the session can switch to, the current one too when it is not
     /// among them, then Allow Everything disabled with its reason where the agent cannot take it while it runs.
-    static func commandRows(_ s: Session) -> [(option: Option, enabled: Bool)] {
-        var rows = listed(switchableModes(s), current: s.permissionMode).map { (option: $0, enabled: true) }
-        if let o = bypassUnavailable(s) { rows.append((option: o, enabled: false)) }
+    static func commandRows(_ s: Session) -> [CommandRow] {
+        var rows = listed(switchableModes(s), current: s.permissionMode).map { CommandRow(option: $0, enabled: true) }
+        if let o = bypassUnavailable(s) { rows.append(CommandRow(option: o, enabled: false)) }
         return rows
     }
 
@@ -965,7 +971,7 @@ struct PermissionModeSheet: View {
         return NavigationStack {
             Form {
                 Section {
-                    ForEach(rows, id: \.option.id) { row in
+                    ForEach(rows) { row in
                         Button {
                             if SessionModes.appliesPick(model.session(key), to: row.option.id) { pick(row.option.id) }
                             dismiss()

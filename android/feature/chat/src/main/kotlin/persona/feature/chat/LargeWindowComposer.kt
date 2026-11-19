@@ -96,8 +96,11 @@ fun LargeWindowComposer(
         )
     }
 
-    val currentOnSend by rememberUpdatedState(onSend)
-    val sendAction = remember { { currentOnSend() } }
+    val mainClear = LocalMainChatClear.current?.takeIf { enabled }
+    val currentSubmit by rememberUpdatedState {
+        dispatchComposerSend(state, extraContent, mainClear, onPermissions, onSend)
+    }
+    val sendAction = remember { { currentSubmit() } }
     val hasContent = state.hasContent || extraContent
     val canSend = enabled && state.ready && !sending
     val sendEnabled = canSend && hasContent && blockedLabel == null

@@ -405,19 +405,9 @@ fun ChatComposer(
         state.value = TextFieldValue()
         clear.clear { state.value = TextFieldValue(SlashCommand.CLEAR, TextRange(SlashCommand.CLEAR.length)) }
     }
-    // /clear sent alone in the main conversation clears it instead of going to Persona (web `isClearCommand`).
-    fun send() {
-        val clear = mainClear
-        val permissions = onPermissions
-        when {
-            clear != null && isMainClearCommand(state.value.text, state.attachments.size, extraContent) -> clearMain(clear)
-            // /permissions typed out opens the menu as a pick does; with photos or quotes it is a message (web `isPermissionsCommand`)
-            permissions != null && SlashCommand.isPermissions(state.value.text) && state.attachments.isEmpty() && !extraContent -> {
-                state.beginEdit(); state.value = TextFieldValue(); permissions()
-            }
-            else -> onSend()
-        }
-    }
+    // /clear sent alone in the main conversation clears it instead of going to Persona (web `isClearCommand`);
+    // /permissions typed out opens the mode picker (shared with LargeWindowComposer's hardware send path).
+    fun send() = dispatchComposerSend(state, extraContent, mainClear, onPermissions, onSend)
     // Picking a quick message puts its words in the box to send; /clear empties the box and asks first (the main
     // conversation's clears at once).
     fun pick(command: SlashCommand) {
@@ -592,4 +582,30 @@ fun ChatComposer(
     if (cameraDenied) JDialog(onDismiss = { cameraDenied = false }, title = stringResource(R.string.chat_composer_camera_title),
         text = stringResource(R.string.chat_composer_camera_text, appLabel(context)),
         confirm = stringResource(R.string.chat_composer_open_settings) to { cameraDenied = false; openAppSettings(context) })
+}
+
+/**
+ * Shared send dispatcher for both touch/IME send (`ChatComposer`) and hardware keyboard send (`LargeWindowComposer`):
+ * intercepts `/clear` in the main conversation and bare `/permissions` (without attachments or quoted extra content).
+ */
+internal fun dispatchComposerSend(
+    state: ChatComposerState,
+    extraContent: Boolean,
+    mainClear: MainChatClear?,
+    onPermissions: (() -> Unit)?,
+    onSend: () -> Unit,
+) {
+    when {
+        mainClear != null && isMainClearCommand(state.value.text, state.attachments.size, extraContent) -> {
+            state.beginEdit()
+            state.value = TextFieldValue()
+            mainClear.clear { state.value = TextFieldValue(SlashCommand.CLEAR, TextRange(SlashCommand.CLEAR.length)) }
+        }
+        onPermissions != null && SlashCommand.isPermissions(state.value.text) && state.attachments.isEmpty() && !extraContent -> {
+            state.beginEdit()
+            state.value = TextFieldValue()
+            onPermissions()
+        }
+        else -> onSend()
+    }
 }

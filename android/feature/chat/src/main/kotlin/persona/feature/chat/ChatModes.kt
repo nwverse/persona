@@ -87,10 +87,8 @@ internal object SessionModes {
      * the web's `bypassRestarts`). Claude Code in a pane of a terminal engine only, not Antigravity, a read-only source or
      * a Persona conversation.
      */
-    fun bypassRestarts(session: Session): Boolean = !session.assistant && session.agent != "agy" && session.isClaude &&
-        !session.hasSource && !session.paneId.isNullOrBlank() && session.canSend && session.canTerminal &&
-        // a node's own word wins (the web's `sessionCan(s, "send")` / `"terminal"`), an older one's absence keeps the pane rule
-        session.capabilities.let { it == null || (it.send && it.terminal && it.modes != false) } &&
+    fun bypassRestarts(session: Session): Boolean = !session.assistant && session.agent != "agy" && session.canChangeModes &&
+        session.isClaude && !session.hasSource && !session.paneId.isNullOrBlank() && session.canSend && session.canTerminal &&
         !session.bypassAvailable && session.permissionMode != BYPASS
 
     /**
