@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -27,7 +28,7 @@ type hookOutbox struct {
 
 // hookOut is one hook event: what the node tells the manager, and what the spool keeps if the connection never sends it.
 type hookOut struct {
-	req    sockRequest // as the hook sent it (sentRequest), what standby keeps
+	req    sockRequest // as the hook sent it (hookCall.sent), what standby keeps
 	in     hookInput
 	at     time.Time
 	params map[string]any
@@ -92,18 +93,39 @@ func (n *Node) keepHookEvent(e *hookOut) {
 	}
 }
 
-// sentRequestKey carries a hook's request as it came on node.sock, before serveSock resolved its session and pane: what
-// the spool keeps, which the replay resolves again (replayHook).
-type sentRequestKey struct{}
-
-func withSentRequest(ctx context.Context, req sockRequest) context.Context {
-	return context.WithValue(ctx, sentRequestKey{}, req)
+// hookCall is one hook's request on its way through handleHook: as it came on node.sock, before serveSock resolved its
+// session and pane (what the spool keeps of its event; the replay resolves it again), and its event once queued, which a
+// card the same hook asks for waits behind (afterHookEvent).
+type hookCall struct {
+	sent  sockRequest
+	event atomic.Pointer[hookOut]
 }
 
-// sentRequest is the hook's request as it came (withSentRequest), else req.
-func sentRequest(ctx context.Context, req sockRequest) sockRequest {
-	if sent, ok := ctx.Value(sentRequestKey{}).(sockRequest); ok {
-		return sent
+type hookCallKey struct{}
+
+// withHookCall carries sent, a hook's request as it came, through its handling.
+func withHookCall(ctx context.Context, sent sockRequest) context.Context {
+	return context.WithValue(ctx, hookCallKey{}, &hookCall{sent: sent})
+}
+
+func hookCallOf(ctx context.Context) *hookCall {
+	hc, _ := ctx.Value(hookCallKey{}).(*hookCall)
+	return hc
+}
+
+// afterHookEvent waits until the event of the hook ctx belongs to was written, kept or dropped: a card the hook asks
+// for then reaches the manager after it, whichever lane each goes on and however long the connection waited to be
+// resumed, as when the hook wrote its event itself (#10829's review). A call that is not a hook's, or a hook that
+// queued no event, does not wait.
+func afterHookEvent(ctx context.Context) {
+	hc := hookCallOf(ctx)
+	if hc == nil {
+		return
 	}
-	return req
+	if e := hc.event.Load(); e != nil {
+		select {
+		case <-e.sent:
+		case <-ctx.Done():
+		}
+	}
 }
