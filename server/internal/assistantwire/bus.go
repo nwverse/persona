@@ -207,6 +207,9 @@ type HTTPRequest struct {
 	Caller          *devicewire.Caller         `json:"caller,omitempty"`
 	ShareAuthority  *devicewire.ShareAuthority `json:"share_authority,omitempty"`
 	HandoffApprover *HandoffApprover           `json:"handoff_approver,omitempty"`
+	// ClarificationProof is the hub-issued opaque, one-time proof for this exact
+	// authenticated question. Older managers ignore it and keep unmarked delivery.
+	ClarificationProof string `json:"clarification_proof,omitempty"`
 	// Human is the hub's word that a person's own app opens this conversation (POST /api/v1/assistant/conversations
 	// with a full device's credential, decided as for SendParams.Human): its first message counts as theirs
 	// (WithHumanStart). Set by the hub on that route only, never from the request; an older hub never sends it.
