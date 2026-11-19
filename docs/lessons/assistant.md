@@ -438,7 +438,7 @@ creation or app presentation; quiet tasks and supervisor routing also show cards
 
 ## Supervisor assignment must respect the policy channel (#10338)
 
-A runtime-backed chat can plan work and receive owner replies. A task reviewer needs a separate policy channel on every supervised turn. Check the session's execution source when dispatch assigns the reviewer, including plans that waited for approval and scheduled chats listed as leaders. A permanent policy refusal ends that relay. The task and its worker reports stay available for review.
+A runtime-backed chat can plan work and receive owner replies. A task reviewer needs a separate policy channel on every supervised turn. Check the session's execution source when dispatch assigns the reviewer, including plans that waited for approval and scheduled chats listed as leaders. A permanent policy refusal ends that relay. The task and its worker reports stay available for review. Routing only at dispatch is not enough: tasks a runtime chat supervised before that, and digests already queued for it, must route around it when they are delivered (`digestTarget`), and the node must never shut the owner out because a policy came with an ordinary message: it refuses only the manager's supervision message (#11121).
 
 ## The supervision fingerprint only sees the agent's words (#6027)
 

@@ -2,7 +2,8 @@
 // its entry is on the sidebar), the cards on "Overview" (overview_card, as the user arranged them: lib/overview-cards.ts)
 // and the sections on a machine's page (machine_section). Each draws the extension's declarative View with ExtensionUI;
 // the list comes from lib/extension-slots.ts.
-import { Suspense, useMemo, useState } from "react";
+import { Suspense, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useFolded } from "../../lib/use-folded";
 import { uiIcon, type UIIcon, type UIPlace, type UITone } from "../../lib/extension-ui";
 import { useExtensionPlace, useExtensionSlot } from "../../lib/extension-slots";
 import { arrangeCards, halvesPaired, useOverviewPrefs, type ArrangedCard, type CardSpan } from "../../lib/overview-cards";
@@ -91,27 +92,55 @@ export function OverviewArrangeButton({ on, onClick }: { on: boolean; onClick: (
   return <IconButton icon="grid" label={t("home.arrange_cards")} pressed={on} onClick={onClick} />;
 }
 
-/** The cards on "Overview" (overview_card), one row under the agents' summary, as the user arranged them
- *  (lib/overview-cards.ts): in their order, a hidden one not drawn (nor asked for), each half a row or the whole row.
- *  Half-row cards go two a row once there are two of them; one alone fills the row, and on a page wide enough for two
- *  columns of rows takes one of them. `editing`: the cards are being arranged (dragged, moved with their arrows,
- *  widened, hidden or shown), the hidden ones drawn in their place without their content. */
+/** The cards on "Overview" (overview_card), the page's last block, under the agents' sections and the computers
+ *  (#11147), as the user arranged them (lib/overview-cards.ts): in their order, a hidden one not drawn (nor asked for),
+ *  each half a row or the whole row. Half-row cards go two a row once there are two of them; one alone fills the row,
+ *  and on a page wide enough for two columns of rows takes one of them. `editing`: the cards are being arranged
+ *  (dragged, moved with their arrows, widened, hidden or shown), the hidden ones drawn in their place without their
+ *  content. */
 export function OverviewCards({ editing = false, onDone }: { editing?: boolean; onDone?: () => void }) {
   const cards = useExtensionSlot("overview_card");
   const prefs = useOverviewPrefs();
   const arranged = useMemo(() => arrangeCards(cards, prefs), [cards, prefs]);
-  const drawn = editing ? arranged : arranged.filter((c) => !c.hidden);
+  const shown = useMemo(() => arranged.filter((c) => !c.hidden), [arranged]);
+  const drawn = editing ? arranged : shown;
+  // A section like the page's others, with their heading (its name and how many cards it shows), and it folds (#11148):
+  // kept per browser with the sidebar's folds (`fold:overview-cards`), open until the owner folds it. Folded, no card
+  // is mounted, so none is asked for either. Arranging the cards opens it, and its fold button is away meanwhile.
+  const [folded, toggle] = useFolded("overview-cards", false, { all: false });
+  const open = editing || !folded;
+  const grid = useId();
+  // the section is the page's last block and the button that arranges it is at the page's top: arranging brings it in
+  const section = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (editing) section.current?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+  }, [editing]);
   if (!drawn.length) return null;
+  return (
+    <section ref={section} aria-label={t("extensions-extensionslots.extensions")} data-overview-cards>
+      <div className={cx("flex items-baseline gap-2", open && "mb-2.5")}>
+        <h2 className="text-meta font-medium text-ink">{t("extensions-extensionslots.extensions")}</h2>
+        <span className="text-label text-ink-3 tabular-nums">{shown.length}</span>
+        <span className="flex-1" />
+        {!editing && (
+          <button type="button" aria-expanded={!folded} aria-controls={folded ? undefined : grid} onClick={toggle} className="shrink-0 whitespace-nowrap rounded-control px-1.5 text-label text-ink-3 transition-colors hover:bg-hover hover:text-ink-2">
+            {folded ? t("extensions-extensionslots.cards_expand") : t("extensions-extensionslots.cards_collapse")}
+          </button>
+        )}
+      </div>
+      {open && <CardGrid id={grid} arranged={arranged} drawn={drawn} editing={editing} onDone={onDone} />}
+    </section>
+  );
+}
+
+function CardGrid({ id, arranged, drawn, editing, onDone }: { id: string; arranged: readonly ArrangedCard<UIPlace>[]; drawn: readonly ArrangedCard<UIPlace>[]; editing: boolean; onDone?: () => void }) {
   return (
     // a card is never wider than one of the overview's two columns of rows below it (Home's GRID.rows, from 60rem of
     // the page) unless the user made it a full row: alone at 1920 px it stretched its chart to 1540 px of sparse bars,
     // and to 1300 px at 1680. While arranging, the hidden cards count where they stand.
     // the cards of a row are one height (the grid's default stretch): each as tall as its own content left a gap under
     // the shorter one in every row, and the rows read as ragged (#11093 tried it, #11109 took it back)
-    <section
-      aria-label={t("extensions-extensionslots.extensions")}
-      className={cx("grid grid-cols-1 gap-3 @min-[60rem]:grid-cols-2", halvesPaired(drawn, editing) && "md:grid-cols-2")}
-    >
+    <div id={id} className={cx("grid grid-cols-1 gap-3 @min-[60rem]:grid-cols-2", halvesPaired(drawn, editing) && "md:grid-cols-2")}>
       {editing && (
         <Suspense fallback={null}>
           <OverviewArrange cards={arranged} onDone={() => onDone?.()} />
@@ -120,11 +149,17 @@ export function OverviewCards({ editing = false, onDone }: { editing?: boolean; 
       {drawn.map((c, i) => (
         <OverviewCard key={c.key} place={c.card} i={i} span={c.span} hidden={c.hidden} edit={editing ? arranged : undefined} />
       ))}
-    </section>
+    </div>
   );
 }
 
 const INTERACTIVE = "a,button,input,select,textarea,label,[role=radio],[role=switch],[tabindex]";
+
+// The most of its view a card that opens a page shows (#11149), in rem so it follows the text size: a stat grid with
+// its chart, or a stat grid and three rows. A card is a glance at its extension; one long list made its whole row,
+// and the card beside it, twice as tall. What is under the limit fades out over CARD_FADE, and "See all" opens the page.
+const CARD_MAX = "max-h-[18.75rem]";
+const CARD_FADE = "[mask-image:linear-gradient(to_bottom,black_calc(100%-2.75rem),transparent)]";
 
 /** One card; `edit`: the cards being arranged, this one among them (its controls and drag are the editor's). */
 function OverviewCard({ place, i, span = "half", hidden = false, edit }: { place: UIPlace; i: number; span?: CardSpan; hidden?: boolean; edit?: readonly ArrangedCard<UIPlace>[] }) {
@@ -136,6 +171,20 @@ function OverviewCard({ place, i, span = "half", hidden = false, edit }: { place
   const to = place.opens ? pageRoute(place.extension, place.opens) : null;
   // whose card it is, unless its title already is that name
   const name = nameBesideTitle(place.extension_name, place.title);
+  // Cut only when there is a page to read the rest on; whether the view is taller than the limit is measured (its
+  // height is the extension's, and changes as it redraws).
+  const view = useRef<HTMLDivElement>(null);
+  const [cut, setCut] = useState(false);
+  const page = to !== null;
+  useEffect(() => {
+    const el = view.current;
+    if (!el || !page || typeof ResizeObserver === "undefined") return;
+    const check = () => setCut(el.offsetHeight > (el.parentElement?.clientHeight ?? Infinity) + 1);
+    const ro = new ResizeObserver(check);
+    ro.observe(el);
+    check();
+    return () => ro.disconnect();
+  }, [page, gone, hidden]);
   if (gone) return null;
   // the whole card opens the page; a button, a row or the chart inside it keeps its own click
   const open = (e: React.MouseEvent) => {
@@ -189,9 +238,20 @@ function OverviewCard({ place, i, span = "half", hidden = false, edit }: { place
       {!hidden && (
         <div className="contents" inert={edit !== undefined}>
           {/* `remember`: a card drawn before is there at once, as tall as it was, while its extension draws it again (#11091) */}
-          <Suspense fallback={<Loading />}>
-            <OwnerScope extension={place.extension}><ExtensionUI extension={place.extension} ui={place.id} context={context} compact remember onMissing={() => setGone(true)} /></OwnerScope>
-          </Suspense>
+          <div data-card-view data-cut={cut || undefined} className={cx(to && `${CARD_MAX} overflow-hidden`, cut && CARD_FADE)}>
+            <div ref={view} className="flex flex-col">
+              <Suspense fallback={<Loading />}>
+                <OwnerScope extension={place.extension}><ExtensionUI extension={place.extension} ui={place.id} context={context} compact remember onMissing={() => setGone(true)} /></OwnerScope>
+              </Suspense>
+            </div>
+          </div>
+          {cut && to && (
+            // at the card's foot, also when its row neighbour makes the card taller than its own view
+            <a data-card-see-all href={href(to)} onClick={(e) => onLinkClick(e, to)} className="group mt-auto flex items-center gap-1 px-4 pt-1.5 pb-1 text-label text-ink-3 outline-none hover:text-ink-2 focus-visible:underline">
+              {t("extensions-extensionslots.card_see_all")}
+              <Icon name="chevronRight" size={11} stroke={2.2} className="shrink-0 transition-transform duration-150 group-hover:translate-x-0.5" />
+            </a>
+          )}
         </div>
       )}
     </div>

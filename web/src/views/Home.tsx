@@ -149,13 +149,6 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
             </div>
           </div>
 
-          {/* the extensions' cards (docs/extensions/extensions.md"UI slots" overview_card), under the agents' summary */}
-          <OverviewCards editing={arranging} onDone={() => setArranging(false)} />
-
-          {/* Before the first snapshot the socket streams the machines' agents and cards in one by one, each moving the
-              groups already painted, and "Loading" then went from over them: until it is in only "Loading", then all at once. */}
-          {!loaded && <Loading label={t("common.loading")} />}
-
           {/* the headline counts agents, this counts cards: say so when one agent has several cards waiting */}
           {loaded && (interactions.length > 0 || held.length > 0) && (
             <Group title={stateName("needs_you")} count={interactions.length} hint={new Set(interactions.map(homeKey)).size < interactions.length ? t("home.needs_you_hint") : undefined} grid="cards">
@@ -265,6 +258,10 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
             </div>
           )}
 
+          {/* Before the first snapshot the socket streams the machines' agents and cards in one by one, each moving the
+              groups already painted, and "Loading" then went from over them: until it is in only "Loading", then all at once. */}
+          {!loaded && <Loading label={t("common.loading")} />}
+
           {loaded && machines.length > 0 && (
             <Group title={t("home.computers")} count={machines.length} right={<a href={href({ name: "machines" })} onClick={(e) => onLinkClick(e, { name: "machines" })} className="text-[12px] text-ink-3 hover:text-ink-2">{t("home.monitor")}</a>}>
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 @min-[60rem]:grid-cols-3 @min-[84rem]:grid-cols-4 @min-[110rem]:grid-cols-5">
@@ -292,6 +289,11 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
               </div>
             </Group>
           )}
+
+          {/* the extensions' cards (docs/extensions/extensions.md "UI slots" overview_card), last: under everything about
+              the owner's agents (what needs them, what is running, what just finished) and the computers, so no number
+              of cards pushes those off the first screen (#11147; #11092 had them under Needs you and Stuck only) */}
+          <OverviewCards editing={arranging} onDone={() => setArranging(false)} />
         </div>
       </div>
       <MarkSeenDialog list={confirmSeen} onClose={() => setConfirmSeen(null)} />
