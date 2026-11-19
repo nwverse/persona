@@ -958,6 +958,7 @@ func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, 
 	}
 	tasks := slices.Clone(sc.tasks)
 	t := &tasks[i]
+	previous := *t
 	if title = strings.TrimSpace(title); title != "" {
 		t.Title = title
 	}
@@ -1005,6 +1006,10 @@ func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, 
 		return "", t.ID, true, err
 	}
 	isolateScheduledConversation(t, mayBeMain)
+	if err := s.checkTaskSourceRestore(ctx, previous, *t); err != nil {
+		sc.mu.Unlock()
+		return "", t.ID, true, err
+	}
 	// until applies only once the task is repeating. A one-off ignores it, including a bad value; checkUntil
 	// clears it. Absent keeps the stored end time; null clears it. A past end time on an enabled task fails
 	// before anything is saved.
@@ -1317,6 +1322,10 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, machine, self string,
 	applyUntil(&t, end, hasUntil, clearUntil)
 	dropStaleUntil(&t, hasUntil, now)
 	isolateScheduledConversation(&t, mayBeMain)
+	if err := s.checkTaskSourceRestore(ctx, old, t); err != nil {
+		sc.mu.Unlock()
+		return "", err
+	}
 	if err := checkTask(&t, now); err != nil {
 		sc.mu.Unlock()
 		return "", err
@@ -1909,7 +1918,7 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 		}
 		return s.failTaskRun(ctx, t, run, err, false)
 	}
-	fresh := t.FreshEachRun && t.Repeat != repeatOnce
+	fresh := t.startsFresh()
 	if fresh {
 		// Override the destination only for this dispatch. Keeping the origin on the saved task
 		// lets the user restore same-chat runs without losing where the follow-up came from.
@@ -2943,7 +2952,7 @@ func (s *Service) scheduleRoutes() {
 			apierr.Write(w, http.StatusServiceUnavailable, err)
 			return
 		}
-		edit, err := s.prepareTaskExecutionEdit(r.Context(), &t, raw)
+		edit, err := s.prepareTaskExecutionEdit(r.Context(), Task{}, &t, raw)
 		if err != nil {
 			writeTaskExecutionError(w, err)
 			return
@@ -3046,7 +3055,7 @@ func (s *Service) scheduleRoutes() {
 			return
 		}
 		rearm(old, &t, now)
-		edit, err := s.prepareTaskExecutionEdit(r.Context(), &t, raw)
+		edit, err := s.prepareTaskExecutionEdit(r.Context(), old, &t, raw)
 		if err != nil {
 			writeTaskExecutionError(w, err)
 			return

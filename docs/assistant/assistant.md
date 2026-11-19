@@ -1144,7 +1144,8 @@ The web task editor's **Execution options**, before the prompt, is an advanced g
 a particular assistant backend, model, computer or directory. Its collapsed summary shows the launcher name, actual
 agent backend, model and thinking effort. Every untouched control explicitly follows Assistant, with known inherited
 values shown; its title and summary share one line. Task rows use the same summary from their effective `execution`,
-while older responses without it keep their legacy display. The saved fields stay unset so future Assistant changes
+while older responses without it keep their legacy display. After a computer's catalog loads, its rows show the saved
+launcher ID for entries missing from that catalog. The saved fields stay unset so future Assistant changes
 still apply. It reuses the chat's
 assistant-compatible launcher list (`purpose=task`), model picker and capability-derived thinking choices; it never changes Main chat.
 Only the explicit task purpose computes computer-scoped task inheritance; `purpose=assistant` keeps the ordinary
@@ -1168,8 +1169,9 @@ provider retains its binding across computers in scope; a local launcher on anot
 compatible launcher defaults, even when its alias matches Main chat's. Its model, effort and profile are not
 copied from another local provider. The picker reports the same computer-scoped defaults. A different explicit provider
 starts from its own defaults. A model or effort override pins the effective provider so a later
-Main chat switch cannot pair it with another agent. Task-specific choices require the task's own conversation;
-turn off **Continue the original chat** first. Agent means a real headless-capable launcher, including compatible
+Main chat switch cannot pair it with another agent. Task-specific choices require the task's own conversation. Turn off
+**Continue the original chat** or enable **Start a new chat for each run** on a repeating task. That setting keeps its
+source available for later reference. Agent means a real headless-capable launcher, including compatible
 runtime launchers, rather than an orchestration role. Work-only computers remain excluded.
 This includes pinning the computer already inherited from Assistant when the save omits `execution_machine_id`.
 An explicit empty computer restores computer inheritance; clearing the launcher/model/effort and computer restores

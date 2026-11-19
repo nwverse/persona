@@ -357,12 +357,18 @@ function pastUntil(d: Task, now: Date): string | null {
   return t("lib-routines.error_until");
 }
 
+export function taskStartsFresh(task: Pick<Task, "repeat" | "fresh_each_run">): boolean {
+  return task.repeat !== "once" && !!task.fresh_each_run;
+}
+
 /** Source chats retain their context, including legacy tasks whose launcher/effort fields were inert. */
 export function taskExecutionNeedsOwnChat(d: Task, saved?: Task | null): boolean {
-  const legacy = saved?.session_id === d.session_id && !saved?.model && !saved?.cwd && !saved?.execution_machine_id &&
-    (["launcher", "effort"] as const).every((key) => (d[key] ?? "").trim() === (saved?.[key] ?? "").trim());
-  return !!d.session_id && (!!d.model?.trim() || !!d.execution_machine_id?.trim() || !!d.cwd ||
-    (!legacy && !!(d.launcher?.trim() || d.effort?.trim())));
+  if (!d.session_id || taskStartsFresh(d)) return false;
+  const legacy = saved && saved.session_id === d.session_id && !saved.model && !saved.cwd && !saved.execution_machine_id &&
+    !taskStartsFresh(saved) &&
+    (["launcher", "effort"] as const).every((key) => (d[key] ?? "").trim() === (saved[key] ?? "").trim());
+  return !!d.model?.trim() || !!d.execution_machine_id?.trim() || !!d.cwd ||
+    (!legacy && !!(d.launcher?.trim() || d.effort?.trim()));
 }
 
 /** What the editor checks before saving (the hub checks the same and says why in Chinese): null = fine. */

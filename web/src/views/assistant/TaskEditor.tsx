@@ -10,7 +10,7 @@ import { shownManager } from "../../lib/manager-choice";
 import { navigate } from "../../lib/router";
 import {
   BYPASS, CRON_EXAMPLES, DAY_NAMES, everyLabel, fromLocalInput, grantKinds, INTERVALS, lastRunText, MAX_EVERY, MIN_EVERY, momentLabel, nextRun, normalizeDays,
-  parseTime, PERMISSION_MODES, repeatsLabel, runDetail, runStatusWord, sameTask, taskBody, taskTitle, toLocalInput, untilLabel, validateTask,
+  parseTime, PERMISSION_MODES, repeatsLabel, runDetail, runStatusWord, sameTask, taskBody, taskStartsFresh, taskTitle, toLocalInput, untilLabel, validateTask,
   TASK_CRON_FEATURE, TASK_INBOX_FEATURE, TASK_PUSH_FEATURE, WEEKEND, withPush, withRepeat, WORKDAYS, type CronPreview, type GrantKind, type InboxMode, type Push, type Repeat, type Run, type Task,
 } from "../../lib/routines";
 import { hubHas, useStore } from "../../lib/store";
@@ -223,7 +223,7 @@ export function TaskEditor({
   const next = nextRun(saved ?? draft);
   const last = saved ? lastRunText(saved, now) : null;
   const own = saved?.run_session_id;
-  const freshEachRun = draft.repeat !== "once" && draft.fresh_each_run;
+  const freshEachRun = taskStartsFresh(draft);
 
   return (
     <Dialog open onClose={close} width={600} title={creating ? t("assistant-taskeditor.new_title") : taskTitle(saved ?? draft)} footer={footer}>

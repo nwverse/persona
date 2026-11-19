@@ -65,9 +65,15 @@ export function Routines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     const controller = new AbortController();
     const machines = [...new Set((tasks ?? []).map((task) => task.execution?.machine_id).filter((id): id is string => !!id))];
     setLauncherNames({});
-    // One metadata read per execution computer, never one per task or a model discovery call.
-    void Promise.allSettled(machines.map(async (id) => [id, (await machineLaunchers(id, { purpose: "task", manager: manager ?? undefined, signal: controller.signal })).launchers] as const))
-      .then((results) => { if (!controller.signal.aborted) setLauncherNames(Object.fromEntries(results.flatMap((r) => r.status === "fulfilled" ? [r.value] : []))); });
+    // Each computer's catalog is authoritative as soon as it answers.
+    for (const id of machines) {
+      void machineLaunchers(id, { purpose: "task", manager: manager ?? undefined, signal: controller.signal }).then(
+        ({ launchers }) => {
+          if (!controller.signal.aborted) setLauncherNames((known) => ({ ...known, [id]: launchers }));
+        },
+        () => {}, // The row keeps the provider names while this catalog is unavailable.
+      );
+    }
     return () => controller.abort();
   }, [tasks, manager]);
 
@@ -315,10 +321,8 @@ export function Routines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
 type TaskChat = { sid: string; title?: string; at?: string };
 
 function TaskRow({ task, launchers, now, chats, onOpen, onMenu, onToggle }: { task: Task; launchers?: MachineLaunchers["launchers"]; now: Date; chats: TaskChat[]; onOpen: () => void; onMenu: (at: MenuAt) => void; onToggle: (on: boolean) => void }) {
-  // its launcher by the provider's display name, the startup ID in the line's tooltip (#5029): the current assistant's
-  // providers, as its tasks are
   const providers = useProviderNames(useChosenManager() ?? "");
-  const names = launchers?.length ? [...launchers, ...providers] : providers;
+  const names = launchers ?? providers;
   const with_ = runsWith(task, names);
   const launcher = task.execution?.launcher || task.launcher;
   const launcherId = launcher ? providerIdNote(namedLauncher(launcher, names)) : "";

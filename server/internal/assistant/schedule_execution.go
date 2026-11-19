@@ -43,10 +43,33 @@ func (s *Service) taskMachine(ctx context.Context, t Task) string {
 	return cmp.Or(t.ExecutionMachineID, s.settings(ctx).MachineID)
 }
 
+func (t Task) startsFresh() bool {
+	return t.FreshEachRun && t.Repeat != repeatOnce
+}
+
+func (t Task) continuesSource() bool {
+	return t.SessionID != "" && !t.startsFresh()
+}
+
 func taskExecutionNeedsOwnChat(t Task, override ModelBinding) bool {
 	// Legacy launcher/effort fields were inert when continuing a source conversation.
 	// New changes to those fields are refused at save time; unchanged old records may still continue it.
-	return t.SessionID != "" && (t.ExecutionMachineID != "" || t.Cwd != "" || override.Model != "" || override.ConfigDir != "")
+	return t.continuesSource() && (t.ExecutionMachineID != "" || t.Cwd != "" || override.Model != "" || override.ConfigDir != "")
+}
+
+// Schedule tools cannot clear the user's execution choices when restoring a task's source conversation.
+func (s *Service) checkTaskSourceRestore(ctx context.Context, previous, next Task) error {
+	if !previous.startsFresh() || !next.continuesSource() {
+		return nil
+	}
+	record, err := s.modelRecord(ctx, "task."+next.ID)
+	if err != nil {
+		return err
+	}
+	if taskExecutionNeedsOwnChat(next, record.Binding) || record.Binding != (ModelBinding{}) {
+		return i18n.Err("assistant-schedule.execution_own_chat")
+	}
+	return nil
 }
 
 // A health task may choose its computer and model, but its directory and instructions belong to the space.
@@ -148,16 +171,16 @@ type taskExecutionEdit struct {
 
 // prepareTaskExecutionEdit reads the model revision that the node checks will validate against.
 // The schedule and model writers remain free while the node answers.
-func (s *Service) prepareTaskExecutionEdit(ctx context.Context, t *Task, raw map[string]json.RawMessage) (taskExecutionEdit, error) {
+func (s *Service) prepareTaskExecutionEdit(ctx context.Context, previous Task, t *Task, raw map[string]json.RawMessage) (taskExecutionEdit, error) {
 	old, err := s.modelRecord(ctx, "task."+t.ID)
 	if err != nil {
 		return taskExecutionEdit{}, err
 	}
-	record, err := s.patchTaskExecution(ctx, t, raw, old)
+	record, err := s.patchTaskExecution(ctx, t, raw, old, previous.startsFresh())
 	return taskExecutionEdit{revision: old.Revision, record: record}, err
 }
 
-func (s *Service) patchTaskExecution(ctx context.Context, t *Task, raw map[string]json.RawMessage, old modelRecord) (*modelRecord, error) {
+func (s *Service) patchTaskExecution(ctx context.Context, t *Task, raw map[string]json.RawMessage, old modelRecord, wasFresh bool) (*modelRecord, error) {
 	changed := false
 	for key, dst := range map[string]*string{"execution_machine_id": &t.ExecutionMachineID, "cwd": &t.Cwd} {
 		if v, ok := raw[key]; ok {
@@ -222,13 +245,14 @@ func (s *Service) patchTaskExecution(ctx context.Context, t *Task, raw map[strin
 		}
 		changed = b != old.Binding
 	}
-	if taskExecutionNeedsOwnChat(*t, b) || t.SessionID != "" && b != old.Binding && b != (ModelBinding{}) {
+	source := t.continuesSource()
+	if taskExecutionNeedsOwnChat(*t, b) || source && b != (ModelBinding{}) && (wasFresh || b != old.Binding) {
 		return nil, i18n.Err("assistant-schedule.execution_own_chat")
 	}
 	if !changed {
 		return nil, nil
 	}
-	if t.SessionID != "" {
+	if source {
 		// Clearing overrides restores the source conversation's context, even while its computer is offline.
 		if b == old.Binding {
 			return nil, nil

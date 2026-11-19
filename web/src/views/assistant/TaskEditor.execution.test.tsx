@@ -253,6 +253,25 @@ it('blocks a pinned inherited computer with a source chat and validates toggling
  expect(writes[0]).not.toHaveProperty('execution_machine_id');
 });
 
+it('saves execution choices for a fresh recurring task while retaining its source chat', async () => {
+ const source = { ...saved, repeat: 'interval' as const, every_minutes: 30, session_id: 'origin', machine_id: 'box' };
+ await render(source);
+ await change(field(t('assistant-taskeditor.execution_computer')), 'box');
+ await change(field(t('assistant-taskeditor.execution_directory')), '/work/project');
+ const save = () => [...document.querySelectorAll('button')].find(b => b.textContent?.trim() === t('common.save'))!;
+ expect(save().disabled).toBe(true);
+ const fresh = field(t('assistant-taskeditor.fresh_each_run'));
+ await act(async () => fresh.click());
+ await flush();
+ expect(save().disabled).toBe(false);
+ expect(document.body.textContent).not.toContain(t('assistant-taskeditor.execution_own_chat'));
+ await click(t('common.save'));
+ expect(writes[0]).toMatchObject({ session_id: 'origin', fresh_each_run: true, execution_machine_id: 'box', cwd: '/work/project', model_revision: 0 });
+ await act(async () => fresh.click());
+ await flush();
+ expect(save().disabled).toBe(true);
+});
+
 it('lets a historical source task clear a saved execution choice back to inheritance',async()=>{
  saved={...saved,session_id:'origin',execution_machine_id:'box'};
  await render();

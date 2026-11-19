@@ -39,7 +39,7 @@ type noticeBody struct {
 // taskTarget is where the run of t would go: the machine and launcher, and whether it starts or continues the task's
 // own conversation on the assistant's machine (own) rather than going into the conversation it came from.
 func (s *Service) taskTarget(ctx context.Context, t Task, mainLauncher string) (machine, launcher string, own bool) {
-	if t.SessionID != "" {
+	if t.continuesSource() {
 		if _, ok := s.device(ctx, t.MachineID); ok {
 			launcher = mainLauncher // a conversation that does not say runs on the main conversation's (readinessModel)
 			if c, ok := s.session(ctx, t.MachineID, t.SessionID); ok && c.Launcher != "" {

@@ -58,6 +58,78 @@ func TestTaskExecutionOriginEdits(t *testing.T) {
 	}
 }
 
+func TestTaskExecutionFreshRecurringTaskKeepsOriginAndUsesOverrides(t *testing.T) {
+	f := readyHub()
+	f.sessions["remote"] = nil
+	f.known["origin"] = true
+	f.zshrc = map[string][]proto.Launcher{
+		"server": {{Name: "claude", Agent: "claude"}, {Name: "codex", Agent: "codex"}},
+		"remote": {{Name: "codex", Agent: "codex"}},
+	}
+	f.answerNode("assistant.directory", func(machine string, raw json.RawMessage) (any, error) {
+		var params struct{ Path string }
+		if err := json.Unmarshal(raw, &params); err != nil {
+			return nil, err
+		}
+		if machine != "remote" || params.Path != "/work/project" {
+			t.Errorf("validated directory on %s: %s", machine, raw)
+		}
+		return map[string]any{"cwd": "/work/resolved"}, nil
+	})
+	s := newTestService(t, f)
+	setTasks(s, Task{ID: "job", Title: "Check", Prompt: "Check files", Repeat: repeatOnce, At: time.Now().Add(time.Hour), Enabled: true, MachineID: "server", SessionID: "origin"})
+	const fields = `,"launcher":"codex","model":"test-model","execution_machine_id":"remote","cwd":"/work/project"`
+	save := func(rule, fields string, fresh bool, revision int, want int) {
+		t.Helper()
+		body := fmt.Sprintf(`{"title":"Check","prompt":"Check files","enabled":true,"session_id":"origin","fresh_each_run":%t,"model_revision":%d,%s%s}`, fresh, revision, rule, fields)
+		if r := request(s, "PUT", "/api/v1/assistant/tasks/job", body); r.Code != want {
+			t.Fatalf("save: got %d, want %d: %s", r.Code, want, r.Body)
+		}
+	}
+	once := fmt.Sprintf(`"repeat":"once","at":%q`, time.Now().Add(time.Hour).UTC().Format(time.RFC3339))
+	save(once, fields, true, 0, http.StatusBadRequest)
+	const interval = `"repeat":"interval","every_minutes":30`
+	save(interval, fields, true, 0, http.StatusOK)
+	save(interval, "", false, 1, http.StatusBadRequest)
+
+	last := "origin"
+	for i := 1; i <= 3; i++ {
+		task, _ := taskByID(s, "job")
+		if i == 3 {
+			if r := request(s, "POST", "/api/v1/assistant/tasks/job/run", `{}`); r.Code != http.StatusOK {
+				t.Fatalf("manual run: %d %s", r.Code, r.Body)
+			}
+		} else {
+			s.runDue(t.Context(), task.At)
+			s.sched.inflight.Wait()
+		}
+		got := waitRuns(t, s, i)[i-1]
+		if got.Status != runOK || got.SessionID == "" || got.SessionID == "origin" || got.SessionID == last ||
+			got.MachineID != "remote" || got.Conversation != "new" || got.Manual != (i == 3) {
+			t.Fatalf("run %d did not make a fresh task conversation: %+v", i, got)
+		}
+		if send := f.lastSend(t); send["launcher"] != "codex" || send["model"] != "test-model" || send["cwd"] != "/work/resolved" ||
+			send["task_execution"] != true || send["resume_only"] == true {
+			t.Fatalf("run %d did not use the validated configuration: %v", i, send)
+		}
+		last = got.SessionID
+	}
+	stored, _ := taskByID(s, "job")
+	if stored.SessionID != "origin" || !stored.FreshEachRun || stored.Cwd != "/work/project" || stored.RunSessionID != last {
+		t.Fatalf("dispatch changed the task's saved configuration: %+v", stored)
+	}
+	if _, err := s.toolScheduleRoutine(t.Context(), "server", "origin", json.RawMessage(`{"id":"job","fresh_each_run":false}`)); err == nil || !strings.Contains(err.Error(), "原来的对话") {
+		t.Fatalf("routine tool restored a source while overrides were set: %v", err)
+	}
+	save(interval, `,"launcher":"","model":"","execution_machine_id":"","cwd":""`, false, 1, http.StatusOK)
+	save(interval, `,"launcher":"codex"`, true, 2, http.StatusOK)
+	save(interval, "", false, 3, http.StatusBadRequest)
+	save(interval, `,"launcher":""`, false, 3, http.StatusOK)
+	if got, err := runNow(t, s, "job"); err != nil || got.SessionID != "origin" {
+		t.Fatalf("restoring the source: %+v %v", got, err)
+	}
+}
+
 func TestTaskExecutionOriginClearsHistoricalOverrides(t *testing.T) {
 	f := newFakeHub().withMachine()
 	s := newTestService(t, f)
