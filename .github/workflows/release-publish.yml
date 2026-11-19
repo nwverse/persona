@@ -171,10 +171,16 @@ jobs:
           PR_NUMBER: ${{ steps.pr.outputs.number }}
         run: |
           set -euo pipefail
-          body="$(gh release view "$TAG" --repo "$REPOSITORY" --json body --jq .body)"
-          if [[ "$body" != release-pr:* ]]; then
-            gh release edit "$TAG" --repo "$REPOSITORY" --notes "release-pr: $PR_NUMBER"
-          fi
+          for attempt in $(seq 1 90); do
+            if body="$(gh release view "$TAG" --repo "$REPOSITORY" --json body --jq .body 2>/dev/null)"; then
+              if [[ "$body" != release-pr:* ]]; then
+                gh release edit "$TAG" --repo "$REPOSITORY" --notes "release-pr: $PR_NUMBER"
+              fi
+              exit 0
+            fi
+            test "$attempt" -lt 90 || { echo 'Release was not created by the tag workflow in time' >&2; exit 1; }
+            sleep 20
+          done
 
   cli-web:
     name: Attach the release PR's verified CLI and Web downloads

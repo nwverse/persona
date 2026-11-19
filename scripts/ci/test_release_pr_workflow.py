@@ -118,6 +118,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn('release-pr: [0-9]+', text)
         self.assertIn("steps.owner.outputs.release_pr == 'false'", text)
         self.assertIn('release-publish owns its exact artifacts', text)
+        self.assertIn('for name in VERSION SHA256SUMS android.json latest.json', PUBLISH.read_text())
 
     def test_workflows_lint(self):
         result = subprocess.run(["actionlint", str(PR), str(PUBLISH), str(SCHEDULE)], capture_output=True, text=True)
