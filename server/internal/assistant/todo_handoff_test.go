@@ -143,6 +143,9 @@ func TestConfirmedTaskHandoffsWakeOnlyMatchingOrigin(t *testing.T) {
 	if _, err := reportHandoffTest(s, "receiver", "done", ra); err != nil {
 		t.Fatal(err)
 	}
+	if _, ok := s.digestEntry(ctx, superviseSignal{Todo: a.ID, Kind: sigIdle}, ""); ok {
+		t.Fatal("a stale stopped signal survived a matching handoff result")
+	}
 	settleService(t, s)
 	if s0, s1, sc := todoNow(s, a.ID).Supervision.State, todoNow(s, b.ID).Supervision.State, todoNow(s, receiving.ID).Supervision.State; s0 != reviewPending || s1 != reviewParked || sc == reviewPending {
 		t.Fatalf("one matching receipt: A=%s B=%s receiver=%s", s0, s1, sc)

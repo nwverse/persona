@@ -571,8 +571,8 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 			return prompts.SuperviseEntry{}, false // progress came, or it was parked or reviewed, meanwhile
 		}
 	case sigIdle, sigUnjudged, sigStalled:
-		if st == reviewParked {
-			return prompts.SuperviseEntry{}, false // parked meanwhile: it waits on purpose (parked.go)
+		if st == reviewParked || v.handoffResult() != nil {
+			return prompts.SuperviseEntry{}, false // a hold or its handoff result superseded the old stop
 		}
 	case sigParkedDue:
 		if r := v.parking(); st != reviewParked || r == nil || parkKey(r) != g.Key {
@@ -583,7 +583,7 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 			return prompts.SuperviseEntry{}, false // told by another message meanwhile (a later decision's)
 		}
 	case sigOrphaned:
-		if p := v.parking(); p != nil && p.Handoff != nil {
+		if p := v.parking(); p != nil && p.Handoff != nil || v.handoffResult() != nil {
 			return prompts.SuperviseEntry{}, false // an acknowledged handoff already explains the stop
 		}
 		if o, ok := s.orphanOf(t.ID); !ok || o.key != g.Key {
