@@ -96,6 +96,7 @@ export function Row({ row, second, describes, keepSecond, asButton, blocked, cus
   // a typed ID's row is its ID already; a preset's second line describes it
   const hasId = row.kind !== "typed" && row.kind !== "preset";
   const idLine = hasId && cut ? "always" : hasId && !describes && model.id !== name ? "touch" : null;
+  const idContext = describes ? provider.name : second || provider.name;
   const key = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.target !== e.currentTarget || e.nativeEvent.isComposing) return;
     if (e.key === "ArrowLeft") {
@@ -194,8 +195,8 @@ export function Row({ row, second, describes, keepSecond, asButton, blocked, cus
       )}
       {!saved && idLine && (
         <div data-row-id={idLine} className={cx("min-w-0 pt-px pl-[26px]", idLine === "touch" && "hidden [@media(hover:none)]:block")}>
-          <div title={second ? `${second} · ${model.id}` : model.id} className="line-clamp-2 font-mono text-xs leading-[1.4] break-all text-ink-2">
-            {second ? `${second} · ${model.id}` : model.id}
+          <div title={`${idContext} · ${model.id}`} className="line-clamp-2 font-mono text-xs leading-[1.4] break-all text-ink-2">
+            {idContext} · {model.id}
           </div>
         </div>
       )}

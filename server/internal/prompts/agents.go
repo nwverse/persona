@@ -253,8 +253,10 @@ func RenderTaskWorker() string { return render("agents/task_worker", struct{}{})
 
 // RenderTaskFiles is the hand-over rule every task's prompt carries (agents/task_files, #10511): a file the user
 // should get is named by its absolute path, never pasted as text. It is always asked for, unlike the closeout form,
-// which depends on a switch.
-func RenderTaskFiles() string { return render("agents/task_files", struct{}{}) }
+// which depends on a switch. language is the user's language by its own name; empty keeps the original Chinese.
+func RenderTaskFiles(language string) string {
+	return render("agents/task_files", struct{ Language string }{language})
+}
 
 // TaskHandoff describes the scoped entries the assignment's actual launcher can use.
 type TaskHandoff struct {

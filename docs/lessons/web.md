@@ -1452,6 +1452,10 @@ owner retyped it on the computer. Keep the node's code on the entry and word the
 entries kept from before), draw an uncertain one as waiting (caution color, no "Not sent"), and make a Check that finds
 nothing new say so. The node tells held from merely unconfirmed by the session's permission mode (`peer_held`).
 
+## Filter history after folding, and reconcile search snapshots (#10240)
+
+A stopped parent can own a working child or a pending side request. Fold the complete sidebar rows before selecting non-running history, or the parent disappears from live work and its children become duplicate history rows. A frozen content-search result can also outlive Resume or deletion: use the current complete row for its identity and drop identities removed from a loaded snapshot. Compute day headings and counts after all filters, with local calendar fields rather than UTC date substrings.
+
 ## A terminal menu must own focus before taking typing keys (#10239)
 
 An open Menu listens in the window's capture phase. Merely hiding pane controls from session rows does not make its
@@ -1460,3 +1464,7 @@ toolbar opts into Menu's focus scope, accepts keys only from its own trigger or 
 trigger when opening. Check a real xterm textarea and a non-editable element as well as ordinary search input. Raw
 pane addresses also need to resolve a listed Agent before closing, or they would fall back to a shell confirmation
 and lose the busy-Agent warning.
+
+## Deep tree rows need space for their counts (#10477)
+
+A shrinking file name cannot protect an end count when the row itself has unbounded indentation padding. Put the indentation and icon inside the name's shrinkable, clipped region; keep the count outside it with no wrapping. Bound deep indentation to a share of that region so the file name still has room for an ellipsis. Measure bounds against the containing panel, not the viewport, and keep the requested width separate from its temporary fitted width. Verify deep rows at minimum width in a real browser: jsdom cannot detect a clipped minus sign.
