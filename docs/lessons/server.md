@@ -2007,6 +2007,18 @@ A connection that outlives its transport (protocol.md "Resuming") changes what s
 - **A frame can come twice.** When the node takes a connection back before it saw the old transport fail, it may read
   frames over the old one after it told the manager how far it read; the manager writes them again. After a resume a
   frame already read is dropped, where before any frame out of order was a protocol error.
+- **Nothing writes on a transport whose resume is not decided.** Switching the node's writer to the new transport
+  before the token was checked let a refused resume, or one over a transport still in use, take frames meant for the
+  connection: a gap on the transport in use, which ends it and counts against framing. The new transport becomes the
+  writer only inside the peer's lock, once the resume is taken.
+- **A kept connection must not hold its hooks.** A hook's event written on a lost connection waits for the resume, and
+  an agent waits on every hook: hook events go through an ordered queue the hook does not wait on while the transport
+  is lost, and what the connection never sent goes to the spool, as standby would have kept it.
+- **A token rotated when its answer is written is lost with the answer.** The manager that never read the answer asks
+  again with the token it has: that one stays taken until the new transport carries a byte.
+- **A side that decides the transport is dead must tell the other.** One side's silence check fired while the other's
+  read loop was busy (not dead); the busy side then waited for its own pings, past the other side's window. The side
+  that loses a transport closes it, and the node keeps the connection longer than the manager takes to notice.
 
 ## A new value for an existing RPC parameter may be silently ignored by an old node (2026-11-06, #4858)
 

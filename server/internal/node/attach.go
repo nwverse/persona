@@ -149,14 +149,16 @@ func AttachWithTransport(ctx context.Context, newNode func() (*Node, error), ext
 	defer keeper.stopAll() // after the last connection handed them over: this resident node is ending
 	defer wg.Wait()
 	// A new transport is served once its first line says what it is (attach_resume.go): read beside the loop, so one
-	// that says nothing holds up no other.
+	// that says nothing holds up no other. Connections still replace each other in the order they came: one that came
+	// before the connection served, and spoke after it, is let go (an attempt the manager gave up on).
 	peeked := make(chan peekedConn)
 	stopped := make(chan struct{}) // this loop returned: a peek still going lets its transport go
 	defer close(stopped)
-	peek := func(c net.Conn) {
+	var came, servedCame uint64 // transports in the order they came; the one of the connection served
+	peek := func(c net.Conn, at uint64) {
 		first, rest, err := readFirstLine(c)
 		select {
-		case peeked <- peekedConn{c: c, first: first, rest: rest, err: err}:
+		case peeked <- peekedConn{c: c, came: at, first: first, rest: rest, err: err}:
 		case <-ctx.Done():
 			c.Close()
 		case <-stopped:
@@ -168,6 +170,7 @@ func AttachWithTransport(ctx context.Context, newNode func() (*Node, error), ext
 		var ok bool
 		var first []byte
 		var rest io.Reader
+		var at uint64 // when c came (came)
 		select {
 		case <-ctx.Done():
 			return nil
@@ -175,17 +178,19 @@ func AttachWithTransport(ctx context.Context, newNode func() (*Node, error), ext
 			if !ok {
 				return nil
 			}
-			go peek(c)
+			came++
+			go peek(c, came)
 			continue
 		case c, ok = <-extra:
 			if !ok {
 				extra = nil // that way is gone; relays go on
 				continue
 			}
-			go peek(c)
+			came++
+			go peek(c, came)
 			continue
 		case f := <-peeked:
-			c, first, rest = f.c, f.first, f.rest
+			c, first, rest, at = f.c, f.first, f.rest, f.came
 			if f.err != nil && !errors.Is(f.err, bufio.ErrTooLong) {
 				// It ended, or said nothing in time, before a whole first line: not a manager's connection (one cut
 				// while asking to resume included), and it must not replace the connection kept.
@@ -214,6 +219,12 @@ func AttachWithTransport(ctx context.Context, newNode func() (*Node, error), ext
 			}
 			continue
 		}
+		if at < servedCame {
+			_ = c.Close()
+			logf("let go a connection that came before the one served")
+			continue
+		}
+		servedCame = at
 		a := &attached{conn: c}
 		reader := connReader{Reader: io.MultiReader(bytes.NewReader(first), rest), a: a}
 		if current != nil {

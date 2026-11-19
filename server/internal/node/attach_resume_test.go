@@ -434,3 +434,61 @@ func TestAttachHookEventsDoNotWaitForAResume(t *testing.T) {
 	}
 	r.end()
 }
+
+// Connections replace each other in the order they came, whatever order they speak in: one that came before the
+// connection served and speaks only now (an attempt the manager gave up on) is let go, not served in its place
+// (#10829's review).
+func TestAttachKeepsTheOrderConnectionsCameIn(t *testing.T) {
+	home := shortHome(t)
+	t.Setenv("PERSONA_HOME", filepath.Join(home, ".persona"))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var made atomic.Int32
+	extra := make(chan net.Conn)
+	done := make(chan error, 1)
+	go func() {
+		done <- Attach(ctx, func() (*Node, error) {
+			made.Add(1)
+			n, err := New("test")
+			if err == nil {
+				n.logger.SetOutput(io.Discard)
+				t.Cleanup(n.starts.close)
+			}
+			return n, err
+		}, extra, nil)
+	}()
+	manager := func(name string, c net.Conn) *rpc.Peer {
+		p := rpc.New(name, c)
+		p.OnRequest = func(context.Context, string, json.RawMessage) (any, error) { return map[string]any{}, nil }
+		go func() { _ = p.Serve(ctx, c) }()
+		return p
+	}
+	m1, n1 := net.Pipe()
+	extra <- n1 // came first, says nothing yet
+	m2, n2 := net.Pipe()
+	extra <- n2
+	newer := manager("h2", m2)
+	cctx, ccancel := context.WithTimeout(ctx, 20*time.Second)
+	defer ccancel()
+	if err := newer.Call(cctx, "ping", map[string]any{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	older := manager("h1", m1)
+	octx, ocancel := context.WithTimeout(ctx, 3*time.Second)
+	defer ocancel()
+	if err := older.Call(octx, "ping", map[string]any{}, nil); err == nil {
+		t.Fatal("the connection that came first was served after the newer one")
+	}
+	if err := newer.Call(cctx, "ping", map[string]any{}, nil); err != nil {
+		t.Fatalf("the newer connection: %v", err)
+	}
+	if made.Load() != 1 {
+		t.Fatalf("%d Nodes made", made.Load())
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(15 * time.Second):
+		t.Fatal("Attach did not end")
+	}
+}

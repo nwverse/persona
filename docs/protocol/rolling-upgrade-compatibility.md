@@ -171,8 +171,8 @@ on a new transport, through the same relays:
 | New manager, a node without a resident node (`node --stdio` serving the connection itself) | It ends with its transport, so it does not announce `node_resume_v1`: the manager does not ask, and a drop reconnects as before. |
 | New manager, older node | No `node_resume_v1`: lanes as in #10660, a drop reconnects. |
 | Older manager, new resident node | The manager's `rpc.lanes` does not ask for resuming, so the node grants none and keeps nothing; a new transport's first line is the manager's handshake, which replaces the connection as before. The node reads that first line before serving, which an older manager writes at once too. |
-| A token the node does not have | A node restarted (a new process), or a token already used: `rpc.resume` is answered `resume_refused`, the transport closed, and the manager connects anew. |
-| A drop past the window, or while the node restarts | The manager closes its peer and connects anew; the node's kept connection ends at the window's end, or when a new connection replaces it. |
+| A token the node does not have | A node restarted (a new process), or a token already used: `rpc.resume` is answered `resume_refused`, the transport closed, and the manager connects anew. A token asked with again because the answer was lost is still taken until the new transport carries a byte. |
+| A drop past the window, or while the node restarts | The manager closes its peer and connects anew after its 30 s; the node's kept connection ends at its own window's end (60 s), or when a new connection replaces it. |
 | An older relay in between | Relays copy bytes; the resume goes over a new transport through them like any connection. |
 
 Nothing is stored: tokens live in each process's memory, so a restarted manager or node connects anew.
