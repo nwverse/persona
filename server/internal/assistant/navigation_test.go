@@ -414,7 +414,7 @@ func TestKeepSections(t *testing.T) {
 		{nil, []overviewPlace{card("a")}, "a"},
 		{[]overviewPlace{card("a"), card("b")}, []overviewPlace{card("b"), card("a")}, "b a"},
 		{[]overviewPlace{section("s"), card("a"), section("t"), card("b")}, []overviewPlace{card("b"), card("a"), card("c")}, "s b t a c"},
-		{[]overviewPlace{section("s"), section("t")}, []overviewPlace{card("a")}, "a s t"},
+		{[]overviewPlace{section("s"), section("t")}, []overviewPlace{card("a")}, "s t a"},
 		{[]overviewPlace{card("a"), section("s"), card("b")}, []overviewPlace{card("c")}, "c s"},
 		{[]overviewPlace{section("s")}, nil, ""},
 		{[]overviewPlace{section("s"), card("a")}, []overviewPlace{section("t"), card("a")}, "t a"},

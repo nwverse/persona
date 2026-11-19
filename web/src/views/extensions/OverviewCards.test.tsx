@@ -3,7 +3,8 @@
 // OverviewArrange): as it always was without an arrangement; a hidden card neither drawn nor asked for; a full-row card
 // across the row and a lone half one still half (web audit item 76); and arranging it: earlier / later, drag and drop,
 // width, hide and show, Reset with Undo, Done, without asking a drawn card again; Overview's own sections among the
-// cards, moved, hidden where that is safe, kept where they are by default unless moved.
+// cards, moved, hidden where that is safe, kept where they are by default unless moved; a row's heading counts the
+// cards shown, and arranging opens the rows when folded.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -83,7 +84,8 @@ const arrange = (list: OverviewEntry[]) => {
 };
 const cards = () => [...host.querySelectorAll<HTMLElement>("[data-extension-card]")];
 const order = () => cards().map((c) => c.dataset.extensionCard);
-const grid = () => host.querySelector("section")!;
+// the grid of cards, inside the section under its heading (#11148)
+const grid = () => host.querySelector("[data-overview-cards] > div[id]")!;
 const card = (key: string) => host.querySelector<HTMLElement>(`[data-extension-card="${key}"]`)!;
 const press = (el: Element | null | undefined) => act(() => (el as HTMLElement).click());
 const byLabel = (label: string) => host.querySelector<HTMLElement>(`[aria-label="${label}"]`);
@@ -103,6 +105,24 @@ describe("Overview's cards", () => {
     draw();
     expect(order()).toEqual(["example-gateway/today", "example-today/needs"]);
     expect(hub.mounts).not.toContain("example-quota/left");
+  });
+
+  it("the heading counts the cards shown; arranging opens a folded section, without its Collapse / Expand (#11148)", () => {
+    arrange([{ extension: "example-quota", id: "left", hidden: true }]);
+    localStorage.setItem("fold:overview-cards", "1");
+    const count = () => host.querySelector("[data-overview-cards] h2")!.nextElementSibling?.textContent;
+    const fold = () => host.querySelector("[data-overview-cards] button[aria-expanded]");
+    draw();
+    expect(count()).toBe("2");
+    expect(cards()).toEqual([]);
+    expect(fold()?.getAttribute("aria-expanded")).toBe("false");
+    draw(true);
+    expect(order()).toEqual(["example-quota/left", "example-gateway/today", "example-today/needs"]);
+    expect(count()).toBe("2");
+    expect(fold()).toBeNull();
+    draw(false);
+    expect(cards()).toEqual([]);
+    expect(fold()?.getAttribute("aria-expanded")).toBe("false");
   });
 
   it("a full-row card spans the row; a lone half card stays half on a wide page (web audit item 76)", () => {
@@ -140,10 +160,11 @@ describe("Overview's cards", () => {
 describe("arranging them", () => {
   it("moves a card earlier and later with its arrows, the ends disabled", () => {
     draw(true);
-    expect(byLabel(t("extensions-overviewarrange.earlier", { name: "Usage today" }))).toHaveProperty("disabled", true);
-    // the last card goes on past the sections (#10905): the last of those is the end
-    expect(byLabel(t("extensions-overviewarrange.later", { name: "Needs me" }))).toHaveProperty("disabled", false);
-    expect(byLabel(t("extensions-overviewarrange.later", { name: TITLES.computers }))).toHaveProperty("disabled", true);
+    // the first card goes on past the sections above it (#10905; the cards last by default, #11147): the first of those
+    // is the end, and the last card
+    expect(byLabel(t("extensions-overviewarrange.earlier", { name: "Usage today" }))).toHaveProperty("disabled", false);
+    expect(byLabel(t("extensions-overviewarrange.earlier", { name: TITLES.needs_you }))).toHaveProperty("disabled", true);
+    expect(byLabel(t("extensions-overviewarrange.later", { name: "Needs me" }))).toHaveProperty("disabled", true);
     press(byLabel(t("extensions-overviewarrange.later", { name: "Usage today" })));
     expect(saved.at(-1)?.map((e) => ("id" in e ? e.id : e.section))).toEqual(["left", "today", "needs"]);
     expect(order()).toEqual(["example-quota/left", "example-gateway/today", "example-today/needs"]);
@@ -340,22 +361,19 @@ describe("Overview's own sections (#10905)", () => {
     );
   const bar = (id: SectionId) => host.querySelector<HTMLElement>(`[data-overview-section="${id}"]`)!;
   const cardsThenSections = (o: OverviewEntry[]) => o.map((e) => ("id" in e ? e.id : e.section));
-  // In progress first, then the cards and the other sections as they were: the user's target arrangement
-  const IN_PROGRESS_FIRST: OverviewEntry[] = [
-    { section: "in_progress" },
-    ...CARDS.map((c) => ({ extension: c.extension, id: c.id })),
-    ...SECTIONS.filter((x) => x !== "in_progress").map((x) => ({ section: x })),
-  ];
+  const OTHER_SECTIONS: OverviewEntry[] = SECTIONS.filter((x) => x !== "in_progress").map((x) => ({ section: x }));
+  // In progress first, then the other sections and the cards as they were: the user's target arrangement
+  const IN_PROGRESS_FIRST: OverviewEntry[] = [{ section: "in_progress" }, ...OTHER_SECTIONS, ...CARDS.map((c) => ({ extension: c.extension, id: c.id }))];
 
-  it("without an arrangement: the cards, then the sections in their order; Loading where the sections begin, the quiet card after Unread", () => {
+  it("without an arrangement: the sections in their order, then the cards (#11147); Loading where the sections begin, the quiet card after Unread", () => {
     act(() => root.render(body(false, { start: <i data-mark="loading" />, after: { unread: <i data-mark="quiet" /> } })));
-    expect(drawnOrder()).toEqual([...CARD_KEYS, "mark:loading", ...SECTIONS.slice(0, 5), "mark:quiet", "computers"]);
+    expect(drawnOrder()).toEqual(["mark:loading", ...SECTIONS.slice(0, 5), "mark:quiet", "computers", ...CARD_KEYS]);
   });
 
-  it("In progress moved first (here, or on another device): right under the greeting, before the cards, the rest as they were", () => {
+  it("In progress moved first (here, or on another device): right under the greeting, above Needs you, the rest as they were", () => {
     arrange(IN_PROGRESS_FIRST);
     act(() => root.render(body(false, { start: <i data-mark="loading" /> })));
-    expect(drawnOrder()).toEqual(["mark:loading", "in_progress", ...CARD_KEYS, "needs_you", "waiting_on_computer", "working", "unread", "computers"]);
+    expect(drawnOrder()).toEqual(["mark:loading", "in_progress", "needs_you", "waiting_on_computer", "working", "unread", "computers", ...CARD_KEYS]);
     // the cards are still one row
     expect(host.querySelectorAll("section")).toHaveLength(1);
   });
@@ -363,24 +381,31 @@ describe("Overview's own sections (#10905)", () => {
   it("a hidden section is not drawn, the card after Unread still is; Needs you and Stuck are drawn whatever the list says", () => {
     arrange(SECTIONS.map((x) => (x === "in_progress" || x === "working" ? { section: x } : { section: x, hidden: true })));
     act(() => root.render(body(false, { after: { unread: <i data-mark="quiet" /> } })));
-    expect(drawnOrder()).toEqual([...CARD_KEYS, "needs_you", "waiting_on_computer", "in_progress", "working", "mark:quiet"]);
+    expect(drawnOrder()).toEqual(["needs_you", "waiting_on_computer", "in_progress", "working", "mark:quiet", ...CARD_KEYS]);
   });
 
-  it("a section between cards splits them into two rows, each laid out on its own", () => {
-    arrange([{ extension: "example-gateway", id: "today" }, { section: "in_progress" }, { extension: "example-quota", id: "left" }, { extension: "example-today", id: "needs" }, ...IN_PROGRESS_FIRST.slice(4)]);
+  it("a section between cards splits them into two rows, each laid out on its own, each with its heading; they fold as one", () => {
+    arrange([{ extension: "example-gateway", id: "today" }, { section: "in_progress" }, { extension: "example-quota", id: "left" }, { extension: "example-today", id: "needs" }, ...OTHER_SECTIONS]);
     draw();
     expect(drawnOrder().slice(0, 4)).toEqual(["example-gateway/today", "in_progress", "example-quota/left", "example-today/needs"]);
     const rows = [...host.querySelectorAll("section")];
     expect(rows).toHaveLength(2);
     // a lone half card keeps item 76's rule; the two after the section go two a row
-    expect(rows[0].className).not.toContain("md:grid-cols-2");
-    expect(rows[1].className).toContain("md:grid-cols-2");
+    expect(rows[0].querySelector("div[id]")!.className).not.toContain("md:grid-cols-2");
+    expect(rows[1].querySelector("div[id]")!.className).toContain("md:grid-cols-2");
+    // each row says how many cards it shows (#11148); folding one folds them all, and opens them all again
+    expect(rows.map((r) => r.querySelector("h2")!.nextElementSibling?.textContent)).toEqual(["1", "2"]);
+    press(rows[1].querySelector("button[aria-expanded]"));
+    expect(cards()).toEqual([]);
+    expect([...host.querySelectorAll("section button[aria-expanded]")].map((b) => b.getAttribute("aria-expanded"))).toEqual(["false", "false"]);
+    press(host.querySelector("section button[aria-expanded]"));
+    expect(order()).toEqual(["example-gateway/today", "example-quota/left", "example-today/needs"]);
   });
 
   it("arranging: each section is a bar in its place, even with no rows now; Needs you and Stuck have no switch and say they are always shown", () => {
     empty = ["needs_you", "working"];
     draw(true);
-    expect(drawnOrder()).toEqual([...CARD_KEYS, ...SECTIONS.map((x) => `bar:${x}`)]);
+    expect(drawnOrder()).toEqual([...SECTIONS.map((x) => `bar:${x}`), ...CARD_KEYS]);
     expect(bar("working").textContent).toContain(TITLES.working);
     // a switch the user can reach: the fixed ones keep only an unseen stand-in, so the arrows line up
     const reachable = (id: SectionId) => [...bar(id).querySelectorAll("[role=switch]")].filter((x) => !x.closest("[aria-hidden]"));
@@ -390,12 +415,13 @@ describe("Overview's own sections (#10905)", () => {
       expect(bar(fixed).textContent).toContain(t("extensions-overviewarrange.always_shown"));
     }
     for (const x of ["in_progress", "working", "unread", "computers"] as const) expect(reachable(x)).toHaveLength(1);
-    // the first card's earlier and the last section's later are the ends
-    expect(byLabel(t("extensions-overviewarrange.earlier", { name: "Usage today" }))).toHaveProperty("disabled", true);
-    expect(byLabel(t("extensions-overviewarrange.earlier", { name: TITLES.needs_you }))).toHaveProperty("disabled", false);
+    // the first section's earlier and the last card's later are the ends
+    expect(byLabel(t("extensions-overviewarrange.earlier", { name: TITLES.needs_you }))).toHaveProperty("disabled", true);
+    expect(byLabel(t("extensions-overviewarrange.earlier", { name: "Usage today" }))).toHaveProperty("disabled", false);
+    expect(byLabel(t("extensions-overviewarrange.later", { name: "Needs me" }))).toHaveProperty("disabled", true);
   });
 
-  it("In progress dropped on the first card takes its place; the list then names every section, and Done keeps it there", () => {
+  it("In progress dropped on Needs you takes its place, first; the list then names every section, and Done keeps it there", () => {
     draw(true);
     const drag = (type: string, el: HTMLElement) => {
       const e = new Event(type, { bubbles: true, cancelable: true });
@@ -404,9 +430,9 @@ describe("Overview's own sections (#10905)", () => {
     };
     expect(bar("in_progress").draggable).toBe(true);
     drag("dragstart", bar("in_progress"));
-    drag("dragover", card("example-gateway/today"));
-    expect(card("example-gateway/today").dataset.drag).toBe("over");
-    drag("drop", card("example-gateway/today"));
+    drag("dragover", bar("needs_you"));
+    expect(bar("needs_you").dataset.drag).toBe("over");
+    drag("drop", bar("needs_you"));
     drag("dragend", bar("in_progress"));
     expect(host.querySelector("[data-drag]")).toBeNull();
     expect(saved).toHaveLength(1);
@@ -415,16 +441,16 @@ describe("Overview's own sections (#10905)", () => {
     // the cards stayed drawn: nothing of them is asked again
     expect(hub.mounts).toHaveLength(3);
     press(byText(t("extensions-overviewarrange.done")));
-    expect(drawnOrder().slice(0, 2)).toEqual(["in_progress", "example-gateway/today"]);
+    expect(drawnOrder().slice(0, 2)).toEqual(["in_progress", "needs_you"]);
     expect(hub.mounts).toHaveLength(3);
   });
 
-  it("a card dropped on a section takes its place, and moves on past the sections with its arrows", () => {
+  it("a card moves on past the sections with its arrows, and a section past the cards", () => {
     draw(true);
-    press(byLabel(t("extensions-overviewarrange.later", { name: "Needs me" })));
-    expect(cardsThenSections(saved.at(-1)!)).toEqual(["today", "left", "needs_you", "needs", "waiting_on_computer", "in_progress", "working", "unread", "computers"]);
-    press(byLabel(t("extensions-overviewarrange.earlier", { name: TITLES.computers })));
-    expect(cardsThenSections(saved.at(-1)!).slice(-2)).toEqual(["computers", "unread"]);
+    press(byLabel(t("extensions-overviewarrange.earlier", { name: "Usage today" })));
+    expect(cardsThenSections(saved.at(-1)!)).toEqual(["needs_you", "waiting_on_computer", "in_progress", "working", "unread", "today", "computers", "left", "needs"]);
+    press(byLabel(t("extensions-overviewarrange.later", { name: TITLES.computers })));
+    expect(cardsThenSections(saved.at(-1)!).slice(-3)).toEqual(["left", "computers", "needs"]);
   });
 
   it("hides a section (its bar an outline) and shows it again; after Done it is not drawn", () => {
@@ -451,7 +477,7 @@ describe("Overview's own sections (#10905)", () => {
     draw(true);
     expect(drawnOrder()).not.toContain("bar:later_section");
     press(byLabel(t("extensions-overviewarrange.later", { name: "Usage today" })));
-    expect(cardsThenSections(saved.at(-1)!).slice(0, 4)).toEqual(["later_section", "in_progress", "left", "today"]);
+    expect(cardsThenSections(saved.at(-1)!)).toEqual(["later_section", "in_progress", "needs_you", "waiting_on_computer", "working", "unread", "computers", "left", "today", "needs"]);
   });
 
   it("Reset puts the sections back too, and Undo the arrangement", () => {
@@ -459,7 +485,7 @@ describe("Overview's own sections (#10905)", () => {
     draw(true);
     press(byText(t("extensions-overviewarrange.reset")));
     expect(saved.at(-1)).toEqual([]);
-    expect(drawnOrder()).toEqual([...CARD_KEYS, ...SECTIONS.map((x) => `bar:${x}`)]);
+    expect(drawnOrder()).toEqual([...SECTIONS.map((x) => `bar:${x}`), ...CARD_KEYS]);
     press(byText(t("extensions-overviewarrange.undo")));
     expect(saved.at(-1)).toEqual(IN_PROGRESS_FIRST);
     expect(drawnOrder()[0]).toBe("bar:in_progress");

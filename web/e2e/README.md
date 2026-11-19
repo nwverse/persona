@@ -89,10 +89,10 @@ MOCK_EXTENSIONS=1 MOCK_OVERVIEW_CARDS=1 PORT=<port> python3 scripts/mock/mock_hu
 node web/e2e/overview-sections.mjs <loopback-web-origin> <artifact-directory> [Chromium executable]
 ```
 
-Against an exclusively owned mock-backed web server, in Simplified Chinese. With nothing arranged the cards come first
-and the sections after them in their order; **整理总览** draws each section as a bar (需要你 and 卡住了，要你去看 without
-a switch, 始终显示), drags 进行中的任务 onto the first card and switches 工作中 off. After **完成**, 进行中的任务 is right
-under the greeting, above the cards, and 工作中 is not drawn; the hub keeps the arrangement (every section named), a
+Against an exclusively owned mock-backed web server, in Simplified Chinese. With nothing arranged the sections come
+first in their order and the cards last (#11147); **整理总览** draws each section as a bar (需要你 and 卡住了，要你去看
+without a switch, 始终显示), drags 进行中的任务 onto 需要你 and switches 工作中 off. After **完成**, 进行中的任务 is right
+under the greeting, above 需要你, the cards still last, and 工作中 is not drawn; the hub keeps the arrangement (every section named), a
 reload and a second browser draw the same, and Reset puts Overview back. Light and dark screenshots of Overview as it
 was, the edit state and 进行中的任务 moved first, at 1440 × 1300 and 390 × 1600, and `results-sections.json`, go to the
 artifact directory; a 300-second watchdog ends the run.

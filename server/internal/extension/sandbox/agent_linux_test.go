@@ -29,6 +29,7 @@ func TestLinuxAgentSandboxForReal(t *testing.T) {
 	if st := AgentSupport(sup); st.State != AgentActive {
 		t.Skip("no Linux agent sandbox here: " + st.Why)
 	}
+	requireAliasMount(t, sup.Bwrap)
 	t.Logf("agent probe: %+v", sup)
 	f := newAgentFixture(t)
 	D, alias := f.dir, f.alias
@@ -342,6 +343,7 @@ func TestLinuxAgentSandboxRelativePathForReal(t *testing.T) {
 	if st := AgentSupport(sup); st.State != AgentActive {
 		t.Skip("no Linux agent sandbox here: " + st.Why)
 	}
+	requireAliasMount(t, sup.Bwrap)
 	f := newAgentFixture(t)
 	work := filepath.Join(f.home, "work")
 	if err := os.Mkdir(work, 0o700); err != nil {
@@ -436,6 +438,7 @@ func TestLinuxAgentSandboxSnapshotForReal(t *testing.T) {
 	if st := AgentSupport(sup); st.State != AgentActive {
 		t.Skip("no Linux agent sandbox here: " + st.Why)
 	}
+	requireAliasMount(t, sup.Bwrap)
 	f := newAgentFixture(t)
 	work := filepath.Join(f.home, "work")
 	if err := os.Mkdir(work, 0o700); err != nil {
@@ -574,6 +577,7 @@ func TestLinuxAgentSandboxNamespaceBoundariesForReal(t *testing.T) {
 	if st := AgentSupport(sup); st.State != AgentActive {
 		t.Skip("no Linux agent sandbox here: " + st.Why)
 	}
+	requireAliasMount(t, sup.Bwrap)
 	if _, err := exec.LookPath("unshare"); err != nil {
 		t.Skip("unshare is not installed")
 	}
@@ -639,4 +643,34 @@ func TestLinuxAgentSandboxNamespaceBoundariesForReal(t *testing.T) {
 		}
 		t.Logf("nested unshare/umount left the secret closed: %s", out)
 	})
+}
+
+// requireAliasMount skips when this host's bwrap leaves the sandboxed process without CAP_SYS_ADMIN in its user
+// namespace (some vendored builds drop every capability). The data-directory alias helper's open_tree needs it, so
+// there every alias start fails closed (WrapAgent reports the sandbox unavailable) and the contract cannot run. It
+// reads the capability bit only and never runs the helper, so a broken alias mount still fails on a capable host.
+func requireAliasMount(t *testing.T, bwrap string) {
+	t.Helper()
+	out, err := exec.Command(bwrap, "--die-with-parent", "--unshare-user", "--bind", "/", "/", "--dev-bind", "/dev", "/dev",
+		"--", "cat", "/proc/self/status").CombinedOutput()
+	if err != nil {
+		t.Fatalf("bwrap capability probe: %v: %s", err, out)
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		hex, ok := strings.CutPrefix(line, "CapEff:")
+		if !ok {
+			continue
+		}
+		hex = strings.TrimSpace(hex)
+		caps, err := strconv.ParseUint(hex, 16, 64)
+		if err != nil {
+			t.Fatalf("bwrap capability probe: CapEff %q: %v", hex, err)
+		}
+		const capSysAdmin = 21
+		if caps&(1<<capSysAdmin) == 0 {
+			t.Skipf("%s gives the sandbox no CAP_SYS_ADMIN (CapEff %s): the alias helper's open_tree cannot run, and production reports the agent sandbox unavailable here", bwrap, hex)
+		}
+		return
+	}
+	t.Fatalf("bwrap capability probe: no CapEff in %s", out)
 }

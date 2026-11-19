@@ -1,7 +1,7 @@
 // Overview's own sections arranged with the extensions' cards (#10905) in a real browser against the mock hub, in
-// Simplified Chinese: with nothing arranged the cards come first and the sections after them in their order; Arrange
+// Simplified Chinese: with nothing arranged the sections come first in their order and the cards last (#11147); Arrange
 // Overview draws each section as a bar (Needs you and Stuck without a switch, "always shown"); Tasks in progress
-// dragged onto the first card takes the top, and after Done it is right under the greeting, above the cards; the hub
+// dragged onto Needs you takes the top, and after Done it is right under the greeting, above Needs you; the hub
 // keeps it, a reload and a second browser (another device) draw the same; Working hidden is not drawn; Reset puts
 // Overview back. Light and dark screenshots at 1440 and 390 wide of Overview as it was, the edit state, and Tasks in
 // progress moved first.
@@ -63,13 +63,14 @@ const navigation = (p, method, body) =>
     return r.status === 200 ? r.json() : { status: r.status };
   }, [method, body]);
 
-/** What Overview draws under the greeting, top to bottom: `card` for each run of cards, a section by its heading, a
- *  section's bar while arranging as `bar:<id>`. */
+/** What Overview draws under the greeting, top to bottom: `card` for each run of cards (its own heading, #11148, left
+ *  out), a section by its heading, a section's bar while arranging as `bar:<id>`. */
 const drawn = (p) =>
   p.evaluate(() => {
     const out = [];
     for (const el of document.querySelectorAll("[data-extension-card], [data-overview-section], section > div > h2")) {
       if (el.closest("[data-extension-card]") && !el.matches("[data-extension-card]")) continue;
+      if (el.matches("h2") && el.closest("[data-overview-cards]")) continue;
       const item = el.matches("[data-extension-card]") ? "card" : el.matches("[data-overview-section]") ? `bar:${el.getAttribute("data-overview-section")}` : el.textContent;
       if (item !== "card" || out.at(-1) !== "card") out.push(item);
     }
@@ -96,26 +97,26 @@ try {
   await overview(p);
   let now = await drawn(p);
   const present = SECTION_TITLES.filter((s) => now.includes(s));
-  check("nothing arranged: the cards first, then the sections in their order", now[0] === "card" && JSON.stringify(now.filter((x) => x !== "card")) === JSON.stringify(present) && present.includes(IN_PROGRESS), now);
+  check("nothing arranged: the sections in their order, then the cards (#11147)", now.at(-1) === "card" && JSON.stringify(now.filter((x) => x !== "card")) === JSON.stringify(present) && present.includes(IN_PROGRESS), now);
 
   await startArranging(p);
   now = await drawn(p);
-  check("arranging: every section is a bar in its place, after the cards", JSON.stringify(now) === JSON.stringify(["card", "bar:needs_you", "bar:waiting_on_computer", "bar:in_progress", "bar:working", "bar:unread", "bar:computers"]), now);
+  check("arranging: every section is a bar in its place, above the cards", JSON.stringify(now) === JSON.stringify(["bar:needs_you", "bar:waiting_on_computer", "bar:in_progress", "bar:working", "bar:unread", "bar:computers", "card"]), now);
   const needs = await bar(p, "needs_you").textContent();
   check("arranging: Needs you and Stuck have no switch and say they are always shown", (await bar(p, "needs_you").getByRole("switch").count()) === 0 && (await bar(p, "waiting_on_computer").getByRole("switch").count()) === 0 && needs.includes("始终显示"), needs);
   check("arranging: the heading names Overview", (await head(p).textContent()).includes("整理总览"));
 
-  // Tasks in progress to the top: dragged onto the first card
-  await bar(p, "in_progress").dragTo(p.locator("[data-extension-card]").first(), { sourcePosition: { x: 16, y: 18 } });
+  // Tasks in progress to the top: dragged onto Needs you
+  await bar(p, "in_progress").dragTo(bar(p, "needs_you"), { sourcePosition: { x: 16, y: 18 } });
   await p.waitForFunction(() => document.querySelector("[data-overview-section], [data-extension-card]")?.getAttribute("data-overview-section") === "in_progress");
-  check("Tasks in progress dropped on the first card takes the top", (await drawn(p))[0] === "bar:in_progress", await drawn(p));
+  check("Tasks in progress dropped on Needs you takes the top", (await drawn(p))[0] === "bar:in_progress", await drawn(p));
   // Working hidden with its switch
   await bar(p, "working").getByRole("switch").click();
   await p.waitForFunction(() => document.querySelector('[data-overview-section="working"]')?.className.includes("shadow-hairline"));
   await done(p);
   await p.waitForFunction(() => !document.querySelector("[data-overview-arrange]"));
   now = await drawn(p);
-  check("done: Tasks in progress right under the greeting, above the cards; Working not drawn", now[0] === IN_PROGRESS && now[1] === "card" && !now.includes("工作中"), now);
+  check("done: Tasks in progress right under the greeting, the cards still last; Working not drawn", now[0] === IN_PROGRESS && now.at(-1) === "card" && !now.includes("工作中"), now);
   const hub = await navigation(p, "GET");
   check("the hub keeps it: Tasks in progress first, every section named, Working hidden", JSON.stringify(hub.overview?.[0]) === JSON.stringify({ section: "in_progress" }) && hub.overview.filter((e) => e.section).length === 6 && hub.overview.some((e) => e.section === "working" && e.hidden), hub.overview);
   const h1 = await p.evaluate(() => {
@@ -127,7 +128,7 @@ try {
 
   await overview(p);
   now = await drawn(p);
-  check("after a reload: the same", now[0] === IN_PROGRESS && now[1] === "card" && !now.includes("工作中"), now);
+  check("after a reload: the same", now[0] === IN_PROGRESS && now.at(-1) === "card" && !now.includes("工作中"), now);
   const other = await device({ width: 1440, height: 900 });
   await other.p.waitForFunction((t) => [...document.querySelectorAll("section > div > h2")][0]?.textContent === t, IN_PROGRESS, { timeout: 20_000 });
   check("another device draws the same", JSON.stringify(await drawn(other.p)) === JSON.stringify(now), await drawn(other.p));
@@ -136,8 +137,9 @@ try {
   // Reset puts Overview back
   await startArranging(p);
   await head(p).getByRole("button", { name: "恢复默认" }).click();
-  await p.waitForFunction(() => document.querySelector("[data-overview-section], [data-extension-card]")?.hasAttribute("data-extension-card"));
-  check("Reset: the cards first, then the sections in their order", JSON.stringify((await drawn(p)).slice(0, 2)) === JSON.stringify(["card", "bar:needs_you"]));
+  await p.waitForFunction(() => document.querySelector("[data-overview-section], [data-extension-card]")?.getAttribute("data-overview-section") === "needs_you");
+  const reset = await drawn(p);
+  check("Reset: the sections in their order, then the cards", reset[0] === "bar:needs_you" && reset.at(-1) === "card", reset);
   await done(p);
   await laptop.context.close();
 

@@ -120,7 +120,7 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
   // Overview being arranged (#9745, #10905): the order of its cards and sections, which are hidden, how wide a card is
   const [arranging, setArranging] = useState(false);
 
-  // Overview's own sections under the cards, each what it draws (nothing while it has no rows): the user may move them,
+  // Overview's own sections, above the cards by default (#11147), each what it draws (nothing while it has no rows): the user may move them,
   // and hide the ones whose rows don't need them (#10905, views/OverviewBody.tsx)
   const sections: OverviewSections = {
     // the headline counts agents, this counts cards: say so when one agent has several cards waiting
@@ -290,10 +290,11 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
           </div>
 
           {/* the extensions' cards (docs/extensions/extensions.md "UI slots" overview_card) and the sections, in the order the
-              user arranged them (#9745, #10905); with nothing arranged, the cards under the agents' summary, then the
-              sections. Before the first snapshot the socket streams the machines' agents and cards in one by one, each
-              moving the groups already painted, and "Loading" then went from over them: until it is in only "Loading"
-              (where the sections begin), then all at once. */}
+              user arranged them (#9745, #10905); with nothing arranged, the sections, then the cards last: under everything
+              about the owner's agents (what needs them, what is running, what just finished) and the computers, so no
+              number of cards pushes those off the first screen (#11147). Before the first snapshot the socket streams the
+              machines' agents and cards in one by one, each moving the groups already painted, and "Loading" then went
+              from over them: until it is in only "Loading" (where the sections begin), then all at once. */}
           <OverviewBody editing={arranging} onDone={() => setArranging(false)} sections={sections} start={!loaded && <Loading label={t("common.loading")} />} after={{ unread: quietCard }} />
         </div>
       </div>

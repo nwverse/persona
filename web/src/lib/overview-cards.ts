@@ -6,11 +6,11 @@
 // default manager) can't keep it.
 //
 // Which cards there are is the hub's list (lib/extension-slots.ts, in its order: by extension, then the manifest's);
-// the sections are SECTIONS, under the cards by default. A card or section the arrangement names comes in its place.
-// A card it does not name (an extension installed since) comes after the last card it names (none: right above Needs
-// you, where the cards end by default), half a row and shown, in the hub's order; a section it does not name (one added
-// since) where it is by default, right after the section before it by default (Needs you: after the cards), so a
-// section the user put first stays first. An entry naming a card that is not
+// the sections are SECTIONS, above the cards by default (the cards last, #11147). A card or section the arrangement
+// names comes in its place. A card it does not name (an extension installed since) comes after the last card it names
+// (none: at the end, where the cards are by default), half a row and shown, in the hub's order; a section it does not
+// name (one added since) where it is by default, right after the section before it by default (Needs you: first), so
+// a section the user put first stays first. An entry naming a card that is not
 // there now is passed over, and kept until the user saves another arrangement (it holds only the cards there are
 // then); one naming a section this web does not have (a newer web's) is kept where it is. Changing it is
 // lib/overview-edit.ts's, loaded with Overview's editor: the first screen only draws.
@@ -53,9 +53,9 @@ export const readOverview = (v: unknown): OverviewEntry[] =>
   Array.isArray(v) ? v.filter((e) => typeof e?.section === "string" || (typeof e?.extension === "string" && typeof e.id === "string")) : [];
 
 /** Overview's cards and sections in the user's arrangement: the named ones in their place, hidden and wide as chosen;
- *  the cards it does not name after the last one it names (none: above Needs you), in the hub's order, half a row and
- *  shown; the sections it does not name each after the one before it by default. Without an arrangement, Overview as
- *  it always was: the cards, then the sections in their order. */
+ *  the sections it does not name each after the one before it by default (Needs you: first); the cards it does not
+ *  name after the last one it names (none: at the end), in the hub's order, half a row and shown. Without an
+ *  arrangement, Overview's default (#11147): the sections in their order, then the cards. */
 export function arrangeOverview<T extends { extension: string; id: string }>(cards: readonly T[], prefs: readonly OverviewEntry[]): ArrangedItem<T>[] {
   const byKey = new Map<string, T>();
   for (const c of cards) if (!byKey.has(cardKey(c))) byKey.set(cardKey(c), c);
@@ -74,27 +74,27 @@ export function arrangeOverview<T extends { extension: string; id: string }>(car
     }
     placed.add(key);
   }
-  const last = () => out.findLastIndex((i) => "card" in i);
-  let at = last() < 0 ? Math.max(0, out.findIndex((i) => i.key === sectionKey(SECTIONS[0]))) : last() + 1;
-  for (const [key, card] of byKey) if (!placed.has(key)) out.splice(at++, 0, { card, key, hidden: false, span: "half" });
   // in their order: the one before each is in place by then
   SECTIONS.forEach((id, i) => {
     const key = sectionKey(id);
-    if (!placed.has(key)) out.splice((i ? out.findIndex((x) => x.key === sectionKey(SECTIONS[i - 1])) : last()) + 1, 0, { section: id, key, hidden: false });
+    if (!placed.has(key)) out.splice(i ? out.findIndex((x) => x.key === sectionKey(SECTIONS[i - 1])) + 1 : 0, 0, { section: id, key, hidden: false });
   });
+  const last = out.findLastIndex((i) => "card" in i);
+  let at = last < 0 ? out.length : last + 1;
+  for (const [key, card] of byKey) if (!placed.has(key)) out.splice(at++, 0, { card, key, hidden: false, span: "half" });
   return out;
 }
 
 /** What a list of only cards from the hub leaves of `stored` while the sections are this browser's alone (a default
  *  manager from before them, #9745's, keeps cards only): the manager's own rule (server/internal/assistant/navigation.go
  *  keepSections). The sections stay where they are and the cards take the stored cards' places in `list`'s order, one
- *  `stored` did not have going after the last of them (none: first); an empty list (Reset) is taken as it is, as is one
+ *  `stored` did not have going after the last of them (none: at the end, where the cards are by default); an empty list (Reset) is taken as it is, as is one
  *  naming a section or one that would hold more than the hub's most. */
 export function keepSections(stored: readonly OverviewEntry[], list: OverviewEntry[]): OverviewEntry[] {
   if (!list.length || list.some(isSection) || !stored.some(isSection)) return list;
   const out: OverviewEntry[] = [];
   let next = 0;
-  let after = 0;
+  let after = -1;
   for (const e of stored) {
     if (isSection(e)) out.push(e);
     else if (next < list.length) {
@@ -102,7 +102,7 @@ export function keepSections(stored: readonly OverviewEntry[], list: OverviewEnt
       after = out.length;
     }
   }
-  out.splice(after, 0, ...list.slice(next));
+  out.splice(after < 0 ? out.length : after, 0, ...list.slice(next));
   return out.length > 256 ? list : out;
 }
 

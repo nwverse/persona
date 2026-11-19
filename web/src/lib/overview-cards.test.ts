@@ -14,7 +14,7 @@ const keys = (list: { key: string }[]) => list.map((c) => c.key);
 const arrangeCards = <T extends { extension: string; id: string }>(cards: readonly T[], prefs: readonly OverviewEntry[]) =>
   arrangeOverview(cards, prefs).filter((i): i is ArrangedCard<T> => "card" in i);
 const id = (e: OverviewEntry) => ("id" in e ? e.id : entryKey(e));
-// Overview's own sections as they are by default, under the cards
+// Overview's own sections as they are by default, above the cards (the cards last, #11147)
 const DEFAULT_SECTIONS = ["section:needs_you", "section:waiting_on_computer", "section:in_progress", "section:working", "section:unread", "section:computers"];
 const section = (s: string, hidden?: true): OverviewEntry => ({ section: s, ...(hidden ? { hidden } : {}) });
 
@@ -110,45 +110,47 @@ describe("halvesPaired", () => {
 
 describe("Overview's own sections (#10905)", () => {
   const CARD_KEYS = ["example-gateway/today", "example-quota/left", "example-today/needs", "example-today/agenda"];
-  // In progress first, then the cards, then the other sections in their order: the user's target arrangement
+  // In progress first, then the other sections in their order, then the cards: the user's target arrangement
   const IN_PROGRESS_FIRST: OverviewEntry[] = [
     section("in_progress"),
-    ...HUB.map((c) => ({ extension: c.extension, id: c.id })),
     ...SECTIONS.filter((s) => s !== "in_progress").map((s) => section(s)),
+    ...HUB.map((c) => ({ extension: c.extension, id: c.id })),
   ];
 
-  it("without an arrangement: the cards, then the sections in their order, all shown", () => {
+  it("without an arrangement: the sections in their order, then the cards (#11147), all shown", () => {
     const out = arrangeOverview(HUB, []);
-    expect(keys(out)).toEqual([...CARD_KEYS, ...DEFAULT_SECTIONS]);
+    expect(keys(out)).toEqual([...DEFAULT_SECTIONS, ...CARD_KEYS]);
     expect(out.every((i) => !i.hidden)).toBe(true);
     expect(SECTIONS).toEqual(["needs_you", "waiting_on_computer", "in_progress", "working", "unread", "computers"]);
   });
 
-  it("an arrangement of only cards (#9745's) leaves the sections where they are by default, under the cards", () => {
+  it("an arrangement of only cards (#9745's) leaves the sections where they are by default, above the cards", () => {
     const out = arrangeOverview(HUB, [{ extension: "example-today", id: "agenda" }, { extension: "example-quota", id: "left", hidden: true }]);
-    expect(keys(out)).toEqual(["example-today/agenda", "example-quota/left", "example-gateway/today", "example-today/needs", ...DEFAULT_SECTIONS]);
+    expect(keys(out)).toEqual([...DEFAULT_SECTIONS, "example-today/agenda", "example-quota/left", "example-gateway/today", "example-today/needs"]);
   });
 
-  it("a section the arrangement moves comes in its place: In progress first, before the cards", () => {
+  it("a section the arrangement moves comes in its place: In progress first, above Needs you", () => {
     const out = arrangeOverview(HUB, IN_PROGRESS_FIRST);
-    expect(keys(out)).toEqual(["section:in_progress", ...CARD_KEYS, ...DEFAULT_SECTIONS.filter((k) => k !== "section:in_progress")]);
+    expect(keys(out)).toEqual(["section:in_progress", ...DEFAULT_SECTIONS.filter((k) => k !== "section:in_progress"), ...CARD_KEYS]);
   });
 
   it("a section it does not name (one added since) comes where it is by default: right after the one before it", () => {
     const without = (x: string) => IN_PROGRESS_FIRST.filter((e) => !("section" in e && e.section === x));
     // Working (after In progress by default) follows In progress, which stays first
     expect(keys(arrangeOverview(HUB, without("working")))).toEqual([
-      "section:in_progress", "section:working", ...CARD_KEYS, "section:needs_you", "section:waiting_on_computer", "section:unread", "section:computers",
+      "section:in_progress", "section:working", "section:needs_you", "section:waiting_on_computer", "section:unread", "section:computers", ...CARD_KEYS,
     ]);
-    expect(keys(arrangeOverview(HUB, without("computers"))).at(-1)).toBe("section:computers");
-    // the first of them comes after the cards
-    expect(keys(arrangeOverview(HUB, without("needs_you"))).slice(4, 7)).toEqual(["example-today/agenda", "section:needs_you", "section:waiting_on_computer"]);
+    // Computers after Unread, still above the cards
+    const noComputers = keys(arrangeOverview(HUB, without("computers")));
+    expect(noComputers.slice(noComputers.indexOf("section:unread"), noComputers.indexOf("section:unread") + 3)).toEqual(["section:unread", "section:computers", CARD_KEYS[0]]);
+    // the first of them by default comes first
+    expect(keys(arrangeOverview(HUB, without("needs_you"))).slice(0, 2)).toEqual(["section:needs_you", "section:in_progress"]);
   });
 
-  it("cards it does not name come after the last card it names; with none named, right above Needs you", () => {
+  it("cards it does not name come after the last card it names; with none named, at the end, where they are by default", () => {
     const some = [section("in_progress"), { extension: "example-quota", id: "left" }, ...SECTIONS.filter((s) => s !== "in_progress").map((s) => section(s))];
     expect(keys(arrangeOverview(HUB, some)).slice(0, 6)).toEqual(["section:in_progress", "example-quota/left", "example-gateway/today", "example-today/needs", "example-today/agenda", "section:needs_you"]);
-    // arranged while there was no card: a card installed since does not take In progress's place at the top
+    // arranged while there was no card: a card installed since comes at the end, not in In progress's place at the top
     const noCards = IN_PROGRESS_FIRST.filter((e) => "section" in e);
     expect(keys(arrangeOverview(HUB, noCards))).toEqual(keys(arrangeOverview(HUB, IN_PROGRESS_FIRST)));
   });
@@ -181,9 +183,10 @@ describe("Overview's own sections (#10905)", () => {
       "section:needs_you",
       ["cards:1", ["example-today/agenda", "example-gateway/today", "example-today/needs"]],
     ]);
-    // the default's one row keeps its name when a section moves above it: its cards are not drawn again
-    expect((overviewRuns(arrangeOverview(HUB, IN_PROGRESS_FIRST))[1] as { key: string }).key).toBe("cards:0");
-    expect((overviewRuns(arrangeOverview(HUB, []))[0] as { key: string }).key).toBe("cards:0");
+    // the default's one row keeps its name when a section moves: its cards are not drawn again
+    const row = (prefs: OverviewEntry[]) => overviewRuns(arrangeOverview(HUB, prefs)).find((r) => "cards" in r)?.key;
+    expect(row(IN_PROGRESS_FIRST)).toBe("cards:0");
+    expect(row([])).toBe("cards:0");
   });
 
   describe("what a change writes", () => {
@@ -195,10 +198,10 @@ describe("Overview's own sections (#10905)", () => {
     });
 
     it("every section once one is moved or hidden, and from then on, back in its place too (until Reset)", () => {
-      const moved = written(items, dropEntry(entriesOf(items), "section:in_progress", "example-gateway/today"), []);
+      const moved = written(items, dropEntry(entriesOf(items), "section:in_progress", "section:needs_you"), []);
       expect(moved).toEqual(IN_PROGRESS_FIRST);
       const hidden = written(items, changeEntry(entriesOf(items), "section:computers", { hidden: true }), []);
-      expect(hidden.at(-1)).toEqual(section("computers", true));
+      expect(hidden.find((e) => entryKey(e) === "section:computers")).toEqual(section("computers", true));
       expect(hidden.filter((e) => "section" in e)).toHaveLength(SECTIONS.length);
       // put back where it was by default: the list still names them, or a hub keeping the sections of a list naming
       // none (for #9745's web) would keep the old place
@@ -208,7 +211,9 @@ describe("Overview's own sections (#10905)", () => {
     });
 
     it("a section this web does not have stays after the entry it followed, or first", () => {
-      const prefs = [section("later_first"), section("in_progress"), ...IN_PROGRESS_FIRST.slice(1, 3), section("later_section"), ...IN_PROGRESS_FIRST.slice(3)];
+      const cards = HUB.map((c) => ({ extension: c.extension, id: c.id }));
+      const rest = SECTIONS.filter((s) => s !== "in_progress").map((s) => section(s));
+      const prefs = [section("later_first"), section("in_progress"), ...cards.slice(0, 2), section("later_section"), ...cards.slice(2), ...rest];
       const now = arrangeOverview(HUB, prefs);
       const out = written(now, moveEntry(entriesOf(now), "example-today/needs", -1), prefs);
       // Needs me moved before Quota left: the newer web's section stays after Quota left, the entry it followed
@@ -217,11 +222,11 @@ describe("Overview's own sections (#10905)", () => {
 
     it("hides and shows a section, moves it, and drops it on a card, writing only what differs from the default", () => {
       const list = entriesOf(items);
-      expect(list.slice(-6)).toEqual(SECTIONS.map((s) => section(s)));
+      expect(list.slice(0, 6)).toEqual(SECTIONS.map((s) => section(s)));
       expect(changeEntry(list, "section:working", { hidden: true, span: "full" }).find((e) => entryKey(e) === "section:working")).toEqual(section("working", true));
       expect(changeEntry(changeEntry(list, "section:working", { hidden: true }), "section:working", { hidden: false }).find((e) => entryKey(e) === "section:working")).toEqual(section("working"));
-      expect(moveEntry(list, "section:needs_you", -1).map(entryKey).slice(3, 5)).toEqual(["section:needs_you", "example-today/agenda"]);
-      expect(dropEntry(list, "section:in_progress", "example-gateway/today").map(entryKey)[0]).toBe("section:in_progress");
+      expect(moveEntry(list, "section:computers", 1).map(entryKey).slice(5, 7)).toEqual(["example-gateway/today", "section:computers"]);
+      expect(dropEntry(list, "section:in_progress", "example-gateway/today").map(entryKey).slice(5, 7)).toEqual(["example-gateway/today", "section:in_progress"]);
     });
   });
 });
@@ -236,7 +241,7 @@ describe("keepSections", () => {
       [[], [c("a")], "a"],
       [[c("a"), c("b")], [c("b"), c("a")], "b a"],
       [[section("s"), c("a"), section("t"), c("b")], [c("b"), c("a"), c("c")], "s b t a c"],
-      [[section("s"), section("t")], [c("a")], "a s t"],
+      [[section("s"), section("t")], [c("a")], "s t a"],
       [[c("a"), section("s"), c("b")], [c("c")], "c s"],
       [[section("s")], [], ""],
       [[section("s"), c("a")], [section("t"), c("a")], "t a"],

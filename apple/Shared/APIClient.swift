@@ -1404,6 +1404,18 @@ nonisolated struct APIClient: Sendable {
         try await post(sp(k) + "/modes", body: ModesBody(permissionMode: permissionMode, effort: effort, model: model), timeout: 30)
     }
 
+    private struct ServiceTierBody: Encodable {
+        var tier: String
+        enum CodingKeys: String, CodingKey { case tier = "service_tier" }
+    }
+
+    /// POST …/modes {"service_tier": tier}, always alone (docs/protocol/protocol.md "Codex speed settings"). The hub
+    /// acknowledges the native value through the session; an HTTP success does not make `tier` the value to draw.
+    func setServiceTier(_ k: SessionKey, tier: String) async throws {
+        // The hub's native speed call may take 90 seconds; leave it five seconds to answer for itself, as the web does.
+        try await post(sp(k) + "/modes", body: ServiceTierBody(tier: tier), timeout: 95)
+    }
+
     /// POST …/modes {"ultracode": on} (docs/protocol/protocol.md "Claude Code ultracode"): its own request, never with
     /// the model or effort. Success says the node took it, maybe queued (`ultracode_pending`), not that it is on: the
     /// session's fields say that. 409 `node_outdated` (the computer's node predates it) or `ultracode_unsupported`.

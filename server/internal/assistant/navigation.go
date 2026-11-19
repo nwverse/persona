@@ -30,8 +30,8 @@ type navigation struct {
 	// Pages is the sidebar's arrangement, as the web keeps it (web/src/lib/sidebar-pages.ts): a page's key as for Start.
 	Pages *sidebarPages `json:"pages,omitempty"`
 	// Overview is Overview's extension cards and its own sections as the user arranged them, as the web keeps it
-	// (web/src/lib/overview-cards.ts). An empty list is the default chosen (every card in the hub's order, half a row,
-	// then the sections in theirs), not "never chosen".
+	// (web/src/lib/overview-cards.ts). An empty list is the default chosen (the sections in their order, then every card
+	// in the hub's order, half a row: the cards last, #11147), not "never chosen".
 	Overview *[]overviewPlace `json:"overview,omitempty"`
 }
 
@@ -86,15 +86,15 @@ func checkOverview(cards []overviewPlace) error {
 // keepSections is what a change to list leaves of Overview: list, unless it names cards and no section while the stored
 // one names sections. Such a list comes from an app that does not know the sections (#9745's web): the sections stay
 // where they are, the cards take the stored cards' places in list's order, and one the stored list did not have goes
-// after the last of them (none: where the cards are by default, first). An empty list (Reset) is taken as it is, as is
-// one that would hold more than the most there may be.
+// after the last of them (none: where the cards are by default, last, under the sections, #11147). An empty list
+// (Reset) is taken as it is, as is one that would hold more than the most there may be.
 func keepSections(stored, list []overviewPlace) []overviewPlace {
 	if len(list) == 0 || slices.ContainsFunc(list, func(c overviewPlace) bool { return c.Section != "" }) ||
 		!slices.ContainsFunc(stored, func(c overviewPlace) bool { return c.Section != "" }) {
 		return list
 	}
 	out := make([]overviewPlace, 0, len(stored)+len(list))
-	next, after := 0, 0
+	next, after := 0, -1
 	for _, c := range stored {
 		if c.Section == "" {
 			if next == len(list) {
@@ -104,6 +104,9 @@ func keepSections(stored, list []overviewPlace) []overviewPlace {
 			after = len(out) + 1
 		}
 		out = append(out, c)
+	}
+	if after < 0 {
+		after = len(out)
 	}
 	out = slices.Insert(out, after, list[next:]...)
 	if len(out) > overviewCardsMost {

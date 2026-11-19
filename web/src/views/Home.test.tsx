@@ -29,7 +29,10 @@ vi.mock("../lib/sessions", async (importOriginal) => {
 });
 
 // the extensions' overview cards are not this test's
-vi.mock("./extensions/ExtensionSlots", () => ({ OverviewCards: () => null, OverviewArrangeButton: () => null, OverviewArranging: () => null }));
+// Overview draws its cards through OverviewBody, a row where the hub has cards (#10905): none unless a test gives some
+const slots = vi.hoisted(() => ({ cards: [] as { extension: string; id: string; title: string; placement: string }[] }));
+vi.mock("../lib/extension-slots", async (importOriginal) => ({ ...(await importOriginal<typeof import("../lib/extension-slots")>()), useExtensionSlot: (slot: string) => (slot === "overview_card" ? slots.cards : []) }));
+vi.mock("./extensions/ExtensionSlots", () => ({ OverviewCards: () => <section data-overview-cards="" />, OverviewArrangeButton: () => null, OverviewArranging: () => null }));
 // a card's answer stays on its way until the test lets it end
 const op = vi.hoisted(() => ({ finish: (_: unknown) => {} }));
 vi.mock("../lib/ops", async (importOriginal) => ({ ...(await importOriginal<typeof import("../lib/ops")>()), apiOp: () => new Promise((done) => { op.finish = done; }) }));
@@ -258,6 +261,28 @@ describe("the overview", () => {
     const row = html.slice(heading(html, "工作中"));
     expect(row.split('data-state="bg_waiting"').length - 1).toBe(1);
     expect(row).toContain("后台等待中");
+  });
+
+  it("puts the extensions' cards last, under the agents' sections and the computers (#11147)", () => {
+    slots.cards = [{ extension: "example", id: "card", title: "Example", placement: "overview_card" }];
+    const cards = (html: string) => html.indexOf("data-overview-cards");
+    const asking = agent(1, 0, "needs_you");
+    const bg = { background_working: true, background_waiting: true };
+    const html = render([asking, agent(2, 0, "needs_you"), agent(3, 0, "working"), agent(5, 0, "working", bg), agent(4, 0, "unread")], [{ id: "i1", kind: "permission", machine_id: "mac", session_id: asking.session_id, tool_name: "Bash" } as Interaction]);
+    const at = [heading(html, "需要你"), heading(html, "卡住了，要你去看"), heading(html, "工作中"), heading(html, "后台等待中"), heading(html, "完成未看"), heading(html, "电脑"), cards(html)];
+    expect(at.every((x) => x > -1)).toBe(true);
+    expect(at).toEqual([...at].sort((a, b) => a - b));
+    // nothing to do: the ready card and the computers still come first
+    const calm = render([]);
+    expect(calm.indexOf("一切就绪")).toBeGreaterThan(-1);
+    expect(calm.indexOf("一切就绪")).toBeLessThan(heading(calm, "电脑"));
+    expect(heading(calm, "电脑")).toBeLessThan(cards(calm));
+    // before the first snapshot: only 加载中, then the cards
+    const early = render([agent(3, 0, "working")], [], { loaded: false });
+    expect(early.indexOf("加载中")).toBeGreaterThan(-1);
+    expect(early.indexOf("加载中")).toBeLessThan(cards(early));
+    render([], [], { loaded: true });
+    slots.cards = [];
   });
 
   it("does not say nothing needs you above a waiting card", () => {
