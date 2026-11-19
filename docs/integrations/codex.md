@@ -73,6 +73,28 @@ The Persona assistant ("Persona" tab) can also use Codex launchers through `code
 
 Multiple existing app-server instances on one computer (desktop App, separate `CODEX_HOME`s, multiple clients reading / writing / approving) are integrated into the existing Agents list. See [`codex-app-server.md`](codex-app-server.md) for how that works and its limits; the source research behind it is in [the archive](../archive/integrations/codex-app-server-research.md). Discovering history requires no herdr; only instances exposing a protected Unix / loopback WebSocket endpoint support live connection and control. External stdio is explicitly read-only.
 
+## Visualize
+
+Codex's visualize plugin asks the model to write a self-contained HTML fragment (no network access of its own: no `fetch` / XHR, everything inlined, under 1 MB) and marks it inside an AgentMessage's text with private-use runes:
+
+`<U+E200>visualize<U+E202>{"path":"<abs>.html","mode":"wide"?,"title"?}<U+E201>`
+
+(`U+E200` opens, `U+E202` separates the tag from the JSON payload, `U+E201` closes.) The files live under `$CODEX_HOME/visualizations/YYYY/MM/DD/<codex session id>/`; `mode` is absent (the Codex client's 736 px frame) or `"wide"` (1024 px), and `title` is optional. The Codex client renders the fragment inline where the marker stood; without handling it, a reader sees only the file path as text.
+
+Persona's transcript parser (`server/internal/transcript/codex_visualize.go`) splits each marker out of the AgentMessage text: the words before, between and after the markers stay one or more ordinary `text` items, and each well-formed marker becomes its own `visualization` item (`proto.Visualization{path, mode, title}`), in order. A marker is kept verbatim as text when its JSON is invalid, its path is relative, its mode is unknown, its title is overlong, or it is not closed; blank lines around a marker are collapsed. The item never carries the fragment's bytes, only the file reference.
+
+Only the session's own completed AgentMessages are scanned. Markers also appear verbatim where one thread reads another's history — inside `codex_app` `read_thread` DynamicToolCall output, `custom_tool_call_output` snapshots and a compacted rollout's `guardian_history` — but those stay part of the tool result: they reference another session's files and repeat on every read, so re-emitting them would duplicate items the owning thread already produced.
+
+The node serves the bytes through `session.visualization`, and the hub through `GET /api/v1/sessions/{mid}/{sid}/items/{iid}/visualization` (`docs/protocol/protocol.md`, "Sessions"). The node resolves symlinks and only returns a file that:
+
+- is inside `$CODEX_HOME/visualizations`, with the fixed `YYYY/MM/DD/<session id>/<file>` shape;
+- belongs to the requested session: the directory's id is the session id or its main thread's;
+- is a regular file of at most 1 MiB (`visualizationMaxBytes`).
+
+Anything else answers `not_found`, so a marker cannot name an arbitrary file on the computer. The hub marks the response `text/html; charset=utf-8` and privately cacheable.
+
+The web client renders the item with `views/chat/VisualizationCard.tsx`: it fetches the fragment once when scrolled on screen and runs it in the same offline QuickJS sandbox as assistant HTML cards (`web/src/lib/html-runtime`, an `allow-scripts`-only iframe, no same-origin access), with every `persona.*` bridge call refused. The frame follows the fragment's height up to 640 px and is torn down off screen; a wide card may take 1024 px, another 736 px. Fetch and runtime failures show the file name and Retry. A Markdown export writes a `_[Visualization: <title or file name>]_` placeholder because the interactive frame has no Markdown form.
+
 ## Sessions on the daemon (app-server route)
 
 Rewind metadata preserves native terminal sessions' read, send, interrupt, approval and terminal capabilities.
@@ -612,6 +634,17 @@ with its own tag and "Message the Agent" input label. Code: `server/internal/nod
 - **Infer state independently**: a braille spinner before the terminal title (`terminal_title`, not the stripped version) or "esc to interrupt" on screen = Working;
   numbered choices such as "› 1." = Needs you (a "Terminal is asking you" card). Otherwise report `done`, and the hub determines Unread / Seen from whether it has been read. Read the screen at most every 2 seconds.
 - **Same file layout as Codex**, rooted at `~/.trae/cli`: `sessions/YYYY/MM/DD/rollout-*.jsonl` and `session_index.jsonl` (thread names for titles).
+- **Paginated history (TRAE CLI 0.215)**: `state_<n>.sqlite` and `thread_history_<n>.sqlite` can be authoritative even when a rollout remains.
+  The node uses the existing paginated reader, with the system `sqlite3` 3.33 or newer, to list and read these conversations, including stored items
+  of a running turn and stopped conversations. Databases are opened read-only; generated transcripts stay in the node's private state directory.
+  Per-thread projection revisions keep unrelated database writes from rebuilding every transcript. Older schemas retain the database-stamp fallback.
+  Full history is projected only when its conversation is read or watched; listing sessions uses cached summaries and does not convert cold histories.
+  Live writer locks and process ancestry select one main conversation per pane; nested exec and guardian threads cannot replace it.
+  A fresh start excludes all historical IDs, and an asynchronous request waits for the CLI's actual thread instead of preallocating a Claude ID.
+- **Conversation directory and terminal container**: the session's cwd comes from its TRAE metadata, not the host workspace.
+  Orca may put a terminal for an unregistered directory in its active workspace and then change into the requested directory. Its workspace ID
+  still describes that physical container; it does not change where the CLI reads or writes. Register the project in Orca when its terminal
+  should belong to that project. Task permission handling remains as documented in [Read-only planned tasks](../assistant/todos.md#read-only-planned-tasks).
 - **Newer rollout format**: user messages and replies are in `history_mutation.display_completions[].item` (same item structure as `item_completed`),
   while tool calls remain in `event_msg/item_completed`. The same item may appear in both places within a turn (deduplicate by id within the turn). A `history_mutation` line may span hundreds of KB to 1 MB
   (full context after compaction); decode only `display_completions`. `task_started` / `task_complete` are recorded in `Meta.TurnOpen`.

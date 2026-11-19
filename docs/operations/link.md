@@ -636,6 +636,127 @@ Without hub TLS, the web reports "The hub hasn't enabled a secure connection yet
 
 For Linux see "Linux (headless)" below: build `persona-link`, then `persona-link install --pair -` pairs, installs and waits for connection in one command.
 
+## Switching from SSH
+
+A Linux computer the hub already reaches over SSH (`kind: ssh`) can move to Persona Link with one confirmed click (#10662), under
+**Switch to Persona Link** on its machine detail in the signed-in web app and on its row in the admin **Computers** page. The
+computer keeps its id and name, and so its pins, mutes, trust, settings and history, which are all stored by id. Afterwards it
+connects to the hub by itself, also from other networks. It is for people who manage their computers, so it sits with the
+machine's details, not in the Assistant. iOS and Android follow in #10671.
+
+**What it needs**: the hub takes Persona Link (`public.tls_listen` or an `https://` `public_url`, as for pairing). The computer
+must also meet all of these:
+
+- It runs Linux on amd64 or arm64.
+- It is online over SSH and confirmed as the user's.
+- It has a running systemd user manager with linger on (`/var/lib/systemd/linger/<user>`). Without linger the user's services stop
+  when the last session ends, and that would be the switch's own SSH session.
+- It has no Persona Link yet: no connector, no `link.json`, no `persona-link.service`, and none under the old names.
+- It has a node program (`~/.persona/bin/personad` or `persona-node`) or already a node service.
+- Its node uses the default `remote_bin` and data directory: no `PERSONA_HOME` in its ssh environment, and no separate
+  `~/.jarvis`.
+
+A Mac or Windows computer is not switched from here, because launchd over SSH is unreliable (see "The device's program", step 3)
+and Windows has no service install over SSH. Install Persona Link on such a computer itself. Each condition the computer does not
+meet shows as a plain reason instead of the button.
+
+**What happens** (the manager that carries the computer runs it, `server/internal/devices/link_switch.go`; the hub only does two
+steps, `devices.link_switch.begin` / `end`). The computer disconnects and reconnects once. Agents running in a terminal (herdr and
+the other engines) keep running, and their hooks reach the new node. A reply the assistant is writing on that computer at that
+moment is cut off, as when a node restarts.
+
+1. **Checking** (30 s): one read-only SSH command looks at the system, systemd and linger, the files above, and which node service
+   exists. Nothing changes, and a refusal ends here.
+2. **Installing**:
+   1. The manager sends the Persona Link build of the hub's version for that platform (from the hub's node builds or its release,
+      [node-update.md](node-update.md) "Node packages") over the same SSH access, so the computer downloads nothing. It is staged
+      as `~/.persona/bin/.persona-link-switch-<op>`, and its SHA-256 and `version` are checked (10 min).
+   2. The hub then checks that the machine's entry is still what the manager saw. It sets `kind: link` and leaves every other field,
+      `ssh_host` included. It makes one pairing code for this machine, ten minutes and single-use, which only the manager gets.
+   3. From here the manager no longer runs the node over SSH. One more SSH command (3 min) puts the staged file in place as
+      `~/.persona/bin/persona-link` (never over an existing one) and runs `persona-link install --pair -`, with the pairing link on
+      its stdin. The link never goes on a command line, into a log, an API answer or the manager's store. The installer redeems
+      the code, adds the node service `personad-node` only when the computer has none (an existing one is left unchanged), starts
+      `persona-link.service`, and waits for the connection.
+      Just before the installer runs, the same command checks again for a node service, or the backup of one
+      (`node-switch.backup`) that the installer may put back. If it finds one, it leaves a marker so a rollback never removes
+      that service. Where `timeout` exists, the installer gets 150 s, so it cannot outlive the SSH command and race a rollback.
+3. **Connecting** (90 s): done when the computer's node answers through Persona Link. If the installer failed before it
+   paired (no `link.json`), nothing can connect, and the switch fails at once.
+
+**When something fails**, the computer goes back to SSH:
+
+- **Before the hub step**, the manager removes the staged file.
+- **After the hub step**, the manager asks the hub to end the switch (`devices.link_switch.end`). The hub revokes this switch's
+  code and the credential it was traded for (the link closes with 4002) and puts the kind back to `ssh`.
+  - **Until the hub answers**, the manager touches nothing on the computer. Persona Link stays installed, so the computer
+    is not left with neither a link nor SSH. The switch shows as rolling back while the manager asks again: after 1 s, then
+    twice as long each time, up to every minute, and again after a restart. The asking is bounded to one hour from the
+    first try, a limit a restart does not reset. After that the manager stops and leaves the computer as it is. The
+    switch ends failed with `hub_unanswered`, saying it could not be undone, and **Redeploy** and automatic updates are
+    no longer held. A hub that does not know the call (`unknown_method`, an older build) ends it the same way at once.
+  - **When the hub has confirmed**, the manager removes over SSH only what this switch installed: the connector with its
+    `link.json` and unit (`persona-link uninstall --purge`), and the node service only if the computer had none before
+    (`persona-link node uninstall`). Both run only through the program this switch sent, recognized by its SHA-256, never
+    through a `persona-link` found there. Then it waits up to 2 minutes for the computer to answer over SSH again.
+- **If the hub refuses to undo it** (it cannot tie the request to this switch), the manager stops asking and leaves Persona
+  Link on the computer. If the hub has undone the switch but the computer is another manager's by now, or has been
+  removed, it answers `rolled_back_gone`. The manager then removes what this switch installed, as for any confirmed
+  rollback, but does not wait for the computer over SSH, since the computer is no longer its own.
+- **If any step cannot be confirmed**, the result says the switch could not be undone for sure, rather than that it was.
+
+The reason the switch failed is shown in plain words either way.
+
+**What the hub keeps** (`machine_audit`, action `link_switch`): one row per step of an operation, written before the step
+takes effect.
+
+- `begin`: before the kind changes.
+- `begun`: once the code exists, with its hash.
+- One final row: `succeeded`, `rolled_back` or `begin_failed`.
+
+How the hub uses these rows:
+
+- **Undoing**: an end is accepted only for the computer's latest operation, and its hash must be the one recorded for it.
+  A final row is final: a repeated rollback changes nothing, a rollback of a switch that succeeded answers
+  `already_succeeded`, and an operation id cannot begin twice.
+- **Survives a hub restart**: the rows stand in for the hub's memory. A hub that stops between changing the kind and making
+  the code can still be undone from the `begin` row.
+- **Bounded**: a switch counts as running for at most 30 minutes after its `begin` row.
+
+**Restarts and repeats**: only one switch per computer runs at a time. While one runs, the hub refuses these with 409, and the
+checks hold across a hub restart:
+
+- a second start (`in_progress`);
+- **Redeploy** of its node;
+- moving the computer to another manager, removing it, or removing its manager (`link_switch_in_progress`). A move or removal
+  that is already under way holds the computer, and a new switch is refused until it finishes.
+
+A device signed in with a pairing code it has not traded yet cannot start a switch (403).
+
+The manager writes down each step before it takes it (setting `link_switch.<machine id>`; the pairing link is never kept). A
+manager that restarts during a switch carries on as follows:
+
+- it finishes the switch if the computer connects through Persona Link before the deadline;
+- it rolls the switch back at once if the installer never ran;
+- it goes on asking the hub to end one it was rolling back;
+- it goes on telling the hub of a success the hub has not acknowledged yet.
+
+If the manager stops waiting for the hub's `begin`, the hub gives up the begin when it has not taken the computer yet.
+
+**The computer's own files**: the check, the transfer and the install refuse (`unsafe_permissions`) unless the home folder,
+`~/.persona` and its `bin` belong to the user, and none of them can be written by other users. A group-writable one is
+accepted only when the group is the user's own private group. The message says how to fix it, for example
+`chmod go-w ~ ~/.persona ~/.persona/bin`.
+After the build is put in place, its SHA-256 is checked once more before it runs.
+
+| Route | Who | Answer |
+| --- | --- | --- |
+| `POST /api/v1/machines/{mid}/link-switch` | a signed-in full device | 202 `{link_switch}`; 409 `{code}` (a reason above, or `in_progress`); 403 otherwise |
+| `POST /api/v1/admin/machines/{mid}/link-switch` | the admin page (session and CSRF) | the same, relayed to the machine's manager |
+
+Progress and the result come with the machine itself (`link_switch` in the machine list, [protocol.md](../protocol/protocol.md)),
+so every open client sees each step at once. A finished switch stays shown for an hour.
+
 
 ## Status line
 

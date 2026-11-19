@@ -70,6 +70,7 @@ Relationship to other docs:
    (`docs/extensions/secret-providers.md` "In the apps").
 5. Never write `glassEffect` or `.glass` directly. Go through `.surface` and `.themedButton`.
 6. Docs are English only. User-visible strings go through the string catalogs (section 5.5).
+7. Apple confirmations use `.accessibleConfirmationDialog` (`apple/Persona/DesignSystem/WindowTextSize.swift`), never SwiftUI's `.confirmationDialog` directly in a page. Through the interface's xxxLarge cap it is the existing confirmation dialog; above the cap it presents an alert, whose labels and button capsules use compatible traits. Keep every action label on one line under rule 3. Set `hasCancel: true` exactly when the existing actions already include Cancel; otherwise the alert adds Cancel once. `ConfirmationDialogRuleTests` rejects direct calls.
 
 ### 1.3 Enforcement today
 
@@ -79,6 +80,7 @@ Relationship to other docs:
 | `apple/PersonaTests/TypeScaleTests.swift` | No system font styles or sizes outside `Theme.Font`. |
 | `apple/PersonaTests/IconVocabularyTests.swift` | A registered symbol must be written as its `Theme.Icon` name. |
 | `apple/PersonaTests/SheetCloseTests.swift` with `apple/PersonaTests/SheetCloseBaseline.json` | Per-file counts, under `apple/Persona` and outside Mac-only branches, of a presented page's close written by the page instead of `SheetClose` (any item at `.cancellationAction`, or a ✕, Cancel, Close or Done at `.topBarLeading` outside `SheetActions.swift`), and of closes at the trailing edge (✕, a close or cancel role, Cancel, Close, or a Done whose action is one plain statement, at `.confirmationAction`, `.topBarTrailing` or `.primaryAction`; Select's Done and Mark as Done do more and do not count). Counts may only go down. Baseline: none of either since 2026-11-17 (#9653): every presented page closes through `SheetClose`, so any new one fails. |
+| `apple/PersonaTests/ConfirmationDialogRuleTests.swift` | Every Swift source under `apple/Persona` uses `.accessibleConfirmationDialog`; the only direct `.confirmationDialog` calls are the shared implementation in `WindowTextSize.swift`. No baseline or per-page exemptions. |
 | `apple/PersonaTests/ContinuousMotionTests.swift` | Every unending animation lists where Reduce Motion stops it. |
 | `StyleSpecTests` (Apple) | Contrast floors for every style and theme color. |
 | `web/src/ui/theme-contrast.test.ts` | AA 4.5:1 for text tokens on seven backgrounds, both schemes. |
@@ -630,6 +632,9 @@ on-demand model panel, not the everyday Assistant home (#6887).
   13 px, at most 420 px, 500 ms into a hover, never pinned by a pointer). A Persona conversation shows only "≈ $0.12"
   and one plain line, and nothing without a cost (super rules 0 and 4). On touch screens the text ends the copy + ⋯
   row: a tap holds the card or the tooltip, and a second tap on the text or a press elsewhere closes it.
+  Translate (#8650) loads a hub-paged reply's full text before requesting its translation: the original and its
+  full-text loading/retry control stay visible until the complete translation succeeds. Show original restores
+  the cached complete reply, not an unmarked prefix; failure to load the full text never sends a partial translation.
   Details: `docs/web/web.md` ("Reply bar").
 - Web hover bar beside your own bubble (pointer only: the time, Copy message, Quote, Edit, ⋯): left of the bubble, 6 px
   away, where it fits inside what shows the chat. Where a narrow window leaves a wide bubble no room there, the same
@@ -789,6 +794,8 @@ sending identity or confirmation behavior.
 The web Agent conversation header's **Session overview** list button toggles a panel from the right side of the toolbar (`web/src/views/chat/ChatView.tsx`, `web/src/views/chat/SessionOverview.tsx`). The panel uses the app's surface and keeps its own scroll. It sits beside the conversation when there is room and above the transcript in a narrow conversation. The reader can keep it open while working in the chat. The environment and context sections use the current session's metadata. The subagent row shows running and ended counts and opens the tree on demand. Background activity uses the Background tasks panel's list rows, workflow details, output viewer and loop controls. The finished task disclosure counts distinct terminal notices in the loaded transcript. The overview and its disclosures start closed.
 
 ### 3.4 Lists and rows
+
+- Web History (#10240) is an Agents destination for non-running sessions, grouped by local activity day. It shares folded sidebar state and visibility before filtering; day counts equal the displayed filtered rows, including only loaded content-search matches. The primary switch stays Assistant / Agents. Agents + owns New Agent, New terminal and Open terminals; History never starts on a remembered terminal inventory (details in `docs/web/web.md`).
 
 - **Native workspace pins** (#9300): the Agents workspace tree shows a host-pinned workspace with the existing pin mark,
   ordered before its unpinned siblings (newest pin first, then the existing stable order). Its repository moves ahead
@@ -1147,16 +1154,18 @@ chat (#5033), where the panel only offers models and says plainly which one the 
 
 - Pill (`web/src/views/chat/ModelPill.tsx`): 30 px tall capsule, 10 px side padding, 4 px gaps, 13 px text
   (`ink`), no frame at rest; hover and open draw a 1 px `--line-strong` border on `--hover`. Contents in order: the
-  provider's letter tile (15 px, 4 px radius, 1 px border in the text colour, 10 px semibold, `ink-2`, 6 px before the
-  name), the model name (truncates), the engine's `AgentMark` at 12 px (the separator: no "·"), the effort label without a
+  mark of the Agent the launcher runs (#5497: `AgentMark` at 15 px, `ink-2` for the one-colour marks, 4 px before the
+  name; an Agent with no mark of its own gets the generic `agent` icon, never a letter, unless its runtime names it
+  (#8142), when it is drawn as the Agents list draws it), the model name (truncates), the
+  effort label 4 px after it without a
   tier colour (English "Extra" for "Very high"; the full name on hover), a filled bolt for Fast and the workflow
   `UltraMark` (`ink-2`), a 14 px chevron (`ink-2`). Widths by the composer card (`@container/composer`): ≥ 600 px 72–320 px;
   < 600 px the width its words need (name ≤ 108 px without a trailing bracketed qualifier, a context size kept as a short
   mark, "Opus 5.5 1M"; the whole name in the tooltip;
   shrinking only when the row is short, the name truncating first, the effort only once the name has no room); < 520 px 12 px text, marks a step smaller; < 420 px 64 px, the
-  tile and chevron only. States: loading (a 13 px `Spinner` and "Loading model…"), failed (the `warning` icon in `--red`),
+  mark and chevron only. States: loading (a 13 px `Spinner` and "Loading model…"), failed (the `warning` icon in `--red`),
   pending (#5035, a switch to another launcher that the next message carries out: a 12 px clock in `ink-3` first, then
-  the target launcher's tile and its name in `ink-3` up to 96 px, hidden under 600 px, before the target's model and
+  the target engine's mark and the launcher's name in `ink-3` up to 96 px, hidden under 600 px, before the target's model and
   effort; the engine's name in its place when the engine changes; the tooltip "Current: …" over "Next message: …"),
   disabled (50% opacity, no pointer), and a label (not a button) where nothing can be switched. The click keeps the caret
   in the message box.
@@ -1187,12 +1196,13 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   Only the current launcher starts expanded; with no current launcher all start collapsed. Each launcher summary names
   the launcher, Agent kind, known default model, catalog model count (excluding a synthetic Default row), Current or
   configured Default status, known weekly quota and any supplied failure reason. No launcher is hidden in another bucket.
-  Disclosure uses the existing chevron, letter tile, role colors and text tokens; Agent mark rollout remains #5497.
+  Disclosure uses the existing chevron, the launcher's Agent mark (#5497), role colors and text tokens.
   Expanded launchers reuse model Row, family folds and Flyout, including Favorite, effort, Fast and engine controls.
   Search is flat: matching launcher summaries, then matching model rows naming their launcher even on touch screens;
   typed-ID rows explicitly name the launcher they send. Why: identical letter tiles and a separate rail hid the account
   and model choices from people comparing several launchers. The single column exposes that information progressively.
-  Rows have two lines with hover-revealed Favorite and Customize; the model that runs has a static selected fill, no
+  Rows have two lines led by the Agent's mark (16 px, the launcher summaries too; the right side holds only effort and
+  Fast) with hover-revealed Favorite and Customize; the model that runs has a static selected fill, no
   check. Customize opens a 264 px flyout to the panel's left: the effort slider, Fast, the engine, an exact catalog
   reference-price line where known, and a footer that says whether the setup is the recommended one, customized or
   saved. A launcher summary adds its weekly-remaining bar only when the existing launcher quota answer supplies a
@@ -1224,7 +1234,7 @@ chat (#5033), where the panel only offers models and says plainly which one the 
 - Tokens: the effort levels have one colour each in both themes (`--effort-low` / `--effort-minimal` #2AAE5B,
   `--effort-medium` #14B8A6, `--effort-high` #3B82F6, `--effort-xhigh` #4F46E5, `--effort-max` #8B5CF6, Codex's ultra on
   max) and `--fast` (#3B9EFF), used inside the flyout only: the pill never colours its effort or its bolt.
-- Deviations from Cindy: letter tiles instead of vendor logos; price and quota appear only where the catalog / launcher
+- Deviations from Cindy: the Agent's mark instead of model-vendor logos (launchers of one Agent share it; #5497); price and quota appear only where the catalog / launcher
   answer supplies them; ↑↓ also move between rows; providers and engines that can't be switched to (an older hub, a chat
   that can't switch) are listed with their rows off and the reason; a pending switch to another launcher of the same
   engine names the launcher rather than the engine; the engine warning line wraps rather than truncating; "Switch Agent?"
@@ -1288,6 +1298,7 @@ package-only Undo with retained recovery files; `docs/operations/hub-update.md` 
 | Load failure on a settings page | `LoadProblem` (`apple/Persona/DesignSystem/SettingsForm.swift:73`), no Retry |
 | List read failure (web) | `ListError` (`web/src/ui/ListError.tsx`): a red `role="alert"` line saying what could not be read and why, with **Retry** under it, in place of the rows; the paged session lists and the sidebar's Agents list (its complete list, and By to-do's unread to-dos) draw it, so a failed read never leaves a list blank or on "Loading…" |
 | Persistent notice | `NoticeBanner` |
+| A short server-driven process (web) | `Steps` (`web/src/ui/Steps.tsx`): one line per step, the current one with a spinner and `aria-current="step"`, done ones ticked green, a stop crossed red, the rest numbered and quiet. The step comes from what the hub pushes, never a local timer. Used by the alert sheet's Redeploy and by **Switch to Persona Link** on the machine detail and the admin Machines row (#10662: confirmation dialog, "Starting…" at once, then the steps, then the result in plain words; nothing shown for an older hub) |
 | Transient result | `Toast` shown by `ToastCapsule` (`apple/Persona/DesignSystem/Toasts.swift:7`) |
 | Chat API failure | Web: `ErrorNotice` (`web/src/ui/ErrorNotice.tsx`), a neutral card with the red mark only and **Error details**; the error the chat stopped on is its banner over the composer with its actions (Retry, Fix it, Edit last message) and ✕, an older one the record in the chat; apps: `APIErrorCard` with details and Retry. While a model request is still retrying, the web's run status bar and Apple's `SessionLiveRetryNote` instead show the plain classified reason, observed error as secondary detail and localized current/max attempt, cleared on recovery, turn end or unwatch (#887) |
 | Chat loading and waiting | iOS `ChatSkeleton` (five rounded bars of `Theme.Size.markS`, the first at the trailing edge, breathing between `Fill.well` and `Fill.chip`) while a chat's first page loads, its load error as a danger line at the chat's newest end, and `TypingIndicator` ("Claude is getting ready…", three pulsing dots) under your message until its turn's work line comes; Android `ChatSkeleton` and the error line on Glass, `TypingLine` in every style (#4339 C9) |
@@ -1475,6 +1486,10 @@ conversation. Upward transcript loading extends that range when it reaches earli
 still count from the full history. Reuse the existing rail, hover preview, keyboard controls and mark geometry.
 This requested pagination correction does not add a setting or change placement. Android has no corresponding
 navigator on current main and is outside this fix's scope; it must not use its two-turn body window as a global count.
+When a web selection needs older messages, keep its loading status at the rail while the current transcript stays in
+place. Only the latest selection can move the transcript. If it fails, keep the marks available so it can be selected again.
+
+The web Changes panel's secondary file tree (#10477) reuses the existing `ResizeHandle` separator from the sidebar and side panel: pointer drag, arrow keys, Home/End, and double-click/Enter to reset. Column dimensions live in `web/src/lib/layout.ts` (`CHANGES_TREE_DEFAULT`, `CHANGES_TREE_MIN`, `CHANGES_TREE_MAX`, `CHANGES_DIFF_MIN`). Its default remains 192 px; the browser remembers a user resize and temporarily fits it to the panel while keeping space for the diff. At narrow widths the tree stays above the diff. File names and indentation may truncate, while each row's unchanged addition/deletion counts remain whole and the full path remains on hover.
 
 ### 4.3 Feedback and haptics
 
@@ -1520,7 +1535,7 @@ Watch maps success, failure, notification, stop and retry the same way. A watch 
 Severity ladder to adopt:
 
 1. Reversible: do it and offer Undo in a toast (inbox bulk actions, remove from list, folder trash do this).
-2. Destructive with one object: `confirmationDialog` with a destructive button that repeats the verb, a message that says what is lost, and Cancel.
+2. Destructive with one object: `.accessibleConfirmationDialog` on Apple (rule 7 in section 1.2), with a destructive button that repeats the verb, a message that says what is lost, and Cancel.
 3. Needs extra choices (keep or remove the worktree): a content-height sheet.
 4. `.alert` for short prompts and text entry, except where the text needs what the alert would cover (below).
 
@@ -1863,7 +1878,7 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   item it comes from, the Agent and its computer, where it runs and what it is asked, never a reference or a value. Like the
   password card it is answered on the card only: no quick answer on a row, a notification, the Live Activity, the watch or
   Siri, and no key approves it (`docs/extensions/secret-providers.md` "In the apps").
-- **Task-review decisions (web, #4808)**: reuse the answerable decision row, its recommendation tag, the `Button` action group and the draft's Later / Don't handle labels. The two secondary actions stay on a separate footer so they never displace the recommended choice; the footer follows the tray's scrolling edge and uses the existing 44 px button minimum. Later defers only this browser session and this review round. Don't handle persists a dismissal of this exact review, offers receipt-scoped Undo, leaves the task open and takes no option; a dismissed review cannot take its timed default. A new review is visible again. The web hides the row and updates its count optimistically; a confirmed same-round dismissal stays hidden across reads and reloads, while a failed write restores the row with an error. An old Agent runtime error does not override dismissal or Later for that review; an actual Agent input request keeps its home visible. Old reviews without an acceptance ask show their original explanation and these same controls, never invented choices or an acceptance button with a made-up round. This is a requested correction to the existing row, not a new style or setting.
+- **Task-review decisions (web, #4808)**: reuse the answerable decision row, its recommendation tag, the `Button` action group and the draft's Later / Don't handle labels. The two secondary actions stay on a separate footer so they never displace the recommended choice; the footer follows the tray's scrolling edge and uses the existing 44 px button minimum. Later defers only this browser session and this review round. Don't handle persists a dismissal of this exact review, offers receipt-scoped Undo, leaves the task open and takes no option; a dismissed review cannot take its timed default. A new review is visible again. The web hides the row and updates its count optimistically; a confirmed same-round dismissal stays hidden across reads and reloads, while a failed write restores the row with an error. An old Agent runtime error does not override dismissal or Later for that review; an actual Agent input request keeps its home visible. Old reviews without an acceptance ask initially show their original explanation and these same controls, never invented choices or an acceptance button with a made-up round. Once a stale decision goes back for rechecking, or an undecidable old review goes back for restatement, that round leaves Needs you and cannot be answered until a fresh supervisor review re-issues it; a fixed-response round keeps its existing visibility. This is a requested correction to the existing row, not a new style or setting.
 - **Questions**: one at a time, with single choice, multiple choice, Other and voice. An unsent answer is kept as a draft per request. On iOS, a long assistant `ask_user` or hook question form's choices (or its review) own one vertical scroll while Previous / Next / Submit stay outside it and visible in the actual pending-card area, in both interface styles. One such card never needs a second, outer scroll; that is reserved for moving between several cards. Dragging through choices only scrolls and never picks one. When the interaction advertises `can_cancel`, a visible **Skip** text action with at least a 44 pt target leads that action row, on the review too; it is not the card's fold mark. Skip sends only `{"cancel":true}`, is disabled while an answer or another Skip is in flight, and leaves the card and its picks in place with the error and Retry on failure. Success removes the card and gives the receipt **Question closed without an answer**. Persona's own main-conversation `ask_user` has no terminal handoff; an Agent's question keeps it. Cards without `can_cancel` have no Skip and keep their existing layout.
 - **A card this client can't answer** (web #7497, Android `approvalBlockedReason`; iOS in #6868): the session's
   capabilities withhold `approve` (a Codex thread Persona hasn't joined, a subagent its parent drives, an unknown
@@ -2123,8 +2138,8 @@ your permission" (section 5, "Notifications"); moving them to the card's words i
 - **Interface** is everything the person operates or scans rather than reads: buttons, top and bottom bars, toolbars, menus' own drawing, the tab bar, segmented controls, filter strips, list rows' labels and values, page headers, the calendar, widgets, a card's controls, settings rows, badges, previews and summaries in lists, search-result snippets. It is capped at `Theme.interfaceLargestTypeSize` (xxxLarge, the largest size that is not an accessibility size). `RootView` sets the cap on the environment's `dynamicTypeSize`, so no view has to ask for it; a view that needs a smaller cap (a glyph in a fixed circle) still names one.
 - **Reading content** keeps growing to AX5: a chat message's body (the user's and the assistant's, replies, quotes, and the same in an Agent session; code blocks follow the reply and scroll sideways), an Inbox item's body and detail, knowledge and file preview bodies, a to-do's description and plan, meeting minutes, transcript and the messages in a meeting's conversation, and what is being typed in a text field (the field's own buttons stay capped, its line limit stays). A tool row, a "Worked for…" fold header, expanded tool output, a diff and the terminal are interface (the terminal has its own text size).
 - A view lifts the cap with `.readingContent()` (`apple/Persona/DesignSystem/ReadingSize.swift`): it sets the size the reader chose, kept by `RootView` in `\.readingTypeSize`. Put it on the text, not on a whole screen. `scripts/test/test_apple_reading_content.py` lists the files that may use it; adding a file needs the reason there. Outside a reading container a view never sees an accessibility size, so it has no AX-only layout: `scripts/test/test_apple_ax_branches.py` lets only the files it lists mention `isAccessibilitySize` or `.accessibility1…5`.
-- The system draws its own menus, alerts, confirmation dialogs, share sheet and keyboard at the system's size; do not cap them.
-- Because the interface is capped, it needs no layout of its own for the accessibility sizes. Do not add one: no `isAccessibilitySize` branch and no `.accessibility1…5` in interface code (`PR 2` of #6448 removes the old ones). A control that still does not fit at xxLarge or xxxLarge uses the rules in section 1.2 (shorten, stack by the width that is there with `StackingButtonRow` or `firstFittingText`).
+- The system draws its own menus, alerts, confirmation dialogs, share sheet and keyboard at the system's size; do not cap them. On iOS, an action sheet is the one system-presentation exception to a simple trait cap: above xxxLarge its button capsules can follow the window's cap while their labels still use the application's larger size. `.accessibleConfirmationDialog` therefore keeps the existing confirmation dialog through xxxLarge and uses an alert above it, with the same title, message and actions and exactly one Cancel. This is a presentation choice inside `WindowTextSize`, not a cap on the system's label and not an accessibility-only page layout. visionOS has no window cap and keeps the confirmation dialog.
+- Because the interface is capped, it needs no layout of its own for the accessibility sizes. Do not add one: no `isAccessibilitySize` branch and no `.accessibility1…5` in interface code (`PR 2` of #6448 removes the old ones). The shared confirmation-presentation choice above is the only exception, and pages never make it themselves. A control that still does not fit at xxLarge or xxxLarge uses the rules in section 1.2 (shorten, stack by the width that is there with `StackingButtonRow` or `firstFittingText`).
 - Large Content Viewer: a capped control shows its name and icon large on a long press (`accessibilityShowsLargeContentViewer`); VoiceOver reads the whole content as before.
 - Screenshots: an interface screen is shot at the largest size up to xxxLarge (`simctl ui <udid> content_size extra-extra-extra-large`); only a screen with reading content is also shot at AX5 (`accessibility-extra-extra-extra-large`).
 - Text Size (Small / Standard / Large) moves the system's size first and the cap comes after: the interface is `min(moved size, xxxLarge)`, reading content is the moved size. At the system's xxxLarge and above, Large has no effect on the interface (it is at the cap) and still adds a step to reading content; Small always takes a step off both.
@@ -3248,6 +3263,8 @@ subtopic closed, more than three loose points beside subtopics under one closed 
 a topic or a project its page. From `Theme.Size.knowledgeMapTwoColumns` of width (any iPad in landscape, a 13-inch one upright beside its
 sidebar) the outline sits beside a detail column for the selected node, the web map's side panel.
 Text follows Dynamic Type (the rows are reading content) and every row reads as one VoiceOver element.
+Android (#7678) draws the same outline with the same rules (`KnowledgeMapScreen`): rows of the design system's tokens, a dot and rails
+in the branch's tone, a 48 dp fold target with Expanded / Collapsed read out, in all three styles, with no detail column.
 
 ## Repository link preview
 
@@ -3318,9 +3335,15 @@ Home/End, Enter takes the first match, Escape closes and returns the focus to
 its button), not a native `select`. Each repository's issues and PRs are link
 rows with their own **Add issue or PR** field: Enter adds, Escape cancels, and a
 URL of another repository is refused inline by `repositoryLinkView`, the same
-rule the manager applies. Directory aliases and source refs stay in the
-per-repository **Source options** disclosure; empty aliases and default branches
-need no setup. Saved-source changes (`removed`, `identity_changed`) and
+rule the manager applies. Public HTTP aliases, scheme case and repository-path
+case are normalized by the shared parser before that comparison; a self-hosted
+instance's scheme and port must match exactly. Two links that normalize to the
+same repository, kind and number are refused before create/save, with both
+entries kept for correction. Directory names and source refs are validated with
+the manager's rules before a create or save, and an invalid optional draft
+shows the field error and cannot be submitted. Directory aliases and source
+refs stay in the per-repository **Source options** disclosure; empty aliases
+and default branches need no setup. Saved-source changes (`removed`, `identity_changed`) and
 `unlisted` rows inferred from agent-added links are explained beneath their
 repository while the saved source stays. A to-do's `pr_url` is drawn inside
 this group as a link row with one line saying it predates the store, and never
@@ -3338,3 +3361,7 @@ agent may have added a link. Manager/Todo/credential changes retire old results.
 New copy ships in English, Simplified Chinese and Japanese. Evidence:
 `web/src/ui/TaskRepositoryBindingsEditor.test.tsx` and
 `web/e2e/todo-repositories-browser.py`.
+
+## Lark topic group policy (#10238)
+
+Settings › Connectors › Lark bot › Topic groups serves owners who want one group to require their explicit bot mention. It reuses Group, Row, Switch, Button, the native select and settings input styles; policy defaults off. Each group shows its saved switch. Enrollment allows choosing the policy before adding the group; a strict first enrollment stays separate from the home choice. The home select shows the effective home or the private-chat fallback. Both writes wait for the existing acknowledged save; failures preserve saved values and enrollment drafts. No primary chat screen or model setting changes.
