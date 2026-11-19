@@ -39,10 +39,12 @@ jobs:
         id: select
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}
+          RELEASE_PR_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}
           REPOSITORY: ${{ github.repository }}
           CHANNEL: ${{ inputs.channel || (github.event.schedule == '0 4 * * *' && 'release' || 'beta') }}
         run: |
           set -euo pipefail
+          test -n "$GH_TOKEN" || { echo 'persona-release is missing RELEASE_PR_TOKEN; no release PR or branch was created' >&2; exit 1; }
           test "$CHANNEL" = release || test "$CHANNEL" = beta
           commit="$(git rev-parse HEAD)"
           stable="$(gh release view --repo "$REPOSITORY" --json tagName --jq .tagName)"
@@ -79,6 +81,7 @@ jobs:
         if: steps.select.outputs.version != ''
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}
+          RELEASE_PR_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}
           REPOSITORY: ${{ github.repository }}
           BRANCH: ${{ steps.select.outputs.branch }}
           TITLE: ${{ steps.select.outputs.title }}
@@ -88,7 +91,7 @@ jobs:
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
-          git switch -c "$BRANCH"
+          git switch -c "$BRANCH" 2>/dev/null || git switch "$BRANCH"
           mkdir -p .github/release-prs
           python3 - <<'PY'
           import json,os
@@ -97,6 +100,15 @@ jobs:
           Path('.github/release-prs/'+os.environ['VERSION']+'.json').write_text(json.dumps(data,indent=2)+'\n')
           PY
           git add ".github/release-prs/$VERSION.json"
-          git commit -m "$TITLE"
+          git diff --cached --quiet || git commit -m "$TITLE"
+          # Reuse the same release-PR branch on a bounded retry. Do not rewrite a release-PR source or move a tag.
           git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" push "https://github.com/$REPOSITORY.git" "refs/heads/$BRANCH"
-          gh pr create --repo "$REPOSITORY" --base main --head "$BRANCH" --title "$TITLE" --body "Refs #9765.\n\nVerify this exact merge result on all available signed platforms before merging. The protected publication workflow consumes the verified artifacts from this release PR; no other commit or unsigned substitute is published.\n\nSource: $COMMIT\nChannel: $CHANNEL"
+          python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          body=(f'Refs #9765.\n\nVerify this exact merge result on all available signed platforms before merging. '
+                f'The protected publication workflow consumes the verified artifacts from this release PR; no other commit or unsigned substitute is published.\n\n'
+                f'Source: {os.environ["COMMIT"]}\nChannel: {os.environ["CHANNEL"]}')
+          Path(os.environ['RUNNER_TEMP']+'/release-pr-body.md').write_text(body)
+          PY
+          python3 scripts/operations/create_release_pr.py --repository "$REPOSITORY" --title "$TITLE" --branch "$BRANCH" --body-file "$RUNNER_TEMP/release-pr-body.md"

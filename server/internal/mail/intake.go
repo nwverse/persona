@@ -59,6 +59,7 @@ func intakeMailbox(row *imap.ListData) bool {
 		}
 	}
 	switch name { // Common names on servers without SPECIAL-USE, including QQ Mail.
+	// i18n-ignore: match mailbox names returned by IMAP servers regardless of the user's display language.
 	case "已发送", "已发送邮件", "草稿", "草稿箱", "已删除", "已删除邮件", "垃圾箱", "垃圾邮件":
 		return false
 	}

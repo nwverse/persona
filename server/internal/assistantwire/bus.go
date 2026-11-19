@@ -206,11 +206,13 @@ type HTTPRequest struct {
 	// Human is the hub's word that a person's own app opens this conversation (POST /api/v1/assistant/conversations
 	// with a full device's credential, decided as for SendParams.Human): its first message counts as theirs
 	// (WithHumanStart). Set by the hub on that route only, never from the request; an older hub never sends it.
-	Human  bool                `json:"human,omitempty"`
-	Method string              `json:"method"`
-	Path   string              `json:"path"`
-	Query  string              `json:"query,omitempty"`
-	Header map[string][]string `json:"header,omitempty"`
+	Human bool `json:"human,omitempty"`
+	// ReplyInput marks a legacy authenticated app start for missing-reply recovery, as in SendParams.
+	ReplyInput bool                `json:"reply_input,omitempty"`
+	Method     string              `json:"method"`
+	Path       string              `json:"path"`
+	Query      string              `json:"query,omitempty"`
+	Header     map[string][]string `json:"header,omitempty"`
 	// BodyStream is set on MethodHTTPStreamed only, in place of Body: where the body comes from.
 	BodyStream *BodyStream `json:"body_stream,omitempty"`
 	// Body stays the last field: hub/bus_forward.go httpParams appends it to the rest as written.
