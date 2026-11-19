@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createRuntime, interactionId, light, PAGE_TEXT, RpcError } from '../index.js'
+import { createRuntime, interactionId, light, PAGE_TEXT, Peer, RpcError } from '../index.js'
 import { startFakeNode, until } from '../testing/fake-node.js'
 import { createEchoRuntime } from '../examples/echo-runtime.mjs'
 
@@ -145,6 +145,40 @@ test('content rewritten under another history goes out even where its seq did no
   assert.equal(n.all('session.items').length, 3)
 })
 
+test('in-place item updates under the same history go out without advancing seq and coalesce by id', async (t) => {
+  const n = await startFakeNode(t)
+  const rt = createRuntime(minimal({ items: async () => ({ items: [], history: 'h1', to_seq: 5 }) }), { runtime: 'toy', socketPath: n.path, retryMs: 20 })
+  t.after(() => rt.stop())
+  rt.start()
+  await n.ready
+  await n.peer.call('session.watch', { session_id: 's1', since_seq: 0 })
+  // Two rapid in-place updates within the append window coalesce into the latest copy of that item id.
+  rt.append('s1', { items: [{ id: '5#0', seq: 5, kind: 'thinking', text: 'Step 1' }], fromSeq: 5, toSeq: 5, history: 'h1', update: true })
+  rt.append('s1', { items: [{ id: '5#0', seq: 5, kind: 'thinking', text: 'Step 1 + 2' }], fromSeq: 5, toSeq: 5, history: 'h1', update: true })
+  await until('coalesced in-place update pushed', () => n.all('session.items').length === 1)
+  assert.deepEqual(n.all('session.items')[0], {
+    session_id: 's1',
+    items: [{ id: '5#0', seq: 5, kind: 'thinking', text: 'Step 1 + 2' }],
+    from_seq: 5,
+    to_seq: 5,
+    history: 'h1',
+  })
+  // Without update: true, a same-seq append is still ignored as already pushed.
+  rt.append('s1', { items: [{ id: '5#0', seq: 5, kind: 'thinking', text: 'ignored' }], fromSeq: 5, toSeq: 5, history: 'h1' })
+  await new Promise((r) => setTimeout(r, 120))
+  assert.equal(n.all('session.items').length, 1)
+  // A follow-up in-place update after flush still goes out under the same history and seq.
+  rt.append('s1', { items: [{ id: '5#0', seq: 5, kind: 'thinking', text: 'Step 1 + 2 + 3' }], fromSeq: 5, toSeq: 5, history: 'h1', update: true })
+  await until('second in-place update pushed', () => n.all('session.items').length === 2)
+  assert.deepEqual(n.all('session.items')[1], {
+    session_id: 's1',
+    items: [{ id: '5#0', seq: 5, kind: 'thinking', text: 'Step 1 + 2 + 3' }],
+    from_seq: 5,
+    to_seq: 5,
+    history: 'h1',
+  })
+})
+
 test('a capped watch catch-up says there is more after its last batch', async (t) => {
   const n = await startFakeNode(t)
   const { page } = await import('../index.js')
@@ -219,6 +253,60 @@ test('asking the phone marks the session as needing you, and a withdrawn ask tak
   await assert.rejects(withdrawn, /gone/)
   await until('cancelled', () => n.last('interaction.cancel')?.id === 'toy-2')
   assert.equal(interactionId('toy', 's1', 'permission', 'call-1'), id, 'stable ids')
+})
+
+for (const loss of ['hub', 'node']) {
+  test(`an aborted ask withdraws its card after ${loss} recovery`, async (t) => {
+    const n = await startFakeNode(t)
+    const rt = createRuntime(minimal(), { runtime: `toy-cancel-${loss}`, socketPath: n.path, retryMs: loss === 'node' ? 200 : 20, pushDelayMs: 5, resumeWaitMs: 5000 })
+    t.after(() => rt.stop())
+    rt.start()
+    await n.ready
+    await until('listed', () => n.last('runtime.sessions'))
+    n.resolve = () => new Promise(() => {})
+    const ac = new AbortController()
+    const asking = rt.ask({ id: `cancel-after-${loss}`, kind: 'question', session_id: 's1' }, { signal: ac.signal })
+    await until('asked', () => n.asked.length === 1)
+    if (loss === 'hub') {
+      n.setHub(false)
+      await until('hub lost', () => !rt.hubConnected)
+    } else {
+      n.peer.close(new Error('node restarted'))
+      await until('node lost', () => !rt.connected)
+    }
+    ac.abort(new Error('answered elsewhere'))
+    await assert.rejects(asking, /answered elsewhere/)
+    assert.equal(n.all('interaction.cancel').length, 0, 'the cancel waits for a connected hub')
+    if (loss === 'hub') n.setHub(true)
+    await until('cancel delivered after recovery', () => n.last('interaction.cancel')?.id === `cancel-after-${loss}`)
+    assert.equal(n.asked.length, 1, 'the aborted ask is not resumed')
+  })
+}
+
+test('an aborted ask retains its cancel when the peer has just closed', async (t) => {
+  const n = await startFakeNode(t)
+  const rt = createRuntime(minimal(), { runtime: 'toy-cancel-closing', socketPath: n.path, retryMs: 200, pushDelayMs: 5, resumeWaitMs: 5000 })
+  t.after(() => rt.stop())
+  rt.start()
+  await n.ready
+  await until('listed', () => n.last('runtime.sessions'))
+  n.resolve = () => new Promise(() => {})
+  const ac = new AbortController()
+  const asking = rt.ask({ id: 'cancel-while-closing', kind: 'question', session_id: 's1' }, { signal: ac.signal })
+  await until('asked', () => n.asked.length === 1)
+  const close = Peer.prototype.close
+  let closing = true
+  Peer.prototype.close = function (err) {
+    close.call(this, err)
+    if (closing && this.prefix === 'd') ac.abort(new Error('answered elsewhere'))
+  }
+  t.after(() => { Peer.prototype.close = close })
+  n.peer.close(new Error('node restarted'))
+  await assert.rejects(asking, /connection closed/)
+  closing = false
+  assert.equal(n.all('interaction.cancel').length, 0)
+  await until('cancel delivered after recovery', () => n.last('interaction.cancel')?.id === 'cancel-while-closing')
+  assert.equal(n.asked.length, 1, 'the aborted ask is not resumed')
 })
 
 test("a card up longer than the resume wait still waits for the hub that went away under it, from when it went", async (t) => {
@@ -934,4 +1022,50 @@ test('send_and_interrupt_say_queued_and_settled_as_the_driver_does', async (t) =
   assert.deepEqual(await n.peer.call('session.interrupt', { session_id: 's1' }), { ok: true }, 'a stop not confirmed says nothing more')
   settle = true
   assert.deepEqual(await n.peer.call('session.interrupt', { session_id: 's1' }), { ok: true, settled: true })
+})
+
+test('supervision_policy is advertised only when both assistant and supervisionPolicy are enabled (#11173)', async (t) => {
+  const full = await startFakeNode(t)
+  const capable = createRuntime(
+    minimal({ start: async () => ({ session: { session_id: 's1', status: 'idle' } }), send: async () => {} }),
+    { runtime: 'agy-like', socketPath: full.path, retryMs: 20, assistant: true, supervisionPolicy: true },
+  )
+  t.after(() => capable.stop())
+  capable.start()
+  await full.ready
+  assert.equal(full.hello.caps.assistant, true)
+  assert.equal(full.hello.caps.supervision_policy, true)
+
+  const legacy = await startFakeNode(t)
+  const plainAsst = createRuntime(
+    minimal({ start: async () => ({ session: { session_id: 's1', status: 'idle' } }), send: async () => {} }),
+    { runtime: 'dsh-like', socketPath: legacy.path, retryMs: 20, assistant: true },
+  )
+  t.after(() => plainAsst.stop())
+  plainAsst.start()
+  await legacy.ready
+  assert.equal(legacy.hello.caps.assistant, true)
+  assert.equal(legacy.hello.caps.supervision_policy, undefined, 'absent unless explicitly opted in')
+
+  const noAsst = await startFakeNode(t)
+  const nonAsst = createRuntime(
+    minimal({ start: async () => ({ session: { session_id: 's1', status: 'idle' } }), send: async () => {} }),
+    { runtime: 'plain', socketPath: noAsst.path, retryMs: 20, assistant: false, supervisionPolicy: true },
+  )
+  t.after(() => nonAsst.stop())
+  nonAsst.start()
+  await noAsst.ready
+  assert.equal(noAsst.hello.caps.assistant, false)
+  assert.equal(noAsst.hello.caps.supervision_policy, undefined, 'never advertised without assistant')
+
+  const noSend = await startFakeNode(t)
+  const incomplete = createRuntime(
+    minimal({ start: async () => ({ session: { session_id: 's1', status: 'idle' } }) }),
+    { runtime: 'half-asst', socketPath: noSend.path, retryMs: 20, assistant: true, supervisionPolicy: true },
+  )
+  t.after(() => incomplete.stop())
+  incomplete.start()
+  await noSend.ready
+  assert.equal(noSend.hello.caps.assistant, false)
+  assert.equal(noSend.hello.caps.supervision_policy, undefined, 'never advertised when start/send are incomplete')
 })

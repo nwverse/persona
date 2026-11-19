@@ -178,9 +178,19 @@ func (h *Manager) feishuCall(ctx context.Context, method string, params json.Raw
 		}
 		msgType, content := feishubot.TypeText, feishubot.TextContent(a.Text)
 		if a.FullAnswer {
-			msgType, content, err = api.AnswerContent(ctx, a.Text)
+			msgType, content, err = h.feishuAnswerContent(ctx, api, a.ReplyTo, replyUUID, a.Text)
 			if err != nil {
 				return nil, err
+			}
+			current, settings := h.botAPI()
+			if !settings.SourceReportFullReply {
+				return nil, errBotSourceReply
+			}
+			if current != api {
+				// The bot restarted during the upload (new credentials, turned off and on, the group's
+				// center moved): a file key of the old client may not be usable. Failing for now lets
+				// the report try again with the current client.
+				return nil, errBotRestarted
 			}
 		}
 		if found && !h.useAISourceReply(a.ReplyTo, a.FullAnswer) {
@@ -212,17 +222,23 @@ func (h *Manager) feishuCall(ctx context.Context, method string, params json.Raw
 		}
 		return map[string]any{}, feishuCoded(api.Recall(ctx, a.MessageID))
 	case assistantwire.FeishuCotCreate:
-		// The agent message is made in the owner's DM, so the message it answers has to be in the DM too.
+		chatID, err := botSendChat(set, a.ChatID)
+		if err != nil {
+			return nil, err
+		}
 		parent, err := h.checkReplyParent(ctx, api, set, a.ReplyTo)
 		if err != nil {
 			return nil, err
 		}
-		if parent != "" && parent != set.Owner.ChatID {
+		if a.InThread && a.ReplyTo == "" {
 			return nil, errBotReplyChat
 		}
-		cot, id, err := api.CotCreate(ctx, set.Owner.ChatID, a.ReplyTo)
+		// As with other replies, the parent decides where the agent message lands; chat_id must still name a chat
+		// the bot may use, and reply_in_thread keeps it in the parent's origin topic.
+		chatID = firstNonEmpty(parent, chatID)
+		cot, id, err := api.CotCreate(ctx, chatID, a.ReplyTo, a.InThread)
 		if err == nil {
-			h.rememberMessageChat(id, set.Owner.ChatID)
+			h.rememberMessageChat(id, chatID)
 		}
 		return map[string]any{"cot_id": cot, "message_id": id}, feishuCoded(err)
 	case assistantwire.FeishuCotAppend:

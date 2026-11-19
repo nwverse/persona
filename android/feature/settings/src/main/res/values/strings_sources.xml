@@ -2,6 +2,10 @@
 <!-- Settings › Connectors / Channels / Model configuration / New model provider / Claude Code settings / Quota (docs/protocol/i18n.md). Same keys in values, values-zh and values-ja. -->
 <resources>
     <string name="settings_src_just_now">Just now</string>
+    <plurals name="settings_src_seconds_ago">
+        <item quantity="one">%1$d second ago</item>
+        <item quantity="other">%1$d seconds ago</item>
+    </plurals>
     <plurals name="settings_src_minutes_ago">
         <item quantity="one">%1$d minute ago</item>
         <item quantity="other">%1$d minutes ago</item>
@@ -331,6 +335,9 @@
     <string name="settings_src_codex_title">Codex settings</string>
     <string name="settings_src_codex_demo">Demo mode has no Codex settings from your computers.</string>
     <string name="settings_src_codex_caption">Changes ~/.codex/config.toml on that machine, only the options below; the rest of the file (model providers, project trust and so on) stays as it is. New Codex sessions pick them up.</string>
+    <string name="settings_src_agy_title">Antigravity settings</string>
+    <string name="settings_src_agy_demo">Demo mode has no Antigravity settings from your computers.</string>
+    <string name="settings_src_agy_caption">Changes ~/.gemini/antigravity-cli/settings.json on that machine, only the options below. New Antigravity (agy) sessions pick them up.</string>
     <string name="settings_src_quota_read_failed">Couldn\'t load quota: %1$s</string>
     <string name="settings_src_quota_title">Quota</string>
     <string name="settings_src_quota_title_named">Quota · %1$s</string>

@@ -23,6 +23,7 @@ import (
 	"github.com/nwverse/persona/server/internal/nodeclient"
 
 	"github.com/nwverse/persona/server/internal/assistantskills"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -68,14 +69,19 @@ func runtimeSessionID(id string) bool { return id != "" && !validID(id) && runti
 // assistantSendRuntime is assistantSend on a runtime (h, nil when it is not connected): a new conversation is started
 // there (session.start with assistant), then the message goes with the snapshot as its context, the conversation's
 // permission mode and its memory directory; a new conversation's first message also carries the instructions only a
-// runtime needs (memory, Feishu).
-func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd, launcher, text string, images []proto.Image, mode string, modelAndEffort ...string) (string, error) {
-	var pickedModel, pickedEffort string
-	if len(modelAndEffort) > 0 {
-		pickedModel = modelAndEffort[0]
+// runtime needs (memory, Feishu). Runtimes that advertise caps.supervision_policy receive manager-owned
+// supervision_instructions as an explicit protocol field on session.start and session.send; non-capable runtimes keep
+// the runtimePolicyDropped boundary (refusing supervision deliveries, dropping policy for owner messages).
+func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd, launcher, text string, images []proto.Image, mode string, modelEffortPolicy ...string) (string, error) {
+	var pickedModel, pickedEffort, policy string
+	if len(modelEffortPolicy) > 0 {
+		pickedModel = modelEffortPolicy[0]
 	}
-	if len(modelAndEffort) > 1 {
-		pickedEffort = modelAndEffort[1]
+	if len(modelEffortPolicy) > 1 {
+		pickedEffort = modelEffortPolicy[1]
+	}
+	if len(modelEffortPolicy) > 2 {
+		policy = modelEffortPolicy[2]
 	}
 	st, known := n.state.get(id)
 	if cwd == "" {
@@ -104,8 +110,18 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 	if h == nil {
 		return "", errRuntimeAway(launcher)
 	}
+	supportsPolicy := h.supervisionPolicy()
+	if !supportsPolicy && policy != "" {
+		if err := n.runtimePolicyDropped(ctx, id); err != nil {
+			return "", err
+		}
+		policy = ""
+	}
+	if supportsPolicy && id != "" && known && st.SupervisionInstructions != policy && n.runtimeStatus(h, id) == proto.StatusWorking {
+		return "", refusal("busy", i18n.T(i18n.From(ctx), "rpc-errors.assistant_supervision_busy"), nil)
+	}
 	n.assistantRuntimeSkills(cwd)
-	memDir := n.memoryDir(cwd)
+	memDir := n.memoryForUse(cwd)
 	turn := map[string]any{"assistant": true, "memory_dir": memDir}
 	if pickedModel != "" {
 		turn["model"] = pickedModel
@@ -113,7 +129,8 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 	if pickedEffort != "" {
 		turn["effort"] = pickedEffort
 	}
-	if id == "" {
+	startedNew := id == ""
+	if startedNew {
 		startParams := map[string]any{"cwd": cwd, "assistant": true}
 		if pickedModel != "" {
 			startParams["model"] = pickedModel
@@ -121,18 +138,24 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 		if pickedEffort != "" {
 			startParams["effort"] = pickedEffort
 		}
+		if supportsPolicy && policy != "" {
+			startParams["supervision_instructions"] = policy
+		}
 		s, err := n.runtimeStartWith(ctx, h, startParams)
 		if err != nil {
 			return "", err
 		}
 		id = s.SessionID
 		st.AwaitingFirstMessage = true
+		if supportsPolicy {
+			st.SupervisionInstructions = policy
+		}
 	}
 	n.noteModes(id, mode, pickedEffort)
 	if m := n.assistantModeOf(id); m != "" {
 		turn["mode"] = m
 	}
-	if !known || st.Launcher != launcher || st.Cwd != cwd {
+	if !known || st.Launcher != launcher || st.Cwd != cwd || (startedNew && supportsPolicy && policy != "") {
 		if st.StartedAt.IsZero() {
 			st.StartedAt = time.Now().UTC()
 		}
@@ -144,9 +167,17 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 		awaitList(n.notifySessionsSoon())
 		return id, nil
 	}
-	live, commit := n.turnContext(id, n.assistantContext(id))
-	if st.AwaitingFirstMessage {
-		live = strings.TrimSpace(n.runtimeInstructions(cwd, memDir) + "\n" + live)
+	// A message that is only a slash command goes on its own: with the context block in front, an agent that runs its own
+	// commands (Antigravity's /compact) takes the line for plain text, records it as `/compact/compact` and runs nothing.
+	// The snapshot is not marked as sent, so the next message carries it. A conversation's first message keeps its block:
+	// it holds the instructions the runtime needs.
+	command := runtimeCommandOnly(text, len(images)) && !st.AwaitingFirstMessage
+	live, commit := "", func() {}
+	if !command {
+		live, commit = n.turnContext(id, n.assistantContext(id))
+		if st.AwaitingFirstMessage {
+			live = strings.TrimSpace(n.runtimeInstructions(cwd, memDir) + "\n" + live)
+		}
 	}
 	params := map[string]any{"session_id": id, "text": text, "images": images}
 	// The message's own client_msg_id, none when it came without one (#5225): a runtime may put the id it is sent with
@@ -161,15 +192,56 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 	if live != "" {
 		params["context"] = live
 	}
+	if supportsPolicy {
+		params["supervision_instructions"] = policy
+	}
 	cctx, cancel := context.WithTimeout(ctx, runtimeCallTimeout)
 	defer cancel()
 	if err := h.peer.Call(cctx, "session.send", params, nil); err != nil {
+		if isRPCError(err) {
+			return "", err
+		}
 		return "", fmt.Errorf("%s: %w", h.label(), err)
 	}
+	if supportsPolicy && st.SupervisionInstructions != policy {
+		cur, _ := n.state.get(id)
+		cur.SupervisionInstructions = policy
+		n.state.put(id, cur)
+	}
 	commit()
+	if command && runtimeCommandWord(text) == "/compact" {
+		// The runtime summarizes the conversation: the blocks it was told are gone, so the next message tells it everything
+		// again, as after Persona's own compaction.
+		n.contextCompacted(id)
+	}
+	if st.AwaitingFirstMessage {
+		n.noteRuntimeWorking(h, id)
+	}
 	awaitList(n.notifySessionsSoon()) // as a Claude conversation's send: not the whole list's time
 	return id, nil
 }
+
+// runtimeCommandOnly: text is one line that is a slash command, with or without arguments ("/compact", "/model opus"),
+// and no picture goes with it. A path ("/data/logs") or a message of several lines is not.
+func runtimeCommandOnly(text string, images int) bool {
+	return images == 0 && !strings.ContainsAny(strings.TrimSpace(text), "\r\n") && runtimeCommandWord(text) != ""
+}
+
+// runtimeCommandWord is the lower-cased command at the start of text ("/compact"), "" when text does not start with one.
+func runtimeCommandWord(text string) string {
+	word, _, _ := strings.Cut(strings.TrimSpace(text), " ")
+	if len(word) < 2 || word[0] != '/' || !isASCIILetter(rune(word[1])) {
+		return ""
+	}
+	for _, r := range word[2:] {
+		if !isASCIILetter(r) && (r < '0' || r > '9') && r != '_' && r != '-' && r != ':' {
+			return ""
+		}
+	}
+	return strings.ToLower(word)
+}
+
+func isASCIILetter(r rune) bool { return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' }
 
 type clientMsgIDKey struct{}
 

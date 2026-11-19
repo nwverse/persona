@@ -171,11 +171,13 @@ func (e *Engine) refreshProjectCall(ctx context.Context, p *Project) (called boo
 		return false, nil
 	}
 	p = current
+	owner := e.knowledgeOwner()
 	in := e.projectInput(p)
+	in.Language = owner.Language
 	var d projectDigest
 	cctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
-	if err := e.modelFor("kb.project").JSONMax(cctx, prompts.RenderKBProject(prompts.KBOwner{Owner: e.ownerName()}), prompts.RenderKBProjectInput(in), 8000, &d); err != nil {
+	if err := e.modelFor("kb.project").JSONMax(cctx, prompts.RenderKBProject(owner), prompts.RenderKBProjectInput(in), 8000, &d); err != nil {
 		return true, err
 	}
 	return true, e.commitProject(p, in, d)
@@ -192,7 +194,14 @@ func (e *Engine) projectInput(p *Project) prompts.KBProjectInput {
 		if r := []rune(sum); len(r) > 1500 {
 			sum = string(r[:1500]) + "…"
 		}
-		in.Chats = append(in.Chats, prompts.KBProjectChat{ID: cid, Summary: sum})
+		pc := prompts.KBProjectChat{ID: cid, Summary: sum}
+		if c, ok := e.Store.Chat(cid); ok && c.State != "" { // the source's fact, so the rewrite need not guess it (#9427)
+			pc.State = c.State
+			if !c.StateAt.IsZero() {
+				pc.StateAt = c.StateAt.In(e.Store.Zone()).Format("2006-01-02")
+			}
+		}
+		in.Chats = append(in.Chats, pc)
 	}
 	in.Moments = e.projectMomentsForPrompt(p, 5)
 	return in

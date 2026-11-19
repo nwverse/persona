@@ -65,6 +65,18 @@ func TestPlainStartRefusalLocalization(t *testing.T) {
 	}
 }
 
+// A Stop that found the turn already over (#10828) is said in the request's language, not the node's.
+func TestTurnOverBackgroundLocalization(t *testing.T) {
+	for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
+		want := i18n.T(lang, "rpc-errors."+proto.CodeTurnOverBackground)
+		err := &rpc.Error{Code: proto.CodeTurnOverBackground, Message: i18n.T(i18n.Default, "rpc-errors."+proto.CodeTurnOverBackground), Data: json.RawMessage(`{"delivered":"none"}`)}
+		body := LocalizedBody(http.StatusConflict, proto.CodeTurnOverBackground, err, lang)
+		if body["error"] != want || body["code"] != proto.CodeTurnOverBackground {
+			t.Fatalf("%s: %v, want %q", lang, body, want)
+		}
+	}
+}
+
 func call(t *testing.T, w http.ResponseWriter, rec *httptest.ResponseRecorder, err error) map[string]any {
 	t.Helper()
 	Call(w, err)
@@ -110,6 +122,27 @@ func TestCallExplainsCodedRefusals(t *testing.T) {
 	body = call(t, rec, rec, &rpc.Error{Code: proto.CodeNoMachine, Message: "assistant machine is not configured"})
 	if rec.Code != http.StatusConflict || body["error"] != "Persona 要在你的一台电脑上干活，现在还没接上电脑。" || body["action"] != "add_computer" {
 		t.Errorf("no_machine: %d %v", rec.Code, body)
+	}
+}
+
+func TestCallExplainsPrivateProfileSignIn(t *testing.T) {
+	const raw = `the selected profile is not signed in; run CLAUDE_CONFIG_DIR='/example/profile' claude`
+	refusal := &rpc.Error{Code: proto.TurnErrorNotLoggedIn, Message: raw,
+		Data: json.RawMessage(`{"delivered":"none","retryable":false,"launcher":"claude"}`)}
+	for _, tc := range []struct {
+		lang i18n.Lang
+		want string
+	}{
+		{"", "这个对话的 Claude Code 配置还没有登录。请登录该配置，或者改用 API Key。"},
+		{i18n.En, "This conversation's Claude Code profile isn't signed in. Sign in to that profile, or use an API key."},
+		{i18n.Ja, "この会話の Claude Code プロファイルにログインしていません。ログインするか、API キーを使ってください。"},
+	} {
+		rec := httptest.NewRecorder()
+		body := call(t, langWriter{rec, tc.lang}, rec, OnMachine(refusal, "server"))
+		if rec.Code != http.StatusConflict || body["code"] != proto.TurnErrorNotLoggedIn || body["error"] != tc.want ||
+			body["detail"] != raw || body["action"] != "connect_model" || body["delivered"] != "none" || body["retryable"] != false {
+			t.Errorf("%s: %d %v", tc.lang, rec.Code, body)
+		}
 	}
 }
 
@@ -302,8 +335,13 @@ func TestRPCFailureLocalePreservesOutcomeAndDiagnostics(t *testing.T) {
 		{"untypable directory", &rpc.Error{Code: "directory_untypable", Message: "node's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.directory_untypable"},
 		// a send to an omp the node cannot resume (node/control.go, node/ompcalls.go)
 		{"omp not resumable", &rpc.Error{Code: "omp_resume_unknown", Message: "node's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.omp_resume_unknown"},
+		{"omp stopped", &rpc.Error{Code: "omp_stopped", Message: "node's own words"}, "rpc-errors.omp_stopped"},
 		// a read of an agent its engine let go, which only an open chat starts (Paseo, #8132)
 		{"not loaded", &rpc.Error{Code: proto.CodeNotLoaded, Message: "the runtime's own words"}, "rpc-errors.not_loaded"},
+		// an owner's message to an Agent with older ones held for it (devices held.go, #10661)
+		{"held ahead", &rpc.Error{Code: "held_ahead", Message: "the manager's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.held_ahead"},
+		{"held not kept", &rpc.Error{Code: "held_not_kept", Message: "the manager's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.held_not_kept"},
+		{"held full", &rpc.Error{Code: "held_full", Message: "the manager's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.held_full"},
 	}
 	for _, tc := range cases {
 		legacy := httptest.NewRecorder()
@@ -367,8 +405,22 @@ func TestOpenElsewhereSpeaksTheClientsLanguage(t *testing.T) {
 	}
 }
 
-func TestAssistantServiceTierFailuresWithholdNativeDiagnostics(t *testing.T) {
-	for _, code := range []string{"assistant_service_tier_start_only", "assistant_service_tier_unsupported", "assistant_service_tier_refused"} {
+func TestCodexWriterConflictSpeaksTheClientsLanguage(t *testing.T) {
+	for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
+		rec := httptest.NewRecorder()
+		raw := &rpc.Error{Code: "codex_writer_busy", Message: "node recovery words", Data: json.RawMessage(`{"delivered":"none","detail":"codex: thread 11111111-2222-3333-4444-555555555555 already has an active writer (-32600)"}`)}
+		body := call(t, langWriter{rec, lang}, rec, raw)
+		if rec.Code != http.StatusConflict || body["code"] != "codex_writer_busy" || body["error"] != i18n.T(lang, "rpc-errors.codex_writer_busy") {
+			t.Fatalf("%s: %d %v", lang, rec.Code, body)
+		}
+		if body["delivered"] != "none" || body["detail"] != "codex: thread 11111111-2222-3333-4444-555555555555 already has an active writer (-32600)" {
+			t.Fatalf("%s lost delivery or diagnostic evidence: %v", lang, body)
+		}
+	}
+}
+
+func TestAssistantActionableRefusalsWithholdNativeDiagnostics(t *testing.T) {
+	for _, code := range []string{"assistant_launcher_profile_switch", "assistant_service_tier_start_only", "assistant_service_tier_unsupported", "assistant_service_tier_refused"} {
 		for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
 			rec := httptest.NewRecorder()
 			raw := &rpc.Error{Code: code, Message: "native English diagnostic", Data: json.RawMessage(`{"delivered":"none","retryable":false}`)}

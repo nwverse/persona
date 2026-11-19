@@ -179,6 +179,22 @@ struct AgentsListMenu: View {
     }
 }
 
+#if os(iOS)
+/// The Sidebar layout's Agents heading's ⋯ (#10738): `AgentsListMenu` in a view graph of its own (`MenuIsland`). In the
+/// sidebar's list the list's updates reached the menu several times a second while agents worked, and SwiftUI handed its
+/// items to UIKit again each time: open and scrolled down, it jumped back to its top.
+struct SidebarAgentsListMenu: View, Equatable {
+    let actions: AgentsListMenu.Actions
+
+    nonisolated static func == (a: Self, b: Self) -> Bool { a.actions === b.actions }
+
+    var body: some View {
+        AgentsListMenu(actions: actions)
+            .accessibilityIdentifier("sidebar-agents-menu")
+    }
+}
+#endif
+
 #if !os(iOS)
 /// A row's long-press menu in Agents. Equal while the facts it shows are: the row's session changes with every push
 /// while its agent works (a new last line), and the menu held open on it was rebuilt each time.
@@ -205,34 +221,8 @@ struct AgentRowMenu: View, Equatable {
     nonisolated var unread = false
     nonisolated var takeoverAvailable = false
     nonisolated var continueAvailable = false
-    nonisolated let actions: Actions
-
-    @MainActor final class Actions {
-        private var renameHandler: (Session) -> Void = { _ in }
-        private var closeHandler: (Session) -> Void = { _ in }
-        private var linkTodoHandler: (Session) -> Void = { _ in }
-        private var deleteHandler: (Session) -> Void = { _ in }
-        private var takeoverHandler: (Session) -> Void = { _ in }
-        private var continueHandler: (Session) -> Void = { _ in }
-
-        func update(rename: @escaping (Session) -> Void, close: @escaping (Session) -> Void, linkTodo: @escaping (Session) -> Void = { _ in },
-                    delete: @escaping (Session) -> Void = { _ in }, takeover: @escaping (Session) -> Void = { _ in },
-                    continueInNewSession: @escaping (Session) -> Void = { _ in }) {
-            renameHandler = rename
-            closeHandler = close
-            linkTodoHandler = linkTodo
-            deleteHandler = delete
-            takeoverHandler = takeover
-            continueHandler = continueInNewSession
-        }
-
-        func rename(_ s: Session) { renameHandler(s) }
-        func close(_ s: Session) { closeHandler(s) }
-        func linkTodo(_ s: Session) { linkTodoHandler(s) }
-        func delete(_ s: Session) { deleteHandler(s) }
-        func takeover(_ s: Session) { takeoverHandler(s) }
-        func continueInNewSession(_ s: Session) { continueHandler(s) }
-    }
+    /// The same handlers as iOS's `AgentActionMenu` (`ChatsView.rowActions`): the list's sheets and alerts.
+    nonisolated let actions: AgentMenuHandlers
 
     nonisolated static func == (a: Self, b: Self) -> Bool {
         a.key == b.key && a.pinned == b.pinned && a.muted == b.muted && a.looping == b.looping && a.live == b.live
@@ -348,7 +338,7 @@ struct AgentRowMenu: View, Equatable {
 extension AgentRowMenu {
     /// The menu of a row's agent, its long-press menu (on iOS the only way to it since the row's ⋯ went, #2530). With
     /// the rows' swipes gone there (#1244), Interrupt and Mark as Seen are here too.
-    @MainActor init(_ s: Session, model: AppModel, actions: Actions) {
+    @MainActor init(_ s: Session, model: AppModel, actions: AgentMenuHandlers) {
         self.init(key: s.key, pinned: model.isPinned(s.key), muted: model.isMuted(s), looping: s.loop != nil, live: s.state.isLive,
                   terminal: s.canTerminal, renamable: s.canRename, closable: s.canClose, attachable: s.canAttach, deletable: s.canDelete,
                   paneActions: NodeMenu.offersPaneActions(s),
@@ -397,9 +387,12 @@ struct SpaceHeaderMenu: View, Equatable {
 }
 
 /// The grouping, one tap away under the quick filters (#5766), in a cell without the search input. The same stored
-/// choice as the ⋯ menu's (`dev.grouping`), kept across launches. Reads nothing that a hub push changes.
-struct AgentsGroupingMenu: View {
+/// choice as the ⋯ menu's (`dev.grouping`), kept across launches. Reads nothing that a hub push changes. Equal while
+/// it is drawn the same way: in the list it sits in a `MenuIsland` (#10738), as the list's updates replaced it while open.
+struct AgentsGroupingMenu: View, Equatable {
     var iconOnly = false
+
+    nonisolated static func == (a: Self, b: Self) -> Bool { a.iconOnly == b.iconOnly }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StoredValue("dev.grouping") private var grouping: DevGrouping = .standard
     private var shown: DevGrouping { DevGrouping.resolvedNow(grouping) }

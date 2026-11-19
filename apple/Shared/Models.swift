@@ -723,7 +723,7 @@ extension Launcher {
         let managed = source == "persona" || source == LegacyNames.product
         let machine = source == nil || source == "" || source == "zshrc" || source == "path" || source == "builtin"
         guard machine || managed, !(managed && agent == "codex") else { return false }
-        return agent == nil || agent == "" || agent == "claude" || agent == "codex" || agent == "agy"
+        return agent == nil || agent == "" || agent == "claude" || agent == "codex"
     }
 }
 
@@ -999,6 +999,13 @@ nonisolated struct SessionChildren: Codable, Hashable, Sendable {
     }
 }
 
+/// A native Codex speed choice advertised for this session. Labels stay localized in the client; these are wire metadata.
+nonisolated struct SessionServiceTier: Codable, Hashable, Sendable {
+    var id: String
+    var name: String
+    var description: String? = nil
+}
+
 nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     var machineID: String
     var sessionID: String
@@ -1070,6 +1077,10 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// The levels `effort` may be set to when they are not Claude Code's (`SessionModes.effortOptions`): a Codex thread
     /// the hub drives through its app-server, where only the effort changes (node/codex_effort.go). Nil elsewhere.
     var efforts: [String]? = nil
+    /// The native Codex speed the hub last acknowledged (`service_tier`), nil while unknown. Never an optimistic pick.
+    var serviceTier: String? = nil
+    /// The native speed choices this session advertises (`service_tiers`), including `default` for Standard.
+    var serviceTiers: [SessionServiceTier]? = nil
     /// The launcher / model / effort picked for this assistant conversation (#5033, `model_pick`); nil: it follows the
     /// Main chat default or keeps what it runs. Only the manager names it, on assistant conversations.
     var modelPick: ModelPick? = nil
@@ -1225,6 +1236,9 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// The extension whose token opened an assistant conversation (protocol.md「Origin of assistant chats」); nil for any
     /// other. Such a chat never attends a meeting (#2981).
     var openedBy: String? = nil
+    /// What of `origin` opened it (`origin_ref`): for Lark /agent and another extension's, that extension's id, which the
+    /// rows draw the icon of when `openedBy` is not there (`ConversationOpener`, #10358). Nil from hubs that do not say.
+    var originRef: String? = nil
     /// The last compaction the user asked for in an assistant conversation (POST …/compact, #1727): running, done or
     /// failed. Nil from hubs without `assistant_compact`, and before the first one.
     var compaction: CompactionRun? = nil
@@ -1462,6 +1476,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         case listWaiting = "waiting", listBackgroundCount = "background_count", listRunningSubagents = "running_subagents", listRunningWorkflows = "running_workflows"
         case listBackgroundTasksCount = "background_tasks_count", listWorkflowProgress = "workflow_progress"
         case title, cwd, status, launcher, model, agent, effort, efforts, capabilities, attached
+        case serviceTier = "service_tier", serviceTiers = "service_tiers"
         case modelPick = "model_pick"
         case canFork = "can_fork"
         case sourceKind = "source_kind", sourceThreadID = "source_thread_id", sourceInstanceID = "source_instance_id",
@@ -1484,7 +1499,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
              updatedAt = "updated_at", lastText = "last_text", asks, awaitsReply = "awaits_reply", backgroundWaiting = "background_waiting", backgroundWorking = "background_working", activity, activityAt = "activity_at", pendingInteractions = "pending_interactions", rev, suggestion, suggestionRisky = "suggestion_risky",
              starting, awaitingFirstMessage = "awaiting_first_message", startError = "start_error", startErrorCode = "start_error_code", startErrorArgs = "start_error_args", todo, quiet, hubGroup = "app_hub_group",
              attentionReason = "attention_reason", failureReason = "failure_reason",
-             turnError = "turn_error", turnErrorKind = "turn_error_kind", turnErrorCode = "turn_error_code", turnErrorResetsAt = "turn_error_resets_at", turnErrorResumes = "turn_error_resumes", externalURL = "external_url", channels, origin, openedBy = "opened_by", compaction, work,
+             turnError = "turn_error", turnErrorKind = "turn_error_kind", turnErrorCode = "turn_error_code", turnErrorResetsAt = "turn_error_resets_at", turnErrorResumes = "turn_error_resumes", externalURL = "external_url", channels, origin, originRef = "origin_ref", openedBy = "opened_by", compaction, work,
              runtime, runtimeFallback = "runtime_fallback", manager, modelFallback = "model_fallback", modelRestore = "model_restore"
     }
 
@@ -1537,6 +1552,8 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         bypassAvailable = (try? c.decodeIfPresent(Bool.self, forKey: .bypassAvailable)).flatMap { $0 } ?? false
         effort = try c.decodeIfPresent(String.self, forKey: .effort)
         efforts = try c.decodeIfPresent([String].self, forKey: .efforts)
+        serviceTier = try c.decodeIfPresent(String.self, forKey: .serviceTier)
+        serviceTiers = try c.decodeIfPresent([SessionServiceTier].self, forKey: .serviceTiers)
         // The conversation's own pick (#5033): an odd one never drops the session, which then follows its default.
         modelPick = (try? c.decodeIfPresent(ModelPick.self, forKey: .modelPick)).flatMap { $0 }
         contextTokens = try? c.decodeIfPresent(Int.self, forKey: .contextTokens) // an odd one never drops the session
@@ -1613,6 +1630,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         channels = try c.decodeIfPresent([String].self, forKey: .channels)
         origin = try c.decodeIfPresent(String.self, forKey: .origin)
         openedBy = try c.decodeIfPresent(String.self, forKey: .openedBy)
+        originRef = try? c.decodeIfPresent(String.self, forKey: .originRef) // an odd one never drops the session
         compaction = try? c.decodeIfPresent(CompactionRun.self, forKey: .compaction) // an odd one never drops the session
         work = try? c.decodeIfPresent(WorkState.self, forKey: .work) // an odd one never drops the session
         hubGroup = try c.decodeIfPresent(String.self, forKey: .hubGroup)
@@ -1653,8 +1671,16 @@ nonisolated struct UndeliveredMessage: Codable, Hashable, Sendable, Identifiable
     var attempts: Int? = nil
     var nextAt: Date? = nil
     var error: String? = nil
+    var deleteOnly: Bool? = nil
+
+    /// The hub's names (`proto.UndeliveredMessage`): one enum, #10775 (`delete_only`) and #10440 (`next_at`) each added one.
+    private enum CodingKeys: String, CodingKey {
+        case id, text, images, at, state, attempts, error
+        case nextAt = "next_at", deleteOnly = "delete_only"
+    }
 
     var gaveUp: Bool { state == "failed" }
+    var canRetry: Bool { gaveUp && deleteOnly != true }
 
     /// The row's kept messages to draw: not one the transcript has (`landed`: its items' client_msg_ids) nor one this
     /// phone still draws as sending or arriving (`drawn`: those bubbles' ids), compared case-insensitively. The row can
@@ -1663,11 +1689,6 @@ nonisolated struct UndeliveredMessage: Codable, Hashable, Sendable, Identifiable
         guard let list, !list.isEmpty else { return [] }
         let skip = Set((landed + drawn).map { $0.lowercased() })
         return list.filter { !skip.contains($0.id.lowercased()) }
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case id, text, images, at, state, attempts, error
-        case nextAt = "next_at"
     }
 }
 
@@ -2575,12 +2596,16 @@ nonisolated struct Item: Codable, Identifiable, Hashable, Sendable {
     var outcome: ToolOutcome? = nil
     /// kind == .notice: an upstream refusal, drawn as a line of its own after the exchange (#4489, `RefusalNotice`).
     var modelRefusal: ModelRefusal? = nil
+    /// Text belonging to the work summary, including when the node sends it unfolded.
+    var narration: Bool? = nil
+    /// A generated heartbeat acknowledgement from a DONT_NOTIFY envelope.
+    var codexHeartbeatQuiet: Bool? = nil
     /// What the model requests this item stands for used (#5426). Older hubs omit it.
     var usage: [TokenUsage]? = nil
 
     enum CodingKeys: String, CodingKey {
         case id, seq, ts, role, kind, text, image, queued, from, wake, fold, task, compact, injected, source, outcome, usage
-        case modelRefusal = "model_refusal"
+        case modelRefusal = "model_refusal", narration, codexHeartbeatQuiet = "codex_heartbeat_quiet"
         case toolUseID = "tool_use_id", toolName = "tool_name", toolInput = "tool_input", isError = "is_error", fullSize = "full_size",
              clientMsgID = "client_msg_id", supervisionUser = "supervision_user"
     }
@@ -2601,6 +2626,9 @@ nonisolated enum InteractionKind: String, Codable, Sendable {
 nonisolated struct QuestionOption: Codable, Hashable, Sendable {
     var label: String
     var description: String?
+    /// "defer" on a manager work card's put-off choices (#6753): picking one only clears the card on the hub and sends
+    /// nothing to the Agent. Missing on every other option.
+    var action: String?
 
     /// "Take the longest one (Recommended)" → ("Take the longest one", true): the words to show and whether Claude recommends it.
     /// The answer sent back keeps the original label. Phone and watch draw 「推荐」 instead of the suffix.
@@ -2655,8 +2683,12 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
     /// Whether this question's runtime can release its waiter without an answer (`cancel` on Resolution).
     var canCancel: Bool?
     var plan: String?
+    /// The permission mode a plan-mode start goes on in after approval (#3784). Older hubs and sessions omit it.
+    var planThen: String?
     var toolInput: JSONValue?
     var summary: String?
+    /// A script ask's opt-in reply-Markdown rendering; missing and unrecognized values stay literal (#10857).
+    var format: String?
     var screen: String?
     /// The screen's dialog as the hub read it (newer hubs): answer with `Resolution.option`.
     var dialog: ScreenDialog?
@@ -2758,8 +2790,9 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
     var screenDialog: ScreenParser.Dialog? { dialog?.parsed ?? screen.flatMap(ScreenParser.dialog) }
 
     enum CodingKeys: String, CodingKey {
-        case id, kind, questions, plan, summary, screen, cwd, dialog, secret, fields, agent, reason, delegating, delegate, manager
+        case id, kind, questions, plan, summary, format, screen, cwd, dialog, secret, fields, agent, reason, delegating, delegate, manager
         case suggestion, canCancel = "can_cancel"
+        case planThen = "plan_then"
         case machineID = "machine_id", sessionID = "session_id", sessionTitle = "session_title", taskTitle = "task_title",
              createdAt = "created_at", expiresAt = "expires_at", toolName = "tool_name", toolUseID = "tool_use_id",
              toolInput = "tool_input", alwaysLabel = "always_label", alwaysKeys = "always_keys", alwaysHonored = "always_honored",

@@ -77,7 +77,8 @@ never stops the call.
 
 The avatar on the call screen says what the call does; the avatar stays decorative, and VoiceOver hears it in words on
 the state line: its value is the row (`CallAvatarLook.Row.words`: Listening, Hearing you, Thinking, Speaking, Working,
-Waiting for your decision, Muted; nothing more where the line's own words say it) beside the running time the line shows,
+Waiting for your decision, Muted; nothing more where the line's own words say it; Working is the state's own name,
+`StateName.working`, 工作中 / 作業中, #10502) beside the running time the line shows,
 and "Waiting for your decision" is announced once as a card comes to wait (`CallScreenStateLine`, #9887 review); the
 minimised bar's face says Thinking, Working or Waiting for your decision within the bar's words. `CallScreenState.make` derives the row from what the call screen already observes: the call's
 phase and hold, the voice's phase and link, the mute, and what the call's conversation and voice do (`CallActivity`: the
@@ -411,6 +412,7 @@ fails on a new one until it is given one):
 | `PhoneVoiceAudio` (`.phone`, `.carPlay`: category, activation, preferred input, speaker override) | only through `VoiceCalls` | would: its session replaces the call's | refused, or asked first (`VoiceCalls.systemCallName`); the system mode (a call's) never touches the session (`aSystemCallsAudioNeverTouchesTheSystemsSession`) |
 | `Dictation` (`.record` category, activation, deactivation) | would, when tapped, or when its permission is answered | would: cuts the call's microphone, its deactivation stops the call's audio | refused before and after the permission (`LiveCallGate.dictationRefusal`); opened on `LiveCallGate.sessionQueue`, in order with the call's category; no deactivation while a call is live |
 | `RecordingCapture.configureSession` (start, resume, the resume when the app comes back) | would | would | refused, and asked again after every wait and before the session or the microphone (`LiveCallGate.recordingRefusal`) |
+| `MeetingReplay` (playback category, activation and deactivation) | would, starting a tape or opening / ending its audio | would: it replaces or deactivates the call's session | refused before the replay begins (`RecordingCapture.callGate`); activation and deactivation run on `LiveCallGate.sessionQueue` and are skipped when `LiveCallGate.liveNow` |
 | `RecordingCapture` stop, cancel, failed start (preferred input, deactivation), `setPlaysAloud` (category), `turnOnEchoCancellation` | yes: a recording paused before an urgent call was answered | would: the deactivation stops the call's audio, the category moves its route | under a live call only the microphone goes back; the category and voice processing wait for the resume |
 | `MeetingSpeaker` (speaker override and its restore), `MeetingVoicePlayer`, `MeetingCallAudio` | only during a meeting recording (a paused one exists under a call) | the override would move the call's route | skipped during a call (`LiveCallGate.callIsLive`) |
 | `VNCPiP.prepare` (`.playback` category, activation) | would, opening a Mac's screen | would | skipped during a call (`LiveCallGate.callIsLive`) |
@@ -465,7 +467,7 @@ offered in China otherwise. The source guard and the binary check run in CI and 
 
 ## DEBUG switches
 
-All are listed in `scripts/release/release.sh`, which fails a Release binary that still has them.
+All are listed in `scripts/release/debug_switches.txt`; `release.sh` fails a Release binary that still has them.
 
 - `-showCallSample <state>`: the call screen with no system, audio or hub: `dialing`, `connecting`, `connected`,
   `muted`, `held`, `interrupted`, `resume`, `speaker`, `ended`, `mutedSpeaker`, `reconnecting`, `audioRoute`, `speaking`,

@@ -189,7 +189,7 @@ func triageStatus(t Todo, look triageLookup, now time.Time) string {
 		}
 	}
 	switch {
-	case interrupted:
+	case interrupted && !working && !waiting && (t.Supervision == nil || t.Supervision.State != "parked"):
 		return "interrupted"
 	case limited:
 		return "usage_limit"
@@ -222,6 +222,9 @@ func acceptanceStands(t Todo) bool {
 // again; an accepted one stays accepted while its acceptance stands.
 func triageReviewState(t Todo) string {
 	if t.Supervision == nil {
+		return ""
+	}
+	if ownerDecisionReturned(t.Supervision) {
 		return ""
 	}
 	st := t.Supervision.State

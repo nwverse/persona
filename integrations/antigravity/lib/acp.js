@@ -19,9 +19,12 @@ export class AgyAcpClient extends EventEmitter {
     this.readyPromise = null
     this.nextId = 1
     this.pending = new Map()
-    this.loadedSessions = new Map() // sessionId -> boolean (hasMcp)
+    this.loadedSessions = new Map() // sessionId -> { mcp: boolean, extraDirsKey: string }
     this.availableModels = null
     this.agentVersion = ''
+    this.supportsAdditionalDirectories = false
+    // Counts the agy processes started: a model list read from one carries its generation (#10368).
+    this.generation = 0
     this.closed = false
     this.initTimeoutMs = options.initTimeoutMs ?? 60_000
     // How long a stopped agy gets to exit on SIGTERM before it is killed.
@@ -45,6 +48,7 @@ export class AgyAcpClient extends EventEmitter {
     const directory = mkdtempSync(join(tmpdir(), 'persona-agy-'))
     const nativeLog = join(directory, 'native.log')
     writeFileSync(nativeLog, '', { mode: 0o600 })
+    this.generation += 1
     const child = spawn(this.bin, [...this.args, '--log-file', nativeLog], {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, PATH: `${extraPath}:${process.env.PATH || ''}` },
@@ -102,6 +106,10 @@ export class AgyAcpClient extends EventEmitter {
       throw err
     }
     this.agentVersion = init?.agentInfo?.version || ''
+    this.supportsAdditionalDirectories = Boolean(
+      init?.agentCapabilities?.sessionCapabilities?.additionalDirectories ||
+      init?.agentCapabilities?.session_capabilities?.additionalDirectories
+    )
     return init
   }
 
@@ -116,6 +124,7 @@ export class AgyAcpClient extends EventEmitter {
     this.loadedSessions.clear()
     this.availableModels = null
     this.agentVersion = ''
+    this.supportsAdditionalDirectories = false
     const pending = [...this.pending.values()]
     this.pending.clear()
     for (const p of pending) p.reject(err)
@@ -221,6 +230,7 @@ export class AgyAcpClient extends EventEmitter {
       if (msg.error) {
         const err = new Error(msg.error.message || `ACP error ${msg.error.code}`)
         err.code = msg.error.code
+        if (msg.error.data !== undefined) err.data = msg.error.data
         entry.reject(err)
       } else {
         entry.resolve(msg.result)
@@ -320,29 +330,40 @@ export class AgyAcpClient extends EventEmitter {
     })
   }
 
-  async newSession({ cwd, mcpServers = [] }) {
-    const res = await this.call('session/new', { cwd, mcpServers }, 30_000)
+  async newSession({ cwd, mcpServers = [], additionalDirectories = [] }) {
+    const extraDirs = Array.isArray(additionalDirectories) ? additionalDirectories.filter(Boolean) : []
+    const params = { cwd, mcpServers, ...(extraDirs.length > 0 ? { additionalDirectories: extraDirs } : {}) }
+    const res = await this.call('session/new', params, 30_000)
     if (res?.sessionId) {
-      this.loadedSessions.set(res.sessionId, mcpServers.length > 0)
+      this.loadedSessions.set(res.sessionId, { mcp: mcpServers.length > 0, extraDirsKey: JSON.stringify(extraDirs) })
       if (res.models?.availableModels) this.availableModels = res.models.availableModels
     }
     return res
   }
 
-  async ensureSessionLoaded(sessionId, cwd, mcpServers = []) {
+  async ensureSessionLoaded(sessionId, cwd, mcpServers = [], additionalDirectories = []) {
     await this.ensureStarted()
-    if (this.loadedSessions.has(sessionId) && (mcpServers.length === 0 || this.loadedSessions.get(sessionId))) {
+    const extraDirs = Array.isArray(additionalDirectories) ? additionalDirectories.filter(Boolean) : []
+    const extraDirsKey = JSON.stringify(extraDirs)
+    const loaded = this.loadedSessions.get(sessionId)
+    if (loaded && (mcpServers.length === 0 || loaded.mcp) && loaded.extraDirsKey === extraDirsKey) {
       return
     }
-    const res = await this.call('session/resume', { sessionId, cwd: cwd || process.env.HOME || '/tmp', mcpServers }, 30_000)
-    this.loadedSessions.set(sessionId, mcpServers.length > 0)
+    const params = {
+      sessionId,
+      cwd: cwd || process.env.HOME || '/tmp',
+      mcpServers,
+      ...(extraDirs.length > 0 ? { additionalDirectories: extraDirs } : {}),
+    }
+    const res = await this.call('session/resume', params, 30_000)
+    this.loadedSessions.set(sessionId, { mcp: mcpServers.length > 0, extraDirsKey })
     if (res?.models?.availableModels) this.availableModels = res.models.availableModels
     return res
   }
 
-  async setModel(sessionId, modelId) {
+  async setModel(sessionId, modelId, timeoutMs = 15_000) {
     if (!modelId) return
-    return this.call('session/set_model', { sessionId, modelId }, 15_000)
+    return this.call('session/set_model', { sessionId, modelId }, timeoutMs)
   }
 
   async setMode(sessionId, modeId) {
@@ -374,6 +395,17 @@ export class AgyAcpClient extends EventEmitter {
     } catch {
       return {}
     }
+  }
+
+  /**
+   * Replace the running agy: it is dropped as an agy that exited is, so the next call starts a fresh one, and ended.
+   * Calls still pending on it fail with `reason`. Resolves once it is gone. The caller makes sure no turn is running.
+   */
+  recycle(reason = 'agy acp recycled') {
+    const child = this.proc
+    if (!child || !this._forget(child, new Error(reason))) return Promise.resolve()
+    this.log(`agy acp: replacing the process (${reason})`)
+    return this._kill(child)
   }
 
   /**

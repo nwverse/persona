@@ -6,7 +6,7 @@ import type { RuleSuggestion } from "./rule-suggestion";
 import type { TodoSummary } from "./todo-view-wire";
 import { api, ApiError, enc } from "./api";
 import { contextBody } from "./context-body";
-import { parseAPIError, retryable } from "./api-errors";
+import { parseAPIError, retryable, unrecoverableError } from "./api-errors";
 import { stateOf } from "./format";
 import { foldedState } from "./child-sessions";
 import { foldRows } from "./folded-rows";
@@ -62,6 +62,8 @@ export interface Todo {
    *  pieces"); unset for a to-do that is no piece and from hubs without them. */
   part_of?: string;
   after?: string[];
+  /** Unmet prerequisite to-do IDs for a strict piece; an empty list means none, omission keeps legacy behavior. */
+  prerequisite_blockers?: string[];
   done_at?: string | null;
   created_at: string;
   updated_at: string;
@@ -401,7 +403,7 @@ export function todoStatus(todo: Todo, lookup?: SessionLookup): TodoStatus {
   }
 
   if (hasNeedsYou) return "needs_you";
-  if (hasInterrupted) return "interrupted";
+  if (hasInterrupted && !hasWorking && !hasWaiting && todo.supervision?.state !== "parked") return "interrupted";
   if (hasLimit) return "usage_limit";
   if (hasUnread) return "unread";
   if (hasWorking) return "working";
@@ -439,10 +441,19 @@ export function interruptedAgent(s?: Session): boolean {
   return st === "unread" || st === "idle";
 }
 
+/** The hub's own word on a turn that had no output at all (#10187): `no_output` (the model service answered nothing) or
+ *  `stopped` (Persona's Stop interrupted it with its conversation). Not a model API error: its turn_error is a sentence
+ *  in the user's language, said as it is. */
+const SILENT_TURN_KINDS: ReadonlySet<string> = new Set(["no_output", "stopped"]);
+
 /** Why the model service cut the agent off (#1516), in words, and whether "Continue" can help (a login or a bad request is
- *  not fixed by going on); undefined when it was not cut off. */
-export function interruption(s?: Session): { reason: string; canContinue: boolean } | undefined {
+ *  not fixed by going on); undefined when it was not cut off. A turn with no output says the hub's sentence for it. */
+export function interruption(s?: Session): { reason: string; canContinue: boolean; invalid?: boolean } | undefined {
   if (!interruptedAgent(s)) return undefined;
+  if (s?.turn_error_kind === "unrecoverable" || s?.turn_error_code === "compaction_sealed" || unrecoverableError(s?.turn_error)) {
+    return { reason: t("lib-api-errors.conversation_invalid"), canContinue: false, invalid: true };
+  }
+  if (SILENT_TURN_KINDS.has(s?.turn_error_kind ?? "")) return { reason: s!.turn_error!.trim(), canContinue: true };
   const info = parseAPIError(s?.turn_error);
   return { reason: info?.reason ?? t("lib-todos.model_request_failed"), canContinue: !info || retryable(info) };
 }
@@ -702,20 +713,6 @@ export interface TodoDecision {
   created_at: string;
   /** Completion time for an outcome written by Persona, which may be recorded later. */
   phase_completed_at?: string;
-}
-
-/** Where a decision came from, as the detail page says it: the agent that asked, by its title when known. */
-export function decisionSourceLabel(d: TodoDecision, todo: Todo, lookup: ReturnType<typeof makeSessionLookup>): string {
-  if (d.source === "outcome") return t("lib-todos.decision_outcome");
-  if (d.source === "agent") return t("lib-todos.decision_by_agent");
-  if (d.source === "thread") return t("lib-todos.decision_by_thread");
-  if (d.source !== "card") return t("lib-todos.decision_manual");
-  const title = lookup(d.source_machine, d.source_session)?.title
-    || todo.agents?.find((a) => a.machine_id === d.source_machine && a.session_id === d.source_session)?.title;
-  if (!title) return t("lib-todos.decision_agent_question");
-  // A session's title is often its first message: keep the label to a glance.
-  const short = [...title.trim()].length > 24 ? `${[...title.trim()].slice(0, 24).join("")}…` : title.trim();
-  return t("lib-todos.decision_in_question", { title: short });
 }
 
 /** How a to-do's Decisions list is shown (#6447, docs/assistant/todos.md "Decision records"): the first few, the

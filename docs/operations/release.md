@@ -59,14 +59,22 @@ What `release.sh` does:
    with the watch App embedded.
 3. `check_bundle_strings.py` checks `Persona.app` and `Persona.app/Watch/Persona.app`: `*UsageDescription` in Info.plist
    must not be empty or equal to the key, and the same for `*.lproj/InfoPlist.strings` (placeholder text gets auto-rejected by App Review).
-4. `strings` checks that the Release binary contains none of the simulator switches that exist only under `#if DEBUG`, such as `pairURL`, `openSession`, `showNewChat`.
+4. `debug_switches.py check` reads the Release binary's `strings` and fails when a line equals one of the simulator switches that exist only under `#if DEBUG`, such as `pairURL`, `openSession`, `showNewChat`,
+   or when a line contains a name of the DEBUG runtime CLI (`runtimeCLI`, `RuntimeCLI`, the accessibility hooks it turns on; `docs/operations/runtime-cli.md`).
+   It reads all of the output: under `set -o pipefail`, `if strings … | grep -q …` passed when the match came early, since `strings` dies of SIGPIPE once grep stops reading (#10654).
+   The switches are listed one per line, sorted and without duplicates, in `scripts/release/debug_switches.txt`: a new switch is one line there, never an edit to `release.sh`.
+   `.gitattributes` merges the file with `merge=union`, so two branches that each add a switch merge cleanly; when both added theirs in the same place the result can be out of order,
+   which `scripts/release/test_debug_switches.py` reports and `python3 scripts/release/debug_switches.py sort` fixes. A union merge can also bring back a name another branch removed, so check union merges that delete names.
+   Comments go in the file's header; the checker refuses a comment or a blank line below the first name. The list is kept by hand rather than read from the Swift sources:
+   switches are read in many shapes (UserDefaults `forKey:` on the standard store or a local alias, arrays of keys, `ProcessInfo` arguments), DEBUG code also reads settings keys that do ship, and the list keeps retired switches.
    `check_bundle_privacy.py` checks that the whole bundle has no personal values (external testing is a public link, see the end).
 5. `xcodebuild -exportArchive`: manual signing + `method=app-store-connect` + the two profile mappings. **This step is the App Store signing**:
    the archive uses automatically signed development profiles (so `aps-environment` in the archive is `development`), and export re-signs with the App Store profiles to
    `production`. With `NO_UPLOAD=1`, `destination` changes from `upload` to `export`, and it additionally checks that `aps-environment` in the exported ipa
    really is `production`.
 6. `scripts/release/entitlements.py check`: in the archive (plus the exported ipa with `NO_UPLOAD=1`), every bundle carries its target's keychain groups, and the group name in Info.plist is among them; see "entitlements" below. It also fails when any binary in the app links CallKit; see "No CallKit" below.
-7. `git tag -f testflight/<build number>`.
+7. `scripts/release/check_mac_imports.py` checks the archived iPhone executable's strong imports against MacOSX.sdk TBD exports, preferring each framework's `System/iOSSupport` copy. An iPhone app on an Apple silicon Mac must not bind a symbol the Mac lacks: dyld otherwise ends its launch before app code. Weak imports pass; libraries with neither a Mac nor an iOS-support stub are outside this comparison. Run it by hand with `python3 scripts/release/check_mac_imports.py <path to Persona.app>/Persona`; findings are printed, a clean check prints nothing.
+8. `git tag -f testflight/<build number>`.
 
 A build shows up in TestFlight about 10–30 minutes after archiving. `asc_testflight.py wait [minutes] [build number]` checks every 30 seconds until
 `processingState=VALID`, then writes the default What to Test and adds it to the `Internal` group; `INVALID` / `FAILED` exits with an error
@@ -454,6 +462,26 @@ curl -fsSL <publish.site_url>/install.sh | sh   # install to ~/.persona/bin/pers
 - Not yet available (others can install, but it's still awkward; see `docs/operations/config.md`):
   Developer ID notarization of the macOS binary (browser downloads get blocked by Gatekeeper; `curl` doesn't).
 
+## Release PRs and GitHub Actions publication
+
+**Every new formal or beta release is an explicit release PR.** The PR title is `release: vX.Y.Z` for a formal release or `release: vX.Y.Z-beta.N` for a beta. It targets `main`, originates in this repository, and is authored by administrator `chyroc`; an ordinary feature PR, fork PR or branch is not a release request. Do not create a local version tag to start a new release.
+
+1. `release-schedule.yml` runs stable selection at 12:00 in the operator's configured UTC+08:00 zone (04:00 UTC) and beta selection every two hours (never every two minutes). It skips an unchanged source and opens a release PR with an unused immutable version. A feature since the previous stable tag increments minor; a fix-only history increments patch. It uses `RELEASE_PR_TOKEN` in the protected `persona-release` environment so the PR has the administrator's identity. Do not replace it with the workflow's ordinary `GITHUB_TOKEN` or run a second local release scheduler.
+2. `release-pr.yml` first checks out the PR's proposed merge result, not an arbitrary branch or an earlier PR head. CLI/Web, Android, iPhone/Watch and Windows produce one exact-source verification plan. If a required build or check fails, repair the release PR and run it again; do not merge a failing release PR or substitute an older artifact.
+3. Only after every required platform check passes may the administrator squash-merge that release PR. The merge gate requires the exact successful check and unexpired verification artifact. Squash creates a new main SHA: the `push` run of `release-pr.yml` then resolves the merged PR and **rebuilds and reverifies that actual main commit on every platform**. A successful PR head is never treated as proof for the squash result.
+4. Only after the post-merge run succeeds does `release-publish.yml` start through `workflow_run`. It rereads the merged PR, requires its merge commit to be the current `main`, verifies the new plan and every artifact digest, then creates the immutable annotated tag once at that exact main commit. An existing tag for another source is a hard failure, never moved. The existing tag-triggered `release.yml` builds the container and creates the stable/prerelease GitHub Release. The publication job uploads the verified artifacts, compares remote SHA-256, independently downloads and compares every artifact, and only then advances the beta pointer. Stable `releases/latest` and stable metadata never come from a beta PR.
+5. TestFlight and release attachments are separate results. A completed release PR does not deploy the production Hub/site, submit an App Store production version or install on a phone. Repeating a failed publication is an administrator-only `release-publish` dispatch for the same merged release PR and exact current main; it never selects another source.
+
+### Protected environment
+
+`persona-release` holds the release-PR token and the signing/build values used by these jobs. `RELEASE_PR_TOKEN` creates release PRs as `chyroc`. Prefer a GitHub App installation token for that account, restricted to this repository with only **Contents: read and write** and **Pull requests: read and write**; a short-lived fine-grained token with exactly the same repository and permissions is the alternative. It needs no administration, packages, signing, Actions or organization access. The scheduler exchanges it only through the protected environment and never writes it to the repository or logs. Do not reuse the current interactive `gh` credential as a permanent release token. Android uses `PERSONA_ANDROID_APPLICATION_ID`, `PERSONA_ANDROID_CERTIFICATE_SHA256`, `PERSONA_ANDROID_KEYSTORE_BASE64`, `PERSONA_ANDROID_KEY_ALIAS`, `PERSONA_ANDROID_KEYSTORE_PASSWORD` and `PERSONA_ANDROID_KEY_PASSWORD`; the private `ci_release_config.py` writes a temporary mode-0600 signer configuration and keystore only inside the runner. Apple uses `PERSONA_APPLE_API_KEY`, `PERSONA_APPLE_API_KEY_ID`, `PERSONA_APPLE_API_ISSUER`, `PERSONA_APPLE_APP_ID`, `PERSONA_APPLE_TEAM_ID`, `PERSONA_APP_BUNDLE_ID`, `PERSONA_TESTFLIGHT_FEEDBACK_EMAIL`, `PERSONA_TESTFLIGHT_EXTERNAL_JSON`, and optional `PERSONA_APP_GROUP`, `PERSONA_WATCH_APP_GROUP`, `PERSONA_WATCH_WIDGET_BUNDLE_ID`. Windows desktop uses the existing `PERSONA_DESKTOP_APP_ID`, `WIN_CSC_LINK` and `WIN_CSC_KEY_PASSWORD` prerequisites. Never commit these values, put them in PR text, or include the temporary configuration in an artifact.
+
+An unconfigured required signing platform blocks the release PR; it is not a successful skip. Windows amd64 native verification runs on `windows-latest`; Windows arm64 requires a matching native ARM64 runner or approved self-hosted signer and is otherwise reported blocked. HarmonyOS production HAP still requires DevEco and production signing (#6734). No debug IPA/APK, unsigned HAP, development Electron installer or ad-hoc signature is an acceptable replacement. Release-PR jobs use only their required protected credentials; the unprivileged CLI/Web job has no signing secrets.
+
+### Historical local tag consumers
+
+The local tag-consumer section below documents the pre-release-PR pipeline and existing private recovery tools. It is not a second scheduler to run alongside release PR publication. Existing tags and Releases remain immutable historical records.
+
 ## Publishing a release (`.github/workflows/release.yml`)
 
 A `v*` tag publishes the hub container image and creates a GitHub Release. **Only `chyroc` may create, update or delete a `v*` tag, dispatch an image release or rerun its jobs.** The repository's `Release tags: administrators only` ruleset permits only the administrator role to bypass its create/update/delete restrictions; other collaborators cannot publish a version tag. The workflow independently requires both the run's actor and its triggering actor to be `chyroc` before any checkout, build or upload, including manual dispatches and reruns. The Release's `github-actions[bot]` author identifies the workflow that created it, not the person who pushed the tag; the Actions run records that triggering actor.
@@ -476,6 +504,14 @@ git tag v1.2.0 && git push origin v1.2.0
 - The image's personad is on the `docker` channel: no skills (like all binaries), no self-update; a new image prompts you to pull it (`docs/operations/hub-update.md`).
 - When the repository is private, the package is private too; NAS installs need `docker login ghcr.io` (`docs/operations/docker.md` ("Image")).
 
+### Darwin command-line programs on version tags
+
+The `darwin-cli-sign` job signs `personad`, `persona-node`, `persona-link`, `persona-hub` and `persona-manager` for both darwin architectures on stable and prerelease version tags. Its `darwin_cli` availability check needs only `MAC_CSC_LINK` and `MAC_CSC_KEY_PASSWORD` in the protected `persona-desktop-release` environment; it is independent of the desktop package version gate and does not require the desktop notarization credentials.
+
+The job builds the tag's programs, signs them under fixed identifiers, verifies each Developer ID signature, recompresses the signed binaries, rebuilds `SHA256SUMS` and `latest.json` from those downloads, verifies that manifest, and attaches the darwin archives and metadata to the same Release. If either certificate secret is missing, the gate reports `Darwin CLI signing blocked` with the missing secret names and the job does not build or upload; there is no ad-hoc fallback. A missing Developer ID identity also stops the job before upload.
+
+Prerelease CLI artifacts do not change the desktop package channel policy or GitHub's `releases/latest` selection. The `latest.json` attached to a prerelease is that Release's version manifest, not a move of the stable Release pointer.
+
 ### Desktop packages on version tags
 
 The same workflow attaches the Electron desktop packages to the Release (`docs/desktop/desktop.md`, "Updates"); installed desktop apps update from them.
@@ -483,7 +519,7 @@ The same workflow attaches the Electron desktop packages to the Release (`docs/d
 - Nothing extra to run: push the stable tag as above. After the `authorize` job, `desktop-gate` checks which signing secrets are configured, `desktop-mac` and `desktop-win` build and verify signed packages on native runners with the tag's version, and `desktop-publish` attaches them after the Release exists: packages and block maps first, `latest-mac.yml` and `latest.yml` last.
 - **Without the signing secrets the release still succeeds and has no desktop packages.** The run's summary says which platform was skipped and which secrets are missing. This is the state today: no Developer ID or Windows code-signing certificate has been supplied (`docs/desktop/desktop.md`, "What the owner must provide", lists the eight secrets and what each must contain).
 - Each platform stands alone: with only the macOS secrets configured, the Release gets the macOS packages and the summary says Windows was skipped.
-- Prerelease tags (`v1.3.0-rc1`) and manual dispatches publish no desktop packages.
+- Prerelease `vX.Y.Z-beta.N` tags publish signed desktop packages when the same signing prerequisites exist. electron-updater reads the prerelease channel (`beta.yml` / `beta-mac.yml`); stable packages continue to read `latest.yml` / `latest-mac.yml` and never opt into prereleases. The prerelease's own immutable Release owns its metadata. Other prerelease spellings and manual dispatches publish no desktop packages.
 - If a desktop job fails after the Release was created, rerun the failed jobs for the same tag; uploads replace assets of the same name. The hub image and the Release itself are not affected by a desktop failure.
 - After the first signed release, check on a real Mac and a real Windows PC that an installed older version offers "Restart to update" and reopens as the new one. That path is not covered by any automated test (the update test uses an unsigned build and a local feed).
 
@@ -562,21 +598,23 @@ A private configuration has only these fields, with no secrets:
   `releases/latest/download` never sees a manifest whose files are not there yet.
 - A receipt that carries `android.json` (the Android platform's) must ship the
   APK it names, at its size and sha256, for the tag's version.
-- Windows CLI bundles (`Persona-<version>-windows-<arch>.zip`) also require a
-  native verification report before upload (#8338). On Windows of that
-  architecture, run `python scripts/operations/windows_release.py --archive
-  <archive.zip> --version <version> --build <build>`. It runs the bundled
-  `persona-link version`, `personad version -v`, and `personad node-update-check`
-  with time limits, without installing or starting services. Success writes
-  `<archive-stem>.verification.json` beside the ZIP; failure removes a previous
-  report. Include the ZIP, report and `BUILD.json` or `latest.json` in the
-  private artifact receipt. The coordinator checks the requested version,
-  build, command results, ZIP digest and executable digests before any upload.
-  This report is output from the trusted release pipeline, preventing stale or
-  mismatched verification; it is not a signed attestation against a malicious
-  publisher. Cross-compilation or a matching build number alone does not prove
-  the Windows programs report the intended version. A missing Windows runner
-  is an explicit publication prerequisite, not a passed or skipped check.
+- Windows CLI bundles (`Persona-<version>-windows-<arch>.zip`) and each current
+  `persona-link-windows-<arch>.exe.gz`, `personad-windows-<arch>.exe.gz` and
+  `persona-node-windows-<arch>.exe.gz` require native verification before upload (#8338).
+  On Windows of that architecture, run `python scripts/operations/windows_release.py --archive
+  <archive.zip-or.exe.gz> --version <version> --build <build>` for each artifact. It runs the actual
+  `version`, `version -v`, and for `personad` / `persona-node` `node-update-check` with time limits,
+  without installing or starting services. Link's native report cannot stand in for a node's.
+  Success writes `<artifact-stem>.verification.json` beside the artifact; failure removes a previous
+  report. Include the artifact, report and `BUILD.json` or `latest.json` in the private artifact
+  receipt. Node programs also require the receipt's `latest.json` to list their exact platform, name
+  and compressed and unpacked hashes. The coordinator checks the requested version, build, command
+  results, PE architecture, archive digest and executable digests before any upload.
+  This report is output from the trusted release pipeline, preventing stale or mismatched verification;
+  it is not a signed attestation against a malicious publisher, nor an Authenticode signature.
+  Cross-compilation or a matching build number alone does not prove the Windows programs report the
+  intended version. A missing Windows runner is an explicit publication prerequisite, not a passed
+  or skipped check.
 
 For the first release, merge this consumer's PR before pushing `v0.1.0` from
 the merged `main` commit. The public workflow creates the Release and image;

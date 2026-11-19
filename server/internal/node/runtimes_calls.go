@@ -17,12 +17,14 @@ import (
 // claimMethods are the calls that ask the connected runtimes about a session nobody claimed yet: what the apps do
 // with a session they show (open it, page it, send to it, stop it).
 var claimMethods = map[string]bool{"session.send": true, "session.items": true, "session.item": true, "session.image": true,
-	"session.watch": true, "session.info": true, "session.interrupt": true}
+	"session.visualization": true,
+	"session.watch":         true, "session.info": true, "session.interrupt": true}
 
 // awayReads are the calls the node answers itself for a session of a runtime that is away whose conversation is a
 // Claude transcript here (runtimeaway.go): its content, its info and the watch of its transcript.
-var awayReads = map[string]bool{"session.items": true, "session.item": true, "session.image": true, "session.watch": true,
-	"session.info": true}
+var awayReads = map[string]bool{"session.items": true, "session.item": true, "session.image": true, "session.visualization": true,
+	"session.watch": true,
+	"session.info":  true}
 
 // runtimeClaimTimeout bounds asking one runtime whether it has a session.
 var runtimeClaimTimeout = 5 * time.Second
@@ -46,6 +48,11 @@ func (n *Node) runtimeFor(ctx context.Context, method, id string) (*runtimeConn,
 		return h, nil
 	}
 	if known {
+		// An omp whose extension left with it (omp exited): a stopped session the node answers from its file and a
+		// message resumes (ompcalls.go), not a runtime that is away.
+		if n.ompStopped(method, id) {
+			return nil, nil
+		}
 		if awayReads[method] && n.runtimeTranscript(id) != "" {
 			return nil, nil // the node reads the transcript (n.file), as it does while the runtime lists the session
 		}
@@ -214,7 +221,7 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 		folded, _ := json.Marshal(nonNil(transcript.FoldWork(items)))
 		page["items"] = folded
 		return page, nil, true
-	case "session.image", "session.item":
+	case "session.image", "session.item", "session.visualization":
 		out, err := call(method, params)
 		return out, err, true
 	case "session.watch":

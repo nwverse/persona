@@ -1,6 +1,6 @@
 ---
 name: pr-review-merge-loop
-description: Continuously discover GitHub PRs and new heads, semantically review and verify them, automatically fix defects and necessary refactoring, and exact-head merge after the repaired head passes. Use for "continuously review, fix and merge PRs", "keep fetching PR updates", "start or inspect pr-watch", or /pr-review-merge-loop. The full review-fix-verify-merge loop is the default; read-only diagnostics and merge opt-out are explicit exceptions.
+description: Continuously discover GitHub PRs and new heads, semantically review them with configured lightweight checks, automatically fix semantic defects, and exact-head merge after the repaired head passes. Use for "continuously review, fix and merge PRs", "keep fetching PR updates", "start or inspect pr-watch", or /pr-review-merge-loop. Full CI and failures on main belong to main-verify-fix-loop, not this skill.
 ---
 
 # Continuous PR review, fix and merge
@@ -16,6 +16,12 @@ Read `docs/operations/pr-review-automation.md` before running or changing anythi
 independent semantic review, verification on the exact base/head, at most three repair rounds across a PR's successive
 heads, a fresh review after every new head, privacy checks and exact-head squash merging. Read
 `docs/operations/collaboration.md` when publishing comments, continuation PRs or issue updates.
+
+**This skill no longer owns repeated full CI or repairs to `main`.** The two maintainer repositories use their
+`semantic_only` verification profile for independent semantic review plus lightweight privacy/documentation guards.
+Build/vet, cross-platform checks, full tests and main failures are handled separately by `main-verify-fix-loop`
+(`docs/operations/main-verification.md`). Do not switch those repositories back to the full PR profiles to compensate
+for a missing main verifier. Other repositories retain their configured verification behavior.
 
 ## Default behavior
 
@@ -71,13 +77,28 @@ The `scripts/` directory contains portable helpers for maintainers who want visi
 They never contain a real username, host, token, proxy, repository checkout or runtime path. Copy the `*.example.json`
 files into a private runtime directory and replace every placeholder; restrict those copies with `chmod 600`.
 
-- `herdr_review.py CONFIG -- <watcher CLI args>` creates one isolated tab in the configured existing Herdr session,
-  launches the configured reviewer there through `systemd-run --user --scope --collect`, forwards
-  `-p --output-format json`, and returns its structured result. Each unique `pr-review-rNN-....scope` uses the explicit
-  `scope_properties`; memory and task values are integer byte/task counts and `CPUQuota` is a percentage string. Keep
-  `process_wrapper` for CPU affinity and rlimits: a scope property shown by `systemctl` is not proof that a cgroup v1
-  memory or CPU controller enforces it. The helper never starts or stops Herdr and closes only its own tab and scope.
-  Reviewer tool boundaries and model overrides remain enforced.
+- `herdr_review.py CONFIG -- <watcher CLI args>` creates one isolated tab in the configured existing Herdr session
+  and launches an interactive reviewer through `systemd-run --user --scope --collect`. The watcher's print-only
+  request is validated then translated to a visible `cc_k3` session: no `-p`, shell prompt redirection, or JSON output
+  file appears in the tab. The private `socket_path` names the existing session's Herdr socket. Herdr submits the
+  multiline review prompt through its JSON-line socket API, keeping large prompts out of the operating-system argument
+  limit; requests are bounded at 2 MiB and responses at 4 MB. The launcher publishes its fresh session ID through the
+  private per-slot session file. The helper reads that session's final marked assistant message from its Claude Code
+  transcript, rather than relying on terminal soft wraps or alternate-screen scrollback. Only a complete `end_turn`
+  message containing exactly the two invocation markers and the JSON object is accepted; intermediate tool calls,
+  prompt echoes, other sessions, additional prose and duplicate marked results are rejected. The response must still
+  match the watcher's JSON schema and changed-line validation; transcript text is transport, never approval by itself.
+  Each review gets a fresh session ID and is never resumed into another PR. The visible launch ends in
+  `zsh -lic cc_k3`; the trusted launcher and `launcher_environment` keep
+  safe-mode, Read-only tools, the maintainer's interactive permission policy, per-session identity and any
+  cgroup-v1 affinity/rlimit fallback out of the displayed command. Each `pr-review-rNN-PID-TOKEN.scope` has a unique
+  per-invocation name, with its exact scope passed to the trusted launcher for ownership validation; cleanup cannot
+  stop an older scope from a killed helper. The helper clears the per-slot session file before launching and rejects
+  a loaded scope that has already exited, rather than waiting for another startup timeout. Each scope uses the explicit
+  `scope_properties`: memory values use `5G`/`6G`-style units, CPU weight and task count are integers, and `CPUQuota`
+  is a percentage string. A scope property shown by `systemctl` is not proof that a cgroup v1 controller enforces it.
+  The helper never starts or stops Herdr and closes only its own tab and scope. Reviewer tool boundaries and model
+  overrides remain enforced.
 - `pr_watch_resources.py CONFIG COMMAND ...` allocates locked CPU groups, preserves the lock across `exec`, and applies
   optional address-space and CPU-time limits. `RLIMIT_AS` is not a cgroup RSS limit. The watcher uses it only when the
   trusted `PR_WATCH_PROCESS_WRAPPER` environment is explicitly configured.
@@ -88,8 +109,11 @@ files into a private runtime directory and replace every placeholder; restrict t
   non-secret environment value. Never put credentials in these environment variables or tracked JSON files.
 
 Keep the repository's existing watcher as the only review, repair and merge policy. P0 findings block and enter bounded
-semantic repair; P1/P2 remain published notes. Verification failures continue only when the same failed lane and
-concrete signature reproduce independently on clean main, and are disclosed as base-owned rather than passing tests.
+semantic repair; P1/P2 remain published notes. In an explicitly configured `semantic_only` repository, verification is
+limited to lightweight privacy/documentation guards: do not repeat full build/vet, cross-platform, build-tag or full-test
+lanes, and do not start CI failure repair. Success comments must disclose that full CI was not run. In the other
+profiles, verification failures continue only when the same failed lane and concrete signature reproduce independently
+on clean main, and are disclosed as base-owned rather than passing tests.
 
 Test the helpers without using a real PR or Herdr session:
 

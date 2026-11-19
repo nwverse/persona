@@ -107,13 +107,13 @@ func (s *Service) elicitationReachable(ix proto.Interaction) bool {
 // ---- telling ----
 
 // announce puts a new card on the apps (through the hub), pushes it, and gives it to the channels. A supervised task's
-// card goes to its supervisor first when leaders are configured (ask_route.go); a question the assistant may answer for
-// the user goes to it first (fleet_delegate.go).
+// parsed terminal question, and its other eligible cards when leaders are configured, go to the supervising conversation
+// first (ask_route.go); a question the assistant may answer for the user goes to it first (fleet_delegate.go).
 func (s *Service) announce(ix proto.Interaction) {
 	if s.approveStandingInteraction(ix) {
 		return
 	}
-	if !s.agentSupervisedSession(ix.MachineID, ix.SessionID) && s.routeAsk(ix) { // a worker's card stays the user's (task_leader.go)
+	if s.routeAsk(ix) {
 		return
 	}
 	if forget := s.delegable(ix); forget != nil {
@@ -596,6 +596,18 @@ func (s *Service) resolveWithStanding(id string, r proto.Resolution, remember bo
 // resolveApproved is resolve for an app's answer the hub relayed, with the device it vouched may approve a hand-off
 // card (nil: none). Only this way does a hand-off card take more than a no (secret_handoff.go).
 func (s *Service) resolveApproved(ctx context.Context, id string, r proto.Resolution, approver *assistantwire.HandoffApprover) error {
+	s.fleet.mu.Lock()
+	prepared := s.fleet.interactions[id]
+	ownerSession := ""
+	if prepared != nil && prepared.prepared != nil && !r.Cancel {
+		ownerSession = prepared.ix.SessionID
+	}
+	s.fleet.mu.Unlock()
+	if ownerSession != "" {
+		// The web route resolves prepared cards directly instead of through Action;
+		// preserve the same owner-activity notification as every other answer path.
+		s.ownerHeard(ownerSession)
+	}
 	return s.resolveAnswer(ctx, id, r, true, nil, approver)
 }
 
@@ -909,6 +921,22 @@ func (s *Service) pendingCards() ([]proto.Interaction, map[string]bool) {
 	return out, told
 }
 
+// pendingOf are the pending interactions of the sessions in want (by computer, the session ids), by computer and
+// session, as they are held, in no order: without the task each agent works for (withTask), which a to-do's view
+// does not read. A list read copies only its runs' few cards this way, never the whole fleet's.
+func (s *Service) pendingOf(want map[string]map[string]bool) map[[2]string][]proto.Interaction {
+	out := map[[2]string][]proto.Interaction{}
+	s.fleet.mu.Lock()
+	defer s.fleet.mu.Unlock()
+	for _, p := range s.fleet.interactions {
+		if want[p.ix.MachineID][p.ix.SessionID] {
+			k := [2]string{p.ix.MachineID, p.ix.SessionID}
+			out[k] = append(out[k], p.ix)
+		}
+	}
+	return out
+}
+
 // pendingIx is one pending interaction; false when it is not pending.
 func (s *Service) pendingIx(id string) (proto.Interaction, bool) {
 	s.fleet.mu.Lock()
@@ -1033,7 +1061,13 @@ func (s *Service) ixInAssistant(ctx context.Context, ix proto.Interaction) bool 
 
 // honest is r without an Always the card does not keep (AlwaysHonored false): an older app, or one that does not
 // read the field, may still send it, and the answer's history must not say "always allowed" for a grant no one keeps.
+// An approved plan likewise uses the mode its start recorded, not an older client's hard-coded mode.
 func honest(ix proto.Interaction, r proto.Resolution) proto.Resolution {
+	if ix.Kind == proto.IxPlan && r.Approve != nil && *r.Approve {
+		if mode := proto.PlanAfterMode(ix.PlanThen); mode != "" {
+			r.Mode = mode
+		}
+	}
 	if ix.AlwaysHonored != nil && !*ix.AlwaysHonored {
 		r.Always = false
 	}
@@ -1071,6 +1105,7 @@ func toolTitle(l i18n.Lang, tool string) string {
 // search"), any other "Persona · agent read". "" for every other tool: the apps name those themselves. Without input,
 // the tool alone ("Report to supervisor"; Interaction.ToolNameTitle).
 func personaToolTitle(l i18n.Lang, name string, input json.RawMessage) string {
+	name = compat.CanonicalMCPToolName(name)
 	rest, ok := strings.CutPrefix(name, "mcp__")
 	i := strings.LastIndex(rest, "__")
 	if !ok || i <= 0 || !compat.IsMCPServer(strings.TrimPrefix(rest[:i], "plugin_")) || rest[i+2:] == "" {
@@ -1189,6 +1224,9 @@ func (s *Service) cancelMachineInteractions(machineID string) {
 	s.fleet.mu.Unlock()
 	s.feishuDetach(ids)
 	for _, id := range ids {
+		if s.endPreparedByID(id, "cancelled", "The computer that owned this approval disconnected; nothing changed.") {
+			continue
+		}
 		s.finishInteraction(id)
 	}
 }
@@ -1247,7 +1285,7 @@ func (s *Service) restoreRoute(ctx context.Context, ix proto.Interaction) bool {
 	if !routable(ix) {
 		return false
 	}
-	ladder, todo, home, ok := s.askLadder(ctx, ix.MachineID, ix.SessionID)
+	ladder, todo, home, ok := s.askLadder(ctx, ix)
 	if !ok {
 		return false
 	}
@@ -1265,6 +1303,15 @@ func (s *Service) restoreRoute(ctx context.Context, ix proto.Interaction) bool {
 	p.ix.Delegating = true
 	shown := p.ix
 	s.fleet.mu.Unlock()
+	if ix.Kind == proto.IxScreen {
+		// Detaching ended the earlier instance of this dialog. The first
+		// explicit escalation after reconnect must still be able to post it.
+		s.chans.mu.Lock()
+		if ended, ok := s.chans.ended[ix.ID]; ok && ended.Before(ix.CreatedAt) {
+			delete(s.chans.ended, ix.ID)
+		}
+		s.chans.mu.Unlock()
+	}
 	s.show(shown)
 	s.signalAsk(todo, ladder[0], ix, 0)
 	return true

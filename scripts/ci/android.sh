@@ -9,6 +9,8 @@ usage() {
     '       scripts/ci/android.sh --help' \
     'Requires Bash, Python 3, timeout (or gtimeout), JAVA_HOME pointing to JDK 21,' \
     'and ANDROID_HOME (or ANDROID_SDK_ROOT) pointing to an installed Android SDK.' \
+    'Swift builds the source-pinned Refract CLI for the explicit About Version regeneration check in lane 0.' \
+    'The check fetches that exact public commit, verifies its deterministic source archive and never skips.' \
     'Also requires rustup and NDK 29.0.14206865: core:rustcore tests build the host JNI library;' \
     'core:rustcore-android packages arm64-v8a and x86_64 for the debug APK.' \
     'SDK setup: sdkmanager "platforms;android-37.0" "build-tools;37.0.0" "platform-tools" "ndk;29.0.14206865"' \
@@ -18,7 +20,7 @@ usage() {
     'No arguments runs the original complete verification. lint-build-test-0 owns checker tests,' \
     'translation/token checks, all-module lint, the debug APK and feature test shard 0; test-1' \
     'runs core, feature shard 1, platform and app tests. Together the two lanes run every' \
-    'included module once using its all-variant test lifecycle task.' \
+    'included module once using its all-variant test lifecycle task (release unit tests included).' \
     '--profile writes Gradle timing reports to android/build/reports/profile/.' \
     'No instrumentation/device tests or release signing.' \
     'ANDROID_CI_TIMEOUT_SECONDS: timeout per check (default 3600; kill grace 30s).' \
@@ -136,6 +138,8 @@ run_check() {
 
 # The checker tests and resource checks run in the lane that runs lint.
 if [[ $LANE == full || $LANE == lint-build-test-0 ]]; then
+  cd "$ROOT"
+  run_check 'Refract About Version regeneration' python3 -I scripts/app/refract_about_version.py check --download
   cd "$ROOT/scripts/ci"
   run_check 'Android shard coverage tests' python3 -B test_android_shards.py
   cd "$ROOT/scripts/app"
@@ -157,6 +161,8 @@ BUILD_COMMIT=${PERSONA_BUILD_COMMIT:-${GITHUB_SHA:-unknown}}
 
 cd "$ROOT/android"
 # Unqualified lint still covers every module; full preserves the original selectors.
+# persona.releaseUnitTests adds the release unit tests (app, core:data) that a local test leaves out, so each
+# module's test still runs every variant here.
 # --continue collects independent failures, never turns them into success.
 # Do not stop shared daemons, update baselines, exclude tests or depend on local.properties.
 if [[ ${#TASKS[@]} -gt 0 ]]; then
@@ -168,6 +174,7 @@ if [[ ${#TASKS[@]} -gt 0 ]]; then
     -PpersonaGoogleOAuthScheme=persona.oauth.unset \
     -PpersonaRepoRoot="$ROOT" \
     -PpersonaBuildCommit="$BUILD_COMMIT" \
+    -Ppersona.releaseUnitTests=true \
     ${PROFILE[@]+"${PROFILE[@]}"} "${TASKS[@]}"
 else
   printf 'Android CI: no modules in lane %s; no Gradle default tasks invoked\n' "$LANE"

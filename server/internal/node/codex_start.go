@@ -30,14 +30,19 @@ import (
 // Starting a Codex from the phone (docs/integrations/codex.md "Starting from the phone"). A Codex launcher (plain `codex`, or an alias whose
 // command is codex) runs in a new herdr tab with an optional first message as its prompt argument: Codex makes the thread
 // itself — on the shared app-server daemon for a plain 0.163, where #220 joins it (codex_daemon.go); in its own process
-// for 0.153 or a launcher with -c, on the terminal route. Neither the message nor the launcher's words (an alias can
-// carry a key) are parsed as shell code or typed onto the screen: they are written to a file only the user can read, the tab runs
-// `personad codex-start <file>`, and that runs the words with any message as one argument after "--". A start with a message answers once the new thread is known — the rollout in that directory, begun after the
+// for 0.153 or a launcher with -c, on the terminal route. Launcher words (an alias can carry a key) stay in a private
+// file: the tab runs `personad codex-start <file>`. On Unix the file also carries the message as one argv value after
+// "--". On Windows the TUI starts empty and receives the message as one bracketed paste (pasteCodexFirst); no shell
+// parses it. A start with a message answers once the new thread is known — the rollout in that directory, begun after the
 // launch, whose first message is exactly this one — with that thread's id, so the phone opens the session that is
 // there; it fails, with what the tab shows, when none comes in time. Without a message it returns a waiting row (codex_waiting.go).
 
 // codexStartWait is how long a start waits for Codex's thread (a trust dialog, a slow ~/.zshrc, the first turn).
 var codexStartWait = 60 * time.Second
+
+// Windows starts the TUI empty and uses the same bracketed-paste path as a
+// subsequent message. No multiline prompt crosses a Windows launcher boundary.
+var codexStartPaste = runtime.GOOS == "windows"
 
 // codexArgv is how a Codex launcher runs: plain codex, or an alias's words; ok false when the launcher is not Codex's.
 func (n *Node) codexArgv(launcher string) ([]string, bool) {
@@ -178,10 +183,10 @@ func codexExecutionArgs(argv []string, e modelExecution) []string {
 }
 
 // startCodex starts a Codex launcher in a new tab with the first message and returns its session once the thread is
-// known. With no message it returns the waiting row once Codex's input box is up (codex_waiting.go). In a pane it was
+// known, its record naming the model and effort asked for (execution), which a resume runs again (retire.go). With no message it returns the waiting row once Codex's input box is up (codex_waiting.go). In a pane it was
 // given (adoptedPane: a switch from Claude Code, engine_switch.go) it starts there, and a start that fails leaves that
 // pane open: what it left in front is for the caller to clear.
-func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launcher string, argv []string, prompt, ws, tabName, mode string) (*proto.Session, error) {
+func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launcher string, argv []string, execution modelExecution, prompt, ws, tabName, mode string) (*proto.Session, error) {
 	waiting := strings.TrimSpace(prompt) == ""
 	if waiting {
 		prompt = ""
@@ -210,7 +215,12 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 	file := filepath.Join(dir, "start.json")
 	owner, _ := launch.(interface{ Kind() string })
 	isolateHooks := owner != nil && owner.Kind() == host.Orca
-	b, _ := json.Marshal(codexStartFile{Argv: argv, Prompt: prompt, Agent: herdrAgentFor(launch, "codex"), IsolateHooks: isolateHooks, Dir: cwd})
+	initial := prompt
+	if codexStartPaste {
+		initial = ""
+		prompt = strings.NewReplacer("\r\n", "\n", "\r", "\n").Replace(inertControls(prompt))
+	}
+	b, _ := json.Marshal(codexStartFile{Argv: argv, Prompt: initial, Agent: herdrAgentFor(launch, "codex"), IsolateHooks: isolateHooks, Dir: cwd})
 	if err := os.WriteFile(file, b, 0o600); err != nil {
 		return nil, err
 	}
@@ -254,7 +264,11 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 			err = nil
 		}
 	} else {
-		id, err = n.waitCodexThread(ctx, pane, cwd, prompt, began)
+		if codexStartPaste {
+			id, err = n.pasteCodexFirst(ctx, pane, cwd, prompt, began)
+		} else {
+			id, err = n.waitCodexThread(ctx, pane, cwd, prompt, began)
+		}
 	}
 	if err != nil {
 		shown, _ := n.readPane(ctx, pane, "recent-unwrapped", 30)
@@ -270,7 +284,10 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 		// A pane it did not open (a switch from Claude Code, engine_switch.go) is the user's terminal and is never
 		// closed: the switch quits what the start left in it (clearPane).
 		if adoptedPane(ctx) == nil {
-			cleanupErr = closeCodexStart(ctx, start)
+			identify, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			start.session = n.failedCodexSession(identify, pane, began)
+			cancel()
+			cleanupErr = n.closeFailedCodexStart(ctx, start)
 		}
 		if cleanupErr != nil {
 			n.mu.Lock()
@@ -291,12 +308,12 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 		return nil, fmt.Errorf("%w\n%s", err, lastLines(shown, 12))
 	}
 	if waiting {
-		return n.openCodexWait(ctx, pane, cwd, launcher, mode, began), nil
+		return n.openCodexWait(ctx, pane, cwd, launcher, mode, execution, began), nil
 	}
 	defer n.unclaimCodexThread(id)
 	n.bindPane(pane, id)
 	n.namePersonaTab(ctx, pane, id) // the tab was marked before the thread was known (personatab.go)
-	st := sessionState{Pane: pane, Launcher: launcher, Cwd: cwd, StartedAt: began.UTC()}
+	st := sessionState{Pane: pane, Launcher: launcher, Cwd: cwd, StartedAt: began.UTC(), Model: execution.Model, ModelEffort: execution.Effort}
 	if mode == "plan" {
 		st.AppMode = mode
 	}
@@ -312,6 +329,31 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 	s := n.sessionFor(id, a)
 	s.Agent = "codex"
 	return s, nil
+}
+
+// Readiness, paste, submit and transcript confirmation share the original startup
+// budget. Two separate 60-second waits would outlive the hub's start request.
+func (n *Node) pasteCodexFirst(ctx context.Context, pane, cwd, prompt string, began time.Time) (id string, err error) {
+	wait, cancel := context.WithTimeout(ctx, codexStartWait)
+	defer cancel()
+	defer func() {
+		if errors.Is(wait.Err(), context.DeadlineExceeded) && ctx.Err() == nil && err != nil {
+			err = &rpc.Error{Code: proto.CodeAgentStartStalled, Message: err.Error()}
+		}
+	}()
+	if err = n.waitCodexBox(wait, pane); err != nil {
+		return "", err
+	}
+	// A user may have typed into the new pane while startup was waiting.
+	if err = n.codexReady(wait, pane, true); err != nil {
+		return "", err
+	}
+	if err = n.codexType(wait, pane, prompt, func(draft string) bool {
+		return stillPrompted(draft, prompt) || pastedRE.MatchString(draft)
+	}); err != nil {
+		return "", err
+	}
+	return n.waitCodexThread(wait, pane, cwd, prompt, began)
 }
 
 // codexOnRemote: the launcher attaches to an app-server of its own (--remote).

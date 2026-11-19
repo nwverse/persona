@@ -20,6 +20,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/lazyre"
+	"github.com/nwverse/persona/server/internal/modelhttp"
 	"github.com/nwverse/persona/server/internal/nodeclient"
 	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -193,6 +194,14 @@ func (n *Node) launcherCommandQ(name string, q func(string) string) string {
 			return "CLAUDE_CONFIG_DIR=" + shellDirQ(*d, q) + " " + name
 		}
 	}
+	if name == "codex" {
+		launcherCache.Lock()
+		words := launcherCache.codex[name]
+		launcherCache.Unlock()
+		if len(words) == 1 && filepath.IsAbs(words[0]) { // the ChatGPT app's codex, which the shell does not find
+			return q(words[0])
+		}
+	}
 	return name
 }
 
@@ -208,17 +217,24 @@ func shellDirQ(p string, q func(string) string) string {
 	return q(p)
 }
 
+const openCodeSessionEnv = "PERSONA_OPENCODE_SESSION"
+
 func managedEnv(l proto.ManagedLauncher) []string {
 	switch l.AgentType() {
 	case "codex":
 		var env []string
-		if l.BaseURL != "" {
-			env = append(env, "OPENAI_BASE_URL="+l.BaseURL)
+		if base := l.LaunchBaseURL(); base != "" {
+			env = append(env, "OPENAI_BASE_URL="+base)
 		}
 		if l.APIKey != "" {
 			env = append(env, "OPENAI_API_KEY="+l.APIKey)
 		}
-		return withLauncherEnv(env, l.Env)
+		env = withLauncherEnv(env, l.Env)
+		if effectiveBase := envValue(env, "OPENAI_BASE_URL"); modelhttp.OpenCodeGo(effectiveBase) && envValue(env, openCodeSessionEnv) == "" {
+			session := cmp.Or(modelhttp.OpenCodeSessionHeaderValue(l.Headers), modelhttp.OpenCodeSessionID("launcher:"+cmp.Or(l.Name, effectiveBase)))
+			env = append(env, openCodeSessionEnv+"="+session)
+		}
+		return env
 	case "agy":
 		var env []string
 		if l.BaseURL != "" {
@@ -345,6 +361,12 @@ func agentExecutable(bin string) (string, error) {
 					return line, nil
 				}
 			}
+		}
+	}
+
+	if bin == "codex" {
+		if p := bundledCodexCLI(); p != "" {
+			return p, nil
 		}
 	}
 
@@ -605,6 +627,9 @@ func codexProviderArgs(args, env []string, catalog string) []string {
 		if catalog != "" { // keyless, codex would not fetch it and would list nothing
 			provider += ",model_catalog_url=" + q(catalog)
 		}
+	}
+	if modelhttp.OpenCodeGo(base) && envValue(env, openCodeSessionEnv) != "" {
+		provider += `,env_http_headers={` + q(modelhttp.OpenCodeSessionHeader) + `=` + q(openCodeSessionEnv) + `}`
 	}
 	return []string{"-c", `model_provider="persona-launcher"`, "-c", "model_providers.persona-launcher=" + provider + "}"}
 }

@@ -5,6 +5,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 @Serializable @SerialName("persona.core.navigation.AssistantRoute") data object AssistantRoute : NavKey
+@Serializable @SerialName("persona.core.navigation.UsageCalendarRoute") data object UsageCalendarRoute : NavKey
 @Serializable @SerialName("persona.core.navigation.AgentsRoute") data object AgentsRoute : NavKey
 @Serializable @SerialName("persona.core.navigation.InboxRoute") data object InboxRoute : NavKey
 @Serializable @SerialName("persona.core.navigation.SettingsRoute") data object SettingsRoute : NavKey
@@ -34,7 +35,11 @@ sealed interface RouteSource {
     val side: Boolean = false,
 ) : NavKey
 
-@Serializable @SerialName("persona.core.navigation.InboxItemRoute") data class InboxItemRoute(val itemId: String) : NavKey
+@Serializable @SerialName("persona.core.navigation.InboxItemRoute") data class InboxItemRoute(
+    val itemId: String,
+    /** The assistant whose item this is; null keeps the current assistant and the route's old saved form. */
+    val manager: String? = null,
+) : NavKey
 
 /**
  * An inbox item drawn by the extension of the connector it comes from (its `inbox_item` UI, docs/extensions/extensions.md "UI slots"):
@@ -50,7 +55,7 @@ data class InboxItemUiRoute(val itemId: String, val extensionId: String, val uiI
 /** The to-do list with "New to-do" open: the launcher's "New to-do" shortcut ([NewTodoLink], iOS AddTodoIntent). */
 @Serializable @SerialName("persona.core.navigation.NewTodoRoute") data object NewTodoRoute : NavKey
 @Serializable @SerialName("persona.core.navigation.TodoDetailRoute") data class TodoDetailRoute(val todoId: String) : NavKey
-@Serializable enum class SettingsPage { Diagnostics, Readiness, Notifications, PhoneData, Appearance, Devices, About, Pairing, ClaudeCode, ModelConfig, Hubs, Persona, Extensions, Mail, Feishu, Channels, HubUpdate, Translation, Triage, Capsule, Language, Codex, Providers, Storage, Desktops, Managers, FeishuBot, Sent, Connectors, AgentSettings, NotificationBackground, KnowledgeSelection, StandingAuthorizations }
+@Serializable enum class SettingsPage { Diagnostics, Readiness, Notifications, PhoneData, Appearance, Devices, About, Pairing, ClaudeCode, ModelConfig, Hubs, Persona, Extensions, Mail, Feishu, Channels, HubUpdate, Translation, Triage, Capsule, Language, Codex, Agy, Providers, Storage, Desktops, Managers, FeishuBot, Sent, Connectors, AgentSettings, NotificationBackground, KnowledgeSelection, StandingAuthorizations }
 @Serializable @SerialName("persona.core.navigation.SettingsPageRoute") data class SettingsPageRoute(val page: SettingsPage) : NavKey
 
 enum class AppTab { Persona, Agents }

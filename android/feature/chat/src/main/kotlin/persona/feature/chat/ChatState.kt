@@ -55,7 +55,9 @@ internal class ChatTimeline {
         if (!window.isFrozen) { window.freeze(items); frozenLiveId = shownLiveId }
     }
     @Synchronized fun follow() { window.follow(); frozenLiveId = null }
-    @Synchronized fun newMessageCount(items: List<Item>, below: Item?, lastRead: Item?) = window.newMessageCount(items, below, lastRead)
+    @Synchronized fun isFrozen(): Boolean = window.isFrozen
+    @Synchronized fun newMessageCount(items: List<Item>, below: Item?, lastRead: Item?, defer: Boolean = false) =
+        window.newMessageCount(items, below, lastRead, defer)
     @Synchronized fun unfold(fold: Item, items: List<Item>) { expanded[fold.id] = fold to items }
 
     /**
@@ -200,6 +202,7 @@ internal fun ChatLine.contentType(): String = when (this) {
     is ChatLine.Viewed -> "viewed"
     is ChatLine.Extra -> "extra"
     is ChatLine.ModelChange -> "model_change"
+    is ChatLine.ModeChange -> "mode_change"
 }
 
 internal fun interactionSource(res: android.content.res.Resources, interaction: Interaction, machine: Machine?): String = listOfNotNull(

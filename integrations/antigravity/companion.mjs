@@ -15,6 +15,8 @@ const { values } = parseArgs({
     socket: { type: 'string' },
     'agy-dir': { type: 'string' },
     'agy-bin': { type: 'string' },
+    instance: { type: 'string' },
+    'parent-stdin': { type: 'boolean' },
   },
   strict: false,
 })
@@ -26,6 +28,7 @@ const runtime = createAgyRuntime({
   socketPath: values.socket || undefined,
   agyDir: values['agy-dir'] || undefined,
   agyBin: values['agy-bin'] || undefined,
+  instance: values.instance || undefined,
   log,
   update: self.store && !process.argv.includes('--no-update') ? {
     name: self.name,
@@ -43,10 +46,21 @@ runtime.start()
 alive = setInterval(() => {}, 1 << 30)
 log('started Antigravity (agy) runtime for Persona')
 
+let stopping = false
+function stopCompanion() {
+  if (stopping) return
+  stopping = true
+  clearInterval(alive)
+  // Exit once agy is gone (killed after a short grace when it ignores SIGTERM), so it does not outlive the companion.
+  runtime.stop().finally(() => process.exit(0))
+}
+
 for (const sig of ['SIGTERM', 'SIGINT']) {
-  process.on(sig, () => {
-    clearInterval(alive)
-    // Exit once agy is gone (killed after a short grace when it ignores SIGTERM), so it does not outlive the companion.
-    runtime.stop().finally(() => process.exit(0))
-  })
+  process.on(sig, stopCompanion)
+}
+
+if (values['parent-stdin'] && !process.stdin.isTTY) {
+  process.stdin.on('end', stopCompanion)
+  process.stdin.on('error', stopCompanion)
+  process.stdin.resume()
 }
