@@ -959,7 +959,7 @@ func (s *Service) taskRoutes() {
 	})
 	s.handle("POST /api/v1/assistant/conversations/{id}/route", func(w http.ResponseWriter, r *http.Request) {
 		if !fullRole(r) {
-			apierr.Write(w, http.StatusForbidden, errors.New("read-only role cannot send"))
+			writeTypedNothing(w, http.StatusForbidden, "", errors.New("read-only role cannot send"))
 			return
 		}
 		var in struct {
@@ -983,7 +983,11 @@ func (s *Service) taskRoutes() {
 			it, err = s.routeToTask(r.Context(), r.PathValue("id"), in.TodoID, in.Text)
 		}
 		if err != nil { // 409 with delivered: send_in_doubt for words that may be with the Agent (todo_write_outcome.go)
-			writeRouteError(w, err)
+			keys := routeInDoubtKeys
+			if in.AskedAt != "" { // words that answer a decision, which may still show when they could not be recorded
+				keys = answerInDoubtKeys
+			}
+			writeRouteError(w, err, keys)
 			return
 		}
 		apierr.WriteJSON(w, map[string]any{"item": it})

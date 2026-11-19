@@ -576,7 +576,9 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 		res, err = s.hub.DeviceCall(ctx, p)
 	}
 	if err == nil && method != DeviceSessionGet && method != "session.unwatch" {
-		err = s.conversationParamsAvailable(ctx, device, params)
+		if err = s.conversationParamsAvailable(ctx, device, params); err != nil && conversationWrite(method) {
+			err = nodeWroteThen{err} // the node already did the write: its words are with the Agent (todo_write_outcome.go)
+		}
 	}
 	if err == nil {
 		round.sent(s, res) // whose round it is, for the owner's next message (owner_preempt.go)
@@ -587,7 +589,10 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 	if err != nil || out == nil || len(res) == 0 {
 		return err
 	}
-	return json.Unmarshal(res, out)
+	if err = json.Unmarshal(res, out); err != nil && conversationWrite(method) {
+		err = nodeWroteThen{err} // an answer that cannot be read, to a start the node did
+	}
+	return err
 }
 
 // appCall is an AppCall whose answer is read into out (nil: not read).

@@ -222,8 +222,8 @@ func (s *Service) answerDecision(ctx context.Context, ask ownAsk, in assistantwi
 	default:
 		result, err = s.acceptTryFromBrief(ctx, ask.todo, ask.round)
 	}
-	if errors.Is(err, db.ErrTodoCompleted) { // the send's guard: the to-do closed, or the round ended, while it went
-		return errAskStale
+	if errors.Is(err, db.ErrTodoCompleted) && writeDelivered(err) == "none" {
+		return errAskStale // the send's guard: the to-do closed, or the round ended, before anything went out
 	}
 	if err != nil {
 		return err
@@ -353,11 +353,7 @@ func (s *Service) writeAnswerError(w http.ResponseWriter, r *http.Request, id st
 		errors.Is(err, errMachineOffline) || errors.As(err, &refused) || errors.Is(err, errPlanNotFound) || errors.Is(err, errPlanNotOpen)):
 		writeTypedNothing(w, http.StatusConflict, "", err) // a start the retry route refuses too: nothing started
 	case nodeRefusal(err): // nothing was typed: 423 with the node's code, as the accept route answers (#7343)
-		body := apierr.CallStatusBody(w, http.StatusLocked, err)
-		if _, said := body["delivered"]; !said {
-			body["delivered"] = "none"
-		}
-		apierr.WriteBody(w, http.StatusLocked, body)
+		writeNodeRefusal(w, err)
 	default: // nothing taken; the owner can answer again
 		writeTypedNothing(w, http.StatusBadGateway, "accept_not_taken", i18n.Err("assistant-reports.accept_not_taken",
 			i18n.Args{"error": clip(oneLine(i18n.Localize(err, s.requestCtxLang(r.Context()))), 120)}))

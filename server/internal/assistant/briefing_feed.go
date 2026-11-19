@@ -251,7 +251,7 @@ func (s *Service) briefRoutes() {
 			// (apierr.Call): on this route the apps already installed (iOS, Android, older web pages) read any 409 as
 			// "this round is over" and lock the button, though nothing reached the agent. 423 Locked (the terminal is
 			// held by the dialog) is a failure to every one of them, which shows the hub's sentence and keeps the button.
-			apierr.CallStatus(w, http.StatusLocked, err)
+			writeNodeRefusal(w, err)
 			return
 		}
 		if err != nil { // another delivery failure: nothing typed or taken, the button works again

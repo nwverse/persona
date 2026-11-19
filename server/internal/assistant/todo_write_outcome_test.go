@@ -18,6 +18,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -66,10 +67,20 @@ func writeOutcomeCases(t *testing.T) []writeOutcomeCase {
 }
 
 // writeFailStore is a database whose writes after a to-do's words went out can be made to fail: the conversation's
-// routed item, or the decision the words answer (InsertTodoDecision answers so for a to-do deleted meanwhile).
+// routed item, or the decision the words answer (InsertTodoDecision answers so for a to-do deleted meanwhile); and
+// whose deletion ledger can mark a session deleted once deletedAfter says so (the node took a send to it meanwhile).
 type writeFailStore struct {
 	*db.DB
 	failRouted, failDecision atomic.Bool
+	deletedAfter             atomic.Pointer[func(session string) bool]
+}
+
+func (s *writeFailStore) ConversationDeletion(ctx context.Context, machine, session string) (json.RawMessage, bool, error) {
+	if after := s.deletedAfter.Load(); after != nil && (*after)(session) {
+		raw, err := json.Marshal(deletedConversation{Machine: machine, ID: session, At: time.Now().UTC()})
+		return raw, true, err
+	}
+	return s.DB.ConversationDeletion(ctx, machine, session)
 }
 
 func (s *writeFailStore) AppendFeed(ctx context.Context, r db.FeedRow) error {
@@ -144,8 +155,18 @@ func writeScene(t *testing.T, route, what string, answer json.RawMessage) *httpt
 		f.mu.Unlock()
 	case "typed_then_not_kept":
 		st.failRouted.Store(true)
+	case "start_then_not_kept":
+		stopped()
+		st.failRouted.Store(true)
 	case "typed_then_gone":
 		st.failDecision.Store(true)
+	case "typed_then_deleted": // the Agent's conversation is marked deleted once the node has the message
+		after := func(session string) bool {
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			return session == a.SessionID && slices.ContainsFunc(f.agentSent, func(p map[string]any) bool { return p["session_id"] == session })
+		}
+		st.deletedAfter.Store(&after)
 	default:
 		t.Fatalf("no scene %q", what)
 	}
@@ -169,7 +190,7 @@ func writeScene(t *testing.T, route, what string, answer json.RawMessage) *httpt
 	// The scene happened, not another refusal on the way: the manager called the node's send, or a new Agent's start,
 	// or neither.
 	nowSends, nowStarts := calls()
-	start := what == "start_in_doubt" || what == "start_refused"
+	start := what == "start_in_doubt" || what == "start_refused" || what == "start_then_not_kept"
 	neither := slices.Contains([]string{"no_agent", "not_this_conversation", "round_over", "no_such_todo"}, what)
 	want := [2]bool{!start && !neither, start}
 	if got := [2]bool{nowSends > sends, nowStarts > starts}; got != want {
@@ -225,6 +246,8 @@ func TestAcceptRouteSaysWhatItTyped(t *testing.T) {
 		{"never sent", rpc.NotSent(context.Canceled), "Kaede", http.StatusBadGateway, "accept_not_taken", "none"},
 		{"refused by the node", &rpc.Error{Code: "dialog_open", Message: "a dialog is open"}, "", http.StatusLocked,
 			"dialog_open", "none"},
+		{"refused with a code it does not word", &rpc.Error{Code: "held_full", Message: "too many held"}, "Kaede",
+			http.StatusLocked, "held_full", "none"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s, f, todo := newDecisionAnswerServiceOn(t, todoTestDB(t))
@@ -286,5 +309,83 @@ func TestWriteDeliveredReadsEachKind(t *testing.T) {
 		if got := writeDelivered(c.err); got != c.want {
 			t.Errorf("%v: %s, want %s", c.err, got, c.want)
 		}
+	}
+}
+
+// The conversation route answering a decision (asked_at) words its doubt as an answer's: the Agent took the words and
+// the decision could not be recorded, so the question may still show and need not be answered again.
+func TestConversationRouteAnswerInDoubtSaysAnAnswer(t *testing.T) {
+	st := &writeFailStore{DB: todoTestDB(t)}
+	s, f, todo := newDecisionAnswerServiceOn(t, st)
+	waitsForReview(t, s, f, todo.ID, "Three ryokan fit the dates.")
+	if _, err := reviewErr(s, todo.ID, ryokanDecision()); err != nil {
+		t.Fatal(err)
+	}
+	round := viewRound(t, s, todo.ID, askDecisionPrefix)
+	st.failDecision.Store(true)
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, httptest.NewRequest("POST", "/api/v1/assistant/conversations/conv1/route",
+		strings.NewReader(`{"todo_id":"`+todo.ID+`","text":"Ryokan Hanami, please","asked_at":"`+round+`"}`)))
+	s.waitWorkEvents()
+	var reply map[string]any
+	if json.Unmarshal(rec.Body.Bytes(), &reply) != nil || rec.Code != http.StatusConflict || reply["code"] != codeSendInDoubt ||
+		reply["delivered"] != "yes" || reply["error"] != i18n.T(i18n.En, answerInDoubtKeys["yes"]) {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+}
+
+// The Lark card's Take the recommendation and an "OK" reply take the accept route's paths: a send that may have
+// reached the Agent says so and to look first, never "nothing was changed; you can try again". The decision still
+// waits, so the button works again.
+func TestLarkSaysTheRecommendationMayHaveArrived(t *testing.T) {
+	s, f, todo, _, notes := conclusionService(t, false)
+	ctx := context.Background()
+	waitsForReview(t, s, f, todo.ID, "Three ryokan fit the dates.")
+	reviewTask(t, s, todo.ID, map[string]any{"verdict": "needs_user", "reason": "Which ryokan?", "recommend": "Ryokan Hanami"})
+	a := askOf(s, todo.ID)
+	failSends(f, context.DeadlineExceeded)
+	inDoubt := i18n.T(s.botLang(ctx), answerInDoubtKeys["unknown"])
+	press := &feishubot.CardAction{}
+	press.Action.Value = map[string]any{"a": "accept", "id": todo.ID}
+	if r := s.botCardAction(ctx, press, ""); r == nil || r.Toast == nil || r.Toast.Type != "error" || r.Toast.Content != inDoubt {
+		t.Fatalf("the Lark button: %+v", r)
+	}
+	s.acceptReply(ctx, "om_ok", "OK", false, a.MessageID)
+	if n := notes(); len(n) == 0 || n[len(n)-1] != inDoubt {
+		t.Fatalf("the reply: %q", n)
+	}
+	if got := askOf(s, todo.ID); !got.AcceptedAt.IsZero() {
+		t.Fatalf("taken: %+v", got)
+	}
+}
+
+// The owner's OK whose recommendation may be with the Agent keeps the decision's deadline handled: no default at the
+// deadline sends it a second time. One that typed nothing leaves the default to the deadline, as before.
+func TestOwnerOKInDoubtTakesNoDefaultAtTheDeadline(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		fail error
+		sent int // what reaches the Agent at the deadline
+	}{
+		{"in doubt", context.DeadlineExceeded, 0},
+		{"never sent", rpc.NotSent(context.Canceled), 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s, f, todo, _, _ := conclusionService(t, false)
+			waitsForReview(t, s, f, todo.ID, "Three ryokan fit the dates.")
+			reviewTask(t, s, todo.ID, map[string]any{"verdict": "needs_user", "reason": "Which ryokan?", "recommend": "Ryokan Hanami",
+				"deadline": "2h", "reversible": true})
+			failSends(f, c.fail)
+			if result, err := s.acceptTry(context.Background(), todo.ID, ""); result.taken || err == nil {
+				t.Fatalf("taken: %+v %v", result, err)
+			}
+			failSends(f, nil)
+			before := len(sentToAgent(f))
+			pastDeadline(t, s, todo.ID)
+			s.sweepDecisionDeadlines(time.Now())
+			if got := sentToAgent(f)[before:]; len(got) != c.sent {
+				t.Fatalf("at the deadline: %q, want %d", got, c.sent)
+			}
+		})
 	}
 }

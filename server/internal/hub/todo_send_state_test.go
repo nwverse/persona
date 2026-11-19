@@ -545,8 +545,8 @@ func TestTodoRouteReceiptKindAndOutcome(t *testing.T) {
 		{403, `{"code":"forbidden","delivered":"none"}`, proto.MessageSendFailed, "failed"},
 		{400, `{"code":"bad_request","delivered":"unknown"}`, proto.MessageSendUnknown, "unknown"},
 		// A newer manager says delivered on every refusal of a to-do's write (spec/fixtures/todo-writes).
-		{409, `{"code":"send_in_doubt","delivered":"unknown","retryable":false}`, proto.MessageSendUnknown, "unknown"},
-		{502, `{"code":"send_in_doubt","delivered":"yes","retryable":false}`, proto.MessageSendUnknown, "unknown"},
+		{409, `{"code":"` + assistantwire.CodeSendInDoubt + `","delivered":"unknown","retryable":false}`, proto.MessageSendUnknown, "unknown"},
+		{502, `{"code":"` + assistantwire.CodeSendInDoubt + `","delivered":"yes","retryable":false}`, proto.MessageSendUnknown, "unknown"},
 		{404, `{"code":"todo_not_found","delivered":"yes"}`, proto.MessageSendUnknown, "unknown"},
 		{409, `{"code":"conflict","delivered":"none"}`, proto.MessageSendFailed, "failed"},
 		{409, `{"code":"ask_stale","delivered":"none"}`, proto.MessageSendFailed, "failed"},

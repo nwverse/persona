@@ -666,6 +666,19 @@ after it (`inDoubt` in `web/src/lib/outbox.ts`; `isEcho` in `web/src/lib/echo.ts
 `CLOCK_SLACK_MS`); one whose copy arrived before the answer did was already settled while it went (`flight.echoed()`
 in ChatView). A refusal never settles by words.
 
+## A node's error keeps only its words past the bus, and a call can fail after the node did it (2026-11-19, #10465)
+
+A to-do's message or answer that fails has to say whether it typed anything, or a phone offers to send again what the
+Agent already has. Two readings looked right and were not. An RPC error that crosses the bus keeps its code and its
+message, not its Go type: a deadline that ran out past the bus reaches the manager as an `*rpc.Error` whose message is
+`context deadline exceeded`, which `errors.Is(err, context.DeadlineExceeded)` does not match. Test for a deadline with
+`apierr.NodeCode` (it reads that exact message as `timeout`), never `errors.Is` alone. `sendUnknown` still reads such a
+deadline as a refusal for its other callers (the send note, a successor's reopen), so the to-do routes read it as in
+doubt themselves (`writeDelivered`, `server/internal/assistant/todo_write_outcome.go`). And `Service.call` can fail
+after the node answered OK: it checks the deletion ledger again and decodes the answer. Such an error of a
+conversation write is `nodeWroteThen`, which the routes read as typed. A refusal said "nothing typed" wrongly is the
+unsafe side: when in doubt, say `unknown`.
+
 ## Name the thing an event is about, and keep what was done for it (#5718)
 
 Completion handling started only on a session list going from `working` to `done` / `idle`, and remembered "this stretch

@@ -33,6 +33,12 @@ func Write(w http.ResponseWriter, status int, err error) {
 // WriteCode preserves error for old clients and adds a stable machine-readable code.
 // An i18n.Message reads in the request's language (docs/protocol/i18n.md "Protocol").
 func WriteCode(w http.ResponseWriter, status int, code string, err error) {
+	WriteBody(w, status, CodeBody(w, status, code, err))
+}
+
+// CodeBody is the body WriteCode writes, for a caller that adds to it (a to-do's write says delivered on every
+// refusal).
+func CodeBody(w http.ResponseWriter, status int, code string, err error) map[string]any {
 	l := i18n.OfWriter(w)
 	body := LocalizedBody(status, code, err, l)
 	if l != "" {
@@ -41,7 +47,7 @@ func WriteCode(w http.ResponseWriter, status int, code string, err error) {
 			body["error"] = i18n.T(l, key)
 		}
 	}
-	WriteBody(w, status, body)
+	return body
 }
 
 var standardStatusKeys = map[int]string{

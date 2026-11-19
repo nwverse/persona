@@ -5,28 +5,38 @@ import (
 	"net/http"
 
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // What a to-do write that failed did with the owner's words (#10465, docs/protocol/protocol.md "To-do writes"): a
-// message on the conversation route, an answer on the asks route or the accept route says it in its error's
-// delivered, so the hub's todo_send_state and its receipt say failed only for a write that typed nothing, and a phone
-// never sends again under a new op id what may be with the Agent already. Words reach an Agent only through
-// sendToTaskAgent's session.send or startTaskSuccessor's session.start: an error of either may have typed them when
-// sendUnknown says so (the rule agentSendNote.sent follows) or it reads as a timeout or a dropped link, and typed
-// nothing otherwise; what fails after one of them took the words is wordsSent; any other error came before anything
-// went out.
+// message on the conversation route, an answer on the asks route or the accept route (and the Lark card's button or an
+// "OK" reply, which take the same paths) says it in its error's delivered, so the hub's todo_send_state and its receipt
+// say failed only for a write that typed nothing, and a phone never sends again under a new op id what may be with the
+// Agent already. Words reach an Agent only through sendToTaskAgent's session.send or startTaskSuccessor's
+// session.start: an error of either may have typed them when sendUnknown says so or it reads as a timeout or a dropped
+// link, and typed nothing otherwise; what fails after the node did the call (nodeWroteThen), or after one of them took
+// the words (wordsSent), typed them; any other error came before anything went out. The reading is deliberately
+// broader than sendUnknown's (the rule agentSendNote.sent and successorOpens follow): a deadline that ran out past the
+// bus arrives as words only, which sendUnknown reads as a refusal, and here saying "none" wrongly is the unsafe side.
 
 // codeSendInDoubt is the code of a to-do write whose words may be with its Agent already, or are: it is never sent
 // again by itself, and its words say to look first.
-const codeSendInDoubt = "send_in_doubt"
+const codeSendInDoubt = assistantwire.CodeSendInDoubt
 
 // wordsSent is a to-do write that failed after its words reached the Agent: the routed item, or the decision they
 // answer, could not be recorded (the to-do may have been deleted meanwhile).
 type wordsSent struct{ error }
 
 func (e wordsSent) Unwrap() error { return e.error }
+
+// nodeWroteThen is a conversation write the node did that failed after it answered (Service.call): the conversation
+// was deleted meanwhile, its deletion ledger could not be read, or the answer could not be read. Whatever it carried
+// is with the Agent.
+type nodeWroteThen struct{ error }
+
+func (e nodeWroteThen) Unwrap() error { return e.error }
 
 // writeDelivered is what err, a to-do write's failure, did with its words, as its answer's delivered says it: "yes"
 // when they reached the Agent before what followed failed, "unknown" when the send or the start that carried them may
@@ -36,8 +46,9 @@ func (e wordsSent) Unwrap() error { return e.error }
 // comes before any send, or instead of one).
 func writeDelivered(err error) string {
 	var sent wordsSent
+	var wrote nodeWroteThen
 	switch {
-	case errors.As(err, &sent):
+	case errors.As(err, &sent), errors.As(err, &wrote):
 		return "yes"
 	case errors.Is(err, rpc.ErrNotSent), errors.Is(err, apierr.ErrOffline), errors.Is(err, errAcceptStore):
 		return "none"
@@ -67,22 +78,43 @@ func writeInDoubt(w http.ResponseWriter, status int, err error, delivered string
 	apierr.WriteBody(w, status, body)
 }
 
-// writeTypedNothing writes err, a refusal of a to-do write that typed nothing, with code ("" for the status's) in the
-// request's language, and delivered "none": the hub's receipt of it is failed, and the phone may send it again under a
-// new op id.
+// writeTypedNothing writes err, a refusal of a to-do write that typed nothing, as apierr.WriteCode does (code "" for
+// the status's), with delivered "none": the hub's receipt of it is failed, and the phone may send it again under a new
+// op id.
 func writeTypedNothing(w http.ResponseWriter, status int, code string, err error) {
-	body := apierr.LocalizedBody(status, code, err, i18n.OfWriter(w))
+	body := apierr.CodeBody(w, status, code, err)
 	body["delivered"] = "none"
 	apierr.WriteBody(w, status, body)
 }
 
+// writeNodeRefusal writes err, a node's coded refusal of a to-do's answer (nodeRefusal: nothing was typed), as 423
+// with the node's code and details, as the accept route answers it (#7343), and delivered "none" unless the node said
+// it.
+func writeNodeRefusal(w http.ResponseWriter, err error) {
+	body := apierr.CallStatusBody(w, http.StatusLocked, err)
+	if _, said := body["delivered"]; !said {
+		body["delivered"] = "none"
+	}
+	apierr.WriteBody(w, http.StatusLocked, body)
+}
+
 // writeRouteError writes err, a message to a to-do the conversation route did not deliver: 409, as every refusal of
 // this route has been (the apps installed show its words), with delivered; words that may be with the Agent already
-// are send_in_doubt and say so, instead of the refusal's words.
-func writeRouteError(w http.ResponseWriter, err error) {
+// are send_in_doubt and say so in words from keys (a message's, or an answer's for one that answers a decision),
+// instead of the refusal's words.
+func writeRouteError(w http.ResponseWriter, err error, keys map[string]string) {
 	if delivered := writeDelivered(err); delivered != "none" {
-		writeInDoubt(w, http.StatusConflict, err, delivered, routeInDoubtKeys)
+		writeInDoubt(w, http.StatusConflict, err, delivered, keys)
 		return
 	}
 	writeTypedNothing(w, http.StatusConflict, "", err)
+}
+
+// inDoubtNote is what a Lark reply or toast says of err, an answer that failed on its way to the task's Agent, when its
+// words may be with the Agent already or are, in l ("" when nothing was typed: the caller says why it was not taken).
+func inDoubtNote(l i18n.Lang, err error) string {
+	if delivered := writeDelivered(err); delivered != "none" {
+		return i18n.T(l, answerInDoubtKeys[delivered])
+	}
+	return ""
 }
