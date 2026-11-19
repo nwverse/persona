@@ -38,7 +38,7 @@
   "desc_inbox_judge": "Judges whether the AI twin should take up an Inbox item.",
   "desc_agent_triage": "Reads why an agent stopped: finished, waiting on something, or needing you.",
   "desc_inbox_draft": "Drafts a reply for you to review and send.",
-  "desc_translate": "Translates text and mail.",
+  "desc_translate": "Translates text and mail on its own model, using a low-cost default.",
   "desc_kb_compress": "Compresses long chats and tags them for the knowledge base.",
   "desc_kb_project": "Rewrites a project's file in the knowledge base from what was learned since.",
   "desc_kb_dedupe": "Finds knowledge-base projects that are the same one.",

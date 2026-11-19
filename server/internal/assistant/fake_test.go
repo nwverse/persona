@@ -1012,6 +1012,25 @@ func (m *memStore) Setting(_ context.Context, key string, out any) (bool, error)
 	return true, json.Unmarshal(b, out)
 }
 
+func (m *memStore) SettingsPrefix(_ context.Context, prefix string) (map[string]json.RawMessage, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.failSetting != nil {
+		return nil, m.failSetting
+	}
+	values := map[string]json.RawMessage{}
+	for key, raw := range m.vals {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		if err := m.failKeys[key]; err != nil {
+			return nil, err
+		}
+		values[key] = append(json.RawMessage(nil), raw...)
+	}
+	return values, nil
+}
+
 func (m *memStore) PutSetting(_ context.Context, key string, v any) error {
 	b, err := json.Marshal(v)
 	if err != nil {
