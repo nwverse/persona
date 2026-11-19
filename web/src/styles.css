@@ -578,6 +578,16 @@ section[data-segment] { contain-intrinsic-block-size: auto var(--seg-est, 0px); 
     &::before { content: ""; position: absolute; top: min(0px, calc(50% - 22px)); bottom: min(0px, calc(50% - 22px)); left: min(0px, calc(50% - 22px)); right: min(0px, calc(50% - 22px)); }
   }
 }
+/* The same for a ✕ in a tile's top-right corner (an attachment's remove): the area grows out of the corner instead, up
+   through the 6 px gap above a row of tiles (no further) and right as far as touch-hit reaches, and only --hit-in-x /
+   --hit-in-y (6 px) into the tile, so a tap on a picture's middle still opens the picture. A tile with nothing to tap
+   under its ✕ (a file's) lets it reach further in. */
+@utility touch-hit-corner {
+  position: relative;
+  @media (pointer: coarse) {
+    &::before { content: ""; position: absolute; top: -8px; right: -13px; bottom: calc(-1 * var(--hit-in-y, 6px)); left: calc(-1 * var(--hit-in-x, 6px)); }
+  }
+}
 /* An extension's graph on a page (UI version 10, #9727): the canvas is 70% of the page's visible height, at least 320
    and at most 900 px (docs/extensions/extensions.md "Drawing, on every app"); in a card, a still preview fitted into
    200 px (graph-preview, views/extensions/ViewBody10.tsx). */
