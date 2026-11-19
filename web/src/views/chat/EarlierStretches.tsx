@@ -8,7 +8,7 @@
 // drawn above the live one. Their messages keep Copy; nothing goes to the composer, and nothing rewinds, branches or
 // forwards from them: they belong to a session the conversation has left.
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { api, errorText, sessionPath } from "../../lib/api";
+import { api, ApiError, errorText, sessionPath } from "../../lib/api";
 import { planStretches, sameItems, splitStretches, stretchWindows, type StretchSource } from "../../lib/engine-stretches";
 import { sessionLoadError } from "../../lib/session-link";
 import { buildTaskIndex } from "../../lib/tasks";
@@ -179,6 +179,19 @@ export default memo(function EarlierStretches({ mid, sid, scope, history, live, 
         return pageToken;
       } catch (e) {
         if (!current()) return;
+        if (e instanceof ApiError && e.status === 404 && e.code === "not_found") {
+          // its computer can't find that stretch's history (#11450): the stretch ends there, as an empty page ended
+          // it, and the older ones load; asking again would get the same
+          setState((st) => {
+            const base = st.scope === at ? st.stores : NO_STORES;
+            return { scope: at, page: undefined, stores: { ...base, [w.sid]: { items: base[w.sid]?.items ?? [], hasMore: false, ready: true } } };
+          });
+          setError("");
+          retryAt.current = 0;
+          wait.current = 0;
+          stopRetry();
+          return;
+        }
         wait.current = Math.min(wait.current ? wait.current * 2 : RETRY_MS, RETRY_MAX_MS);
         retryAt.current = Date.now() + wait.current;
         setError(sessionLoadError(errorText(e)));

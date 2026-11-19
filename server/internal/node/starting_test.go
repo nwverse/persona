@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -166,5 +167,91 @@ func TestAsyncStartsStopWithTheirNode(t *testing.T) {
 	}
 	if _, err := stopped.startAsync("", t.TempDir(), "claude", "", "w1", "", "", ""); err == nil || !strings.Contains(err.Error(), "shutting down") {
 		t.Fatalf("a closed node accepted another start: %v", err)
+	}
+}
+
+// More sessions that may not have written their first line yet, which a read answers with an empty page and not
+// no_transcript (#11450): a thread a Codex app-server has loaded, which has no rollout before its first message; a
+// Codex waiting row whose record still names its pane, before a host refresh lists it again after a reconnect; a
+// session whose only, refused, turn healClaudeRefusalTranscript removed with its file before starting it again.
+func TestItemsOfMoreSessionsThatHaveNotWrittenYet(t *testing.T) {
+	n, home := testNode(t)
+	long := time.Now().Add(-time.Hour).UTC()
+	items := func(id string) (any, error) {
+		return n.handle(context.Background(), "session.items", json.RawMessage(`{"session_id":"`+id+`","turns":2}`))
+	}
+	empty := func(what, id string) {
+		t.Helper()
+		res, err := items(id)
+		if b, _ := json.Marshal(res); err != nil || !strings.Contains(string(b), `"items":[]`) {
+			t.Errorf("%s: want an empty page, got %s %v", what, b, err)
+		}
+	}
+	gone := func(what, id string) {
+		t.Helper()
+		if _, err := items(id); rpcCode(err) != codeNotFound || notFoundReason(err) != proto.NotFoundNoTranscript {
+			t.Errorf("%s: want not_found no_transcript, got %v", what, err)
+		}
+	}
+
+	// A thread a ready app-server has loaded, with no rollout yet.
+	n.codices = newCodexRegistry()
+	codexHome := canonicalCodexHome(filepath.Join(home, ".codex"), home)
+	n.codices.config.LegacyHome = codexHome
+	const thread = "019a0000-0000-7000-8000-000000000001"
+	if id := n.registerCodex(codexHome, thread, ""); id != thread {
+		t.Fatalf("registered as %q", id)
+	}
+	gone("a Codex thread no app-server has loaded", thread)
+	n.codices.remotes = map[string]*codexRemote{"app": {n: n, spec: proto.CodexServer{ID: "app", Home: codexHome}, ready: true,
+		threads: map[string]remoteThread{thread: {id: thread, publicID: thread}}}}
+	empty("a Codex thread an app-server has loaded", thread)
+
+	// A Codex waiting row long open, which no host refresh has registered again yet; once it left its pane, gone.
+	row := codexWaitID()
+	n.state.put(row, sessionState{Pane: "w1:p1", Launcher: "codex", Cwd: home, StartedAt: long})
+	empty("a Codex waiting row", row)
+	n.state.setPane(row, "")
+	gone("a Codex waiting row that left its pane", row)
+
+	// A conversation whose only turn was refused: the heal removes its file before it is started again.
+	n.paths, n.metas = map[string]string{}, map[string]quickMeta{}
+	n.state.put(pruneID, sessionState{Launcher: "claude", Cwd: home + "/.persona/assistant", StartedAt: long})
+	n.paths[pruneID] = writePruneFile(t, refusalTurnLines("one"))
+	if pruned, clean := n.healClaudeRefusalTranscript(pruneID); !pruned || clean {
+		t.Fatalf("pruned=%v clean=%v", pruned, clean)
+	}
+	empty("a conversation started again after its refused turn was removed", pruneID)
+}
+
+// A synchronous start (a Resume always is) keeps the record's first start time and may have no transcript yet: while
+// it runs, a read of the session is an empty page; a start that failed takes that back (#11450).
+func TestItemsOfASessionWhileItsResumeRuns(t *testing.T) {
+	n, f, home := herdrNode(t)
+	cwd := mkdir(t, filepath.Join(home, "proj"))
+	const id = "33333333-2222-3333-4444-555555555555"
+	n.state.put(id, sessionState{Launcher: "claude", Cwd: cwd, StartedAt: time.Now().Add(-time.Hour).UTC()})
+	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+	n.claudeStart, n.claudeReady = time.Second, time.Second // the fake shell never runs claude: the start fails
+	read := func() (any, error) {
+		return n.handle(context.Background(), "session.items", json.RawMessage(`{"session_id":"`+id+`","turns":2}`))
+	}
+	if _, err := read(); notFoundReason(err) != proto.NotFoundNoTranscript {
+		t.Fatalf("before the Resume: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := request(t, n, "session.start", map[string]any{"resume_session_id": id})
+		done <- err
+	}()
+	waitFor(t, "the Resume to begin", func() bool { return n.startsBegun.within(id, time.Minute) })
+	if res, err := read(); err != nil {
+		t.Errorf("while the Resume runs: want an empty page, got %v %v", res, err)
+	}
+	if err := <-done; err == nil {
+		t.Fatal("the Resume should fail without claude")
+	}
+	if _, err := read(); notFoundReason(err) != proto.NotFoundNoTranscript {
+		t.Errorf("after the Resume failed: want not_found no_transcript, got %v", err)
 	}
 }

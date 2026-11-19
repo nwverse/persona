@@ -86,6 +86,35 @@ describe("EarlierStretches", () => {
     }
   });
 
+  // #11450: an earlier stretch whose computer can't find its history (404 not_found) ends there, as an empty page did:
+  // no error and no retry, and the older stretches still load.
+  it("ends an earlier stretch its computer can't find and loads the older ones", async () => {
+    const asked: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const sid = /\/sessions\/m\/([^/]+)\/items\?/.exec(String(input))?.[1] ?? "";
+      asked.push(sid);
+      if (sid === "b") return Response.json({ error: "Persona can't find its history", code: "not_found", reason: "no_transcript" }, { status: 404 });
+      return Response.json({ items: [item(1, 1)], has_more: false });
+    }));
+    try {
+      const reports: StretchesReport[] = [];
+      const history = [{ session_id: "a", agent: "claude", until: at(10) }, { session_id: "b", agent: "codex", until: at(20) }];
+      await act(() => root.render(
+        <EarlierStretches mid="m" sid="c" scope="m/c" history={history} live={live([item(2, 21)])} report={(_s, r) => { reports.push(r); }} />,
+      ));
+      for (let n = 0; n < 10 && reports.at(-1)?.hasMore; n++) {
+        await act(async () => { await reports.at(-1)?.loadEarlier(); });
+      }
+      expect(asked.filter((sid) => sid === "b")).toHaveLength(1);
+      expect(asked).toContain("a");
+      expect(reports.at(-1)?.hasMore).toBe(false);
+      expect(host.querySelector("[data-engine-stretch-error]")).toBeNull();
+      expect(host.querySelector('[data-engine-stretch="a"] [data-line]')).not.toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   // #8160: an earlier stretch gets a divider over the first line of each day it covers, day-only keys, and a day split
   // across an engine switch is labelled once.
   const drawWithFetch = async (sid: string, history: EngineLeg[], items: Item[], pages: Record<string, Item[]>) => {

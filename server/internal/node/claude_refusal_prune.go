@@ -345,6 +345,9 @@ func (n *Node) healClaudeRefusalTranscript(id string) (pruned bool, hasCleanTurn
 		delete(n.pathsAt, id)
 	}
 	n.mu.Unlock()
+	if !hasCleanTurns { // started again right after (a Resume, a respawn): its chat is empty, not gone, meanwhile
+		n.startsBegun.begin(id, n.startWait())
+	}
 	forgetOfflineScan()
 	n.logf("claude %s: pruned trailing synthetic refusal turn from transcript before resume", short(id))
 	return true, hasCleanTurns
