@@ -994,7 +994,7 @@ class OkHttpHubConnection(
         // The language the app shows (docs/protocol/i18n.md "Protocol"): this socket's notices, and the user's language.
         put("locale", persona.core.contracts.ClientLanguage.tag)
         putJsonArray("features") {
-            (setOf("endpoints", "ws_notify", "app_ping", "elicitation", ProtocolCompatibility.CAPABILITY) + config.clientFeatures).forEach { add(it) }
+            (setOf("endpoints", "ws_notify", "app_ping", "elicitation", persona.core.contracts.api.AgentMessageHoldFeature, ProtocolCompatibility.CAPABILITY) + config.clientFeatures).forEach { add(it) }
         }
         if ("heartbeat" in features) {
             putJsonObject("heartbeat") {

@@ -102,6 +102,25 @@ class DevPackageTest {
         assertFalse(lines.single().contains("low_memory"))
     }
 
+    @Test fun sameHourHistoricalExitSortsBeforeNewerRecords() {
+        val records = DevStore(File(directory, "records"))
+        records.appendEvents(listOf(
+            """{"t":"${now.minusSeconds(30)}","kind":"app","event":"startup"}""",
+            """{"t":"${now.minusSeconds(20)}","kind":"app","event":"foreground"}""",
+        ), now)
+        val current = File(File(directory, "records/events"), DevStore.hourName(now.minusSeconds(30)))
+        java.io.FileOutputStream(current, true).bufferedWriter().use {
+            it.write("""{"t":"${now.minusSeconds(60)}","kind":"app","event":"exit"}""")
+            it.newLine()
+        }
+        val entries = readZip(DevPackage.exportZip(File(directory, "work"), records, setOf(DevCategory.Logs), since, device, now = now))
+        val root = entries.keys.first().substringBefore('/') + '/'
+        val lines = entries.getValue(root + "events.jsonl").lines().filter(String::isNotBlank)
+        assertEquals(listOf("exit", "startup", "foreground"), lines.map {
+            JsonCodec.parseToJsonElement(it).jsonObject.getValue("event").jsonPrimitive.content
+        })
+    }
+
     private fun readZip(file: File): Map<String, String> {
         ZipFile(file).use { zip ->
             return zip.entries().asSequence().filter { !it.isDirectory }.associate { entry ->

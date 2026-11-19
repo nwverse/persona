@@ -453,11 +453,16 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // read a later hello or another sign-in overtook left alone (lib/start-page.ts). The editor (its heading, each card's
 // controls, the drag and the edits) is a chunk of its own (views/extensions/OverviewArrange.tsx, lib/overview-edit.ts).
 // Main had 4,560 B of room, so the budget is this ja size plus those 4,560 B.
+// #11090: a waiting to-do's label says what it waits on (lib/todo-wait-reason.ts waitReason and todoLook, read on the
+// first screen by Overview's task cards, the main chat's trays and the sidebar's By to-do rows; the seven
+// lib-state-labels waits_* words in place of task_waiting). 505 B in ja, measured in one environment against main
+// c4fc3ef324 (ja 479,301 B to 479,806 B; en 476,414 B to 476,898 B, zh-Hans 477,154 B to 477,624 B). Main had 3,430 B
+// of room; the budget stays (merged with #9745 above, it takes those 505 B of #9745's room).
 // #10822: Colored sidebar icons, an Appearance choice off by default: the choice's store and the built-in pages' colors
 // (lib/sidebar-icons.ts), read where the sidebar draws its pages, and the style a colored icon takes. 356 B in each
 // language, measured in one environment against main baacfe89c6 (ja 480,552 B to 480,908 B; en 477,626 B to 477,982 B,
-// zh-Hans 478,364 B to 478,720 B); the setting's row and words load with Settings. Main had 2,928 B of room, so the
-// budget is this ja size plus those 2,928 B.
+// zh-Hans 478,364 B to 478,720 B); the setting's row and words load with Settings. Main had 2,928 B of room (a budget of
+// 483,480 B), which is kept, so the budget moves by these 356 B, to this ja size plus those 2,928 B.
 export const FIRST_SCREEN_BUDGET = 483_836;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
