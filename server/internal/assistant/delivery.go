@@ -241,7 +241,7 @@ func deliverySummary(t Todo) string {
 func (s *Service) snapshotApprovals(ctx context.Context, web string) []prompts.SnapshotApproval {
 	var list []Todo
 	for _, t := range s.todosOf(ctx, "*") {
-		if t.Origin != "" && t.DoneAt == nil && t.Delivery.held() && t.Delivery.Unblock == unblockUser {
+		if t.Origin != "" && t.DoneAt == nil && t.Delivery.waitsForOwner() {
 			list = append(list, t)
 		}
 	}
@@ -257,4 +257,8 @@ func (s *Service) snapshotApprovals(ctx context.Context, web string) []prompts.S
 			Link: todoLink(web, t.ID), Owner: todoOwner(t)})
 	}
 	return out
+}
+
+func (d *TodoDelivery) waitsForOwner() bool {
+	return d.held() && d.Unblock == unblockUser
 }

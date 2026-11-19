@@ -3,7 +3,7 @@
 // never from what an agent says about itself. The rules are the SOP's table, in its order; the first that holds wins.
 
 import { acceptanceStands, decisionDismissed, latestReview, reviewState } from "./supervision";
-import { openAsk, todoDueBy, todoStatus, type PRFacts, type SessionLookup, type Todo, type TodoStatus } from "./todos";
+import { heldDelivery, openAsk, todoDueBy, todoStatus, type PRFacts, type SessionLookup, type Todo, type TodoStatus } from "./todos";
 
 /** Where a to-do shows. */
 export type TriageSection = "waiting" | "working" | "parked" | "just_done" | "other" | "shelved" | "done";
@@ -166,7 +166,8 @@ export function triage(todo: Todo, lookup: SessionLookup | undefined, now: numbe
   }
   if (status === "needs_you" || status === "interrupted") return at("waiting", "agent_asks");
   // a decision the owner chose Don't handle on no longer waits on them (decisionDismissed)
-  if (!todo.done_at && !decisionDismissed(todo) && (reviewState(todo) === "needs_user" || ask?.outcome === "decide" || ask?.outcome === "cannot")) return at("waiting", "owner_decides");
+  if (heldDelivery(todo)?.unblock === "user" || !todo.done_at && !decisionDismissed(todo) &&
+      (reviewState(todo) === "needs_user" || ask?.outcome === "decide" || ask?.outcome === "cannot")) return at("waiting", "owner_decides");
   // rule 8's signals, read here so rule 9 yields to them: a turn or review nobody has looked at stays Just finished
   const finished = status === "unread" || reviewState(todo) === "pending_review" || (ask && !ask.outcome) || ask?.outcome === "done";
   // a parked hold is its supervisor's reading of the latest turn: an agent session left unread does not hide its PR

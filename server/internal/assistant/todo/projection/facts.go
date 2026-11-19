@@ -153,6 +153,8 @@ type Progress struct {
 type Delivery struct {
 	State string    `json:"state"`
 	At    time.Time `json:"at"`
+	Owner bool      `json:"owner,omitempty"` // an open delivery hold asks the owner to release it
+	Gate  string    `json:"gate,omitempty"`
 }
 
 // PRStatus is an observation of one of the task's PRs.

@@ -393,17 +393,18 @@ func canWaitDecision(a *Ask) bool { return a.Outcome == outcomeDecide && a.ForBr
 // done, unless the owner chose Don't handle on it. A decision that can wait is row 4's. verify, steps_proposed,
 // signin and a possible duplicate have no input yet (spec/fixtures/todo-view/README.md "Not produced yet").
 func (r *reading) ownerDecides() (placement, bool) {
-	if r.dismissed() {
-		return placement{}, false
-	}
 	a := r.decisionAsk()
+	p := r.at(assistantwire.TodoPhaseNeedsYou, assistantwire.TodoListSectionNeedsYou, assistantwire.TodoReasonOwnerDecides)
 	switch {
+	case a == nil && (r.dismissed() || reviewState(r.f) != reviewNeedsUser):
+		if d := r.f.Delivery; d != nil && d.Owner {
+			p.Line, p.Since = line(lineDecision, "text", d.Gate), utc(d.At)
+			return p, true
+		}
+		return placement{}, false
 	case a != nil && canWaitDecision(a): // row 4
 		return placement{}, false
-	case a == nil && reviewState(r.f) != reviewNeedsUser:
-		return placement{}, false
 	}
-	p := r.at(assistantwire.TodoPhaseNeedsYou, assistantwire.TodoListSectionNeedsYou, assistantwire.TodoReasonOwnerDecides)
 	switch {
 	case a == nil: // a needs_user review with no ask listed: its question, nothing to answer here
 		p.Line = line(lineDecision)

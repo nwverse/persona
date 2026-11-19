@@ -240,7 +240,7 @@ func projectionFacts(t listedTodo, sessions map[[2]string]proto.Session, loc *ti
 		f.OtherPRs = append(f.OtherPRs, projection.PRStatus{URL: p.URL, State: p.State, Draft: p.Draft, CheckedAt: p.CheckedAt})
 	}
 	if d := t.Delivery; d != nil {
-		f.Delivery = &projection.Delivery{State: d.State, At: d.At}
+		f.Delivery = &projection.Delivery{State: d.State, At: d.At, Owner: d.waitsForOwner(), Gate: d.Gate}
 	}
 	if a := t.Ask; a != nil {
 		f.Ask = &projection.Ask{Outcome: a.Outcome, Verdict: a.Verdict, Recommend: a.Recommend, AskedAt: a.AskedAt,

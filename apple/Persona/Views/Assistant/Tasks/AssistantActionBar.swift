@@ -253,10 +253,11 @@ nonisolated enum AssistantEntries {
             // a failed start carries done_at (the hub ends it), yet it is the user's to retry while its bucket says open
             let waits = status == .failed ? bucket == .open : todo.doneAt == nil && (status == .needsYou || status == .interrupted)
             let decision = awaitsDecision(todo, now: now)
+            let deliveryApproval = todo.doneAt == nil && todo.delivery?.waitsForOwner == true
             if !asks.isEmpty { asking.append((row, asks.map { $0.createdAt ?? .distantPast }.min())); listed() }
-            else if waits || decision {
+            else if waits || decision || deliveryApproval {
                 // Only the review decision is put off or dismissed (Later / Don't handle); a live Agent question keeps its home.
-                if !(status != .needsYou && decision && decisionHidden(todo)) { deciding.append((row, rank(todo, status), when)) }
+                if deliveryApproval || !(status != .needsYou && decision && decisionHidden(todo)) { deciding.append((row, rank(todo, status), when)) }
                 listed()
             }
             // its supervisor's review is under way (not the owner's yet): in progress, whatever the To-dos page files it under
