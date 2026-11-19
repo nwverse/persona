@@ -874,7 +874,7 @@ func (m *Machine) nodeUID() string {
 // computer) whether the hub got through to the resident node.
 func (m *Machine) tellLinks(online bool, err string) { m.tellLinksIf(online, err, nil) }
 
-// tellLinksIf is tellLinks for a state still says is still the machine's as each link takes it (tellNode).
+// tellLinksIf is tellLinks, each link taking the state only if still says it holds then (tellNode).
 func (m *Machine) tellLinksIf(online bool, err string, still func() bool) {
 	for _, p := range m.d.pathsOf(m) {
 		if p.src != nil && p.src.cfg.Kind == kindLink {
