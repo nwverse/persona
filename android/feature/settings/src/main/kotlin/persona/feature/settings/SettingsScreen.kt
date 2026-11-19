@@ -116,6 +116,7 @@ private fun SettingsContent(
     LaunchedEffect(assistant.id) {
         if (shownFor == assistant.id) return@LaunchedEffect
         shownFor = assistant.id
+        ProviderImportRequests.cancel()
         if (initialPage == "settings" && isAssistantSettingsPage(page)) {
             page = "settings"; parents = emptyList(); purpose = null; purposeManager = null; extension = null; extensionManager = null
             connectorManager = null; channel = null; provider = null; providerStep = null
@@ -538,7 +539,26 @@ private fun SettingsPageContent(
         "storage" -> StoragePage(back, services.clearCacheFiles, footer = deviceFeedback)
         "providers" -> {
             val providerService = mine.providers.takeUnless { services.demo }
-            when {
+            // Take the link only after this destination's provider service can open it. Leaving the providers page or
+            // switching assistants cancels it, so a later service cannot replay a key-bearing link (#5428).
+            var importLink by remember(page, assistant.id) { mutableStateOf<String?>(null) }
+            var importGeneration by remember(page, assistant.id) { mutableLongStateOf(0L) }
+            DisposableEffect(page, assistant.id) { onDispose { ProviderImportRequests.cancel() } }
+            val requestedImport = ProviderImportRequests.pending.value
+            LaunchedEffect(requestedImport, providerService != null) {
+                if (requestedImport != null) {
+                    val link = ProviderImportRequests.takeIfReady(providerService != null)
+                    if (link != null) {
+                        importLink = link
+                        importGeneration = ProviderImportRequests.generation.longValue
+                    }
+                }
+            }
+            if (importLink != null && providerService != null) {
+                NewProviderPage(providerService, onBack = { ProviderImportRequests.cancel(); importLink = null; providerStep = null },
+                    onSaved = { importLink = null; providerStep = null }, readiness = services.readiness,
+                    machines = machines, importLink = importLink, importGeneration = importGeneration)
+            } else when {
                 providerStep == "add" && providerService != null -> NewProviderPage(providerService, onBack = { providerStep = null }, onSaved = { providerStep = null },
                     readiness = services.readiness, machines = machines)
                 providerStep == "import" && providerService != null -> ProviderImportPage(providerService, machines, onBack = { providerStep = null }, onDone = { providerStep = null })

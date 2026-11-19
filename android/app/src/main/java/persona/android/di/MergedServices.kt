@@ -55,6 +55,7 @@ internal fun mergedSessions(stacks: GroupStacks): SessionsRepository = object : 
         combine(stack.repositories.sessions.listStatus, listNamespaces) { status, namespaces ->
             if (namespaces?.contains(stack.names.namespace) == false) SessionListStatus(loaded = true)
             else status.copy(
+                filter = status.filter.copy(hiddenBotmuxHubs = if (null in status.filter.hiddenBotmuxHubs) setOf(stack.namespace) else emptySet()),
                 counts = status.counts.copy(machine = status.counts.machine.mapKeys { (id, _) -> stack.names.machineId(id) }),
                 machineCounts = status.machineCounts.copy(machine = status.machineCounts.machine.mapKeys { (id, _) -> stack.names.machineId(id) }),
             )
@@ -69,22 +70,24 @@ internal fun mergedSessions(stacks: GroupStacks): SessionsRepository = object : 
             total = statuses.sumOf { it.total },
             counts = SessionListCounts(total = statuses.sumOf { it.counts.total }, machine = totals({ it.machine }),
                 project = totals({ it.project }), group = totals({ it.group }), state = totals({ it.state }),
-                revision = statuses.joinToString("|") { it.counts.revision }, backgroundWaiting = statuses.sumOf { it.counts.backgroundWaiting }),
+                revision = statuses.joinToString("|") { it.counts.revision }, backgroundWaiting = statuses.sumOf { it.counts.backgroundWaiting },
+                paneSource = totals({ it.paneSource })),
             machineCounts = SessionListCounts(total = statuses.sumOf { it.machineCounts.total }, machine = totals({ it.machine }, true),
                 project = totals({ it.project }, true), group = totals({ it.group }, true), state = totals({ it.state }, true)),
+            filter = SessionListFilter(hiddenBotmuxHubs = statuses.flatMapTo(mutableSetOf()) { it.filter.hiddenBotmuxHubs }),
         )
     }
     override suspend fun setListFilter(filter: SessionListFilter) = stacks.forEach { stack ->
         if (!selected(stack)) return@forEach
         val machine = filter.machineId?.let { id -> if (stack.names.owns(id)) GroupKeys.raw(id) else id }
-        stack.repositories.sessions.setListFilter(filter.copy(machineId = machine))
+        stack.repositories.sessions.setListFilter(filter.forHub(stack.namespace).copy(machineId = machine))
     }
     override suspend fun loadMore() = stacks.forEach { if (selected(it)) it.repositories.sessions.loadMore() }
     override suspend fun loadPrevious() = stacks.forEach { if (selected(it)) it.repositories.sessions.loadPrevious() }
     override suspend fun listCounts(filter: SessionListFilter): SessionListCounts {
         val machine = requireNotNull(filter.machineId)
         return stacks.use(GroupKeys.namespaceOf(machine)) { stack ->
-            val counts = stack.repositories.sessions.listCounts(filter.copy(machineId = GroupKeys.raw(machine)))
+            val counts = stack.repositories.sessions.listCounts(filter.forHub(stack.namespace).copy(machineId = GroupKeys.raw(machine)))
             counts.copy(machine = counts.machine.mapKeys { (id, _) -> stack.names.machineId(id) })
         }
     }

@@ -59,6 +59,8 @@ internal fun ChatPageReaderContent(
     deferCount: Boolean,
     placed: persona.core.domain.lines.PlacedMessages,
     pendingDay: java.time.LocalDate?,
+    heldRows: List<persona.core.contracts.HeldAgentMessage>,
+    heldActions: persona.core.contracts.api.HeldAgentActions?,
     composerDeliveries: Map<String, persona.core.contracts.api.ComposerDelivery>,
     deliveryActions: ChatDeliveryActions,
     readOnly: Boolean,
@@ -172,6 +174,9 @@ internal fun ChatPageReaderContent(
                 errorLine?.let { error -> item(key = ERROR_ROW, contentType = ERROR_ROW) { ChatSystemLine(error, failed = true) } }
                 readyLine?.let { words -> item(key = READY_ROW, contentType = READY_ROW) { TypingLine(words) } }
                 // Newest at the bottom (reverse layout). A failed send sits above the first line written after it.
+                heldRows.asReversed().forEach { row ->
+                    item(key = "held-${row.id}", contentType = "held") { HeldAgentBubble(row, heldActions, canSend, onNotice) }
+                }
                 placed.rest.asReversed().forEach { message ->
                     item(key = "outbox-${message.clientMessageId}", contentType = "outbox") { outboxBubble(message) }
                 }
@@ -218,13 +223,13 @@ internal fun ChatPageReaderContent(
             }
             val settling = snapshot.loading || projectedFrom == null || (snapshot.items.isNotEmpty() && projectedFrom !== snapshot.items)
             val readerPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = listBottomInset)
-            if (settling && lines.isEmpty() && messages.isEmpty()) {
+            if (settling && lines.isEmpty() && messages.isEmpty() && heldRows.isEmpty()) {
                 // An Agent's chat on Glass: iOS's skeleton rows where its newest lines will be; Brief and Board keep the spinner.
                 if (glass && agentChat) ChatSkeleton(Modifier.align(Alignment.BottomCenter).padding(start = horizontalPadding, end = horizontalPadding,
                     bottom = listBottomInset + Tokens.Space.m))
                 else JLoading(Modifier.align(Alignment.Center).padding(readerPadding).padding(horizontal = horizontalPadding))
             }
-            else if (!settling && lines.isEmpty() && messages.isEmpty() && snapshot.error == null)
+            else if (!settling && lines.isEmpty() && messages.isEmpty() && heldRows.isEmpty() && snapshot.error == null)
                 JEmptyState(stringResource(R.string.chat_screen_empty_title),
                     emptyChatHint(res, session, machineName, readOnly),
                     Modifier.align(Alignment.Center).padding(readerPadding).padding(horizontal = horizontalPadding))

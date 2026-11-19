@@ -137,6 +137,9 @@ func (m *Machine) resumeSucceeded(c *nodeConn, lostAt time.Time, try int) {
 	p, via := c.route()
 	m.d.logf("[%s] connection over %s resumed after %s (try %d, path %s): %s %s", m.cfg.ID, via, took.Round(time.Millisecond),
 		try, pathName(m.d, p), counts, c.peer.LaneStats())
+	// A link that came back meanwhile (the one the connection was resumed over, often) has not heard the node is
+	// online: only a new connection said so (serve). Not when it is lost again by then, or no longer the machine's.
+	m.tellLinksIf(true, "", func() bool { return m.nodeConnected(c.peer) })
 }
 
 // tryResumePath tries a newly better path's transports in the same order establish would. If it moves the route,

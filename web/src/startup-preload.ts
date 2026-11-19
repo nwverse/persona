@@ -453,6 +453,11 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // read a later hello or another sign-in overtook left alone (lib/start-page.ts). The editor (its heading, each card's
 // controls, the drag and the edits) is a chunk of its own (views/extensions/OverviewArrange.tsx, lib/overview-edit.ts).
 // Main had 4,560 B of room, so the budget is this ja size plus those 4,560 B.
+// #11090: a waiting to-do's label says what it waits on (lib/todo-wait-reason.ts waitReason and todoLook, read on the
+// first screen by Overview's task cards, the main chat's trays and the sidebar's By to-do rows; the seven
+// lib-state-labels waits_* words in place of task_waiting). 505 B in ja, measured in one environment against main
+// c4fc3ef324 (ja 479,301 B to 479,806 B; en 476,414 B to 476,898 B, zh-Hans 477,154 B to 477,624 B). Main had 3,430 B
+// of room; the budget stays (merged with #9745 above, it takes those 505 B of #9745's room).
 // #9778 (#9745's follow-up): what is on its way kept to the sign-in it was made under (a change sent, queued or not
 // taken under an earlier one dropped, its answer changing nothing) and a hello's read a push or another tab's change
 // overtook left alone (lib/start-page.ts, lib/overview-cards.ts), and Arrange cards opening a folded cards' section and
