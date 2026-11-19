@@ -407,7 +407,8 @@ The retired native Mac app showed this section through the shared iOS view and r
 
 ## Diagnosis and cleanup (#8037)
 
-An alert on a machine card says what is wrong; the sheet it opens also says why and offers the action that fixes it. For memory, CPU and disk the "why" comes from the computer
+An alert on a machine card says what is wrong; the sheet it opens also says why and offers the action that fixes it. A launcher's alert shows the recorded error without terminal escapes or
+the shell's startup noise, and the redacted line is already clean (`docs/server/launcher-health.md` "Checks"). For memory, CPU and disk the "why" comes from the computer
 itself: the manager routes `GET /api/v1/machines/{mid}/diagnosis` and `POST /api/v1/machines/{mid}/cleanup` (`devices/diagnosis.go`, `full` devices only) call the node's
 `machine.diagnose` and `machine.cleanup` (`node/machdiag/`, capability `machine_diagnose`). The wire is in [protocol.md](../protocol/protocol.md) ("Data types").
 

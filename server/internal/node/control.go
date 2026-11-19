@@ -238,6 +238,11 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		_ = renameSlot(ctx, launch, created.SlotID, name)
 	}
 
+	// A trailing refused turn would be merged into the first new prompt of a resume, so it is cut first: the file's
+	// last turn is then clean again. A session whose only turn was refused loses its file and starts under its id.
+	if resume != "" {
+		n.healClaudeRefusalTranscript(id)
+	}
 	// A session whose first start failed (claude never came up) has no transcript to resume: start it under its id.
 	args := "--session-id " + id
 	if resume != "" && n.transcriptPath(id) != "" {
