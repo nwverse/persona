@@ -5,7 +5,8 @@ import type { HubAddress } from "./urls.js";
 import { appPairingURL } from "./pairing.js";
 import { installDesktopIPC, DesktopNotifications } from "./ipc.js";
 import { PageRoutes } from "./page-routes.js";
-import { installSetupIPC } from "./setup-ipc.js";
+import { installSetupIPC, installSetupProtocol } from "./setup-ipc.js";
+import { SETUP_SCHEME, SETUP_URL } from "./setup-page.js";
 import { JSONStore } from "./store.js";
 import { restoreWindow, DEFAULT_WINDOW } from "./window-state.js";
 import { closeToTray, installTray } from "./tray.js";
@@ -24,7 +25,10 @@ import { ISLAND_SCHEME } from "./island-page.js";
 
 installSmokeCapture();
 // Electron takes this registration once, before the app is ready: every scheme of the app's own pages belongs here.
-protocol.registerSchemesAsPrivileged([{ scheme: ISLAND_SCHEME, privileges: { standard: true, secure: true } }]);
+protocol.registerSchemesAsPrivileged([
+  { scheme: ISLAND_SCHEME, privileges: { standard: true, secure: true } },
+  { scheme: SETUP_SCHEME, privileges: { standard: true, secure: true } },
+]);
 
 let mainWindow: BrowserWindow | undefined;
 let hub: HubAddress | undefined;
@@ -324,7 +328,7 @@ async function showSetup(): Promise<void> {
       return result;
     },
   });
-  await setup.loadFile(join(import.meta.dirname, "setup.html"));
+  await setup.loadURL(SETUP_URL);
 }
 
 const locked = app.requestSingleInstanceLock();
@@ -346,6 +350,7 @@ else {
   });
   app.whenReady().then(async () => {
     installIslandProtocol();
+    installSetupProtocol();
     const publishPresence = () => {
       if (!mainWindow || mainWindow.isDestroyed()) return;
       const presence = desktopPresence(powerMonitor.getSystemIdleTime(), screenLocked, Notification.isSupported());

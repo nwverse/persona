@@ -1,5 +1,9 @@
 # Lessons: hub / node and networking
 
+## A cancelled RPC test must acknowledge cancellation before releasing work (#10342)
+
+A local context cancellation only starts delivery of `rpc.cancel`; it does not prove the node has processed it. A test that releases a held file write immediately can let the operation finish as `done`, after which polling for `cancelled` times out and the original destination is not restored. Keep the write held until a following `file.operation` request on the same ordered connection has been answered, then release it. Exercise cancellation and normal completion in the same command, and keep the existing deadline, cleanup and restoration assertions.
+
 ## Queue admission decides notification replay (#10394)
 
 A connected WebSocket is not evidence that its outbound queue accepted a notification. Record admission per device
@@ -7,6 +11,16 @@ and retain the event in the existing reconnect ring when every eligible socket r
 same credential accepts it, do not retain a duplicate. Keep recipient-selection counts separate from queue admission
 and delivery. Exercise the real notification bus handler with a full queue, same-ID outbox retry and reconnect;
 keep push-route, capability and preference exclusions intact.
+
+## A response that stops mid-body must be aborted, not returned from (#10855)
+
+`http.ServeContent` stops at a read that fails and returns as if it were done, with the head (200 or 206 and its
+Content-Length) already sent. Over HTTP/1.1 net/http then closes the connection short of that length, which clients
+notice; over HTTP/2 it ends the stream cleanly with fewer bytes than declared, and a client that does not compare them
+keeps the cut file as the whole one. Keep the reader's error and `panic(http.ErrAbortHandler)` after `ServeContent`
+(`recoverPanics` passes it on): HTTP/2 resets the stream. Check it over a real HTTP/2 connection by reading the frames
+(`server/internal/hub/download_abort_test.go`): a `ResponseRecorder` cannot show it, and Go's client counts the bytes
+itself, so it reports the clean end and the reset alike as errors.
 
 ## Contribution identity must match both preview and commit (#10272)
 

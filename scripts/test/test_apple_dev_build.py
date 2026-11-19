@@ -1,5 +1,6 @@
-"""The iOS development build (#10713): the switch that leaves the watch app and the share extension out, and the commit
-stamp that runs only in Release. The project checks need xcodegen (skipped without it); the rest reads the scripts."""
+"""The iOS development build (#10713): the switch that leaves the watch app and the share extension out, the line a lean
+build prints when the branch changes what it leaves out, and the commit stamp that runs only in Release. The project
+checks need xcodegen (skipped without it); the rest reads the scripts or runs them in disposable git repositories."""
 import json
 import os
 from pathlib import Path
@@ -17,6 +18,12 @@ SWITCH = 'PERSONA_LEAN_DEV_BUILD'
 ALWAYS = ['LiveCommunicationKit.framework', 'PersonaWire', 'PersonaWidgets', 'PersonaNotify', 'MarkdownUI', 'BeautifulUI',
           'PersonaSSH', 'PersonaKit', 'PersonaCore', 'MarqueeGlow', 'PersonaScreenKit', 'PersonaInputKit']
 WHOLE_ONLY = ['PersonaWatch', 'PersonaShare']
+# Scripts that run `xcodegen generate` on a spec other than apple/project.yml, which the switch does not touch.
+OTHER_PROJECTS = {
+    'native/iphone-bridge/build.sh': 'its simulator test runner (native/iphone-bridge/sim-runner)',
+    'scripts/app/island_peer.sh': 'apple/IslandPeer',
+}
+NOTE = 'scripts/app/lean-build-note.sh'
 
 
 def dump(**switches):
@@ -83,17 +90,131 @@ class LeanDevBuildCallersTests(unittest.TestCase):
         # The launch arguments still reach the app, without the flag.
         self.assertIn('${ARGS[@]+"${ARGS[@]}"}', sim)
 
-    def test_release_ci_and_ui_tests_build_every_slice_and_the_whole_project(self):
-        # Each clears the switch before it generates the project, so a value the shell exported cannot drop the watch
-        # app from a TestFlight build, and asks for every slice of the Rust core.
-        for path in ('scripts/release/release.sh', 'scripts/ci/apple.sh', 'scripts/app/ui-test.sh'):
+    def test_release_ci_and_ui_tests_build_every_slice_of_the_rust_core(self):
+        for path in ('scripts/release/release.sh', 'scripts/ci/apple.sh', 'scripts/app/ui-test.sh',
+                     'scripts/app/perf-test.sh', 'scripts/diag/stream-scroll/run-ios.sh'):
             with self.subTest(path=path):
                 text = (ROOT / path).read_text()
                 self.assertIn('build-apple.sh', text)
                 self.assertNotIn('--simulator', text)
+
+    def test_every_other_caller_of_xcodegen_generates_the_whole_project(self):
+        # Each clears the switch before it generates the project, so a value the shell exported cannot drop the watch
+        # app from a TestFlight build or the share extension from the tests that share into it. Found by searching,
+        # so a new caller is held to it too.
+        listed = subprocess.run(['git', '-C', str(ROOT), 'grep', '-lE', r'xcodegen +generate', '--', '.',
+                                 ':!docs', ':!*.md', ':!scripts/test'],
+                                capture_output=True, text=True, timeout=60, check=True).stdout.split()
+        for path in OTHER_PROJECTS:
+            self.assertIn(path, listed, 'stale entry in OTHER_PROJECTS')
+        callers = [p for p in listed if p not in OTHER_PROJECTS and p != 'scripts/app/sim.sh']
+        self.assertTrue({'scripts/release/release.sh', 'scripts/ci/apple.sh', 'scripts/app/ui-test.sh',
+                         'scripts/app/share-from-apps.sh'} <= set(callers), callers)
+        for path in callers:
+            with self.subTest(path=path):
+                text = (ROOT / path).read_text()
                 self.assertNotIn(SWITCH + '=', text)
-                generate = text.index('xcodegen generate')
-                self.assertLess(text.index('unset ' + SWITCH + '\n'), generate)
+                cleared = text.find('unset ' + SWITCH + '\n')
+                self.assertNotEqual(cleared, -1, 'generates the project without clearing ' + SWITCH)
+                self.assertLess(cleared, re.search(r'xcodegen +generate', text).start(), 'clears it too late')
+
+    def test_only_a_lean_build_names_the_check_it_skipped(self):
+        sim = (ROOT / 'scripts/app/sim.sh').read_text()
+        lean = sim[sim.index('if [ "$LEAN" = YES ]; then'):]
+        self.assertIn('../' + NOTE, lean[:lean.index('\nfi\n')])
+        self.assertEqual(sim.count('lean-build-note.sh'), 2)  # the call and the header that names it
+
+
+class LeanBuildNoteTests(unittest.TestCase):
+    """scripts/app/lean-build-note.sh in a disposable repository with an origin/main."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix='persona-lean-note-'))
+        self.addCleanup(shutil.rmtree, self.root)
+        (self.root / 'scripts/app').mkdir(parents=True)
+        shutil.copy2(ROOT / NOTE, self.root / NOTE)
+        for path in ('apple/Shared/Hub.swift', 'apple/PersonaWatch/Watch.swift', 'apple/PersonaWatchWidgets/Face.swift',
+                     'apple/PersonaShare/Share.swift', 'apple/Persona/App.swift', 'server/main.go'):
+            self.write(path, 'one\n')
+        self.git('init', '-q', '-b', 'main')
+        self.commit('base')
+        self.git('update-ref', 'refs/remotes/origin/main', 'HEAD')
+        self.git('checkout', '-q', '-b', 'feature')
+
+    def git(self, *args):
+        return subprocess.run(['git', '-C', str(self.root), '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.com',
+                               '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', *args],
+                              capture_output=True, text=True, timeout=30, check=True).stdout
+
+    def write(self, path, text):
+        (self.root / path).parent.mkdir(parents=True, exist_ok=True)
+        (self.root / path).write_text(text)
+
+    def commit(self, message):
+        self.git('add', '-A')
+        self.git('commit', '-q', '-m', message)
+
+    def note(self):
+        run = subprocess.run(['bash', str(self.root / NOTE)], capture_output=True, text=True, timeout=30)
+        self.assertEqual((run.returncode, run.stderr), (0, ''))
+        self.assertLessEqual(len(run.stdout.splitlines()), 1)
+        return run.stdout
+
+    def test_the_folders_it_watches_are_the_real_ones(self):
+        text = (ROOT / NOTE).read_text()
+        folders = [f for line in re.findall(r'^(?:WATCH|WATCH_AND_SHARE)=\((.*)\)$', text, re.M) for f in line.split()]
+        self.assertEqual(sorted(folders), ['apple/PersonaShare', 'apple/PersonaWatch', 'apple/PersonaWatchWidgets',
+                                           'apple/Shared'])
+        for folder in folders:
+            with self.subTest(folder=folder):
+                self.assertTrue((ROOT / folder).is_dir(), folder)
+        project = (APPLE / 'project.yml').read_text()
+        for folder in ('PersonaWatch', 'PersonaWatchWidgets', 'Shared'):
+            self.assertIn('      - path: %s\n' % folder, project)
+
+    def test_nothing_changed_where_the_lean_build_skips_says_nothing(self):
+        self.assertEqual(self.note(), '')
+        self.write('apple/Persona/App.swift', 'two\n')
+        self.write('server/main.go', 'two\n')
+        self.commit('elsewhere')
+        self.assertEqual(self.note(), '')
+
+    def test_a_change_to_shared_names_the_whole_build(self):
+        self.write('apple/Shared/Hub.swift', 'two\n')
+        self.commit('shared')
+        out = self.note()
+        self.assertIn('changes apple/Shared/;', out)
+        self.assertTrue(out.rstrip().endswith('scripts/app/sim.sh --with-watch'), out)
+
+    def test_uncommitted_and_new_files_count(self):
+        self.write('apple/PersonaShare/New.swift', 'new\n')
+        self.assertIn('apple/PersonaShare/', self.note())
+        self.git('checkout', '-q', '--', '.')
+        (self.root / 'apple/PersonaShare/New.swift').unlink()
+        self.write('apple/PersonaWatchWidgets/Face.swift', 'two\n')
+        self.assertIn('apple/PersonaWatchWidgets/', self.note())
+
+    def test_a_watch_only_change_names_the_watch_scheme(self):
+        self.write('apple/PersonaWatch/Watch.swift', 'two\n')
+        self.write('apple/PersonaWatchWidgets/Face.swift', 'two\n')
+        self.commit('watch')
+        out = self.note()
+        self.assertIn('changes apple/PersonaWatch/ apple/PersonaWatchWidgets/;', out)
+        self.assertIn("-scheme PersonaWatch -destination 'generic/platform=watchOS Simulator'", out)
+        self.assertNotIn('--with-watch', out)
+
+    def test_only_the_branch_counts_not_what_main_did_since(self):
+        self.git('checkout', '-q', 'main')
+        self.write('apple/Shared/Hub.swift', 'main moved on\n')
+        self.commit('main')
+        self.git('update-ref', 'refs/remotes/origin/main', 'HEAD')
+        self.git('checkout', '-q', 'feature')
+        self.assertEqual(self.note(), '')
+
+    def test_without_origin_main_it_stays_quiet(self):
+        self.write('apple/Shared/Hub.swift', 'two\n')
+        self.git('update-ref', '-d', 'refs/remotes/origin/main')
+        self.assertEqual(self.note(), '')
 
 
 @unittest.skipUnless(shutil.which('xcodegen') and shutil.which('git'), 'needs xcodegen and git')
