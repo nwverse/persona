@@ -154,7 +154,11 @@ func resumeParams(c proto.Session, text string) map[string]any {
 func (s *Service) resumeAndSend(ctx context.Context, self string, am Device, c proto.Session, params map[string]any, why, told, handed string,
 	task *handedTask) (string, error) {
 	text, _ := params["text"].(string)
-	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute) // a resume can take minutes
+	wait := 5 * time.Minute // a resume can take minutes
+	if contextFull(c) {
+		wait += compactSendWait // and then a compaction (#11137)
+	}
+	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), wait)
 	defer cancel()
 	sendNote, err := s.noteAgentSend(sctx, self, am.ID, c.SessionID, "", text) // more from its task's conversation reopens an accepted task (#6726, #7539)
 	if err != nil {
@@ -182,14 +186,12 @@ func (s *Service) resumeAndSend(ctx context.Context, self string, am Device, c p
 	}
 	compacted := ""
 	if full {
-		cctx, ccancel := context.WithTimeout(sctx, compactSendWait)
 		send := maps.Clone(params)
 		send["compact_if_full"] = true
 		var sent struct {
 			Compacted bool `json:"compacted"`
 		}
-		err = s.call(cctx, am.ID, DeviceSessionSend, send, &sent)
-		ccancel()
+		err = s.call(sctx, am.ID, DeviceSessionSend, send, &sent)
 		sendNote.sent(sctx, err)
 		if err != nil {
 			if errCode(err) == proto.CodeCompactFailed {
