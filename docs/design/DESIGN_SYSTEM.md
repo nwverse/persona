@@ -1851,7 +1851,7 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   once the stack is opened in full (folded, its "N more" row says it), so the stack never hides how many it holds.
   Wherever an Allow is in view, what it allows is in view too.
 - **Room** (web, #4656): an open tray of requests takes the room its cards need, up to most of the visible height (the assistant's Needs you / In progress tray lets the dock grow to 82% of it while open), never a fixed short box. Its header (title, All, Expand, Close) stays and only its list scrolls; a card's answer row stays at the list's bottom edge with a hairline over what scrolls under it. **Expand** in the header fills the chat column for going through many requests, the composer still on screen; the same button, **Restore size**, or closing the tray gives the room back.
-- **Card text**: the title names the request and what happens next, in the same words on every client: the request titles in section 5.6. The body gives only what the decision needs: the command, the plan's summary, the question and its choices. Commands render formatted, never as raw JSON.
+- **Card text**: the title names the request and what happens next, in the same words on every client: the request titles in section 5.6. The body gives only what the decision needs: the command, the plan's summary, the question and its choices. Commands render formatted, never as raw JSON. A script ask whose interaction has `format: "markdown"` draws its permission summary or question with the existing reply Markdown renderer on iOS and the web, including inline styles, lists and short tables; missing and unrecognized formats keep the literal card text (#10857).
 - **A plan's recorded following mode** (#3784): when the plan interaction carries `plan_then`, the existing approval card names that mode with the general permission-mode label and offers one approval, not a competing set of modes; the recorded mode came from the task's start, so it wins on older clients too. Send Back stays. A card without the field keeps the existing approval-mode choices and default. This changes only the affected approval's content, reusing the current buttons, menu-free action row and localized labels.
 - **Editing before Allow** (web Lark send/reply): the default card remains read-only with Allow primary. **Edit text** and **Deny with note…** progressively disclose their fields only when the server declares the capability. An actual edit hides Always and makes Allow apply to the reviewed replacement, never the original command; blank text disables Allow. Deny remains an explicit action, with its optional reason secondary to the decision. Other clients and other permission kinds keep the unchanged Allow/Deny layout.
 - **One scroll, the answers in view** (iOS and iPadOS, #6605): a card scrolls in one place at most. A lone card fits the
@@ -3001,9 +3001,13 @@ effort fields are gone. What the panel gained for it, each part optional and abs
   `--line-strong` border, no glow) at the start, the bubble and accessible value "Model default"; a click or key picks a
   level.
 - Lines under the first message box: one 11.5 px line each, a 12 px icon first: a pick dropped on another computer
-  (`info`, `ink-3`), a list that couldn't be read (`warning`, `--orange`), what runs this time can't start here (`warning`,
-  `--orange`, the "Used this time" pill, How to fix), the preset picked (`layers`, `ink-3`; `warning` in `--orange` when
-  something of it can't be applied).
+  (`info`, `ink-3`), the computer's launchers that couldn't be read (`warning`, `--orange`, the reason in `ink-3`, Retry
+  in `--accent-ink`; #10952), a list that couldn't be read (`warning`, `--orange`), what runs this time can't start here
+  (`warning`, `--orange`, the "Used this time" pill, How to fix), the preset picked (`layers`, `ink-3`; `warning` in
+  `--orange` when something of it can't be applied).
+- Launchers that couldn't be read (#10952): the pill leaves its spinner for its failed state (the red `warning` and
+  "Model loading failed"), and a click on it reads them again, as Retry on the line under the box does; Start still runs
+  the computer's default.
 
 Reason: one place to choose a model for chats and new Agents (principle 4), the engine visible without a field of its
 own (principle 2), the default as one row that can always be gone back to (principles 1 and 3). The deviations from

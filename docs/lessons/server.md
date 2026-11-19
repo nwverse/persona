@@ -571,10 +571,14 @@ entry can import a secret target. Recreate ordinary links with `--symlink` so th
 close links for special read-only files or partially closed directories. Keep the view root read-only so later secret
 backups cannot be created. File binds still pin their inode and the top-level entry list: a replaced `node.sock` stays
 old, so a node restart requires an agent restart. Do not permanently cache probes or preflight success; bwrap/PATH and
-namespace availability can change, and full per-cwd profiles make an unbounded key space. A tmpfs mounted directly on a symlink follows it and masks the target; give an alias its own view, but do not
-claim this protects the link from unlink. Stock bwrap 0.8 has no path-aware unlink/rename filter, so protecting the link
-while keeping its parent writable needs another mechanism. It also keeps a supervisor even without `--unshare-pid` or
-with `--as-pid-1`: verify the agent's `PPID` in the host pid namespace, not equal pids, and use `--die-with-parent` for
+namespace availability can change, and full per-cwd profiles make an unbounded key space. A tmpfs mounted directly on a
+symlink follows it and masks the target; the alias view alone does not protect the link from unlink. Stock bwrap 0.8 has
+no path-aware unlink/rename filter. To protect an explicit alias while its parent stays writable, a pre-exec helper can
+`open_tree` the symlink inode with `AT_SYMLINK_NOFOLLOW`, then `move_mount` the detached clone onto the alias without
+following the destination. Run the same helper in preflight and exec the agent at the same pid. Do not drop
+`CAP_SYS_ADMIN` to harden these mounts: that breaks `unshare -rm`, which was working; direct `umount` in the original
+namespace therefore remains an explicit boundary. Bubblewrap keeps a supervisor even without `--unshare-pid` or with
+`--as-pid-1`: verify the agent's `PPID` in the host pid namespace, not equal pids, and use `--die-with-parent` for
 lifecycle cleanup.
 
 ## Runtime policy and publisher-owned node packages (#2566)
@@ -2738,6 +2742,7 @@ computer every 2 s): the manager allocated 555 MB and used about 2.1 s of CPU a 
 - `cmd.Cancel` runs only when the context ends before the process exits. A shell that exits at once and leaves a background child holding its stdout or stderr (`sleep 4 & echo $!`) keeps `Wait` reading the pipe until that child exits or `WaitDelay`, counted from the shell's exit, closes it: the deadline passes unnoticed. `secret.run` held a 1-second run for 4 seconds, and the next command, which could no longer start, came back as timed out.
 - Watch the context for as long as `Wait` runs and stop the group at the deadline, sharing one "stopped" flag with `Cancel` so the group gets one SIGTERM (`runSecretCommand`). Classify the result by that flag, not the exit status: the shell exited 0.
 - A command that never started because the time was used up gets no result. A timed-out result for it reads as a command that ran and was stopped, and makes the Agent check the computer for one that never ran.
+- The same hole sat in the node's launcher scan (`launchers.go`, #10952): a `~/.zshrc` that left a job running in the background (or the script's children when the 20 s cap killed only the shell) kept `Output()` waiting, under the lock every launcher read takes. Each `GET /machines/{mid}/launchers` then ran into the hub's 30 s and nothing was cached. A login-shell read whose output matters takes `killGroupOnCancel`; `time zsh -ic true | cat` against `time zsh -ic true` shows such an rc file.
 
 ## An id the node makes up for a message ends up on its line (2026-11-12, #5225)
 
