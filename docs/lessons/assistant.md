@@ -812,3 +812,9 @@ slash-only message on its own, leaves the snapshot unsent for the next message, 
 snapshot the conversation has seen (`TestAssistantOnARuntimeSendsASlashCommandOnItsOwn`). The chat bubble showed the
 doubled text because the chat is drawn from the agent's own transcript: when a user bubble looks wrong, compare it with
 the hub's record of what was sent before looking at the client.
+
+## Permanent conversation errors outrank silent-turn hints (#10399)
+
+When merging no-output turn handling, keep account-sealed compaction ahead of `no_output` / `stopped` handling in triage
+and clients. A generic kind must not restore Continue for a permanent error; ordinary silent turns keep their own text
+and Continue. Test both paths together, including the clients' independent invalid and plain-text flags.

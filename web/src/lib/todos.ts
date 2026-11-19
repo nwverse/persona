@@ -6,7 +6,7 @@ import type { RuleSuggestion } from "./rule-suggestion";
 import type { TodoSummary } from "./todo-view-wire";
 import { api, ApiError, enc } from "./api";
 import { contextBody } from "./context-body";
-import { parseAPIError, retryable } from "./api-errors";
+import { parseAPIError, retryable, unrecoverableError } from "./api-errors";
 import { stateOf } from "./format";
 import { foldedState } from "./child-sessions";
 import { foldRows } from "./folded-rows";
@@ -403,7 +403,7 @@ export function todoStatus(todo: Todo, lookup?: SessionLookup): TodoStatus {
   }
 
   if (hasNeedsYou) return "needs_you";
-  if (hasInterrupted) return "interrupted";
+  if (hasInterrupted && !hasWorking && !hasWaiting && todo.supervision?.state !== "parked") return "interrupted";
   if (hasLimit) return "usage_limit";
   if (hasUnread) return "unread";
   if (hasWorking) return "working";
@@ -448,8 +448,11 @@ const SILENT_TURN_KINDS: ReadonlySet<string> = new Set(["no_output", "stopped"])
 
 /** Why the model service cut the agent off (#1516), in words, and whether "Continue" can help (a login or a bad request is
  *  not fixed by going on); undefined when it was not cut off. A turn with no output says the hub's sentence for it. */
-export function interruption(s?: Session): { reason: string; canContinue: boolean } | undefined {
+export function interruption(s?: Session): { reason: string; canContinue: boolean; invalid?: boolean } | undefined {
   if (!interruptedAgent(s)) return undefined;
+  if (s?.turn_error_kind === "unrecoverable" || s?.turn_error_code === "compaction_sealed" || unrecoverableError(s?.turn_error)) {
+    return { reason: t("lib-api-errors.conversation_invalid"), canContinue: false, invalid: true };
+  }
   if (SILENT_TURN_KINDS.has(s?.turn_error_kind ?? "")) return { reason: s!.turn_error!.trim(), canContinue: true };
   const info = parseAPIError(s?.turn_error);
   return { reason: info?.reason ?? t("lib-todos.model_request_failed"), canContinue: !info || retryable(info) };

@@ -412,9 +412,11 @@ type Session struct {
 	// (docs/assistant/todos.md "State calculation rules", #1516).
 	TurnError string `json:"turn_error,omitempty"`
 	// TurnErrorKind is what the agent's record says of TurnError, when it says (Claude Code's error field, Codex's
-	// error kinds): TurnErrorTransient (worth a "Continue"), TurnErrorUser (the user must act) or TurnErrorUsageLimit
-	// (a subscription's usage limit, until it resets); empty: read off the text. Or the hub's own word on a task
-	// Agent's turn that had no output at all (SilentTurnKind: TurnErrorNoOutput, TurnErrorStopped), with TurnError
+	// error kinds): TurnErrorTransient (worth a "Continue"), TurnErrorUser (the user must act), TurnErrorUsageLimit
+	// (a subscription's usage limit, until it resets), or TurnErrorUnrecoverable (the conversation is invalid).
+	// The hub's permanent-error classification overrides a generic runtime kind; empty: read off the text.
+	// Or the hub's own word on a task Agent's turn that had no output at all
+	// (SilentTurnKind: TurnErrorNoOutput, TurnErrorStopped), with TurnError
 	// the sentence for it in the user's language (#10187).
 	TurnErrorKind string `json:"turn_error_kind,omitempty"`
 	// TurnErrorResetsAt is when the subscription usage limit that ended the turn resets (TurnErrorKind
@@ -487,9 +489,10 @@ type Session struct {
 
 // Session.TurnErrorKind values.
 const (
-	TurnErrorTransient  = "transient"   // the model service failed for a moment: worth a "Continue"
-	TurnErrorUser       = "user"        // sign-in, context window, the model…: the user must act
-	TurnErrorUsageLimit = "usage_limit" // a subscription's usage limit: it goes on once the limit resets (TurnErrorResetsAt)
+	TurnErrorTransient     = "transient"     // the model service failed for a moment: worth a "Continue"
+	TurnErrorUser          = "user"          // sign-in, context window, the model…: the user must act
+	TurnErrorUsageLimit    = "usage_limit"   // a subscription's usage limit: it goes on once the limit resets (TurnErrorResetsAt)
+	TurnErrorUnrecoverable = "unrecoverable" // this conversation cannot continue; start a new one
 	// The hub's word on a task Agent's turn that ended with no reply, tool call or image (#2349, #10187): no error the
 	// model service reported, and no "Done" either.
 	TurnErrorNoOutput = "no_output" // the model service answered nothing: interrupted, worth a "Continue"
@@ -507,6 +510,7 @@ const (
 	TurnErrorModelRoute               = "model_route"                // the model name is not one the service or gateway knows
 	TurnErrorRateLimited              = "rate_limited"               // too many requests, or a usage limit
 	TurnErrorModelFallbackUnavailable = "model_fallback_unavailable" // a refusal selected a model the service cannot use
+	TurnErrorCompactionSealed         = "compaction_sealed"          // native context is encrypted to another account
 	// TurnErrorToolSearchUnsupported: the gateway refused Claude Code's on-demand tool loading (tool search, #10365). The
 	// node now starts that launcher and model with every tool loaded, so a retry works: not the user's to fix.
 	TurnErrorToolSearchUnsupported = "tool_search_unsupported"
