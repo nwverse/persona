@@ -905,6 +905,7 @@ var errTodosUnavailable = errors.New("todos service unavailable")
 
 func (s *Service) todoRoutes() {
 	s.todoRepositoryRoutes()
+	s.workspaceNamingRoutes()
 	s.taskReviewDismissalRoutes()
 	s.todoDecisionRoutes()
 	s.todoThreadRoutes()

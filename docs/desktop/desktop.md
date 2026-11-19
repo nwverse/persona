@@ -167,20 +167,20 @@ The update state lives in the tray menu, between **Open Persona** and **Quit Per
 
 ### How a release publishes desktop packages
 
-A stable `v<major>.<minor>.<patch>` tag runs `.github/workflows/release.yml` (`docs/operations/release.md`, "Desktop packages on version tags"). Behind the same administrator-only gate as the hub image, it:
+A stable `v<major>.<minor>.<patch>` tag or a `v<major>.<minor>.<patch>-beta.<N>` tag runs `.github/workflows/release.yml` (`docs/operations/release.md`, "Desktop packages on version tags"). Behind the same administrator-only gate as the hub image, it:
 
 1. decides per platform whether every signing secret below is configured (`scripts/ci/desktop-release-gate.sh`; only whether a secret exists reaches the script, never its value);
 2. builds on native runners with `scripts/ci/desktop-package.sh`: the universal macOS DMG and ZIP, signed and notarized, and the Windows NSIS installer, signed. The package version is the tag without its `v`; the app ID comes from the `PERSONA_DESKTOP_APP_ID` secret and is never written in the repository;
 3. verifies the result (`codesign` and Gatekeeper's `spctl` on macOS, `Get-AuthenticodeSignature` on Windows);
 4. attaches the packages and their block maps to the GitHub Release the workflow already created, and only then the update metadata (`latest-mac.yml`, `latest.yml`), so an installed app never reads metadata naming a package that is not there yet.
 
-**A release never ships an unsigned package as if it were final.** When a platform's secrets are missing, that platform is skipped, the run's summary names the missing secrets, and the hub image and GitHub Release are published as before. In release mode the package script refuses to build without a certificate or with the placeholder app ID instead of falling back to the unsigned development build. Prerelease tags (`v1.3.0-rc1`) publish no desktop packages: installed apps follow the latest stable Release only.
+**A release never ships an unsigned package as if it were final.** When a platform's secrets are missing, that platform is skipped, the run's summary names the missing secrets, and the hub image and GitHub Release are published as before. In release mode the package script refuses to build without a certificate or with the placeholder app ID instead of falling back to the unsigned development build. Stable and beta desktop channels are distinct: stable versions use `latest.yml` / `latest-mac.yml`; beta versions use `beta.yml` / `beta-mac.yml` on their immutable prerelease, so the stable update channel does not opt into prereleases. The separate hub beta setting does not silently change a desktop's update channel.
 
 Between the moment the Release is created and the moment its desktop metadata is attached, the newest Release has no update metadata. A check in that window fails quietly and the next scheduled one succeeds.
 
 ### What the owner must provide
 
-No certificate exists yet, so no release has published desktop packages. Before adding credentials, the owner must create the `persona-desktop-release` GitHub Environment with required reviewer approval restricted to the administrator, and configure these as **Environment secrets**, not repository secrets. The environment restricts their use to the release jobs on stable version tags. The development Desktop workflow never receives them. None is ever committed, and nobody should look for them in a key store.
+No certificate exists yet, so no release has published desktop packages. Before adding credentials, the owner must create the `persona-desktop-release` GitHub Environment with required reviewer approval restricted to the administrator, and configure these as **Environment secrets**, not repository secrets. The environment restricts their use to the release jobs on version tags. The development Desktop workflow never receives them. None is ever committed, and nobody should look for them in a key store.
 
 | Secret | What it is |
 | --- | --- |

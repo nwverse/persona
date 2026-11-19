@@ -535,6 +535,11 @@ cost is smaller than a broken image. When something has to be listed by hand in 
   may be one in each set since each records its own part (one file in both sets is
   still refused); move only an unpublished migration to another second, never an
   applied migration or the guard.
+- A numbered migration on an older feature branch may be absent from main's
+  frozen inventory (#7100). Keep its SQL unchanged when giving that branch-only
+  file a timestamp, and map its known legacy record through the existing
+  renumbering step. Test old-only and duplicate records with saved rules and
+  operation snapshots. Keep every frozen migration and the guard unchanged.
 - Future publication needs an immutable enable-window frontier **and** a moving
   verified scan checkpoint. Using the previous scan's EOF as the window boundary
   drops a new pending turn when it completes on a later scan. Preserve first-seen
@@ -1709,10 +1714,34 @@ back) and only keeps the entry. Tell them apart by git's `CONFLICT` lines plus `
 
 ## Block iCloud paths component by component (2026-11-04, #1669)
 
+- **A naming plan needs the same guard as a file path** (#7100): lexical root
+  checks miss links in the base, task and individual repository directories.
+  Resolve each through `realPath`, permit only its guarded missing tail, and
+  check both credentials and the entire physical private-state directory before
+  returning any plan. Keep the resolver pure, preserve Linux case sensitivity,
+  and reserve Darwin private paths without case; a Linux rule test or cross-build
+  does not establish native macOS filesystem behavior. Preparation rechecks when
+  resources are actually used.
+- **Test a missing state root as well as missing workspace targets** (#7100):
+  `realPath` returns the physical existing ancestors plus missing tail with
+  `ErrNotExist`. Keep that returned path for containment. A state-root link or
+  linked parent with an absent destination must still deny that destination at
+  the base, task and repository levels; a sibling sharing only its prefix stays
+  outside. Test through Node RPC with actual temporary links and no creation.
 - **Literal checks don't stop links**: `stat` / `file` only checked whether the resolved string contained `/Library/Mobile Documents`; a `~/x` symlink into iCloud still reached `os.Stat`, hanging the batch on a locked Mac.
 - **`filepath.EvalSymlinks` isn't enough**: it `Lstat`s component by component; after following a link into iCloud it stats the next component there, so checks after return are too late.
   Walk components ourselves (`realPath` in `node/pathguard.go`), checking `offLimits` before each `Lstat`; lowercase comparisons because macOS is case-insensitive by default.
 - **One hung stat mustn't stall the batch**: network drives and sleeping disks hang too. `statPaths` runs 8 concurrently, waits at most 3 seconds overall, and treats nonresponses as `missing`.
+
+## Verify saved settings on the wire (#7100)
+
+- Distinct JSON tags on an embedded saved-settings field and an effective field
+  do not collide. Verify the actual HTTP response before changing the view:
+  `workspace_rules` stays partial while `effective_workspace_rules` is complete.
+  Exercise untouched settings, partial writes, omitted fields, explicit values
+  equal to defaults and null resets through GET/PUT, then read the database and
+  GET from a fresh service. Internal struct assertions alone miss serialization
+  regressions and cannot establish the editor's inheritance contract.
 
 ## Upload names the file system cannot take
 
@@ -2921,3 +2950,7 @@ documenting an order.
   guards against moving a switching computer were checked in memory and acted on without a lock. Each of these could leave
   the computer at `kind: link` with nobody able to undo it. Write the intent row first and decide under the lock. Keep what
   must survive a restart in the database.
+
+## Compile production and test callers after shared helper changes
+
+A helper refactor can leave a missing tuple return, a test caller without a new context argument, or a runtime reader naming the old helper. Compile both production and test packages after merging; retain the existing read-only database helper and exercise its failure paths rather than adding a parallel implementation.
