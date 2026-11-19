@@ -49,4 +49,3 @@ export function launcherSearch(input: Omit<SectionsInput, "view">): PanelRow[] {
     presets: [],
   }).flatMap((s) => s.rows);
 }
-

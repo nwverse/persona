@@ -149,7 +149,7 @@ func (m *Machine) pingAnswered(peer *rpc.Peer, err error) {
 	if at := peer.PingActivity(); !at.IsZero() {
 		last = "last reply or large frame " + now.Sub(at).Round(time.Second).String() + " ago"
 	}
-	m.d.logf("[%s] no answer to %d pings in a row over %s (%s): closing the connection to reconnect", m.cfg.ID, misses, m.transportNow(), last)
+	m.d.logf("[%s] no answer to %d pings in a row over %s (%s, %s): closing the connection to reconnect", m.cfg.ID, misses, m.transportNow(), last, peer.LaneStats())
 	peer.Close(fmt.Errorf("no answer to %d pings in a row (a half-open link?)", misses))
 	m.wake()
 }

@@ -55,6 +55,36 @@ with Vite's `normalizePath` before comparing allowlisted module IDs or removing 
 Keep the isolation rules strict: verify the actual public viewer build on Windows, its relative graph paths, and
 the rejection of an injected module outside the allowed graph.
 
+## Translate the full item, not the page's preview (#8650)
+
+A hub-paged answer's `text` is only a prefix until `useFullText` loads its full item. Passing that prefix to a
+translation action produced a partial translation and replaced the very control that could load the rest.
+Load through the existing full-text hook before the model request; share manual/in-flight loads and keep its
+loading/failure control readable. Use the item's stable source identity while the visible text expands, so the
+translation is not discarded as a stale result. A regression must render the real `Answer` with `full_size`,
+not only `MessageActions` around already complete text; assert the exact full payload and no spend on load failure.
+
+Reuse the existing translation module on intent rather than adding request/cache code to the first screen. Check
+owner/item/unmount both before loading the full text and after it; a module or source load can outlive the reply.
+
+Measure the normalized first-screen chunks, not a helper's standalone compressed size: a small lazy state wrapper
+can cost more than it removes. Menu-only actions and text selection can share the existing reply-controls chunk
+through `lazyOverlay` / `lazyDialog`, preserving the visible phone actions and dialog exits. List only their
+remaining eager translation keys in the startup catalog; moving code alone still ships a whole namespace's words.
+Build the touch menu's Select text action there as well as its dialog, so its label does not remain eager.
+Use `Menu.point` for a right-click position instead of creating and cleaning up a zero-sized DOM anchor.
+The fork action's label and callback belong in that same cold chunk; its opener needs only eligibility. Read the
+conversation context and filter the reply's More actions there too, rather than preparing closed-menu state.
+The side bar's clipping measurement can share it on pointer/focus intent: keep the same buttons safely below
+until it arrives, and do not publish placement for disconnected elements.
+Keep one anchor and scope for the message's overlay: opening its full context menu from an open More menu must
+replace that menu, not leave two copies with different action scopes.
+Check whole startup namespaces: an already lazy dialog (such as New main chat) can still ship all its words there.
+Keep its header and immediate feedback keys eager, and let the existing dialog loader bring the rest.
+When merging a new menu row, keep its label and callback in that cold menu too, preserving the upstream scope and
+payload. Select messages belongs last in the full menu, not the compact More menu; await the intent-loaded menu
+in its regression rather than dropping the original selection assertions.
+
 ## A refused credential-mirror write must not erase the readable legacy login (#9023)
 
 Migration reads are on the startup path, so a `setItem` quota or permission failure can otherwise leave the whole app blank before any page boundary mounts. Return the already-read legacy token and its matching device id when the canonical mirror cannot be written; `storedValue` must use that same accepted fallback, never revive a legacy token beside an orphan canonical id or override a canonical empty sign-out. Re-read the canonical value after attempting migration so another tab's newer write still wins. Test token and device-id write failures separately, plus a real browser startup with synthetic storage; never clear a user's profile to make the migration succeed.
@@ -1422,6 +1452,10 @@ owner retyped it on the computer. Keep the node's code on the entry and word the
 entries kept from before), draw an uncertain one as waiting (caution color, no "Not sent"), and make a Check that finds
 nothing new say so. The node tells held from merely unconfirmed by the session's permission mode (`peer_held`).
 
+## Filter history after folding, and reconcile search snapshots (#10240)
+
+A stopped parent can own a working child or a pending side request. Fold the complete sidebar rows before selecting non-running history, or the parent disappears from live work and its children become duplicate history rows. A frozen content-search result can also outlive Resume or deletion: use the current complete row for its identity and drop identities removed from a loaded snapshot. Compute day headings and counts after all filters, with local calendar fields rather than UTC date substrings.
+
 ## A terminal menu must own focus before taking typing keys (#10239)
 
 An open Menu listens in the window's capture phase. Merely hiding pane controls from session rows does not make its
@@ -1430,3 +1464,7 @@ toolbar opts into Menu's focus scope, accepts keys only from its own trigger or 
 trigger when opening. Check a real xterm textarea and a non-editable element as well as ordinary search input. Raw
 pane addresses also need to resolve a listed Agent before closing, or they would fall back to a shell confirmation
 and lose the busy-Agent warning.
+
+## Deep tree rows need space for their counts (#10477)
+
+A shrinking file name cannot protect an end count when the row itself has unbounded indentation padding. Put the indentation and icon inside the name's shrinkable, clipped region; keep the count outside it with no wrapping. Bound deep indentation to a share of that region so the file name still has room for an ellipsis. Measure bounds against the containing panel, not the viewport, and keep the requested width separate from its temporary fitted width. Verify deep rows at minimum width in a real browser: jsdom cannot detect a clipped minus sign.

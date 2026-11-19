@@ -181,10 +181,24 @@ describe("the model panel", () => {
   it("distinguishes identical model names by their launcher in All", async () => {
     const shared = [{ id: "fable", name: "Fable", efforts: [] }];
     await open({ providers: [claude({ models: shared }), codex({ models: shared, unavailable: undefined })], state: { current: null, recommended: [], starting: true } });
+    act(() => launcher("claude").click());
+    act(() => launcher("codex").click());
     const duplicates = rows().filter((r) => r.textContent?.includes("Fable"));
     expect(duplicates).toHaveLength(2);
     expect(duplicates[0].textContent).toContain("Claude");
     expect(duplicates[1].textContent).toContain("Codex");
+  });
+
+  it("draws each provider's Agent mark once, first: on its launcher summary and at the start of its rows, never a letter (#5497)", async () => {
+    await open({ providers: [claude(), codex(), { ...codex(), id: "dsh", name: "dsh", engine: "dsh" }] });
+    const mark = (el: Element) => el.querySelector("[data-agent-mark]")?.getAttribute("data-agent-mark");
+    expect(["claude", "codex", "dsh"].map((p) => mark(launcher(p)))).toEqual(["claude", "codex", "generic"]);
+    expect(row("Opus").querySelectorAll("[data-agent-mark]")).toHaveLength(1);
+    expect(mark(row("Opus").firstElementChild!)).toBe("claude");
+    act(() => launcher("codex").click());
+    expect(mark(row("GPT").firstElementChild!)).toBe("codex");
+    expect(row("GPT").querySelector("[data-row-setup] [data-agent-mark]")).toBeNull();
+    expect(document.body.querySelector('[data-agent-mark="letter"]')).toBeNull();
   });
 
   it("draws a provider's weekly quota bar and reset tooltip, and no bar when it is unknown", async () => {

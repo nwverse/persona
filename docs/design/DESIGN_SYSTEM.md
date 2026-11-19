@@ -630,6 +630,9 @@ on-demand model panel, not the everyday Assistant home (#6887).
   13 px, at most 420 px, 500 ms into a hover, never pinned by a pointer). A Persona conversation shows only "≈ $0.12"
   and one plain line, and nothing without a cost (super rules 0 and 4). On touch screens the text ends the copy + ⋯
   row: a tap holds the card or the tooltip, and a second tap on the text or a press elsewhere closes it.
+  Translate (#8650) loads a hub-paged reply's full text before requesting its translation: the original and its
+  full-text loading/retry control stay visible until the complete translation succeeds. Show original restores
+  the cached complete reply, not an unmarked prefix; failure to load the full text never sends a partial translation.
   Details: `docs/web/web.md` ("Reply bar").
 - Web hover bar beside your own bubble (pointer only: the time, Copy message, Quote, Edit, ⋯): left of the bubble, 6 px
   away, where it fits inside what shows the chat. Where a narrow window leaves a wide bubble no room there, the same
@@ -789,6 +792,8 @@ sending identity or confirmation behavior.
 The web Agent conversation header's **Session overview** list button toggles a panel from the right side of the toolbar (`web/src/views/chat/ChatView.tsx`, `web/src/views/chat/SessionOverview.tsx`). The panel uses the app's surface and keeps its own scroll. It sits beside the conversation when there is room and above the transcript in a narrow conversation. The reader can keep it open while working in the chat. The environment and context sections use the current session's metadata. The subagent row shows running and ended counts and opens the tree on demand. Background activity uses the Background tasks panel's list rows, workflow details, output viewer and loop controls. The finished task disclosure counts distinct terminal notices in the loaded transcript. The overview and its disclosures start closed.
 
 ### 3.4 Lists and rows
+
+- Web History (#10240) is an Agents destination for non-running sessions, grouped by local activity day. It shares folded sidebar state and visibility before filtering; day counts equal the displayed filtered rows, including only loaded content-search matches. The primary switch stays Assistant / Agents. Agents + owns New Agent, New terminal and Open terminals; History never starts on a remembered terminal inventory (details in `docs/web/web.md`).
 
 - **Native workspace pins** (#9300): the Agents workspace tree shows a host-pinned workspace with the existing pin mark,
   ordered before its unpinned siblings (newest pin first, then the existing stable order). Its repository moves ahead
@@ -1147,16 +1152,18 @@ chat (#5033), where the panel only offers models and says plainly which one the 
 
 - Pill (`web/src/views/chat/ModelPill.tsx`): 30 px tall capsule, 10 px side padding, 4 px gaps, 13 px text
   (`ink`), no frame at rest; hover and open draw a 1 px `--line-strong` border on `--hover`. Contents in order: the
-  provider's letter tile (15 px, 4 px radius, 1 px border in the text colour, 10 px semibold, `ink-2`, 6 px before the
-  name), the model name (truncates), the engine's `AgentMark` at 12 px (the separator: no "·"), the effort label without a
+  mark of the Agent the launcher runs (#5497: `AgentMark` at 15 px, `ink-2` for the one-colour marks, 4 px before the
+  name; an Agent with no mark of its own gets the generic `agent` icon, never a letter, unless its runtime names it
+  (#8142), when it is drawn as the Agents list draws it), the model name (truncates), the
+  effort label 4 px after it without a
   tier colour (English "Extra" for "Very high"; the full name on hover), a filled bolt for Fast and the workflow
   `UltraMark` (`ink-2`), a 14 px chevron (`ink-2`). Widths by the composer card (`@container/composer`): ≥ 600 px 72–320 px;
   < 600 px the width its words need (name ≤ 108 px without a trailing bracketed qualifier, a context size kept as a short
   mark, "Opus 5.5 1M"; the whole name in the tooltip;
   shrinking only when the row is short, the name truncating first, the effort only once the name has no room); < 520 px 12 px text, marks a step smaller; < 420 px 64 px, the
-  tile and chevron only. States: loading (a 13 px `Spinner` and "Loading model…"), failed (the `warning` icon in `--red`),
+  mark and chevron only. States: loading (a 13 px `Spinner` and "Loading model…"), failed (the `warning` icon in `--red`),
   pending (#5035, a switch to another launcher that the next message carries out: a 12 px clock in `ink-3` first, then
-  the target launcher's tile and its name in `ink-3` up to 96 px, hidden under 600 px, before the target's model and
+  the target engine's mark and the launcher's name in `ink-3` up to 96 px, hidden under 600 px, before the target's model and
   effort; the engine's name in its place when the engine changes; the tooltip "Current: …" over "Next message: …"),
   disabled (50% opacity, no pointer), and a label (not a button) where nothing can be switched. The click keeps the caret
   in the message box.
@@ -1187,12 +1194,13 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   Only the current launcher starts expanded; with no current launcher all start collapsed. Each launcher summary names
   the launcher, Agent kind, known default model, catalog model count (excluding a synthetic Default row), Current or
   configured Default status, known weekly quota and any supplied failure reason. No launcher is hidden in another bucket.
-  Disclosure uses the existing chevron, letter tile, role colors and text tokens; Agent mark rollout remains #5497.
+  Disclosure uses the existing chevron, the launcher's Agent mark (#5497), role colors and text tokens.
   Expanded launchers reuse model Row, family folds and Flyout, including Favorite, effort, Fast and engine controls.
   Search is flat: matching launcher summaries, then matching model rows naming their launcher even on touch screens;
   typed-ID rows explicitly name the launcher they send. Why: identical letter tiles and a separate rail hid the account
   and model choices from people comparing several launchers. The single column exposes that information progressively.
-  Rows have two lines with hover-revealed Favorite and Customize; the model that runs has a static selected fill, no
+  Rows have two lines led by the Agent's mark (16 px, the launcher summaries too; the right side holds only effort and
+  Fast) with hover-revealed Favorite and Customize; the model that runs has a static selected fill, no
   check. Customize opens a 264 px flyout to the panel's left: the effort slider, Fast, the engine, an exact catalog
   reference-price line where known, and a footer that says whether the setup is the recommended one, customized or
   saved. A launcher summary adds its weekly-remaining bar only when the existing launcher quota answer supplies a
@@ -1224,7 +1232,7 @@ chat (#5033), where the panel only offers models and says plainly which one the 
 - Tokens: the effort levels have one colour each in both themes (`--effort-low` / `--effort-minimal` #2AAE5B,
   `--effort-medium` #14B8A6, `--effort-high` #3B82F6, `--effort-xhigh` #4F46E5, `--effort-max` #8B5CF6, Codex's ultra on
   max) and `--fast` (#3B9EFF), used inside the flyout only: the pill never colours its effort or its bolt.
-- Deviations from Cindy: letter tiles instead of vendor logos; price and quota appear only where the catalog / launcher
+- Deviations from Cindy: the Agent's mark instead of model-vendor logos (launchers of one Agent share it; #5497); price and quota appear only where the catalog / launcher
   answer supplies them; ↑↓ also move between rows; providers and engines that can't be switched to (an older hub, a chat
   that can't switch) are listed with their rows off and the reason; a pending switch to another launcher of the same
   engine names the launcher rather than the engine; the engine warning line wraps rather than truncating; "Switch Agent?"
@@ -1288,6 +1296,7 @@ package-only Undo with retained recovery files; `docs/operations/hub-update.md` 
 | Load failure on a settings page | `LoadProblem` (`apple/Persona/DesignSystem/SettingsForm.swift:73`), no Retry |
 | List read failure (web) | `ListError` (`web/src/ui/ListError.tsx`): a red `role="alert"` line saying what could not be read and why, with **Retry** under it, in place of the rows; the paged session lists and the sidebar's Agents list (its complete list, and By to-do's unread to-dos) draw it, so a failed read never leaves a list blank or on "Loading…" |
 | Persistent notice | `NoticeBanner` |
+| A short server-driven process (web) | `Steps` (`web/src/ui/Steps.tsx`): one line per step, the current one with a spinner and `aria-current="step"`, done ones ticked green, a stop crossed red, the rest numbered and quiet. The step comes from what the hub pushes, never a local timer. Used by the alert sheet's Redeploy and by **Switch to Persona Link** on the machine detail and the admin Machines row (#10662: confirmation dialog, "Starting…" at once, then the steps, then the result in plain words; nothing shown for an older hub) |
 | Transient result | `Toast` shown by `ToastCapsule` (`apple/Persona/DesignSystem/Toasts.swift:7`) |
 | Chat API failure | Web: `ErrorNotice` (`web/src/ui/ErrorNotice.tsx`), a neutral card with the red mark only and **Error details**; the error the chat stopped on is its banner over the composer with its actions (Retry, Fix it, Edit last message) and ✕, an older one the record in the chat; apps: `APIErrorCard` with details and Retry. While a model request is still retrying, the web's run status bar and Apple's `SessionLiveRetryNote` instead show the plain classified reason, observed error as secondary detail and localized current/max attempt, cleared on recovery, turn end or unwatch (#887) |
 | Chat loading and waiting | iOS `ChatSkeleton` (five rounded bars of `Theme.Size.markS`, the first at the trailing edge, breathing between `Fill.well` and `Fill.chip`) while a chat's first page loads, its load error as a danger line at the chat's newest end, and `TypingIndicator` ("Claude is getting ready…", three pulsing dots) under your message until its turn's work line comes; Android `ChatSkeleton` and the error line on Glass, `TypingLine` in every style (#4339 C9) |
@@ -1475,6 +1484,8 @@ conversation. Upward transcript loading extends that range when it reaches earli
 still count from the full history. Reuse the existing rail, hover preview, keyboard controls and mark geometry.
 This requested pagination correction does not add a setting or change placement. Android has no corresponding
 navigator on current main and is outside this fix's scope; it must not use its two-turn body window as a global count.
+
+The web Changes panel's secondary file tree (#10477) reuses the existing `ResizeHandle` separator from the sidebar and side panel: pointer drag, arrow keys, Home/End, and double-click/Enter to reset. Column dimensions live in `web/src/lib/layout.ts` (`CHANGES_TREE_DEFAULT`, `CHANGES_TREE_MIN`, `CHANGES_TREE_MAX`, `CHANGES_DIFF_MIN`). Its default remains 192 px; the browser remembers a user resize and temporarily fits it to the panel while keeping space for the diff. At narrow widths the tree stays above the diff. File names and indentation may truncate, while each row's unchanged addition/deletion counts remain whole and the full path remains on hover.
 
 ### 4.3 Feedback and haptics
 
@@ -3218,6 +3229,8 @@ subtopic closed, more than three loose points beside subtopics under one closed 
 a topic or a project its page. From `Theme.Size.knowledgeMapTwoColumns` of width (any iPad in landscape, a 13-inch one upright beside its
 sidebar) the outline sits beside a detail column for the selected node, the web map's side panel.
 Text follows Dynamic Type (the rows are reading content) and every row reads as one VoiceOver element.
+Android (#7678) draws the same outline with the same rules (`KnowledgeMapScreen`): rows of the design system's tokens, a dot and rails
+in the branch's tone, a 48 dp fold target with Expanded / Collapsed read out, in all three styles, with no detail column.
 
 ## Repository link preview
 
@@ -3288,9 +3301,15 @@ Home/End, Enter takes the first match, Escape closes and returns the focus to
 its button), not a native `select`. Each repository's issues and PRs are link
 rows with their own **Add issue or PR** field: Enter adds, Escape cancels, and a
 URL of another repository is refused inline by `repositoryLinkView`, the same
-rule the manager applies. Directory aliases and source refs stay in the
-per-repository **Source options** disclosure; empty aliases and default branches
-need no setup. Saved-source changes (`removed`, `identity_changed`) and
+rule the manager applies. Public HTTP aliases, scheme case and repository-path
+case are normalized by the shared parser before that comparison; a self-hosted
+instance's scheme and port must match exactly. Two links that normalize to the
+same repository, kind and number are refused before create/save, with both
+entries kept for correction. Directory names and source refs are validated with
+the manager's rules before a create or save, and an invalid optional draft
+shows the field error and cannot be submitted. Directory aliases and source
+refs stay in the per-repository **Source options** disclosure; empty aliases
+and default branches need no setup. Saved-source changes (`removed`, `identity_changed`) and
 `unlisted` rows inferred from agent-added links are explained beneath their
 repository while the saved source stays. A to-do's `pr_url` is drawn inside
 this group as a link row with one line saying it predates the store, and never

@@ -142,6 +142,8 @@ Server state is stored in the hub's Postgres database (read/written by the assis
 
   A fresh current-head change request can also end a typed merge wait (#9570). The same PR observer records optional `changes_requested_at` from an active review's provider `submitted_at`, only with a known reviewer and a `commit_id` matching the observed PR head. Later approval or dismissal by that reviewer supersedes the request; a saturated 100-review page supplies no automatic-wake timestamp. The exact recorded `merge_review` source must match, and the provider time must be strictly after this park and no later than `checked_at`; missing or ambiguous same-second times do not prove a new event. The captured park, current task/stage and latest saved facts are rechecked before changing the existing state to `pending_review`. This actionable review need not wait for other PRs to become terminal. Its provider time persists with PR facts, so a failed ledger write can reconcile after reload without another review-state edge. It preserves the original review/history and supervisor, queues the existing review signal, and never accepts/closes the task, fabricates an owner answer or sends an Agent instruction itself. Poll cadence and Inbox switches are unchanged; this does not add ordinary-comment, participant-reply, CI, GitLab or version observers.
 
+   Review notifications ask the supervisor to check each current acceptance criterion; they are not completion verdicts (#8373). The shared message retains the actual PR event or judge's reason and any recorded criterion evidence. A prerequisite PR merging or closing, or receiving a change request, does not prove the delivery criteria passed. A judged-done result is still a review candidate, not acceptance. Review state, acceptance gates and task display grouping are unchanged.
+
 ### 2. todo_spaces table
 Records project workspaces (herdr workspaces) linked as a whole to a to-do:
 - `todo_id` (text, NOT NULL, FK → `todos(id)` ON DELETE CASCADE): linked to-do ID.
@@ -1156,6 +1158,12 @@ its canonical associations. The additive tool accepts `{id, links: [{url, title}
 with full source titles, or legacy `{id, urls}` (one to 50 exact issue/PR URLs in
 total), infers repository groups offline (an address on a host a provider
 extension claims is read by that extension) and needs no preconfigured catalog.
+Creation and replacement tool schemas leave `requested_ref` optional. When
+present, it requires `kind`: `default` omits `value`, while `branch`, `tag`,
+`commit` and `ref` require a nonempty string value. The manager still validates
+Git ref syntax and commit hashes; its older omitted-ref default is unchanged.
+Each repository has at most 50 links, and structured link numbers are decimal
+strings matching `^[1-9][0-9]{0,19}$` across creation and replacement tools.
 Titles are optional plain text, limited to 1,024 UTF-8 bytes after trimming; control
 characters are rejected. The tool schemas describe this byte limit explicitly;
 their `maxLength` is only a character ceiling, not a UTF-8 byte validator.
