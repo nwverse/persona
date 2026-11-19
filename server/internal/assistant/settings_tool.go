@@ -58,6 +58,7 @@ func (s *Service) ownSettings() []ownSetting {
 			About: "default Lark message sender; bot preserves existing behavior; changing it never broadens a standing message grant",
 			Value: `"bot" or "user"; only supported identity-aware transports use this setting`},
 			get: s.outboundIdentity, set: s.setOutboundIdentity},
+		s.hiddenDirSetting(),
 		{Setting: Setting{Key: standingAuthorizationsKey, Title: "Standing authorizations", Actions: getSet,
 			About: "user-confirmed computer/directory actions or exact outward-message scopes; only the main conversation may set them, and every change requires the user’s own permission approval",
 			Value: "{revision, authorizations: [{id?, machine_id, directory, actions, conditions, quote, source, reversible, messages?}]}; messages: {channel: larkcli, target: exact oc_ chat or empty for all chats, scenario: inbox_reply or assistant_message, identity: bot or user}; message grants require actions [send], reversible true, empty conditions/computer/directory. Get first; retain existing entries unchanged or remove them; omit id for new grants; granted_at is set by the server"},
@@ -321,9 +322,13 @@ func (s *Service) toolPersonaSettings(ctx context.Context, call ToolCall, args j
 		Action string          `json:"action"`
 		Key    string          `json:"key"`
 		Value  json.RawMessage `json:"value"`
+		ID     string          `json:"id"` // remove's, as the hub's own settings take it
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return proto.TextResult(fmt.Sprintf("invalid arguments: %v", err), true)
+	}
+	if a.Action == "remove" && len(a.Value) == 0 && a.ID != "" {
+		a.Value, _ = json.Marshal(a.ID)
 	}
 	if a.Key == standingAuthorizationsKey && a.Action == "set" && (call.SessionID == "" || call.SessionID != s.settings(ctx).Main || call.MachineID != s.settings(ctx).MachineID) {
 		return proto.TextResult("only the main conversation may change standing authorizations", true)

@@ -54,7 +54,7 @@ def features():
     return ["error_codes", "client_hello", "heartbeat", "app_ping", "client_msg_id", "send_refusals",
             "screen_dialog", "resumable_interactions", "secret_prompts", "request_id", "file_upload", "upload_attachment",
             "tls", "endpoints", "connectors", "lark_attachments", "file_stream", "file_thumb", "git_blob", "task_push", "task_inbox",
-            "machine_rename"] + ([] if os.environ.get("MOCK_MANAGERS") == "0" else ["sessions_manager"]) + (["git_write"] if os.environ.get("MOCK_GIT_WRITE") and os.environ.get("MOCK_GIT_WRITE_FEATURE") != "0" else []) + (["git_review"] if os.environ.get("MOCK_REVIEW") else []) + (["terminal_stream"] if TERMINAL_STREAM else []) + (
+            "machine_rename"] + ([] if os.environ.get("MOCK_MANAGERS") == "0" else ["sessions_manager"]) + (["git_write"] if os.environ.get("MOCK_GIT_WRITE") and os.environ.get("MOCK_GIT_WRITE_FEATURE") != "0" else []) + (["git_review"] if os.environ.get("MOCK_REVIEW") else []) + (["session_review"] if os.environ.get("MOCK_AGENT_REVIEW") else []) + (["terminal_stream"] if TERMINAL_STREAM else []) + (
                 ["terminal_control", "terminal_scroll", "terminal_click", "terminal_mouse"] if TERMINAL_CONTROL else []) + (
                 ["terminal_panes", "pane_new_space"] if os.environ.get("MOCK_TERMINAL_PANES") else []) + (["herdr_client"] + ([] if os.environ.get("MOCK_TERMINAL_FULL_NOFOCUS") else ["herdr_focus"]) if TERMINAL_FULL else []) + (
                 ["assistant_compact", "assistant_main_new", "assistant_main_clear"] if os.environ.get("MOCK_MAIN_ACTIONS") == "1" else []) + (
@@ -10753,6 +10753,8 @@ def mock_interactions():
     with REQUEST_LOCK:
         seen = {x["id"] for x in INTERACTIONS}
         out = list(INTERACTIONS) + [x for x in MOCK_INTERACTIONS if x["id"] not in seen]
+        if AGENT_REVIEW and (review_card := mock_agent_review.card()) is not None and review_card["id"] not in seen:
+            out.append(review_card)
         # MOCK_TASKS_NO_ASKS=1: the tasks' agents ask nothing, so the conversation shows above the composer whole.
         if os.environ.get("MOCK_TASKS_NO_ASKS") == "1":
             out = [x for x in out if x.get("session_id") not in (TESTS, WIDGET, RELEASE)]
@@ -11000,6 +11002,8 @@ def renew_requests(minutes):
 def resolve_mock_interaction(request_id, resolution):
     with REQUEST_LOCK:
         request = next((r for r in mock_interactions() if r["id"] == request_id), None)
+        if AGENT_REVIEW and request_id.startswith("review_"):
+            mock_agent_review.note_answer(resolution)
         if request is not None:
             for lst in (MOCK_INTERACTIONS, INTERACTIONS):
                 lst[:] = [x for x in lst if x["id"] != request_id]
@@ -11830,6 +11834,60 @@ CLAUDE_DIRS_BLOCKED = {}
 _CLAUDE_DIRS = [("~/.claude", "default", 0, 86), ("~/.config/claude/work", "config", 2, 41),
                 ("~/.automation/claude-model-a", "found", 1, 132), ("~/.automation/claude-model-b", "found", 0, 97),
                 ("~/.automation/claude-relay", "found", 1, 18)]
+
+
+# Settings › Agent › Hidden Agent Folders (#8578, docs/protocol/protocol.md "Agent directory visibility"): machine id →
+# [{pattern, enabled}]. Rows whose cwd an enabled rule matches carry hidden_by_directory; bounded lists leave them out
+# unless include_hidden=1, the legacy list and the sockets keep them. A change pushes that computer's rows and replays
+# its pending cards, as the manager does; the cards never leave the inventory.
+AGENT_DIRS_HIDDEN = {}
+AGENT_DIRS_FAIL = {"n": 0}  # GET /mock/agent_dirs_fail?n=<count>: the next n reads of the list answer 503
+
+
+def _machine_home(mid):
+    return next((m.get("home") for m in MACHINES if m["id"] == mid), "") or "/home/me"
+
+
+def _hidden_by_directory(mid, cwd):
+    import fnmatch
+    if not cwd:
+        return False
+    home, parts = _machine_home(mid), [x for x in cwd.split("/") if x]
+    for r in AGENT_DIRS_HIDDEN.get(mid, []):
+        pat = r["pattern"]
+        if not r.get("enabled", True):
+            continue
+        if pat.startswith("*"):
+            if any(fnmatch.fnmatchcase(x, pat) for x in parts):
+                return True
+            continue
+        pat = home + pat[1:] if pat.startswith("~/") else pat
+        if any(fnmatch.fnmatchcase("/" + "/".join(parts[:n]), pat) for n in range(1, len(parts) + 1)):
+            return True
+    return False
+
+
+def _agent_dirs_hidden_state(mid):
+    return {"rules": AGENT_DIRS_HIDDEN.get(mid, []), "home": _machine_home(mid)}
+
+
+def _set_agent_dirs_hidden(mid, body):
+    """PUT …/agent-dirs/hidden: the whole list, checked as the manager checks it; (state, None) or (None, error)."""
+    rules = []
+    for r in body.get("rules") or []:
+        pat = (r.get("pattern") or "").strip()
+        while len(pat) > 1 and pat.endswith("/"):
+            pat = pat[:-1]
+        if pat in ("~", "/", "*") or not (pat.startswith("/") or pat.startswith("~/") or pat.startswith("*")):
+            return None, "bad pattern %r: a path or glob starting with / or ~/, or * for a folder name" % pat
+        if any(x["pattern"] == pat for x in rules):
+            return None, "duplicate pattern %r" % pat
+        rules.append({"pattern": pat, "enabled": r.get("enabled", True) is not False})
+    AGENT_DIRS_HIDDEN[mid] = rules
+    push_machine(mid)
+    for ix in out_by_machine([x for x in mock_interactions() if x.get("machine_id") == mid]):
+        broadcast({"type": "interaction", "interaction": ix})
+    return _agent_dirs_hidden_state(mid), None
 
 
 def _claude_dirs_state(mid):
@@ -18877,7 +18935,11 @@ MODES_LOG = []  # POST …/modes requests, GET /mock/modes (the model picker's a
 
 
 def all_sessions():
-    return fold_hierarchy([decorated_session(s) for s in (SESSIONS + ASSISTANT)])
+    rows = fold_hierarchy([decorated_session(s) for s in (SESSIONS + ASSISTANT)])
+    if not AGENT_DIRS_HIDDEN:
+        return rows
+    return [dict(r, hidden_by_directory=True) if not r.get("assistant") and _hidden_by_directory(r["machine_id"], r.get("cwd")) else r
+            for r in rows]
 
 
 def is_child_row(r):
@@ -19157,8 +19219,13 @@ def paged_sessions(query):
         if not any(m["id"] == named and not m.get("installing") for m in MANAGERS["list"]):
             return {"error": "no such manager: %r" % named, "code": "no_manager"}, 404
         rows = [s for s in rows if s.get("manager") == named]
-    if os.environ.get("MOCK_SESSIONS_LIST") != "1" or not (set(query) - {"manager"}):
+    if os.environ.get("MOCK_SESSIONS_LIST") != "1" or not (set(query) - {"manager", "include_hidden"}):
         return {"sessions": rows}, 200
+    # The exact lookup (one session_id with its machine_id) answers a directory-hidden row too, as the hub's
+    # (sessionlist Options.ID); every other read leaves hidden rows out unless include_hidden=1.
+    exact = len(query.get("session_id", [])) == 1 and bool(query.get("machine_id", [""])[0])
+    if not exact and query.get("include_hidden", [""])[0] != "1":
+        rows = [s for s in rows if not s.get("hidden_by_directory")]
     revision = list_revision(rows)
     fields = {"machine_id": "machine_id", "session_id": "session_id",
               "group": "space_id", "source": "source_kind", "provider": "agent"}
@@ -21042,6 +21109,10 @@ MOCK_REPO = "code/weather"
 # MOCK_REVIEW=1 (#151): git/review answers for this checkout (mock_review.py), with the files its review shows on disk.
 # Not `REVIEW`: that is the PR #42 review agent's session id, which later code (MOCK_AGENT_LIVE, MOCK_IMAGES…) still uses.
 GIT_REVIEW = bool(os.environ.get("MOCK_REVIEW"))
+AGENT_REVIEW = bool(os.environ.get("MOCK_AGENT_REVIEW"))
+if AGENT_REVIEW:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import mock_agent_review
 if GIT_REVIEW:
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import mock_review
@@ -26461,6 +26532,8 @@ class H(BaseHTTPRequestHandler):
             return self.send_json({"ok": True, "sent": fs_changed(mid, [path] if add else [], git), "path": path})
         if p == "/mock/review" and GIT_REVIEW:
             return self.send_json(mock_review.control(q))
+        if p == "/mock/agent-review" and AGENT_REVIEW:
+            return self.send_json(mock_agent_review.control(q))
         if p == "/mock/git-write" and os.environ.get("MOCK_GIT_WRITE"):
             global GIT_W
             if q.get("reset"): GIT_W = git_write_fresh()
@@ -26731,6 +26804,9 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/v1/interactions":
             HELLO["request_client"] = self.headers.get("X-Persona-Client")
             return self.send_json({"interactions": out_by_machine(mock_interactions())})
+        review_match = AGENT_REVIEW and re.fullmatch(r"/api/v1/sessions/([^/]+)/([^/]+)/review", p)
+        if review_match:
+            return self.send_json(mock_agent_review.state())
         if p == "/api/v1/fleet":
             return self.send_json({"fleet": mock_fleet() if MOCK_FLEET else {"phase": "", "needsYou": 0, "working": 0, "unread": 0, "items": []}})
         if p == "/api/v1/interactions/history":
@@ -27073,6 +27149,9 @@ class H(BaseHTTPRequestHandler):
             time.sleep(PERSONAL_STATE["delay"])
             return self.send_json({"sessions": personal_listed(False), "items": []})
         if p == "/api/v1/agents/hidden": return self.send_json({"sessions": personal_listed(True)})
+        if p == "/mock/agent_dirs_fail":
+            AGENT_DIRS_FAIL["n"] = int(q.get("n", ["1"])[0])
+            return self.send_json({"n": AGENT_DIRS_FAIL["n"]})
         if p == "/mock/start-fail":
             START_FAIL.update(n=int(q.get("n", ["1"])[0]), code=q.get("code", ["assistant_in_doubt"])[0],
                               delay=float(q.get("delay", ["0"])[0]))
@@ -27368,6 +27447,11 @@ class H(BaseHTTPRequestHandler):
             return self.send_json({"settings": CLAUDE_SETTINGS.setdefault(p.split("/")[4], _claude_settings())})
         if p.startswith("/api/v1/machines/") and p.endswith("/claude-dirs"):
             return self.send_json(_claude_dirs_state(p.split("/")[4]))
+        if p.startswith("/api/v1/machines/") and p.endswith("/agent-dirs/hidden"):
+            if AGENT_DIRS_FAIL["n"] > 0:
+                AGENT_DIRS_FAIL["n"] -= 1
+                return self.send_json({"error": "the manager did not answer"}, 503)
+            return self.send_json(_agent_dirs_hidden_state(p.split("/")[4]))
         if p.startswith("/api/v1/machines/") and p.endswith("/codex-settings"):
             return self.send_json({"settings": CODEX_SETTINGS.setdefault(p.split("/")[4], _codex_settings())})
         if p.startswith("/api/v1/machines/") and p.endswith("/agy-settings"):
@@ -29240,6 +29324,10 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/v1/bots/feishu/test": return self.send_json({"ok": True})
         if p.startswith("/api/v1/interactions/") and p.endswith("/reanswer") and p.count("/") == 5:
             return self.send_json(*mock_reanswer(p.split("/")[4], json.loads(self.last_body or b"{}")))
+        review_match = AGENT_REVIEW and re.fullmatch(r"/api/v1/sessions/([^/]+)/([^/]+)/review", p)
+        if review_match:
+            body, status = mock_agent_review.start(review_match[1], review_match[2])
+            return self.send_json(body, status)
         if p.startswith("/api/v1/interactions/") and p.endswith("/resolve"):  # notification buttons (UI test reads it back)
             # MOCK_RESOLVE=slow holds every answer for 6 s before it goes through; =fail refuses it with a 400 (nothing is
             # resolved): an answer being sent, and one that failed (#6279). GET /mock/resolve-mode?mode=ok|slow|fail switches it.
@@ -29261,6 +29349,9 @@ class H(BaseHTTPRequestHandler):
             sync_resolved(p.split("/")[4])
             push_fleet()
             return self.send_json({"ok": True})
+        if p.startswith("/api/v1/machines/") and p.endswith("/agent-dirs/hidden") and self.command == "PUT":
+            state, err = _set_agent_dirs_hidden(p.split("/")[4], json.loads(self.last_body or b"{}"))
+            return self.send_json({"error": err} if err else state, 400 if err else 200)
         if p.startswith("/api/v1/machines/") and p.endswith("/claude-dirs/blocked") and self.command == "PUT":
             body, mid = json.loads(self.last_body or b"{}"), p.split("/")[4]
             pats = []
