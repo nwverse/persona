@@ -535,6 +535,18 @@ When enabled, tasks dispatched from the main chat (`task_plan`; also `agent_star
 
 ### Supervision (#3124)
 
+Queued supervision digests retain their structured signals in the manager's relay setting (#10424). At drain time,
+the manager loads the task ledger, drops signals that no longer hold, and renders the remaining entries using the
+same rules as a new digest. An entirely obsolete digest leaves the queue without starting a conversation turn;
+a mixed digest contains only actionable entries. Changed conversation supervisors receive their entries through
+the existing relay path, with the source removal and destination queue saved together. Ledger or checkpoint failure
+keeps the original work for recovery. Refreshing a queued payload preserves its persisted once-only delivery ID, including after restart.
+An uncertain send whose text or destination would change stays queued rather
+than acquiring a second delivery identity. Reassignment to an Agent supervisor is retained for recovery rather than
+sent through an assistant conversation. Older text-only queued records keep the legacy behavior: task facts are not
+inferred from their prose. A later structured replacement can be rechecked after restart.
+
+
 The main chat **supervises** tasks it dispatches (`task_plan`, and to-dos created by `agent_start` in quiet-task mode). The assistant owns their completion and quality, rather than merely relaying "done."
 
 Who does the follow-up: by default the **background supervisor** (#4927, "Background supervisor" below), a built-in conversation that gets these tasks' supervision messages and reviews them, so the main chat stays free for the owner. Where this section says the main chat receives a supervision message or reviews a task, that is the background supervisor unless the paragraph says otherwise or `main_supervises_own_tasks` is on; the ledger still names the main chat as `supervisor`.

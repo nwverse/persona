@@ -760,6 +760,16 @@ mark the conversation as being replaced under that same lock (`relayBook.replaci
 delivery respect the mark (the direct ones queue), and clear it only where what waited has moved or the replacement
 failed, draining it again then (`TestNothingGoesIntoABackgroundSupervisorBeingReplaced`).
 
+## A queued supervision digest is not a snapshot of work that still needs review (#10424)
+
+An interruption and an unjudged turn can wait behind a busy supervisor while that task recovers and is accepted.
+Replaying only the rendered text then starts obsolete work or retries a refusal forever. Persist the structured signals
+with the relay, recheck the loaded task ledger immediately before delivery, and render only the surviving entries.
+A failed ledger read or checkpoint is unknown: keep the original queue. Move a changed conversation destination and
+remove its source entries in the same saved relay state. Do not change an uncertain send's text or destination: its
+old once-only identity may already have reached the node. Test both an entirely obsolete digest and a mixed one,
+including a real database reload into a new service; the in-memory signal map alone does not survive restart.
+
 ## Manual compaction is not a main-only policy (#10064)
 
 The manual HTTP and node paths already accept side conversations, but all three client menus hid the action behind
