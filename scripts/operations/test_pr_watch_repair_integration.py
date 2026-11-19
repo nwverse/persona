@@ -161,6 +161,47 @@ class RepairIntegrationTests(unittest.TestCase):
         branch = "refs/heads/pr-watch/repair-7-" + merged["headRefOid"][:12]
         self.assertEqual(self.git("ls-remote", "origin", branch).split()[0], merged["headRefOid"])
 
+    def test_fork_continuation_checks_github_before_publishing(self):
+        pr, merged, base = self.fork_merge()
+        existing = {"number": 8, "title": "fix: continue #7 verification repair", "body": ""}
+        created = []
+        snapshots = {7: pr, 9: dict(merged, number=9)}
+
+        def github(argv, **kwargs):
+            if "--search" in argv:
+                return [existing]
+            if "--head" in argv:
+                return []
+            created.append(json.loads(kwargs["input_text"]))
+            return {"number": 9}
+
+        original_checked = pr_watch_repair.checked
+
+        def checked(argv, **kwargs):
+            if argv[:2] == ["gh", "api"]:
+                self.assertEqual(argv[2], "repos/example/one/commits/" + pr["headRefOid"])
+                return "2026-11-16T00:00:00Z\n"
+            return original_checked(argv, **kwargs)
+
+        with patch.object(pr_watch_repair, "verify", return_value=[]), self.passthrough(), \
+                patch.object(pr_watch_repair, "privacy_scanner_environment", return_value={}), \
+                patch.object(pr_watch_repair, "pr_snapshot", side_effect=lambda repo, number: snapshots[number]), \
+                patch.object(pr_watch_repair, "gh_json", side_effect=github), \
+                patch.object(pr_watch_repair, "checked", side_effect=checked):
+            for state, merged_at, expected in [("OPEN", None, (8, None)),
+                                               ("MERGED", "2026-11-17T00:00:00Z", (8, None)),
+                                               ("MERGED", "2026-11-15T00:00:00Z", (9, []))]:
+                with self.subTest(state=state, merged_at=merged_at):
+                    existing.update(state=state, mergedAt=merged_at)
+                    result = pr_watch_repair.commit_and_push_repair("example/one", merged, str(self.repo), base, "failure",
+                                                                      {"profile": "commands", "commands": [["true"]]},
+                                                                      allow_merge_only=True, original_pr=pr)
+                    self.assertEqual(result, expected)
+                    if expected[0] == 8:
+                        self.assertEqual(created, [])
+                        self.assertEqual(self.git("ls-remote", "origin", "refs/heads/pr-watch/*"), "")
+        self.assertEqual(len(created), 1)
+
     def test_fork_continuation_retries_an_unchanged_absent_branch_without_force(self):
         pr, merged, base = self.fork_merge()
         snapshots = {7: pr, 8: dict(merged, number=8)}
