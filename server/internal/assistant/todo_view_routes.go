@@ -3,6 +3,7 @@ package assistant
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"slices"
@@ -103,9 +104,17 @@ func (s *Service) todosViewed(ctx context.Context, briefs bool) ([]listedTodo, t
 	return list, p, nil
 }
 
+// todoItem is GET /api/v1/todos/{id}'s answer: the to-do's row, and beside it the paper's rounds, results and recap
+// (todo_timeline.go, #10465).
+type todoItem struct {
+	Todo json.RawMessage `json:"todo"`
+	assistantwire.TodoItemDetail
+}
+
 func (s *Service) todoViewRoutes() {
-	// GET /api/v1/todos/{id}: one to-do as GET /api/v1/todos lists it, its view included → {"todo": row}; an unknown
-	// id 404 todo_not_found.
+	// GET /api/v1/todos/{id}: one to-do as GET /api/v1/todos lists it, its view included, and what the paper shows of
+	// its history (todoItemDetail) → {"todo": row, "rounds", "rounds_total", "recap"?, "results"?}; an unknown id 404
+	// todo_not_found.
 	s.handle("GET /api/v1/todos/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if err := s.ensureTodosLoaded(r.Context()); err != nil {
@@ -119,15 +128,21 @@ func (s *Service) todoViewRoutes() {
 			apierr.WriteCode(w, http.StatusNotFound, "todo_not_found", errors.New("todo not found"))
 			return
 		}
-		list, _, err := s.todosViewed(r.Context(), false)
+		list, p, err := s.todosViewed(r.Context(), false)
 		if err != nil {
 			apierr.Write(w, http.StatusServiceUnavailable, errTodosUnavailable)
 			return
 		}
-		for _, t := range list {
+		for i, t := range list {
 			if t.ID == id {
 				t.Todo = s.withBrief(t.Todo) // as withBriefFrom gives it in the list
-				apierr.WriteJSON(w, map[string]any{"todo": t})
+				raw, err := json.Marshal(t)
+				if err != nil {
+					apierr.Write(w, http.StatusInternalServerError, err)
+					return
+				}
+				// Its runs' sessions as its view read them: the timeline asks no computer again.
+				apierr.WriteJSON(w, todoItem{Todo: raw, TodoItemDetail: s.todoItemDetail(r.Context(), id, raw, p.facts[i].Sessions)})
 				return
 			}
 		}

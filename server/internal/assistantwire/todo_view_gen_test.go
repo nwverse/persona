@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/jsonsubset"
@@ -21,7 +22,8 @@ const mergedPlaces = `{"places":[{"id":"all","kind":"all","title":"","needs_you"
 	`"waiting":0,"todo":1,"just_finished":0,"someday":0,"done":0}}}`
 
 // The views, counts and places the shared to-do cases expect (spec/fixtures/todo-view and todo-counts, #10226), and
-// the timelines, results and recaps (spec/fixtures/todo-rounds, #10465), read into the generated types
+// the timelines, results and recaps (spec/fixtures/todo-rounds, #10465) with what the item route carries of them,
+// read into the generated types
 // (todo_view_gen.go) and write back as the same JSON: no field lost, renamed or added, and no time written another
 // way. What Go writes also holds to the schema (checkTodoView), so a required list or map is never null, which a nil
 // slice or map would be.
@@ -56,7 +58,7 @@ func TestTodoViewSamplesRoundTrip(t *testing.T) {
 		}
 		seen[s.def] = true
 	}
-	for _, def := range []string{"TodoSummary", "TodoCounts", "TodoPlaces", "TodoTimeline", "TodoResult", "TodoRecap"} {
+	for _, def := range []string{"TodoSummary", "TodoCounts", "TodoPlaces", "TodoTimeline", "TodoResult", "TodoRecap", "TodoItemDetail"} {
 		if !seen[def] {
 			t.Errorf("no %s sample", def)
 		}
@@ -135,6 +137,7 @@ func todoViewSamples(t *testing.T) []todoViewSample {
 						Timeline json.RawMessage   `json:"timeline"`
 						Results  []json.RawMessage `json:"results"`
 						Recap    json.RawMessage   `json:"recap"`
+						Latest   []string          `json:"latest"`
 					}
 				}
 			}
@@ -154,10 +157,48 @@ func todoViewSamples(t *testing.T) []todoViewSample {
 					out = append(out, todoViewSample{def: "TodoResult", where: fmt.Sprintf("%s TodoResult %d", where, i),
 						raw: raw})
 				}
+				if c.Expected.Timeline != nil {
+					out = append(out, todoViewSample{def: "TodoItemDetail", where: where + " TodoItemDetail",
+						raw: itemDetailSample(t, c.Expected.Timeline, c.Expected.Latest, c.Expected.Recap, c.Expected.Results)})
+				}
 			}
 		}
 	}
 	return out
+}
+
+// itemDetailSample is what GET /api/v1/todos/{id} carries beside the row for a todo-rounds case (TodoItemDetail,
+// #10465): the rounds of its timeline the paper shows (the case's latest), how many it has, its recap and results.
+func itemDetailSample(t *testing.T, timeline json.RawMessage, latest []string, recap json.RawMessage, results []json.RawMessage) json.RawMessage {
+	t.Helper()
+	var tl struct {
+		Rounds []json.RawMessage `json:"rounds"`
+	}
+	if err := json.Unmarshal(timeline, &tl); err != nil {
+		t.Fatal(err)
+	}
+	shown := []json.RawMessage{}
+	for _, r := range tl.Rounds {
+		var head struct{ ID string }
+		if err := json.Unmarshal(r, &head); err != nil {
+			t.Fatal(err)
+		}
+		if slices.Contains(latest, head.ID) {
+			shown = append(shown, r)
+		}
+	}
+	detail := map[string]any{"rounds": shown, "rounds_total": len(tl.Rounds)}
+	if recap != nil {
+		detail["recap"] = recap
+	}
+	if len(results) > 0 {
+		detail["results"] = results
+	}
+	raw, err := json.Marshal(detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
 }
 
 // todoViewSchema is schema/wire/todo-view.schema.json, compiled for jsonsubset.

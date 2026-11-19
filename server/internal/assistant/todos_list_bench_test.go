@@ -207,6 +207,51 @@ func BenchmarkSuperviseWatch(b *testing.B) {
 	}
 }
 
+// todoFeedForBench gives to-do id n items in its origin conversation's feed, as a long task leaves them: in each four
+// the owner's instruction, two turns of its run and a review, a minute apart.
+func todoFeedForBench(s *Service, id string, n int) {
+	base := time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC)
+	s.tasks.mu.Lock()
+	defer s.tasks.mu.Unlock()
+	for i := range n {
+		var kind string
+		var body any
+		switch i % 4 {
+		case 0:
+			kind, body = feedRouted, map[string]string{"text": "also cover the rotation case, then merge it"}
+		case 1, 2:
+			kind, body = feedReceipt, receiptBody{Title: "fix the login crash", State: "done", Machine: "box",
+				MachineID: "box", SessionID: "s000000", Summary: strings.Repeat("Fixed the crash in landscape and added a test. ", 12)}
+		default:
+			kind, body = feedReview, reviewFeedBody{Title: "fix the login crash", Verdict: reviewRework, Round: i / 4,
+				Note: "the rotation case still crashes"}
+		}
+		raw, _ := json.Marshal(body)
+		s.tasks.feed["conv1"] = append(s.tasks.feed["conv1"], FeedItem{ID: fmt.Sprintf("feed_bench%06d", i),
+			Conversation: "conv1", At: base.Add(time.Duration(i) * time.Minute), Kind: kind, Ref: id, Body: raw})
+	}
+}
+
+// BenchmarkTodoItem: GET /api/v1/todos/{id} with 250 finished supervised tasks (manyTodos), the one read having feed
+// items in its conversation: the item route works the view out over the whole list, and with todo_timeline (#10465)
+// reads that to-do's history too, at most todoTimelineFeedCap items of it.
+func BenchmarkTodoItem(b *testing.B) {
+	for _, feed := range []int{0, 1000} {
+		b.Run(fmt.Sprintf("feed=%d", feed), func(b *testing.B) {
+			s := manyTodos(250)
+			todoFeedForBench(s, "todo_bench000000", feed)
+			b.ReportAllocs()
+			for b.Loop() {
+				w := httptest.NewRecorder()
+				s.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/todos/todo_bench000000", nil))
+				if w.Code != 200 {
+					b.Fatalf("GET /api/v1/todos/{id} = %d %s", w.Code, w.Body.String())
+				}
+			}
+		})
+	}
+}
+
 // Every to-do in the list carries the brief and lineage it has on its own (GET /api/v1/todos/{id} reads them one by
 // one), take-overs included.
 func TestTodosListLineageAsEachHasIt(t *testing.T) {

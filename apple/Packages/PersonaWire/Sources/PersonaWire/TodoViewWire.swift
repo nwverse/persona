@@ -882,3 +882,44 @@ public nonisolated struct TodoRecap: Codable, Hashable, Sendable {
         self.counts = (try? c.decodeIfPresent([String: Int].self, forKey: .counts)) ?? [:]
     }
 }
+
+/// What GET /api/v1/todos/{id} answers beside `todo` (the list's hand-typed row, which clients read as their own row
+/// type) from a manager that names todo_timeline (#10465): the paper's Conversation block, Results and Since you
+/// looked (proposal 3.5 rows 3, 9 and 10), so the paper needs no second read. All four are absent from an older
+/// manager, and when the manager could not read the to-do's history (the row still answers); recap and results also
+/// when there is none.
+public nonisolated struct TodoItemDetail: Codable, Hashable, Sendable {
+    /// The rounds the paper shows, oldest first: the latest two that are not Background ones, the latest Background
+    /// ones making up the rest (spec/fixtures/todo-rounds/README.md R7); empty when the to-do has none. GET
+    /// /api/v1/todos/{id}/timeline has every round.
+    public var rounds: [TodoRound]?
+    /// How many rounds the to-do's conversation has in all, the ones rounds leaves out included.
+    public var roundsTotal: Int?
+    /// What changed since the owner last looked; absent when they never did, or nothing but their own acts came
+    /// since.
+    public var recap: TodoRecap?
+    /// What the to-do's work produced, newest first, at most 3; absent when nothing was.
+    public var results: [TodoResult]?
+
+    public init(rounds: [TodoRound]? = nil, roundsTotal: Int? = nil, recap: TodoRecap? = nil, results: [TodoResult]? = nil) {
+        self.rounds = rounds
+        self.roundsTotal = roundsTotal
+        self.recap = recap
+        self.results = results
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case rounds
+        case roundsTotal = "rounds_total"
+        case recap
+        case results
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.rounds = try? c.decodeIfPresent([TodoRound].self, forKey: .rounds)
+        self.roundsTotal = try? c.decodeIfPresent(Int.self, forKey: .roundsTotal)
+        self.recap = try? c.decodeIfPresent(TodoRecap.self, forKey: .recap)
+        self.results = try? c.decodeIfPresent([TodoResult].self, forKey: .results)
+    }
+}

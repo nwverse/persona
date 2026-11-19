@@ -33,4 +33,7 @@ type Store interface {
 	// MarkFeedSent merges patch into the bodies of the kind / ref items put in by at that do not say sent_at yet; the
 	// items it changed.
 	MarkFeedSent(ctx context.Context, kind, ref string, at time.Time, patch json.RawMessage) ([]db.FeedRow, error)
+	// FeedByRef lists the items of kinds about ref in every conversation, newest first, at most limit: a to-do's
+	// history (todo_timeline.go). It refuses message cards (db.ErrFeedByRefMessage).
+	FeedByRef(ctx context.Context, ref string, kinds []string, limit int) ([]db.FeedRow, error)
 }

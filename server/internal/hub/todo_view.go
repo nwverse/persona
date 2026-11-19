@@ -25,6 +25,9 @@ const (
 	featureTodoView = assistantwire.CapabilityTodoView
 	// featureTodoPlaces: GET /api/v1/todos/places answers the To-dos sidebar's places with the counts.
 	featureTodoPlaces = assistantwire.CapabilityTodoPlaces
+	// featureTodoTimeline: GET /api/v1/todos/{id}/timeline answers a to-do's conversation, and GET /api/v1/todos/{id}
+	// carries the rounds the paper shows, its results and what changed since the owner looked (#10465).
+	featureTodoTimeline = assistantwire.CapabilityTodoTimeline
 	// todoPlacesRoute is answered by every manager the to-dos list merges, joined (mergeTodoPlaces).
 	todoPlacesRoute = "GET /api/v1/todos/places"
 )
@@ -49,6 +52,20 @@ func (h *Hub) todoViewFeatures() []string {
 		return []string{featureTodoPlaces}
 	}
 	return nil
+}
+
+// todoTimelineFeatures is todo_timeline while every manager whose to-dos the list merges is connected and names it, as
+// todoViewFeatures has todo_view: a hub-wide feature cannot promise a to-do's history for part of the list, so an older
+// or offline manager hides it until it is ready, and clients draw no conversation, results or recap until then.
+func (h *Hub) todoTimelineFeatures() []string {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	for _, id := range h.listManagers(ctx) {
+		if h.archiveManagerHas(id, assistantwire.CapabilityTodoTimeline) != http.StatusOK {
+			return nil
+		}
+	}
+	return []string{featureTodoTimeline}
 }
 
 // todoListSums are the members of a merged to-dos list the hub adds up over its answers (mergeList, before the list's

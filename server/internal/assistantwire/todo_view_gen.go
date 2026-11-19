@@ -522,6 +522,24 @@ type TodoRecap struct {
 	Counts map[string]int `json:"counts"`
 }
 
+// TodoItemDetail: what GET /api/v1/todos/{id} answers beside `todo` (the list's hand-typed row, which clients read as
+// their own row type) from a manager that names todo_timeline (#10465): the paper's Conversation block, Results and
+// Since you looked (proposal 3.5 rows 3, 9 and 10), so the paper needs no second read. All four are absent from an
+// older manager, and when the manager could not read the to-do's history (the row still answers); recap and results
+// also when there is none.
+type TodoItemDetail struct {
+	// The rounds the paper shows, oldest first: the latest two that are not Background ones, the latest Background ones
+	// making up the rest (spec/fixtures/todo-rounds/README.md R7); empty when the to-do has none. GET
+	// /api/v1/todos/{id}/timeline has every round.
+	Rounds []TodoRound `json:"rounds,omitzero"`
+	// How many rounds the to-do's conversation has in all, the ones rounds leaves out included.
+	RoundsTotal *int `json:"rounds_total,omitempty"`
+	// What changed since the owner last looked; absent when they never did, or nothing but their own acts came since.
+	Recap *TodoRecap `json:"recap,omitempty"`
+	// What the to-do's work produced, newest first, at most 3; absent when nothing was.
+	Results []TodoResult `json:"results,omitempty"`
+}
+
 // todoViewDefs makes a value of each definition, for tests that read examples by definition name.
 var todoViewDefs = map[string]func() any{
 	"TodoLine":          func() any { return new(TodoLine) },
@@ -539,4 +557,5 @@ var todoViewDefs = map[string]func() any{
 	"TodoTimeline":      func() any { return new(TodoTimeline) },
 	"TodoResult":        func() any { return new(TodoResult) },
 	"TodoRecap":         func() any { return new(TodoRecap) },
+	"TodoItemDetail":    func() any { return new(TodoItemDetail) },
 }

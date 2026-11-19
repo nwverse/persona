@@ -66,7 +66,7 @@ def domain_cases(domain):
 
 def todo_views():
     """(definition, sample) of every view todo-view expects, every counts and places todo-counts expects, and every
-    timeline, result and recap todo-rounds expects."""
+    timeline, result and recap todo-rounds expects, with what the item route carries of them."""
     for where, c in domain_cases("todo-view"):
         yield "TodoSummary", f"{where}.expected.view", c["expected"]["view"]
     for where, c in domain_cases("todo-counts"):
@@ -79,6 +79,18 @@ def todo_views():
             yield "TodoResult", f"{where}.expected.results[{i}]", r
         if "recap" in e:
             yield "TodoRecap", f"{where}.expected.recap", e["recap"]
+        yield "TodoItemDetail", f"{where} (the item route's)", item_detail(e)
+
+
+def item_detail(expected):
+    """What GET /api/v1/todos/{id} carries beside the row for a todo-rounds case (#10465): the rounds the paper shows
+    (the case's latest), how many there are, its recap and results."""
+    rounds = expected["timeline"]["rounds"]
+    detail = {"rounds": [r for r in rounds if r["id"] in expected.get("latest", [])], "rounds_total": len(rounds)}
+    for key in ("recap", "results"):
+        if key in expected:
+            detail[key] = expected[key]
+    return detail
 
 
 SAMPLES = {"recents.schema.json": recent_setups, "todo-view.schema.json": todo_views}
