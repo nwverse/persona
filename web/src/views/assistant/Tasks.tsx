@@ -39,7 +39,7 @@ import {
 } from "../../lib/feed";
 import { backgroundWorkLine, type BackgroundWork } from "../../lib/background-work";
 import { workflowCounts } from "../../lib/workflows";
-import { dockAgents, type DockAgent, interruption, isRemovable, mostUrgentAgent, openAsk, orphanedLine, stoppedReason, taskNow, todoStatus, TODO_STATUS_INFO, waitingLine, type SessionLookup, type Todo, type TodoStatus } from "../../lib/todos";
+import { dockAgents, type DockAgent, heldDelivery, interruption, isRemovable, mostUrgentAgent, openAsk, orphanedLine, stoppedReason, taskNow, todoStatus, TODO_STATUS_INFO, waitingLine, type SessionLookup, type Todo, type TodoStatus } from "../../lib/todos";
 import { usageLimitLabel } from "../../lib/usage-limit";
 import { openAgent, openTask } from "../../lib/handoff";
 import { navigate } from "../../lib/router";
@@ -880,6 +880,7 @@ function TaskProgressMeter({ value, total, blocked, title }: { value: number; to
 
 /** The task's line in Needs you when no card of its agent stands for it: what it waits for. */
 export function waitsLabel(todo: Todo, status: TodoStatus): string {
+  if (status !== "interrupted" && heldDelivery(todo)?.unblock === "user") return t("todos.kicker_permission");
   if (todo.supervision?.state === "pending_review") return t("assistant-tasks.review_pending");
   if (todo.supervision?.state === "needs_user") return t("assistant-tasks.review_needs_user");
   return TODO_STATUS_INFO[status]?.label ?? t("assistant-tasks.review_needs_user");
@@ -1050,7 +1051,10 @@ function WaitingTaskRow({ rowKey, todo, status, countsOpenAttr }: { rowKey?: str
   const cutOff = status === "interrupted";
   const cut = cutOff ? interruption(task?.lead) : undefined;
   const canContinue = cutOff && (cut ? cut.canContinue : true);
-  const line = cut ? cut.reason : todo.supervision?.state === "pending_review" ? (summary && plainMarkdown(summary)) || progressOf(task?.lead)?.text : undefined;
+  const hold = heldDelivery(todo);
+  const line = cutOff ? cut?.reason
+    : hold?.unblock === "user" ? hold.gate
+      : todo.supervision?.state === "pending_review" ? (summary && plainMarkdown(summary)) || progressOf(task?.lead)?.text : undefined;
   return (
     <div data-needs-row={rowKey} {...countsOpenAttr} data-waiting-task={todo.id} className={cx("flex flex-col gap-1.5 rounded-control px-3 py-2 text-sm", cutOff ? "bg-danger-wash" : "bg-field")}>
       <div className="flex min-w-0 items-center gap-2">

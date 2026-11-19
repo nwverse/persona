@@ -257,7 +257,10 @@ nonisolated enum AssistantEntries {
             if !asks.isEmpty { asking.append((row, asks.map { $0.createdAt ?? .distantPast }.min())); listed() }
             else if waits || decision || deliveryApproval {
                 // Only the review decision is put off or dismissed (Later / Don't handle); a live Agent question keeps its home.
-                if deliveryApproval || !(status != .needsYou && decision && decisionHidden(todo)) { deciding.append((row, rank(todo, status), when)) }
+                if deliveryApproval || !(status != .needsYou && decision && decisionHidden(todo)) {
+                    let needsStatus: Status = deliveryApproval && status != .interrupted ? .needsYou : status
+                    deciding.append((.task(id: todo.id, status: needsStatus, agents: active.count), rank(todo, status), when))
+                }
                 listed()
             }
             // its supervisor's review is under way (not the owner's yet): in progress, whatever the To-dos page files it under
@@ -903,7 +906,7 @@ struct AssistantActionBar: View {
             // in plain words; the raw error is the task's details' (#8237)
             return store.startFailure(todo).map(StartFailureWords.rowLine)
         case .needsYou:
-            return TaskAsk.waitingLine(store.interactions(todo))
+            return TaskAsk.waitingLine(store.interactions(todo)) ?? (todo.delivery?.waitsForOwner == true ? one(todo.delivery?.gate) : nil)
         case .working, .waiting:
             return activity.isActive ? nil : one(TaskNow(lead: lead, working: status == .working)?.text)
         case .unread, .followUp:

@@ -42,6 +42,8 @@ import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcons
 import persona.core.domain.answer.*
 import persona.core.domain.tasks.BackgroundWork
+import persona.core.domain.tasks.HoldUnblock
+import persona.core.domain.tasks.hold
 import persona.core.domain.tasks.TriageStatus
 import persona.core.domain.tasks.NeedsYouEntry
 import persona.core.domain.tasks.NeedsYouGroup
@@ -350,11 +352,12 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
                                 items(deciding.filter(group::has), key = { it.key }) { entry ->
                                     val todo = entry.todo
                                     val row = progressByTodo[todo.id]
+                                    val gate = todo.hold?.takeIf { it.unblock == HoldUnblock.User }?.gate
                                     when {
                                         todo.ask?.outcome == "decide" -> TaskDecisionCard(todo, host, enabled) { openTask(host, todo) }
                                         entry.status == TriageStatus.Failed || entry.status == TriageStatus.Interrupted ->
                                             TrayOutcomeRow(entry, host, enabled, taskBusy)
-                                        else -> TrayDecisionRow(todo.title, todo.ask?.verdict ?: row?.text.orEmpty(), R.string.chat_tray_review,
+                                        else -> TrayDecisionRow(todo.title, todo.ask?.verdict ?: gate ?: row?.text.orEmpty(), R.string.chat_tray_review,
                                             "assistant-review-${row?.id ?: "todo:${todo.id}"}", enabled, onOpen = { openTask(host, todo) }) { openTask(host, todo) }
                                     }
                                 }
