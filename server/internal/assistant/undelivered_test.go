@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -226,6 +227,111 @@ func TestUndeliveredGoesWhenTheConversationRunsAgain(t *testing.T) {
 	s.undeliveredPass(context.Background(), time.Now())
 	if got := ownerSends(f); len(got) != 1 {
 		t.Fatalf("sent %q once it ran again", got)
+	}
+}
+
+func TestUndeliveredFromSignedOutDeviceIsDeleteOnly(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		event   bool
+		inDoubt bool
+	}{
+		{name: "received_event", event: true},
+		{name: "missed_event"},
+		{name: "missed_event_with_a_try_in_doubt", inDoubt: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			st := &memStore{}
+			s, f := newQuietServiceOn(t, st)
+			for _, id := range []string{"signed-out", "other-device"} {
+				code := "machine_offline"
+				if tc.inDoubt && id == "signed-out" {
+					code = assistantwire.CodeDeliveryUnknown
+				}
+				row, err := s.KeepUndelivered(ctx, assistantwire.KeepUndeliveredParams{
+					MachineID: "server", SessionID: "conv1", CredentialID: id, Human: true, Lang: "en", Code: code,
+					Params: map[string]any{"text": id, "client_msg_id": id},
+				})
+				if err != nil || row.State != proto.UndeliveredWaiting {
+					t.Fatalf("initial row: %+v, %v", row, err)
+				}
+			}
+			assertFailed := func(service *Service) []proto.UndeliveredMessage {
+				t.Helper()
+				for _, v := range service.snapshot(ctx).Sessions {
+					if v.SessionID == "conv1" {
+						rows := v.Undelivered
+						if len(rows) > 0 && rows[0].ID == "signed-out" && rows[0].State == proto.UndeliveredFailed &&
+							rows[0].DeleteOnly && rows[0].NextAt == nil && rows[0].Error == "Not sent: the device that sent it was signed out" {
+							return rows
+						}
+						t.Fatalf("conversation's rows: %+v", rows)
+					}
+				}
+				t.Fatal("conversation missing from snapshot")
+				return nil
+			}
+			if tc.event {
+				b := &BusHub{svc: s}
+				raw, err := json.Marshal(bus.DeviceCredential{ID: "signed-out"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := b.event(ctx, busEvent{name: bus.EventCredentialRevoked, params: raw}); err != nil {
+					t.Fatal(err)
+				}
+				rows := assertFailed(s)
+				if len(rows) != 2 || rows[1].ID != "other-device" || rows[1].State != proto.UndeliveredWaiting || rows[1].DeleteOnly {
+					t.Fatalf("other device's row: %+v", rows)
+				}
+			} else {
+				// The original sender survives reload, even though this manager missed the event.
+				s, f = newQuietServiceOn(t, st)
+				f.mu.Lock()
+				f.revokedDevices = map[string]bool{"signed-out": true}
+				f.credentialCheckErr = errors.New("hub temporarily unavailable")
+				f.mu.Unlock()
+				s.undeliveredPass(ctx, time.Now().Add(time.Minute))
+				if got := ownerSends(f); len(got) != 0 {
+					t.Fatalf("sent while the credential could not be checked: %q", got)
+				}
+				f.mu.Lock()
+				f.credentialCheckErr = nil
+				f.mu.Unlock()
+			}
+
+			s.undeliveredSeen(DeviceSessions{MachineID: "server", Sessions: []proto.Session{{SessionID: "conv1", Status: proto.StatusIdle}}})
+			now := time.Now()
+			if tc.inDoubt {
+				// An uncertain try is checked on its own schedule after the computer returns.
+				now = now.Add(time.Minute)
+			}
+			s.undeliveredPass(ctx, now)
+			if got := ownerSends(f); !slices.Equal(got, []string{"other-device"}) {
+				t.Fatalf("sent %q", got)
+			}
+			if rows := assertFailed(s); len(rows) != 1 {
+				t.Fatalf("still kept after delivery: %+v", rows)
+			}
+			again, nextHub := newQuietServiceOn(t, st)
+			assertFailed(again)
+			path := "/api/v1/assistant/conversations/conv1/undelivered/signed-out"
+			rec := httptest.NewRecorder()
+			again.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path+"/retry", nil))
+			if rec.Code != http.StatusConflict {
+				t.Fatalf("retry: %d %s", rec.Code, rec.Body)
+			}
+			again.undeliveredPass(ctx, time.Now().Add(time.Hour))
+			if got := ownerSends(nextHub); len(got) != 0 {
+				t.Fatalf("sent after reload and Retry: %q", got)
+			}
+			rec = httptest.NewRecorder()
+			again.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, path, nil))
+			if rec.Code != http.StatusOK || len(undeliveredOf(t, again, "conv1")) != 0 {
+				t.Fatalf("delete: %d %s", rec.Code, rec.Body)
+			}
+		})
 	}
 }
 

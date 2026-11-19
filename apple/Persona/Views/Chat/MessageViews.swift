@@ -517,7 +517,7 @@ struct UndeliveredBubble: View {
             HStack(alignment: .bottom, spacing: Theme.Space.s) {
                 Spacer(minLength: 40)
                 Menu {
-                    if message.gaveUp {
+                    if message.canRetry {
                         Button(action: retry) { Label("Retry", systemImage: Theme.Icon.retry) }
                     }
                     Button(role: .destructive, action: discard) { Label("Delete", systemImage: Theme.Icon.delete) }
@@ -530,10 +530,11 @@ struct UndeliveredBubble: View {
                             .contentShape(.rect)
                     }
                 }
-                .accessibilityLabel(message.gaveUp ? Text("Not delivered. Retry or delete.") : Text("Not delivered yet. It will be sent automatically."))
+                .accessibilityLabel(message.deleteOnly == true ? Text(verbatim: reason) :
+                    message.gaveUp ? Text("Not delivered. Retry or delete.") : Text("Not delivered yet. It will be sent automatically."))
                 // The menu's items as actions too (VoiceOver's Actions rotor, the Runtime CLI), as on PendingBubble.
                 .accessibilityActions {
-                    if message.gaveUp { Button("Retry", action: retry) }
+                    if message.canRetry { Button("Retry", action: retry) }
                     Button("Delete", action: discard)
                 }
                 let split = MessageComments.inBubble(shown)
@@ -546,7 +547,9 @@ struct UndeliveredBubble: View {
                     }
             }
             Group {
-                if message.gaveUp {
+                if message.deleteOnly == true {
+                    Text(verbatim: reason).foregroundStyle(Theme.danger)
+                } else if message.gaveUp {
                     Text("Not delivered: \(reason)").foregroundStyle(Theme.danger)
                 } else {
                     Text("Not delivered: \(reason). It will be sent automatically.").foregroundStyle(Theme.cautionText)
