@@ -862,7 +862,7 @@ export const Composer = memo(function Composer({
     input.current?.focus({ preventScroll: true });
   };
 
-  const slashProps = { rows, active, onHover: setActive, onPick: pick, onClose: closeSlash, query, source: mention, machineId, within: box };
+  const slashProps = { rows, active, onHover: setActive, onPick: pick, onClose: closeSlash, query, source: mention, machineId, within: box, ime: ime.tracker };
   const commandPalette = () => <SlashPalette {...slashProps} active={Math.min(active, Math.max(rows.length - 1, 0))} />;
   const MentionPanel = mention?.skills ? AssistantComposerPanel : ComposerPanel;
   return (
@@ -1096,6 +1096,9 @@ export const Composer = memo(function Composer({
               fillSuggestion(pill);
               return;
             }
+            // Alt+Enter, which sends on a desktop, never sends the half-typed "/com" or "@file" an open menu is completing:
+            // the menu's rows take only a plain Enter, and Mod+Enter stays the explicit send
+            if (send && (slashOpen || mOpen) && e.altKey && !modEnter) return;
             // a touch keyboard's return is a new line there; the send button sends (a hardware keyboard with a
             // trackpad, an iPad's, sends on Enter)
             if (send) {

@@ -62,4 +62,49 @@ describe("SlashSkillPalette's keys", () => {
     expect(onPick).toHaveBeenCalledWith(expect.objectContaining({ kind: "skill", id: "skill:review" }));
     composer.remove();
   });
+
+  it("with the composer's own state, an Enter right after a compositionend it saw before mounting is not a pick", () => {
+    const within = createRef<HTMLDivElement>();
+    const composer = document.createElement("div");
+    const field = document.createElement("textarea");
+    composer.append(field);
+    document.body.append(composer);
+    (within as { current: HTMLDivElement | null }).current = composer;
+    const onPick = vi.fn();
+    // the composition ended just before the palette mounted
+    const ime = { current: { active: false, endedAt: now } };
+    act(() => root.render(<SlashSkillPalette rows={[]} active={0} onHover={vi.fn()} onPick={onPick} onClose={vi.fn()} query="rev" within={within} ime={ime} />));
+    now += 10;
+    const enter = () => {
+      const e = new KeyboardEvent("keydown", { key: "Enter", keyCode: 13, bubbles: true, cancelable: true });
+      field.dispatchEvent(e);
+      return e;
+    };
+    expect(enter().defaultPrevented).toBe(false);
+    expect(onPick).not.toHaveBeenCalled();
+    now += 500;
+    expect(enter().defaultPrevented).toBe(true);
+    expect(onPick).toHaveBeenCalledTimes(1);
+    composer.remove();
+  });
+
+  it("without one, a blur in the middle of a composition does not leave its keys dead", () => {
+    const within = createRef<HTMLDivElement>();
+    const composer = document.createElement("div");
+    const field = document.createElement("textarea");
+    composer.append(field);
+    document.body.append(composer);
+    (within as { current: HTMLDivElement | null }).current = composer;
+    const onPick = vi.fn();
+    act(() => root.render(<SlashSkillPalette rows={[]} active={0} onHover={vi.fn()} onPick={onPick} onClose={vi.fn()} query="rev" within={within} />));
+    field.focus();
+    field.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    field.blur();
+    now += 500;
+    const e = new KeyboardEvent("keydown", { key: "Enter", keyCode: 13, bubbles: true, cancelable: true });
+    field.dispatchEvent(e);
+    expect(e.defaultPrevented).toBe(true);
+    expect(onPick).toHaveBeenCalledTimes(1);
+    composer.remove();
+  });
 });

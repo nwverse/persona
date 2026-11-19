@@ -8,6 +8,10 @@ import { COMPOSITION_TAIL_MS } from "../../lib/ime";
 import { loadPages } from "../../lib/lazy-page";
 import { Composer, type Outgoing } from "./Composer";
 
+// a skill catalog for the skill-aware "/" palette (a chat whose mention source offers skills)
+const catalog = vi.hoisted(() => ({ skills: [{ id: "review", name: "/review", description: "Review the change", source: "project" }] }));
+vi.mock("./useSkillCatalog", () => ({ useSkillCatalog: () => ({ catalog, status: undefined }) }));
+
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 let host: HTMLDivElement;
@@ -132,6 +136,86 @@ describe("Shift+Enter with the slash palette open", () => {
     // a plain Enter still picks the row
     expect((await press()).defaultPrevented).toBe(true);
   });
+});
+
+describe("Alt+Enter with a menu open", () => {
+  it("never sends the half-typed /command or @file, and still sends without a menu", async () => {
+    const onSend = vi.fn(async (_m: Outgoing) => true);
+    mount({ commands: [{ word: "/compact", desc: "Compact", text: "/compact" }], mention: { files: () => ["/code/app/lib/links.ts"] }, onSend });
+    act(() => box().focus());
+    await type("/com");
+    await act(async () => {
+      await vi.waitFor(() => expect(host.querySelector("[data-slash-palette] [role=option]")).not.toBeNull());
+    });
+    await press({ altKey: true });
+    expect(onSend).not.toHaveBeenCalled();
+    expect(box().value).toBe("/com");
+
+    await type("see @lin");
+    await act(async () => {
+      await vi.waitFor(() => expect(host.querySelector('[data-composer-panel="at"] [role=option]')).not.toBeNull());
+    });
+    await press({ altKey: true });
+    expect(onSend).not.toHaveBeenCalled();
+    expect(box().value).toBe("see @lin");
+
+    // without a menu, Alt+Enter sends on a desktop as before (lib/viewport.ts enterSends)
+    await type("done here");
+    expect((await press({ altKey: true })).defaultPrevented).toBe(true);
+    expect(onSend.mock.calls.map(([m]) => m.text)).toEqual(["done here"]);
+  });
+});
+
+describe("the skill palette and Safari's committing Enter", () => {
+  const skills = { files: () => [], skills: { manager: "assistant", environment: "test" } };
+  const option = () => host.querySelector("[data-slash-palette] [role=option]");
+  // Opens the palette once so its lazy chunk is in (React reveals a lazy part on its scheduler's clock, which these
+  // tests hold still), then empties the box.
+  const loadPalette = async () => {
+    await type("/rev");
+    await vi.waitFor(async () => {
+      await act(async () => { now += 100; await new Promise((r) => setTimeout(r, 20)); });
+      expect(option()).not.toBeNull();
+    }, { timeout: 8_000, interval: 20 });
+    await type("");
+  };
+  it("opened by compositionend, does not take the Enter right after it as a pick", async () => {
+    const onSend = vi.fn(async (_m: Outgoing) => true);
+    mount({ mention: skills, commands: [], onSend });
+    act(() => box().focus());
+    await loadPalette();
+    compose("compositionstart");
+    await type("/rev");
+    await settle();
+    expect(option()).toBeNull();
+    compose("compositionend");
+    await settle();
+    expect(option()).not.toBeNull();
+    now += 10;
+    expect((await press()).defaultPrevented).toBe(false);
+    expect(box().value).toBe("/rev");
+    expect(onSend).not.toHaveBeenCalled();
+    // the person's own Enter, a moment later, picks the skill
+    now += COMPOSITION_TAIL_MS;
+    expect((await press()).defaultPrevented).toBe(true);
+    expect(box().value).not.toBe("/rev");
+    expect(onSend).not.toHaveBeenCalled();
+  }, 20_000);
+
+  it("picks again after a blur in the middle of a composition", async () => {
+    mount({ mention: skills, commands: [] });
+    act(() => box().focus());
+    await loadPalette();
+    await type("/rev");
+    await settle();
+    expect(option()).not.toBeNull();
+    compose("compositionstart");
+    act(() => box().blur());
+    act(() => box().focus());
+    now += 1_000;
+    expect((await press()).defaultPrevented).toBe(true);
+    expect(box().value).not.toBe("/rev");
+  }, 20_000);
 });
 
 describe("measuring the box", () => {

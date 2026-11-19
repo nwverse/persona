@@ -36,15 +36,20 @@ export function SlashSkillPalette(input: SlashPaletteInput) {
   // Capture inside this composer, before its special /model and /permissions handling. Commands fall through to it;
   // arrows and a highlighted skill are handled here across the combined list.
   const within = input.within;
+  const shared = input.ime;
   useEffect(() => {
     const root = within?.current;
     if (!root) return;
-    // the composer's own input method state (lib/ime.ts): Safari's Enter right after compositionend is still the IME's
-    const ime: ImeState = { active: false, endedAt: -Infinity };
-    const start = () => { ime.active = true; };
-    const end = () => { ime.active = false; ime.endedAt = performance.now(); };
+    // The composer's input-method state where it passes one (lib/ime.ts): Safari's Enter right after compositionend is
+    // still the IME's, and that compositionend came before this palette mounted. Without one, a state of its own.
+    const own = { current: { active: false, endedAt: -Infinity } as ImeState };
+    const ime = shared ?? own;
+    const start = () => { own.current.active = true; };
+    const end = () => { own.current = { active: false, endedAt: performance.now() }; };
+    // a field that loses focus mid-composition may never get its compositionend
+    const out = () => { own.current.active = false; };
     const key = (e: KeyboardEvent) => {
-      if (imeKey(e, ime)) return;
+      if (imeKey(e, ime.current)) return;
       const { entries, current, pick, onHover } = latest.current;
       // a plain Enter picks; Shift+Enter and Alt+Enter stay a new line, Mod+Enter sends
       const pickEnter = e.key === "Enter" && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey;
@@ -58,15 +63,19 @@ export function SlashSkillPalette(input: SlashPaletteInput) {
         pick(entries[current]);
       }
     };
-    root.addEventListener("compositionstart", start, true);
-    root.addEventListener("compositionend", end, true);
     root.addEventListener("keydown", key, true);
+    if (!shared) {
+      root.addEventListener("compositionstart", start, true);
+      root.addEventListener("compositionend", end, true);
+      root.addEventListener("focusout", out, true);
+    }
     return () => {
+      root.removeEventListener("keydown", key, true);
       root.removeEventListener("compositionstart", start, true);
       root.removeEventListener("compositionend", end, true);
-      root.removeEventListener("keydown", key, true);
+      root.removeEventListener("focusout", out, true);
     };
-  }, [within]);
+  }, [within, shared]);
   return (
     <SlashSkillView
       {...input}
