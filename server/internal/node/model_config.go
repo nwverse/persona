@@ -111,7 +111,8 @@ func (m modelExecution) withSupervision(policy *string) modelExecution {
 // assistantModel is the launcher and model the hub runs conversation id's next message on (as a message from the phone
 // would be), for a message the node sends it by itself (recoverAssistantTasks). Started on the model it last ran, the
 // conversation's next message from the phone would need another process (#1554). Nothing when the hub can't say (an
-// older hub): the conversation's own then.
+// older hub): the conversation's own then. The manager also re-attests origin here, so a pre-upgrade node session
+// with no persisted origin still recovers under its Inbox policy.
 func (n *Node) assistantModel(ctx context.Context, id string) (string, modelExecution) {
 	var res struct {
 		Launcher                string                   `json:"launcher"`
@@ -122,10 +123,11 @@ func (n *Node) assistantModel(ctx context.Context, id string) (string, modelExec
 		IsMain                  bool                     `json:"is_main"`
 		MainCompact             int                      `json:"main_compact_window"`
 		External                *proto.ExternalExecution `json:"external"`
+		Origin                  string                   `json:"origin"`
 		SupervisionInstructions *string                  `json:"supervision_instructions"`
 	}
 	if n.peer == nil || n.peer.Call(ctx, "assistant.model", map[string]any{"session_id": id}, &res) != nil {
 		return "", modelExecution{}
 	}
-	return res.Launcher, (modelExecution{Model: res.Model, Effort: res.Effort, UseEffort: res.ModelFingerprint != "", Fingerprint: res.ModelFingerprint, Runtime: n.externalRuntime(id, res.Launcher, res.Runtime), IsMain: res.IsMain, MainCompactWindow: res.MainCompact, External: res.External}).withSupervision(res.SupervisionInstructions)
+	return res.Launcher, (modelExecution{Model: res.Model, Effort: res.Effort, UseEffort: res.ModelFingerprint != "", Fingerprint: res.ModelFingerprint, Runtime: n.externalRuntime(id, res.Launcher, res.Runtime), IsMain: res.IsMain, MainCompactWindow: res.MainCompact, External: res.External, Origin: res.Origin}).withSupervision(res.SupervisionInstructions)
 }

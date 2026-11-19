@@ -65,6 +65,10 @@ const assistantAllowedTools = "mcp__persona"
 // (#5839).
 const assistantBuiltinTools = "Bash,Read,Write,Edit,Monitor,Skill,Agent,ListAgents,SendMessage,TaskStop,WebFetch,WebSearch,ToolSearch"
 
+// SendMessage is a Claude built-in, not a Persona MCP call, so the manager/node origin guard cannot classify its
+// cross-Agent resume or message. Inbox handling keeps the investigation tools but must finish through inbox_suggest.
+const assistantInboxBuiltinTools = "Bash,Read,Write,Edit,Monitor,Skill,Agent,ListAgents,TaskStop,WebFetch,WebSearch,ToolSearch"
+
 type assistantProc struct {
 	id       string
 	agent    string // "claude" (stream-json) or "codex" (app-server, assistant_codex.go)
