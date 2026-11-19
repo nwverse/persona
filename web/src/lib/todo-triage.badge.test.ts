@@ -109,6 +109,19 @@ describe("the badge's rules", () => {
     // held for an Agent or for others, it is nobody's to OK: it still counts, as nothing shows an Agent on it
     const forAgent = { ...held, delivery: { state: "pr", unblock: "agent" } };
     expect(waitsOnOwner(forAgent, triage(forAgent, lookup, NOW))).toBeNull();
+    // held for the owner's OK while its own Agent is at work again: the hold still waits on them
+    expect(counted([task("again", { agents: [agent("run")], delivery: { state: "merged", unblock: "user" } })])).toEqual(["again"]);
+    // a goal that itself asks the owner a decision, its pieces at work: the decision is theirs
+    const asks = personal("ask-goal", { ask: { outcome: "decide", verdict: "Which launch day?", asked_at: hoursAgo(1) } });
+    expect(counted([asks, task("busy", { part_of: "ask-goal", agents: [agent("run3")] })])).toEqual(["ask-goal"]);
+  });
+
+  it("does not read a shelved hold as waiting on the owner, nor let it carry its goal", () => {
+    const old = hoursAgo(100);
+    const shelved = task("held", { part_of: "goal", created_at: hoursAgo(120), updated_at: old, agents: [{ ...agent("old"), linked_at: hoursAgo(110) }], delivery: { state: "pr", unblock: "user", at: old } });
+    expect(triage(shelved, lookup, NOW).section).toBe("shelved");
+    expect(waitsOnOwner(shelved, triage(shelved, lookup, NOW))).toBeNull();
+    expect(counted([personal("goal"), shelved])).toEqual(["goal"]);
   });
 
   it("counts a cut-off Agent's task, and keeps counting tasks no Agent is on", () => {
