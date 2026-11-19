@@ -621,6 +621,11 @@ on-demand model panel, not the everyday Assistant home (#6887).
   screen). Markdown rendered with `askImages` (Inbox connector and Lark threads) keeps a run its size with Load image
   over it; a hub without `remote_images` keeps every picture behind a click (#8162's gate), loaded from its host with
   no Referer.
+  Android (#9476) uses a 240 dp single and a 480 dp maximum column in Glass, Brief and Board. Inline pictures use the
+  measured text line height, including at large system text sizes. A tap opens that reply’s pictures in the existing
+  viewer, including inline and overflow pictures. Each third-party thumbnail and previously unopened gallery page
+  asks before loading. Mail keeps its Show images action. A pairing that has yet to advertise `remote_images` waits
+  for a tap and uses a separate HTTPS reader. WebView link preloading skips picture-bearing replies.
 - No shared bubble component exists. Messages, Tasks and Lark rebuild it with different paddings and gutters (DS-20).
 - Web: user bubble 14 px radius; replies unboxed. Android: 20 dp in Glass, max width 86%.
 - Web reply bar (#5314, `ReplyBar`; the owner's requested alignment with cindy's `MessageActionBar`, 2026-11-12): only
@@ -1438,6 +1443,8 @@ The widget extension doesn't build `Theme`: Persona's widgets take their colors,
 ### 3.15.1 Token usage calendar (Android)
 
 `UsageCalendarCard` and `UsageCalendarPage` (`feature/assistant/UsageCalendar.kt`) are the daily-token counterpart of the Machine monitoring charts. They compare magnitude over time, so they use one hue rather than categorical series colors: the current theme accent in four quantile steps, with `sunken` for no usage. Text, dates, legends and breakdown rows stay in the ordinary ink tokens. The exact number and the four token kinds are available by selecting a day; the details page also lists every computer and kind in text, so color is never the only way to read a value.
+
+On the detail page, each agent’s seven-day total adds input, output, cache write and cache read. Each positive total gets a grouped row with its Android agent mark, its name and a localized short number. The meter below the name compares the total to the largest agent on the same scale across rows. Historical usage gets a labeled row without a mark. At large text sizes the name can wrap above the meter. TalkBack reads the name and exact count together.
 
 The daily grid is Monday-first, seven rows per week, with the current week last and a thin outline on today. A day with usage ranks among only the days with usage: `ceil(4 × rank / count)`, where rank includes every equal or smaller day, gives steps 1–4; no usage is step 0. The hourly grid uses the same quantile rule among its hours and retains repeated clock-change hours by timestamp. Small chart cells are not the sole controls: selected days have 48dp previous / next buttons and an exact spoken value, while the card's non-cell area opens the details page. Home reads while resumed and keeps the previous devices section until real data arrives; it never substitutes an all-zero calendar for a failed or unsupported read.
 
