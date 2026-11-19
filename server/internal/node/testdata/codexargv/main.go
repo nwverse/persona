@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/node"
@@ -20,7 +21,10 @@ func main() {
 		})
 		return
 	}
-	var input struct{ Dir, Prompt string }
+	var input struct {
+		Dir, Prompt          string
+		NpmShim, UnsafeBatch bool
+	}
 	if err := json.NewDecoder(os.Stdin).Decode(&input); err != nil {
 		panic(err)
 	}
@@ -29,8 +33,45 @@ func main() {
 		panic(err)
 	}
 	file := filepath.Join(input.Dir, "start.json")
+	program := self
+	if input.NpmShim {
+		program = filepath.Join(input.Dir, "npm", "codex.cmd")
+		platform, triple := "codex-win32-x64", "x86_64-pc-windows-msvc"
+		if runtime.GOARCH == "arm64" {
+			platform, triple = "codex-win32-arm64", "aarch64-pc-windows-msvc"
+		}
+		pkg := filepath.Join(filepath.Dir(program), "node_modules", "@openai", "codex")
+		for name, content := range map[string][]byte{
+			program:                               []byte("@exit /b 99\r\n"),
+			filepath.Join(pkg, "bin", "codex.js"): nil,
+		} {
+			if err := os.MkdirAll(filepath.Dir(name), 0o700); err != nil {
+				panic(err)
+			}
+			if err := os.WriteFile(name, content, 0o600); err != nil {
+				panic(err)
+			}
+		}
+		binary, err := os.ReadFile(self)
+		if err != nil {
+			panic(err)
+		}
+		native := filepath.Join(pkg, "node_modules", "@openai", platform, "vendor", triple, "bin", "codex.exe")
+		if err := os.MkdirAll(filepath.Dir(native), 0o700); err != nil {
+			panic(err)
+		}
+		if err := os.WriteFile(native, binary, 0o700); err != nil {
+			panic(err)
+		}
+	}
+	if input.UnsafeBatch {
+		program = filepath.Join(input.Dir, "unknown.cmd")
+		if err := os.WriteFile(program, []byte("@exit /b 99\r\n"), 0o600); err != nil {
+			panic(err)
+		}
+	}
 	data, _ := json.Marshal(map[string]any{
-		"argv": []string{self, "receive", input.Dir}, "prompt": input.Prompt, "dir": input.Dir,
+		"argv": []string{program, "receive", input.Dir}, "prompt": input.Prompt, "dir": input.Dir,
 	})
 	if err := os.WriteFile(file, data, 0o600); err != nil {
 		panic(err)
@@ -41,6 +82,7 @@ func main() {
 	// receiver starts, with no truncation or terminal-input fallback.
 	_ = json.NewEncoder(os.Stdout).Encode(map[string]any{
 		"limit_refused":  err != nil && strings.Contains(err.Error(), "32767"),
+		"batch_refused":  err != nil && strings.Contains(err.Error(), "batch file"),
 		"source_removed": os.IsNotExist(statErr),
 	})
 }

@@ -55,20 +55,22 @@ func TestCodexStartNativeArgvRoundTrip(t *testing.T) {
 				nativeDir = strings.TrimSpace(string(out))
 			}
 			type inputCase struct {
-				name, text string
-				refused    bool
+				name, text                    string
+				refused, npmShim, unsafeBatch bool
 			}
-			cases := []inputCase{{"multiline-CJK-nonBMP-quotes", prompt, false}}
+			cases := []inputCase{{name: "multiline-CJK-nonBMP-quotes", text: prompt}}
 			if target == "windows" {
 				cases = append(cases,
-					inputCase{"ASCII-under-limit", strings.Repeat("a", 17000), false},
-					inputCase{"nonBMP-over-UTF16-limit", strings.Repeat("🧪", 17000), true},
-					inputCase{"quoting-over-limit", strings.Repeat(`\" `, 8500), true},
+					inputCase{name: "ASCII-under-limit", text: strings.Repeat("a", 17000)},
+					inputCase{name: "nonBMP-over-UTF16-limit", text: strings.Repeat("🧪", 17000), refused: true},
+					inputCase{name: "quoting-over-limit", text: strings.Repeat(`\" `, 8500), refused: true},
+					inputCase{name: "npm-shim-resolves-native-exe", text: prompt, npmShim: true},
+					inputCase{name: "unknown-batch-refused", text: prompt, unsafeBatch: true},
 				)
 			}
 			for _, tc := range cases {
 				t.Run(tc.name, func(t *testing.T) {
-					data, _ := json.Marshal(map[string]any{"dir": nativeDir, "prompt": tc.text})
+					data, _ := json.Marshal(map[string]any{"dir": nativeDir, "prompt": tc.text, "npmShim": tc.npmShim, "unsafeBatch": tc.unsafeBatch})
 					cmd := exec.CommandContext(ctx, bin)
 					cmd.Stdin = bytes.NewReader(data)
 					var stderr bytes.Buffer
@@ -81,17 +83,18 @@ func TestCodexStartNativeArgvRoundTrip(t *testing.T) {
 						Args          []string `json:"args"`
 						SourceRemoved bool     `json:"source_removed"`
 						LimitRefused  bool     `json:"limit_refused"`
+						BatchRefused  bool     `json:"batch_refused"`
 					}
 					if err := json.Unmarshal(out, &got); err != nil {
 						t.Fatalf("native receiver did not return JSON: %v", err)
 					}
-					if !got.SourceRemoved || got.LimitRefused != tc.refused {
+					if !got.SourceRemoved || got.LimitRefused != tc.refused || got.BatchRefused != tc.unsafeBatch {
 						t.Fatalf("source removed=%v, limit refused=%v; expected refusal=%v", got.SourceRemoved, got.LimitRefused, tc.refused)
 					}
-					if !tc.refused && !slices.Equal(got.Args, []string{"--", tc.text}) {
+					if !tc.refused && !tc.unsafeBatch && !slices.Equal(got.Args, []string{"--", tc.text}) {
 						t.Fatalf("native %s argument changed: expected %d UTF-8 bytes, got argument lengths %v", target, len(tc.text), argvLengths(got.Args))
 					}
-					if tc.refused && len(got.Args) != 0 {
+					if (tc.refused || tc.unsafeBatch) && len(got.Args) != 0 {
 						t.Fatal("oversized input reached the receiver")
 					}
 					t.Logf("native %s: UTF-8 bytes=%d, Unicode chars=%d, limit_refused=%v", target, len(tc.text), len([]rune(tc.text)), tc.refused)
