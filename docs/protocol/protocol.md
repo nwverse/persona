@@ -3174,6 +3174,8 @@ When Claude Code answers an upstream refusal with another model and keeps the se
   (the box holds the words of the transcript's last prompt, which was answered and whose turn ended, and the conversation above the box no longer shows that prompt) and marks the segment the same way (`File.RewoundAt`), so `history` changes within a few seconds.
   If Claude then writes a message or a reply **under** the segment (the guess was wrong: the user had typed the same words again), the segment comes back: the node reads the file again and `history` changes once more (it then differs from what a freshly started node would compute, so clients re-fetch once more after a node restart).
 
+Optional inline tool waits use the input-echo ledger below: a successful `session.start` with `client_msg_id` records its first prompt, or a resume prompt after the transcript boundary captured before resuming. This does not make `session.start` a retry-deduplicating endpoint. The assistant generates the correlator and observes it through `session.items`; older nodes without this echo cannot satisfy the wait. `task_plan` persists its hub-generated `wait_input_id` with its single task across asynchronous admission/start; caller-supplied values are discarded. No public item or session schema changes. See [Assistant](../assistant/assistant.md) for `wait_seconds` and observation states.
+
 ### Matching pending messages
 
 A message the App sends shows as a pending bubble until it appears in the transcript. Claude Code, Codex and runtimes all use their own item ids for the user's line, not
@@ -3591,14 +3593,16 @@ on or off, and from which device:
   Once the node took it, the manager writes a `set` row: `from` (the mode the session ran in), `to`, and `applied` as
   the node's answer says (`now`, `restart` for a queued restart into Full access, `""` from an older node). Effort- or
   model-only changes, refused picks and calls that did not come through `/modes` are not recorded (the assistant's own
-  changes and plan approvals: #10308).
+  changes and plan approvals: #10308), nor is a pick of the mode the session already runs in (`from` equals `to`): it
+  changed nothing, and when it withdrew a waiting restart the node's `cancelled` drop is the record of it (#11089).
 - **What became of a queued restart**: the node's `session.mode_restart` event becomes a `restart_done`,
   `restart_failed` or `restart_dropped` row with its `reason`, a code the apps put in words (`proto.ModeRestartReason…`):
-  dropped for `replaced` (another mode picked first), `process_exited`, `process_replaced` or `process_unknown` (the
+  dropped for `replaced` (another mode picked first), `cancelled` (the mode the session runs in picked again, #11089;
+  older nodes say `replaced`), `process_exited`, `process_replaced` or `process_unknown` (the
   process it was picked for is gone, docs/integrations/claude-integration.md "Full access by a restart"), `expired`
   (picked over two hours ago); done with `already_in` (put in the mode at the computer meanwhile); failed with
   `not_stopped`, `start_failed` (it runs as before) or `stopped`. `""` says nothing more; rows from before the codes hold
-  English words, which the apps leave out.
+  English words, which the apps leave out, as they leave out a code they do not know yet (the plain line, no error).
 
 Rows are never changed or deleted. `GET /api/v1/sessions/{mid}/{sid}/mode-changes` gives a session's latest 200 to the
 owner's devices, which draw a line for each in the session's chat.

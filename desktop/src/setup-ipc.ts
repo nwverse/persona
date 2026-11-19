@@ -28,7 +28,8 @@ export function installSetupProtocol(): void {
 /** Setup is a local shell window. Its sender is validated again on every privileged action. */
 export function installSetupIPC(window: BrowserWindow, deps: {
   readonly hub: () => HubAddress | undefined;
-  readonly connect: (raw: string) => Promise<{ ok: boolean; error?: string }>;
+  readonly connectionFailed: () => boolean;
+  readonly connect: (raw: string) => Promise<{ ok: boolean; error?: string; replaced?: boolean }>;
 }): () => void {
   const fromSetup = (sender: Electron.WebContents, frame: Electron.WebFrameMain | null): boolean => sender === window.webContents && !window.isDestroyed() && frame === sender.mainFrame && sender.getURL() === SETUP_URL;
   // Setup owns separate channels: closing it must not remove the hub window's login-item handlers.
@@ -38,7 +39,7 @@ export function installSetupIPC(window: BrowserWindow, deps: {
     if (!fromSetup(event.sender, event.senderFrame)) return { address: "" };
     const locale = desktopLocale(app.getLocale());
     const strings = await loadStrings(join(import.meta.dirname, "locales"), locale);
-    return { address: deps.hub()?.url.href ?? "", locale, strings };
+    return { address: deps.hub()?.url.href ?? "", connectionFailed: deps.connectionFailed(), locale, strings };
   });
   ipcMain.handle("desktop:hub-set", async (event, value: unknown) => {
     if (!fromSetup(event.sender, event.senderFrame) || typeof value !== "string") return { ok: false, error: "Enter the hub's web address." };
