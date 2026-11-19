@@ -94,6 +94,7 @@ func (s *Service) inboxMailBody(ctx context.Context, ref assistantwire.InboxMail
 func (s *Service) connectorReply(ctx context.Context, source string, r connector.InboxReply, sendID string) error {
 	var sent assistantwire.InboxSent
 	err := s.appCall(ctx, AppInbox, inboxReplyMethod, map[string]any{"source": source, "reply": r, "send_id": sendID}, &sent)
+	noteOutboundReadback(ctx, sent.Already)
 	s.inboxSent(sent, sendID)
 	return err
 }

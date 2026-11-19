@@ -497,10 +497,20 @@ func (s *Service) tellOwner(ctx context.Context, t Todo, st FeishuStatus, key st
 func (s *Service) sendSourceReport(ctx context.Context, src TodoSource, todoID string) error {
 	switch src.Channel {
 	case channel.Feishu:
-		return s.appCall(ctx, AppFeishu, FeishuText, map[string]any{
-			"chat_id": src.ChatID, "reply_to": src.MessageID, "text": src.ReportText, "uuid": reportKey(todoID, src.MessageID),
-			"full_answer": src.ReportFullReply, "no_detour": true,
-		}, nil)
+		r := outboundReply{ID: reportKey(todoID, src.MessageID), TodoID: todoID, Text: src.ReportText,
+			Topic: "lark-message/" + src.ChatID + "/" + src.MessageID, URL: "/todos/" + todoID}
+		if src.ThreadID != "" {
+			r.Topic = "lark-bot/" + src.ChatID + "/" + src.ThreadID
+			r.URL = outboundTopicURL(src.ChatID, src.ThreadID, src.MessageID)
+		} else {
+			r.Topic = s.outboundFeishuSourceTopic(ctx, src.ChatID, src.MessageID)
+		}
+		return s.deliverOutbound(ctx, r, func() error {
+			return s.appCall(ctx, AppFeishu, FeishuText, map[string]any{
+				"chat_id": src.ChatID, "reply_to": src.MessageID, "text": src.ReportText, "uuid": r.ID,
+				"full_answer": src.ReportFullReply, "no_detour": true,
+			}, nil)
+		})
 	}
 	return fmt.Errorf("no way back to channel %q", src.Channel)
 }

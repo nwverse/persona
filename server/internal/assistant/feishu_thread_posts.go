@@ -275,7 +275,12 @@ func (s *Service) threadFlush(id string) {
 	to := feishuTarget{ChatID: th.ChatID, InThread: true, NoDetour: true}
 	// Its own key for every line: the reply's usual key is made of the parent and the words, so two lines that read the
 	// same (two finished turns) under one anchor would be one to Feishu, and the second silently dropped.
-	err = s.appCall(ctx, AppFeishu, FeishuText, to.params(map[string]any{"reply_to": anchor, "text": text, "uuid": s.threadPostKey(id)}), nil)
+	key := s.threadPostKey(id)
+	r := outboundReply{ID: key, TodoID: id, Topic: "lark-bot/" + th.ChatID + "/" + th.ThreadID,
+		URL: outboundTopicURL(th.ChatID, th.ThreadID, anchor), Text: text}
+	err = s.deliverOutbound(ctx, r, func() error {
+		return s.appCall(ctx, AppFeishu, FeishuText, to.params(map[string]any{"reply_to": anchor, "text": text, "uuid": key}), nil)
+	})
 	switch {
 	case err == nil:
 	case feishubot.MessageGone(err):

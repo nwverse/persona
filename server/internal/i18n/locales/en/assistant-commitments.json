@@ -1,0 +1,16 @@
+{
+  "title": "Send the promised update",
+  "unconfirmed_title": "Check whether the promised update was sent",
+  "unconfirmed_record": "The send's confirmation is missing. Read back the original conversation before deciding what to do; do not resend an uncertain message.\n\nOriginal conversation: {url}\nAttempted wording: {quote}\nCheck due: {due}",
+  "criterion": "Send a follow-up update in the original conversation.",
+  "record": "Follow-up promised\n\nOriginal conversation: {url}\n\nSent wording:\n{quote}\n\nDue: {due}",
+  "fulfilled": "Promised follow-up fulfilled at {at} by a sent update in the original conversation: {url}",
+  "overdue": "A promised update is overdue. Review what to tell the other person.\n\nOriginal conversation: {url}\nPromised: {quote}\nDue: {due}",
+  "review_update": "Review an update to send",
+  "review_effect": "Prepare an update for your approval; nothing is sent automatically.",
+  "keep_waiting": "Keep waiting",
+  "wait_effect": "Ask the supervisor to check progress and propose a new deadline.",
+  "cost": "The other person is still waiting for the update we promised.",
+  "approval_title": "A reply is waiting for your approval",
+  "approval_overdue": "The other person has waited {hours} hours. Review and send the prepared reply, or decide not to send it."
+}

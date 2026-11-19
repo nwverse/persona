@@ -542,13 +542,13 @@ func (s *Service) replyInboxDoMode(ctx context.Context, id, text, clientID strin
 	case c.Connector == nil && migratedThread(&c) != "": // a plugin took Feishu over (inbox_migrate.go)
 		already, err = s.replyMigrated(ctx, req)
 	case len(changes) > 0:
-		return InboxItem{}, i18n.ErrEnglish("inbox-errors.document_only")
+		err = i18n.ErrEnglish("inbox-errors.document_only")
 	case c.Connector != nil:
 		already, err = s.replyConnectorItem(ctx, req)
 	case c.Mail != nil:
 		already, err = s.replyMail(ctx, req)
 	default:
-		return InboxItem{}, errCannotReply
+		err = errCannotReply
 	}
 	if err != nil {
 		return InboxItem{}, err
@@ -636,8 +636,12 @@ func (s *Service) replyMail(ctx context.Context, r inboxReplyReq) (bool, error) 
 		return true, nil
 	}
 	var sent assistantwire.InboxSent
-	err := s.appCall(ctx, AppInbox, inboxReplyMail, map[string]any{"account_id": m.AccountID, "uid": m.UIDs[len(m.UIDs)-1],
-		"mailbox": m.Mailbox, "text": r.text, "send_id": r.sendID}, &sent)
+	err := s.deliverInboxReply(ctx, r, func(ctx context.Context) error {
+		err := s.appCall(ctx, AppInbox, inboxReplyMail, map[string]any{"account_id": m.AccountID, "uid": m.UIDs[len(m.UIDs)-1],
+			"mailbox": m.Mailbox, "text": r.text, "send_id": r.sendID}, &sent)
+		noteOutboundReadback(ctx, sent.Already)
+		return err
+	})
 	s.inboxSent(sent, r.sendID)
 	// A hub "already" can be the first answer this manager got after an in-doubt send: this manager still writes the
 	// resulting item state. Only the local repeat check above may skip that write.

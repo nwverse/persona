@@ -33,7 +33,7 @@ func (t *feishuTopic) target() feishuTarget {
 	if t == nil {
 		return feishuTarget{}
 	}
-	return feishuTarget{ChatID: t.Chat, InThread: true}
+	return feishuTarget{ChatID: t.Chat, ThreadID: t.Thread, InThread: true}
 }
 
 // runTo is where a run's messages go, from its channel values (Ext): the topic it was asked in, else the private chat.

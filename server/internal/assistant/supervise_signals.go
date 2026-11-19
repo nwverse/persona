@@ -107,6 +107,9 @@ func (g superviseSignal) level() string {
 // id names what a newer signal replaces while it waits: the task's signal of that kind (a report: of that kind of
 // report, so a progress report does not push out a question).
 func (g superviseSignal) id() string {
+	if g.Kind == sigReport && strings.HasPrefix(g.Key, "promise:") {
+		return g.Todo + "|" + g.Key
+	}
 	if g.Kind == sigDraftPR {
 		return g.Todo + "|" + g.Kind + "@" + g.PRURL
 	}
@@ -416,6 +419,8 @@ func (s *Service) superviseLoop(ctx context.Context) {
 // conversation left waiting to the main conversation's follow-up (handOverUnreviewed), and lets go of a hold on the
 // main conversation's pushes that outlived superviseHoldMax.
 func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
+	s.watchOutboundCommitments(ctx, now)
+	s.checkInboxReplyApprovals(ctx, now)
 	s.autoReviewTick(ctx, now)
 	s.askTick(now)                 // cards held past their time go up a rung (ask_route.go)
 	s.handOverUnreviewed(ctx, now) // a review a side conversation left waiting goes to the main one's follow-up (side_handover.go)

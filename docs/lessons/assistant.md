@@ -1,5 +1,7 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- An outward promise belongs to the actual source topic, not the task's work topic (#9754). A request forwarded from one group can have a separate Lark work thread, and a GitHub Inbox comment can be associated with that same task. Keep the original source thread identity; never substitute the work thread or use an update there as proof that the other person received a follow-up. An intent without a saved delivery receipt requires source readback, not a resend.
+- Keep local reply deduplication, provider readback, and receipt attachment distinct (#9754). Validate a source and check local duplicates before preparing an intent, require explicit receipts to match the original topic for every source, and retain the first confirmation until task attachment is durable. A retry repairs the original receipt; it cannot invent a send, advance its time, or fulfill a newer promise.
 - A review wake is not a completion verdict (#8373). PR events and judged-done candidates share the same signal. Keep its wording neutral, preserve the actual reason and criterion evidence, and leave acceptance gates and display grouping unchanged.
 
 - Snapshot display projections must not initialize the knowledge base (#10108). Publication already holds

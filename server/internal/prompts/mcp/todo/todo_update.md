@@ -1,54 +1,30 @@
-Update supplied title, notes, due/reminder, priority, project, part_of or after immediately, including task to-dos; no confirmation. Omitted fields stay; "" clears notes/due/remind/project/part_of, [] clears after. New reminder times notify again. Completion/reopening uses todo_complete/todo_reopen.
+Update supplied fields now; omitted stay. Empty text clears; after=[] clears dependencies. Completion uses todo_complete/reopen. outward_reply records a successful send's original HTTPS topic, permalink, exact text and RFC3339 provider time. Retry recording, never resending. promise overrides detection; due_at overrides 24h.
 
 ```json
 {
   "type": "object",
-  "required": [
-    "id"
-  ],
+  "required": ["id"],
   "properties": {
-    "id": {
-      "type": "string",
-      "description": "To-do id from todo_list."
-    },
-    "title": {
-      "type": "string",
-      "description": "the new title"
-    },
-    "notes": {
-      "type": "string",
-      "description": "Replacement notes; retain anything still needed. \"\" clears."
-    },
-    "due": {
-      "type": "string",
-      "description": "New due date YYYY-MM-DD or datetime (user's time zone/RFC3339); \"\" clears."
-    },
-    "remind": {
-      "type": "string",
-      "description": "New reminder datetime (user's time zone/RFC3339) or relative 30m/2h/1d; never past. \"\" clears."
-    },
-    "priority": {
-      "type": "string",
-      "enum": [
-        "high",
-        "normal",
-        "low"
-      ]
-    },
-    "project": {
-      "type": "string",
-      "description": "Existing knowledge-base project slug/name (kb_list projects), preferably a long-term work area. Set only when clear; do not invent near-duplicates. \"\" clears."
-    },
-    "part_of": {
-      "type": "string",
-      "description": "Request to-do this is a piece of; changing clears after."
-    },
-    "after": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      },
-      "description": "Sibling piece ids it waits for; replaces old."
+    "id": {"type": "string"},
+    "title": {"type": "string"},
+    "notes": {"type": "string", "description": "Replacement; preserve still-needed notes."},
+    "due": {"type": "string", "description": "YYYY-MM-DD or RFC3339."},
+    "remind": {"type": "string", "description": "Future datetime or 30m/2h/1d; new times notify again."},
+    "priority": {"type": "string", "enum": ["high", "normal", "low"]},
+    "project": {"type": "string", "description": "Existing KB project slug/name; avoid duplicates."},
+    "part_of": {"type": "string", "description": "Request id; changing clears after."},
+    "after": {"type": "array", "items": {"type": "string"}, "description": "Sibling piece ids."},
+    "outward_reply": {
+      "type": "object",
+      "required": ["topic_url", "sent_url", "text", "sent_at"],
+      "properties": {
+        "topic_url": {"type": "string"},
+        "sent_url": {"type": "string"},
+        "text": {"type": "string"},
+        "sent_at": {"type": "string"},
+        "due_at": {"type": "string"},
+        "promise": {"type": "boolean"}
+      }
     }
   }
 }
