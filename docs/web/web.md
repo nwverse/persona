@@ -372,8 +372,10 @@ use it only on the intranet / VPN, and put an HTTPS reverse proxy in front befor
 
 - **Workflow board** (`/workspace-board`, #1646): off by default, turned on in Settings › hub › Agents (the switch is stored on the hub, the same for every browser, #2475). When off, the sidebar has no entry; opening the URL directly shows **Workflow board is off** with a button to Settings, and it neither reads the board nor polls the discovery API. When on, enter from the sidebar, bind an existing workspace or a real directory on an online machine, and manage columns, card order, pinning and archiving by hand; the detail view links Agents in the same directory and opens files, Git, or explicitly creates a new Agent. Cards and column state are stored in Postgres; Agent state does not move cards between columns, and cards stay when offline. Operations, permissions, upgrades and sources: see [Workspace board](workspace-board.md).
 
-- **Terminal** (`/terminal`, `/terminal/<machine>/<terminal id>`, `src/views/terminal/TerminalPage.tsx`, `src/lib/terminals.ts`, `docs/integrations/terminal.md` section 19): open a terminal without starting an Agent.
-  **Sessions | Terminals** (#4754, `src/lib/terminal-list.ts`): the list column of the Sessions and Terminal page starts with a switch (the shared `Segmented`) between the sessions list and **Terminals**, every plain terminal of every online computer at the column's full height (it replaced the folded "Standalone shells" section capped at 35% under the sessions). The address says which list shows (`/terminal?view=terminals`, also after an open terminal: `/terminal/<machine>/<terminal id>?view=terminals`); without it the page shows the one this browser chose last (`persona.terminal.list`), so the sidebar entry lands there; the sessions on a fresh browser, beside an open session (the work view), and on a hub without `terminal_panes`. Switching keeps an open terminal open (the address is replaced, so Back leaves the page). ⌘K has **Open terminals**.
+- **History** (#10240, `/terminal`, `src/views/agents/HistoryBrowser.tsx`): under Agents in the sidebar and on the phone's Agents page. A fresh visit lists non-running sessions by the reader's local calendar day of last activity, newest first. It uses the complete sidebar snapshot and the same folded state and health visibility rules: children and supported side sessions fold into their parent before filtering, and running or pending parents stay with live work. Each day count is the number of filtered history rows under it. Computer and Agent filters sit beside search; search uses the existing conversation index (`sessions_search`), with Load more for its frozen window. Counts describe the loaded matching rows, not a server-wide search total. An older hub explicitly says it searches titles and previews only.
+  A row opens the normal session detail with its retained terminal when available. Resumable rows use the existing Resume action and progress; after the authoritative snapshot reports the session running, it leaves History and remains reachable from Agents. Read-only rows still open normally. The phone's primary switch remains **Assistant | Agents**; History is a destination within Agents.
+  **Agents +** holds **New Agent**, **New terminal** and **Open terminals**. New terminal chooses an online computer and one of its existing writable workspaces, using the terminal inventory's existing plain-shell request. On a computer with no writable workspace, an advertised `pane_new_space` capability permits a home workspace. Failure keeps the picker and its choices for retry. The terminal inventory and bookmarked `/terminal/<machine>/<terminal id>?view=terminals` addresses remain available.
+  **History | Terminals** uses the shared `Segmented` in the list column. An explicit `?view=terminals` opens the inventory; a fresh `/terminal` always starts with History, regardless of the browser's previous terminal-list choice. Switching keeps an open terminal open; session details keep History beside them. ⌘K still offers **Open terminals**.
   In **Terminals** each pane opens on the right as before (its `pane:` address), where it can be typed into. A plain pane's second line starts with the program in front of it when the node says (`foreground`: `zsh`, `vim`, `npm`; not repeated when it is the title). A pane a stopped Agent left (`agent_session`) is **Finished: <that Agent's title>** (a short id when this computer no longer lists the Agent). A computer with any of those has **Close finished terminals**: it asks the computer what it would close (`POST /machines/{mid}/panes/close_finished` with `preview`), shows a confirmation listing them (with how many stay open because a program runs in them), **Close terminals** in red and **Cancel**, then closes exactly the listed panes (`panes`), says how many closed and reads the list again (`views/terminal/CloseFinished.tsx`). Nothing closes them on a timer.
   Machine → herdr space → tab → pane, read for each online computer every 8 seconds while the page is in front (`src/lib/terminal-panes.ts`); a reply equal to the one shown, or the same failure again, keeps what is shown, so an unchanged layout builds no tree and redraws nothing (#6291). Agents have a status dot, plain shells a terminal icon. Clicking a plain shell pane opens it as a terminal on the right (full page on narrow screens); it is the same `TerminalPanel` as **Side panel › Terminal**, with the same take-over / view-only / key bar / history. Clicking an **Agent's pane** (or Enter in Jump To) goes to its session page with the terminal view in the middle (**Terminal ⇄ chat**, #2419); old `/terminal/<machine>/<Agent session id>` links still open.
   The terminal has two UIs, switched by "Single pane / Full UI" in its header (default full UI; see **Side panel › Terminal** below).
@@ -1213,12 +1215,24 @@ and **Meeting minutes** in Background processing · Direct API, right after Info
   revision (`resetPatch`), also when the page's catalog did not load, so an effort saved on an earlier provider goes too.
   With its provider cleared, the draft previews what it will follow: the category's provider from the catalog
   (`parentCategory`), with that launcher's model list, the category's model as its **Default**, the backend chip and
-  whether it takes an effort. Effort goes by the provider the draft runs on (`effortOffered`): the hub lists `effort` in
-  an API purpose's `fields` while the provider in effect takes one. Although the server now accepts effort on Chat
-  Completions too, this editor still treats Chat as unsupported until #8780, so Meeting minutes on a Chat Completions
-  connection offer choices again once a Messages or Responses one is picked, and Save sends them. The launcher's model list is
-  inert while a save is on its way, and the page shows only its latest catalog request's answer, so an older one still
-  on its way never puts back what a save's reload replaced.
+  whether it takes an effort. Effort goes by the provider the draft runs on (`effortOffered`): a current hub lists `effort`
+  for Messages, Responses and Chat Completions connections and marks Chat providers `chat_effort`. A hub that already
+  lists `effort` for the effective Chat provider keeps it available without that mark. Against an older hub that omits
+  both for Chat, Meeting minutes offer choices again once a Messages or Responses connection is picked, and Save sends
+  them. If an older hub supplies `effort` for Messages or Responses but no Chat provider mark, switching to a different
+  Chat provider hides the field and Save omits it. For Chat, both the direct editor and an editor of a use with its own
+  record read the selected model's stored `providers[].models` capabilities; the direct editor uses discovery as the
+  fallback when no entry is stored. `providers[].model_aliases` resolves legacy Chat tier aliases to the stored model
+  IDs used by real requests and named probes before either editor reads capabilities. The control uses `all_efforts`
+  when present, else `efforts`, limited to levels a direct-purpose Save accepts; `none` and `off` appear as **Off**, without
+  duplicating a current `none` value. Efforts-only Chat metadata keeps **Off** as a separate control. If none of the
+  exact reported levels can be saved, only the default remains and the editor says those levels are unavailable; it
+  does not substitute projected levels that Chat's exact runtime list would reject. Responses and Messages keep their
+  projected `efforts` behavior, including the Responses unknown-metadata `minimal` and `ultra` choices. Chat treats
+  absent metadata and an empty effort list as unknown and uses the direct-purpose options (`off`, `low`, `medium`,
+  `high`, `xhigh`, `max`); only stored or fallback-discovered `no_effort: true` marks the model unsupported.
+  The launcher's model list is inert while a save is on its way, and the page shows only its latest catalog request's
+  answer, so an older one still on its way never puts back what a save's reload replaced.
 - **Unchanged in look**: the background supervisor (its **Follows Main chat** comes from the hub's `inherited_from`, its
   reset is **Inherit**), the AI twin, Lark /agent and the extensions' purposes. Against a hub before #7980 there are no
   such rows and nothing is asked by their ids.
@@ -1228,6 +1242,8 @@ Tests: `lib/model-config.test.ts`, `views/settings/ModelConfiguration.meeting.te
 360 px with Large text, wide; English, 简体中文 and 日本語; the background supervisor's as the unchanged reference): against
 that mock and `npx vite`, run `node web/e2e/meeting-models.mjs <web URL> [--shots <dir>] [--executable <chromium>]`
 (the mock names its categories in Chinese in every language; the script gives the page their names as a hub sends them).
+For the Chat effort editor, also start the mock with `MOCK_CHAT_EFFORT=1` and pass `--chat-effort`. The script selects the
+Chat Completions connection, checks its reported options, and saves light/dark screenshots at default and Large text.
 
 ### Standing authorizations
 
