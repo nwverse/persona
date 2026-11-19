@@ -9,10 +9,11 @@ import { attentionReason, externalLink, failureReason, isStoppedAgent, resumeCom
 import { conversationPage } from "../../lib/conversation-page";
 import { navigate, type SessionView } from "../../lib/router";
 import { canShowTerminal, composerSlot, otherView, terminalJump, terminalWaits, useSessionView, viewOnlyRow } from "../../lib/session-view";
+import { invalidateOverviewPanel } from "../../lib/use-shortcuts";
 import { resumeInTerminal, terminalResume } from "../../lib/agent-resume";
 import { openLink } from "../../lib/links";
 import { getPanel, openPanel, togglePanel, usePanel } from "../../lib/panel";
-import { isWorkflowsCommand, latestWorkflowRun, openBackgroundPanel, provideBackgroundChat, WORKFLOWS_COMMAND } from "../../lib/background-panel";
+import { backgroundPanelOf, isWorkflowsCommand, latestWorkflowRun, openBackgroundPanel, provideBackgroundChat, WORKFLOWS_COMMAND } from "../../lib/background-panel";
 import { machineWithHub } from "../../lib/mesh";
 import { sidebarRail, sidebarShown, useLayout } from "../../lib/layout";
 import { hasModes, isMuted, listedModesOf, toggleMute } from "../../lib/session-actions";
@@ -173,6 +174,7 @@ const NavRail = lazy(() => import("./NavRail").then((m) => ({ default: m.NavRail
 const ModelFallbackCard = lazy(() => import("./ModelFallbackCard").then((m) => ({ default: m.ModelFallbackCard })));
 // A message the assistant keeps after it could not go in (#10194) is rare: its status line, Retry and Delete load only in
 // a conversation that holds one (#10357). Until they are in it shows as the owner's bubble alone, so it never blinks out.
+const SessionReviewMenuItem = lazyPage(() => import("./SessionReviewMenuItem").then((m) => m.SessionReviewMenuItem));
 const UndeliveredBubble = lazyPage(() => import("./UndeliveredBubbles").then((m) => m.UndeliveredBubble));
 
 const NO_FEED: FeedItem[] = [];
@@ -2060,14 +2062,24 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const overviewId = useId();
   const [overviewOpen, setOverviewOpen] = useState(false);
   const showOverview = !assistant && !embedded && Boolean(session);
+  useEffect(() => {
+    if (!showOverview || !overviewOpen) return;
+    // The origin owns both the visible dependent detail and the one Cmd+B remembers. Its closure, including leaving
+    // this conversation, invalidates both; while it stays open, Cmd+B can close and restore the detail as usual.
+    return () => invalidateOverviewPanel(mid, sid);
+  }, [showOverview, overviewOpen, mid, sid]);
   const overview = useMemo(() => showOverview
     ? { id: overviewId, open: overviewOpen, toggle: () => setOverviewOpen((open) => !open) }
     : undefined, [overviewId, overviewOpen, showOverview]);
+  // Its background detail takes the side panel's space, rather than squeezing the mounted overview and losing its place.
+  const overviewDetail = panelDrawn && backgroundPanelOf(panel, mid, sid)?.from === "overview";
 
   const page = (
     <div className="@container/session flex h-full min-w-0 flex-col">
       {!embedded && <Header
         session={session}
+        starting={starting}
+        interactions={interactions}
         overview={overview}
         title={title}
         direction={directionName !== undefined && !isMain && !notFound}
@@ -2385,7 +2397,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         <PageBoundary page={`overview:${mid}/${sid}`}>
           <Suspense fallback={<div className="p-3"><Loading /></div>}>
             <SessionOverview id={overviewId} session={session} machineName={machineName} items={tr.items} tasks={tasks}
-              children={kids.rows} onJumpToCall={jump} />
+              children={kids.rows} onJumpToCall={jump} hidden={overviewDetail} />
           </Suspense>
         </PageBoundary>
       )}
@@ -2561,6 +2573,8 @@ function AttentionNote({ session }: { session: Session }) {
 // the model is the composer's pill, the permission mode the composer's picker; the rest is in ⋯ and Session info.
 export const Header = memo(function Header({
   session,
+  starting = false,
+  interactions = [],
   overview,
   title,
   machineName,
@@ -2584,6 +2598,8 @@ export const Header = memo(function Header({
   direction = false,
 }: {
   session?: Session;
+  starting?: boolean;
+  interactions?: Interaction[];
   overview?: { id: string; open: boolean; toggle: () => void };
   title: string;
   machineName: string;
@@ -2684,6 +2700,7 @@ export const Header = memo(function Header({
   const openPreview = () => session && togglePanel({ kind: "preview", mid: session.machine_id, sid: session.session_id, cwd: session.cwd });
   const openReview = () => session && togglePanel({ kind: "review", mid: session.machine_id, sid: session.session_id, cwd: session.cwd });
   const reviews = useStore((s) => hubHas(s.features, REVIEW_FEATURE));
+  const [sessionReviewItems, setSessionReviewItems] = useState<MenuItem[]>([]);
   // the comparison this Agent is a run of (#8916, kept in this browser): its module and words load after the first screen,
   // long before ⋯ opens; re-read with the header
   const [compareOf, setCompareOf] = useState<null | ((s: Session) => { id: string; label: string } | undefined)>(null);
@@ -2772,6 +2789,7 @@ export const Header = memo(function Header({
           ? [{ key: "resume-terminal", label: t("chat-chatview.resume_in_terminal"), icon: "play" as const, disabled: resumeOffer === "no_engine", detail: resumeOffer === "no_engine" ? t("chat-chatview.resume_no_engine", { computer: machineName }) : undefined, onSelect: resumeHere }]
           : []),
         ...(showFiles ? [{ key: "files", label: t("chat-chatview.files"), icon: "folder" as const, checked: here(panel, "files"), onSelect: openFiles }, { key: "git", label: "Git", icon: "git" as const, checked: here(panel, "git"), onSelect: openGit }, ...(reviews ? [{ key: "review", label: t("chat-chatview.review_changes"), icon: "pullRequest" as const, checked: here(panel, "review"), onSelect: openReview }] : [])] : []),
+        ...sessionReviewItems,
         // a run of a comparison (#8916): back to its runs' page
         ...(compare ? [{ key: "compare", label: compare.label, icon: "branch" as const, onSelect: () => navigate({ name: "compare", id: compare.id }) }] : []),
         ...(showFiles && previews ? [{ key: "preview", label: t("chat-chatview.preview"), icon: "web" as const, checked: here(panel, "preview"), onSelect: openPreview }] : []),
@@ -2812,7 +2830,9 @@ export const Header = memo(function Header({
   const sideLabel = sides ? [t("chat-chatview.side_sessions_count", { count: sides.count }), sides.needs ? t("chat-chatview.side_sessions_needs_you") : ""].filter(Boolean).join(" · ") : "";
 
   return (
-    <header className="@container flex h-14 shrink-0 items-center gap-2 border-b border-line bg-page/85 px-3 backdrop-blur-md sm:px-4">
+    <>
+      {menu.anchor && <SessionReviewMenuItem onItem={setSessionReviewItems} session={assistant ? undefined : session} busy={starting} ix={interactions} />}
+      <header className="@container flex h-14 shrink-0 items-center gap-2 border-b border-line bg-page/85 px-3 backdrop-blur-md sm:px-4">
       <div className={headerSlot(Boolean(topCenter), "start")}>
         {onToggleSidebar && <ChatSidebarButton session={session} counted={!topCenter} onClick={onToggleSidebar} />}
       </div>
@@ -2938,6 +2958,7 @@ export const Header = memo(function Header({
       {session && sharingOpen && !assistant && !main && <SharingDialog key={`${session.machine_id}/${session.session_id}/${session.manager ?? ""}`} session={session} onClose={() => setSharingOpen(false)} />}
       {assistantDialogs}
     </header>
+    </>
   );
 });
 

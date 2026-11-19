@@ -349,7 +349,7 @@ later without sending.
   new activity; it is not a substitute for the task-state filter.
 - On by default and independent of the main switch (`transient_retry`, #3208): it is a rule, with no triage model call. With the main switch off, only
   turns that a transient error ended are followed (`workActive`), and the lists show only the continuation on its way (`transientPending`); everything else stays as without triage.
-- Assistant conversations and managed Agents share the manager's durable due-wake scheduler (Refs #10444). Temporary network failures, timeouts, throttling and recoverable server errors continue indefinitely until cancelled, with no attempt budget. Authentication, permissions, invalid requests, missing models, usage limits, user decisions and repeated-tool-loop stops never enter this outage retry loop. Existing bounded unavailable-model, safeguards-refusal and tool-search recovery keeps its own behavior.
+- Assistant conversations and managed Agents share the manager's durable due-wake scheduler (Refs #10444). Temporary network failures, timeouts, throttling and recoverable server errors continue indefinitely until cancelled, with no attempt budget. Authentication, permissions, invalid requests, missing models, usage limits, user decisions and repeated-tool-loop stops never enter this outage retry loop. Existing bounded unavailable-model, safeguards-refusal, gateway-quota and tool-search recovery keeps its own behavior.
 - Exponential backoff uses a 15-second base (`retry_base_seconds`), doubled per failed continuation; throttling starts at four times the base. Equal jitter selects between half of the exponential ceiling and that ceiling, capped at 30 minutes. The legacy `max_retries` configuration remains readable but no longer limits temporary model failures. A productive turn resets the count.
 - Send `继续` ("Continue") into the existing session history, without resubmitting the original task or its completed tool calls. Due timestamps persist in `session_work`; waiting uses the existing manager tick, without a waiting execution subprocess. Old pending retries survive database loading and pruning.
 - Stop and a bare `/exit` or `/quit` retire the pending wake durably. The hub reports every known session's interrupt to the manager, and node guards reject known stop causes that forbid supervisor resume. New input, changed turns, queued input and pending interactions prevent automatic continuation. Concurrent ticks share a session claim. A stable `client_msg_id` and restored transcript receipt prevent repeating a delivered continuation; runtime tool history remains the authority for completed side effects.
@@ -673,3 +673,38 @@ Pre-launch baseline (evening of 2026-11-04, non-assistant sessions on the hub): 
 | 1 | This document; hub (moved to the manager since 2026-11-04, see "Responsibilities"): `session_work` table, triage (rules + model), automatic continuation, wakeups, cards, `state` algorithm, `work` field, statistics endpoint; snapshot; task interruption receipts |
 | 2 | Move switches into App settings, all off by default; web displays `work.line`, Waiting, and switches (#1837) |
 | 3 | Android (#1837); iOS / Mac work previews (#2895) and settings page (#3078) |
+
+## Independent review of a session's work (#1808)
+
+An Agent session's web menu offers **Review this work** only when the hub advertises `session_review`. Nothing starts at
+rest: opening ⋯ reads `GET /api/v1/sessions/{mid}/{sid}/review` for `{running,has_changes,started_at}`, and only the
+explicit choice POSTs. A busy or starting Agent, a running review, or no change disables the entry with the reason.
+The source session's own Claude launcher starts the fresh reviewer with `permission_mode: "plan"`; Codex and other
+launchers are refused before a snapshot or reviewer starts.
+
+The source directory is only read. `git.review` supplies the branch change (falling back to uncommitted when no default
+branch or merge base exists), and `worktree.snapshot` makes a disposable copy of its current HEAD and uncommitted change.
+The reviewer runs in that copy. This is the safety boundary established for #2218: if the engine later recovers the
+reviewer outside its plan-mode launch, it still cannot edit the source working tree. The reviewer's session ID is named
+and persisted before `session.start`; no unacknowledged node `state.put` participates in identity or cleanup.
+
+The prompt contains the genuine recent user asks (bounded together with the diff) and the real diff, never the source
+Agent's replies, reasoning, injected follow-ups or peer messages. It asks for prioritized `path:line` findings and short
+fix suggestions, ending in `<review-findings count="N" blocking="M"/>`. The manager removes the marker and uses its count;
+an empty or unmarked answer is a failed review, not a blank card.
+
+The manager's `assistant.session_reviews` setting holds running and finished records with acknowledged, revisioned writes.
+A failed read never becomes an empty book, and memory advances only after persistence succeeds. At most one review runs
+per source. A reviewer turn end finishes its run; the periodic review tick also recovers a reviewer that stopped while
+the manager was away, fails runs older than 30 minutes, and expires result cards after seven days. A newer result
+atomically replaces the older pending result for the same source. Reviewer sessions and their snapshot directories stay
+out of published Agent lists and triage; cleanup stops the reviewer with `session.stop` (keeping its terminal) and removes
+only the disposable snapshot.
+
+The result is a manager-owned **question** interaction with `tool_name: "persona_session_review"`, so older clients do not
+need a new kind decoder. Its additive `review_report`, `review_count` and `reviewer_session_id` fields hold the report,
+count and correlation ID. **Send to agent** resolves the card through the normal answer path and forwards the persisted
+report once to the source (an explicit resume when stopped), using the review ID for send deduplication. A failed send
+returns a conflict and leaves the same card answerable. **Dismiss** resolves without sending. Manager reconstruction
+restores the same pending card and its answers remain durable. Go coverage is in `agents_session_review_test.go`;
+web coverage is in `ChatView.session-review.test.tsx` and `Interactions.session-review.test.tsx`.

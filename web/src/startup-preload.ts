@@ -439,6 +439,12 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // Its rows, seeing a task on opening it and the tray's empty line come with the tray's first opening, in the chunk of
 // the Parked rows (FinishedTaskRows.tsx through ParkedTaskRow.tsx: no lazy entry of their own), which also took
 // lib/todo-seen.ts off the first screen; on it they cost 228 B. Main had 4,653 B of room; the budget stays.
+// #8578: directory-hidden Agents and their pending cards leave the lists, counts and attention events (lib/sessions.ts
+// directoryVisible / directoryVisibleCards, lib/attention.ts) and the Agents page gets its Hidden sessions button; the
+// inspection dialog and its hint (key temporary_view, outside the startup prefix "inspect") are a chunk of its own
+// (views/HiddenAgentSessionsDialog.tsx); pending cards' sessions are looked up until each is known (lib/store.ts
+// cardSessionRow). 549 B in ja, measured in one environment against main 0c97da818c (ja 479,051 B to 479,600 B; en
+// 476,160 B to 476,701 B, zh-Hans 476,915 B to 477,472 B), 3,131 B of room. The budget stays.
 // Keep the stricter existing limit while combining these changes.
 // #10904: the overview's task cards name who works on each task, the lead Agent's computer, model and effort and "+N"
 // for the others (lib/home-tasks.ts leadAgent; views/Home.tsx taskAgentLine over the model pill's pillView, modelList and
@@ -470,7 +476,18 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // zh-Hans 478,364 B to 478,720 B); the setting's row and words load with Settings. Main had 2,928 B of room (a budget of
 // 483,480 B), which is kept, so the budget moves by these 356 B, to this ja size plus those 2,928 B.
 // Merged with #9778, the budget adds both feature deltas (63 B + 356 B) to the previous 483,480 B limit.
-export const FIRST_SCREEN_BUDGET = 483_899;
+// #10905: Overview's own sections arranged with the extensions' cards add 323 B in ja, measured in one environment
+// against main 1e34873c71 (ja 483,878 B to 484,201 B; en 480,952 B to 481,265 B, zh-Hans 481,673 B to 482,012 B): the
+// sections' ids and their place in the arrangement, Needs you and Stuck never hidden (lib/overview-cards.ts),
+// Overview's cards and sections drawn in that order, each row of cards with its heading and all of them under one fold
+// (views/OverviewBody.tsx, Home's sections handed to it, Working's with the background-wait group of #10938), the
+// Arrange button always there, and where a default manager of #9745 refuses the sections, the cards sent on their own
+// and the sections kept here under the hub's cards (keepSections and its note per sign-in, lib/overview-cards.ts;
+// lib/start-page.ts). The sections' bars and their names while arranging, and what a change writes, are the editor's
+// chunk (views/extensions/OverviewArrange.tsx, lib/overview-edit.ts). The budget is main's budget plus this PR's ja
+// delta of 323 B.
+// Merging #10822 with #10905 carries both independent feature allowances: 483,866 B + 356 B.
+export const FIRST_SCREEN_BUDGET = 484_222;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;

@@ -399,7 +399,7 @@ func (n *Node) assistantGateTool(ctx context.Context, g *proto.CommandGate, sess
 	}
 	command := g.Command + " " + strings.Join(words, " ")
 	ix := proto.Interaction{SessionID: session, Cwd: cwd, CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().Add(nodeclient.HookTimeout).UTC(),
-		ToolName: g.Tool.Name, SessionTitle: filepath.Base(cwd)}
+		ToolName: g.Tool.Name, ToolInput: raw, SessionTitle: filepath.Base(cwd)}
 	if s, _, ok := n.runtimes.rowOf(session); ok && s.Title != "" {
 		ix.SessionTitle = s.Title
 	}

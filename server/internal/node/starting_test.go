@@ -11,26 +11,54 @@ import (
 
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/proto"
-	"github.com/nwverse/persona/server/internal/transcript"
 )
 
 // Right after a message starts a session, claude has not written its transcript yet: the phone's backlog request
-// must get an empty chat, not "transcript not found" (which flashed as an error on the chat page).
+// must get an empty chat, not "transcript not found" (which flashed as an error on the chat page). So does every
+// session that may not have written its first line yet (startingSession): one that runs (a live agent, an assistant
+// process, an external start under way), waits for its first message, has a start under way or one that failed a
+// moment ago, or was started within the start bound. A known session that is none of these is not_found
+// (TestReadsOfAGoneTranscriptAreNotFound), and so is an unknown id.
 func TestItemsOfStartingSession(t *testing.T) {
-	home := t.TempDir()
-	n := &Node{home: home, paths: map[string]string{}, files: map[string]*transcript.File{}, procs: map[string]*assistantProc{},
-		agents: map[string]host.Agent{}, state: &stateFile{Sessions: map[string]sessionState{}}}
-	const started = "11111111-2222-3333-4444-555555555555"
-	n.state.put(started, sessionState{Cwd: home + "/.persona/assistant"})
-	res, err := n.handle(context.Background(), "session.items", json.RawMessage(`{"session_id":"`+started+`","turns":2}`))
-	if err != nil {
-		t.Fatalf("a starting session should not fail: %v", err)
+	n, home := testNode(t)
+	long := time.Now().Add(-time.Hour).UTC()
+	sessions := map[string]string{
+		"just started":                  "11111111-2222-3333-4444-555555555501",
+		"waiting for its first message": "11111111-2222-3333-4444-555555555502",
+		"a live agent":                  "11111111-2222-3333-4444-555555555503",
+		"a running assistant process":   "11111111-2222-3333-4444-555555555504",
+		"a start under way":             "11111111-2222-3333-4444-555555555505",
+		"a start that just failed":      "11111111-2222-3333-4444-555555555506",
+		"an external start under way":   "11111111-2222-3333-4444-555555555507",
 	}
-	if b, _ := json.Marshal(res); !strings.Contains(string(b), `"items":[]`) {
-		t.Fatalf("want an empty page, got %s", b)
+	n.state.put(sessions["just started"], sessionState{Cwd: home + "/.persona/assistant", StartedAt: time.Now().UTC()})
+	n.state.put(sessions["waiting for its first message"], sessionState{Cwd: home + "/.persona/assistant", StartedAt: long, AwaitingFirstMessage: true})
+	n.agents[sessions["a live agent"]] = host.Agent{PaneID: "w1:p1"}
+	n.procs[sessions["a running assistant process"]] = &assistantProc{}
+	if err := n.starts.add(sessions["a start under way"], &startRec{done: make(chan struct{})}); err != nil {
+		t.Fatal(err)
 	}
-	_, err = n.handle(context.Background(), "session.items", json.RawMessage(`{"session_id":"99999999-2222-3333-4444-555555555555"}`))
-	if err == nil || !strings.Contains(err.Error(), "not found") {
+	failed := &startRec{done: make(chan struct{}), err: errors.New("no terminal"), ended: time.Now()}
+	if err := n.starts.add(sessions["a start that just failed"], failed); err != nil {
+		t.Fatal(err)
+	}
+	_, done := n.beginExternalStartup(context.Background(), sessions["an external start under way"])
+	defer done()
+	for what, id := range sessions {
+		res, err := n.handle(context.Background(), "session.items", json.RawMessage(`{"session_id":"`+id+`","turns":2}`))
+		if err != nil {
+			t.Fatalf("%s should not fail: %v", what, err)
+		}
+		if b, _ := json.Marshal(res); !strings.Contains(string(b), `"items":[]`) {
+			t.Fatalf("%s: want an empty page, got %s", what, b)
+		}
+		res, err = n.handle(context.Background(), "session.items", json.RawMessage(`{"session_id":"`+id+`","user_inputs":true}`))
+		if b, _ := json.Marshal(res); err != nil || !strings.Contains(string(b), `"inputs":[]`) {
+			t.Fatalf("%s: want an empty index, got %s %v", what, b, err)
+		}
+	}
+	_, err := n.handle(context.Background(), "session.items", json.RawMessage(`{"session_id":"99999999-2222-3333-4444-555555555555"}`))
+	if rpcCode(err) != codeNotFound || notFoundReason(err) != proto.NotFoundUnknownSession {
 		t.Fatalf("an unknown session should still fail, got %v", err)
 	}
 }
