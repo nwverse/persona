@@ -290,6 +290,7 @@ func (d *Devices) Handler(next http.Handler) http.Handler {
 		}
 		writeJSON(w, map[string]any{"ok": true})
 	})
+	route("POST /api/v1/machines/{mid}/link-switch", d.postLinkSwitch)
 	route("GET /api/v1/machines/{mid}/diagnosis", d.getDiagnosis)
 	route("POST /api/v1/machines/{mid}/cleanup", d.postCleanup)
 	route("GET /api/v1/machines/{mid}/claude-dirs", d.getClaudeDirs)

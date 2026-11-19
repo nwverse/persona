@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -26,6 +27,14 @@ func TestTaskFilePaths(t *testing.T) {
 	}
 }
 
+func TestTaskFilePathsLanguageMarkers(t *testing.T) {
+	got := taskFilePaths("文件:/tmp/zh-ascii.md\nfile：「/tmp/fullwidth.md」\n")
+	want := []string{"/tmp/zh-ascii.md", "/tmp/fullwidth.md"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("paths: %q, want %q", got, want)
+	}
+}
+
 func TestTaskFilePathsMost(t *testing.T) {
 	var b strings.Builder
 	for i := 0; i < taskFilesMost+3; i++ {
@@ -33,6 +42,40 @@ func TestTaskFilePathsMost(t *testing.T) {
 	}
 	if got := taskFilePaths(b.String()); len(got) != taskFilesMost {
 		t.Fatalf("paths: %d, want %d", len(got), taskFilesMost)
+	}
+}
+
+func TestTaskSuccessorFilesLanguage(t *testing.T) {
+	for _, tc := range []struct {
+		locale string
+		want   []string
+	}{
+		{locale: "zh-Hans", want: []string{"file: <这台电脑上的绝对路径>", "最多 5 个", "Persona 会把它们送到对话那边"}},
+		{locale: "en", want: []string{"file: <absolute path on this computer>", "up to 5", "Persona will deliver them to the conversation"}},
+		{locale: "ja", want: []string{"file: <このコンピューター上の絶対パス>", "最大 5 ファイル", "Persona が会話へ配送するため"}},
+	} {
+		t.Run(tc.locale, func(t *testing.T) {
+			f := newFakeHub().withMachine()
+			f.sessions["box"] = nil
+			f.hello.Locale = tc.locale
+			s := newStorelessService(t, f)
+			todo := Todo{ID: "todo_1", Title: "Hand over a report"}
+			putTodo(s, todo)
+			last := proto.Session{MachineID: "box", SessionID: "old", Cwd: "/code", Launcher: "claude", Agent: "claude"}
+			if _, err := s.startTaskSuccessor(context.Background(), todo, last, "Continue"); err != nil {
+				t.Fatalf("startTaskSuccessor: %v", err)
+			}
+			starts := startsOf(f)
+			if len(starts) != 1 {
+				t.Fatalf("got %d starts, want 1", len(starts))
+			}
+			prompt, _ := starts[0]["prompt"].(string)
+			for _, want := range tc.want {
+				if !strings.Contains(prompt, want) {
+					t.Errorf("successor prompt is missing %q:\n%s", want, prompt)
+				}
+			}
+		})
 	}
 }
 
@@ -144,8 +187,8 @@ func TestDeliverTaskFilesFailure(t *testing.T) {
 	if len(files) != 1 || files[0].Error == "" || files[0].Path != "/home/me/gone.md" {
 		t.Fatalf("files: %+v", files)
 	}
-	if !strings.Contains(files[0].String(), "在原电脑") {
-		t.Fatalf("String: %q", files[0].String())
+	if got := files[0].prompt(); got.Error == "" || got.Path != "/home/me/gone.md" {
+		t.Fatalf("prompt: %+v", got)
 	}
 }
 
@@ -175,9 +218,33 @@ func TestDeliverTaskFilesOldNode(t *testing.T) {
 	}
 }
 
-func TestTaskFileLineInNotice(t *testing.T) {
-	got := taskFileLines([]taskFile{{Name: "manual.md", Path: "/home/me/manual.md", Local: "/x/uploads/files/2026-11-18/ab12-manual.md"}})
-	if len(got) != 1 || !strings.Contains(got[0], "manual.md：/x/uploads/files/") {
-		t.Fatalf("lines: %q", got)
+// The task notice and a supervision message list each file as the Go code wrote it before the line moved into their
+// templates (#10734): its copy, the original when there was nothing to copy, or why it did not come and where it stayed.
+func TestTaskFileLinesInPrompts(t *testing.T) {
+	long := strings.Repeat("x", 200)
+	files := []taskFile{
+		{Name: "manual.md", Path: "/home/me/manual.md", Local: "/x/uploads/files/2026-11-18/ab12-manual.md"},
+		{Name: "a.md", Path: "/home/me/a.md"},
+		{Name: "b.zip", Path: "/home/me/b.zip", Error: "over 100 MB"},
+		{Name: "c.md", Path: "/home/me/c.md", Local: "/x/c.md", Error: "an earlier try"},
+		{Name: "d.md", Path: "/home/me/d.md", Error: long},
+	}
+	want := []string{
+		"manual.md：/x/uploads/files/2026-11-18/ab12-manual.md",
+		"a.md：/home/me/a.md",
+		"b.zip（没取回：over 100 MB；在原电脑 /home/me/b.zip）",
+		"c.md：/x/c.md",
+		"d.md（没取回：" + clip(long, 160) + "；在原电脑 /home/me/d.md）",
+	}
+	notice := renderNotice(&quietNotice{todo: Todo{Title: "整理手册"}, state: "done", files: files}, false, "")
+	supervise := prompts.RenderSupervise(prompts.Supervise{Entries: []prompts.SuperviseEntry{
+		{ID: "todo_1", Title: "整理手册", Kind: "review", Files: taskFilePrompts(files)}}})
+	for _, w := range want {
+		if !strings.Contains(notice, "\n- "+w+"\n") {
+			t.Errorf("notice lacks %q:\n%s", w, notice)
+		}
+		if !strings.Contains(supervise, "\n   - "+w+"\n") {
+			t.Errorf("supervision message lacks %q:\n%s", w, supervise)
+		}
 	}
 }

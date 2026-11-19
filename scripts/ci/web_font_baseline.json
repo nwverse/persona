@@ -147,7 +147,7 @@
  "web/src/views/chat/ImageViewer.tsx": 4,
  "web/src/views/chat/Interactions.tsx": 50,
  "web/src/views/chat/Lines.tsx": 9,
- "web/src/views/chat/MessageActions.tsx": 3,
+ "web/src/views/chat/MessageActions.tsx": 2,
  "web/src/views/chat/Messages.tsx": 5,
  "web/src/views/chat/ModelChangeDivider.tsx": 1,
  "web/src/views/chat/ModelFallbackCard.tsx": 1,
