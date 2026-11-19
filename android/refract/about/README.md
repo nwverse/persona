@@ -69,8 +69,12 @@ style change.
 ## Evidence and limits
 
 `AboutVersionRefractTest` compares actual generated versus handwritten pixels across Glass, Brief and Board, light
-and dark, en/zh-Hans/ja, and standard/2x text; it also exercises the missing-version fallback, the unchanged
-three-row rollback and the existing native Commit tests. Captures go to build output or `-Dpersona.shots=<dir>` and
-are attached to the PR, never committed. These are **Native JVM Compose component captures**, not device/emulator,
-system-bar, navigation, accessibility-service or performance evidence. No such broader result is claimed by this
-consumer.
+and dark, en/zh-Hans/ja, and standard/2x text. `AboutVersionMatrixTest` extends those pairs to 360dp compact and
+640dp regular component widths, Standard/Compact density, a long Version and a native Build plus present/unknown
+Commit beside them. It compares the rows' actual Compose semantics, checks single-line long-value layout, the native
+Commit's copy action label, full-value clipboard result and unknown no-op, and measures 48dp minimum touch bounds.
+It also exercises the missing-version fallback, the unchanged three-row rollback and the existing native Commit tests.
+Captures go to build output or `-Dpersona.shots=<dir>` and are attached to the PR, never committed. These are
+**Native JVM Compose component captures and semantics**, not device/emulator, system-bar, navigation, accessibility-service
+or performance evidence. A regular-width fixture is not a tablet-window test, and retained full-value semantics does not
+establish TalkBack speech or traversal. No such broader result is claimed by this consumer.

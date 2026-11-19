@@ -237,6 +237,8 @@ type SessionSeen struct {
 // agentRoutes are the Agents business's routes the manager answers (agents_routes.go there): its switches, its
 // numbers, renaming the tabs nobody named.
 var agentRoutes = []string{
+	"GET /api/v1/agents/display-settings",
+	"PUT /api/v1/agents/display-settings",
 	"GET /api/v1/agents/triage",
 	"PUT /api/v1/agents/triage",
 	"GET /api/v1/agents/work/stats",

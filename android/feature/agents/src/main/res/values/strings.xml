@@ -528,9 +528,6 @@
     <string name="agents_source_feishu_open">Open this topic in Lark</string>
     <string name="agents_filter_feishu">Lark groups</string>
     <string name="agents_filter_terminal">Terminal</string>
-    <string name="agents_botmux">botmux</string>
-    <string name="agents_botmux_hide">Hide botmux sessions</string>
-    <string name="agents_botmux_show">Show botmux sessions</string>
     <string name="agents_menu_sort">Sort: %1$s</string>
     <string name="agents_sort_state">Status first</string>
     <string name="agents_sort_updated">Recently updated</string>

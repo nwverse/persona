@@ -164,10 +164,8 @@ func (h *herdrCoreHost) snapshot(ctx context.Context, requireDoc bool) (*host.La
 			l.Spaces = append(l.Spaces, host.Space{ID: a.WorkspaceID, Label: label, Number: len(l.Spaces) + 1})
 		}
 		l.Panes = append(l.Panes, a)
-		if a.Agent != "" {
-			l.Agents = append(l.Agents, a)
-		}
 	}
+	l.Agents = withAgentParents(l.Panes)
 	fillSpaceDirectories(l.Spaces, l.Panes)
 	return l, nil
 }
@@ -186,13 +184,46 @@ func (h *herdrCoreHost) Agents(ctx context.Context) ([]host.Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	var out []host.Agent
+	panes := make([]host.Agent, 0, len(terms))
 	for _, t := range terms {
-		if a := fromTerminal(t); a.Agent != "" {
-			out = append(out, a)
+		panes = append(panes, fromTerminal(t))
+	}
+	return withAgentParents(panes), nil
+}
+
+// withAgentParents keeps the panes that run an agent, each linked to the nearest agent that started it.
+func withAgentParents(panes []host.Agent) []host.Agent {
+	byAddress := make(map[string]host.Agent, len(panes))
+	for _, p := range panes {
+		byAddress[host.ParsePane(p.PaneID).ID] = p
+	}
+	var out []host.Agent
+	for _, p := range panes {
+		if p.Agent != "" {
+			out = append(out, withAgentParent(p, byAddress))
 		}
 	}
-	return out, nil
+	return out
+}
+
+// withAgentParent points a terminal's parent at the nearest ancestor terminal that runs an agent: a sub-agent started
+// through a shell or script still belongs to the agent that started the chain. A parent on another machine or with no
+// agent above it links nothing.
+func withAgentParent(a host.Agent, byAddress map[string]host.Agent) host.Agent {
+	seen := map[string]bool{}
+	for p := host.ParsePane(a.ParentPaneID).ID; p != "" && !seen[p]; p = host.ParsePane(byAddress[p].ParentPaneID).ID {
+		seen[p] = true
+		parent, ok := byAddress[p]
+		if !ok {
+			break
+		}
+		if parent.Agent != "" {
+			a.ParentPaneID = parent.PaneID
+			return a
+		}
+	}
+	a.ParentPaneID = ""
+	return a
 }
 
 func (h *herdrCoreHost) Agent(ctx context.Context, pane host.PaneRef) (*host.Agent, error) {
@@ -330,6 +361,9 @@ func fromTerminal(t herdrcore.Terminal) host.Agent {
 		Name: t.Name, Cwd: t.Cwd, PaneID: host.PaneRef{Kind: host.HerdrCore, ID: t.Address}.String(),
 		WorkspaceID: t.Labels[herdrSpaceLabel], TabID: t.Labels[herdrTabLabel],
 		Title: stripSpinner(t.Title), RawTitle: t.Title,
+	}
+	if t.Parent != "" {
+		a.ParentPaneID = host.PaneRef{Kind: host.HerdrCore, ID: t.Parent}.String()
 	}
 	if a.WorkspaceID == "" {
 		a.WorkspaceID, a.TabID = dirSpace+t.Cwd, ""

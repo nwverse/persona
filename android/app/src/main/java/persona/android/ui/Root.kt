@@ -960,7 +960,9 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
             }
             entry<InteractionRoute> { ShellChat(it.chat, session, navigator, shell.feedback, it.requestId, navigator::sessionClosed,
                 ::openWithCard, navigator::groupGone, chatTerminal(it.chat)) }
-            inboxEntries(navigator, session.inbox, connectors = services.connectors.takeUnless { services.demo }, onOpenCard = { card ->
+            inboxEntries(navigator, session.inbox, pictureMarkdown = { text, source, modifier ->
+                persona.feature.chat.ExternalReplyMarkdown(text, source, modifier)
+            }, connectors = services.connectors.takeUnless { services.demo }, onOpenCard = { card ->
                 openWithCard(ResolvedRoute(AppTab.Agents, AgentsRoute, card = card))
             })
             entry<InboxItemRoute> { InboxLink(it, session.inbox, navigator, ::replace) }
