@@ -19,13 +19,14 @@ import textwrap
 import time
 import unittest
 from urllib.error import HTTPError, URLError
-from urllib.request import Request as HTTPRequest, urlopen
+from urllib.request import ProxyHandler, Request as HTTPRequest, build_opener
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import mock_domains  # noqa: E402
 
 LOOPBACK = "127.0.0.1"
+OPENER = build_opener(ProxyHandler({}))  # loopback, never through a proxy in the shell's environment
 
 
 class FakeHandler:
@@ -246,14 +247,14 @@ class EndToEndTests(unittest.TestCase):
 
     @classmethod
     def get(cls, path):
-        with urlopen(cls.base + path, timeout=10) as response:
+        with OPENER.open(cls.base + path, timeout=10) as response:
             return json.load(response)
 
     def call(self, method, path, body):
         request = HTTPRequest(self.base + path, method=method, data=json.dumps(body).encode(),
                               headers={"Content-Type": "application/json"})
         try:
-            with urlopen(request, timeout=10) as response:
+            with OPENER.open(request, timeout=10) as response:
                 return response.status, json.load(response)
         except HTTPError as e:
             with e:
