@@ -228,17 +228,5 @@
       "shared/kb_blocks.md",
       "shared/user_rules.md"
     ]
-  },
-  "todo": {
-    "count": 7,
-    "files": [
-      "todo/decisions.md",
-      "todo/outcome.md",
-      "todo/outcome_input.md",
-      "todo/project.md",
-      "todo/thread_open.md",
-      "todo/thread_reply.md",
-      "todo/title_input.md"
-    ]
   }
 }

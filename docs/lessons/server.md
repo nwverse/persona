@@ -1923,6 +1923,74 @@ Two remaining limits aren't fixed by heartbeat settings:
   The root fix is smaller frames (`Writer` segmentation), or ping only when idle.
 - Hub Persona Link forwarding caps each write at 1 minute (`spliceWS`); below about 17 KB/s, 1 MiB blocks still time out. Use smaller blocks or speed-dependent limits.
 
+## Priority lanes on the node connection (2026-11-19, #10660)
+
+The heartbeat closed working connections because a pong queued behind whatever the node's one writer was writing, a
+1 MiB file chunk being 47 s at 30 KB/s. The miss rules were relaxed five times (#7520, #7861, #8846, #8900, #10442);
+framing the connection on lanes (protocol.md "Lanes") changes the queue instead. What the design learned:
+
+- **Priority at the writer is not enough.** The transports (ssh's channel window, TCP's buffers, a relay) take
+  megabytes the moment they are written, and a pong written after them waits behind them all the same. Only a credit
+  window bounds what is ahead of it in the pipe, and only a delay-based one fits both 30 KB/s (where 64 KiB in flight
+  is two seconds of queue) and a fast link (where it starves a transfer). Frames shrink with the window: on a slow
+  link the frame an interactive frame waits behind is a few KiB.
+- **Credit only where no read loop writes or waits.** A write made from inside a read loop (a synchronous event
+  handler), or one such a handler waits for (an answer, through `AfterReply`), that waits for credit waits for an
+  acknowledgement only that read loop's reading could release: a deadlock lines cannot have. So requests and bulk
+  lines wait for credit; events and interactive answers do not. Credit for bulk alone was the first version: a review
+  showed a large `model.http` body then filled ssh's buffer ahead of the ping, which with lines would have waited
+  unwritten (not counted) and framed was written and missed; credit for every interactive line was the second, and a
+  read loop waiting for its own answer then hung (`TestLanesReadLoopWaitingForItsOwnAnswer`). Large answers and
+  events still go to the transport at once, as with lines; the middle of a long line keeps excusing a late pong.
+- **A delay-based window compares like with like.** Once short interactive frames fed it round trips, the link's base
+  delay came from them, and a full frame's own 137 ms on the wire at 30 KB/s read as queueing: the window sat at its
+  least and a 1 MiB transfer took 109 s instead of 47 s. Only frames cut to the frame size are samples now.
+- **A round trip has two directions.** The window first judged round trips, and an acknowledgement waits behind
+  whatever the other side sends: with the node's events filling the way back, the manager's port bytes fell from
+  31.9 to 14.7 KB/s (64 KiB of queue) and from 36.9 to 5.5 KB/s (256 KiB). An acknowledgement now carries when its
+  frame was read, so the queueing judged is one way's. That alone still left the link idle: an acknowledgement waiting
+  behind the other side's 32 KiB frame covers everything read meanwhile but names only the newest frame, so the window
+  also keeps what the other side reads while its first byte waits to be acknowledged (a simulation that acknowledged
+  every frame on its own hid this: 100% there, 87% with one acknowledgement a frame of the other side's), and grows
+  little past it, since on a long round trip a queue shows only a round trip later. Pacing bulk at the measured rate
+  was tried and left out: a rate measured from the handshake's small frames is a few hundred bytes a second, and a
+  pace held to it stopped a port's bytes until the notes' stall check closed the connection.
+- **A floor needs a way down.** The window's floor (the longest wait of 10 s) outlived the wait it was set for: when
+  the other side's queue drained, its acknowledgements came quicker than the frames were read and the floor kept the
+  window large, so up to that queue's worth (8.7 s at 256 KiB) sat on the way ahead of pings. A queue on the way now
+  holds the window to the latest wait. And a budget shared by two queues must be paid back by both: dropping them
+  took only the new note off the count, which then stayed full and dropped every note after it.
+- **Two queues reorder.** Port bytes went to the bulk queue and the stream's close to the other one, so the close
+  overtook the last bytes and the tail of a download was lost. What must arrive in order shares one writer.
+- **A stall is no progress, not a long wait.** The notes' watchdog judged how long one write took; a write waiting for
+  credit while the connection carries other frames is not stuck. It now asks when the connection last wrote anything.
+- **The read-ahead must cost a read, not a line.** Decoding the pieces ahead again for every line made a framed
+  connection read 0.45 MB/s of small events where lines read 2.8: the reader scans what a read brought once.
+- **Taking turns among long lines finishes all of them last.** Ten 200 KiB answers sharing a link frame by frame all
+  end at the end, so every caller with a deadline gives up where one after another most would finish. Within a lane,
+  short lines take turns with the oldest long line; the other long lines wait, as on the one writer.
+- **A frame is not a line, nor a read.** The heartbeat's signals are defined per line and per read: the read-ahead must
+  never judge a later piece of a line on its own (a closing piece does not decode, and counted as activity), the
+  middle of a line counts per read that goes on with it (not per whole frame), and it stands while that same line
+  still arrives even when shorter lines finish beside it (any long line in progress would do for a first fix, and a
+  line held back by credit the other side never gets then kept every later event's middle alive: #8771 again). Each was a divergence from lines that a review found by feeding a
+  peer of lines and a framed one the same bytes (`server/internal/rpc/lanes_activity_test.go`).
+- **Switch each direction on its own line.** One side cannot know where the other's lines end except by a line that
+  says so: the answering side's last line is its answer, the asking side's a marker event. Both are written under the
+  writer's lock (a writer that waited for it finds the output framed and queues frames), and each read loop switches
+  right after reading the other's last line, handing the bytes it already read past it to the frame reader. An answer
+  must switch the asker whether or not its call still waits: a node already framing to a manager that gave up would
+  otherwise be read as lines.
+- **Writers wrapped around a connection assume a line a write.** The node's secret scrubbing and its update-response
+  observer were `io.Writer`s around the connection; with frames they would have scrubbed across frame headers (a value
+  split between two frames never found, a length changed under its header) and parsed frames as JSON. They are line
+  hooks on the peer now (`LineFilter` when a line's first frame is cut, `LineWritten` when its last is written).
+- **Not removed here:** the relaxed ping rules. Lanes take the large blocks out of a pong's way on the node connection,
+  but nodes and managers without lanes still need every allowance, and on a framed connection large answers and events
+  still fill the transport ahead of a pong: narrowing them needs evidence from framed connections first. On Persona
+  Link, frames also mean no WebSocket message over 32 KiB on the node stream, which takes away the 5 s `writeControl`
+  wait and `spliceWS`'s one-minute write cap described in "Heartbeat timeouts on slow links" for that stream.
+
 ## A new value for an existing RPC parameter may be silently ignored by an old node (2026-11-06, #4858)
 
 Uploads already had a `dest` parameter (`terminal`, `health`), but older nodes never read it: given `dest=dir&dir=~/proj`, they still put the file in the system temp directory and returned a successful path.
@@ -2746,6 +2814,24 @@ The tier criteria are shared with event grouping. Describe each event's assigned
 requests, not one "current new message" for an entire batch. A mixed-event regression should keep a new request
 and screenshot separate from another event's final acknowledgement, while retaining each event's overall tier.
 
+## Doing the owner's call later (#10661)
+
+A message held while its computer is away must reach the Agent as the owner's, or a Claude outside Persona's
+terminals reads it as another session's (no `owner_input`) and a public share loses its submission. The devices
+manager strips both from every call a manager makes (`devices/owner_input.go`), so a manager cannot re-send it as its
+own `session.send`: keep the hub's `devicewire.NodeCall` as it came (caller, submission, share authority) and replay it
+through the devices manager's own call path (`devices/held.go`).
+
+Only an error that proves nothing was written (`errOffline`, `rpc.ErrNotSent`, `rpc.ErrSuspended`, a hop's
+`machine_offline`) may lead to an automatic second try. `rpc.ErrNotWritten` alone does not: `Peer.Call` gives it to any
+write error that matches the call's ending context, and a WebSocket writer reports its own context's end after part
+of a frame went out. A bare `ErrClosed` proves nothing either once a wrapper may have lost `ErrDropped`. Anything else,
+a deadline included, may have typed it: ask the owner instead.
+
+Sending the moment the node's connection is configured and listed is too early for a runtime Agent: the runtime
+reconnects to the new node's socket a moment later, and the node answers "no such session". Wait for the session in
+the connection's own list (a new connection starts with none).
+
 ## Moving an element to the front with `slices.Delete` in the same expression (2026-11-19, #10659)
 
 `append([]T{s[i]}, slices.Delete(s, i, i+1)...)` sometimes reads `s[i]` after `Delete` ran. Go doesn't fix the order
@@ -2756,3 +2842,33 @@ first, then delete and insert.
 `golang.org/x/net/http/httpproxy.FromEnvironment` reads `https_proxy` before `HTTPS_PROXY` (lower case first) in the
 version this repository uses. Older notes and reviews often say upper case first. Check the module's source before
 documenting an order.
+
+## Switching an ssh computer to Persona Link over ssh (#10662)
+
+- Every gate on the Persona Link path checks the entry's kind: making a code for an existing computer, redeeming it, the hub
+  taking `/api/v1/link`, and the manager taking the relayed link. A switch that pairs first and changes the kind later would
+  have to widen one of them. Change the kind first, in one hub step with the code (`devices.link_switch.begin`). The cost
+  is a few seconds offline, while the old ssh connection ends and the new link comes up.
+- `persona-link install` is meant for a person at the computer. It does not refuse an existing `link.json`. It always restarts
+  the connector, and exits 0 when the link connects even if its node step failed. `persona-link node uninstall` removes
+  any `personad-node.service`, whoever wrote it. A remote flow must find out what is there before it starts, record that, and
+  undo only what it added. It judges success by the node answering over the new link, not by the installer's exit code.
+- Without linger (`/var/lib/systemd/linger/<user>`), the user's systemd manager ends with the last session. Over ssh, that
+  session is the switch's own. The connector would start, connect, and stop again once the installer's ssh session closed.
+  Refuse instead.
+- ssh reads `~/.ssh/config` from the passwd entry's home directory, not from `$HOME`. To keep a test hub's ssh off the
+  user's config and keys, put a wrapper named `ssh` that runs `/usr/bin/ssh -F <own config>` first on its PATH
+  (`scripts/test/link_switch_e2e.py`).
+- systemd as PID 1 in a container needs a writable cgroup. Plain `docker run` (cgroup v2, private namespace) exits 255 with
+  "Failed to create /init.scope control group: Read-only file system". `--privileged --cgroupns=private` works, and
+  `loginctl enable-linger` then gives `testuser` a user manager reachable over ssh.
+- **A rollback must not take away the only way back.** The first version gave up asking the hub to end a failed switch after
+  2 minutes, then removed Persona Link from the computer anyway. The hub still said `kind: link`, and nothing asked again, so
+  the computer had neither a link nor SSH. Undo the side that decides how the computer is reached (the hub's entry) first,
+  and keep asking until it answers. Remove things from the computer only after that. `scripts/test/link_switch_e2e.py
+  --scenario hub_pause` stops the hub's slot process for 150 s to check this.
+- **Proof that something began must be written before it begins, under the same lock as anything that reads it.** An end
+  read "has it begun?" before taking the lock its begin held, a begin wrote its audit row after changing the kind, and the
+  guards against moving a switching computer were checked in memory and acted on without a lock. Each of these could leave
+  the computer at `kind: link` with nobody able to undo it. Write the intent row first and decide under the lock. Keep what
+  must survive a restart in the database.

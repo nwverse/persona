@@ -105,6 +105,14 @@ func (n *Node) findOwnTranscriptPath(id string, pass *codexListPass) string {
 	if strings.HasPrefix(id, "c0de-") {
 		return n.oldCodexTranscript(id)
 	}
+	// A migrated compatible-CLI conversation may retain its old rollout. Its paginated history is authoritative,
+	// even when a reader cached the rollout before migration; followCopy will relocate that reader too.
+	if _, ok := n.traexThread(id); ok {
+		if p := n.traexPath(id); p != "" {
+			n.setPath(id, p)
+			return p
+		}
+	}
 	n.mu.Lock()
 	p := n.paths[id]
 	at, fresh := n.pathsAt[id]

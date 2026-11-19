@@ -32,7 +32,7 @@ import { runStep, sameStep, turnDone, type RunStep } from "../../lib/run-step";
 import { stabilizeLines, stableValue } from "../../lib/stable-lines";
 import { planProgress, workLineStyle } from "../../lib/work-groups";
 import { echoed, taggedSeen } from "../../lib/echo";
-import { assertDelivered, isKept, keptBubble, showKept, shownUndelivered, type KeptReply } from "../../lib/undelivered";
+import { AGENT_MESSAGE_HOLD_FEATURE, assertDelivered, isKept, keptBubble, showKept, shownUndelivered, type KeptReply } from "../../lib/undelivered";
 import { lazyPage } from "../../lib/lazy-page";
 import { acceptOutgoing, forgetOutgoing, inSendOrder, keepFailed, keepOutgoing, noteWritten, outboxKey, placeFailed, registerOutboxRecheck, relayNotice, restoreOutbox, retryOutbox, SENT_GRACE_MS, settleOutbox, type DeliveryReply } from "../../lib/outbox";
 import { apiOp } from "../../lib/ops";
@@ -337,6 +337,13 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const subagents = stableSubagents(lastSubagents.current, listed);
   lastSubagents.current = subagents;
   const machineName = useStore((s) => machineWithHub(mid, s.machines));
+  // An Agent's computer away, on a hub that holds what is sent meanwhile (#10661): the box stays open and says the
+  // messages go once it is back, in words from the held bubbles' chunk, off the first screen (UndeliveredBubbles).
+  const computerAway = useStore((s) => !assistant && hubHas(s.features, AGENT_MESSAGE_HOLD_FEATURE) && s.machines.find((m) => m.id === mid)?.online === false);
+  const [awayLine, setAwayLine] = useState("");
+  useEffect(() => {
+    if (computerAway) void import("./UndeliveredBubbles").then((m) => setAwayLine(m.heldPlaceholder(machineName)), () => {});
+  }, [computerAway, machineName]);
   // A Codex opened with no first message (lib/codex-waiting.ts): once its thread comes (the message went in from here
   // or its terminal) the row goes and the thread's comes in the same pane, and this page follows it there.
   const waitsFirst = waitsForFirstMessage(session);
@@ -2246,7 +2253,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         ) : (
         <Composer
           draftKey={draftKey}
-          placeholder={offlineLine ? offlineLine : waitsFirst ? t("chat-chatview.codex_first_placeholder") : refusedNoRow ? t(gone ? "chat-chatview.session_gone_placeholder" : "chat-chatview.connecting_placeholder") : viewOnlyRow(session) ? t("chat-chatview.view_only") : state === "working" || state === "needs_you" ? t("chat-chatview.queue_placeholder") : assistant ? askPlaceholder ?? t("chat-chatview.ask_placeholder", { name: persona.name }) : state === "offline" ? t("chat-chatview.resume_placeholder") : t("chat-chatview.agent_placeholder")}
+          placeholder={offlineLine ? offlineLine : waitsFirst ? t("chat-chatview.codex_first_placeholder") : refusedNoRow ? t(gone ? "chat-chatview.session_gone_placeholder" : "chat-chatview.connecting_placeholder") : viewOnlyRow(session) ? t("chat-chatview.view_only") : computerAway && awayLine ? awayLine : state === "working" || state === "needs_you" ? t("chat-chatview.queue_placeholder") : assistant ? askPlaceholder ?? t("chat-chatview.ask_placeholder", { name: persona.name }) : state === "offline" ? t("chat-chatview.resume_placeholder") : t("chat-chatview.agent_placeholder")}
           machineId={mid}
           uploadDest={session?.space === "health" ? "health" : undefined}
           working={state === "working" || awaiting}
