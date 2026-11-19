@@ -24,6 +24,7 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var in struct {
 		Settings
+		ExpectedWorkGuide      *bool           `json:"expected_work_guide"`
 		WorkspaceRulesPatch    json.RawMessage `json:"workspace_rules"`
 		Permission             json.RawMessage `json:"default_permission_mode"`
 		Readonly               json.RawMessage `json:"readonly_mode"`
@@ -46,7 +47,7 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-schedule.bad_permission_mode", i18n.Args{"mode": strconv.Quote(in.DefaultPermissionMode)}))
 		return
 	}
-	if in.Permission != nil && !s.explicitSettingsTarget(w, r) {
+	if (in.Permission != nil || in.WorkGuide != nil) && !s.explicitSettingsTarget(w, r) {
 		return
 	}
 	if in.Readonly != nil {
@@ -189,7 +190,11 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 			mainMachine = before.MachineID
 		}
 	}
+	errGuideChanged := errors.New("work guide setting changed")
 	if _, err := s.updateSettings(ctx, func(v *Settings) error {
+		if in.WorkGuide != nil && in.ExpectedWorkGuide != nil && *in.ExpectedWorkGuide != (v.WorkGuide != nil && *v.WorkGuide) {
+			return errGuideChanged
+		}
 		if len(in.WorkspaceRulesPatch) > 0 {
 			rules, err := workspacenaming.Patch(v.WorkspaceRules, in.WorkspaceRulesPatch)
 			if err != nil {
@@ -254,6 +259,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if in.MainCompactWindow != nil {
 			v.MainCompactWindow = in.MainCompactWindow
+		}
+		if in.WorkGuide != nil {
+			v.WorkGuide = in.WorkGuide
 		}
 		if in.RecentTaskChats != nil {
 			v.RecentTaskChats = in.RecentTaskChats
@@ -336,6 +344,10 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		return nil
 	}); err != nil {
+		if errors.Is(err, errGuideChanged) {
+			apierr.WriteCode(w, http.StatusConflict, "configuration_conflict", err)
+			return
+		}
 		apierr.Write(w, http.StatusInternalServerError, err)
 		return
 	}

@@ -33,7 +33,7 @@ func TestSyncLinksTheUsersSkills(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dir, "beta"), 0o755); err != nil { // the user's own, in place
 		t.Fatal(err)
 	}
-	if err := Sync(dir, user, nil, quiet); err != nil {
+	if err := Sync(dir, user, Selection{}, quiet); err != nil {
 		t.Fatal(err)
 	}
 	if target, err := os.Readlink(filepath.Join(dir, "alpha")); err != nil || target != filepath.Join(user, "alpha") {
@@ -48,7 +48,7 @@ func TestSyncLinksTheUsersSkills(t *testing.T) {
 	if err := os.RemoveAll(filepath.Join(user, "alpha")); err != nil {
 		t.Fatal(err)
 	}
-	if err := Sync(dir, user, nil, quiet); err != nil {
+	if err := Sync(dir, user, Selection{}, quiet); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Lstat(filepath.Join(dir, "alpha")); !os.IsNotExist(err) {
@@ -67,7 +67,7 @@ func TestSyncMovesTheOldCopy(t *testing.T) {
 		t.Fatal(err)
 	}
 	var said []string
-	if err := Sync(dir, user, nil, func(f string, a ...any) { said = append(said, f) }); err != nil {
+	if err := Sync(dir, user, Selection{}, func(f string, a ...any) { said = append(said, f) }); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(user, "lark-gateway", "scripts", "ol.sh")); err != nil {
@@ -95,7 +95,7 @@ func TestSyncOldCopyGivesWayToTheUsers(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, legacyStamp), []byte("abc\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := Sync(dir, user, nil, quiet); err != nil {
+	if err := Sync(dir, user, Selection{}, quiet); err != nil {
 		t.Fatal(err)
 	}
 	if target, _ := os.Readlink(filepath.Join(dir, "lark-gateway")); target != filepath.Join(user, "lark-gateway") {
@@ -123,7 +123,7 @@ func TestSyncOldCopyLeavesExtensionSkills(t *testing.T) {
 func TestNoStampNoMove(t *testing.T) {
 	user, dir := t.TempDir(), t.TempDir()
 	skill(t, dir, "lark-gateway", "placed by hand")
-	if err := Sync(dir, user, nil, quiet); err != nil {
+	if err := Sync(dir, user, Selection{}, quiet); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(user, "lark-gateway")); !os.IsNotExist(err) {
@@ -154,7 +154,7 @@ func TestListAndDescriptions(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(user, "no-skill-md"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	got := List(user, nil)
+	got := List(user, Selection{})
 	// The user's, then the built-in ones that need no connector (persona-office).
 	if len(got) != 3 || got[0] != (Skill{"alpha", "quoted one", "user"}) || got[1] != (Skill{"folded", "first line second line", "user"}) ||
 		got[2].Name != "persona-office" || got[2].Source != "builtin" || !strings.HasPrefix(got[2].Description, "生成 Word") {
@@ -169,30 +169,30 @@ func TestConnectorSkillFollowsItsConnector(t *testing.T) {
 	Requires = map[string]string{"persona-office": "example"}
 	t.Cleanup(func() { Requires = old })
 	user, dir := t.TempDir(), t.TempDir()
-	if err := Sync(dir, user, nil, quiet); err != nil {
+	if err := Sync(dir, user, Selection{}, quiet); err != nil {
 		t.Fatal(err)
 	}
-	if hasSkill(dir, "persona-office") || slices.ContainsFunc(List(user, nil), func(s Skill) bool { return s.Name == "persona-office" }) {
+	if hasSkill(dir, "persona-office") || slices.ContainsFunc(List(user, Selection{}), func(s Skill) bool { return s.Name == "persona-office" }) {
 		t.Fatal("the skill is in with its connector not signed in")
 	}
-	if err := Sync(dir, user, []string{"example"}, quiet); err != nil {
+	if err := Sync(dir, user, Selection{Connectors: []string{"example"}}, quiet); err != nil {
 		t.Fatal(err)
 	}
 	if !hasSkill(dir, "persona-office") {
 		t.Fatal("its connector signed in, no skill")
 	}
-	listed := List(user, []string{"example"})
+	listed := List(user, Selection{Connectors: []string{"example"}})
 	if i := slices.IndexFunc(listed, func(s Skill) bool { return s.Name == "persona-office" }); i < 0 || listed[i].Source != "builtin" {
 		t.Fatalf("listed %+v", listed)
 	}
-	if err := Sync(dir, user, nil, quiet); err != nil {
+	if err := Sync(dir, user, Selection{}, quiet); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Lstat(filepath.Join(dir, "persona-office")); !os.IsNotExist(err) {
 		t.Fatalf("signed out, the skill stayed: %v", err)
 	}
 	skill(t, user, "persona-office", "mine")
-	if err := Sync(dir, user, []string{"example"}, quiet); err != nil {
+	if err := Sync(dir, user, Selection{Connectors: []string{"example"}}, quiet); err != nil {
 		t.Fatal(err)
 	}
 	if target, _ := os.Readlink(filepath.Join(dir, "persona-office")); target != filepath.Join(user, "persona-office") {
@@ -213,7 +213,7 @@ func TestABuiltinSkillNoLongerCarriedGivesWayToAPlugins(t *testing.T) {
 	if _, err := ApplyPlugins(plugins, []PluginSkill{{Name: "telegram", Plugin: "telegram", Digest: "d1", Files: map[string][]byte{"SKILL.md": md}}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := Sync(dir, user, []string{"telegram"}, quiet); err != nil {
+	if err := Sync(dir, user, Selection{Connectors: []string{"telegram"}}, quiet); err != nil {
 		t.Fatal(err)
 	}
 	if b, err := os.ReadFile(filepath.Join(dir, "telegram", "SKILL.md")); err != nil || !strings.Contains(string(b), "the extension's") {
@@ -295,4 +295,45 @@ func TestOfficeScript(t *testing.T) {
 func hasSkill(dir, name string) bool {
 	_, err := os.Stat(filepath.Join(dir, name, "SKILL.md"))
 	return err == nil
+}
+
+func TestWorkGuideLeavesExistingSkillInPlace(t *testing.T) {
+	dir, user := t.TempDir(), t.TempDir()
+	t.Setenv("PERSONA_PLUGIN_SKILLS_DIR", t.TempDir())
+	skill(t, dir, "persona-work", "Personal workflow")
+	for _, on := range []bool{false, true, false} {
+		if err := Sync(dir, user, Selection{WorkGuide: on}, quiet); err != nil {
+			t.Fatal(err)
+		}
+		b, err := os.ReadFile(filepath.Join(dir, "persona-work", "SKILL.md"))
+		if err != nil || !strings.Contains(string(b), "Personal workflow") || WorkGuideInstalled(dir) {
+			t.Fatalf("changed existing skill: %s, %v", b, err)
+		}
+	}
+}
+
+func TestWorkGuideCatalogBudget(t *testing.T) {
+	dir, user := t.TempDir(), t.TempDir()
+	t.Setenv("PERSONA_PLUGIN_SKILLS_DIR", t.TempDir())
+	if err := Sync(dir, user, Selection{WorkGuide: true}, t.Logf); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := LocalCatalog([]Root{{Path: dir, Source: "project"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name != workGuideName {
+			continue
+		}
+		// Use a stable fixture path for a reproducible UTF-8 catalog measurement.
+		e.Path = "/example/assistant/.claude/skills/persona-work/SKILL.md"
+		b, err := json.Marshal(e)
+		if err != nil || len(b) > 512 {
+			t.Fatalf("catalog entry %d bytes: %v", len(b), err)
+		}
+		t.Logf("normalized local native catalog entry %d bytes", len(b))
+		return
+	}
+	t.Fatal("missing guide")
 }

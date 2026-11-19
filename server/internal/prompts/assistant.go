@@ -26,6 +26,7 @@ type AssistantMachine struct {
 
 // AssistantClaudeMD is the assistant directory's CLAUDE.md (assistant/claude_md).
 type AssistantClaudeMD struct {
+	WorkGuide    bool
 	Owner        string // "" is "user"
 	Machines     []AssistantMachine
 	Notes        string // Settings › Assistant › About me, trimmed

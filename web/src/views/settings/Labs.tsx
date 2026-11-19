@@ -1,16 +1,15 @@
 // Settings › Labs (#9877, docs/web/web.md "Labs"): trial features and choices between a stable and a new implementation.
 // Each module that has one injects a configuration source (lib/configuration/contract.ts); this page draws each with the
-// generic form (configuration/ConfigurationForm.tsx), which knows none of them. Today: the terminal renderer
-// (lib/labs-terminal.ts), kept by this browser.
+// generic form (configuration/ConfigurationForm.tsx).
 import { t } from "../../i18n";
-import type { ConfigurationSource } from "../../lib/configuration/contract";
+import { workGuideLabsSource } from "../../lib/labs-work-guide";
+import { ConfigurationManager } from "./ConfigurationManager";
 import { terminalLabsSource } from "../../lib/labs-terminal";
 import { Dialog } from "../../ui/atoms";
 import { ConfigurationForm } from "./configuration/ConfigurationForm";
 import { Group, SettingsHint } from "./SettingsParts";
 
-/** The modules' Labs sources, in the order the page shows them. Only real features: never a demo entry. */
-const MODULES: ConfigurationSource[] = [terminalLabsSource()];
+const terminal = terminalLabsSource();
 
 export function LabsSettings() {
   return (
@@ -18,11 +17,10 @@ export function LabsSettings() {
       <Group anchor="labs" footer={t("settings-labs.scope_note")}>
         <SettingsHint>{t("settings-labs.intro")}</SettingsHint>
       </Group>
-      {MODULES.map((source) => (
-        <div key={source.key} className="mb-6">
-          <ConfigurationForm source={source} />
-        </div>
-      ))}
+      <ConfigurationManager>{(manager) => (
+        <div className="mb-6"><ConfigurationForm source={workGuideLabsSource(manager)} /></div>
+      )}</ConfigurationManager>
+      <div className="mb-6"><ConfigurationForm source={terminal} /></div>
     </>
   );
 }

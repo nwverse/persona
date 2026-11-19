@@ -239,6 +239,10 @@ Go side: `prompts.go` (parsing, template functions), `assistant.go`, `inbox.go`,
 
 ## MCP tools
 
+When adding, renaming, removing or changing a work-management tool, check the affected workflow in the built-in
+`persona-work` skill (`server/internal/assistantskills/builtin/persona-work/`) in the same PR. Put operation-specific
+changes in the relevant reference. Keep the catalog description short and retain the contracts that task Agents use.
+
 Each MCP tool hub provides to Agents / the assistant has one file: `mcp/<scenario>/<tool-name>.md`. The filename is the tool name. Contents: one paragraph of model-facing description, a blank line,
 then a ```json code block containing the input schema (parameters and their descriptions). These files are **not templates**; they are read verbatim. The schema is loaded with `json.Compact`,
 so layout is arbitrary (short arrays can be one line) and does not affect transmitted bytes.

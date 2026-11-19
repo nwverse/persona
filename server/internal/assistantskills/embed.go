@@ -31,11 +31,12 @@ var builtin, _ = fs.Sub(embedded, "builtin")
 
 // Redistributable is every built-in skill and why Persona may ship it (TestBuiltinsAreRedistributable).
 var Redistributable = map[string]string{
+	workGuideName:    "Persona’s own Assistant work management guide",
 	"persona-office": "Persona's own (personad office's skill, docs/assistant/office.md)",
 }
 
 // ForAgents are the built-in skills the agents Persona starts get too, as the plugin WritePlugin makes (the
-// assistant gets every built-in one in its directory). Only for the agents Persona starts: nothing goes into a
+// assistant gets the selected built-ins in its directory). Only for the agents Persona starts: nothing goes into a
 // machine's own Claude or Codex skills, so sessions the user starts themselves are left as they are (#1300).
 var ForAgents = []string{"persona-office"}
 
@@ -44,15 +45,25 @@ var ForAgents = []string{"persona-office"}
 // comes with its extension (#1704), as a plugin skill (plugins.go).
 var Requires = map[string]string{}
 
+// Selection is the manager's provisioning state for one Assistant directory.
+type Selection struct {
+	Connectors []string
+	WorkGuide  bool
+}
+
 // wanted says whether the built-in skill name goes in with the connectors signed in.
-func wanted(name string, connectors []string) bool {
+func (s Selection) wanted(name string) bool {
+	if name == workGuideName {
+		return s.WorkGuide && !slices.Contains(pluginNames(PluginDir()), name)
+	}
 	need, ok := Requires[name]
-	return !ok || slices.Contains(connectors, need)
+	return !ok || slices.Contains(s.Connectors, need)
 }
 
 const (
-	builtinStamp = ".persona-builtin" // the built-in skills last copied in
-	legacyStamp  = ".persona-skills"  // what older personad binaries left next to their copies
+	workGuideName = "persona-work"
+	builtinStamp  = ".persona-builtin" // the built-in skills last copied in
+	legacyStamp   = ".persona-skills"  // what older personad binaries left next to their copies
 )
 
 // UserDir is the user's skill space: ~/.persona/skills (PERSONA_SKILLS_DIR elsewhere, for tests).
@@ -102,13 +113,13 @@ func userNames(user string) []string {
 // the user has none of, as copies: those that need a connector (Requires) only while it is among connectors, the hub's
 // signed in. A link into user whose skill is gone is removed; a directory the user put in dir themselves is left
 // alone. logf reports what changed.
-func Sync(dir, user string, connectors []string, logf func(string, ...any)) error {
+func Sync(dir, user string, selection Selection, logf func(string, ...any)) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 	migrate(dir, user, logf)
 	mine := userNames(user)
-	if err := installBuiltins(dir, mine, connectors); err != nil {
+	if err := installBuiltins(dir, mine, selection); err != nil {
 		return err
 	}
 	if err := installPlugins(dir, PluginDir(), mine); err != nil {
@@ -123,7 +134,7 @@ func Sync(dir, user string, connectors []string, logf func(string, ...any)) erro
 			}
 			_ = os.Remove(at)
 		} else if st, err := os.Lstat(at); err == nil && st.IsDir() {
-			if !slices.Contains(builtinNames(), name) {
+			if name == workGuideName || !slices.Contains(builtinNames(), name) {
 				logf("assistant skills: %s is a directory of its own in %s; %s is not linked over it", name, dir, target)
 				continue
 			}
@@ -155,7 +166,7 @@ func migrate(dir, user string, logf func(string, ...any)) {
 	entries, _ := os.ReadDir(dir)
 	for _, e := range entries {
 		name := e.Name()
-		if !e.IsDir() || strings.HasPrefix(name, ".") || slices.Contains(builtinNames(), name) {
+		if !e.IsDir() || strings.HasPrefix(name, ".") || (name != workGuideName && slices.Contains(builtinNames(), name)) {
 			continue // a link (the user's), a stamp, or what installBuiltins puts in
 		}
 		if _, err := os.Stat(filepath.Join(dir, name, pluginStamp)); err == nil {
@@ -193,27 +204,55 @@ func builtinVersion() string {
 	return hex.EncodeToString(h.Sum(nil))[:12]
 }
 
+func installedNames(stamp []byte) []string {
+	if fields := strings.Fields(string(stamp)); len(fields) == 2 {
+		return strings.Split(fields[1], ",")
+	}
+	return nil
+}
+
+// WorkGuideInstalled distinguishes our managed guide from a user's or an extension's same-name skill.
+func WorkGuideInstalled(dir string) bool {
+	stamp, _ := os.ReadFile(filepath.Join(dir, builtinStamp))
+	return slices.Contains(installedNames(stamp), workGuideName) && workGuideFilePresent(dir)
+}
+
+func workGuideFilePresent(dir string) bool {
+	st, err := os.Stat(filepath.Join(dir, workGuideName, "SKILL.md"))
+	return err == nil && st.Mode().IsRegular()
+}
+
 // installBuiltins copies the built-in skills into dir, except those the user has their own of and those whose
 // connector is not signed in; the stamp (version and what was copied) skips an identical install and lets a copy no
 // longer carried, or no longer wanted, be removed.
-func installBuiltins(dir string, mine, connectors []string) error {
+func installBuiltins(dir string, mine []string, selection Selection) error {
+	stamp := filepath.Join(dir, builtinStamp)
+	old, _ := os.ReadFile(stamp)
+	installed := installedNames(old)
 	var names []string
 	for _, n := range builtinNames() {
-		if !slices.Contains(mine, n) && wanted(n, connectors) {
+		if n == workGuideName && !slices.Contains(installed, n) {
+			// An upgrade may find a handwritten skill here. Leave it in place.
+			if _, err := os.Lstat(filepath.Join(dir, n)); err == nil {
+				continue
+			} else if !os.IsNotExist(err) {
+				return err
+			}
+		}
+		if !slices.Contains(mine, n) && selection.wanted(n) {
 			names = append(names, n)
 		}
 	}
 	want := builtinVersion() + " " + strings.Join(names, ",")
-	stamp := filepath.Join(dir, builtinStamp)
-	old, _ := os.ReadFile(stamp)
-	if strings.TrimSpace(string(old)) == want {
+	if strings.TrimSpace(string(old)) == want && (!slices.Contains(names, workGuideName) || workGuideFilePresent(dir)) {
 		return nil
 	}
-	if f := strings.Fields(string(old)); len(f) == 2 {
-		for _, n := range strings.Split(f[1], ",") {
-			if at := filepath.Join(dir, n); n != "" && !slices.Contains(names, n) {
-				if st, err := os.Lstat(at); err == nil && st.IsDir() {
-					_ = os.RemoveAll(at)
+	for _, n := range installed {
+		if fs.ValidPath(n) && n != "." && filepath.Base(n) == n && !slices.Contains(names, n) {
+			at := filepath.Join(dir, n)
+			if st, err := os.Lstat(at); err == nil && st.IsDir() {
+				if err := os.RemoveAll(at); err != nil {
+					return err
 				}
 			}
 		}
@@ -334,7 +373,7 @@ func WritePlugin(dir string) error {
 
 // List is the skills the assistant gets on this machine: the user's, then the built-in ones they have none of whose
 // connector, if they need one, is signed in.
-func List(user string, connectors []string) []Skill {
+func List(user string, selection Selection) []Skill {
 	out := []Skill{}
 	mine := userNames(user)
 	for _, n := range mine {
@@ -342,13 +381,13 @@ func List(user string, connectors []string) []Skill {
 		out = append(out, Skill{Name: n, Description: description(string(b)), Source: "user"})
 	}
 	for _, n := range builtinNames() {
-		if !slices.Contains(mine, n) && wanted(n, connectors) {
+		if !slices.Contains(mine, n) && selection.wanted(n) {
 			b, _ := fs.ReadFile(builtin, n+"/SKILL.md")
 			out = append(out, Skill{Name: n, Description: description(string(b)), Source: "builtin"})
 		}
 	}
 	for _, n := range pluginNames(PluginDir()) {
-		if !slices.Contains(mine, n) && !slices.Contains(builtinNames(), n) {
+		if !slices.Contains(mine, n) && (n == workGuideName || !slices.Contains(builtinNames(), n)) {
 			b, _ := os.ReadFile(filepath.Join(PluginDir(), n, "SKILL.md"))
 			out = append(out, Skill{Name: n, Description: description(string(b)), Source: "plugin"})
 		}

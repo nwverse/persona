@@ -16,5 +16,13 @@
   "terminal_renderer_standard": "Standard",
   "terminal_renderer_webgl": "WebGL",
   "terminal_renderer_activation": "Terminals you open after changing it. A terminal that's already open keeps its renderer, and what you typed in it, until you open it again or reload the page.",
-  "terminal_renderer_rollback": "Choose Standard. If WebGL stops working in a terminal, that terminal switches back to Standard by itself, and so does this setting."
+  "terminal_renderer_rollback": "Choose Standard. If WebGL stops working in a terminal, that terminal switches back to Standard by itself, and so does this setting.",
+  "work_area": "Assistant",
+  "work_title": "Work management guide on demand",
+  "work_hint": "Let your assistant look up instructions when you ask it to remember, delegate or review work.",
+  "work_scope": "This assistant, across your devices.",
+  "work_activation": "Start a new chat to apply your choice fully. An open chat may keep its earlier instructions and tool information.",
+  "work_rollback": "Turn this off to include the usual guidance in new chats. Your to-dos and tasks stay as they are.",
+  "work_saved": "Saved. Start a new chat to fully apply this choice.",
+  "work_unsupported": "Update this assistant to change this setting."
 }

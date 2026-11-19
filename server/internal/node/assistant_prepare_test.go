@@ -210,3 +210,68 @@ func TestSkillsListPreparedDirectoryFallback(t *testing.T) {
 		})
 	}
 }
+
+func TestWorkGuidePrepareAndRollback(t *testing.T) {
+	t.Setenv("PERSONA_SKILLS_DIR", t.TempDir())
+	t.Setenv("PERSONA_PLUGIN_SKILLS_DIR", t.TempDir())
+	n, _ := testNode(t)
+	n.dir, n.bin, n.logger = t.TempDir(), "/opt/example/personad", log.New(io.Discard, "", 0)
+	other := prepareAssistantForTest(t, n, ".persona/assistant", nil, nil)
+	for _, guide := range []string{"", "short instructions", ""} {
+		params, _ := json.Marshal(map[string]any{"dir": ".persona/managers/second/assistant", "claude_md": "full instructions", "work_guide_md": guide})
+		out, err := n.handle(t.Context(), "assistant.prepare", params)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cwd := out.(map[string]any)["cwd"].(string)
+		n.assistantRuntimeSkills(cwd)
+		for _, name := range []string{"CLAUDE.md", "AGENTS.md"} {
+			want := "full instructions"
+			if guide != "" {
+				want = guide
+			}
+			got, err := os.ReadFile(filepath.Join(cwd, name))
+			if err != nil || string(got) != want {
+				t.Fatalf("%s: %q, %v", name, got, err)
+			}
+		}
+		for _, root := range []string{".claude", ".agents"} {
+			for _, dir := range []string{cwd, other} {
+				path := filepath.Join(dir, root, "skills", "persona-work", "references", "delegate.md")
+				_, err := os.Stat(path)
+				if guide != "" && dir == cwd {
+					if err != nil {
+						t.Fatal(err)
+					}
+				} else if !os.IsNotExist(err) {
+					t.Fatalf("unexpected guide at %s: %v", path, err)
+				}
+			}
+		}
+	}
+}
+
+func TestWorkGuidePrepareWithLocalCodexSkill(t *testing.T) {
+	t.Setenv("PERSONA_SKILLS_DIR", t.TempDir())
+	t.Setenv("PERSONA_PLUGIN_SKILLS_DIR", t.TempDir())
+	n, _ := testNode(t)
+	n.dir, n.bin, n.logger = t.TempDir(), "/opt/example/personad", log.New(io.Discard, "", 0)
+	cwd := prepareAssistantForTest(t, n, ".persona/assistant", nil, nil)
+	at := filepath.Join(cwd, ".agents", "skills", "persona-work")
+	if err := os.MkdirAll(at, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	custom := filepath.Join(at, "SKILL.md")
+	if err := os.WriteFile(custom, []byte("custom"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	params, _ := json.Marshal(map[string]string{"dir": ".persona/assistant", "claude_md": "full instructions", "work_guide_md": "short instructions"})
+	if _, err := n.handle(t.Context(), "assistant.prepare", params); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]string{custom: "custom", filepath.Join(cwd, "AGENTS.md"): "full instructions"} {
+		if got, err := os.ReadFile(path); err != nil || string(got) != want {
+			t.Fatalf("%s: %q, %v", path, got, err)
+		}
+	}
+}
