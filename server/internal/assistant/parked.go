@@ -75,6 +75,37 @@ func (v *Supervision) parking() *TaskReview {
 	return nil
 }
 
+// activeTimeSince discounts the intersection of each park with the current period of inactivity.
+// For older ledgers, the next review (or the last ledger update) is the available end of a completed park.
+func (v *Supervision) activeTimeSince(since, now time.Time) time.Duration {
+	active := now.Sub(since)
+	cursor := since
+	for i, r := range v.Reviews {
+		if r.Verdict != reviewParked || r.At.IsZero() {
+			continue
+		}
+		end := r.ParkEndedAt
+		if end.IsZero() {
+			end = v.UpdatedAt
+			if i+1 < len(v.Reviews) {
+				end = v.Reviews[i+1].At
+			}
+		}
+		if end.After(now) {
+			end = now
+		}
+		start := r.At
+		if cursor.After(start) {
+			start = cursor
+		}
+		if end.After(start) {
+			active -= end.Sub(start)
+			cursor = end
+		}
+	}
+	return active
+}
+
 // parked is v's parking as the apps get it; nil when it is not parked.
 func (v *Supervision) parked() *Parked {
 	r := v.parking()

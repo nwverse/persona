@@ -442,8 +442,8 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 	case sigPRConflict:
 		p := t.PRStatus
 		if p == nil || p.URL != t.PRURL || p.State != "open" || !p.Conflicts || p.HeadOID == "" ||
-			g.Key != p.URL+"@"+p.HeadOID || s.stagePR(t.ID) != p.URL {
-			return prompts.SuperviseEntry{}, false // resolved, closed, or replaced while the signal waited
+			g.Key != p.URL+"@"+p.HeadOID || s.stagePR(t.ID) != p.URL || parkWaitsOnPR(v.parking(), p.URL) {
+			return prompts.SuperviseEntry{}, false // resolved, replaced, or parked for this PR while the signal waited
 		}
 	case sigReview:
 		if st != reviewPending {
