@@ -96,6 +96,7 @@ todos.write          DELETE /api/v1/todos/{id}/agents/{mid}/{sid}
 -                    DELETE /api/v1/todos/{id}/seen
 -                    DELETE /api/v1/todos/{id}/someday
 todos.write          DELETE /api/v1/todos/{id}/spaces/{mid}/{space...}
+-                    DELETE /api/v1/todos/{id}/terminal-cleanup
 -                    DELETE /api/v1/todos/{id}/thread
 -                    DELETE {base}/markets/{mid}
 -                    GET /api/v1/admin/devices
@@ -336,6 +337,9 @@ todos.read           GET /api/v1/todos/places
 todos.read           GET /api/v1/todos/{id}
 todos.read           GET /api/v1/todos/{id}/decisions
 todos.read           GET /api/v1/todos/{id}/repositories
+todos.read           GET /api/v1/todos/{id}/timeline
+todos.read           GET /api/v1/todos/{id}/workspace-naming/plans/{operation_id}
+todos.read           GET /api/v1/todos/{id}/workspace-rules
 -                    GET /api/v1/usage
 -                    GET /api/v1/usage/days
 -                    GET /api/v1/usage/hours
@@ -434,6 +438,7 @@ assistant.ask        POST /api/v1/assistant/conversations/{id}/stop
 -                    POST /api/v1/assistant/tasks/{id}/run
 -                    POST /api/v1/assistant/urgent-call/test
 -                    POST /api/v1/assistant/warm
+todos.write          POST /api/v1/assistant/workspace-naming/preview
 -                    POST /api/v1/auth/browser-login/approve
 -                    POST /api/v1/auth/browser-login/confirm
 -                    POST /api/v1/auth/browser-login/poll
@@ -619,12 +624,15 @@ todos.write          POST /api/v1/todos
 -                    POST /api/v1/todos/import/reminders
 -                    POST /api/v1/todos/retitle
 -                    POST /api/v1/todos/{id}/accept
+-                    POST /api/v1/todos/{id}/asks/{ask}/answer
 -                    POST /api/v1/todos/{id}/decision-dismiss
 -                    POST /api/v1/todos/{id}/decision-undo-dismiss
 todos.write          POST /api/v1/todos/{id}/decisions
 -                    POST /api/v1/todos/{id}/done-check
 -                    POST /api/v1/todos/{id}/retry
 -                    POST /api/v1/todos/{id}/start/answer
+todos.write          POST /api/v1/todos/{id}/workspace-naming/plans
+todos.write          POST /api/v1/todos/{id}/workspace-naming/preview
 -                    POST /api/v1/translate
 -                    POST /api/v1/translate/mail
 -                    POST /api/v1/translate/message
@@ -723,6 +731,7 @@ todos.write          PUT /api/v1/todos/{id}/repositories/{repo_id}/links
 -                    PUT /api/v1/todos/{id}/someday
 todos.write          PUT /api/v1/todos/{id}/spaces/{mid}/{space...}
 -                    PUT /api/v1/todos/{id}/thread
+todos.write          PUT /api/v1/todos/{id}/workspace-rules
 -                    PUT /api/v1/workspace-board/settings
 -                    PUT {base}/market-settings
 -                    PUT {base}/markets/{mid}

@@ -17,6 +17,7 @@ import { UserBubble } from "./SegmentView";
 
 /** The line under a kept message's bubble. */
 function keptLine(m: UndeliveredMessage, failed: boolean): string {
+  if (m.delete_only && m.error) return m.error;
   if (m.computer) return m.error || t(failed ? "chat-undeliveredbubbles.held_failed" : "chat-undeliveredbubbles.held_waiting", { computer: m.computer });
   return t(failed ? "chat-undeliveredbubbles.failed" : "chat-undeliveredbubbles.waiting", { reason: m.error || t("lib-outbox.delivery_unknown") });
 }
@@ -47,7 +48,7 @@ export function UndeliveredBubble({ mid, sid, m }: { mid: string; sid: string; m
           {keptLine(m, failed)}
           {m.images ? ` · ${t("chat-undeliveredbubbles.images", { count: m.images })}` : ""}
         </span>
-        {failed && (
+        {failed && !m.delete_only && (
           <button type="button" disabled={busy} aria-busy={busy} onClick={() => void run(() => retryUndelivered(mid, sid, m))} className="whitespace-nowrap font-medium text-accent-ink hover:underline">
             {t("chat-outboxbubbles.retry")}
           </button>
