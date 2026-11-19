@@ -155,6 +155,9 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		return "", fmt.Errorf("user_check applies to accepted only")
 	}
 	if verdict == reviewAccepted { // done_needs_delivery: its PR is live first (supervise_review_delivery.go)
+		if err := s.outboundCompletionError(ctx, t.ID); err != nil {
+			return "", err
+		}
 		if err := s.acceptedDeliveryError(ctx, t, strings.TrimSpace(a.Link), a.Outcome); err != nil {
 			return "", err
 		}
@@ -532,6 +535,11 @@ type reviewFeedBody struct {
 // accepted task's outcome is recorded, as when it closes by itself or the user closes it (todo_outcome.go, #2820); a
 // cancelled one came to nothing and records none.
 func (s *Service) reviewDoneTodo(ctx context.Context, id, reason string, accepted bool) (bool, error) {
+	if accepted {
+		if err := s.outboundCompletionError(ctx, id); err != nil {
+			return false, err
+		}
+	}
 	if t, ok := s.todoNow(id); ok && t.isConcern() {
 		return false, nil // only its report closes a concern (concerns.go)
 	}

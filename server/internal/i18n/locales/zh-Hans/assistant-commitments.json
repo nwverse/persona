@@ -1,0 +1,16 @@
+{
+  "title": "把答应的进展同步出去",
+  "unconfirmed_title": "核实答应同步的消息是否发出",
+  "unconfirmed_record": "这次发送缺少确认记录。请先回原话题核实，再决定下一步，不要直接重发。\n\n原话题：{url}\n尝试发送的原话：{quote}\n应核实时间：{due}",
+  "criterion": "在原话题发出后续更新。",
+  "record": "已承诺后续同步\n\n原话题：{url}\n\n承诺原话：\n{quote}\n\n期限：{due}",
+  "fulfilled": "已于 {at} 在原话题发出更新，兑现了后续同步承诺：{url}",
+  "overdue": "答应的后续同步已超时，请确认该怎么回复对方。\n\n原话题：{url}\n承诺原话：{quote}\n期限：{due}",
+  "review_update": "准备一条更新供我确认",
+  "review_effect": "先拟好更新等你确认，不自动对外发送。",
+  "keep_waiting": "继续等待",
+  "wait_effect": "请督办方查看进度，给出新的期限。",
+  "cost": "对方还在等我们答应同步的进展。",
+  "approval_title": "有一条回复等你确认",
+  "approval_overdue": "对方已等了 {hours} 小时。请确认发送已拟好的回复，或决定不发。"
+}

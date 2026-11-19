@@ -697,6 +697,86 @@ Not orphaned: a done to-do; one with no Agent yet (not started, or its start fai
 
 The assistant's snapshot says it on the task's line, and a supervised task's supervisor gets the `orphaned` signal once (`docs/assistant/unified-entry.md`, "Supervision": the supervisor loop's signals). Clients that do not know the field show the to-do as before; showing it on the task card and row is each client's own work: the web (`docs/web/web.md`), Android (`docs/android/android.md`, "Closeout, decisions and tasks nobody works on") and the iOS app (`OrphanedLine`, `docs/apple/ios.md` "Closeout, orphaned tasks and answerable decisions (#3612, #3618, #3804)") do.
 
+## Outward follow-up promises
+
+For people who ask Persona to reply on their behalf, a promise to return with an
+update is work to follow up, not an external dependency to park (#9754).
+
+- Successful bot topic answers, source-group reports, task-topic updates, and
+  Inbox source replies record recognized promises. Inbox replies include GitHub
+  connector comments, confirmed drafts, and confirmed handoff replies. The
+  associated open to-do gets the exact sent wording, original topic link, and
+  deadline in its notes. A promise with no open task gets a supervised follow-up
+  to-do. The ledger is an assistant-owned Postgres setting, not a JSON file.
+- Detection is deterministic and deliberately narrow: common first-person English
+  promises to share results later, and literal Chinese follow-up phrases used in
+  sent messages. Quoted lines, fenced examples, and ordinary result messages do
+  not introduce a promise. There is no extra model call or model-specific behavior.
+  Other send tools can explicitly record their actual receipt through
+  `todo_update.outward_reply`: original HTTPS topic, sent-message permalink,
+  exact text, and provider send time. Optional `promise` handles other wording;
+  `due_at` states an exact deadline. This records an already-sent message and never
+  sends one. An explicit receipt is the sender's attestation, not independent
+  verification by the provider. Its sent-message permalink must resolve to the
+  same topic: a GitHub issue/PR, a Feishu/Lark thread, or a generic HTTPS URL
+  differing only in its fragment. Unrecognized permalink relationships are
+  rejected rather than guessed. An uncertain send is not such a receipt.
+- The default deadline is 24 hours after successful sending. Recognized message
+  times are RFC3339 timestamps, numeric English/Chinese minute/hour/day durations,
+  and today/tomorrow with `HH:MM` in the owner's time zone. An explicit receipt's
+  `due_at` wins. Unsupported natural-language dates use the default; the sender
+  can supply their resolved deadline explicitly.
+- A later **successfully sent** update in the same topic fulfills earlier
+  promises there only when its preparation time is strictly after the promise's
+  successful send, including after a manager restart. An update prepared at or
+  before that send cannot fulfill the promise just because delivery finishes
+  later. An unknown preparation time cannot prove eligibility. Explicit provider
+  receipts retain their provided send time for this ordering.
+  A retry of the same delivery, an incoming reply, another topic, or a
+  failed/unconfirmed send does not.
+  GitHub comment fragments do not change the topic. A task's separate Lark work
+  topic is never substituted for its actual outward source. Newly captured
+  Feishu source requests retain their original thread id. Migrated Inbox chat
+  replies and old source reports resolve a native source chat/message with one
+  readback, bounded to two seconds. Only that exact, non-deleted source message
+  in that chat can supply the shared bot thread identity; a forwarded inner
+  message cannot. Their internal item/task URL remains the display link.
+  Unreadable or opaque sources keep an exact source-message identity (shared
+  with a report to that message), with secondary legacy accounts isolated.
+  Unthreaded legacy chats without a message anchor use their account-scoped
+  `migratedThread`, not the transient Inbox item ID. A topic without an anchor
+  stays item-scoped rather than conflating all topics in a group. No name-based
+  mapping or extra retry is attempted; unavailable source identity cannot prove
+  cross-topic fulfillment. A sender can record a verified topic explicitly.
+- At expiry the task's existing supervisor gets a source-linked blocked-work
+  signal. After another 24 hours, the task enters the existing Needs you decision
+  flow, with options to prepare an update for approval or keep waiting. Nothing is
+  sent externally by either deadline. Fulfillment updates the task's readable
+  record, retires its matching owner decision, and invalidates queued reminders;
+  unrelated decisions are not overwritten.
+- Automatic completion and supervisor acceptance cannot retire an outstanding
+  sent promise. Explicit owner completion/cancellation remains authoritative;
+  fulfillment never means that all the original task's work is accepted.
+
+Delivery and recording are separate. Source validation and local duplicate checks
+precede a relevant send's intent; a failed intent write prevents the provider
+attempt. A locally repeated reply neither prepares nor confirms another receipt.
+Only provider readback of that exact send is an older delivery; a fresh provider
+delivery keeps its actual send time. Confirmed-delivery bookkeeping is retried
+without sending again, retaining its original timestamp and deadline until the
+receipt, task notes, supervision, and task association are durable. After a
+restart, a provider's `Already` readback never fulfills another promise, whether
+its intent was saved earlier or first created by that call. Without a known
+delivery timestamp, intent time is only a conservative recording bound, not
+evidence that a fresh update was sent. An intent with no saved receipt
+is **not** promoted to delivery or fulfillment: after 24 hours it becomes a
+source-readback task and supervisor signal. This is not another outbox and never
+blindly retries a potentially delivered message.
+
+The existing supervisor watch checks these deadlines (normally every 30 seconds);
+there is no user-created recurring patrol or extra scheduling setup. These
+obligations are the opposite direction from #9601's named-person reply waits.
+
 ## Decision records
 
 A standing authorization answer records an Agent decision naming the grant, original user words and source. It is

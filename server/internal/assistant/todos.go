@@ -1820,6 +1820,9 @@ func (s *Service) failTodoIf(ctx context.Context, id, reason string, keep func(T
 // began; false when the user got there first (done it, reopened it), it is gone, or it is a concern (never closed on
 // its own, concerns.go).
 func (s *Service) autoDoneTodo(ctx context.Context, id, reason string, work time.Time) (bool, error) {
+	if err := s.outboundCompletionError(ctx, id); err != nil {
+		return false, err
+	}
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		return false, err
 	}

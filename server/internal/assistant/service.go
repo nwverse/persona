@@ -68,6 +68,7 @@ type Service struct {
 	// id is Options.ID: the manager this assistant is.
 	id               string
 	repositoriesMu   sync.Mutex
+	outbound         outboundBook
 	repositoryConfig string
 	repositoryCheck  func(context.Context, repository.Identity) error // tests only; production uses the guarded checker
 	// repoExt is the extensions' repository providers (SetExtensions; repository_providers.go); nil: none.

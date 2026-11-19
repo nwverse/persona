@@ -503,6 +503,10 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 	var replyAsk acceptAsk
 	var draft *TodoPRStatus
 	switch g.Kind {
+	case sigReport:
+		if strings.HasPrefix(g.Key, "promise:") && !s.outboundSignalHolds(ctx, g) {
+			return prompts.SuperviseEntry{}, false
+		}
 	case sigDraftPR:
 		if t.PRURL != g.PRURL && !slices.Contains(t.PRs, g.PRURL) {
 			return prompts.SuperviseEntry{}, false

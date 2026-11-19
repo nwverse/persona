@@ -35,6 +35,7 @@ type Source struct {
 	Channel   string
 	ChatID    string
 	MessageID string
+	ThreadID  string
 	Text      string
 	Quote     string
 }
@@ -125,7 +126,7 @@ func (s *Service) openFromElsewhere(ctx context.Context, src Source) (Todo, erro
 	ev.Message.Content = string(c)
 	ev.Sender.SenderType, ev.Sender.SenderID.OpenID = "app", ""
 	todo, fail := s.openTodoIn(ctx, ev, st, feishubot.Content{Text: text}, text, quote, topic,
-		&TodoSource{Channel: src.Channel, ChatID: src.ChatID, MessageID: src.MessageID})
+		&TodoSource{Channel: src.Channel, ChatID: src.ChatID, MessageID: src.MessageID, ThreadID: src.ThreadID})
 	if fail != "" {
 		s.botNoteTo(ctx, topic.target(), posted.MessageID, fail) // the topic was opened: it says why nothing came of it
 		return Todo{}, errors.New(fail)
@@ -159,7 +160,7 @@ func (s *Service) openInOwnerChat(ctx context.Context, st FeishuStatus, src Sour
 	ev.Message.Content = string(c)
 	ev.Sender.SenderType = "app"
 	todo, fail := s.openTodoIn(ctx, ev, st, feishubot.Content{Text: text}, text, quote, nil,
-		&TodoSource{Channel: src.Channel, ChatID: src.ChatID, MessageID: src.MessageID, Anchor: posted.MessageID})
+		&TodoSource{Channel: src.Channel, ChatID: src.ChatID, MessageID: src.MessageID, ThreadID: src.ThreadID, Anchor: posted.MessageID})
 	if fail != "" {
 		s.botNoteTo(ctx, feishuTarget{}, posted.MessageID, fail) // the first message was posted: it says why nothing came of it
 		return Todo{}, errors.New(fail)
@@ -239,7 +240,7 @@ func (s *Service) feishuElsewhere(ev feishubot.MessageEvent, st FeishuStatus) {
 	say := func(key string, args ...i18n.Args) {
 		s.botNoteTo(ctx, where, msg.MessageID, i18n.T(l, "assistant-feishu."+key, args...))
 	}
-	src := Source{Channel: channel.Feishu, ChatID: msg.ChatID, MessageID: msg.MessageID, Text: rest}
+	src := Source{Channel: channel.Feishu, ChatID: msg.ChatID, MessageID: msg.MessageID, ThreadID: msg.ThreadID, Text: rest}
 	if msg.ParentID != "" {
 		src.Quote = s.elsewhereQuote(ctx, msg.ParentID)
 	}

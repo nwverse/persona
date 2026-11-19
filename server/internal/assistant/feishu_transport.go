@@ -3,7 +3,9 @@ package assistant
 import (
 	"cmp"
 	"context"
+	"fmt"
 
+	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/feishubot"
 )
 
@@ -25,6 +27,7 @@ func (s *Service) botPostKeyed(ctx context.Context, replyTo string, card *feishu
 // zero value is what the calls always did.
 type feishuTarget struct {
 	ChatID   string
+	ThreadID string // observed source identity, not a separate transport parameter
 	InThread bool
 	// NoDetour: a reply whose parent is gone fails (the hub's no_detour) instead of landing in the chat as a message of
 	// its own: for what belongs under that parent or nowhere (a to-do's line into its topic, a card into a topic).
@@ -84,7 +87,21 @@ func (s *Service) botNote(ctx context.Context, messageID, text string) {
 
 // botNoteTo is botNote to a target.
 func (s *Service) botNoteTo(ctx context.Context, to feishuTarget, messageID, text string) {
-	if err := s.appCall(ctx, AppFeishu, FeishuText, to.params(map[string]any{"reply_to": messageID, "text": text}), nil); err != nil {
+	r := outboundReply{}
+	if to.ChatID != "" && to.ThreadID != "" {
+		r = outboundReply{Topic: "lark-bot/" + to.ChatID + "/" + to.ThreadID, Text: text,
+			URL: outboundTopicURL(to.ChatID, to.ThreadID, messageID)}
+		r.ID = "note:" + outboundID(r.Topic, fmt.Sprintf("%s:%t:%s", messageID, to.InThread, text))
+		if t, ok := s.todoOfThread(TodoThread{Channel: channel.Feishu, ChatID: to.ChatID, ThreadID: to.ThreadID}); ok {
+			r.TodoID, r.Origin = t.ID, t.Origin
+		}
+	}
+	if err := s.deliverOutbound(ctx, r, func() error {
+		if s.outboundTracksTopic(r) {
+			to.NoDetour = true
+		}
+		return s.appCall(ctx, AppFeishu, FeishuText, to.params(map[string]any{"reply_to": messageID, "text": text}), nil)
+	}); err != nil {
 		s.logf("bots: note: %v", err)
 	}
 }
