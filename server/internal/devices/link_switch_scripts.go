@@ -3,6 +3,7 @@ package devices
 import (
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/nodeproto"
@@ -26,8 +27,16 @@ const (
 )
 
 // lsStagePrefix names the staged build in the data directory's bin (with the operation id): a hidden name nothing
-// runs, which install links into place.
+// runs, which install links into place. Only a switch makes files of this name (the staged build, and its .node
+// marker: a node service was there when the installer ran), so a stage and an uninstall remove every one of them.
 const lsStagePrefix = ".persona-link-switch-"
+
+// lsNodeBackup is where persona-link's node switch keeps a service file it replaced until the new node answers: its
+// installer may put that back, so it counts as a node service the computer has.
+const lsNodeBackup = "node-switch.backup"
+
+// lsStagedAll is every file a switch staged or marked, as an sh glob.
+var lsStagedAll = `"$B"/` + shellQuote(lsStagePrefix) + `*`
 
 // The names under the data directory and the user's systemd units, current and older.
 var (
@@ -71,6 +80,10 @@ func lsLinkPaths() string {
 		lsIn("U", lsLinkUnit), lsIn("U", lsLegacyLinkUnit)}, " ")
 }
 
+// lsNodeThere sets n=1 when the computer has a node service (either name), or one persona-link may put back.
+var lsNodeThere = `n=0; for p in ` + lsIn("U", lsNodeUnit) + ` ` + lsIn("U", lsLegacyNodeUnit) + ` ` + lsIn("D", lsNodeBackup) +
+	`; do if e "$p"; then n=1; fi; done`
+
 // lsSum sets s to the sha-256 (hex) of the file in shell variable file, "" when nothing here computes one.
 func lsSum(file string) string {
 	return `if command -v sha256sum >/dev/null 2>&1; then s=$(sha256sum < "$` + file + `"); ` +
@@ -84,7 +97,8 @@ func lsStaged(op string) string { return lsIn("B", lsStagePrefix+op) }
 
 // lsProbeScript looks at the computer and changes nothing: it prints os, arch, systemd (a user manager answers),
 // linger, link (Persona Link there already), custom (another data directory than ~/.persona would be used),
-// node_unit (a node service exists), node_bin (a node program to run as one) and end=1 last. Exit 0.
+// node_unit (a node service exists, or a backup of one persona-link may restore), node_bin (a node program to run as
+// one) and end=1 last. Exit 0.
 func lsProbeScript(p lsPaths) string {
 	current, legacy := compat.EnvNames("PERSONA_HOME")
 	lines := append(lsPrelude(),
@@ -93,7 +107,7 @@ func lsProbeScript(p lsPaths) string {
 		`if [ -e `+shellQuote(p.linger)+`/"$(id -un)" ]; then echo linger=1; else echo linger=0; fi`,
 		`k=0; for p in `+lsLinkPaths()+`; do if e "$p"; then k=1; fi; done; echo "link=$k"`,
 		`c=0; if [ -n "${`+current+`:-}" ] || [ -n "${`+legacy+`:-}" ]; then c=1; fi; if e "$O" && ! [ "$O" -ef "$D" ]; then c=1; fi; echo "custom=$c"`,
-		`n=0; for p in `+lsIn("U", lsNodeUnit)+` `+lsIn("U", lsLegacyNodeUnit)+`; do if e "$p"; then n=1; fi; done; echo "node_unit=$n"`,
+		lsNodeThere+`; echo "node_unit=$n"`,
 		`x=0; for p in `+lsIn("B", nodeproto.ProgramPersonad)+` `+lsIn("B", nodeproto.ProgramPersonaNode)+` `+lsIn("B", compat.DaemonBinary)+
 			`; do if [ -f "$p" ] && [ -x "$p" ]; then x=1; fi; done; echo "node_bin=$x"`,
 		"echo end=1")
@@ -105,7 +119,7 @@ func lsProbeScript(p lsPaths) string {
 func lsStageScript(op, sum string) string {
 	return lsScript("set -u", `B="$HOME/.persona/bin"`, "f="+lsStaged(op),
 		`mkdir -p "$B" || exit `+strconv.Itoa(lsExitStageWrite),
-		`rm -f "$f"`,
+		`rm -f `+lsStagedAll, // what an earlier switch left
 		`if ! gzip -dc > "$f"; then rm -f "$f"; exit `+strconv.Itoa(lsExitStageCopy)+`; fi`,
 		`chmod 755 "$f" || { rm -f "$f"; exit `+strconv.Itoa(lsExitStageWrite)+`; }`,
 		lsSum("f"),
@@ -116,23 +130,29 @@ func lsStageScript(op, sum string) string {
 
 // lsInstallScript refuses when Persona Link appeared since the probe, links the staged build of op into place as
 // bin/persona-link (never over a file there), says placed=1, and runs its installer with the pairing link on stdin
-// (`install --pair -` reads it to EOF): the script's exit is the installer's from there, and paired=1 says the
-// installer got as far as pairing (link.json is there), so its link may still come.
-func lsInstallScript(op string) string {
+// (`install --pair -` reads it to EOF), for at most limit where `timeout` exists, so it never outlives the ssh run and
+// races a rollback: the script's exit is the installer's from there, and paired=1 says the installer got as far as
+// pairing (link.json is there), so its link may still come. node_unit=1 (and the staged name's .node marker, which
+// the uninstall reads) says a node service was there just before the installer ran: not this switch's to remove.
+func lsInstallScript(op string, limit time.Duration) string {
+	secs := strconv.Itoa(max(int((limit+time.Second-1)/time.Second), 1))
 	lines := append(lsPrelude(), "f="+lsStaged(op), "t="+lsIn("B", lsLinkBin),
 		`for p in `+lsLinkPaths()+`; do if e "$p"; then rm -f "$f"; exit `+strconv.Itoa(lsExitInstallExists)+`; fi; done`,
 		`[ -f "$f" ] || exit `+strconv.Itoa(lsExitInstallStaged),
 		`ln "$f" "$t" 2>/dev/null || { rm -f "$f"; exit `+strconv.Itoa(lsExitInstallPlace)+`; }`,
 		`rm -f "$f"`, "echo placed=1",
-		`"$t" install --pair -`, "x=$?",
+		lsNodeThere+`; if [ "$n" = 1 ]; then : > "$f.node"; echo node_unit=1; fi`,
+		`if command -v timeout >/dev/null 2>&1; then timeout `+secs+` "$t" install --pair -; else "$t" install --pair -; fi`, "x=$?",
 		`if [ -e `+lsIn("D", "link.json")+` ]; then echo paired=1; fi`, `exit "$x"`)
 	return lsScript(lines...)
 }
 
-// lsUninstallScript undoes what the switch of op may have set up and checks it is gone: the staged build always;
-// with node, the node service persona-link installed (there was none before); with purge, Persona Link's service,
-// pairing, logs and program. Either runs only through the program this switch sent (bin/persona-link of sha-256 sum),
-// never another one found there. clean=1, or lsExitUninstallStays when anything of it is still there.
+// lsUninstallScript undoes what the switch of op may have set up and checks it is gone: every staged file always;
+// with node, the node service persona-link installed (there was none before: not when the install found one, its
+// .node marker, which it then says as node_unit=1); with purge, Persona Link's service, pairing, logs and program.
+// Either runs only through the program this switch sent (bin/persona-link of sha-256 sum), never another one found
+// there. clean=1, or lsExitUninstallStays when anything of it is still there. The marker goes last, so an uninstall
+// cut short and run again still sees it.
 func lsUninstallScript(op, sum string, node, purge bool) string {
 	flag := func(b bool) string {
 		if b {
@@ -142,11 +162,13 @@ func lsUninstallScript(op, sum string, node, purge bool) string {
 	}
 	lines := append(lsPrelude(), "f="+lsStaged(op), "t="+lsIn("B", lsLinkBin),
 		"node="+flag(node), "purge="+flag(purge), "want="+shellQuote(sum),
+		`if e "$f.node"; then node=0; echo node_unit=1; fi`,
 		`rm -f "$f"`,
 		`ours=0; if [ -f "$t" ] && ! [ -L "$t" ]; then `+lsSum("t")+`; if [ -n "$want" ] && [ "$s" = "$want" ]; then ours=1; fi; fi`,
 		`if [ "$node" = 1 ] && [ "$ours" = 1 ] && e `+lsIn("U", lsNodeUnit)+`; then "$t" node uninstall </dev/null >/dev/null 2>&1; echo "node_uninstall=$?"; fi`,
 		`if [ "$purge" = 1 ] && [ "$ours" = 1 ]; then "$t" uninstall --purge </dev/null >/dev/null 2>&1; echo "purge=$?"; fi`,
-		`bad=0; if e "$f"; then bad=1; fi`,
+		`rm -f `+lsStagedAll,
+		`bad=0; for p in `+lsStagedAll+`; do if e "$p"; then bad=1; fi; done`,
 		`if [ "$node" = 1 ] && e `+lsIn("U", lsNodeUnit)+`; then bad=1; fi`,
 		`if [ "$purge" = 1 ]; then for p in "$t" `+lsIn("D", "link.json")+` `+lsIn("U", lsLinkUnit)+`; do if e "$p"; then bad=1; fi; done; fi`,
 		`if [ "$bad" = 0 ]; then echo clean=1; else exit `+strconv.Itoa(lsExitUninstallStays)+`; fi`)

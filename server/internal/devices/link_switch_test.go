@@ -58,6 +58,9 @@ type lsHub struct {
 	endFail int
 	endCode string
 	onBegin func()
+	onEnd   func(p devicewire.LinkSwitchEnd)
+	// beginErr: begin fails with it after switching the entry (an error the hub did not code as a refusal).
+	beginErr error
 }
 
 func remarshal(in, out any) error {
@@ -75,7 +78,7 @@ func (hub *lsHub) Call(ctx context.Context, method string, params, out any) erro
 		_ = remarshal(params, &p)
 		hub.mu.Lock()
 		hub.begins = append(hub.begins, p)
-		refuse, drop, hook := hub.refuse, hub.drop, hub.onBegin
+		refuse, drop, hook, berr := hub.refuse, hub.drop, hub.onBegin, hub.beginErr
 		hub.mu.Unlock()
 		hub.h.note("hub begin")
 		if refuse != "" {
@@ -88,15 +91,21 @@ func (hub *lsHub) Call(ctx context.Context, method string, params, out any) erro
 		if drop {
 			return rpc.ErrDropped
 		}
+		if berr != nil {
+			return berr
+		}
 		return remarshal(devicewire.LinkSwitchBegun{Link: lsTestLink, PairHash: lsTestHash}, out)
 	case devicewire.MethodLinkSwitchEnd:
 		var p devicewire.LinkSwitchEnd
 		_ = remarshal(params, &p)
 		hub.mu.Lock()
 		hub.ends = append(hub.ends, p)
-		n, fail, code := len(hub.ends), hub.endFail, hub.endCode
+		n, fail, code, hook := len(hub.ends), hub.endFail, hub.endCode, hub.onEnd
 		hub.mu.Unlock()
 		hub.h.note("hub end " + p.Outcome)
+		if hook != nil {
+			hook(p)
+		}
 		if fail < 0 || n <= fail {
 			return errors.New("the hub is away")
 		}
@@ -170,8 +179,9 @@ type lsHarness struct {
 }
 
 // lsStubLink is the build the tests send: persona-link's commands as a switch uses them, against $HOME. The
-// installer writes what came on its stdin to .pair-got; files in $HOME make it fail before it paired (.fail-pair), after
-// it paired (.fail-install), never connect (.no-connect) or fail to uninstall (.fail-uninstall).
+// installer writes what came on its stdin to .pair-got and puts a node service back from node-switch.backup, as
+// persona-link's does; files in $HOME make it hang (.hang), fail before it paired (.fail-pair), after it paired
+// (.fail-install), never connect (.no-connect) or fail to uninstall (.fail-uninstall).
 const lsStubLink = `#!/bin/sh
 D="$HOME/.persona"; U="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 case "$1 $2" in
@@ -179,9 +189,11 @@ case "$1 $2" in
 "install --pair")
 	[ "$3" = "-" ] || exit 2
 	cat > "$D/.pair-got"
+	if [ -e "$HOME/.hang" ]; then exec sleep 30; fi
 	if [ -e "$HOME/.fail-pair" ]; then exit 1; fi
 	mkdir -p "$U"
 	echo '{}' > "$D/link.json"
+	if [ -e "$D/node-switch.backup" ]; then mv "$D/node-switch.backup" "$U/personad-node.service"; fi
 	[ -e "$U/personad-node.service" ] || echo written-by-the-installer > "$U/personad-node.service"
 	echo unit > "$U/persona-link.service"
 	if [ -e "$HOME/.fail-install" ]; then exit 1; fi
@@ -729,7 +741,6 @@ func TestLinkSwitchBeginRefused(t *testing.T) {
 		devicewire.LinkSwitchCodeUnavailable:  proto.LinkSwitchReasonLinkUnavailable,
 		devicewire.LinkSwitchCodeExistingLink: proto.LinkSwitchReasonExistingLink,
 		"unknown_method":                      proto.LinkSwitchReasonHubOld,
-		"something_new":                       proto.LinkSwitchReasonUnknown,
 	} {
 		t.Run(code, func(t *testing.T) {
 			h := newLSHarness(t, lsOptions{})
@@ -1082,6 +1093,10 @@ func TestLinkSwitchAvailability(t *testing.T) {
 		{"default remote_bin", mc{Kind: "ssh", RemoteBin: "~/.persona/bin/personad"}, linux, true, nil, &proto.MachineLinkSwitch{Available: true}},
 		{"data directory", mc{Kind: "ssh"}, proto.NodeInfo{OS: "linux", Arch: "amd64", Home: "/home/me", DataDir: "/srv/persona"}, true, nil,
 			&proto.MachineLinkSwitch{Reason: proto.LinkSwitchReasonCustomNode}},
+		{"data directory with a trailing slash", mc{Kind: "ssh"}, proto.NodeInfo{OS: "linux", Arch: "amd64", Home: "/home/me", DataDir: "/home/me/.persona/"},
+			true, nil, &proto.MachineLinkSwitch{Available: true}},
+		{"data directory not said (an older node: the probe looks)", mc{Kind: "ssh"}, proto.NodeInfo{OS: "linux", Arch: "amd64", Home: "/home/me"},
+			true, nil, &proto.MachineLinkSwitch{Available: true}},
 		{"offline", mc{Kind: "ssh"}, linux, false, nil, &proto.MachineLinkSwitch{Reason: proto.LinkSwitchReasonOffline}},
 		{"never connected", mc{Kind: "ssh"}, proto.NodeInfo{}, false, nil, &proto.MachineLinkSwitch{Reason: proto.LinkSwitchReasonOffline}},
 		{"mac", mc{Kind: "ssh"}, proto.NodeInfo{OS: "darwin", Arch: "arm64", Home: "/Users/me", DataDir: "/Users/me/.persona"}, true, nil,
@@ -1236,13 +1251,14 @@ func TestLinkSwitchEndAnswers(t *testing.T) {
 		{devicewire.LinkSwitchCodeNoMachine, lsTestHash, true, true},
 		{devicewire.LinkSwitchCodeNoMachine, "", false, true},
 		{"invalid_params", lsTestHash, false, true},
+		{devicewire.LinkSwitchCodeSucceeded, lsTestHash, true, true},
 		{devicewire.LinkSwitchCodeChanged, lsTestHash, false, false},
 	} {
 		t.Run(c.code+"/"+c.hash[:min(len(c.hash), 4)], func(t *testing.T) {
 			h := newLSHarness(t, lsOptions{})
 			h.hub.endCode = c.code
 			r := &linkSwitchRun{d: h.d, t: lsTestTimes, rec: linkSwitchRecord{MachineID: "box", Operation: "ls_1", PairHash: c.hash}}
-			if got := r.end(context.Background(), devicewire.LinkSwitchRolledBack, 300*time.Millisecond); got != c.want {
+			if got, _ := r.end(context.Background(), devicewire.LinkSwitchRolledBack, 300*time.Millisecond); got != c.want {
 				t.Errorf("end confirmed %t, want %t", got, c.want)
 			}
 			if _, ends := h.hub.calls(); (len(ends) == 1) != c.once {
@@ -1275,12 +1291,14 @@ func TestLinkSwitchInstallerThatNeverPairedFailsAtOnce(t *testing.T) {
 		name  string
 		setup func(h *lsHarness)
 		wait  bool
+		want  string // "": install_failed
 	}{
-		{"never paired", func(h *lsHarness) { h.force["install"], h.forceOut["install"] = 1, "placed=1\n" }, false},
-		{"paired", func(h *lsHarness) { h.force["install"], h.forceOut["install"] = 1, "placed=1\npaired=1\n" }, true},
-		{"ssh failed", func(h *lsHarness) { h.force["install"], h.forceOut["install"] = 255, "placed=1\n" }, true},
-		{"the installer, before pairing", func(h *lsHarness) { mustWrite(t, filepath.Join(h.home, ".fail-pair"), "", 0o644) }, false},
-		{"the installer, after pairing", func(h *lsHarness) { mustWrite(t, filepath.Join(h.home, ".fail-install"), "", 0o644) }, true},
+		{"never paired", func(h *lsHarness) { h.force["install"], h.forceOut["install"] = 1, "placed=1\n" }, false, ""},
+		{"paired", func(h *lsHarness) { h.force["install"], h.forceOut["install"] = 1, "placed=1\npaired=1\n" }, true, ""},
+		{"ssh failed after placing", func(h *lsHarness) { h.force["install"], h.forceOut["install"] = 255, "placed=1\n" }, true, ""},
+		{"ssh failed before placing", func(h *lsHarness) { h.force["install"] = 255 }, true, proto.LinkSwitchReasonLinkTimeout},
+		{"the installer, before pairing", func(h *lsHarness) { mustWrite(t, filepath.Join(h.home, ".fail-pair"), "", 0o644) }, false, ""},
+		{"the installer, after pairing", func(h *lsHarness) { mustWrite(t, filepath.Join(h.home, ".fail-install"), "", 0o644) }, true, ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			h := newLSHarness(t, lsOptions{setup: func(h *lsHarness) {
@@ -1296,8 +1314,8 @@ func TestLinkSwitchInstallerThatNeverPairedFailsAtOnce(t *testing.T) {
 				return r != nil && (r.Phase == proto.LinkSwitchPhaseRollingBack || r.finished())
 			})
 			rec := h.finished()
-			if rec.Phase != proto.LinkSwitchPhaseFailed || rec.Error != proto.LinkSwitchReasonInstallFailed || rec.RollbackUnconfirmed {
-				t.Fatalf("record %+v", rec)
+			if want := orDefault(c.want, proto.LinkSwitchReasonInstallFailed); rec.Phase != proto.LinkSwitchPhaseFailed || rec.Error != want || rec.RollbackUnconfirmed {
+				t.Fatalf("record %+v, want %s", rec, want)
 			}
 			if c.wait && took < connect {
 				t.Errorf("rolling back after %s, before the link had its %s", took, connect)
@@ -1310,6 +1328,204 @@ func TestLinkSwitchInstallerThatNeverPairedFailsAtOnce(t *testing.T) {
 			}
 			if h.exists(".persona/bin/persona-link") || h.exists(".persona/link.json") || !h.d.sshOnline("box") {
 				t.Error("not rolled back")
+			}
+		})
+	}
+}
+
+// A node service the computer has, or one persona-link may put back from its node switch's backup, is never removed
+// by a rollback: found by the probe, found by the install just before the installer ran (it appeared since), or
+// marked on the computer by that install when the manager's record lost it (a restart).
+func TestLinkSwitchRollbackKeepsANodeServiceThatWasThere(t *testing.T) {
+	unit := func(h *lsHarness) string { return filepath.Join(h.units, "personad-node.service") }
+	for _, c := range []struct {
+		name  string
+		setup func(h *lsHarness)
+	}{
+		{"a backup when it probed", func(h *lsHarness) {
+			mustWrite(t, filepath.Join(h.persona, lsNodeBackup), "the computer's own", 0o644)
+		}},
+		{"a backup since", func(h *lsHarness) {
+			h.hub.onBegin = func() { mustWrite(t, filepath.Join(h.persona, lsNodeBackup), "the computer's own", 0o644) }
+		}},
+		{"a service since", func(h *lsHarness) {
+			h.hub.onBegin = func() { mustWrite(t, unit(h), "the computer's own", 0o644) }
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := newLSHarness(t, lsOptions{setup: func(h *lsHarness) {
+				mustWrite(t, filepath.Join(h.home, ".fail-install"), "", 0o644)
+				c.setup(h)
+			}})
+			h.start()
+			rec := h.finished()
+			if rec.Error != proto.LinkSwitchReasonInstallFailed || rec.RollbackUnconfirmed || !rec.NodeUnitExisted {
+				t.Fatalf("record %+v", rec)
+			}
+			if b, err := os.ReadFile(unit(h)); string(b) != "the computer's own" {
+				t.Errorf("the computer's node service was removed: %q %v", b, err)
+			}
+			if h.exists(".persona/link.json") || h.exists(".persona/bin/persona-link") {
+				t.Error("what the switch set up is left")
+			}
+		})
+	}
+	t.Run("marked on the computer, lost by the record", func(t *testing.T) {
+		h := newLSHarness(t, lsOptions{kind: kindLink})
+		sum, _ := fileSHA256(h.pkg)
+		op := "ls_00112233aabbccdd"
+		b, _ := os.ReadFile(h.pkg)
+		mustWrite(t, filepath.Join(h.binOf, "persona-link"), string(b), 0o755)
+		mustWrite(t, filepath.Join(h.persona, "link.json"), "{}", 0o600)
+		mustWrite(t, filepath.Join(h.units, "persona-link.service"), "unit", 0o644)
+		mustWrite(t, unit(h), "the computer's own", 0o644)
+		mustWrite(t, filepath.Join(h.home, stagedName(op)+".node"), "", 0o644)
+		_ = h.store.PutSetting(context.Background(), linkSwitchKey("box"), linkSwitchRecord{Operation: op, MachineID: "box",
+			Phase: proto.LinkSwitchPhaseConnecting, Deadline: time.Now(), SSHHost: "box.example", SHA256: sum, BeginIntended: true,
+			PairHash: lsTestHash, Install: lsInstallRunning})
+		h.d.resumeLinkSwitches(context.Background())
+		rec := h.finished()
+		if rec.Error != proto.LinkSwitchReasonInterrupted || rec.RollbackUnconfirmed || !rec.NodeUnitExisted {
+			t.Fatalf("record %+v", rec)
+		}
+		if b, err := os.ReadFile(unit(h)); string(b) != "the computer's own" {
+			t.Errorf("the computer's node service was removed: %q %v", b, err)
+		}
+		if h.exists(".persona/link.json") || h.exists(stagedName(op)+".node") {
+			t.Error("not cleaned up")
+		}
+	})
+}
+
+// The record says succeeded before the hub is told, and a rollback the hub answers already_succeeded (a record that
+// missed the success) ends succeeded with nothing removed.
+func TestLinkSwitchNeverRollsBackASuccess(t *testing.T) {
+	t.Run("recorded first", func(t *testing.T) {
+		h := newLSHarness(t, lsOptions{})
+		var stored linkSwitchRecord
+		h.hub.onEnd = func(devicewire.LinkSwitchEnd) {
+			if stored.Phase == "" { // as it was when the hub was first told
+				_, _ = h.store.Setting(context.Background(), linkSwitchKey("box"), &stored)
+			}
+		}
+		h.start()
+		if rec := h.finished(); rec.Phase != proto.LinkSwitchPhaseSucceeded {
+			t.Fatalf("record %+v", rec)
+		}
+		if stored.Phase != proto.LinkSwitchPhaseSucceeded {
+			t.Errorf("the hub was told before the record said succeeded: %+v", stored)
+		}
+	})
+	t.Run("the hub saw it succeed", func(t *testing.T) {
+		h := newLSHarness(t, lsOptions{kind: kindLink})
+		h.hub.endCode = devicewire.LinkSwitchCodeSucceeded
+		b, _ := os.ReadFile(h.pkg)
+		mustWrite(t, filepath.Join(h.binOf, "persona-link"), string(b), 0o755)
+		mustWrite(t, filepath.Join(h.persona, "link.json"), "{}", 0o600)
+		sum, _ := fileSHA256(h.pkg)
+		_ = h.store.PutSetting(context.Background(), linkSwitchKey("box"), linkSwitchRecord{Operation: "ls_1", MachineID: "box",
+			Phase: proto.LinkSwitchPhaseConnecting, Deadline: time.Now(), SSHHost: "box.example", SHA256: sum, BeginIntended: true,
+			PairHash: lsTestHash, Install: lsInstallPlaced})
+		h.d.resumeLinkSwitches(context.Background())
+		rec := h.finished()
+		if rec.Phase != proto.LinkSwitchPhaseSucceeded || rec.Error != "" {
+			t.Fatalf("record %+v", rec)
+		}
+		if got := h.whats(); len(got) > 0 {
+			t.Errorf("ssh runs %q", got)
+		}
+		if !h.exists(".persona/link.json") || !h.exists(".persona/bin/persona-link") {
+			t.Error("Persona Link was removed")
+		}
+	})
+}
+
+// The installer is bounded inside the install run (`timeout`), so it never runs on past it into the rollback.
+func TestLinkSwitchInstallerIsBounded(t *testing.T) {
+	if !strings.Contains(lsInstallScript("ls_1", 150*time.Second), "timeout 150 ") {
+		t.Errorf("the default install is not bounded at 150 s: %s", lsInstallScript("ls_1", 150*time.Second))
+	}
+	if _, err := exec.LookPath("timeout"); err != nil {
+		t.Skip("no timeout here")
+	}
+	h := newLSHarness(t, lsOptions{setup: func(h *lsHarness) {
+		h.d.switches.times.Install = 4 * time.Second // the installer gets 2 s
+		mustWrite(t, filepath.Join(h.home, ".hang"), "", 0o644)
+	}})
+	h.start()
+	rec := h.finished()
+	if rec.Error != proto.LinkSwitchReasonInstallFailed || rec.InstallerExit == nil || *rec.InstallerExit != 124 {
+		t.Fatalf("the installer was not cut off by its own bound: %+v", rec)
+	}
+}
+
+// Files an earlier switch left (a staged build, a marker) are removed by the next stage and by an uninstall.
+func TestLinkSwitchRemovesStaleStagedFiles(t *testing.T) {
+	stale := []string{stagedName("ls_old"), stagedName("ls_old") + ".node"}
+	for _, c := range []struct {
+		name  string
+		setup func(h *lsHarness)
+	}{
+		{"by the stage", nil},
+		{"by the uninstall", func(h *lsHarness) { h.force["stage"] = 255 }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := newLSHarness(t, lsOptions{setup: c.setup})
+			for _, rel := range stale {
+				mustWrite(t, filepath.Join(h.home, rel), "old", 0o644)
+			}
+			h.start()
+			h.finished()
+			for _, rel := range stale {
+				if h.exists(rel) {
+					t.Errorf("%s is left", rel)
+				}
+			}
+		})
+	}
+}
+
+// A restart that finds a switch whose installer never ran rolls back at once: no link can come.
+func TestLinkSwitchResumeWithoutAnInstallRollsBackAtOnce(t *testing.T) {
+	for _, install := range []string{"", lsInstallNotPlaced} {
+		t.Run(orDefault(install, "none"), func(t *testing.T) {
+			h := newLSHarness(t, lsOptions{kind: kindLink})
+			_ = h.store.PutSetting(context.Background(), linkSwitchKey("box"), linkSwitchRecord{Operation: "ls_1", MachineID: "box",
+				Phase: proto.LinkSwitchPhaseInstalling, Deadline: time.Now().Add(time.Minute), SSHHost: "box.example",
+				BeginIntended: true, PairHash: lsTestHash, Install: install})
+			begun := time.Now()
+			h.d.resumeLinkSwitches(context.Background())
+			rec := h.finished()
+			if rec.Phase != proto.LinkSwitchPhaseFailed || rec.Error != proto.LinkSwitchReasonInterrupted || rec.RollbackUnconfirmed {
+				t.Fatalf("record %+v", rec)
+			}
+			if took := time.Since(begun); took > 15*time.Second {
+				t.Errorf("waited %s for a link that cannot come", took)
+			}
+		})
+	}
+}
+
+// A begin the hub failed without one of its refusals (an uncoded error) may have switched the entry: rolled back with
+// end(rolled_back) without a pairing hash, never taken as nothing changed.
+func TestLinkSwitchBeginFailingOtherwiseRollsBack(t *testing.T) {
+	for _, err := range []error{&rpc.Error{Message: "database is down"}, &rpc.Error{Code: "something_new", Message: "new"}} {
+		t.Run(err.(*rpc.Error).Code, func(t *testing.T) {
+			h := newLSHarness(t, lsOptions{})
+			h.hub.beginErr = err
+			h.start()
+			rec := h.finished()
+			if rec.Phase != proto.LinkSwitchPhaseFailed || rec.Error != proto.LinkSwitchReasonUnknown || rec.RollbackUnconfirmed {
+				t.Fatalf("record %+v", rec)
+			}
+			if _, ends := h.hub.calls(); len(ends) != 1 || ends[0].PairHash != "" || ends[0].Outcome != devicewire.LinkSwitchRolledBack {
+				t.Errorf("ends %+v", ends)
+			}
+			if got := h.whats(); slices.Contains(got, "install") {
+				t.Errorf("ssh runs %q", got)
+			}
+			if h.hub.kind() != "ssh" || !h.d.sshOnline("box") {
+				t.Error("not back on ssh")
 			}
 		})
 	}
