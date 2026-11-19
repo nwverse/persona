@@ -58,3 +58,7 @@ const (
 	LinkSwitchCodeExistingLink = "existing_link"    // the computer has a Persona Link credential or unused code already
 	LinkSwitchCodeNoMachine    = "no_machine"       // the hub has no such machine, or not of this manager
 )
+
+// LinkSwitchCodeSucceeded is end(rolled_back)'s answer for an operation the hub saw succeed: nothing is undone, the
+// switch stays done.
+const LinkSwitchCodeSucceeded = "already_succeeded"
