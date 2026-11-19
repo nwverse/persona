@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 func runJSON(t *testing.T, s *Service, self, name string, args map[string]any) (string, error) {
@@ -325,6 +326,17 @@ func TestAgentInterruptReportsOnlyAnEndedTurnAsStopped(t *testing.T) {
 	res, err = runJSON(t, s, "conv1", "agent_interrupt", map[string]any{"machine": "box", "session_id": "s1abcdef", "then": "先修测试"})
 	if err != nil || !strings.HasPrefix(res, "Stopped") || !strings.Contains(res, "queued") {
 		t.Fatalf("settled, queued: %s %v", res, err)
+	}
+
+	// The turn ended while the phone was asked, and only background work keeps the Agent Working: the node says so
+	// (#10828). Not a failed stop: the instruction still goes out.
+	queued = false
+	f.answerNode("session.interrupt", func(string, json.RawMessage) (any, error) {
+		return nil, &rpc.Error{Code: proto.CodeTurnOverBackground, Message: "the turn had already ended"}
+	})
+	res, err = runJSON(t, s, "conv1", "agent_interrupt", map[string]any{"machine": "box", "session_id": "s1abcdef", "then": "先修测试"})
+	if err != nil || !strings.HasPrefix(res, "Stopped") || !strings.Contains(res, "sent the new instruction") {
+		t.Fatalf("turn over with background work: %s %v", res, err)
 	}
 
 	// A stop the runtime could not make happen is an error, not "Stopped".
