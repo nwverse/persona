@@ -44,6 +44,7 @@ export function waitingForMerge(todo: Todo, lookup: SessionLookup | undefined, n
   if (todo.done_at || !openMergePRs(todo, now).length) return false;
   const status = todoStatus(todo, lookup);
   if (status === "failed" || status === "needs_you" || status === "interrupted" || status === "working" || status === "waiting") return false;
+  if (hasActiveAgentWork(todo, lookup)) return false;
   if (!decisionDismissed(todo) && (reviewState(todo) === "needs_user" || openAsk(todo)?.outcome === "decide" || openAsk(todo)?.outcome === "cannot")) return false;
   return true;
 }
@@ -89,6 +90,15 @@ function ms(at: string | null | undefined): number {
   if (!at) return 0;
   const v = Date.parse(at);
   return Number.isNaN(v) ? 0 : v;
+}
+
+/** Unread on one session does not hide another session's live turn or background work. */
+function hasActiveAgentWork(todo: Todo, lookup: SessionLookup | undefined): boolean {
+  return (todo.agents ?? []).some((a) => {
+    if (a.released_at || a.start_error) return false;
+    const background = lookup?.(a.machine_id, a.session_id)?.background_working;
+    return background || ["working", "waiting"].includes(todoStatus({ ...todo, agents: [a] }, lookup));
+  });
 }
 
 /** The last moment the to-do or any of its agents moved: its own times, its supervision's (reviews, reports), its
@@ -176,8 +186,8 @@ export function triage(todo: Todo, lookup: SessionLookup | undefined, now: numbe
     // Seeing a supervisor's review does not finish its open PR or turn that internal review into an external wait.
     return reviewState(todo) === "pending_review" ? at("other", "rest") : at("parked", "pr_open");
   }
-  if (status === "working" || status === "waiting") return at("working", "agent_running");
   if (todo.done_at) return at(fresh(ms(todo.done_at)) ? "just_done" : "done", "closed");
+  if (status === "working" || status === "waiting" || (!settled && hasActiveAgentWork(todo, lookup))) return at("working", "agent_running");
   // A fallback date is not a state transition: keep overdue waits visible until the hub actually wakes them.
   if (reviewState(todo) === "parked") return at("parked", "parked");
   if (!concern && acceptanceStands(todo)) return at(fresh(ms(latestReview(todo.supervision)?.at)) ? "just_done" : "done", "accepted");
