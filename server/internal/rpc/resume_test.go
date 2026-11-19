@@ -767,3 +767,59 @@ func TestResumeBusyReaderIsNotSilence(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A read loop held up past the silence check (a slow handler on the manager's side, #10829's review): the other side
+// takes the transport for dead and closes it, so the held side learns as soon as it reads again, and resumes at once,
+// well within the window, rather than after its pings went unanswered. Nothing is lost or doubled.
+func TestResumeHeldReaderLearnsAtOnce(t *testing.T) {
+	oldStale, oldCheck := resumeStale, resumeCheck
+	resumeStale, resumeCheck = 200*time.Millisecond, 20*time.Millisecond
+	t.Cleanup(func() { resumeStale, resumeCheck = oldStale, oldCheck })
+	hold := make(chan struct{})
+	var mu sync.Mutex
+	var got []int
+	l := newResumeLink(t, netshape.Config{}, 5*time.Second, true, true, func(h, n *Peer) {
+		h.OnEvent = func(_ string, params json.RawMessage) {
+			var e struct{ I int }
+			_ = json.Unmarshal(params, &e)
+			if e.I == 0 {
+				<-hold
+			}
+			mu.Lock()
+			got = append(got, e.I)
+			mu.Unlock()
+		}
+	})
+	const events = 200
+	go func() {
+		for i := range events {
+			_ = l.n.Notify("ev", map[string]int{"i": i})
+		}
+	}()
+	select {
+	case <-l.nLost: // its frames unacknowledged, nothing read
+	case <-time.After(5 * time.Second):
+		t.Fatal("the node's side never took the transport for dead")
+	}
+	close(hold)
+	select {
+	case <-l.hLost:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the held side was not told: it would have waited for its pings, past the other side's window")
+	}
+	if err := l.resume(); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(got) == events
+	})
+	mu.Lock()
+	defer mu.Unlock()
+	for i, v := range got {
+		if v != i {
+			t.Fatalf("event %d came as %d: %v", i, v, got)
+		}
+	}
+}

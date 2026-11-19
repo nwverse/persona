@@ -574,13 +574,15 @@ func (lw *laneWriter) keptAfterLocked(seq uint64) bool {
 	return lw.keep && max(lw.gapThrough, lw.ackedThrough) <= seq && seq <= lw.seq
 }
 
-// loseGen: the transport of generation gen failed; nothing more is written until resume.
-func (lw *laneWriter) loseGen(gen uint64) {
+// loseGen: the transport of generation gen failed; nothing more is written until resume. w is what it was written on.
+func (lw *laneWriter) loseGen(gen uint64) (w io.Writer) {
 	lw.mu.Lock()
 	defer lw.mu.Unlock()
-	if gen == lw.gen {
-		lw.lost = true
+	if gen != lw.gen {
+		return nil
 	}
+	lw.lost = true
+	return lw.w
 }
 
 // resume writes on w, generation gen, from now on: first again what came after peerRead, then on as before. The

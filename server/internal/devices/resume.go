@@ -19,7 +19,8 @@ import (
 // round; nothing is watched again. Refused (the node restarted), or not done within resumeWindow, the peer closes and
 // the run loop connects anew as it always did.
 
-// resumeWindow is how long a dropped connection waits to be resumed (the node keeps it as long).
+// resumeWindow is how long a dropped connection waits to be resumed, from when the manager noticed (the node keeps it
+// longer, nodeproto.ResumeKeepSeconds: it may have noticed first).
 var resumeWindow = time.Duration(nodeproto.ResumeWindowSeconds) * time.Second
 
 // resumeTryWait bounds one try: opening a transport and the rpc.resume exchange on it.

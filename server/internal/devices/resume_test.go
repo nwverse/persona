@@ -308,3 +308,16 @@ func (c *countedConn) Close() error {
 	c.closes.Add(1)
 	return c.Conn.Close()
 }
+
+// A resident node keeps a dropped connection past the longest the manager can take to notice the drop and try: it may
+// have noticed first, from an end the manager never read (#10829's review). The manager notices a transport that died
+// without a word by its next ping and the silence check after it (rpc resumeStale, 15 s).
+func TestNodeKeepsPastTheManagersNotice(t *testing.T) {
+	keep := time.Duration(nodeproto.ResumeKeepSeconds) * time.Second
+	if notice := pingInterval + 15*time.Second + resumeTryWait; keep < notice {
+		t.Fatalf("the node keeps %v, the manager may take %v to notice and try", keep, notice)
+	}
+	if keep < resumeWindow {
+		t.Fatalf("the node keeps %v, less than the manager tries (%v)", keep, resumeWindow)
+	}
+}

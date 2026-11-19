@@ -218,14 +218,22 @@ func (p *Peer) lose(err error, gen uint64) bool {
 }
 
 // loseLocked makes the connection lost (p.mu held): the writer waits, the window starts, and the returned func
-// tells OnLost (called once p.mu is let go).
+// (called once p.mu is let go) closes the lost transport and tells OnLost.
+//
+// The transport is closed, when its writer can be, so that the other side learns at its next read instead of by its
+// own checks, which can take longer than this side waits (pings a minute apart): a side that went silent because its
+// read loop was busy, not because the link died, then reads what was written up to here and resumes at once. Only
+// the lost generation's writer is closed, whatever was installed since.
 func (p *Peer) loseLocked(err error) func() {
 	rs := p.resume
 	rs.lost = true
-	p.lw.loseGen(rs.gen)
+	w := p.lw.loseGen(rs.gen)
 	p.armWindowLocked(err)
 	onLost := p.OnLost
 	return func() {
+		if c, ok := w.(io.Closer); ok {
+			_ = c.Close()
+		}
 		if onLost != nil {
 			go onLost(err)
 		}

@@ -168,9 +168,14 @@ const (
 	NodeResume = "node_resume_v1"
 )
 
-// ResumeWindowSeconds is how long a dropped connection that can resume waits for it, on the node and on the manager
-// alike: the machine shows as connected meanwhile and its calls wait, as during a reconnect.
+// ResumeWindowSeconds is how long the manager tries to resume a dropped connection that can resume, from when it
+// noticed the drop: the machine shows as connected meanwhile and its calls wait, as during a reconnect.
 const ResumeWindowSeconds = 30
+
+// ResumeKeepSeconds is how long a resident node keeps such a connection for the manager, from when it noticed the drop.
+// The node may notice first (it read the end, or its silence check fired) while nothing told the manager: its next
+// ping comes up to 30 s later and its silence check takes 15 s more, then it tries. The node keeps it past all that.
+const ResumeKeepSeconds = 60
 
 // ControlLane and BulkLane say which messages of a framed node connection go on those lanes (rpc.Peer.EnableLanes,
 // docs/protocol/protocol.md "Lanes"): a method names a request and its answer, an event itself. Every other request and

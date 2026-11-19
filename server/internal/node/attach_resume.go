@@ -18,8 +18,8 @@ import (
 // way replaces the one served, as before; one with a token this node does not have (it restarted, or the token was used)
 // is refused, and the manager connects anew.
 
-// resumeWindow is how long a resident node keeps a connection whose transport ended (nodeproto.ResumeWindowSeconds).
-var resumeWindow = time.Duration(nodeproto.ResumeWindowSeconds) * time.Second
+// resumeWindow is how long a resident node keeps a connection whose transport ended (nodeproto.ResumeKeepSeconds).
+var resumeWindow = time.Duration(nodeproto.ResumeKeepSeconds) * time.Second
 
 // firstLineWait bounds the wait for a new transport's first line: the manager writes it at once (rpc.resume, or the
 // handshake's first call), and an old one too.
