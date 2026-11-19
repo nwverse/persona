@@ -310,6 +310,113 @@ def tile_hits(browser, base, shots):
     ctx.close()
 
 
+# toast() from the page's own module (a fresh dev server: one edited since serves the app another copy of it)
+TOAST = "async (tone) => { const m = await import('/src/ui/atoms.tsx'); m.toast(tone === 'error' ? '没复制上' : '已复制', tone); }"
+TOAST_ROWS = """() => [...document.querySelectorAll('[aria-live=polite] > div:not([data-closing])')].map((e) => {
+  const r = e.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, left: r.left }; })"""
+# whether a finger on the middle of each control lands on it (not on a toast drawn over it)
+HITS_SELF = """(sels) => sels.filter((s) => { const b = document.querySelector(s); if (!b) return true; const r = b.getBoundingClientRect();
+  const e = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return !(e && (b === e || b.contains(e))); })"""
+CONTROLS = [SEND, "main [aria-label=添加文件、图片等]", "main [aria-label^=权限模式]", "main [aria-label^=选择模型]"]
+
+
+def toasts_phone(browser, base):
+    """Toasts on a phone (#11442): in the visible frame, clear of the composer's controls and of a sheet's Cancel and
+    Start; one a finger tapped still goes; the New Agent sheet's message box stays in sight with the keyboard up;
+    a wide screen keeps them at the bottom as before."""
+    ctx, page = phone(browser, 390, 844, ios=True)
+    open_pane(page, base)
+    page.evaluate(TOAST, "error")
+    page.wait_for_timeout(400)
+    dock = box(page, "[data-chat-dock]")
+    rows = page.evaluate(TOAST_ROWS)
+    if not rows or rows[-1]["bottom"] > dock["top"] + 0.5:
+        fail(f"390: the toast {rows} is not above the dock (top {dock['top']:.0f})")
+    covered = page.evaluate(HITS_SELF, CONTROLS)
+    if covered:
+        fail(f"390: a toast covers {covered}")
+    ok(f"390: the toast sits at {rows[-1]['top']:.0f}-{rows[-1]['bottom']:.0f}, over the dock; send, +, permissions and the model hit themselves")
+    page.locator(COMPOSER).tap()
+    page.evaluate("__kb(470)")
+    page.wait_for_timeout(300)
+    page.evaluate(TOAST, "info")
+    page.wait_for_timeout(400)
+    rows, top = page.evaluate(TOAST_ROWS), box(page, COMPOSER)["top"]
+    if any(r["top"] < 0 or r["bottom"] > 470.5 or r["bottom"] > top for r in rows):
+        fail(f"keyboard at 470: the toasts {rows} are not in [0, 470] above the composer (top {top:.0f})")
+    covered = page.evaluate(HITS_SELF, CONTROLS)
+    if covered:
+        fail(f"keyboard at 470: a toast covers {covered}")
+    ok(f"keyboard at 470: {len(rows)} toasts in the visible frame above the composer, the controls hit themselves")
+    page.evaluate("__kb(844)")
+    page.locator(COMPOSER).blur()
+    page.wait_for_function("!document.querySelector('[aria-live=polite] > div')", timeout=9000)
+    # a finger's tap on a toast does not hold it: the tap's compatibility mouseover gets no mouseout. On its icon, far
+    # from the close button (the browser's tap adjustment would snap a tap near it onto it, closing the toast).
+    go(page, "/overview")
+    page.wait_for_timeout(500)
+    page.evaluate(TOAST, "error")
+    page.wait_for_timeout(400)
+    r = page.evaluate(TOAST_ROWS)[-1]
+    page.touchscreen.tap(r["left"] + 16, (r["top"] + r["bottom"]) / 2)
+    page.wait_for_timeout(1000)
+    if not page.evaluate(TOAST_ROWS):
+        fail("tapping a toast's icon closed it")
+    try:
+        page.wait_for_function("!document.querySelector('[aria-live=polite] > div')", timeout=6000)
+    except Exception:
+        fail("a toast a finger tapped is still there 7 s later")
+    ok("a toast a finger tapped still goes after its time")
+
+    # the New Agent sheet: Cancel and Start stay reachable under a toast; its message box in sight with the keyboard up
+    page.get_by_role("button", name="新建 Agent").last.tap()
+    page.wait_for_selector("[role=dialog]")
+    page.wait_for_timeout(600)  # the sheet's slide
+    page.evaluate(TOAST, "error")
+    page.wait_for_timeout(400)
+    foot = box(page, "[role=dialog] [data-dialog-footer]")
+    rows = page.evaluate(TOAST_ROWS)
+    if rows[-1]["bottom"] > foot["top"] + 0.5:
+        fail(f"New Agent: the toast {rows} is not above the sheet's footer (top {foot['top']:.0f})")
+    covered = page.evaluate("""() => [...document.querySelectorAll('[role=dialog] [data-dialog-footer] button')].filter((b) => {
+      const r = b.getBoundingClientRect(); const e = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      return !(e && (b === e || b.contains(e))); }).map((b) => b.textContent.trim())""")
+    if covered:
+        fail(f"New Agent: a toast covers {covered}")
+    ok("New Agent: the toast sits over the footer; 取消 and 启动 hit themselves")
+    inside = """() => { const d = document.querySelector('[role=dialog]').getBoundingClientRect(); const f = document.activeElement;
+      const r = f.getBoundingClientRect(); return { tag: f.tagName, field: [r.top, r.bottom], sheet: [d.top, d.bottom],
+      inside: r.top >= d.top - 0.5 && r.bottom <= d.bottom + 0.5 }; }"""
+    page.locator("[role=dialog] textarea").first.tap()
+    page.wait_for_timeout(300)
+    for kb in ("500", "500, 300"):
+        page.evaluate("document.querySelector('[role=dialog] .overflow-y-auto').scrollTop = 0")
+        page.evaluate(f"__kb({kb})")
+        page.wait_for_timeout(400)
+        res = page.evaluate(inside)
+        if res["tag"] != "TEXTAREA" or not res["inside"]:
+            fail(f"New Agent with __kb({kb}): the message box is out of the sheet ({res})")
+        page.evaluate("__kb(844)")
+        page.wait_for_timeout(300)
+    ok("New Agent: with the keyboard up (__kb(500), __kb(500, 300)) the focused message box stays inside the sheet")
+    page.keyboard.press("Escape")
+    page.wait_for_selector("[role=dialog]", state="detached")
+    page.wait_for_timeout(500)
+    ctx.close()
+
+    ctx = browser.new_context(viewport={"width": 1280, "height": 900})
+    page = ctx.new_page()
+    page.on("pageerror", lambda e: ERRORS.append(str(e)))
+    open_pane(page, base, cards=False)
+    page.evaluate(TOAST, "error")
+    page.wait_for_timeout(400)
+    r = page.evaluate(TOAST_ROWS)[-1]
+    if abs(r["bottom"] - (900 - 20)) > 0.5:
+        fail(f"1280: the toast should stay 20 px over the bottom ({r})")
+    ok("1280: the toast stays at the bottom, as before")
+    ctx.close()
+
+
 def run(base, shots, hub=None):
     with sync_playwright() as p:
         browser = p.chromium.launch(channel="chrome")
@@ -539,6 +646,7 @@ def run(base, shots, hub=None):
         card_field_keyboard(browser, base, hub, shots)
         lark_keyboard(browser, base, shots)
         tile_hits(browser, base, shots)
+        toasts_phone(browser, base)
         browser.close()
     if ERRORS:
         fail(f"uncaught page errors: {ERRORS[:3]}")

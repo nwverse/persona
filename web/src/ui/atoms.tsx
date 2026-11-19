@@ -1056,6 +1056,41 @@ export function useExit(open: boolean, ms: number, play: () => (Animation | unde
 
 // ── modal dialog ────────────────────────────────────────
 
+const REVEAL_MARGIN = 8;
+
+/** Scrolls `scroller` so the field focused in it is in sight: its top when it is taller than the room. */
+function revealFocused(scroller: HTMLElement | null) {
+  const field = document.activeElement;
+  if (!scroller || !(field instanceof HTMLElement) || !field.matches("input, textarea, [contenteditable]") || !scroller.contains(field)) return;
+  const box = scroller.getBoundingClientRect();
+  const r = field.getBoundingClientRect();
+  if (r.top < box.top + REVEAL_MARGIN || r.height > box.height - 2 * REVEAL_MARGIN) scroller.scrollTop += r.top - box.top - REVEAL_MARGIN;
+  else if (r.bottom > box.bottom - REVEAL_MARGIN) scroller.scrollTop += r.bottom - box.bottom + REVEAL_MARGIN;
+}
+
+/** A sheet's body, once the keyboard has made the sheet shorter (--kb-h), scrolls its focused field back into sight.
+ *  By hand, inside the sheet: a document-level scrollIntoView could pan iOS's visual viewport away from --kb-top.
+ *  A frame later, so the keyboard's variables are written and the sheet laid out at its new height. */
+function useSheetReveal(body: React.RefObject<HTMLDivElement | null>, on: boolean) {
+  useEffect(() => {
+    if (!on) return;
+    const vv = window.visualViewport;
+    let frame = 0;
+    const later = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => revealFocused(body.current));
+    };
+    // the visual viewport on iOS; the window on Android, where the keyboard resizes the page itself
+    vv?.addEventListener("resize", later);
+    window.addEventListener("resize", later);
+    return () => {
+      cancelAnimationFrame(frame);
+      vv?.removeEventListener("resize", later);
+      window.removeEventListener("resize", later);
+    };
+  }, [body, on]);
+}
+
 /** A modal. Wide: a card in the middle of the page. Phone width (max-sm): a sheet up from the bottom of what the
  *  keyboard leaves visible (--kb-top / --kb-h), at most 90% of it, its body scrolling between the title and the footer,
  *  and Back closes it. Either way the focus moves in, Tab stays in, and goes back where it was when it closes
@@ -1089,6 +1124,8 @@ export function Dialog({
   // The dialog itself takes the focus, so a phone's keyboard does not come up for its first field (one with autoFocus
   // took it already). On close it goes back to the opener, unless the close moved it outside on purpose.
   useModalFocus(panel, open);
+  const body = useRef<HTMLDivElement>(null);
+  useSheetReveal(body, open && sheet);
   const backdrop = useRef<HTMLDivElement>(null);
   // what it showed when last open: a caller may clear what the body reads once it is closed, while it still leaves
   const kept = useRef({ title, children, footer });
@@ -1131,8 +1168,9 @@ export function Dialog({
             <IconButton icon="x" label={t("ui-atoms.close")} onClick={onClose} size={26} iconSize={14} />
           </div>
         )}
-        <div className={cx("min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pt-2 pb-4", !shown.footer && "max-sm:pb-[calc(16px+env(safe-area-inset-bottom))]")}>{shown.children}</div>
-        {shown.footer && <div className="flex shrink-0 items-center justify-end gap-2 border-t border-line bg-inset px-4 py-2.5 max-sm:pb-[calc(10px+env(safe-area-inset-bottom))]">{shown.footer}</div>}
+        <div ref={body} className={cx("min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pt-2 pb-4", !shown.footer && "max-sm:pb-[calc(16px+env(safe-area-inset-bottom))]")}>{shown.children}</div>
+        {/* data-dialog-footer: what a toast on a phone keeps clear of (Toasts) */}
+        {shown.footer && <div data-dialog-footer className="flex shrink-0 items-center justify-end gap-2 border-t border-line bg-inset px-4 py-2.5 max-sm:pb-[calc(10px+env(safe-area-inset-bottom))]">{shown.footer}</div>}
       </div>
     </div>,
     document.body,
@@ -1172,7 +1210,7 @@ function dropToast(id: number) {
   setTimeout(() => removeToast(id), EXIT_MS.toast + 120); // the exit's end may never come (a hidden tab)
 }
 
-/** Holds every toast's time while the pointer or the focus is on one (WCAG 2.2.1), and lets it run on after. */
+/** Holds every toast's time while a mouse pointer or the focus is on one (WCAG 2.2.1), and lets it run on after. */
 function pauseToasts(on: boolean) {
   if (toastsPaused === on) return;
   toastsPaused = on;
@@ -1207,9 +1245,94 @@ export function toast(text: string, tone: Toast["tone"] = "info", action?: Toast
   toastsChanged();
 }
 
+const TOAST_EDGE = 20; // bottom-5: the toasts' room under them, above the frame's edge or what they keep clear of
+const TOAST_GAP = 8; // gap-2
+
+/** How far the toasts sit above the bottom of the visible frame on a narrow screen (`--toast-lift`): clear of what
+ *  reaches into their place there, the chat's dock, or the footer of the sheet on top (the page under a modal is
+ *  covered, so only its own footer counts). Null: nothing there, the home indicator's inset applies; with the keyboard
+ *  up there is none. Also returns what it measured, for the caller to watch. */
+function toastLift(box: HTMLElement, rows: Iterable<HTMLElement>): { lift: string | null; watched: HTMLElement[] } {
+  const frame = box.getBoundingClientRect();
+  let stack = -TOAST_GAP;
+  for (const row of rows) stack += row.offsetHeight + TOAST_GAP;
+  stack = Math.max(0, stack);
+  const reach = frame.bottom - TOAST_EDGE - stack; // the stack's top with nothing to keep clear of
+  const modals = [...document.querySelectorAll<HTMLElement>('[role="dialog"][aria-modal="true"]')].filter((m) => m.getClientRects().length);
+  const top = modals[modals.length - 1];
+  const watched = [...(top ?? document).querySelectorAll<HTMLElement>(top ? "[data-dialog-footer]" : "[data-chat-dock]")];
+  let edge = Infinity;
+  for (const el of watched) {
+    const r = el.getBoundingClientRect();
+    if (r.height && r.bottom > reach && r.top < frame.bottom) edge = Math.min(edge, r.top);
+  }
+  if (edge === Infinity) return { lift: keyboardFrame(window.innerHeight, window.visualViewport) ? "0px" : null, watched };
+  // never pushed out of the top of the frame: a dock as tall as what the keyboard leaves gets them over its top part
+  const lift = Math.max(0, Math.min(frame.bottom - edge, frame.height - TOAST_EDGE - stack - TOAST_GAP));
+  return { lift: `${Math.round(lift)}px`, watched };
+}
+
+/** Keeps `--toast-lift` on `box` up to date while `on` (a toast shows on a narrow screen), and only then: what it
+ *  keeps clear of may grow (the composer's lines), come or go (a sheet, a chat), or move with the keyboard. Writes the
+ *  style itself, at most once a frame, with no React state. Returns the measure, for a list change to run at once. */
+function useToastLift(box: React.RefObject<HTMLDivElement | null>, rows: React.RefObject<Map<number, HTMLDivElement>>, on: boolean) {
+  const measure = useRef<(() => void) | null>(null);
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!on || !el) return;
+    let frame = 0;
+    let seen: HTMLElement[] = [];
+    const later = () => {
+      if (!frame) frame = requestAnimationFrame(now);
+    };
+    const resize = typeof ResizeObserver === "function" ? new ResizeObserver(later) : null;
+    const now = () => {
+      cancelAnimationFrame(frame);
+      frame = 0;
+      const { lift, watched } = toastLift(el, rows.current.values());
+      if ((lift ?? "") !== el.style.getPropertyValue("--toast-lift")) {
+        if (lift === null) el.style.removeProperty("--toast-lift");
+        else el.style.setProperty("--toast-lift", lift);
+      }
+      if (resize && (watched.length !== seen.length || watched.some((w, i) => w !== seen[i]))) {
+        resize.disconnect();
+        resize.observe(el);
+        watched.forEach((w) => resize.observe(w));
+        seen = watched;
+      }
+    };
+    // a chat or a sheet coming or going; a modal closing (it drops aria-modal at once, and leaves after its exit)
+    const changes = new MutationObserver(later);
+    changes.observe(document.body, { childList: true, subtree: true, attributeFilter: ["aria-modal"] });
+    const vv = window.visualViewport;
+    vv?.addEventListener("resize", later);
+    vv?.addEventListener("scroll", later);
+    window.addEventListener("resize", later);
+    // a sheet sliding up is measured where it ends
+    document.addEventListener("transitionend", later, true);
+    document.addEventListener("animationend", later, true);
+    measure.current = now;
+    return () => {
+      measure.current = null;
+      cancelAnimationFrame(frame);
+      resize?.disconnect();
+      changes.disconnect();
+      vv?.removeEventListener("resize", later);
+      vv?.removeEventListener("scroll", later);
+      window.removeEventListener("resize", later);
+      document.removeEventListener("transitionend", later, true);
+      document.removeEventListener("animationend", later, true);
+      el.style.removeProperty("--toast-lift");
+    };
+  }, [box, rows, on]);
+  return measure;
+}
+
 export function Toasts() {
   const [, force] = useState(0);
+  const box = useRef<HTMLDivElement>(null);
   const rows = useRef(new Map<number, HTMLDivElement>());
+  const lift = useToastLift(box, rows, useMedia(NARROW_QUERY) && toasts.length > 0);
   // where each row was on screen just before the list changed, and the glides and exits that are running
   const before = useRef(new Map<number, number>());
   const glides = useRef(new Map<number, Animation>());
@@ -1229,6 +1352,8 @@ export function Toasts() {
     };
   }, []);
   useLayoutEffect(() => {
+    // placed first: a new toast shows clear of the composer from its first frame, and the glides below see where it went
+    lift.current?.();
     // a row the list change moved slides from where it was to its new place, by transform only
     for (const item of toasts) {
       const el = rows.current.get(item.id);
@@ -1261,7 +1386,12 @@ export function Toasts() {
   useEffect(() => pauseToasts(paused), [paused]);
   useEffect(() => () => pauseToasts(false), []);
   return createPortal(
-    <div aria-live="polite" className="pointer-events-none fixed inset-x-0 bottom-5 z-[70] flex flex-col items-center gap-2 px-4">
+    // Narrow: in the visible frame (above the keyboard), lifted over what sits at its bottom (useToastLift).
+    <div
+      ref={box}
+      aria-live="polite"
+      className="pointer-events-none fixed inset-x-0 bottom-5 z-[70] flex flex-col items-center gap-2 px-4 max-lg:top-(--kb-top) max-lg:bottom-auto max-lg:h-(--kb-h) max-lg:justify-end max-lg:pb-[calc(var(--toast-lift,env(safe-area-inset-bottom))+20px)]"
+    >
       {toasts.map((item) => (
         <div
           key={item.id}
@@ -1271,8 +1401,9 @@ export function Toasts() {
           }}
           data-closing={item.leaving || undefined}
           inert={item.leaving || undefined}
-          onMouseEnter={() => setHovered(item.id)}
-          onMouseLeave={() => setHovered((h) => (h === item.id ? null : h))}
+          // a mouse only: a tap's compatibility mouseenter gets no mouseleave, and would hold the toast for good
+          onPointerEnter={(e) => e.pointerType === "mouse" && setHovered(item.id)}
+          onPointerLeave={(e) => e.pointerType === "mouse" && setHovered((h) => (h === item.id ? null : h))}
           onFocus={() => setFocused(item.id)}
           onBlur={(e) => !e.currentTarget.contains(e.relatedTarget as Node | null) && setFocused((f) => (f === item.id ? null : f))}
           className="pointer-events-auto flex max-w-md items-center gap-2 rounded-[10px] border border-tooltip-border bg-tooltip-bg px-3 py-2 text-[12.5px] text-tooltip-fg shadow-overlay"
@@ -1281,8 +1412,11 @@ export function Toasts() {
           {item.tone === "error" && <Icon name="warning" size={13} stroke={2.2} className="shrink-0 text-red" />}
           {item.tone === "ok" && <Icon name="check" size={13} stroke={2.6} className="text-green" />}
           <span className="min-w-0">{item.text}</span>
+          {/* On a touch screen the button reaches 8 px past its word on either side (padding its margins give back,
+              so the word stays put) and 44 px high, and the close button moves over so their targets meet there
+              instead of the close button's covering the gap: a tap just past the word still runs it. */}
           {item.action && (
-            <button type="button" className="ml-1 shrink-0 whitespace-nowrap font-semibold text-accent hover:underline"
+            <button type="button" className="touch-hit ml-1 shrink-0 whitespace-nowrap font-semibold text-accent hover:underline [@media(pointer:coarse)]:-mr-2 [@media(pointer:coarse)]:-ml-1 [@media(pointer:coarse)]:px-2"
               onClick={() => { item.action?.run(); dropToast(item.id); }}>
               {item.action.label}
             </button>
@@ -1292,7 +1426,7 @@ export function Toasts() {
             aria-label={t("ui-atoms.close")}
             title={t("ui-atoms.close")}
             onClick={() => dropToast(item.id)}
-            className="touch-hit -mr-1.5 ml-0.5 flex size-5 shrink-0 items-center justify-center rounded-[5px] text-tooltip-muted transition-colors duration-150 hover:bg-tooltip-border hover:text-tooltip-fg"
+            className={cx("touch-hit -mr-1.5 ml-0.5 flex size-5 shrink-0 items-center justify-center rounded-[5px] text-tooltip-muted transition-colors duration-150 hover:bg-tooltip-border hover:text-tooltip-fg", item.action && "[@media(pointer:coarse)]:ml-3")}
           >
             <Icon name="x" size={12} stroke={2.2} />
           </button>
