@@ -218,6 +218,10 @@ type Session struct {
 	AgentSurface string `json:"agent_surface,omitempty"`
 	Launcher     string `json:"launcher,omitempty"`
 	Model        string `json:"model,omitempty"`
+	// RequestedModel is the last model passed to a Persona-managed process.
+	// Nil means an older node or an observed session; an empty value means launcher default.
+	// Model remains the transcript-reported name, which a gateway may rewrite.
+	RequestedModel *string `json:"requested_model,omitempty"`
 	// PermissionMode and Effort are what Claude Code runs with now: default / acceptEdits / plan / auto /
 	// bypassPermissions, and low … max. Empty while unknown (before the first turn, Codex). A Codex thread the phone
 	// drives through its app-server has an Effort too (Codex's levels, see Efforts) but never a PermissionMode.

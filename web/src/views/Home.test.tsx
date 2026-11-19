@@ -260,21 +260,23 @@ describe("the overview", () => {
     expect(row).toContain("后台等待中");
   });
 
-  it("puts what waits for the owner above the extensions' cards, and the cards above the rest (#11092)", () => {
+  it("puts the extensions' cards last, under the agents' sections and the computers (#11147)", () => {
     const cards = (html: string) => html.indexOf("data-overview-cards");
     const asking = agent(1, 0, "needs_you");
-    const html = render([asking, agent(2, 0, "needs_you"), agent(3, 0, "working"), agent(4, 0, "unread")], [{ id: "i1", kind: "permission", machine_id: "mac", session_id: asking.session_id, tool_name: "Bash" } as Interaction]);
-    const at = [heading(html, "需要你"), heading(html, "卡住了，要你去看"), cards(html), heading(html, "工作中"), heading(html, "完成未看"), heading(html, "电脑")];
+    const bg = { background_working: true, background_waiting: true };
+    const html = render([asking, agent(2, 0, "needs_you"), agent(3, 0, "working"), agent(5, 0, "working", bg), agent(4, 0, "unread")], [{ id: "i1", kind: "permission", machine_id: "mac", session_id: asking.session_id, tool_name: "Bash" } as Interaction]);
+    const at = [heading(html, "需要你"), heading(html, "卡住了，要你去看"), heading(html, "工作中"), heading(html, "后台等待中"), heading(html, "完成未看"), heading(html, "电脑"), cards(html)];
     expect(at.every((x) => x > -1)).toBe(true);
     expect(at).toEqual([...at].sort((a, b) => a - b));
-    // nothing waits: the cards are right under the summary, before every section
-    const calm = render([agent(3, 0, "working")]);
-    expect(cards(calm)).toBeGreaterThan(-1);
-    expect(cards(calm)).toBeLessThan(heading(calm, "工作中"));
-    // before the first snapshot: the cards, then only 加载中
+    // nothing to do: the ready card and the computers still come first
+    const calm = render([]);
+    expect(calm.indexOf("一切就绪")).toBeGreaterThan(-1);
+    expect(calm.indexOf("一切就绪")).toBeLessThan(heading(calm, "电脑"));
+    expect(heading(calm, "电脑")).toBeLessThan(cards(calm));
+    // before the first snapshot: only 加载中, then the cards
     const early = render([agent(3, 0, "working")], [], { loaded: false });
-    expect(cards(early)).toBeGreaterThan(-1);
-    expect(cards(early)).toBeLessThan(early.indexOf("加载中"));
+    expect(early.indexOf("加载中")).toBeGreaterThan(-1);
+    expect(early.indexOf("加载中")).toBeLessThan(cards(early));
     render([], [], { loaded: true });
   });
 

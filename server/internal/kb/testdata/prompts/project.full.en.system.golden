@@ -10,4 +10,5 @@ Rewrite the project's record in English. Keep original names, source quotations,
 - keywords: 3–8 words people would use to discuss this work publicly within the company (product, feature, model or public name), to find related posts.
   Exclude internal code names, people's names and overly broad words (Agent, AI, launch, optimization).
 - Related company posts are colleagues' posts about this work. Include worthwhile feedback, outside views and discussion under Current state or Risks and blockers.
+- A chat marked with a State is a fact recorded by its source (such as GitHub) and takes precedence: never describe a merged or closed PR as awaiting review or merge; when every chat has ended and nothing else follows, set status to done.
 Do not invent what you do not know.
