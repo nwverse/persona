@@ -65,6 +65,18 @@ func TestPlainStartRefusalLocalization(t *testing.T) {
 	}
 }
 
+// A Stop that found the turn already over (#10828) is said in the request's language, not the node's.
+func TestTurnOverBackgroundLocalization(t *testing.T) {
+	for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
+		want := i18n.T(lang, "rpc-errors."+proto.CodeTurnOverBackground)
+		err := &rpc.Error{Code: proto.CodeTurnOverBackground, Message: i18n.T(i18n.Default, "rpc-errors."+proto.CodeTurnOverBackground), Data: json.RawMessage(`{"delivered":"none"}`)}
+		body := LocalizedBody(http.StatusConflict, proto.CodeTurnOverBackground, err, lang)
+		if body["error"] != want || body["code"] != proto.CodeTurnOverBackground {
+			t.Fatalf("%s: %v, want %q", lang, body, want)
+		}
+	}
+}
+
 func call(t *testing.T, w http.ResponseWriter, rec *httptest.ResponseRecorder, err error) map[string]any {
 	t.Helper()
 	Call(w, err)

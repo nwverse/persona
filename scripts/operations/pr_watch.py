@@ -1005,6 +1005,16 @@ class Watcher:
                                  review_attempts=0, repair_attempts=0, retry_after=0)
         if old.get("outcome") == "continuation":
             return
+        if pr.get("isCrossRepository"):
+            # Another watcher may already carry this fork head (#10881). A
+            # lookup failure raises and retries; it never opens a duplicate.
+            existing = pr_watch_repair.existing_continuation(repo, pr)
+            if existing:
+                self.state.put(repo, number, head, evidence_key=evidence_key, outcome="continuation",
+                               continuation=existing, failure=None, base=pr["baseRefOid"],
+                               repair_rounds=int(old.get("repair_rounds", 0)), format=FORMAT_VERSION)
+                self.log("%s#%s is already carried by continuation #%s; left to it" % (repo, number, existing))
+                return
         if (old.get("head") == head and old.get("evidence_key") == evidence_key
                 and old.get("outcome") == "retry" and old.get("retry_reason") == "failed_verification"):
             # The migration record is a failed verification, not a success to

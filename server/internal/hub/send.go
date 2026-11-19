@@ -396,8 +396,9 @@ func (h *Hub) sendMessageOnce(w http.ResponseWriter, r *http.Request, m *Machine
 			h.conversationSent(m.cfg.ID, sid, f.status, f.body, outcome)
 		}
 		if assistantConv && (outcome == sendUnknown || f.status >= http.StatusInternalServerError) && asSent != nil {
-			// Nothing was typed, or the connection ended before the outcome was known: the manager keeps the message and
-			// sends it again only after its landed-check, and the app is told it is kept (#10194, #10503).
+			// Nothing was typed, or the connection ended before the outcome was known: the manager keeps the message,
+			// sends it again in the first case and only looks for it in the second (the owner decides when it is not
+			// found), and the app is told it is kept (#10194, #10503, #10669).
 			keepCode := errorCodeOf(f.body)
 			if outcome == sendUnknown {
 				keepCode = assistantwire.CodeDeliveryUnknown
@@ -585,8 +586,14 @@ func (h *Hub) keepUndelivered(ctx context.Context, m *Machine, sid string, msg m
 	if code == assistantwire.CodeDeliveryUnknown {
 		tried = sendTimingOf(ctx).start
 	}
+	p := principalOf(ctx)
+	credential := ""
+	if p.Role == roleFull || p.Role == roleAnswer {
+		credential = p.ID
+	}
 	err := h.asstOf(h.sessionOwner(m.cfg.ID, sid)).call(kctx, assistantwire.MethodKeepUndelivered, assistantwire.KeepUndeliveredParams{
 		MachineID: m.cfg.ID, SessionID: sid, Params: msg, Human: personSent(ctx), Lang: string(h.contextLang(ctx)), Code: code, Error: why, TriedAt: tried,
+		CredentialID: credential,
 	}, &res)
 	if err != nil || res.Undelivered == nil {
 		h.logf("send to %s/%s: not kept for later: %v", m.cfg.ID, sid, err)

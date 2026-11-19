@@ -417,11 +417,19 @@ func (f *File) seeded(fh *os.File, w *window, b int, end int64, window []byte) M
 		pending, pendingIDs = f.codexPendingAt(fh, w, b, end, readLine)
 	}
 	// A subagent's own work starts at its first user line (a fork's copied context is its first two lines at most): a
-	// later window is past it.
+	// later window is past it. A window at the second line is past it when the first line is the subagent's prompt.
+	sawUser := b > 2
+	if b == 2 && f.meta.Sidechain {
+		if line := readLine(1); line != nil {
+			probe := Meta{Sidechain: true}
+			ParseLine(1, line, &probe)
+			sawUser = probe.sawUser
+		}
+	}
 	return Meta{Sidechain: f.meta.Sidechain, Codex: w.codex, notified: scratch.notified, taskCalls: scratch.taskCalls,
 		handbacks: scratch.handbacks, agentCalls: scratch.agentCalls, bashInput: bash,
 		Ultracode: ultra.Ultracode, UltracodeAt: ultra.UltracodeAt, UltracodeSince: ultra.UltracodeSince, ultracodeCommand: ultra.ultracodeCommand,
-		usage: usage, codexTotal: tokenuse.CodexTotalFrom(codexTotal), sawUser: b > 2,
+		usage: usage, codexTotal: tokenuse.CodexTotalFrom(codexTotal), sawUser: sawUser,
 		codexPending: pending, codexPendingIDs: pendingIDs}
 }
 

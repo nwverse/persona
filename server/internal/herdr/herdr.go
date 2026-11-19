@@ -264,6 +264,10 @@ func (c *Client) rpcOnce(ctx context.Context, method string, params any, out any
 		return fmt.Errorf("%w: %v", errNoSocket, err)
 	}
 	defer conn.Close()
+	return c.rpcConn(ctx, conn, method, params, out)
+}
+
+func (c *Client) rpcConn(ctx context.Context, conn net.Conn, method string, params any, out any) error {
 	if dl, ok := ctx.Deadline(); ok {
 		_ = conn.SetDeadline(dl)
 	}
@@ -680,6 +684,26 @@ func (c *Client) TabClose(ctx context.Context, tab string) error {
 
 func (c *Client) PaneClose(ctx context.Context, pane string) error {
 	return c.call(ctx, "pane.close", map[string]any{"pane_id": pane}, nil, "pane", "close", pane)
+}
+
+// PaneCloseIf pins the close connection before the final check. A server
+// replacement between the check and the write cannot receive the close.
+// Attempted is true once the request may have reached the original server.
+func (c *Client) PaneCloseIf(ctx context.Context, pane string, check func() bool) (attempted bool, err error) {
+	if c.Socket == "" {
+		return false, errNoSocket
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeoutOf("session.snapshot")+timeoutOf("pane.close"))
+	defer cancel()
+	conn, err := dialSocket(ctx, c.Socket)
+	if err != nil {
+		return false, err
+	}
+	defer conn.Close()
+	if !check() || ctx.Err() != nil {
+		return false, nil
+	}
+	return true, c.rpcConn(ctx, conn, "pane.close", map[string]any{"pane_id": pane}, nil)
 }
 
 // PaneSplit splits a pane (direction "right" or "down") without moving the computer's focus, the new pane starting
