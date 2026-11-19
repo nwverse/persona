@@ -1272,6 +1272,20 @@ function toastLift(box: HTMLElement, rows: Iterable<HTMLElement>): { lift: strin
   return { lift: `${Math.round(lift)}px`, watched };
 }
 
+// what toastLift measures, and what holds it (a sheet's backdrop holds its dialog)
+const LIFT_NODES = '[data-chat-dock], [role="dialog"], [data-dialog-footer]';
+
+/** Whether a mutation can move what the toasts keep clear of: an aria-modal change, or such a node added or removed. */
+function liftChanged(records: MutationRecord[]): boolean {
+  for (const r of records) {
+    if (r.type === "attributes") return true;
+    for (const nodes of [r.addedNodes, r.removedNodes]) {
+      for (const n of nodes) if (n instanceof Element && (n.matches(LIFT_NODES) || n.querySelector(LIFT_NODES))) return true;
+    }
+  }
+  return false;
+}
+
 /** Keeps `--toast-lift` on `box` up to date while `on` (a toast shows on a narrow screen), and only then: what it
  *  keeps clear of may grow (the composer's lines), come or go (a sheet, a chat), or move with the keyboard. Writes the
  *  style itself, at most once a frame, with no React state; a change to the list is measured at once. */
@@ -1302,8 +1316,9 @@ function useToastLift(box: React.RefObject<HTMLDivElement | null>, rows: React.R
         seen = watched;
       }
     };
-    // a chat or a sheet coming or going; a modal closing (it drops aria-modal at once, and leaves after its exit)
-    const changes = new MutationObserver(later);
+    // a chat or a sheet coming or going; a modal closing (it drops aria-modal at once, and leaves after its exit). Only
+    // those wake it: a sticky toast can stay all session, over a reply streaming in a node at a time.
+    const changes = new MutationObserver((records) => liftChanged(records) && later());
     changes.observe(document.body, { childList: true, subtree: true, attributeFilter: ["aria-modal"] });
     const vv = window.visualViewport;
     vv?.addEventListener("resize", later);

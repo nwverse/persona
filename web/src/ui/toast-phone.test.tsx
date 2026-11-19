@@ -13,6 +13,7 @@ let narrow = true;
 let host: HTMLDivElement;
 let root: Root;
 let extra: HTMLElement[] = [];
+let bounds: { mock: { contexts: unknown[] } };
 const rects = new Map<Element, Partial<DOMRect>>();
 const vv = Object.assign(new EventTarget(), { height: 768, width: 390, offsetTop: 0, offsetLeft: 0, scale: 1 });
 
@@ -56,7 +57,7 @@ beforeEach(() => {
   Object.defineProperty(window, "visualViewport", { configurable: true, get: () => vv });
   // the frame the container fills: --kb-top / --kb-h, the whole 768 px window by default
   rects.clear();
-  vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+  bounds = vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
     const r = this.matches("[aria-live=polite]") ? rect(vv.offsetTop, vv.offsetTop + vv.height) : rects.get(this);
     return { x: 0, y: 0, top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0, ...r, toJSON() {} } as DOMRect;
   });
@@ -128,10 +129,35 @@ describe("toasts on a narrow screen", () => {
     add("<div data-chat-dock></div>", { "[data-chat-dock]": [400, 768] });
     show("没发出去", "error");
     expect(lift()).toBe("368px");
-    add('<div role="dialog" aria-modal="true"><div data-dialog-footer></div></div>', { "[data-dialog-footer]": [700, 768] });
+    const sheet = add('<div role="dialog" aria-modal="true"><div data-dialog-footer></div></div>', { "[data-dialog-footer]": [700, 768] });
     await act(async () => {}); // the sheet came: the body's children changed (a mutation record, then a frame)
     advance(20);
     expect(lift()).toBe("68px");
+    // closing, it drops aria-modal at once: back over the dock
+    sheet.querySelector("[role=dialog]")!.removeAttribute("aria-modal");
+    await act(async () => {});
+    advance(20);
+    expect(lift()).toBe("368px");
+  });
+
+  it("is not woken by changes that cannot move it: a reply streaming into the chat measures nothing", async () => {
+    const page = add("<div data-chat-dock></div><div data-chat-log><p></p></div>", { "[data-chat-dock]": [560, 768] });
+    const dock = page.querySelector("[data-chat-dock]");
+    const log = page.querySelector("[data-chat-log]")!;
+    show("没发出去", "error");
+    const measured = () => bounds.mock.contexts.filter((c) => c === dock).length;
+    const before = measured();
+    for (let i = 0; i < 20; i++) {
+      log.appendChild(document.createElement("p")).textContent = `第 ${i} 段`;
+      log.firstElementChild!.appendChild(document.createTextNode("…"));
+      await act(async () => {});
+      advance(20);
+    }
+    log.firstElementChild!.remove();
+    await act(async () => {});
+    advance(20);
+    expect(measured()).toBe(before);
+    expect(lift()).toBe("208px");
   });
 
   it("a footer or dock that does not reach down to where they are (a card in the middle) does not move them", () => {
