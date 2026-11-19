@@ -60,9 +60,12 @@ val generateLocaleConfig by tasks.registering(GenerateLocaleConfig::class) {
     languages.from(languageFiles)
     outputDirectory.set(layout.buildDirectory.dir("generated/languages/res"))
 }
+// Release unit tests (src/testRelease: Release has no answer observer) rerun the whole suite against the release variant,
+// so they are off by default; -Ppersona.releaseUnitTests=true turns them on, and scripts/ci/android.sh does.
+val releaseUnitTests = providers.gradleProperty("persona.releaseUnitTests").map(String::toBoolean).getOrElse(false)
 androidComponents {
     beforeVariants { variant ->
-        if (variant is HasUnitTestBuilder && variant.name == "release") {
+        if (releaseUnitTests && variant is HasUnitTestBuilder && variant.name == "release") {
             variant.javaClass.getMethod("setEnableUnitTest", Boolean::class.javaPrimitiveType).invoke(variant, true)
         }
     }
@@ -181,10 +184,9 @@ dependencies {
     add("answerFriend", project(":core:rustcore"))
     add("answerFriend", project(path = ":core:rustcore", configuration = "shadowRuntimeElements"))
 }
+// friendPaths, not an -Xfriend-paths= argument: the argument's absolute paths would be part of the cache key (#10712).
 tasks.matching { it.name == "compileDebugKotlin" || it.name == "compileDebugUnitTestKotlin" }.configureEach {
     val compile = this as KotlinJvmCompile
     compile.dependsOn(":core:domain:domainShadowJar")
-    compile.compilerOptions.freeCompilerArgs.add(provider {
-        "-Xfriend-paths=" + answerFriend.joinToString(",") { jar -> jar.absolutePath }
-    })
+    compile.friendPaths.from(answerFriend)
 }

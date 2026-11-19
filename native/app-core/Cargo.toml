@@ -35,3 +35,12 @@ lto = "fat"
 codegen-units = 1
 panic = "unwind"
 debug = "line-tables-only"
+
+# Debug Android packages (debug APKs and their replay tests; never shipped, and production code does not call the core
+# yet): release's optimisation without its fat LTO and single codegen unit, so a rebuild takes a fraction of the time.
+# Same opt-level, no debug assertions: the debug APK runs the same logic as release (#10712).
+[profile.android-dev]
+inherits = "release"
+lto = false
+codegen-units = 16
+incremental = true

@@ -1,4 +1,5 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import persona.buildlogic.configureRepositoryTests
 
 plugins {
     id("org.jetbrains.kotlin.jvm")
@@ -19,14 +20,10 @@ java {
 dependencies {
     "testImplementation"(libs.findLibrary("junit").get())
 }
+// The repository root and the shared fixture domains this module's tests read (persona/buildlogic/FixtureReferences.kt).
+configureRepositoryTests()
 tasks.withType<Test>().configureEach {
     useJUnit()
-    val repositoryRoot = providers.gradleProperty("personaRepoRoot")
-        .getOrElse(rootProject.layout.projectDirectory.dir("..").asFile.absolutePath)
-    systemProperty("persona.repo.root", repositoryRoot)
-    inputs.files(fileTree(File(repositoryRoot, "spec/fixtures")) { include("**/*.json") })
-        .withPropertyName("sharedFixtures")
-        .withPathSensitivity(PathSensitivity.RELATIVE)
     testLogging {
         events("failed", "skipped")
         showStandardStreams = true
