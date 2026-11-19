@@ -107,6 +107,7 @@
   "kind_cli": "その他（Web / コマンドライン）",
   "kind_web": "Web",
   "role_answer": "回答のみ",
+  "role_scoped": "アクセス制限",
   "revoked_ago": "{time}に取り消し",
   "used_ago": "{time}に使用",
   "added_ago": "{time}に追加",
