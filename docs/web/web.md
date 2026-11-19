@@ -520,7 +520,7 @@ use it only on the intranet / VPN, and put an HTTPS reverse proxy in front befor
   A start whose new terminal tab stopped on a question of the shell's startup files (`shell_waiting`, #10365; hub feature `start_continue`) shows the question under the failure, on the launch's page and in the chat (`views/ShellQuestionCard.tsx`, loaded only then): the design system's notice (`ErrorNotice`) with the terminal's mark in `--ink-2` instead of the red one, "Your computer's terminal is asking: “…”", what helps and until when the tab stays open, one 28 px button per answer the computer offers (`start_error_args.choices`, worded by what it does where the question says, with the key: **Update (y)**, **Not now (n)**, **Enter (yes)**; a password prompt gets **Cancel (Ctrl-C)** alone, an ssh host key no trust) and the tab's last lines under **Error details**. A tap sends `POST …/start/continue`, shows the session starting at once, and sends again the messages that start refused (`lib/start-continue.ts` `resendRefused`: the launch's first message first, then the outbox's entries with code `shell_waiting` once it went, one after another; one refused again keeps them back); a refusal (the tab expired, an answer not offered) stays on the card in the hub's words. A question answered at the computer meanwhile is no refusal: the computer types nothing and starts the session in that tab. The card goes once the tab is no longer kept. A planned task's failed start with the same question (its plan task's `error_code` / `error_args`; hub feature `todo_start_answer`) shows the same card on its failed row, in the task panel and on the to-do page, beside Retry, which stays: a tap sends `POST /api/v1/todos/{id}/start/answer` and puts the reopened to-do in place (`answerTaskStart`); the hub then starts the task in that tab. On a hub without the feature the task offers Retry alone, as before.
   Text drafts are saved in localStorage; attachments and background tasks live only in the current page's memory, so reloading the page does not restore unfinished tasks.
 - **Overview**: **Needs you** (interaction cards for you to handle), **Stuck, take a look** (Agents that need you but have no card for you to handle; formerly "Stopped on the computer"), **Working** (with timers), and **Unread** (**Mark all as seen** on the right), one row each (Task Rows), with the computers below. The sentence at the top counts Agents ("5 agents need you"), while **Needs you** counts cards: when one Agent has several cards there is an extra gray line under the heading explaining it; **Stuck, take a look** also has an explanatory line (#2956).
-  Rows are compact (#5599): the title alone on the first line, then the computer / space / tab as small tags and the latest words; a tag that only repeats the title (a tab named after the agent's first words) is left out, and a session's source is a tag rather than a prefix of the latest words. The page grows to 1920px on wide screens and its agent sections go into columns by container width (two from 60rem, three from 100rem; rows with one-tap answers from 84rem / 120rem); phones and narrow windows keep one column. For screenshots use the mock hub with `MOCK_OVERVIEW_DENSE=1` (many finished rows, long titles, tabs named after their titles, one untitled).
+  Rows are compact (#5599): the title alone on the first line, then the computer / space / tab as small tags and the latest words (one line of plain text: their Markdown marks are left out through `plainMarkdown` in `lib/plain-markdown.ts`, as on the sidebar's row line, a computer's Agent rows and a knowledge entry's Agents, #10939); a tag that only repeats the title (a tab named after the agent's first words) is left out, and a session's source is a tag rather than a prefix of the latest words. The page grows to 1920px on wide screens and its agent sections go into columns by container width (two from 60rem, three from 100rem; rows with one-tap answers from 84rem / 120rem); phones and narrow windows keep one column. For screenshots use the mock hub with `MOCK_OVERVIEW_DENSE=1` (many finished rows, long titles, tabs named after their titles, one untitled).
   After the initial load, if there are no computers and no Agents or interactions needing attention, the summary asks you to connect a computer first. The **All set** card becomes **No computers yet**, explains that a computer must connect to the hub before you can create an Agent, and offers **Open machines** (#3729). The overview header also hides **New agent** when there are no computers. Before the first load the summary says **Connecting to the hub…** while the socket is not connected and **Loading…** once it is (the hub's first answers are still on their way); with any existing computer, including an offline one, the usual overview and actions remain.
   On a hub that pages its Agents list (`sessions_list`) the socket pushes no sessions, so how many Agents there are is known only once the list they come from has been read over HTTP: the list's first pages with one assistant, the complete list (`useFullAgentSessions`) with several. Overview takes that status from the same source as its counts (`useScopedAgentListStatus` in `lib/current-assistant.ts`, over `useAgentListStatus` in `lib/sessions.ts`). Until then the summary says **Loading…**; when the read failed it says **Couldn't load what your agents are doing.** with **Retry** (which reads that list at once; the hub's next change of the list, and the complete list's own retry every 5 s, do too), and neither claims that nothing needs you nor shows **All set**. A read that the hub's next change of the list (or the 5 s retry) starts after a failure keeps the failure line and its Retry in place until one succeeds, so they never turn into **Loading…** under the pointer; **Retry** itself says **Loading…** until the answer, as the Agents list's Retry does (`retryFullAgentSessions`). The summary line holds one live region (`role="status"`), mounted throughout, with only its state in it (**Connecting to the hub…**, **Loading…** or the failure), so a screen reader hears the failure; the counts sentence that replaces it is plain text, so the counts are not read out again each time an Agent starts, stops or finishes. Meanwhile each computer's line leaves out its Agent count (its system name, or **Online**) rather than saying "0 agents", while **Needs you** still lists the cards, which come from their own read (web audit item 30). A computer's count also needs a list that holds every Agent: with one assistant the first pages hold only the newest Agents while the list has more pages (`hasMore`), so the line leaves the count out then too, rather than reading the complete list on the landing page; the Machines page counts every computer from the complete list. The summary is never an empty sentence: with no Agent needing you, working or unseen but cards waiting (a Persona conversation's, whose Agent is not counted), it says how many requests are waiting.
   Several Agents in the same herdr tab collapse into one row (#2320, `homeTaskGroups` in `lib/herdr-tree.ts`; since #5180 only peers, a tab whose first pane is a shell, as a lead's workers fold into the lead's row): placed under the most urgent state among them, titled with the lead's title (or the first pane's when there is no lead),
@@ -780,7 +780,7 @@ use it only on the intranet / VPN, and put an HTTPS reverse proxy in front befor
     An Agent of a provider that is not Claude Code's which lists its modes (#8261, `capabilities.permission_modes`: Paseo's Grok, OpenCode or Codex, `lib/session-actions.ts` `listedModesOf`) gets the same chip while it runs, with those two rows alone: **Launcher default** (跟随启动器; ランチャーに従う), its own approval, with the plain shield (no raised hand: its own settings may approve everything), and **Full access**, a switch both ways. No mode reported is Launcher default. Going into Full access asks again as above; leaving it does not, and there is no Plan mode row or `/permissions` extra. New Agent offers the same two for such a launcher (below).
     Each option in the permission-mode menu shows its name with its explanation wrapped on a second line (#5584). A menu row's sentence goes in `MenuItem.detail`, not `hint`. `hint` is a short note that never wraps, at the end of the row, and a sentence there pushed the name off the row, ran past the menu's edge and squeezed the current option's check into a stray glyph (the check now never shrinks). The explanation is the row's `aria-describedby`. Rows that are one choice of a set set `MenuItem.radio`: they are `menuitemradio` with `aria-checked`, so screen readers say which is selected. Toggles and filters that set only `checked` stay plain `menuitem`s. A menu above its button is measured at its final width, because wrapped rows make it taller and it would otherwise cover the button. `scripts/test/web_mode_menu_e2e.py` checks in a real browser that no row is clipped.
     Switching a running Claude Code session's model (#2434) goes through the model pill and its panel (#5032, "Model pill and model panel" below): typing just `/model` in the input and pressing Enter does not send but opens the panel (Agents without model switching send as usual). Typing `/permissions` (#6476, `lib/permissions-command.ts`, Persona's own command, offered wherever the permission picker is: an Agent with modes while it runs, every Persona conversation; never Codex, compatible CLIs or read-only sources) and pressing Enter, or picking it in the palette, opens the permission picker's menu with all five modes, Plan mode and Auto included (the chip's own click still leaves Plan mode to the + panel); a pick switches the running session through `POST …/modes` without a restart or Shift+Tab at the computer. Full access on a terminal Claude Code that cannot reach it with Shift+Tab (`bypass_available` false) is offered too, saying **Restarts the session to apply it once this turn ends**, and asks first: the node restarts the session in it ("Full access by a restart" in `docs/integrations/claude-integration.md`); while it waits the row has `bypass_pending`, the chip keeps the mode it still runs in and says on hover that the session restarts once the turn ends. A Persona conversation's Full access row says **Takes effect from the next message**. On receiving `model`, node types `/model <id>` into Claude Code's input along the same safe path as sending messages: it reads the screen first and refuses, typing nothing, if a dialog is open (`dialog_open`) or the input has a draft (`input_draft`);
-    it also refuses while the Agent is working. After typing it reads the screen again to confirm `Set model to` appeared, and reports an error otherwise rather than treating it as success. The model id accepts a single word (letters, digits and `._:/@[]-`), never a command or arguments. Note: newer Claude Code's `/model <id>` also saves the chosen model as the default for new sessions (the output in the local transcript is "Set model to `…` and saved as your default for new sessions"); there is no way to change only this session. In the older iOS / Mac layout, the thinking-effort tag menu can also pick a model, through the same `modes {"model"}` (#3119).
+    it also refuses while the Agent is working. After typing it reads the screen again for three seconds to confirm `Set model to` appeared, and reports an error otherwise rather than treating it as success. Claude Code's own record of the switch also confirms it: the `/model <id>` command and its `Set model to` output line, written to the transcript after the typing. Claude Code can take longer than those three seconds to run a typed command (twelve seconds were seen on a long session, #10810): the error is then still reported, and for five minutes the node takes the pick up as soon as that record shows, so the pill ends on the model the session really runs without a second switch. The model id accepts a single word (letters, digits and `._:/@[]-`), never a command or arguments. Note: newer Claude Code's `/model <id>` also saves the chosen model as the default for new sessions (the output in the local transcript is "Set model to `…` and saved as your default for new sessions"); there is no way to change only this session. In the older iOS / Mac layout, the thinking-effort tag menu can also pick a model, through the same `modes {"model"}` (#3119).
   - Sending bubbles show `<persona-context>` as a quote card, the same as in the record (it used to expose the raw tag).
   - `seen` is sent when the page opens, when it returns to the foreground, and when a turn ends while the chat is on screen in a tab in front (a background tab marks nothing). The agent shows seen at once, before the hub answers: like the app's `SeenOutbox` (#1588, `lib/seen-outbox.ts`), each mark is held until a list from the hub shows it recorded (a later `seen_at`), a new turn ends, or the agent works or needs you again, and lists that still say Unread meanwhile are drawn seen (the store's rows and the paged sidebar's rows alike). A socket `seen` not recorded within 5 seconds goes again over `POST …/seen`, one sent while the socket was down goes over HTTP, and what was not answered goes again after the next hello; marks are dropped after 10 minutes. Subagent transcripts mark nothing.
 - **Persona**: `/` (and the old `/persona`) is the main chat, `/persona/new` is a new chat (suggestions + Prompt Bar, `POST /api/v1/assistant/conversations`; the input can send files to the assistant's computer and @ other sessions as context, #2978, like iOS StarterComposer), and `/persona/<id>` is one chat; the headless assistant's `delta` streams in character by character.
@@ -1086,7 +1086,7 @@ use it only on the intranet / VPN, and put an HTTPS reverse proxy in front befor
   **UI slots** (#1451, `docs/extensions/extensions.md` ("UI slots"); list and badges in `lib/extension-slots.ts`, rendering for the three placements in `views/extensions/ExtensionSlots.tsx`, charts in `views/extensions/ExtensionChart.tsx`, logic in `lib/extension-ui.ts`):
   Only queried when hub features contain `extension_ui_slots` (`plugin_ui_slots` on old hubs). `GET /extensions/-/ui` (without placement) fetches all slots at once; fetch again on reconnect (hello), after enabling / disabling / changing settings / installing / upgrading / removing an extension here, and when the tab returns to the foreground after more than a minute.
   `nav_page` adds one sidebar row per page between Machines and Settings (the eight fixed icons are mapped to web icons; unknown ones use the extension icon. Badge color follows tone; `extension_ui` events (`plugin_ui` on old hubs) update it in place without refetching), opening `/extension/<extension>/<page>`.
-  `overview_card` is a row of cards below the Overview greeting (one fills the width, multiple cards use two columns; once the page is wide enough for two columns of rows, 60rem as the agent sections below it, a lone card takes one of them, so its chart is not stretched across a wide page: 540 px of a 1440 px window, 780 px at 1920, web audit item 76), rendered compactly (`context.size: compact`); clicking the blank area or title opens `opens`, while buttons, rows, and charts within the card remain clickable.
+  `overview_card` is a row of cards below the Overview greeting (one fills the width, multiple cards use two columns; once the page is wide enough for two columns of rows, 60rem as the agent sections below it, a lone card takes one of them, so its chart is not stretched across a wide page: 540 px of a 1440 px window, 780 px at 1920, web audit item 76), rendered compactly (`context.size: compact`); clicking the blank area or title opens `opens`, while buttons, rows, and charts within the card remain clickable. A card's heading has its title and, at the right, the extension's name, left out when it only says the title again (`nameBesideTitle` in `views/extensions/ExtensionSlots.tsx`, case and surrounding spaces ignored; the same rule as an extension page's top bar and a machine section's heading, #10940).
   `machine_section` adds one section per extension at the end of the machine page (after launchers), with `context.machine`. Every render and action carries `context: {tz, locale, platform: "web", ui_version: 4, …}`.
   Unknown items are skipped; a section emptied by skipping is removed (kept if it has a footer). Only failure to read the whole View shows an error. `chart` renders SVG bar charts (grouped / stacked, bars at most 24px wide, rounding on the free end, 2px gaps between stacked segments) and line charts.
   Hover or arrow keys show each series' value under that label; x-axis labels appear at intervals without overlapping, with only the first and last labels in compact mode. Series without a tone use `--series-1…4` (the first is the primary color, avoiding the green / orange / red role colors, with light and dark sets).
@@ -1624,8 +1624,8 @@ Two-column pages (Inbox, Knowledge) switch to one column according to their own 
     The program receives them if mouse mode is enabled, otherwise they are dropped (herdr does not tell us the program's mouse mode). Default is Pass to program: Shift-drag selects locally, Shift+right-click opens the menu above (then right-click is no longer the browser menu).
     Terminal settings › Mouse › Local selection restores the original drag-selection / context-menu behavior, with Shift passing to the program. ⌘ and touch remain local. No hover events sent. Feature `terminal_mouse`.
   - **Mac line-editing keys** (while in control, in xterm's custom key handler, `lineEdit`): ⌘⌫ → ^U, ⌘← → ^A, ⌘→ → ^E, alongside existing Shift+Enter (ESC CR); combinations with extra modifiers are unchanged.
-  - **New terminal settings**: cursor style (Block / Bar / Underline), cursor blink, WebGL rendering (`@xterm/addon-webgl`, loaded on first enable; disabling or losing context disposes it and falls back to default rendering).
-    Stored as `persona.terminal.cursorStyle` / `cursorBlink` / `webgl`; defaults (block, no blink, DOM rendering) write no keys and leave default appearance pixel-identical. Cursor style only affects xterm's cursor; the page-drawn cursor in Wrap mode is unchanged.
+  - **New terminal settings**: cursor style (Block / Bar / Underline) and cursor blink, stored as `persona.terminal.cursorStyle` / `cursorBlink`; defaults (block, no blink) write no keys and leave default appearance pixel-identical. Cursor style only affects xterm's cursor; the page-drawn cursor in Wrap mode is unchanged.
+    The renderer (DOM or WebGL, `persona.terminal.webgl`) is chosen in Settings › Labs ("Labs" above, #9877); Terminal settings shows this terminal's renderer and links there.
   - **Focus policy**: while in control, clicking anywhere in the panel or regaining window focus returns the keyboard to the terminal, unless text is selected, a dialog / menu / overlay is open, focus is in another input (including search), focus is on a control outside the panel, or this terminal is covered by another (`shouldRefocus` in `lib/terminal-details.ts`; page facts in `terminal/focus.ts`). View only never steals focus.
   - **Search** (`terminal/FindBar.tsx`, `@xterm/addon-search`): with terminal focus, ⌘F (Mac) / Ctrl+Shift+F (other OS; Ctrl+F also works when not in control, while ^F belongs to the program in control) opens a find bar at the top of the panel: search as you type, Enter next, Shift+Enter previous, Aa case-sensitive, Esc or × closes (Esc not sent to the program).
     A selected line becomes the initial query. The find bar only acts within the panel and registers no global shortcut. Search scope is in `docs/integrations/terminal.md` section 20.
@@ -2002,6 +2002,126 @@ hello's `features`, `hub_name` and `mesh` are kept in the store. Lark through th
 
 **Request failures** (#3728): `errorText` in `lib/api.ts` explains common failures in the page's language. A 404, `not_found` or a bare `not found` says the item does not exist or this version does not support it yet, and suggests refreshing or checking whether the hub or the computer needs an update; 502 / 503 / 504 say the hub cannot answer right now, other 5xx that the service hit an error, both with retry and check-that-it-runs advice. The HTTP status and the hub's original text stay in brackets for diagnosis; the terminal list's error line stays on one line and shows the whole text on hover. Wrong credentials and other business errors show as before. Code that decides on compatibility or an error code reads the raw `ApiError`, never the explained text.
 For `node_unreachable` and `timeout` (#5031) the hub did answer; the computer did not. `errorText` goes by the code and says what to do next: offline when `delivered` is `none` (check that the computer is on, online and running Persona Link), a connection cut mid-call for any other `node_unreachable` (reconnect, check whether the last action went through), a timeout (check, then try again later). These carry no status in brackets, so offline feedback does not fold them into "can't reach the hub"; the hub's words stay on the `ApiError`.
+
+## Configuration forms
+
+A module that has settings for one resource describes them as a configuration **Document** and the web draws it with one
+generic form (#9877; `web/src/lib/configuration/`, `web/src/views/settings/configuration/ConfigurationForm.tsx`). The JSON
+is the hub's portable contract (the server's `configuration` package defines the same types), so every client can read the
+same thing.
+
+**The contract.** A Document (`schema_version` 1, an opaque `id` and `revision`, `title`, `description`) has titled
+groups of fields and `values`: one effective value per field, defaults included, plus optional per-field `notices`
+(info / warning). A field is one of `toggle`, `text` (single line or `multiline`, placeholder, lengths), `select` (options
+shown as a `list`, `dropdown` or `segmented` control), `multiselect` (checks, minimum and maximum chosen) and `number`
+(integer or not, minimum, maximum, a `step` that only nudges), each with a title, description, typed `default`,
+`read_only`, `disabled_reason` and `details` (title + description lines the module writes: scope, activation, rollback).
+An Update names the document, the revision it was made against, the `changes` it makes and the fields to `reset` (remove
+the override); missing fields stay as they are. The answer is the whole committed Document, or `{ error, code,
+field_errors }`; a `configuration_conflict` carries no replacement values. The codes are the shared contract's root codes
+(`configuration_bad_request`, `configuration_version`, `configuration_too_large`, `configuration_invalid`,
+`configuration_conflict`, `configuration_forbidden`, `configuration_not_found`, `configuration_unavailable`) and field
+codes (`type`, `option`, `duplicate`, `min_length`, `max_length`, `min_selected`, `max_selected`, `integer`, `minimum`,
+`maximum`, `range`, `unknown`, `read_only`, `unsupported`), and the client says a code it knows in the reader's language
+(a module's own localized message wins for a code it doesn't know). `contract.ts` mirrors the TypeScript union and the
+writer's checks: lengths in Unicode scalar values, numbers finite and inside the safe integer range (decimal bounds
+allowed), choices known and distinct, counts within their limits. The shared `schema/configuration/validation-cases.json`
+(26 cases, the same file the Go checks run) is a Web test input; there is no Web-only copy of it or of the all-types
+document. A kind it doesn't know, or a definition that isn't valid, is shown read-only with a line saying so; a saved value
+that isn't valid is not shown as a value, but the field still draws its empty state with the invalid-value line so it can
+be chosen again, and offers **Reset**; a schema version it doesn't know is shown and never written. Nothing in a Document
+is a URL, a scope or an instruction.
+
+**Sources.** The form takes a `ConfigurationSource` injected by the owning module, already bound to its one resource:
+`key` (the resource's identity: another key starts the form over), `read`, `update` and, when the module can tell,
+`subscribe` (the resource may have changed elsewhere; the form reads it again). `httpConfigurationSource` reads with GET
+and writes with PATCH at an endpoint and through a transport the module supplies (its authentication and base address);
+nothing in an answer chooses another address. A local module implements the same four members itself. The generic layer
+imports no module, assistant, hub or storage.
+
+**The form.** It reuses the settings pieces (`Group`, `RowFailed`, `Switch`, `Segmented`, `ChoiceRows`, `CheckMark`, the
+field and button classes). A single-step choice (a switch, a list, dropdown or segmented selection) is written at once and
+shows **Saving…** until the source has committed; only then **Saved**. Typed text, numbers and a multiselect's checks are
+drafts until **Save** (Enter on one line; Escape puts a typed one back), so a fixed count can move from one choice to
+another without an invalid write in between. A multiselect whose maximum is one is a single choice: it is drawn as
+`role="radio"` rows with round marks and arrow keys, and choosing another option replaces the old one in one click (the
+wire value stays an array). It has exactly one Tab stop — the chosen option, or the first option when none is chosen, with
+no radio marked chosen — and a larger maximum keeps ordinary checks, whose pending count can pass through a temporary
+value. Every field ends in one footer row that holds its default value, the count where a text field has a maximum, the
+save state and the **Reset** / **Cancel** / **Save** actions that apply, so the actions never sit between the control and
+its explanation. The footer reserves the small-button height when no action is shown and can grow for wrapping content.
+The invalid-value hint accompanies the control and is part of its accessible description. A valid choice or entry
+replaces the unavailable value, and **Reset** returns the default. A change or reset to an unsupported field is
+rejected locally with `unsupported`.
+Drafts stay through a failed write, a conflict, a re-read or a change elsewhere, including what is typed or checked
+while its save is on the way (that newer edit stays unsaved). One write at a time, each against the revision
+shown. A conflict, or a write whose outcome is unknown (`configuration_unavailable`, a request that threw or timed out, or
+a successful answer that isn't a Document), says so and offers **Reload**, which keeps every draft; nothing else is
+written until it has read again, and a version it can't write blocks writing altogether. A refusal the writer names (a
+validation or storage failure) is retriable at once. Field errors appear on their fields in the client's words for codes
+it knows; an unknown code shows the module's own message. A source replaced while it is still answering is ignored, and so
+is a read that started before a newer Document arrived, or before a write (or while it was in flight): a stale read cannot
+replace the document a write returned, drop its pending choice, or clear the barrier a failed write set. A read that times
+out is reported, not mistaken for the form's own cancellation. The form loads with its page, in its own chunk. Every control is named by its field's title and described by
+its description. `web/e2e/configuration-form.html` shows the form over the shared `schema/configuration/all-types.json`
+for screenshots (`web/e2e/configuration-form.mjs`); it is never built. `web/e2e/configuration-showcase.html`
+(`web/e2e/configuration-showcase.mjs`, `web/e2e/configuration-showcase-data.mjs`) is a fixture-only page that presents
+three genuine-looking module settings — a browser-local terminal renderer, a server-style daily digest and a local editor
+— exactly as the real form draws them, with no mock or test framing on the page itself. Its sources are in that page's
+memory and read or write no real setting; the page checks its own documents with the real parser. Coverage scenarios use
+the URL only (`?scenario=slow|load-fail|reject|conflict|unconfirmed|keyboard|contract|invalid|empty|unsupported`; the
+product view with no query or `?scenario=overview`), and none of that navigation is drawn. `contract` shows the shared
+all-types example unchanged, `invalid` shows a document whose saved values are missing or unreadable so every control is in
+its empty, correctable state, `keyboard` refuses the first single-choice save so its Tab stop can be checked, `empty` shows
+a document without groups, `unsupported` shows an unknown kind and a newer schema version, and the failure scenarios show
+only the module they happen in. The page is never built.
+
+## Labs
+
+Settings › Labs (#9877; `web/src/views/settings/Labs.tsx`) is the one place for trial features and for choosing between a
+stable and a new implementation of the same thing. It is a sidebar group of its own, after the hub's, without a title:
+each module says in its own document whose setting it holds. The page explains Labs and says that each item states its
+own scope (the terminal one is this browser only), then draws each module's source with the configuration form. Modules
+inject their source in `Labs.tsx`; the page and the form know nothing else of them. Only real features: never a demo
+entry.
+
+**Terminal renderer** (the first module; `web/src/lib/labs-terminal.ts` over `web/src/lib/labs.ts`). Single pane terminals
+(`views/session/terminal/feed.ts`) draw with xterm's DOM renderer (Standard, the default) or WebGL (`@xterm/addon-webgl`,
+its own chunk, loaded only when chosen). Full view always uses the DOM renderer and is not affected. It is kept by this
+browser (`localStorage`) because GPU support differs per browser and machine; it never reaches the hub, another browser,
+device or user. Its document has one segmented choice with details for scope, activation and rollback. No request
+leaves the page.
+- Storage: the key `persona.terminal.webgl` with WebGL as `1`, the Terminal settings switch's from before Labs, so a saved
+  choice keeps working and an older build reads the same value back. Standard writes nothing. A value this build doesn't
+  recognize reads as Standard, is left in place and is named in a notice until a choice replaces it; storage the page
+  can't read shows Standard with a notice. A write the browser throws on or doesn't read back fails with the module's
+  message, which says only that the save couldn't be confirmed (the stored value may or may not have changed). The
+  revision follows what is stored, so a choice made in another tab is a conflict for a stale page, and the page follows
+  other tabs through `subscribe`.
+- A terminal reads the choice when it is made (`rendererChosen`); a change in Labs leaves open terminals, and what was
+  typed in them, as they are; the next terminal opened (or the page after a reload) uses it.
+- Terminal settings has no WebGL switch of its own: its Renderer row says what draws this terminal (Standard, WebGL, or
+  Standard after WebGL stopped) and has a Labs button. It opens the same Labs page in a dialog over the page (a sheet on a
+  phone; `LabsDialog`, loaded on first open), as Edit shortcuts opens its editor, never Settings in place of the page:
+  the chat beside the terminal stays mounted, so an unsent draft keeps its text, its images (held only by the composer,
+  released when it unmounts) and an image being edited.
+- If WebGL cannot start or its GPU context is lost, that terminal disposes the addon, xterm repaints with the DOM renderer
+  from its unchanged buffer, input keeps flowing, and the choice is set back to Standard so the next terminal does not fail
+  the same way. A toast says so; if Standard could not be saved, it says that instead. A terminal that fell back stays on
+  Standard until it is opened again.
+
+### Adding, graduating and removing an entry
+
+1. **Add** an entry only for a real feature with both paths in the code, where going back is safe: no irreversible data
+   migration, no restored removed implementation, no bypassed security fix. The module adds a source (its document, with
+   details for scope, activation and rollback, its words in `en`, `zh-Hans` and `ja`) to `Labs.tsx`, a search index entry,
+   and tests for both paths and the fallback. Keep the old path the default until the new one has been used for a while.
+2. **Graduate** when the new path is ready for everyone: make it the default in a PR linked to the entry's issue, say so
+   in the release notes, and keep the entry for at least one release so people can still go back.
+3. **Remove** after that release: delete the module's source, its words and the old path. Stop reading its key; leave
+   stored values alone (they are ignored). An entry whose new path is abandoned is removed the same way with the old path kept.
+
+An entry should not stay in Labs indefinitely; each one's issue stays open until it graduates or is removed.
 
 ## Developing Persona (#9617)
 
@@ -2415,7 +2535,10 @@ and Android follow in #5117.
   Cindy's new-task composer and create-agent toolbar; the attach hint gives way to it (on a phone it is only the + button's
   tooltip). It replaces the **Preset**, **Launcher** / **Launcher (this time only)**, **Model** and **Thinking effort**
   fields and **Manage launchers** ("Configure models" at the panel's foot closes the sheet and opens Settings › Model
-  providers). The pill is off, with a spinner, until the computer's launchers are read.
+  providers). The pill is off, with a spinner, until the computer's launchers are read. When they can't be (#10952: the
+  hub gave up on the computer), the pill shows its failed state instead and a click reads them again; the line under the
+  box says why with **Retry**, and Start runs the computer's default. A read still on its way for a computer picked
+  before never lands on the one picked since.
 - **What the pill says**: what this start runs: the mark of the Agent the launcher runs, the model (the one picked; else Model
   settings' model on their launcher; else the model the launcher's default entry stands for, by its list's name; a
   launcher that fixes its own `--model`, that model) and, for Claude Code and Antigravity, the effort
@@ -2771,6 +2894,9 @@ The defaults add nothing to the page (no attribute, no stylesheet), so the defau
   `--text-scale` only has a value on `html[data-text-size]` (`styles.css`), which `index.html` sets before the first screen. em, %, and unitless line heights follow the parent element and are left alone.
   CSS `zoom` on the whole page is not used: under zoom, `getBoundingClientRect` and `left` / `top` are not in the same coordinate space, so every overlay positioned by element location would be off, and `100vh` would overflow the screen.
   Font sizes set in JS (inline `fontSize`, the terminal, Mermaid) don't change; icons and spacing don't either (iOS's `scaledFrame` does scale them).
+- **Font** (`persona.font`, #10243): independent Interface font (System UI, Georgia, Source Han Serif SC) and Code font (System Mono, Menlo, Consolas), both Default, plus one installed Custom family each. These browser-local choices serve people reading chats, documents and code; no model or hub setting changes. The Custom field appears only for Custom, validates a single name and quotes it as a CSS family. Font availability is advisory; unavailable or inconclusive results keep the choice and use the fallback stack. No font is downloaded.
+  `index.html` applies saved choices before first paint through one `persona-font` stylesheet. `ui/font-preference.ts` applies edits immediately and follows storage changes and resets in other tabs. An explicit choice prepends its face to the existing sans/mono stack (including CJK and system symbol fallback) and takes priority over a theme's inline default. Theme changes retain their stack behind the choice. Resetting one family restores its base/theme stack independently; resetting both removes the preference and stylesheet. Inline code retains its original stack at Default and follows the code choice when set.
+  Both terminal modes read the selected mono stack when opened, keeping their separate font size and local CJK width correction. A retained Full UI feed also reads it when another terminal surface attaches.
 - **Recent chats in the sidebar** (`persona.sidebar-recent`, #5146): 5 / 10 / 15 / 25, default 5 (#6228), how many of the latest chats the sidebar's Persona chats › 最近 lists before **Show N more**. iOS and Android list 5 and have no such setting yet. The fold of the 最近 group itself is `fold:recent-chats` (#6228).
 
 ## New versions

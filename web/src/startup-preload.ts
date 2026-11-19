@@ -425,15 +425,13 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // extension's view (ExtensionSlots, the assistant's cards, an inbox item's body, the subscription pages, the launcher
 // sections), all in the first screen's static closure; the canvas itself is a chunk of its own (ViewBody10.tsx).
 // Main had 1,583 B of room; the budget stays.
+// Keep the stricter existing limit while combining these changes.
 // #10904: the overview's task cards name who works on each task, the lead Agent's computer, model and effort and "+N"
 // for the others (lib/home-tasks.ts leadAgent; views/Home.tsx taskAgentLine over the model pill's pillView, modelList and
-// effortTitle, and home.task_agents_more). 96 B in ja, measured in one environment against main 969e278401 (ja
-// 482,659 B to 482,755 B; en 479,576 B to 479,680 B, zh-Hans 480,427 B to 480,519 B), when main had 24 B of room.
-// 2026-11-19: main then took #9758, #10637 and #10844 and is over on its own, so it stopped building (1fe09bb458: ja
-// 482,736 B, 53 B over; 55b2894ba7: ja 483,021 B, en 479,920 B, zh-Hans 480,775 B, 338 B over). With this change on
-// 55b2894ba7 the first screen is ja 483,233 B (en 480,128 B, zh-Hans 480,973 B): the same code, 790 B more of the App
-// chunk before compression every time, measures 212 B there. The budget is that ja size.
-export const FIRST_SCREEN_BUDGET = 483_233;
+// effortTitle, and home.task_agents_more). 205 B in ja, measured in one environment against main 8038ebaf10 (ja
+// 482,497 B to 482,702 B; en 479,378 B to 479,585 B, zh-Hans 480,224 B to 480,422 B). Main had 29 B of room, so the
+// budget is this ja size plus those 29 B.
+export const FIRST_SCREEN_BUDGET = 482_731;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
