@@ -973,7 +973,10 @@ Use an invalidation revision as the task key and handle the flag after completio
 - The hub continuously pushes lists, machines and steps; every push reevaluates consumers. Do not attach active controls to them (`docs/archive/apple/live-updates.md`):
   toolbars in data-driven views are resubmitted to UIKit each push, resetting open overflow-menu scroll position even with unchanged content. `ChatsView` handles navigation / toolbar, `AgentsList` handles the list
   (after splitting, `ChatsView.body` must read `searching`, otherwise chats opened from search retain the system navigation bar, `SearchOpenTests`);
-  closure environment values in body (`.environment(\.openFile) { … }`) are new each time, reevaluating every reading row (all visible work steps per push); use once-created `ChatActions`;
+  closure environment values in body (`.environment(\.openFile) { … }`) are new each time, reevaluating every reading row (all visible work steps per push); use once-created `ChatActions`.
+  A closure read from the environment is reported changed each time SwiftUI looks, even the same one handed down once (`_printChanges`): a list moving windows, a tab switch or anything above
+  that makes SwiftUI look at a row's inputs again runs every row that reads one. Hand an object down instead, one for the life of the view that makes it (`FileOpener`, `SpaceOpener`,
+  `SplitShowList`, #10303); a `Binding(get:set:)` and a binding through `Bindable` are reported changed the same way, a `@State` binding is not;
   observe `model.session(key)` per session (`SessionCell`), not all-machine lists. Keep fullscreen viewers and row expansion state on the page, not lazy rows.
   Measure with `LiveUpdateTests` (`/mock/churn` continuous pushes, `-perfCounts YES` reporting body counts and main-thread time per round).
 - Badges (pending count, Inbox Needs you) change almost every push; their consumers must not contain pages or menus (2026-11-01, TestFlight 70 "it's back", `docs/archive/apple/live-updates.md`):

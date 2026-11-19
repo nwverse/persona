@@ -398,4 +398,3 @@ internal object KnowledgeMap {
             projects.sumOf { p -> p.kids.firstOrNull { it.id.endsWith("#notes") }?.count ?: 0 })
     }
 }
-
