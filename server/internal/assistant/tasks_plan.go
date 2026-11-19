@@ -90,6 +90,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		t.TodoID, t.Error, t.ErrorCode, t.ErrorArgs, t.RetryWith = "", "", "", nil, nil
 		t.WorkspaceResolved, t.ReservedTodoID, t.WorkspaceInferred = nil, "", false
 		t.OwnerStarted = false // the hub's: only the owner's Start on the card sets it (startPlan)
+		t.RequestGate, t.Queue = "", nil
 		t.CloseTabOnAccept, t.TerminalTarget, t.TerminalCleanup = false, taskTerminalTarget{}, ""
 		t.TerminalAuthorized = false
 		// The hub's too: the scheduled round this plan comes from is the hub's to tell (scheduledRoundOf, #8045).
@@ -219,6 +220,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			if err := s.planPieces(&a.Tasks[i]); err != nil {
 				return "", fmt.Errorf("task %d: %w", i+1, err)
 			}
+			a.Tasks[i].RequestGate = s.planRequestGate(a.Tasks[i])
 		}
 	}
 	if err := s.planBriefs(ctx, machine, sessionID, a.Tasks); err != nil {
@@ -284,7 +286,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	if inRound {
 		granted = func() func(PlanTask) bool { return s.scheduleGrantCover(ctx, round, machine, sessionID) }
 	}
-	if health || !s.planStartsAtOnceUnder(ctx, p.Tasks, granted) {
+	if health || slices.ContainsFunc(p.Tasks, func(task PlanTask) bool { return task.RequestGate != "" }) || !s.planStartsAtOnceUnder(ctx, p.Tasks, granted) {
 		s.event(ctx, map[string]any{"type": "task_plan", "plan": s.planWithSuggestion(ctx, p, s.lang(ctx))})
 		// A card below the answer is easy to miss: push it as well.
 		titles := make([]string, 0, len(p.Tasks))

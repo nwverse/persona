@@ -67,6 +67,13 @@ describe("the extension's name beside a title (#10940)", () => {
     expect(count(html, "行情")).toBe(1);
   });
 
+  it("draws each Overview card as tall as its own content, not its row neighbour's (#11093)", () => {
+    data.slots = { overview_card: [{ extension: "a", id: "card", title: "A", placement: "overview_card" }, { extension: "b", id: "card", title: "B", placement: "overview_card" }] };
+    const grid = renderToStaticMarkup(<OverviewCards />).match(/<section[^>]*class="([^"]*)"/)![1]!.split(" ");
+    expect(grid).toContain("grid");
+    expect(grid).toContain("items-start");
+  });
+
   it("asks for each Overview card's last view and marks its heading while that is on screen (#11091)", () => {
     data.slots = { overview_card: [{ extension: "a", id: "card", title: "A", placement: "overview_card" }] };
     seen.length = 0;
