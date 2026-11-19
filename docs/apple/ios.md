@@ -1315,6 +1315,14 @@ and what this device asked are `AppModel.setUltracode` / `dismissUltracodeLost`,
 - **Tests**: `UltracodeTests` (FakeHub: decoding with older hubs, the requests, where it shows, graying, the ask, the quota) and `UltracodeUITests`
   against the mock hub with `MOCK_ULTRACODE=1` (`TEST_RUNNER_PERSONA_ULTRACODE_HUB`, screenshots with `TEST_RUNNER_PERSONA_SHOTS`).
 
+## Agent presets in New Agent and plan cards (#2225)
+
+`AgentPreset` / `AgentPresetProfile` decode `tiers` and `tiers_profile` from New Agent's `GET /api/v1/machines/{mid}/launchers`; `AppModel` caches them beside the launchers, default and unavailable lists and clears them with those caches. An older hub, no active profile, or no tier this computer can run leaves **Preset** out and keeps the ordinary defaults and start body unchanged. The body never carries `tier`: a preset is only a way to fill launcher, model and effort.
+
+When tiers exist, New Agent's Preset NavigationLink opens `AgentPresetPicker`, naming the active profile and showing each tier's name, description and launcher/model/effort. A launcher with blocked health has its reason on a disabled row, so it cannot be picked. Picking another row fills the three fields through the existing `restoredModel` path; manual launcher/model/effort edits unmark it, reselecting restores its defaults, and machine changes or recent-setup fills clear the pick. Explicitly choosing the list's default model through a preset remains an explicit `model` in `POST /api/v1/sessions` (`LauncherModelChoice.presetDefault`), rather than collapsing to Model Settings' default.
+
+A preset with a model or effort waits for its own launcher's model-list request: Start is disabled and guarded, with **Loading the preset's model options…**, until that request settles. This prevents the previous launcher's list from dropping or replacing the preset's values. Once the list is available (or its absence/failure is known), the form names a locked or unlisted model and an unsupported effort that the start cannot send, using the launcher's or model's own settings for the omitted field; the existing list error and locked-model explanation remain visible too. Plan tasks decode and encode their optional `tier`. Their model chip gives an explicit model precedence, then shows `launcher · Preset <tier>` or `Preset <tier>`, then the existing launcher/Default Model label.
+
 ## Launcher health in New Agent (#1643)
 
 `Launcher.health` (`apple/Shared/Models.swift`) is the hub's record for the computer the list is for (`docs/server/launcher-health.md` "In the App"); a record it can't read is dropped, never the launcher. Since #4437 the hub leaves out a launcher whose latest check failed, so the list the app reads carries `blocked` only for `not_in_terminal` and for the configured default; the rest are gone until a check passes.

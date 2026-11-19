@@ -34,7 +34,7 @@ func (h *Hub) channelNoted(id, machine, session string) {
 // channelsDeviceCall answers the device methods of the channels' turns; false for the others.
 func (h *Hub) channelsDeviceCall(ctx context.Context, m *Machine, p assistantwire.DeviceCall) (json.RawMessage, bool, error) {
 	switch p.Method {
-	case assistantwire.DeviceSessionSendOnce:
+	case assistantwire.DeviceSessionSendOnce, assistantwire.DeviceAssistantAnswerAgain:
 		var a map[string]any
 		if err := json.Unmarshal(p.Params, &a); err != nil {
 			return nil, true, err
@@ -42,13 +42,20 @@ func (h *Hub) channelsDeviceCall(ctx context.Context, m *Machine, p assistantwir
 		if id, _ := a["client_msg_id"].(string); id == "" {
 			return nil, true, errors.New("session.send_once needs client_msg_id")
 		}
-		return json.RawMessage(`{}`), true, h.sendOnce(ctx, m, a)
+		method := "session.send"
+		if p.Method == assistantwire.DeviceAssistantAnswerAgain {
+			method = p.Method
+			if after, _ := a["answer_again_after"].(string); after == "" {
+				return nil, true, errors.New("assistant.answer_again needs the transcript tail")
+			}
+		}
+		return json.RawMessage(`{}`), true, h.sendOnce(ctx, m, method, a)
 	}
 	return nil, false, nil
 }
 
 // sendOnce sends with the same once-only guard as the app (send.go): a message id is sent at most once.
-func (h *Hub) sendOnce(ctx context.Context, m *Machine, p map[string]any) error {
+func (h *Hub) sendOnce(ctx context.Context, m *Machine, method string, p map[string]any) error {
 	id, _ := p["client_msg_id"].(string)
 	sid, _ := p["session_id"].(string)
 	if h.store != nil {
@@ -62,7 +69,11 @@ func (h *Hub) sendOnce(ctx context.Context, m *Machine, p map[string]any) error 
 			return i18n.Err("hub-assistant_channels.send_in_doubt")
 		}
 	}
-	err := m.call(ctx, "session.send", p, nil)
+	if method == assistantwire.DeviceAssistantAnswerAgain {
+		p["once_id"] = id
+		delete(p, "client_msg_id") // the persisted follow-up is Persona's message
+	}
+	err := m.call(ctx, method, p, nil)
 	if h.store != nil {
 		if serr := h.store.SettleSend(context.WithoutCancel(ctx), id, sendOutcome(err)); serr != nil {
 			h.logf("channels: settle send: %v", serr)

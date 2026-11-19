@@ -695,13 +695,7 @@ func (n *Node) fetchState(ctx context.Context) bool {
 	n.state.merge(res.Sessions)
 	// What a launcher switch that outlived the last connection wrote since, over what the hub had (switch_share.go).
 	n.switches().receive(n)
-	go n.recoverAssistantTasks(func(id, text string) error {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-		defer cancel()
-		launcher, execution := n.assistantModel(ctx, id)
-		_, err := n.assistantSend(ctx, id, "", launcher, text, nil, "", "", execution)
-		return err
-	})
+	go n.recoverAssistantTasks(n.recoverAssistantSend)
 	panes := n.state.panes()
 	n.mu.Lock()
 	for pane, id := range panes {
@@ -711,6 +705,25 @@ func (n *Node) fetchState(ctx context.Context) bool {
 	}
 	n.mu.Unlock()
 	return true
+}
+
+// recoverAssistantSend needs an explicit origin decision before it may resume a pre-upgrade record. Without one, an
+// Inbox session would be indistinguishable from an ordinary one and could recover with ordinary built-in tools.
+// Keep its lost tasks for the next connection instead. A known ordinary record retains the older-hub fallback.
+func (n *Node) recoverAssistantSend(id, text string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	launcher, execution, answered := n.assistantModelDecision(ctx, id)
+	if !answered || !execution.OriginKnown {
+		st, ok := n.state.get(id)
+		if !ok || !st.OriginKnown {
+			return errors.New("manager origin attestation unavailable; lost tasks kept for retry")
+		}
+		execution.Origin, execution.OriginKnown = st.Origin, true
+	}
+	execution.OriginDecisionRequired = true
+	_, err := n.assistantSend(ctx, id, "", launcher, text, nil, "", "", execution)
+	return err
 }
 
 // writeClaudeConfig writes the files the sessions Persona starts load (hooks, MCP, skills; generatedFiles).
@@ -868,6 +881,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		Configured     bool                          `json:"configured"`     // launchers.models, .probe, .http, .model.check: hub.json names this launcher
 		Guest          *guestParams                  `json:"guest"`          // assistant.send: a new guest conversation (assistant_guest.go)
 		Origin         string                        `json:"origin"`         // assistant.send: the manager-recorded source of this conversation
+		OriginKnown    bool                          `json:"origin_known"`   // explicit manager decision; false from an older manager
 		NewSessionID   string                        `json:"new_session_id"` // assistant.send: start the new conversation under this id
 		Raw            json.RawMessage               `json:"-"`
 
@@ -939,7 +953,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			}
 		}
 	}
-	if n.codexBlocked(p.SessionID) && (strings.HasPrefix(method, "session.") || strings.HasPrefix(method, "terminal.") || method == "assistant.send" || method == "assistant.permissions.reset") {
+	if n.codexBlocked(p.SessionID) && (strings.HasPrefix(method, "session.") || strings.HasPrefix(method, "terminal.") || method == "assistant.send" || method == assistantwire.DeviceAssistantAnswerAgain || method == "assistant.permissions.reset") {
 		return nil, refusal("identity_conflict", "会话 ID 与另一来源重复，不能判断操作目标；未读取或发送", nil)
 	}
 	if n.codexBlocked(p.ResumeSessionID) && devicewire.IsSessionStart(method) {
@@ -1549,11 +1563,25 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return map[string]any{"session_id": id}, err
 	case "assistant.execution":
 		return n.assistantExecution(ctx, p.SessionID), nil
-	case "assistant.send":
+	case "assistant.send", assistantwire.DeviceAssistantAnswerAgain:
 		if p.ResumeOnly && !n.assistantResumable(p.SessionID) {
 			return nil, fmt.Errorf("conversation %s is gone", p.SessionID)
 		}
 		sctx := withSkillOwner(ctx, p.SkillOwner)
+		if method == assistantwire.DeviceAssistantAnswerAgain {
+			var guard struct {
+				After       string `json:"answer_again_after"`
+				OnceID      string `json:"once_id"`
+				ClientMsgID string `json:"client_msg_id"`
+			}
+			if err := json.Unmarshal(params, &guard); err != nil {
+				return nil, err
+			}
+			if p.SessionID == "" || p.NewSessionID != "" || guard.After == "" || guard.OnceID == "" || guard.ClientMsgID != "" {
+				return nil, errors.New("assistant.answer_again needs a guarded send to an existing Assistant conversation")
+			}
+			sctx = context.WithValue(sctx, answerAgainAfterKey{}, guard.After)
+		}
 		if p.NewSessionID != "" {
 			// A start under a given id (a meeting's room, its follow-up: made once, also across a restart). One the
 			// node has already is that conversation: nothing is sent again.
@@ -1588,7 +1616,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		sctx = withClientMsgID(sctx, opts.ClientMsgID) // a runtime's message goes under it (assistant_runtime.go)
 		sctx = withSupervisionDelivery(sctx, p.MessageSource)
 		send := func() (string, error) {
-			return n.assistantSend(sctx, p.SessionID, p.Cwd, p.Launcher, p.Text, p.Images, p.PermissionMode, p.Effort, (modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, ServiceTier: p.ServiceTier, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: n.externalRuntime(p.SessionID, p.Launcher, p.Runtime), External: p.External, IsMain: p.IsMain, MainCompactWindow: p.MainCompact, FollowsSetting: p.FollowsSetting, ConfigDir: p.ConfigDir, Origin: p.Origin, Interject: p.Interject, Interactive: p.Interactive}).withSupervision(p.SupervisionInstructions))
+			return n.assistantSend(sctx, p.SessionID, p.Cwd, p.Launcher, p.Text, p.Images, p.PermissionMode, p.Effort, (modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, ServiceTier: p.ServiceTier, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: n.externalRuntime(p.SessionID, p.Launcher, p.Runtime), External: p.External, IsMain: p.IsMain, MainCompactWindow: p.MainCompact, FollowsSetting: p.FollowsSetting, ConfigDir: p.ConfigDir, Origin: p.Origin, OriginKnown: p.OriginKnown, OriginDecisionRequired: true, Interject: p.Interject, Interactive: p.Interactive}).withSupervision(p.SupervisionInstructions))
 		}
 		if p.NewSessionID == "" && p.SessionID == "" && opts.ClientMsgID != "" {
 			// A new conversation's first message with its client_msg_id (one a person's own app opened, the manager's
@@ -1685,8 +1713,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		}
 		ctx = context.WithValue(ctx, sendTraceKey{}, opts.ClientMsgID)
 		ctx = withSupervisionDelivery(ctx, p.MessageSource)
-		ctx, waits := withComputerWait(ctx) // claudebg.go: an outside Claude took it behind a dialog
-		ctx, queued := withSendQueued(ctx)  // codex_desktop_queue.go: it waits behind the turn under way
+		ctx, waits := withComputerWait(ctx)    // claudebg.go: an outside Claude took it behind a dialog
+		ctx, queued := withSendQueued(ctx)     // codex_desktop_queue.go: it waits behind the turn under way
+		ctx, compacted := withCompactNote(ctx) // compact_before_send.go: compacted first, or held for it (#11137)
 		var owner *ownerDelivery
 		if opts.OwnerInput && ownerInputExact(params) {
 			ctx, owner = withOwnerDelivery(ctx) // ccplugin.go: which way the owner's message went in
@@ -1701,8 +1730,11 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			}
 			return n.sendEchoed(p.SessionID, opts.ClientMsgID, p.Text, len(p.Images), after, func() error { // echo.go
 				if n.isAssistantSession(p.SessionID) {
-					_, err := n.assistantSend(withSkillOwner(withClientMsgID(ctx, opts.ClientMsgID), p.SkillOwner), p.SessionID, "", p.Launcher, p.Text, p.Images, "", "", (modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: n.externalRuntime(p.SessionID, p.Launcher, p.Runtime), External: p.External, IsMain: p.IsMain, MainCompactWindow: p.MainCompact, FollowsSetting: p.FollowsSetting, ConfigDir: p.ConfigDir, Origin: p.Origin, Interject: p.Interject, Interactive: p.Interactive}).withSupervision(p.SupervisionInstructions))
+					_, err := n.assistantSend(withSkillOwner(withClientMsgID(ctx, opts.ClientMsgID), p.SkillOwner), p.SessionID, "", p.Launcher, p.Text, p.Images, "", "", (modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: n.externalRuntime(p.SessionID, p.Launcher, p.Runtime), External: p.External, IsMain: p.IsMain, MainCompactWindow: p.MainCompact, FollowsSetting: p.FollowsSetting, ConfigDir: p.ConfigDir, Origin: p.Origin, OriginKnown: p.OriginKnown, OriginDecisionRequired: true, Interject: p.Interject, Interactive: p.Interactive}).withSupervision(p.SupervisionInstructions))
 					return err
+				}
+				if opts.CompactIfFull { // compact_before_send.go (#11137)
+					return n.sendCompacting(ctx, p.SessionID, p.Text, p.Images, opts)
 				}
 				return n.send(ctx, p.SessionID, p.Text, p.Images, opts)
 			})
@@ -1716,6 +1748,12 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		}
 		if *queued {
 			res["queued"] = true
+		}
+		if compacted.held {
+			res["compact_after_turn"] = true
+		}
+		if compacted.done {
+			res["compacted"] = true
 		}
 		if owner != nil && owner.as != "" {
 			res["delivered_as"] = owner.as

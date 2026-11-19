@@ -586,6 +586,7 @@ func init() {
 }
 
 func sendAssistantRecovery(ctx context.Context, n *Node, p *assistantProc, launcher, cwd string, execution modelExecution) error {
+	execution.OriginDecisionRequired = true
 	_, err := n.assistantSend(ctx, p.id, cwd, launcher, prompts.RenderModelRetry(), nil, "", "", execution)
 	return err
 }

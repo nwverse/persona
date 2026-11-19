@@ -2546,6 +2546,29 @@
         }
       }
     },
+    "%@ is offline. Sends when it's back." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ is offline. Sends when it's back."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 已离线，重新上线后会发送。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ はオフラインです。オンラインに戻ると送信されます。"
+          }
+        }
+      }
+    },
     "%@ is offline: it may be asleep, or Persona Link isn't running on it." : {
       "localizations" : {
         "en" : {
@@ -22281,19 +22304,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Allow Everything"
+            "value" : "Full access"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "すべて許可"
+            "value" : "フルアクセス"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "全部放行"
+            "value" : "完全访问"
           }
         }
       },
@@ -22304,19 +22327,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Allow Everything: it won't ask before running commands or changing files."
+            "value" : "Full access: it won't ask before running commands or changing files."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "すべて許可：コマンドの実行やファイルの変更を確認なしで行います。"
+            "value" : "フルアクセス：コマンドの実行やファイルの変更を確認なしで行います。"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "全部放行：运行时跑命令、改文件都不再问你。"
+            "value" : "完全访问：运行时跑命令、改文件都不再问你。"
           }
         }
       },
@@ -22327,19 +22350,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Allow Everything?"
+            "value" : "Full access?"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "すべて許可しますか？"
+            "value" : "フルアクセスにしますか？"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "全部放行？"
+            "value" : "完全访问？"
           }
         }
       },
@@ -26548,19 +26571,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ask First"
+            "value" : "Default permissions"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "手動で確認"
+            "value" : "デフォルト権限"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "手动确认"
+            "value" : "默认权限"
           }
         }
       },
@@ -26892,19 +26915,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ask every step"
+            "value" : "Default permissions"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "毎回確認"
+            "value" : "デフォルト権限"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "每步都问"
+            "value" : "默认权限"
           }
         }
       },
@@ -28149,19 +28172,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Auto"
+            "value" : "Auto-review"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "自動判断"
+            "value" : "自動レビュー"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "自动判断"
+            "value" : "自动审批"
           }
         }
       }
@@ -28217,19 +28240,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Auto-Edit"
+            "value" : "Auto accept edits"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "自動編集"
+            "value" : "編集を自動承認"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "自动改文件"
+            "value" : "允许编辑"
           }
         }
       },
@@ -44555,19 +44578,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Confirm each step"
+            "value" : "Default permissions"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "ステップごとに確認"
+            "value" : "デフォルト権限"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "每步确认"
+            "value" : "默认权限"
           }
         }
       },
@@ -57574,6 +57597,29 @@
         }
       }
     },
+    "Delete this held message?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete this held message?"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除这条待发消息？"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この保留中のメッセージを削除しますか？"
+          }
+        }
+      }
+    },
     "Delete this report?" : {
       "localizations" : {
         "en" : {
@@ -58724,6 +58770,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Delivery status unknown" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delivery status unknown"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "送达状态未知"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "配信状況を確認できません"
+          }
+        }
+      }
     },
     "Details" : {
       "localizations" : {
@@ -66589,6 +66658,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Effort %@ [Agent Preset Compatibility]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Effort %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "思考の強さ %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "思考强度 %@"
+          }
+        }
+      }
     },
     "Every %@" : {
       "localizations" : {
@@ -88659,19 +88751,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Leave Allow Everything?"
+            "value" : "Leave Full access?"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "すべて許可をやめますか？"
+            "value" : "フルアクセスをやめますか？"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "离开全部放行？"
+            "value" : "退出完全访问？"
           }
         }
       }
@@ -91346,6 +91438,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Loading the preset's model options…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Loading the preset's model options…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プリセットのモデルオプションを読み込み中…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在载入预设的模型选项…"
+          }
+        }
+      }
     },
     "Loading timed out" : {
       "localizations" : {
@@ -97481,6 +97596,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Model %@ [Agent Preset Compatibility]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Model %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "モデル %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模型 %@"
+          }
+        }
+      }
     },
     "Model [Assistant View c98e11]" : {
       "localizations" : {
@@ -111579,6 +111717,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Not used here: %@. The launcher or model's own settings apply. [Agent Preset Compatibility]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not used here: %@. The launcher or model's own settings apply."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ここでは使えません：%@。ランチャーまたはモデル自身の設定が適用されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这里用不上：%@，会按启动器或模型自己的设置运行。"
+          }
+        }
+      }
     },
     "Not valid JSON, showing as text: %@" : {
       "localizations" : {
@@ -126929,6 +127090,29 @@
         }
       }
     },
+    "Picking a preset fills the launcher, model and thinking effort for this start." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Picking a preset fills the launcher, model and thinking effort for this start."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プリセットを選ぶと、今回の開始に使うランチャー、モデル、思考の強さが入力されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择预设会填入本次启动的启动器、模型和思考强度。"
+          }
+        }
+      }
+    },
     "Picking one fills it in; it's sent only when you tap Send" : {
       "localizations" : {
         "en" : {
@@ -127670,19 +127854,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Plan Only"
+            "value" : "Plan mode"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "プランのみ"
+            "value" : "計画モード"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "只做计划"
+            "value" : "计划模式"
           }
         }
       },
@@ -127785,19 +127969,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Plan first"
+            "value" : "Plan mode"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "先にプラン"
+            "value" : "計画モード"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "先出方案"
+            "value" : "计划模式"
           }
         }
       },
@@ -128419,6 +128603,52 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "準備中…"
+          }
+        }
+      }
+    },
+    "Preset" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Preset"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プリセット"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "预设"
+          }
+        }
+      }
+    },
+    "Preset %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Preset %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プリセット %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "预设 %@"
           }
         }
       }
@@ -171682,6 +171912,54 @@
       },
       "extractionState" : "manual"
     },
+    "Conversation invalid: its compacted context belongs to another account. Start a new conversation to continue." : {
+      "comment" : "An unrecoverable account-sealed conversation; explain why and guide the owner to a replacement.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conversation invalid: its compacted context belongs to another account. Start a new conversation to continue."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此会话已失效：压缩上下文属于另一个账号。请换新会话接着做。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この会話は無効です。圧縮されたコンテキストは別のアカウントに紐付いています。新しい会話で続けてください。"
+          }
+        }
+      }
+    },
+    "Invalid conversation" : {
+      "comment" : "An Agent conversation that cannot be resumed.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Invalid conversation"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已失效"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無効な会話"
+          }
+        }
+      }
+    },
     "The model request failed" : {
       "comment" : "Why a model request failed: the first line of the error card in a chat (PersonaKit, #5758)",
       "localizations" : {
@@ -176548,19 +176826,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "This agent uses its own approval settings unless you choose Allow Everything."
+            "value" : "This agent uses its own approval settings unless you choose Full access."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "「すべて許可」を選ばない限り、このエージェントは自身の承認設定で動作します。"
+            "value" : "「フルアクセス」を選ばない限り、このエージェントは自身の承認設定で動作します。"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "除非选「全部放行」，这个 Agent 按它自己的审批设置运行。"
+            "value" : "除非选「完全访问」，这个 Agent 按它自己的审批设置运行。"
           }
         }
       }
@@ -176571,19 +176849,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "This agent uses its own approval settings unless you choose Allow Everything. You can switch in the chat later."
+            "value" : "This agent uses its own approval settings unless you choose Full access. You can switch in the chat later."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "「すべて許可」を選ばない限り、このエージェントは自身の承認設定で動作します。あとからチャットで切り替えることもできます。"
+            "value" : "「フルアクセス」を選ばない限り、このエージェントは自身の承認設定で動作します。あとからチャットで切り替えることもできます。"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "除非选「全部放行」，这个 Agent 按它自己的审批设置运行。之后也能在对话里切换。"
+            "value" : "除非选「完全访问」，这个 Agent 按它自己的审批设置运行。之后也能在对话里切换。"
           }
         }
       }
@@ -176593,19 +176871,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "This agent wasn't started with Allow Everything, so it can't be switched back to it from here."
+            "value" : "This agent wasn't started with Full access, so it can't be switched back to it from here."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "このエージェントはすべて許可で起動していないため、切り替えるとここからは戻せません。"
+            "value" : "このエージェントはフルアクセスで起動していないため、切り替えるとここからは戻せません。"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "这个 Agent 不是以全部放行启动的，切走后在这里切不回来。"
+            "value" : "这个 Agent 不是以完全访问启动的，切走后在这里切不回来。"
           }
         }
       }

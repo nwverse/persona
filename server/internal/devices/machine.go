@@ -181,6 +181,7 @@ type Machine struct {
 	derived   bool
 	active    *nodePath
 	transport string
+	routeRev  uint64 // the serving connection's route generation, for late probes and callbacks
 	uid       string
 	next      *nodeConn
 	parked    string
@@ -680,6 +681,9 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 	if nodeHas(info, nodeproto.OwnerControls) {
 		method = ownerControlMethod(ctx, method)
 	}
+	if dial, ok := params.(devicewire.PortDial); method == devicewire.MethodPortDial && ok && dial.ID != "" {
+		return m.callPortDial(ctx, p, dial, out)
+	}
 	return p.Call(ctx, method, params, out)
 }
 
@@ -908,6 +912,9 @@ func (m *Machine) onEvent(event string, params json.RawMessage) {
 			devicewire.ShareCreationLog(m.d.logf, p.SessionID, "manager_persist", "store_unavailable")
 		}
 		return // the manager's alone
+	case proto.EventModeSet:
+		m.onModeSet(params)
+		return // the manager keeps the record; no app broadcast
 	case proto.EventModeRestart: // what became of a queued restart into a mode (mode_changes.go)
 		m.onModeRestart(params)
 		return // the manager's alone

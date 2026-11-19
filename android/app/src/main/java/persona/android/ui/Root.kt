@@ -228,16 +228,25 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     val saved = remember(store) { if (shell.automation) ShellPosition() else store.load() }
     // With the embedded assistant chat (not in demo), assistant conversations open inside the Persona home.
     val embeddedAssistant = session.demo == null
+    fun hubRouter(kind: (String, String) -> ConversationKind?) = Router(
+        hubLink = { link ->
+            resolveHubRoute(link, session.hubAddresses(), session.groups.groups.value.firstOrNull { it.selected }?.namespace,
+                session.sessions.sessions.value.map { it.key }, session.assistant.assistant.value, session.groups.groups.value)
+        },
+        conversationKind = kind,
+    )
     val initialLaunch = remember { openNavigation.value }
     val initialRoute = remember {
-        initialLaunch?.invoke(Router { m, s ->
+        initialLaunch?.invoke(hubRouter { m, s ->
             val key = SessionKey(m, s)
             val assistant = session.assistant.assistant.value
             if (key == assistant.mainSession || assistant.conversations.any { it.key == key }) ConversationKind.Assistant
             else session.sessions.sessions.value.firstOrNull { it.key == key }?.let {
                 if (it.assistant) ConversationKind.Assistant else ConversationKind.Agent
             }
-        })
+        })?.takeIf { route ->
+            route.hubGroupId == null || route.hubGroupId == session.groups.groups.value.firstOrNull { it.selected }?.id
+        }
     }
     var selected by rememberSaveable { mutableStateOf(initialRoute?.tab ?: if (session.demo != null) AppTab.Persona else saved.tab) }
     var machine by rememberSaveable { mutableStateOf(saved.machine) }
@@ -276,6 +285,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
         sidebarOverlayShown.value = false
     }
     val settingsSheetStack = rememberNavBackStack(SettingsRoute)
+    persona.android.navigation.TrackDevScreen(selected, stacks.getValue(selected).lastOrNull(), settingsOpened, settingsSheetStack.lastOrNull())
     // Where each stack's Inbox list goes when an item is opened from outside it (#9053): one per stack, so a list kept
     // composed in a hidden tab never takes another stack's landing.
     val inboxLandings = remember(session.identity) { AppTab.entries.associateWith { InboxLanding() } }
@@ -426,7 +436,8 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
         assistantRequest = conversation
         assistantPending = null
     }
-    val router = remember { Router { m, s -> currentKind(SessionKey(m, s)) } }
+    val router = remember(session) { hubRouter { m, s -> currentKind(SessionKey(m, s)) } }
+    var hubSelectionFrom by remember { mutableStateOf<String?>(null) }
     val agentsWiring by session.agentsWiring.state.collectAsStateWithLifecycle()
     val navigationWiring = remember { MutableStateFlow(agentsWiring) }
     SideEffect {
@@ -453,15 +464,28 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
             }
         }
     }
-    LaunchedEffect(sessions, assistant, openNavigation.value) {
+    val pendingHubLink = MainActivity.pendingHubLink.value
+    LaunchedEffect(sessions, assistant, openNavigation.value, pendingHubLink, session.identity) {
         navigator.restoreChatTabs()
-        openNavigation.value?.invoke(router)?.let {
-            settingsOpened = false
-            sidebar.opened.value = false
-            selected = openResolved(it)
-            it.pairingLink?.let { link -> MainActivity.pendingPairLink.value = link }
-            openNavigation.value = null
+        val fromActivity = openNavigation.value != null
+        val route = if (fromActivity) openNavigation.value?.invoke(router)
+            else pendingHubLink?.let { router.parse(RouteInput.DeepLink(it)) }
+        if (route == null) return@LaunchedEffect
+        val selectedGroup = session.groups.groups.value.firstOrNull { it.selected }?.id
+        val targetGroup = route.hubGroupId
+        if (targetGroup != null && targetGroup != selectedGroup) {
+            hubSelectionFrom = session.identity
+            session.groups.select(targetGroup)
+            return@LaunchedEffect
         }
+        // Selection publishes a replacement session. Do not open another hub's page with the old one's assistant state.
+        if (hubSelectionFrom != null && hubSelectionFrom == session.identity) return@LaunchedEffect
+        settingsOpened = false
+        sidebar.opened.value = false
+        selected = openResolved(route)
+        route.pairingLink?.let { link -> MainActivity.pendingPairLink.value = link }
+        hubSelectionFrom = null
+        if (fromActivity) openNavigation.value = null else MainActivity.pendingHubLink.value = null
     }
     LaunchedEffect(store) {
         snapshotFlow {
@@ -936,7 +960,9 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
             }
             entry<InteractionRoute> { ShellChat(it.chat, session, navigator, shell.feedback, it.requestId, navigator::sessionClosed,
                 ::openWithCard, navigator::groupGone, chatTerminal(it.chat)) }
-            inboxEntries(navigator, session.inbox, connectors = services.connectors.takeUnless { services.demo }, onOpenCard = { card ->
+            inboxEntries(navigator, session.inbox, pictureMarkdown = { text, source, modifier ->
+                persona.feature.chat.ExternalReplyMarkdown(text, source, modifier)
+            }, connectors = services.connectors.takeUnless { services.demo }, onOpenCard = { card ->
                 openWithCard(ResolvedRoute(AppTab.Agents, AgentsRoute, card = card))
             })
             entry<InboxItemRoute> { InboxLink(it, session.inbox, navigator, ::replace) }
@@ -973,6 +999,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                 session.knowledgeNamespace, uriHandler::openUri,
                 onNewAgent = { start -> navigator.navigate(NewAgentRoute(start.machineId, start.cwd, start.prompt)) }) } ?: run {
                 entry<KnowledgeRoute> { UnavailablePage(stringResource(R.string.app_demo_no_knowledge), navigator) }
+                entry<KnowledgeKindRoute> { UnavailablePage(stringResource(R.string.app_demo_no_knowledge), navigator) }
                 entry<KnowledgeDetailRoute> { UnavailablePage(stringResource(R.string.app_demo_no_knowledge), navigator) }
             }
             settingsDetailEntries(navigator, services, askSubscriptions)
