@@ -6,7 +6,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import persona.core.contracts.Interaction
 import persona.core.contracts.Item
+import persona.core.contracts.Session
 import persona.core.contracts.SessionKey
+import persona.core.contracts.UndeliveredMessage
 import persona.core.contracts.api.DeliveryState
 import persona.core.contracts.api.OutboxMessage
 import java.time.Instant
@@ -80,5 +82,17 @@ class ChatTapsTest {
         )
         assertEquals(listOf("c2"), chatBubbles(outbox, key, items).map { it.clientMessageId })
         assertEquals(listOf("c1", "c2", "c3"), chatBubbles(outbox, key, emptyList()).map { it.clientMessageId })
+    }
+
+    @Test fun keptBubblesDoNotDuplicateTranscriptOrLocalIds() {
+        val key = SessionKey("m1", "s1")
+        val waiting = UndeliveredMessage("ABC-kept", "waiting", at = "2026-11-17T10:00:00Z", state = "waiting")
+        val failed = UndeliveredMessage("DEF-kept", "failed", at = "2026-11-17T10:01:00Z", state = "failed")
+        val row = Session("m1", "s1", assistant = true, undelivered = listOf(waiting, failed))
+        assertEquals(listOf(waiting, failed), shownUndelivered(row, emptyList(), emptyList()))
+        val transcript = listOf(Item("line", 1, role = "user", kind = "text", text = "waiting", clientMsgId = "abc-KEPT"))
+        assertEquals(listOf(failed), shownUndelivered(row, transcript, emptyList()))
+        val local = listOf(OutboxMessage("def-KEPT", key, "failed", DeliveryState.Sending))
+        assertEquals(listOf(waiting), shownUndelivered(row, emptyList(), local))
     }
 }

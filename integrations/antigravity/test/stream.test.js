@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict'
-import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { packageHash } from '../../runtime-sdk/lib/package.js'
 import { startFakeNode, until } from '../../runtime-sdk/testing/fake-node.js'
+import { PACKAGE_NAME } from '../install.mjs'
 import { createAgyRuntime } from '../lib/runtime.js'
 import { AgyAcpClient } from '../lib/acp.js'
 
@@ -27,6 +30,7 @@ async function fixture(t, options = {}) {
   await node.ready
   await node.peer.call('session.start', { cwd: directory })
   await node.peer.call('session.watch', { session_id: SESSION })
+  await until('initial session is listed', () => sessionStatus(node))
   const calls = () => readFileSync(join(directory, 'calls.jsonl'), 'utf8').split('\n').filter(Boolean).map(JSON.parse)
   const update = (value) => appendFileSync(join(directory, 'updates.jsonl'), `${JSON.stringify(value)}\n`)
   const chunk = async (text, expected = text) => {
@@ -34,7 +38,7 @@ async function fixture(t, options = {}) {
     await until(`live text ${expected}`, () => node.last('session.delta')?.text === expected, 15_000)
   }
   const promptCount = (count) => until(`${count} prompts started`, () => calls().filter((r) => r.method === 'session/prompt').length === count, 15_000)
-  return { node, directory, calls, update, chunk, promptCount }
+  return { node, directory, calls, update, chunk, promptCount, runtime }
 }
 
 test('AGY streams one assistant message at a time across tool calls', { timeout: 20_000 }, async (t) => {
@@ -110,11 +114,255 @@ function transcripts(directory, compact, complete) {
 const userStep = (index, text) => ({ step_index: index, source: 'USER_EXPLICIT', type: 'USER_INPUT', status: 'DONE', content: text })
 const replyStep = (index, text) => ({ step_index: index, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', content: text })
 
+function nativeState(directory, status, stepCount) {
+  const db = new DatabaseSync(join(directory, 'config/conversation_summaries.db'))
+  try {
+    db.exec('CREATE TABLE IF NOT EXISTS conversation_summaries (conversation_id TEXT PRIMARY KEY, status TEXT, not_fully_idle INTEGER, killed INTEGER, step_count INTEGER, title TEXT, workspace_uris TEXT, last_modified_time TEXT)')
+    db.prepare("INSERT OR REPLACE INTO conversation_summaries VALUES (?, ?, 0, 0, ?, '', '[]', '')")
+      .run(RAW, `CASCADE_RUN_STATUS_${status}`, stepCount)
+  } finally {
+    db.close()
+  }
+}
+
+const sessionStatus = (node) => node.last('runtime.sessions')?.sessions.find((session) => session.session_id === SESSION)?.status
+
+test('autonomous wakes stream work and settle only once native work is idle and exported', async (t) => {
+  const { node, directory, calls, update, chunk, runtime } = await fixture(t, { exportPollMs: 20 })
+  const prior = [userStep(0, 'Run the workflow.'), replyStep(1, 'Workflow started.')]
+  transcripts(directory, prior, prior)
+  nativeState(directory, 'IDLE', 2)
+
+  update({ sessionUpdate: 'agent_thought_chunk', content: { text: 'Inspect the result.' } })
+  await until('autonomous working status before native activity', () => sessionStatus(node) === 'working', 1000)
+  await until('autonomous thought', () => node.last('session.items')?.items.some((item) => item.kind === 'thinking' && item.text === 'Inspect the result.'))
+  await chunk('Reading the result.')
+  update({ sessionUpdate: 'tool_call', toolCallId: 'read', name: 'read_file' })
+  await until('autonomous tool and pre-tool text', () => node.last('session.items')?.items.some((item) => item.kind === 'tool_use'))
+  assert.ok(node.last('session.items').items.some((item) => item.text === 'Reading the result.'))
+  update({ sessionUpdate: 'tool_call_update', toolCallId: 'read', status: 'completed', rawInput: { Path: 'result.txt' }, rawOutput: 'Found it.' })
+  await until('autonomous tool result', () => node.last('session.items')?.items.some((item) => item.kind === 'tool_result'))
+  const live = node.last('session.items').items
+  assert.equal(live.find((item) => item.kind === 'tool_use').tool_use_id, live.find((item) => item.kind === 'tool_result').tool_use_id)
+  assert.match(JSON.stringify(live.find((item) => item.kind === 'tool_use').tool_input), /result\.txt/)
+  await chunk('Workflow finished.')
+  assert.equal(calls().filter((call) => call.method === 'session/prompt').length, 0)
+
+  const wake = { step_index: 2, type: 'SYSTEM_MESSAGE', content: 'The workflow finished.' }
+  const partial = [...prior, wake, replyStep(3, 'Reading the result.')]
+  transcripts(directory, partial, partial)
+  await new Promise((resolve) => setTimeout(resolve, 80))
+  assert.equal(node.last('session.delta').text, 'Workflow finished.', 'an idle summary and a partial export do not settle the turn')
+
+  const complete = [...partial, { ...replyStep(4, ''), thinking: 'Inspect the result.', tool_calls: [{ name: 'read_file', args: { Path: 'result.txt' } }] },
+    { step_index: 5, type: 'GENERIC', status: 'DONE', content: 'Found it.' }, replyStep(6, 'Workflow finished.')]
+  nativeState(directory, 'RUNNING', 7)
+  transcripts(directory, complete, complete)
+  await new Promise((resolve) => setTimeout(resolve, 80))
+  assert.equal(node.last('session.delta').text, 'Workflow finished.', 'a running summary does not settle even with the reply exported')
+  nativeState(directory, 'IDLE', 7)
+  await until('native export replaces autonomous work', () => sessionStatus(node) === 'done' && node.last('session.delta')?.text === '' && runtime.idle())
+  const final = await node.peer.call('session.items', { session_id: SESSION })
+  assert.equal(final.items.filter((item) => item.kind === 'tool_use').length, 1)
+  assert.equal(final.items.filter((item) => item.text === 'Workflow finished.').length, 1)
+})
+
+test('autonomous wakes retire after inactivity without native export', async (t) => {
+  const { node, directory, update, chunk, runtime } = await fixture(t, { autonomousIdleMs: 350, exportPollMs: 20 })
+  nativeState(directory, 'IDLE', 0)
+  update({ sessionUpdate: 'tool_call_update', toolCallId: 'read', name: 'read_file', status: 'completed', rawOutput: 'Found it.' })
+  await until('a tool update can start the wake', () => node.last('session.items')?.items.some((item) => item.kind === 'tool_result'), 1000)
+  await chunk('Still awake.')
+  await until('inactivity retires the stream and working status', () => node.last('session.delta')?.text === '' && sessionStatus(node) !== 'working' && runtime.idle(), 1500)
+  assert.deepEqual((await node.peer.call('session.items', { session_id: SESSION })).items, [])
+  await chunk('Awake again.')
+})
+
+test('an autonomous wake stays live while its permission card awaits an answer', async (t) => {
+  const { node, calls, update, chunk, runtime } = await fixture(t, { autonomousIdleMs: 300, exportPollMs: 20 })
+  const permissionId = 'wake-permission'
+  const answer = () => calls().find((call) => call.id === permissionId)?.result?.outcome
+  let answerCard
+  node.resolve = () => new Promise((resolve) => { answerCard = resolve })
+  await chunk('Waiting for permission.')
+  update({ permission: permissionId })
+  await until('permission card reaches the phone', () => answerCard)
+  await new Promise((resolve) => setTimeout(resolve, 400))
+  assert.equal(answer(), undefined, 'the wake must not cancel the card after its inactivity deadline')
+  assert.equal(runtime.idle(), false)
+
+  answerCard({ allow: true })
+  await until('ACP permission answer', () => answer())
+  assert.deepEqual(answer(), { outcome: 'selected', optionId: 'allow' })
+  await new Promise((resolve) => setTimeout(resolve, 60))
+  assert.equal(runtime.idle(), false, 'answering the card gives the wake a fresh inactivity window')
+  await chunk('Continuing.', 'Waiting for permission.Continuing.')
+  await until('wake settles after the answer and subsequent inactivity', () => runtime.idle() && node.last('session.delta')?.text === '')
+})
+
+test('empty updates cannot start an autonomous wake', async (t) => {
+  const { node, update, runtime } = await fixture(t)
+  const before = node.all('session.delta').length
+  update({ sessionUpdate: 'agent_message_chunk', content: { text: ' \n ' } })
+  update({ sessionUpdate: 'agent_thought_chunk', content: { text: ' \t ' } })
+  update({ sessionUpdate: 'tool_call_update', status: 'completed' })
+  update({ sessionUpdate: 'session_info_update', title: 'Updates delivered' })
+  await until('ACP updates delivered', () => node.last('runtime.sessions')?.sessions[0]?.title === 'Updates delivered')
+  assert.notEqual(sessionStatus(node), 'working')
+  assert.equal(node.all('session.delta').length, before)
+  assert.equal(runtime.idle(), true)
+})
+
+test('an installed update exits as soon as the autonomous wake retires', async (t) => {
+  const store = mkdtempSync(join(tmpdir(), 'agy-wake-update-'))
+  t.after(() => rmSync(store, { recursive: true, force: true }))
+  const exits = []
+  const { node, directory, chunk } = await fixture(t, {
+    idleCheckMs: 10_000, retryMs: 20, exportPollMs: 20,
+    update: { name: PACKAGE_NAME, hash: 'running', store, exit: (hash) => exits.push(hash) },
+  })
+  await chunk('Wake reply.')
+  const files = [{ path: 'antigravity/companion.mjs', data: Buffer.from('export {}\n') }]
+  const hash = packageHash(files)
+  node.offer = { name: PACKAGE_NAME, hash, files: files.map((file) => ({ ...file, data: file.data.toString('base64') })) }
+  node.peer.close(new Error('node upgraded'))
+  await until('package installed while wake is active', () => {
+    try { return readlinkSync(join(store, 'current')) === hash } catch { return false }
+  })
+  assert.deepEqual(exits, [])
+  const steps = [replyStep(0, 'Wake reply.')]
+  transcripts(directory, steps, steps)
+  nativeState(directory, 'IDLE', 1)
+  await until('wake retirement triggers exit without waiting for the idle poll', () => exits.length, 1500)
+  assert.deepEqual(exits, [hash])
+})
+
+test('a user send takes over an autonomous wake without waiting for it', async (t) => {
+  const { node, update, chunk, promptCount, runtime } = await fixture(t)
+  update({ sessionUpdate: 'tool_call', toolCallId: 'read', name: 'read_file' })
+  await chunk('Background progress.')
+  const sent = await node.peer.call('session.send', { session_id: SESSION, text: 'Next request.' })
+  assert.notEqual(sent?.queued, true)
+  await promptCount(1)
+  await chunk('User reply.')
+  update({ end: true })
+  await until('user turn settles independently', () => node.last('session.delta')?.text === '' && sessionStatus(node) !== 'working' && runtime.idle())
+  const page = await node.peer.call('session.items', { session_id: SESSION })
+  assert.deepEqual(page.items.map((item) => item.text), ['Next request.', 'User reply.'])
+})
+
+test('a policy-changing send cannot resume AGY during an autonomous wake', async (t) => {
+  const { node, calls, chunk } = await fixture(t)
+  await chunk('Background progress.')
+  const resumes = calls().filter((call) => call.method === 'session/resume').length
+  await assert.rejects(node.peer.call('session.send', {
+    session_id: SESSION, text: 'Next request.', supervision_instructions: 'Ask before editing files.',
+  }), /Wait for the current turn to finish before changing supervision policy/)
+  assert.equal(calls().filter((call) => call.method === 'session/resume').length, resumes)
+  assert.equal(calls().some((call) => call.method === 'session/prompt'), false)
+  assert.equal(node.last('session.delta').text, 'Background progress.')
+})
+
+test('interrupt settles an autonomous wake even when the native summary still says running', async (t) => {
+  const { node, directory, calls, update, chunk, runtime } = await fixture(t)
+  nativeState(directory, 'RUNNING', 0)
+  update({ sessionUpdate: 'tool_call', toolCallId: 'read', name: 'read_file' })
+  await chunk('Background progress.')
+  await node.peer.call('session.interrupt', { session_id: SESSION })
+  await until('native cancel requested', () => calls().some((call) => call.method === 'session/cancel'))
+  await until('interrupt retires autonomous work', () => node.last('session.delta')?.text === '' && sessionStatus(node) !== 'working' && runtime.idle())
+  assert.deepEqual((await node.peer.call('session.items', { session_id: SESSION })).items, [])
+})
+
+test('an autonomous wake preserves a previous unexported reply through interrupt and export', async (t) => {
+  const { node, directory, update, chunk, promptCount, runtime } = await fixture(t)
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Run the workflow.' })
+  await promptCount(1)
+  await chunk('Workflow started.')
+  update({ end: true })
+  await until('prompt reply held until export', () => runtime.idle() && node.last('session.items')?.items.some((item) => item.text === 'Workflow started.'))
+  const prior = node.last('session.items').history
+
+  update({ sessionUpdate: 'tool_call', toolCallId: 'read', name: 'read_file' })
+  await until('autonomous tool over the pending reply', () => node.last('session.items')?.items.some((item) => item.kind === 'tool_use'))
+  assert.notEqual(node.last('session.items').history, prior)
+  await node.peer.call('session.interrupt', { session_id: SESSION })
+  await until('prior transcript restored and autonomous tool removed', () => node.last('session.items')?.history === prior)
+  assert.deepEqual(node.last('session.items').items.map((item) => item.text), ['Run the workflow.', 'Workflow started.'])
+
+  await chunk('Workflow finished.')
+  const complete = [userStep(0, 'Run the workflow.'), { step_index: 1, type: 'SYSTEM_MESSAGE', content: 'Progress update.' },
+    replyStep(2, 'Workflow started.'), { step_index: 3, type: 'SYSTEM_MESSAGE', content: 'The workflow finished.' }, replyStep(4, 'Workflow finished.')]
+  transcripts(directory, complete, complete)
+  nativeState(directory, 'IDLE', 5)
+  await until('both replies are exported despite a mid-prompt system message', () => runtime.idle() && node.last('session.items')?.to_seq === 5)
+  const final = await node.peer.call('session.items', { session_id: SESSION })
+  assert.deepEqual(final.items.map((item) => item.text), ['Run the workflow.', 'Workflow started.', 'Workflow finished.'])
+})
+
+test('a text-only wake does not rewrite the unexported prompt history', async (t) => {
+  const { node, update, chunk, promptCount, runtime } = await fixture(t)
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Run the workflow.' })
+  await promptCount(1)
+  await chunk('Workflow started.')
+  update({ end: true })
+  await until('prompt reply held until export', () => runtime.idle() && node.last('session.items')?.items.some((item) => item.text === 'Workflow started.'))
+  const prior = await node.peer.call('session.items', { session_id: SESSION })
+  await chunk('Workflow finished.')
+  assert.deepEqual(await node.peer.call('session.items', { session_id: SESSION }), prior)
+})
+
+test('a late export of one wake cannot settle the next wake', async (t) => {
+  const { node, directory, update, chunk, runtime } = await fixture(t, { autonomousIdleMs: 800, exportPollMs: 20 })
+  const announce = (toolCallId) => update({ sessionUpdate: 'tool_call', toolCallId, name: 'read_file' })
+  announce('first-read')
+  await chunk('Workflow finished.')
+  await until('first wake times out unexported', () => runtime.idle() && node.last('session.delta')?.text === '')
+
+  announce('second-read')
+  await chunk('Workflow finished.')
+  const first = [{ step_index: 0, type: 'SYSTEM_MESSAGE' },
+    { ...replyStep(1, ''), tool_calls: [{ name: 'read_file' }] }, replyStep(2, 'Workflow finished.')]
+  transcripts(directory, first, first)
+  nativeState(directory, 'IDLE', 3)
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  assert.equal(runtime.idle(), false, 'the earlier wake exported the same tool and reply')
+  assert.equal(node.last('session.delta').text, 'Workflow finished.')
+
+  const next = [...first, { step_index: 3, type: 'SYSTEM_MESSAGE' }, replyStep(4, 'Workflow finished.')]
+  transcripts(directory, next, next)
+  nativeState(directory, 'IDLE', 5)
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  assert.equal(runtime.idle(), false, 'the second wake cannot borrow the first wake\'s tool call')
+
+  const complete = [...next.slice(0, -1), { ...replyStep(4, ''), tool_calls: [{ name: 'read_file' }] }, replyStep(5, 'Workflow finished.')]
+  transcripts(directory, complete, complete)
+  nativeState(directory, 'IDLE', 6)
+  await until('second wake settles with its own export', () => runtime.idle() && node.last('session.delta')?.text === '', 400)
+  const final = await node.peer.call('session.items', { session_id: SESSION })
+  assert.equal(final.items.filter((item) => item.kind === 'tool_use').length, 2)
+})
+
+test('unknown and archived sessions cannot start autonomous work', async (t) => {
+  const { node, update, chunk, runtime } = await fixture(t)
+  const unknown = '66666666-2222-4333-8444-555555555555'
+  await node.peer.call('session.watch', { session_id: `agy-${unknown}` })
+  update({ sessionId: unknown, sessionUpdate: 'agent_message_chunk', content: { text: 'Unknown session.' } })
+  await chunk('Known session.')
+  assert.equal(node.all('session.delta').some((delta) => delta.text === 'Unknown session.'), false)
+  await node.peer.call('session.close', { session_id: SESSION })
+  await until('close retires autonomous work', () => node.last('session.delta')?.text === '' && runtime.idle() && !sessionStatus(node))
+
+  update({ sessionUpdate: 'agent_message_chunk', content: { text: 'Archived session.' } })
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  assert.equal(node.all('session.delta').some((delta) => delta.text === 'Archived session.'), false)
+  assert.equal(runtime.idle(), true)
+})
+
 test('watched native turns push new content after an older quota error without ACP updates', async (t) => {
-  const { node, directory, calls, update } = await fixture(t)
+  const { node, directory, calls } = await fixture(t)
   const old = [userStep(0, 'First request.'), { step_index: 1, type: 'ERROR_MESSAGE', content: 'Quota exhausted.' }]
   transcripts(directory, old, old)
-  update({ sessionUpdate: 'tool_call', toolCallId: 'initial', title: 'Read' })
   await until('old quota is pushed', () => node.last('session.items')?.to_seq === 2)
   const next = [...old, userStep(2, 'Second request.'), replyStep(3, 'Current progress.')]
   transcripts(directory, next, next)
@@ -135,11 +383,10 @@ test('watched native turns push new content after an older quota error without A
 })
 
 test('a native planner completion at the same index replaces watched content', async (t) => {
-  const { node, directory, update } = await fixture(t)
+  const { node, directory } = await fixture(t)
   const pending = { ...replyStep(1, ''), thinking: 'Reviewing the change.', created_at: '2026-01-02T12:00:01Z' }
   const old = [userStep(0, 'Review the change.'), pending]
   transcripts(directory, old, old)
-  update({ sessionUpdate: 'tool_call', toolCallId: 'initial', title: 'Read' })
   await until('initial work is pushed', () => node.last('session.items')?.to_seq === 2)
   const history = node.last('session.items').history
   const complete = [old[0], { ...pending, content: 'Review complete.' }]
@@ -166,12 +413,11 @@ test('normal AGY pages recover the complete native reply through the same source
 })
 
 test('live AGY items apply Persona page limits to the complete native reply', async (t) => {
-  const { node, directory, update } = await fixture(t)
+  const { node, directory } = await fixture(t)
   const complete = '## Report\n' + 'A detailed report row.\n'.repeat(2000) + 'Literal example: <truncated 7 bytes>.'
   transcripts(directory,
     [userStep(0, 'Read the report.'), { ...replyStep(1, '## Report\n<truncated 40000 bytes>\nEnd.'), truncated_fields: ['content'] }],
     [userStep(0, 'Read the report.'), replyStep(1, complete)])
-  update({ sessionUpdate: 'tool_call', toolCallId: 'read-report', title: 'Read' })
   await until('the reply is pushed', () => node.last('session.items')?.to_seq === 2)
   const reply = node.last('session.items').items.find((item) => item.role === 'assistant' && item.kind === 'text')
   assert.equal(reply.full_size, Buffer.byteLength(complete))
@@ -182,19 +428,17 @@ test('live AGY items apply Persona page limits to the complete native reply', as
 })
 
 test('AGY watch cursors follow the complete export while its compact export is ahead', async (t) => {
-  const { node, directory, update } = await fixture(t)
+  const { node, directory } = await fixture(t)
   const old = [userStep(0, 'First request.'), replyStep(1, 'First reply.')]
   const nextUser = userStep(2, 'Second request.')
   transcripts(directory, [...old, nextUser], old)
   const page = await node.peer.call('session.items', { session_id: SESSION })
   assert.equal(page.to_seq, 2)
-  update({ sessionUpdate: 'tool_call', toolCallId: 'read-first', title: 'Read' })
   await until('the initial complete export is pushed', () => node.last('session.items')?.to_seq === 2)
   await node.peer.call('session.unwatch', { session_id: SESSION })
   await node.peer.call('session.watch', { session_id: SESSION })
   const complete = [...old, nextUser, replyStep(3, 'Second reply.')]
   transcripts(directory, complete, complete)
-  update({ sessionUpdate: 'tool_call', toolCallId: 'read-next', title: 'Read' })
   await until('the complete export catches up', () => node.last('session.items')?.to_seq === 4)
   assert.deepEqual(node.last('session.items').items.map((item) => item.seq), [3, 4])
 })

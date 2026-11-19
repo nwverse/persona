@@ -325,6 +325,8 @@ internal class MergedShellServices(private val stacks: GroupStacks) {
         override suspend fun verify(session: Session, action: ChatAction) = of(session).verify(session, action)
         override suspend fun editQueue(session: Session, keep: List<Int>) = of(session).editQueue(session, keep)
         override suspend fun sendQueuedNow(session: Session) = of(session).sendQueuedNow(session)
+        override suspend fun retryUndelivered(session: Session, messageId: String) = of(session).retryUndelivered(session, messageId)
+        override suspend fun deleteUndelivered(session: Session, messageId: String) = of(session).deleteUndelivered(session, messageId)
         override suspend fun info(session: Session) = of(session).info(session)
         override suspend fun completeRow(session: Session) = of(session).completeRow(session)
         override suspend fun childRows(session: Session) = of(session).childRows(session)

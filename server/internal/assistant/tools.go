@@ -546,6 +546,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			Launcher string `json:"launcher"`
 			Model    string `json:"model"`
 			Effort   string `json:"effort"`
+			Speed    string `json:"speed"`
 			Tier     string `json:"tier"`
 			Worktree struct {
 				Branch string `json:"branch"`
@@ -577,7 +578,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			return "", fmt.Errorf("%w; no agent was started", err)
 		}
 		a.Cwd = proto.ExpandHome(a.Cwd, am.Home)
-		own := startPick{launcher: strings.TrimSpace(a.Launcher), effort: strings.TrimSpace(a.Effort)} // before the tier
+		own := startPick{launcher: strings.TrimSpace(a.Launcher), effort: strings.TrimSpace(a.Effort), speed: strings.TrimSpace(a.Speed)} // before the tier
 		// The tier is resolved first (an unknown one asks and starts nothing), then Model Settings' Agents laid over it as
 		// the start lays it: what runs is said on the card (a hand-off from the health space asks) and in the answer.
 		tier, runs := strings.TrimSpace(a.Tier), ""
@@ -586,21 +587,26 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			if err != nil {
 				return "", fmt.Errorf("%w; no agent was started", err)
 			}
+			model := a.Model
 			if !layTier(t, &a.Launcher, &a.Model, &a.Effort) {
 				tier = "" // a launcher of its own: the tier gives it nothing
 			} else {
-				picks := map[string]any{"launcher": a.Launcher, "model": a.Model, "effort": a.Effort}
+				if a.Speed == "" && (model == "" || model == t.Model) {
+					a.Speed = t.Speed
+				}
+				picks := map[string]any{"launcher": a.Launcher, "model": a.Model, "effort": a.Effort, "speed": a.Speed}
 				if s.applyModel(ctx, "agent.new", picks) == nil { // one that can't run is the start's to say
 					l, _ := picks["launcher"].(string)
 					m, _ := picks["model"].(string)
 					e, _ := picks["effort"].(string)
-					runs = ModelTier{Launcher: l, Model: m, Effort: e}.runs()
+					v, _ := picks["speed"].(string)
+					runs = ModelTier{Launcher: l, Model: m, Effort: e, Speed: v}.runs()
 				}
 			}
 		}
 		// What it runs on this computer, before the user is asked (#2640, launcher_fit.go): a launcher named here that
 		// the computer lacks starts nothing; a default it lacks gives way to one it has, and the card and answer say so.
-		run := map[string]any{"launcher": a.Launcher, "model": a.Model, "effort": a.Effort}
+		run := map[string]any{"launcher": a.Launcher, "model": a.Model, "effort": a.Effort, "speed": a.Speed}
 		if err := s.applyModel(ctx, "agent.new", run); err != nil {
 			return "", err
 		}
@@ -608,10 +614,15 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if err != nil {
 			return "", fmt.Errorf("%w; no agent was started", err)
 		}
+		a.Speed, _ = run["speed"].(string)
+		if err := checkStartSpeed(run, fit, ""); err != nil {
+			return "", fmt.Errorf("%w; no agent was started", err)
+		}
 		if swapped != "" {
 			a.Launcher, _ = run["launcher"].(string)
 			a.Model, _ = run["model"].(string)
 			a.Effort, _ = run["effort"].(string)
+			a.Speed, _ = run["speed"].(string)
 			tier, runs = "", "" // the tier's launcher is not what runs
 		}
 		// traex, omp…: no effort (launcher_modes.go). One this call names is refused before the user is asked, rather
@@ -640,6 +651,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			where += i18n.T(s.lang(ctx), "assistant-tools.with_tier", i18n.Args{"tier": tier, "runs": runs})
 		case a.Model != "":
 			where += i18n.T(s.lang(ctx), "assistant-tools.with_model", i18n.Args{"model": a.Model})
+		case proto.FasterSpeed(a.Speed):
+			where += " · " + a.Speed
 		}
 		if a.Ultracode {
 			where += " · ultracode"
@@ -660,7 +673,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), agentStartTimeout)
 		defer cancel()
 		// The tab is named from the prompt as written; the agent gets its project's background before it (#2820).
-		params := map[string]any{"cwd": a.Cwd, "launcher": a.Launcher, "model": a.Model, "effort": a.Effort, "tab_name": s.tabName(sctx, a.Prompt)}
+		params := map[string]any{"cwd": a.Cwd, "launcher": a.Launcher, "model": a.Model, "effort": a.Effort, "speed": a.Speed, "tab_name": s.tabName(sctx, a.Prompt)}
 		prompt := s.withCloseoutBrief(sctx, a.Prompt, false)
 		params["prompt"] = s.withProjectContext(sctx, am.ID, a.Cwd, self, prompt)
 		if a.Ultracode {
@@ -680,6 +693,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			if _, fit, err = s.fitLauncher(ctx, am, own, params); err != nil {
 				return "", fmt.Errorf("%w; no agent was started", err)
 			}
+		}
+		if err := checkStartSpeed(params, fit, ""); err != nil {
+			return "", fmt.Errorf("%w; no agent was started", err)
 		}
 		// Allow all for Claude Code and for a provider whose approval is an Auto Accept switch (startAgent.allowAll, #8141).
 		if fit.allowAll() {
@@ -761,6 +777,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			return "", fmt.Errorf("%w; no agent was started", err)
 		}
 		defer release()
+		clearStandardSpeed(params)
 		s.setPlanThen(ctx, am.ID, params)
 		var values *handoffValues
 		if hand != nil {

@@ -334,7 +334,7 @@ func (s *Service) writeConversationJSON(ctx context.Context, w http.ResponseWrit
 
 func conversationWrite(method string) bool {
 	switch method {
-	case "assistant.send", "session.send", "session.start", "session.resume", "session.fork", "session.rewind", assistantwire.DeviceAssistantAnswerAgain:
+	case "assistant.send", "session.send", DeviceSessionSendOnce, "session.start", "session.resume", "session.fork", "session.rewind", assistantwire.DeviceAssistantAnswerAgain:
 		return true
 	}
 	return false

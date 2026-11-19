@@ -458,7 +458,13 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // lib-state-labels waits_* words in place of task_waiting). 505 B in ja, measured in one environment against main
 // c4fc3ef324 (ja 479,301 B to 479,806 B; en 476,414 B to 476,898 B, zh-Hans 477,154 B to 477,624 B). Main had 3,430 B
 // of room; the budget stays (merged with #9745 above, it takes those 505 B of #9745's room).
-export const FIRST_SCREEN_BUDGET = 483_480;
+// #9778 (#9745's follow-up): what is on its way kept to the sign-in it was made under (a change sent, queued or not
+// taken under an earlier one dropped, its answer changing nothing) and a hello's read a push or another tab's change
+// overtook left alone (lib/start-page.ts, lib/overview-cards.ts), and Arrange cards opening a folded cards' section and
+// scrolling to it, its heading counting the cards shown (views/extensions/ExtensionSlots.tsx). 63 B in ja, measured in
+// one environment against main cacd8d75a6 (ja 480,670 B to 480,733 B; en 477,744 B to 477,807 B, zh-Hans 478,482 B to
+// 478,545 B). Main had 2,810 B of room, so the budget is this ja size plus those 2,810 B.
+export const FIRST_SCREEN_BUDGET = 483_543;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;

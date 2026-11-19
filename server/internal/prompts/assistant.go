@@ -299,7 +299,7 @@ type SnapshotProfile struct {
 // SnapshotTier is one tier of the profile in use: what an Agent started on it runs on ("" model or effort: the
 // launcher's), and when to use it.
 type SnapshotTier struct {
-	Name, Launcher, Model, Effort, Description string
+	Name, Launcher, Model, Effort, Speed, Description string
 }
 
 // Snapshot is the live context a starting assistant gets in its system prompt.

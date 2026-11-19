@@ -12,7 +12,7 @@ import { stripBase } from "./base";
 import { hasSlots } from "./extension-slots";
 import { feedCacheScope } from "./feed-cache";
 import { NAV_PAGES } from "./persona-nav";
-import { adoptOverview, getOverviewPrefs, noteOverviewKept, onOverviewSaved, overviewChosen, overviewKept, type OverviewEntry } from "./overview-cards";
+import { adoptOverview, getOverviewPrefs, noteOverviewKept, onOverviewSaved, overviewChosen, overviewElsewhere, overviewKept, type OverviewEntry } from "./overview-cards";
 import { adoptSidebarPrefs, chosen, getSidebarPrefs, onSidebarPrefsSaved } from "./sidebar-pages";
 import { isResumed } from "./reconnect";
 import { navigate, type Route } from "./router";
@@ -161,11 +161,37 @@ let helloOverview = 0; // bumped by each hello that did not resume: the hub's pu
 // a change sent before such a hello was taken: its push may have gone with the old socket, so the pushes heard since are
 // settled without it, the newest taken (they come in the hub's order; its own, if it comes, is taken in turn)
 let looseOverview = false;
+let pushedOverview = 0; // bumped by each push of it: a hello's read begun before one is older than what it pushed
+// What else changed the arrangement since a read began: a push of it, or another tab's change to this sign-in's copy
+// (review of #9778, P1): a read that one overtook is not taken.
+const overviewVersion = () => pushedOverview + overviewElsewhere();
+// The sign-in all of this belongs to (lib/feed-cache.ts feedCacheScope: the hub, the account, the device and its
+// credentials, renewed at each sign-in and sign-out, a return to the same token too; review of #9778, P1). When it
+// changes, everything on its way is retired: a change sent, queued or not taken under the earlier one, its
+// answers and the pushes heard with them. An older request's answer, failure or end then changes nothing, and sends
+// nothing under the new one, which starts as a fresh load does, its own hello reading its own arrangement.
+let scopeOverview = feedCacheScope();
+let ownerOverview = 0; // bumped at each such change: a request carries the one it was sent under
+let helloScope: string | null | undefined; // the sign-in of the last hello: pushes before the next one's are the old socket's
+function retireOverview() {
+  ownerOverview++;
+  scopeOverview = feedCacheScope();
+  sendingOverview = againOverview = unsentOverview = looseOverview = false;
+  heardOverview = [];
+  answeredOverview = [];
+  noteOverviewKept(null);
+}
+/** The sign-in's generation, the earlier one's work retired first where it changed since. */
+function ownOverview() {
+  if (feedCacheScope() !== scopeOverview) retireOverview();
+  return ownerOverview;
+}
 // The hub passes a push on as it read it (internal/hub bus_broadcast.go), a card's keys in another order than its answer's:
 // an arrangement is compared card by card.
 const overviewKey = (v: unknown) =>
   JSON.stringify((Array.isArray(v) ? (v as Partial<OverviewEntry>[]) : []).map((c) => [c?.extension, c?.id, c?.hidden ?? false, c?.span ?? ""]));
 function sendOverview(probe = false) {
+  const owner = ownOverview();
   if (synced === false || (overviewKept() === false && !probe)) return; // this browser only
   if (sendingOverview) return void (againOverview = true);
   sendingOverview = true;
@@ -173,28 +199,36 @@ function sendOverview(probe = false) {
   const hello = helloOverview;
   api<{ overview?: unknown }>("/navigation", { method: "PUT", json: { overview: getOverviewPrefs() } })
     .then(
-      (r) => {
-        noteStartPageSynced();
-        unsentOverview = false;
-        noteOverviewKept(Array.isArray(r.overview));
-        // its push is still to come, unless it went out before a hello that did not resume
-        if (Array.isArray(r.overview) && hello === helloOverview) answeredOverview.push(overviewKey(r.overview));
-        else if (Array.isArray(r.overview)) looseOverview = true;
-      },
-      (e) => {
-        noteStartPageSynced(e);
-        const old = e instanceof ApiError && e.status === 400 && OLD_MANAGER.includes(String(e.body?.error));
-        if (old) noteOverviewKept(false);
-        unsentOverview = !old && synced !== false;
-      },
+      (r) => ({ ok: true as const, r }),
+      (e: unknown) => ({ ok: false as const, e }),
     )
-    .finally(() => {
-      sendingOverview = false;
-      if (againOverview) {
-        againOverview = false;
-        sendOverview();
+    .then((done) => {
+      // the earlier sign-in's: its answer, failure and end change nothing here, nor is a change queued under it sent
+      if (owner !== ownOverview()) return;
+      try {
+        if (done.ok) {
+          const r = done.r;
+          noteStartPageSynced();
+          unsentOverview = false;
+          noteOverviewKept(Array.isArray(r.overview));
+          // its push is still to come, unless it went out before a hello that did not resume
+          if (Array.isArray(r.overview) && hello === helloOverview) answeredOverview.push(overviewKey(r.overview));
+          else if (Array.isArray(r.overview)) looseOverview = true;
+        } else {
+          const e = done.e;
+          noteStartPageSynced(e);
+          const old = e instanceof ApiError && e.status === 400 && OLD_MANAGER.includes(String(e.body?.error));
+          if (old) noteOverviewKept(false);
+          unsentOverview = !old && synced !== false;
+        }
+      } finally {
+        sendingOverview = false;
+        if (againOverview) {
+          againOverview = false;
+          sendOverview();
+        }
+        if (!sendingOverview) settleOverview();
       }
-      if (!sendingOverview) settleOverview();
     });
 }
 onOverviewSaved(() => {
@@ -239,14 +273,17 @@ function hubOverview(v: unknown[]) {
 // each change. A hub that never stored one is handed the one this browser kept while there was no record. A read a
 // later hello or another sign-in overtook is left to that one, every field of it and any hand-over.
 onHubEvent("hello", (msg) => {
+  helloScope = feedCacheScope();
   if (isResumed(msg)) return;
-  // what the hub pushed before it does not come again: its read stands for it
+  // what the hub pushed before it does not come again: its read stands for it; and another sign-in's work is over
+  ownOverview();
   const hello = ++helloOverview;
   const scope = feedCacheScope();
   const overtaken = () => hello !== helloOverview || scope !== feedCacheScope();
   heardOverview = [];
   answeredOverview = [];
   const edits = sendingOverview ? -1 : editsOverview;
+  const version = overviewVersion();
   api<{ start?: string; pages?: unknown; overview?: unknown }>("/navigation").then(
     (r) => {
       if (overtaken()) return;
@@ -257,10 +294,12 @@ onHubEvent("hello", (msg) => {
       if (r.pages && !unsent) adoptSidebarPrefs(r.pages);
       else if (chosen(getSidebarPrefs())) handover.pages = getSidebarPrefs();
       if (Object.keys(handover).length) void api("/navigation", { method: "PUT", json: handover }).then(() => (unsent = false), () => {});
-      // ours, unless a change of it did not reach the hub or one was on its way or made since this read began (newer than
-      // its answer); else handed over, or asked again where it was refused
-      if (Array.isArray(r.overview) && !unsentOverview && edits === editsOverview) hubOverview(r.overview);
-      else if (overviewChosen() || unsentOverview || overviewKept() === false) sendOverview(true);
+      // ours, unless a change of it did not reach the hub or one was on its way or made since this read began, or the
+      // hub pushed one or another tab changed it meanwhile (newer than its answer, review of #9778, P1); else handed
+      // over (only while nothing newer came: the hub has one then), or asked again where it was refused
+      const fresh = version === overviewVersion();
+      if (Array.isArray(r.overview) && !unsentOverview && edits === editsOverview && fresh) hubOverview(r.overview);
+      else if (unsentOverview || overviewKept() === false || (fresh && overviewChosen())) sendOverview(true);
     },
     (e) => void (overtaken() || noteStartPageSynced(e)), // the copies here stay
   );
@@ -268,5 +307,9 @@ onHubEvent("hello", (msg) => {
 onHubEvent("navigation", (msg) => {
   if (typeof msg.start === "string") keepStartPage(msg.start);
   if (msg.pages && !sending) adoptSidebarPrefs(msg.pages);
-  if (Array.isArray(msg.overview)) hubOverview(msg.overview);
+  // not one the earlier sign-in's socket passed on before this one's hello
+  if (Array.isArray(msg.overview) && helloScope === feedCacheScope()) {
+    pushedOverview++;
+    hubOverview(msg.overview);
+  }
 });

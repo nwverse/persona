@@ -423,6 +423,50 @@ func TestHerdrCoreSkipsANestedHerdr(t *testing.T) {
 	}
 }
 
+// herdr-core opens Windows PowerShell by default on Windows: its terminal is a shell to start in and to type into.
+func TestHerdrCoreWindowsPowerShellIsAShell(t *testing.T) {
+	for _, name := range []string{"powershell.exe", `C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe`, "pwsh.exe", "PowerShell.EXE", "zsh", "-bash"} {
+		if !hcShell(name) {
+			t.Errorf("hcShell(%q) = false", name)
+		}
+	}
+	for _, name := range []string{"claude.exe", "node", "cmd.exe", ""} {
+		if hcShell(name) {
+			t.Errorf("hcShell(%q) = true", name)
+		}
+	}
+	fg := herdrcore.Foreground{Pid: 1, Name: "powershell.exe", Argv: []string{`C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe`, "-NoExit"}}
+	if !isShell(&fg) {
+		t.Errorf("isShell(%+v) = false", fg)
+	}
+}
+
+// On Windows herdr-core names the first program below the shell as in front: a start's claude runs three bash deep.
+// The nearest agent below it is found in the process table, and its terminal is claude's (#11214).
+func TestHerdrCoreAgentBelowTheReportedForeground(t *testing.T) {
+	procs := map[int]proc{
+		10: {cmd: "powershell.exe"},
+		20: {ppid: 10, cmd: "bash.exe"}, 21: {ppid: 20, cmd: "bash.exe"}, 22: {ppid: 21, cmd: "bash.exe"},
+		30: {ppid: 22, cmd: "claude.exe"}, 31: {ppid: 30, cmd: "claude.exe"}, 32: {ppid: 30, cmd: "bash.exe"},
+		40: {ppid: 10, cmd: "node.exe"},
+	}
+	children := procChildren(procs)
+	if got := agentBelow(procs, children, 20); got != 30 {
+		t.Errorf("agentBelow(20) = %d, want 30 (the nearest claude)", got)
+	}
+	if got := agentBelow(procs, children, 40); got != 0 {
+		t.Errorf("agentBelow(40) = %d, want none", got)
+	}
+	cycle := map[int]proc{1: {ppid: 2, cmd: "bash.exe"}, 2: {ppid: 1, cmd: "bash.exe"}}
+	if got := agentBelow(cycle, procChildren(cycle), 1); got != 0 {
+		t.Errorf("agentBelow in a cycle = %d", got)
+	}
+	tm := herdrcore.Terminal{Address: "t3", State: "live", Foreground: &herdrcore.Foreground{Pid: 30, Name: "claude.exe", Argv: []string{"claude.exe"}}}
+	if a := fromTerminal(tm); a.Agent != "claude" {
+		t.Errorf("claude.exe in front: agent %q", a.Agent)
+	}
+}
+
 func TestHookPane(t *testing.T) {
 	env := func(kv ...string) func(string) string {
 		return func(k string) string {
