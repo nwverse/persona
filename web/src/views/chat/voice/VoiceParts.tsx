@@ -96,4 +96,3 @@ export function useVoiceEntry(o: VoiceOwner & { session: Session | undefined; it
   const dialog = <UnavailableDialog open={Boolean(why)} why={why} onClose={() => setWhy(null)} />;
   return { offer, dialog };
 }
-

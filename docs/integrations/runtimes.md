@@ -476,6 +476,12 @@ five minutes, and the picker's refresh requests a fresh catalog through optional
 default. New sessions and availability checks explicitly apply that model through ACP, since ACP may ignore the
 settings file when choosing its initial model. An explicit caller model takes precedence, and resumed sessions retain
 their native selection. An unavailable catalog returns the native error instead of advertising a built-in model list.
+A CLI whose stored sign-in expired long ago does not fail `agy models`: it hangs. The companion kills it after 25 seconds
+and reports that the sign-in may have expired and that running `agy` once on the computer signs in again; each
+discovery in a row that times out doubles the wait before the next one, up to an hour, and one that answers restores
+the five-minute pace (#11106). Whether a call that sends no prompt can refresh such a sign-in is not established: a
+`agy models` run refreshed a token close to its expiry, but one expired for months stayed hung until a prompt in print
+mode signed in silently.
 One `agy acp` process can keep the model list it had when the account's plan lapsed or the CLI signed out (#10368), so
 a session's model list replaces the catalog only when its ACP process started after the latest successful discovery
 began. When ACP rejects a model as unknown and a fresh discovery lists it, the companion replaces the ACP process and

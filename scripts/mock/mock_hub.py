@@ -3161,6 +3161,31 @@ _TODO_LIST = os.environ.get("MOCK_TODO_LIST", "")
 if _TODO_LIST:
     TODOS_INIT[:] = _todo_list_fixture(_TODO_LIST)
 
+# MOCK_TODO_BADGE=1 (#11085, docs/assistant/todos.md "Sidebar and main navigation"): only these to-dos, for the sidebar's
+# To-dos badge. A goal of the owner's whose two pieces (`part_of`) Agents are working on, and an errand of the owner's
+# no Agent was ever on: the To-dos page's Not done is 4, the badge 1 (the errand), where it used to say 4 as well.
+if os.environ.get("MOCK_TODO_BADGE") == "1":
+    def _badge_agent(n, title, last):
+        sid = f"c3d5e7f9-0000-4000-8000-{11085000 + n:012d}"
+        SESSIONS.append(sess("macbook", sid, title, "/Users/me/code/settings", "working", "working", "settings", 8, "1", n, 3, last))
+        return {"machine_id": "macbook", "session_id": sid, "linked_at": ago(minutes=40), "released_at": None, "title": title,
+                "cwd": "/Users/me/code/settings", "agent": "claude", "start_error": "", "source": "spawned", "via": ""}
+
+    def _badge_todo(tid, title, minutes, **kw):
+        t = {"id": tid, "title": title, "notes": "", "done_at": None, "created_at": ago(minutes=minutes + 60),
+             "updated_at": ago(minutes=minutes), "origin": "", "spaces": [], "agents": [], "priority": ""}
+        t.update(kw)
+        return t
+
+    TODOS_INIT[:] = [
+        _badge_todo("tb_goal", "设置页改版上线", 30),
+        _badge_todo("tb_search", "设置页：分组和搜索", 3, part_of="tb_goal", origin="conv_demo",
+                    agents=[_badge_agent(1, "设置页分组和搜索", "在给每个分组补搜索关键词。")]),
+        _badge_todo("tb_dark", "设置页：深色模式配色", 3, part_of="tb_goal", origin="conv_demo",
+                    agents=[_badge_agent(2, "设置页深色配色", "在核对深色模式下的对比度。")]),
+        _badge_todo("tb_errand", "给家里的 NAS 换硬盘", 90),
+    ]
+
 # MOCK_TODO_CONCERNS=1 (#3582): one concern working, one waiting for its report in Other open, and one closed by its
 # report, for the To-dos list's light / dark captures. "only" keeps just these to-dos so the working one is within
 # Home's six cards, and links it to its Agent's space for the Space page capture. The dedicated agent keeps the rest of

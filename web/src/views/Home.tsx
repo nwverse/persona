@@ -196,15 +196,6 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
             </Group>
           )}
 
-          {/* the extensions' cards (docs/extensions/extensions.md "UI slots" overview_card): under what waits for the owner
-              (Needs you, Stuck), so no number of cards pushes that off the first screen (#11092); with nothing waiting
-              they are right under the summary */}
-          <OverviewCards />
-
-          {/* Before the first snapshot the socket streams the machines' agents and cards in one by one, each moving the
-              groups already painted, and "Loading" then went from over them: until it is in only "Loading", then all at once. */}
-          {!loaded && <Loading label={t("common.loading")} />}
-
           {loaded && tasks.rows.length > 0 && (
             <Group
               title={t("home.tasks")}
@@ -264,6 +255,10 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
             </div>
           )}
 
+          {/* Before the first snapshot the socket streams the machines' agents and cards in one by one, each moving the
+              groups already painted, and "Loading" then went from over them: until it is in only "Loading", then all at once. */}
+          {!loaded && <Loading label={t("common.loading")} />}
+
           {loaded && machines.length > 0 && (
             <Group title={t("home.computers")} count={machines.length} right={<a href={href({ name: "machines" })} onClick={(e) => onLinkClick(e, { name: "machines" })} className="text-[12px] text-ink-3 hover:text-ink-2">{t("home.monitor")}</a>}>
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 @min-[60rem]:grid-cols-3 @min-[84rem]:grid-cols-4 @min-[110rem]:grid-cols-5">
@@ -291,6 +286,11 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
               </div>
             </Group>
           )}
+
+          {/* the extensions' cards (docs/extensions/extensions.md "UI slots" overview_card), last: under everything about
+              the owner's agents (what needs them, what is running, what just finished) and the computers, so no number
+              of cards pushes those off the first screen (#11147; #11092 had them under Needs you and Stuck only) */}
+          <OverviewCards />
         </div>
       </div>
       <MarkSeenDialog list={confirmSeen} onClose={() => setConfirmSeen(null)} />

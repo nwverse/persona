@@ -1,7 +1,8 @@
 // The extensions' places among the web's own pages (docs/extensions/extensions.md "UI slots"): a nav_page's full page (/extension/<id>/<ui>,
 // its entry is on the sidebar), the cards on "Overview" (overview_card) and the sections on a machine's page
 // (machine_section). Each draws the extension's declarative View with ExtensionUI; the list comes from lib/extension-slots.ts.
-import { Suspense, useMemo, useState } from "react";
+import { Suspense, useId, useMemo, useState } from "react";
+import { useFolded } from "../../lib/use-folded";
 import { uiIcon, type UIIcon, type UIPlace, type UITone } from "../../lib/extension-ui";
 import { useExtensionPlace, useExtensionSlot } from "../../lib/extension-slots";
 import { href, navigate, onLinkClick, type Route } from "../../lib/router";
@@ -79,22 +80,43 @@ export function ExtensionNavPage({ extension, ui, onToggleSidebar }: { extension
   );
 }
 
-/** The cards on "Overview" (overview_card), under the agents' summary and what waits for the owner (Needs you, Stuck;
- *  #11092): one card full width, more two a row;
+/** The cards on "Overview" (overview_card), the page's last block, under the agents' sections and the computers
+ *  (#11147): one card full width, more two a row;
  *  on a page wide enough for two columns of rows, a lone card takes one of them. */
 export function OverviewCards() {
   const cards = useExtensionSlot("overview_card");
+  // A section like the page's others, with their heading (its name and how many), and it folds (#11148): kept per
+  // browser with the sidebar's folds (`fold:overview-cards`), open until the owner folds it. Folded, no card is mounted,
+  // so none is asked for either.
+  const [folded, toggle] = useFolded("overview-cards", false, { all: false });
+  const grid = useId();
   if (!cards.length) return null;
+  return (
+    <section aria-label={t("extensions-extensionslots.extensions")} data-overview-cards>
+      <div className={cx("flex items-baseline gap-2", !folded && "mb-2.5")}>
+        <h2 className="text-meta font-medium text-ink">{t("extensions-extensionslots.extensions")}</h2>
+        <span className="text-label text-ink-3 tabular-nums">{cards.length}</span>
+        <span className="flex-1" />
+        <button type="button" aria-expanded={!folded} aria-controls={folded ? undefined : grid} onClick={toggle} className="shrink-0 whitespace-nowrap rounded-control px-1.5 text-label text-ink-3 transition-colors hover:bg-hover hover:text-ink-2">
+          {folded ? t("extensions-extensionslots.cards_expand") : t("extensions-extensionslots.cards_collapse")}
+        </button>
+      </div>
+      {!folded && <CardGrid id={grid} cards={cards} />}
+    </section>
+  );
+}
+
+function CardGrid({ id, cards }: { id: string; cards: UIPlace[] }) {
   return (
     // a card is never wider than one of the overview's two columns of rows below it (Home's GRID.rows, from 60rem of
     // the page): alone at 1920 px it stretched its chart to 1540 px of sparse bars, and to 1300 px at 1680
     // the cards of a row are one height (the grid's default stretch): each as tall as its own content left a gap under
     // the shorter one in every row, and the rows read as ragged (#11093 tried it, #11109 took it back)
-    <section aria-label={t("extensions-extensionslots.extensions")} className={cx("grid grid-cols-1 gap-3 @min-[60rem]:grid-cols-2", cards.length > 1 && "md:grid-cols-2")}>
+    <div id={id} className={cx("grid grid-cols-1 gap-3 @min-[60rem]:grid-cols-2", cards.length > 1 && "md:grid-cols-2")}>
       {cards.map((c, i) => (
         <OverviewCard key={`${c.extension}/${c.id}`} place={c} i={i} />
       ))}
-    </section>
+    </div>
   );
 }
 
