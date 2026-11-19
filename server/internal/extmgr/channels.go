@@ -249,8 +249,12 @@ func (h *Manager) marketChannels(have []channel.View) []channel.View {
 		// asked for every few seconds while agents work, and building the whole catalog for it was 4.4 ms and
 		// 1.1 MB a time with the official market's entries (#3197).
 		var items []CatalogItem
+		channelKinds := map[string]channel.Kind{}
 		for i := range s.index.Extensions {
 			e := &s.index.Extensions[i]
+			for _, contribution := range e.Parsed.Channels() {
+				channelKinds[contribution.ID] = contribution.Kind
+			}
 			if len(e.Parsed.Contributes["channel"]) == 0 || len(e.Parsed.Items("channel")) == 0 {
 				continue
 			}
@@ -267,8 +271,12 @@ func (h *Manager) marketChannels(have []channel.View) []channel.View {
 				if seen[id] {
 					continue
 				}
+				kind, known := channelKinds[id]
+				if !known {
+					kind = channel.KindIM
+				}
 				seen[id] = true
-				out = append(out, channel.View{ID: id, Name: it.Name, Kind: channel.KindIM, Source: channel.SourceMarket, Plugin: it.ID, Market: it.Market,
+				out = append(out, channel.View{ID: id, Name: it.Name, Kind: kind, Source: channel.SourceMarket, Plugin: it.ID, Market: it.Market,
 					State: channel.StateNotInstalled, Bind: channel.BindNone, Description: it.Description})
 			}
 		}

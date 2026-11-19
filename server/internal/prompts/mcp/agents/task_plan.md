@@ -74,7 +74,7 @@ Workspace policy: "new" makes an isolated checkout; {"new":{"branch":"task/my-ch
           },
           "model": {
             "type": "string",
-            "description": "model id the agent takes (an alias such as opus, a gateway's own id, or a provider/model such as ag-chat/cursor/grok-4.7 for pi; letters, digits and . _ - / : @ [ ] only, or a leading ~ as in ~vendor/model-latest); empty: the launcher's default"
+            "description": "model id or alias the agent takes; empty: the launcher's default"
           },
           "permission": {
             "type": "string",
@@ -182,11 +182,16 @@ Workspace policy: "new" makes an isolated checkout; {"new":{"branch":"task/my-ch
           },
           "tier": {
             "type": "string",
-            "description": "Agent preset from the snapshot's 模型档位 line; choose by purpose; resolved at task start with its profile; explicit launcher/model/effort overrides"
+            "description": "Agent preset from the snapshot's 模型档位 line; choose by purpose; resolved at task start with its profile; explicit launcher/model/effort/speed overrides"
+          },
+          "speed": {
+            "type": "string",
+            "enum": ["standard", "fast", "ultrafast"],
+            "description": "new-start speed; explicit choice overrides the tier. standard/omitted: launcher default. Codex: fast, ultrafast; Claude Code: fast only"
           },
           "effort": {
             "type": "string",
-            "description": "Explicit effort override; omit to use the tier or purpose default."
+            "description": "Explicit effort; omit for tier/purpose default."
           }
         }
       }
