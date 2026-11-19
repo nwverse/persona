@@ -125,6 +125,9 @@ type TaskReview struct {
 	// RestateAt: when the hub handed this needs_user back to its supervisor because the owner could not answer it
 	// (undecidable, or owner_cannot_answer): told once.
 	RestateAt time.Time `json:"restate_at,omitzero"`
+	// RecheckAt: when this decision went back to its supervisor to confirm stale facts. While it is the latest review,
+	// the old round is neither shown nor answerable; a fresh needs_user review starts a new round (decision.go).
+	RecheckAt time.Time `json:"recheck_at,omitzero"`
 	// OwnerResponse: the fixed answer the owner gave its decision (decide_yourself, not_what_i_asked, explain_first)
 	// and when; HoldReleased: after not_what_i_asked, the supervisor sent the task's agent on again.
 	OwnerResponse   string    `json:"owner_response,omitempty"`
