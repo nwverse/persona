@@ -18,6 +18,7 @@ import (
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 type outboundMemoryStore struct {
@@ -318,14 +319,22 @@ func TestOutboundHandedOffSuggestionStaysManual(t *testing.T) {
 }
 
 func TestOutboundAutomaticSendFailsClosedWithoutAudit(t *testing.T) {
-	h, st, c, _ := outboundTestHub(t)
+	h, st, c, it := outboundTestHub(t)
 	putMessageGrant(t, st, "inbox_reply")
 	st.failAudit = true
-	if _, err := suggestTool(t, h, `{"kind":"reply","text":"Do not send without a ledger."}`); err == nil || !strings.Contains(err.Error(), "audit") {
+	_, err := suggestTool(t, h, `{"kind":"reply","text":"Do not send without a ledger."}`)
+	var failure *rpc.Error
+	if !errors.As(err, &failure) || failure.Code != assistantwire.CodeInboxSendUnrecorded {
 		t.Fatalf("audit failure was hidden: %v", err)
 	}
 	if len(c.got) != 0 {
 		t.Fatal("send escaped without durable audit")
+	}
+	h.inbox.mu.Lock()
+	defer h.inbox.mu.Unlock()
+	a := suggestionAttempt(it, it.SuggestSeq)
+	if a == nil || a.Status != suggestionFailed || a.Code != assistantwire.CodeInboxSendUnrecorded {
+		t.Fatalf("audit failure should be recorded as unsent: %+v", a)
 	}
 }
 

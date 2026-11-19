@@ -20,6 +20,8 @@ import (
 
 const outboundIdentityKey = "assistant.outbound_identity"
 
+var errOutboundAuditUnrecorded = errors.New("message not sent: cannot persist audit")
+
 // MessageAuthorization is deliberately separate from a computer/directory grant:
 // a repository's "send" permission must never authorize an unrelated chat message.
 type MessageAuthorization struct {
@@ -144,12 +146,12 @@ type outboundAuditStore interface {
 func (s *Service) auditedMessage(ctx context.Context, source, target, text, sendID string, a outboundApproval, send func() (bool, error)) (bool, error) {
 	st, ok := s.store().(outboundAuditStore)
 	if !ok {
-		return false, errors.New("outward messages need a persistent audit ledger")
+		return false, errOutboundAuditUnrecorded
 	}
 	attempt := "outbound-audit:" + sendID
 	state, err := st.ClaimSend(ctx, attempt, a.Machine, a.Session)
 	if err != nil {
-		return false, fmt.Errorf("message not sent: cannot claim audited attempt: %w", err)
+		return false, fmt.Errorf("%w: claim attempt: %w", errOutboundAuditUnrecorded, err)
 	}
 	if state != "" {
 		return false, errors.New("this message was already attempted; inspect its audit and destination before a manual retry")
@@ -167,7 +169,7 @@ func (s *Service) auditedMessage(ctx context.Context, source, target, text, send
 		LetThrough: marshal(through)})
 	if err != nil {
 		_ = st.SettleSend(ctx, attempt, "") // no transport call happened
-		return false, fmt.Errorf("message not sent: cannot persist audit: %w", err)
+		return false, fmt.Errorf("%w: %w", errOutboundAuditUnrecorded, err)
 	}
 	already, err := send()
 	outcome := "sent"

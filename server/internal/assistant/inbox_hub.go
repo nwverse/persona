@@ -141,6 +141,9 @@ func (s *Service) connectorReply(ctx context.Context, source string, r connector
 			params["send_id"] = sendID
 		}
 		already, err = s.auditedMessage(ctx, source, messageTarget(r.Thread), r.Text, sendID, approval, send)
+		if errors.Is(err, errOutboundAuditUnrecorded) {
+			return false, unrecordedSuggestionReply()
+		}
 	} else {
 		already, err = send()
 	}
