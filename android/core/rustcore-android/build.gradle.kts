@@ -42,15 +42,16 @@ val ndkHostTag = when {
 }
 
 // The ABIs a debug build packages: -Ppersona.abis=arm64-v8a (or x86_64) builds one for a local device or emulator.
-// Release always packages both, whatever the property says.
+// Release always packages both, whatever the property says. Read here, not in a provider's lambda: a lambda that uses
+// this script's values cannot be stored in the configuration cache.
 val allAbis = listOf("arm64-v8a", "x86_64")
-val debugAbis = providers.gradleProperty("persona.abis").map { value ->
+val debugAbis: List<String> = providers.gradleProperty("persona.abis").orNull?.let { value ->
     value.split(',').map(String::trim).filter(String::isNotEmpty).distinct().also { abis ->
         require(abis.isNotEmpty() && abis.all(allAbis::contains)) {
             "persona.abis must list one or more of ${allAbis.joinToString(", ")}, separated by commas (got '$value')"
         }
     }
-}.orElse(allAbis)
+} ?: allAbis
 
 abstract class BuildAndroidCore : Exec() {
     @get:OutputDirectory abstract val jniDirectory: DirectoryProperty
