@@ -1200,7 +1200,7 @@ describe("a message to an Agent whose computer is away", () => {
   });
 
   it("one that stopped says why in red, with Retry and Delete on the held routes", async () => {
-    const stopped = { ...held, state: "failed" as const, error: "May have arrived before the connection dropped. Check the chat, then retry or delete." };
+    const stopped = { ...held, state: "failed" as const, error: "Might not have arrived. Retry checks the chat first." };
     captured.session = { ...agentRow, undelivered: [stopped] };
     captured.machines = [laptop];
     captured.features = ["agent_message_hold"];

@@ -1372,7 +1372,7 @@ manager that connects the computer holds it and sends it once the computer is ba
   mark while it waits ("Will check the chat when <computer> is back"), and does not expire: the turns are read when the
   computer is back. Found, it leaves the row and is not sent. Not found is no proof it did not arrive (the hub hands a
   restarted node its ties for a day, the node keeps them a day, only the latest turns are read, some runtimes never
-  tie a line), so nothing is sent: it goes back to the owner, "Couldn't confirm it arrived. Retry to send it anyway,
+  tie a line; #10790 would let the node say), so nothing is sent: it goes back to the owner, "Couldn't confirm it arrived. Retry to send it anyway,
   or delete it", still holding the later ones back; that Retry sends it as it is. Three reads that fail end the same
   way. While the turns are read, a Retry of it answers that it is being sent; a Delete goes. A node that refused it
   (nothing typed), or a message that could not be made ready to send before the node was asked, fails with the reason
