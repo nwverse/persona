@@ -29,7 +29,7 @@ vi.mock("../lib/session-models", async (importOriginal) => {
   const real = await importOriginal<typeof import("../lib/session-models")>();
   return { ...real, modelList: (mid: string, launcher: string) => fake.lists.get(`${mid}/${launcher}`) ?? {} };
 });
-vi.mock("./extensions/ExtensionSlots", () => ({ OverviewCards: () => null }));
+vi.mock("./extensions/ExtensionSlots", () => ({ OverviewCards: () => null, OverviewArrangeButton: () => null }));
 
 const { Home } = await import("./Home");
 const { t } = await import("../i18n");

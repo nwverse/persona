@@ -2442,6 +2442,11 @@ item states its own scope, then one configuration form per module. Where a featu
 the page (never navigating away, so nothing open behind it, such as a chat's unsent draft, is unmounted) instead of a
 second switch, so there is one place to change it.
 
+An experiment can supply a permanent note under its introduction or beside a field, using the existing info and warning
+hint styles. A choice with consequences can request confirmation for a specific change. Use the shared Dialog, with the
+affected scope, impact, timing and an action-specific button. All dismissal paths preserve the edit. On success the
+field’s polite save status can explain when the choice takes effect. Show this receipt once, in the field footer.
+
 ## A chosen page that is not there now (#9071)
 
 A setting that names something which can come and go (the web's **Open on**, Settings › General › Start page: a page of
@@ -2454,6 +2459,19 @@ until it's back**). Choosing anything else in the same menu replaces it. Reason:
 back (principle 3), and a toast at every opening would be noise for something they can read where they would change it.
 The same rule as a chosen look whose extension is switched off ("the choice stays: the default only shows meanwhile",
 `server/internal/hub/looks.go` `looksGone`). It reuses Settings' `Row`, its hint line and a native select; no new component.
+
+## Arranging cards in place (#9745)
+
+Overview's extension cards (web) are arranged where they are drawn, not in a settings list: the result is a layout (which
+card is wide, which sit side by side), and a list would show neither widths nor neighbours. Overview's top bar has
+**Arrange cards** (`IconButton` with the `grid` icon, `aria-pressed` while on) beside **New agent**, only while there are
+cards. The edit state reuses the sidebar pages editor's pieces (`web/src/views/settings/SidebarPages.tsx`): the `grip`
+handle and an HTML drag onto another item, which takes its place; ↑ / ↓ `IconButton`s at 26 px for the keyboard and touch;
+a native select for the width (**Half row** / **Full row**); `Switch` for shown or hidden; the hub footer's words for where
+it is kept; and **Reset** with Undo in a toast (4.4). Each card keeps its surface and its content, made `inert`; its head
+becomes the controls, which wrap under the name on a narrow card. A hidden card is drawn only while arranging, as its
+hairline outline (`shadow-hairline`, no surface) with "Hidden: not loaded" in `--ink-3` under its name; the card a dragged
+one would land on has a 2 px inset `--accent` ring. No new token or component (`web/src/views/extensions/OverviewArrange.tsx`).
 
 ## Values a form fills in by itself (#4975)
 
