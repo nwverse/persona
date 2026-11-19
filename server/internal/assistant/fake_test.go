@@ -33,15 +33,17 @@ import (
 // that was cleaned up), a model (a Messages API the hello's "ai" points at, fakeModel), and what the assistant pushed
 // and reported. settings are the assistant's own a test service starts with (newTestService…).
 type fakeHub struct {
-	mu            sync.Mutex
-	inboxHook     func(ctx context.Context) // runs first in InboxChanged, no lock held (#4924)
-	readHooks     receiptHooks              // around session.items reads and on receipt broadcasts, no lock held
-	itemReads     int                       // session.items reads since the hooks were set
-	onDevicesList func()                    // runs once, then clears, before the next devices.list; no lock held
+	mu                 sync.Mutex
+	revokedDevices     map[string]bool
+	credentialCheckErr error
+	inboxHook          func(ctx context.Context) // runs first in InboxChanged, no lock held (#4924)
+	readHooks          receiptHooks              // around session.items reads and on receipt broadcasts, no lock held
+	itemReads          int                       // session.items reads since the hooks were set
+	onDevicesList      func()                    // runs once, then clears, before the next devices.list; no lock held
 	// beforeSend runs once, then clears, when session.send is called, before it is answered (what happens on the
-	// agent's computer while the send is out); afterList, by machine, once after that machine's next sessions.list was
-	// answered. No lock held. sendHangs: session.send is never answered while the link stays up, and ends with the
-	// call's context, after beforeSend (a request that went out).
+	// agent's computer while the send is out); afterList, by machine, once after that machine's next sessions.list made
+	// with a listHooked context was answered. No lock held. sendHangs: session.send is never answered while the link
+	// stays up, and ends with the call's context, after beforeSend (a request that went out).
 	beforeSend   func()
 	afterList    map[string]func()
 	sendHangs    bool
@@ -179,14 +181,21 @@ type fakeHub struct {
 	// context: a check that takes its time; its error is the call's.
 	checkWait func(ctx context.Context) error
 	checkedAt []time.Time
-	repairs   []map[string]any
-	repairRes *proto.LauncherRepair
-	onRepair  func(f *fakeHub)
-	onSend    func(f *fakeHub, p map[string]any) // runs (under the fake's lock) after each session.send
-	onStart   func(f *fakeHub, p map[string]any) // runs (under the fake's lock) when session.start arrives, before slowStart blocks
-	down      map[string]bool                    // machines listed as not connected (devices.list) while f.devices is nil
-	downLists map[string]int                     // and for how many more devices.list answers a machine is listed so
-	onList    func(f *fakeHub, machine string)   // runs (under the fake's lock) before a sessions.list is answered, which then sends the list as it left it
+
+	// checkParams are the launchers.check params in order; oldCheck: the node runs the plain check whatever it is asked
+	// (no assistant_turn in its answer), as one without launcher_check_assistant_turn
+	checkParams []map[string]any
+	oldCheck    bool
+
+	repairs    []map[string]any
+	repairRes  *proto.LauncherRepair
+	onRepair   func(f *fakeHub)
+	onSend     func(f *fakeHub, p map[string]any) // runs (under the fake's lock) after each session.send
+	onSendOnce func(f *fakeHub, p map[string]any) // runs under the fake's lock when a once-only send is accepted
+	onStart    func(f *fakeHub, p map[string]any) // runs (under the fake's lock) when session.start arrives, before slowStart blocks
+	down       map[string]bool                    // machines listed as not connected (devices.list) while f.devices is nil
+	downLists  map[string]int                     // and for how many more devices.list answers a machine is listed so
+	onList     func(f *fakeHub, machine string)   // runs (under the fake's lock) before a sessions.list is answered, which then sends the list as it left it
 	// onAssistantSend runs (under the fake's lock) when assistant.send arrives, before it is answered
 	onAssistantSend func(f *fakeHub, p map[string]any)
 	// assistantAnswer adds to assistant.send's answer (under the fake's lock): what a node says of a supervision round
@@ -230,6 +239,16 @@ func (f *fakeHub) Hello(context.Context) (Hello, error) {
 	return h, nil
 }
 
+// afterListCall marks the context of the call a test arms afterList for (listHooked).
+type afterListCall struct{}
+
+// listHooked is ctx for the call under test: afterList runs only after a sessions.list made with it, never after one
+// a background goroutine makes meanwhile. A change to a task's agents has the todo-token sync list their machine
+// (syncTodoTokens), and on a busy machine that list can still be out when the test arms the hook.
+func listHooked(ctx context.Context) context.Context {
+	return context.WithValue(ctx, afterListCall{}, true)
+}
+
 func (f *fakeHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage, error) {
 	if p.Device == DeviceAll && p.Method == DeviceDevicesList {
 		f.mu.Lock()
@@ -255,7 +274,7 @@ func (f *fakeHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 	}
 	if p.Method != DeviceSessionItems {
 		out, err := f.deviceCall(ctx, p)
-		if p.Method == DeviceSessionsList {
+		if p.Method == DeviceSessionsList && ctx.Value(afterListCall{}) != nil {
 			f.mu.Lock()
 			hook := f.afterList[p.Device]
 			delete(f.afterList, p.Device)
@@ -359,6 +378,9 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 			return nil, f.failSendOnce[p.Device+"/"+sid]
 		}
 		f.sentOnce = append(f.sentOnce, a)
+		if f.onSendOnce != nil {
+			f.onSendOnce(f, a)
+		}
 		return json.RawMessage(`{}`), nil
 	case DeviceSessionsList:
 		if f.sessionsFail[p.Device] > 0 { // a node that answers offline for a few tries, then recovers
@@ -409,14 +431,17 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 	case assistantwire.DeviceLaunchersCheck:
 		name, _ := a["name"].(string)
 		f.checked = append(f.checked, p.Device+"/"+name)
+		f.checkParams = append(f.checkParams, a)
 		if f.onCheck != nil {
 			f.onCheck(f)
 		}
 		f.checkedAt = append(f.checkedAt, time.Now())
+		turn := a["assistant_turn"] == true && !f.oldCheck && launcherAgent(name) == "claude"
 		if c, ok := f.checks[p.Device+"/"+name]; ok {
+			c.AssistantTurn = c.AssistantTurn || turn
 			return json.Marshal(c)
 		}
-		return json.Marshal(proto.LauncherCheck{OK: true, Agent: launcherAgent(name), Model: "m", Answer: "ok"})
+		return json.Marshal(proto.LauncherCheck{OK: true, Agent: launcherAgent(name), Model: "m", Answer: "ok", AssistantTurn: turn})
 	case assistantwire.DeviceLaunchersRepair:
 		f.repairs = append(f.repairs, a)
 		if f.repairRes == nil {
@@ -433,6 +458,19 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		name, _ := a["name"].(string)
 		return json.Marshal(map[string]any{"agent": launcherAgent(name)})
 	case DeviceLaunchersList:
+		if a["source"] == proto.ExternalLauncherSource {
+			list, ok := f.zshrc[p.Device]
+			if !ok {
+				list = f.launcherList
+			}
+			external := []proto.Launcher{}
+			for _, l := range list {
+				if proto.IsExternalLauncher(l.Name) {
+					external = append(external, l)
+				}
+			}
+			return json.Marshal(launcherListing{Source: proto.ExternalLauncherSource, Launchers: external})
+		}
 		if f.launcherGate != nil {
 			gate := f.launcherGate
 			f.mu.Unlock()
@@ -774,6 +812,12 @@ func (f *fakeHub) Broadcast(_ context.Context, b Broadcast) {
 	}
 }
 
+func (f *fakeHub) CredentialRevoked(_ context.Context, id string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.revokedDevices[id], f.credentialCheckErr
+}
+
 func (f *fakeHub) InboxChanged(ctx context.Context, c assistantwire.InboxChanged) {
 	f.mu.Lock()
 	hook := f.inboxHook
@@ -959,6 +1003,9 @@ func (noPlans) FeedItem(context.Context, string) (*db.FeedRow, error) {
 func (noPlans) MarkFeedSent(context.Context, string, string, time.Time, json.RawMessage) ([]db.FeedRow, error) {
 	return nil, errors.New("no assistant_feed here")
 }
+func (noPlans) FeedByRef(context.Context, string, []string, int) ([]db.FeedRow, error) {
+	return nil, errors.New("no assistant_feed here")
+}
 
 func (m *memStore) Setting(_ context.Context, key string, out any) (bool, error) {
 	m.mu.Lock()
@@ -974,6 +1021,25 @@ func (m *memStore) Setting(_ context.Context, key string, out any) (bool, error)
 		return false, nil
 	}
 	return true, json.Unmarshal(b, out)
+}
+
+func (m *memStore) SettingsPrefix(_ context.Context, prefix string) (map[string]json.RawMessage, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.failSetting != nil {
+		return nil, m.failSetting
+	}
+	values := map[string]json.RawMessage{}
+	for key, raw := range m.vals {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		if err := m.failKeys[key]; err != nil {
+			return nil, err
+		}
+		values[key] = append(json.RawMessage(nil), raw...)
+	}
+	return values, nil
 }
 
 func (m *memStore) PutSetting(_ context.Context, key string, v any) error {

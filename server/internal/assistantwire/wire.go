@@ -148,6 +148,8 @@ type Device struct {
 	// (--model) and effort, which "Models" needs of the machine a launcher purpose runs on.
 	Version            string `json:"version,omitempty"`
 	ModelConfiguration bool   `json:"model_configuration,omitempty"`
+	// ExternalInventory is announced only by a node with an enabled, trusted local model adapter.
+	ExternalInventory bool `json:"external_inventory,omitempty"`
 	// ClaudeVersion is Claude Code's version there ("" when it has none or never said): 设置 › 模型供应商's built-in
 	// claude lists the machines that have it.
 	ClaudeVersion string `json:"claude_version,omitempty"`
@@ -317,6 +319,12 @@ type NotifyTodo struct {
 	// `response`. Left out by a hub from before them.
 	Options   []string `json:"options,omitempty"`
 	Responses []string `json:"responses,omitempty"`
+	// Ask is the decision's ask in the to-do's view (OwnerAsk.ID), which an answer from the notification names, and
+	// Lockscreen what its push may offer on the lock screen (OwnerAskLockscreen: answer, its options as actions;
+	// open_only, none, a tap opens it), from how risky answering it is (#10465). The hub forwards the options only
+	// with answer, and sends an older manager's push, which has neither, as before.
+	Ask        string `json:"ask,omitempty"`
+	Lockscreen string `json:"lockscreen,omitempty"`
 }
 
 // NotifyPush is the kind of the assistant's pushes.
@@ -424,6 +432,8 @@ type SessionView struct {
 	// Tags are the conversation's user-defined labels (assistant/conversation_tags.go); absent or empty for one without.
 	Tags   []string `json:"tags,omitempty"`
 	Queued []string `json:"queued,omitempty"` // messages from other conversations waiting for its turn to end
+	// Undelivered: the owner's messages it keeps after they could not go in (proto.Session.Undelivered, #10194).
+	Undelivered []proto.UndeliveredMessage `json:"undelivered,omitempty"`
 	// Origin is who opened the conversation (docs/protocol/protocol.md "Origin of assistant chats": user, channel, inbox, task, spawned,
 	// lark_agent, extension) and OriginRef what of (the inbox item, the task, the conversation, the channel, the
 	// extension); both "" while it is not known.

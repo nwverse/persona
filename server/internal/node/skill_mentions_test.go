@@ -177,6 +177,11 @@ func TestClaudeSkillCatalogFollowsManagedSettings(t *testing.T) {
 		}
 	}
 
+	// A file that is not there holds no policy: readSettingsFile gives it as an empty map, not as the nil of a file that
+	// holds null (review of #9870).
+	if m, err := readSettingsFile(file); err != nil || m == nil || len(m) != 0 {
+		t.Fatalf("a missing managed-settings.json: %v %v, want an empty map", m, err)
+	}
 	listed("no managed settings", "review", "deploy")
 	writeFile(t, file, `{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"/opt/example/hook"}]}]}}`)
 	writeFile(t, filepath.Join(dir, "10-hooks.json"), `{"hooks":{}}`)

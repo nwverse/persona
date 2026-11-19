@@ -75,11 +75,17 @@ fun receiptState(item: FeedItem): String = when (val st = item.field("state")) {
  *  lines beside it; the receipt's own title (the name when it was written) once the to-do is gone; else null. */
 fun receiptTitle(item: FeedItem, todo: Todo?): String? = todo?.title?.trim()?.ifEmpty { null } ?: item.field("title")
 
-/** Why the model service cut the agent off (#1516), in words, and whether "Continue" can help; null when it was not. */
-data class Interruption(val reason: CoreText, val canContinue: Boolean) {
+/** Why the model service cut the agent off (#1516), in words, and whether "Continue" can help; null when it was not.
+ *  [plain]: no model service error, [reason] being the hub's own sentence, said as it is: a turn with no output at all
+ *  (turn_error_kind `no_output`, or `stopped` when Persona's Stop interrupted it with its conversation, #10187). */
+data class Interruption(val reason: CoreText, val canContinue: Boolean, val plain: Boolean = false) {
     companion object {
+        /** The hub's own kinds for a turn with no output (#10187): its turn_error is a sentence, not an API error. */
+        private val silentKinds = setOf("no_output", "stopped")
+
         fun of(s: Session?): Interruption? {
             if (s?.interrupted != true) return null
+            if (s.turnErrorKind in silentKinds) return Interruption(CoreText.plain(s.turnError.orEmpty().trim()), true, plain = true)
             val info = ApiErrorInfo.parse(s.turnError)
             return Interruption(info?.reason ?: CoreText.of(Key.ApiFailed), info?.needsAction != true)
         }
@@ -121,9 +127,13 @@ sealed interface TaskNow {
  *
  * [itemId] is the id of the item the phone made, which Undo deletes. The phone's calendar ids are numbers, so a result
  * whose id is not one (an iPhone's event or reminder) still draws its card, without an Undo button.
+ *
+ * [sourceDeviceName] and [sourceDevicePlatform] are the hub-attested phone that created it, when known. Older results
+ * leave both null and make no source claim.
  */
 data class QuickResult(
     val reminder: Boolean, val callId: String, val itemId: Long?, val title: String, val time: String?, val place: String?,
+    val sourceDeviceName: String? = null, val sourceDevicePlatform: String? = null,
 ) {
     companion object {
         fun of(call: ToolCall): QuickResult? {
@@ -137,10 +147,12 @@ data class QuickResult(
             if (result.isError == true) return null
             val o = runCatching { JsonCodec.parseToJsonElement(result.text.orEmpty()) as? JsonObject }.getOrNull() ?: return null
             fun s(k: String) = (o[k] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+            fun nonBlank(k: String) = s(k)?.trim()?.takeIf { it.isNotEmpty() }
             // No card without an id (iOS QuickResult.init), so an old or broken result says nothing it cannot back.
             val id = s("id")?.trim()?.takeIf { it.isNotEmpty() } ?: return null
             return QuickResult(reminder, call.use.id, id.toLongOrNull()?.takeIf { it > 0 },
-                s("title").orEmpty(), s(if (reminder) "due" else "start"), s(if (reminder) "list" else "calendar"))
+                s("title").orEmpty(), s(if (reminder) "due" else "start"), s(if (reminder) "list" else "calendar"),
+                nonBlank("source_device_name"), nonBlank("source_device_platform"))
         }
     }
 }

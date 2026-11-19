@@ -163,7 +163,10 @@ type Meta struct {
 	queued []queuedInput
 	// Background holds background shells / agents that have not reported back (see trackBackground).
 	Background []proto.BackgroundTask
-	bgPending  map[string]proto.BackgroundTask // tool_use_id → started, waiting for the tool result with its id
+	// BackgroundEnded holds recent shell / Monitor outcomes, oldest first, at most backgroundEndedKept.
+	BackgroundEnded []proto.BackgroundTask
+	bgPending       map[string]proto.BackgroundTask // tool_use_id → started, waiting for the tool result with its id
+	bgPendingIDs    [][]byte                        // the same ids, for readers that skip lines without a static marker
 	// fgBash: foreground Bash calls waiting for their result, which may say it was moved to the background by hand
 	// (Ctrl+B, or a message sent mid-turn: node/assistant_interject.go).
 	fgBash map[string]proto.BackgroundTask
@@ -631,7 +634,10 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 			return nil
 		}
 		var text string
-		var images []proto.Item // a message with pictures, sent while the agent worked: its prompt is blocks
+		// A message with pictures, sent while the agent worked: its prompt is blocks. Newer Claude Code puts the
+		// pictures first: the text's items count from its first block, after them, so no two items share an id.
+		var before, images []proto.Item
+		at := 0
 		if json.Unmarshal(a.Prompt, &text) != nil {
 			var blocks []block
 			if json.Unmarshal(a.Prompt, &blocks) == nil {
@@ -639,12 +645,19 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 				for i, b := range blocks {
 					switch b.Type {
 					case "text":
+						if len(parts) == 0 {
+							at = i
+						}
 						parts = append(parts, b.Text)
 					case "image":
 						if img := imageOf(b); img != nil {
 							it := mk(i, "user", proto.KindImage)
 							it.Image, it.Queued = img, true
-							images = append(images, it)
+							if len(parts) == 0 {
+								before = append(before, it)
+							} else {
+								images = append(images, it)
+							}
 						}
 					}
 				}
@@ -658,9 +671,9 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 		if notification {
 			return nil // other harness notifications are not user input
 		}
-		items, paseo := paseoInput(mk, 0, text)
+		items, paseo := paseoInput(mk, at, text)
 		if !paseo {
-			items = userText(mk, text, meta)
+			items = userText(func(k int, role, kind string) proto.Item { return mk(at+k, role, kind) }, text, meta)
 		}
 		for i := range items {
 			if !paseo || items[i].Role == "user" { // a Paseo child's notice is a notice, as a background task's
@@ -670,7 +683,7 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 		if meta.FirstUser == "" && len(items) > 0 && items[0].Kind == proto.KindText {
 			meta.FirstUser = items[0].Text
 		}
-		return append(items, images...) // the pictures dropped here once: the phone showed the message without them
+		return append(append(before, items...), images...) // the pictures dropped here once: the phone showed the message without them
 	case "system":
 		if strings.HasPrefix(e.Subtype, "model_refusal_") {
 			return meta.claudeModelRefusal(e.Subtype, line, mk(0, "system", proto.KindNotice))

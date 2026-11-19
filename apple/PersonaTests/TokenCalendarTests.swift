@@ -147,4 +147,16 @@ struct TokenCalendarTests {
         #expect(AgentKind(usageAgent: "opencode")?.name == "opencode" && AgentKind(usageAgent: "opencode")?.brand == nil)
         #expect(AgentKind(usageAgent: "") == nil)
     }
+
+    /// What every client calls each agent (spec/fixtures/agent-names, #10042): the web checks the same file.
+    @Test func namesTheAgentsAsEveryClientDoes() throws {
+        let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let data = try Data(contentsOf: repo.appending(path: "spec/fixtures/agent-names/names.json"))
+        let fixture = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let names = try #require(fixture["names"] as? [String: String])
+        #expect(!names.isEmpty)
+        for (id, name) in names {
+            #expect(AgentKind(usageAgent: id)?.name == name, "\(id)")
+        }
+    }
 }

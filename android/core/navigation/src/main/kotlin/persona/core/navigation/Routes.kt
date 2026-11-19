@@ -5,6 +5,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 @Serializable @SerialName("persona.core.navigation.AssistantRoute") data object AssistantRoute : NavKey
+@Serializable @SerialName("persona.core.navigation.UsageCalendarRoute") data object UsageCalendarRoute : NavKey
 @Serializable @SerialName("persona.core.navigation.AgentsRoute") data object AgentsRoute : NavKey
 @Serializable @SerialName("persona.core.navigation.InboxRoute") data object InboxRoute : NavKey
 @Serializable @SerialName("persona.core.navigation.SettingsRoute") data object SettingsRoute : NavKey
@@ -50,7 +51,7 @@ data class InboxItemUiRoute(val itemId: String, val extensionId: String, val uiI
 /** The to-do list with "New to-do" open: the launcher's "New to-do" shortcut ([NewTodoLink], iOS AddTodoIntent). */
 @Serializable @SerialName("persona.core.navigation.NewTodoRoute") data object NewTodoRoute : NavKey
 @Serializable @SerialName("persona.core.navigation.TodoDetailRoute") data class TodoDetailRoute(val todoId: String) : NavKey
-@Serializable enum class SettingsPage { Diagnostics, Readiness, Notifications, PhoneData, Appearance, Devices, About, Pairing, ClaudeCode, ModelConfig, Hubs, Persona, Extensions, Mail, Feishu, Channels, HubUpdate, Translation, Triage, Capsule, Language, Codex, Providers, Storage, Desktops, Managers, FeishuBot, Sent, Connectors, AgentSettings, NotificationBackground, KnowledgeSelection, StandingAuthorizations }
+@Serializable enum class SettingsPage { Diagnostics, Readiness, Notifications, PhoneData, Appearance, Devices, About, Pairing, ClaudeCode, ModelConfig, Hubs, Persona, Extensions, Mail, Feishu, Channels, HubUpdate, Translation, Triage, Capsule, Language, Codex, Agy, Providers, Storage, Desktops, Managers, FeishuBot, Sent, Connectors, AgentSettings, NotificationBackground, KnowledgeSelection, StandingAuthorizations }
 @Serializable @SerialName("persona.core.navigation.SettingsPageRoute") data class SettingsPageRoute(val page: SettingsPage) : NavKey
 
 enum class AppTab { Persona, Agents }

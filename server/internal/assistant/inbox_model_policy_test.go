@@ -203,9 +203,10 @@ func TestOrdinaryOriginsKeepNotifyDelegationAndConversationSend(t *testing.T) {
 	}
 }
 
-// Inbox starts are Plan even if the caller asks for bypass, and the initial node request carries origin. Ordinary
-// starts retain their selected mode.
-func TestInboxStartForcesPlanAndAttestsOrigin(t *testing.T) {
+// Inbox starts use non-bypass default even if the caller asks for bypass, and the initial node request carries origin.
+// Unlike Plan, default lets the node's explicit Persona MCP allowlist run investigation and inbox_suggest unasked.
+// Ordinary starts retain their selected mode.
+func TestInboxStartForcesDefaultAndAttestsOrigin(t *testing.T) {
 	h := agentHub(t)
 	sess, err := h.Start(t.Context(), StartParams{Text: "Investigate", Origin: OriginInbox, PermissionMode: proto.ModeBypass})
 	if err != nil {
@@ -214,7 +215,7 @@ func TestInboxStartForcesPlanAndAttestsOrigin(t *testing.T) {
 	h.f.mu.Lock()
 	inboxStart := h.f.sends[len(h.f.sends)-1]
 	h.f.mu.Unlock()
-	if inboxStart["permission_mode"] != proto.ModePlan || inboxStart["origin"] != OriginInbox || sess.PermissionMode != proto.ModePlan {
+	if inboxStart["permission_mode"] != "default" || inboxStart["origin"] != OriginInbox || sess.PermissionMode != "default" {
 		t.Fatalf("Inbox start params=%v session mode=%q", inboxStart, sess.PermissionMode)
 	}
 	sess, err = h.Start(t.Context(), StartParams{Text: "Ordinary", Origin: OriginUser, PermissionMode: proto.ModeBypass})

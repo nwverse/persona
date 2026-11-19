@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -24,7 +25,11 @@ type modelExecution struct {
 	// PlanThen: the permission mode a start in plan mode goes on in once its plan is approved (planthen.go); never
 	// part of a fingerprint.
 	PlanThen string `json:"-"`
-	IsMain   bool   `json:",omitempty"`
+	// Runtime preserves an external request's raw value for admission only. Ordinary conversations always use the CLI.
+	Runtime string `json:"-"`
+	// StartupContext belongs to the current external send only and is cleared before recording a process model.
+	StartupContext context.Context `json:"-"`
+	IsMain         bool            `json:",omitempty"`
 	// FollowsSetting: a leader/background supervisor conversation the manager sends with the main chat's model
 	// setting (#7824). With IsMain it identifies the protected conversations whose recovery is visible and reversible;
 	// worker Agent conversations have neither flag.
@@ -45,18 +50,24 @@ type modelExecution struct {
 	// Interject: a message this one carries, sent while the conversation answers, moves its foreground work to the
 	// background (assistant_interject.go). Per message, never part of the fingerprint.
 	Interject bool `json:"-"`
+	// Interactive: run a Claude conversation as interactive Claude Code instead of claude -p (assistant_tui.go), the
+	// assistant's claude_interactive setting. Part of the fingerprint, so a change resumes an idle conversation in a
+	// new process; omitted when off, so fingerprints from before it stay the same.
+	Interactive bool `json:",omitempty"`
 	// SecretTicket: the hand-off a new Claude Code start puts in its environment (secretenv.go). Per start, never
 	// part of a fingerprint, never kept for a resume.
 	SecretTicket string `json:"-"`
-	// Goal: a Claude Code /goal condition typed after the first message of a new start is in (startgoal.go). Per start,
-	// never part of a fingerprint, never kept for a resume.
+	// External is a manager-resolved, explicit main-chat pick. Nil preserves older fingerprints.
+	External *proto.ExternalExecution `json:",omitempty"`
+	// Goal: a /goal typed after the first message of a new Claude Code or Codex start is in (startgoal.go,
+	// codex_start_goal.go). Per start, never part of a fingerprint, never kept for a resume.
 	Goal string `json:"-"`
 	// InPane is session.start's in_pane: a failed start's kept tab to start in (startremedy.go).
 	InPane string `json:"-"`
 }
 
 func supervisionRuntimeRefusal(ctx context.Context) error {
-	return refusal("assistant_supervision_runtime", i18n.T(i18n.From(ctx), "rpc-errors.assistant_supervision_runtime"), nil)
+	return refusal(assistantwire.CodeSupervisionRuntime, i18n.T(i18n.From(ctx), "rpc-errors.assistant_supervision_runtime"), nil)
 }
 
 // check refuses a model that is not a model id (proto.ValidModelID, #1644) before anything runs; the error's text is
@@ -108,16 +119,19 @@ func (m modelExecution) withSupervision(policy *string) modelExecution {
 // older hub): the conversation's own then.
 func (n *Node) assistantModel(ctx context.Context, id string) (string, modelExecution) {
 	var res struct {
-		Launcher                string  `json:"launcher"`
-		Model                   string  `json:"model"`
-		Effort                  string  `json:"effort"`
-		ModelFingerprint        string  `json:"model_fingerprint"`
-		IsMain                  bool    `json:"is_main"`
-		MainCompact             int     `json:"main_compact_window"`
-		SupervisionInstructions *string `json:"supervision_instructions"`
+		Launcher                string                   `json:"launcher"`
+		Model                   string                   `json:"model"`
+		Effort                  string                   `json:"effort"`
+		ModelFingerprint        string                   `json:"model_fingerprint"`
+		Runtime                 string                   `json:"runtime"`
+		IsMain                  bool                     `json:"is_main"`
+		MainCompact             int                      `json:"main_compact_window"`
+		External                *proto.ExternalExecution `json:"external"`
+		SupervisionInstructions *string                  `json:"supervision_instructions"`
+		ClaudeInteractive       bool                     `json:"claude_interactive"` // #10058: a send's own flag, here for starts no send makes
 	}
 	if n.peer == nil || n.peer.Call(ctx, "assistant.model", map[string]any{"session_id": id}, &res) != nil {
 		return "", modelExecution{}
 	}
-	return res.Launcher, (modelExecution{Model: res.Model, Effort: res.Effort, UseEffort: res.ModelFingerprint != "", Fingerprint: res.ModelFingerprint, IsMain: res.IsMain, MainCompactWindow: res.MainCompact}).withSupervision(res.SupervisionInstructions)
+	return res.Launcher, (modelExecution{Model: res.Model, Effort: res.Effort, UseEffort: res.ModelFingerprint != "", Fingerprint: res.ModelFingerprint, Runtime: n.externalRuntime(id, res.Launcher, res.Runtime), IsMain: res.IsMain, MainCompactWindow: res.MainCompact, External: res.External, Interactive: res.ClaudeInteractive}).withSupervision(res.SupervisionInstructions)
 }
