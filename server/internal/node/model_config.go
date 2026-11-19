@@ -14,8 +14,10 @@ import (
 
 // modelExecution is non-secret per-turn execution metadata supplied by the hub.
 type modelExecution struct {
-	Model  string
-	Effort string
+	TaskInstructions string `json:"-"`
+	TaskAttachments  string `json:"-"`
+	Model            string
+	Effort           string
 	// ServiceTier is a one-shot native speed request for a new Codex conversation. It is consumed before the first turn,
 	// never kept as process state or included in the execution fingerprint.
 	ServiceTier string `json:"-"`

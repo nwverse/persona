@@ -1423,6 +1423,8 @@ the timestamp on the workspace catalog and match machine, source and source ID. 
 old sessions even if pin and unpin happen before the coalesced catalog push: a session push can observe the temporary
 pin while the final catalog bytes equal the earlier unpinned snapshot.
 
+- **Separate assignment data from framework policy (#10200).** Let the manager supply matching project background once; callers add only facts it cannot resolve. Preserve attachment suffixes when a launcher falls back to first-message rules. A dedicated instruction channel must survive resume and must suppress duplicate SessionStart closeout guidance. Never replace a configured Codex developer policy to obtain a cleaner transcript: fall back conservatively. Herdr refuses apostrophes even inside quoted restore arguments; encode them as TOML Unicode escapes, and use a persistent file for Claude's multiline policy. One new closeout can carry delivery, gate and responsible party while both historical formats remain readable.
+
 ## A transcript directory is not the selected launcher's sign-in
 
 When restoring an assistant conversation, finding its newest transcript does not establish that a newly selected launcher can authenticate in that profile. Check private-profile ownership before stopping the old process or writing input; a later CLI sign-in error has already accepted the wrong launch and may forward a provider-only model. A refusal should preserve the original process and session state and explain how to continue. Regression coverage needs cold resumes and live idle processes, with both an omitted model and the old provider's explicit model (#10453).
