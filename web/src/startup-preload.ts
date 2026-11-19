@@ -471,16 +471,16 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // one environment against main cacd8d75a6 (ja 480,670 B to 480,733 B; en 477,744 B to 477,807 B, zh-Hans 478,482 B to
 // 478,545 B). Main had 2,810 B of room, so the budget is this ja size plus those 2,810 B.
 // #10905: Overview's own sections arranged with the extensions' cards add 323 B in ja, measured in one environment
-// against main 3eedaaedf4, which carries #9778 (ja 483,878 B to 484,201 B; en 480,952 B to 481,265 B, zh-Hans 481,673 B
-// to 482,012 B; against #9778's branch at 2cc366d0b4 it was 529 B): the sections' ids and their place in the
-// arrangement, Needs you and Stuck never hidden (lib/overview-cards.ts), Overview's cards and sections drawn in that
-// order, each row of cards with its heading and all of them under one fold (views/OverviewBody.tsx, Home's sections
-// handed to it, Working's with the background-wait group of #10938), the Arrange button always there, and where a
-// default manager of #9745 refuses the sections, the cards sent on their own and the sections kept here under the hub's
-// cards (keepSections and its note per sign-in, lib/overview-cards.ts; lib/start-page.ts). The sections' bars and their
-// names while arranging, and what a change writes, are the editor's chunk (views/extensions/OverviewArrange.tsx,
-// lib/overview-edit.ts). Main was 335 B over the budget, so the budget is this ja size.
-export const FIRST_SCREEN_BUDGET = 484_201;
+// against main 1e34873c71 (ja 483,878 B to 484,201 B; en 480,952 B to 481,265 B, zh-Hans 481,673 B to 482,012 B): the
+// sections' ids and their place in the arrangement, Needs you and Stuck never hidden (lib/overview-cards.ts),
+// Overview's cards and sections drawn in that order, each row of cards with its heading and all of them under one fold
+// (views/OverviewBody.tsx, Home's sections handed to it, Working's with the background-wait group of #10938), the
+// Arrange button always there, and where a default manager of #9745 refuses the sections, the cards sent on their own
+// and the sections kept here under the hub's cards (keepSections and its note per sign-in, lib/overview-cards.ts;
+// lib/start-page.ts). The sections' bars and their names while arranging, and what a change writes, are the editor's
+// chunk (views/extensions/OverviewArrange.tsx, lib/overview-edit.ts). The budget is main's budget plus this PR's ja
+// delta of 323 B.
+export const FIRST_SCREEN_BUDGET = 483_866;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
