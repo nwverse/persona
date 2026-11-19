@@ -751,6 +751,19 @@ unknown-risk write. Stable read shortcuts are listed in `larkCLIKnownReads`, whi
 nothing, so lark-cli's own answer still wins. When a card names a read as a write, check the lookup in the node's
 environment first, before changing the classifier. A literal `cd` before a command variable (`cd /tmp; L=/abs/lark-cli; $L …`)
 now resolves only absolute values: a relative one is looked up from the new directory.
+The short list was not enough (#11193): `calendar +agenda` still went to the phone as "建 / 改日程". When the lookup gives
+nothing, a command named as a read also counts as one (`larkCLINamedRead`): a shortcut whose name is, ends in or (get /
+list only) starts with fetch, agenda, search, list, get or mget, and a generated method named list, get, search, mget or
+batch_get. Every other name, sends, replies, reactions, create and update included, stays a write.
+
+## One `$?` in a literal loop made its lark-cli reads writes (#11193)
+
+`literalLarkLoopCommands` binds a literal `for` list into each lark-cli call so a variable path such as
+`documents/$d/raw_content` can be read. It gave up on the whole loop at any other parameter, and `echo "$d exit=$?"` was
+enough to leave `lark-cli api GET …/$d/…` unbound, unclassifiable and carded as a write. `$?` is now kept as inert text:
+it is always a number the shell sets, so it can neither name a program nor become a lark-cli word the classifier trusts
+(a path holding it is still unknown). When a loop of reads is carded, check every parameter in its body, not only the
+loop variable.
 
 ## A rejected answer must not consume Don't handle (#7907)
 

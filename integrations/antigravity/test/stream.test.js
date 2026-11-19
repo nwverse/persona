@@ -485,3 +485,39 @@ for (const secondReply of ['Second answer.', 'First answer.']) {
     assert.equal(node.last('session.items').items.at(-1).text, secondReply)
   })
 }
+
+test('runtime session.items refreshes history token and omits broken tool-media image items (#11224)', async (t) => {
+  const { node, directory } = await fixture(t)
+  const steps = [
+    { ...userStep(0, 'Check the screenshot.'), created_at: '2026-01-01T00:00:00Z' },
+    {
+      step_index: 1,
+      source: 'MODEL',
+      type: 'PLANNER_RESPONSE',
+      status: 'DONE',
+      created_at: '2026-01-01T00:00:01Z',
+      tool_calls: [{ name: 'read_file', args: { Path: '/work/shots/ui.png' } }],
+    },
+    {
+      step_index: 2,
+      source: 'MODEL',
+      type: 'GENERIC',
+      status: 'DONE',
+      created_at: '2026-01-01T00:00:02Z',
+      content: 'Read image /work/shots/ui.png',
+      media: [{ mime_type: 'image/png', uri: '/work/shots/ui.png' }],
+    },
+    { ...replyStep(3, 'Looks clean.'), created_at: '2026-01-01T00:00:03Z' },
+  ]
+  transcripts(directory, steps, steps)
+  const paged = await node.peer.call('session.items', { session_id: SESSION, turns: 1 })
+  assert.match(paged.history, /:no-tool-media(?:$|:)/)
+  assert.equal(paged.has_more, false)
+  assert.equal(paged.items.some((it) => it.kind === 'image'), false)
+  const readUse = paged.items.find((it) => it.kind === 'tool_use')
+  const readResult = paged.items.find((it) => it.kind === 'tool_result')
+  assert.equal(readUse?.tool_name, 'Read')
+  assert.deepEqual(readUse?.tool_input, { file_path: '/work/shots/ui.png' })
+  assert.equal(readResult?.tool_use_id, readUse?.tool_use_id)
+  assert.equal(readResult?.is_error, false)
+})
