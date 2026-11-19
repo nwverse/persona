@@ -794,6 +794,7 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 		Host           string `json:"host,omitempty"`
 		PermissionMode string `json:"permission_mode,omitempty"`
 		Effort         string `json:"effort,omitempty"`
+		Speed          string `json:"speed,omitempty"`
 		Ultracode      *bool  `json:"ultracode,omitempty"`
 		// Goal: a one-line condition the node sets with /goal after the first message is in (node/startgoal.go); a
 		// start it cannot take there answers 409 start_goal_unsupported before anything starts.

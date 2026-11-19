@@ -16,8 +16,12 @@ import (
 type modelExecution struct {
 	Model  string
 	Effort string
-	// ServiceTier is a one-shot native speed request for a new Codex conversation. It is consumed before the first turn,
-	// never kept as process state or included in the execution fingerprint.
+	// Speed is a one-shot Agent start choice, resolved only against the actual terminal dispatch. FastMode is the
+	// Claude Code form. Neither is kept as process state or included in the execution fingerprint.
+	Speed    string `json:"-"`
+	FastMode bool   `json:"-"`
+	// ServiceTier is a one-shot native speed request for a new Codex conversation or Agent start. It is consumed before
+	// the first turn, never kept as process state or included in the execution fingerprint.
 	ServiceTier string `json:"-"`
 	UseEffort   bool
 	Fingerprint string
