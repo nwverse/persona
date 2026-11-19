@@ -266,9 +266,8 @@ func (n *Node) isAssistantSessionIn(id string, pass *codexListPass) bool {
 // never written) starts a new conversation at the hub instead of a blank one under the old id (docs/assistant/assistant.md
 // "Scheduled tasks").
 func (n *Node) assistantResumable(id string) bool {
-	if n.runtimeAssistant(id) { // a runtime keeps it: still its while the runtime knows it
-		_, _, known := n.runtimes.belongs(id)
-		return known
+	if _, _, known := n.runtimes.belongs(id); known { // runtime ownership is independent of local state or id shape
+		return true
 	}
 	if id == "" || !validID(id) {
 		return false
@@ -304,7 +303,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if launcher != "" && !shellcmd.NameRe.MatchString(launcher) {
 		return "", fmt.Errorf("invalid launcher %q", launcher)
 	}
-	if id != "" && !validID(id) && !n.runtimeAssistant(id) {
+	_, _, runtimeKnown := n.runtimes.belongs(id)
+	strictRuntime := executionOption(options).Strict && runtimeKnown
+	if id != "" && !validID(id) && !n.runtimeAssistant(id) && !strictRuntime {
 		return "", fmt.Errorf("invalid session id %q", id)
 	}
 	externalLauncher := launcher
@@ -364,6 +365,12 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	restartForRecovery := recovery != nil && restart
 	resume := id != ""
 	st, _ := n.state.get(id)
+	if executionOption(options).Strict {
+		if err := n.checkTaskDirectory(id, cwd, launcher); err != nil {
+			return "", err
+		}
+		_, _, strictRuntime = n.runtimes.belongs(id)
+	}
 	if strings.HasPrefix(clientMsgIDFrom(ctx), "model-retry:") && st.StopCause != "" && !st.StopCause.AllowsSupervisorResume() {
 		return "", n.stoppedRefusal(id)
 	}
@@ -454,7 +461,10 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			launcher, options = "", nil // it keeps what it started on (the hub sends none either)
 		}
 	}
-	if own, switched := n.assistantResumeLauncher(ctx, id, launcher, st); switched {
+	if own, switched := n.assistantResumeLauncher(ctx, id, launcher, st); switched && !strictRuntime {
+		if executionOption(options).Strict {
+			return "", errors.New("task execution context differs from this conversation; start a new conversation")
+		}
 		n.logger.Printf("assistant %s: resumes on %s, the kind of agent it was started on, not on %s", short(id), launcherOr(own, st.Launcher), launcher)
 		launcher, options = own, nil // the model picked for the other launcher is not this one's
 	}
@@ -477,7 +487,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			return "", err
 		}
 	}
-	if onRuntime, runs := n.assistantRuntime(rl), n.runtimeAssistant(id); guest != nil && (onRuntime != nil || runs) {
+	if onRuntime, runs := n.assistantRuntime(rl), n.runtimeAssistant(id) || strictRuntime; guest != nil && (onRuntime != nil || runs) {
 		return "", errGuestAgent
 	} else if onRuntime != nil || runs {
 		if origin == originInbox {
@@ -509,7 +519,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			// What it ran, with this message's claude_interactive: the manager's switch, sent with every message, not a
 			// model pick (assistant_tui.go). Without it a message that picks no model (a supervision message, a relay)
 			// started claude -p, and restarted a conversation that runs interactive Claude Code.
-			execution = modelExecution{Model: st.Model, Effort: st.ModelEffort, UseEffort: st.ModelFingerprint != "", Fingerprint: st.ModelFingerprint, SupervisionInstructions: st.SupervisionInstructions, Origin: origin, Interactive: execution.Interactive}
+			execution = modelExecution{Strict: execution.Strict, Model: st.Model, Effort: st.ModelEffort, UseEffort: st.ModelFingerprint != "", Fingerprint: st.ModelFingerprint, SupervisionInstructions: st.SupervisionInstructions, Origin: origin, Interactive: execution.Interactive}
 		}
 	}
 	if launcher != "" && st.Launcher != "" && launcher != st.Launcher && execution.Fingerprint == "" {
@@ -535,7 +545,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if err := n.ensureManaged(ctx, launcher); err != nil { // the conversation's own provider (managed.go)
 		return "", err
 	}
-	if recovery == nil && id != "" && !proto.IsExternalLauncher(launcher) {
+	if recovery == nil && id != "" && !execution.Strict && !proto.IsExternalLauncher(launcher) {
 		askedModel := execution.Model
 		// The fallback that answered (#3788). holdExpired is declared apart: ":=" would shadow execution in this block.
 		var holdExpired bool
@@ -739,7 +749,8 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if proto.IsExternalLauncher(launcher) && p != nil && p.alive() && !otherTools && !restartForRecovery && !p.needsRestartFor(want) && !p.instructionsStale() {
 		execution = pinExternalExecution(p, launcher, execution)
 	}
-	if p != nil && (!p.alive() || p.launcher != launcher || p.fingerprint != n.executionFingerprint(launcher, execution) || p.needsRestartFor(want) || n.tuiEffortStale(p, execution) || p.instructionsStale() || otherTools || n.toolSearchStale(p)) {
+	executionChanged := p != nil && (p.launcher != launcher || p.fingerprint != n.executionFingerprint(launcher, execution) || n.tuiEffortStale(p, execution))
+	if p != nil && (!p.alive() || executionChanged || p.needsRestartFor(want) || p.instructionsStale() || otherTools || n.toolSearchStale(p)) {
 		p.mu.Lock()
 		originChanged := assistantOriginToolPolicy(p.origin) != assistantOriginToolPolicy(origin) ||
 			assistantOriginToolPolicy(p.model.Origin) != assistantOriginToolPolicy(origin)
@@ -778,6 +789,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 				// Do not kill active work, or deliver a new role's message on the old system
 				// policy. Manager-generated messages remain queued for an idle retry.
 				return "", refusal("busy", i18n.T(i18n.From(ctx), "rpc-errors.assistant_supervision_busy"), nil)
+			}
+			if execution.Strict && executionChanged {
+				return "", errors.New("task execution context differs from this conversation; start a new conversation")
 			}
 			if otherTools && superviseRoundFrom(ctx) == nil && recovery == nil {
 				// A message that needs every tool, for a round's process still at work after awaitRoundTurn (past its
@@ -968,6 +982,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		if controlErr == nil && !hasInput {
 			// Allocation and its retries confirm settings without consuming a
 			// snapshot, acknowledging context, or starting a context-only turn.
+			if err := finishExternalStartup(ctx); err != nil {
+				return "", err
+			}
 			awaitList(n.notifySessionsSoon())
 			return id, nil
 		}

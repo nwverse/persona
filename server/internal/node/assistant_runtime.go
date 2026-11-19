@@ -120,7 +120,9 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 	if supportsPolicy && id != "" && known && st.SupervisionInstructions != policy && n.runtimeStatus(h, id) == proto.StatusWorking {
 		return "", refusal("busy", i18n.T(i18n.From(ctx), "rpc-errors.assistant_supervision_busy"), nil)
 	}
-	n.assistantRuntimeSkills(cwd)
+	if n.assistantDirectoryPrepared(cwd) {
+		n.assistantRuntimeSkills(cwd)
+	}
 	memDir := n.memoryForUse(cwd)
 	turn := map[string]any{"assistant": true, "memory_dir": memDir}
 	if pickedModel != "" {
