@@ -5,9 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
+	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,8 +23,9 @@ var ErrOffline = errors.New("not connected to the hub")
 // stableAfter: a connection that stayed up this long starts the backoff over when it drops.
 const stableAfter = time.Minute
 
-// A wait longer than probeOver looks every probeEvery whether the hub's port answers (Client.pause). Settings, not
-// measurements: a laptop that wakes reconnects within about probeEvery of its hub answering again.
+// A wait longer than probeOver asks the hub's health every probeEvery, each probe given up after probeEvery
+// (Client.pause). Settings, not measurements: a laptop that wakes reconnects within about probeEvery of its hub
+// answering again.
 const (
 	probeOver  = 3 * time.Second
 	probeEvery = 2 * time.Second
@@ -128,11 +130,11 @@ func (c *Client) Run(ctx context.Context) error {
 }
 
 // pause waits d before the next try, or ctx's end (its error). A wait longer than probeOver whose hub was out of
-// reach as it began (reach: its port did not answer) ends as soon as the port answers again, looking every
-// probeEvery: the network or the hub came back, and the next try goes at once. A port that answered as the wait
-// began says the try failed past it (a reset during the handshake, a hub that is starting): that wait runs to its
-// end, so a hub that takes connections but not the bus is still tried only as the backoff says, and its port sees
-// one probe a wait. A nil reach waits d whole.
+// reach as it began (reach: its health did not answer) ends as soon as the hub answers again, looking every
+// probeEvery: the network, a tunnel to the hub or the hub itself came back, and the next try goes at once. A hub that
+// answered as the wait began says the try failed past its health (a reset during the handshake, a bus that refuses
+// for now): that wait runs to its end, so such a hub is still tried only as the backoff says, and sees one probe a
+// wait. A nil reach waits d whole.
 func (c *Client) pause(ctx context.Context, d time.Duration, reach func(context.Context, time.Duration) bool) error {
 	timer := time.NewTimer(d)
 	defer timer.Stop()
@@ -158,72 +160,64 @@ func (c *Client) pause(ctx context.Context, d time.Duration, reach func(context.
 	}
 }
 
-// prober is how pause looks whether the hub's port answers: a TCP connection to it, closed without a word, dialed the
-// way the client's own connections are (its transport's DialContext: a pinned client's too), given up after within.
-// nil when such a connection would not be to the hub: through a proxy (it answers for a hub that may be gone), or
-// with a transport that dials TLS itself or is not an *http.Transport. pause then waits each backoff whole, as before.
+// healthPath is the hub's one route without authentication (hub/hello.go): {"ok": true, …} while it runs.
+const healthPath = "/api/v1/health"
+
+// prober is how pause looks whether the hub answers: GET healthPath with the client's own HTTP client (the default
+// one when it has none, as websocket.Dial), so the probe goes the bus's own way to the hub: pinned to its key,
+// through a proxy, over an SSH forward. Something that answers for a hub it cannot reach (a forward whose tunnel
+// stalled, a proxy whose upstream is gone) does not pass for it. Given up after within. nil for a hub URL that does
+// not parse (each try says so).
 func (c *Client) prober() func(ctx context.Context, within time.Duration) bool {
-	u, addr, err := hubAddr(c.Hub)
+	u, err := healthURL(c.Hub)
 	if err != nil {
 		return nil
 	}
 	hc := c.HTTPClient
 	if hc == nil {
-		hc = http.DefaultClient // as websocket.Dial
-	}
-	rt := hc.Transport
-	if rt == nil {
-		rt = http.DefaultTransport
-	}
-	t, ok := rt.(*http.Transport)
-	if !ok {
-		return nil
-	}
-	if t.Proxy != nil {
-		if p, err := t.Proxy(&http.Request{URL: u, Header: http.Header{}}); err != nil || p != nil {
-			return nil
-		}
-	}
-	if u.Scheme == "https" && t.DialTLSContext != nil {
-		return nil
-	}
-	dial := t.DialContext
-	if dial == nil {
-		dial = (&net.Dialer{}).DialContext
+		hc = http.DefaultClient
 	}
 	return func(ctx context.Context, within time.Duration) bool {
 		ctx, cancel := context.WithTimeout(ctx, within)
 		defer cancel()
-		conn, err := dial(ctx, "tcp", addr)
-		if err != nil {
-			return false
-		}
-		_ = conn.Close()
-		return true
+		return healthy(ctx, hc, u)
 	}
 }
 
-// hubAddr is the URL of the bus's request as the transport gets it (websocket.Dial asks http for ws, https for wss),
-// and the host:port it dials for it: the URL's port, or the scheme's (80 for http, 443 for https).
-func hubAddr(hub string) (u *url.URL, addr string, err error) {
-	raw, err := Endpoint(hub)
+// healthy says the hub answers its health at u: a 2xx whose body says "ok": true, as `personad hub doctor` reads it.
+func healthy(ctx context.Context, hc *http.Client, u string) bool {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return nil, "", err
+		return false
 	}
-	if u, err = url.Parse(raw); err != nil {
-		return nil, "", err
+	resp, err := hc.Do(req)
+	if err != nil {
+		return false
 	}
-	port := "80"
-	switch u.Scheme {
+	defer resp.Body.Close()
+	var body struct {
+		OK bool `json:"ok"`
+	}
+	err = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&body)
+	return resp.StatusCode/100 == 2 && err == nil && body.OK
+}
+
+// healthURL is healthPath under the hub's base URL (a reverse proxy's path kept), over http(s) for ws(s).
+func healthURL(hub string) (string, error) {
+	if _, err := Endpoint(hub); err != nil {
+		return "", err
+	}
+	base, err := url.Parse(strings.TrimRight(hub, "/") + "/")
+	if err != nil {
+		return "", err
+	}
+	switch base.Scheme {
 	case "ws":
-		u.Scheme = "http"
-	case "https", "wss":
-		u.Scheme, port = "https", "443"
+		base.Scheme = "http"
+	case "wss":
+		base.Scheme = "https"
 	}
-	if p := u.Port(); p != "" {
-		port = p
-	}
-	return u, net.JoinHostPort(u.Hostname(), port), nil
+	return base.JoinPath(strings.TrimPrefix(healthPath, "/")).String(), nil
 }
 
 // session is one connection: dial, handshake, serve until it drops. helloed: the handshake went through.

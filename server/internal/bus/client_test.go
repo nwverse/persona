@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -185,6 +186,62 @@ func stop(t *testing.T, cancel context.CancelFunc, ran <-chan error) {
 	}
 }
 
+// probeUA is how a test tells the client's probes from another program's port scan landing on its server.
+func probeUA(r *http.Request) bool { return strings.HasPrefix(r.UserAgent(), "Go-http-client/") }
+
+// hangUp drops the request's connection without an answer: a reset during the handshake, or an SSH forward whose
+// tunnel cannot reach the hub.
+func hangUp(w http.ResponseWriter) {
+	if hj, ok := w.(http.Hijacker); ok {
+		if conn, _, err := hj.Hijack(); err == nil {
+			_ = conn.Close()
+		}
+	}
+}
+
+// noBus is a hub whose health answers and whose bus does not: it hangs up on each try (counted), and counts the
+// probes of its health.
+type noBus struct{ tries, probes events }
+
+func (n *noBus) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	switch {
+	case r.URL.Path == healthPath:
+		if probeUA(r) {
+			n.probes.add()
+		}
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	case r.URL.Path == Path && r.Header.Get("Authorization") != "":
+		n.tries.add()
+		hangUp(w)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+// forward stands in for an SSH local forward to the hub: its port takes connections all along. While its tunnel is
+// stalled, a health request gets no answer (stuck counts them) and the bus's request is hung up on; then everything
+// goes through to hub.
+type forward struct {
+	stalled atomic.Bool
+	stuck   events
+	hub     http.Handler
+}
+
+func (f *forward) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if !f.stalled.Load() {
+		f.hub.ServeHTTP(w, r)
+		return
+	}
+	if r.URL.Path == healthPath {
+		if probeUA(r) {
+			f.stuck.add()
+		}
+		<-r.Context().Done() // until the probe gives up
+		return
+	}
+	hangUp(w)
+}
+
 // A client whose backoff is at its cap (a laptop that slept through failed tries) is back within moments of the hub
 // answering again, not after the rest of its minute: one full try, once the probe finds the port.
 func TestClientReconnectsSoonAfterTheHubComesBack(t *testing.T) {
@@ -208,6 +265,9 @@ func TestClientReconnectsSoonAfterTheHubComesBack(t *testing.T) {
 	}
 	if n := f.dials.Load(); n != 1 {
 		t.Errorf("%d full tries once the hub answered, want 1", n)
+	}
+	if f.healths.Load() < 1 {
+		t.Error("connected without asking the hub's health")
 	}
 	if log.count("the hub answers again") != 1 {
 		t.Errorf("the log does not say why it tried early: %q", log.all())
@@ -241,58 +301,71 @@ func TestClientProbesWhileTheHubStaysDown(t *testing.T) {
 	}
 }
 
-// A hub whose port takes connections but drops the handshake (a reset mid-way, a proxy in front of a hub that is
-// gone) keeps the doubling backoff: its port answered as each wait began, so no wait ends early, and it sees one
-// probe a wait, not one every probeEvery.
-func TestClientKeepsBackoffWhenThePortAnswersButNotTheBus(t *testing.T) {
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer l.Close()
-	var tries, probes events
-	go func() {
-		for {
-			conn, err := l.Accept()
-			if err != nil {
-				return
-			}
-			go func() {
-				defer conn.Close()
-				_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-				if n, _ := conn.Read(make([]byte, 512)); n > 0 { // a try's request: hang up on it
-					tries.add()
-				} else { // a probe says nothing
-					probes.add()
-				}
-			}()
-		}
-	}()
+// A hub reached through a local SSH forward: the forward's port takes connections while the tunnel behind it is
+// stalled (a laptop asleep), so a TCP dial would find "the hub" all along. The probe asks the hub's health through
+// it instead: no answer while the tunnel is stalled, so the wait began with the hub out of reach, and it ends within
+// a probe of the tunnel carrying again, not after the rest of the minute.
+func TestClientReconnectsThroughAForwardWhoseTunnelComesBack(t *testing.T) {
+	f := &fakeHub{}
+	fw := &forward{hub: f}
+	fw.stalled.Store(true)
+	srv := httptest.NewServer(fw)
+	defer srv.Close()
 	var log logLines
-	c := &Client{Hub: "http://" + l.Addr().String(), Token: "t", HelloMethod: "manager.hello", Logf: log.logf,
+	// No HTTPClient: the default one, as a manager whose hub is a plain-http forward on the loopback.
+	c := &Client{Hub: srv.URL, Token: "t", HelloMethod: "manager.hello", Logf: log.logf,
+		Backoff: time.Minute, MaxBackoff: time.Minute, probeEvery: 20 * time.Millisecond}
+	ctx, _, _ := runClient(t, c)
+	log.waitFor(t, "again in 1m0s", 1, 5*time.Second)
+	fw.stuck.waitFor(t, "health probes the stalled tunnel left unanswered", 2, 5*time.Second)
+
+	fw.stalled.Store(false)
+	back := time.Now()
+	wctx, wcancel := context.WithTimeout(ctx, 5*time.Second)
+	defer wcancel()
+	if err := c.Wait(wctx); err != nil {
+		t.Fatalf("not connected %s after the tunnel came back (the backoff is a minute): %v", time.Since(back), err)
+	}
+	if n := f.dials.Load(); n != 1 {
+		t.Errorf("%d full tries once the hub answered, want 1", n)
+	}
+	if log.count("the hub answers again") != 1 {
+		t.Errorf("the log does not say why it tried early: %q", log.all())
+	}
+}
+
+// A hub whose health answers but whose bus does not (a reset during the handshake, a bus that refuses for now) keeps
+// the doubling backoff: it answered as each wait began, so no wait ends early, and it sees one probe a wait, not one
+// every probeEvery.
+func TestClientKeepsBackoffWhenTheHubIsHealthyButNotTheBus(t *testing.T) {
+	n := &noBus{}
+	srv := httptest.NewServer(n)
+	defer srv.Close()
+	var log logLines
+	c := &Client{Hub: srv.URL, Token: "t", HelloMethod: "manager.hello", Logf: log.logf,
 		Backoff: 100 * time.Millisecond, MaxBackoff: 200 * time.Millisecond,
 		probeOver: time.Nanosecond, probeEvery: 10 * time.Millisecond}
 	began := time.Now()
 	_, cancel, ran := runClient(t, c)
-	tries.waitFor(t, "full tries", 4, 10*time.Second)
+	n.tries.waitFor(t, "full tries", 4, 10*time.Second)
 	took := time.Since(began)
-	probes.waitFor(t, "probes (one in each wait so far)", 3, 5*time.Second)
+	n.probes.waitFor(t, "probes (one in each wait so far)", 3, 5*time.Second)
 	stop(t, cancel, ran)
-	n, p := tries.count(), probes.count()
-	t.Logf("%d full tries in %s, %d probes", n, took.Round(time.Millisecond), p)
+	tries, probes := n.tries.count(), n.probes.count()
+	t.Logf("%d full tries in %s, %d probes", tries, took.Round(time.Millisecond), probes)
 	if took < 450*time.Millisecond {
 		t.Fatalf("4 full tries within %s, faster than the backoff's 500 ms (a try every probe would take 30 ms)", took)
 	}
-	if p > n+1 {
-		t.Fatalf("%d probes for %d waits, want one a wait", p, n)
+	if probes > tries+1 {
+		t.Fatalf("%d probes for %d waits, want one a wait", probes, tries)
 	}
 	if log.count("the hub answers again") != 0 {
-		t.Fatal("a wait ended early though the port answered as it began")
+		t.Fatal("a wait ended early though the hub answered as it began")
 	}
 }
 
-// A try that a probe brought early and that fails past the network doubles the backoff as any other: the hub came
-// back for TCP but not for the bus, and the next wait is the longer one, run to its end.
+// A try that a probe brought early and that fails past the hub's health doubles the backoff as any other: the hub
+// came back but its bus did not, and the next wait is the longer one, run to its end.
 func TestClientEarlyTryThatFailsKeepsDoubling(t *testing.T) {
 	addr := freeAddr(t)
 	var dials events
@@ -303,21 +376,8 @@ func TestClientEarlyTryThatFailsKeepsDoubling(t *testing.T) {
 	log.waitFor(t, "again in 30s", 1, 5*time.Second)
 	dials.waitFor(t, "dials (the try, then probes that find nothing)", 3, 5*time.Second)
 
-	l := listenAt(t, addr) // the port answers, and hangs up on the bus's request
-	defer l.Close()
-	go func() {
-		for {
-			conn, err := l.Accept()
-			if err != nil {
-				return
-			}
-			go func() {
-				defer conn.Close()
-				_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-				_, _ = conn.Read(make([]byte, 512))
-			}()
-		}
-	}()
+	srv := serveOn(listenAt(t, addr), &noBus{}) // healthy, and hangs up on the bus's request
+	defer srv.Close()
 	log.waitFor(t, "the hub answers again", 1, 5*time.Second)
 	log.waitFor(t, "again in 1m0s", 1, 5*time.Second)
 	if n := log.count(tryEnded); n != 2 {
@@ -401,15 +461,20 @@ func TestClientPauseEndsWithItsContext(t *testing.T) {
 	})
 	t.Run("in a probe", func(t *testing.T) {
 		var dials atomic.Int32
-		probing := make(chan struct{})
+		probing, release := make(chan struct{}), make(chan struct{})
+		t.Cleanup(func() { close(release) }) // a dial the transport goes on with after its request gave up
 		var once sync.Once
 		dial := func(ctx context.Context, network, addr string) (net.Conn, error) {
 			if dials.Add(1) == 1 {
 				return nil, errors.New("down") // the try
 			}
 			once.Do(func() { close(probing) }) // a probe: nothing answers, for as long as it may wait (a minute)
-			<-ctx.Done()
-			return nil, ctx.Err()
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-release:
+				return nil, errors.New("released")
+			}
 		}
 		c := &Client{Hub: "http://hub.example", Token: "t", HelloMethod: "manager.hello",
 			HTTPClient: &http.Client{Transport: &http.Transport{DialContext: dial}},
@@ -432,71 +497,115 @@ func TestClientPauseEndsWithItsContext(t *testing.T) {
 	})
 }
 
-func TestHubAddr(t *testing.T) {
-	for _, c := range []struct{ hub, scheme, addr string }{
-		{"http://hub.example", "http", "hub.example:80"},
-		{"http://hub.example:18660", "http", "hub.example:18660"},
-		{"https://hub.example/base/", "https", "hub.example:443"},
-		{"ws://hub.example", "http", "hub.example:80"},
-		{"wss://[::1]:8443", "https", "[::1]:8443"},
+func TestHealthURL(t *testing.T) {
+	for _, c := range []struct{ hub, want string }{
+		{"http://hub.example:18660", "http://hub.example:18660/api/v1/health"},
+		{"https://hub.example/base/", "https://hub.example/base/api/v1/health"},
+		{"ws://hub.example", "http://hub.example/api/v1/health"},
+		{"wss://[::1]:8443", "https://[::1]:8443/api/v1/health"},
 	} {
-		u, addr, err := hubAddr(c.hub)
-		if err != nil || u.Scheme != c.scheme || addr != c.addr {
-			t.Errorf("hubAddr(%q) = %v, %q, %v; want scheme %s, %q", c.hub, u, addr, err, c.scheme, c.addr)
+		if got, err := healthURL(c.hub); err != nil || got != c.want {
+			t.Errorf("healthURL(%q) = %q, %v; want %q", c.hub, got, err, c.want)
 		}
 	}
-	if _, _, err := hubAddr("hub.example"); err == nil {
-		t.Error("a hub without a scheme has an address")
+	for _, hub := range []string{"hub.example", "ftp://hub.example", ""} {
+		if got, err := healthURL(hub); err == nil {
+			t.Errorf("healthURL(%q) = %q, want an error", hub, got)
+		}
+	}
+	if (&Client{Hub: "hub.example"}).prober() != nil {
+		t.Error("a probe for a hub URL that does not parse")
 	}
 }
 
-type otherTransport struct{}
-
-func (otherTransport) RoundTrip(*http.Request) (*http.Response, error) { return nil, errors.New("no") }
-
-// The probe dials the way the client's connections are dialed, and not at all where its connection would not be to
-// the hub itself.
-func TestProberFollowsTheClientsRoute(t *testing.T) {
-	proxy, _ := url.Parse("http://proxy.example:3128")
-	noProxy := func(*http.Request) (*url.URL, error) { return nil, nil }
-	tlsDial := func(context.Context, string, string) (net.Conn, error) { return nil, errors.New("no") }
+// Only the hub's own answer counts: a 2xx whose body says "ok": true, in time.
+func TestProbeReadsTheHubsHealth(t *testing.T) {
+	var mode atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != healthPath {
+			http.NotFound(w, r)
+			return
+		}
+		switch mode.Load().(string) {
+		case "ok":
+			_, _ = w.Write([]byte(`{"ok":true,"hub_id":"h"}`))
+		case "not ok":
+			_, _ = w.Write([]byte(`{"ok":false}`))
+		case "503":
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		case "not json":
+			_, _ = w.Write([]byte(`<html>a proxy's page</html>`))
+		case "hang":
+			<-r.Context().Done()
+		}
+	}))
+	defer srv.Close()
+	reach := (&Client{Hub: srv.URL}).prober()
 	for _, c := range []struct {
-		name string
-		hub  string
-		hc   *http.Client
+		mode string
 		want bool
-	}{
-		// The default transport sends nothing on the loopback through a proxy, whatever the environment says.
-		{"default client, loopback hub", "http://127.0.0.1:18660", nil, true},
-		{"through a proxy", "https://hub.example", &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxy)}}, false},
-		{"a proxy func that says direct", "https://hub.example", &http.Client{Transport: &http.Transport{Proxy: noProxy}}, true},
-		{"another kind of transport", "https://hub.example", &http.Client{Transport: otherTransport{}}, false},
-		{"its own TLS dial", "https://hub.example", &http.Client{Transport: &http.Transport{DialTLSContext: tlsDial}}, false},
-		{"its own TLS dial, plain http", "http://hub.example", &http.Client{Transport: &http.Transport{DialTLSContext: tlsDial}}, true},
-		{"a bad hub url", "hub.example", nil, false},
-	} {
-		got := (&Client{Hub: c.hub, HTTPClient: c.hc}).prober() != nil
-		if got != c.want {
-			t.Errorf("%s: probes %v, want %v", c.name, got, c.want)
+	}{{"ok", true}, {"not ok", false}, {"503", false}, {"not json", false}, {"hang", false}, {"ok", true}} {
+		mode.Store(c.mode)
+		if got := reach(context.Background(), 300*time.Millisecond); got != c.want {
+			t.Errorf("health %s: reachable %v, want %v", c.mode, got, c.want)
 		}
 	}
-
-	// A transport's own dial (a pinned client's) is the probe's, to the hub's host and port.
-	var dialed []string
-	var mu sync.Mutex
-	hc := &http.Client{Transport: &http.Transport{DialContext: func(_ context.Context, network, addr string) (net.Conn, error) {
-		mu.Lock()
-		dialed = append(dialed, network+" "+addr)
-		mu.Unlock()
-		return nil, errors.New("down")
-	}}}
-	reach := (&Client{Hub: "https://hub.example", HTTPClient: hc}).prober()
-	if reach == nil || reach(context.Background(), time.Second) {
-		t.Fatal("a dial that fails is a hub out of reach")
+	if (&Client{Hub: srv.URL + "/elsewhere"}).prober()(context.Background(), time.Second) {
+		t.Error("a 404 for the health is a hub that answers")
 	}
-	mu.Lock()
-	defer mu.Unlock()
-	if len(dialed) != 1 || dialed[0] != "tcp hub.example:443" {
-		t.Fatalf("dialed %q", dialed)
+}
+
+// recorder answers every request with {"ok": true} and keeps what was asked.
+type recorder struct {
+	mu   sync.Mutex
+	seen []string
+}
+
+func (r *recorder) RoundTrip(req *http.Request) (*http.Response, error) {
+	r.mu.Lock()
+	r.seen = append(r.seen, req.Method+" "+req.URL.String()+" auth="+req.Header.Get("Authorization"))
+	r.mu.Unlock()
+	return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}},
+		Body: io.NopCloser(strings.NewReader(`{"ok":true}`)), Request: req}, nil
+}
+
+// The probe goes the bus's own way: through the client's HTTP client, whatever its transport (a pinned TLS client,
+// a proxy), and without the token, which the health does not need.
+func TestProbeGoesTheClientsWay(t *testing.T) {
+	rec := &recorder{}
+	c := &Client{Hub: "https://hub.example/base/", Token: "secret", HTTPClient: &http.Client{Transport: rec}}
+	if !c.prober()(context.Background(), time.Second) {
+		t.Fatal("the client's own transport said ok")
+	}
+	rec.mu.Lock()
+	if len(rec.seen) != 1 || rec.seen[0] != "GET https://hub.example/base/api/v1/health auth=" {
+		t.Errorf("asked %q", rec.seen)
+	}
+	rec.mu.Unlock()
+
+	// Through a proxy: what the proxy says of the hub is the answer (502 when it cannot reach it).
+	var upstreamDown atomic.Bool
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Host != "hub.invalid:18660" || r.URL.Path != healthPath {
+			http.Error(w, "unexpected "+r.URL.String(), http.StatusBadRequest)
+			return
+		}
+		if upstreamDown.Load() {
+			http.Error(w, "bad gateway", http.StatusBadGateway)
+			return
+		}
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer proxy.Close()
+	pu, _ := url.Parse(proxy.URL)
+	via := &Client{Hub: "http://hub.invalid:18660", HTTPClient: &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(pu)}}}
+	reach := via.prober()
+	if !reach(context.Background(), time.Second) {
+		t.Fatal("the hub answered through the proxy")
+	}
+	upstreamDown.Store(true)
+	if reach(context.Background(), time.Second) {
+		t.Fatal("a proxy that cannot reach the hub passed for it")
 	}
 }
