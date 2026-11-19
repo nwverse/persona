@@ -16,7 +16,7 @@ import (
 var (
 	larkFilters = map[string]bool{"jq": true, "head": true, "tail": true, "grep": true, "egrep": true, "wc": true, "sort": true, "uniq": true, "cut": true, "tr": true, "column": true,
 		// and commands that only print
-		"echo": true, "printf": true, "true": true, "date": true, "which": true, "type": true, "cd": true}
+		"echo": true, "printf": true, "true": true, "date": true, "seq": true, "which": true, "type": true, "cd": true}
 	// curl flags a gated command passes on that cannot leak the token or reach another host, with whether they take a value.
 	gateCurlFlags = map[string]bool{"--url-query": true, "-G": false, "--get": false, "--data-urlencode": true, "-d": true, "--data": true,
 		"--data-raw": true, "-o": true, "--output": true, "-i": false, "--include": false, "-m": true, "--max-time": true, "-s": false,
@@ -147,10 +147,70 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 		}
 		return v
 	}
-	cmd = normalizeLarkCommand(cmd, cwd, gates)
+	resolvedPrefixes := map[string]bool{}
+	cmd = normalizeLarkCommandTracked(cmd, cwd, gates, resolvedPrefixes)
 	v.unknown = shellCommandUnknown(cmd, false, depth)
 	segs, ok := shellcmd.Split(cmd)
 	if !ok {
+		// The line splitter cannot represent every compound statement. Walk the shell AST instead, preserving simple
+		// statements and whole pipelines, and classify each one with the same rules. Unsupported compound syntax keeps
+		// the original opaque verdict; no command is executed by this fallback.
+		if tree, err := syntax.NewParser().Parse(strings.NewReader(cmd), ""); err == nil {
+			compound := true
+			var walk func(*syntax.Stmt) bool
+			walk = func(stmt *syntax.Stmt) bool {
+				switch c := stmt.Cmd.(type) {
+				case *syntax.CallExpr:
+				case *syntax.BinaryCmd:
+					if c.Op != syntax.Pipe && c.Op != syntax.PipeAll {
+						return walk(c.X) && walk(c.Y)
+					}
+				case *syntax.Block:
+					if len(stmt.Redirs) != 0 {
+						return false
+					}
+					for _, inner := range c.Stmts {
+						if !walk(inner) {
+							return false
+						}
+					}
+					return true
+				case *syntax.Subshell:
+					if len(stmt.Redirs) != 0 {
+						return false
+					}
+					for _, inner := range c.Stmts {
+						if !walk(inner) {
+							return false
+						}
+					}
+					return true
+				default:
+					return false
+				}
+				var text strings.Builder
+				if syntax.NewPrinter().Print(&text, stmt) != nil {
+					return false
+				}
+				child := classifyLarkDepth(text.String(), gates, cwd, risk, depth+1)
+				merge(child)
+				v.other = true
+				v.unsure = v.unsure || child.unsure
+				v.unparsed = v.unparsed || child.unparsed
+				return true
+			}
+			for _, stmt := range tree.Stmts {
+				compound = walk(stmt) && compound
+			}
+			if compound {
+				v.other = true
+				// Splitting statements also loses larkTextRuns's cross-statement data flow (a heredoc written now and
+				// executed later). Keep every compound fallback that names the CLI opaque; the per-call results above
+				// are sufficient only when no such indirect execution text is present.
+				v.unknown = v.unknown || larkCLIRe.MatchString(cmd)
+				return v
+			}
+		}
 		v.other, v.unparsed, v.unknown = true, true, v.unknown || gateNamed(gates, cmd) || larkCLIRe.MatchString(cmd) || shellCommandUnknown(cmd, true, depth)
 		return v
 	}
@@ -169,6 +229,7 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 		writes, notes := larkWritesFile(s.Redirect)
 		flow = append(flow, larkFlow{text: s.Text, writes: writes, notes: notes})
 		seg := &flow[len(flow)-1]
+		seg.resolved = resolvedPrefixes[larkWordsKey(s.Words)]
 		nestedUnsure := false
 		// fileReads: every substitution that is no filter only reads files (larkFileReadSubstitution).
 		fileReads := true
@@ -190,7 +251,7 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 			if len(child.calls) > 0 || child.unknown || child.unparsed {
 				v.other = true
 			}
-			nestedUnsure = nestedUnsure || !larkFilterSubstitution(nested) || child.unknown || child.unparsed || child.unsure
+			nestedUnsure = nestedUnsure || !larkFilterSubstitution(nested) && !larkClassifiedReadSubstitution(child) || child.unknown || child.unparsed || child.unsure
 			fileReads = fileReads && (larkFilterSubstitution(nested) || larkFileReadSubstitution(nested)) &&
 				len(child.calls) == 0 && !child.unknown && !child.unparsed && !child.unsure
 			merge(child)
@@ -318,7 +379,7 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 					v.other = true
 				}
 			}
-			if s.ArgSubst || splitGateArguments(s.Text) {
+			if s.ArgSubst || splitGateArgumentsForGate(s.Text) {
 				v.other, v.unknown = true, true
 				v.unread = append(v.unread, gate)
 				continue
@@ -402,6 +463,13 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 
 // larkFilterSubstitution reports whether a command substitution only formats
 // or prints data. Other programs keep the enclosing gated call conservative.
+// larkClassifiedReadSubstitution is a command substitution made solely of calls already proven to be reads. Its
+// output can be stored or formatted as data; the enclosing executable and any eval/shell use are checked separately.
+func larkClassifiedReadSubstitution(v larkVerdict) bool {
+	return len(v.calls) > 0 && !v.other && !v.unknown && !v.unparsed && !v.unsure &&
+		!slices.ContainsFunc(v.calls, func(c larkCall) bool { return !larkRead(c) || !larkBypassSafe(c) })
+}
+
 func larkFilterSubstitution(cmd string) bool {
 	segs, ok := shellcmd.Split(cmd)
 	if !ok || len(segs) == 0 {
@@ -412,7 +480,7 @@ func larkFilterSubstitution(cmd string) bool {
 			return false
 		}
 		words, ok := unwrapCommand(s.Words)
-		if !ok || len(words) == 0 || len(words) != len(s.Words) || !larkFilters[words[0]] {
+		if !ok || len(words) == 0 || len(words) != len(s.Words) || !larkFilters[words[0]] && !selfContainedCode(words) {
 			return false
 		}
 	}
@@ -729,6 +797,16 @@ func wordExpandsToMany(word *syntax.Word) bool {
 // splitGateArguments reports an expansion that can produce extra arguments.
 // Redirect targets are excluded.
 func splitGateArguments(cmd string) bool {
+	return splitGateArgumentsMode(cmd, false)
+}
+
+// splitGateArgumentsForGate permits only the narrowly proven unquoted read-query case below. lark-cli's flags keep
+// the stricter splitGateArguments check.
+func splitGateArgumentsForGate(cmd string) bool {
+	return splitGateArgumentsMode(cmd, true)
+}
+
+func splitGateArgumentsMode(cmd string, unmatchedReadQuery bool) bool {
 	cmd = strings.TrimSpace(cmd)
 	for {
 		stripped := false
@@ -755,7 +833,10 @@ func splitGateArguments(cmd string) bool {
 		if !ok {
 			return true
 		}
-		for _, arg := range call.Args {
+		for i, arg := range call.Args {
+			if unmatchedReadQuery && gateUnmatchedReadQuery(call.Args, i) {
+				continue
+			}
 			found = wordExpandsToMany(arg)
 			if found {
 				break
@@ -764,6 +845,31 @@ func splitGateArguments(cmd string) bool {
 		return false
 	})
 	return found
+}
+
+// gateUnmatchedReadQuery proves that an unquoted '?' in the final argument cannot produce a different request.
+// The method is a literal GET/HEAD, the route is absolute, no other glob or expansion occurs, the pathname glob has
+// no match, and the whole word still passes the deletion-action boundary with its query retained as path text. With
+// no match, an ordinary shell leaves the bytes alone; nullglob removes only the final route, leaving no request, and
+// failglob runs nothing. A match, a later argument or a non-read method stays unknown.
+func gateUnmatchedReadQuery(args []*syntax.Word, index int) bool {
+	if index < 2 || index != len(args)-1 {
+		return false
+	}
+	method, methodDynamic := executionWord(args[index-1])
+	if methodDynamic || method != "GET" && method != "HEAD" {
+		return false
+	}
+	value, dynamic := executionWord(args[index])
+	if dynamic || !strings.HasPrefix(value, "/") || !strings.Contains(value, "?") || strings.ContainsAny(value, "*[") {
+		return false
+	}
+	_, query, found := strings.Cut(value, "?")
+	if !found || !strings.Contains(query, "=") || !larkBypassSafe(larkCall{Method: method, Path: strings.ToLower(value)}) {
+		return false
+	}
+	matches, err := filepath.Glob(value)
+	return err == nil && len(matches) == 0
 }
 
 // parseGateCall reads `METHOD PATH [BODY] [curl flags]` after a gated command.
