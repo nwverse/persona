@@ -2344,12 +2344,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			}
 		}
 		if err := n.syncAssistantSkills(dir); err != nil {
-			if a.WorkGuideMD != "" {
-				return nil, err
-			}
 			n.logger.Printf("assistant: skills: %v", err)
-		}
-		if a.WorkGuideMD != "" && assistantskills.WorkGuideInstalled(filepath.Join(dir, ".claude", "skills")) &&
+		} else if a.WorkGuideMD != "" && assistantskills.WorkGuideInstalled(filepath.Join(dir, ".claude", "skills")) &&
 			assistantskills.WorkGuideInstalled(filepath.Join(dir, ".agents", "skills")) {
 			a.ClaudeMD = a.WorkGuideMD
 		}

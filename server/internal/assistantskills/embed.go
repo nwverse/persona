@@ -61,9 +61,11 @@ func (s Selection) wanted(name string) bool {
 }
 
 const (
-	workGuideName = "persona-work"
-	builtinStamp  = ".persona-builtin" // the built-in skills last copied in
-	legacyStamp   = ".persona-skills"  // what older personad binaries left next to their copies
+	// Codex can discover both native skill roots. One canonical file keeps a single catalog entry.
+	runtimeGuideLink = "../../.claude/skills/" + workGuideName
+	workGuideName    = "persona-work"
+	builtinStamp     = ".persona-builtin" // the built-in skills last copied in
+	legacyStamp      = ".persona-skills"  // what older personad binaries left next to their copies
 )
 
 // UserDir is the user's skill space: ~/.persona/skills (PERSONA_SKILLS_DIR elsewhere, for tests).
@@ -229,6 +231,13 @@ func installBuiltins(dir string, mine []string, selection Selection) error {
 	stamp := filepath.Join(dir, builtinStamp)
 	old, _ := os.ReadFile(stamp)
 	installed := installedNames(old)
+	var guideLink string
+	if filepath.Base(dir) == "skills" && filepath.Base(filepath.Dir(dir)) == ".agents" {
+		guideLink = filepath.FromSlash(runtimeGuideLink)
+		if selection.WorkGuide && !WorkGuideInstalled(filepath.Dir(filepath.Join(dir, guideLink))) {
+			selection.WorkGuide = false
+		}
+	}
 	var names []string
 	for _, n := range builtinNames() {
 		if n == workGuideName && !slices.Contains(installed, n) {
@@ -244,13 +253,21 @@ func installBuiltins(dir string, mine []string, selection Selection) error {
 		}
 	}
 	want := builtinVersion() + " " + strings.Join(names, ",")
-	if strings.TrimSpace(string(old)) == want && (!slices.Contains(names, workGuideName) || workGuideFilePresent(dir)) {
-		return nil
+	if strings.TrimSpace(string(old)) == want {
+		if !slices.Contains(names, workGuideName) {
+			return nil
+		}
+		target, _ := os.Readlink(filepath.Join(dir, workGuideName))
+		if target == guideLink && workGuideFilePresent(dir) {
+			return nil
+		}
 	}
 	for _, n := range installed {
 		if fs.ValidPath(n) && n != "." && filepath.Base(n) == n && !slices.Contains(names, n) {
 			at := filepath.Join(dir, n)
-			if st, err := os.Lstat(at); err == nil && st.IsDir() {
+			target, _ := os.Readlink(at)
+			managedLink := n == workGuideName && guideLink != "" && target == guideLink
+			if st, err := os.Lstat(at); err == nil && (st.IsDir() || managedLink) {
 				if err := os.RemoveAll(at); err != nil {
 					return err
 				}
@@ -260,7 +277,11 @@ func installBuiltins(dir string, mine []string, selection Selection) error {
 	for _, name := range names {
 		tmp := filepath.Join(dir, "."+name+".new")
 		_ = os.RemoveAll(tmp)
-		if err := copyBuiltin(name, tmp); err != nil {
+		if name == workGuideName && guideLink != "" {
+			if err := os.Symlink(guideLink, tmp); err != nil {
+				return err
+			}
+		} else if err := copyBuiltin(name, tmp); err != nil {
 			return err
 		}
 		final := filepath.Join(dir, name)

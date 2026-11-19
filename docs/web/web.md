@@ -2086,7 +2086,12 @@ own scope (the terminal one is this browser only), then draws each module's sour
 inject their source in `Labs.tsx`; the page and the form know nothing else of them. Only real features: never a demo
 entry.
 
-**Terminal renderer** (the first module; `web/src/lib/labs-terminal.ts` over `web/src/lib/labs.ts`). Single pane terminals
+**Work management guide on demand** (#11055, `web/src/lib/labs-work-guide.ts`). This switch applies to the selected
+Assistant across devices and defaults to off. Enabling it moves the workflows for to-dos, delegation, supervision and
+review into the built-in `persona-work` skill. Switching it off restores the full startup instructions. After either
+change, the form asks the user to start a new chat. Existing chats may retain earlier guidance and tool information.
+
+**Terminal renderer** (`web/src/lib/labs-terminal.ts` over `web/src/lib/labs.ts`). Single pane terminals
 (`views/session/terminal/feed.ts`) draw with xterm's DOM renderer (Standard, the default) or WebGL (`@xterm/addon-webgl`,
 its own chunk, loaded only when chosen). Full view always uses the DOM renderer and is not affected. It is kept by this
 browser (`localStorage`) because GPU support differs per browser and machine; it never reaches the hub, another browser,
