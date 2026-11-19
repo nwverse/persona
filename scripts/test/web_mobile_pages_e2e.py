@@ -190,9 +190,21 @@ def inbox_filters(page, tag, shots):
 
 
 def todos(page, tag, shots):
+    # a to-do's page asks for its repositories and decisions: none is open, so none is asked for (#11442)
+    detail_reads = []
+    on_request = lambda r: detail_reads.append(r.url) if "/api/v1/todos/" in r.url and ("/repositories" in r.url or "/decisions" in r.url) else None
+    page.on("request", on_request)
     goto(page, "/todos")
     circle = page.get_by_role("button", name="完成待办").first
     circle.wait_for()
+    check(page.locator("[data-todo][aria-current]").count() == 0, f"{tag}: no to-do row is current before one is opened")
+    search = page.get_by_placeholder("搜索待办")
+    search.press_sequentially("PR", delay=60)
+    page.wait_for_timeout(300)
+    search.fill("")
+    page.wait_for_timeout(500)
+    page.remove_listener("request", on_request)
+    check(not detail_reads, f"{tag}: no unopened to-do's page loads, also while searching", detail_reads)
     calls = []
     page.route("**/api/v1/todos/*", lambda r: (calls.append((r.request.method, r.request.post_data)), r.fulfill(status=500, body="{}")) if r.request.method == "PATCH" else r.continue_())
     b = circle.bounding_box()
@@ -210,6 +222,63 @@ def todos(page, tag, shots):
     page.wait_for_function("location.search.startsWith('?id=')")
     ok(f"{tag}: Enter on a focused todo row opens it")
     shot(page, shots, f"todos_{tag}")
+
+
+# Overview on a phone (#11442): a task card opens from a tap anywhere on it, its PR link keeps its own; See all and
+# Monitor take a 44pt touch; a Needs you card's kicker never takes more room than its title.
+def overview_cards(page, ctx, w, tag, shots):
+    def back_to_overview():
+        goto(page, "/overview")
+        page.wait_for_selector("[data-task]")
+        page.wait_for_timeout(300)
+
+    # in the middle of the screen, clear of a toast left at its bottom by an earlier step
+    def center(loc):
+        loc.evaluate("e => e.scrollIntoView({ block: 'center' })")
+        page.wait_for_timeout(200)
+
+    def tap(box, dy=0.0):
+        page.touchscreen.tap(box["x"] + min(12, box["width"] / 2), box["y"] + box["height"] / 2 + dy)
+        page.wait_for_timeout(500)
+        return page.evaluate("location.pathname + location.search")
+
+    back_to_overview()
+    card = page.locator("[data-task]:has([data-task-agents])").first
+    center(card)
+    tid = card.get_attribute("data-task")
+    check(tap(card.locator("[data-task-agents]").bounding_box()) == f"/todos?id={tid}", f"{tag}: a tap on a task card's agent line opens the task")
+    back_to_overview()
+    card = page.locator("[data-task]:has([data-stage]):has(a[target=_blank])").first
+    center(card)
+    shot(page, shots, f"overview_cards_{tag}")
+    tid = card.get_attribute("data-task")
+    pr = card.locator("a[target=_blank]")
+    with ctx.expect_page() as popup:
+        tap(pr.bounding_box())
+    check(popup.value.url == pr.get_attribute("href") and page.evaluate("location.pathname") == "/overview", f"{tag}: its PR link opens the PR, not the task", popup.value.url)
+    popup.value.close()
+    check(tap(card.locator("[data-stage] .rounded-full").first.bounding_box()) == f"/todos?id={tid}", f"{tag}: a tap on its stage bar opens the task")
+    for name, path in [("查看全部", "/todos"), ("监控", "/machines")]:
+        for dy in (-15, 15):
+            back_to_overview()
+            link = page.locator("section h2 ~ a", has_text=name)
+            center(link)
+            box = link.bounding_box()
+            check(box["height"] < 30 and tap(box, dy) == path, f"{tag}: {name} answers a touch {abs(dy)}px {'above' if dy < 0 else 'below'} its words")
+    if w == 360 and not tag.endswith("d"):
+        back_to_overview()
+        page.evaluate("localStorage.setItem('persona.language', 'en')")
+        page.reload()
+        page.wait_for_selector("[data-task]")
+        page.wait_for_timeout(800)
+        rows = page.evaluate("""() => [...document.querySelectorAll('a')].filter(a => a.querySelector('span[title] > span.truncate')).map(a => {
+          const words = a.querySelector('span[title] > span.truncate'), title = a.querySelector('.block.truncate');
+          return { kicker: words.textContent, words: words.getBoundingClientRect().width, title: title.getBoundingClientRect().width, cut: words.scrollWidth > words.clientWidth + 1 }; })""")
+        page.evaluate("localStorage.removeItem('persona.language')")
+        page.reload()
+        page.wait_for_selector("aside", state="attached")
+        check(rows and all(r["title"] >= r["words"] - 1 for r in rows), "360 en: every Needs you title is at least as wide as its kicker's words", rows)
+        check(any(r["cut"] for r in rows) and all(abs(r["title"] - r["words"]) <= 1 for r in rows if r["cut"]), "360 en: a long kicker is cut only to the title's width", rows)
 
 
 def long_press(page, ctx, tag):
@@ -271,6 +340,7 @@ def main():
                 settings_list(page, tag, a.shots)
                 inbox_filters(page, tag, a.shots)
                 todos(page, tag, a.shots)
+                overview_cards(page, ctx, w, tag, a.shots)
                 if not dark:
                     long_press(page, ctx, tag)
                 ctx.close()
