@@ -393,7 +393,8 @@ export interface Session {
    *  the turn ends, and the strip's actions leave them alone (#4342). */
   queued_relayed?: number;
   /** In a Persona chat, the owner's messages that could not go in and that the assistant keeps and sends again by
-   *  itself, oldest first (#10194, lib/undelivered.ts). Drawn as the owner's bubbles marked not delivered. */
+   *  itself, oldest first (#10194, lib/undelivered.ts); in an Agent's chat, the ones held while its computer was away
+   *  (#10661, `computer` set on each). Drawn as the owner's bubbles marked not delivered. */
   undelivered?: UndeliveredMessage[];
   subagents?: Subagent[];
   loop?: LoopInfo;
@@ -1068,4 +1069,7 @@ export interface UndeliveredMessage {
   attempts?: number;
   next_at?: string;
   error?: string;
+  /** Held for an Agent while its computer was away (#10661): that computer's name. `error` is then the whole line to
+   *  show under the bubble, and Retry / Delete go to the session's held routes (lib/undelivered-actions.ts). */
+  computer?: string;
 }

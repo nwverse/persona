@@ -564,6 +564,9 @@ func (s *Service) undeliveredRoutes() {
 		}
 		b.mu.Unlock()
 		if !found {
+			if s.heldAction(w, r, sid, mid, true) {
+				return
+			}
 			apierr.Write(w, http.StatusNotFound, errors.New("no such message"))
 			return
 		}
@@ -586,10 +589,38 @@ func (s *Service) undeliveredRoutes() {
 			return
 		}
 		if !s.undeliveredDrop(sid, mid) {
+			if s.heldAction(w, r, sid, mid, false) {
+				return
+			}
 			apierr.Write(w, http.StatusNotFound, errors.New("no such message"))
 			return
 		}
 		s.publish(context.WithoutCancel(r.Context()))
 		apierr.WriteJSON(w, map[string]any{"ok": true})
 	})
+}
+
+// heldAction is Retry (retry) or Delete on message mid of session sid when none of the conversations keeps it: one an
+// Agent's computer's manager holds (internal/devices held.go, #10661). Older apps call these routes for every row's
+// undelivered message, whatever kind it is. Only a person's own app may change one (assistantwire.PersonHeader, set by
+// the hub): its delivery carries that person's provenance. False when no machine holds it, or another asks: the route
+// answers 404 as before.
+func (s *Service) heldAction(w http.ResponseWriter, r *http.Request, sid, mid string, retry bool) bool {
+	if s.devs == nil || r.Header.Get(assistantwire.PersonHeader) != "1" {
+		return false
+	}
+	act := s.devs.HeldDelete
+	if retry {
+		act = s.devs.HeldRetry
+	}
+	found, err := act(r.Context(), sid, mid)
+	switch {
+	case !found:
+		return false
+	case err != nil:
+		apierr.Call(w, err) // coded for the app: 409 while it is being sent
+	default:
+		apierr.WriteJSON(w, map[string]any{"ok": true})
+	}
+	return true
 }
