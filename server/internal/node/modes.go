@@ -265,14 +265,36 @@ func (n *Node) setModes(ctx context.Context, id, mode, effort string) error {
 		if p != nil && p.alive() && p.agent == "claude" {
 			p.settingsMu.Lock()
 			defer p.settingsMu.Unlock()
+			p.mu.Lock()
+			effortRestart := p.effortNeedsRestartLocked(effort) // an interactive process's effort (assistant_tui.go)
+			p.mu.Unlock()
+			if effortRestart && !p.needsRestartFor(mode) {
+				n.noteModes(id, mode, effort)
+				n.persistModes(id, mode, effort)
+				p.mu.Lock()
+				active := p.busy || len(p.tasks) > 0
+				p.mu.Unlock()
+				if !active {
+					n.stopAssistant(id)
+				}
+				n.notifySessions()
+				return nil // an active one restarts with it at the next idle message
+			}
 			if p.needsRestartFor(mode) {
-				// bypassPermissions requires a new process. Record the choice while holding the same
-				// lock as ordinary changes, so an older ACK cannot overwrite it.
+				// bypassPermissions requires a new process, as does any mode for interactive Claude Code. Record the
+				// choice while holding the same lock as ordinary changes, so an older ACK cannot overwrite it.
 				n.noteModes(id, mode, "")
 				n.persistModes(id, mode, "")
 				p.mu.Lock()
 				active := p.busy || len(p.tasks) > 0
+				tui := p.tui && p.tuiNote == ""
 				p.mu.Unlock()
+				if active && tui {
+					n.noteModes(id, "", effort)
+					n.persistModes(id, "", effort)
+					n.notifySessions()
+					return nil // both wait for the restart at the next idle message
+				}
 				if !active {
 					n.stopAssistant(id)
 					n.noteModes(id, "", effort)
@@ -627,7 +649,7 @@ func (n *Node) setAssistantModes(ctx context.Context, p *assistantProc, mode, ef
 		if field == "effort" {
 			want, previous = effort, p.effort
 		}
-		restart := field == "mode" && p.needsRestartForLocked(want)
+		restart := field == "mode" && p.needsRestartForLocked(want) || field == "effort" && p.effortNeedsRestartLocked(want)
 		p.mu.Unlock()
 		if want == "" || restart {
 			continue

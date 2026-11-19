@@ -553,6 +553,82 @@ merges such a message into the turn with `turn/steer` ("Codex" below); a Claude 
   chat busy because the recovery holds the failed turn, but nobody sent it mid-turn: it carries neither the note nor the
   `background_tasks` request. Test: `TestAssistantRecoveryResendIsNoInterjection` (`node/assistant_recovery_test.go`).
 
+## Interactive Claude Code (#10058)
+
+Claude assistant conversations run `claude -p`, which Claude Code reports with entrypoint `sdk-cli`. People report that on a
+Claude subscription such runs use the 5-hour window faster than the same work in interactive Claude Code (about 1.7–2.9×;
+anthropics/claude-code#97074). Anthropic documents no such weighting, so this is an observation, not a rule.
+
+- **Switch**: `claude_interactive` in the assistant's settings (`GET/PUT /api/v1/assistant`, `persona_settings` key
+  `assistant.claude_interactive`), **off by default**. While it is on the manager adds `claude_interactive: true` to every
+  `assistant.send`, `assistant.warm` and `session.send` it sends or fills in (`SendParams`); the node's `modelExecution.Interactive`
+  stays with a message that picks no model (a supervision message, a relay: it runs on what the conversation ran) and
+  is part of the execution fingerprint, so an idle conversation resumes in the other kind of process with its next message and a
+  busy one finishes its turn first.
+- **Risk, said where it is turned on**: Persona then drives a program made for a person. Anthropic may read that as a different
+  kind of use than it is, and an account restriction is possible; another project declined the same backend for that reason
+  (yetone/magpie#707). Nothing disguises what runs: no `CLAUDE_CODE_ENTRYPOINT`, no changed headers or config files. The process
+  is interactive Claude Code (entrypoint `cli`), started by Persona.
+- **How** (`node/assistant_tui*.go`): the conversation's process is `personad assistant-tui`. Its first stdin line is its spec:
+  the launcher command with the same flags (`--append-system-prompt`, `--settings`, `--plugin-dir`, `--mcp-config`, `--allowedTools`,
+  `--tools`, `--model`, `--session-id` / `--resume`), less the print-only ones, plus `--permission-mode` and `--effort`; and the
+  print-mode command. It runs the interactive one in a tmux server on a private socket, attached through a pseudo-terminal of its
+  own with `destroy-unattached`, so Claude Code ends with the bridge however it ends. The server runs in the foreground
+  (`tmux -D`, tmux 3.2 or later) as the bridge's child, its session created with `-N` so no other server can take it, so Claude Code, its MCP server and its hooks descend from the
+  process the node runs for the conversation, as claude -p's do: the node takes the MCP server for the assistant's by
+  that (`mcpAssistantOf`), and under a daemonized server the main conversation got an Agent's four tools. The pane gets
+  the `PWD` claude -p gets (the node's, usually none), not the folder as tmux was given it: Claude Code takes its working
+  directory from `PWD`, and a symlinked home's other spelling became a second working directory; the print-mode fallback
+  gets the node's environment for the same reason. The pane runs a script in the bridge's
+  private directory that holds the command: tmux takes at most 16 KB for a new session's command and refuses more ("command too
+  long"), and an assistant's start, with its system prompt and tool rules, is often longer. It answers the start-up screens a terminal
+  start answers (`claudeready.go`: the folder's trust, first-run screens, the Bypass Permissions confirmation of a start that asked
+  for bypass, a guide), then speaks the stream-json `claude -p` speaks: a message is pasted (bracketed) and submitted once the
+  input box takes it; the transcript becomes `system/init` as a turn starts, a `stream_event` per assistant message (usage, model,
+  its text), `compact_boundary`, and `result` at `turn_duration` or an interruption; running background work is read off the mode
+  line (`background_tasks_changed`). A turn the screen shows over without a line ending it (a local command such as `/compact`)
+  ends after 15 quiet seconds. An `interrupt` control request is Esc and `background_tasks` is Ctrl+B, as in a terminal; the apps' Stop
+  still ends the process, as it does for claude -p (background tasks included), and the next message resumes the conversation.
+- **What changes**: live text arrives a content block at a time (an interactive Claude Code writes no partial messages); a long
+  message (any message with its live snapshot) reaches the model inside Claude Code's own `<pasted_content>` wrapper, as a long
+  message typed into an Agent's terminal does (the transcript readers drop it); an image is saved to a private file and the
+  message names its path; Claude Code's tmux variables are unset in the pane, so it is never taken for an Agent in tmux; queue-strip "Send now" and cancelling a queued message answer with an
+  error; permission mode and effort are start flags, so changing one resumes the conversation in a new process (as
+  `bypassPermissions` always has; a busy one finishes its turn first). Guests, meeting rooms, supervision rounds (`--resume-session-at`
+  is print-only), plan mode, warm spares (none is warmed while the switch is on) and Codex keep running as before.
+- **Starts no message makes**: the manager also answers `claude_interactive` on `assistant.model`, so a process the node starts
+  by itself (compacting a stopped conversation, resending what lost background tasks were doing after a restart) runs in the
+  same kind of Claude Code as a send would start, and the next message does not restart it into the other kind.
+- **A message that cannot be typed is never dropped quietly**: when the bridge cannot type a message (an image that does not
+  decode, an input box that takes nothing for 10 minutes), its turn fails with the reason, as a send claude -p could not deliver
+  does, and the messages already waiting behind it fail with it instead of reaching Claude Code out of order. Sent while a turn
+  runs, it fails that turn as it ends. A control request that comes during the start is answered by the bridge and never reaches
+  the print-mode fallback; only messages do.
+- **Visible fallback**: when the interactive start fails (no tmux, Claude Code exiting, a start-up screen Persona does not
+  answer, no input box within 2 minutes, a Claude Code that keeps no transcript because it was started from inside another Claude
+  Code session), the bridge runs the print-mode command in its place and, once it runs, prints
+  `{"type":"system","subtype":"persona_tui_fallback","reason":…}` (a command that cannot run gets no notice; the node never takes
+  the notice for a start, so a claude -p that exits before printing anything fails the send as it would without the bridge), handing it the messages written meanwhile: nothing is lost. The reason names what ended
+  and its last words: the pane's last lines when Claude Code exited, or what the tmux client printed when tmux itself would not
+  start (`tmux exited before Claude Code was ready (status 1): command too long`). The node logs it, the
+  conversation's execution report (`assistant.execution`; for the main chat Settings › Assistant › Runs on shows "Main chat runs
+  with: Claude Code (print mode)" and the reason under it) carries `mode: "print"` with the reason in `mode_note`, and new starts on
+  that node stay in print mode for 10 minutes before trying again. A process running as asked reports `mode: "interactive"`
+  ("Claude Code (interactive)"); with the switch off `mode` is absent. Windows never tries: its conversations run in print mode and
+  say so.
+- **Web**: Settings › Assistant has the switch under Runs on, its footer saying what it is for and the risk; a hub without the
+  setting shows no switch (`AssistantSettings.claude-interactive.test.tsx`). The apps do not show it yet; the assistant's
+  `persona_settings` tool changes it from any client.
+- Tests: `TestTUITranslatorReadsATranscriptAsStreamJSON`, `TestTUIArgsDropPrintFlagsAndCarryTheStartModes`,
+  `TestTUIProcessRestartsForModeAndEffort`, `TestInteractiveStartGoesThroughTheBridgeAndItsFallbackIsVisible`,
+  `TestPrintModeStartNeverRunsTheBridge`, `TestBridgeFallsBackToPrintModeVisibly`, `TestUndeliveredMessagesFailTheirTurn`,
+  `TestFallbackForwardsOnlyMessages`, `TestCompactingAStoppedConversationKeepsInteractive`, `TestFallbackThatDiesIsAFailedStart`,
+  `TestFallbackThatCannotRunSaysNothing`, `TestALongInteractiveCommandStartsInTmux`, `TestATmuxThatRefusesToStartSaysWhy`,
+  `TestTUIScriptQuotesEveryArgument`, `TestAMessageWithNoModelPickKeepsInteractive`,
+  `TestInteractiveClaudeCodeDescendsFromTheBridge`, `TestTheInteractivePaneGetsThePrintModePWD`, `TestFallbackGetsThePrintModePWD`
+  (`node/assistant_tui_test.go`),
+  `TestSendParamsClaudeInteractive`, `TestClaudeInteractiveSetting` (`assistant/claude_interactive_test.go`).
+
 ## Next-message suggestions (#4644)
 
 The strip over an empty composer (#2978: click or Tab fills it in, the arrow sends it) reads one field, `Session.suggestion`, which has
@@ -662,8 +738,15 @@ Known strict-plugin policy or `Skill` deny/ask rules refuse this adapter rather 
 customization/approval gates.
 The launcher's existing `--settings` file or inline object is checked through the same settings reader as startup;
 its values are never returned in the catalog or diagnostics.
-Known managed-policy files/drop-in directories or a server-policy cache also refuse the bounded adapter:
-it checks their presence without reading a potentially credential-bearing cache or executing policy helpers.
+The administrator's settings files are read and checked the same way (#9862): `managed-settings.json` and the `*.json`
+drop-ins in `managed-settings.d` (hidden files skipped) under `/Library/Application Support/ClaudeCode`,
+`/etc/claude-code` and `%ProgramFiles%\ClaudeCode`, each system's in Claude Code's merge order (the file, then the
+drop-ins alphabetically). They apply last, so a managed `skillOverrides: off` cannot be turned back on by the profile,
+project or launcher settings. Besides `strictPluginOnlyCustomization` and `Skill` deny/ask rules, a managed
+`policyHelper` refuses too: its output would replace these files, and the node never runs it. A managed file that is
+missing is skipped; one that cannot be read or parsed refuses. A file with only unrelated keys (for example only
+`hooks`) leaves the menu listed. The profile's server-policy cache (`remote-settings.json`) still refuses by presence
+alone: it may carry credentials and is never read. MDM configuration profiles and the Windows registry are not checked.
 This bounded adapter deliberately does **not** claim to enumerate plugin, bundled or remote skills.
 It sends an explicit, server-resolved exact-file reading instruction under existing permissions rather than a native
 slash command, which could resolve a same-name skill elsewhere or apply frontmatter tool/permission overrides.

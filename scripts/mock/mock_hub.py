@@ -2674,6 +2674,9 @@ ASSISTANT_CONFIG = {"machine_id": "server", "launcher": "claude", "timezone": "A
                     "close_ended_terminals": False,
                     # The manager's next-message suggestions (#4644), off by default; MOCK_NEXT_SUGGESTIONS=1 starts on.
                     "next_suggestions": os.environ.get("MOCK_NEXT_SUGGESTIONS") == "1",
+                    # Claude chats in interactive Claude Code (#10058), off by default; MOCK_CLAUDE_INTERACTIVE=on starts on,
+                    # =fallback also has the main chat's report say it fell back to print mode. Left out with MOCK_LEGACY_HUB.
+                    "claude_interactive": os.environ.get("MOCK_CLAUDE_INTERACTIVE", "") in ("on", "fallback"),
                     # The main chat follows up its own tasks instead of the background supervisor (#4927), off by
                     # default. Left out with MOCK_LEGACY_HUB.
                     "main_supervises_own_tasks": False,
@@ -2717,6 +2720,7 @@ def assistant_state(space="", archived=False):
         out.update(agent_tasks=cfg["agent_tasks"], close_ended_terminals=cfg["close_ended_terminals"], inbox_signals=cfg["inbox_signals"], archive_closed_days=cfg["archive_closed_days"],
                    idle_close_hours=cfg["idle_close_hours"], kb_topics=cfg["kb_topics"],
                    main_supervises_own_tasks=cfg["main_supervises_own_tasks"], next_suggestions=cfg["next_suggestions"],
+                   claude_interactive=cfg["claude_interactive"],
                    start_requested_tasks=cfg["start_requested_tasks"], task_workspace_preference=cfg["task_workspace_preference"],
                    agent_auto_naming=cfg["agent_auto_naming"], agent_auto_naming_max=cfg["agent_auto_naming_max"],
                    agent_auto_naming_interval_hours=cfg["agent_auto_naming_interval_hours"],
@@ -26702,6 +26706,14 @@ class H(BaseHTTPRequestHandler):
             return self.send_json(mock_direction_tree())
         if p == "/api/v1/assistant":
             q = parse_qs(urlparse(self.path).query)
+            if q.get("view", [""])[0] == "main-runtime" and os.environ.get("MOCK_CLAUDE_INTERACTIVE"):
+                # The main chat's execution report while interactive Claude Code is asked for (#10058)
+                report = {"session_id": ASSISTANT_CONFIG["main"], "machine_id": ASSISTANT_CONFIG["machine_id"], "state": "running",
+                          "source": "native", "harness": "claude", "location": {"host": "example-host"}}
+                if ASSISTANT_CONFIG["claude_interactive"]:
+                    fell_back = os.environ.get("MOCK_CLAUDE_INTERACTIVE") == "fallback"
+                    report.update(mode="print", mode_note="tmux is not installed on this computer") if fell_back else report.update(mode="interactive")
+                return self.send_json(report)
             return self.send_json(assistant_state(q.get("space", [""])[0], q.get("archived", [""])[0] == "1"))
         if rule_suggestions_area(self, "GET", p): return  # the standing authorizations Always granted
         if p == "/api/v1/model-config": return self.send_json(listed_model_configuration(cron_lang(self.headers.get("Accept-Language"))))
@@ -28776,6 +28788,8 @@ class H(BaseHTTPRequestHandler):
                 ASSISTANT_CONFIG["kb_topics"] = body["kb_topics"]
             if isinstance(body.get("next_suggestions"), bool):
                 ASSISTANT_CONFIG["next_suggestions"] = body["next_suggestions"]
+            if isinstance(body.get("claude_interactive"), bool):
+                ASSISTANT_CONFIG["claude_interactive"] = body["claude_interactive"]
             if body.get("machine_id"):
                 if not any(m["id"] == body["machine_id"] for m in MACHINES):
                     return self.send_json({"error": "unknown machine"}, 400)
