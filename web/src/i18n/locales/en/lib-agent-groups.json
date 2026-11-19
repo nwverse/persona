@@ -12,6 +12,5 @@
   "state_muted": "Muted",
   "source_feishu": "Lark group",
   "source_terminal": "Terminal",
-  "source_desktop": "Desktop app",
-  "open_feishu_topic": "Open this topic in Lark"
+  "source_desktop": "Desktop app"
 }

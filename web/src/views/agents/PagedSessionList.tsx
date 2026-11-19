@@ -39,8 +39,9 @@ export interface PagedSessionListProps<T> {
   removeIdentity?: (id: string) => string;
   event: "sessions_list" | "agents";
   /** `within` and `group`: the group the row is listed under (Browse by a computer, project or space), so it need not
-   *  repeat what the heading says and can say what the heading leaves open (which of a project's computers). */
-  renderRow: (row: T, within?: GroupDimension, group?: SessionGroup) => ReactNode;
+   *  repeat what the heading says and can say what the heading leaves open (which of a project's computers). `machines`
+   *  is that project's own machine set, once an open legacy group's counts have identified it. */
+  renderRow: (row: T, within?: GroupDimension, group?: SessionGroup, machines?: readonly string[]) => ReactNode;
   personal?: boolean;
   label?: (dimension: string, value: string) => string;
   /** The hub names this collection's projects and spaces (`sessions_catalog`): a repository checked out on several

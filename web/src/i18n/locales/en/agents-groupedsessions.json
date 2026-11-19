@@ -1,3 +1,5 @@
 {
-  "places": "Where it is checked out"
+  "places": "Where it is checked out",
+  "machine_count_one": "{count} machine",
+  "machine_count_other": "{count} machines"
 }

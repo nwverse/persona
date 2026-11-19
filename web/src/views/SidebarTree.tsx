@@ -28,7 +28,7 @@ import { useFolded } from "../lib/use-folded";
 import { sameValue } from "../lib/stable-lines";
 import { stateCount } from "../lib/state-labels";
 import { neverConnected } from "../lib/add-computer";
-import { type GoFn, GroupCount, holdsRow, type NodeMenuFn, type RegFn, rowKey, type RowMenuFn, Section, SidebarGroup } from "./SidebarParts";
+import { type GoFn, GroupCount, holdsRow, MachineChip, type NodeMenuFn, type RegFn, rowKey, type RowMenuFn, Section, SidebarGroup } from "./SidebarParts";
 import { NavRow, SessionRow } from "./SidebarRows";
 import { WindowedRows } from "./WindowedRows";
 import { workspacePinTime, type WorkspaceTarget } from "../lib/workspace-catalog";
@@ -250,7 +250,7 @@ const TreeAgentRows = memo(function TreeAgentRows({ a, depth, machineLabel, show
   const [folded, toggle] = useFolded(keyPrefix + a.key + ":children", a.folded, { follow: true, holds: holdsRow(subtree(a), activeKey) });
   const s = a.session;
   const key = `${keyPrefix}s:${s.machine_id}/${s.session_id}`;
-  const context = noContext ? undefined : [s.space_name || baseName(s.cwd), machineLabel(s.machine_id)].filter(Boolean).join(" · ");
+  const context = noContext ? undefined : s.space_name || baseName(s.cwd);
   return (
     <div style={depth ? { paddingLeft: 12 } : undefined}>
       <div className="flex items-center">
@@ -260,7 +260,7 @@ const TreeAgentRows = memo(function TreeAgentRows({ a, depth, machineLabel, show
           </button>
         )}
         <div className="min-w-0 flex-1">
-          <SessionRow s={s} k={key} reg={reg} hover={hover} active={activeKey === key} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} hint={context} host={showHost && sessionHost(s) !== "herdr" && sessionHost(s) !== "botmux" ? sessionHost(s) : undefined} onMenu={onRowMenu} />
+          <SessionRow s={s} k={key} reg={reg} hover={hover} active={activeKey === key} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} hint={context} showMachine={Boolean(machineLabel(s.machine_id))} host={showHost && sessionHost(s) !== "herdr" && sessionHost(s) !== "botmux" ? sessionHost(s) : undefined} onMenu={onRowMenu} />
         </div>
       </div>
       {a.children.length > 0 && (
@@ -451,13 +451,13 @@ export function SpaceSection({ sp, machineName, reg, hover, activeKey, go, pinne
         <span className="flex items-center gap-1.5">
           <span className="truncate normal-case tracking-normal text-[11.5px] text-ink-2">{sp.name}</span>
           <SpaceMarks pinned={pinned} muted={muted} />
-          {machineName && <span className="truncate normal-case tracking-normal text-[11px] font-normal text-ink-3">{machineName}</span>}
         </span>
       }
       right={
         <>
           <span className={cx("flex items-center gap-1", MENU_STEP_ASIDE, MENU_TOUCH_ROOM)}>
             <SpaceTodoTag sp={sp} onNavigate={onNavigate} />
+            {machineName && <MachineChip name={machineName} />}
             <span className={MENU_HIDES}><SessionTally sessions={sp.sessions} folded={folded} /></span>
           </span>
           <SpaceMenuButton sp={sp} onMenu={onMenu} />
