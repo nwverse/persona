@@ -107,6 +107,7 @@
   "kind_cli": "其他（网页 / 命令行）",
   "kind_web": "网页",
   "role_answer": "只能回答",
+  "role_scoped": "受限访问",
   "revoked_ago": "{time}撤销",
   "used_ago": "{time}用过",
   "added_ago": "{time}添加",
