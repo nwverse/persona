@@ -85,8 +85,9 @@ export function createGrokRuntime(options = {}) {
       // A rediscovered conversation belongs to the assistant only in its directories (or by its metadata, readMetadata).
     const s = { ...blankItems(), raw, id: PREFIX + raw, cwd, assistant: !restored || isConversationDir(cwd, home, options.env || process.env), title: 'Grok', mode: restored ? 'default' : defaultMode, modeKnown: !restored,
       model: '', effort: '', updated: new Date().toISOString(), history: `grok:${raw}`,
-      loaded: 0, running: false, tail: Promise.resolve(), queued: 0, epoch: 0, seen: new Set(), asks: new Set(), approved: new Set() }
+      restored, loaded: 0, running: false, tail: Promise.resolve(), queued: 0, epoch: 0, seen: new Set(), asks: new Set(), approved: new Set() }
     sessions.set(s.id, s)
+    rt.sessionsChanged()
     return s
   }
 
@@ -178,8 +179,8 @@ export function createGrokRuntime(options = {}) {
     if (scanning) return (rescanning ||= scanning.then(() => { rescanning = null; return scan() }))
     scanning = (async () => {
       await readTerminalHeld()
-      let dirs
-      try { dirs = await readdir(join(grokHome, 'sessions'), { withFileTypes: true }) } catch (error) { if (error.code === 'ENOENT') return; throw error }
+      let dirs = []
+      try { dirs = await readdir(join(grokHome, 'sessions'), { withFileTypes: true }) } catch (error) { if (error.code !== 'ENOENT') throw error }
       for (const dir of dirs) {
         if (!dir.isDirectory()) continue
         let cwd
@@ -187,12 +188,15 @@ export function createGrokRuntime(options = {}) {
         // Every working directory: the assistant's, and the ones where Grok was started in a terminal.
         const conversations = isConversationDir(cwd, home, options.env || process.env)
         const base = join(grokHome, 'sessions', dir.name)
-        const entries = await readdir(base, { withFileTypes: true })
+        let entries
+        try { entries = await readdir(base, { withFileTypes: true }) } catch (error) { if (error.code === 'ENOENT') continue; throw error }
         for (const entry of entries) {
           if (!entry.isDirectory() || !validRaw(entry.name) || probes.has(entry.name)) continue
           try {
             const summary = JSON.parse(await readFile(join(base, entry.name, 'summary.json'), 'utf8'))
             if (summary.info?.cwd !== cwd || summary.info?.id !== entry.name) continue
+            // Background CLI runs and child agents are not interactive terminal conversations.
+            if (!conversations && (summary.session_kind === 'headless' || summary.session_kind === 'subagent')) continue
             // Older terminal conversations are left unread until they are updated again.
             if (!conversations && !sessions.has(PREFIX + entry.name) && !terminalHeld.has(entry.name) &&
               !(Date.now() - Date.parse(summary.updated_at) < TERMINAL_RECENT_MS)) continue
@@ -208,6 +212,19 @@ export function createGrokRuntime(options = {}) {
               await readMetadata(s)
             }
           } catch (error) { if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) log(`Grok transcript read: ${error.code || error.name}`) }
+        }
+      }
+      // Native cleanup can remove a whole cwd group between scans. Forget only rediscovered, unowned conversations;
+      // a new chat may not have flushed its summary yet, and the assistant keeps its own conversation lifecycle.
+      for (const [id, s] of sessions) {
+        if (!s.restored || s.assistant) continue
+        try { await stat(join(sessionDir(s), 'summary.json')) }
+        catch (error) {
+          if (error.code !== 'ENOENT') { log(`Grok summary stat: ${error.code || error.name}`); continue }
+          // Check after the filesystem await: a turn may have started or queued while the summary was checked.
+          if (s.running || s.queued || s.loading || terminalHeld.has(s.raw)) continue
+          sessions.delete(id)
+          rt.sessionsChanged()
         }
       }
     })().finally(() => { scanning = null })

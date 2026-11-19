@@ -964,8 +964,8 @@ struct MeetingPhotoViewer: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .themedGroupedPage()
-                .overlay(alignment: .topTrailing) {
-                    RecordingSheetCloseButton(title: String(localized: "Done"), identifier: "meeting-photo-viewer-done") { dismiss() }
+                .overlay(alignment: .topLeading) {
+                    RecordingCornerButton(kind: .close, identifier: "meeting-photo-viewer-done") { dismiss() }
                         .padding(.horizontal, Theme.Space.page)
                 }
             }

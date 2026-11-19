@@ -6,7 +6,8 @@ import PersonaWire
 
 /// How each Claude Code tool is named and summarized in the chat.
 enum ToolPresentation {
-    nonisolated static func baseName(_ name: String) -> String {
+    nonisolated static func baseName(_ raw: String) -> String {
+        let name = HubNaming.canonicalMCPTool(raw)
         if name.hasPrefix("mcp__") { return name.split(separator: "__").last.map(String.init) ?? name }
         return name
     }
@@ -1180,9 +1181,10 @@ struct FullOutputSheet: View {
                     }
                 }
                 #else
-                ToolbarItem(placement: .confirmationAction) { Button("Done [Extension System Presentation c0b3fb]") { dismiss() }.lineLimit(1) }
+                // ✕ at the leading corner, the page's own Copy All at the trailing one (#9653).
+                SheetClose { dismiss() }
                 if let text {
-                    ToolbarItem(placement: .topBarLeading) {
+                    ToolbarItem(placement: .primaryAction) {
                         Button { UIPasteboard.general.string = text } label: { Label("Copy All [Tool Views 1c5144]", systemImage: Theme.Icon.copy) }
                     }
                 }

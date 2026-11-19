@@ -9,19 +9,18 @@ import { BASE } from "./base";
 import { mainConversationMachine, clearMemoryPages, discardFeedCache, feedCacheScope, readFeedCache } from "./feed-cache";
 import { useRef, useSyncExternalStore } from "react";
 import { AGENTS_PAGE_COUNTS_FEATURE, agentsChanged, refreshAgentPrefs, refreshAgentSessions, resetAgents, setAgentListMode, setPersonalPageCounts } from "./agents";
-import { onRuntimeChanges, runtimeAgents, runtimeIdentity, runtimeRemoval, runtimeSessions, SESSIONS_AGENTS_ONLY_FEATURE, SESSIONS_LOOKUP_FEATURE, SESSIONS_PAGE_COUNTS_FEATURE, setRuntimePageCounts } from "./runtime-list";
+import { onRuntimeChanges, runtimeAgents, runtimeIdentity, runtimeRemoval, runtimeSessions, SESSIONS_LOOKUP_FEATURE, SESSIONS_PAGE_COUNTS_FEATURE, setRuntimePageCounts, supportsPagedAgents } from "./runtime-list";
 import { sameValue } from "./stable-lines";
 import { SESSIONS_LIST_CHANGES_FEATURE, SESSIONS_LIST_FEATURE, type ListCounts } from "./session-list";
 import { SESSIONS_HIERARCHY_FEATURE } from "./child-sessions";
 import { SESSIONS_SIDE_FOLD_FEATURE, setSideFold } from "./side-fold";
 import { applySessionDelta, SESSIONS_DELTA_FEATURE, sessionRefreshed, sessionSnapshot } from "./sessions-delta";
-import { dueMarks, heldRows, liveMarks, markOver, newMark, nextDue, unansweredMarks, type SeenMark, type SeenMarks } from "./seen-outbox";
+import { dueMarks, heldRows, liveMarks, markOver, newMark, nextDue, seenCopy, unansweredMarks, unseen, type SeenMark, type SeenMarks } from "./seen-outbox";
 import { probeEdge } from "./edge-auth";
 import { api, ApiError, CLIENT_FEATURES, CLIENT_PONG_TIMEOUT, CLIENT_PLATFORM, CLIENT_VERSION, errorText, getToken, credentialOwner, sessionPath } from "./api";
 import { helloDeviceId } from "./device-id";
 import { currentLanguage } from "../i18n";
 import type { AgentMutes } from "./agent-groups";
-import { stateOf } from "./format";
 import { timeMs } from "./times";
 import { NO_PINS, pinsOf, type AgentPins } from "./pins";
 import type { AssistantInfo, Interaction, Item, Machine, MeshHub, Session } from "./types";
@@ -871,7 +870,7 @@ function onMessage(msg: Record<string, unknown>) {
       back();
       const summaryMode = state.features.includes(SESSIONS_LOOKUP_FEATURE);
       const rootsMode = state.features.includes(SESSIONS_HIERARCHY_FEATURE);
-      const agentsMode = state.features.includes(SESSIONS_AGENTS_ONLY_FEATURE);
+      const agentsMode = supportsPagedAgents(state.features);
       const { loaded: agentsLoaded, loading: agentsLoading, error: agentsError } = runtimeAgents.getSnapshot();
       const usedAgentsList = agentsLoaded || agentsLoading || agentsError !== null;
       if (runtimeSessions.isSummary() !== summaryMode) listedFull.clear();
@@ -899,10 +898,13 @@ function onMessage(msg: Record<string, unknown>) {
       if (!isResumed(msg)) {
         void followDirections(); // the direction tree again: a `directions` may have been missed while away
         void refresh();
-        // at once, not in a hint's window: a reconnect may have missed any number of changes (docs/lessons/web.md, #6362)
-        if (agentsMode && usedAgentsList) void runtimeAgents.load().catch(() => {});
         void refreshAgentSessions();
         void refreshAgentPrefs();
+      }
+      // Overview and attention signals need counts even when the paged sidebar is closed. Read at once when a
+      // reconnect may have missed changes, without waiting for another hint (docs/lessons/web.md, #6362).
+      if (agentsMode && (!isResumed(msg) || !runtimeAgents.getSnapshot().loaded)) {
+        void runtimeAgents.load().catch(() => {});
       }
       directionTreeAwaitsHello(false); // after followDirections started its read: those waiting share it
       break;
@@ -924,7 +926,7 @@ function onMessage(msg: Record<string, unknown>) {
     case "sessions_list":
       // A hint is not a checkpoint. Even resumed connections must check the HTTP epoch.
       runtimeSessions.invalidate();
-      if (state.features.includes(SESSIONS_AGENTS_ONLY_FEATURE)) {
+      if (supportsPagedAgents(state.features)) {
         const agentsList = runtimeAgents.getSnapshot();
         if (agentsList.loaded || agentsList.loading || agentsList.error !== null) runtimeAgents.invalidate();
       }
@@ -1061,7 +1063,7 @@ export function savePins(pins: AgentPins): Promise<void> {
   return save("pins", "/pins", pins, pinsSaves);
 }
 
-/** "Mark all as seen": every finished-unread one of these is seen now, in one update of the list (iOS AppModel.markSeen). The
+/** "Mark all as seen": every finished one of these nobody has seen (Unread, Just finished) is seen now, in one update of the list (iOS AppModel.markSeen). The
  * hub pushes the sessions back as seen; the list does not wait for it, and each waits in the seen outbox until it does. */
 export function markSeen(list: Session[]) {
   const keys = new Set<string>();
@@ -1081,7 +1083,7 @@ export function markSeen(list: Session[]) {
     const mark = newMark(s, Date.now(), now);
     if (!mark) continue;
     marks[id] = deliverSeen(s.machine_id, s.session_id, mark);
-    changed.push({ ...s, state: "idle", seen_at: now });
+    changed.push({ ...seenCopy(s), seen_at: now });
   }
   if (!changed.length) return;
   // one update of the list: the marks and the rows they hold seen together
@@ -1132,6 +1134,8 @@ export function upsertSession(s: Session) {
   const next = i < 0 ? [...list, s] : list.map((x, j) => {
     if (j !== i) return x;
     const merged = { ...x, ...s };
+    // A Persona chat's row leaves the kept messages out once none is left (#10194): not kept from the old row then.
+    if (s.assistant) merged.undelivered = s.undelivered;
     merged.background_working = s.background_working;
     merged.background_waiting = s.background_waiting;
     // An optimistic action can start from getSession's summary fallback. A later complete info response must
@@ -1144,6 +1148,7 @@ export function upsertSession(s: Session) {
       delete merged.background_tasks_count;
       delete merged.workflow_progress;
       merged.background = s.background;
+      merged.background_ended = s.background_ended;
       merged.subagents = s.subagents;
       merged.workflows = s.workflows;
     } else {
@@ -1574,14 +1579,14 @@ function pageInFront(): boolean {
   return typeof document === "undefined" || document.visibilityState === "visible";
 }
 
-/** Marks every viewed chat that is Unread now. `always`: an opened chat, or the page coming back to the front, tells
+/** Marks every viewed chat that is Unread (or Just finished) now. `always`: an opened chat, or the page coming back to the front, tells
  *  the hub even when this page has it seen already (another device's view, an older seen the hub lost). */
 function seeViewed(always: boolean) {
   if (!viewed.size || !pageInFront()) return;
   for (const id of viewed.keys()) {
     const [mid, sid] = JSON.parse(id) as [string, string];
     const s = getSession(mid, sid);
-    if (always || (s && stateOf(s) === "unread" && !state.seen[id])) markSeenLocally(mid, sid);
+    if (always || (s && unseen(s) && !state.seen[id])) markSeenLocally(mid, sid);
   }
 }
 

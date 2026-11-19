@@ -1,5 +1,10 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- Snapshot display projections must not initialize the knowledge base (#10108). Publication already holds
+  `pubMu`; read an already-open engine and retain the canonical cached project-name fallback rather than calling
+  an accessor that may initialize storage. Let direction synchronization refresh project names asynchronously.
+  Keep a regression proving that building a snapshot leaves an unopened knowledge base unopened.
+
 - A terminal review covers its criteria, not every later scope (#6880). Explicitly replacing criteria on an open, previously accepted or cancelled task must invalidate its terminal supervision state; otherwise unfinished or unjudged follow-up work is silently suppressed. Keep review history and unchanged criteria's evidence. Metadata-only changes and ordinary follow-up conversation do not invalidate the review, and existing stale records still need a real supervisor review rather than an automatic migration.
 
 - Process lifetime is not model-health evidence (#8480). Keep an observed completed answer and its original timestamp independently of the live session row. Otherwise releasing an idle process drops the only recovery evidence while an older failed probe remains, reviving an already repaired authentication error. Capture completed-turn evidence without requiring a client poll, scope it to the model binding, retire superseded probes and let newer failures win. Failed persistence must remain retryable.
@@ -199,7 +204,7 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
 - Fake HOME is not isolation. Node follows launcher-selected `CLAUDE_CONFIG_DIR`; hardcoded profile launcher writes real transcripts, and cwd suffix `/.persona/assistant` makes real assistant chats appear in test hub, editable by test assistant (2026-11-01 chat-management tests). Copy launcher into fake HOME, redirect `CLAUDE_CONFIG_DIR` there, copy settings.json, define `_claude_launchers` in fake .bashrc, prompt only own created chats; delete full fake HOME afterward, keys included.
 - Unknown `assistant.send` session ID starts **blank new chat** rather than error if no transcript. Resume-or-report-failure calls (scheduled chats 2026-11-01) use `resume_only`; no process / transcript errors, hub creates / records new chat (`docs/assistant/assistant.md` “Scheduled tasks”). Busy state comes from hub working / needs_you and only listed sessions; retain long-lived chats in `keptSessions`, or 80 new transcripts on busy machine evict them.
 - **No per-message changing data in system prompt** (2026-11-01, `docs/assistant/assistant.md` “Live snapshots and prefix caching”). Prefix caching puts system / tools before history; one byte change rewrites hundreds of thousands of tokens after restart, first output 10 seconds to minutes. Snapshots accompany messages. Claude resume actually retains first system prompt until compaction, so old snapshot stale, not cache-invalidating. Real restart cache miss was **changed tools**: one removed MCP tool rewrites all, schema key order does not. Diagnose experimentally: copy real chat with new ID / temporary directory, change one thing per restart, inspect `message_start` cache_read_input_tokens.
-- Per-start compaction belongs in both the process environment and the final merged settings (#6481). Claude settings `env` can override the process, and the SDK recomputes provider environment after spawn. Preserve launcher settings / hooks, then pin the computed AUTO and MAX values last in both paths. A launcher AUTO value is not evidence of backend capacity. Match warm spares and restarts by explicit main-chat scope, not the assistant directory or model purpose; scheduled chats share both. Don't turn "nothing declared" into a Persona number (#3008, #3066): a guessed 200k, then fixed 200k / 400k targets, made 1M conversations compact at about 167k. The one Persona number left is explicit and narrow: `assistant.main_compact_window` (#7314) caps only the main conversation, only on a managed launcher that declares a larger window, and only when the manager sends it (absent or 0: no cap). Follow what the launcher declares, write nothing otherwise (Claude Code already holds AUTO to its own model window), and read the real window from `result.modelUsage.<model>.contextWindow` where Persona needs it (the idle threshold). Write values only where Persona owns the environment (a managed launcher): over a shell launcher they would override its own declarations.
+- Per-start compaction belongs in both the process environment and the final merged settings (#6481). Claude settings `env` can override the process. Preserve launcher settings / hooks, then pin the computed AUTO and MAX values last in both. A launcher AUTO value is not evidence of backend capacity. Match warm spares and restarts by explicit main-chat scope, not the assistant directory or model purpose; scheduled chats share both. Don't turn "nothing declared" into a Persona number (#3008, #3066): a guessed 200k, then fixed 200k / 400k targets, made 1M conversations compact at about 167k. The one Persona number left is explicit and narrow: `assistant.main_compact_window` (#7314) caps only the main conversation, only on a managed launcher that declares a larger window, and only when the manager sends it (absent or 0: no cap). Follow what the launcher declares, write nothing otherwise (Claude Code already holds AUTO to its own model window), and read the real window from `result.modelUsage.<model>.contextWindow` where Persona needs it (the idle threshold). Write values only where Persona owns the environment (a managed launcher): over a shell launcher they would override its own declarations.
 
 - Headless `claude -p` auto-compacts via `CLAUDE_CODE_AUTO_COMPACT_WINDOW`; idle compaction only interactive. `stream-json` `/compact` manually compacts. First resumed-process message sometimes does not compact, second does; one miss not proof unsupported.
 - `ssh_host` aliases exist only hub ~/.ssh/config. Giving remote assistant ssh <alias> supplies unusable command.
@@ -447,11 +452,13 @@ their own and kept a step at two until they used the same path, so never call `s
 that count events right after a write must wait with `todosTold` first. A pass that runs on a timer and looks only at
 open tasks takes them with `todosWhere`, not `todosOf(ctx, "*")`, which deep-copies every finished one too (27 MB per
 30 s at 4,000). The direction tree is not such a pass: a finished task decides whether a failed start in its row
-still counts, so it reads them all.
+still counts, so it reads them all. The To-dos view's pushes (`todo_view_push.go`) need the same answer without that
+copy: their recheck and clock read only the to-dos they are about and take supersession from each to-do's title, PR,
+plan and close alone (`projection.Superseded`).
 
 ## Disable ToolSearch per server, not for the whole assistant process (#5838)
 
-Setting `ENABLE_TOOL_SEARCH=false` for Persona's assistant also forced every claude.ai connector's tools into each request (one connector alone was hundreds of tools and most of the context), causing repeated compaction. `personad mcp` now marks only Persona tools with `_meta: {"anthropic/alwaysLoad": true}` when `PERSONA_ASSISTANT=1`, and the assistant no longer disables ToolSearch globally. Keep other servers on Claude Code's normal deferred loading. A regression test checks both the metadata and the process environment.
+Setting `ENABLE_TOOL_SEARCH=false` for Persona's assistant also forced every claude.ai connector's tools into each request (one connector alone was hundreds of tools and most of the context), causing repeated compaction. Never set it to false on Anthropic's own API (behind a gateway it is the right value: #10365, below). `personad mcp` marks only Persona tools with `_meta: {"anthropic/alwaysLoad": true}` when `PERSONA_ASSISTANT=1` (since #7317 only those the manager did not defer), and other servers keep Claude Code's normal deferred loading. The assistant's processes carry `ENABLE_TOOL_SEARCH=true` instead (#7317, below), which keeps that deferral. A regression test checks both the metadata and the process environment.
 ## A leader writes to an owner who has seen nothing else (#5842)
 
 Leaders spend most of their turns with the main chat, other leaders, scheduled runs and supervision messages (on one
@@ -472,6 +479,50 @@ request lists the deferred tools by name but nothing can load them (the transcri
 Measured on Claude Code 2.1.321 with a 256-tool connector: with `--tools Bash,Read` the connector's tools were
 unreachable; with `ToolSearch` added the model loaded one on request, and the first request stayed ~15K tokens.
 
+## Persona's rarely used tools wait behind ToolSearch, and so do held-off conversations' (#7317)
+
+Marking every Persona tool `alwaysLoad` sent 96 full tool schemas with every request, about 49K tokens (Claude's
+tokenizer), while in 30 days of one install's assistant conversations 20 of them made 95% of the Persona calls and 51
+were never called. The manager now defers all but the tools called at least 5 times in that window, less the two whose
+every call failed for want of setup (`ask_escalate`, `mail_accounts`): `coreTools` in `assistant/tool_loading.go`,
+pinned by `TestCoreToolsPinned`. A new tool is deferred until it is added there. Deferring all but the 36 tools called
+at least 5 times made a new conversation's request about 22.5K tokens smaller (measured); the shipped set defers those
+two as well, about 23K (estimated). The manager sets the flag on every list itself, so a tool that arrives deferred
+(a connector program's own `defer_loading`) still loads up front for a guest, an agent or while
+`assistant.load_all_tools` is on. A guest conversation is never deferred: its `--tools ""` has no `ToolSearch` to load
+one with. A deferred tool the model calls by name before loading it fails; `assistant.load_all_tools` puts every tool
+back up front, in running conversations too: changing it wakes every `personad mcp`'s tool watch
+(`assistant/mcp_tools_changes.go`), so it does not wait for a process restart or for the next task-link change, which
+would otherwise refresh the list at a time nobody can predict. `inbox_suggest`, which the inbox's processing
+conversations must call every round, is deferred too (it had few calls on the measured install), so each such
+conversation spends one ToolSearch call before its first suggestion. It cannot stay up front for those conversations only: a process lists its
+tools when it starts (a spare before it has a conversation), before the manager notes where the conversation came from
+(`originSet`, which `assistant/start.go` calls once the node has answered). Add it to `coreTools` if the AI twin's
+conversations show failed or extra calls.
+
+Claude Code also holds tool search off for a conversation that once ran without `ToolSearch` ("Tool search disabled:
+this conversation has run without ToolSearch, and stays so until it is compacted or cleared"), so conversations started
+before #5839 sent every tool, other servers' too, until their next compaction: about 8.7K tokens more per request on
+Claude Code 2.1.322. Any non-empty `ENABLE_TOOL_SEARCH` lifts the hold-off; the assistant sets exactly `true`, which
+keeps the default deferral (`false` is #5838). Correction (#10365): `true` is the same mode as unset only on Anthropic's
+own API. Any value also lifts Claude Code's rule that keeps tool search off behind a Base URL that is not
+`api.anthropic.com`, so `true` for every conversation (#7371) sent deferred tools to gateways that refuse them; the
+"endpoint-refused fallback" #7371 relied on is not in the Claude Code the machines ran (2.1.291). The assistant now sets
+`true` only there (next lesson).
+
+## `ENABLE_TOOL_SEARCH=true` also lifts Claude Code's gateway rule (#10365)
+
+Claude Code keeps tool search off by itself when `ANTHROPIC_BASE_URL` is not `api.anthropic.com`, but only while the
+variable is unset: `true` (or any value) overrides that rule. #7371 set `true` on every assistant process, and on a
+gateway whose edge cannot represent `defer_loading` tools, `tool_reference` blocks or the `ToolSearch` tool, every
+conversation on some models failed with `400 request is not representable on this edge: ToolSearch is not supported`.
+Nothing caught it: the node's recovery takes a 400 as the user's, the hub had no code for it (the card said the request
+was malformed), and Test passed, since `claude -p` checks set nothing and kept Claude Code's rule. Set the variable by
+where the requests go (`toolSearchFor`): `true` on Anthropic's own API, `false` behind a known gateway (also in a managed
+provider's own environment, which may opt back in), nothing where the start cannot tell. Decide per (launcher, model):
+one gateway carried deferral for its Claude model and refused it for two others. Read the version you rely on: a
+behaviour measured on one Claude Code (2.1.322) is not proof for the one the machines run.
+
 ## A leader's split must be somewhere the owner can see (#5846)
 
 Owners lost track of their directions because a leader kept its breakdown in its own files and turns: the direction tree
@@ -482,6 +533,22 @@ To-dos SOP shelves it after 48 h untouched like any agent-made to-do (it leaves 
 and the stuck rule must not count a piece that never started, or every planned piece older than a day reported stuck.
 
 - Match Inbox PR/issue comments by full task URLs before the AI twin gate (#5578). A to-do may record its link only in `pr_url`, its title or its notes. Keep host, repository and PR/issue kind in the identity, leave ambiguous matches to the judge, and use a separate per-message signal cursor: the twin's `Of` cursor tracks handling, which does not run while it is off. Persist associations before forwarding them, and retain the existing supervision opt-in and exclusions.
+
+## Size a tool's text in tokens, not characters (#7316)
+
+Claude Code refuses an MCP tool's output past 25,000 tokens (`MAX_MCP_OUTPUT_TOKENS`, which Persona does not set) and
+saves it to a file instead, so a result over it costs the call and the reads that recover it: on one install, 54 `kb_get`
+failures in 30 days, all on projects, then about 70 Bash / Read / sub-agent calls. Characters are a poor measure. With
+Claude's tokenizer on knowledge-base text, CJK alone was 1.08 tokens a character, but Chinese mixed with English words,
+digits and markdown (summaries, logs, chat messages) cost up to a third more than "one token a CJK character, two ASCII
+characters a token"; indented JSON was 1.8 characters a token, numeric ids 2.2, English prose 3.1. "One token a CJK
+character, 3.5 ASCII characters a token" put whole `kb_get` results at two thirds of their real count. `kb_get`'s
+ceiling (`estTokens`, `assistant/kb_get_fit.go`) counts a rune past ASCII as 1.25 tokens and an ASCII byte as half of
+one, which stayed within 15% under the real count on all of these, and stops at 20,000. The size came from the data,
+not the model: linking a group chat to a project adds all its members to the project's people, so one project's
+meta.json held 3,708 ids, 92% of a 129,000-character result. Fold such lists in the tool's text rather than count on
+the store staying small.
+
 ## A source read by pages must settle what left the page (#5993)
 
 The Inbox's mail rounds read each account's newest 40 INBOX messages, and every rule that files a mail item (read
@@ -620,6 +687,15 @@ When `session.start` never answers, the hub lists the machine and adopts the ses
 
 #3811 gave interval follow-ups in leader conversations a hidden 10-minute cadence while an open supervised todo had an active agent: `nextWithLeaderCadence` derived extra runs from `LastRun` while leaving the stored `At` / `EveryMinutes` on the original rule, and the run copy's `cadenceEvery` made `taskPrompt` print "每 10 分钟". The stored task still showed 30 minutes / 1 hour in `list_followups`, so nothing visible explained why a patrol the user asked for every 30 minutes fired every 10 minutes from its first run, and it became the main chat's biggest token sink. Lesson: a scheduler may have exactly one effective cadence, and it must be the one stored on the task and shown in every view and run prompt; an "accelerate while busy" rule that is invisible to both storage and UI is indistinguishable from a bug. If such a rule is ever wanted again, it must be an explicit, user-visible setting with its own stored field, not a second rule derived inside the scheduler. Keep interval advancement in one place (`runDue` advancing `At` by `EveryMinutes`); tests assert the prompt text states the configured interval even while supervised work is open.
 
+## Scheduled runs need observable to-do progress (#9755)
+
+- A successful scheduled run is not progress on its linked to-do (#9755). Compare transcript output, criterion
+  states and explicit progress-report content, not updated timestamps or the follow-up's own summary. Keep the
+  streak and baseline with the schedule, not only in capped shared history; test restart, history eviction,
+  replayed completions and failed persistence before emitting a supervisor signal or an owner decision. Keep the
+  first escalation attempt's identity across runs: its committed owner review repairs a lost final marker without
+  duplicating that decision or mistaking an unrelated owner question for its own.
+
 ## A stopped leader's own To-do does not list its workers (#8400)
 
 Workers planned by a task leader have separate To-dos: their `todo_agents.source` is `worker` and `via` is the leader's
@@ -660,3 +736,25 @@ answer retryable. Tests must check both the in-memory receipt and stored one, pl
 
 Restore the previous `DueAt` on acceptance-save failure, not an empty time: an owner message in the Agent chat uses
 that marker to pause the default. A later rejected answer must preserve both that pause and the dismissal.
+
+## Reserve a conversation for replacement in the same step as the check that nothing goes in (#7315)
+
+The background supervisor is replaced when its rounds outgrow it, and the first version checked that no queued message
+was going into the old one, released the relay book's lock, and only then started the replacement, which takes seconds.
+A session list pushed in that gap could drain the old one's queue into it (found in review): that round would run in a
+conversation archived moments later and no longer the background supervisor, so its `task_review` of a main-chat task
+would be refused, and a message queued before a manager restart, whose signals were not in memory, would leave the queue
+as delivered instead of moving to the replacement. A check that a resource is free is only good while the lock it was read under is held:
+mark the conversation as being replaced under that same lock (`relayBook.replacing`), have every drain and every direct
+delivery respect the mark (the direct ones queue), and clear it only where what waited has moved or the replacement
+failed, draining it again then (`TestNothingGoesIntoABackgroundSupervisorBeingReplaced`).
+
+## A check that passes must have sent what the chat sends (#10365)
+
+"Try it" ran `launchers.check` with the Main chat launcher's name alone: the launcher's default model, the login shell's
+profile, no tools, no tool search. The chat ran a picked or configured model in its own profile with Persona's tools,
+and failed with `model_route`; the check passed, its newer pass cleared the readiness card, and the next message failed
+again. Evidence about a model is about one request shape: resolve the probe's target with the send path's own code
+(`sendModel`, read-only), have the node build the check as the turn (`launchers.check` `assistant_turn`), and key the
+evidence and its reuse by machine, launcher and model, so a pass of something else, or of an older plain check, never
+outranks the real turn's failure (`TestReadinessProbeOtherModelDoesNotClearModelRoute`).

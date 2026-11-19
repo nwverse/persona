@@ -65,7 +65,7 @@ import { ListError } from "../ui/ListError";
 import { SESSION_LIST_STYLE } from "../ui/list-metrics";
 import { normalizePath } from "../lib/files";
 import { RUNTIME_AGENTS_PATH, supportsPagedAgents, runtimeActiveAt, runtimeAgents, runtimeIdentity, runtimeNeedsYou, runtimeOrder, runtimeParentIdentity, runtimePlace, runtimeRemoval } from "../lib/runtime-list";
-import { SESSIONS_CATALOG_FEATURE, SESSIONS_QUICK_FILTERS_FEATURE, SESSIONS_TODO_FEATURE, type GroupDimension, type TodoNames } from "../lib/session-groups";
+import { SESSIONS_CATALOG_FEATURE, SESSIONS_JUST_FINISHED_FEATURE, SESSIONS_QUICK_FILTERS_FEATURE, SESSIONS_TODO_FEATURE, type GroupDimension, type TodoNames } from "../lib/session-groups";
 import { type ListFilters } from "../lib/session-list";
 import { NoComputers, useAddComputer } from "./machines/AddComputerEntry";
 import { BADGE_CLASS, DOT_CLASS, type GoFn, GroupCount, holdsRow, morePagesMenu, type NavPage, type NodeMenuFn, type RegFn, rowKey, type RowMenuFn, Section, SidebarGroup, GroupFoldButton, useActiveKey, useGo, useNavPages } from "./SidebarParts";
@@ -355,7 +355,7 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
           column, so the usage popover that opens upward over it from the bottom is never drawn under them */}
       <div ref={nav} data-sidebar-rows data-row-scroller onMouseLeave={() => hover(null)} className="relative isolate min-h-0 flex-1 scroll-pt-16 overflow-y-auto overscroll-contain px-2.5 pb-3">
         {highlight}
-        {/* the main conversation is the column's first row, Persona with the app's mark, and only there (#2004, #5109); it
+        {/* the main conversation is the column's first row, Main chat with the home symbol, and only there (#2004, #5109); it
             stays at the top while the rest scrolls (#5581), with a solid divider above the sticky groups */}
         <div data-sidebar-sticky className="sticky top-0 z-30 flex flex-col gap-px bg-canvas pt-1">
           <PersonaRow reg={reg} hover={hover} active={activeKey === "persona"} go={go} main={mainConversation} chord={bindings.persona} onMenu={onConvMenu} />
@@ -700,6 +700,7 @@ const PAGED_DIMENSION: Record<Exclude<AgentGrouping, "repo">, GroupDimension> = 
 function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, add = true, grouping, todosUnread = false, chooseGrouping }: AgentsBlockProps & { grouping: Exclude<AgentGrouping, "repo">; /** By to-do shown by status: its to-dos cannot be read */ todosUnread?: boolean; chooseGrouping: (g: AgentGrouping) => void }) {
   const machines = useStore(selectSidebarMachines);
   const catalog = useStore((s) => s.features.includes(SESSIONS_CATALOG_FEATURE));
+  const justFinished = useStore((s) => s.features.includes(SESSIONS_JUST_FINISHED_FEATURE));
   // a hub that folds side sessions (#7944) leaves them out of the list: nothing to nest under a parent
   const sideFold = useStore((s) => s.features.includes(SESSIONS_SIDE_FOLD_FEATURE));
   const archives = useStore((s) => s.features.includes(AGENT_ARCHIVES_FEATURE));
@@ -784,7 +785,7 @@ function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate,
     <HerdrNotices />
     <PagedSessionList root={runtimeAgents} path={RUNTIME_AGENTS_PATH} identity={runtimeIdentity} compare={runtimeOrder} removeIdentity={runtimeRemoval} parentOf={sideFold ? undefined : runtimeParentIdentity} event="sessions_list" grouping={pagedGrouping}
       activeAt={runtimeActiveAt} needsYou={runtimeNeedsYou} isOpen={(s) => activeKey === `s:${s.machine_id}/${s.session_id}`}
-      catalog={catalog} placeOf={runtimePlace} failureText={agentsReadFailed}
+      catalog={catalog} justFinished={justFinished} placeOf={runtimePlace} failureText={agentsReadFailed}
       label={(dimension, id) => dimension === "machine" ? machineWithHub(id, machines) : id}
       renderRow={(s, within) => {
         const k = `s:${s.machine_id}/${s.session_id}`;

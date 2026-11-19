@@ -357,8 +357,6 @@ nonisolated enum Theme {
         }
         /// The home page's greeting, the welcome page (24 bold).
         static var display: SwiftUI.Font { sized(.display, .bold) }
-        /// The display level unemphasized: "(Persona)" after the name in a screenshot's banner (#9508, 24 regular).
-        static var displayPlain: SwiftUI.Font { sized(.display) }
         /// A detail page's or a sheet's title (18 semibold).
         static var title: SwiftUI.Font { sized(.title, .semibold) }
         /// Titles of rows, cards, panels and Markdown headings below the first (13 semibold).
@@ -421,8 +419,6 @@ nonisolated enum Theme {
         static let labelStrong = label.weight(.semibold)
         static let labelMedium = label.weight(.medium)
         static let labelHeavy = label.weight(.bold)
-        /// The display level unemphasized: "(Persona)" after the name in a screenshot's banner (#9508, 28 regular).
-        static let displayPlain = display.weight(.regular)
 
         #if os(iOS) || os(visionOS)
         /// `body` for a UIKit control inside a SwiftUI page (the hidden `SecretField`): the same text style, so it
@@ -801,6 +797,17 @@ nonisolated enum Theme {
         }
         /// Something the finger dragged aside going back to its place (a message swiped to quote it): a little bounce.
         static let springBack = Animation.spring(duration: 0.3, bounce: 0.25)
+        /// iPhone Duo's tab bar (#9837, after the system's tab bar there): a glass lens leaves the chosen item for the new
+        /// one, swelling as it goes (`lensSwellTime`, to `lensSwellScale`, `lensStretch` longer along the bar than across),
+        /// glides there with a bounce (`lensGlide`, `lensGlideTime`) and shrinks and fades once it lands (`lensFadeTime`);
+        /// with Reduce Motion the items only cross-fade (`tabFade`).
+        static let lensGlide = Spring(duration: 0.45, bounce: 0.3)
+        static let lensGlideTime: TimeInterval = 0.45
+        static let lensSwellTime: TimeInterval = 0.15
+        static let lensFadeTime: TimeInterval = 0.2
+        static let lensSwellScale: CGFloat = 1.2
+        static let lensStretch: CGFloat = 0.12
+        static let tabFade = Animation.easeInOut(duration: 0.2)
         /// The stationary sidebar rises only this far as the page slides off it; no horizontal parallax or zoom.
         static let drawerLift = Theme.Space.s
 
@@ -1064,15 +1071,18 @@ nonisolated enum Theme {
         static let switchHeight: CGFloat = 44
         /// The largest text size the top bars grow with (their buttons, the face, the switch: up to 1.35 ×): larger, the
         /// bar reached into the search field pulled out under it on Agents, whose room is a line of the system's that
-        /// does not grow with the text (`ShellNavigationClearance`).
-        static let topBarLargestTypeSize: DynamicTypeSize = .xxxLarge
+        /// does not grow with the text (`ShellNavigationClearance`). iOS 18's line is shorter (78 pt with the bar, #6730):
+        /// there the bars stop a size earlier.
+        static var topBarLargestTypeSize: DynamicTypeSize {
+            if #available(iOS 26.0, *) { .xxxLarge } else { .xxLarge }
+        }
         /// Room on Agents between the navigation bar and the search field for the top bar, which is taller (`AgentsHeader`):
         /// the height of the system's prompt line that made it before (`ShellNavigationClearance`), the same at every size.
         static let agentsRoom: CGFloat = 34
         /// The optional third segment must leave both side buttons reachable on narrow screens.
         static let compactSwitchLargestTypeSize: DynamicTypeSize = .large
-        /// The switch as iPhone Duo's tab bar (#4231: `ShellSwitch(axis: .vertical)` in the side column of the outer display
-        /// and of the inner one on its side, `ShellSwitch(bottomBar: true)` along the inner one's foot upright): a bar of fixed
+        /// The switch as iPhone Duo's tab bar on the outer display (#4231: `ShellSwitch(axis: .vertical)` in its side
+        /// column; the open Duo shows the system's tab bar): a bar of fixed
         /// items, as the system's tab bar it stands for, so its items keep the default text size (DESIGN_SYSTEM.md 6.2), each
         /// also shown large on a long press (the Large Content Viewer).
         static let switchTypeSize: DynamicTypeSize = .large
@@ -1084,11 +1094,32 @@ nonisolated enum Theme {
         /// inset): the strip at the screen's edge the system's bars keep clear of. The status bar is centred on the rest of
         /// the column (its clock 49 pt from the edge on both displays), and so is the side tab bar.
         static let sideColumnEdge: CGFloat = 14
-        /// Where the side tab bar's foot stands where nothing is under it in the column (the open Duo's tabs): this share of
-        /// the column's height (the safe area's) above its foot, so the bar is in the lower middle of the column, as a tab
-        /// bar down the side of the outer display stands (the owner's reference, #4231), not a small block at the foot. On
-        /// the outer display's rail the face and the page's action are under it.
-        static let sideTabBarFoot: CGFloat = 0.25
+        /// The side column from its foot up (`ShellSideRail`), one set of values on both displays, so the side tab bar stands
+        /// at the same height when the Duo folds or unfolds: the column's foot (the safe area's) to the lowest button, then
+        /// the face and the page's action a `sideRailSpacing` apart, then the tab bar a `sideTabBarGap` more above them. On
+        /// the open Duo, where nothing is under the bar, their room stays empty (`ShellRailButtonRoom`), so the bar's foot is
+        /// as far above the column's foot as on the outer display: the bar in the column's lower middle there too, as a tab
+        /// bar down the side of the outer display stands (the owner's reference, #4231), not a small block at the foot.
+        static let sideRailFoot: CGFloat = Space.l
+        static let sideRailSpacing: CGFloat = Space.m
+        static let sideTabBarGap: CGFloat = Space.s
+        /// A tab bar item's count there (`TabBarCount`, the system's tab bar badge: `Size.badge` tall, its number
+        /// `Font.labelHeavy`): ringed this wide in the page's color, apart from the chosen item's circle and the symbol, and
+        /// centred this far inside the top trailing corner of the symbol's `Size.well`, so it rests on the circle's rim.
+        static let tabBarBadgeRing: CGFloat = Size.lineMedium
+        static let tabBarBadgeInset: CGFloat = Space.xxs
+        /// The system's own items down that column (a page's bar items, a search at its foot), measured on iOS 27.2 on both
+        /// displays (#9837): each a 48 pt glass, Back alone, 12 pt over the rest in one glass, 4 pt apart in it; at every text
+        /// size. The first one's top is 174 pt below the safe area's on the outer display (its camera is over the status
+        /// bar there), 124 pt on the inner one; a search stands at the foot, its top 38 pt above the safe area's foot.
+        static let systemBarItem: CGFloat = 48
+        static let systemBarItemGap: CGFloat = 4
+        static let systemBarBackGap: CGFloat = 12
+        static let systemBarTopOuter: CGFloat = 174
+        static let systemBarTopInner: CGFloat = 124
+        static let systemBarFootItemTop: CGFloat = 38
+        /// The outer display is narrower than this (466 pt), the inner one wider (669 pt upright, 951 pt on its side).
+        static let outerDisplayWidest: CGFloat = 600
     }
 
     /// The page behind lists and chats.
@@ -1206,9 +1237,9 @@ nonisolated enum Fmt {
         }
     }
 
-    /// Model names like "deepseek/v4.1-flash-chain" → "v4.1-flash-chain".
+    /// Model names like "deepseek/v4.1-flash-chain" → "v4.1-flash-chain"; no model, including an older node's display placeholder, → nil.
     static func model(_ m: String?) -> String? {
-        guard let m, !m.isEmpty else { return nil }
+        guard let m, !m.isEmpty, m != "默认" else { return nil } // i18n-ignore: legacy wire value, never displayed
         return m.split(separator: "/").last.map(String.init) ?? m
     }
 }

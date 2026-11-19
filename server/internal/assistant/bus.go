@@ -135,7 +135,8 @@ func NewBusHub(o BusOptions) *BusHub {
 					assistantwire.CapabilityMeetingAttendance, assistantwire.CapabilityMeetingConversation, assistantwire.CapabilityMeetingPhotos, assistantwire.CapabilityMeetingLiveView,
 					assistantwire.CapabilityMeetingHighlights, assistantwire.CapabilityMeetingNotes, assistantwire.CapabilityMeetingEcho, assistantwire.CapabilityMeetingTranscription,
 					assistantwire.CapabilityRecordingDay, assistantwire.CapabilityAssistantSearch, assistantwire.CapabilityHTTPBodyStream, assistantwire.CapabilityAssistantStartServiceTier,
-					assistantwire.CapabilityMCPWait, assistantwire.CapabilitySessionsSideFold, assistantwire.CapabilityRemoteImages, devicewire.SharingCapability}}
+					assistantwire.CapabilityMCPWait, assistantwire.CapabilitySessionsSideFold, assistantwire.CapabilityRemoteImages, assistantwire.CapabilityTodoView,
+					assistantwire.CapabilityTodoPlaces, devicewire.SharingCapability}}
 		},
 		OnHello: b.onHello,
 		// A node's tool call that its caller stopped waiting for ends at the hub too (fleet_tools.go).
@@ -562,6 +563,9 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 		if err := decode(&p); err != nil {
 			return nil, err
 		}
+		if s.keepsBehind(ctx, p) { // older owner messages to it are kept: this one goes after them (undelivered.go)
+			return nil, &rpc.Error{Code: assistantwire.CodeUndeliveredAhead, Message: "older messages to this conversation wait to go in"}
+		}
 		ctx, note := withLauncherNote(ctx)
 		params, err := s.SendParams(ctx, p)
 		if err != nil {
@@ -572,6 +576,16 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 			return map[string]any{"params": params, "launcher_note": *note}, nil
 		}
 		return map[string]any{"params": params}, nil
+	case assistantwire.MethodKeepUndelivered:
+		var p assistantwire.KeepUndeliveredParams
+		if err := decode(&p); err != nil {
+			return nil, err
+		}
+		kept, err := s.KeepUndelivered(ctx, p)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"undelivered": kept}, nil
 	case assistantwire.MethodRename:
 		var p RenameParams
 		if err := decode(&p); err != nil {
@@ -615,6 +629,15 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 			return nil, err
 		}
 		return s.askHub(ctx, p.Interaction)
+	case assistantwire.MethodFleetAskPrepared:
+		var p struct {
+			Interaction proto.Interaction `json:"interaction"`
+			Replacement string            `json:"replacement"`
+		}
+		if err := decode(&p); err != nil {
+			return nil, err
+		}
+		return b.askPreparedHub(ctx, p.Interaction, p.Replacement)
 	}
 	if out, ok, err := s.kbRequest(ctx, method, params); ok { // the knowledge base's (kb_bus.go)
 		return out, err
@@ -794,11 +817,11 @@ func (b *BusHub) event(ctx context.Context, ev busEvent) error {
 	decode := func(v any) error { return json.Unmarshal(ev.params, v) }
 	switch ev.name {
 	case assistantwire.EventUserSpoke:
-		var p SessionRef
+		var p assistantwire.UserSpokeParams
 		if err := decode(&p); err != nil {
 			return err
 		}
-		s.UserSpoke(ctx, p)
+		s.userSpokeText(ctx, p.SessionRef, p.Text)
 	case assistantwire.EventUserStopped:
 		var p SessionRef
 		if err := decode(&p); err != nil {

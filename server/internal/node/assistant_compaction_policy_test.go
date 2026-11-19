@@ -132,7 +132,7 @@ func TestAssistantCompactionRPCAndSpare(t *testing.T) {
 	}
 }
 
-func TestAssistantCompactionSettingsAndSDK(t *testing.T) {
+func TestAssistantCompactionSettings(t *testing.T) {
 	n := assistantNode(t)
 	n.dir = t.TempDir()
 	settings := filepath.Join(t.TempDir(), "settings.json")
@@ -164,15 +164,6 @@ func TestAssistantCompactionSettingsAndSDK(t *testing.T) {
 		if overrides[name] != "off" {
 			t.Errorf("development skill %s is not hidden: %v", name, s["skillOverrides"])
 		}
-	}
-	start := sdkStart{settings: path, mcp: map[string]any{}, compaction: &c, env: map[string]string{"CLAUDE_CODE_MAX_CONTEXT_TOKENS": "200000", "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "200000"}}
-	opts, err := start.options("claude")
-	if err != nil {
-		t.Fatal(err)
-	}
-	env = opts["settings"].(map[string]any)["env"].(map[string]any)
-	if env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] != "400000" || env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] != "1000000" {
-		t.Fatalf("SDK clamped policy back down: %v", env)
 	}
 	if mode, err := os.Stat(path); err != nil || mode.Mode().Perm() != 0o600 {
 		t.Fatalf("settings permissions: %v %v", mode, err)
@@ -212,15 +203,16 @@ func TestAssistantCodexCapacity(t *testing.T) {
 // the declared window, else the default until Claude Code reports one (TestAssistantIdleCompactFromWindow).
 func TestAssistantShellLauncherCompaction(t *testing.T) {
 	for _, tt := range []struct {
-		name, rc  string
-		auto, max string // what claude sees, "" for unset
-		idle      int
+		name, rc   string
+		auto, max  string // what claude sees, "" for unset
+		idle       int
+		toolSearch string // ENABLE_TOOL_SEARCH as claude sees it (toolSearchFor, #10365)
 	}{
-		{"declares window and capacity", `function testproxy { export CLAUDE_CODE_MAX_CONTEXT_TOKENS=1000000 CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000; command claude "$@"; }`, "200000", "1000000", 150000},
-		{"declared 200K backend", `function testproxy { export CLAUDE_CODE_MAX_CONTEXT_TOKENS=200000; command claude "$@"; }`, "", "200000", 150000},
-		{"small backend", `function testproxy { export CLAUDE_CODE_MAX_CONTEXT_TOKENS=128000 CLAUDE_CODE_AUTO_COMPACT_WINDOW=128000; command claude "$@"; }`, "128000", "128000", 96000},
-		{"declares a 1M window", `function testproxy { export CLAUDE_CODE_AUTO_COMPACT_WINDOW=1000000; command claude "$@"; }`, "1000000", "", 750000},
-		{"gateway function declaring nothing", `function testproxy { ( export ANTHROPIC_BASE_URL=http://127.0.0.1:9; command claude --model opus "$@" ) }`, "", "", 150000},
+		{"declares window and capacity", `function testproxy { export CLAUDE_CODE_MAX_CONTEXT_TOKENS=1000000 CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000; command claude "$@"; }`, "200000", "1000000", 150000, "true"},
+		{"declared 200K backend", `function testproxy { export CLAUDE_CODE_MAX_CONTEXT_TOKENS=200000; command claude "$@"; }`, "", "200000", 150000, "true"},
+		{"small backend", `function testproxy { export CLAUDE_CODE_MAX_CONTEXT_TOKENS=128000 CLAUDE_CODE_AUTO_COMPACT_WINDOW=128000; command claude "$@"; }`, "128000", "128000", 96000, "true"},
+		{"declares a 1M window", `function testproxy { export CLAUDE_CODE_AUTO_COMPACT_WINDOW=1000000; command claude "$@"; }`, "1000000", "", 750000, "true"},
+		{"gateway function declaring nothing", `function testproxy { ( export ANTHROPIC_BASE_URL=http://127.0.0.1:9; command claude --model opus "$@" ) }`, "", "", 150000, "false"},
 	} {
 		for _, main := range []bool{true, false} {
 			t.Run(tt.name+"/main="+strconv.FormatBool(main), func(t *testing.T) {
@@ -269,10 +261,10 @@ func TestAssistantShellLauncherCompaction(t *testing.T) {
 						t.Fatalf("claude saw %s=%q, want %q (the launcher's own)", k, got, want)
 					}
 				}
-				// Only Persona's own tools are eagerly loaded (mcpserver's alwaysLoad marker); other MCP servers
-				// keep the ordinary ToolSearch deferral instead of a process-wide disable (#5838).
-				if got := envValue(lines, "ENABLE_TOOL_SEARCH"); got != "" {
-					t.Fatalf("ToolSearch was disabled process-wide: %q", got)
+				// Tool search on Anthropic's own API, also for a conversation that ran without it (#7317); off behind
+				// a gateway, where true would lift Claude Code's own rule and send deferred tools it may refuse (#10365).
+				if got := envValue(lines, "ENABLE_TOOL_SEARCH"); got != tt.toolSearch {
+					t.Fatalf("claude saw ENABLE_TOOL_SEARCH=%q, want %q", got, tt.toolSearch)
 				}
 			})
 		}
@@ -417,19 +409,20 @@ func TestAssistantIdleCompactFromWindow(t *testing.T) {
 	}
 }
 
-func TestAssistantSDKCompactionStart(t *testing.T) {
-	f := sdkTest(t)
+// A managed launcher's start carries its declared window, for the main conversation too, and its model's 1M as the
+// context window.
+func TestAssistantCompactionStartOnAManagedLauncher(t *testing.T) {
+	f := cliTest(t)
+	f.fakeLaunch(t)
 	f.n.setManaged([]proto.ManagedLauncher{{Name: "gw", Model: "big", CompactWindow: 200000, Models: []proto.ProviderModel{{ID: "big", ContextWindow: 1000000}}}})
-	execution := sdkExec(proto.AssistantRuntimeAgentSDK)
+	execution := cliExec()
 	execution.IsMain = true
 	id, err := f.n.assistantSend(context.Background(), "", t.TempDir(), "gw", "hello", nil, "", "", execution)
 	if err != nil {
 		t.Fatal(err)
 	}
-	opts := f.start(t)
-	env := opts["settings"].(map[string]any)["env"].(map[string]any)
-	// The launcher's declared 200000, for the main conversation too; its model's 1M as the context window.
-	if env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] != "200000" || env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] != "1000000" || f.proc(id).compactIdleAt != 150000 {
-		t.Fatalf("SDK start: %v, idle %d", env, f.proc(id).compactIdleAt)
+	p := f.proc(id)
+	if envValue(p.cmd.Env, "CLAUDE_CODE_AUTO_COMPACT_WINDOW") != "200000" || envValue(p.cmd.Env, "CLAUDE_CODE_MAX_CONTEXT_TOKENS") != "1000000" || p.compactIdleAt != 150000 {
+		t.Fatalf("start env %v, idle %d", p.cmd.Env, p.compactIdleAt)
 	}
 }

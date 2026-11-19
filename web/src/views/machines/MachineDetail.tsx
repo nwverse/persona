@@ -20,7 +20,6 @@ import {
   level,
   load as loadText,
   loadAxis,
-  localOffset,
   memPercent,
   percent,
   RANGE_KEYS,
@@ -28,6 +27,7 @@ import {
   rate,
   systemFacts,
   systemLine,
+  temperature,
   usedOfTotal,
   type DetailMachine,
   type DetailMetrics,
@@ -220,7 +220,6 @@ export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleS
   const hub = hubLabel(m, machines);
   const route = routeText(m, machines);
   const system = data?.metrics.system ?? m?.system;
-  const tz = useMemo(() => localOffset(), []);
   // a hub that renames computers, and one of its own (a linked hub's is renamed there)
   const canRename = useStore((s) => s.features.includes(MACHINE_RENAME_FEATURE)) && m?.kind !== "hub" && (!m?.hub_id || !selfHub || m.hub_id === selfHub);
   const [renaming, setRenaming] = useState(false);
@@ -412,7 +411,7 @@ export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleS
             </div>
           )
         ) : (
-          <Monitor data={data} range={range} online={online} system={system} tz={tz} onRange={setRange} />
+          <Monitor data={data} range={range} online={online} system={system} onRange={setRange} />
         )}
         {data && failure && <p className="mt-2 px-1 text-[11.5px] text-red">{t("machines-machinedetail.refresh_failed", { error: failure })}</p>}
         <p className="mt-2 px-1 text-[11.5px] leading-relaxed text-ink-3">{t("machines-machinedetail.metrics_note")}</p>
@@ -526,14 +525,12 @@ function Monitor({
   range,
   online,
   system,
-  tz,
   onRange,
 }: {
   data: { metrics: DetailMetrics; range: MetricRange; at: number };
   range: MetricRange;
   online: boolean;
   system: DetailMachine["system"];
-  tz: number;
   onRange: (r: MetricRange) => void;
 }) {
   const { metrics } = data;
@@ -562,7 +559,7 @@ function Monitor({
   return (
     <>
       {live && <NowTiles s={live} cores={system?.cores} />}
-      <Charts data={data} range={range} live={live} system={system} tz={tz} />
+      <Charts data={data} range={range} live={live} system={system} />
       {perCore && <CoreBars cores={perCore} />}
     </>
   );
@@ -577,13 +574,11 @@ function Charts({
   range,
   live,
   system,
-  tz,
 }: {
   data: { metrics: DetailMetrics; range: MetricRange; at: number };
   range: MetricRange;
   live: NonNullable<DetailMetrics["latest"]> | undefined;
   system: DetailMachine["system"];
-  tz: number;
 }) {
   const { metrics } = data;
   const r = RANGES[data.range];
@@ -611,7 +606,7 @@ function Charts({
     setHoverRange(range);
     setHover(null);
   }
-  const common = { points: metrics.points, t0, t1, step: r.step, hover, onHover: setHover, tz };
+  const common = { points: metrics.points, t0, t1, step: r.step, hover, onHover: setHover };
 
   return (
     <div className={cx("grid grid-cols-1 gap-3 transition-opacity duration-200 md:grid-cols-2", data.range !== range && "opacity-60")}>
@@ -636,6 +631,24 @@ function NowTiles({ s, cores }: { s: NonNullable<DetailMetrics["latest"]>; cores
     { label: t("machines-machinedetail.disk"), value: percent(diskPct), sub: s.disk_used !== undefined ? usedOfTotal(s.disk_used, s.disk_total) : undefined, frac: diskPct, lv: level(diskPct, 80, 90) },
     { label: t("machines-machinedetail.swap"), value: s.swap_total ? bytesBin(s.swap_used) : t("machines-machinedetail.swap_off"), sub: s.swap_total ? t("machines-machinedetail.swap_total", { total: bytesBin(s.swap_total) }) : undefined, frac: swapPct, lv: "normal" },
   ];
+  if (s.battery_percent !== undefined && Number.isFinite(s.battery_percent)) {
+    const charging = s.battery_charging === true;
+    tiles.push({
+      label: t("machines-machinedetail.battery"),
+      value: percent(s.battery_percent),
+      sub: charging ? t("machines-machinedetail.charging") : undefined,
+      frac: s.battery_percent,
+      lv: s.battery_percent <= 15 && !charging ? "critical" : s.battery_percent <= 25 && !charging ? "warning" : "normal",
+    });
+  }
+  if (s.temp_c !== undefined && Number.isFinite(s.temp_c)) {
+    tiles.push({
+      label: t("machines-machinedetail.temperature"),
+      value: temperature(s.temp_c),
+      frac: Math.min(100, (s.temp_c / 125) * 100),
+      lv: level(s.temp_c, 75, 90),
+    });
+  }
   return (
     <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
       {tiles.map((tile) => (

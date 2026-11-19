@@ -2,7 +2,9 @@ package assistant
 
 import (
 	"context"
+	"strings"
 	"time"
+	"unicode"
 )
 
 type decisionAgentReply struct {
@@ -12,9 +14,9 @@ type decisionAgentReply struct {
 	ToldAt    time.Time `json:"told_at,omitzero"`
 }
 
-// agentDecisionSpoke observes authorship and task ownership, never the meaning of the message.
+// agentDecisionSpoke settles only an exact owner choice; anything else pauses for the supervisor.
 // The same action lock as the deadline's final check fences a default already collected by a sweep.
-func (s *Service) agentDecisionSpoke(ctx context.Context, r SessionRef, at time.Time) {
+func (s *Service) agentDecisionSpoke(ctx context.Context, r SessionRef, at time.Time, text string) {
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		s.logf("decision: agent reply: load tasks: %v", err)
 		return
@@ -36,19 +38,36 @@ func (s *Service) agentDecisionSpoke(ctx context.Context, r SessionRef, at time.
 		return
 	}
 	a := b.asks[id]
-	if a == nil || !decideAsk(a) || a.AskedAt.IsZero() || !a.AcceptedAt.IsZero() || a.AgentReply != nil ||
+	if a == nil || !decideAsk(a) || a.AskedAt.IsZero() || !a.AcceptedAt.IsZero() ||
 		!at.After(a.AskedAt) || acceptAskStale(a, t) || acceptAskEnded(a, t) {
 		b.mu.Unlock()
 		return
 	}
-	a.AgentReply = &decisionAgentReply{MachineID: r.MachineID, SessionID: r.SessionID, At: at.UTC()}
-	a.DueAt = at.UTC()
-	// Even a failed write must not let this process take the default. The sweep retries persistence.
-	err := s.saveAcceptErrLocked(ctx)
+	label := exactDecisionOption(text, a.Options)
+	if a.AgentReply != nil && label == "" {
+		b.mu.Unlock()
+		return
+	}
+	var err error
+	if a.AgentReply == nil {
+		a.AgentReply = &decisionAgentReply{MachineID: r.MachineID, SessionID: r.SessionID, At: at.UTC()}
+		a.DueAt = at.UTC()
+		// Even a failed write must not let this process take the default. The sweep retries persistence.
+		err = s.saveAcceptErrLocked(ctx)
+	}
 	cp := *a
 	b.mu.Unlock()
 	if err != nil {
 		s.logf("task %s: decision: persist agent reply: %v", id, err)
+	}
+	if label != "" && err == nil {
+		taken, err := s.decisionToldLocked(ctx, id, label, r.MachineID, r.SessionID, text)
+		if err == nil && taken {
+			return
+		}
+		if err != nil {
+			s.logf("task %s: decision: record exact agent reply: %v", id, err)
+		}
 	}
 	s.askChanged(ctx)
 	s.signalAgentDecisionReply(id, cp)
@@ -58,6 +77,45 @@ func (s *Service) agentDecisionSpoke(ctx context.Context, r SessionRef, at time.
 		defer cancel()
 		s.updateAskCards(ctx, id, cp)
 	}()
+}
+
+// Letters refer to displayed order; labels match in full, ignoring only whitespace and punctuation.
+// A letter and a normalized label pointing at different options are ambiguous, not a choice.
+func exactDecisionOption(text string, options []DecisionOption) string {
+	normalize := func(s string) string {
+		return strings.Map(func(r rune) rune {
+			if unicode.IsSpace(r) || unicode.IsPunct(r) {
+				return -1
+			}
+			return r
+		}, s)
+	}
+	answer := normalize(text)
+	if answer == "" {
+		return ""
+	}
+	chosen := -1
+	if len(answer) == 1 {
+		c := answer[0]
+		if c >= 'a' && c <= 'z' {
+			c -= 'a' - 'A'
+		}
+		if c >= 'A' && int(c-'A') < len(options) {
+			chosen = int(c - 'A')
+		}
+	}
+	for i, option := range options {
+		if normalize(option.Label) == answer {
+			if chosen >= 0 && chosen != i {
+				return ""
+			}
+			chosen = i
+		}
+	}
+	if chosen < 0 {
+		return ""
+	}
+	return options[chosen].Label
 }
 
 func agentDecisionReplyKey(a acceptAsk) string {
@@ -134,5 +192,5 @@ func (s *Service) agentDecisionPrompt(machine, session string, p map[string]any)
 			return
 		}
 	}
-	s.agentDecisionSpoke(context.Background(), SessionRef{MachineID: machine, SessionID: session}, at)
+	s.agentDecisionSpoke(context.Background(), SessionRef{MachineID: machine, SessionID: session}, at, "")
 }

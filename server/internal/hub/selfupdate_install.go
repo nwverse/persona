@@ -368,7 +368,10 @@ func (u *updater) download(ctx context.Context, m *update.Manifest, f update.Fil
 	if localSource != "" {
 		return update.Download(ctx, u.client, localSource, f, dir)
 	}
-	src := u.h.updateSource()
+	src, sourceErr := u.installSource(m)
+	if sourceErr != nil {
+		return "", sourceErr
+	}
 	bin, err := update.DownloadRelease(ctx, u.client, src.url, m, f, dir)
 	var moved *update.MovedError
 	if !errors.As(err, &moved) {

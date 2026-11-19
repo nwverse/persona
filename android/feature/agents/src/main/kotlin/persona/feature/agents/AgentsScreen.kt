@@ -267,7 +267,8 @@ internal fun AgentsScreen(
     // In the list the space menu also opens the space page; the space page itself puts it in its bar.
     val spaceMenu: @Composable (AgentSpace, Boolean) -> Unit = { space, inList ->
         val session = space.members.first().session
-        val unread = space.members.filter { it.state == AgentState.Unread }
+        // Mark all as read: the finished ones nobody has seen, Just finished ones too (#9786)
+        val unread = space.members.filter { it.unseen }
         // A whole project on a to-do (#1616, iOS SpaceTodoMenu): only a herdr space the hub can name, on a hub that knows projects.
         val todoSpace = session.todoSpaceName?.takeIf { model.tasks?.spacesSupported == true }
         val linked = todoSpace?.let { todos.forSpace(session.machineId, it) }
@@ -287,7 +288,7 @@ internal fun AgentsScreen(
         val space = page.spacesById[repo.id]
         if (space != null) {
             val session = space.members.first().session
-            val unread = space.members.filter { it.state == AgentState.Unread }
+            val unread = space.members.filter { it.unseen }
             val todoSpace = session.todoSpaceName?.takeIf { model.tasks?.spacesSupported == true }
             val linked = todoSpace?.let { todos.forSpace(session.machineId, it) }
             agentSpaceActions(session, space.preferenceKey in page.preferences.pins.spaces, space.preferenceKey in page.preferences.mutes.spaces,
@@ -303,7 +304,7 @@ internal fun AgentsScreen(
                         onClick = { navigator.navigate(persona.core.navigation.TodoDetailRoute(todo.id)) })
                 })
         } else {
-            val unread = (repo.rows + page.list.groups.filter { it.under == repo.id }.flatMap { it.rows }).filter { it.state == AgentState.Unread }
+            val unread = (repo.rows + page.list.groups.filter { it.under == repo.id }.flatMap { it.rows }).filter { it.unseen }
             listOfNotNull(JAction(stringResource(R.string.agents_mark_all_read), PhIcons.Check, onClick = { confirmRead = unread })
                 .takeIf { unread.isNotEmpty() })
         }
@@ -324,6 +325,22 @@ internal fun AgentsScreen(
             showAll = page.settings.expandedAll.takeIf {
                 page.settings.query.isEmpty() && page.settings.quick == AgentQuickFilter.All && !page.pagination.paged
             }, idleRepos = repoTree, hideIdle = hideIdle)
+    }
+    // Tap-driven row motion only (#9600). Hub pushes change [tree] with the flag clear, so they stay put.
+    val listTapMotion = remember { ListTapMotion() }
+    // The motion follows this screen's model. A second model (the shot loop, or a new key) must not
+    // leave the flag on the previous one: that list then folds with nothing armed.
+    DisposableEffect(model, listTapMotion) {
+        model.attachListTap(listTapMotion)
+        onDispose { model.detachListTap(listTapMotion) }
+    }
+    // A page built before the tap carries an older generation and is ignored (the list is throttled).
+    LaunchedEffect(page) { listTapMotion.land(page.tapEpoch) }
+    BindListTapMotion(listTapMotion)
+    // The computer chip only (ChatsView.swift:1646). The menu's machine picker sets the filter with no animation (AgentsMenus.swift:141).
+    fun clearMachine() {
+        model.machine("", animate = true)
+        onMachineSelected("")
     }
     val paginationFooter = page.pagination.paged && !firstPageIncomplete
     val controls = page.settings
@@ -385,6 +402,7 @@ internal fun AgentsScreen(
             summary = summary, subtitle = subtitle, greet = true, largeTitle = LocalHomeChrome.current == null,
             titleBusy = connection in setOf(ConnectionState.Connecting, ConnectionState.Updating),
             onTitleClick = if (connection != ConnectionState.Online) connectionDetails else ({ menu = true }), refreshing = refreshing, onRefresh = model::refresh,
+            listScroll = listTapScroll(listTapMotion),
             actions = {
                 if (LocalHomeChrome.current == null) JIconButton(PhIcons.ListChecks, stringResource(R.string.agents_action_todos), { navigator.navigate(persona.core.navigation.TodosRoute) })
                 JIconButton(if (homeChrome) PhIcons.NotePencil else PhIcons.Plus, stringResource(R.string.agents_action_new_session), { newSession() })
@@ -393,6 +411,8 @@ internal fun AgentsScreen(
                 else JIconButton(PersonaIcons.moreMenu, stringResource(R.string.agents_action_list_settings), { menu = true })
             },
         ) {
+            val tapScope = ListTapLazyScope(this, listTapMotion, listState, page.tapEpoch)
+            with(tapScope) {
             item("search") {
                 val settings by model.listSettings.collectAsStateWithLifecycle()
                 androidx.compose.animation.AnimatedVisibility(!homeChrome || searchVisible || settings.query.isNotBlank()) {
@@ -430,8 +450,8 @@ internal fun AgentsScreen(
                 val hint = stringResource(R.string.agents_only_machine_hint)
                 Row(Modifier.padding(horizontal = Tokens.Space.l, vertical = Tokens.Space.xs)) {
                     JChip(stringResource(R.string.agents_only_machine, name), Modifier.testTag("agents-machine-filter")
-                        .semantics { onClick(label = hint) { model.machine(""); onMachineSelected(""); true } },
-                        selected = true, onClick = { model.machine(""); onMachineSelected("") },
+                        .semantics { onClick(label = hint) { clearMachine(); true } },
+                        selected = true, onClick = { clearMachine() },
                         role = Role.Button, trailingIcon = persona.core.designsystem.icons.PersonaIcons.clear)
                 }
             }
@@ -704,7 +724,11 @@ internal fun AgentsScreen(
                     is TreeChildrenEntry -> item(entry.key, contentType = "children") {
                         val slot = repoSlots[entry.key]
                         AgentSpaceHeader(stringResource(R.string.agents_child_tasks, entry.count), !entry.expanded,
-                            onToggle = { expandedTasks = if (entry.expanded) expandedTasks - entry.parent.id else expandedTasks + entry.parent.id },
+                            onToggle = {
+                                // Codex subtasks (ChatsView.swift:3289).
+                                listTapMotion.arm(ListTapMotionKind.State)
+                                expandedTasks = if (entry.expanded) expandedTasks - entry.parent.id else expandedTasks + entry.parent.id
+                            },
                             modifier = if (slot != null) Modifier.repoCard(slot.first, slot.last) else Modifier,
                             depth = slot?.level ?: entry.depth, kind = stringResource(R.string.agents_child_tasks_kind))
                     }
@@ -741,6 +765,8 @@ internal fun AgentsScreen(
                     if (page.pagination.loading) JSpinner()
                     else if (page.pagination.hasMore) JTextButton(stringResource(R.string.agents_page_more), model::loadMore)
                 }
+            }
+            tapScope.commit()
             }
         }
         AgentsFeedNote(feed, latestPage, Modifier.align(Alignment.BottomCenter).navigationBarsPadding()
@@ -1195,7 +1221,7 @@ internal fun AgentSessionMenuItems(
         if (session.canRename) add(JAction(stringResource(R.string.agents_action_rename), PhIcons.NotePencil, enabled = !busy, onClick = onRename))
         if (session.loop != null && session.canSend) add(JAction(stringResource(R.string.agents_action_stop_loop), enabled = !busy, onClick = onStopLoop))
         add(JAction(stringResource(R.string.agents_action_handoff), onClick = onHandoff))
-        if (row.state == AgentState.Unread) add(JAction(stringResource(R.string.agents_action_mark_read), PhIcons.Check, onClick = onRead))
+        if (row.unseen) add(JAction(stringResource(R.string.agents_action_mark_read), PhIcons.Check, onClick = onRead))
         // Only a session in a terminal resumes there; a Codex thread by its own thread id.
         session.resumeCommand()?.let { command -> add(JAction(stringResource(R.string.agents_action_copy_resume), onClick = { copy(command, null) })) }
         add(JAction(stringResource(R.string.agents_action_copy_directory), enabled = session.cwd.isNotBlank(), onClick = { copy(session.cwd, null) }))
@@ -1286,13 +1312,16 @@ internal val AgentState.designStatus: Status get() = when (this) {
 }
 internal val AgentState.label: String @Composable get() = designStatus.localizedLabel
 
-/** A row's state colour: Awaiting Reply (#5096) takes Unread's, since it waits on the user as much; a muted one is just Seen. */
-internal fun AgentSession.rowStatus(muted: Boolean): Status = if (asksYou && !muted) Status.Unread else state.designStatus
+/**
+ * A row's state colour: Awaiting Reply (#5096) and Just finished (#9786) take Unread's, since they wait on the user as
+ * much; a muted one is just Seen.
+ */
+internal fun AgentSession.rowStatus(muted: Boolean): Status = if ((asksYou || showsJustFinished) && !muted) Status.Unread else state.designStatus
 
 /**
  * The row's state in words, as iOS's default row (#4338 A9, `rowStateWord`): only what its dot does not say alone, Needs
- * you (unless muted), Awaiting reply and Waiting in the background. Working, Unread and the rest are the dot's; TalkBack
- * still hears the state ([AgentRow]).
+ * you (unless muted), Awaiting reply, Just finished and Waiting in the background. Working, Unread and the rest are the
+ * dot's; TalkBack still hears the state ([AgentRow]).
  */
 @Composable
 internal fun AgentSession.rowStatusText(muted: Boolean): String? = rowStateWord(muted)?.text()

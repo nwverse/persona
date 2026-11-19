@@ -14,6 +14,10 @@ import (
 // NodeEvent takes a node's event before the hub does (devices.Options.Event); false: the hub does not get it (the
 // manager tells it what follows instead).
 func (s *Service) NodeEvent(machine, event string, params json.RawMessage) bool {
+	if event == "launchers.changed" {
+		s.launchersChanged(machine)
+		return false
+	}
 	if err := s.conversationParamsAvailable(context.Background(), machine, params); err != nil {
 		return false
 	}
@@ -55,7 +59,10 @@ func (s *Service) NodeEvent(machine, event string, params json.RawMessage) bool 
 			ID string `json:"id"`
 		}
 		if json.Unmarshal(params, &p) == nil {
-			s.recordEnd(p.ID, "dismissed", nil)
+			if s.endPreparedByID(p.ID, "dismissed", "The approval was dismissed on the computer; this card did not apply the change.") {
+				return false
+			}
+			s.recordEnd(p.ID, "dismissed", &proto.Resolution{Dismiss: true, AnsweredBy: proto.AnsweredByTerminal})
 			s.finishInteraction(p.ID)
 		}
 		return false
@@ -64,6 +71,9 @@ func (s *Service) NodeEvent(machine, event string, params json.RawMessage) bool 
 			ID string `json:"id"`
 		}
 		if json.Unmarshal(params, &p) == nil {
+			if s.endPreparedByID(p.ID, "cancelled", "The approval was cancelled on the computer; nothing changed.") {
+				return false
+			}
 			s.recordEnd(p.ID, "cancelled", nil) // or the next manager would take it for one a hook may still claim
 			s.finishInteraction(p.ID)
 		}
@@ -159,6 +169,7 @@ func (s *Service) NodeRequest(ctx context.Context, machine, method string, param
 		out, err := s.mailAttachment(ctx, machine, p)
 		return out, true, err
 	case "mcp.tools":
+		ctx = withToolSet(ctx, params) // a narrower set the process asks for (supervise_round.go)
 		var p struct {
 			Assistant  bool   `json:"assistant"`
 			SessionID  string `json:"session_id"`
@@ -170,12 +181,21 @@ func (s *Service) NodeRequest(ctx context.Context, machine, method string, param
 		if p.LeaderOnly {
 			return map[string]any{"tools": s.runtimeLeaderTools(ctx, machine, p.SessionID, p.Guest)}, true, nil
 		}
-		return s.sessionMCPToolsSince(ctx, machine, p.SessionID, p.Assistant, p.Guest, p.Revision), true, nil
+		out := s.sessionMCPToolsSince(ctx, machine, p.SessionID, p.Assistant, p.Guest, p.Revision)
+		// Only an assistant conversation defers tools: a guest, by the node's word or by the manager's own record
+		// (guest.go), has no ToolSearch to load one with (node/assistant_guest.go). An unchanged or failed answer
+		// carries no list to mark.
+		if tools, ok := out["tools"].([]proto.Tool); ok {
+			deferring := p.Assistant && !p.Guest && !s.isGuest(ctx, machine, p.SessionID)
+			out["tools"] = s.withToolLoading(ctx, p.SessionID, tools, deferring)
+		}
+		return out, true, nil
 	case "mcp.call":
 		var p struct {
 			Name        string          `json:"name"`
 			Args        json.RawMessage `json:"args"`
 			SessionID   string          `json:"session_id"`
+			Origin      string          `json:"origin"` // the node's attested origin, including during assistant startup
 			Assistant   bool            `json:"assistant"`
 			Guest       bool            `json:"guest"`
 			WaitUpdates bool            `json:"wait_updates"`
@@ -197,7 +217,7 @@ func (s *Service) NodeRequest(ctx context.Context, machine, method string, param
 			}
 			return s.roomToolCall(ctx, rec, p.Name, p.Args), true, nil // bound to its own recording
 		}
-		return s.mcpCall(ctx, machine, p.SessionID, p.Name, p.Args, p.Assistant), true, nil
+		return s.mcpCallWithOrigin(ctx, machine, p.SessionID, p.Name, p.Args, p.Assistant, p.Origin), true, nil
 	}
 	return nil, false, nil
 }

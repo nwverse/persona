@@ -21,6 +21,9 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
     var stop: (() -> Void)?
     /// Voice Chat (docs/assistant/voice.md 6.1): set where the conversation offers a voice call; nil, the composer is as it was.
     var voice: (() -> Void)? = nil
+    /// What the voice button says to VoiceOver: what its tap does here (#9887 one button, `VoiceEntry.iconLabel`); nil,
+    /// Voice Chat.
+    var voiceLabel: String? = nil
     /// What the model button says, ChatGPT's "6.1 Sol Medium": the model, then the effort (`SessionModes.composerTitle`);
     /// nil: no button. Its menu says what needs saying about the permission mode (Allow Everything), not the button (#1117).
     var modesTitle: SessionModes.ComposerTitle?
@@ -650,7 +653,7 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
 
     /// Round in send's place; beside stop (the agent works) a plain icon like dictation's, so the line keeps one round button.
     private func voiceButton(_ voice: @escaping () -> Void) -> some View {
-        ComposerVoiceButton(round: stop == nil, id: "shell-composer-voice") {
+        ComposerVoiceButton(round: stop == nil, id: "shell-composer-voice", label: voiceLabel ?? String(localized: "Voice Chat")) {
             focused.wrappedValue = false
             endDictation(then: voice)
         }
@@ -783,19 +786,7 @@ private struct ComposerPageEditor: View {
 
     private var controls: some View {
         HStack(spacing: Theme.Space.xs) {
-            Spacer(minLength: Theme.Space.s)
-            if focused {
-                Button(action: dismissPageKeyboard) {
-                    ThemedIcon(Theme.Icon.dismissKeyboard)
-                        .font(Theme.Font.secondary)
-                        .foregroundStyle(ink)
-                        .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
-                        .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Hide Keyboard")
-                .accessibilityIdentifier("composer-page-dismiss-keyboard")
-            }
+            // The way back to the box first, at the leading corner, as every presented page's way out (#9653).
             Button {
                 commitTyped()
                 collapse()
@@ -809,6 +800,19 @@ private struct ComposerPageEditor: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Collapse the message box")
             .accessibilityIdentifier("composer-page-collapse")
+            Spacer(minLength: Theme.Space.s)
+            if focused {
+                Button(action: dismissPageKeyboard) {
+                    ThemedIcon(Theme.Icon.dismissKeyboard)
+                        .font(Theme.Font.secondary)
+                        .foregroundStyle(ink)
+                        .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Hide Keyboard")
+                .accessibilityIdentifier("composer-page-dismiss-keyboard")
+            }
         }
         .fixedSize(horizontal: false, vertical: true)
         .padding(.horizontal, Theme.Space.l)
