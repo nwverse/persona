@@ -327,8 +327,8 @@
     <string name="agents_new_no_launchers">No launchers on this machine</string>
     <string name="agents_new_follow_config">Follow model settings</string>
     <string name="agents_new_permission_mode">Permission mode</string>
-    <string name="agents_new_bypass_warning">With everything allowed, editing files and running commands won\'t ask you again.</string>
-    <string name="agents_new_provider_mode_hint">This agent uses its own approval settings unless you pick Allow everything. You can switch in the chat later.</string>
+    <string name="agents_new_bypass_warning">With Full access, editing files and running commands won\'t ask you again.</string>
+    <string name="agents_new_provider_mode_hint">This agent uses its own approval settings unless you pick Full access. You can switch in the chat later.</string>
     <string name="agents_new_effort">Thinking effort</string>
     <string name="agents_new_no_effort">This model has no thinking effort setting</string>
     <string name="agents_new_first_message_codex">First message (required for Codex)</string>
@@ -345,11 +345,11 @@
     <string name="agents_new_recent_remove">Remove from Recent</string>
     <string name="agents_new_recent_clear">Clear Recent Setups</string>
     <string name="agents_mode_follow">Follow launcher</string>
-    <string name="agents_mode_default">Ask each time</string>
-    <string name="agents_mode_accept_edits">Auto-edit files</string>
-    <string name="agents_mode_plan">Plan only</string>
-    <string name="agents_mode_auto">Auto</string>
-    <string name="agents_mode_bypass">Allow everything</string>
+    <string name="agents_mode_default">Default permissions</string>
+    <string name="agents_mode_accept_edits">Auto accept edits</string>
+    <string name="agents_mode_plan">Plan mode</string>
+    <string name="agents_mode_auto">Auto-review</string>
+    <string name="agents_mode_bypass">Full access</string>
     <string name="agents_effort_low">Low</string>
     <string name="agents_effort_medium">Medium</string>
     <string name="agents_effort_high">High</string>
