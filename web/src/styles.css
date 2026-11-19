@@ -306,6 +306,10 @@
   --font-mono: "JetBrains Mono", "SF Mono", "DejaVu Sans Mono", "Liberation Mono", ui-monospace, Menlo, Consolas, monospace;
 }
 
+/* @theme inline expands utility families to literals; resolve the runtime preference for these utilities too. */
+.font-sans { font-family: var(--font-sans); }
+.font-mono { font-family: var(--font-mono); }
+
 body {
   background: var(--page);
   color: var(--ink);
@@ -456,7 +460,7 @@ button:disabled { cursor: default; }
    draw Chinese in a serif (NSimSun on Windows; Linux falls back to Noto CJK on its own). The monospaced faces come first:
    a CJK face has proportional Latin letters. Its ink is a step quieter than --ink, a long way from --ink-2 (iOS
    Theme.Reply.codeInk; theme-contrast.test.ts keeps it readable). */
-.prose-j code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", "PingFang SC", "Microsoft YaHei", monospace; font-size: .94em; color: color-mix(in srgb, var(--ink) 55%, var(--ink-2)); }
+.prose-j code { font-family: var(--font-inline-code, ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", "PingFang SC", "Microsoft YaHei", monospace); font-size: .94em; color: color-mix(in srgb, var(--ink) 55%, var(--ink-2)); }
 .prose-j pre { margin: .7em 0; background: var(--inset); border-radius: 10px; box-shadow: var(--shadow-hairline); padding: 10px 12px; overflow-x: auto; font-size: 12.5px; line-height: 1.6; }
 .prose-j pre code { font-family: var(--font-mono); font-size: inherit; }
 /* A code block with its title bar (#2984, CodeBar): the box is the wrap's, the pre sits in it. */

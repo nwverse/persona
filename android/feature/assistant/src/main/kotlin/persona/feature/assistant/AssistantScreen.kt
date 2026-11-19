@@ -65,6 +65,7 @@ import persona.core.navigation.ConversationKind
 import persona.core.navigation.TodoDetailRoute
 import persona.core.navigation.ModelPurposeRoute
 import persona.core.navigation.Navigator
+import persona.core.navigation.UsageCalendarRoute
 import persona.core.navigation.SettingsPage
 import persona.core.navigation.SettingsPageRoute
 import persona.feature.assistant.proactive.AssistantProactiveScreen
@@ -136,6 +137,7 @@ fun AssistantScreen(
     machines: List<Machine> = LocalAssistantHost.current?.machines.orEmpty(),
     phoneToolsAvailable: Boolean? = LocalAssistantHost.current?.phoneToolsAvailable,
     management: AssistantManagement? = LocalAssistantHost.current?.management,
+    usageHistory: persona.core.contracts.api.UsageHistoryApi? = null,
     assistantChatContent: (@Composable (SessionKey, AssistantChatOptions) -> Unit)? = LocalAssistantHost.current?.chatContent,
     requestedSession: SessionKey? = null,
     mainConversationSender: MainConversationSender? = LocalAssistantHost.current?.mainSender ?: messageSender as? MainConversationSender,
@@ -188,6 +190,9 @@ fun AssistantScreen(
         ?: persona.core.contracts.api.AssistantSnapshot(manager = managerChoice.manager, managerId = managerChoice.shown)
     val pageManagement = remember(management, managerChoice.hubId, managerChoice.shown) {
         management?.forManager(managerChoice.shown)
+    }
+    val usageApi = remember(pageManagement, usageHistory) {
+        (pageManagement as? persona.core.contracts.api.UsageHistoryApi) ?: usageHistory
     }
     val managers = assistantManagers(managerRoster, managerChoice, androidx.compose.ui.platform.LocalResources.current)
     // One name source with the sidebar's switcher (#6401): the current manager's name. The persona pack's name is the
@@ -1032,6 +1037,7 @@ fun AssistantScreen(
                 HealthHome(healthChats, contentPadding = padding, onOpen = ::openConversation, onCopy = ::copyId)
             } else {
                 NewChatPage(enabled = !sending && draftReady && composer.ready, machines = machines,
+                    usageHistory = usageApi, onOpenUsage = { navigator.navigate(UsageCalendarRoute) },
                     phoneToolsAvailable = phoneToolsAvailable, contentPadding = padding, demo = demo,
                     setup = blocking != null, startsMain = newChat == null, hubSuggestions = readiness?.suggestions?.takeIf { it.isNotEmpty() },
                     onLocalSuggestion = { readinessHelp = ReadinessHelp.ofSuggestion(it) },
@@ -1260,6 +1266,7 @@ internal fun homeLead(setup: Boolean, startsMain: Boolean): Int = when {
 @OptIn(ExperimentalLayoutApi::class)
 private fun NewChatPage(
     enabled: Boolean, machines: List<Machine>, phoneToolsAvailable: Boolean?, contentPadding: PaddingValues,
+    usageHistory: persona.core.contracts.api.UsageHistoryApi?, onOpenUsage: () -> Unit,
     demo: Boolean, onSuggestion: (String) -> Unit,
     needsYou: NeedsYou = NeedsYou(), onNeed: ((NeedsYouLine) -> Unit)? = null, onMore: () -> Unit = {},
     /** The main conversation still misses a step (docs/assistant/onboarding.md 4.4): the lead says so. */
@@ -1285,7 +1292,7 @@ private fun NewChatPage(
     }
     LazyVerticalGrid(
         columns = GridCells.Fixed(2), state = grid,
-        modifier = Modifier.fillMaxSize().then(if (room == null) Modifier else Modifier.onGloballyPositioned { gridTop = it.positionInRoot().y.roundToInt() }),
+        modifier = Modifier.fillMaxSize().testTag("assistant-new-chat-grid").then(if (room == null) Modifier else Modifier.onGloballyPositioned { gridTop = it.positionInRoot().y.roundToInt() }),
         contentPadding = PaddingValues(start = pagePadding, end = pagePadding,
             top = contentPadding.calculateTopPadding() + 16.dp.dense, bottom = contentPadding.calculateBottomPadding() + 24.dp.dense),
         horizontalArrangement = Arrangement.spacedBy(12.dp.dense), verticalArrangement = Arrangement.spacedBy(12.dp.dense),
@@ -1312,19 +1319,7 @@ private fun NewChatPage(
                 onClick = if (enabled) ({ onSuggestion(prompt) }) else null)
         }
         item(span = { GridItemSpan(2) }) {
-            Column {
-                JSectionHeader(stringResource(R.string.assistant_online_devices))
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp.dense), verticalArrangement = Arrangement.spacedBy(8.dp.dense)) {
-                    machines.filter { it.online }.distinctBy { it.id }.forEach { machine ->
-                        JChip(machine.displayName, icon = PhIcons.Desktop)
-                    }
-                    JChip(when (phoneToolsAvailable) {
-                        true -> stringResource(R.string.assistant_this_phone)
-                        false -> stringResource(R.string.assistant_phone_tools_unavailable)
-                        null -> stringResource(R.string.assistant_phone_permissions_pending)
-                    }, icon = PhIcons.DeviceMobile)
-                }
-            }
+            UsageHomeSection(usageHistory, machines, phoneToolsAvailable, onOpenUsage)
         }
     }
 }
@@ -1701,9 +1696,11 @@ private fun ConversationRow(
     var menu by remember { mutableStateOf(false) }
     // What opened an automatic chat takes precedence; a user's own chat keeps its latest message's channel mark (#5196).
     val source = automaticConversationOrigin(origin)
+    // The extension that opened it, whose own icon its mark draws once it is there (#10358).
+    val opener = ConversationOpener.of(session, origin)
     val channels = LocalChannels.current
     val channel = remember(session.channels, channels) { ChannelSources.latest(session.channels, channels) }
-    val sourceMark: (@Composable () -> Unit)? = source?.let { s -> { ConversationOriginMark(s) } }
+    val sourceMark: (@Composable () -> Unit)? = source?.let { s -> { ConversationOriginMark(s, opener) } }
         ?: channel?.let { c -> { JChannelMark(c, size = MarkSize.Inline) } }
     val archivedLabel = if (session.archived) stringResource(R.string.assistant_archived) else null
     val accessory: (@Composable () -> Unit)? = if (sourceMark == null && archivedLabel == null) null else {
@@ -1767,11 +1764,18 @@ private fun ConversationRow(
     )
 }
 
-/** What opened an automatic chat: Lark's official brand for /agent, otherwise the source's icon (#5196). */
+/**
+ * What opened an automatic chat: Lark's official brand for /agent, otherwise the source's icon (#5196). A chat an
+ * extension opened ([opener]) draws that extension's own icon instead once it is there, named "From <its name>"
+ * (#10358, ConversationOpener.kt); until then, and for every fallback, the origin's mark and words stay.
+ */
 @Composable
-private fun ConversationOriginMark(source: AssistantConversationOrigin) {
-    val label = source.accessibilityLabel(androidx.compose.ui.platform.LocalResources.current)
-    if (source == AssistantConversationOrigin.LarkAgent) {
+private fun ConversationOriginMark(source: AssistantConversationOrigin, opener: ConversationOpener? = null) {
+    val drawn = rememberDrawnOpener(opener, source)
+    val label = originMarkLabel(source, drawn?.name, androidx.compose.ui.platform.LocalResources.current)
+    if (drawn != null) {
+        JSourceMark(label, size = MarkSize.Inline, picture = drawn.picture)
+    } else if (source == AssistantConversationOrigin.LarkAgent) {
         JSourceMark(label, brand = Brand.Lark, size = MarkSize.Inline)
     } else {
         val icon = when (source) {

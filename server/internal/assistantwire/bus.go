@@ -313,6 +313,12 @@ var Routes = []string{
 	"GET /api/v1/todos/places", // the To-dos places and counts (todo_view_routes.go, #10226); the literal wins over {id}
 	"GET /api/v1/todos/{id}",   // one to-do as the list has it, with its view
 	"GET /api/v1/todos/{id}/repositories",
+	"GET /api/v1/todos/{id}/workspace-rules",
+	"PUT /api/v1/todos/{id}/workspace-rules",
+	"POST /api/v1/todos/{id}/workspace-naming/preview",
+	"POST /api/v1/todos/{id}/workspace-naming/plans",
+	"GET /api/v1/todos/{id}/workspace-naming/plans/{operation_id}",
+	"POST /api/v1/assistant/workspace-naming/preview",
 	"PUT /api/v1/todos/{id}/repositories",
 	"PUT /api/v1/todos/{id}/repositories/{repo_id}/links",
 	"POST /api/v1/todos",

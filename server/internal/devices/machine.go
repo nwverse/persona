@@ -119,9 +119,10 @@ type Machine struct {
 	kick      chan struct{}
 	// deploying: the manager is sending this machine the hub's node build (deploy.go); deployErr: why the last try
 	// failed.
-	deploying   bool
-	deployErr   string
-	deployPhase string
+	deploying       bool
+	deployErr       string
+	deployPhase     string
+	deployPreflight *nodeDeployPreflight
 	// via is how the connection runs (local | ssh | tailcat | link | service | hub), path how tailcat's packets go.
 	via, path                  string
 	directFailed, switchedBack time.Time
@@ -667,6 +668,15 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 		snapshot.peer, snapshot.revision = p, m.sessionRevision
 		m.mu.Unlock()
 	}
+	if method == proto.MethodSessionEchoStatus && !nodeHas(info, nodeproto.SessionEchoStatus) {
+		return errEchoStatusUnsupported
+	}
+	if try, ok := ctx.Value(heldDeliveryKey{}).(*heldTry); ok && try.checkUnseen && method == "session.send" {
+		if !nodeHas(info, nodeproto.SessionEchoStatus) {
+			return errEchoStatusUnsupported
+		}
+		method = proto.MethodSessionSendUnseen
+	}
 	if nodeHas(info, nodeproto.OwnerControls) {
 		method = ownerControlMethod(ctx, method)
 	}
@@ -826,6 +836,9 @@ func (m *Machine) onEvent(event string, params json.RawMessage) {
 	}
 	m.noteClosed(event, params)
 	switch event {
+	case nodeproto.EventUpdatePreflightFailed:
+		m.nodeUpdatePreflightFailed(params)
+		return
 	case "sessions.changed":
 		m.sessionsEventMu.Lock()
 		defer m.sessionsEventMu.Unlock() // held through OnEvent and forward below

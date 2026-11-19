@@ -584,6 +584,7 @@ effective from the next judgment and next dispatched task. When on:
 - **A supervisor's `accepted` is held the same way** (#6428, `assistant/supervise_review_delivery.go`): `task_review` with `accepted` on a task whose PR (the review's `link` when it names a GitHub PR, else the to-do's) is not live is refused and nothing is written: the PR not merged, merged but not in the running hub, not named by its deployed-commits file, or the check failing. Where the running hub cannot be checked against (another repository, a hub that does not say its commit) the PR only has to be merged. The refusal tells the supervisor to rework, `agent_send`, park with `waiting_on: external_event`, or cancel; `outcome: cannot` and tasks with no PR are not held.
 - **To-do shows the blocker**: judgment results except `not_done` are recorded in to-do `delivery` (`{"state", "gate", "unblock", "at"}`, settings `assistant.todo_stages` alongside stage strip, no new table); delivery replaces unconfirmed reply-keyword guesses (PR → review, merged → merge, off by default/live → deploy), but never rolls stored progress back or caps a deployment confirmed by the deploy gate. Explicit verification is recorded only after an acceptance is saved; a supervisor's `accepted` alone does not verify a high-priority task still awaiting its owner. All stage writes are forward-only except an explicit review withdrawing verification (`unverified`) from `verify`; rework, `cannot` and a requested user check do not count as verification.
   Web to-do rows add "At PR · Blocked on '…' · Needs your approval" while open and `state` is `pr` / `merged` / `off`; Android to-do rows (when the Agent is neither working nor waiting for you) and details show the same line (`Todo.hold` in `core:domain`); iOS / Mac do not render it yet (optional field, old clients unaffected).
+- **The delivery hold follows the current wait**: the to-do and briefing combine the recorded delivery with current supervision and forge observations. An external park supplies its reason and puts the next step with someone else. A pending owner decision supplies its question. An answer, rework review or acceptance supersedes the previous approval, and a requested owner check remains available on its verification card. A ready PR resolves its draft approval, and a merge advances a PR hold to the deployment stage of work still to do. An independent owner decision stays actionable. The deploy check still uses the recorded delivery as evidence.
 - **Batch user approvals**: assistant live snapshot lists delivery blockers after each task; open tasks with `unblock = user` get a separate "Waiting for user approval to go live" group (oldest ten).
   Assistant CLAUDE.md tells it to present these together in one message; after user approves in one reply, use `agent_send` to notify the corresponding Agents separately, rather than asking anew for every item.
 
@@ -1019,7 +1020,7 @@ several requests, in a stable order, and counts the set as sent only once every 
 
 - **Show**: All (the default), No due date, Today, This week, This month, each with how many to-dos it would show. Today, This week and This month take the to-dos due in them (a due day by its day, a due moment by itself) and also open to-dos already overdue; a done to-do counts only by its own due date. The week is the calendar's ("Calendar" above): Monday to Sunday in Chinese, the same days the calendar view shows.
 - **Sort by**: Recent activity (the default: most recently active first, the list as it always was), Due date (earliest first, those without one last) or Priority (high, normal, low; then by due date). Rows are ordered inside each status section; the sections keep their order, so Needs you stays first. A merged row sorts by its earliest due and its highest priority member.
-- **With the sections and counts**: the search and the filter pick the to-dos first, then the SOP places them (`docs/assistant/todo-status-sop.md`), so a section with nothing left does not show and each section's count is the to-dos its rows list. Only whether a failed start was superseded (SOP rule 1a, #3713) is decided on every to-do: a search or filter that leaves out its finished work does not put it back in Needs you, nor in the count of those the filter leaves out. A filter opens Other open; Shelved and Done stay folded with their counts. Needs you is filtered like the rest, and a line over the list says how many to-dos waiting on the user it leaves out ("1 more waiting on you, not in This week"), with Show all. The sidebar's badge and the assistant's Progress count every to-do, whatever this page shows.
+- **With the sections and counts**: the search and the filter pick the to-dos first, then the SOP places them (`docs/assistant/todo-status-sop.md`), so a section with nothing left does not show and each section's count is the to-dos its rows list. Only whether a failed start was superseded (SOP rule 1a, #3713) is decided on every to-do: a search or filter that leaves out its finished work does not put it back in Needs you, nor in the count of those the filter leaves out. A filter opens Other open; Shelved and Done stay folded with their counts. Needs you is filtered like the rest, and a line over the list says how many to-dos waiting on the user it leaves out ("1 more waiting on you, not in This week"), with Show all. The sidebar's badge and the assistant's Progress read every to-do, whatever this page shows (the badge counts only the open ones that need the owner, "Sidebar and main navigation" below).
 - **Seen**: an active filter shows as a chip beside the button that clears it (`docs/design/DESIGN_SYSTEM.md` 3.4, "List controls"); the button is filled while the filter or the order is not the default (on the web it carries a dot). A filter that leaves nothing says so ("Nothing due this week") with Show all.
 - **Code**: Android `core/domain/.../tasks/TodoListFilter.kt` (pure, `TodoListFilterTest`) and `feature/agents/.../TodoListControls.kt`, described in `docs/android/android.md`.
 - **Code**: iOS `apple/Shared/TodoListFilter.swift` (`TodoListLogic`, pure, `TodoListLogic.list` the filtered sections and the line; `TodoListFilterTests`; the week from `TodoCalendar.userCalendar`), the button and the list in `apple/Persona/Views/Todos/TodosView.swift`, kept in `UserDefaults` (`todos.filter`, `todos.sort`); `TodosListTests` (UI, mock hub `MOCK_TODO_LIST=1`) taps "N related" and the filter.
@@ -1037,12 +1038,22 @@ several requests, in a stable order, and counts the set as sent only once every 
 
 When one thing the owner asked for is split into several pieces of work, the pieces say so on the to-dos themselves (`assistant/todo_pieces.go`): `part_of` is the to-do that stands for the request (its root, usually the owner's words as a to-do), and `after` the pieces of the same request a piece waits for. The web's To-dos page draws them as a graph under **By request** (`docs/web/web.md` "Todos").
 
-- **Who writes them**: the assistant through `todo_create` / `todo_update` and each `task_plan` task's `part_of` / `after`, the apps through `PATCH /api/v1/todos/{id}`. Persona does not decide when work is split or when a waiting piece starts: that is the conversation's, by its instructions or an extension.
+- **Who writes them**: the assistant through `todo_create` / `todo_update` and each `task_plan` task's `part_of` / `after`, the apps through `PATCH /api/v1/todos/{id}`. The graph is advisory by default; owners can opt into enforcement below.
 - **The manager's checks**, whenever they are written: the to-dos named exist; a to-do names neither itself nor a to-do that is itself a piece (one level: a request's root is no piece, and a to-do with pieces cannot become one); `after` names pieces of the same request only, needs `part_of`, and closes no cycle; repeats and blanks are dropped. Changing `part_of` without giving `after` empties `after`. The same-request rule holds from both ends: a piece another piece waits for keeps its `part_of` (moving it to another request or clearing it is refused, naming the pieces that wait) until it is taken out of their `after`; Persona does not take it out for them, since that would let them start early without anyone deciding so. A refusal says what is wrong (a tool error, or 400). The write checks them once more while holding the to-dos' write lock (`todoBook.writing`, taken by every link write: `editTodo`, `insertTodo`), so two writes at once that each pass against the graph the other is changing (A after B, B after A) can't both be stored: the later one is refused (#8556 review).
 - **A piece that waits** is a to-do with no Agent. Made with `todo_create` and `part_of` by a conversation that may hand out tasks, it is that conversation's (`origin`, as a leader's pieces are, but not supervised until an Agent works on it), so when its turn comes `task_plan` with its `todo_id` runs an Agent on that same to-do: its id, and every `after` naming it, stay. From an Agent's session it is a plain to-do.
-- **`task_plan`** checks a task's links when the plan is made and writes them on its to-do when it starts (a new one, or the `todo_id` it runs on); a link that no longer holds by then is left out and logged rather than failing a start the owner approved. The apps' edits of a plan card do not change them.
-- **Deleting** a to-do leaves its id in other to-dos' `part_of` / `after`; the web skips ids it does not have, and the next write of that list drops them.
+- **`task_plan`** checks a task's links when the plan is made and writes them when the task starts. For advisory requests, a stale link is logged and left out rather than stopping an approved start. The apps' edits of a plan card do not change links.
+- **Deleting** a to-do leaves its id in other to-dos' `part_of` / `after`. The graph cannot draw edges to missing nodes; enforced starts stay blocked until their references are repaired.
 - `todo_list` / `todo_get` show a piece as `(piece of todo_…, after todo_…)`.
+
+### Enforce prerequisites at launch
+
+An owner can set `{"require_accepted_after":true}` on the root to-do with `POST /api/v1/todos` (alongside `title`) or `PATCH /api/v1/todos/{id}`. It defaults to `false`. Use the existing `part_of` and `after` fields to relate pieces; there is no separate editor or assistant tool for the switch. This gate applies to manager task plans, not to standalone agents launched outside a plan.
+
+1. Create the pieces, then use `task_plan` with each piece's `todo_id`. To change a recorded piece's links, edit that to-do rather than putting new links on the plan. A plan for a new piece can instead supply `part_of` and `after` directly, but stale links must be fixed before that plan can start.
+2. Approve the plan on its card. A piece with prerequisites requires explicit approval even if other policies would let it start immediately. Independent pieces can start without waiting for one another. Blocked pieces list the outstanding to-do IDs in their queue status and do not take a machine slot.
+3. A prerequisite clears on an accepted task review, not when its agent merely finishes a turn or when its to-do is marked Done. If the review asks the owner to verify it, the gate also waits for their Pass. A reopened, cancelled, deleted, or unaccepted prerequisite stays blocking; the **By request** graph uses `prerequisite_blockers` from the to-do list to show the manager's state.
+
+An approved start is remembered across manager restarts and rechecked by the task queue (normally within a minute). After it clears prerequisites, normal capacity checks still apply. A waiting start checks the prerequisites it was approved with as well as any new links; removing a link or turning enforcement off does not waive that approval's prerequisites. To release work with revised prerequisites, cancel the old start and approve a new plan. If the manager loses confirmation of a launch, it does not send it a second time automatically: check the computer. This version does not support direct Retry or a `continues` handoff for gated starts; after a definitive failure, make a new plan on the same to-do and approve it.
 
 ## The assistant's todo tools
 
@@ -1066,7 +1077,7 @@ Only the main conversation and the ones acting for it (the background supervisor
 ## Interaction design across clients
 
 ### 1. Sidebar and main navigation
-- Sidebar has a **To-dos** entry with unfinished-count badge.
+- Sidebar has a **To-dos** entry with a badge of the to-dos that need the owner, not those Agents are on (web, #11085; `ownerBadge` in `web/src/lib/todo-triage.ts`). Among the open to-dos (the page's "Not done", `countsAsOpen`), quiet tasks left out (#1731), the first rule that holds wins: one that waits on the owner (`waitsOnOwner`: the page files it under Waiting on you, so a failed start to retry, an Agent that asks or was cut off, or a decision or review only they can make; or its finished work is held for their OK, `delivery.unblock = user`) counts; one whose own Agent is on it (the page's Working: working, starting, or waiting for something other than the owner to bring it back) does not; one whose pieces (`part_of`, at any depth, a loop walked once) have an Agent on them or wait on the owner does not, since a piece that waits counts by itself and the request is not counted twice; anything else counts, a personal to-do no Agent was ever on and whatever shows no Agent on it (its Agents stopped, finished work nobody looked at, a PR waiting on others). So a goal whose pieces Agents are doing adds nothing, and the same goal with one piece waiting on the owner adds 1. The badge is never more than "Not done", which is unchanged, and its tooltip and spoken label say what it counts ("2 to-dos need you"). This is the owner's preference behind #11085; maintainers decide the default. iOS and Android still badge the open count and follow with the same rule.
 
 ### 2. To-do list and details
 - List: search bar, unfinished list, collapsed completed group at bottom. Every client's default list (web, iOS / Mac and Android, #3206) is by status section (Waiting on you, Working, Just finished, PR to merge, then Other open, Shelved and Done folded), related to-dos merged into one row and stale ones shelved; by folder is the web's secondary view (`docs/assistant/todo-status-sop.md`). Each row shows title, state dot, linked-Agent count and latest message from the highest-priority Agent. Tap circle or swipe left to mark done.
@@ -1232,6 +1243,11 @@ as its install permission says. Reports skip such addresses while the extension 
 unavailable, and the one-time import of older `pr_url` / `prs` references never
 asks an extension.
 
+Task repository storage uses manager migration `0516_todo_repositories.sql`.
+Earlier branch builds recorded it as `0513` or `0514`; the existing migration
+renumbering moves either record before applying the search migration that now
+owns that number. Existing association data is kept.
+
 Shared Go types and validators: `server/internal/assistant/repository/task.go`.
 Web types/helpers: `web/src/lib/task-repositories.ts`. Fixed consumer fixture:
 `spec/fixtures/task-repositories/contract.json`. Directory aliases use one ASCII
@@ -1250,10 +1266,130 @@ catalog entry's `clone_url` when there is one (`transport_origin: "catalog"`),
 else from the clone address a provider extension answered for its repository
 (`"provider"`), else from its canonical URL (`"canonical_default"`).
 
-Preparation consumers use `db.ReadTodoRepositoriesTx` with the expected revision,
+Preparation consumers use `repositorystore.ReadTodoRepositoriesTx` with the expected revision,
 select repository IDs through `repository.Snapshot`, and persist that value with
 their operation in the same transaction. The reader locks the Todo, including an
 empty set. Digests exclude links and association revision. Consumers retain the
 operation's snapshot for retries; no permanent business-association seal or
 legacy-start hook exists. Physical records, paths, resolved commits and cleanup
 belong to the workspace preparation service.
+
+
+## Backend workspace naming
+
+People configuring coding tasks can open **Workspace naming** inside Assistant
+settings’ **Starting tasks** group after choosing **New workspaces**.
+The entry waits for the matching assistant’s confirmed preference; other, missing
+or unknown preferences hide it without deleting saved rules. A to-do’s details
+keep an independent naming entry. Template help appears beneath each field by
+default; preview options open on request. Labels and fields form compact desktop
+rows and stack on narrow screens. Unset inputs are blank, with localized
+placeholders showing the system default (Assistant settings) or the effective
+Assistant default (task overrides). Clearing and saving removes that override;
+there are no inheritance status labels or reset buttons. A preview shows the task
+folder once, then a labeled branch for a root repository or each repository's
+folder-to-branch mapping for a container, without repeating the parent path. The
+computer and layout selectors and the preview action form one compact row that
+stacks on phones; a task's repository choices sit above it. Routine planning
+time, time zone and disclaimer text are left out of the result.
+It applies only to explicitly selected backend preparation. It does not change Engine creation, legacy `new`, `existing`
+or `none`, existing preferences, task progress or cleanup.
+
+The fields are `base_directory` (default `{home}/workspace`),
+`task_directory_template` (`task-{task-id}`), and `branch_template`
+(`persona/{task-id}`). Each field inherits task override → Assistant → product
+default. Omitted patch fields preserve saved values; `null` removes an override;
+empty strings are invalid on the wire. The Web editor converts a cleared field
+to a null patch and uses the same fallback in preview and after reload. Assistant
+writes still require the explicit manager.
+Assistant GET and PUT responses keep `workspace_rules` as the saved partial
+object (`{}` when unset or wholly reset); `effective_workspace_rules` separately
+contains all resolved fields. Saving a value equal to a default still records
+an explicit override. Reading defaults never materializes them in saved rules.
+Task overrides have their own CAS revision, independent of legacy Todo edits.
+
+Folder templates support `{task-id}`, `{task-slug}`, `{yyyy}` and `{mmdd}`.
+Branches also support `{repo}`, `{branch}` and `{base-branch}`. The last two
+require an explicit branch; default, tag, commit and arbitrary typed refs are
+preserved without guessing a branch. Only a template using an unavailable field
+fails. A root repository maps to `.`, while containers use each repository's
+explicit alias or the shared repository-name default. Duplicate names fail.
+
+| Route | Contract |
+| --- | --- |
+| `GET/PUT /api/v1/assistant` | `workspace_rules`, `effective_workspace_rules`, `workspace_naming_version` (`workspace-naming/v1`); PUT patches rules with explicit manager ownership. |
+| `GET/PUT /api/v1/todos/{id}/workspace-rules` | `{todo_id, revision, workspace_rules}`; PUT requires `expected_revision` and a rule patch. |
+| `POST /api/v1/assistant/workspace-naming/preview` | Clearly labeled sample, using selected computer and layout; optional draft rules. |
+| `POST /api/v1/todos/{id}/workspace-naming/preview` | Trusted saved Todo/repositories, explicit `machine_id`, `layout` (`root` or `container`) and `selected_repo_ids`, optional draft rules. |
+| `POST /api/v1/todos/{id}/workspace-naming/plans` | Same selection plus required stable `operation_id`, without draft rules; saves one immutable snapshot for this operation. |
+| `GET /api/v1/todos/{id}/workspace-naming/plans/{operation_id}` | Reads a saved snapshot, including after a lost save response. |
+
+Preview calls the selected computer's read-only `workspace.naming.resolve` RPC.
+It supplies its own home and native path semantics; no browser-provided home or
+resolved path is trusted. The pure resolver checks lexical paths; on Darwin it
+compares components without case to conservatively reserve private state even
+on case-sensitive volumes, while Linux comparisons remain case-sensitive.
+The Node resolves existing symlink ancestors of the base, task root and every
+repository's absolute path through its existing guarded walker, then rejects
+credential paths and physical private state. Only a missing tail is accepted;
+other resolution errors fail closed. This includes the private-state root itself:
+the guarded walk returns its physical existing ancestors plus missing tail even
+with `ErrNotExist`, and containment uses that returned path. It also validates local branch format.
+No directory is created, no repository is
+queried or fetched, and no Engine is opened. `.persona` and `.git` task path
+segments and private state directories are unavailable; `{persona-home}` has no
+registered public workspace subtree in this version and is unsupported.
+Windows device and extended namespaces (`//?/`, `//./` and `/??/`, including
+extended UNC paths) are rejected rather than stripped: they can name the same
+private directory with a different lexical volume. A Windows Node with a
+namespace-form home or state directory returns `context_invalid`; ordinary
+drive and UNC paths retain their native case and separator semantics.
+Task-directory components follow portable rules both when saving a template and
+after expanding it on the Node. Windows device names (`CON`, `PRN`, `AUX`, `NUL`,
+`COM1`–`COM9`, `LPT1`–`LPT9`, and their superscript-digit forms) are rejected in
+every component, regardless of case or extension. The shared repository helper
+checks only reserved names: task paths still allow Unicode, internal spaces and
+components longer than a repository alias. Ordinary near-matches such as
+`COM10` and `NUL-backup` remain valid. This is naming validation, not proof that
+the target filesystem can create the path. Preparation must recheck physical
+paths when it creates or reuses resources; preview does not freeze the filesystem.
+
+The sole resolver and wire contract are in
+`server/internal/workspacenaming/naming.go`, with an exact shared vector in
+`spec/fixtures/workspace-naming/contract.json`. It freezes the instant, assistant
+timezone (explicit UTC fallback), title slug, effective rules, T1 selected source
+snapshot, paths and task branches. `digest` is SHA-256 of the Go JSON encoding
+with its own digest cleared; repositories are ordered by repository ID.
+
+The manager persists `todo_workspace_rules` and `workspace_naming_plans` in
+PostgreSQL. Their schema migration is `20261118234802_workspace_naming.sql`. Earlier
+branch builds recorded `0515_workspace_naming.sql`; the existing renumbering step
+moves that record before applying pending migrations. Saved rules, revisions and
+operation snapshots are kept, including when an older build left both records.
+Snapshot saves check the current override revision and selected source
+digest in the same Todo transaction. Link-only edits do not alter that source
+digest. Retrying an existing operation returns its original snapshot without
+rereading settings, title, clock or computer context. Changing input requires a
+new operation; associations and overrides remain editable, including after a
+snapshot. Operation IDs are global: reusing another Todo's ID returns a generic
+conflict before calling the computer, while a read under the wrong Todo remains
+not found. Concurrent saves preserve one immutable snapshot; incompatible input
+returns a conflict rather than a database uniqueness error.
+Preparation can call `repositorystore.ReadWorkspaceNamingPlanTx` in its own
+transaction. This read does not permanently bind the Todo or attest readiness;
+preparation owns cancellation, intent checks, physical ownership, Git source
+resolution, recovery and existing cleanup semantics.
+
+Web reuses `WorkspaceRulesEditor`, `WorkspaceNamingPreview`, settings inputs,
+Group and Button. Saves confirm returned values; failures keep drafts and can
+reload the saved baseline without discarding local edits. Reloading also removes
+preview selections for repositories no longer associated with the task; existing
+selections stay unchanged and newly associated repositories require selection.
+Both entry points load the shared editor through `lazyPage` when rendered, keeping
+its module out of the first screen's page-preload dependencies. The connection
+context guard is shared with the repository editor. Both Assistant settings and
+Todo details wrap naming in a local `PageBoundary`, retaining the existing
+one-time chunk reload and recoverable error. A persistent import failure leaves
+the other editors mounted and saveable.
+Edits and computer or assistant changes invalidate pending preview responses.
+These controls never select a creation mode or start an Agent.

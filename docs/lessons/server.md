@@ -1,5 +1,37 @@
 # Lessons: hub / node and networking
 
+## Under a full-tunnel VPN the default route's address is the tunnel's (#11125)
+
+A UDP "connect" towards a far address reports the source address of the route it would take, the usual way to find
+"the address traffic goes out of". When a VPN routes general traffic through its tunnel, that is the tunnel's own
+address (`utun*` on macOS), and many VPN clients give the tunnel a new one on every reconnect. `hub setup` wrote it into
+`public_url` and `public.tls_listen` as the LAN address, so after the next reconnect the TLS port refused everyone, LAN
+clients included. Before an address goes into config as the LAN address, check the interface it is on: up, not
+loopback, not virtual (`pickLANIPv4` in `server/internal/hub/setup_machine.go`), else take the first private IPv4 on
+such an interface.
+
+## A cancelled RPC test must acknowledge cancellation before releasing work (#10342)
+
+A local context cancellation only starts delivery of `rpc.cancel`; it does not prove the node has processed it. A test that releases a held file write immediately can let the operation finish as `done`, after which polling for `cancelled` times out and the original destination is not restored. Keep the write held until a following `file.operation` request on the same ordered connection has been answered, then release it. Exercise cancellation and normal completion in the same command, and keep the existing deadline, cleanup and restoration assertions.
+
+## Queue admission decides notification replay (#10394)
+
+A connected WebSocket is not evidence that its outbound queue accepted a notification. Record admission per device
+and retain the event in the existing reconnect ring when every eligible socket rejects it. If another socket for the
+same credential accepts it, do not retain a duplicate. Keep recipient-selection counts separate from queue admission
+and delivery. Exercise the real notification bus handler with a full queue, same-ID outbox retry and reconnect;
+keep push-route, capability and preference exclusions intact.
+
+## A response that stops mid-body must be aborted, not returned from (#10855)
+
+`http.ServeContent` stops at a read that fails and returns as if it were done, with the head (200 or 206 and its
+Content-Length) already sent. Over HTTP/1.1 net/http then closes the connection short of that length, which clients
+notice; over HTTP/2 it ends the stream cleanly with fewer bytes than declared, and a client that does not compare them
+keeps the cut file as the whole one. Keep the reader's error and `panic(http.ErrAbortHandler)` after `ServeContent`
+(`recoverPanics` passes it on): HTTP/2 resets the stream. Check it over a real HTTP/2 connection by reading the frames
+(`server/internal/hub/download_abort_test.go`): a `ResponseRecorder` cannot show it, and Go's client counts the bytes
+itself, so it reports the clean end and the reset alike as errors.
+
 ## Contribution identity must match both preview and commit (#10272)
 
 UI routes and switches identify a contribution by extension plus local ID. A global UI-ID conflict check can therefore
@@ -527,6 +559,11 @@ cost is smaller than a broken image. When something has to be listed by hand in 
   may be one in each set since each records its own part (one file in both sets is
   still refused); move only an unpublished migration to another second, never an
   applied migration or the guard.
+- A numbered migration on an older feature branch may be absent from main's
+  frozen inventory (#7100). Keep its SQL unchanged when giving that branch-only
+  file a timestamp, and map its known legacy record through the existing
+  renumbering step. Test old-only and duplicate records with saved rules and
+  operation snapshots. Keep every frozen migration and the guard unchanged.
 - Future publication needs an immutable enable-window frontier **and** a moving
   verified scan checkpoint. Using the previous scan's EOF as the window boundary
   drops a new pending turn when it completes on a later scan. Preserve first-seen
@@ -558,10 +595,14 @@ entry can import a secret target. Recreate ordinary links with `--symlink` so th
 close links for special read-only files or partially closed directories. Keep the view root read-only so later secret
 backups cannot be created. File binds still pin their inode and the top-level entry list: a replaced `node.sock` stays
 old, so a node restart requires an agent restart. Do not permanently cache probes or preflight success; bwrap/PATH and
-namespace availability can change, and full per-cwd profiles make an unbounded key space. A tmpfs mounted directly on a symlink follows it and masks the target; give an alias its own view, but do not
-claim this protects the link from unlink. Stock bwrap 0.8 has no path-aware unlink/rename filter, so protecting the link
-while keeping its parent writable needs another mechanism. It also keeps a supervisor even without `--unshare-pid` or
-with `--as-pid-1`: verify the agent's `PPID` in the host pid namespace, not equal pids, and use `--die-with-parent` for
+namespace availability can change, and full per-cwd profiles make an unbounded key space. A tmpfs mounted directly on a
+symlink follows it and masks the target; the alias view alone does not protect the link from unlink. Stock bwrap 0.8 has
+no path-aware unlink/rename filter. To protect an explicit alias while its parent stays writable, a pre-exec helper can
+`open_tree` the symlink inode with `AT_SYMLINK_NOFOLLOW`, then `move_mount` the detached clone onto the alias without
+following the destination. Run the same helper in preflight and exec the agent at the same pid. Do not drop
+`CAP_SYS_ADMIN` to harden these mounts: that breaks `unshare -rm`, which was working; direct `umount` in the original
+namespace therefore remains an explicit boundary. Bubblewrap keeps a supervisor even without `--unshare-pid` or with
+`--as-pid-1`: verify the agent's `PPID` in the host pid namespace, not equal pids, and use `--die-with-parent` for
 lifecycle cleanup.
 
 ## Runtime policy and publisher-owned node packages (#2566)
@@ -1701,10 +1742,34 @@ back) and only keeps the entry. Tell them apart by git's `CONFLICT` lines plus `
 
 ## Block iCloud paths component by component (2026-11-04, #1669)
 
+- **A naming plan needs the same guard as a file path** (#7100): lexical root
+  checks miss links in the base, task and individual repository directories.
+  Resolve each through `realPath`, permit only its guarded missing tail, and
+  check both credentials and the entire physical private-state directory before
+  returning any plan. Keep the resolver pure, preserve Linux case sensitivity,
+  and reserve Darwin private paths without case; a Linux rule test or cross-build
+  does not establish native macOS filesystem behavior. Preparation rechecks when
+  resources are actually used.
+- **Test a missing state root as well as missing workspace targets** (#7100):
+  `realPath` returns the physical existing ancestors plus missing tail with
+  `ErrNotExist`. Keep that returned path for containment. A state-root link or
+  linked parent with an absent destination must still deny that destination at
+  the base, task and repository levels; a sibling sharing only its prefix stays
+  outside. Test through Node RPC with actual temporary links and no creation.
 - **Literal checks don't stop links**: `stat` / `file` only checked whether the resolved string contained `/Library/Mobile Documents`; a `~/x` symlink into iCloud still reached `os.Stat`, hanging the batch on a locked Mac.
 - **`filepath.EvalSymlinks` isn't enough**: it `Lstat`s component by component; after following a link into iCloud it stats the next component there, so checks after return are too late.
   Walk components ourselves (`realPath` in `node/pathguard.go`), checking `offLimits` before each `Lstat`; lowercase comparisons because macOS is case-insensitive by default.
 - **One hung stat mustn't stall the batch**: network drives and sleeping disks hang too. `statPaths` runs 8 concurrently, waits at most 3 seconds overall, and treats nonresponses as `missing`.
+
+## Verify saved settings on the wire (#7100)
+
+- Distinct JSON tags on an embedded saved-settings field and an effective field
+  do not collide. Verify the actual HTTP response before changing the view:
+  `workspace_rules` stays partial while `effective_workspace_rules` is complete.
+  Exercise untouched settings, partial writes, omitted fields, explicit values
+  equal to defaults and null resets through GET/PUT, then read the database and
+  GET from a fresh service. Internal struct assertions alone miss serialization
+  regressions and cannot establish the editor's inheritance contract.
 
 ## Upload names the file system cannot take
 
@@ -2402,6 +2467,13 @@ time when binding evidence to activation: later transport, REST and validation w
 renew its lifetime. Test embedded publisher modules in an isolated interpreter as well as
 ordinary imports; a transitive import can be available locally and missing remotely.
 
+An unset assistant settings row is not explicit empty authority (#2628): zero-value product
+settings do not settle that contract. Require an existing empty row's revision, and use a
+guaranteed-row read with a database timestamp to distinguish absence from a failed read. Do
+not create an empty row or a synthetic main. Require an explicit unassigned plan and deliberately
+empty flags, then prove empty Hub ownership twice. Zero owned machines needs no node dial, but
+any conversation, runtime row, partial assignment or revision change must still fail closed.
+
 
 ## Release status reporting is opt-in (#2671)
 
@@ -2694,6 +2766,7 @@ computer every 2 s): the manager allocated 555 MB and used about 2.1 s of CPU a 
 - `cmd.Cancel` runs only when the context ends before the process exits. A shell that exits at once and leaves a background child holding its stdout or stderr (`sleep 4 & echo $!`) keeps `Wait` reading the pipe until that child exits or `WaitDelay`, counted from the shell's exit, closes it: the deadline passes unnoticed. `secret.run` held a 1-second run for 4 seconds, and the next command, which could no longer start, came back as timed out.
 - Watch the context for as long as `Wait` runs and stop the group at the deadline, sharing one "stopped" flag with `Cancel` so the group gets one SIGTERM (`runSecretCommand`). Classify the result by that flag, not the exit status: the shell exited 0.
 - A command that never started because the time was used up gets no result. A timed-out result for it reads as a command that ran and was stopped, and makes the Agent check the computer for one that never ran.
+- The same hole sat in the node's launcher scan (`launchers.go`, #10952): a `~/.zshrc` that left a job running in the background (or the script's children when the 20 s cap killed only the shell) kept `Output()` waiting, under the lock every launcher read takes. Each `GET /machines/{mid}/launchers` then ran into the hub's 30 s and nothing was cached. A login-shell read whose output matters takes `killGroupOnCancel`; `time zsh -ic true | cat` against `time zsh -ic true` shows such an rc file.
 
 ## An id the node makes up for a message ends up on its line (2026-11-12, #5225)
 
@@ -2821,6 +2894,17 @@ nothing ran the old build after the new one.
   it. When a fence refuses a live, authenticated client, either let it prove the move or tell it plainly what to do;
   and check what a "looks unused" revocation still owns before treating it as cleanup.
 
+## Trace custom TLS boundaries explicitly (#10533)
+
+An `http.Transport` with `DialTLSContext` can emit TLS callbacks only after the custom
+function has already completed its real handshake. Invoke the context's TLS start/done
+hooks around the unchanged `HandshakeContext`, including tunnel transports, and retain
+that first measurement when the transport announces the completed handshake again.
+Otherwise a TLS stall is indistinguishable from a TCP failure. DNS and connect hooks can run concurrently
+or finish after cancellation, so synchronize snapshots and distinguish overlapping connects.
+Keep diagnostic output to finite categories and durations: never format trace payloads or
+wrapped network errors, which carry addresses, stream query parameters and certificate data.
+
 ## A restore check must not start what it checks (2026-11-18, #10497)
 
 - Starting a restored hub or manager to see whether the restore worked changes the state under test: startup marks
@@ -2906,3 +2990,17 @@ documenting an order.
   guards against moving a switching computer were checked in memory and acted on without a lock. Each of these could leave
   the computer at `kind: link` with nobody able to undo it. Write the intent row first and decide under the lock. Keep what
   must survive a restart in the database.
+
+## Compile production and test callers after shared helper changes
+
+A helper refactor can leave a missing tuple return, a test caller without a new context argument, or a runtime reader naming the old helper. Compile both production and test packages after merging; retain the existing read-only database helper and exercise its failure paths rather than adding a parallel implementation.
+
+## A custom `DialTLSContext` owns its handshake deadline (2026-11-19, #11028)
+
+`http.Transport.TLSHandshakeTimeout` bounds only the handshake the transport runs itself. #10681 moved the link's hub
+handshake into a custom `DialTLSContext` (to trace it) and so dropped that bound, and the transport dials under a
+context that a given-up request does not end. A hub, or a proxy's tunnel, that took the connection and never answered
+the TLS hello then held it open forever, on the direct route and through the proxy alike; #10716 put the deadline back.
+Whoever writes a `DialTLSContext` gives the handshake its own deadline and closes the raw connection when it runs out.
+Test it by waiting for the far end to see the connection close, not by how long the request took: the request returns
+on its own deadline either way (`TestDirectStalledHandshakeIsClosed`, `TestProxyStallingInsideTheTunnelIsClosed`).
