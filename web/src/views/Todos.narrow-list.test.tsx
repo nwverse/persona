@@ -145,6 +145,6 @@ describe("side by side", () => {
     await mount("/todos");
     expect(current()).toEqual(["a"]);
     // its page reads them once it has drawn, which a loaded machine can take past settle()
-    await vi.waitFor(() => expect(loaded()).toEqual(["a"]));
+    await vi.waitFor(() => expect(loaded()).toEqual(["a"]), { timeout: 5000 });
   });
 });

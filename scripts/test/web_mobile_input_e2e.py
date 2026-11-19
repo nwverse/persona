@@ -4,7 +4,11 @@ shows and the composer stays on screen (the first card open, "N more" for the ot
 viewport (a keyboard on Android) and a twenty-line draft keep the send button on screen; the iOS keyboard moves the
 side panel with it (--kb-top / --kb-h); Back closes a full-screen side panel and stays on the conversation; switching
 panes writes no history; the header leaves the title room at 360; on a phone on its side the run's status and the
-queue share a line.
+queue share a line. Since #11442 also: a waiting card's own field typed into with the keyboard up stays in sight (it
+needs --hub: the card comes from the fake hub's /mock routes, which Vite does not proxy); a Feishu chat keeps its newest
+message in view as the keyboard and a long draft shorten it; a tap on an attached picture's middle opens it and its ✕
+answers only at its corner; toasts stay in the visible frame, clear of the composer and a sheet's footer, and a sheet's
+focused field stays in view.
 
 Needs a running web page against the fake hub with the crowded conversation, and Playwright for Python (it drives the
 installed Chrome):
