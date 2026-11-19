@@ -10,6 +10,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/shellcmd"
+	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
 // What a runtime that is a machine's engine needs beyond listing and driving its sessions (Paseo, docs/integrations/paseo.md):
@@ -387,6 +388,11 @@ func (n *Node) runtimeLauncherCheck(ctx context.Context, h *runtimeConn, name, c
 	if err := h.peer.Call(ctx, "launchers.check", params, &result); err != nil {
 		result = proto.LauncherCheck{Error: err.Error()}
 	}
+	// The runtime's CLI may print colour and shell integration like any other: the record and the apps read it clean.
+	if result.Error != "" {
+		result.Error = textfmt.LauncherErrorSummary(result.Error, 400)
+	}
+	result.Answer = textfmt.StripTerminalEscapes(result.Answer)
 	launcher, _ := h.launcherNamed(name)
 	result.Agent = launcher.Agent
 	if result.Agent == "" {

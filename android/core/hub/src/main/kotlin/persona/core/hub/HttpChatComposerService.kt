@@ -93,18 +93,22 @@ class HttpChatComposerService internal constructor(
                         record(message, ComposerDelivery(DeliveryState.Unknown))
                         return@use MessageTransportResult.NoReceipt
                     }
-                    if (fields?.get("delivered") == JsonPrimitive("later")) {
-                        refused.remove(message.clientMessageId)
-                        record(message, ComposerDelivery(DeliveryState.Held))
+                    if (fields?.get("delivered")?.jsonPrimitive?.contentOrNull == "later") {
                         val kept = (fields["undelivered"] as? JsonObject)?.let {
                             runCatching { JsonCodec.decodeFromJsonElement<HeldAgentMessage>(it) }.getOrNull()
                         }
-                        if (kept?.id == message.opId) {
-                            try { onHeld(message.session, kept) }
-                            catch (cancelled: CancellationException) { throw cancelled }
-                            catch (_: Exception) { /* A later session snapshot also carries the queue. */ }
+                        if (kept == null || !kept.computer.isNullOrBlank()) {
+                            refused.remove(message.clientMessageId)
+                            record(message, ComposerDelivery(DeliveryState.Held))
+                            if (kept?.id == message.opId) {
+                                try { onHeld(message.session, kept) }
+                                catch (cancelled: CancellationException) { throw cancelled }
+                                catch (_: Exception) { /* A later session snapshot also carries the queue. */ }
+                            }
+                            return@use MessageTransportResult.Held
                         }
-                        return@use MessageTransportResult.Held
+                        refused.remove(message.clientMessageId)
+                        return@use MessageTransportResult.Kept
                     }
                     try { transport.onAccepted(message.session, fields) }
                     catch (cancelled: CancellationException) { throw cancelled }

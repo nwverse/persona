@@ -309,10 +309,14 @@ export function sessionSwitches(s: Session): { model: boolean; effort: boolean }
 }
 
 /** The row of `models` the session runs: the one its model names (an alias or what an alias stands for; the default entry
- *  only when no other row names it); with no model reported yet, the default entry, which is what runs then. */
+ *  only when no other row names it); with no model reported yet, the default entry, which is what runs then. An exact
+ *  match (any case) is preferred; a gateway's routed echo or other 1M spelling folds to its row only when nothing exact
+ *  does (isCurrentModel). */
 export function currentModelRow(models: AgentModel[], model: string | undefined): AgentModel | undefined {
   if (!model) return defaultModel(models);
-  const hits = models.filter((m) => isCurrentModel(m, model));
+  const c = model.toLowerCase();
+  const exact = models.filter((m) => [m.id, m.resolved, ...(m.aliases ?? [])].some((v) => v && v.toLowerCase() === c));
+  const hits = exact.length ? exact : models.filter((m) => isCurrentModel(m, model));
   return hits.find((m) => !m.default) ?? hits[0];
 }
 

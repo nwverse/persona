@@ -2814,6 +2814,14 @@ them (`docs/design/PRINCIPLES.md`, principle 4).
 | `selected` | A node drawn as selected; the canvas opens centred on it |
 | `folded` | Nodes whose children start folded. Once the person folds or unfolds one, the app keeps their choice for this `key` |
 | `key` | As every component's: keeps the person's pan, zoom and folding across redraws |
+| `started_at` | Unix seconds (at least 0) when the node started; drawn on the timeline and read out in the inspector |
+| `ended_at` | Unix seconds (at least 0) when the node ended; omitted while it still runs, and never before `started_at` when both are set |
+| `facts` | Up to 8 `Fact` items (`value`, optional `label` and `icon`): short readings shown in the node inspector |
+| `detail` | Up to 2000 characters of plain text (a summary, verifier feedback or an error) shown in the node inspector |
+| `links` | Up to 8 `{title, url}` items in the node inspector: `title` 1–80 characters, a credential-free `https://` url up to 2000 characters |
+
+The last five are optional and only feed the inspector and the timeline, so a source that has them adds depth without changing
+the graph's shape.
 
 The layout rules are exact and shared: `spec/fixtures/graph-layout/README.md` states them, `scripts/gen/graph_layout.py` is the
 reference and writes the cases every app and the hub check themselves against. A layout is in slots (a node and its gap); each
@@ -2823,7 +2831,10 @@ app multiplies by its own node size.
 edge names known nodes, never one node twice (`from` = `to`) and never the same pair twice; no cycle; in a `tree`, no node with two
 parents; `selected` and every `folded` id name a node; not both `tone` and `color` on a node; the page's components, each node
 counted, at most 300. A graph's nodes' actions are the view's actions (`wire.Actions`): their `push` is checked as any other, an
-assistant-only action is taken out of an extension's view.
+assistant-only action is taken out of an extension's view. The optional inspector and timeline fields are checked too: `started_at`
+and `ended_at` are seconds at least 0, `ended_at` is never before `started_at` when both are set, `facts` holds at most 8 items
+(each a `Fact`), `detail` at most 2000 characters, and `links` at most 8 items whose `title` is 1–80 characters and whose `url` is a
+credential-free `https://` address of at most 2000 characters.
 
 **Drawing, on every app:**
 
@@ -2865,10 +2876,13 @@ the same titles, states and actions are there, as a list:
 | a node's `progress` | the row's `value`, the percentage (`40%`) |
 | a folded node | its row's `value` gains `+12` (the nodes it hides), after the percentage with ` · ` when it has one; what it hides has no row |
 | `tone`, `group`, `selected`, `layout`, `direction`, `key` | left out (a row's key is `key/id` when the graph has a key and that is free on the page; a native stream's row always has a key, so a taken or overlong one becomes a free digest of the node id) |
+| a node's `started_at`, `ended_at`, `facts`, `detail`, `links` | left out: neither a fallback row nor a native stream's row carries timing, inspector or timeline data |
 
 Below versions 6 and 3 the rows then lose what those versions did not have (`icon_color`, `icon`), as any row. A native stream's
-client (whose components never include `graph`) gets the same rows. Extensions may still draw an older app differently (`ui_version`).
-An action's `items` holding a graph are left out for an app below 10, which then draws the whole page again.
+client (whose components never include `graph`) gets the same rows, so it never sees the inspector or timeline fields either.
+Extensions may still draw an older app differently (`ui_version`). An older client that does send `10` but predates these fields
+simply ignores the unknown node properties; only the downgrade below 10 strips them. An action's `items` holding a graph are left
+out for an app below 10, which then draws the whole page again.
 
 **The web** (#9727) draws all of it and sends `10` (`web/src/views/extensions/ViewBody10.tsx`, a chunk loaded with the first view that has
 a graph; the page keeps the canvas's height meanwhile, and the card's fallback keeps the card's height too). The nodes are cards of the node token's size — growing with the
@@ -2881,6 +2895,19 @@ node, never over it — inside the node's own list item, so Tab walks a node the
 they fold one themselves. The keyboard walks the nodes in reading order (arrows pan, +/- zoom, 0 fits) and a focused node is panned into view; nodes fade in only when they
 are new or their fields changed. A card draws the same graph as a still fitted preview 200 px tall — fitted with no zoom floor, so a big graph fits too — with no buttons or
 presses; pressing it opens Full screen, the same interactive canvas as the page's. The web's native stream still sends 7.
+
+**The web's non-still canvas** (#11234) is a control room; a page, Full screen and a card's Full screen all draw it (the card itself stays a
+still 200 px preview). A collapsible outline of the visible nodes runs down the leading side: `j` / `k` and the arrow keys walk it,
+Enter opens the selected node's first link or runs its action, and Escape clears the selection and closes the inspector. Tapping a node
+that carries `facts`, `detail` or `links` opens an in-place node inspector beside the canvas (stacked below on narrow screens) with
+those readings, summary, HTTPS links (`openLink` opens hub session links in the side panel when supported) and any node `action`
+button; nodes without rich inspector metadata still run their `action` directly on tap. Beneath the canvas a collapsible parallel
+wall-clock timeline draws every node's `started_at`–`ended_at` span on one clock with adaptive ticks (`15s` / `1m` / `5m` / `15m` / `1h` / `6h`,
+scaling to date ticks across multi-day spans), so attempts running side by side read as concurrent bars; pressing a row selects and
+inspects that node in place, without leaving the page. In a `tree`, a run of more than 6 sibling leaves packs into columns instead of
+one long line. The opening viewport stays readable: when the fitted scale would fall below 65% it opens at 75% instead, centred on
+`selected`, else on the first running, caution or danger node, so a wide graph opens where the action is; Fit still zooms down to
+25% to show all of it.
 `web/e2e/extension-graph.mjs` checks it in a browser against the mock (`MOCK_EXTENSIONS=1 MOCK_EXTENSION_GRAPH=1`), keyboard included.
 
 **iOS** (#9727) draws all of it and sends `10` for whole pages and the app's cards and sections
