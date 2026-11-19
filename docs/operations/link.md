@@ -242,6 +242,7 @@ Both sides ignore a message type they don't know.
 
 **Reconnect**
 - Exponential backoff: starts at 1 second, doubles up to 1 minute; randomized between half and full delay each time. After a link connected for a full minute disconnects, it starts over.
+- When a normal wait exceeds 3 seconds, Link races eligible direct addresses and outbound proxy targets with an unauthenticated `GET /api/v1/health`, using the same TLS verification as the link. If none returns a 2xx response with `"ok": true` at the start, Link probes every 2 seconds and retries as soon as one does. SSH logins happen only on full connection attempts. SSH-only configurations, including **Always use SSH**, skip these probes, as do credential, replacement and rate-limit waits.
 - Special cases:
 
   | Case | Wait |
