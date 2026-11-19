@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/creack/pty"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/screen"
 	"github.com/nwverse/persona/server/internal/tmux"
 )
@@ -241,7 +241,7 @@ func (t *tuiTail) Write(p []byte) (int, error) {
 }
 
 // tuiEscape matches a terminal's control sequences: CSI, OSC and the short ones.
-var tuiEscape = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b[()][0-9A-Za-z]|\x1b[@-_]`)
+var tuiEscape = lazyre.New(`\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b[()][0-9A-Za-z]|\x1b[@-_]`)
 
 // lines are the last n non-blank lines written, as plain text.
 func (t *tuiTail) lines(n int) []string {

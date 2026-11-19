@@ -85,7 +85,10 @@ type sessionModes struct {
 	// App: the effort the phone set for the next turn of a chat of the Codex App (codex_desktop_effort.go); nil none.
 	App *codexAppPick
 	// Model: the model the app switched a Claude Code session to, shown until its transcript shows another (model_switch.go).
-	Model     *pendingModel
+	Model *pendingModel
+	// Awaited: a model switch typed into Claude Code and not confirmed in time, taken up as Model once Claude Code's
+	// own record of it shows in the transcript (model_switch.go).
+	Awaited   *awaitedModel
 	Ultracode *ultracodeState // independent, session-only workflow switch (ultracode.go)
 }
 
