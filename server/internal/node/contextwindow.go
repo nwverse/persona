@@ -86,6 +86,7 @@ func modelVersionPart(s string) (int, bool) {
 // The context fields stay zero (and so off the wire) while the transcript has no reply yet.
 func setContext(s *proto.Session, m quickMeta) {
 	s.OutputTokens = m.outputTokens
+	s.ContextRestartRecommended = m.contextRestartRecommended
 	s.TitleManual = s.TitleManual || m.titleManual
 	if m.title != "" && s.Title == m.title || m.title == "" && m.titleSource == "prompt" {
 		// A terminal's tool-only fallback still has known transcript provenance

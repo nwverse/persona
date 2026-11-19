@@ -1,0 +1,6 @@
+{
+  "main": "The last 3 requests used over 300K context tokens each. Start a new main chat and carry over a summary.",
+  "regular": "The last 3 requests used over 300K context tokens each. Start fresh and archive this chat when you’re ready.",
+  "new_agent": "New Agent…",
+  "dismiss": "Dismiss context notice"
+}

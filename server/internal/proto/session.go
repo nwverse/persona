@@ -337,6 +337,9 @@ type Session struct {
 	// It takes the first message (text only) and opens its terminal; once the thread exists the row goes and the
 	// thread's comes, in the same pane (docs/integrations/codex.md "Starting without a first message").
 	AwaitingFirstMessage bool `json:"awaiting_first_message,omitempty"`
+	// ContextRestartRecommended: the latest three measured requests each used over 300,000 input
+	// tokens since the last compaction. Omitted when false or the runtime has no request-level evidence.
+	ContextRestartRecommended bool `json:"context_restart_recommended,omitempty"`
 	// QueuedRelayed: the last this many of Queued are messages from other conversations that an assistant
 	// conversation's manager holds until its turn ends (docs/assistant/assistant.md "Queue while running"); the apps
 	// show them but take back, delete, move and send now only the others (#4342). A uint16 here sits in the padding
