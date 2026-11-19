@@ -58,6 +58,7 @@
 - `settings.grouping` 为 `state`、`space` 或 `machine`，其中 space 对应界面的「按项目」，并非按 cwd 汇总。
 - `settings.quick` 为 `all`、`needsYou`、`unread`、`working` 或 `backgroundWaiting`；`machine_filter` 和 `query` 为空字符串时不限。
 - `search_scope` is `all`, `title`, `conversation`, `user`, `assistant` or `errors`; `search_as_code` enables the raw-query heuristics. `machine_title_filter`, `harness_filter`, `project_filter`, `model_filter` and `pinned_only` are the dedicated settings appended to the parsed inline query, exactly as on iOS.
+- Android's Kotlin list has none of those settings: its `AgentListFixtureTest` skips a case that sets a scope other than `all`, `search_as_code`, or a dedicated setting, and reads `native_sessions` where a case has them (it builds the subtask forest itself, as the Swift oracle does).
 - `kept` 是这一帧已经保留的完整会话 id；用例成对给出看过后和重新选择筛选后的快照，不要求测试驱动模拟 SwiftUI 回调。
 - `folded` 使用 `state/needs` 等状态段 id（`!state/idle` 表示默认折叠的「已看」已打开）、`machine/机器标识` 或 `机器标识/空间标识`。
 - `expanded_idle` 使用活跃空间 id 或 `machine-机器标识`；`expanded_quiet` 使用空闲空间 id；二者和显式 folded 分开。
