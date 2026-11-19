@@ -85,6 +85,8 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		t.TodoID, t.Error, t.ErrorCode, t.ErrorArgs, t.RetryWith = "", "", "", nil, nil
 		t.WorkspaceResolved, t.ReservedTodoID, t.WorkspaceInferred = nil, "", false
 		t.OwnerStarted = false // the hub's: only the owner's Start on the card sets it (startPlan)
+		t.CloseTabOnAccept, t.TerminalTarget, t.TerminalCleanup = false, taskTerminalTarget{}, ""
+		t.TerminalAuthorized = false
 		// The hub's too: the scheduled round this plan comes from is the hub's to tell (scheduledRoundOf, #8045).
 		t.Schedule, t.ScheduleTitle, t.ScheduleBasis = "", "", ""
 		// Reroute is hub-owned: drop any reroute a model passes in task_plan args, so healthyPlace seeds it only from a

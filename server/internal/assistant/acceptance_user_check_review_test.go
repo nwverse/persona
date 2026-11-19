@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -81,6 +82,32 @@ func TestUserCheckAcceptsAClosedTaskInANewRound(t *testing.T) {
 	}
 	if result, err := s.acceptTry(ctx, todo.ID, a.MessageID); err != nil || !result.taken {
 		t.Fatalf("the fresh owner Pass did not complete: %+v, %v", result, err)
+	}
+}
+
+func TestUserCheckStartsNewRoundAfterTerminalCleanupWasSkipped(t *testing.T) {
+	s, f, todo := dispatchTerminalTask(t, true, true)
+	f.mu.Lock()
+	f.sessions["box"][0].Status = proto.StatusWorking
+	f.mu.Unlock()
+	result := reviewTask(t, s, todo.ID, map[string]any{"verdict": "accepted"})
+	closed := todoNow(s, todo.ID)
+	if closed.DoneAt == nil || closed.DoneBy != db.DoneByReview ||
+		!strings.Contains(result, "Terminal cleanup: skipped") {
+		t.Fatalf("the prior review did not complete while keeping the terminal: %q, %+v", result, closed)
+	}
+
+	reviewTask(t, s, todo.ID, map[string]any{"verdict": "accepted", "user_check": true})
+	got := todoNow(s, todo.ID)
+	if got.DoneAt != nil || got.Supervision.state(got) != reviewUserCheck || askOf(s, todo.ID) == nil {
+		t.Fatalf("the fresh owner check did not reopen the task: %+v", got)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, call := range f.calls {
+		if call.Method == devicewire.MethodCloseTaskTerminal {
+			t.Fatal("starting a fresh owner check attempted terminal cleanup")
+		}
 	}
 }
 
