@@ -68,13 +68,6 @@ var ProgramNames = []string{"persona-hub", "persona-manager"}
 // service can run one in personad's place, so a release without one is not always installed (internal/hub unreplaced).
 var SplitPrograms = []string{"persona-hub", "persona-manager"}
 
-// program names the program a download belongs to ("persona-manager-linux-amd64.gz" -> "persona-manager"), "" for
-// personad's own.
-func program(gz string) string {
-	prog, _ := artifactIdentity(gz)
-	return prog
-}
-
 // ancestorBytes is how much of each commit id Ancestors keeps: 6 bytes, 12 hex digits. A few KB for a thousand
 // commits; a commit that is not there matches one by chance about once in 10^10 lookups at ten thousand.
 const ancestorBytes = 6

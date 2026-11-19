@@ -31,18 +31,6 @@ func (s *Service) recordConfirmationNotification(ix proto.Interaction) {
 	}
 }
 
-func (s *Service) recordConfirmationAutoApproval(ix proto.Interaction, todoID, grantID string) {
-	st, ok := s.store().(confirmationStore)
-	if !ok {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), historyTimeout)
-	defer cancel()
-	if err := st.MarkConfirmationAutoAuthorized(ctx, ix.ID, ix.CreatedAt, time.Now(), todoID, grantID); err != nil {
-		s.logf("record automatic confirmation: %v", err)
-	}
-}
-
 type briefConfirmations struct {
 	Unknown        bool                   `json:"unknown,omitempty"`
 	Since          time.Time              `json:"since"`

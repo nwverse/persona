@@ -8,7 +8,6 @@
     <string name="inbox_ai_draft">AI下書き</string>
     <string name="inbox_ai_summary">AI要約</string>
     <string name="inbox_more">その他</string>
-    <string name="inbox_back">戻る</string>
     <string name="inbox_close">閉じる</string>
     <string name="inbox_expand">展開</string>
     <string name="inbox_collapse">折りたたむ</string>
@@ -27,7 +26,6 @@
     <string name="inbox_unfold_all">すべて展開</string>
     <string name="inbox_select_all">すべて選択</string>
     <string name="inbox_deselect_all">選択を解除</string>
-    <string name="inbox_end_selection">選択を終了</string>
     <string name="inbox_pick_group">「%1$s」をすべて選択</string>
     <string name="inbox_load_older">さらに読み込む</string>
     <string name="inbox_loading_older">読み込み中…</string>
@@ -99,7 +97,6 @@
     <string name="inbox_empty_section_text">残りは上のほかの区分にあります。</string>
     <string name="inbox_empty_done_text">対応済みにしたものがここに表示されます。</string>
     <string name="inbox_group_fyi">参考</string>
-    <string name="inbox_mark_all_seen">すべて確認</string>
     <string name="inbox_clear_all">すべてクリア</string>
     <plurals name="inbox_mark_all_in_seen">
         <item quantity="other">「%2$s」の%1$d件をすべて確認済みにする</item>

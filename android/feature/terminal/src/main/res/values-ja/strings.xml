@@ -38,8 +38,6 @@
     <string name="terminal_key_enter">Enter</string>
     <string name="terminal_key_backspace">バックスペース</string>
     <string name="terminal_copy_all">すべてコピー</string>
-    <string name="terminal_clip_label">ターミナル</string>
-    <string name="terminal_copied">コピーしました</string>
     <string name="terminal_select_empty_title">ターミナルにはまだテキストがありません</string>
     <string name="terminal_select_empty_body">ターミナルに内容が表示されてから選択してください。</string>
     <string name="terminal_screen_description">ターミナル画面</string>

@@ -317,8 +317,3 @@ func (p *pages) took(ms int64, pushed bool) string {
 func (p *pages) seconds(ms int64) string {
 	return p.t("run.seconds", i18n.Args{"s": strconv.FormatFloat(float64(ms)/1000, 'f', 1, 64)})
 }
-
-func atoi(s string) int {
-	n, _ := strconv.Atoi(s)
-	return n
-}

@@ -49,10 +49,6 @@ func (n *Node) externalRuntime(id, launcher, requested string) string {
 	return "" // ordinary conversations always follow the native CLI policy
 }
 
-func (n *Node) externalSessionRuntime(id, launcher, requested string, explicit bool) string {
-	return n.externalRuntime(id, launcher, requested)
-}
-
 // checkExternalAssistant checks execution authority, not merely catalog visibility.
 // The manager supplies this binding only for the actual main chat's persisted pick.
 func (n *Node) checkExternalAssistant(ctx context.Context, id, launcher string, execution modelExecution, spare bool) error {

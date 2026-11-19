@@ -146,13 +146,6 @@ type pushPolicy struct {
 	manager    string
 }
 
-func (p pushPolicy) levelOr(level string) pushPolicy {
-	if p.level == "" {
-		p.level = level
-	}
-	return p
-}
-
 // levelFor derives the urgency of a manager notification that named no level itself, from its kind.
 func levelFor(kind, given string) string {
 	if given != "" {

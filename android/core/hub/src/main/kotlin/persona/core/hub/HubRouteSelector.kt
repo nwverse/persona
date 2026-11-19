@@ -35,8 +35,6 @@ data class HubRoute(val endpoint: Endpoint, val health: Health) {
     companion object {
         /** How long a member that answered first waits for the center to answer too. */
         const val CENTER_GRACE_MILLIS = 1500L
-        /** How often a socket on a member asks whether the center answers again. */
-        const val CENTER_RECHECK_MILLIS = 300_000L
 
         fun centerId(config: HubConnectionConfig, members: List<HubMember>): String? =
             config.centerHubId ?: if (config.center) config.hubId else members.firstOrNull { it.center }?.hubId

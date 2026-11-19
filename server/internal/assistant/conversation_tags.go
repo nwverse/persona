@@ -64,21 +64,6 @@ func (s *Service) tagsLocked(ctx context.Context) bool {
 	return true
 }
 
-// conversationTagsSet returns the tags by conversation id (a copy of each list); false while the book could not be read.
-func (s *Service) conversationTagsSet() (map[string][]string, bool) {
-	records, ok := s.conversationTagsRecords()
-	if !ok {
-		return nil, false
-	}
-	out := make(map[string][]string, len(records))
-	for id, t := range records {
-		if len(t.Tags) > 0 {
-			out[id] = slices.Clone(t.Tags)
-		}
-	}
-	return out, true
-}
-
 // conversationTagsRecords returns the book's records by conversation id; false while it could not be read.
 func (s *Service) conversationTagsRecords() (map[string]*conversationTags, bool) {
 	b := &s.tags

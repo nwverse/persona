@@ -13,10 +13,9 @@
 // /api/v1/assistant/leaders and there are no counts.
 import { useEffect, useSyncExternalStore } from "react";
 import { api } from "./api";
-import { DIRECTION_TREE_PATH, directionTreeNow, readDirectionTreeOnce, refreshDirectionTree, resetDirectionTree, subscribeDirectionTree, type DirectionTree } from "./direction-tree";
+import { directionTreeNow, readDirectionTreeOnce, refreshDirectionTree, resetDirectionTree, subscribeDirectionTree, type DirectionTree } from "./direction-tree";
 
 export const LEADERS_PATH = "/assistant/leaders";
-export const TREE_PATH = DIRECTION_TREE_PATH;
 
 /** The tree's directions as leaders: the secretary group left out. */
 export function treeLeaders(tree: DirectionTree | undefined): LeaderInfo[] {

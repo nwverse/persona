@@ -109,28 +109,3 @@ func (s *Service) repositoryToolError(ctx context.Context, err error) error {
 	}
 	return fmt.Errorf("repository_%s: %s", code, i18n.T(s.lang(ctx), "assistant-repositories."+code))
 }
-
-func (s *Service) confirmRepositoryAdd(ctx context.Context, machine, self, tool, summary string, shown json.RawMessage, expires time.Time) (bool, string, error) {
-	if machine == "" || self == "" {
-		return false, "", errors.New("a calling conversation is required")
-	}
-	ctx, cancel := context.WithDeadline(ctx, expires)
-	defer cancel()
-	now := time.Now().UTC()
-	r, err := s.ask(ctx, proto.Interaction{ID: "ix_" + randomHex(6), MachineID: machine, SessionID: self,
-		Kind: proto.IxPermission, ToolName: tool, Summary: summary, ToolInput: shown, SessionTitle: "Persona",
-		CreatedAt: now, ExpiresAt: expires})
-	if err != nil {
-		return false, "", err
-	}
-	if err := ctx.Err(); err != nil {
-		return false, "", err
-	}
-	if r.UserAllowed() {
-		return true, "", nil
-	}
-	if r.UserDenied() {
-		return false, "The user declined the change: nothing changed.", nil
-	}
-	return false, prompts.RenderSettingUnanswered(), nil
-}

@@ -57,9 +57,6 @@ export function uploadToDir(
   return uploadWithProgress(mid, file, q, opts);
 }
 
-/** The hub feature for `dest=attachment`: a file sent with a chat message, kept on the computer (#8361). */
-export const UPLOAD_ATTACHMENT_FEATURE = "upload_attachment";
-
 /**
  * Sends `file` with a chat message to machine `mid` (docs/protocol/protocol.md "Sending files", #8361), reporting the
  * bytes sent: `dest` "attachment" keeps it beside the chat's pictures, "health" in the health space's reports, none in

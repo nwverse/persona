@@ -34,8 +34,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 
 /** Focus state shared with the outer sheet's explicit blank-tap clear signal. */
 internal class SettingsFocusRestoration {
@@ -43,20 +41,6 @@ internal class SettingsFocusRestoration {
     var hasFocus by mutableStateOf(false)
     fun clearFocus() { restoreChildFocus = false }
     fun shouldRestoreFocus(): Boolean = restoreChildFocus && !hasFocus
-}
-
-/** A centered page above the shell, with the same opaque surface and dismiss behavior as a settings sheet. */
-@Composable
-fun JPageSizedSettingsSheet(onDismiss: () -> Unit, content: @Composable () -> Unit) {
-    val restoration = remember { SettingsFocusRestoration() }
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
-        HardwareShortcutHost(Modifier.fillMaxSize(), requestFocusWhenLarge = false) {
-            Box(Modifier.fillMaxSize().hardwareShortcutDismiss(onDismiss)
-                .dismissKeyboardOnBlankTap { restoration.clearFocus() }) {
-                JSettingsPresentationFrame(SettingsPresentation.PageSized, onDismiss, restoration, content)
-            }
-        }
-    }
 }
 
 /**

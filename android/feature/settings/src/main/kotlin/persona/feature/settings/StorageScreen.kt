@@ -191,12 +191,3 @@ private fun StorageBar(sizes: Map<StorageKind, Long>?, total: Long) {
         }
     }
 }
-
-/** Settings' "Storage" row, with how much the app takes (measured each time the list shows). */
-@Composable
-internal fun StorageRow(selected: Boolean, onClick: () -> Unit) {
-    val context = LocalContext.current
-    val total by produceState<Long?>(null, context) { value = withContext(Dispatchers.IO) { StorageUsage.of(context).scan().values.sum() } }
-    JRow(stringResource(R.string.settings_row_storage), leadingIcon = PhIcons.Archive, selected = selected, onClick = onClick,
-        value = total?.let { storageText(context, it) })
-}

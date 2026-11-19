@@ -308,7 +308,6 @@ def ended_checks(browser, port, shots):
     ctx, page = fresh(browser, port, {"width": 1300, "height": 800})
     open_terminal(page, base)
     wait_text(page, "spaces", "the first client")
-    page.get_by_text("herdr client exited: 0").first.wait_for(timeout=8000) if False else None
     wait_text(page, "herdr client exited: 0", "the reason, dim, in the terminal", 8000)
     expect(page.get_by_role("button", name="重新连接", exact=True).first).to_be_visible()
     shot(page, shots, "ended-wide-light.png")

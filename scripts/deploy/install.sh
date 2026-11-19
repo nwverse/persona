@@ -272,14 +272,6 @@ warn() {
 prompt() {
 	install_format "$@" >/dev/tty
 }
-
-install_text_check() {
-	_install_old_lang=${INSTALL_LANG:-}
-	for INSTALL_LANG in en zh-Hans ja; do
-		for _install_check_key in $INSTALL_TEXT_KEYS; do install_text "$_install_check_key" >/dev/null || return 1; done
-	done
-	INSTALL_LANG=$_install_old_lang
-}
 # <<< install language
 
 INSTALL_LANG=$(install_language)

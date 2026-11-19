@@ -413,10 +413,6 @@ func doctorChecks(ctx context.Context, opts DoctorOptions) DoctorReport {
 
 const doctorDialTimeout = 3 * time.Second
 
-func checkNodeSocket(ctx context.Context, path string) DoctorCheck {
-	return checkNodeSocketIn(ctx, path, i18n.Default)
-}
-
 func checkNodeSocketIn(ctx context.Context, path string, lang i18n.Lang) DoctorCheck {
 	c := DoctorCheck{Name: "node.sock"}
 	if _, err := os.Stat(path); err != nil {
@@ -440,10 +436,6 @@ func checkNodeSocketIn(ctx context.Context, path string, lang i18n.Lang) DoctorC
 	}
 	c.Status, c.Detail = DoctorOK, i18n.T(lang, "node-doctor.node_socket_ok")
 	return c
-}
-
-func checkRuntimeSocket(ctx context.Context, path string) DoctorCheck {
-	return checkRuntimeSocketIn(ctx, path, i18n.Default)
 }
 
 func checkRuntimeSocketIn(ctx context.Context, path string, lang i18n.Lang) DoctorCheck {
@@ -687,10 +679,6 @@ func (o DoctorOptions) claudeProbe() func(context.Context) (string, bool) {
 	}
 }
 
-func checkClaudeVersion(ctx context.Context, ask func(context.Context) (string, bool)) DoctorCheck {
-	return checkClaudeVersionIn(ctx, ask, i18n.Default)
-}
-
 func checkClaudeVersionIn(ctx context.Context, ask func(context.Context) (string, bool), lang i18n.Lang) DoctorCheck {
 	c := DoctorCheck{Name: "claude-version"}
 	v, missing := "", true
@@ -715,12 +703,8 @@ func checkClaudeVersionIn(ctx context.Context, ask func(context.Context) (string
 	return c
 }
 
-// checkHerdr dials herdr's API socket. The engine is chosen by the hub when it connects and is not kept on this
+// checkHerdrIn dials herdr's API socket. The engine is chosen by the hub when it connects and is not kept on this
 // machine, so a socket that is not there is a warning: it only matters when herdr is this machine's engine.
-func checkHerdr(ctx context.Context, path string) DoctorCheck {
-	return checkHerdrIn(ctx, path, i18n.Default)
-}
-
 func checkHerdrIn(ctx context.Context, path string, lang i18n.Lang) DoctorCheck {
 	c := DoctorCheck{Name: "herdr"}
 	if path == "" {
@@ -813,12 +797,8 @@ func checkAgentSandboxIn(dir string, lang i18n.Lang) DoctorCheck {
 	return c
 }
 
-// agentSandboxLimits is what the doctor reminds of while the sandbox is on (docs/server/agent-sandbox.md): what it does not
+// agentSandboxLimitsIn is what the doctor reminds of while the sandbox is on (docs/server/agent-sandbox.md): what it does not
 // stop, which agents it does not cover, and platform-specific behavior that needs a restart or stops working.
-func agentSandboxLimits(goos string) string {
-	return agentSandboxLimitsIn(goos, i18n.Default)
-}
-
 func agentSandboxLimitsIn(goos string, lang i18n.Lang) string {
 	limits := i18n.T(lang, "node-doctor.sandbox_limits")
 	switch goos {
@@ -846,12 +826,8 @@ func agentSandboxWord(lang i18n.Lang, state string) string {
 	return i18n.T(lang, key)
 }
 
-// checkGlobalPermissionHooks looks at the user's own settings.json for synchronous PermissionRequest hooks (other
+// checkGlobalPermissionHooksIn looks at the user's own settings.json for synchronous PermissionRequest hooks (other
 // tools put them there) and says how many; it never changes the file.
-func checkGlobalPermissionHooks(configDir string) DoctorCheck {
-	return checkGlobalPermissionHooksIn(configDir, i18n.Default)
-}
-
 func checkGlobalPermissionHooksIn(configDir string, lang i18n.Lang) DoctorCheck {
 	c := DoctorCheck{Name: "global-permission-hooks", Items: []string{}}
 	b, err := os.ReadFile(filepath.Join(configDir, "settings.json"))

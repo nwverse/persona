@@ -163,7 +163,6 @@ class OkHttpHubConnection(
     private val _heartbeat = MutableStateFlow(Heartbeat(20, 15))
     val heartbeat = _heartbeat.asStateFlow()
     private val _weakNetwork = MutableStateFlow(false)
-    val weakNetwork = _weakNetwork.asStateFlow()
     private val _diagnostics = MutableStateFlow(ConnectionDiagnostics())
     override val diagnostics = _diagnostics.asStateFlow()
     /** The credential for the hub the current route reaches: its own token, else the group credential. */

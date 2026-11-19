@@ -71,8 +71,6 @@ internal val ContinuityAdapter.Input.isContent: Boolean get() = when (this) {
     is ContinuityAdapter.Input.Reload, is ContinuityAdapter.Input.Older, is ContinuityAdapter.Input.Range -> true
     else -> false
 }
-internal val ContinuityAdapter.Input.isFillResponse: Boolean get() =
-    this is ContinuityAdapter.Input.After || this is ContinuityAdapter.Input.Reload || this is ContinuityAdapter.Input.Latest
 
 /** The existing reducer and sync, without changing their rules or request gates. */
 class KotlinContinuityAdapter(private val chat: String) : ContinuityAdapter {

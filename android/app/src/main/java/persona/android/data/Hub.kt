@@ -1,13 +1,11 @@
 package persona.android.data
 
-import persona.core.contracts.ServerEvent
 import persona.core.contracts.api.ConnectionState
 import persona.core.hub.OkHttpHubConnection
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
@@ -24,7 +22,6 @@ class Hub(
 ) {
     private val mutableConnection = MutableStateFlow(ConnState.Connecting)
     val conn: StateFlow<ConnState> = mutableConnection.asStateFlow()
-    val serverEvents: SharedFlow<ServerEvent> get() = connection.events
     private var observer: Job? = null
 
     fun start() {

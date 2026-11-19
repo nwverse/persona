@@ -25,7 +25,6 @@
     <string name="knowledge_updated">更新于 %1$s</string>
     <string name="knowledge_link_unsupported">暂不支持打开这个链接</string>
     <string name="knowledge_question_default">请说说最新进展、需要我处理的事，以及接下来该做什么。</string>
-    <string name="knowledge_clip_label">项目背景</string>
     <string name="knowledge_context_copied">项目背景已复制：新建会话后粘贴为第一条消息</string>
     <string name="knowledge_context_copied_dir">项目背景已复制：新建会话后粘贴为第一条消息，目录 %1$s</string>
     <string name="knowledge_tag_action">打标</string>

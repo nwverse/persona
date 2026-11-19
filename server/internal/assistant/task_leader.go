@@ -902,14 +902,6 @@ func (s *Service) leaderResumeTime() time.Duration {
 	return leaderResumeWait
 }
 
-// leaderTaskIDOf is the task leader agent lead belongs to ("" if none).
-func (s *Service) leaderTaskIDOf(lead TodoAgent) string {
-	if t, ok := s.taskOfAny(context.Background(), lead.MachineID, lead.SessionID); ok {
-		return t.ID
-	}
-	return ""
-}
-
 // leaderRetryBackoff caps how often an undelivered worker supervision message is tried again.
 func leaderRetryBackoff(d time.Duration) time.Duration {
 	if d < 10*time.Minute {

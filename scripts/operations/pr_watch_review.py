@@ -226,8 +226,3 @@ def review(repo, pr, worktree, config):
     if len(unique) > 20:
         raise WatchError("aggregated semantic review exceeds the 20-finding publication bound")
     return list(unique.values())
-
-
-def blocking_review(repo, pr, worktree):
-    """Small real-reviewer smoke check, without any GitHub writes."""
-    return review(repo, pr, worktree, {})

@@ -201,9 +201,6 @@ class AppServices @Inject constructor(
         }
     }
 
-    /** Whether the last run was in demo mode; readable before the demo session is rebuilt. */
-    fun demoSaved(): Boolean = mode.getBoolean("demo", false)
-
     suspend fun restoreDemo() {
         app.pairingReady.first { it }
         if (mode.getBoolean("demo", false) && app.hub.value == null) enterDemo()

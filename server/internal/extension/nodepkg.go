@@ -10,7 +10,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 )
 
@@ -134,19 +133,6 @@ func (c *countWriter) Write(b []byte) (int, error) {
 // UnpackNodePackage unpacks a package NodePackage made into to, with the checks installing one has (nothing outside
 // it, no links out of it, within PackageMost).
 func UnpackNodePackage(file, to string) error { return untar(file, to) }
-
-// NodePlatforms are the platforms a manifest has programs on computers for, sorted.
-func (m *Manifest) NodePlatforms() []string {
-	if m.NodeProgram() == nil {
-		return nil
-	}
-	var out []string
-	for p := range m.Node.Command.ByPlatform {
-		out = append(out, p)
-	}
-	slices.Sort(out)
-	return out
-}
 
 // NodeRuns says whether m's program on computers can run on a machine of goos / goarch.
 func (m *Manifest) NodeRuns(goos, goarch string) bool {

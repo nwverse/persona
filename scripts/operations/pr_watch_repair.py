@@ -57,18 +57,6 @@ def failed_test_names(text):
     return sorted(names)
 
 
-def failed_go_packages(worktree, text):
-    """Map a failed package path to a local Go package for the base comparison."""
-    packages = set()
-    for line in (text or "").splitlines():
-        match = re.match(r"^FAIL\s+(\S+)(?:\s|$)", line)
-        if match and "/server/" in match.group(1):
-            suffix = match.group(1).split("/server/", 1)[1]
-            if Path(worktree, "server", suffix, "go.mod").exists() or list(Path(worktree, "server", suffix).glob("*.go")):
-                packages.add("./" + suffix)
-    return sorted(packages)
-
-
 def failure_signature(text):
     """Compare failed lane labels and specific diagnostics, not test names alone."""
     signatures = []

@@ -48,7 +48,6 @@
     <string name="agents_action_list_settings">List settings</string>
     <string name="agents_search_placeholder">Search spaces, sessions or latest messages</string>
     <string name="agents_action_search">Search</string>
-    <string name="agents_requests_title">Needs your decision</string>
     <plurals name="agents_requests_more">
         <item quantity="one">1 more</item>
         <item quantity="other">%1$d more</item>
@@ -91,7 +90,6 @@
     <string name="agents_range_running">Running</string>
     <string name="agents_range_all">All</string>
     <string name="agents_range_history">History</string>
-    <string name="agents_grouping_current">Grouping: %1$s</string>
     <string name="agents_group_by">Group By</string>
     <string name="agents_only_machine">Only %1$s</string>
     <string name="agents_only_machine_hint">Shows all machines</string>
@@ -401,14 +399,12 @@
     <string name="agents_todos_no_match">No matching to-dos</string>
     <string name="agents_todos_empty_hint">Note something to do and hand it to an agent.</string>
     <string name="agents_todos_no_match_hint">Try another keyword.</string>
-    <string name="agents_todos_open">Open</string>
     <string name="agents_todo_done_action">Done</string>
     <string name="agents_todo_delete_action">Delete</string>
     <string name="agents_todo_done_failed">Couldn\'t complete the to-do: %1$s</string>
     <string name="agents_todo_delete_failed">Couldn\'t delete the to-do: %1$s</string>
     <string name="agents_todo_state_didnt_start">Didn\'t start</string>
     <string name="agents_todo_start_failed">Couldn\'t start: %1$s</string>
-    <string name="agents_todo_in_progress">In progress</string>
     <plurals name="agents_todo_agents">
         <item quantity="one">1 agent</item>
         <item quantity="other">%1$d agents</item>

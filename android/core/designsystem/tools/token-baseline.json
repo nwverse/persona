@@ -519,9 +519,6 @@
     "android/feature/inbox/src/main/kotlin/persona/feature/inbox/InboxScreen.kt": {
       "icon": 16
     },
-    "android/feature/inbox/src/main/kotlin/persona/feature/inbox/InboxTopBar.kt": {
-      "icon": 1
-    },
     "android/feature/inbox/src/main/kotlin/persona/feature/inbox/InboxTriage.kt": {
       "icon": 2
     },

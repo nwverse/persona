@@ -44,9 +44,6 @@ fun CoreText.resolve(context: Context): String = resolve(context.resources)
 @ReadOnlyComposable
 fun CoreText.text(): String = resolve(LocalResources.current)
 
-/** The words a failure from the core modules carries, if it is one ([CoreTextFailure]). */
-val Throwable.coreText: CoreText? get() = (this as? CoreTextFailure)?.text
-
 /** String ids are positive; plural ids are negated so one `when` covers both. */
 private fun resourceOf(key: CoreText.Key): Int = when (key) {
     CoreText.Key.FleetNeedsYou -> -R.plurals.designsystem_core_fleet_needs_you

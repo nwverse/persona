@@ -17,9 +17,6 @@ import (
 // reads and writes that setting the way Settings › Extensions does (the registry's SetConfig: held to the schema, the
 // plugin restarts). The hub's own connectors (GitHub, iMessage) carry no rules yet.
 
-// triageRulesField is the plugin setting that holds a source's triage rules (docs/extensions/extensions.md "Conventional settings").
-const triageRulesField = "triage_rules"
-
 // sourceRulesSettings is one entry per plugin that declares triage_rules.
 func (h *Manager) sourceRulesSettings() []selfSetting {
 	if h.extensions == nil {
@@ -50,7 +47,7 @@ func (h *Manager) sourceRulesSettings() []selfSetting {
 }
 
 func declaresTriageRules(s *extension.Schema) bool {
-	return s != nil && slices.ContainsFunc(s.Fields, func(f extension.Field) bool { return f.Name == triageRulesField && f.Type == "string" })
+	return s != nil && slices.ContainsFunc(s.Fields, func(f extension.Field) bool { return f.Name == extension.TriageRulesField && f.Type == "string" })
 }
 
 // extensionTriageRules is the plugin's triage_rules as it gets them (its default filled in).
@@ -62,7 +59,7 @@ func (h *Manager) extensionTriageRules(id string) string {
 	var cfg map[string]json.RawMessage
 	_ = json.Unmarshal(h.extensions.reg.Config(p), &cfg)
 	var rules string
-	_ = json.Unmarshal(cfg[triageRulesField], &rules)
+	_ = json.Unmarshal(cfg[extension.TriageRulesField], &rules)
 	return strings.TrimSpace(rules)
 }
 
@@ -98,9 +95,9 @@ func (h *Manager) setExtensionTriageRules(id, title string, v json.RawMessage) (
 				}
 			}
 			if text == "" {
-				delete(cfg, triageRulesField)
+				delete(cfg, extension.TriageRulesField)
 			} else {
-				cfg[triageRulesField], _ = json.Marshal(text)
+				cfg[extension.TriageRulesField], _ = json.Marshal(text)
 			}
 			raw, _ := json.Marshal(cfg)
 			if err := h.extensions.reg.SetConfig(ctx, id, raw, "assistant"); err != nil {

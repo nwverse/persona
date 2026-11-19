@@ -251,6 +251,3 @@ export function claimSlot(evict: () => void, force = false): Slot | null {
 export function releaseSlot(s: Slot | null | undefined) {
   if (s) running.delete(s);
 }
-
-/** How many run now (tests). */
-export const runningCount = () => running.size;

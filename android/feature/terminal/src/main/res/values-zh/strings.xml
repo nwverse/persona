@@ -38,8 +38,6 @@
     <string name="terminal_key_enter">回车</string>
     <string name="terminal_key_backspace">退格</string>
     <string name="terminal_copy_all">全部拷贝</string>
-    <string name="terminal_clip_label">终端</string>
-    <string name="terminal_copied">已拷贝</string>
     <string name="terminal_select_empty_title">终端里还没有文字</string>
     <string name="terminal_select_empty_body">等终端显示内容后再来选择。</string>
     <string name="terminal_screen_description">终端画面</string>

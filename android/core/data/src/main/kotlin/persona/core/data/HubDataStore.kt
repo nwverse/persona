@@ -208,13 +208,6 @@ class HubDataStore(
         data.close()
     } }
 
-    /** Forgets a pairing: its whole scope, or with [keepData] only its credentials and route choices (the directory is a group's storage). */
-    suspend fun eraseHub(scope: HubScope, keepData: Boolean) =
-        erase(listOf(ScopeErasure(StoredScope.of(scope), if (keepData) Erase.Credentials else Erase.All)))
-
-    /** Drops a group's data scope but keeps a pairing that lives in the same directory. */
-    suspend fun eraseStorage(scope: HubScope) = erase(listOf(ScopeErasure(StoredScope.of(scope), Erase.Data)))
-
     /** Carries out a [RegistryChange]'s erasures. Scopes still in use by an open group are refused. */
     suspend fun erase(erasures: List<ScopeErasure>) = withContext(Dispatchers.IO) { lock.withLock {
         check(job.isActive) { "Hub data store is closed" }

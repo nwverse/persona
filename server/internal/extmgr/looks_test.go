@@ -1,6 +1,7 @@
 package extmgr
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -53,7 +54,7 @@ func TestExtensionLooksReported(t *testing.T) {
 			t.Fatalf("%+v", lp)
 		}
 		var id struct{ ID string }
-		_ = jsonUnmarshal(lp.Item, &id)
+		_ = json.Unmarshal(lp.Item, &id)
 		looks[id.ID] = lp.Files
 	}
 	if len(looks) != 2 || looks["aurora"] == nil || looks["pebble"] == nil {

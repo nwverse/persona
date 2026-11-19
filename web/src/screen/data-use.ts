@@ -72,8 +72,6 @@ export function budgetOf(net: Network, mobileData: MobileData | null): Budget {
   return { maxKbps: mobile ? MOBILE_KBPS : WIFI_KBPS, fps: FPS };
 }
 
-export const sameBudget = (a: Budget, b: Budget) => a.maxKbps === b.maxKbps && a.fps === b.fps && a.maxScale === b.maxScale;
-
 // The choice, kept in this browser for every computer. localStorage can throw (private mode, disabled): the page still
 // works, starting from Data Saver and asking again next time.
 const KEY = "persona.screen.mobileData";

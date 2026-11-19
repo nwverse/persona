@@ -7,7 +7,6 @@ import kotlinx.serialization.json.*
 object NativeStreamSchema {
     const val FrameBytes = 1024 * 1024
     const val RequestBytes = 64 * 1024
-    const val MaxVersion = 9007199254740991L
     private val schemas = mutableMapOf<String, JsonObject>()
     private val json = Json { ignoreUnknownKeys = false }
 

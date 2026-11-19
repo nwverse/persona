@@ -265,20 +265,6 @@ internal fun toolCategory(name: String) = when (val base = persona.core.domain.t
     }
 }
 
-@Composable
-internal fun ToolCategoryIcon(name: String) {
-    JIcon(toolCategory(name), null, size = 18.dp, tint = PersonaTheme.palette.ink2)
-}
-
-@Composable
-internal fun DiffStats(diff: ToolDiff) {
-    val palette = PersonaTheme.palette
-    Row(horizontalArrangement = Arrangement.spacedBy(6.dp.dense)) {
-        Text("+${diff.added}", color = palette.diffAdd, style = PersonaTheme.type.caption, maxLines = 1)
-        Text("−${diff.removed}", color = palette.diffDel, style = PersonaTheme.type.caption, maxLines = 1)
-    }
-}
-
 /** A line's code with the words that changed on [word] (tabs widened per piece, so the ranges still fit). */
 internal fun diffText(line: DiffLine, word: Color): AnnotatedString = buildAnnotatedString {
     for (piece in LineDiff.pieces(line.text, line.changed)) {

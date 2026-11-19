@@ -40,7 +40,6 @@
     <string name="agents_action_list_settings">列表设置</string>
     <string name="agents_search_placeholder">搜索空间、会话或最新消息</string>
     <string name="agents_action_search">搜索</string>
-    <string name="agents_requests_title">等你定</string>
     <plurals name="agents_requests_more">
         <item quantity="other">还有 %1$d 个</item>
     </plurals>
@@ -76,7 +75,6 @@
     <string name="agents_range_running">运行中</string>
     <string name="agents_range_all">全部</string>
     <string name="agents_range_history">历史</string>
-    <string name="agents_grouping_current">分组：%1$s</string>
     <string name="agents_group_by">分组方式</string>
     <string name="agents_only_machine">只看 %1$s</string>
     <string name="agents_only_machine_hint">显示全部机器</string>
@@ -379,14 +377,12 @@
     <string name="agents_todos_no_match">未找到相关待办</string>
     <string name="agents_todos_empty_hint">记下一件要做的事，把它交给 Agent 去做。</string>
     <string name="agents_todos_no_match_hint">换个关键词搜索试试。</string>
-    <string name="agents_todos_open">未完成</string>
     <string name="agents_todo_done_action">完成</string>
     <string name="agents_todo_delete_action">删除</string>
     <string name="agents_todo_done_failed">完成待办失败：%1$s</string>
     <string name="agents_todo_delete_failed">删除待办失败：%1$s</string>
     <string name="agents_todo_state_didnt_start">没开起来</string>
     <string name="agents_todo_start_failed">启动失败：%1$s</string>
-    <string name="agents_todo_in_progress">正在进行</string>
     <plurals name="agents_todo_agents">
         <item quantity="other">%1$d 个 Agent</item>
     </plurals>

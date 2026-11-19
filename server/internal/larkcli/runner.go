@@ -57,12 +57,6 @@ func New(cfg Config) *Runner {
 	return &Runner{cfg: cfg}
 }
 
-// NewRunner is a compact constructor for callers that already have the three
-// configuration values from lark.cli.
-func NewRunner(bin, profile string, timeout time.Duration) *Runner {
-	return New(Config{Bin: bin, Profile: profile, Timeout: timeout})
-}
-
 // Profile returns the configured lark-cli profile name. It contains no
 // credentials and is used only to make user-facing commands point at the same
 // profile as the runner.

@@ -2,8 +2,6 @@ package persona.feature.settings
 
 import android.content.res.Resources
 import androidx.annotation.StringRes
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.res.stringResource
 import persona.core.contracts.api.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -67,8 +65,6 @@ internal fun ConnectionCandidate.probeMeasurement(resources: Resources): String 
 }
 
 internal fun routeKind(kind: String, resources: Resources): String = routeKindRes(kind)?.let(resources::getString) ?: kind
-
-@Composable internal fun routeKindText(kind: String): String = routeKindRes(kind)?.let { stringResource(it) } ?: kind
 
 /** The rows "Connection diagnostics" shows for the last pairing attempt: a label and its value; [stepLabel] names where it stopped. */
 internal fun PairingAttempt.rows(resources: Resources, stepLabel: String? = step?.let { resources.getString(it.labelRes()) }): List<Pair<String, String?>> = listOf(

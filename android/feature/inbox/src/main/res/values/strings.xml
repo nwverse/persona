@@ -9,7 +9,6 @@
     <string name="inbox_ai_draft">AI draft</string>
     <string name="inbox_ai_summary">AI summary</string>
     <string name="inbox_more">More</string>
-    <string name="inbox_back">Back</string>
     <string name="inbox_close">Close</string>
     <string name="inbox_expand">Expand</string>
     <string name="inbox_collapse">Collapse</string>
@@ -28,7 +27,6 @@
     <string name="inbox_unfold_all">Expand all</string>
     <string name="inbox_select_all">Select all</string>
     <string name="inbox_deselect_all">Deselect all</string>
-    <string name="inbox_end_selection">End selection</string>
     <string name="inbox_pick_group">Select all in %1$s</string>
     <string name="inbox_load_older">Show older</string>
     <string name="inbox_loading_older">Loading…</string>
@@ -103,7 +101,6 @@
     <string name="inbox_empty_section_text">The rest are in the other sections above.</string>
     <string name="inbox_empty_done_text">What you mark done shows up here.</string>
     <string name="inbox_group_fyi">FYI</string>
-    <string name="inbox_mark_all_seen">Mark all seen</string>
     <string name="inbox_clear_all">Clear all</string>
     <plurals name="inbox_mark_all_in_seen">
         <item quantity="one">Mark %1$d item in “%2$s” seen</item>

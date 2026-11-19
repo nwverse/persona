@@ -7,7 +7,6 @@ import { useMemo } from "react";
 import type { AgentMutes } from "./agent-groups";
 import { stateOf } from "./format";
 import { requestHome } from "./child-sessions";
-import { useShownManager } from "./manager-choice";
 import { installedManagers, multiManager, ownerIn, useRoster, type ManagerList } from "./managers";
 import { isMuted } from "./session-actions";
 import { directoryVisibleCards, useFullAgentSessions } from "./sessions";
@@ -66,11 +65,4 @@ export function useManagerBadges(): Record<string, number> {
   const interactions = useStore((s) => directoryVisibleCards(s.interactions));
   const mutes = useStore((s) => s.mutes);
   return useMemo(() => (several ? managerBadges(roster, sessions, interactions, mutes) : NONE), [several, roster, sessions, interactions, mutes]);
-}
-
-/** Whether an assistant other than the current one has something waiting: the dot on the sidebar's avatar. */
-export function useOthersWaiting(): boolean {
-  const badges = useManagerBadges();
-  const current = useShownManager();
-  return Object.entries(badges).some(([id, n]) => id !== current && n > 0);
 }

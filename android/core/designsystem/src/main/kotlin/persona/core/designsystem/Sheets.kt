@@ -278,6 +278,3 @@ fun JDialog(
     HardwareShortcutHelp(shortcutHelpOwner)
     }
 }
-
-/** Translucent-safe colour for Material components that draw their own surfaces. */
-internal val PersonaPalette.opaqueSurface: Color get() = surfaceOpaque

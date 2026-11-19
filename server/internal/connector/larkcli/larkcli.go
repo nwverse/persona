@@ -74,12 +74,6 @@ func New(cfg adapter.Config) *Connector {
 	return c
 }
 
-// NewWithRunner is useful for unit tests and embedders that already constructed a
-// runner. The runner still executes the real configured subprocess.
-func NewWithRunner(r *adapter.Runner) *Connector {
-	return &Connector{runner: r, docs: newDocumentInbox(), profile: r.Profile(), inboxPoll: inboxPollDefault, inboxPageLimit: inboxPageLimit}
-}
-
 func (c *Connector) ID() string   { return ID }
 func (c *Connector) Name() string { return Name }
 

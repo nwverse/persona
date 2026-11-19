@@ -99,9 +99,6 @@ internal object FilesPaths {
     fun extension(name: String): String = name.substringAfterLast('.', "").lowercase(Locale.ROOT)
 
     fun isMarkdown(name: String) = extension(name) in setOf("md", "markdown", "mdx")
-
-    /** [s] cut from the start to at most [max] characters ("…/b/c"): a path keeps its informative end. */
-    fun keepEnd(s: String, max: Int = 48): String = if (s.length <= max) s else "…" + s.takeLast(max - 1)
 }
 
 /** 1023 B, 1.5 KB, 12 MB (binary units, one decimal under 10), the number in [locale]'s digits and decimal mark. */

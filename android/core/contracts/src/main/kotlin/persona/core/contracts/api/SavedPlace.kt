@@ -22,7 +22,6 @@ data class SavedPlace(
 ) {
     companion object {
         const val DEFAULT_RADIUS = 150
-        val RADIUS_RANGE = 100..2000
         /** Reminder-radius choices in the editor, in meters (same as iOS). */
         val PRESET_RADII = listOf(100, 150, 300, 500, 1000, 2000)
     }

@@ -7,9 +7,6 @@ import kotlinx.coroutines.flow.flowOf
 /** A signed-in device adds a computer: `POST /api/v1/auth/pair-codes {"add"}` (docs/protocol/protocol.md "Computer pairing codes"). */
 const val MachinesAddFeature = "machines_add"
 
-/** Machines carry `trust` / `error_code` and take `…/confirm` / `…/reject` (docs/protocol/protocol.md "Computer trust"). */
-const val MachineTrustFeature = "machine_trust"
-
 /** The systems "Add computer" has instructions for; the hub takes the same words (`add.os`). */
 enum class ComputerOs(val wire: String) {
     Mac("mac"), Linux("linux"), Windows("windows");

@@ -613,8 +613,6 @@ class TasksStore(
         if (current.any { it.kind == "task" || it.kind == "receipt" }) reloadTodos()
     }
 
-    fun tasksOf(conversation: String): List<Todo> = _todos.value.filter { it.origin == conversation }
-
     /** The task's agents among [sessions], and its state. */
     fun agentsOf(todo: Todo, sessions: List<Session>): List<Session> =
         todo.activeAgents.filter { it.dismissedAt == null && it.machineId.isNotBlank() && it.sessionId.isNotBlank() }.map { a ->

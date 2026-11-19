@@ -552,11 +552,6 @@ func (s *Service) withMachineKeys(keys []machineKey, name string, in, refs map[s
 	return out, true, nil
 }
 
-// withoutMachineKeys is keys without provider name's.
-func withoutMachineKeys(keys []machineKey, name string) []machineKey {
-	return slices.DeleteFunc(slices.Clone(keys), func(k machineKey) bool { return k.Launcher == name })
-}
-
 // purposeScopeStatus is Model configuration's word for a launcher purpose bound to machine whose provider is out of
 // that computer's scope ("" when it is not).
 func (s *Service) purposeScopeStatus(ctx context.Context, lang i18n.Lang, provider, machine string) string {

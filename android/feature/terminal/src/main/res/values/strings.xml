@@ -39,8 +39,6 @@
     <string name="terminal_key_enter">Enter</string>
     <string name="terminal_key_backspace">Backspace</string>
     <string name="terminal_copy_all">Copy all</string>
-    <string name="terminal_clip_label">Terminal</string>
-    <string name="terminal_copied">Copied</string>
     <string name="terminal_select_empty_title">No text in the terminal yet</string>
     <string name="terminal_select_empty_body">Come back once the terminal shows something.</string>
     <string name="terminal_screen_description">Terminal screen</string>

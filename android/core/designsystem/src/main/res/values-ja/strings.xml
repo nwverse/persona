@@ -80,7 +80,6 @@
     <string name="designsystem_line_answering">選択を送信中…</string>
     <string name="designsystem_message_sending">送信中</string>
     <string name="designsystem_message_processing">処理中</string>
-    <string name="designsystem_line_sending">送信中…</string>
     <string name="designsystem_line_unconfirmed">前回の操作の結果は未確認です</string>
     <plurals name="designsystem_line_needs_you_count">
         <item quantity="other">要対応%1$d件</item>

@@ -9,9 +9,7 @@ import persona.core.domain.ContinuitySync.Action
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.json.*
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -109,7 +107,6 @@ class HubChatRepository(
 
     private val entries = LinkedHashMap<SessionKey, Entry>(64, 0.75f, true)
     private val images = ImageBytesCache()
-    private val backgroundSlots = Semaphore(3)
     private var closes = 0L
 
     init {

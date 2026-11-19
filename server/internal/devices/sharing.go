@@ -714,16 +714,5 @@ func (d *Devices) finishShareCall(ctx context.Context, p devicewire.NodeCall, id
 	_ = d.shareDB().SettleShareSubmission(c, id, p.MachineID, session, state)
 }
 
-// Sorted IDs make synthetic acceptance output reproducible without ever printing
-// capabilities. All readable content is prepared Postgres data, not live Item DTOs.
-func shareSortedIDs(m map[string]bool) []string {
-	out := make([]string, 0, len(m))
-	for id := range m {
-		out = append(out, id)
-	}
-	sort.Strings(out)
-	return out
-}
-
 var _ = pgx.ErrNoRows
 var _ = base64.RawURLEncoding

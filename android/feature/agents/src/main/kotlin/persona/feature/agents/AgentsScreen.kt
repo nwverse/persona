@@ -1018,9 +1018,6 @@ private fun ConnectionNotice(state: ConnectionState, onSettings: () -> Unit) {
     } else Text(stringResource(R.string.agents_connection_cached), Modifier.padding(vertical = 8.dp.dense), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3)
 }
 
-@Composable
-internal fun SectionTitle(text: String) { JSectionHeader(text) }
-
 /**
  * A session row of the tree and the space page. [located] rows sit outside the computer tree, so they say which
  * computer and space they run in; rows under a space do not repeat it. On Glass the row is iOS's Avatar row (#4338 A9):
@@ -1322,10 +1319,6 @@ internal fun AgentSession.rowStatus(muted: Boolean): Status = if ((asksYou || sh
  */
 @Composable
 internal fun AgentSession.rowStatusText(muted: Boolean): String? = rowStateWord(muted)?.text()
-@Composable
-internal fun StateDot(state: AgentState, breathe: Boolean = false) {
-    JStatusMark(state.designStatus, animated = breathe)
-}
 
 /** The space shown for each group heading: the herdr space itself, or the one space a repository's sessions are all in. */
 internal fun spacesByGroup(list: AgentListResult, grouping: AgentGrouping, spaces: List<AgentSpace>): Map<String, AgentSpace> =

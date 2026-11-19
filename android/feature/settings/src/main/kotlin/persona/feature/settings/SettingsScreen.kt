@@ -124,8 +124,6 @@ private fun SettingsContent(
     }
     val desktops = services.desktops?.collectAsState()?.value.orEmpty()
     val context = LocalContext.current
-    // Read here: the settings list below is a LazyColumn builder, where composition locals cannot be read.
-    val appStyleStore = LocalAppStyleStore.current
     val scope = rememberCoroutineScope()
     val connection by services.connection.state.collectAsState()
     LaunchedEffect(knowledgeAvailability, page, connection, assistant.id) {

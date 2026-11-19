@@ -31,9 +31,6 @@ data class SshRoute(
     /** `user@host` (`:port` when not 22), what lists show. */
     val label: String get() = "${user.trim()}@${host.trim()}" + if (port == 22) "" else ":$port"
 
-    /** Another server needs its key confirmed again. */
-    fun sameServer(other: SshRoute): Boolean = host.trim() == other.host.trim() && port == other.port
-
     companion object {
         const val DEFAULT_TARGET_HOST = "127.0.0.1"
         const val DEFAULT_TARGET_PORT = 18660

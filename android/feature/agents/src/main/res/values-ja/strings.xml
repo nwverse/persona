@@ -40,7 +40,6 @@
     <string name="agents_action_list_settings">リスト設定</string>
     <string name="agents_search_placeholder">スペース、セッション、最新メッセージを検索</string>
     <string name="agents_action_search">検索</string>
-    <string name="agents_requests_title">判断待ち</string>
     <plurals name="agents_requests_more">
         <item quantity="other">ほか%1$d件</item>
     </plurals>
@@ -76,7 +75,6 @@
     <string name="agents_range_running">実行中</string>
     <string name="agents_range_all">すべて</string>
     <string name="agents_range_history">履歴</string>
-    <string name="agents_grouping_current">グループ化：%1$s</string>
     <string name="agents_group_by">グループ</string>
     <string name="agents_only_machine">%1$sのみ表示</string>
     <string name="agents_only_machine_hint">すべてのマシンを表示</string>
@@ -379,14 +377,12 @@
     <string name="agents_todos_no_match">一致するToDoはありません</string>
     <string name="agents_todos_empty_hint">やることを書き留めて、エージェントに任せましょう。</string>
     <string name="agents_todos_no_match_hint">別のキーワードで検索してください。</string>
-    <string name="agents_todos_open">未完了</string>
     <string name="agents_todo_done_action">完了</string>
     <string name="agents_todo_delete_action">削除</string>
     <string name="agents_todo_done_failed">ToDoを完了できませんでした：%1$s</string>
     <string name="agents_todo_delete_failed">ToDoを削除できませんでした：%1$s</string>
     <string name="agents_todo_state_didnt_start">起動失敗</string>
     <string name="agents_todo_start_failed">起動できませんでした：%1$s</string>
-    <string name="agents_todo_in_progress">進行中</string>
     <plurals name="agents_todo_agents">
         <item quantity="other">エージェント%1$d個</item>
     </plurals>

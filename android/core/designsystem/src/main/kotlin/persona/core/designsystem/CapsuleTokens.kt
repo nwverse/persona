@@ -26,7 +26,6 @@ object CapsuleTokens {
     val smallGap = 4.dp
     val border = 1.dp
     val elevation = 6.dp
-    val messageHeight = 148.dp
     val inputMaxHeight = 80.dp
     val zero = 0.dp
     val headerHeight = 51.dp

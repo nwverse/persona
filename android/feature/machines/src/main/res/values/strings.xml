@@ -4,7 +4,6 @@
     <!-- Lists -->
     <string name="machines_title">Machines</string>
     <string name="machines_title_detail">Machine details</string>
-    <string name="machines_summary">%1$d of %2$d online · %3$d needing attention</string>
     <string name="machines_summary_with_agents">%1$d of %2$d online · %3$s · %4$s</string>
     <plurals name="machines_attention">
         <item quantity="one">%d needing attention</item>

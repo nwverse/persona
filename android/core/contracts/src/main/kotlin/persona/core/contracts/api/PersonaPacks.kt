@@ -111,10 +111,7 @@ data class PersonaManifest(
     val source: Source? = null,
 ) {
     /** `colors.light` / `colors.dark`: `accent`, `bubble`, `bubble_text`, `primary`, `secondary` (each optional). */
-    @Serializable data class Colors(val light: Map<String, String> = emptyMap(), val dark: Map<String, String> = emptyMap()) {
-        /** Brings an accent in both appearances: the only colours "Follow persona" lays over the style. */
-        val hasAccent: Boolean get() = "accent" in light || "accent" in dark
-    }
+    @Serializable data class Colors(val light: Map<String, String> = emptyMap(), val dark: Map<String, String> = emptyMap())
     /** PNGs by side; [dark]: the same for dark mode (an SVG is the web's, not read here). */
     @Serializable data class Avatar(val sizes: Map<String, String>, val dark: Dark? = null)
     @Serializable data class Dark(val sizes: Map<String, String> = emptyMap())

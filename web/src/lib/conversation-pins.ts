@@ -1,7 +1,6 @@
 // Pinned Persona conversations (the iOS sidebar's "Pinned", `assistant.pinned`; Android's drawer): kept per browser, as the
 // app keeps them per device. The main conversation is always first and is never in the list. The newest pin comes first.
 // The hub's leader conversations are pinned on every browser, ahead of these (pinOrder).
-import { useSyncExternalStore } from "react";
 import { isAutoConversation } from "./conversation-origins";
 import { firstAndCurrent } from "./persona-nav";
 import { toggled } from "./pins";
@@ -9,7 +8,6 @@ import type { Session } from "./types";
 import { byTime } from "./times";
 
 const KEY = "assistant.pinned";
-const listeners = new Set<() => void>();
 let cached: { raw: string | null; ids: string[] } = { raw: null, ids: [] };
 
 /** The stored ids (an unreadable or broken value is none). */
@@ -41,7 +39,6 @@ function save(ids: string[]) {
   } catch {
     // storage blocked: the pin lasts until the page reloads at most
   }
-  listeners.forEach((l) => l());
 }
 
 /** Pins `sid` (first), or takes its pin back. */
@@ -51,22 +48,6 @@ export function togglePinnedConversation(sid: string) {
 
 export function unpinAllConversations() {
   save([]);
-}
-
-if (typeof window !== "undefined") {
-  // another tab pinned one
-  window.addEventListener("storage", (e) => {
-    if (e.key === KEY || e.key === null) listeners.forEach((l) => l());
-  });
-}
-
-const subscribe = (l: () => void) => {
-  listeners.add(l);
-  return () => void listeners.delete(l);
-};
-
-export function usePinnedConversations(): string[] {
-  return useSyncExternalStore(subscribe, getPinnedConversations, () => cached.ids);
 }
 
 /** The order of the sidebar's pinned Persona chats: the leader conversations first (the hub's `assistant.leaders`, the
