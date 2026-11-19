@@ -459,16 +459,29 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 		if err := s.putSupervisionInstructions(ctx, device, id, p); err != nil {
 			return err
 		}
-		if method == DeviceSessionSend {
-			// Inbox continuations use session.send, not assistant.send's SendParams. Re-attest the manager's persisted
-			// origin on this real path too; caller input can neither downgrade an Inbox conversation nor invent one.
-			delete(p, "origin")
-			if s.isInboxModelCall(ctx, device, id, "") {
-				p["origin"] = OriginInbox
+		if method == DeviceAssistantSend || method == DeviceSessionSend {
+			// Initial assistant.send starts do not pass through SendParams, and Inbox continuations use session.send.
+			// Attest the explicit ordinary/unknown decision on every manager-owned node send.
+			newConversation := method == DeviceAssistantSend && id == ""
+			startOrigin := ""
+			if newConversation {
+				startOrigin, _ = p["origin"].(string)
+			} else {
+				delete(p, "origin") // an existing conversation trusts only the manager's origin book
 			}
-			cfg := s.settings(ctx)
-			if id != "" && id == cfg.Main && device == cfg.mainRouteMachine() {
-				p["is_main"] = true // internal sends must not restart main on ordinary-chat compaction settings
+			origin, originKnown := s.managerOriginDecision(ctx, device, id, startOrigin, newConversation)
+			delete(p, "origin_known")
+			if originKnown {
+				p["origin_known"] = true
+			}
+			if origin != "" {
+				p["origin"] = origin
+			}
+			if method == DeviceSessionSend {
+				cfg := s.settings(ctx)
+				if id != "" && id == cfg.Main && device == cfg.mainRouteMachine() {
+					p["is_main"] = true // internal sends must not restart main on ordinary-chat compaction settings
+				}
 			}
 		}
 	}

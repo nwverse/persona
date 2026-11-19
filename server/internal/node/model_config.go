@@ -47,6 +47,12 @@ type modelExecution struct {
 	// Origin is the conversation's manager-recorded source. It is authorization metadata, not a model choice, so it
 	// never changes the execution fingerprint; the node carries it into session state and model tool calls.
 	Origin string `json:"-"`
+	// OriginKnown distinguishes a manager's explicit ordinary (empty-origin) decision from a pre-upgrade record whose
+	// origin is unknown. It is likewise authorization metadata and never changes the execution fingerprint.
+	OriginKnown bool `json:"-"`
+	// OriginDecisionRequired marks the RPC and autonomous-resume entries that must fail closed on a legacy unknown
+	// origin. Trusted in-process model plumbing may carry an existing execution without setting this per-entry gate.
+	OriginDecisionRequired bool `json:"-"`
 	// Interject: a message this one carries, sent while the conversation answers, moves its foreground work to the
 	// background (assistant_interject.go). Per message, never part of the fingerprint.
 	Interject bool `json:"-"`
@@ -114,11 +120,17 @@ func (m modelExecution) withSupervision(policy *string) modelExecution {
 }
 
 // assistantModel is the launcher and model the hub runs conversation id's next message on (as a message from the phone
-// would be), for a message the node sends it by itself (recoverAssistantTasks). Started on the model it last ran, the
-// conversation's next message from the phone would need another process (#1554). Nothing when the hub can't say (an
-// older hub): the conversation's own then. The manager also re-attests origin here, so a pre-upgrade node session
-// with no persisted origin still recovers under its Inbox policy.
+// would be), for a message the node sends it by itself. Started on the model it last ran, the conversation's next message
+// from the phone would need another process (#1554). Nothing when the hub can't say (an older hub): the conversation's own.
 func (n *Node) assistantModel(ctx context.Context, id string) (string, modelExecution) {
+	launcher, execution, _ := n.assistantModelDecision(ctx, id)
+	return launcher, execution
+}
+
+// assistantModelDecision also re-attests origin for background-task recovery. Its boolean says whether the hub answered
+// at all. Only the manager's explicit origin_known attests an ordinary empty origin: a successful empty response, an older
+// hub and an unavailable answer all leave a pre-upgrade record unknown and must not start it with ordinary tools.
+func (n *Node) assistantModelDecision(ctx context.Context, id string) (string, modelExecution, bool) {
 	var res struct {
 		Launcher                string                   `json:"launcher"`
 		Model                   string                   `json:"model"`
@@ -129,11 +141,12 @@ func (n *Node) assistantModel(ctx context.Context, id string) (string, modelExec
 		MainCompact             int                      `json:"main_compact_window"`
 		External                *proto.ExternalExecution `json:"external"`
 		Origin                  string                   `json:"origin"`
+		OriginKnown             bool                     `json:"origin_known"`
 		SupervisionInstructions *string                  `json:"supervision_instructions"`
 		ClaudeInteractive       bool                     `json:"claude_interactive"` // #10058: a send's own flag, here for starts no send makes
 	}
 	if n.peer == nil || n.peer.Call(ctx, "assistant.model", map[string]any{"session_id": id}, &res) != nil {
-		return "", modelExecution{}
+		return "", modelExecution{}, false
 	}
-	return res.Launcher, (modelExecution{Model: res.Model, Effort: res.Effort, UseEffort: res.ModelFingerprint != "", Fingerprint: res.ModelFingerprint, Runtime: n.externalRuntime(id, res.Launcher, res.Runtime), IsMain: res.IsMain, MainCompactWindow: res.MainCompact, External: res.External, Origin: res.Origin, Interactive: res.ClaudeInteractive}).withSupervision(res.SupervisionInstructions)
+	return res.Launcher, (modelExecution{Model: res.Model, Effort: res.Effort, UseEffort: res.ModelFingerprint != "", Fingerprint: res.ModelFingerprint, Runtime: n.externalRuntime(id, res.Launcher, res.Runtime), IsMain: res.IsMain, MainCompactWindow: res.MainCompact, External: res.External, Origin: res.Origin, OriginKnown: res.OriginKnown, Interactive: res.ClaudeInteractive}).withSupervision(res.SupervisionInstructions), true
 }

@@ -69,6 +69,8 @@ const assistantBuiltinTools = "Bash,Read,Write,Edit,Monitor,Skill,Agent,ListAgen
 // cross-Agent resume or message. Inbox handling keeps the investigation tools but must finish through inbox_suggest.
 const assistantInboxBuiltinTools = "Bash,Read,Write,Edit,Monitor,Skill,Agent,ListAgents,TaskStop,WebFetch,WebSearch,ToolSearch"
 
+var errAssistantOriginUnknown = errors.New("manager origin attestation unavailable; resume refused")
+
 type assistantProc struct {
 	id       string
 	agent    string // "claude" (stream-json) or "codex" (app-server, assistant_codex.go)
@@ -407,9 +409,15 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			n.state.put(id, st)
 		}
 	}
-	origin := executionOption(options).Origin
-	if origin == "" {
+	requestedOrigin := executionOption(options)
+	origin, originKnown := requestedOrigin.Origin, requestedOrigin.OriginKnown || st.OriginKnown || !resume
+	if !requestedOrigin.OriginKnown && origin == "" {
 		origin = st.Origin
+	}
+	if resume && requestedOrigin.OriginDecisionRequired && !originKnown && guest == nil {
+		// A pre-upgrade record has no ordinary-origin decision. Neither an older manager's send nor a non-empty caller
+		// origin proves one; wait for the new manager's explicit origin_known instead of starting ordinary built-ins.
+		return "", errAssistantOriginUnknown
 	}
 	if mode == "" && guest == nil {
 		mode = st.AppMode
@@ -439,6 +447,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	}
 	execution := executionOption(options)
 	execution.Origin = origin
+	// A new conversation has no legacy origin to recover. A resumed one gets here only with the manager's explicit
+	// decision or a previously persisted one; internal sends retain the decision already in session state.
+	execution.OriginKnown = originKnown
 	// An agent runtime's launcher, or a conversation one runs (assistant_runtime.go): it keeps its model; the node
 	// keeps the conversation's state, snapshot, mode and memory.
 	rl := launcherOr(launcher, st.Launcher)
@@ -735,6 +746,10 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			}
 		}
 	}
+	// Model recovery or adoption of an existing process may have replaced execution above. Carry the manager's origin
+	// decision through that replacement before tool selection and persistence, including an explicitly ordinary empty origin.
+	execution.Origin = origin
+	execution.OriginKnown = originKnown || execution.OriginKnown
 	if startTier == "" {
 		n.noteModes(id, mode, effort) // the ordinary start keeps its original ordering
 	}
@@ -755,7 +770,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		}
 		n.noteModes(id, mode, effort)
 	}
-	if st, known := n.state.get(id); !known || st.Launcher != launcher || st.Cwd != cwd || st.Model != execution.Model || st.ModelFingerprint != execution.Fingerprint || st.ModelEffort != execution.Effort || st.Origin != origin || st.IsMain != execution.IsMain || st.MainCompactWindow != execution.MainCompactWindow || st.ConfigDir != execution.ConfigDir || st.FollowsSetting != execution.FollowsSetting || st.SupervisionInstructions != execution.SupervisionInstructions || !resume && !hasInput {
+	if st, known := n.state.get(id); !known || st.Launcher != launcher || st.Cwd != cwd || st.Model != execution.Model || st.ModelFingerprint != execution.Fingerprint || st.ModelEffort != execution.Effort || st.Origin != origin || st.OriginKnown != execution.OriginKnown || st.IsMain != execution.IsMain || st.MainCompactWindow != execution.MainCompactWindow || st.ConfigDir != execution.ConfigDir || st.FollowsSetting != execution.FollowsSetting || st.SupervisionInstructions != execution.SupervisionInstructions || !resume && !hasInput {
 		started := st.StartedAt
 		if started.IsZero() {
 			started = time.Now().UTC()
@@ -763,6 +778,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		st.Launcher, st.Cwd, st.StartedAt = launcher, cwd, started
 		st.Model, st.ModelFingerprint, st.ModelEffort = execution.Model, execution.Fingerprint, execution.Effort
 		st.Origin = origin
+		st.OriginKnown = execution.OriginKnown
 		st.IsMain, st.MainCompactWindow = execution.IsMain, execution.MainCompactWindow
 		st.SupervisionInstructions = execution.SupervisionInstructions
 		st.FollowsSetting = execution.FollowsSetting

@@ -49,6 +49,25 @@ func (s *Service) isInboxModelCall(ctx context.Context, machine, session, origin
 	return o != nil && o.Origin == OriginInbox && (o.MachineID == "" || s.sameMachine(machine, o.MachineID))
 }
 
+// managerOriginDecision returns the only origin attestation a node may trust. A new conversation carries the manager's
+// own start origin; an existing one requires a successful origin-book read. A store error is unknown, never ordinary.
+func (s *Service) managerOriginDecision(ctx context.Context, machine, session, startOrigin string, newConversation bool) (string, bool) {
+	if newConversation {
+		return startOrigin, true
+	}
+	b := &s.origins
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !s.originsLocked(ctx) {
+		return "", false
+	}
+	o := b.m[session]
+	if o != nil && o.Origin == OriginInbox && (o.MachineID == "" || s.sameMachine(machine, o.MachineID)) {
+		return OriginInbox, true
+	}
+	return "", true
+}
+
 // inboxModelRefusal applies only to model/node tool entry points, never runTool. Owner-confirmed reply, Agent and to-do
 // execution deliberately takes the latter path as the owner's action.
 func (s *Service) inboxModelRefusal(ctx context.Context, machine, session, originHint, name string) (proto.ToolResult, bool) {
