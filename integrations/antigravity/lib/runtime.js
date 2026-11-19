@@ -1237,7 +1237,7 @@ export function createAgyRuntime(options = {}) {
     if (activeTurns.has(pid) || rewinding.has(pid) || cancelling.has(rawId) || !sessionCwds.has(rawId)) return undefined
     const now = Date.now()
     let turn = autonomousTurns.get(pid)
-    const missed = missedWake(rawId, now) ?? turn?.observedMissed
+    const missed = missedWake(rawId, now)
     if (toolCallId && missed?.toolIds.includes(toolCallId)) {
       missed.skip--
       missed.toolIds = []
@@ -1266,7 +1266,11 @@ export function createAgyRuntime(options = {}) {
     if (permissionAsks.get(rawId)?.size) return
     const now = Date.now()
     const missed = missedWake(rawId, now)
-    const cursor = missed ?? (turn.observedMissed?.skip ? turn.observedMissed : turn.wakeCursor)
+    if (!missed && turn.observedMissed?.skip && turn.observedMissed.observed) {
+      const { after } = turn.observedMissed.observed
+      turn.observedMissed = { after, skip: 0, observed: { after, remaining: 0 } }
+    }
+    const cursor = missed ?? (turn.observedMissed?.observed ? turn.observedMissed : turn.wakeCursor)
     const native = readConversationStates().get(rawId)
     if (native && !nativeWorking(native) && native.step_count > turn.exportedBaseMax) {
       const { steps } = exportedTranscriptOf(rawId)
@@ -1285,7 +1289,7 @@ export function createAgyRuntime(options = {}) {
           turn.observedMissed = cursor
           return false
         })
-        if ((wake >= 0 || (!skip && !pending)) && autonomousExported(turn, steps.slice(Math.max(first, wake + 1)))) {
+        if ((wake >= 0 || (!skip && !pending && !cursor.observed)) && autonomousExported(turn, steps.slice(Math.max(first, wake + 1)))) {
           missedWakes.delete(rawId)
           retireAutonomousTurn(rawId)
           return

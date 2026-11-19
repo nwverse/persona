@@ -401,6 +401,34 @@ for (const exportSettleTimeoutMs of [450, 1100]) {
   })
 }
 
+test('a live wake discards only unobserved missed boundaries on expiry', async (t) => {
+  const exportSettleTimeoutMs = 1100
+  const { node, directory, chunk, runtime } = await fixture(t, { autonomousIdleMs: 800, exportPollMs: 20, exportSettleTimeoutMs })
+  const reply = 'Workflow finished.'
+  const retired = () => runtime.idle() && node.last('session.delta')?.text === ''
+
+  await chunk(reply)
+  await until('the first wake times out', retired)
+  await chunk(reply)
+  await until('the ephemeral second wake times out', retired)
+  const expiresAt = Date.now() + exportSettleTimeoutMs
+
+  await chunk(reply)
+  const first = [{ step_index: 0, type: 'SYSTEM_MESSAGE' }, replyStep(1, reply)]
+  transcripts(directory, first, first)
+  nativeState(directory, 'IDLE', first.length)
+  await new Promise((resolve) => setTimeout(resolve, 550))
+  await chunk(' ', `${reply} `)
+  await new Promise((resolve) => setTimeout(resolve, Math.max(0, expiresAt - Date.now() + 50)))
+  assert.equal(runtime.idle(), false, 'expiry cannot reassign the first wake export')
+  await chunk(' ', `${reply}  `)
+
+  const complete = [...first, { step_index: 2, type: 'SYSTEM_MESSAGE' }, replyStep(3, reply)]
+  transcripts(directory, complete, complete)
+  nativeState(directory, 'IDLE', complete.length)
+  await until('the third wake settles without an export for the second wake', retired, 350)
+})
+
 test('unknown and archived sessions cannot start autonomous work', async (t) => {
   const { node, update, chunk, runtime } = await fixture(t)
   const unknown = '66666666-2222-4333-8444-555555555555'
