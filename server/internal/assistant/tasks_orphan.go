@@ -76,8 +76,8 @@ func agentGone(a orphanAgent, now time.Time) string {
 		return "" // a card waits for the user, or input waits to go in
 	case wakePending(c) || usageLimitWaiting(c, now):
 		return "" // the manager wakes or continues it
-	case c.TurnError != "":
-		return orphanError
+	case c.TurnError != "" && !proto.SilentTurnKind(c.TurnErrorKind):
+		return orphanError // not the hub's word on a turn with no output, which no error ended (silent_turns.go)
 	}
 	return orphanClosed
 }

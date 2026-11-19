@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantskills"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
@@ -30,6 +31,7 @@ import (
 	"github.com/nwverse/persona/server/internal/node/machdiag"
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/nodeupdate"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/quota"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -39,6 +41,13 @@ import (
 )
 
 type Node struct {
+	runtimeUsage runtimeUsageReports
+
+	// The assistant's one memory (memory_merge.go), both under memoryMu: per project key, the other profiles' notes
+	// already merged, and when a merge that failed is tried again.
+	memoryMerged     map[string]map[string]bool
+	memoryMergeRetry map[string]time.Time
+
 	memoryMu     sync.Mutex
 	Version      string
 	skillImports assistantskills.Importer
@@ -70,6 +79,8 @@ type Node struct {
 	// input box, in place of claudeStartWait and claudeReadyWait (tests; claudeready.go). readyPoll replaces only
 	// the Claude/Codex polling interval for scripted hosts; the normal interval remains 500 ms.
 	claudeStart, claudeReady, readyPoll time.Duration
+	// idleCompactWait shortens only the unattended delivery wait in tests, not the running compaction.
+	idleCompactWait time.Duration
 	// shellSettle, shellQuiet, shellAsk: when set, how long a start waits at most for a new tab's shell to settle, how
 	// long its screen must stay the same, and how long a startup question may stay on screen, in place of
 	// shellSettleWait, shellQuietFor and shellQuestionWait (tests; shellsettle.go).
@@ -241,7 +252,8 @@ type Node struct {
 	runtimeSock string
 	// runtimeHost: the runtime socket this Node lists runtimes from — the resident node's, shared by its Nodes
 	// (attach.go), or its own for the one connection it serves (runtimehost.go).
-	runtimeHost *RuntimeHost
+	runtimeHost    *RuntimeHost
+	autoCompanions bool
 	// keeper: a resident node's conversations between hub connections (assistant_keep.go); nil without one.
 	keeper *assistantKeeper
 	// replayed is closed once what standby took while no manager was connected went to this one (spool_replay.go): new
@@ -273,6 +285,7 @@ type Node struct {
 	// terminals opened for Agents on engines without marks of their own (finished_close.go); n.mu.
 	finishedSince map[string]finishedClock
 	agentTerms    map[string]bool
+	agentRoots    map[string]bool // first shells of Agent worktrees on engines without tokens (personatab.go)
 
 	expectedTokensMu sync.Mutex
 	expectedTokens   map[string]map[string]string
@@ -357,9 +370,18 @@ func New(version string) (*Node, error) {
 	if err != nil {
 		return nil, err
 	}
-	// ssh sessions get a minimal PATH; herdr and claude usually live in ~/.local/bin.
+	// ssh sessions get a minimal PATH; herdr and claude usually live in ~/.local/bin. Tools a version manager installs
+	// (git-lfs through mise, #10127) come after the rest (toolpath.go).
+	// A later hub connection of a resident node starts from the PATH the last New made, without hub.json's directories
+	// (withoutExtraPath): those already lead with these, and the configure that follows puts hub.json's back.
 	extra := []string{filepath.Join(home, ".local/bin"), filepath.Join(home, "bin"), filepath.Join(home, "go/bin"), "/opt/homebrew/bin", "/usr/local/bin", "/usr/local/go/bin"}
-	os.Setenv("PATH", strings.Join(append(extra, os.Getenv("PATH")), string(os.PathListSeparator)))
+	path, resident := withoutExtraPath(os.Getenv("PATH"))
+	if !resident {
+		path = strings.Join(append(extra, path), string(os.PathListSeparator))
+	}
+	path = withDirsAfter(path, versionManagerShims(home, os.Getenv))
+	os.Setenv("PATH", path)
+	resetExtraPath(path)
 	dir, err := identity.PrepareHome(home)
 	if err != nil {
 		return nil, err
@@ -431,6 +453,7 @@ func New(version string) (*Node, error) {
 
 // ServeStdio runs the node protocol on stdin/stdout until the hub disconnects.
 func (n *Node) ServeStdio(ctx context.Context) error {
+	n.autoCompanions = true
 	return n.Serve(ctx, os.Stdin, os.Stdout)
 }
 
@@ -445,12 +468,15 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 	if err := n.writeClaudeConfig(); err != nil {
 		n.logger.Printf("write claude config: %v", err)
 	}
-	// What the node sends hides the values handed to Agent starts (secretenv.go): the innermost writer, so every line.
-	w = scrubWriter{w: w, s: n.handoffs().scrub}
-	if n.updater != nil {
-		w = &updateResponseWriter{Writer: w, responseWritten: n.updater.ResponseWritten}
-	}
 	n.peer = rpc.New("n", w)
+	// What the node sends hides the values handed to Agent starts (secretenv.go): every line, as it goes out.
+	n.peer.LineFilter = n.handoffs().scrub.filter
+	if n.updater != nil {
+		n.peer.LineWritten = updateResponseWritten(n.updater.ResponseWritten)
+	}
+	// A manager that knows lanes asks for them after node.info (docs/protocol/protocol.md "Lanes"): pongs and answers
+	// then pass file chunks and updates on the way.
+	n.peer.EnableLanes(nodeproto.ControlLane, nodeproto.BulkLane)
 	if n.external != nil {
 		peer := n.peer
 		n.external.SetOnChange(func() { _ = peer.Notify("launchers.changed", map[string]any{}) })
@@ -494,7 +520,10 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 	} else if rh, err := n.listenRuntimeSocket(ctx); err != nil { // runtimes (runtimes.go): beside the engine, whichever it is
 		n.logger.Printf("runtime socket: %v", err)
 	} else {
-		defer rh.detach(n)
+		defer func() {
+			rh.setAgyBridge(false)
+			rh.detach(n)
+		}()
 	}
 	ln, err := n.listenHookSocket(ctx)
 	if err != nil {
@@ -774,33 +803,36 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		TabName                 *string       `json:"tab_name"`
 		TZ                      string        `json:"tz"` // the user's time zone
 		// HTTP is a quota plugin's request to send to a launcher's gateway (launchers.http); nil asks for the gateway.
-		HTTP           *quota.Request  `json:"http,omitempty"`
-		Async          bool            `json:"async"`
-		Title          *string         `json:"title"`
-		PermissionMode string          `json:"permission_mode"`
-		PlanThen       string          `json:"plan_then"`     // session.start in plan mode: the mode after its plan (planthen.go)
-		SecretTicket   string          `json:"secret_ticket"` // session.start: a hand-off's values for this new Claude Code start (secretenv.go)
-		Effort         string          `json:"effort"`
-		ServiceTier    string          `json:"service_tier"`
-		Ultracode      *bool           `json:"ultracode"`
-		Goal           string          `json:"goal"` // session.start: a /goal typed after the first message is in (startgoal.go)
-		DismissLost    bool            `json:"dismiss_lost"`
-		ResumeOnly     bool            `json:"resume_only"`
-		OnlyRunning    bool            `json:"only_running"` // assistant.compact: refuse not_running rather than start the process
-		IsMain         bool            `json:"is_main"`
-		MainCompact    int             `json:"main_compact_window"` // assistant.send, session.send, assistant.warm: with is_main (model_config.go)
-		FollowsSetting bool            `json:"follows_setting"`
-		Interject      bool            `json:"interject_background"`
-		AtItemID       string          `json:"at_item_id"`     // session.fork: the reply to branch off at
-		Refresh        bool            `json:"refresh"`        // launchers.models: ask again, not the kept list
-		Purpose        string          `json:"purpose"`        // launchers.models/check: assistant runs outside the Agent engine
-		AssistantTurn  bool            `json:"assistant_turn"` // launchers.check: shaped as an assistant turn (launchercheck_assistant.go)
-		Conversation   string          `json:"conversation"`   // launchers.check with assistant_turn: the conversation whose profile it runs in
-		Configured     bool            `json:"configured"`     // launchers.models, .probe, .http, .model.check: hub.json names this launcher
-		Guest          *guestParams    `json:"guest"`          // assistant.send: a new guest conversation (assistant_guest.go)
-		Origin         string          `json:"origin"`         // assistant.send: the manager-recorded source of this conversation
-		NewSessionID   string          `json:"new_session_id"` // assistant.send: start the new conversation under this id
-		Raw            json.RawMessage `json:"-"`
+		HTTP           *quota.Request                `json:"http,omitempty"`
+		Async          bool                          `json:"async"`
+		Title          *string                       `json:"title"`
+		PermissionMode string                        `json:"permission_mode"`
+		PlanThen       string                        `json:"plan_then"`     // session.start in plan mode: the mode after its plan (planthen.go)
+		SecretTicket   string                        `json:"secret_ticket"` // session.start: a hand-off's values for this new Claude Code start (secretenv.go)
+		Effort         string                        `json:"effort"`
+		ServiceTier    string                        `json:"service_tier"`
+		Ultracode      *bool                         `json:"ultracode"`
+		Goal           string                        `json:"goal"` // session.start: a /goal typed after the first message is in (startgoal.go)
+		DismissLost    bool                          `json:"dismiss_lost"`
+		ResumeOnly     bool                          `json:"resume_only"`
+		OnlyRunning    bool                          `json:"only_running"` // assistant.compact: refuse not_running rather than start the process
+		IsMain         bool                          `json:"is_main"`
+		MainCompact    int                           `json:"main_compact_window"` // assistant.send, session.send, assistant.warm: with is_main (model_config.go)
+		FollowsSetting bool                          `json:"follows_setting"`
+		Interject      bool                          `json:"interject_background"`
+		IdleCompaction *assistantwire.IdleCompaction `json:"idle_compaction"`
+		MessageSource  *proto.MessageSource          `json:"message_source"`
+		ClientMsgID    string                        `json:"client_msg_id"`
+		AtItemID       string                        `json:"at_item_id"`     // session.fork: the reply to branch off at
+		Refresh        bool                          `json:"refresh"`        // launchers.models: ask again, not the kept list
+		Purpose        string                        `json:"purpose"`        // launchers.models/check: assistant runs outside the Agent engine
+		AssistantTurn  bool                          `json:"assistant_turn"` // launchers.check: shaped as an assistant turn (launchercheck_assistant.go)
+		Conversation   string                        `json:"conversation"`   // launchers.check with assistant_turn: the conversation whose profile it runs in
+		Configured     bool                          `json:"configured"`     // launchers.models, .probe, .http, .model.check: hub.json names this launcher
+		Guest          *guestParams                  `json:"guest"`          // assistant.send: a new guest conversation (assistant_guest.go)
+		Origin         string                        `json:"origin"`         // assistant.send: the manager-recorded source of this conversation
+		NewSessionID   string                        `json:"new_session_id"` // assistant.send: start the new conversation under this id
+		Raw            json.RawMessage               `json:"-"`
 
 		Runtime         string                   `json:"runtime"` // external admission only; never selects a native runtime
 		External        *proto.ExternalExecution `json:"external"`
@@ -860,6 +892,19 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	}
 	if n.codexBlocked(p.ResumeSessionID) && devicewire.IsSessionStart(method) {
 		return nil, refusal("identity_conflict", "会话 ID 与另一来源重复，不能恢复", nil)
+	}
+	if method == "assistant.send" || method == "session.send" {
+		source := prompts.ItemSource(proto.Item{Role: "user", Kind: proto.KindText, Text: p.Text, Source: p.MessageSource, ClientMsgID: p.ClientMsgID})
+		if source == nil && p.ClientMsgID == "" && !prompts.UserAuthoredContext(p.Text) {
+			if injected := prompts.ParseInjected(p.Text); injected != nil && injected.Kind == proto.InjectedTaskNotice {
+				source = &proto.MessageSource{Kind: proto.InjectedTaskNotice}
+			}
+		}
+		input := idleCompactionInput{
+			At: time.Now(), Policy: p.IdleCompaction, Source: source,
+		}
+		ctx = context.WithValue(ctx, idleCompactionInputKey{}, input)
+		n.noteIdleCompactionInput(p.SessionID, input)
 	}
 	if method == "session.skills" {
 		return n.sessionSkillCatalog(ctx, p.SkillOwner, p.SessionID)
@@ -1069,9 +1114,15 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			// ClaudeLiveReplies: the Agents' starts load the live replies plugin (Settings › Claude Code, hooksplugin.go,
 			// #1309); nil (an older hub) leaves it as it is, on at first.
 			ClaudeLiveReplies *bool `json:"claude_live_replies"`
+			// ExtraPath: directories at the front of the node's PATH (hub.json machines[].extra_path, toolpath.go);
+			// nil (an older hub, a call that says nothing of it) leaves PATH as it is, [] takes them out.
+			ExtraPath *[]string `json:"extra_path"`
 		}
 		if err := json.Unmarshal(params, &c); err != nil {
 			return nil, err
+		}
+		if c.ExtraPath != nil { // before herdr_autostart: a herdr server the node starts next has them too
+			n.setExtraPath(*c.ExtraPath)
 		}
 		if c.HubFeatures != nil || c.MachineID != "" {
 			n.hubPersonaContracts.Store(c.HubFeatures != nil && slices.Contains(*c.HubFeatures, nodeproto.PersonaContracts))
@@ -1310,7 +1361,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			}
 		}
 		// A goal is set after the first message is in, so a start without a first message cannot take one: a new
-		// Claude Code in a terminal is the only start that does (startgoal.go).
+		// Claude Code or Codex in a terminal is the only start that does (startgoal.go, codex_start_goal.go).
 		goal := cleanStartGoal(p.Goal)
 		if goal != "" {
 			kind := p.AgentType
@@ -1326,7 +1377,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			if isDesktopLauncher(p.Launcher) || isCodexAppLauncher(p.Launcher) {
 				kind = "app"
 			}
-			if err := n.checkStartGoal(goal, kind, p.ResumeSessionID, p.Prompt); err != nil {
+			if err := n.checkStartGoal(goal, kind, cmp.Or(p.Host, n.defaultKind()), p.ResumeSessionID, p.Prompt); err != nil {
 				return nil, err
 			}
 		}
@@ -1379,7 +1430,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return withInstead(res, err, instead)
 		}
 		// Only Claude Code has a session id before it starts; another agent picks its own (start_agent.go).
-		if p.Async && p.ResumeSessionID == "" && (p.AgentType == "" || p.AgentType == "claude") && launcherAgentType(p.Launcher) != ompAgent {
+		asyncAgent := n.startAgentType(p.Launcher, p.AgentType)
+		if p.Async && p.ResumeSessionID == "" && (p.AgentType == "" || p.AgentType == "claude") && asyncAgent != traexAgent && asyncAgent != ompAgent {
 			s, err := n.startAsyncIn(p.Host, p.SessionID, p.Cwd, p.Launcher, p.Prompt, p.WorkspaceID, p.PermissionMode, p.Effort, tab, modelExecution{InPane: p.InPane, PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Ultracode: p.Ultracode, SecretTicket: p.SecretTicket, Goal: goal})
 			return n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation)
 		}
@@ -1670,7 +1722,14 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 				return ok(err)
 			}
 		}
-		return ok(n.keys(ctx, p.SessionID, []string{"esc"}, ""))
+		over := n.turnOver(p.SessionID) // before the key: the Escape itself may end a turn
+		err := n.keys(ctx, p.SessionID, []string{"esc"}, "")
+		if err == nil && over && n.backgroundRuns(p.SessionID) {
+			// The Escape went to an idle prompt and the background work goes on: said, not claimed as an interruption
+			// (#10828). The key is pressed whatever this finds, so a turn that does run is never left running.
+			err = refusal(proto.CodeTurnOverBackground, i18n.T(i18n.From(ctx), "rpc-errors."+proto.CodeTurnOverBackground), nil)
+		}
+		return ok(err)
 	case "session.screen.before":
 		var a struct {
 			SessionID string   `json:"session_id"`
@@ -1758,9 +1817,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			if strings.TrimSpace(in.Branch) != "" || strings.TrimSpace(in.Path) != "" {
 				return nil, errors.New("Choose automatic naming or an explicit branch and path")
 			}
-			return n.worktreeCreateAutomatic(worktreeComposerContext(ctx, params), in.Kind, in.WorkspaceID, in.Cwd, in.ParentWorkspaceID)
+			return n.worktreeCreateAutomatic(withAgentWorktree(worktreeComposerContext(ctx, params), in.ForAgent), in.Kind, in.WorkspaceID, in.Cwd, in.ParentWorkspaceID)
 		}
-		return n.worktreeCreate(worktreeComposerContext(ctx, params), in.Kind, in.WorkspaceID, in.Cwd, in.Branch, in.Path, in.ParentWorkspaceID)
+		return n.worktreeCreate(withAgentWorktree(worktreeComposerContext(ctx, params), in.ForAgent), in.Kind, in.WorkspaceID, in.Cwd, in.Branch, in.Path, in.ParentWorkspaceID)
 	case methodWorktreeSource, methodWorktreePreset, methodWorktreeDelete:
 		var in worktreeSourceParams
 		if err := json.Unmarshal(params, &in); err != nil {
@@ -1819,6 +1878,16 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return nil, fmt.Errorf("no image %s in session %s", a.ItemID, p.SessionID)
 		}
 		return it.Image, nil
+	case "session.visualization":
+		var a struct {
+			ItemID string `json:"item_id"`
+		}
+		_ = json.Unmarshal(params, &a)
+		html, err := n.visualizationHTML(p.SessionID, a.ItemID)
+		if err != nil {
+			return nil, err
+		}
+		return html, nil
 	case "session.item": // one item whole: the text a page cut (full_size)
 		var a struct {
 			ItemID string `json:"item_id"`

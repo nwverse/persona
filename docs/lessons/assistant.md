@@ -1,5 +1,7 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- A review wake is not a completion verdict (#8373). PR events and judged-done candidates share the same signal. Keep its wording neutral, preserve the actual reason and criterion evidence, and leave acceptance gates and display grouping unchanged.
+
 - Snapshot display projections must not initialize the knowledge base (#10108). Publication already holds
   `pubMu`; read an already-open engine and retain the canonical cached project-name fallback rather than calling
   an accessor that may initialize storage. Let direction synchronization refresh project names asynchronously.
@@ -418,6 +420,10 @@ its task decision together before sending it to a hook. A plan approval must sel
 mode can fall back to bypass permissions on the node. Count confirmation dispatch at `tellUser`, not interaction
 creation or app presentation; quiet tasks and supervisor routing also show cards without ringing the user.
 
+## Supervisor assignment must respect the policy channel (#10338)
+
+A runtime-backed chat can plan work and receive owner replies. A task reviewer needs a separate policy channel on every supervised turn. Check the session's execution source when dispatch assigns the reviewer, including plans that waited for approval and scheduled chats listed as leaders. A permanent policy refusal ends that relay. The task and its worker reports stay available for review.
+
 ## The supervision fingerprint only sees the agent's words (#6027)
 
 `digestFingerprint` (`supervise_dedup.go`) folds a signal into the one told in the last 30 minutes when its agent's
@@ -686,6 +692,15 @@ When `session.start` never answers, the hub lists the machine and adopts the ses
 ## A hidden effective cadence overrides the interval the user configured (#7619)
 
 #3811 gave interval follow-ups in leader conversations a hidden 10-minute cadence while an open supervised todo had an active agent: `nextWithLeaderCadence` derived extra runs from `LastRun` while leaving the stored `At` / `EveryMinutes` on the original rule, and the run copy's `cadenceEvery` made `taskPrompt` print "每 10 分钟". The stored task still showed 30 minutes / 1 hour in `list_followups`, so nothing visible explained why a patrol the user asked for every 30 minutes fired every 10 minutes from its first run, and it became the main chat's biggest token sink. Lesson: a scheduler may have exactly one effective cadence, and it must be the one stored on the task and shown in every view and run prompt; an "accelerate while busy" rule that is invisible to both storage and UI is indistinguishable from a bug. If such a rule is ever wanted again, it must be an explicit, user-visible setting with its own stored field, not a second rule derived inside the scheduler. Keep interval advancement in one place (`runDue` advancing `At` by `EveryMinutes`); tests assert the prompt text states the configured interval even while supervised work is open.
+
+## Scheduled runs need observable to-do progress (#9755)
+
+- A successful scheduled run is not progress on its linked to-do (#9755). Compare transcript output, criterion
+  states and explicit progress-report content, not updated timestamps or the follow-up's own summary. Keep the
+  streak and baseline with the schedule, not only in capped shared history; test restart, history eviction,
+  replayed completions and failed persistence before emitting a supervisor signal or an owner decision. Keep the
+  first escalation attempt's identity across runs: its committed owner review repairs a lost final marker without
+  duplicating that decision or mistaking an unrelated owner question for its own.
 
 ## A stopped leader's own To-do does not list its workers (#8400)
 

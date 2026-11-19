@@ -94,6 +94,7 @@ func (s *Service) setSessions(machine string, list []proto.Session) {
 		}
 	}
 	s.availSweep(machine, list, now) // the waits of conversations no longer listed (availability.go)
+	s.pruneGoneQuiet(machine)        // the verdicts and Stops of task Agents no longer listed (silent_turns.go)
 	s.fleetKeep(machine, list, connected, unsure)
 	for _, sess := range unsure {
 		go s.reconnectedTurnEnd(machine, sess)
@@ -414,12 +415,19 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 	shown, via := r.sessions, r.marks
 	r.mu.RUnlock()
 	lang := s.lang(context.Background())
+	// The owner's messages to Agents held while their computer is away (internal/devices held.go, #10661): once for
+	// the whole list, worded as the rows are.
+	var held map[string][]proto.UndeliveredMessage
+	if s.devs != nil {
+		held = s.devs.HeldMessages(machine, lang)
+	}
 	// A done turn nobody has seen is Just finished when it ended after this (#9751).
 	finishedSince := time.Now().Add(-justFinishedFor(s.triageCfg(context.Background())))
 	dir := m.assistantCwd() // once, not a path.Join for each row
 	asks := s.fleet.asks.reader(machine, complete)
 	defer asks.done()
 	suggested := s.hubSuggestions(machine)
+	quiet := s.quietMarks(machine) // turns of task Agents that had no output (silent_turns.go)
 	for i := range list {
 		list[i].MachineID = machine
 		list[i].PendingInteractions = counts[list[i].SessionID]
@@ -451,6 +459,9 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 				kept := slices.Clone(u) // the owner's messages that could not go in (undelivered.go, #10194)
 				list[i].Undelivered = &kept
 			}
+		} else if u := held[list[i].SessionID]; len(u) > 0 {
+			kept := u // an Agent's, fresh from HeldMessages; its own variable, so only a row with some is allocated
+			list[i].Undelivered = &kept
 		}
 		list[i].SeenAt = seen[list[i].SessionID]
 		localizeSession(lang, &list[i]) // the node's Chinese activity line… (fleet_text.go)
@@ -460,6 +471,8 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 		list[i].State, list[i].BackgroundWorking = stateWithBackground(agentState(list[i], list[i].SeenAt), list[i])
 		list[i].BackgroundWaiting = backgroundWaiting(list[i])
 		list[i].TurnError, list[i].TurnErrorKind = turnError(list[i])
+		// A task Agent's turn with no output: interrupted or stopped, not done (silent_turns.go, #10187).
+		putQuietTurn(&list[i], quiet, lang)
 		decorateLimit(&list[i]) // a subscription's usage limit and when it resets (usage_limit.go)
 		list[i].TurnErrorCode = sessionTurnErrorCode(list[i])
 		if list[i].TurnError != "" {
