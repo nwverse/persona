@@ -1257,8 +1257,13 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 			}
 		}
 	}
-	if l == "" && !followsSetting {
-		if c, known := s.session(ctx, machine, sid); known {
+	if l == "" {
+		c, known := s.session(ctx, machine, sid)
+		if known && c.SourceKind == proto.SourceRuntime {
+			// The node resumes the session on the runtime that owns it, even for scheduled chats and leaders.
+			return nil
+		}
+		if known && !followsSetting {
 			l = c.Launcher // no launcher picked: the one this conversation runs
 			if l != "" {
 				p["launcher"] = l

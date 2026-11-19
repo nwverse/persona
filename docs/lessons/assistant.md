@@ -420,6 +420,10 @@ its task decision together before sending it to a hook. A plan approval must sel
 mode can fall back to bypass permissions on the node. Count confirmation dispatch at `tellUser`, not interaction
 creation or app presentation; quiet tasks and supervisor routing also show cards without ringing the user.
 
+## Supervisor assignment must respect the policy channel (#10338)
+
+A runtime-backed chat can plan work and receive owner replies. A task reviewer needs a separate policy channel on every supervised turn. Check the session's execution source when dispatch assigns the reviewer, including plans that waited for approval and scheduled chats listed as leaders. A permanent policy refusal ends that relay. The task and its worker reports stay available for review.
+
 ## The supervision fingerprint only sees the agent's words (#6027)
 
 `digestFingerprint` (`supervise_dedup.go`) folds a signal into the one told in the last 30 minutes when its agent's
