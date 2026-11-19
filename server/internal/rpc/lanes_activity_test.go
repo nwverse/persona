@@ -529,3 +529,55 @@ func TestFrameReaderReadAheadOnceARead(t *testing.T) {
 		t.Fatalf("%d lines in %s with the read-ahead looked at for each, %s without", n, took, plain)
 	}
 }
+
+// lastRead hands over all of b in one read, which also ends the input when endsWith; or the next one does.
+type lastRead struct {
+	b        []byte
+	endsWith bool
+	done     bool
+}
+
+func (r *lastRead) Read(p []byte) (int, error) {
+	if r.done {
+		return 0, io.EOF
+	}
+	r.done = true
+	if r.endsWith {
+		return copy(p, r.b), io.EOF
+	}
+	return copy(p, r.b), nil
+}
+
+// A read that ends the input brings frames all the same: the reply among them is ahead of the line before it.
+func TestFrameReaderReadAheadOnTheLastRead(t *testing.T) {
+	wire, _ := frames(0, LaneEvents, framePayloadMax, []byte(`{"event":"x","params":{}}`), []byte(`{"id":"h1","result":{}}`))
+	fr := newFrameReader(&lastRead{b: wire, endsWith: true}, 64<<20)
+	if !fr.Scan() {
+		t.Fatalf("no line: %v", fr.Err())
+	}
+	if !fr.aheadActivity() {
+		t.Fatal("the reply behind the event, brought by the read that ended the input, not seen ahead")
+	}
+}
+
+// What the read-ahead marked moves with the bytes when the buffer is compacted: a reply already read is not taken for
+// one ahead once the buffer starts over.
+func TestFrameReaderReadAheadAfterCompaction(t *testing.T) {
+	reply := []byte(`{"id":"h1","result":{}}`)
+	pad := []byte(`{"event":"x","params":{"s":"` + strings.Repeat("a", 16<<10) + `"}}`)
+	wire, seq := frames(0, LaneEvents, framePayloadMax, reply, pad, pad)
+	next, _ := frames(seq, LaneEvents, framePayloadMax, pad)
+	wire = append(wire, next[:frameHeader+10]...) // a frame begun: reading on needs more, from the start of the buffer
+	fr := newFrameReader(&lastRead{b: wire}, 64<<20)
+	for range 3 {
+		if !fr.Scan() {
+			t.Fatalf("no line: %v", fr.Err())
+		}
+	}
+	if fr.Scan() {
+		t.Fatal("a line out of half a frame")
+	}
+	if fr.aheadActivity() {
+		t.Fatal("the reply read first taken for one ahead after the buffer was compacted")
+	}
+}

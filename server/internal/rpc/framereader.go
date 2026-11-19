@@ -220,6 +220,9 @@ func (s *frameReader) fill() {
 	}
 	if s.start > 0 && (s.start == s.end || len(s.buf)-s.end < frameMax) {
 		copy(s.buf, s.buf[s.start:s.end])
+		for i := range s.marks { // they move with the bytes; the ones behind start go negative and drop out
+			s.marks[i] -= s.start
+		}
 		s.end -= s.start
 		s.start = 0
 	}
@@ -230,14 +233,16 @@ func (s *frameReader) fill() {
 			return
 		}
 		s.end += n
+		if n > 0 { // a read that ends the input may bring the last frames too
+			s.reads++
+			s.readAt = clockMS(time.Now())
+			s.scan(carried)
+		}
 		if err != nil {
 			s.setErr(err)
 			return
 		}
 		if n > 0 {
-			s.reads++
-			s.readAt = clockMS(time.Now())
-			s.scan(carried)
 			return
 		}
 		loop++
