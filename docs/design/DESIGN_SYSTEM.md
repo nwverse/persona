@@ -2983,8 +2983,11 @@ stopped changing for 0.7 s, it runs once for that input. An address being typed 
 field to something else on the page (not when the window loses focus), the step is left, or a paste fills all of it,
 so a key never goes to a half-typed host; until then the form says leaving the field starts the check. It never runs
 on opening something already saved, only after the fields the form names as its connection change (the provider
-wizard: address, key, sign-in method); fields that play no part in the connection (a name) never block or repeat it.
-Each part runs whatever an earlier part said, since one part failing does not prove another will (a key may chat
+wizard: address, key, sign-in method, request headers); fields that play no part in the connection (a name) never block or repeat it.
+The optional request-header editor stays visible on the custom gateway's Connect step before the check, in add and edit,
+with configured names but never saved values and with the selected runtime's support or limitation beside it. Reserved or
+unsupported headers stop the check instead of letting it imply a launch would send them. A header-only edit invalidates
+old results and starts the same 0.7 s check. Each part runs whatever an earlier part said, since one part failing does not prove another will (a key may chat
 without listing models); a part that is running or passed is not sent again. A line says it will check by itself, then
 shows progress with a spinner, then the result; a failure keeps the server's words and offers to run that part again
 (Retry on the Connect step). Manual buttons, where the form has them, and the note that a test may cost a little stay;
