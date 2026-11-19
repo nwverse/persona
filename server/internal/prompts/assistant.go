@@ -1237,6 +1237,7 @@ type SuperviseCloseout struct {
 	Artifacts         []string
 	// CheckedMerged, CheckedDeployed: what the hub found itself, "yes", "no" or "" when it could not tell.
 	CheckedMerged, CheckedDeployed string
+	LocalDeployment                bool
 }
 
 // Route is the system prompt of assistant.route (assistant/route): is a New chat's first message a direction or a quick

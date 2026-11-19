@@ -624,6 +624,7 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 				Did: c.Did, Verified: c.Verified, Missing: c.Missing}
 			if s.checkCloseout(ctx, &c, arts); c.Checked != nil {
 				e.Closeout.CheckedMerged, e.Closeout.CheckedDeployed = c.Checked.Merged, c.Checked.Deployed
+				e.Closeout.LocalDeployment = c.Checked.LocalDeployment
 			}
 			for _, a := range arts {
 				e.Closeout.Artifacts = append(e.Closeout.Artifacts, a.Kind+" "+a.Ref)
