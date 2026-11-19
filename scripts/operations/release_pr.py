@@ -102,8 +102,13 @@ def next_version(repository, beta, requested="", runner=subprocess.check_output,
     if beta:
         # An orphaned release-PR branch also reserves its version. Its previous failed source must never be
         # overwritten with a different main commit, even while no immutable tag exists for it yet.
-        reserved_beta = {value[1:] for value in reserved if BETA.fullmatch("v" + value)}
-        number = max((int(match.group(4)) for tag in (*known, *reserved_beta) if (match := BETA.fullmatch(tag))), default=0) + 1
+        reserved_beta = {value if value.startswith("v") else "v" + value for value in reserved
+                         if BETA.fullmatch(value if value.startswith("v") else "v" + value)}
+        used = {int(match.group(4)) for tag in (*known, *reserved_beta) if (match := BETA.fullmatch(tag))}
+        number = max(used, default=0) + 1
+        # An orphan may be newer than the latest tag, so its next number may already be reserved too.
+        while number in used:
+            number += 1
         version = "%d.%d.%d-beta.%d" % (*base, number)
     else:
         raise ReleaseError("version already exists; choose a new immutable release PR version")
