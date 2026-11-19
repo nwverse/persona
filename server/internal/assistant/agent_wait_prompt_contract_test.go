@@ -2,11 +2,12 @@ package assistant
 
 import (
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/nwverse/persona/server/internal/mcptoolgolden"
 )
 
 // #10224 added inline observation without a prompt-size budget increase. Keep that total budget explicit while the
@@ -23,10 +24,11 @@ func TestAgentWaitPromptSizeBudget(t *testing.T) {
 }
 
 // TestAgentWaitPromptContract checks the meaning of the inline-observation guidance, not its current prose. The
-// golden is the final tool list whose wire form TestGoldenMCPTools compares with the hub's actual tools.
+// goldens hold the final tool list whose wire form TestGoldenMCPTools compares with the hub's actual tools.
 func TestAgentWaitPromptContract(t *testing.T) {
-	path := filepath.Join("..", "hub", "testdata", "prompts", "mcp_tools.assistant.golden")
-	raw, err := os.ReadFile(path)
+	dir := filepath.Join("..", "hub", mcptoolgolden.Dir)
+	path := filepath.Join(dir, "assistant") // for messages: the list's index and tool files
+	raw, err := mcptoolgolden.Load(dir, "assistant")
 	if err != nil {
 		t.Fatal(err)
 	}

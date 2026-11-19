@@ -66,11 +66,17 @@ func (n *Node) assistantCompact(ctx context.Context, id string, onlyRunning bool
 		if cwd == "" {
 			cwd = identity.AssistantDir(n.home)
 		}
+		var agentKind string
 		if !proto.IsExternalLauncher(launcher) {
-			if _, err := n.assistantAgent(ctx, launcher); err != nil {
+			var err error
+			agentKind, err = n.assistantAgent(ctx, launcher)
+			if err != nil {
 				return err
 			}
-			n.stopAssistant(id)
+			n.cancelAssistantRecovery(id)
+			if held := n.takeAssistant(id); held != nil {
+				stopAndWait([]*assistantProc{held})
+			}
 		}
 		var err error
 		// A guest (a meeting's room too) starts as on any resume: spawnClaude reads its tools and kind from its record
@@ -98,10 +104,14 @@ func (n *Node) assistantCompact(ctx context.Context, id string, onlyRunning bool
 			if err := n.checkExternalAssistant(ctx, id, launcher, execution, false); err != nil {
 				return err
 			}
-			if _, err := n.assistantAgent(ctx, launcher); err != nil {
+			agentKind, err = n.assistantAgent(ctx, launcher)
+			if err != nil {
 				return err
 			}
-			n.stopAssistant(id)
+			n.cancelAssistantRecovery(id)
+			if held := n.takeAssistant(id); held != nil {
+				stopAndWait([]*assistantProc{held})
+			}
 		}
 		if current.SupervisionResolved {
 			execution.SupervisionInstructions = current.SupervisionInstructions
@@ -117,7 +127,12 @@ func (n *Node) assistantCompact(ctx context.Context, id string, onlyRunning bool
 			st.Origin, st.OriginKnown = execution.Origin, execution.OriginKnown
 			n.state.put(id, st)
 		}
-		if p, err = n.spawnAssistant(id, cwd, launcher, true, false, execution); err != nil {
+		// A trailing refused turn is no context the compaction would summarize: it is cut, and a session left with no
+		// file by that starts under the id rather than resuming nothing.
+		if agentKind == "claude" {
+			n.healClaudeRefusalTranscript(id)
+		}
+		if p, err = n.spawnAssistant(id, cwd, launcher, n.transcriptPath(id) != "", false, execution); err != nil {
 			return err
 		}
 		if st.SupervisionInstructions != execution.SupervisionInstructions {

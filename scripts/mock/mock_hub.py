@@ -25329,6 +25329,8 @@ def markets_route(handler, p, body):
                     "placement": "nav_page", "size": "full", "icon": "gauge"}]
         if GRAPH_MODE and placement in ("", "nav_page"):
             ui += [{"plugin": "example-work", "plugin_name": "Example Work", "id": "work", "title": "Work",
+                    "placement": "nav_page", "size": "full", "icon": "branch"},
+                   {"plugin": "example-work", "plugin_name": "Example Work", "id": "control-room", "title": "Control room",
                     "placement": "nav_page", "size": "full", "icon": "branch"}]
         if GRAPH_MODE and placement in ("", "overview_card"):
             ui += [{"plugin": "example-work", "plugin_name": "Example Work", "id": "work-card", "title": "Work",
@@ -30686,6 +30688,8 @@ def plugins_route(handler, p, body):
     if PLUGINS_MODE and GRAPH_MODE and p in ("/api/v1/extensions/example-work/-/ui/work",
                                              "/api/v1/extensions/example-work/-/ui/work-card"):
         return mock_work(handler, body, card=p.endswith("-card"))
+    if PLUGINS_MODE and GRAPH_MODE and p == "/api/v1/extensions/example-work/-/ui/control-room":
+        return mock_control_room(handler, body)
     if PLUGINS_MODE and p == "/api/v1/extensions/showcase/-/ui/motion":
         handler.send_json({"view": _motion_view(_MOTION_STEP[0])})
         return True
@@ -30946,6 +30950,82 @@ def mock_work(handler, body, card=False):
     if card:
         view = {"title": "Work", "sections": [{"key": "work", "items": [_work_graph(_WORK_DRAWS[0])]}]}
     handler.send_json({"view": view})
+    return True
+
+
+# MOCK_EXTENSION_GRAPH=1, the "control room" page (#11234): a made-up parallel workflow with the inspector and timeline
+# fields in full — one root, a Plan, a Parallel Sweep fanning out to thirty workers and three grouped candidates, and a
+# Verify stage with its verifier. The timestamps span the last eighteen minutes and two workers are still running (no
+# ended_at), so the wall-clock timeline draws a real fan-out with stragglers; the verifier, still running with its
+# feedback, is selected and carries facts and session links. Thirty-eight nodes, all names invented, every URL a
+# placeholder host. Tapping a node pushes its own page, as on the Work page.
+def _control_room_graph():
+    now = int(time.time())
+    base = now - 18 * 60
+    nodes, edges = [], []
+
+    def add(nid, title, parent=None, at=0, **extra):
+        nodes.append({"id": nid, "title": title, "started_at": base + at, **extra,
+                      "action": {"id": "open", "values": {"id": nid}, "push": {"ui": "work", "state": nid}}})
+        if parent:
+            edges.append({"from": parent, "to": nid})
+
+    add("root", "Ship the billing release", subtitle="3 stages · 36 steps", icon="list",
+        badge={"text": "Running", "tone": "caution"}, tone="caution", progress=0.62,
+        facts=[{"label": "Owner", "value": "Dev box"}, {"label": "Attempts", "value": "2"}],
+        detail="Three stages run at once; the verifier reviews both attempts before sign-off.")
+    add("plan", "Plan", "root", at=0, ended_at=base + 95, icon="list", tone="positive",
+        badge={"text": "Done", "tone": "positive"})
+    add("sweep", "Parallel Sweep", "root", at=70, icon="branch", tone="caution",
+        badge={"text": "Running", "tone": "caution"}, progress=0.5,
+        detail="Thirty workers and three candidate fixes sweep the flaky checkout path together.")
+    add("verify", "Verify", "root", at=95, icon="check", badge={"text": "Reviewing", "tone": "caution"},
+        detail="Two attempts are compared; the faster one moves on.")
+    for i in range(1, 31):
+        nid = f"w{i:02d}"
+        started = 140 + (i - 1) * 26
+        running = i in (27, 30)
+        extra = {
+            "icon": "list",
+            "subtitle": "Checkout retry path",
+            "facts": [{"label": "Files", "value": str(2 + i % 5)}, {"label": "Tests", "value": "passing" if i % 7 else "1 failing"}],
+        }
+        if running:
+            extra.update(tone="caution", badge={"text": "Running", "tone": "caution"}, progress=0.45)
+        elif i == 14:
+            extra.update(tone="danger", badge={"text": "Failed", "tone": "danger"},
+                         detail="Retries storm past 40 in one second; the backoff is capped too low.")
+        else:
+            extra.update(tone="positive", badge={"text": "Done", "tone": "positive"})
+            extra["ended_at"] = base + started + 55 + (i * 7) % 70
+        add(nid, f"Worker {i:02d}", "sweep", at=started, **extra)
+    for i in range(1, 4):
+        add(f"c{i}", f"Candidate {i}", "sweep", at=330 + i * 40, group="Candidates", icon="branch", tone="caution",
+            badge={"text": "Candidate", "tone": "caution"}, subtitle="Same task, a different way",
+            detail=f"Attempt {i} narrows the retry window instead of widening it.")
+    add("v1", "Verifier", "verify", at=now - base - 130, icon="check", tone="danger",
+        badge={"text": "Blocked", "tone": "danger"}, progress=0.7,
+        subtitle="Reviews both attempts",
+        facts=[{"label": "Attempt 1", "value": "fails on retries"}, {"label": "Attempt 2", "value": "still running"},
+               {"label": "Verdict", "value": "waiting"}],
+        detail="Attempt 1 fails on the retry storm; attempt 2 is still running. Sign-off waits for it.")
+    nodes[-1]["links"] = [
+        {"title": "Attempt 1 · Work session", "url": "https://hub.example.com/s/dev-box/session-work-1"},
+        {"title": "Attempt 1 · Verifier session", "url": "https://hub.example.com/s/dev-box/session-verify-1"},
+        {"title": "Attempt 2 · Work session", "url": "https://hub.example.com/s/dev-box/session-work-2"}]
+    return {"type": "graph", "key": "control-room", "nodes": nodes, "edges": edges, "selected": "v1"}
+
+
+def mock_control_room(handler, body):
+    request = json.loads(body) if body else {}
+    node = (request.get("values") or {}).get("id") if request.get("action") == "open" else None
+    if node:
+        handler.send_json({"view": _work_view(0, node)})
+        return True
+    handler.send_json({"view": {"title": "Control room", "refresh_after": 30, "sections": [{"key": "control-room", "items": [
+        {"type": "header", "title": "Ship the billing release", "subtitle": "3 stages · 38 nodes · 2 running",
+         "badges": [{"text": "Running", "tone": "caution"}]},
+        _control_room_graph()]}]}})
     return True
 
 

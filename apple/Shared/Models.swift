@@ -1263,6 +1263,18 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// for the lists' order and folds (`AgentListOrder.awaitsReply`) and for every word, color and question a row shows:
     /// a muted one is plain Seen everywhere, so callers say whether it is muted.
     func awaitsYourReply(muted: Bool) -> Bool { state == .idle && awaitsReply && !muted }
+    func isJustFinished(muted: Bool) -> Bool { state == .idle && work?.justFinished == true && !muted }
+
+    /// Group actions check mute preferences only for flagged idle rows.
+    func needsSeen(muted: @autoclosure () -> Bool = false) -> Bool {
+        state == .unread || (isJustFinished(muted: false) && !muted())
+    }
+
+    mutating func markLocallySeen() {
+        if state == .unread { state = .idle }
+        if work?.justFinished == true { work?.justFinished = nil }
+    }
+
     /// Waiting in the background (#6045): working, but all it runs is waiting. Shown apart from Working and lighter, and
     /// left out of Working's counts and filter; whatever acts on a working agent (stop, queue) still treats it as one.
     /// A list copy whose state was rewritten to working because a child is working is not waiting in the background.
@@ -1719,6 +1731,8 @@ nonisolated struct WorkState: Codable, Hashable, Sendable {
     var resetsAt: Date? = nil
     var attempts: Int? = nil
     var max: Int? = nil
+    /// A recently finished turn nobody has seen. Hubs predating the flag omit it.
+    var justFinished: Bool? = nil
     /// The agent it waits for.
     var agent: WorkAgent? = nil
     /// What the work produced: pull requests, commits, documents, builds (`WorkArtifact`). Nil from a hub without them.
@@ -1729,7 +1743,7 @@ nonisolated struct WorkState: Codable, Hashable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case phase, on, line, wait, then, attempts, max, agent, artifacts, closeout
-        case wakeAt = "wake_at", resetsAt = "resets_at"
+        case wakeAt = "wake_at", resetsAt = "resets_at", justFinished = "just_finished"
     }
 
     init(from decoder: Decoder) throws {
@@ -1743,6 +1757,7 @@ nonisolated struct WorkState: Codable, Hashable, Sendable {
         resetsAt = try c.decodeIfPresent(Date.self, forKey: .resetsAt)
         attempts = try c.decodeIfPresent(Int.self, forKey: .attempts)
         max = try c.decodeIfPresent(Int.self, forKey: .max)
+        justFinished = try c.decodeIfPresent(Bool.self, forKey: .justFinished)
         agent = try c.decodeIfPresent(WorkAgent.self, forKey: .agent)
         // New (#3612): one that does not decode is as if there were none, never the whole work state failing.
         artifacts = try? c.decodeIfPresent([WorkArtifact].self, forKey: .artifacts)

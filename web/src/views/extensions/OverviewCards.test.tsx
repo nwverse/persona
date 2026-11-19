@@ -2,7 +2,8 @@
 // Overview's extension cards as the user arranged them (#9745, ExtensionSlots' OverviewCards, OverviewArrange): as they
 // always were without an arrangement; a hidden card neither drawn nor asked for; a full-row card across the row and a
 // lone half one still half (web audit item 76); and arranging them: earlier / later, drag and drop, width, hide and
-// show, Reset with Undo, Done, without asking a drawn card again.
+// show, Reset with Undo, Done, without asking a drawn card again; the section's heading counts the cards shown, and
+// arranging opens it when folded.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -71,7 +72,8 @@ const arrange = (list: OverviewEntry[]) => {
 };
 const cards = () => [...host.querySelectorAll<HTMLElement>("[data-extension-card]")];
 const order = () => cards().map((c) => c.dataset.extensionCard);
-const grid = () => host.querySelector("section")!;
+// the grid of cards, inside the section under its heading (#11148)
+const grid = () => host.querySelector("[data-overview-cards] > div[id]")!;
 const card = (key: string) => host.querySelector<HTMLElement>(`[data-extension-card="${key}"]`)!;
 const press = (el: Element | null | undefined) => act(() => (el as HTMLElement).click());
 const byLabel = (label: string) => host.querySelector<HTMLElement>(`[aria-label="${label}"]`);
@@ -91,6 +93,24 @@ describe("Overview's cards", () => {
     draw();
     expect(order()).toEqual(["example-gateway/today", "example-today/needs"]);
     expect(hub.mounts).not.toContain("example-quota/left");
+  });
+
+  it("the heading counts the cards shown; arranging opens a folded section, without its Collapse / Expand (#11148)", () => {
+    arrange([{ extension: "example-quota", id: "left", hidden: true }]);
+    localStorage.setItem("fold:overview-cards", "1");
+    const count = () => host.querySelector("[data-overview-cards] h2")!.nextElementSibling?.textContent;
+    const fold = () => host.querySelector("[data-overview-cards] button[aria-expanded]");
+    draw();
+    expect(count()).toBe("2");
+    expect(cards()).toEqual([]);
+    expect(fold()?.getAttribute("aria-expanded")).toBe("false");
+    draw(true);
+    expect(order()).toEqual(["example-quota/left", "example-gateway/today", "example-today/needs"]);
+    expect(count()).toBe("2");
+    expect(fold()).toBeNull();
+    draw(false);
+    expect(cards()).toEqual([]);
+    expect(fold()?.getAttribute("aria-expanded")).toBe("false");
   });
 
   it("a full-row card spans the row; a lone half card stays half on a wide page (web audit item 76)", () => {

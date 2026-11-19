@@ -503,6 +503,7 @@ struct PendingBubble: View {
 struct UndeliveredBubble: View {
     var message: UndeliveredMessage
     var canManage: Bool
+    var retryDisabled = false
     var retry: () -> Void
     var discard: () -> Void
     @State private var confirmingDelete = false
@@ -526,6 +527,7 @@ struct UndeliveredBubble: View {
                 Menu {
                     if message.canRetry {
                         Button(action: retry) { Label("Retry", systemImage: Theme.Icon.retry) }
+                            .disabled(retryDisabled)
                     }
                     Button(role: .destructive, action: requestDelete) { Label("Delete", systemImage: Theme.Icon.delete) }
                 } label: {
@@ -547,7 +549,7 @@ struct UndeliveredBubble: View {
                 // The menu's items as actions too (VoiceOver's Actions rotor, the Runtime CLI), as on PendingBubble.
                 .accessibilityActions {
                     if canManage {
-                        if message.canRetry { Button("Retry", action: retry) }
+                        if message.canRetry && !retryDisabled { Button("Retry", action: retry) }
                         Button("Delete", action: requestDelete)
                     }
                 }
