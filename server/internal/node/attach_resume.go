@@ -108,7 +108,7 @@ func (r connReader) Close() error {
 
 var errReloading = errors.New("the node is restarting")
 
-// peekedConn is a new transport, which came came-th, and what readFirstLine read of it.
+// peekedConn is a new transport, numbered in the order transports came, and what readFirstLine read of it.
 type peekedConn struct {
 	c     net.Conn
 	came  uint64
