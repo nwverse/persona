@@ -21,6 +21,7 @@ const WHY: Record<string, string> = {
   pending: "machines-machinedetail.machine_switch_link_why_pending",
   custom_node: "machines-machinedetail.machine_switch_link_why_custom_node",
   unsafe_permissions: "machines-machinedetail.machine_switch_link_why_unsafe_permissions",
+  hub_unanswered: "machines-machinedetail.machine_switch_link_why_hub_unanswered",
   busy: "machines-machinedetail.machine_switch_link_why_busy",
   in_progress: "machines-machinedetail.machine_switch_link_why_in_progress",
   no_systemd: "machines-machinedetail.machine_switch_link_why_no_systemd",

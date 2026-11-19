@@ -71,7 +71,7 @@ describe("LinkSwitch states", () => {
     ["unsupported_os", "只有 Linux 电脑可以在这里切换。Mac 或 Windows 电脑请在电脑上自行安装 Persona Link。"],
     ["pending", "请先确认这台电脑是你的。"],
     ["custom_node", "装在自定义位置"],
-    ["unsafe_permissions", "其他用户可以改动 Persona 的文件夹"],
+    ["unsafe_permissions", "chmod go-w ~ ~/.persona ~/.persona/bin"],
     ["hub_old", "hub 需要更新后才能切换电脑。"],
     ["something_new", "这台电脑暂时不能切换到 Persona Link。"],
   ])("says why it can't start (%s), with no button", async (reason, words) => {
@@ -142,6 +142,14 @@ describe("LinkSwitch states", () => {
     expect(line.textContent).toContain("请检查能否连上这台电脑；如果连不上，请在这台电脑上重新连接。");
     expect(line.textContent).not.toContain("电脑已回到 SSH 连接");
     expect(text()).toContain("电脑要在线才能切换。");
+  });
+
+  it("says the hub did not answer when undoing ran out of time", async () => {
+    await render(view({ available: false, reason: "in_progress", phase: "failed", error: "hub_unanswered", rollback_unconfirmed: true }));
+    const line = host.querySelector("[data-link-switch-failed]")!;
+    expect(line.getAttribute("data-link-switch-failed")).toBe("unconfirmed");
+    expect(line.textContent).toContain("hub 一小时内都没有应答，所以没能撤销这次切换。");
+    expect(line.textContent).not.toContain("hub_unanswered");
   });
 
   it("names the linger command with the computer's account, or a placeholder", async () => {
