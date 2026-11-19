@@ -873,6 +873,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		MainCompact      int                           `json:"main_compact_window"` // assistant.send, session.send, assistant.warm: with is_main (model_config.go)
 		FollowsSetting   bool                          `json:"follows_setting"`
 		Interject        bool                          `json:"interject_background"`
+		Public           bool                          `json:"public"` // a public mention turn: no owner live snapshot on this input
 		IdleCompaction   *assistantwire.IdleCompaction `json:"idle_compaction"`
 		MessageSource    *proto.MessageSource          `json:"message_source"`
 		ClientMsgID      string                        `json:"client_msg_id"`
@@ -1634,7 +1635,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		sctx = withClientMsgID(sctx, opts.ClientMsgID) // a runtime's message goes under it (assistant_runtime.go)
 		sctx = withSupervisionDelivery(sctx, p.MessageSource)
 		send := func() (string, error) {
-			return n.assistantSend(sctx, p.SessionID, p.Cwd, p.Launcher, p.Text, p.Images, p.PermissionMode, p.Effort, (modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, ServiceTier: p.ServiceTier, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: n.externalRuntime(p.SessionID, p.Launcher, p.Runtime), External: p.External, IsMain: p.IsMain, MainCompactWindow: p.MainCompact, FollowsSetting: p.FollowsSetting, ConfigDir: p.ConfigDir, Origin: p.Origin, OriginKnown: p.OriginKnown, OriginDecisionRequired: true, Interject: p.Interject, Interactive: p.Interactive}).withSupervision(p.SupervisionInstructions))
+			return n.assistantSend(sctx, p.SessionID, p.Cwd, p.Launcher, p.Text, p.Images, p.PermissionMode, p.Effort, (modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, ServiceTier: p.ServiceTier, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: n.externalRuntime(p.SessionID, p.Launcher, p.Runtime), External: p.External, IsMain: p.IsMain, MainCompactWindow: p.MainCompact, FollowsSetting: p.FollowsSetting, ConfigDir: p.ConfigDir, Origin: p.Origin, OriginKnown: p.OriginKnown, OriginDecisionRequired: true, Public: p.Public, Interject: p.Interject, Interactive: p.Interactive}).withSupervision(p.SupervisionInstructions))
 		}
 		if p.NewSessionID == "" && p.SessionID == "" && opts.ClientMsgID != "" {
 			// A new conversation's first message with its client_msg_id (one a person's own app opened, the manager's
@@ -1751,7 +1752,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			}
 			return n.sendEchoed(p.SessionID, opts.ClientMsgID, p.Text, len(p.Images), after, func() error { // echo.go
 				if n.isAssistantSession(p.SessionID) {
-					_, err := n.assistantSend(withSkillOwner(withClientMsgID(ctx, opts.ClientMsgID), p.SkillOwner), p.SessionID, "", p.Launcher, p.Text, p.Images, "", "", (modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: n.externalRuntime(p.SessionID, p.Launcher, p.Runtime), External: p.External, IsMain: p.IsMain, MainCompactWindow: p.MainCompact, FollowsSetting: p.FollowsSetting, ConfigDir: p.ConfigDir, Origin: p.Origin, OriginKnown: p.OriginKnown, OriginDecisionRequired: true, Interject: p.Interject, Interactive: p.Interactive}).withSupervision(p.SupervisionInstructions))
+					_, err := n.assistantSend(withSkillOwner(withClientMsgID(ctx, opts.ClientMsgID), p.SkillOwner), p.SessionID, "", p.Launcher, p.Text, p.Images, "", "", (modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: n.externalRuntime(p.SessionID, p.Launcher, p.Runtime), External: p.External, IsMain: p.IsMain, MainCompactWindow: p.MainCompact, FollowsSetting: p.FollowsSetting, ConfigDir: p.ConfigDir, Origin: p.Origin, OriginKnown: p.OriginKnown, OriginDecisionRequired: true, Public: p.Public, Interject: p.Interject, Interactive: p.Interactive}).withSupervision(p.SupervisionInstructions))
 					return err
 				}
 				if opts.CompactIfFull { // compact_before_send.go (#11137)

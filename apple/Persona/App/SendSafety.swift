@@ -17,12 +17,82 @@ struct SendRefusal: Identifiable {
     var id: UUID { messageID }
 }
 
+/// The same operation can have a check-only Retry first and a send-anyway Retry later.
+nonisolated struct HeldActionTarget: Hashable, Codable {
+    let session: SessionKey
+    let id: String
+    let manager: String?
+    let pairing: String
+    let credential: String
+}
+
+nonisolated struct HeldRetryOffer: Hashable, Codable {
+    let target: HeldActionTarget
+    let instruction: String
+
+    init?(_ target: HeldActionTarget?, _ message: UndeliveredMessage) {
+        guard let target, message.heldForComputer, message.canRetry else { return nil }
+        self.target = target
+        // The wire supplies the manager's delivery instruction in error. The receipt needs no message or status text.
+        self.instruction = DeviceCredentialTrade.fingerprint(message.error ?? "")
+    }
+
+    private static let name = "held-retry-receipts"
+
+    static func read(in folder: URL?) -> Set<Self> {
+        let data: Data?
+        if let folder { data = try? Data(contentsOf: folder.appending(path: name)) }
+        else { data = UserDefaults.standard.data(forKey: name) }
+        return data.flatMap { try? JSONDecoder().decode(Set<Self>.self, from: $0) } ?? []
+    }
+
+    static func save(_ receipts: Set<Self>, in folder: URL?) {
+        guard let data = try? JSONEncoder().encode(receipts) else { return }
+        if let folder {
+            try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try? data.write(to: folder.appending(path: name), options: .atomic)
+        } else if receipts.isEmpty {
+            UserDefaults.standard.removeObject(forKey: name)
+        } else {
+            UserDefaults.standard.set(data, forKey: name)
+        }
+    }
+}
+
 extension AppModel {
     /// Managing a held copy belongs to this device's own credential at the hub that advertised it.
     func canManageHeld(_ group: String) -> Bool {
+        heldPairing(group) != nil
+    }
+
+    private func heldPairing(_ group: String) -> PairedHub? {
         guard let link = link(group), link.features.contains(UndeliveredMessage.agentHoldFeature),
-              link.surfaceCapabilitiesConfig == link.config else { return false }
-        return registry.hubs.contains { $0.group == group && $0.config.token == link.config.token && $0.deviceID?.isEmpty == false }
+              link.surfaceCapabilitiesConfig == link.config else { return nil }
+        return registry.hubs.first { $0.group == group && $0.config.token == link.config.token && $0.deviceID?.isEmpty == false }
+    }
+
+    func heldTarget(_ key: SessionKey, _ id: String, row: Session?) -> HeldActionTarget? {
+        guard let row, let pairing = heldPairing(key.group) else { return nil }
+        let owner = machine(key.machineRef)?.manager ?? row.manager
+        return HeldActionTarget(session: key, id: id, manager: owner?.isEmpty == false ? owner : nil,
+                                pairing: pairing.id, credential: DeviceCredentialTrade.fingerprint(pairing.config.token))
+    }
+
+    func heldRetryDisabled(_ offer: HeldRetryOffer?) -> Bool {
+        guard let offer else { return false }
+        return heldActionRequests.contains(offer.target) || heldRetryReceipts.contains(offer)
+    }
+
+    /// Reconcile only the receipt's own operation, on its paired manager. A paged/filtered list can omit a whole chat.
+    func reconcileHeldRetries(_ rows: [MachineRef: [Session]]) {
+        guard !heldRetryReceipts.isEmpty else { return }
+        let remaining = heldRetryReceipts.filter { offer in
+            let target = offer.target, key = target.session
+            guard let row = rows[key.machineRef]?.first(where: { $0.sessionID == key.sessionID }),
+                  heldTarget(key, target.id, row: row) == target else { return true }
+            return row.undelivered?.first { $0.id == target.id }.flatMap { HeldRetryOffer(target, $0) } == offer
+        }
+        if remaining != heldRetryReceipts { heldRetryReceipts = remaining }
     }
 
     /// Only the computer being away is recoverable by holding a message. Its manager must still be reachable.
@@ -140,46 +210,87 @@ extension AppModel {
         }
     }
 
-    func retryUndelivered(_ key: SessionKey, _ id: String) async {
-        await changeUndelivered(key, id, retry: true)
+    func retryUndelivered(_ key: SessionKey, _ id: String, shown: HeldRetryOffer? = nil) async {
+        await changeUndelivered(key, id, retry: true, target: shown?.target, offer: shown)
     }
 
-    func deleteUndelivered(_ key: SessionKey, _ id: String) async {
-        await changeUndelivered(key, id, retry: false)
+    func deleteUndelivered(_ key: SessionKey, _ id: String, target: HeldActionTarget? = nil) async {
+        await changeUndelivered(key, id, retry: false, target: target, offer: nil)
     }
 
-    private func changeUndelivered(_ key: SessionKey, _ id: String, retry: Bool) async {
+    private func changeUndelivered(_ key: SessionKey, _ id: String, retry: Bool, target: HeldActionTarget?, offer: HeldRetryOffer?) async {
         guard let row = latest(key), let message = row.undelivered?.first(where: { $0.id == id }),
               !retry || message.canRetry, let client = api(key.group) else { return }
-        if message.heldForComputer, !canManageHeld(key.group) { return }
-        guard undeliveredActions[key, default: []].insert(id).inserted else { return }
+        if message.heldForComputer {
+            guard let current = heldTarget(key, id, row: row), target == nil || target == current else { return }
+            let currentOffer = HeldRetryOffer(current, message)
+            guard !retry || (offer == nil || offer == currentOffer) && !heldRetryDisabled(currentOffer) else { return }
+            await changeHeld(current, message, retry: retry, api: client.manager(current.manager))
+            return
+        }
+        guard target == nil, undeliveredActions[key, default: []].insert(id).inserted else { return }
         defer {
             undeliveredActions[key]?.remove(id)
             if undeliveredActions[key]?.isEmpty == true { undeliveredActions.removeValue(forKey: key) }
         }
-        let api = message.heldForComputer ? client.manager(machine(key.machineRef)?.manager ?? row.manager) : client
         do {
             if retry {
-                try await api.retryUndelivered(key, message)
-                if message.heldForComputer {
-                    // A Retry can mean "check the chat" or "send anyway". Only the manager knows its new line.
-                    // A row pushed while either request was in flight is already newer.
-                    guard latest(key)?.undelivered == row.undelivered,
-                          let fresh = try await api.sessionListDetail(key, title: row.title),
-                          latest(key)?.undelivered == row.undelivered else { return }
-                    patchListedSession(key) { $0.undelivered = fresh.undelivered }
-                } else {
-                    patchListedSession(key) { row in
-                        guard let i = row.undelivered?.firstIndex(of: message) else { return }
-                        row.undelivered?[i].state = "waiting"
-                        row.undelivered?[i].error = nil
-                    }
+                try await client.retryUndelivered(key, message)
+                patchListedSession(key) { row in
+                    guard let i = row.undelivered?.firstIndex(of: message) else { return }
+                    row.undelivered?[i].state = "waiting"
+                    row.undelivered?[i].error = nil
                 }
             } else {
-                try await api.deleteUndelivered(key, message)
+                try await client.deleteUndelivered(key, message)
                 patchListedSession(key) { $0.undelivered?.removeAll { $0.id == id } }
             }
         } catch { show(error) }
+    }
+
+    private func changeHeld(_ target: HeldActionTarget, _ message: UndeliveredMessage, retry: Bool, api: APIClient) async {
+        let key = target.session
+        guard heldActionRequests.insert(target).inserted else { return }
+        do {
+            do {
+                defer { heldActionRequests.remove(target) }
+                if retry { try await api.retryUndelivered(key, message) }
+                else { try await api.deleteUndelivered(key, message) }
+            } catch let error as URLError where retry && (error.isTimeout || error.code == .networkConnectionLost) {
+                // The manager may already have checked the chat. Reconcile its instruction before allowing another Retry.
+            }
+            let row = latest(key)
+            let stillHere = heldTarget(key, target.id, row: row) == target
+            if !retry {
+                if stillHere { patchListedSession(key) { $0.undelivered?.removeAll { $0.id == target.id } } }
+                heldRetryReceipts = heldRetryReceipts.filter { $0.target != target }
+                return
+            }
+            guard let offer = HeldRetryOffer(target, message),
+                  registry.hubs.contains(where: { $0.id == target.pairing && DeviceCredentialTrade.fingerprint($0.config.token) == target.credential })
+            else { return }
+            // The POST belongs to this pairing even if its chat is no longer showing. A push on this same
+            // target may already have replaced or removed its instruction while the request was in flight.
+            if stillHere, row?.undelivered?.first(where: { $0.id == target.id }).flatMap({ HeldRetryOffer(target, $0) }) != offer { return }
+            heldRetryReceipts.insert(offer)
+            guard stillHere, let row else { return }
+            // The lookup may lag a push about another device's actions. Update only the operation we asked about
+            // and keep a change to that operation which landed during the read. A missing session can be temporary.
+            let previous = row.undelivered?.first { $0.id == target.id }
+            guard let fresh = try await api.sessionListDetail(key, title: row.title),
+                  heldTarget(key, target.id, row: latest(key)) == target, heldRetryReceipts.contains(offer),
+                  latest(key)?.undelivered?.first(where: { $0.id == target.id }) == previous else { return }
+            let next = fresh.undelivered?.first { $0.id == target.id }
+            guard next.flatMap({ HeldRetryOffer(target, $0) }) != offer else { return }
+            patchListedSession(key) { row in
+                guard let index = row.undelivered?.firstIndex(where: { $0.id == target.id }) else { return }
+                if let next { row.undelivered?[index] = next }
+                else { row.undelivered?.remove(at: index) }
+            }
+            heldRetryReceipts.remove(offer)
+        } catch {
+            if heldTarget(key, target.id, row: latest(key)) == target { show(error) }
+        }
     }
 
     private func noteFailure(_ key: SessionKey, _ id: UUID, _ reason: String?) {

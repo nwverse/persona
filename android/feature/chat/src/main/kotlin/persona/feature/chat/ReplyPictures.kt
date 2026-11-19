@@ -2,7 +2,6 @@ package persona.feature.chat
 
 import android.graphics.Bitmap
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -16,7 +15,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.painter.BitmapPainter
@@ -43,7 +41,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import persona.core.contracts.api.ReplyImageSource
 import persona.core.designsystem.*
-import persona.core.designsystem.icons.PhIcons
+import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.R as DesignR
 
 /** Only the reply's explicitly supplied author can opt into automatic loads. Other Markdown surfaces stay inert. */
@@ -192,14 +190,14 @@ private fun ReplyTile(gallery: ReplyGallery, index: Int, column: Float, square: 
                 when { !allowed -> gallery.allow(picture); state == TileState.Failed -> attempt++; bitmap != null -> gallery.show(index) }
             }).semantics { contentDescription = if (more > 0) "$label +$more" else label }, contentAlignment = Alignment.Center) {
         val opacity by animateFloatAsState(if (bitmap != null) 1f else 0f,
-            animationSpec = if (PersonaTheme.reduceMotion) snap() else tween(Tokens.Motion.Reveal.duration), label = "reply picture")
+            animationSpec = if (PersonaTheme.reduceMotion) tween(Tokens.Motion.reduced) else SharedMotion.reveal(), label = "reply picture")
         if (bitmap != null) Image(bitmap.asImageBitmap(), null, Modifier.fillMaxSize().alpha(opacity), contentScale = ContentScale.Crop)
         else if (!allowed) Text(load, style = PersonaTheme.type.callout, color = palette.ink2)
-        else if (state == TileState.Failed) JIcon(PhIcons.Image, tint = palette.ink3)
+        else if (state == TileState.Failed) JIcon(PersonaIcons.photo, tint = palette.ink3)
         if (more > 0) Box(Modifier.fillMaxSize().background(palette.scrim), contentAlignment = Alignment.Center) {
-            Text("+$more", style = PersonaTheme.type.title, color = Color.White)
+            Text("+$more", style = PersonaTheme.type.title, color = palette.onMediaBackdrop)
         }
-        if (menu) JMenu(true, { menu = false }, listOf(JAction(original, PhIcons.ArrowSquareOut, section = picture.host) {
+        if (menu) JMenu(true, { menu = false }, listOf(JAction(original, PersonaIcons.openExternal, section = picture.host) {
             menu = false
             uri.openUri(picture.url)
         }))
@@ -229,7 +227,7 @@ private class InlineReplyPictures(private val gallery: ReplyGallery, private val
         val density = LocalDensity.current
         val state = thumbnail(gallery, picture, ReplyImageLayout.request(height, density.density), allowed, attempt)
         val bitmap = (state as? TileState.Ready)?.bitmap
-        val painter = if (bitmap == null) rememberVectorPainter(PhIcons.Image.regular)
+        val painter = if (bitmap == null) rememberVectorPainter(PersonaIcons.photo.regular)
             else remember(bitmap) { BitmapPainter(bitmap.asImageBitmap()) }
         val description = picture.alt.ifEmpty { picture.host }
         val load = stringResource(DesignR.string.designsystem_load_image)
@@ -237,7 +235,7 @@ private class InlineReplyPictures(private val gallery: ReplyGallery, private val
         val uri = LocalUriHandler.current
         val original = stringResource(R.string.chat_reply_image_original)
         var menu by remember(picture.url) { mutableStateOf(false) }
-        if (menu) JMenu(true, { menu = false }, listOf(JAction(original, PhIcons.ArrowSquareOut, section = picture.host) {
+        if (menu) JMenu(true, { menu = false }, listOf(JAction(original, PersonaIcons.openExternal, section = picture.host) {
             menu = false
             uri.openUri(picture.url)
         }))
