@@ -33,6 +33,8 @@ func TestLarkLiteralCommandPrefixes(t *testing.T) {
 		{"block before gated read", `cd /tmp && { f=$(git ls-files | grep -m1 review); echo "$f"; grep -n model "$f" | head; }; ex GET /accounts | python3 -c 'import json,sys; print(json.load(sys.stdin))' | tail`, 0},
 		{"write inside block", `{ f=example; echo "$f"; ex POST /messages/$f/recall; }; ex GET /accounts`, 1},
 		{"shell punctuation in a value stays unknown", `READER="python3 /opt/example/reader.py; lark-cli im +messages-send --text hello"; $READER`, 1},
+		{"expanded opaque program before a read", `READER="python3 -I -B /opt/example/reader.py"; $READER list; lark-cli docs +fetch --doc-id example`, 0},
+		{"expanded opaque program after a read", `READER="python3 -I -B /opt/example/reader.py"; lark-cli docs +fetch --doc-id example; $READER list`, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) { assertAssistantBypassClassification(t, tc.command, tc.cards) })
 	}

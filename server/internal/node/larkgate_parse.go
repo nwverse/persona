@@ -159,8 +159,18 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 			compound := true
 			var walk func(*syntax.Stmt) bool
 			walk = func(stmt *syntax.Stmt) bool {
+				if len(tree.Stmts) == 1 && stmt == tree.Stmts[0] {
+					if _, simple := stmt.Cmd.(*syntax.CallExpr); simple {
+						return false // the splitter, not a compound statement, is what failed
+					}
+				}
 				switch c := stmt.Cmd.(type) {
 				case *syntax.CallExpr:
+					for _, redirect := range stmt.Redirs {
+						if redirect.Pos().Offset() < c.End().Offset() {
+							return false // a redirect interleaved with arguments can change which words are the call
+						}
+					}
 				case *syntax.BinaryCmd:
 					if c.Op != syntax.Pipe && c.Op != syntax.PipeAll {
 						return walk(c.X) && walk(c.Y)
@@ -189,8 +199,8 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 					return false
 				}
 				var text strings.Builder
-				if syntax.NewPrinter().Print(&text, stmt) != nil {
-					return false
+				if syntax.NewPrinter().Print(&text, stmt) != nil || strings.TrimSpace(text.String()) == strings.TrimSpace(cmd) {
+					return false // never recursively classify the same unsplittable text
 				}
 				child := classifyLarkDepth(text.String(), gates, cwd, risk, depth+1)
 				merge(child)
@@ -230,6 +240,11 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 		flow = append(flow, larkFlow{text: s.Text, writes: writes, notes: notes})
 		seg := &flow[len(flow)-1]
 		seg.resolved = resolvedPrefixes[larkWordsKey(s.Words)]
+		assignmentWords := s.Words
+		for len(assignmentWords) > 0 && (assignmentWords[0] == "do" || assignmentWords[0] == "then" || assignmentWords[0] == "else") {
+			assignmentWords = assignmentWords[1:]
+		}
+		resultAssignment := len(assignmentWords) == 1 && isAssignment(assignmentWords[0])
 		nestedUnsure := false
 		// fileReads: every substitution that is no filter only reads files (larkFileReadSubstitution).
 		fileReads := true
@@ -251,7 +266,9 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 			if len(child.calls) > 0 || child.unknown || child.unparsed {
 				v.other = true
 			}
-			nestedUnsure = nestedUnsure || !larkFilterSubstitution(nested) && !larkClassifiedReadSubstitution(child) || child.unknown || child.unparsed || child.unsure
+			formatting := larkFilterSubstitution(nested) || resultAssignment && larkAssignmentFormattingSubstitution(nested)
+			readResult := resultAssignment && larkClassifiedReadSubstitution(child)
+			nestedUnsure = nestedUnsure || !formatting && !readResult || child.unknown || child.unparsed || child.unsure
 			fileReads = fileReads && (larkFilterSubstitution(nested) || larkFileReadSubstitution(nested)) &&
 				len(child.calls) == 0 && !child.unknown && !child.unparsed && !child.unsure
 			merge(child)
@@ -471,6 +488,16 @@ func larkClassifiedReadSubstitution(v larkVerdict) bool {
 }
 
 func larkFilterSubstitution(cmd string) bool {
+	return larkSubstitutionFilter(cmd, false)
+}
+
+// larkAssignmentFormattingSubstitution also permits self-contained inline formatters. It is used only when a result
+// is saved in a variable; command arguments keep the stricter filter rule above.
+func larkAssignmentFormattingSubstitution(cmd string) bool {
+	return larkSubstitutionFilter(cmd, true)
+}
+
+func larkSubstitutionFilter(cmd string, inlineCode bool) bool {
 	segs, ok := shellcmd.Split(cmd)
 	if !ok || len(segs) == 0 {
 		return false
@@ -480,7 +507,7 @@ func larkFilterSubstitution(cmd string) bool {
 			return false
 		}
 		words, ok := unwrapCommand(s.Words)
-		if !ok || len(words) == 0 || len(words) != len(s.Words) || !larkFilters[words[0]] && !selfContainedCode(words) {
+		if !ok || len(words) == 0 || len(words) != len(s.Words) || !larkFilters[words[0]] && (!inlineCode || !selfContainedCode(words)) {
 			return false
 		}
 	}

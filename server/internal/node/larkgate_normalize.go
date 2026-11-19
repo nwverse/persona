@@ -113,23 +113,27 @@ func normalizeLarkCommandTracked(cmd, cwd string, gates []proto.CommandGate, res
 			resolvedAbsolute := false
 			if ok && len(suffix) > 0 {
 				index := len(words) - len(suffix)
-				for i, arg := range call.Args {
-					if i == index {
-						continue
+				base := filepath.Base(suffix[0])
+				scriptArguments := commandShells[strings.TrimRight(base, "0123456789.")] || base == "ssh"
+				if scriptArguments {
+					for i, arg := range call.Args {
+						if i == index {
+							continue
+						}
+						value, replaced, literal := literalLoopWord(arg, vars)
+						if !literal || !replaced {
+							// Text bindings also cover literal script fragments. Unquoted field splitting rules still
+							// reject a multiword value; a quoted expansion stays one word.
+							value, replaced, literal = literalLoopWord(arg, textVars)
+						}
+						if !literal || !replaced {
+							continue
+						}
+						// A single literal binding cannot add fields or globs. Quote the resulting word so a nested shell or
+						// remote command receives exactly the bytes the outer shell would have expanded.
+						arg.Parts = []syntax.WordPart{&syntax.SglQuoted{Value: value}}
+						words[i], changed = value, true
 					}
-					value, replaced, literal := literalLoopWord(arg, vars)
-					if !literal || !replaced {
-						// Text bindings also cover literal script fragments and structured arguments. Unquoted
-						// field splitting rules still reject a multiword value; a quoted expansion stays one word.
-						value, replaced, literal = literalLoopWord(arg, textVars)
-					}
-					if !literal || !replaced {
-						continue
-					}
-					// A single literal binding cannot add fields or globs. Quote the resulting word so a nested shell or
-					// remote command receives exactly the bytes the outer shell would have expanded.
-					arg.Parts = []syntax.WordPart{&syntax.SglQuoted{Value: value}}
-					words[i], changed = value, true
 				}
 				dynamicArgs := false
 				for i, arg := range call.Args {
