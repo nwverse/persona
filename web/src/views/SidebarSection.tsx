@@ -124,6 +124,11 @@ export function Section({ title, children, folded, onToggle, right, onMenu, firs
   );
 }
 
+/** A machine named once in a project heading, or at the start of a row's existing second line. */
+export function MachineChip({ name }: { name: string }) {
+  return <span data-machine-chip title={name} className="inline-block h-4 max-w-28 shrink-0 truncate rounded bg-hover px-1 text-[10px] leading-4 text-ink-3">{name}</span>;
+}
+
 /** A group title's count with what it counts: a tooltip, and the same words for a screen reader. */
 export function GroupCount({ n, label, className }: { n: number; label: string; className?: string }) {
   return (

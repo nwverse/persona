@@ -1,3 +1,5 @@
 {
-  "places": "チェックアウト先"
+  "places": "チェックアウト先",
+  "machine_count_one": "{count}台のマシン",
+  "machine_count_other": "{count}台のマシン"
 }

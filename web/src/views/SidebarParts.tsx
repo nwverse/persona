@@ -143,7 +143,7 @@ export function morePagesMenu(more: NavPage[], activeKey: string, onNavigate?: (
   ];
 }
 
-export { GroupCount, Section, SidebarGroup } from "./SidebarSection";
+export { GroupCount, MachineChip, Section, SidebarGroup } from "./SidebarSection";
 
 const FOLD_LABEL = { "open-block": "sidebar.open_all", "fold-groups": "sidebar.fold_all", "open-groups": "sidebar.open_all" } as const;
 

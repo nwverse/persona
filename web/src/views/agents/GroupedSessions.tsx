@@ -4,20 +4,20 @@
 // too, #9751);
 // a section reads its own sessions while it is open, a page at a time, and stops when it is folded, so the groups of a
 // long list cost nothing until someone looks into one.
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { t } from "../../i18n";
 import { shortPath } from "../../lib/format";
 import { filterQuery, PAGE_SIZE, SessionList, type ListChangeHint, type ListFilters } from "../../lib/session-list";
 import { onHubEvent } from "../../lib/store";
 import { SectionList } from "../../lib/section-list";
-import { groupMachines, holdsPlace, JUST_FINISHED_KEY, type GroupDimension, type SessionGroup, type SessionPlace } from "../../lib/session-groups";
+import { holdsPlace, JUST_FINISHED_KEY, type GroupDimension, type SessionGroup, type SessionPlace } from "../../lib/session-groups";
 import { onShownHint } from "../../lib/shown-hints";
 import { useFolded } from "../../lib/use-folded";
 import { nestUnderParents } from "../../lib/side-sessions";
 import { Button } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { SESSION_LIST_METRICS, SESSION_LIST_STYLE } from "../../ui/list-metrics";
-import { GroupCount, NeedsCount, Section, ShowMoreRow } from "../SidebarSection";
+import { GroupCount, MachineChip, NeedsCount, Section, ShowMoreRow } from "../SidebarSection";
 
 /** How a section's own list is read: the collection the groups are of, as the list above them reads it. */
 export interface GroupedSource<T> {
@@ -40,7 +40,7 @@ export interface GroupedSessionsProps<T> {
   /** The search, the provider and the state: what every section's sessions are narrowed by. */
   scope: ListFilters;
   source: GroupedSource<T>;
-  renderRow: (row: T, within: GroupDimension, group: SessionGroup) => ReactNode;
+  renderRow: (row: T, within: GroupDimension, group: SessionGroup, machines: readonly string[]) => ReactNode;
   groupName: (group: SessionGroup) => string;
   machineName: (id: string) => string;
   /** Where the open conversation is: its section opens by itself. */
@@ -53,13 +53,11 @@ export interface GroupedSessionsProps<T> {
 export function GroupedSessions<T>({ groups, dimension, kind, scope, source, renderRow, groupName, machineName, open, foldScope }: GroupedSessionsProps<T>) {
   const [all, setAll] = useState(false);
   const shown = all ? groups : groups.slice(0, SESSION_LIST_METRICS.groupOptions);
-  // a space or a directory names its computer only when the groups are on several
-  const several = groupMachines(groups) > 1;
   return (
     <div data-session-groups={dimension}>
       {shown.map((group, i) => (
         <GroupSection key={group.key} group={group} first={i === 0} startsOpen={dimension === "todo" ? !group.rest : i < SESSION_LIST_METRICS.groupsOpen || (dimension === "state" && group.key === JUST_FINISHED_KEY)} dimension={dimension} kind={kind} scope={scope} source={source}
-          renderRow={renderRow} name={groupName(group)} machineName={machineName} several={several} holds={Boolean(open && holdsPlace(group, dimension, open))} foldScope={foldScope} />
+          renderRow={renderRow} name={groupName(group)} machineName={machineName} holds={Boolean(open && holdsPlace(group, dimension, open))} foldScope={foldScope} />
       ))}
       {groups.length > shown.length && (
         <ShowMoreRow label={t("paged-agents.more_groups", { count: groups.length - shown.length })} onClick={() => setAll(true)} />
@@ -68,27 +66,42 @@ export function GroupedSessions<T>({ groups, dimension, kind, scope, source, ren
   );
 }
 
-function GroupSection<T>({ group, first, startsOpen, dimension, kind, scope, source, renderRow, name, machineName, several, holds, foldScope }: {
+/** One machine's name, or how many machines a project spans. */
+function GroupMachineChip({ machines, machineName }: { machines: readonly string[]; machineName: (id: string) => string }) {
+  const label = machines.length > 1 ? t("agents-groupedsessions.machine_count", { count: machines.length }) : machines[0] ? machineName(machines[0]) : "";
+  return label ? <MachineChip name={label} /> : null;
+}
+
+function GroupSection<T>({ group, first, startsOpen, dimension, kind, scope, source, renderRow, name, machineName, holds, foldScope }: {
   group: SessionGroup; first: boolean; startsOpen: boolean; dimension: GroupDimension; kind: string; scope: ListFilters; source: GroupedSource<T>;
-  renderRow: (row: T, within: GroupDimension, group: SessionGroup) => ReactNode; name: string; machineName: (id: string) => string; several: boolean; holds: boolean; foldScope?: string;
+  renderRow: (row: T, within: GroupDimension, group: SessionGroup, machines: readonly string[]) => ReactNode; name: string; machineName: (id: string) => string; holds: boolean; foldScope?: string;
 }) {
   // The busiest few start open, the rest folded: an open section keeps a list of its own up to date. "Expand all"
   // leaves them alone for the same reason (it would start one read per group), except in the sidebar, whose title row
   // folds and opens them as the complete list's groups (`foldScope`, #6662): someone asked. What is folded is kept.
   const [folded, toggle] = useFolded(`sessions-by:${kind}:${dimension}:${group.key}`, !startsOpen, { holds, all: Boolean(foldScope), scope: foldScope });
-  // a space is one computer's: two computers' spaces of one name are told apart by it
-  const computer = dimension === "group" && several && group.places[0]?.machine ? machineName(group.places[0].machine) : "";
+  const placed = [...new Set(group.places.map((place) => place.machine).filter(Boolean))];
+  const selected = filterQuery({ ...scope, ...group.filters }, {});
+  const [readMachines, setReadMachines] = useState<{ selected: string; ids: readonly string[] }>();
+  const onMachines = useCallback((ids: readonly string[]) => setReadMachines({ selected, ids }), [selected]);
+  // A legacy hub's global counts cannot pair a project with its machines. Its open section reads its own counts;
+  // folded sections keep their no-extra-reads behavior and show no machine chip until opened.
+  const readMachineCounts = (dimension === "project" || dimension === "group") && !group.rest && !placed.length && !group.filters.machine_id;
+  const learned = readMachines?.selected === selected ? readMachines.ids : [];
+  const machineIds = placed.length ? placed : group.filters.machine_id ? [group.filters.machine_id] : learned;
+  const headingMachines = dimension === "project" || dimension === "group" ? machineIds : [];
   return (
     <div data-session-group={group.key} data-group-open={!folded}>
       <Section first={first} folded={folded} onToggle={toggle}
-        title={<>{name}{computer && <span className="font-normal"> · {computer}</span>}</>}
+        title={name}
         right={<>
           <NeedsCount n={group.needs} />
+          <GroupMachineChip machines={headingMachines} machineName={machineName} />
           <GroupCount n={group.count} label={t("paged-agents.count", { count: group.count })} />
         </>}>
         {!folded && <>
-          {dimension === "project" && <GroupPlaces group={group} machineName={machineName} />}
-          <GroupRows group={group} dimension={dimension} scope={scope} source={source} renderRow={renderRow} />
+          {dimension === "project" && <GroupPlaces group={group} machineName={machineName} several={machineIds.length > 1} />}
+          <GroupRows group={group} dimension={dimension} scope={scope} selected={selected} source={source} renderRow={renderRow} machineIds={machineIds} readMachineCounts={readMachineCounts} onMachines={onMachines} />
         </>}
       </Section>
     </div>
@@ -96,7 +109,7 @@ function GroupSection<T>({ group, first, startsOpen, dimension, kind, scope, sou
 }
 
 /** A project's remote and its directories, each with its computer: which checkouts the sessions below are in. */
-function GroupPlaces({ group, machineName }: { group: SessionGroup; machineName: (id: string) => string }) {
+function GroupPlaces({ group, machineName, several }: { group: SessionGroup; machineName: (id: string) => string; several: boolean }) {
   if (!group.origin && !group.places.length) return null;
   return (
     <ul aria-label={t("agents-groupedsessions.places")} className="flex flex-col gap-0.5 px-2 pb-1 text-xs text-ink-3">
@@ -107,7 +120,7 @@ function GroupPlaces({ group, machineName }: { group: SessionGroup; machineName:
         </li>
       )}
       {group.places.map((place) => {
-        const where = [place.machine && machineName(place.machine), shortPath(place.path)].filter(Boolean).join(" · ");
+        const where = [several && place.machine && machineName(place.machine), shortPath(place.path)].filter(Boolean).join(" · ");
         return (
           <li key={`${place.machine}\n${place.path}`} className="flex min-w-0 items-center gap-1.5">
             <Icon name="folder" size={11} className="shrink-0" />
@@ -121,19 +134,22 @@ function GroupPlaces({ group, machineName }: { group: SessionGroup; machineName:
 }
 
 /** An open section's sessions: the list's own rows, the newest first. A few at first, then a page at a time. */
-function GroupRows<T>({ group, dimension, scope, source, renderRow }: {
-  group: SessionGroup; dimension: GroupDimension; scope: ListFilters; source: GroupedSource<T>; renderRow: (row: T, within: GroupDimension, group: SessionGroup) => ReactNode;
+function GroupRows<T>({ group, dimension, scope, selected, source, renderRow, machineIds, readMachineCounts, onMachines }: {
+  group: SessionGroup; dimension: GroupDimension; scope: ListFilters; selected: string; source: GroupedSource<T>;
+  renderRow: (row: T, within: GroupDimension, group: SessionGroup, machines: readonly string[]) => ReactNode;
+  machineIds: readonly string[]; readMachineCounts: boolean; onMachines: (ids: readonly string[]) => void;
 }) {
   const { path, identity, compare, removeIdentity, event, summary, roots, parentOf } = source;
-  // rows only: the section's numbers are the ones its heading already has. A runtime section passes over the hints that
-  // name none of its rows (#9176): with several open, each read for every agent's update anywhere.
+  // A legacy project also reads its own counts to learn its machine set; other sections need rows only (#9176).
   const follows = event === "sessions_list";
-  const list = useMemo(() => new (follows ? SectionList : SessionList)<T>(path, identity, compare, undefined, removeIdentity, { summary, roots, counts: false }),
-    [path, identity, compare, removeIdentity, summary, roots, follows]);
+  const list = useMemo(() => new (follows ? SectionList : SessionList)<T>(path, identity, compare, undefined, removeIdentity, { summary, roots, counts: readMachineCounts }),
+    [path, identity, compare, removeIdentity, summary, roots, follows, readMachineCounts]);
   // the groups are built again with every read: the list follows what they select, not which object says it
-  const selected = filterQuery({ ...scope, ...group.filters }, {});
   const filters = useMemo(() => ({ ...scope, ...group.filters }), [selected]); // eslint-disable-line react-hooks/exhaustive-deps
   const page = useSyncExternalStore(list.subscribe, list.getSnapshot, list.getSnapshot);
+  useEffect(() => {
+    if (readMachineCounts && page.counts) onMachines(Object.keys(page.counts.machine).filter(Boolean).sort());
+  }, [readMachineCounts, page.counts, onMachines]);
   useEffect(() => {
     void list.setFilters(filters).catch(() => {});
     // the hub's message for the hint onShownHint acts on (registered first, so it is the one the hint is for); after a
@@ -164,7 +180,7 @@ function GroupRows<T>({ group, dimension, scope, source, renderRow }: {
   };
   return <>
     {rows.map((row) => <div key={identity(row)} data-session-row="">
-      {nesting?.nested.has(row) ? <div data-nested-session className={SESSION_LIST_STYLE.nestedRow}>{renderRow(row, dimension, group)}</div> : renderRow(row, dimension, group)}
+      {nesting?.nested.has(row) ? <div data-nested-session className={SESSION_LIST_STYLE.nestedRow}>{renderRow(row, dimension, group, machineIds)}</div> : renderRow(row, dimension, group, machineIds)}
     </div>)}
     {page.loading && (!page.loaded || page.loadingMore) && <p role="status" className="px-2 py-1 text-xs text-ink-3">{t("sidebar.loading")}</p>}
     {page.error && <div className="px-2 py-1"><p role="alert" className="text-xs text-red">{page.error}</p><Button onClick={() => void list.retry().catch(() => {})}>{t("sidebar.retry")}</Button></div>}

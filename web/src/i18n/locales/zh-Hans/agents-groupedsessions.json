@@ -1,3 +1,5 @@
 {
-  "places": "所在的目录"
+  "places": "所在的目录",
+  "machine_count_one": "{count} 台机器",
+  "machine_count_other": "{count} 台机器"
 }

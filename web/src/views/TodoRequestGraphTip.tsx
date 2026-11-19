@@ -4,7 +4,7 @@
 // TIP_DELAY, or when keyboard focus lands on one; it goes when the pointer leaves, the focus does, Escape is pressed, the
 // page scrolls or a press lands. It takes no pointer and no focus (pointer-events: none), so it never stands between the
 // pointer and what it is going for, and it opens above the anchor when there is no room below.
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { placeMenu } from "../ui/overlay";
 import { TOOLTIP_SURFACE } from "../ui/tooltip-surface";
@@ -15,6 +15,8 @@ export const TIP_DELAY = 150;
 const TIP_W = 360;
 
 export interface TipApi {
+  /** The id that anchors use for aria-describedby. */
+  id: string;
   /** Show `content` by `anchor` after `delay` ms (0: at once). A card already up is replaced by the new one. */
   show: (anchor: Element, content: () => ReactNode, delay?: number) => void;
   /** Take the card away now, or only when it is the one `anchor` asked for. */
@@ -22,13 +24,18 @@ export interface TipApi {
 }
 
 /** The card and the api that raises it: render `layer` once, hand `api` to whatever has something to say. */
-export function useTips(): { api: TipApi; layer: ReactNode } {
+export function useTips(tipId?: string, onClose?: () => void): { api: TipApi; layer: ReactNode } {
+  const generatedId = useId();
+  const id = tipId ?? generatedId;
+  const closed = useRef(onClose);
+  useLayoutEffect(() => { closed.current = onClose; });
   const [shown, setShown] = useState<{ anchor: Element; content: () => ReactNode } | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const current = useRef<Element | null>(null);
   const pending = useRef<Element | null>(null);
   useEffect(() => () => clearTimeout(timer.current), []);
   const api = useMemo<TipApi>(() => ({
+    id,
     show(anchor, content, delay = TIP_DELAY) {
       clearTimeout(timer.current);
       pending.current = anchor;
@@ -48,9 +55,25 @@ export function useTips(): { api: TipApi; layer: ReactNode } {
       current.current = null;
       setShown(null);
     },
-  }), []);
-  const hide = useCallback(() => api.hide(), [api]);
-  const layer = shown ? <TipCard key="tip" anchor={shown.anchor} content={shown.content} onClose={hide} /> : null;
+  }), [id]);
+  const hide = useCallback(() => {
+    api.hide();
+    closed.current?.();
+  }, [api]);
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => e.key === "Escape" && hide();
+    // scrolling or resizing also cancels a card that is still waiting for its hover delay
+    const away = () => hide();
+    addEventListener("keydown", key);
+    addEventListener("scroll", away, true);
+    addEventListener("resize", away);
+    return () => {
+      removeEventListener("keydown", key);
+      removeEventListener("scroll", away, true);
+      removeEventListener("resize", away);
+    };
+  }, [hide]);
+  const layer = shown ? <TipCard key="tip" id={id} anchor={shown.anchor} content={shown.content} onClose={hide} /> : null;
   return { api, layer };
 }
 
@@ -58,6 +81,7 @@ export function useTips(): { api: TipApi; layer: ReactNode } {
  *  both going away. Spread them on an HTML or SVG element. */
 export function tipHandlers(api: TipApi, content: () => ReactNode) {
   return {
+    "aria-describedby": api.id,
     onPointerEnter: (e: React.PointerEvent<Element>) => {
       if (e.pointerType === "mouse" || e.pointerType === "pen" || !e.pointerType) api.show(e.currentTarget, content);
     },
@@ -76,26 +100,13 @@ export function tipHandlers(api: TipApi, content: () => ReactNode) {
   };
 }
 
-function TipCard({ anchor, content, onClose }: { anchor: Element; content: () => ReactNode; onClose: () => void }) {
+function TipCard({ id, anchor, content, onClose }: { id: string; anchor: Element; content: () => ReactNode; onClose: () => void }) {
   const card = useRef<HTMLDivElement>(null);
   const [place, setPlace] = useState<{ left: number; top: number } | null>(null);
   const close = useRef(onClose);
   useLayoutEffect(() => {
     close.current = onClose;
   });
-  useEffect(() => {
-    const key = (e: KeyboardEvent) => e.key === "Escape" && close.current();
-    // the list scrolling under it would leave the card behind
-    const away = () => close.current();
-    addEventListener("keydown", key);
-    addEventListener("scroll", away, true);
-    addEventListener("resize", away);
-    return () => {
-      removeEventListener("keydown", key);
-      removeEventListener("scroll", away, true);
-      removeEventListener("resize", away);
-    };
-  }, []);
   useLayoutEffect(() => {
     const el = card.current;
     if (!el) return;
@@ -107,6 +118,7 @@ function TipCard({ anchor, content, onClose }: { anchor: Element; content: () =>
   return createPortal(
     <div
       ref={card}
+      id={id}
       role="tooltip"
       data-graph-tip=""
       style={{ left: place?.left ?? -9999, top: place?.top ?? -9999, maxWidth: TIP_W }}
