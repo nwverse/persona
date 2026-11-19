@@ -253,21 +253,8 @@ export function stepsToItems(steps, opts = {}) {
           ts,
         }
         items.push(opts.full ? resItem : light(resItem))
-        if (Array.isArray(step.media)) {
-          step.media.forEach((m, mi) => {
-            if (m && typeof m.mime_type === 'string' && m.mime_type.startsWith('image/')) {
-              items.push({
-                id: `${line}#img${mi}`,
-                seq,
-                role: 'user',
-                kind: 'image',
-                mime: m.mime_type,
-                lazy: true,
-                ts,
-              })
-            }
-          })
-        }
+        // Omit tool-result step.media: Antigravity runtimes have no session.image handler (matching agytranscript.go),
+        // and Read/view_file image thumbnails are already resolved from tool_input.file_path via ViewedImages.
         break
       }
       case 'ERROR_MESSAGE': {
@@ -288,7 +275,7 @@ export function stepsToItems(steps, opts = {}) {
 
 const transcriptCache = new Map()
 const transcriptRevisions = new Map()
-const MAX_CACHED_TRANSCRIPTS = 16
+const MAX_CACHED_TRANSCRIPTS = 128
 const MAX_TRANSCRIPT_REVISIONS = 256
 const MAX_TRANSCRIPT_CACHE_BYTES = 64 * 1024 * 1024
 let transcriptCacheBytes = 0

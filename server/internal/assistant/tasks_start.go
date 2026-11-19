@@ -1122,6 +1122,7 @@ func (s *Service) continueTask(ctx context.Context, cur Todo) (json.RawMessage, 
 		}
 		var err error
 		if started, err = s.startTaskSuccessor(ctx, cur, cut, continueText); err != nil {
+			_, st.uncertain = errors.AsType[*uncertainTaskStart](err)
 			return nil, err
 		}
 		return s.todoView(ctx, cur.ID)
