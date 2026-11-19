@@ -10,6 +10,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/closeout"
 	"github.com/nwverse/persona/server/internal/lazyre"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -32,12 +33,13 @@ const (
 )
 
 // taskFileLine is a hand-over line in a reply: `file: /a/b`, or `文件：/a/b`.
+// i18n-ignore: the marker matched in an Agent's reply (prompts/agents/task_files.md), not text anyone reads.
 var taskFileLine = lazyre.New(`(?mi)^[ \t]*(?:file|文件)[ \t]*[:：][ \t]*(.+?)[ \t]*$`)
 
 // taskFilePath is p as a file path to copy, or "": absolute or ~/, without the quotes or backticks a model likes to
 // wrap it in.
 func taskFilePath(p string) string {
-	p = strings.Trim(strings.TrimSpace(p), "`'\"「」")
+	p = strings.Trim(strings.TrimSpace(p), "`'\"「」") // i18n-ignore: quote marks trimmed off a path in an Agent's reply
 	p = strings.TrimSpace(p)
 	if strings.HasPrefix(p, "~/") || strings.HasPrefix(p, "/") {
 		return p
@@ -89,15 +91,13 @@ func (f taskFile) local() string {
 	return f.Path
 }
 
-// String is name and where the file is, or why it did not come, for a notice or a supervision message.
-func (f taskFile) String() string {
-	if f.Local != "" {
-		return f.Name + "：" + f.Local
+// prompt is f as a notice or a supervision message lists it (prompts/assistant/task_notice.md, supervise.md): where the
+// conversation finds it, or why it did not come and where it stayed.
+func (f taskFile) prompt() prompts.TaskFile {
+	if f.Local == "" && f.Error != "" {
+		return prompts.TaskFile{Name: f.Name, Path: f.Path, Error: clip(f.Error, 160)}
 	}
-	if f.Error != "" {
-		return f.Name + "（没取回：" + clip(f.Error, 160) + "；在原电脑 " + f.Path + "）"
-	}
-	return f.Name + "：" + f.Path
+	return prompts.TaskFile{Name: f.Name, Path: f.local()}
 }
 
 // taskFileBook is what each task handed over, by todo id. The copies themselves live on the conversation's computer;
@@ -148,11 +148,11 @@ func (s *Service) keepTaskFiles(id string, files []taskFile) []taskFile {
 	return append([]taskFile(nil), cur...)
 }
 
-// taskFileLines is files as a notice or a supervision message lists them.
-func taskFileLines(files []taskFile) []string {
-	out := make([]string, 0, len(files))
+// taskFilePrompts is files as a notice or a supervision message lists them.
+func taskFilePrompts(files []taskFile) []prompts.TaskFile {
+	out := make([]prompts.TaskFile, 0, len(files))
 	for _, f := range files {
-		out = append(out, f.String())
+		out = append(out, f.prompt())
 	}
 	return out
 }

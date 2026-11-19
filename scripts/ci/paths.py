@@ -25,17 +25,25 @@ _RELATIVE = re.compile(r"""\.\.?/[^"'`\s]*""")
 _JOINED = re.compile(r"""["']\.\.["'](?:\s*,\s*["'][^"'\s,()]*["'])+""")
 _ELEMENT = re.compile(r"""["']([^"']*)["']""")
 _FS_IMPORT = re.compile(r"""["'](?:node:)?fs(?:/promises)?["']""")
+# How a quoted fs module name ends ("fs", "node:fs/promises"): looked for as substrings before _FS_IMPORT runs,
+# which on every file would take about a third of the scan's time.
+_FS_ENDINGS = ('fs"', "fs'", 'fs/promises"', "fs/promises'")
 _SCHEMA_REF = re.compile(r'"\$ref"\s*:\s*"([^"#:]+)')
 _WILDCARD = re.compile(r"[*?\[{$]")
 
 # Web files that most tests import (lib/store.ts ~825 of ~1,350 test files, lib/api.ts ~1,040, ui/atoms.tsx ~930,
 # i18n/ ~1,190, the vitest setup file included) run the whole suite in check-fast: following the imports would select
 # nearly all of it and only add the time to walk the graph. So does any change outside web/src (the Vite and
-# TypeScript configs, package.json, package-lock.json, the global setup in web/scripts, public/, e2e/), and a change to
-# a web/src module the Vite configs import.
+# TypeScript configs, package.json, package-lock.json, the global setup in web/scripts, public/, e2e/), a change to
+# a web/src module the Vite configs import, and a change to anything the vitest setup files reach (_setup_reach).
 WEB_FULL_SUITE = ("web/src/lib/store.ts", "web/src/lib/api.ts", "web/src/ui/atoms.tsx", "web/src/i18n/*")
 WEB_CONFIGS = ("web/vite.config.ts", "web/vite.public.config.ts")
 _CONFIG_IMPORT = re.compile(r"""from\s+["'](\./src/[^"']+)["']""")
+# A config's test.setupFiles and test.globalSetup: one path or a list, relative to web/.
+_SETUP_OPTION = re.compile(r"""\b(?:setupFiles|globalSetup)\s*:\s*(\[[^\]]*\]|["'][^"']*["'])""")
+# How an import without its file's extension resolves (TypeScript's bundler resolution): the path as written, with
+# an extension, or the index of a directory; an import that names a .js file may mean the .ts or .tsx beside it.
+_MODULE_SUFFIXES = ("", ".ts", ".tsx", ".mts", ".js", ".jsx", ".mjs", "/index.ts", "/index.tsx", "/index.js")
 # The modules a file imports to build, serve or test through a Vite config (WebFile.build).
 _VITE_API = ("vite", "vitest/node")
 
@@ -43,7 +51,8 @@ _VITE_API = ("vite", "vitest/node")
 class WebFile:
     """What one scanned web file reads.
 
-    fs: it reads through node's fs (fs, node:fs, readFileSync), so the path can be built at run time.
+    fs: it reads through node's fs (fs, node:fs, fs/promises, node:fs/promises, readFileSync), so the path can be built
+    at run time.
     vite: it reads through Vite, a glob or a query import (?raw, ?url, ?inline, ?worker). Those paths are literal, but
     vitest related follows a dependency only when its id is a file on disk, which a query import's never is.
     build: it imports Vite's or vitest's node API (vite, vitest/node), so it builds or serves through a Vite config
@@ -58,7 +67,7 @@ class WebFile:
         refs = [match.group(0) for match in _RELATIVE.finditer(text)
                 if match.start() and text[match.start() - 1] in "\"'`"]
         refs += ["/".join(_ELEMENT.findall(match.group(0))) for match in _JOINED.finditer(text)]
-        self.fs = "readFileSync" in text or (("fs\"" in text or "fs'" in text) and bool(_FS_IMPORT.search(text)))
+        self.fs = "readFileSync" in text or (any(end in text for end in _FS_ENDINGS) and bool(_FS_IMPORT.search(text)))
         self.vite = "import.meta.glob" in text or any("?" in ref for ref in refs)
         self.build = any(f"{quote}{name}{quote}" in text for name in _VITE_API for quote in "\"'")
         base = posixpath.dirname(path)
@@ -131,16 +140,21 @@ def web_scan(root=ROOT):
     return scan
 
 
+def _add_read(root, target, found):
+    """Add the patterns of one named path to found: a file as itself, with the files a JSON Schema's $refs name; a
+    directory, a glob or a path with a ${…} part as everything under its literal part."""
+    pattern = _pattern(root, target)
+    if pattern == target:
+        _schema_refs(root, target, found)
+    else:
+        found.add(pattern)
+
+
 def _read_patterns(root, file):
-    """The patterns of what a web file reads: each path it names (a file as itself; a directory, a glob or a path with
-    a ${…} part as everything under its literal part), and the files a named JSON Schema's $refs name."""
+    """The patterns of what a web file reads: each path it names (_add_read)."""
     found = set()
     for target in file.named:
-        pattern = _pattern(root, target)
-        if pattern == target:
-            _schema_refs(root, target, found)
-        else:
-            found.add(pattern)
+        _add_read(root, target, found)
     return found
 
 
@@ -164,14 +178,56 @@ def _config_sources(root):
     return sources
 
 
+def _module(root, target):
+    """The file an import of a named path resolves to (_MODULE_SUFFIXES), or None: not a module, or not there."""
+    if target.endswith("/") or _WILDCARD.search(target):
+        return None
+    candidates = [target + suffix for suffix in _MODULE_SUFFIXES]
+    if target.endswith(".js"):
+        candidates += [target[:-3] + ".ts", target[:-3] + ".tsx"]
+    return next((path for path in candidates if (root / path).is_file()), None)
+
+
+def _setup_reach(root):
+    """What the vitest setup files reach, as fnmatch patterns: each setup file the Vite configs name, everything it
+    reads (_add_read), and each module it imports, followed to the end. Every test runs the setup files first, and
+    vitest related follows only the test's own imports, so a change to any of these must run the whole suite."""
+    scanned = {file.path: file for file in web_scan(root)}
+    todo = []
+    for config in WEB_CONFIGS:
+        file = root / config
+        if file.is_file():
+            for option in _SETUP_OPTION.findall(file.read_text(errors="replace")):
+                todo += [path for name in _ELEMENT.findall(option)
+                         if (path := _module(root, posixpath.normpath(posixpath.join("web", name))))]
+    reach, seen = set(), set()
+    while todo:
+        path = todo.pop()
+        if path in seen:
+            continue
+        seen.add(path)
+        reach.add(path)
+        file = scanned.get(path) or WebFile(path, (root / path).read_text(errors="replace"))
+        for target in file.named:
+            module = _module(root, target)
+            if module and _WEB_CODE.search(module):
+                todo.append(module)
+            elif module:
+                _schema_refs(root, module, reach)  # a JSON or other file it imports, as itself
+            else:
+                _add_read(root, target, reach)
+    return reach
+
+
 def web_plan(changed, root=ROOT):
     """check-fast's web check for a list of changed repository paths (#10619): (mode, reason, files).
 
     "none" when nothing changed under web/ or in a file web/src and its tests read; "full" when the whole suite runs
-    (WEB_FULL_SUITE, anything in web/ outside web/src, a module the Vite configs import); "related" when vitest related
-    runs from files, relative to web/: the changed web/src and outside files, every vitest file that reads through fs
-    or Vite or builds through a Vite config (the import graph does not see what they read), every other web/src module
-    that reads through fs or builds, and each one that reads through Vite a path a changed file matches.
+    (WEB_FULL_SUITE, anything in web/ outside web/src, a module the Vite configs import, anything the vitest setup files
+    reach); "related" when vitest related runs from files, relative to web/: the changed web/src and outside files,
+    every vitest file that reads through fs or Vite or builds through a Vite config (the import graph does not see what
+    they read), every other web/src module that reads through fs or builds, and each one that reads through Vite a
+    path a changed file matches.
     """
     root = Path(root)
     inputs = web_inputs(root)
@@ -188,6 +244,10 @@ def web_plan(changed, root=ROOT):
             return "full", f"{path} is a shared entry point", []
         if posixpath.splitext(path)[0] in config:
             return "full", f"{path} is part of the Vite config", []
+    setup = _setup_reach(root)
+    for path in web + outside:
+        if any(fnmatch.fnmatchcase(path, pattern) for pattern in setup):
+            return "full", f"{path} is part of the vitest setup", []
     readers = []
     for file in web_scan(root):
         always = file.fs or file.build or (file.test and file.vite)

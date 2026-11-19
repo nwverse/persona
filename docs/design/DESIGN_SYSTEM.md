@@ -915,7 +915,10 @@ Android's `JMenu` takes a choice list in groups: an action can open a group with
   Separate at compact width, #4206): the web sidebar's structure in one column
   (`UnifiedSidebarColumn`): the assistant, the main conversation held at the top, then one list (Pages and
   Persona Chats folding under their headings, then the Agents with their heading's ⋯ / Personal Agents / New Session, quick
-  filters, grouping, Needs You and groups, the Agents page's own rows), and at the foot the Needs You jump, the usage, New
+  filters, grouping, Needs You and groups, the Agents page's own rows; the three headings are one row each in one box,
+  `SidebarHeadingBox`: a sidebar row's height and padding for the name, `Space.s` over it, buttons beside the name never
+  setting the height, and no sections' gap before Agents, so the three stand evenly apart folded and unfolded; #10551,
+  `SidebarHeadingGapsUITests`), and at the foot the Needs You jump, the usage, New
   Chat (the only one where the column is beside the page, #4206), and Search and Settings in one capsule. A pick replaces
   the page beside it. **Search** is one page over the whole window (#4206, the owner; it replaced a field in the head
   that filtered the column in place): the field at its foot, two scopes at its top, Chats (Persona's, by what was said
