@@ -212,7 +212,11 @@ func CallStatus(w http.ResponseWriter, status int, err error) {
 		if _, hasDetail := body["detail"]; !hasDetail {
 			body["detail"] = re.Message
 		}
-		body["error"] = i18n.T(l, "http-status.not_found")
+		key := "http-status.not_found"
+		if reason, _ := body["reason"].(string); notFoundKeys[reason] != "" {
+			key = notFoundKeys[reason]
+		}
+		body["error"] = i18n.T(l, key)
 	} else if _, explained := codeActions[code]; !explained {
 		localizeFailure(body, status, err, i18n.OfWriter(w))
 	}
@@ -338,6 +342,14 @@ var rpcFailureKeys = map[string]string{
 	proto.CodeSwitchFailed:          "rpc-errors.switch_failed",
 	proto.CodeSwitchFailedStopped:   "rpc-errors.switch_failed_stopped",
 	proto.CodeSwitchBusy:            "rpc-errors.switch_busy",
+}
+
+// notFoundKeys word a node's not_found by why its session's history can't be read (data.reason, node/transcript_files.go
+// readErr, #11388). One without a known reason (an older node, a runtime's own answer, a missing file) keeps the plain
+// summary.
+var notFoundKeys = map[string]string{
+	proto.NotFoundNoTranscript:   "apierr-apierr.session_no_transcript",
+	proto.NotFoundUnknownSession: "apierr-apierr.session_unknown",
 }
 
 // openElsewhereKeys word the node's open_elsewhere refusal by where the session is open (node/openelsewhere.go
