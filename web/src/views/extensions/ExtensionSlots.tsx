@@ -94,10 +94,10 @@ export function OverviewCards() {
   return (
     <section aria-label={t("extensions-extensionslots.extensions")} data-overview-cards>
       <div className={cx("flex items-baseline gap-2", !folded && "mb-2.5")}>
-        <h2 className="text-[13px] font-medium text-ink">{t("extensions-extensionslots.extensions")}</h2>
-        <span className="text-[12px] text-ink-3 tabular-nums">{cards.length}</span>
+        <h2 className="text-meta font-medium text-ink">{t("extensions-extensionslots.extensions")}</h2>
+        <span className="text-label text-ink-3 tabular-nums">{cards.length}</span>
         <span className="flex-1" />
-        <button type="button" aria-expanded={!folded} aria-controls={folded ? undefined : grid} onClick={toggle} className="shrink-0 whitespace-nowrap rounded-control px-1.5 text-[12px] text-ink-3 transition-colors hover:bg-hover hover:text-ink-2">
+        <button type="button" aria-expanded={!folded} aria-controls={folded ? undefined : grid} onClick={toggle} className="shrink-0 whitespace-nowrap rounded-control px-1.5 text-label text-ink-3 transition-colors hover:bg-hover hover:text-ink-2">
           {folded ? t("extensions-extensionslots.cards_expand") : t("extensions-extensionslots.cards_collapse")}
         </button>
       </div>
