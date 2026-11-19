@@ -872,12 +872,24 @@ func (m *Machine) nodeUID() string {
 
 // tellLinks says on the links of this computer's persona-links (its own entry's and those of entries with the same
 // computer) whether the hub got through to the resident node.
-func (m *Machine) tellLinks(online bool, err string) {
+func (m *Machine) tellLinks(online bool, err string) { m.tellLinksIf(online, err, nil) }
+
+// tellLinksIf is tellLinks, each link taking the state only if still says it holds then (tellNode).
+func (m *Machine) tellLinksIf(online bool, err string, still func() bool) {
 	for _, p := range m.d.pathsOf(m) {
 		if p.src != nil && p.src.cfg.Kind == kindLink {
-			p.src.tellLink(online, err)
+			p.src.tellLink(online, err, still)
 		}
 	}
+}
+
+// nodeConnected: the manager is through to the resident node now (on peer, when not nil): a connection served, not
+// one whose transport went and that waits to be resumed.
+func (m *Machine) nodeConnected(peer *rpc.Peer) bool {
+	m.mu.Lock()
+	cur, online := m.peer, m.online
+	m.mu.Unlock()
+	return online && cur != nil && (peer == nil || cur == peer) && !cur.Lost()
 }
 
 // reachableHere: this hub can try its hub.json entry's way to the node now as far as it knows, and its last round

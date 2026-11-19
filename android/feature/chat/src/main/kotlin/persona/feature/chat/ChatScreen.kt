@@ -105,6 +105,7 @@ fun ChatScreen(
     historySession: Session? = null,
     /** The host already knows this is Health; do not briefly route its files as ordinary attachments while the row loads. */
     healthChat: Boolean = false,
+    composerUpload: ComposerAttachmentUpload? = null,
 ) {
     PersonaTheme(darkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f) {
         LaunchedEffect(sessionKey, chrome.childSessionId) {
@@ -122,7 +123,7 @@ fun ChatScreen(
             ChatPage(sessionKey, repository, pageSender, interactions, sessions, onBack, onTerminal, onResumeInTerminal, chrome,
                 scopedReadingKey, anchorStore ?: local?.anchors,
                 renderStyle, textUpdates,
-                composerService, composerState ?: rememberChatComposerState(), onDraftChanged, onContextCleared, statusBindings,
+                composerService, composerUpload, composerState ?: rememberChatComposerState(), onDraftChanged, onContextCleared, statusBindings,
                 embedded, showTopBar, historyReadOnly, historyFooter, historySession, healthChat)
         }
     }
@@ -136,7 +137,7 @@ private fun ChatPage(
     onTerminal: ((SessionKey) -> Unit)?, onResumeInTerminal: ((SessionKey) -> Unit)?, chrome: ChatChromeBindings,
     readingKey: ChatReadingKey?, anchorStore: ChatAnchorStore?,
     renderStyle: ChatRenderStyle, textUpdates: Map<String, ChatTextUpdate>,
-    composerService: ChatComposerService?, composer: ChatComposerState,
+    composerService: ChatComposerService?, composerUpload: ComposerAttachmentUpload?, composer: ChatComposerState,
     onDraftChanged: ((ChatComposerDraft) -> Unit)?, onContextCleared: ((SessionKey) -> Unit)?,
     statusBindings: ChatStatusBindings,
     embedded: Boolean, showTopBar: Boolean,
@@ -244,11 +245,6 @@ private fun ChatPage(
     var conversationModel by rememberSaveable(key.path, chrome.assistantManagement) { mutableStateOf<String?>(null) }
     // Forward placements arrive over the composer; the message action and forward-sheet UI lives in ChatMessageActions.
     val placedForwards = ForwardPlacements.waiting(key)
-    LaunchedEffect(placedForwards, readOnly, canSend) {
-        if (placedForwards == null || readOnly || !canSend) return@LaunchedEffect
-        ForwardPlacements.take(key).forEach { linkContexts = withQuote(linkContexts, it) }
-        composer.focusRequest++
-    }
     // /model in the "/" list asked for the "Mode" sheet: a one-off, cleared once the sheet opened (not replayed when the bar returns).
     var openModes by remember { mutableStateOf(false) }
     // `/permissions` in the "/" list asked for the permission mode menu (#6513): Glass's mode button, the others' "Mode" sheet
@@ -421,6 +417,27 @@ private fun ChatPage(
     var reportedSeen by pageReader.reportedSeen
     val readThrough = pageReader.readThrough
     val context = pageReader.context
+    LaunchedEffect(placedForwards, readOnly, canSend) {
+        if (placedForwards == null || readOnly || !canSend) return@LaunchedEffect
+        val fresh = mutableListOf<ForwardPlacement>()
+        val duplicates = mutableListOf<RestoredPhotos>()
+        ForwardPlacements.take(key).forEach { placement ->
+            val next = withQuote(linkContexts, placement.ref)
+            if (next.size == linkContexts.size) duplicates += placement.photos
+            else {
+                linkContexts = next
+                fresh += placement
+            }
+        }
+        duplicates.forEach { discardForwardedPhotos(context, it) }
+        val rejected = attachForwardedPhotos(context, composer, fresh.map(ForwardPlacement::photos))
+        val lost = fresh.sumOf { it.photos.lost } + rejected.size
+        if (lost > 0) {
+            val message = forwardedPhotoNotice(res, lost)
+            if (feedback?.notice(message) != true) notice = message
+        }
+        composer.focusRequest++
+    }
     val pairingLoader = pageReader.pairingLoader
     val loader = pageReader.loader
     val markdownCache = pageReader.markdownCache
@@ -697,8 +714,9 @@ private fun ChatPage(
     val turnFix = if (renderStyle == ChatRenderStyle.Assistant) TurnErrorFix.of(session?.turnErrorCode) else null
     val fixModel = chrome.onFixModel?.let { open -> { action: persona.core.designsystem.ReadinessActionId -> open(action, session?.launcher, session?.manager) } }
     // Nothing is up over the page: the header may fold by itself (iOS waits while a sheet or menu is presented).
-    val headerBusy by rememberUpdatedState(chrome.covered || overlay || chromeOverlay || linkVisible || statusSheet || activitySheet ||
-        terminalHelp || taskPageVisible || fullText != null || search.visible || pushedDetail != null)
+    val pageCovered = chrome.covered || overlay || linkVisible || statusSheet || activitySheet || terminalHelp ||
+        taskPageVisible || fullText != null || search.visible || pushedDetail != null
+    val headerBusy by rememberUpdatedState(pageCovered || chromeOverlay)
     LaunchedEffect(headerFold, foldsHeader, reduceMotion) {
         if (!foldsHeader || reduceMotion) return@LaunchedEffect
         while (true) {
@@ -1008,10 +1026,11 @@ private fun ChatPage(
                                     // /clear and /model type into Claude's pane: Claude in a terminal engine only (positive check).
                                     canClear = clearingPane == null && session?.canTypeClaudeCommands == true,
                                     service = composerService, uploadDestination = if (healthChat || session?.isHealth == true) "health" else null,
+                                    upload = composerUpload,
                                     onSend = { send() }, onCommand = { send(it) }, onNotice = { notice = it },
                                     extraContent = linkContexts.isNotEmpty(),
                                     assistantChat = assistantChat,
-                                    useShellSurface = compactGlassAgent,
+                                    useShellSurface = compactGlassAgent, covered = pageCovered,
                                     enabled = canSend, wrapPlaceholder = offlineHint != null, placeholder = when {
                                         !canSend -> READ_ONLY.text()
                                         // "Ask Persona…", as the assistant's blank page and iOS say (#4339 C18).

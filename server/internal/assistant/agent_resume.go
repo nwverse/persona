@@ -105,15 +105,34 @@ func contextFull(c proto.Session) bool {
 	return proto.ContextNearlyFull(int(c.ContextTokens), int(c.ContextWindow))
 }
 
-// compactable: c runs on a runtime whose own compaction the node can run before a message (#11137): Claude Code or
-// Codex, not a runtime's session (Paseo and the like).
+// compactable: c runs on a runtime whose own compaction the node can run before a message (#11137): Claude Code in one
+// of Persona's terminals, and Codex wherever Persona reaches it to resume or send: its terminal, a thread nothing runs
+// that the node resumes there with codex resume (codex_history), or its app-server (codex_app_server). Not the Codex
+// App's chats, a Claude outside Persona's terminals (claude_bg, claude_desktop, claude_cli: its inbox runs no command)
+// or a runtime's session (Paseo and the like).
 func compactable(c proto.Session) bool {
-	return c.SourceKind == "" && (c.Agent == "" || c.Agent == "claude" || c.Agent == "codex")
+	switch c.Agent {
+	case "", "claude":
+		return c.SourceKind == ""
+	case "codex":
+		return c.SpaceKind != codexAppSpace && (c.SourceKind == "" || c.SourceKind == "codex_history" || c.SourceKind == "codex_app_server")
+	}
+	return false
 }
 
-// notCompactable says why c cannot be compacted from Persona.
+// codexAppSpace is the space_kind of the Codex App's chats (node codex_desktop.go).
+const codexAppSpace = "codex_app"
+
+// notCompactable says why c cannot be compacted from Persona, and what then.
 func notCompactable(c proto.Session) string {
-	if c.SourceKind != "" {
+	switch {
+	case c.Agent == "codex" && c.SpaceKind == codexAppSpace:
+		return "it is a Codex App chat, which takes no /compact from Persona (the App compacts on its own)"
+	case c.SourceKind == proto.SourceClaudeBg || c.SourceKind == proto.SourceClaudeDesktop || c.SourceKind == proto.SourceClaudeTerminal:
+		return "it is a Claude outside Persona's terminals, whose inbox runs no /compact"
+	case c.SourceKind != "" && (c.Agent == "" || c.Agent == "claude" || c.Agent == "codex"):
+		return "it is a " + c.SourceKind + " session, which Persona cannot compact"
+	case c.SourceKind != "":
 		return "it runs in " + c.SourceKind + ", which has no compaction Persona can run"
 	}
 	return c.Agent + " has no compaction Persona can run"
