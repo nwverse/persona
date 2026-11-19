@@ -90,5 +90,6 @@
   "omp_resume_unknown": "Persona 还不能从这里恢复这个 omp 会话，请在电脑上用 omp --resume 接着它。这次没有发送。",
   "held_ahead": "这个 Agent 还有更早的消息在等待发送，请等它们发出后再发这条。",
   "held_not_kept": "前面的消息还在等待发送，这条没能保存下来。请稍后再试。",
-  "held_full": "等待发给这个 Agent 的消息太多了。请先删掉一些，或等电脑回来后再发这条。"
+  "held_full": "等待发给这个 Agent 的消息太多了。请先删掉一些，或等电脑回来后再发这条。",
+  "assistant_launcher_profile_switch": "无法将此对话切换到所选连接，消息未发送。请选择上一个连接继续此对话，或使用所选连接及其模型新建对话。"
 }

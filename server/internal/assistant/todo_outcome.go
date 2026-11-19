@@ -203,12 +203,13 @@ func (s *Service) outcomeAgents(ctx context.Context, t Todo) []outcomeAgent {
 
 // pullOutcome asks the model what the task came to (the kb.project purpose: it writes the projects' timelines).
 func (s *Service) pullOutcome(ctx context.Context, t Todo, agents []outcomeAgent) (taskOutcome, error) {
-	in := prompts.TodoOutcomeInput{Title: t.Title, Prompt: clipMiddle(strings.TrimSpace(t.Notes), 1500)}
+	language := answerLanguage(s.hello(ctx).Locale)
+	in := prompts.TodoOutcomeInput{Language: language, Title: t.Title, Prompt: clipMiddle(strings.TrimSpace(t.Notes), 1500)}
 	for _, a := range agents {
 		in.Replies = append(in.Replies, prompts.TodoOutcomeReply{Machine: a.Machine, Cwd: a.Cwd, Text: clipMiddle(a.Text, outcomeReplyMax)})
 	}
 	var out taskOutcome
-	err := s.purposeModel("kb.project").JSONMax(ctx, prompts.RenderTodoOutcome(prompts.TodoOutcome{Owner: s.owner(ctx)}),
+	err := s.purposeModel("kb.project").JSONMax(ctx, prompts.RenderTodoOutcome(prompts.TodoOutcome{Language: language, Owner: s.owner(ctx)}),
 		prompts.RenderTodoOutcomeInput(in), 2048, &out)
 	return out, err
 }
@@ -394,15 +395,19 @@ func (s *Service) projectContextSlugs(ctx context.Context, machine, dir string) 
 		return "", nil
 	}
 	projects := e.ProjectsForWork(machine, dir)
+	if len(projects) == 0 {
+		return ""
+	}
 	// What extensions wrote for these projects (extension_context.go): asked once for all of them.
 	var slugs []string
 	for _, p := range projects {
 		slugs = append(slugs, p.Slug)
 	}
 	fromExtensions := s.projectExtensionContext(ctx, slugs)
+	language := answerLanguage(s.hello(ctx).Locale)
 	var blocks []string
 	for _, p := range projects {
-		d := prompts.TodoProject{Name: contextText(oneLine(p.Name)), OneLine: contextText(oneLine(p.OneLine)), Extensions: fromExtensions[p.Slug]}
+		d := prompts.TodoProject{Language: language, Name: contextText(oneLine(p.Name)), OneLine: contextText(oneLine(p.OneLine)), Extensions: fromExtensions[p.Slug]}
 		for _, o := range e.Store.TodoOutcomes(p.Slug, projectOutcomesMost) {
 			d.Outcomes = append(d.Outcomes, prompts.TodoProjectOutcome{When: o.When, Title: contextText(o.Title), Text: contextText(o.Text)})
 		}
