@@ -612,3 +612,109 @@ func TestResumeKeptGoesOnceRead(t *testing.T) {
 	}
 	eventually(t, func() bool { return l.n.LaneStats().Kept == 0 })
 }
+
+// The transport replaced while this side's read loop was busy with a line, not reading (its OnEvent, say): the next
+// read still starts afresh, the part of a frame left from the old transport dropped and frames read twice let go, so
+// every event comes once and in order (#10829's review).
+func TestResumeWhileTheReaderIsBusy(t *testing.T) {
+	const events = 400
+	hold := make(chan struct{})
+	var mu sync.Mutex
+	var got []int
+	l := newResumeLink(t, netshape.Config{Rate: 4_000_000, Delay: 5 * time.Millisecond, Queue: 256 << 10}, 10*time.Second, true, true, func(h, n *Peer) {
+		h.OnEvent = func(event string, params json.RawMessage) {
+			var e struct {
+				I int `json:"i"`
+			}
+			_ = json.Unmarshal(params, &e)
+			if e.I == 50 {
+				<-hold // busy with this line while the transport changes
+			}
+			mu.Lock()
+			got = append(got, e.I)
+			mu.Unlock()
+		}
+	})
+	go func() {
+		for i := 1; i <= events; i++ {
+			if l.n.Notify("ev", map[string]any{"i": i, "pad": strings.Repeat("z", 3000)}) != nil {
+				return
+			}
+		}
+	}()
+	eventually(t, func() bool { mu.Lock(); defer mu.Unlock(); return len(got) == 49 })
+	<-time.After(50 * time.Millisecond) // more of the node's frames in h's buffer, one in part
+	l.cut()
+	if !l.h.Lose(errors.New("pings unanswered")) { // as the manager does: its reader is not reading to see the cut
+		t.Fatal("not resumable")
+	}
+	select {
+	case <-l.nLost:
+	case <-time.After(5 * time.Second):
+		t.Fatal("n not told lost")
+	}
+	if err := l.resume(); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	close(hold)
+	eventually(t, func() bool { mu.Lock(); defer mu.Unlock(); return len(got) >= events })
+	mu.Lock()
+	defer mu.Unlock()
+	for i, v := range got {
+		if v != i+1 {
+			t.Fatalf("event %d is %d", i+1, v)
+		}
+	}
+	if err := l.h.Err(); err != nil {
+		t.Fatalf("closed: %v", err)
+	}
+}
+
+// A connection taken over before its side saw the old transport fail, whose answer then cannot be written (the new
+// transport failed too), waits out its window like any lost connection, instead of for ever (#10829's review).
+func TestResumeAnswerFailsAndTheWindowRuns(t *testing.T) {
+	l := newResumeLink(t, netshape.Config{}, 300*time.Millisecond, true, true, nil)
+	l.n.mu.Lock()
+	token := l.n.resume.token
+	l.n.mu.Unlock()
+	if err := l.n.AcceptResume(ResumeRequest{ID: "h9", Token: token}, strings.NewReader(""), failingWriter{}); err == nil || errors.Is(err, ErrResumeRefused) {
+		t.Fatalf("an answer that could not be written: %v", err)
+	}
+	if !l.n.Lost() {
+		t.Fatal("not lost after a failed take over")
+	}
+	select {
+	case <-l.n.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("still open after its window")
+	}
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("the new transport failed") }
+
+// A read loop busy with a line does not read its transport, nor the acknowledgements of what its side wrote: that
+// is no sign of a dead transport, which only a read waiting for bytes can show (#10829's review).
+func TestResumeBusyReaderIsNotSilence(t *testing.T) {
+	oldStale, oldCheck := resumeStale, resumeCheck
+	resumeStale, resumeCheck = 200*time.Millisecond, 20*time.Millisecond
+	t.Cleanup(func() { resumeStale, resumeCheck = oldStale, oldCheck })
+	hold := make(chan struct{})
+	l := newResumeLink(t, netshape.Config{}, 5*time.Second, true, true, func(h, n *Peer) {
+		h.OnEvent = func(string, json.RawMessage) { <-hold }
+	})
+	if err := l.n.Notify("ev", map[string]int{"i": 1}); err != nil {
+		t.Fatal(err)
+	}
+	call := make(chan error, 1)
+	go func() { call <- l.h.Call(context.Background(), "echo", nil, nil) }() // kept until an acknowledgement is read
+	<-time.After(5 * resumeStale)
+	if l.h.Lost() {
+		t.Fatal("a transport lost while its read loop was busy with a line")
+	}
+	close(hold)
+	if err := <-call; err != nil {
+		t.Fatal(err)
+	}
+}

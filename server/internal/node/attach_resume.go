@@ -33,11 +33,12 @@ type attached struct {
 
 func (a *attached) setPeer(p *rpc.Peer) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	a.peer = p
+	a.mu.Unlock()
+	go func() { <-p.Done(); a.closeConn() }() // its transport ends with it: a read stuck on a silent one returns
 }
 
-// closeConn closes the transport now in use: one whose peer lost it, so a write still stuck on it returns.
+// closeConn closes the transport now in use.
 func (a *attached) closeConn() {
 	a.mu.Lock()
 	c := a.conn
@@ -56,20 +57,24 @@ func (a *attached) end(err error) {
 	}
 }
 
-// resume takes the connection back over c, which brought req (rest: what follows it). false: refused, nothing written.
-func (a *attached) resume(req rpc.ResumeRequest, c net.Conn, rest io.Reader) bool {
+// resume takes the connection back over c, which brought req (rest: what follows it); its old transport is closed,
+// which ends a read or write still stuck on it. rpc.ErrResumeRefused: nothing was written, c is the caller's.
+func (a *attached) resume(req rpc.ResumeRequest, c net.Conn, rest io.Reader) error {
 	a.mu.Lock()
 	p := a.peer
 	a.mu.Unlock()
-	if p == nil || p.AcceptResume(req, rest, c) != nil {
-		return false
+	if p == nil {
+		return rpc.ErrResumeRefused
+	}
+	if err := p.AcceptResume(req, rest, c); err != nil {
+		return err
 	}
 	a.mu.Lock()
 	old := a.conn
 	a.conn = c
 	a.mu.Unlock()
 	_ = old.Close()
-	return true
+	return nil
 }
 
 // connReader is what a Node reads: the attached transport's bytes, the first line read ahead of them included. Close
@@ -92,15 +97,15 @@ type peekedConn struct {
 	c     net.Conn
 	first []byte
 	rest  io.Reader
+	err   error
 }
 
 // readFirstLine reads c's first line (rpc.ReadFirstLine), waiting at most firstLineWait. line is what it read: the
 // line, or what came before giving up; rest is what follows it.
-func readFirstLine(c net.Conn) (line []byte, rest io.Reader) {
+func readFirstLine(c net.Conn) (line []byte, rest io.Reader, err error) {
 	_ = c.SetReadDeadline(time.Now().Add(firstLineWait))
 	defer func() { _ = c.SetReadDeadline(time.Time{}) }()
-	line, rest, _ = rpc.ReadFirstLine(c, firstLineMax)
-	return line, rest
+	return rpc.ReadFirstLine(c, firstLineMax)
 }
 
 // firstLineMax bounds a new transport's first line: rpc.resume, or the manager's first call, both short.

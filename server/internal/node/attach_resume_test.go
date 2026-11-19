@@ -105,3 +105,57 @@ func TestAttachResumesAConnection(t *testing.T) {
 		t.Fatal("Attach did not end")
 	}
 }
+
+// A transport that ends before it said a whole first line (a manager's attempt to resume cut on its way) is let go:
+// it does not replace the connection kept (#10829's review).
+func TestAttachIgnoresATransportThatSaidNothing(t *testing.T) {
+	home := shortHome(t)
+	t.Setenv("PERSONA_HOME", filepath.Join(home, ".persona"))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var made atomic.Int32
+	extra := make(chan net.Conn)
+	done := make(chan error, 1)
+	go func() {
+		done <- Attach(ctx, func() (*Node, error) {
+			made.Add(1)
+			n, err := New("test")
+			if err == nil {
+				n.logger.SetOutput(io.Discard)
+				t.Cleanup(n.starts.close)
+			}
+			return n, err
+		}, extra, nil)
+	}()
+	m1, n1 := net.Pipe()
+	extra <- n1
+	hub := rpc.New("h", m1)
+	hub.EnableLanes(nodeproto.ControlLane, nodeproto.BulkLane)
+	hub.OnRequest = func(context.Context, string, json.RawMessage) (any, error) { return map[string]any{}, nil }
+	go func() { _ = hub.Serve(ctx, m1) }()
+	cctx, ccancel := context.WithTimeout(ctx, 20*time.Second)
+	defer ccancel()
+	if err := hub.Call(cctx, "ping", map[string]any{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, partial := range []string{"", `{"id":"h7","method":"rpc.res`} {
+		m2, n2 := net.Pipe()
+		extra <- n2
+		go func() {
+			_, _ = m2.Write([]byte(partial))
+			m2.Close()
+		}()
+	}
+	if err := hub.Call(cctx, "ping", map[string]any{}, nil); err != nil {
+		t.Fatalf("the connection served after two that said nothing: %v", err)
+	}
+	if made.Load() != 1 {
+		t.Fatalf("%d Nodes made", made.Load())
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(15 * time.Second):
+		t.Fatal("Attach did not end")
+	}
+}

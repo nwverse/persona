@@ -85,6 +85,13 @@ func (m *Machine) resumeConn(c *nodeConn, err error) {
 			m.fellBack(lostAt, oneLineErr(rerr))
 			return
 		}
+		if p, _ := m.d.choosePath(m); p != nil && pathName(m.d, p) != pathName(m.d, c.path) {
+			// Its path failed and the machine has a better one now (a network changed): connecting anew over it
+			// is quicker than waiting for this one to come back.
+			c.peer.Close(fmt.Errorf("%s failed (%v) after: %w", pathName(m.d, c.path), oneLineErr(rerr), err))
+			m.fellBack(lostAt, "another path: "+pathName(m.d, p))
+			return
+		}
 		select {
 		case <-time.After(min(wait, time.Until(deadline))):
 		case <-c.peer.Done():
@@ -103,19 +110,39 @@ func (m *Machine) resumeConn(c *nodeConn, err error) {
 	}
 }
 
-// tryResume opens one transport on c's path and resumes c over it.
+// tryResume opens one transport on c's path and resumes c over it, within resumeTryWait: a dial that hangs (the old
+// route gone quiet) gives up for the next try. The transport lasts as long as the connection.
 func (m *Machine) tryResume(c *nodeConn) error {
 	tctx, cancel := context.WithTimeout(c.ctx, resumeTryWait)
 	defer cancel()
-	l, err := m.openPipe(c.ctx, c.path, c.via)
-	if err != nil {
+	type opened struct {
+		l   *nodePipe
+		err error
+	}
+	ch := make(chan opened, 1)
+	go func() {
+		l, err := m.openPipe(c.ctx, c.path, c.via)
+		ch <- opened{l, err}
+	}()
+	var o opened
+	select {
+	case o = <-ch:
+	case <-tctx.Done():
+		go func() { // let the late one go once it is there
+			if o := <-ch; o.l != nil {
+				o.l.close()
+			}
+		}()
+		return tctx.Err()
+	}
+	if o.err != nil {
+		return o.err
+	}
+	if err := c.peer.Resume(tctx, o.l.r, o.l.w); err != nil {
+		o.l.close()
 		return err
 	}
-	if err := c.peer.Resume(tctx, l.r, l.w); err != nil {
-		l.close()
-		return err
-	}
-	c.pipeNow.Store(l)
+	c.pipeNow.Store(o.l)
 	return nil
 }
 

@@ -1,6 +1,7 @@
 package node
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -150,11 +151,15 @@ func AttachWithTransport(ctx context.Context, newNode func() (*Node, error), ext
 	// A new transport is served once its first line says what it is (attach_resume.go): read beside the loop, so one
 	// that says nothing holds up no other.
 	peeked := make(chan peekedConn)
+	stopped := make(chan struct{}) // this loop returned: a peek still going lets its transport go
+	defer close(stopped)
 	peek := func(c net.Conn) {
-		first, rest := readFirstLine(c)
+		first, rest, err := readFirstLine(c)
 		select {
-		case peeked <- peekedConn{c: c, first: first, rest: rest}:
+		case peeked <- peekedConn{c: c, first: first, rest: rest, err: err}:
 		case <-ctx.Done():
+			c.Close()
+		case <-stopped:
 			c.Close()
 		}
 	}
@@ -181,18 +186,32 @@ func AttachWithTransport(ctx context.Context, newNode func() (*Node, error), ext
 			continue
 		case f := <-peeked:
 			c, first, rest = f.c, f.first, f.rest
+			if f.err != nil && !errors.Is(f.err, bufio.ErrTooLong) {
+				// It ended, or said nothing in time, before a whole first line: not a manager's connection (one cut
+				// while asking to resume included), and it must not replace the connection kept.
+				_ = c.Close()
+				continue
+			}
 		}
 		if req, ok := rpc.ParseResume(first); ok { // the manager takes its connection back (attach_resume.go)
 			mu.Lock()
 			a := cur
 			mu.Unlock()
-			if a != nil && a.resume(req, c, rest) {
-				logf("connection resumed on a new transport")
-				continue
+			var err error = rpc.ErrResumeRefused
+			if a != nil {
+				err = a.resume(req, c, rest)
 			}
-			_ = rpc.RefuseResume(c, req)
-			_ = c.Close()
-			logf("refused to resume a connection this node does not have")
+			switch {
+			case err == nil:
+				logf("connection resumed on a new transport")
+			case errors.Is(err, rpc.ErrResumeRefused):
+				_ = rpc.RefuseResume(c, req)
+				_ = c.Close()
+				logf("refused to resume a connection this node does not have")
+			default: // the new transport failed while answering: the connection waits for the next
+				_ = c.Close()
+				logf("resuming on a new transport: %v", err)
+			}
 			continue
 		}
 		a := &attached{conn: c}
@@ -245,7 +264,7 @@ func AttachWithTransport(ctx context.Context, newNode func() (*Node, error), ext
 			n.spool = sp      // what standby took goes to this connection first (spool.go)
 			// The connection outlives a transport that ends, for the manager to resume (attach_resume.go): writes go to
 			// whichever transport is in use.
-			n.resumeWindow, n.onPeer, n.onLost = resumeWindow, a.setPeer, func(error) { a.closeConn() }
+			n.resumeWindow, n.onPeer = resumeWindow, a.setPeer
 			go func() { <-cctx.Done(); a.end(errReplaced) }() // a replaced connection stops at once, a waiting one too
 			if err := n.Serve(cctx, reader, attachedWriter{a}); err != nil && !errors.Is(err, io.EOF) && cctx.Err() == nil {
 				n.logger.Printf("connection ended: %v", err)

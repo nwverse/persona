@@ -204,22 +204,41 @@ func (p *Peer) lose(err error, gen uint64) bool {
 		p.mu.Unlock()
 		return true // a resume already took over, or this loss is known
 	}
-	if !lw.resumable() {
+	if rs.sr == nil || !lw.resumable() { // input not read through a transport a resume can replace, or a gap
 		p.mu.Unlock()
 		return false
 	}
+	tell := p.loseLocked(err)
+	p.mu.Unlock()
+	tell()
+	return true
+}
+
+// loseLocked makes the connection lost (p.mu held): the writer waits, the window starts, and the returned func
+// tells OnLost (called once p.mu is let go).
+func (p *Peer) loseLocked(err error) func() {
+	rs := p.resume
 	rs.lost = true
-	lw.loseGen(gen)
+	p.lw.loseGen(rs.gen)
+	p.armWindowLocked(err)
+	onLost := p.OnLost
+	return func() {
+		if onLost != nil {
+			go onLost(err)
+		}
+	}
+}
+
+// armWindowLocked starts the window a lost connection waits for a resume (p.mu held).
+func (p *Peer) armWindowLocked(err error) {
+	rs := p.resume
+	if rs.timer != nil {
+		rs.timer.Stop()
+	}
 	window := rs.window
 	rs.timer = time.AfterFunc(window, func() {
 		p.Close(fmt.Errorf("rpc: not resumed within %s: %w", window, err))
 	})
-	onLost := p.OnLost
-	p.mu.Unlock()
-	if onLost != nil {
-		go onLost(err)
-	}
-	return true
 }
 
 // Resume takes a lost connection back over a new transport r / w: it asks the other side with the token it was given,
@@ -229,9 +248,13 @@ func (p *Peer) lose(err error, gen uint64) bool {
 func (p *Peer) Resume(ctx context.Context, r io.Reader, w io.Writer) error {
 	p.mu.Lock()
 	rs := p.resume
-	if rs == nil || !rs.on || !rs.lost || rs.fr == nil {
+	if rs == nil || !rs.on || rs.fr == nil {
 		p.mu.Unlock()
-		return errors.New("rpc: nothing to resume")
+		return fmt.Errorf("%w: nothing to resume", ErrResumeRefused)
+	}
+	if !rs.lost {
+		p.mu.Unlock()
+		return errors.New("rpc: the connection is not lost")
 	}
 	gen, token, read := rs.gen, rs.token, rs.fr.lastRead.Load()
 	id := fmt.Sprintf("%s%d", p.prefix, p.nextID.Add(1))
@@ -327,14 +350,18 @@ func (p *Peer) AcceptResume(req ResumeRequest, r io.Reader, w io.Writer) error {
 		p.mu.Unlock()
 		return ErrResumeRefused
 	}
-	if !rs.lost {
-		rs.lost = true
-		lw.loseGen(rs.gen)
+	tell := func() {}
+	if !rs.lost { // its transport not seen failing (half open): lost now, as if it had
+		tell = p.loseLocked(errTakenOver)
+	}
+	if rs.timer != nil {
+		rs.timer.Stop() // the window does not end while the answer goes out
 	}
 	rs.accepting = true // one at a time: the token stays this one's until the answer is out
 	next := newResumeToken()
 	result, err := marshal(resumeAnswer{Read: rs.fr.lastRead.Load(), Token: next})
 	p.mu.Unlock()
+	tell()
 	if err == nil {
 		var line []byte
 		if line, err = encodeLine(message{ID: req.ID, Result: result}); err == nil {
@@ -344,18 +371,22 @@ func (p *Peer) AcceptResume(req ResumeRequest, r io.Reader, w io.Writer) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	rs.accepting = false
-	if err != nil {
-		return err // the new transport failed already: still lost, a next one may come with the same token
-	}
 	select {
 	case <-p.closed:
 		return ErrClosed
 	default:
 	}
+	if err != nil {
+		p.armWindowLocked(err) // the new transport failed already: still lost, a next one may come with the same token
+		return err
+	}
 	rs.token = next
 	p.installLocked(r, w, req.Read)
 	return nil
 }
+
+// errTakenOver is why AcceptResume lost a transport the peer had not seen fail.
+var errTakenOver = errors.New("rpc: taken over by a resume on a new transport")
 
 // RefuseResume answers req on w: this side has no connection to take back for it. The other side connects anew.
 func RefuseResume(w io.Writer, req ResumeRequest) error {
@@ -410,36 +441,44 @@ func ReadFirstLine(r io.Reader, max int) (line []byte, rest io.Reader, err error
 // the peer (lose); while it waits for a resume the read waits too, and once the next transport is in it returns
 // errResumed.
 type swapReader struct {
-	p      *Peer
-	mu     sync.Mutex
-	r      io.Reader
-	gen    uint64
-	next   chan struct{} // closed when the next generation is installed
-	readAt atomic.Int64  // unix nanoseconds: the latest read that brought bytes (watchStale)
+	p    *Peer
+	mu   sync.Mutex
+	r    io.Reader
+	gen  uint64
+	seen uint64        // the generation the reader read from last: the first read after another is errResumed
+	next chan struct{} // closed when the next generation is installed
+	// waiting is since when a read has waited for bytes (unix nanoseconds), 0 while none does: a transport is
+	// silent only while this side reads it (watchStale), not while its read loop is busy with a line.
+	waiting atomic.Int64
 }
 
 func newSwapReader(p *Peer, r io.Reader) *swapReader {
-	s := &swapReader{p: p, r: r, next: make(chan struct{})}
-	s.readAt.Store(time.Now().UnixNano())
-	return s
+	return &swapReader{p: p, r: r, next: make(chan struct{})}
 }
 
 func (s *swapReader) Read(b []byte) (int, error) {
 	s.mu.Lock()
 	r, gen, next := s.r, s.gen, s.next
-	s.mu.Unlock()
-	n, err := r.Read(b)
-	if n > 0 {
-		s.readAt.Store(time.Now().UnixNano())
+	if s.seen != gen { // a transport installed since the last read, however that read ended: what was left of the old goes
+		s.seen = gen
+		s.mu.Unlock()
+		return 0, errResumed
 	}
+	s.mu.Unlock()
+	s.waiting.Store(time.Now().UnixNano())
+	n, err := r.Read(b)
+	s.waiting.Store(0)
 	if n > 0 || err == nil {
-		return n, nil // an error with data comes again on the next read
+		return n, nil // an error with data comes again on the next read; bytes of an old transport, then errResumed
 	}
 	if !s.p.lose(err, gen) {
 		return 0, err
 	}
 	select {
 	case <-next:
+		s.mu.Lock()
+		s.seen = s.gen
+		s.mu.Unlock()
 		return 0, errResumed
 	case <-s.p.closed:
 		return 0, err
@@ -450,7 +489,6 @@ func (s *swapReader) install(r io.Reader, gen uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.r, s.gen = r, gen
-	s.readAt.Store(time.Now().UnixNano()) // a new transport: its silence counts from now
 	close(s.next)
 	s.next = make(chan struct{})
 }
@@ -475,11 +513,14 @@ func (p *Peer) watchStale(stale, every time.Duration) {
 			p.mu.Unlock()
 			continue
 		}
-		gen, read := rs.gen, time.Unix(0, rs.sr.readAt.Load())
+		gen, waiting := rs.gen, rs.sr.waiting.Load()
 		p.mu.Unlock()
-		now := time.Now()
-		if oldest := lw.oldestKept(); !oldest.IsZero() && now.Sub(oldest) > stale && now.Sub(read) > stale {
-			p.lose(fmt.Errorf("%w for %s", errStale, now.Sub(read).Round(time.Second)), gen)
+		if waiting == 0 {
+			continue // not reading now: a read loop busy with a line is no sign of a dead transport
+		}
+		now, since := time.Now(), time.Unix(0, waiting)
+		if oldest := lw.oldestKept(); !oldest.IsZero() && now.Sub(oldest) > stale && now.Sub(since) > stale {
+			p.lose(fmt.Errorf("%w for %s", errStale, now.Sub(since).Round(time.Second)), gen)
 		}
 	}
 }

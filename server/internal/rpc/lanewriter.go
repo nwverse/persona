@@ -52,7 +52,8 @@ type laneWriter struct {
 	gen          uint64
 	lost         bool
 	resend       int
-	resent       int64 // frames written again, every resume together
+	resent       int64      // frames written again, every resume together
+	held         []*outLine // lines whose last frame went with a write that failed, until written again (run)
 	lose         func(err error, gen uint64) bool
 }
 
@@ -236,14 +237,25 @@ func (lw *laneWriter) run() {
 		if err == nil && lw.wrote != nil {
 			lw.wrote.Store(time.Now().UnixNano())
 		}
-		if err != nil && lw.lose != nil && lw.lose(err, gen) {
-			// Resuming: what this write carried is kept and goes again on the next transport, as if it went out now.
-			err = nil
-		}
+		resuming := err != nil && lw.lose != nil && lw.lose(err, gen)
 		lw.mu.Lock()
 		lw.busy = false
-		for _, l := range finished {
-			l.done <- err
+		switch {
+		case resuming:
+			// What this write carried is kept and goes again on the next transport: its lines are written once the
+			// frames written again are (or told the error if the peer closes first).
+			lw.held = append(lw.held, finished...)
+			err = nil
+		default:
+			for _, l := range finished {
+				l.done <- err
+			}
+			if err == nil && lw.resend < 0 {
+				for _, l := range lw.held {
+					l.done <- nil
+				}
+				lw.held = nil
+			}
 		}
 		lw.mu.Unlock()
 		if err != nil {
@@ -272,6 +284,10 @@ func (lw *laneWriter) stop(err error) {
 		}
 		*q = laneQueue{}
 	}
+	for _, l := range lw.held {
+		l.done <- lw.err
+	}
+	lw.held = nil
 }
 
 // fillLocked makes the next write: the acknowledgement due, then frames in priority order while they fit in frameMax

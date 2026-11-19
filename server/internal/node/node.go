@@ -257,10 +257,9 @@ type Node struct {
 	// keeper: a resident node's conversations between hub connections (assistant_keep.go); nil without one.
 	keeper *assistantKeeper
 	// Resuming (attach_resume.go): a resident node keeps a connection whose transport ended resumeWindow for the
-	// manager to take back; onPeer is told the connection's peer once it is made, onLost that its transport ended.
+	// manager to take back; onPeer is told the connection's peer once it is made.
 	resumeWindow time.Duration
 	onPeer       func(*rpc.Peer)
-	onLost       func(error)
 	// replayed is closed once what standby took while no manager was connected went to this one (spool_replay.go): new
 	// hooks wait for it, so the manager hears them after the older ones. nil (tests' Nodes): nothing waits.
 	replayed chan struct{}
@@ -486,9 +485,6 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 		n.peer.EnableResume(n.resumeWindow)
 		n.peer.OnLost = func(err error) {
 			n.logger.Printf("connection lost (%v): kept %s for the manager to resume", err, n.resumeWindow)
-			if n.onLost != nil {
-				n.onLost(err)
-			}
 		}
 	}
 	if n.onPeer != nil {
