@@ -5,6 +5,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.isDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -90,6 +91,8 @@ class StandaloneScheduledChatTest {
             style = candidate
             Snapshot.sendApplyNotifications()
             rule.waitForIdle()
+            // Projection and list placement finish off the main thread; Compose idle does not cover that work (#10747).
+            rule.waitUntil(20_000) { rule.onNodeWithText("Daily briefing pushed to your phone.").isDisplayed() }
             rule.onNodeWithText("Daily briefing pushed to your phone.").assertIsDisplayed()
         }
     }
@@ -133,6 +136,8 @@ class StandaloneScheduledChatTest {
             style = candidate
             Snapshot.sendApplyNotifications()
             rule.waitForIdle()
+            // Projection and list placement finish off the main thread; Compose idle does not cover that work.
+            rule.waitUntil(20_000) { rule.onNodeWithText("Deployment finished and pushed.").isDisplayed() }
             rule.onNodeWithText("Deployment finished and pushed.").assertIsDisplayed()
             rule.onNodeWithText("Nothing needs the owner right now.").assertDoesNotExist()
         }

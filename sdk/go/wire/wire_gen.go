@@ -1838,10 +1838,17 @@ type Component struct {
 	Aspect string `json:"aspect,omitempty"`
 	Fit    string `json:"fit,omitempty"`
 	// Tapping does nothing (else it shows the picture full screen).
-	NoZoom     bool   `json:"no_zoom,omitempty"`
-	Tiles      []Tile `json:"tiles,omitempty"`
-	MaxColumns int    `json:"max_columns,omitempty"`
-	Width      string `json:"width,omitempty"`
+	NoZoom     bool        `json:"no_zoom,omitempty"`
+	Tiles      []Tile      `json:"tiles,omitempty"`
+	MaxColumns int         `json:"max_columns,omitempty"`
+	Width      string      `json:"width,omitempty"`
+	Nodes      []GraphNode `json:"nodes,omitempty"`
+	Edges      []GraphEdge `json:"edges,omitempty"`
+	Layout     string      `json:"layout,omitempty"`
+	Direction  string      `json:"direction,omitempty"`
+	// Ids of nodes whose children start folded. Once the person folds or unfolds one, the app keeps their choice for
+	// this key.
+	Folded []string `json:"folded,omitempty"`
 }
 
 // Component types.
@@ -1872,13 +1879,59 @@ const (
 	ComponentImage         = "image"
 	ComponentGrid          = "grid"
 	ComponentCarousel      = "carousel"
+	ComponentGraph         = "graph"
 )
 
 // ComponentTypes are the types of Component, in order.
-var ComponentTypes = []string{"text", "metric", "progress", "row", "button", "link", "field", "divider", "chart", "stat_grid", "segmented", "markdown", "table", "empty", "loading", "html", "header", "breadcrumb", "file_tree", "code", "diff", "comment_thread", "composer", "image", "grid", "carousel"}
+var ComponentTypes = []string{"text", "metric", "progress", "row", "button", "link", "field", "divider", "chart", "stat_grid", "segmented", "markdown", "table", "empty", "loading", "html", "header", "breadcrumb", "file_tree", "code", "diff", "comment_thread", "composer", "image", "grid", "carousel", "graph"}
 
 // ComponentSince is the UI version that brought each type.
-var ComponentSince = map[string]int{"text": 1, "metric": 1, "progress": 1, "row": 1, "button": 1, "link": 1, "field": 1, "divider": 1, "chart": 2, "stat_grid": 2, "segmented": 2, "markdown": 3, "table": 3, "empty": 3, "loading": 3, "html": 4, "header": 4, "breadcrumb": 4, "file_tree": 4, "code": 4, "diff": 4, "comment_thread": 4, "composer": 4, "image": 6, "grid": 6, "carousel": 6}
+var ComponentSince = map[string]int{"text": 1, "metric": 1, "progress": 1, "row": 1, "button": 1, "link": 1, "field": 1, "divider": 1, "chart": 2, "stat_grid": 2, "segmented": 2, "markdown": 3, "table": 3, "empty": 3, "loading": 3, "html": 4, "header": 4, "breadcrumb": 4, "file_tree": 4, "code": 4, "diff": 4, "comment_thread": 4, "composer": 4, "image": 6, "grid": 6, "carousel": 6, "graph": 10}
+
+// GraphNode: one node of a graph (UI version 10): a box with a title, a state line, a badge, an icon and a progress
+// bar, in tone's role color or color's named color (never both).
+type GraphNode struct {
+	ID       string `json:"id"`
+	Title    string `json:"title"`
+	Subtitle string `json:"subtitle,omitempty"`
+	Badge    *Badge `json:"badge,omitempty"`
+	Tone     string `json:"tone,omitempty"`
+	Color    string `json:"color,omitempty"`
+	Icon     string `json:"icon,omitempty"`
+	// A thin bar along the node's foot, 0 to 1.
+	Progress *float64 `json:"progress,omitempty"`
+	// Nodes with the same parents and the same group sit next to each other inside one frame titled with it (the same
+	// task tried several ways).
+	Group  string  `json:"group,omitempty"`
+	Action *Action `json:"action,omitempty"`
+}
+
+// GraphEdge: an edge from one node to another (UI version 10): from is the parent, to the child.
+type GraphEdge struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+// GraphLayout: tree (the default): every node has at most one parent, children under it, a parent centred over its
+// children. layered: a node may have several parents; each node sits one layer past its furthest parent (a plan whose
+// steps wait for several others).
+const (
+	GraphLayoutTree    = "tree"
+	GraphLayoutLayered = "layered"
+)
+
+// GraphLayouts are the values of GraphLayout, in order.
+var GraphLayouts = []string{"tree", "layered"}
+
+// GraphDirection: right (the default): roots at the start, children after them, so a wide fan-out reads down the
+// screen like an outline. down: roots at the top, children below.
+const (
+	GraphDirectionRight = "right"
+	GraphDirectionDown  = "down"
+)
+
+// GraphDirections are the values of GraphDirection, in order.
+var GraphDirections = []string{"right", "down"}
 
 // ImageSource: where a picture comes from (UI version 6): an https url the app loads without credentials, or a ref
 // the extension serves itself (ui.image) through the hub; exactly one. path is written by the hub only, for a ref:
@@ -3949,6 +4002,13 @@ type ConnectorArchiveChat struct {
 	// The owner marked it done.
 	Done      bool      `json:"done,omitempty"`
 	UpdatedAt time.Time `json:"updated_at,omitzero"`
+	// Where the conversation stands at the source, as the source records it (a pull request or issue: open, merged or
+	// closed); omitted when the source has no such state. A fact, not the owner's done flag: the selection does not read
+	// it; the knowledge base keeps it on the chat, finishes projects whose chats have all ended and leaves ended chats
+	// out of the assistant's snapshot.
+	State string `json:"state,omitempty"`
+	// When the conversation got to state; omitted when unknown.
+	StateAt time.Time `json:"state_at,omitzero"`
 }
 
 // ConnectorArchiveMessage: one archived message. The archive only appends: a message without at, or without text and
@@ -4099,6 +4159,8 @@ type ConnectorKBItem struct {
 	LockedFields []string  `json:"locked_fields,omitempty"`
 	// The store's: which extension holds a locked field. A connector's is ignored.
 	Provenance map[string]ConnectorKBProvenance `json:"provenance,omitempty"`
+	// The store's: the links the user removed, by list. A connector's is ignored.
+	Excluded map[string][]string `json:"excluded,omitempty"`
 }
 
 // ConnectorKBProvenance: who holds a locked field of a knowledge-base entity, and from what (kb.schema.json
@@ -4649,11 +4711,14 @@ type KBDetail struct {
 	Path string `json:"path"`
 	// The entity's own fields (meta.json). For people, status is active, ignored or self; absent or empty means active.
 	// Status uses the same locked_fields and provenance as other corrected fields.
-	Meta     json.RawMessage      `json:"meta"`
-	Summary  string               `json:"summary,omitempty"`
-	Log      []string             `json:"log,omitempty"`
-	Recent   string               `json:"recent,omitempty"`
-	Links    []KBEntry            `json:"links,omitempty"`
+	Meta    json.RawMessage `json:"meta"`
+	Summary string          `json:"summary,omitempty"`
+	Log     []string        `json:"log,omitempty"`
+	Recent  string          `json:"recent,omitempty"`
+	Links   []KBEntry       `json:"links,omitempty"`
+	// The links the user removed by hand (meta's excluded), named as links are; automatic organizing and extensions
+	// leave them out until the user links them again (docs/assistant/knowledge.md "Removed links").
+	Removed  []KBEntry            `json:"removed,omitempty"`
 	Moments  []KBMomentRef        `json:"moments,omitempty"`
 	Segments []KBRecordingSegment `json:"segments,omitempty"`
 	// A recording's meeting minutes, once written (docs/assistant/meeting-minutes.md); kept as the hub sends them.
@@ -4865,8 +4930,8 @@ type KBUpdateResult struct {
 	// The previous value of each field written (null when unset; summary is the old text, profile this extension's own
 	// profile before), for the extension's own undo.
 	Before map[string]json.RawMessage `json:"before,omitempty"`
-	// Fields the update carried that its kind does not use (a person's summary and log, for one): not applied, each with
-	// why.
+	// Fields the update carried that its kind does not use (a person's summary and log, for one), and links to make that
+	// the user removed: not applied, each with why.
 	Ignored []KBIgnoredField `json:"ignored,omitempty"`
 }
 
@@ -6263,6 +6328,14 @@ func (v requiredJSONComponent) MarshalJSON() ([]byte, error) {
 			plain: plain(v),
 			Tiles: v.Tiles,
 		})
+	case "graph":
+		return json.Marshal(struct {
+			plain
+			Nodes []GraphNode `json:"nodes"`
+		}{
+			plain: plain(v),
+			Nodes: v.Nodes,
+		})
 	default:
 		return json.Marshal(plain(v))
 	}
@@ -6442,6 +6515,8 @@ var newDef = map[string]func() any{
 	"View":                          func() any { return new(View) },
 	"Section":                       func() any { return new(Section) },
 	"Component":                     func() any { return new(Component) },
+	"GraphNode":                     func() any { return new(GraphNode) },
+	"GraphEdge":                     func() any { return new(GraphEdge) },
 	"ImageSource":                   func() any { return new(ImageSource) },
 	"RowControl":                    func() any { return new(RowControl) },
 	"RowAction":                     func() any { return new(RowAction) },
