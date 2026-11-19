@@ -77,7 +77,8 @@ never stops the call.
 
 The avatar on the call screen says what the call does; the avatar stays decorative, and VoiceOver hears it in words on
 the state line: its value is the row (`CallAvatarLook.Row.words`: Listening, Hearing you, Thinking, Speaking, Working,
-Waiting for your decision, Muted; nothing more where the line's own words say it) beside the running time the line shows,
+Waiting for your decision, Muted; nothing more where the line's own words say it; Working is the state's own name,
+`StateName.working`, 工作中 / 作業中, #10502) beside the running time the line shows,
 and "Waiting for your decision" is announced once as a card comes to wait (`CallScreenStateLine`, #9887 review); the
 minimised bar's face says Thinking, Working or Waiting for your decision within the bar's words. `CallScreenState.make` derives the row from what the call screen already observes: the call's
 phase and hold, the voice's phase and link, the mute, and what the call's conversation and voice do (`CallActivity`: the
@@ -465,7 +466,7 @@ offered in China otherwise. The source guard and the binary check run in CI and 
 
 ## DEBUG switches
 
-All are listed in `scripts/release/release.sh`, which fails a Release binary that still has them.
+All are listed in `scripts/release/debug_switches.txt`; `release.sh` fails a Release binary that still has them.
 
 - `-showCallSample <state>`: the call screen with no system, audio or hub: `dialing`, `connecting`, `connected`,
   `muted`, `held`, `interrupted`, `resume`, `speaker`, `ended`, `mutedSpeaker`, `reconnecting`, `audioRoute`, `speaking`,

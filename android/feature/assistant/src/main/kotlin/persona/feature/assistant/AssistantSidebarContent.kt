@@ -194,8 +194,6 @@ fun AssistantSidebarContent(
         }
     }
     if (fullSearchOpen && fullWindowSearch) {
-        val roster = persona.core.designsystem.LocalManagerRoster.current
-        val assistantName = roster.assistantDisplayName(choice.shown, persona.core.designsystem.LocalPersonaName.current)
         AssistantFullSearch(
             chats = openChats,
             known = knownChats,
@@ -206,7 +204,6 @@ fun AssistantSidebarContent(
             names = received.directionNames,
             backgroundId = received.backgroundSupervisor,
             activeTag = history.activeTag,
-            mainName = assistantName,
             mainKey = received.mainSession,
             onOpen = { key ->
                 fullSearchOpen = false

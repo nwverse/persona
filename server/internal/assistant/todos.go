@@ -711,6 +711,10 @@ func formatTodo(t Todo) Todo {
 	})
 	out.Agents = append(out.Agents, curr...)
 	out.Agents = append(out.Agents, past...)
+	if ownerDecisionReturned(out.Supervision) {
+		out.Supervision = out.Supervision.clone()
+		out.Supervision.State = "" // its old review stays in history; only a fresh review may ask the owner again
+	}
 	return out
 }
 
