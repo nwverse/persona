@@ -146,7 +146,7 @@ class PlanCardConversationTest {
             // the number disc only when there are several tasks
             rule.onNodeWithText("1").assertIsDisplayed()
             rule.onNodeWithText("2").assertIsDisplayed()
-            for (chip in listOf("Work laptop", "shop", "Default model", "Can edit files", "Build server", "app", "Opus", "Read-only requested"))
+            for (chip in listOf("Work laptop", "shop", "Default model", "Auto accept edits", "Build server", "app", "Opus", "Read-only requested"))
                 rule.onNodeWithText(chip).assertIsDisplayed()
             rule.onNodeWithText("It only touches the docs folder").assertIsDisplayed()
             // the choice, then the three actions in iOS's order
