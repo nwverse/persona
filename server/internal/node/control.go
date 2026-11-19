@@ -52,10 +52,7 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	}
 	// The effort is checked against the agent this start actually dispatches: an explicit agentType wins over the
 	// launcher's name, so a Claude start refuses ultra even on a launcher named codex.
-	kind := agentType
-	if kind == "" {
-		kind = launcherAgentType(launcher)
-	}
+	kind := n.startAgentType(launcher, agentType)
 	if err := execution.check(kind); err != nil {
 		return nil, err
 	}

@@ -46,12 +46,44 @@ final class AppModel {
     @ObservationIgnored private let idleLive = LiveConnection()
     /// What the titles say about the links (Waiting for Network / Connecting… / Updating…).
     let connection: ConnectionStatus
-    private(set) var machines: [Machine] = [] {
-        didSet {
-            machinesNow = machines
-            let choices = machines.map(MachineChoice.init)
+    /// The machines. A heartbeat, a list that differs only in `lastSeen` (on every push of a busy hub), is stored
+    /// without telling who read `machines`: a body that reads them for anything else ran again on every push (the
+    /// Agents list, #1495; every row through its menu, #10231). What shows `lastSeen` reads `lastSeen(_:)`.
+    private(set) var machines: [Machine] {
+        get {
+            access(keyPath: \.machines)
+            return machineStore
+        }
+        set {
+            if Self.sameApartFromHeartbeat(newValue, machineStore) {
+                if newValue != machineStore { machineHeartbeat &+= 1 }
+                machineStore = newValue
+            } else {
+                withMutation(keyPath: \.machines) { machineStore = newValue }
+            }
+            machinesNow = machineStore
+            let choices = machineStore.map(MachineChoice.init)
             if choices != machineChoices { machineChoices = choices }
             saveSnapshot()
+        }
+    }
+    @ObservationIgnored private var machineStore: [Machine] = []
+    /// Moves on each heartbeat: what `lastSeen(_:)` observes instead of `machines`.
+    private var machineHeartbeat = 0
+
+    /// When the hub last heard from a machine, observed through the heartbeat (`machines` is not told of it).
+    func lastSeen(_ ref: MachineRef) -> Date? {
+        _ = machineHeartbeat
+        return machinesNow.first { $0.id == ref.id && $0.group == ref.group }?.lastSeen
+    }
+
+    /// The same machines but for when the hub last heard from them (`lastSeen`).
+    nonisolated static func sameApartFromHeartbeat(_ a: [Machine], _ b: [Machine]) -> Bool {
+        a.count == b.count && zip(a, b).allSatisfy { x, y in
+            guard x.lastSeen != y.lastSeen else { return x == y }
+            var y = y
+            y.lastSeen = x.lastSeen
+            return x == y
         }
     }
     /// `machines` for a page that can be kept hidden behind another (`allSessions(inFront:)`): watched only in front.
@@ -3079,7 +3111,8 @@ final class AppModel {
     /// the hub would refuse it (`SecretHandoff`).
     func resolve(_ ix: Interaction, _ r: Resolution, handoffCard: Bool = false) async {
         // To the hub of the interaction's own group (docs/protocol/multi-hub.md「Connections and routing」).
-        guard canAnswer(ix), let api = api(ix.group) else { return }
+        // A stopped Agent's work card still takes the answers that send it nothing: put off, or dismissed (#6839).
+        guard canAnswer(ix) || ix.isLocalResolution(r), let api = api(ix.group) else { return }
         let handoff = ix.isSecretHandoff && r.allow == true
         if handoff && !handoffCard {
             toast = Toast(String(localized: "Approve it on its card in the chat."), style: .error)
@@ -4237,6 +4270,7 @@ final class AppModel {
         drafts = drafts.filter { !gone.contains($0.key.group) }
         heldAttachments = heldAttachments.filter { !gone.contains($0.key.group) }
         healthReports = healthReports.filter { !gone.contains($0.key) }
+        TodosV1.shared.forget(gone)
         if let k = openChat, gone.contains(k.group) { openChat = nil }
         if let k = assistantCurrent, gone.contains(k.group) { assistantCurrent = nil }
         for g in gone {

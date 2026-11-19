@@ -178,7 +178,8 @@ export function stepsToItems(steps, opts = {}) {
         afterWork = false
         const text = cleanUserText(step.content)
         if (!text) break
-        const item = { id: `${line}#0`, seq, role: 'user', kind: 'text', text, ts }
+        const msgId = (typeof step.client_msg_id === 'string' && step.client_msg_id) || opts.clientMsgIdFor?.(idx, text)
+        const item = { id: `${line}#0`, seq, role: 'user', kind: 'text', text, ts, ...(msgId ? { client_msg_id: msgId } : {}) }
         items.push(opts.full ? item : light(item))
         break
       }
@@ -292,7 +293,8 @@ export function readTranscript(brainDir, full = false) {
   const file = join(brainDir, '.system_generated', 'logs', full ? 'transcript_full.jsonl' : 'transcript.jsonl')
   const fallback = full ? join(brainDir, '.system_generated', 'logs', 'transcript.jsonl') : null
   const target = existsSync(file) ? file : fallback && existsSync(fallback) ? fallback : null
-  if (!target) return { steps: [], branch: '' }
+  if (!target) return { steps: [], branch: '', revision: '', compact: false }
+  const compact = Boolean(full && target !== file)
   try {
     const info = statSync(target, { bigint: true })
     const version = [info.dev, info.ino, info.size, info.mtimeNs, info.ctimeNs].join(':')
@@ -351,7 +353,7 @@ export function readTranscript(brainDir, full = false) {
     // Keep small revision records independently of the parsed-body LRU, including fresh native rewrites.
     transcriptRevisions.set(target, { length: raw.length, hash, branch, nativeRevision, revision })
     while (transcriptRevisions.size > MAX_TRANSCRIPT_REVISIONS) transcriptRevisions.delete(transcriptRevisions.keys().next().value)
-    const transcript = { steps: out, branch, revision }
+    const transcript = { steps: out, branch, revision, compact }
     const size = Number(info.size)
     if (settled && size <= MAX_TRANSCRIPT_CACHE_BYTES) {
       while (transcriptCache.size >= MAX_CACHED_TRANSCRIPTS || transcriptCacheBytes + size > MAX_TRANSCRIPT_CACHE_BYTES) {
@@ -364,7 +366,7 @@ export function readTranscript(brainDir, full = false) {
     }
     return transcript
   } catch {
-    return full ? readTranscript(brainDir, false) : { steps: [], branch: '' }
+    return full ? { ...readTranscript(brainDir, false), compact: true } : { steps: [], branch: '', revision: '', compact: false }
   }
 }
 
