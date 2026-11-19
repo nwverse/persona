@@ -67,8 +67,11 @@ type resumeState struct {
 	timer  *time.Timer
 	// accepting: an AcceptResume is writing its answer.
 	accepting bool
-	sr        *swapReader
-	fr        *frameReader
+	// prev is the token the last AcceptResume was asked with, still taken until the new transport carries a byte
+	// (confirmResume): its answer may never have reached the other side, which then asks again with that token.
+	prev string
+	sr   *swapReader
+	fr   *frameReader
 }
 
 type resumeRequest struct {
@@ -339,8 +342,7 @@ func (p *Peer) Resume(ctx context.Context, r io.Reader, w io.Writer) error {
 func (p *Peer) AcceptResume(req ResumeRequest, r io.Reader, w io.Writer) error {
 	p.mu.Lock()
 	rs, lw := p.resume, p.lw
-	ok := rs != nil && rs.on && !rs.accepting && rs.fr != nil && lw != nil &&
-		subtle.ConstantTimeCompare([]byte(req.Token), []byte(rs.token)) == 1
+	ok := rs != nil && rs.on && !rs.accepting && rs.fr != nil && lw != nil && (tokenIs(req.Token, rs.token) || tokenIs(req.Token, rs.prev))
 	select {
 	case <-p.closed:
 		ok = false
@@ -376,9 +378,26 @@ func (p *Peer) AcceptResume(req ResumeRequest, r io.Reader, w io.Writer) error {
 	if err != nil {
 		return err // the new transport failed already: still lost, its window running, a next one may come
 	}
-	rs.token = next
+	rs.prev, rs.token = req.Token, next
+	rs.sr.fresh.Store(true) // before r is read: what a read of the old one brings meanwhile confirms nothing
 	p.installLocked(r, w, req.Read)
 	return nil
+}
+
+// tokenIs compares a token asked with to one this side has, in constant time; "" is no token.
+func tokenIs(asked, have string) bool {
+	return have != "" && subtle.ConstantTimeCompare([]byte(asked), []byte(have)) == 1
+}
+
+// confirmResume: the transport of generation gen carried a byte, so the other side read the answer that installed it
+// and holds the new token. The one it asked with is taken no more.
+func (p *Peer) confirmResume(gen uint64) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if rs := p.resume; rs != nil && rs.gen == gen {
+		rs.prev = ""
+		rs.sr.fresh.Store(false)
+	}
 }
 
 // errTakenOver is why AcceptResume lost a transport the peer had not seen fail.
@@ -446,6 +465,8 @@ type swapReader struct {
 	// waiting is since when a read has waited for bytes (unix nanoseconds), 0 while none does: a transport is
 	// silent only while this side reads it (watchStale), not while its read loop is busy with a line.
 	waiting atomic.Int64
+	// fresh: an AcceptResume installed the transport and nothing came on it yet (confirmResume).
+	fresh atomic.Bool
 }
 
 func newSwapReader(p *Peer, r io.Reader) *swapReader {
@@ -464,6 +485,9 @@ func (s *swapReader) Read(b []byte) (int, error) {
 	s.waiting.Store(time.Now().UnixNano())
 	n, err := r.Read(b)
 	s.waiting.Store(0)
+	if n > 0 && s.fresh.Load() {
+		s.p.confirmResume(gen)
+	}
 	if n > 0 || err == nil {
 		return n, nil // an error with data comes again on the next read; bytes of an old transport, then errResumed
 	}

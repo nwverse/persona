@@ -381,6 +381,11 @@ func TestResumeTokenOnceAndOwn(t *testing.T) {
 	if err := l.resume(); err != nil {
 		t.Fatal(err)
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := l.h.Call(ctx, "echo", nil, nil); err != nil { // the new transport carried something: the answer came
+		t.Fatal(err)
+	}
 	other := New("n", io.Discard)
 	other.EnableLanes(nil, nil)
 	other.EnableResume(time.Second)
@@ -404,8 +409,6 @@ func TestResumeTokenOnceAndOwn(t *testing.T) {
 		t.Fatal("a refused token suspended the connection")
 	}
 	var out map[string]any
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
 	if err := l.h.Call(ctx, "echo", nil, &out); err != nil {
 		t.Fatalf("after the refusals: %v", err)
 	}
@@ -687,6 +690,52 @@ func TestResumeAnswerFailsAndTheWindowRuns(t *testing.T) {
 	case <-l.n.Done():
 	case <-time.After(5 * time.Second):
 		t.Fatal("still open after its window")
+	}
+}
+
+// The answer to a resume can be lost on its way (the new transport dropped right after it was written): the other side
+// asks again with the token it has, which is still taken until the new transport carries something (#10829's review).
+func TestResumeAnswerLostAsksAgain(t *testing.T) {
+	l := newResumeLink(t, netshape.Config{}, 5*time.Second, true, true, nil)
+	l.h.mu.Lock()
+	first := l.h.resume.token
+	l.h.mu.Unlock()
+	l.cut()
+	l.waitLost()
+	a, b := silentPipe(netshape.Config{})
+	go func() { _, _ = io.Copy(io.Discard, a) }() // the answer goes nowhere
+	accepted := make(chan error, 1)
+	go func() {
+		line, rest, err := ReadFirstLine(b, resumeLineMax)
+		if err != nil {
+			accepted <- err
+			return
+		}
+		req, _ := ParseResume(line)
+		accepted <- l.n.AcceptResume(req, rest, b)
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	never, _ := io.Pipe()
+	if err := l.h.Resume(ctx, never, a); err == nil {
+		t.Fatal("a resume whose answer never came succeeded")
+	}
+	cancel()
+	if err := <-accepted; err != nil {
+		t.Fatalf("the node's side: %v", err)
+	}
+	a.Close() // the manager lets the transport go
+	b.Close()
+	if err := l.resume(); err != nil {
+		t.Fatalf("asked again with the same token: %v", err)
+	}
+	cctx, ccancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer ccancel()
+	if err := l.h.Call(cctx, "echo", nil, nil); err != nil {
+		t.Fatalf("after resuming: %v", err)
+	}
+	var w bytes.Buffer // the new transport carried a call: the token asked with twice is used now
+	if err := l.n.AcceptResume(ResumeRequest{ID: "h98", Token: first}, strings.NewReader(""), &w); !errors.Is(err, ErrResumeRefused) {
+		t.Fatalf("the used token once the new transport carried a call: %v", err)
 	}
 }
 
