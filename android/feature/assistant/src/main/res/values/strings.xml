@@ -98,6 +98,7 @@
     <string name="assistant_full_search_no_results">No results for “%1$s”</string>
     <string name="assistant_start_main">Start the main chat</string>
     <string name="assistant_main_chat">Main chat</string>
+    <string name="assistant_main_conversation">Main conversation</string>
     <!-- The drawer's newest eligible chats, between 常驻 and All chats (#4922, #5196) -->
     <string name="assistant_recent">Recent</string>
     <string name="assistant_directions">Pinned</string>

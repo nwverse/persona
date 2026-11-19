@@ -173,6 +173,8 @@ const (
 	// conversation (Data: conversation_agent, launcher, launcher_agent, delivered "none"): the hub answers 409, nothing
 	// was sent, and the conversation keeps its agent (docs/assistant/assistant.md, #4662).
 	CodeLauncherOtherKind = "launcher_other_kind"
+	// CodeSupervisionRuntime means the runtime cannot receive separate supervision instructions. Nothing was sent.
+	CodeSupervisionRuntime = "assistant_supervision_runtime"
 	// CodeBodyIncomplete: MethodHTTPStreamed's body did not arrive whole (the relay was not there, broke or carried
 	// another size). Nothing ran: the hub sends the request again as MethodHTTP.
 	CodeBodyIncomplete = "body_incomplete"
@@ -325,6 +327,7 @@ var Routes = []string{
 	"POST /api/v1/later/{id}/handled", // a question that can wait, marked handled (later.go)
 	"POST /api/v1/todos/{id}/done-check",
 	"POST /api/v1/todos/{id}/retry",
+	"POST /api/v1/todos/{id}/start/answer", // the startup question a task's start stopped on, answered (start_answer.go, #10365)
 	"POST /api/v1/todos/retitle",
 	"POST /api/v1/todos/import/reminders",
 	// Its settings and its main conversation (profile.go, start.go).

@@ -77,7 +77,8 @@ never stops the call.
 
 The avatar on the call screen says what the call does; the avatar stays decorative, and VoiceOver hears it in words on
 the state line: its value is the row (`CallAvatarLook.Row.words`: Listening, Hearing you, Thinking, Speaking, Working,
-Waiting for your decision, Muted; nothing more where the line's own words say it) beside the running time the line shows,
+Waiting for your decision, Muted; nothing more where the line's own words say it; Working is the state's own name,
+`StateName.working`, 工作中 / 作業中, #10502) beside the running time the line shows,
 and "Waiting for your decision" is announced once as a card comes to wait (`CallScreenStateLine`, #9887 review); the
 minimised bar's face says Thinking, Working or Waiting for your decision within the bar's words. `CallScreenState.make` derives the row from what the call screen already observes: the call's
 phase and hold, the voice's phase and link, the mute, and what the call's conversation and voice do (`CallActivity`: the
@@ -245,7 +246,10 @@ the call's (`audioActive`). `held` is "any hold reason".
   nobody to write into Recents (an incoming call names its member as it is reported). Reports wait until the system
   knows the conversation (LiveCommunicationKit lists an outgoing conversation only once its Start is fulfilled: checked
   right after the fulfil, else on the next `conversationChanged`), in the order they were made: the system drops
-  reports made before. The system giving up on the Start ends the call as failed.
+  reports made before. When the conversation state reaches `joined` the members are reported again (#10495):
+  LiveCommunicationKit discards `conversationUpdated` while the conversation is `idle`, and the first report is sent in
+  that window; the second one, in `joined`, is the one the system persists for Recents.
+  The system giving up on the Start ends the call as failed.
 - **Connected.** A call to Persona connects on the voice's first `ready` (report `connected`); an urgent call on Join.
 - **Audio.** The engine's audio starts only on `didActivate`. `didDeactivate` stops it and never ends the call; outside
   a pause, with no interruption to say why, it holds the call (`.interruption`, either kind's engine holds) and the
@@ -408,6 +412,7 @@ fails on a new one until it is given one):
 | `PhoneVoiceAudio` (`.phone`, `.carPlay`: category, activation, preferred input, speaker override) | only through `VoiceCalls` | would: its session replaces the call's | refused, or asked first (`VoiceCalls.systemCallName`); the system mode (a call's) never touches the session (`aSystemCallsAudioNeverTouchesTheSystemsSession`) |
 | `Dictation` (`.record` category, activation, deactivation) | would, when tapped, or when its permission is answered | would: cuts the call's microphone, its deactivation stops the call's audio | refused before and after the permission (`LiveCallGate.dictationRefusal`); opened on `LiveCallGate.sessionQueue`, in order with the call's category; no deactivation while a call is live |
 | `RecordingCapture.configureSession` (start, resume, the resume when the app comes back) | would | would | refused, and asked again after every wait and before the session or the microphone (`LiveCallGate.recordingRefusal`) |
+| `MeetingReplay` (playback category, activation and deactivation) | would, starting a tape or opening / ending its audio | would: it replaces or deactivates the call's session | refused before the replay begins (`RecordingCapture.callGate`); activation and deactivation run on `LiveCallGate.sessionQueue` and are skipped when `LiveCallGate.liveNow` |
 | `RecordingCapture` stop, cancel, failed start (preferred input, deactivation), `setPlaysAloud` (category), `turnOnEchoCancellation` | yes: a recording paused before an urgent call was answered | would: the deactivation stops the call's audio, the category moves its route | under a live call only the microphone goes back; the category and voice processing wait for the resume |
 | `MeetingSpeaker` (speaker override and its restore), `MeetingVoicePlayer`, `MeetingCallAudio` | only during a meeting recording (a paused one exists under a call) | the override would move the call's route | skipped during a call (`LiveCallGate.callIsLive`) |
 | `VNCPiP.prepare` (`.playback` category, activation) | would, opening a Mac's screen | would | skipped during a call (`LiveCallGate.callIsLive`) |
@@ -422,8 +427,9 @@ fails on a new one until it is given one):
 ## Recents and intents
 
 The system writes a call into the Phone app's Recents when it ends, for its members: an outgoing call reports them once
-the system has its conversation (the members update above), and its end goes through `EndConversationAction` or a
-`conversationEnded` report. The app declares `NSUserActivityTypes` `INStartCallIntent` and `INStartAudioCallIntent`
+the system has its conversation (the members update above) and again when the conversation joins (#10495: the system
+discards updates while `idle`), and its end goes through `EndConversationAction` or a `conversationEnded` report.
+The app declares `NSUserActivityTypes` `INStartCallIntent` and `INStartAudioCallIntent`
 (`apple/project.yml`): Recents may hand either. A redial reaches `PersonaCalls.continueActivity` from the scene's delegate (cold launch:
 `connectionOptions.userActivities`; warm: `scene(_:continue:)`) or SwiftUI's `onContinueUserActivity`, whichever
 fires; the same tap within 2 s is taken once. Any handle calls the current hub's main conversation. Siri, Shortcuts,
@@ -439,7 +445,9 @@ system has the conversation, or dropped, connected (the voice's first ready), th
 `conversationEnded` was reported) and the conversation's state on every `conversationChanged`. The members update and
 the final `left` start with `recents:`, so `log stream --predicate 'subsystem == "persona" AND category == "call"'` (or
 Console, or Developing Persona's Export Diagnostics, whose `log.txt` keeps this launch's lines) shows whether the system
-had the members and saw the conversation leave.
+had the members and saw the conversation leave. The members are reported twice (#10495): once when the system first has
+the conversation (usually `idle`), once when it joins; `the conversation joined` on the second `recents: members
+reported` line confirms the system accepted the update.
 
 ## CarPlay
 
@@ -459,7 +467,7 @@ offered in China otherwise. The source guard and the binary check run in CI and 
 
 ## DEBUG switches
 
-All are listed in `scripts/release/release.sh`, which fails a Release binary that still has them.
+All are listed in `scripts/release/debug_switches.txt`; `release.sh` fails a Release binary that still has them.
 
 - `-showCallSample <state>`: the call screen with no system, audio or hub: `dialing`, `connecting`, `connected`,
   `muted`, `held`, `interrupted`, `resume`, `speaker`, `ended`, `mutedSpeaker`, `reconnecting`, `audioRoute`, `speaking`,
@@ -503,8 +511,9 @@ All are listed in `scripts/release/release.sh`, which fails a Release binary tha
   (the screen's states and layout), `CallPersonaIntentTests`, the `UrgentCall*Tests` suites, `VoiceCallsTests`,
   `VoiceConversationTests` (`.call`, hold frames, `surface`), `LocalProxyRouteTests` and the CarPlay suites;
   `CallRecentsTests` (#9887: the outgoing call's members update before `startedConnecting` once the system has the
-  conversation, the incoming path unchanged, Developing Persona's Call handle picking the kind, both kinds in the
-  configuration, the log's steps); `CallFollowUpTests` (the assistant's name on the system call and the ring, the guards
+  conversation, re-reported when the conversation joins (#10495), the incoming path unchanged for both the initial
+  report and the joined re-report, Developing Persona's Call handle picking the kind, both kinds in the configuration,
+  the log's steps); `CallFollowUpTests` (the assistant's name on the system call and the ring, the guards
   following the live call, voice chat refused or asked, dictation and recordings refused, web media suspended, the call
   keeping its microphone, the assistant's look per state, the call's window, the bar's room, the template icon; and from
   the second review: a disconnect refused while the call talks through the hub, the call keeping the look and name it
@@ -540,8 +549,9 @@ All are listed in `scripts/release/release.sh`, which fails a Release binary tha
 
 - The system's call UI, the Lock Screen and Dynamic Island call, the Recents row and which activity type a redial
   delivers. After hanging up an outgoing call, Recents shows a row with the assistant's name (or the conversation's) and
-  the app's icon, and tapping it calls the main conversation; the `recents:` lines say the members were reported and the
-  conversation left. With no row, Developing Persona's Call Handle set to Email and a new call is the next check.
+  the app's icon, and tapping it calls the main conversation; the `recents:` lines say the members were reported (twice:
+  once while `idle`, once while `joined`; #10495) and the conversation left with `local member set`. With no row,
+  Developing Persona's Call Handle set to Email and a new call is the next check.
 - When `didActivate` arrives for an outgoing call, and whether the 5 s watchdog ever fires.
 - The engine-start system mute and its 0.5 s window; Mute and hang-up from AirPods and from the system's call UI.
 - Hold & Accept with an urgent call; whether a cellular call arrives as a pause or as an interruption, and the resume.
