@@ -291,6 +291,55 @@ func TestClientKeepsBackoffWhenThePortAnswersButNotTheBus(t *testing.T) {
 	}
 }
 
+// A try that a probe brought early and that fails past the network doubles the backoff as any other: the hub came
+// back for TCP but not for the bus, and the next wait is the longer one, run to its end.
+func TestClientEarlyTryThatFailsKeepsDoubling(t *testing.T) {
+	addr := freeAddr(t)
+	var dials events
+	var log logLines
+	c := &Client{Hub: "http://" + addr, Token: "t", HelloMethod: "manager.hello", Logf: log.logf,
+		HTTPClient: countingClient(&dials), Backoff: 30 * time.Second, MaxBackoff: time.Minute, probeEvery: 10 * time.Millisecond}
+	runClient(t, c)
+	log.waitFor(t, "again in 30s", 1, 5*time.Second)
+	dials.waitFor(t, "dials (the try, then probes that find nothing)", 3, 5*time.Second)
+
+	l := listenAt(t, addr) // the port answers, and hangs up on the bus's request
+	defer l.Close()
+	go func() {
+		for {
+			conn, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+				_, _ = conn.Read(make([]byte, 512))
+			}()
+		}
+	}()
+	log.waitFor(t, "the hub answers again", 1, 5*time.Second)
+	log.waitFor(t, "again in 1m0s", 1, 5*time.Second)
+	if n := log.count(tryEnded); n != 2 {
+		t.Fatalf("%d tries, want the first and the early one: %q", n, log.all())
+	}
+}
+
+// A wait no longer than probeOver (the first ones, 1 s and 2 s by default) is waited whole without probes.
+func TestClientShortWaitsDoNotProbe(t *testing.T) {
+	var dials events
+	var log logLines
+	c := &Client{Hub: "http://" + freeAddr(t), Token: "t", HelloMethod: "manager.hello", Logf: log.logf,
+		HTTPClient: countingClient(&dials), Backoff: 50 * time.Millisecond, MaxBackoff: 50 * time.Millisecond,
+		probeOver: 100 * time.Millisecond, probeEvery: time.Millisecond}
+	_, cancel, ran := runClient(t, c)
+	log.waitFor(t, tryEnded, 4, 10*time.Second)
+	stop(t, cancel, ran)
+	if n, tries := dials.count(), log.count(tryEnded); n > tries+1 {
+		t.Fatalf("%d dials for %d tries with waits of 50 ms: probes in a short wait", n, tries)
+	}
+}
+
 // A refused token waits MaxBackoff whole, even when the hub goes away and comes back during the wait: only someone
 // fixing the token helps, and a probe would only bring the next refusal sooner. It does not probe at all.
 func TestClientRejectedTokenKeepsItsWait(t *testing.T) {
