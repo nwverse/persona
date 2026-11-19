@@ -20,6 +20,10 @@ const (
 	KindNotice     = "notice"
 	KindImage      = "image"
 	KindRecap      = "recap" // Claude Code's "while you were away" summary
+	// KindVisualization is a Codex visualize reference: a self-contained HTML fragment on the node's disk that the
+	// Codex client draws inline. The item carries the node-side path, never the bytes; clients fetch them through the
+	// session visualization route.
+	KindVisualization = "visualization"
 	// KindFold stands for a run of the agent's work left out of a page (Item.Fold); only for callers that ask
 	// (fold_work).
 	KindFold = "fold"
@@ -189,9 +193,8 @@ type Item struct {
 	// Wake marks a background task's notice that started new work after the agent had finished its turn
 	// (not one absorbed mid-turn): the exchange before it is over and its last words are an answer.
 	Wake bool `json:"wake,omitempty"`
-	// Narration is assistant text that belongs to the work summary (Codex commentary). It is internal to the
-	// transcript and FoldWork: on the wire it is ordinary text, so clients need no new item kind or cache migration.
-	Narration bool `json:"-"`
+	// Narration marks assistant text belonging to the work summary (Codex commentary), even if sent unfolded.
+	Narration bool `json:"narration,omitempty"`
 	// From names the Claude session that sent this message (cross-session messaging), not the user.
 	From string `json:"from,omitempty"`
 	// Injected: this user line is a message Persona put into the conversation for the model (a task's notice, a
@@ -228,6 +231,18 @@ type Item struct {
 	// nodes. A chat sums a turn's items (folds' Fold.Usage included) into the turn's usage
 	// (docs/protocol/protocol.md "Token usage on items").
 	Usage []TokenUsage `json:"usage,omitempty"`
+	// Visualization is set on KindVisualization items: a Codex visualize marker's reference to an HTML fragment on
+	// the node. The bytes are not carried here; the session visualization route serves them after path checks.
+	Visualization *Visualization `json:"visualization,omitempty"`
+}
+
+// Visualization is one Codex visualize reference (the visualize plugin's in-conversation HTML contract): the
+// fragment's absolute path on the node, its display mode ("" for the regular 736 px surface, "wide" for up to
+// 1024 px) and an optional title.
+type Visualization struct {
+	Path  string `json:"path"`
+	Mode  string `json:"mode,omitempty"`
+	Title string `json:"title,omitempty"`
 }
 
 // TokenUsage is what model requests used, as the transcript records it (#5426): tokens by kind, the way the usage

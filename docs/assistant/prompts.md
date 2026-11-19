@@ -57,6 +57,29 @@ records a justified compatibility change. Before claiming any follow-up, recheck
 | tools | #6274 | Remaining tool guidance and generated helper text; keep protocol identifiers and parameters stable. |
 | channel/shared/bot | #6275 | Channel/bot wrappers and shared fragments; inventory all includes and preserve provenance and native message data. |
 
+### To-do prompts
+
+The model phase covers the title and completion receipt. The title keeps its existing output language and length rules,
+and the receipt uses the owner's language for newly generated text while retaining its JSON field names and original
+evidence links. The title and receipt inputs retain task notes, machine names, paths and Agent replies as data.
+
+The delivery phase covers decision and project context in Agent handoffs and the Feishu topic-open and topic-reply
+messages. They read the owner's current locale at render time. Context tags, quote handling, to-do IDs, decision
+source records, and the `task_plan` contract are independent of the rendered language. Transcript stripping uses
+the context tags, and Feishu routing uses the structured topic and run records.
+
+### Tool guidance (#6274)
+
+1. The translation JSON routes and the background mail pass reach `translateTexts` or `translateMailFresh`.
+   Localize their model instructions with the owner's language while preserving the explicit translation target.
+   The shared system template, batch and mail wrappers, and mail input are one unit. The batch parser checks
+   `texts` cardinality and order, and the mail parser reads `subject` and `text`. Keep those keys and localize
+   the subject label together in the system and user messages.
+2. Manual and automatic naming reach `makeTitle`. Its system prompt already carries the topic language.
+   Give its first exchange and failed-answer retry the same language and character limit. The parser continues
+   to require one of the existing Chinese kind identifiers and the same pipe delimiter. The first exchange,
+   extension hint and rejected answer are quoted as data. These calls are private model requests.
+
 ### Ratchet and acceptance
 
 `scripts/ci/prompt_language_ratchet.py` runs in the repository CI guards. It counts CJK-bearing `.md` templates

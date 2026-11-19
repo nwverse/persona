@@ -170,6 +170,13 @@ def main_failure_comparison(repo, pr, worktree, failure, timeout=600, git_root=N
         run(["git", "worktree", "remove", "--force", str(base_worktree)], cwd=git_root or worktree, timeout=90)
 
 
+def fetch_branch(branch):
+    """Fetch one branch into this worktree's FETCH_HEAD only. Worktrees share the
+    checkout's refs; an empty refmap keeps concurrent workers from racing to
+    update refs/remotes/origin/<branch> (#10584)."""
+    return ["git", "fetch", "-q", "--refmap=", "origin", "refs/heads/" + branch]
+
+
 def contains(worktree, ancestor, descendant):
     return run(["git", "merge-base", "--is-ancestor", ancestor, descendant], cwd=worktree).returncode == 0
 
@@ -178,7 +185,7 @@ def fetch_current_main(pr, worktree, base):
     """The base branch's tip now. Main moves every few minutes and a verification takes longer (#7840), so a repair
     merges the main it fetched as long as that still contains `base`, the one read before verifying; a rewritten main
     stops it."""
-    checked(["git", "fetch", "-q", "origin", "refs/heads/" + pr["baseRefName"]], cwd=worktree, timeout=180)
+    checked(fetch_branch(pr["baseRefName"]), cwd=worktree, timeout=180)
     tip = checked(["git", "rev-parse", "FETCH_HEAD"], cwd=worktree).strip()
     if tip != base and not contains(worktree, base, tip):
         raise WatchError("main was rewritten while preparing the repair")
@@ -244,7 +251,7 @@ def push_updated_head(repo, pr, worktree, updated_head):
     """Publish an already verified merge without changing its exact tree."""
     if checked(["git", "rev-parse", "HEAD"], cwd=worktree).strip() != updated_head:
         raise WatchError("verified merge head changed before publication")
-    checked(["git", "fetch", "-q", "origin", "refs/heads/" + pr["headRefName"]], cwd=worktree, timeout=180)
+    checked(fetch_branch(pr["headRefName"]), cwd=worktree, timeout=180)
     if checked(["git", "rev-parse", "FETCH_HEAD"], cwd=worktree).strip() != pr["headRefOid"]:
         raise WatchError("PR head moved before merging main; nothing was pushed")
     checked(["git", "push", "origin", "HEAD:refs/heads/" + pr["headRefName"]], cwd=worktree, timeout=180)
@@ -658,6 +665,37 @@ def repair_with_model(repo, pr, worktree, failure, config):
         return diff
 
 
+def continuation_title(number):
+    return "fix: continue #%s verification repair" % number
+
+
+def existing_continuation(repo, pr):
+    """An open or merged continuation of this fork PR that already contains its
+    current head, whoever published it (#10881). Each watcher keeps private
+    state, so GitHub is the only shared record; another watcher's continuation
+    must not be duplicated. A fork head pushed after that continuation is not
+    contained in it and gets a fresh repair."""
+    title = continuation_title(pr["number"])
+    found = gh_json(["pr", "list", "--repo", repo, "--state", "all", "--limit", "50",
+                     "--search", '"%s" in:title' % title,
+                     "--json", "number,title,state,headRefOid"]) or []
+    candidates = [item for item in found
+                  if isinstance(item, dict) and item.get("title") == title
+                  and item.get("state") in ("OPEN", "MERGED")
+                  and isinstance(item.get("number"), int)
+                  and isinstance(item.get("headRefOid"), str) and SHA.fullmatch(item["headRefOid"])]
+    # Prefer a continuation that is still open; a merged one also covers the head.
+    candidates.sort(key=lambda item: (item["state"] != "OPEN", -item["number"]))
+    for item in candidates:
+        if item["headRefOid"] == pr["headRefOid"]:
+            return item["number"]
+        status = checked(["gh", "api", "repos/%s/compare/%s...%s" % (repo, pr["headRefOid"], item["headRefOid"]),
+                          "--jq", ".status"], timeout=90).strip()
+        if status in ("ahead", "identical"):
+            return item["number"]
+    return None
+
+
 def moved(latest, expected, follows_main):
     """The PR moved under a repair: its head always counts; its base counts unless the repair follows main."""
     return latest["headRefOid"] != expected["headRefOid"] or (not follows_main and latest["baseRefOid"] != expected["baseRefOid"])
@@ -725,7 +763,7 @@ def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None
         latest = pr_snapshot(repo, identity_pr["number"])
         if moved(latest, identity_pr, follows_main):
             raise WatchError("PR head/base moved before the repair push was accepted")
-    checked(["git", "fetch", "-q", "origin", "refs/heads/" + pr["baseRefName"]], cwd=worktree, timeout=180)
+    checked(fetch_branch(pr["baseRefName"]), cwd=worktree, timeout=180)
     tip = checked(["git", "rev-parse", "FETCH_HEAD"], cwd=worktree).strip()
     if tip != base and not (follows_main and contains(worktree, base, tip)):
         raise WatchError("base moved before the repair push; nothing was pushed")
@@ -749,7 +787,7 @@ def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None
             if remote != head:
                 raise WatchError("continuation branch exists at a different head; choose a fresh repair branch")
     if not pr.get("isCrossRepository"):
-        checked(["git", "fetch", "-q", "origin", "refs/heads/" + pr["headRefName"]], cwd=worktree, timeout=180)
+        checked(fetch_branch(pr["headRefName"]), cwd=worktree, timeout=180)
         remote_output = checked(["git", "ls-remote", "origin", "refs/heads/" + pr["headRefName"]], cwd=worktree, timeout=180).strip()
         if not remote_output:
             raise WatchError("contributor branch is absent; refusing to recreate it without an unchanged-head guarantee")
@@ -762,7 +800,7 @@ def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None
             issues[0], pr["number"], bounded(failure, 4000))
         owner = repo.split("/", 1)[0]
         created = gh_json(["api", "repos/%s/pulls" % repo, "--method", "POST", "--input", "-"],
-                          input_text=json.dumps({"title": "fix: continue #%s verification repair" % pr["number"],
+                          input_text=json.dumps({"title": continuation_title(pr["number"]),
                                                  "head": owner + ":" + branch, "base": pr["baseRefName"], "body": body}))
         actual = pr_snapshot(repo, created["number"])
         if actual["headRefOid"] != head:

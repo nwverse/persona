@@ -308,6 +308,9 @@ draw the everyday page (`iphone/kyoto`) and the multi-agent page (`iphone/releas
 adds Done when and Work details, and its default lines name no runtime, repository, path or PR number: "Code change"
 stands for the pull request on the paper, and its number is inside Work details.
 
+`spec/fixtures/todo-detail` pins this section's table; its README's "Judgement calls" settle where the section is silent
+or differs from the prototype, such as notes beside the brief and the primary with several asks.
+
 ### 3.6 The conversation
 
 **One timeline, two zooms.** Each to-do has one **Conversation**, stored once as typed entries on the to-do. On the
@@ -498,7 +501,7 @@ region by arithmetic; there is no accessibility-size branch (DESIGN_SYSTEM 6.2,
 | Token | Value | Status |
 | --- | --- | --- |
 | `Theme.Size.sidebar` / `sidebarPhone` | 400 (iPad) / 320 (Duo) | existing |
-| `todoList` | 320; 340 at ≥ 1032; 300 in iPad windows of 600–759 | new |
+| `todoList` | 320; 340 where the window's shorter side is 1032 or more; 300 in iPad windows of 600–759 | new |
 | paper minimum | `Theme.Size.splitPageMin` (400); **320 on the Duo's inner display, for To-dos only** (owner decision 2) | existing + one new value |
 | paper content | `Theme.Size.readable` (560) unless screenshots show the ask card and steps need more; a wider token needs that reason | existing |
 | `todoConversation` | 400; 440 on the web | new |
@@ -510,7 +513,7 @@ region by arithmetic; there is no accessibility-size branch (DESIGN_SYSTEM 6.2,
 | Duo outer 466 × 678 (382 + side column 84) | 1 page | 1 page, pinned header 92 | — | push, cross-fade |
 | Duo inner portrait 669 × 951 | List 334 ┊ Paper 335 | Paper 334 ┊ Conversation 335 | the list | pane at the crease; each half cross-fades |
 | Duo inner landscape 951 × 669 (867 usable) | List 320 │ Paper 547 | Paper 467 │ Conversation 400 | the list | pane, cross-fade |
-| iPad mini portrait 744 | List 320 │ Paper 424 | pushed with the pinned header (400 + 400 > 744) | — | push |
+| iPad mini portrait 744 | List 300 │ Paper 444 | pushed with the pinned header (400 + 400 > 744) | — | push |
 | iPad 11" portrait 834 × 1194 | List 320 │ Paper 514 | Paper 434 │ Conversation 400 | the list | pane |
 | iPad 13" portrait 1032 × 1376 | List 340 │ Paper 692 | Paper 632 │ Conversation 400 | the list | pane |
 | iPad 11" landscape 1194 × 834 | Sidebar 400 │ List 320 │ Paper 474 | List 320 │ Paper 474 │ Conversation 400 | the sidebar (transient) | pane; a pure −400-pt shift |
@@ -519,6 +522,9 @@ region by arithmetic; there is no accessibility-size branch (DESIGN_SYSTEM 6.2,
 | Web 1440 | Sidebar 284 │ List 360 │ Paper 796 | Rail 56 │ List 360 │ Paper 584 │ Conversation 440 | sidebar → rail | column |
 | Web ≥ 1600 | Sidebar 284 │ List 360 │ Paper (the rest) | Sidebar 284 │ List 360 │ Paper ≥ 516 │ Conversation 440 | — | column |
 | Android open foldable, book posture | List ┊ Paper at the hinge | Paper ┊ Conversation | the list | supporting pane |
+
+`spec/fixtures/todo-layout` pins this table and its rule; its README's "Judgement calls" settle where the section is
+silent, such as how the 24-pt band holds a region.
 
 - **Per-place overlay.** While To-dos is in front, the sidebar lies over the page on windows where list and paper
   don't fit beside it: iPad 11" portrait, iPad 13" portrait and the Duo inner landscape. Today the rule is "beside or
@@ -866,8 +872,10 @@ page per to-do with its conversation beside it").
   home in the session, which Agents users rely on.
 - **Replaces:** the To-dos badge's open count drawn in the needs-you look; "Answer in chat" routing into the origin
   conversation as a separate answer path; the watch's 403 on to-do answers.
-- **Rolling upgrade:** the count change is gated per manager (`todo_asks`), so old clients keep counting sessions until
-  every supported manager advertises it.
+- **Rolling upgrade:** the count change rides on the `assistant_needs` payload (7.3, Attention): a client counts each
+  to-do once only where that payload is present, so old clients keep counting sessions until every supported manager
+  sends it. `todo_asks` gates the answer route alone, which ships first (stage 2), so a manager that answers asks never
+  claims a count unit it does not have (amended 2026-11-19, #10465).
 
 **5. The to-do's own Conversation.**
 
@@ -1083,11 +1091,11 @@ joins `managerMessageTypes` (`server/internal/hub/bus_broadcast.go`), or `TestBr
 | Timeline | `GET /api/v1/todos/{id}/timeline?before=&limit=` → rounds grouped by the hub; push `todo_timeline {todo, entries}` only to clients that have the to-do open. Manager pushes reach every app connection today and the only subscription is per session, so a per-to-do subscription is new hub work | `todo_timeline` (stage 2: derived over today's stores; stage 3: `todo_activity`) | C13 |
 | Messages | `POST /api/v1/todos/{id}/messages {client_op_id, text, to: steward or run:<id>, mode: queue or now, answers?: ask_id}` → `202 {message_id, state: processing}`; push `todo_message {message_id, state: delivered, queued, failed or unknown, to}` | `todo_messages` (without it: today's origin route where allowed, else the main chat with the route chip) | C8, C14 |
 | Send Now support | a session capability `send_now`, set by the node; the client heuristics retire | per session | — |
-| Asks | `POST /api/v1/todos/{id}/asks/{ask}/answer {client_op_id, option, text or outcome: later or decline}`; a stale round → 409; `/accept` kept as an alias | `todo_asks` (also gates the to-do count unit) | C7, C15 |
+| Asks | `POST /api/v1/todos/{id}/asks/{ask}/answer {option, response, text or outcome: later, decline or undo}` with the op id in `X-Persona-Op-Id`, as every to-do write (Writes); a stale round → 409; `/accept` and the other answer routes kept for clients without it | `todo_asks` (the route alone) | C7, C15 |
 | Steps | `POST /todos/{id}/steps:suggest` (nothing kept until Keep); `POST /todos/{id}/steps` (add, reorder, tick) | `todo_view` | — |
 | Writes | `PATCH /todos/{id}` and `PUT` / `DELETE …/seen` (existing); `…/someday` and `…/restored` (new routes); all with `X-Persona-Op-Id` and `If-Match: rev`. `client_ops` covers no to-do route today, so the to-do kinds are added | `todo_view` | C6, C8 |
 | Delta | the Inbox's precedent (#4740): `GET /todos?since=<cursor>` → `{as_of, cursor, delta: true, items, removed: [{id, manager}], …}`; the bare `{"type":"todos"}` push stays; a cursor the hub can't follow gets the whole list | none: an older hub answers without a cursor and the client falls back | C3 |
-| Attention | `assistant_needs {todos: N, elsewhere: M, groups}` (not `attention`, which is Persona Link's Needs-you summary); `TODO_DECIDE` with up to 3 option actions and `lockscreen` | `todo_asks` | — |
+| Attention | `assistant_needs {todos: N, elsewhere: M, groups}` (not `attention`, which is Persona Link's Needs-you summary); `TODO_DECIDE` with up to 3 option actions and `lockscreen` | the payload itself: the per-to-do count where `assistant_needs` is present, the options and `lockscreen` where the push carries them | — |
 
 **Rolling upgrade.** Every field is additive. Old clients keep every old field (`done_at` and `done_by` filled from the
 lifecycle, `start_error` from the run outcome) and the bare `{"type":"todos"}` push. On an old hub the new routes are
@@ -1137,8 +1145,8 @@ the hub), never lays out (the core is client logic without UI), and never groups
 | --- | --- | --- | --- | --- |
 | 0 | This proposal, the owner decisions and the glossary; the fixtures first (`todo-view`, `todo-detail`, `todo-counts`, `todo-layout`). Decide owner decision 3 before PR #9823 merges; take PR #6206's lifecycle as input. Docs only | the prototypes V1–V3 | C9, C10 (spec) | all, as mocks |
 | 1 | Additive: one item shape and `GET /todos/{id}`; `view` from `todo_triage.go` moved into the projection slice, with the parked rule added, shadow-compared on the web against the fixtures; `places` and `counts`; restores and seen on the hub; the schema for `view` + `OwnerAsk` with Go, Kotlin and ArkTS outputs | the web draws `view` behind a debug shadow | C1, C2, C4, C5, C6 | the data behind the list, rows, counts, places and summary, drawn on iOS from stage 2 (`iphone/list`, `ipad11-landscape/closed`, `ipad13-landscape/summary`) |
-| 2 | A timeline derived over today's stores (decisions, feed items with `ref`, reviews, runs) behind `todo_timeline`; the asks route over today's stores (both origin guards lifted for answers); `TODO_DECIDE` option actions and `lockscreen`; the Duo animator measured | **iOS reference:** places, list, paper, ask cards and doors, the docked composer routing through today's route where allowed, and the pane showing today's run view plus the derived timeline. **The two to-do pages merge here** | C9 | paper, run session, pane on a run (`iphone/kyoto`, `iphone/release`, `iphone/release-widget-session`, `duo-inner-landscape/release-pane-on-widget`, `iphone/lock-push`) |
-| 3 | `todo_activity` with an outbox (C13); the asks table (C7, C15); messages and the steward (its model turn, verbatim relay) behind `todo_messages`; message states; the per-to-do timeline subscription; the `send_now` session capability; the to-do count unit behind `todo_asks`; client op kinds for to-do routes (C8). Requires PR #6924 | iOS: the steward Conversation in the pane and pushed; receipts; steer and queue; the tray's to-do grouping | C7, C8, C13–C15 | quick note, Conversation, the scope change mid-turn (S5), the to-do count unit (`iphone/kyoto-quicknote-keyboard`, `iphone/conversation-kyoto-keyboard`, `duo-outer/conversation-kyoto-keyboard`, `duo-inner-portrait/paper-conversation`, `ipad11-landscape/open`, `iphone/assistant-tray`) |
+| 2 | A timeline derived over today's stores (decisions, feed items with `ref`, reviews, runs) behind `todo_timeline`; the asks route over today's stores (both origin guards lifted for answers) behind `todo_asks`; `TODO_DECIDE` option actions and `lockscreen`; the Duo animator measured | **iOS reference:** places, list, paper, ask cards and doors, the docked composer routing through today's route where allowed, and the pane showing today's run view plus the derived timeline. **The two to-do pages merge here** | C9 | paper, run session, pane on a run (`iphone/kyoto`, `iphone/release`, `iphone/release-widget-session`, `duo-inner-landscape/release-pane-on-widget`, `iphone/lock-push`) |
+| 3 | `todo_activity` with an outbox (C13); the asks table (C7, C15); messages and the steward (its model turn, verbatim relay) behind `todo_messages`; message states; the per-to-do timeline subscription; the `send_now` session capability; the to-do count unit, carried by `assistant_needs`; client op kinds for to-do routes (C8). Requires PR #6924 | iOS: the steward Conversation in the pane and pushed; receipts; steer and queue; the tray's to-do grouping | C7, C8, C13–C15 | quick note, Conversation, the scope change mid-turn (S5), the to-do count unit (`iphone/kyoto-quicknote-keyboard`, `iphone/conversation-kyoto-keyboard`, `duo-outer/conversation-kyoto-keyboard`, `duo-inner-portrait/paper-conversation`, `ipad11-landscape/open`, `iphone/assistant-tray`) |
 | 4 | Deltas in the Inbox's shape (C3); the places push | the web, then Android (Glass) and HarmonyOS, from the same fixtures; the web writes optimistically | C3, C8 | `V1:web/open`, `android-fold/paper-conversation` |
 | 5 | The rest of the module slices (C5); the `todo_stages` settings blob → a `todo_progress` table (C7); the guards below (C12) | the core adds to-do rows to the launch snapshot (C11); the client triage copies, the second detail pages, the List or Calendar toggle and the Hand to Agent default are deleted | C5, C7, C11, C12 | — |
 
