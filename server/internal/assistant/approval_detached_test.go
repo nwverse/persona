@@ -225,19 +225,11 @@ func TestDetachedGrantConsumptionFailureDoesNotAllow(t *testing.T) {
 			res, err := restarted.nodeInteraction(context.Background(), detachedTestCard("ix_after_restart"))
 			pending <- detachedTestResult{res, err}
 		}()
-		deadline := time.Now().Add(5 * time.Second)
-		for {
+		waitFor(t, "the restarted manager's fresh pending card", func() bool {
 			restarted.fleet.mu.Lock()
-			n := len(restarted.fleet.interactions)
-			restarted.fleet.mu.Unlock()
-			if n == 1 {
-				break
-			}
-			if time.Now().After(deadline) {
-				t.Fatal("the consumed grant was replayed after restart")
-			}
-			time.Sleep(time.Millisecond)
-		}
+			defer restarted.fleet.mu.Unlock()
+			return len(restarted.fleet.interactions) == 1
+		})
 		restarted.fleet.mu.Lock()
 		p := restarted.fleet.interactions["ix_after_restart"]
 		restarted.fleet.mu.Unlock()
