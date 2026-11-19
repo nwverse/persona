@@ -1048,7 +1048,7 @@ func TestLinkSwitchResumesAfterARestart(t *testing.T) {
 			t.Fatal(err)
 		}
 		h.d.resumeLinkSwitches(context.Background())
-		time.Sleep(100 * time.Millisecond)
+		h.switchesDone()
 		if begins, ends := h.hub.calls(); len(begins)+len(ends) > 0 || len(h.whats()) > 0 {
 			t.Errorf("acted on a finished switch: %q", h.whats())
 		}
@@ -1329,6 +1329,18 @@ func (h *lsHarness) installed() {
 }
 
 // waitEnds waits until the hub was asked at least n ends.
+// switchesDone waits until no goroutine of the manager runs a switch (one a resume may have started has ended).
+func (h *lsHarness) switchesDone() {
+	h.t.Helper()
+	done := make(chan struct{})
+	go func() { h.d.switches.wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(20 * time.Second):
+		h.t.Fatal("a switch still runs")
+	}
+}
+
 func (h *lsHarness) waitEnds(n int) {
 	h.t.Helper()
 	eventually(h.t, 20*time.Second, fmt.Sprintf("%d ends asked", n), func() bool {
@@ -1345,7 +1357,9 @@ func TestLinkSwitchRollbackWaitsForTheHub(t *testing.T) {
 	check := func(h *lsHarness) {
 		h.t.Helper()
 		h.waitEnds(12) // 20 ms doubling to 200 ms: past the longest wait several times
-		time.Sleep(300 * time.Millisecond)
+		// Three more asks at the longest wait: the hub stays away a while longer and still nothing is touched.
+		_, asked := h.hub.calls()
+		h.waitEnds(len(asked) + 3)
 		if rec := h.d.linkSwitchRecordOf("box"); rec.Phase != proto.LinkSwitchPhaseRollingBack || rec.HubEnded != "" {
 			h.t.Fatalf("record while the hub is away %+v", rec)
 		}
@@ -1473,7 +1487,7 @@ func TestLinkSwitchSuccessEndIsAskedUntilTaken(t *testing.T) {
 		_ = h.store.PutSetting(context.Background(), linkSwitchKey("box"), linkSwitchRecord{Operation: "ls_1", MachineID: "box",
 			Phase: proto.LinkSwitchPhaseSucceeded, At: time.Now(), HubEnded: lsEndedSucceeded})
 		h.d.resumeLinkSwitches(context.Background())
-		time.Sleep(100 * time.Millisecond)
+		h.switchesDone()
 		if _, ends := h.hub.calls(); len(ends) > 0 || len(h.whats()) > 0 {
 			t.Errorf("asked again: %+v %q", ends, h.whats())
 		}

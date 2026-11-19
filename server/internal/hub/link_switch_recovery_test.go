@@ -341,7 +341,10 @@ func TestLinkSwitchTimeRunsOut(t *testing.T) {
 	if _, err := h.moveMachine(ctx, "lsw-box", "m-0e0e0e"); !errors.Is(err, errLinkSwitchInProgress) {
 		t.Fatalf("moved while it switched: %v", err)
 	}
-	time.Sleep(400 * time.Millisecond)
+	eventually(t, 5*time.Second, "the switch's time to run out", func() bool {
+		busy, err := h.linkSwitchAudited(ctx, "lsw-box")
+		return err == nil && !busy && !h.linkSwitch.live("lsw-box", time.Now())
+	})
 	if h.linkSwitch.live("lsw-box", time.Now()) {
 		t.Fatal("still under way after its time ran out")
 	}
@@ -379,7 +382,10 @@ func TestLinkSwitchRollbackOfAComputerThatLeft(t *testing.T) {
 				t.Fatalf("redeem %d", code)
 			}
 			cred := out["token"].(string)
-			time.Sleep(300 * time.Millisecond) // the switch no longer holds it
+			eventually(t, 5*time.Second, "the switch no longer holding it", func() bool {
+				busy, err := h.linkSwitchAudited(ctx, "lsw-box")
+				return err == nil && !busy && !h.linkSwitch.live("lsw-box", time.Now())
+			})
 			switch how {
 			case "moved":
 				if _, err := h.moveMachine(ctx, "lsw-box", "m-0e0e0e"); err != nil {

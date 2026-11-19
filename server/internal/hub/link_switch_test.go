@@ -834,8 +834,9 @@ func TestAPairingCodeStartsNoSwitch(t *testing.T) {
 func TestAdminLinkSwitchWaitsForTheManager(t *testing.T) {
 	h := newTestHub(t)
 	h.devices.mu.Lock()
-	h.devices.up, h.devices.warmUntil = make(chan struct{}), time.Now().Add(5*time.Second)
-	up := h.devices.up
+	// No up channel yet: waitDevices makes it, which is how this test knows the request is waiting for the manager
+	// (a lookup before the wait answers 404 at once and never makes it).
+	h.devices.up, h.devices.warmUntil = nil, time.Now().Add(5*time.Second)
 	h.devices.mu.Unlock()
 	mux := http.NewServeMux()
 	h.adminLinkSwitchRoutes(mux)
@@ -845,7 +846,13 @@ func TestAdminLinkSwitchWaitsForTheManager(t *testing.T) {
 		mux.ServeHTTP(w, httptest.NewRequest("POST", "/api/v1/admin/machines/lsw-box/link-switch", strings.NewReader(`{}`)))
 		done <- w.Code
 	}()
-	time.Sleep(100 * time.Millisecond)
+	var up chan struct{}
+	eventually(t, 5*time.Second, "the request waiting for the manager", func() bool {
+		h.devices.mu.Lock()
+		defer h.devices.mu.Unlock()
+		up = h.devices.up
+		return up != nil
+	})
 	m := newMachine(h, MachineConfig{ID: "lsw-box", Kind: "ssh"})
 	h.fleet.mu.Lock()
 	h.machines, h.byID["lsw-box"] = append(h.machines, m), m
