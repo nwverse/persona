@@ -973,7 +973,10 @@ Use an invalidation revision as the task key and handle the flag after completio
 - The hub continuously pushes lists, machines and steps; every push reevaluates consumers. Do not attach active controls to them (`docs/archive/apple/live-updates.md`):
   toolbars in data-driven views are resubmitted to UIKit each push, resetting open overflow-menu scroll position even with unchanged content. `ChatsView` handles navigation / toolbar, `AgentsList` handles the list
   (after splitting, `ChatsView.body` must read `searching`, otherwise chats opened from search retain the system navigation bar, `SearchOpenTests`);
-  closure environment values in body (`.environment(\.openFile) { … }`) are new each time, reevaluating every reading row (all visible work steps per push); use once-created `ChatActions`;
+  closure environment values in body (`.environment(\.openFile) { … }`) are new each time, reevaluating every reading row (all visible work steps per push); use once-created `ChatActions`.
+  A closure read from the environment is reported changed each time SwiftUI looks, even the same one handed down once (`_printChanges`): a list moving windows, a tab switch or anything above
+  that makes SwiftUI look at a row's inputs again runs every row that reads one. Hand an object down instead, one for the life of the view that makes it (`FileOpener`, `SpaceOpener`,
+  `SplitShowList`, #10303); a `Binding(get:set:)` and a binding through `Bindable` are reported changed the same way, a `@State` binding is not;
   observe `model.session(key)` per session (`SessionCell`), not all-machine lists. Keep fullscreen viewers and row expansion state on the page, not lazy rows.
   Measure with `LiveUpdateTests` (`/mock/churn` continuous pushes, `-perfCounts YES` reporting body counts and main-thread time per round).
 - Badges (pending count, Inbox Needs you) change almost every push; their consumers must not contain pages or menus (2026-11-01, TestFlight 70 "it's back", `docs/archive/apple/live-updates.md`):
@@ -3020,6 +3023,12 @@ coordinate space (`onGeometryChange` into a store that redraws nothing), read th
 (`onScrollGeometryChange`), work out the least offset that clears the fade (`CapsuleReveal.offset`, pure and tested),
 and set it through `ScrollPosition.scrollTo(x:)`. `InboxSectionBarUITests.testAChosenChoiceComesWhollyIntoViewAtTheLargestText`
 checks the chip's frame against the strip's.
+
+## Confirmation-dialog labels ignore the window's text-size traits (2026-11-18, #8127)
+
+- On iOS 27 at AX5, the window's xxxLarge trait override reaches an action sheet's title, message and button capsules, but its button labels still use the application's uncapped size. Plain string titles and custom labels draw alike; `lineLimit`, `dynamicTypeSize` on a label, and environment or scene trait overrides do not change that label. An alert's labels and capsules stay consistent.
+- Pages use `.accessibleConfirmationDialog`: the original confirmation dialog through xxxLarge, an alert above it on iOS. The alert needs exactly one Cancel. Since a generic `ViewBuilder` cannot reveal whether its actions already contain one, each call says `hasCancel: true` only for an existing cancel action; otherwise the shared modifier adds Cancel. `ConfirmationDialogRuleTests` keeps pages on that rule.
+- XCTest sees two nested button elements with the capsule's frame and no static-text element for the action label, at both ordinary and AX5 sizes. For a frame assertion, the DEBUG `-probes YES` element `probe.confirmation-dialog-labels` reads the presented `UIAlertController`'s real `UILabel` frames. Compare those with the XCTest button frame; do not assert containment between the two nested buttons, which stays equal even while the glyphs overflow.
 
 ## A place chosen again while in front keeps its page and its state (2026-11-16, #9053)
 

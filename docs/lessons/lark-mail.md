@@ -200,3 +200,7 @@ Pinned chats on the home page and normal paging both need to be bound to the act
   not feed alone. That's also why the hub doesn't guess the account from the feed (when an old client opens another account's chat, the default account is used: better to fail to read than to send under the wrong identity).
 - Resource URLs (avatars, images, files) for added accounts come from the Lark gateway with `ol_account` already in them; the hub rewrites them to `/api/v1/lark/media/…?ol_account=N`, and passing that back unchanged is correct;
   when the App adds an account to such URLs, it must not overwrite the `ol_account` already there.
+
+## Group delivery is not permission to trigger (#10238)
+
+A platform's mention scope may coexist with broader message scopes. Enforce per-group mention-only policy before the bot's own settings commands as well as assistant handoff; a command reply is already an observable side effect. Match structured open IDs, fail closed while the bot identity is unknown, and read the policy after a queued message gets its turn. Keep omitted boolean edits distinct from false so older clients cannot silently loosen a saved policy. A strict first enrollment must not become the fallback home for unrelated requests.
