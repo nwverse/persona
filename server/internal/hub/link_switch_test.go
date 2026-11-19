@@ -782,6 +782,29 @@ type langRecorder struct {
 
 func (r langRecorder) Lang() i18n.Lang { return r.l }
 
+// Nor is the manager that carries it removed meanwhile (its computers would go to the carrier mid-switch).
+func TestLinkSwitchHoldsItsManager(t *testing.T) {
+	h, srv, store := managersHub(t)
+	busToken(t, h, assistantwire.AssistantID, "assistant")
+	busToken(t, h, "m-0c0c0c", "other")
+	h.devices.mu.Lock()
+	h.devices.entries, h.devices.started = []MachineConfig{{ID: "lsw-desk", Kind: kindLink}}, true
+	h.devices.assign = map[string]string{"lsw-desk": "m-0c0c0c"}
+	h.devices.mu.Unlock()
+	h.linkSwitch.start("lsw-desk", linkSwitchRun{operation: newSwitchOp(), by: "device"})
+	var out map[string]any
+	if code := managersDo(t, h, srv, "DELETE", "/api/v1/managers/m-0c0c0c", nil, &out); code != http.StatusConflict || out["code"] != "link_switch_in_progress" {
+		t.Fatalf("removed while one of its computers switches: %d %v", code, out)
+	}
+	if b, _ := store.BusIdentityByID(context.Background(), "m-0c0c0c"); b == nil {
+		t.Fatal("its identity went")
+	}
+	h.linkSwitch.stop("lsw-desk")
+	if code := managersDo(t, h, srv, "DELETE", "/api/v1/managers/m-0c0c0c", nil, nil); code != http.StatusOK {
+		t.Fatalf("remove once the switch ended: %d", code)
+	}
+}
+
 // An app's pairing code stands in for a full device until it is traded, but starts no switch; a signed-in full
 // device's request reaches the computer's manager (away here).
 func TestAPairingCodeStartsNoSwitch(t *testing.T) {
