@@ -325,38 +325,42 @@ step() {
 # <line>", so a run waiting for a slot is not silent until the step ends, and appends each wait to the job's wait file
 # as "<kind> <seconds>" for the summary. A "got" line without a "waiting" line before it, or anything after the first
 # other line, is the command's and only passes through: a free slot runs the command without a word.
-slot_lines() {
-  awk -v step="$1" -v waits="$WORK/job.${JOB_I:-x}.wait" '
-    function seconds(text,   minutes) {  # the helper duration: 45s, 2m or 1m5s
-      minutes = 0
-      if (text ~ /^[0-9]+m/) {
-        minutes = substr(text, 1, index(text, "m") - 1)
-        text = substr(text, index(text, "m") + 1)
-      }
-      return minutes * 60 + text
-    }
-    function live(   wait, kind) {
-      print "check-fast: " step ": " substr($0, 13) > "/dev/stderr"
-      wait = ""
-      if ($0 ~ /^heavy_slot: got /) { wait = $0; sub(/.* slot after /, "", wait) }
-      if ($0 ~ /^heavy_slot: timed out /) { wait = $0; sub(/^heavy_slot: timed out after /, "", wait); sub(/ .*/, "", wait) }
-      if (wait != "") {
-        kind = $0
-        sub(/ slot.*/, "", kind)
-        sub(/.* /, "", kind)
-        print kind, seconds(wait) >> waits
-        close(waits)
-      }
-    }
-    BEGIN { state = "start" }
-    state == "start" && /^heavy_slot: waiting for an? [a-z]+ slot \([0-9]+ busy, up to [0-9ms]+\)$/ {
-      live(); state = "waiting"; print; fflush(); next
-    }
-    state == "start" && /^heavy_slot: timed out after [0-9ms]+ waiting / { live() }
-    state == "waiting" && /^heavy_slot: (got an? [a-z]+ slot after [0-9ms]+$|timed out after [0-9ms]+ waiting )/ { live() }
-    { state = "done"; print; fflush() }
-  ' 2>&4 4>&-
-}
+# bash's read takes a pipe a byte at a time, so the waiting line is seen the moment it arrives; awk is no substitute,
+# since mawk (Debian and Ubuntu's awk) fills a 4 KiB buffer or reaches EOF before it handles a line read from a pipe,
+# which here is the whole wait. After the helper's lines cat copies the rest, with fd 4 closed.
+SLOT_WAITING='^heavy_slot: waiting for an? [a-z]+ slot \([0-9]+ busy, up to [0-9ms]+\)$'
+SLOT_GOT='^heavy_slot: got an? ([a-z]+) slot after ([0-9ms]+)$'
+SLOT_TIMED_OUT='^heavy_slot: timed out after ([0-9ms]+) waiting for an? ([a-z]+) slot '
+slot_lines() (
+  _step=$1
+  # slot_read reads one line into _line (a last line without a newline too); false at the end of the output.
+  slot_read() { _line=""; IFS= read -r _line || [ -n "$_line" ]; }
+  # slot_live copies the line to fd 4 and records the wait a "got" or "timed out" line reports (45s, 2m or 1m5s).
+  slot_live() {
+    local _kind="" _wait="" _minutes=0
+    printf 'check-fast: %s: %s\n' "$_step" "${_line#heavy_slot: }" >&4
+    if [[ $_line =~ $SLOT_GOT ]]; then
+      _kind=${BASH_REMATCH[1]}; _wait=${BASH_REMATCH[2]}
+    elif [[ $_line =~ $SLOT_TIMED_OUT ]]; then
+      _kind=${BASH_REMATCH[2]}; _wait=${BASH_REMATCH[1]}
+    fi
+    [ -n "$_wait" ] || return 0
+    case $_wait in *m*) _minutes=${_wait%%m*}; _wait=${_wait#*m} ;; esac
+    _wait=${_wait%s}
+    printf '%s %s\n' "$_kind" "$((_minutes * 60 + ${_wait:-0}))" >> "$WORK/job.${JOB_I:-x}.wait"
+  }
+  slot_read || exit 0
+  if [[ $_line =~ $SLOT_WAITING ]]; then
+    slot_live
+    printf '%s\n' "$_line"
+    slot_read || exit 0
+    if [[ $_line =~ $SLOT_GOT || $_line =~ $SLOT_TIMED_OUT ]]; then slot_live; fi
+  elif [[ $_line =~ $SLOT_TIMED_OUT ]]; then
+    slot_live
+  fi
+  printf '%s\n' "$_line"
+  exec cat 4>&-
+)
 
 skip() { printf 'SKIP\t0\t%s\t%s\n' "$SECONDS" "$1" > "$JOB_STATUS"; exit 0; }
 

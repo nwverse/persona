@@ -1090,6 +1090,16 @@ Use an executable fixture that logs calls and returns the documented result: 0 f
 
 In a UTF-8 locale, `/usr/bin/awk` on macOS (version 20200816) stops at the first invalid byte sequence with `towc: multibyte conversion failure`, prints the record's raw bytes and exits 2; gawk and mawk on Linux read on, so CI never sees it. `install.sh` read every launchd file with awk, and vendors often ship binary property lists: each printed its bytes, and the Python tests reading the script's output with `text=True` crashed with `UnicodeDecodeError`. An awk that reads files it did not write runs with `LC_ALL=C`; plain substring matches mean the same in bytes. The Mac in hand may have no binary plist at all: the regression test writes one with `plistlib` (`FMT_BINARY`) into its own home.
 
+## mawk holds a pipe's lines until 4 KiB or EOF (2026-11-19, #11017)
+
+mawk, the awk of Debian and Ubuntu (and so most likely of the hosted Linux runners, which install no gawk), reads a
+pipe in 4 KiB blocks and handles no line until a block fills or the input ends; `fflush()` only flushes its output.
+macOS awk, busybox awk and gawk handle each line as it arrives, so a filter meant to show a line live works on a Mac
+and stays silent on Linux until the producer exits: check-fast's "waiting for a go slot" line came out after the whole
+wait. `mawk -W interactive` fixes mawk but other awks reject it. A filter that must react to a line at once reads it in
+bash (`IFS= read -r`, which takes a pipe a byte at a time) and hands the rest to `cat`; check the live behaviour in a
+Debian container, not only on the Mac.
+
 ## Import guards read source files, not `go list` (2026-11-06, #5814)
 
 `go list -deps` resolves imports for the host's GOOS / GOARCH and no build tags, so a `server/internal` import in a `_darwin.go` file, a `//go:build public` file (release builds use the tags of `server/build-tags.txt`, `public` among them) or a `//go:build ignore` generator passed the plugin guard on Linux. A guard that must hold for every build parses each `.go` file's imports with `go/parser` (`parser.ImportsOnly`), whatever its constraints, and keeps `go list` as a second view of indirect dependencies, run for every GOOS / GOARCH pair the server ships and every set of build tags it is built with (with `CGO_ENABLED=0`, as the builds are made): an `_arm64.go` file is as invisible to an amd64 host as a `_darwin.go` file is to Linux, and a `// +build !public` line still counts.
