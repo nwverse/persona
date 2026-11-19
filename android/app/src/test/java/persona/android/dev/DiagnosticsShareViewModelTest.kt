@@ -73,6 +73,16 @@ class DiagnosticsShareViewModelTest {
         } finally { fixture.close() }
     }
 
+    @Test fun mainChatOpensThePreparedConversation() = runTest {
+        val fixture = Fixture(main = true)
+        try {
+            fixture.model.prepare(null)
+            assertEquals(DiagnosticsOpenChat(SessionKey("main-machine", "main-session")), fixture.model.openChat)
+            assertEquals(listOf(SessionKey("main-machine", "main-session")), fixture.composer.uploads)
+            assertEquals(1, fixture.drafts.stored.version)
+        } finally { fixture.close() }
+    }
+
     @Test fun uploadFailureDoesNotOpenTheChat() = runTest {
         val fixture = Fixture()
         try {
@@ -115,6 +125,17 @@ class DiagnosticsShareViewModelTest {
         try {
             fixture.current.value = fixture.bindings.copy(scope = HubScope("other", "changed"))
             fixture.model.prepare(null)
+            assertNull(fixture.model.openChat)
+            assertEquals(fixture.context.getString(R.string.app_share_pairing_changed), fixture.model.error)
+            assertTrue(fixture.composer.uploads.isEmpty())
+        } finally { fixture.close() }
+    }
+
+    @Test fun agentChatRejectsAPairingChangeBeforeUploading() = runTest {
+        val fixture = Fixture()
+        try {
+            fixture.agent.value = fixture.bindings.copy(scope = HubScope("other", "changed"))
+            fixture.model.prepare(fixture.target)
             assertNull(fixture.model.openChat)
             assertEquals(fixture.context.getString(R.string.app_share_pairing_changed), fixture.model.error)
             assertTrue(fixture.composer.uploads.isEmpty())

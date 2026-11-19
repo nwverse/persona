@@ -18,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import java.io.File
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import persona.core.data.dev.DevCategory
 import persona.core.designsystem.GroupPosition
@@ -62,6 +63,8 @@ internal fun DevelopingPersonaAbout(
                 }
                 developing.setEnabled(enabled)
                 confirming = false
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (_: Exception) {
                 failed = true
             } finally {

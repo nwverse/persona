@@ -121,15 +121,16 @@ class DiagnosticsShareViewModel @Inject constructor(
         try {
             val flow = destination?.let(wiring::bindingsFor) ?: wiring.current
             val bindings = withTimeout(10_000) { flow.filterNotNull().first() }
-            if (destination == null && bindings.scope != originalOwner) {
+            if (bindings.scope != originalOwner) {
                 error = application.getString(R.string.app_share_pairing_changed)
                 return
             }
+            val mainTarget = if (destination == null) bindings.mainUploadTarget?.invoke() else null
             prepareDiagnosticsDraft(
                 bindings.drafts, bindings.composer, destination,
-                bindings.mainUploadTarget ?: { null }, archive, note,
+                { mainTarget }, archive, note,
             )
-            openChat = DiagnosticsOpenChat(destination)
+            openChat = DiagnosticsOpenChat(destination ?: mainTarget)
             try {
                 targets.remember(destination, System.currentTimeMillis())
             } catch (cancelled: CancellationException) { throw cancelled }

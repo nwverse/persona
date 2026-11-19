@@ -27,6 +27,7 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -95,7 +96,7 @@ class DevelopingPersona internal constructor(
             prefs.edit().clear().apply()
             _state.value = DevelopingDiagnosticsSnapshot(recordedBytes = 0)
             // stop() first rejects new records; settle waits for writes that were already queued before clearing them.
-            withContext(io) {
+            withContext(NonCancellable + io) {
                 recorder.settle()
                 store.clear()
                 exportRoot.deleteRecursively()
