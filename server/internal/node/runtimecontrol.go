@@ -153,10 +153,9 @@ func (n *Node) runtimeLauncherModels(name string) (proto.LauncherModels, bool) {
 	return launcherModelsOf(n.runtimeOf(name), name)
 }
 
-// agyRuntimeModels is the Antigravity runtime's own launcher models, which a managed launcher named agy does not hide:
-// what a managed Antigravity launcher starts (startRuntime) and offers.
+// agyRuntimeModels is the Antigravity companion's advertised catalog for settings.
 func (n *Node) agyRuntimeModels() (proto.LauncherModels, bool) {
-	return launcherModelsOf(n.runtimes.launcherRuntime("agy"), "agy")
+	return launcherModelsOf(n.runtimes.launcherRuntime(agyAgent), agyAgent)
 }
 
 // launcherModelsOf is runtime h's advertisement for its launcher name; false without a runtime.
