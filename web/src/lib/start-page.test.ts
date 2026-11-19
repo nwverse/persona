@@ -767,6 +767,61 @@ describe("Overview's cards (#9745)", () => {
       expect(puts$()).toEqual([]);
     });
 
+    // review of #9778, P2: the start page, the sidebar's pages and the hand-over were still taken from such a read
+    it("nor are an overtaken read's start page and sidebar pages taken, nor its failure", async () => {
+      const { hello } = await loaded();
+      const page = await import("./start-page");
+      const pages = await import("./sidebar-pages");
+      hub = { overview: [], start: "inbox", pages: { order: ["kb"], shown: [], hidden: [] } };
+      const first = holdNext();
+      let refuse!: () => void;
+      const refused = new Promise<void>((r) => (refuse = r));
+      queue.push(async () => (await refused, Response.json({ error: "not found" }, { status: 404 })));
+      await hello();
+      await hello(); // its read is refused later
+      hub = { overview: [], start: "todos", pages: { order: ["inbox"], shown: [], hidden: [] } };
+      await hello();
+      expect(page.startPage()).toBe("todos");
+      await first();
+      refuse();
+      await flush();
+      expect(page.startPage()).toBe("todos");
+      expect(pages.getSidebarPrefs().order).toEqual(["inbox"]);
+      expect(page.startPageSynced()).toBe(true);
+    });
+
+    it("nor is anything handed over from a read answered after signing in as someone else", async () => {
+      const { hello } = await loaded();
+      const page = await import("./start-page");
+      page.keepStartPage("inbox"); // this browser's choice; the hub has none to hand it to
+      const read = holdNext();
+      await hello();
+      localStorage.setItem("persona.token", "another-token");
+      const sent = puts$().length;
+      await read();
+      expect(puts$()).toHaveLength(sent);
+    });
+
+    // review of #9778, P2: a change answered after a hello that did not resume left a newer push from another device unseen
+    it("a change answered after a hello that did not resume still lets the newer pushes heard meanwhile be taken", async () => {
+      const { cards, hello } = await loaded();
+      let release!: () => void;
+      const held = new Promise<void>((r) => (release = r));
+      queue.push(async () => (await held, Response.json({ overview: arrangement }))); // taken; its push went with the old socket
+      cards.saveOverview(arrangement);
+      await flush();
+      const read = holdNext(); // the hello's read, answered later
+      await hello();
+      hub = { overview: newer };
+      Socket.last.push({ type: "navigation", overview: newer }); // another device's, after ours
+      release();
+      await flush();
+      expect(cards.getOverviewPrefs()).toEqual(newer);
+      await read();
+      expect(cards.getOverviewPrefs()).toEqual(newer);
+      expect(hub).toMatchObject({ overview: newer });
+    });
+
     it("nor one answered after signing in as someone else, under that account's copy", async () => {
       const { cards, hello } = await loaded();
       hub = { overview: arrangement };

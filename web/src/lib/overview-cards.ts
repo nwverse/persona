@@ -81,8 +81,8 @@ export function getOverviewPrefs(): OverviewEntry[] {
 /** Whether this browser holds an arrangement at all (none: the cards as they always were). */
 export const overviewChosen = () => getOverviewPrefs().length > 0;
 
-// Bumped by each arrangement kept here (made here or taken from the hub) and each one another tab wrote: one equal to an
-// earlier (another Reset) is newer all the same (OverviewArrange's Undo).
+// Bumped by each arrangement kept here (made here or taken from the hub) and each change another tab made to this
+// sign-in's copy: one equal to an earlier (another Reset) is newer all the same (OverviewArrange's Undo).
 let revision = 0;
 export const overviewRevision = () => revision;
 
@@ -127,11 +127,14 @@ export function noteOverviewKept(on: boolean) {
 }
 
 if (typeof window !== "undefined") {
-  // another tab changed it
+  // another tab changed it: newer for Undo only where this sign-in's copy is not what it was (not another sign-in's
+  // copy, nor storage cleared while this one held none)
   window.addEventListener("storage", (e) => {
     if (e.key === null || e.key.endsWith(`:${KEY}`)) {
+      const ours = e.key === scopedKey(feedCacheScope(), KEY);
+      if (e.key === null ? !!prefs?.length : ours && e.oldValue !== e.newValue) revision++;
       prefs = null;
-      revision++;
+      getOverviewPrefs(); // read again now: a clear after this knows whether this sign-in held a copy
       changed();
     }
   });

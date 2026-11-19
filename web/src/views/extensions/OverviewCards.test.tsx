@@ -25,7 +25,7 @@ vi.mock("../settings/ExtensionView", async () => {
 import { t } from "../../i18n";
 import { feedCacheScope, scopedKey } from "../../lib/feed-cache";
 import { loadPages } from "../../lib/lazy-page";
-import { adoptOverview, getOverviewPrefs, noteOverviewKept, onOverviewSaved, type OverviewEntry } from "../../lib/overview-cards";
+import { adoptOverview, getOverviewPrefs, noteOverviewKept, onOverviewSaved, overviewRevision, type OverviewEntry } from "../../lib/overview-cards";
 import { Toasts } from "../../ui/atoms";
 import { OverviewArrangeButton, OverviewCards } from "./ExtensionSlots";
 
@@ -65,8 +65,9 @@ const draw = (editing = false) => act(() => root.render(<><OverviewCards editing
 // this browser's copy, as another tab would leave it (the store reads it again)
 const arrange = (list: OverviewEntry[]) => {
   const key = scopedKey(feedCacheScope(), "overview.cards")!;
+  const oldValue = localStorage.getItem(key);
   localStorage.setItem(key, JSON.stringify(list));
-  window.dispatchEvent(new StorageEvent("storage", { key }));
+  window.dispatchEvent(new StorageEvent("storage", { key, oldValue, newValue: JSON.stringify(list) }));
 };
 const cards = () => [...host.querySelectorAll<HTMLElement>("[data-extension-card]")];
 const order = () => cards().map((c) => c.dataset.extensionCard);
@@ -269,6 +270,34 @@ describe("arranging them", () => {
     expect(document.body.textContent).toContain(t("extensions-overviewarrange.undo_stale"));
     press(undos[1]); // the second's still puts back what it reset
     expect(saved).toEqual([[{ extension: "example-quota", id: "left" }, { extension: "example-gateway", id: "today" }, { extension: "example-today", id: "needs" }]]);
+  });
+
+  // review of #9778, P2: another tab clearing storage, signing out or removing another sign-in's copy refused Undo
+  it("Undo still puts back after storage events that leave this sign-in's copy as Reset left it", () => {
+    const list = [{ extension: "example-today", id: "needs", span: "full" as const }];
+    const key = scopedKey(feedCacheScope(), "overview.cards")!;
+    arrange(list);
+    draw(true);
+    press(byText(t("extensions-overviewarrange.reset")));
+    act(() => {
+      window.dispatchEvent(new StorageEvent("storage", { key: "persona.feed.another:overview.cards", oldValue: JSON.stringify(list), newValue: null }));
+      window.dispatchEvent(new StorageEvent("storage", { key, oldValue: null, newValue: null })); // nothing of it changed
+      window.dispatchEvent(new StorageEvent("storage", { key: null })); // storage cleared: this sign-in held no copy
+    });
+    saved = [];
+    press(byText(t("extensions-overviewarrange.undo")));
+    expect(saved).toEqual([list]);
+  });
+
+  it("a clear of storage that held this sign-in's copy is newer for Undo, one another tab just wrote too", () => {
+    const list = [{ extension: "example-today", id: "needs", span: "full" as const }];
+    // nothing drawn reads the copy (Reset's toast outlives Overview): the store still knows what it held
+    const before = overviewRevision();
+    act(() => {
+      arrange(list);
+      window.dispatchEvent(new StorageEvent("storage", { key: null }));
+    });
+    expect(overviewRevision()).toBe(before + 2);
   });
 
   it("says where the arrangement is kept: every device, or this browser only", () => {
