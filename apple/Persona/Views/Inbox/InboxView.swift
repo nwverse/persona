@@ -171,7 +171,7 @@ struct InboxPage: View {
                 .sheet(isPresented: $showingSubscriptions) { SubscriptionsSheet() }
                 .sheet(item: $ruling) { InboxPolicySheet(target: $0) }
                 .sheet(item: $todoRequest) { InboxDueSheet(request: $0) }
-                .confirmationDialog(InboxBulk.confirmTitle, isPresented: $confirming, titleVisibility: .visible) {
+                .accessibleConfirmationDialog(InboxBulk.confirmTitle, isPresented: $confirming, titleVisibility: .visible, hasCancel: true) {
                     Button(InboxBulk.confirmButton(count: cleanScope.count)) { clean(confirmed: true) }
                         .accessibilityIdentifier("inbox.cleanConfirm")
                     Button("Cancel", role: .cancel) {}
@@ -1538,8 +1538,9 @@ struct InboxRow: View {
             } else if item.isLark {
                 LarkAvatarImage(name: item.title, url: item.avatar, isGroup: item.lark?.isGroup ?? false, size: Theme.Size.avatar)
             } else {
-                let disc = Theme.monogram(item.sender ?? "")
-                Monogram(name: item.sender ?? "", fill: disc.fill, ink: disc.ink)
+                // A connector's thread picture (the other person, a group's own) over the initial; the initial alone
+                // without one, mail's included.
+                ChatAvatar(url: item.connector?.avatarURL, name: item.sender ?? "")
             }
             }
             .opacity(item.isDone ? 0.6 : 1)

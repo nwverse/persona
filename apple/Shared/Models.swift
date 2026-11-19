@@ -999,6 +999,13 @@ nonisolated struct SessionChildren: Codable, Hashable, Sendable {
     }
 }
 
+/// A native Codex speed choice advertised for this session. Labels stay localized in the client; these are wire metadata.
+nonisolated struct SessionServiceTier: Codable, Hashable, Sendable {
+    var id: String
+    var name: String
+    var description: String? = nil
+}
+
 nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     var machineID: String
     var sessionID: String
@@ -1070,6 +1077,10 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// The levels `effort` may be set to when they are not Claude Code's (`SessionModes.effortOptions`): a Codex thread
     /// the hub drives through its app-server, where only the effort changes (node/codex_effort.go). Nil elsewhere.
     var efforts: [String]? = nil
+    /// The native Codex speed the hub last acknowledged (`service_tier`), nil while unknown. Never an optimistic pick.
+    var serviceTier: String? = nil
+    /// The native speed choices this session advertises (`service_tiers`), including `default` for Standard.
+    var serviceTiers: [SessionServiceTier]? = nil
     /// The launcher / model / effort picked for this assistant conversation (#5033, `model_pick`); nil: it follows the
     /// Main chat default or keeps what it runs. Only the manager names it, on assistant conversations.
     var modelPick: ModelPick? = nil
@@ -1465,6 +1476,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         case listWaiting = "waiting", listBackgroundCount = "background_count", listRunningSubagents = "running_subagents", listRunningWorkflows = "running_workflows"
         case listBackgroundTasksCount = "background_tasks_count", listWorkflowProgress = "workflow_progress"
         case title, cwd, status, launcher, model, agent, effort, efforts, capabilities, attached
+        case serviceTier = "service_tier", serviceTiers = "service_tiers"
         case modelPick = "model_pick"
         case canFork = "can_fork"
         case sourceKind = "source_kind", sourceThreadID = "source_thread_id", sourceInstanceID = "source_instance_id",
@@ -1540,6 +1552,8 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         bypassAvailable = (try? c.decodeIfPresent(Bool.self, forKey: .bypassAvailable)).flatMap { $0 } ?? false
         effort = try c.decodeIfPresent(String.self, forKey: .effort)
         efforts = try c.decodeIfPresent([String].self, forKey: .efforts)
+        serviceTier = try c.decodeIfPresent(String.self, forKey: .serviceTier)
+        serviceTiers = try c.decodeIfPresent([SessionServiceTier].self, forKey: .serviceTiers)
         // The conversation's own pick (#5033): an odd one never drops the session, which then follows its default.
         modelPick = (try? c.decodeIfPresent(ModelPick.self, forKey: .modelPick)).flatMap { $0 }
         contextTokens = try? c.decodeIfPresent(Int.self, forKey: .contextTokens) // an odd one never drops the session
@@ -1657,8 +1671,16 @@ nonisolated struct UndeliveredMessage: Codable, Hashable, Sendable, Identifiable
     var attempts: Int? = nil
     var nextAt: Date? = nil
     var error: String? = nil
+    var deleteOnly: Bool? = nil
+
+    /// The hub's names (`proto.UndeliveredMessage`): one enum, #10775 (`delete_only`) and #10440 (`next_at`) each added one.
+    private enum CodingKeys: String, CodingKey {
+        case id, text, images, at, state, attempts, error
+        case nextAt = "next_at", deleteOnly = "delete_only"
+    }
 
     var gaveUp: Bool { state == "failed" }
+    var canRetry: Bool { gaveUp && deleteOnly != true }
 
     /// The row's kept messages to draw: not one the transcript has (`landed`: its items' client_msg_ids) nor one this
     /// phone still draws as sending or arriving (`drawn`: those bubbles' ids), compared case-insensitively. The row can
@@ -1667,11 +1689,6 @@ nonisolated struct UndeliveredMessage: Codable, Hashable, Sendable, Identifiable
         guard let list, !list.isEmpty else { return [] }
         let skip = Set((landed + drawn).map { $0.lowercased() })
         return list.filter { !skip.contains($0.id.lowercased()) }
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case id, text, images, at, state, attempts, error
-        case nextAt = "next_at"
     }
 }
 
@@ -2579,12 +2596,16 @@ nonisolated struct Item: Codable, Identifiable, Hashable, Sendable {
     var outcome: ToolOutcome? = nil
     /// kind == .notice: an upstream refusal, drawn as a line of its own after the exchange (#4489, `RefusalNotice`).
     var modelRefusal: ModelRefusal? = nil
+    /// Text belonging to the work summary, including when the node sends it unfolded.
+    var narration: Bool? = nil
+    /// A generated heartbeat acknowledgement from a DONT_NOTIFY envelope.
+    var codexHeartbeatQuiet: Bool? = nil
     /// What the model requests this item stands for used (#5426). Older hubs omit it.
     var usage: [TokenUsage]? = nil
 
     enum CodingKeys: String, CodingKey {
         case id, seq, ts, role, kind, text, image, queued, from, wake, fold, task, compact, injected, source, outcome, usage
-        case modelRefusal = "model_refusal"
+        case modelRefusal = "model_refusal", narration, codexHeartbeatQuiet = "codex_heartbeat_quiet"
         case toolUseID = "tool_use_id", toolName = "tool_name", toolInput = "tool_input", isError = "is_error", fullSize = "full_size",
              clientMsgID = "client_msg_id", supervisionUser = "supervision_user"
     }
@@ -2605,6 +2626,9 @@ nonisolated enum InteractionKind: String, Codable, Sendable {
 nonisolated struct QuestionOption: Codable, Hashable, Sendable {
     var label: String
     var description: String?
+    /// "defer" on a manager work card's put-off choices (#6753): picking one only clears the card on the hub and sends
+    /// nothing to the Agent. Missing on every other option.
+    var action: String?
 
     /// "Take the longest one (Recommended)" → ("Take the longest one", true): the words to show and whether Claude recommends it.
     /// The answer sent back keeps the original label. Phone and watch draw 「推荐」 instead of the suffix.
@@ -2663,6 +2687,8 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
     var planThen: String?
     var toolInput: JSONValue?
     var summary: String?
+    /// A script ask's opt-in reply-Markdown rendering; missing and unrecognized values stay literal (#10857).
+    var format: String?
     var screen: String?
     /// The screen's dialog as the hub read it (newer hubs): answer with `Resolution.option`.
     var dialog: ScreenDialog?
@@ -2764,7 +2790,7 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
     var screenDialog: ScreenParser.Dialog? { dialog?.parsed ?? screen.flatMap(ScreenParser.dialog) }
 
     enum CodingKeys: String, CodingKey {
-        case id, kind, questions, plan, summary, screen, cwd, dialog, secret, fields, agent, reason, delegating, delegate, manager
+        case id, kind, questions, plan, summary, format, screen, cwd, dialog, secret, fields, agent, reason, delegating, delegate, manager
         case suggestion, canCancel = "can_cancel"
         case planThen = "plan_then"
         case machineID = "machine_id", sessionID = "session_id", sessionTitle = "session_title", taskTitle = "task_title",

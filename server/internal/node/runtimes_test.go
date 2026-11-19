@@ -242,9 +242,31 @@ func dshHello() map[string]any {
 		"caps": map[string]any{"start": true, "send": true, "interrupt": true, "rename": true}}
 }
 
+// nodeCall is a current-manager call: an existing assistant conversation gets an explicit ordinary origin decision
+// unless the fixture sets origin_known itself. nodeCallWithoutAttestation exercises older-manager/store-error upgrades.
 func nodeCall(t *testing.T, n *Node, method string, params any) (json.RawMessage, error) {
 	t.Helper()
 	raw, _ := json.Marshal(params)
+	if method == "assistant.send" || method == "session.send" {
+		var p map[string]any
+		if json.Unmarshal(raw, &p) == nil && p["session_id"] != "" && p["session_id"] != nil {
+			if _, set := p["origin_known"]; !set {
+				p["origin_known"] = true
+				raw, _ = json.Marshal(p)
+			}
+		}
+	}
+	return nodeCallRaw(t, n, method, raw)
+}
+
+func nodeCallWithoutAttestation(t *testing.T, n *Node, method string, params any) (json.RawMessage, error) {
+	t.Helper()
+	raw, _ := json.Marshal(params)
+	return nodeCallRaw(t, n, method, raw)
+}
+
+func nodeCallRaw(t *testing.T, n *Node, method string, raw json.RawMessage) (json.RawMessage, error) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	res, err := n.handle(ctx, method, raw)
