@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -144,8 +145,8 @@ func TestDeliverTaskFilesFailure(t *testing.T) {
 	if len(files) != 1 || files[0].Error == "" || files[0].Path != "/home/me/gone.md" {
 		t.Fatalf("files: %+v", files)
 	}
-	if !strings.Contains(files[0].String(), "在原电脑") {
-		t.Fatalf("String: %q", files[0].String())
+	if got := files[0].prompt(); got.Error == "" || got.Path != "/home/me/gone.md" {
+		t.Fatalf("prompt: %+v", got)
 	}
 }
 
@@ -175,9 +176,33 @@ func TestDeliverTaskFilesOldNode(t *testing.T) {
 	}
 }
 
-func TestTaskFileLineInNotice(t *testing.T) {
-	got := taskFileLines([]taskFile{{Name: "manual.md", Path: "/home/me/manual.md", Local: "/x/uploads/files/2026-11-18/ab12-manual.md"}})
-	if len(got) != 1 || !strings.Contains(got[0], "manual.md：/x/uploads/files/") {
-		t.Fatalf("lines: %q", got)
+// The task notice and a supervision message list each file as the Go code wrote it before the line moved into their
+// templates (#10734): its copy, the original when there was nothing to copy, or why it did not come and where it stayed.
+func TestTaskFileLinesInPrompts(t *testing.T) {
+	long := strings.Repeat("x", 200)
+	files := []taskFile{
+		{Name: "manual.md", Path: "/home/me/manual.md", Local: "/x/uploads/files/2026-11-18/ab12-manual.md"},
+		{Name: "a.md", Path: "/home/me/a.md"},
+		{Name: "b.zip", Path: "/home/me/b.zip", Error: "over 100 MB"},
+		{Name: "c.md", Path: "/home/me/c.md", Local: "/x/c.md", Error: "an earlier try"},
+		{Name: "d.md", Path: "/home/me/d.md", Error: long},
+	}
+	want := []string{
+		"manual.md：/x/uploads/files/2026-11-18/ab12-manual.md",
+		"a.md：/home/me/a.md",
+		"b.zip（没取回：over 100 MB；在原电脑 /home/me/b.zip）",
+		"c.md：/x/c.md",
+		"d.md（没取回：" + clip(long, 160) + "；在原电脑 /home/me/d.md）",
+	}
+	notice := renderNotice(&quietNotice{todo: Todo{Title: "整理手册"}, state: "done", files: files}, false, "")
+	supervise := prompts.RenderSupervise(prompts.Supervise{Entries: []prompts.SuperviseEntry{
+		{ID: "todo_1", Title: "整理手册", Kind: "review", Files: taskFilePrompts(files)}}})
+	for _, w := range want {
+		if !strings.Contains(notice, "\n- "+w+"\n") {
+			t.Errorf("notice lacks %q:\n%s", w, notice)
+		}
+		if !strings.Contains(supervise, "\n   - "+w+"\n") {
+			t.Errorf("supervision message lacks %q:\n%s", w, supervise)
+		}
 	}
 }
