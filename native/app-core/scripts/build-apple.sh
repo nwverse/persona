@@ -6,6 +6,8 @@
 #   native/app-core/scripts/build-apple.sh --simulator   # the simulator slice only (scripts/app/sim.sh)
 #
 # The default builds all three slices, so both the iOS XCTest host and macOS `swift test` exercise the same C ABI.
+# A simulator-only framework links for no phone and no "My Mac (Designed for iPad)": Xcode stops with "no library for
+# this platform was found". The script says so whenever it leaves one; running it with no flag adds the other slices.
 # Built frameworks are kept in a cache shared by every worktree on the machine (#10713), keyed by a hash of the
 # inputs (sources, Cargo files, toolchain, this script, the Mac's architecture, the Apple SDKs and the caller's
 # RUSTFLAGS and deployment targets), never by the checkout's path: a worktree at the same Rust inputs copies the
@@ -35,6 +37,12 @@ case "$(uname -m)" in
   x86_64) SIM_TARGET=x86_64-apple-ios ;;
   *) fail "unsupported Mac architecture $(uname -m)" ;;
 esac
+# The last line for a worktree left with the simulator slice only ($1: the slices it has).
+note_slices() {
+  [ "$1" = simulator ] || return 0
+  printf 'persona-core-apple: simulator slice only; for a phone or "My Mac (Designed for iPad)" in Xcode, first run %s\n' \
+    "native/app-core/scripts/build-apple.sh (no flag)"
+}
 CLEANUP=()
 cleanup() {
   local path
@@ -67,6 +75,7 @@ if [ -d "$DEST" ] && [ -f "$STAMP" ]; then
   read -r have_key have_slices < "$STAMP" || true
   if [ "${have_key:-}" = "$KEY" ] && { [ "${have_slices:-}" = all ] || [ "${have_slices:-}" = "$SLICES" ]; }; then
     printf 'persona-core-apple: XCFramework is current (%s)\n' "${have_slices:-}"
+    note_slices "${have_slices:-}"
     exit 0
   fi
 fi
@@ -105,6 +114,7 @@ if [ -n "$ENTRY" ]; then
       copy_framework "$ENTRY/$slices/PersonaCoreC.xcframework" "$next"
       install_framework "$next" "$slices"
       printf 'persona-core-apple: XCFramework (%s) from the shared cache %s\n' "$slices" "$ENTRY"
+      note_slices "$slices"
       exit 0
     fi
   done
@@ -176,3 +186,4 @@ if [ -n "$ENTRY" ]; then
 fi
 install_framework "$BUILT/PersonaCoreC.xcframework" "$SLICES"
 printf 'persona-core-apple: XCFramework (%s) ready at %s\n' "$SLICES" "$DEST"
+note_slices "$SLICES"

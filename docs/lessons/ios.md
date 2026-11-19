@@ -58,6 +58,10 @@ the tapping test for the tap's own path.
   the hash, so `native/app-core/scripts/build-apple.sh`'s input hash held each worktree's root and no worktree could use
   another's build. Hash `< <file>`, name each file by its path in the checkout, and add what the environment changes
   about the output (SDKs, `RUSTFLAGS`, deployment targets) before sharing the result.
+- **A slice-only framework in the worktree breaks the next build for another platform.** After `sim.sh` asked for the
+  Rust core's simulator slice only, Xcode building for a phone or "My Mac (Designed for iPad)" stopped with "no library
+  for this platform was found in PersonaCoreC.xcframework", which reads like a broken build. Every way the builder leaves
+  a simulator-only framework now says to run it with no flag first, and the docs that send people to Xcode say the same.
 
 ## A machine's heartbeat used to tell every reader of `machines` (2026-11-18, #10231)
 

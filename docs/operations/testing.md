@@ -278,7 +278,8 @@ The `xcode-slot` runner that `scripts/release/release.sh` and `sim.sh`'s Rust co
   (`./scripts/app/sim.sh --with-watch -openSession <machine>/<id>`); a later build without it first takes them out of the
   app again, since Xcode leaves in place the watch app it no longer embeds. Nothing else sets the switch, so
   `xcodegen generate` alone builds the whole project, and CI, release and the UI tests clear it first, whatever the shell
-  exported. After `sim.sh`, the project Xcode opens is the lean one until the next `xcodegen generate`.
+  exported. After `sim.sh`, the project Xcode opens is the lean one until the next `xcodegen generate`, and its Rust
+  core has the simulator slice only (the last item).
 - **The commit stamp is Release only.** "Stamp the commit" (`apple/project.yml`, the iPhone and Vision apps) does nothing
   in Debug: a Debug build's Settings › About › Build says Unknown, and a build with nothing changed writes no Info.plist
   and signs nothing again. Every Release build, and so every TestFlight build, is stamped as before; a Debug build that
@@ -293,7 +294,10 @@ The `xcode-slot` runner that `scripts/release/release.sh` and `sim.sh`'s Rust co
   inputs' content (never their path), the Mac's architecture, the Apple SDKs and the caller's `RUSTFLAGS` and deployment
   targets: another worktree at the same Rust inputs copies it instead of building, and a full entry also serves a
   simulator request. The newest three keys stay (`PERSONA_APP_CORE_CACHE_KEEP`); `PERSONA_APP_CORE_CACHE=<directory>`
-  moves the cache and `PERSONA_APP_CORE_CACHE=0` turns it off.
+  moves the cache and `PERSONA_APP_CORE_CACHE=0` turns it off. **Before a phone or "My Mac (Designed for iPad)" build in
+  Xcode after `sim.sh`, run `native/app-core/scripts/build-apple.sh` with no flag:** a simulator-only framework has no
+  device slice, so Xcode stops with "no library for this platform was found", which looks like a broken build. The
+  script prints the same reminder whenever it leaves the simulator slice only.
 
 ## Fast local checks (`scripts/check-fast.sh`, #2849)
 

@@ -173,7 +173,21 @@ class AppleCoreBuildTests(unittest.TestCase):
         out = self.build(second, '--simulator')
         self.assertEqual(self.built(), [])
         self.assertIn('XCFramework (all) from the shared cache', out)
+        self.assertNotIn('simulator slice only', out)
         self.assertEqual(self.framework(second)[1][1], 'all')
+
+    def test_a_simulator_only_framework_says_how_to_build_for_a_phone(self):
+        # Xcode stops with "no library for this platform" on a phone or My Mac (Designed for iPad) when the worktree
+        # has the simulator slice only, so every way of leaving one says how to add the rest; a full one says nothing.
+        first, second = self.checkout('first'), self.checkout('second')
+        note = 'simulator slice only; for a phone'
+        self.assertIn(note, self.build(first, '--simulator'))        # built
+        self.assertIn(note, self.build(first, '--simulator'))        # current
+        self.assertIn(note, self.build(second, '--simulator'))       # from the cache
+        out = self.build(first)
+        self.assertIn('XCFramework (all) ready', out)
+        self.assertNotIn(note, out)
+        self.assertNotIn(note, self.build(first, '--simulator'))     # a full copy serves it as it is
 
     def test_changed_inputs_build_again_and_only_the_newest_keys_stay(self):
         first = self.checkout('first')
