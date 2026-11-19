@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -56,15 +57,15 @@ type modelExecution struct {
 	SecretTicket string `json:"-"`
 	// External is a manager-resolved, explicit main-chat pick. Nil preserves older fingerprints.
 	External *proto.ExternalExecution `json:",omitempty"`
-	// Goal: a Claude Code /goal condition typed after the first message of a new start is in (startgoal.go). Per start,
-	// never part of a fingerprint, never kept for a resume.
+	// Goal: a /goal typed after the first message of a new Claude Code or Codex start is in (startgoal.go,
+	// codex_start_goal.go). Per start, never part of a fingerprint, never kept for a resume.
 	Goal string `json:"-"`
 	// InPane is session.start's in_pane: a failed start's kept tab to start in (startremedy.go).
 	InPane string `json:"-"`
 }
 
 func supervisionRuntimeRefusal(ctx context.Context) error {
-	return refusal("assistant_supervision_runtime", i18n.T(i18n.From(ctx), "rpc-errors.assistant_supervision_runtime"), nil)
+	return refusal(assistantwire.CodeSupervisionRuntime, i18n.T(i18n.From(ctx), "rpc-errors.assistant_supervision_runtime"), nil)
 }
 
 // check refuses a model that is not a model id (proto.ValidModelID, #1644) before anything runs; the error's text is

@@ -58,6 +58,7 @@
   "codex_not_ready": "Codex on the computer isn’t at its input box yet (still loading, or another screen is open). Nothing was sent; try again in a moment.",
   "codex_first_text": "Codex’s first message can only be text. Remove the photos or files, then send it again.",
   "codex_first_unconfirmed": "The message went into Codex, but its session didn’t appear in time. Check the computer before sending it again.",
+  "codex_compact_busy": "Codex is working on a turn. Compact once it finishes; nothing was sent.",
   "codex_waiting": "Codex hasn’t had its first message yet. This works once it has its session.",
   "codex_no_box": "Codex opened in a new tab on the computer, but its input box didn’t appear within a minute.",
   "codex_no_box_here": "Codex started in the pane you picked, but its input box didn’t appear within a minute. The pane is left as it is.",
@@ -87,5 +88,10 @@
   "assistant_supervision_busy": "This conversation's task-follow-up role changed. Wait for its current work to finish, then try again. Nothing was sent.",
   "assistant_supervision_runtime": "Use a Claude Code or Codex conversation for task follow-up. This Agent does not support its separate instructions. Nothing was started or sent.",
   "assistant_supervision_node_outdated": "Update this computer's Persona Link before following up tasks here. Its current version cannot apply separate task instructions. Nothing was started or sent.",
-  "omp_resume_unknown": "Persona can’t resume this omp session from here yet. Continue it on the computer with omp --resume. Nothing was sent."
+  "omp_resume_unknown": "Persona can’t resume this omp session from here yet. Continue it on the computer with omp --resume. Nothing was sent.",
+  "held_ahead": "Earlier messages to this Agent are still waiting to be sent. Send this one after them.",
+  "held_not_kept": "Earlier messages are still waiting to be sent, and this one couldn't be saved. Try again in a moment.",
+  "held_full": "Too many messages are waiting for this Agent. Delete some, or send this one when the computer is back.",
+  "assistant_launcher_profile_switch": "Can’t switch this conversation to the selected connection. Nothing was sent. Choose the previous connection to continue here, or start a new conversation with the selected connection and one of its models.",
+  "turn_over_background": "This turn had already ended, so nothing was interrupted. Its background work is still running; stop it in the terminal on that computer."
 }

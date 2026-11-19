@@ -202,7 +202,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	t.planFirst = false
 	params := map[string]any{"launcher": t.Launcher, "model": t.Model, "effort": t.Effort, "tier": t.Tier}
 	// The start-defaults policy: its preset goes in before the start is resolved, as if the task had named that tier;
-	// its effort, ultracode and goal after the launcher fit.
+	// its effort and ultracode after the launcher fit, and the goal (a rule's or the Codex default) after that.
 	defaults, withDefaults := s.taskStartDefaults(ctx, t)
 	presetNote := ""
 	if withDefaults {
@@ -275,8 +275,11 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		t.Effort = ""
 	}
 	if withDefaults { // only what the task left open, after the fit, which may itself have filled some in
-		s.applyStartExtras(ctx, t, caller, defaults, fit.agent == "claude", params, presetNote)
+		s.applyStartExtras(ctx, t, caller, defaults, fit.agent, params, presetNote)
 	}
+	// The goal: a rule's, else the Codex default for a task with criteria (startGoalSource); the default is not sent
+	// where the node is known to refuse it, and its refusal elsewhere is only logged (below).
+	defaultGoal := s.applyStartGoal(t, defaults, withDefaults, fit.agent, defaultGoalRefusedOn(m, params, fit), params)
 	if t.MachinePolicy == machineFixed {
 		// Only an actual terminal start can recheck a repaired terminal shell.
 		// An explicit retry keeps that existing recovery path on the fixed target;
@@ -327,6 +330,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	case t.Parent != "":
 		rules = append(rules, prompts.RenderTaskWorker())
 	}
+	// Files for the user are named by path, never pasted into the reply (task_files.go, #10511). Always asked for,
+	// unlike the closeout form below, which depends on a switch: a stable rule, so it travels with the framework.
+	rules = append(rules, prompts.RenderTaskFiles(answerLanguage(s.hello(ctx).Locale)))
 	// One structured closeout carries delivery too when both switches are on.
 	delivery := !t.Readonly && s.doneNeedsDelivery(ctx)
 	brief := s.closeoutBrief(ctx, delivery)
@@ -338,7 +344,8 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	}
 	// The project background, and the decisions of the todo and its continuation ancestors (a task started again may
 	// have some), follow the assignment; they remain user context, never framework policy.
-	background := s.projectHandoffContext(ctx, m.ID, t.Cwd, t.Supervisor)
+	// The direction's notes go by who follows the task up (#10623): a leader's own plan names it only in the ledger.
+	background := s.projectHandoffContext(ctx, m.ID, t.Cwd, s.taskSupervisorOf(t))
 	if decisions := s.todoHandoffDecisionsContext(ctx, t.TodoID); decisions != "" {
 		background = strings.TrimSpace(background + "\n\n" + decisions)
 	}
@@ -421,7 +428,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		if reason, no := s.goalRefusal(err, params); no {
 			delete(params, "goal")
 			s.logf("task %s: start: %s; starting without a goal", t.TodoID, reason)
-			t.noteWhy(i18n.T(s.lang(ctx), "assistant-tasks.start_goal_skipped", i18n.Args{"reason": reason}))
+			if !defaultGoal { // a goal the owner never asked for is no news on the task's card
+				t.noteWhy(i18n.T(s.lang(ctx), "assistant-tasks.start_goal_skipped", i18n.Args{"reason": reason}))
+			}
 			if err := s.checkContinuationScope(t); err != nil {
 				return "", "", err
 			}
