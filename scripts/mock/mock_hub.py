@@ -806,6 +806,13 @@ _WIDGET_SUBAGENTS = ([
     {"id": "a2", "session_id": f"{WIDGET}@a2", "type": "Explore", "description": "核对降雨概率的格式", "running": True,
      "background": True, "started_at": ago(minutes=2)}] if os.environ.get("MOCK_TASKS_SUBAGENTS") == "1" else []) + MOCK_TOPBAR_SUBAGENTS
 
+# MOCK_BG_MONITOR=1 (#10852): the widget chat also runs a Monitor started a minute ago whose start result names no output
+# file, as a Monitor's does until its first event; GET /mock/monitor_event names it, as that event would (the hub's
+# taskFinished). The background command's and the Monitor's output files have a few lines (FILES).
+MOCK_BG_MONITOR = os.environ.get("MOCK_BG_MONITOR") == "1"
+BG_MONITOR = {"id": "bm1", "kind": "monitor", "description": "盯小组件构建日志里的报错",
+              "command": 'tail -n 0 -f logs/widget-build.log | grep --line-buffered -E "error|warning"', "started_at": ago(minutes=1)}
+
 SESSIONS = [
     sess("macbook", WIDGET, "给天气 App 加主屏幕小组件", "/Users/me/code/weather", "working", "working", "weather", 1, "widget", 1, 0,
          "小组件的时间线已经能按小时刷新了，正在跑测试确认降雨概率的格式化没问题。", permission_mode="acceptEdits",
@@ -818,6 +825,7 @@ SESSIONS = [
          background=[{"id": "b1", "kind": "shell", "description": "跑小组件快照测试",
                       "command": "xcodebuild test -scheme WeatherWidget -only-testing:SnapshotTests",
                       "output_file": "/tmp/claude/b1.output", "started_at": ago(minutes=4)}]
+                    + ([dict(BG_MONITOR)] if MOCK_BG_MONITOR else [])
                     # MOCK_WORKFLOWS=1|legacy (#2935): a background workflow running; legacy: a hub without workflows
                     + ([{"id": "wdemo1", "kind": "workflow", "description": "widget-audit", "run_id": "wf_demo1", "started_at": ago(minutes=14)}]
                        if os.environ.get("MOCK_WORKFLOWS") in ("1", "legacy") else []),
@@ -892,7 +900,8 @@ if os.environ.get("MOCK_BYPASS_AVAILABLE") == "1":
 # Full access by a restart (#6476, node/mode_restart.go): Allow All picked for a terminal Claude Code whose process has
 # no bypass flag (bypass_available false) is not refused. Its row says a restart waits (bypass_pending) and keeps the
 # mode it runs in; once its turn is over (here: MOCK_BYPASS_RESTART_SECONDS, default 6, after an idle pick; a working
-# agent waits until it is idle) the "restart" comes up in it, with bypass_available. Any other mode drops it.
+# agent waits until it is idle) the "restart" comes up in it, with bypass_available. Any other mode drops it: the mode it
+# runs in calls it off (cancelled, #11089), another replaces it.
 BYPASS_RESTART_SECONDS = float(os.environ.get("MOCK_BYPASS_RESTART_SECONDS") or 6)
 
 
@@ -919,7 +928,8 @@ def bypass_restart(s, mode):
     """True when s takes mode by a restart (queued here); a pick of another mode drops one that waits."""
     if mode != "bypassPermissions":
         if mode and s.pop("bypass_pending", None):
-            note_mode_change(s, "restart_dropped", "bypassPermissions", reason="replaced")
+            note_mode_change(s, "restart_dropped", "bypassPermissions",
+                             reason="cancelled" if mode == s.get("permission_mode") else "replaced")
         return False
     if s.get("assistant") or s.get("agent") not in (None, "claude") or not s.get("pane_id") or s.get("bypass_available") \
             or s.get("permission_mode") == "bypassPermissions":
@@ -1797,6 +1807,11 @@ if os.environ.get("MOCK_AGENT_MARKS"):
         ("marks-traex", "traex", "TRAEX 的一个会话", "done", "done", 9),
         ("marks-amp", "amp", "amp 的一个会话", "idle", "idle", 70),
         ("marks-trae", "trae", "TRAE CLI 的一个会话", "working", "working", 3),
+        ("marks-grok", "grok", "Grok", "idle", "idle", 5),
+        ("marks-agy", "agy", "Antigravity CLI", "working", "working", 7),
+        ("marks-dsh", "dsh", "DeepSeek Harness", "done", "done", 8),
+        ("marks-kimi", "kimi", "Kimi CLI", "idle", "idle", 10),
+        ("marks-copilot", "copilot", "GitHub Copilot", "idle", "idle", 11),
     ]
     # the client each one runs in (#6390): the command-line ones carry the </> badge, the desktop app and the unknown none
     MARKS_SURFACES = {"marks-claude": "cli", "marks-codex": "desktop", "marks-trae": "cli"}
@@ -2674,6 +2689,9 @@ ASSISTANT_CONFIG = {"machine_id": "server", "launcher": "claude", "timezone": "A
                     "close_ended_terminals": False,
                     # The manager's next-message suggestions (#4644), off by default; MOCK_NEXT_SUGGESTIONS=1 starts on.
                     "next_suggestions": os.environ.get("MOCK_NEXT_SUGGESTIONS") == "1",
+                    # Claude chats in interactive Claude Code (#10058), off by default; MOCK_CLAUDE_INTERACTIVE=on starts on,
+                    # =fallback also has the main chat's report say it fell back to print mode. Left out with MOCK_LEGACY_HUB.
+                    "claude_interactive": os.environ.get("MOCK_CLAUDE_INTERACTIVE", "") in ("on", "fallback"),
                     # The main chat follows up its own tasks instead of the background supervisor (#4927), off by
                     # default. Left out with MOCK_LEGACY_HUB.
                     "main_supervises_own_tasks": False,
@@ -2717,6 +2735,7 @@ def assistant_state(space="", archived=False):
         out.update(agent_tasks=cfg["agent_tasks"], close_ended_terminals=cfg["close_ended_terminals"], inbox_signals=cfg["inbox_signals"], archive_closed_days=cfg["archive_closed_days"],
                    idle_close_hours=cfg["idle_close_hours"], kb_topics=cfg["kb_topics"],
                    main_supervises_own_tasks=cfg["main_supervises_own_tasks"], next_suggestions=cfg["next_suggestions"],
+                   claude_interactive=cfg["claude_interactive"],
                    start_requested_tasks=cfg["start_requested_tasks"], task_workspace_preference=cfg["task_workspace_preference"],
                    agent_auto_naming=cfg["agent_auto_naming"], agent_auto_naming_max=cfg["agent_auto_naming_max"],
                    agent_auto_naming_interval_hours=cfg["agent_auto_naming_interval_hours"],
@@ -3141,6 +3160,31 @@ def _todo_list_fixture(variant):
 _TODO_LIST = os.environ.get("MOCK_TODO_LIST", "")
 if _TODO_LIST:
     TODOS_INIT[:] = _todo_list_fixture(_TODO_LIST)
+
+# MOCK_TODO_BADGE=1 (#11085, docs/assistant/todos.md "Sidebar and main navigation"): only these to-dos, for the sidebar's
+# To-dos badge. A goal of the owner's whose two pieces (`part_of`) Agents are working on, and an errand of the owner's
+# no Agent was ever on: the To-dos page's Not done is 4, the badge 1 (the errand), where it used to say 4 as well.
+if os.environ.get("MOCK_TODO_BADGE") == "1":
+    def _badge_agent(n, title, last):
+        sid = f"c3d5e7f9-0000-4000-8000-{11085000 + n:012d}"
+        SESSIONS.append(sess("macbook", sid, title, "/Users/me/code/settings", "working", "working", "settings", 8, "1", n, 3, last))
+        return {"machine_id": "macbook", "session_id": sid, "linked_at": ago(minutes=40), "released_at": None, "title": title,
+                "cwd": "/Users/me/code/settings", "agent": "claude", "start_error": "", "source": "spawned", "via": ""}
+
+    def _badge_todo(tid, title, minutes, **kw):
+        t = {"id": tid, "title": title, "notes": "", "done_at": None, "created_at": ago(minutes=minutes + 60),
+             "updated_at": ago(minutes=minutes), "origin": "", "spaces": [], "agents": [], "priority": ""}
+        t.update(kw)
+        return t
+
+    TODOS_INIT[:] = [
+        _badge_todo("tb_goal", "设置页改版上线", 30),
+        _badge_todo("tb_search", "设置页：分组和搜索", 3, part_of="tb_goal", origin="conv_demo",
+                    agents=[_badge_agent(1, "设置页分组和搜索", "在给每个分组补搜索关键词。")]),
+        _badge_todo("tb_dark", "设置页：深色模式配色", 3, part_of="tb_goal", origin="conv_demo",
+                    agents=[_badge_agent(2, "设置页深色配色", "在核对深色模式下的对比度。")]),
+        _badge_todo("tb_errand", "给家里的 NAS 换硬盘", 90),
+    ]
 
 # MOCK_TODO_CONCERNS=1 (#3582): one concern working, one waiting for its report in Other open, and one closed by its
 # report, for the To-dos list's light / dark captures. "only" keeps just these to-dos so the working one is within
@@ -8091,6 +8135,18 @@ def wf_call(tid, name, ts_min):
             it("user", "tool_result", ts_min, tool_use_id=tid, text="Workflow launched in background: %s" % name)]
 
 
+def bg_monitor_event():
+    """GET /mock/monitor_event (MOCK_BG_MONITOR): the Monitor's first event names its output file, pushed as the hub would."""
+    for s in SESSIONS:
+        task = next((b for b in s.get("background") or [] if s["session_id"] == WIDGET and b["id"] == BG_MONITOR["id"]), None)
+        if task:
+            task["output_file"] = "/tmp/claude/bm1.output"
+            s.update(rev=(s.get("rev") or 0) + 1, updated_at=ago(minutes=0))
+            push_machine(s["machine_id"])
+            return {"output_file": task["output_file"]}
+    return {"error": "MOCK_BG_MONITOR is off"}
+
+
 def set_wf_step(step):
     """GET /mock/workflow?step=n: the small run at that step, pushed as the hub would."""
     WF_STEP["n"] = max(0, min(3, step))
@@ -9230,8 +9286,9 @@ if MOCK_TASKS:
             TASK_FEED[ASK1].append(_feed("feed_receipt_review_%d" % _n, 0.2 - _n / 100, "receipt", _tid,
                                         {"title": _title, "state": "done", "summary": "检查结果已整理好，等待验收。",
                                          "review": {"state": "awaiting", "criteria": _n}}))
-    # MOCK_TASKS_FINISHED=1 (#8237): two handed-out tasks closed in the last hour and not looked at since, so In Progress
-    # lists them under Just Finished: one the hub closed with its reason, one its review accepted, each with its receipt.
+    # MOCK_TASKS_FINISHED=1 (#8237, #10922): handed-out tasks closed in the last hours, each with its receipt, so the
+    # Finished entry lists them: two not looked at since (new, the To-dos page's Just Finished): one the hub closed with
+    # its reason, one its review accepted; and one the owner already opened, which Finished still lists, as Done.
     if os.environ.get("MOCK_TASKS_FINISHED") == "1":
         for _tid, _title, _min, _extra, _summary in [
             ("todo_done_login", "修复登录页闪退", 12, {"done_by": "auto", "done_reason": "改好了：登录页不再闪退，PR #43 已合并"},
@@ -9240,6 +9297,9 @@ if MOCK_TASKS:
                 "supervisor": ASK1, "state": "accepted", "round": 0, "done_when": [], "updated_at": ago(minutes=40),
                 "reviews": [{"at": ago(minutes=40), "verdict": "accepted", "note": "写好了：7 个 PR 分成新功能、修复和其他三组"}]}},
              "发布说明分好了三组，放在 docs/release-notes.md。"),
+            ("todo_done_faq", "更新常见问题页", 150, {"done_by": "auto", "done_reason": "改好了：常见问题页补了三条付款问题",
+                                                    "seen_at": ago(minutes=100)},
+             "常见问题页补了三条付款相关的问答。"),
         ]:
             _todo = dict(_task_todo(_tid, _title, "", "macbook", "", "/Users/me/code/example", _min + 30, ""), agents=[],
                          done_at=ago(minutes=_min), **_extra)
@@ -12390,6 +12450,8 @@ if os.environ.get("MOCK_MAIL_INBOX") == "off":
     LEGACY_CONNECTORS[1]["inbox"] = False
 
 # Telegram (the Telegram extension, #1704; docs/archive/extensions/plan-telegram.md): the user's own account, signed in from Settings › Connectors › Telegram a step at a time.
+# Its two inbox rows carry their conversations' pictures (connector.avatar_url, the avatars route serves made-up ones, #10923);
+# GET /mock/telegram_avatars?mode=before lists them as an older hub did, without.
 # All made up: api_id 1234567 (a hash of 32 zeros is refused), any phone starting with +, the code 12345, the 2FA
 # password example-password. MOCK_TELEGRAM=off|signed_out|signed_in|2fa|limited (unset: no Telegram connector at all;
 # limited: signed in and waiting out a flood wait Telegram asked for);
@@ -12935,11 +12997,28 @@ def tg_sticker(n=180):
 TG_AVATAR_COLORS = {"u1": (88, 160, 230), "u7": (230, 140, 90), "u8": (150, 110, 210), "c2": (90, 190, 150)}
 
 
+def tg_avatar(peer, n=96):
+    """A made-up picture of peer (no one's photo): a diagonal of its color into a lighter one, with soft discs, one for a
+    person and three for a group (c…), so a row's picture is plainly not its initial."""
+    base = TG_AVATAR_COLORS[peer]
+    light = tuple(min(255, c + 70) for c in base)
+    discs = [(0.36, 0.38, 0.22), (0.66, 0.40, 0.18), (0.50, 0.68, 0.20)] if peer.startswith("c") else [(0.5, 0.42, 0.2), (0.5, 0.95, 0.38)]
+    def px(x, y):
+        fx, fy = x / max(n - 1, 1), y / max(n - 1, 1)
+        f = (fx + fy) / 2
+        c = [int(base[i] + (light[i] - base[i]) * f) for i in range(3)]
+        for cx, cy, r in discs:
+            if (fx - cx) ** 2 + (fy - cy) ** 2 < r * r:
+                c = [int(v + (255 - v) * 0.55) for v in c]
+        return (*c, 255)
+    return tg_rgba(n, n, px)
+
+
 def tg_media(ref):
     """The bytes a made-up media ref names (refs as the connector makes them: a.<peer>.<photo>, m.<chat>.<id>.f|t)."""
     parts = ref.split(".")
     if parts[0] == "a" and len(parts) == 3 and parts[1] in TG_AVATAR_COLORS:
-        return png(96, 96, TG_AVATAR_COLORS[parts[1]])
+        return tg_avatar(parts[1])
     if ref == "m.u1.333.f":
         return tg_photo(400, 300, (110, 170, 235), (210, 230, 250))
     if ref == "m.u1.335.f":
@@ -13010,6 +13089,57 @@ def tg_thread(thread, before, limit):
     if len(msgs) > limit:
         out["before"] = page[0]["id"]
     return out
+
+
+def avatar_path(source, value):
+    """The avatars route's path for a value, as the hub lists it (extwire.AvatarURL)."""
+    return "/api/v1/avatars/%s/%s" % (source, base64.urlsafe_b64encode(value.encode()).rstrip(b"=").decode())
+
+
+def avatars_area(h, p):
+    """GET /api/v1/avatars/{source}/{value}?size= (#10923, docs/protocol/protocol.md "Avatars"): the made-up pictures the
+    mock's lists name, drawn at the size asked (64, 128, 256 or 512); True when it answered."""
+    if not p.startswith("/api/v1/avatars/"):
+        return False
+    source, _, seg = p[len("/api/v1/avatars/"):].partition("/")
+    try:
+        value = base64.urlsafe_b64decode(seg + "=" * (-len(seg) % 4)).decode()
+    except Exception:
+        return h.send_json({"error": "not an avatar", "code": "bad_url"}, 404) or True
+    try:
+        asked = int(parse_qs(urlparse(h.path).query).get("size", ["128"])[0])
+    except ValueError:
+        asked = 128
+    size = next((e for e in (64, 128, 256, 512) if e >= asked), 512)
+    parts = value.split(".")
+    if source != "telegram" or not TELEGRAM_MODE or parts[0] != "a" or len(parts) != 3 or parts[1] not in TG_AVATAR_COLORS:
+        return h.send_json({"error": "no such picture", "code": "fetch_failed"}, 502) or True
+    data = tg_avatar(parts[1], size)
+    h.send_response(200)
+    h.send_header("Content-Type", "image/png"); h.send_header("Content-Length", str(len(data)))
+    h.send_header("X-Content-Type-Options", "nosniff")
+    h.send_header("Cache-Control", "private, max-age=31536000, immutable")
+    h.end_headers(); h.wfile.write(data)
+    return True
+
+
+# GET /mock/telegram_avatars?mode=before|1 (MOCK_TELEGRAM_INBOX, #10923): the Telegram rows as a hub before the avatars
+# route lists them (no connector.avatar_url: every app draws the initial), or with their pictures.
+TG_AVATARS = {"u1": "a.u1.501", "c2": "a.c2.900"}
+
+
+def telegram_avatars_area(h, method, p):
+    if not os.environ.get("MOCK_TELEGRAM_INBOX") or method != "GET" or p != "/mock/telegram_avatars":
+        return False
+    mode = parse_qs(urlparse(h.path).query).get("mode", ["1"])[0] or "1"
+    for x in INBOX:
+        c = x.get("connector") or {}
+        if x.get("source") == "telegram" and c.get("thread") in TG_AVATARS:
+            if mode == "before":
+                c.pop("avatar_url", None)
+            else:
+                c["avatar_url"] = avatar_path("telegram", TG_AVATARS[c["thread"]])
+    return h.send_json({"mode": mode}) or True
 
 
 def telegram_area(h, method, p, raw):
@@ -13118,13 +13248,13 @@ if os.environ.get("MOCK_TELEGRAM_INBOX"):
          "started_at": ago(minutes=12), "updated_at": ago(minutes=12), "tier": "action",
          "summary": "示例用户问你周末的活动还去不去", "reason": "等你回复", "read": False,
          "context": "示例用户（Telegram 私聊）\n昨天 20:15 我：好的，到时候见\n今天 09:40 示例用户：周末的示例活动还去吗？",
-         "connector": {"thread": "u1", "label": "私聊", "open_url": "tg://resolve?domain=example"}},
+         "connector": {"thread": "u1", "label": "私聊", "open_url": "tg://resolve?domain=example", "avatar_url": avatar_path("telegram", "a.u1.501")}},
         {"id": "telegram:mention2", "source": "telegram", "kind": "mention", "account": "telegram", "account_name": "Telegram",
          "title": "示例群", "sender": "另一个示例用户", "preview": "@example 这个示例方案你怎么看？", "count": 1,
          "started_at": ago(minutes=40), "updated_at": ago(minutes=40), "tier": "action",
          "summary": "群里有人问你对示例方案的看法", "reason": "@你", "read": False,
          "context": "示例群（Telegram 群）\n今天 09:12 另一个示例用户：@example 这个示例方案你怎么看？",
-         "connector": {"thread": "c2", "label": "@你", "open_url": "https://t.me/c/2/12"}},
+         "connector": {"thread": "c2", "label": "@你", "open_url": "https://t.me/c/2/12", "avatar_url": avatar_path("telegram", "a.c2.900")}},
     ]
 
 
@@ -18616,6 +18746,18 @@ def fold_work(items):
     results = {x.get("tool_use_id") for x in items if x["kind"] == "tool_result"}
     # a subagent's call stays on the page: the chat draws it as a card that never folds (#5602)
     agents = {x.get("tool_use_id") for x in items if x["kind"] == "tool_use" and x.get("tool_name") in ("Task", "Agent")}
+    finishes = {x.get("tool_use_id") for x in items if x["kind"] == "tool_use"
+                and x.get("tool_name") in ("supervision_finish", "mcp__persona__supervision_finish")}
+    silent = set()
+    for x in items:
+        call_id = x.get("tool_use_id")
+        if x["kind"] == "tool_result" and call_id in finishes and not x.get("is_error"):
+            try:
+                receipt = json.loads(x.get("text") or "")
+            except ValueError:
+                continue
+            if isinstance(receipt, dict) and receipt.get("visibility") == "silent":
+                silent.add(call_id)
 
     latest_narration = next((i for i in range(len(items) - 1, -1, -1) if items[i]["role"] == "assistant" and items[i]["kind"] == "text"), -1)
 
@@ -18626,7 +18768,7 @@ def fold_work(items):
         if x["kind"] == "text":
             return bool(x.get("narration")) and i != latest_narration
         t = x.get("tool_use_id")
-        return x["kind"] in ("tool_use", "tool_result", "image") and t and t in uses and t in results and t not in agents
+        return x["kind"] in ("tool_use", "tool_result", "image") and t and t in uses and t in results and t not in agents and t not in silent
     out, i = [], 0
     while i < len(items):
         if not inside(i):
@@ -18910,7 +19052,7 @@ def summary_row(s):
     subagents or workflows arrays; counts and the newest running run's progress, without its agents and phases."""
     runs = [w for w in s.get("workflows") or [] if w.get("running")]
     bg = s.get("background") or []
-    out = {k: v for k, v in s.items() if k not in ("background", "subagents", "workflows", "queued")}
+    out = {k: v for k, v in s.items() if k not in ("background", "subagents", "workflows", "queued", "service_tier", "service_tiers")}
     out["background_count"] = len(bg)
     out["running_subagents"] = sum(1 for a in s.get("subagents") or [] if a.get("running"))
     out["running_workflows"] = len(runs) or (0 if s.get("workflows") else sum(1 for b in bg if b.get("kind") == "workflow"))
@@ -19150,6 +19292,11 @@ if os.environ.get("MOCK_MESSAGE_LIFT") == "1":  # the paths in the lift's long m
     FILES["/Users/me/.config/example-gateway/management.key"] = b"placeholder\n"
 if os.environ.get("MOCK_CJK_PATHS") == "1":  # its files are there (#8386)
     mock_cjk_paths()
+if MOCK_BG_MONITOR:  # the background command's output, and the Monitor's before its first event names it (#10852)
+    FILES["/tmp/claude/b1.output"] = (b"Test Suite 'SnapshotTests' started\n"
+                                      b"Test Case 'HourlyTimelineTests.testRainChanceFormat' passed (0.012 seconds)\n"
+                                      b"Test Case 'HourlyTimelineTests.testEntryBudget' passed (0.034 seconds)\n")
+    FILES["/tmp/claude/bm1.output"] = b"warning: Timeline entries exceed the refresh budget (42 of 40)\n"
 VIDEO_READS = []
 VIDEO_READ_LOCK = threading.Lock()
 FILE_PAGE = 2 << 20
@@ -25095,6 +25242,12 @@ def markets_route(handler, p, body):
         if GAUGE_MODE and placement in ("", "nav_page"):
             ui += [{"plugin": "example-quota", "plugin_name": "Example Quota", "id": "quota", "title": "Quota",
                     "placement": "nav_page", "size": "full", "icon": "gauge"}]
+        if GRAPH_MODE and placement in ("", "nav_page"):
+            ui += [{"plugin": "example-work", "plugin_name": "Example Work", "id": "work", "title": "Work",
+                    "placement": "nav_page", "size": "full", "icon": "branch"}]
+        if GRAPH_MODE and placement in ("", "overview_card"):
+            ui += [{"plugin": "example-work", "plugin_name": "Example Work", "id": "work-card", "title": "Work",
+                    "placement": "overview_card", "size": "compact", "opens": "work"}]
         if os.environ.get("MOCK_EXTENSION_SHOWCASE") == "1" and placement in ("", "nav_page"):
             from pathlib import Path
             snapshots = Path(__file__).resolve().parents[2] / "schema/extension/examples/showcase"
@@ -26152,6 +26305,7 @@ class H(BaseHTTPRequestHandler):
             transcription_socket(self, audio[1].lower())
             return
         if self.token_refused(): return
+        if DOMAINS.http(self, "GET", p): return  # the domains' routes first (scripts/mock/mock_domains.py)
         if CASE and case_route(self, "GET", p, q, b""): return
         if preview_route and preview_route(self, "GET", p, q): return
         if p == "/mock/ln":
@@ -26476,7 +26630,6 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/devices/retire":
             PUSH_RETIRED[0] = q.get("on", ["1"])[0] == "1"
             return self.send_json({"retired": PUSH_RETIRED[0]})
-        if p == "/mock/desktops": return self.send_json(desktops_state())
         if p == "/mock/hello": return self.send_json(HELLO)
         if p == "/mock/phone":
             with FAULT_LOCK:
@@ -26520,6 +26673,7 @@ class H(BaseHTTPRequestHandler):
             ARCHIVE_CLOSE["mode"] = q.get("close", [""])[0]
             return self.send_json({"close": ARCHIVE_CLOSE["mode"], "archived": [x["session_id"] for x in ARCHIVED_AGENTS]})
         if p == "/mock/reset":  # MachinePagesTests: each test starts from the same machines
+            DOMAINS.reset()
             BOTMUX_ON.clear()
             TAB_NAMES.clear()  # TerminalsRenameUITests: the tabs' own names again
             machine_alerts.reset()  # cleaned caches and launcher checks (#8037)
@@ -26597,6 +26751,8 @@ class H(BaseHTTPRequestHandler):
             return self.send_json({k: SESSION_CLOSE[k] for k in ("fail", "attempts", "closed")})
         if p == "/mock/subagent-step" and os.environ.get("MOCK_SUBAGENT_CARDS") == "1":
             return self.send_json(subagent_step())
+        if p == "/mock/monitor_event":
+            return self.send_json(bg_monitor_event())
         if p == "/mock/workflow" and MOCK_WORKFLOW_CARDS:  # MOCK_WORKFLOW_CARDS: the small run at ?step=0..3
             return self.send_json(set_wf_step(int(q.get("step", ["0"])[0] or 0)))
         if p == "/mock/workflow" and os.environ.get("MOCK_WORKFLOW") == "1":  # MOCK_WORKFLOW=1: parity-audit at ?step=0..4
@@ -26684,6 +26840,14 @@ class H(BaseHTTPRequestHandler):
             return self.send_json(mock_direction_tree())
         if p == "/api/v1/assistant":
             q = parse_qs(urlparse(self.path).query)
+            if q.get("view", [""])[0] == "main-runtime" and os.environ.get("MOCK_CLAUDE_INTERACTIVE"):
+                # The main chat's execution report while interactive Claude Code is asked for (#10058)
+                report = {"session_id": ASSISTANT_CONFIG["main"], "machine_id": ASSISTANT_CONFIG["machine_id"], "state": "running",
+                          "source": "native", "harness": "claude", "location": {"host": "example-host"}}
+                if ASSISTANT_CONFIG["claude_interactive"]:
+                    fell_back = os.environ.get("MOCK_CLAUDE_INTERACTIVE") == "fallback"
+                    report.update(mode="print", mode_note="tmux is not installed on this computer") if fell_back else report.update(mode="interactive")
+                return self.send_json(report)
             return self.send_json(assistant_state(q.get("space", [""])[0], q.get("archived", [""])[0] == "1"))
         if rule_suggestions_area(self, "GET", p): return  # the standing authorizations Always granted
         if p == "/api/v1/model-config": return self.send_json(listed_model_configuration(cron_lang(self.headers.get("Accept-Language"))))
@@ -26750,10 +26914,14 @@ class H(BaseHTTPRequestHandler):
             start, end = 0, len(value)
             if header:
                 match = re.fullmatch(r"bytes=(\d+)-(\d*)", header)
-                if not match or int(match[1]) >= len(value):
+                suffix = re.fullmatch(r"bytes=-(\d+)", header)  # the last n bytes: a background task's output (#10852)
+                if suffix and int(suffix[1]) and value:
+                    start = max(0, len(value) - int(suffix[1]))
+                elif not match or int(match[1]) >= len(value):
                     return self.send_json({"error": "invalid range"}, 416)
-                start = int(match[1])
-                end = min(int(match[2]) + 1 if match[2] else len(value), len(value))
+                else:
+                    start = int(match[1])
+                    end = min(int(match[2]) + 1 if match[2] else len(value), len(value))
                 if end <= start: return self.send_json({"error": "invalid range"}, 416)
             read = {"start": start, "end": end, "sent": 0, "active": True, "cancelled": False}
             with VIDEO_READ_LOCK: VIDEO_READS.append(read)
@@ -26918,6 +27086,8 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/v1/mail/messages": return self.send_json({"messages": [], "has_more": False})
         if p == "/api/v1/lark/unread-count": return self.send_json({"count": 4})
         if telegram_area(self, "GET", p, b""): return
+        if avatars_area(self, p): return
+        if telegram_avatars_area(self, "GET", p): return
         if larkcli_thread_area(self, "GET", p): return
         if plugin_connector_area(self, "GET", p, b""): return
         if triage_route(self, "GET", p, b""): return
@@ -27342,6 +27512,7 @@ class H(BaseHTTPRequestHandler):
             return self.upload()
         self.last_body = self.body()
         p = urlparse(self.path).path
+        if DOMAINS.http(self, self.command, p, self.last_body): return  # the domains' routes first
         if CASE and case_route(self, self.command, p, parse_qs(urlparse(self.path).query), self.last_body): return
         if preview_route and preview_route(self, self.command, p, parse_qs(urlparse(self.path).query)): return
         if custom_models_route(self, self.command, p, parse_qs(urlparse(self.path).query), self.last_body): return
@@ -28758,6 +28929,8 @@ class H(BaseHTTPRequestHandler):
                 ASSISTANT_CONFIG["kb_topics"] = body["kb_topics"]
             if isinstance(body.get("next_suggestions"), bool):
                 ASSISTANT_CONFIG["next_suggestions"] = body["next_suggestions"]
+            if isinstance(body.get("claude_interactive"), bool):
+                ASSISTANT_CONFIG["claude_interactive"] = body["claude_interactive"]
             if body.get("machine_id"):
                 if not any(m["id"] == body["machine_id"] for m in MACHINES):
                     return self.send_json({"error": "unknown machine"}, 400)
@@ -29102,7 +29275,8 @@ class H(BaseHTTPRequestHandler):
                     if bypass_restart(s, body.get("permission_mode")):
                         applied = {k: v for k, v in body.items() if k != "permission_mode"}
                         push_machine(s["machine_id"])
-                    if body.get("permission_mode"):
+                    # a pick of the mode it runs in already changed nothing: no row, as the manager keeps none (#11089)
+                    if body.get("permission_mode") and not (applied is body and body["permission_mode"] == before):
                         note_mode_change(s, "set", body["permission_mode"], **{"from": before, "applied": "now" if applied is body else "restart",
                                                                               "actor_kind": "device", "device_name": "Phone"})
                     s.update({k: v for k, v in applied.items() if k in ("permission_mode", "effort", "model") and v})
@@ -29304,6 +29478,7 @@ class H(BaseHTTPRequestHandler):
             ws_token = (parse_qs(urlparse(self.path).query).get("token") or [""])[0]
         # A legacy fixture socket has no credential and keeps the mock's full-role default.
         client["role"] = PAIR_DEVICE_ROLES.get(ws_token, "full")
+        domain_socket = DOMAINS.socket(self.connection, send, client, asked)
         if MOCK_PAIR_TOKEN: print("mock: ws open host=%s token=%s" % (self.headers.get("Host"), ws_token[:9]), flush=True)
         if MOCK_PAIR_TOKEN and ws_token == MOCK_PAIR_TOKEN:
             def cut_after_grace():  # the hub cancels the pairing token's sockets once its grace is over
@@ -29392,6 +29567,8 @@ class H(BaseHTTPRequestHandler):
                 if op != 1: continue
                 msg = json.loads(payload or b"{}")
                 LOG.write("  WS %s\n" % msg.get("type")); LOG.flush()
+                if DOMAINS.ws_message(domain_socket, msg):
+                    continue
                 if msg.get("type") == "client_hello":
                     declared, requested = msg.get("features", []), msg.get("heartbeat")
                     if not isinstance(declared, list) or not all(isinstance(f, str) for f in declared):
@@ -29427,9 +29604,6 @@ class H(BaseHTTPRequestHandler):
                 if msg.get("type") == "register_phone":
                     with FAULT_LOCK:
                         PHONES[self.connection] = {"send": send, "registration": msg}
-                    continue
-                if msg.get("type") in ("register_desktop", "unregister_desktop"):
-                    desktop_registration(self.connection, msg)
                     continue
                 if msg.get("type") == "tool_result":
                     with FAULT_LOCK:
@@ -29603,7 +29777,7 @@ class H(BaseHTTPRequestHandler):
             CLIENTS.pop(self.connection, None)
             PHONES.pop(self.connection, None)
             FS_WATCHES.pop(self.connection, None)
-        desktop_registration(self.connection, None)
+        DOMAINS.ws_closed(domain_socket)
         LIVE[:] = [x for x in LIVE if x[0] is not send]
         self.close_connection = True
 
@@ -29784,9 +29958,11 @@ def features():
     return _features_without_channels() + (["channels"] if CHANNELS_MODE else [])
 
 
+MOCK_HELP.append("MOCK_BG_MONITOR=1  The widget chat's Background tasks also list a running Monitor whose output file is not known yet (#10852); GET /mock/monitor_event names it, as its first event would")
 MOCK_HELP.append("MOCK_SIDEBAR_GROUPS=1  (with MOCK_EXTENSIONS=1 MOCK_EXTENSION_COLUMNS=1) Today, Lark and Calendar name the sidebar group 工作台, Assets 资产 and Home devices 家里 (#9071)")
 MOCK_HELP.append("MOCK_NAVIGATION=off  A hub (or default manager) from before the start page (#9071): GET / PUT /api/v1/navigation answer 404, so the web keeps the choice in the browser")
 MOCK_HELP.append("MOCK_EXTENSION_COLUMNS=1  (with MOCK_EXTENSIONS=1) A made-up extension's Today page, UI version 8's columns layout (#9158): a full-width Needs me card with its rows two a line, then Calendar | Lark today and WeChat | Running Agents, each with an icon, a link beside its title, a summary and a link at the bottom")
+MOCK_HELP.append("MOCK_EXTENSION_GRAPH=1  (with MOCK_EXTENSIONS=1) A made-up Work page, UI version 10's graph (#9727): a 200-node tree of work in states with groups, progress, a folded part and a selected step; a node pushes its own page; each draw moves one step to Done; an overview card shows the graph as a still preview")
 MOCK_HELP.append("MOCK_EXTENSION_GAUGE=1  (with MOCK_EXTENSIONS=1) A made-up gateway's Quota page, UI version 9's gauge (#9337): a row of status tiles, then a card of three rings (5 hours, This week, Fable this week; the last one low, in amber) with the reset times in its footer")
 MOCK_HELP.append("MOCK_EXTENSION_PICKERS=1  （配合 MOCK_EXTENSIONS=1）多一个扩展「Example 聊天」：设置里选一台电脑（format machine）、选启动器（format launcher，代答的那个已经不在了）、整数带步进（#2385）")
 MOCK_HELP.append("MOCK_EXTENSION_OPS=1|fail  （配合 MOCK_EXTENSIONS）扩展的安装 / 升级 / 卸载分步骤推进度（extension_operation 事件）：后台预览、停在等你同意、同意后同一个操作接着装；fail：每个扩展第一次安装停在「启动」、第一次卸载停在「删除」，都能重试；MOCK_EXTENSION_OPS_STEP=秒 每步的时长；MOCK_EXTENSION_INSTALL_DELAY=秒 没有分步骤的旧 hub 安装 / 卸载要这么久才回（#3307）")
@@ -30376,6 +30552,9 @@ def plugins_route(handler, p, body):
         return mock_today(handler, body)
     if PLUGINS_MODE and GAUGE_MODE and p == "/api/v1/extensions/example-quota/-/ui/quota":
         return mock_quota(handler, body)
+    if PLUGINS_MODE and GRAPH_MODE and p in ("/api/v1/extensions/example-work/-/ui/work",
+                                             "/api/v1/extensions/example-work/-/ui/work-card"):
+        return mock_work(handler, body, card=p.endswith("-card"))
     if PLUGINS_MODE and p == "/api/v1/extensions/showcase/-/ui/motion":
         handler.send_json({"view": _motion_view(_MOTION_STEP[0])})
         return True
@@ -30540,6 +30719,83 @@ def mock_today(handler, body):
             {"type": "empty", "title": title, "detail": "Everything of this card would be listed here."}]}]}})
     else:
         handler.send_json({"view": _today_view()})
+    return True
+
+
+# MOCK_EXTENSION_GRAPH=1 (with MOCK_EXTENSIONS=1): UI version 10's graph (#9727), a made-up "Work" page: a header, then
+# a 200-node tree of work split into parts (each part's first two steps one task tried two ways, a group), in states,
+# with progress, part 6 folded, a step selected; tapping a node pushes its own page. Each draw moves one more step to
+# Done, so a redraw changes only states (same key, same nodes and edges). An overview card draws the same graph as a
+# still preview. All names are invented.
+GRAPH_MODE = os.environ.get("MOCK_EXTENSION_GRAPH") == "1"
+_WORK_DRAWS = [0]
+
+
+def _work_graph(draw):
+    nodes, edges = [], []
+    states = [("Done", "positive"), ("Running", "caution"), ("Queued", None), ("Failed", "danger")]
+
+    def add(nid, title, parent=None, **extra):
+        if len(nodes) >= 200:
+            return False
+        nodes.append({"id": nid, "title": title, **extra,
+                      "action": {"id": "open", "values": {"id": nid}, "push": {"ui": "work", "state": nid}}})
+        if parent:
+            edges.append({"from": parent, "to": nid})
+        return True
+
+    add("root", "Ship the spring release", subtitle="8 parts", icon="list", badge={"text": "Running", "tone": "caution"},
+        progress=min(1.0, 0.3 + draw * 0.05))
+    step = 0
+    for p in range(8):
+        pid = f"p{p}"
+        add(pid, f"Part {p + 1}", "root", subtitle="6 steps", icon="folder")
+        for s in range(6):
+            sid = f"{pid}.s{s}"
+            text, tone = states[(p + s + (1 if step < draw else 0)) % 4] if step >= draw else states[0]
+            step += 1
+            extra = {"badge": {"text": text, **({"tone": tone} if tone else {})}}
+            if tone:
+                extra["tone"] = tone
+            if text == "Running":
+                extra["progress"] = 0.5
+            if s < 2:
+                extra["group"] = "Two ways"
+            add(sid, f"Step {s + 1}" if s >= 2 else ("Smallest change" if s == 0 else "Remove the cause"), pid, **extra)
+            for c in range((p + s) % 5):
+                add(f"{sid}.c{c}", f"Check {c + 1}", sid, subtitle="Unit tests" if c % 2 == 0 else "Review")
+    k = 0
+    while len(nodes) < 200:
+        add(f"p{k % 8}.s5.x{k // 8}", f"Follow-up {k + 1}", f"p{k % 8}.s5")
+        k += 1
+    return {"type": "graph", "key": "work", "nodes": nodes, "edges": edges, "folded": ["p6"], "selected": "p2.s3"}
+
+
+def _work_view(draw, node=None):
+    if node:
+        return {"title": node, "sections": [{"key": "node", "items": [
+            {"type": "header", "title": node, "subtitle": "A made-up step", "badges": [{"text": "Running", "tone": "caution"}]},
+            {"type": "text", "text": "This page stands for a node's own page: its question, its result and its steps."}]}]}
+    return {"title": "Work", "refresh_after": 30, "sections": [{"key": "work", "items": [
+        {"type": "header", "title": "Ship the spring release", "subtitle": f"{min(48, draw)} of 48 steps done",
+         "badges": [{"text": "Running", "tone": "caution"}]},
+        _work_graph(draw)]}]}
+
+
+def mock_work(handler, body, card=False):
+    request = json.loads(body) if body else {}
+    state = request.get("state")
+    node = state if isinstance(state, str) and state else None
+    if request.get("action") == "open":
+        node = (request.get("values") or {}).get("id") or "root"
+        handler.send_json({"view": _work_view(0, node)})
+        return True
+    if not card and not node:
+        _WORK_DRAWS[0] += 1
+    view = _work_view(_WORK_DRAWS[0], node)
+    if card:
+        view = {"title": "Work", "sections": [{"key": "work", "items": [_work_graph(_WORK_DRAWS[0])]}]}
+    handler.send_json({"view": view})
     return True
 
 
@@ -31705,9 +31961,105 @@ if MODEL_PICK_MODE and MODEL_GATEWAY_MODE:
         ]}
 
 
+MODEL_SPEED_FIELDS = ("agent", "launcher", "model", "effort", "efforts", "service_tier", "service_tiers",
+                      "status", "state", "capabilities")
+MODEL_SPEED_BASE = None
+MODEL_SPEED_MODE = ""
+MODEL_SPEED_PENDING = None
+MODEL_SPEED_GATE = threading.Event()
+MODEL_SPEED_LOG = []
+
+
+def model_speed_reset():
+    """Restore the ordinary model-picker main chat and clear the current-session speed fixture."""
+    global MODEL_SPEED_BASE, MODEL_SPEED_MODE, MODEL_SPEED_PENDING, MODEL_SPEED_GATE
+    main = next((s for s in ASSISTANT if s["session_id"] == ASK1), None)
+    if main is not None:
+        if MODEL_SPEED_BASE is None:
+            MODEL_SPEED_BASE = {k: copy.deepcopy(main[k]) for k in MODEL_SPEED_FIELDS if k in main}
+        for k in MODEL_SPEED_FIELDS:
+            if k in MODEL_SPEED_BASE: main[k] = copy.deepcopy(MODEL_SPEED_BASE[k])
+            else: main.pop(k, None)
+    MODEL_SPEED_MODE = ""
+    MODEL_SPEED_PENDING = None
+    MODEL_SPEED_GATE.set()  # release a request a failed test left waiting before the next fixture starts
+    MODEL_SPEED_GATE = threading.Event()
+    del MODEL_SPEED_LOG[:]
+
+
+def model_speed_configure(mode):
+    """MOCK_MODEL_PICK speed=<case>: a Codex main chat with synthetic acknowledged speed state."""
+    global MODEL_SPEED_MODE
+    MODEL_SPEED_MODE = mode
+    main = next((s for s in ASSISTANT if s["session_id"] == ASK1), None)
+    if main is None: return
+    main.update(agent="codex", launcher="codex", model="gpt-5.5-codex", effort="medium",
+                efforts=["low", "medium", "high", "xhigh"],
+                model_pick={"launcher": "codex", "model": "gpt-5.5-codex", "effort": "medium"},
+                status="working" if mode == "working" else "idle", state="working" if mode == "working" else "idle")
+    if mode == "no-tier":
+        main.pop("service_tier", None)
+        main.pop("service_tiers", None)
+    else:
+        main.update(service_tier="default", service_tiers=[
+            {"id": "default", "name": "Standard"},
+            {"id": "priority", "name": "Fast", "description": "Increased usage"},
+        ])
+
+
+def model_speed_acknowledge():
+    """Release the tier held back by speed=ack, as the native session push would acknowledge it."""
+    global MODEL_SPEED_PENDING
+    main = next((s for s in ASSISTANT if s["session_id"] == ASK1), None)
+    if main is not None and MODEL_SPEED_PENDING is not None:
+        main["service_tier"] = MODEL_SPEED_PENDING
+        MODEL_SPEED_PENDING = None
+        push_machine(main["machine_id"])
+    MODEL_SPEED_GATE.set()
+
+
+def model_speed_modes(handler, p, body):
+    """The speed fixture's running /modes calls, including independent effort changes. False outside it."""
+    global MODEL_SPEED_PENDING
+    if not MODEL_SPEED_MODE or handler.command != "POST": return False
+    m = re.fullmatch(r"/api/v1/sessions/([^/]+)/([^/]+)/modes", p)
+    if not m or m.group(2) != ASK1: return False
+    main = next((s for s in ASSISTANT if s["session_id"] == ASK1), None)
+    if main is None: return False
+    req = json.loads(body or b"{}")
+    MODEL_SPEED_LOG.append({"method": handler.command, "path": p, "body": req})
+    if "service_tier" in req:
+        if set(req) != {"service_tier"}:
+            return handler.send_json({"error": "service_tier must be its own request"}, 400) or True
+        tier = req["service_tier"]
+        if tier not in {t["id"] for t in main.get("service_tiers") or []}:
+            return handler.send_json({"error": "This model cannot apply the requested service tier",
+                                      "code": "service_tier_unsupported"}, 409) or True
+        if MODEL_SPEED_MODE == "refusal":
+            return handler.send_json({"error": "Codex refused the speed change", "code": "service_tier_refused"}, 409) or True
+        if MODEL_SPEED_MODE == "timeout":
+            return handler.send_json({"error": "The speed change was not confirmed", "code": "timeout"}, 504) or True
+        if MODEL_SPEED_MODE == "pending":
+            gate = MODEL_SPEED_GATE
+            MODEL_SPEED_PENDING = tier
+            if not gate.wait(15):
+                MODEL_SPEED_PENDING = None
+                return handler.send_json({"error": "The speed change was not confirmed", "code": "timeout"}, 504) or True
+        elif MODEL_SPEED_MODE == "ack":
+            MODEL_SPEED_PENDING = tier
+        else:
+            main["service_tier"] = tier
+            push_machine(main["machine_id"])
+        return handler.send_json({"ok": True}) or True
+    main.update({k: v for k, v in req.items() if k in ("permission_mode", "effort", "model") and v})
+    push_machine(main["machine_id"])
+    return handler.send_json({"ok": True}) or True
+
+
 def model_pick_reset():
     global MODEL_PICK_DEFAULT
     MODEL_PICK_DEFAULT = MODEL_PICK_HOME
+    model_speed_reset()
     for s in ASSISTANT:
         s.pop("model_pick", None)
     if MODEL_PICK_MODE == "picked":
@@ -31729,14 +32081,20 @@ def model_pick_route(handler, p, body):
     if p == "/mock/model_pick":
         if query.get("reset"):
             model_pick_reset()
+            if not query.get("speed"): push_machine(ASSISTANT_CONFIG["machine_id"])
+        if query.get("speed"):
+            model_speed_configure(query["speed"][0])
             push_machine(ASSISTANT_CONFIG["machine_id"])
+        if query.get("speed_ack"):
+            model_speed_acknowledge()
         if query.get("default"):
             MODEL_PICK_DEFAULT = query["default"][0]
             main = next((s for s in ASSISTANT if s["session_id"] == ASK1), None)
             if main is not None:
                 main["rev"] = (main.get("rev") or 0) + 1
             push_machine(ASSISTANT_CONFIG["machine_id"])
-        return handler.send_json({"requests": MODEL_PICK_LOG, "default": MODEL_PICK_DEFAULT}) or True
+        return handler.send_json({"requests": MODEL_PICK_LOG, "default": MODEL_PICK_DEFAULT,
+                                  "speed_requests": MODEL_SPEED_LOG}) or True
     if handler.command == "GET" and re.fullmatch(r"/api/v1/machines/[^/]+/launchers", p) and query.get("purpose") == ["assistant"]:
         return handler.send_json({
             "launchers": [dict(l) for l in MODEL_PICK_LAUNCHERS],
@@ -31748,6 +32106,7 @@ def model_pick_route(handler, p, body):
                 {"name": "gpt-direct", "display_name": "GPT direct", "kind": "api", "api": "responses", "code": "api_protocol", "reason": MODEL_PICK_REASONS["api_protocol"][lang]},
                 {"name": "far-gw", "display_name": "Far gateway", "kind": "launcher", "code": "launcher_out_of_scope", "reason": MODEL_PICK_REASONS["launcher_out_of_scope"][lang]},
             ]}) or True
+    if model_speed_modes(handler, p, body): return True
     m = re.fullmatch(r"/api/v1/assistant/conversations/([^/]+)/model", p)
     if not m or handler.command not in ("PUT", "DELETE"): return False
     s = next((x for x in ASSISTANT if x["session_id"] == m.group(1)), None)
@@ -31794,7 +32153,9 @@ def features():
 MOCK_HELP.append("MOCK_MODEL_PICK=1|picked|otherkind  Persona 对话自己的模型（#5033）：features 带 assistant_model_pick；主对话的启动器（?purpose=assistant）带默认和 unavailable"
                  "（一个 Responses 直连 API、一个不对这台电脑开放的服务商）；PUT / DELETE /api/v1/assistant/conversations/{id}/model 记下或清掉 model_pick。"
                  "picked：第二个对话一开始就有自己的选择；otherkind：当前主对话跑 Codex、默认仍是 Claude（#4662）。"
-                 "GET /mock/model_pick 看请求，?reset=1 复原；?default=claude|codex|gone 改启动器列表的默认")
+                 "GET /mock/model_pick 看请求，?reset=1 复原；?default=claude|codex|gone 改启动器列表的默认。"
+                 "reset=1&speed=idle|working|no-tier|ack|pending|refusal|timeout：主对话的 Codex 当前 Speed；speed_requests 记每个 /modes 的 method/path/body；"
+                 "ack 先不确认，pending 最多等 15 秒，?speed_ack=1 推送并放行；refusal 409，timeout 504；不带 speed 的 reset 还原普通模型选择")
 MOCK_HELP.append("MOCK_MODEL_PICK_GROUPS=1  配合 MOCK_MODEL_PICK：几个同为 claude- 开头的启动器（claude-aster / claude-max / claude-desktop）和 codex，看模型面板分组栏的短名")
 MOCK_HELP.append("MOCK_MODEL_FAMILIES=1  配合 MOCK_MODEL_PICK：多个模型家族的长模型列表（claude-max 的 Claude 全系、codex 的 GPT-6、混合厂商的本机网关 aster、work-claude、agy），截模型面板用；主对话默认 claude-max")
 MOCK_HELP.append("MOCK_ASSISTANT_LAUNCHER_FIXTURE=1  配合 MOCK_MODEL_PICK：读取 spec/fixtures/assistant-launchers/cases.json，三端共用同一组启动器候选；默认 runtime、无显式模型，managed Codex 只在 unavailable")
@@ -32234,44 +32595,6 @@ MOCK_HELP.append("MOCK_OUTSIDE_DIALOG=1  A Claude Code session in a plain termin
                  "can answer (#5890): a message to it answers {ok, waits_on_computer}")
 
 
-# Desktop client registration (hub/desktops.go): `register_desktop` on an app's socket, withdrawn by `unregister_desktop`
-# (a hub with the feature desktop_unregister) or by the socket closing. GET /mock/desktops says who is registered now and
-# what happened in order, for the desktop shell's smoke (desktop/scripts/e2e-main.mjs).
-DESKTOPS = {}  # socket -> device_name
-DESKTOP_LOG = []  # {"event": "register" | "unregister" | "close", "device_name"}
-DESKTOP_LOCK = threading.Lock()
-
-
-def desktop_registration(connection, msg):
-    """A socket's register_desktop / unregister_desktop message, or its close (msg None)."""
-    if msg is not None and CLIENTS.get(connection, {}).get("role") != "full":
-        return  # hub/desktops.go: an answer-only watch never becomes desktop presence.
-    with DESKTOP_LOCK:
-        if msg is not None and msg.get("type") == "register_desktop":
-            name = msg.get("device_name") if isinstance(msg.get("device_name"), str) else ""
-            DESKTOPS[connection] = name
-            DESKTOP_LOG.append({"event": "register", "device_name": name})
-        elif connection in DESKTOPS:  # a withdrawal only of a socket that registered
-            DESKTOP_LOG.append({"event": "unregister" if msg is not None else "close", "device_name": DESKTOPS.pop(connection)})
-
-
-def desktops_state():
-    with DESKTOP_LOCK:
-        return {"registered": sorted(DESKTOPS.values()), "log": list(DESKTOP_LOG)}
-
-
-_features_without_desktops = features
-
-
-def features():
-    return _features_without_desktops() + (["desktops", "desktop_unregister"] if os.environ.get("MOCK_DESKTOPS") == "1" else [])
-
-
-MOCK_HELP.append("MOCK_DESKTOPS=1  features list desktops and desktop_unregister, so a desktop client withdraws its registration with "
-                 "unregister_desktop instead of closing its socket (an older hub). Either way GET /mock/desktops says who is registered "
-                 "and the register / unregister / close events in order")
-
-
 _features_without_agent_archives = features
 
 
@@ -32426,6 +32749,20 @@ def mock_turn_usage(mode):
 
 if MOCK_TURN_USAGE in ("1", "multi", "unpriced"):
     mock_turn_usage(MOCK_TURN_USAGE)
+
+
+# ---------- the mock's domains (scripts/mock/mock_domains.py, docs/operations/testing.md "Mock hub domains") ----------
+# Each module in mock_domains.DOMAINS registers its routes, WebSocket messages, features, help lines and /mock/reset
+# hooks, and H consults them before its own; a new domain is a module and a line in that list, with no change here.
+# They load after every switch above, so a domain can read and extend those fixtures.
+import mock_domains  # noqa: E402
+DOMAINS = mock_domains.load(globals())
+MOCK_HELP.extend(DOMAINS.help_lines)
+_features_without_domains = features
+
+
+def features():
+    return DOMAINS.features(_features_without_domains())
 
 
 # MOCK_TODO_VIEW=1|old|late, MOCK_TODO_MANAGERS=2 (#10465, scripts/mock/todo_view_mock.py): the To-dos view, counts and

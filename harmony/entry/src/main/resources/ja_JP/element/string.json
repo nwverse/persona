@@ -4637,6 +4637,10 @@
       "value": "バックグラウンド待機"
     },
     {
+      "name": "agent_group_just_finished",
+      "value": "完了したばかり"
+    },
+    {
       "name": "agent_group_waiting",
       "value": "起動待ち"
     },
