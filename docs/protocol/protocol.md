@@ -3593,14 +3593,16 @@ on or off, and from which device:
   Once the node took it, the manager writes a `set` row: `from` (the mode the session ran in), `to`, and `applied` as
   the node's answer says (`now`, `restart` for a queued restart into Full access, `""` from an older node). Effort- or
   model-only changes, refused picks and calls that did not come through `/modes` are not recorded (the assistant's own
-  changes and plan approvals: #10308).
+  changes and plan approvals: #10308), nor is a pick of the mode the session already runs in (`from` equals `to`): it
+  changed nothing, and when it withdrew a waiting restart the node's `cancelled` drop is the record of it (#11089).
 - **What became of a queued restart**: the node's `session.mode_restart` event becomes a `restart_done`,
   `restart_failed` or `restart_dropped` row with its `reason`, a code the apps put in words (`proto.ModeRestartReason…`):
-  dropped for `replaced` (another mode picked first), `process_exited`, `process_replaced` or `process_unknown` (the
+  dropped for `replaced` (another mode picked first), `cancelled` (the mode the session runs in picked again, #11089;
+  older nodes say `replaced`), `process_exited`, `process_replaced` or `process_unknown` (the
   process it was picked for is gone, docs/integrations/claude-integration.md "Full access by a restart"), `expired`
   (picked over two hours ago); done with `already_in` (put in the mode at the computer meanwhile); failed with
   `not_stopped`, `start_failed` (it runs as before) or `stopped`. `""` says nothing more; rows from before the codes hold
-  English words, which the apps leave out.
+  English words, which the apps leave out, as they leave out a code they do not know yet (the plain line, no error).
 
 Rows are never changed or deleted. `GET /api/v1/sessions/{mid}/{sid}/mode-changes` gives a session's latest 200 to the
 owner's devices, which draw a line for each in the session's chat.

@@ -1387,7 +1387,8 @@ Claude Code has Allow All (`bypassPermissions`) in its Shift+Tab cycle only when
   A start that does not come up is followed by one in the mode the agent had (`switch_failed`), or the agent is left
   stopped (`switch_failed_stopped`).
 - **What the apps see**: `bypass_pending: true` on the row while the restart waits, with `permission_mode` still the mode
-  it runs in. Picking any other mode first drops the restart, and so does a pick older than two hours (`modeRestartMaxAge`).
+  it runs in. Picking any other mode first drops the restart (picking the mode it still runs in withdraws it: recorded as
+  called off, not as a change of mode, #11089), and so does a pick older than two hours (`modeRestartMaxAge`).
 - **For which process** (#10296): the pick belongs to the claude process it was made for, its pid and start as the hooks
   report them (else its `sessions/<pid>.json`). Once that process has exited, or the session runs in another one (a
   resume at the computer or Persona's Resume), the pick is dropped: a later claude of the same conversation was never
