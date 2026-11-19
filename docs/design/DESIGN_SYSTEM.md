@@ -1208,10 +1208,11 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   saved. A launcher summary adds its weekly-remaining bar only when the existing launcher quota answer supplies a
   weekly ratio; its tooltip names the window and reset time.
 - Provider identity on model rows (#7360): every row in New Agent and in saved setups and flat search results names
-  its owning launcher at the start of the second line, on web, Android and Apple. The rest of that line keeps the model
-  ID, resolved model, description or typed-model explanation; an expanded launcher's model rows may keep the description
-  alone. A sign-in, key or model-availability error that offers a repair names the affected launcher in its title, and
-  the repair opens that launcher's provider settings. This is a content rule, not a new badge, token or visual style.
+  its owning launcher in its model label or at the start of the second line, on web, Android and Apple. The rest of
+  that line keeps the model ID, resolved model, description or typed-model explanation; an expanded or filtered
+  launcher's own model rows may keep the description alone. A sign-in, key or model-availability error that offers a
+  repair names the affected launcher in its title, and the repair opens that launcher's provider settings. This is a
+  content rule, not a new badge, token or visual style.
   Launcher summaries retain each provider's full name as their accessible name and tooltip; the former provider rail
   and its shortened captions are replaced by the shared column (#10249).
 - Model families (`web/src/lib/model-families.ts`, `docs/web/web.md` "Model pill and model panel"): inside a provider

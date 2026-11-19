@@ -327,8 +327,8 @@ func newTasksState() tasksState {
 		working: map[string]time.Time{}, receipted: map[string]time.Time{}, retrying: map[string]*taskStart{},
 		outcomes: map[string]time.Time{}, reusing: map[string]bool{}, taking: map[string]*taskStart{}, sendsOut: map[[2]string]*sendsOut{},
 		sendsRetryAfter: sendsRetryEvery,
-		turns: turnsState{again: map[string]bool{}, looked: map[string]turnLook{}, recovering: map[string]bool{}, tries: map[string]int{},
-			retry:   map[string]turnRetry{},
+		turns: turnsState{again: map[string]bool{}, looked: map[turnRecoveryKey]turnLook{}, recovering: map[string]bool{}, tries: map[string]int{},
+			retry:   map[turnRecoveryKey]turnRetry{},
 			judging: map[string]int{}, closed: map[SessionRef]turnLook{}}}
 }
 
