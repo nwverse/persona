@@ -9,6 +9,12 @@
 #                                         # including every scripts/**/test_*.py suite CI's Scripts tests job runs
 #                                         # (a test_*.py that never mentions unittest is a SKIP line, as in
 #                                         # scripts/ci/python-tests.py; diff mode skips it too)
+#   scripts/check-fast.sh --dry-run       # print the plan (the queued checks and the SKIP / INFO notes), run nothing
+#   scripts/check-fast.sh --dry-run --changed-from <file|->
+#                                         # the plan for the paths listed in the file (one per line), not the diff
+#   scripts/check-fast.sh --dry-run --changed-from <file|-> --each
+#                                         # the plan of each listed path on its own, after a "== <path>" line;
+#                                         # scripts/ci/affected_drift.py compares them with the CI lanes (#11026)
 #   scripts/check-fast.sh -h|--help
 #
 # Path mapping (diff mode):
@@ -50,6 +56,10 @@
 #   spec/fixtures/**, schema/extension/**, schema/wire/**, integrations/**, docs/<file>, scripts/test/server_test_env.py
 #                              also go test on each server package whose _test.go names that input (server-test.yml's
 #                              path filter), found at run time with git grep (comment lines are ignored)
+#   apple/**, android/**       also go test on each server package whose _test.go names the file whole, in quotes
+#                              (internal/proto's Swift and Kotlin contract checks, #11026)
+#   spec/**, schema/**         also the tests of each integrations/<pkg> and of sdk/ts whose files name the path or a
+#                              directory it is in (CI's runtimes lane runs for all of them), found at run time
 #   android/**                 scripts/app/android_i18n_check.py plus the android checkers' own unittests (no gradle)
 #   .github/**                 scripts/test/pr_needs_issue_test.mjs
 #   schema/**                  the extension-schema py, the sdk bundle py, and sdk/go go test (mirrors CI's job)
@@ -74,7 +84,10 @@
 #                              test_release_debug_guard.py and scripts/test/test_apple_release_switch_names.py;
 #                              scripts/test/go_trimpath.sh also scripts/ci/test_ci.py and scripts/test/test_check_fast.py
 #                              (they run server.sh and check-fast.sh with it); scripts/heavy_slot.py also
-#                              scripts/test/test_check_fast.py (it runs check-fast.sh with it)
+#                              scripts/test/test_check_fast.py (it runs check-fast.sh with it); scripts/ci/paths.py
+#                              also test_ci.py, test_check_fast.py and scripts/ci/test_affected_drift.py, this script
+#                              and scripts/operations/pr_watch_verify.py also test_affected_drift.py, and each
+#                              scripts/operations/pr_watch_*.py also scripts/operations/test_pr_watch.py
 #   docs/**, any *.md          scripts/test/test_doc_paths.py and test_doc_go_paths.py (paths quoted in the docs, the
 #                              CLAUDE.md doc index), test_doc_sections.py (section names quoted after a doc path),
 #                              test_doc_wire.py (the wire lists in protocol.md, extensions.md)
@@ -95,6 +108,8 @@
 #                              scripts/test/test_docker_entrypoint.py (it also reads the root Dockerfile)
 #                              These Linux suites run in CI's Scripts tests job; they run from scripts/test as there.
 # scripts/privacy_check.py runs on every invocation that has changes (it is a seconds-long local scan, no network).
+# The plan ends with an INFO line naming the CI lanes the change selects (python3 scripts/ci/paths.py --lanes-for, the
+# selection CI and the PR watcher read) that it runs no part of, such as android, core or desktop (#11026).
 #
 # Independent checks run in parallel; each command gets a GNU timeout (override with the CHECK_FAST_TIMEOUT_*
 # variables below). The go test / go build and vitest commands first take a machine-wide slot of their kind
@@ -115,6 +130,7 @@
 # (scripts/test/test-server.sh).
 set -uo pipefail
 
+CALLER_DIR=$PWD  # a relative --changed-from file is read from here
 cd "$(dirname "$0")/../.."
 
 # Per-command timeouts in seconds (CLAUDE.md: every background step carries a timeout). Override for slow machines.
@@ -129,6 +145,9 @@ usage() {
 
 ALL=0
 BASE_REF=""
+DRY_RUN=0
+CHANGED_FROM=""
+EACH=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --all) ALL=1 ;;
@@ -139,11 +158,31 @@ while [ $# -gt 0 ]; do
     --base=*)
       BASE_REF=${1#*=}
       [ -n "$BASE_REF" ] || { echo "check-fast: --base needs a git ref" >&2; exit 2; } ;;
+    --dry-run) DRY_RUN=1 ;;
+    --changed-from)
+      [ $# -ge 2 ] && [ -n "$2" ] || { echo "check-fast: --changed-from needs a file (- for stdin)" >&2; exit 2; }
+      CHANGED_FROM=$2; shift ;;
+    --changed-from=*)
+      CHANGED_FROM=${1#*=}
+      [ -n "$CHANGED_FROM" ] || { echo "check-fast: --changed-from needs a file (- for stdin)" >&2; exit 2; } ;;
+    --each) EACH=1 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "check-fast: unknown argument: $1 (see --help)" >&2; exit 2 ;;
   esac
   shift
 done
+# A listed set of paths has no merge-base for the checks that compare with one (frozen migrations, fixed sleeps), so
+# it only plans; --each plans one listed path at a time.
+if [ -n "$CHANGED_FROM" ] && { [ "$DRY_RUN" -eq 0 ] || [ "$ALL" -eq 1 ] || [ -n "$BASE_REF" ]; }; then
+  echo "check-fast: --changed-from goes with --dry-run, without --all or --base" >&2; exit 2
+fi
+if [ "$EACH" -eq 1 ] && [ -z "$CHANGED_FROM" ]; then
+  echo "check-fast: --each needs --dry-run --changed-from <file>" >&2; exit 2
+fi
+case "$CHANGED_FROM" in ""|-|/*) ;; *) CHANGED_FROM="$CALLER_DIR/$CHANGED_FROM" ;; esac
+if [ -n "$CHANGED_FROM" ] && [ "$CHANGED_FROM" != "-" ] && [ ! -f "$CHANGED_FROM" ]; then
+  echo "check-fast: --changed-from: no such file: $CHANGED_FROM" >&2; exit 2
+fi
 
 if command -v timeout >/dev/null 2>&1; then
   TIMEOUT_BIN=timeout
@@ -555,6 +594,7 @@ migration_freeze_wanted() {
       server/internal/db/migrations/*|scripts/ci/migration_freeze.py) return 0 ;;
     esac
   done <<< "$CHANGED"
+  [ -n "$CHANGED_FROM" ] && return 1  # a listed set of paths is the whole change: no renames to look for
   while IFS= read -r -d '' status; do
     IFS= read -r -d '' path || return 1
     case "$status" in
@@ -584,6 +624,7 @@ sleep_ratchet_wanted() {
       server/*_test.go|sdk/go/*_test.go|scripts/ci/sleep_ratchet.py|scripts/ci/sleep_baseline.json) return 0 ;;
     esac
   done <<< "$CHANGED"
+  [ -n "$CHANGED_FROM" ] && return 1  # a listed set of paths is the whole change: no renames to look for
   while IFS= read -r -d '' status; do
     IFS= read -r -d '' path || return 1
     case "$status" in
@@ -613,12 +654,17 @@ job_extension_schema() {
 
 # --- plan -----------------------------------------------------------------
 
-CORE_FAIL=0
+# plan_reset empties the plan, so --each can plan one listed path after another.
+plan_reset() {
+  CORE_FAIL=0
+  WEB=0; SDKTS=0; ANDROID=0; PRNEEDS=0; EXTSCHEMA=0; SERVER_BUILD=0; APPLE=0; UNMAPPED=0; GO_GUARDS=0
+  SITE=0; SDKGO=0; EXTREFS=0; SDKBUNDLE=0
+  INTEG=(); GO_GROUPS=(); UNMAPPED_FILES=(); SCRIPT_TESTS=()
+  CORE_MISSING=(); INFO=()
+  JOB_NAME=(); JOB_FN=(); JOB_ARG=(); JOB_LOG=(); JOB_STATUS=()
+}
+plan_reset
 CHANGED=""
-WEB=0; SDKTS=0; ANDROID=0; PRNEEDS=0; EXTSCHEMA=0; SERVER_BUILD=0; APPLE=0; UNMAPPED=0; GO_GUARDS=0
-SITE=0; SDKGO=0; EXTREFS=0; SDKBUNDLE=0
-INTEG=(); GO_GROUPS=(); UNMAPPED_FILES=(); SCRIPT_TESTS=()
-CORE_MISSING=()
 
 core_missing() {  # --all treats a missing core toolchain as a failure; diff mode records a skip.
   if [ "$ALL" -eq 1 ]; then
@@ -631,13 +677,13 @@ core_missing() {  # --all treats a missing core toolchain as a failure; diff mod
 
 if [ "$ALL" -eq 1 ]; then
   echo "check-fast: --all, running every local fast check (iOS/macOS and Postgres suites excluded)"
-  WEB=1; SDKTS=1; ANDROID=1; PRNEEDS=1; EXTSCHEMA=1; SITE=1; SDKGO=1; EXTREFS=1; SDKBUNDLE=1
-  for _d in integrations/*/; do
-    if [ -f "$_d/package.json" ]; then
-      _p=$(basename "$_d")
-      arr_has "$_p" "${INTEG[@]:-}" || INTEG+=("$_p")
-    fi
-  done
+elif [ -n "$CHANGED_FROM" ]; then
+  if [ "$CHANGED_FROM" = - ]; then CHANGED=$(sed '/^$/d' | sort -u); else CHANGED=$(sed '/^$/d' "$CHANGED_FROM" | sort -u); fi
+  if [ -z "$CHANGED" ]; then
+    echo "check-fast: no paths listed in $CHANGED_FROM; nothing to check."
+    exit 0
+  fi
+  [ "$EACH" -eq 1 ] || echo "check-fast: $(printf '%s\n' "$CHANGED" | wc -l | tr -d ' ') listed file(s) from $CHANGED_FROM"
 else
   # Without --base: the clone's default branch, from local refs only so the script works offline. origin/HEAD is
   # set at clone time and can name a branch that is gone since, so it counts only if it resolves to a commit. Its
@@ -673,6 +719,63 @@ else
     exit 0
   fi
   echo "check-fast: $(printf '%s\n' "$CHANGED" | wc -l | tr -d ' ') changed file(s) against $(git rev-parse --short "$MB") (merge-base with $BASE_REF)"
+fi
+
+# web_plan prints the web check's plan for $CHANGED (paths.py --web-plan, below). --each reads the next line of the
+# plans paths.py --web-plan-each made for every listed path at once (fd 6): one scan of web/ takes about a second.
+web_plan() {
+  if [ "$EACH" -eq 1 ]; then
+    local _line
+    IFS= read -r _line <&6 || return 1
+    printf '%s\n' "$_line"
+    return 0
+  fi
+  printf '%s\n' "$CHANGED" | "$TIMEOUT_BIN" -k 5s "$TIMEOUT_OTHER" python3 scripts/ci/paths.py --web-plan
+}
+
+# readers_of points READERS_FILE at server_readers' lines for the regex $1 (server_readers is below), kept per regex:
+# under --each many listed paths share one (spec/fixtures/*). runtime_named's lines are read once per run too.
+READER_CACHE=()
+RUNTIME_NAMED=""; RUNTIME_NAMED_READ=0
+readers_of() {
+  local _i=0
+  while [ "$_i" -lt "${#READER_CACHE[@]}" ]; do
+    if [ "${READER_CACHE[$_i]}" = "$1" ]; then READERS_FILE="$WORK/readers.$_i"; return 0; fi
+    _i=$((_i + 1))
+  done
+  READERS_FILE="$WORK/readers.$_i"
+  server_readers "$1" > "$READERS_FILE"
+  READER_CACHE+=("$1")
+}
+
+# plan_notes prints what a plan leaves for the summary: the missing core toolchains and the SKIP / INFO lines.
+plan_notes() {
+  local _msg
+  for _msg in "${CORE_MISSING[@]:-}"; do [ -n "$_msg" ] && echo "FAIL     core toolchain: $_msg"; done
+  for _msg in "${INFO[@]:-}"; do [ -n "$_msg" ] && echo "$_msg"; done
+  return 0
+}
+
+# plan_changes picks the checks for $CHANGED (every check with --all) and schedules them. Its body keeps the
+# indentation it had at the top level.
+plan_changes() {
+# The CI lanes the change selects (paths.py --lanes-for, the selection CI and the PR watcher read), asked in the
+# background while the plan is made; the lanes check-fast runs no part of are named at the end.
+LANES_PID=""
+if [ "$ALL" -eq 0 ] && [ "$EACH" -eq 0 ] && [ "$HAVE_PY" -eq 1 ] && [ -f scripts/ci/paths.py ]; then
+  printf '%s\n' "$CHANGED" | "$TIMEOUT_BIN" -k 5s "$TIMEOUT_OTHER" python3 scripts/ci/paths.py --lanes-for \
+    > "$WORK/lanes.txt" 2> /dev/null &
+  LANES_PID=$!
+fi
+if [ "$ALL" -eq 1 ]; then
+  WEB=1; SDKTS=1; ANDROID=1; PRNEEDS=1; EXTSCHEMA=1; SITE=1; SDKGO=1; EXTREFS=1; SDKBUNDLE=1
+  for _d in integrations/*/; do
+    if [ -f "$_d/package.json" ]; then
+      _p=$(basename "$_d")
+      arr_has "$_p" "${INTEG[@]:-}" || INTEG+=("$_p")
+    fi
+  done
+else
   while IFS= read -r f; do
     # Files outside web/ that web/src and its tests read also run the web check, on top of their own mapping below:
     # the web plan after this loop finds them.
@@ -734,8 +837,7 @@ fi
 WEB_MODE=full; WEB_REASON=""; WEB_PLAN="$WORK/web-plan.txt"
 if [ "$ALL" -eq 0 ]; then
   if [ "$HAVE_PY" -eq 1 ] && [ -f scripts/ci/paths.py ]; then
-    if printf '%s\n' "$CHANGED" | "$TIMEOUT_BIN" -k 5s "$TIMEOUT_OTHER" python3 scripts/ci/paths.py --web-plan \
-        > "$WEB_PLAN" 2> "$WORK/web-plan.err"; then
+    if web_plan > "$WEB_PLAN" 2> "$WORK/web-plan.err"; then
       read -r WEB_MODE WEB_REASON < "$WEB_PLAN"
       case "$WEB_MODE" in
         full|related) WEB=1 ;;
@@ -781,7 +883,7 @@ server_readers() {
 # Repository inputs that server tests read (the extra paths in server-test.yml's filter): a change to one also runs go
 # test on the packages that read it. Each regex matches the input as a path string or as filepath.Join elements.
 if [ "$ALL" -eq 0 ]; then
-  READER_RES=()
+  READER_RES=(); _client=""
   while IFS= read -r f; do
     _re=""
     case "$f" in
@@ -791,15 +893,53 @@ if [ "$ALL" -eq 0 ]; then
       integrations/*/*) _re='integrations/|"integrations"' ;;
       scripts/test/server_test_env.py) _re='server_test_env\.py' ;;
       docs/*) _re=$(printf '%s' "$f" | sed 's/[][\.^$*+?(){}|]/\\&/g') ;;  # docs/example-guide.md -> docs/example-guide\.md
+      # Client sources the Go contract tests read (internal/proto reads "apple/Shared/Models.swift"): only a test that
+      # names the whole path in quotes counts, not a longer string that mentions it ("apple/Shared/Models.swift: Fold").
+      apple/*|android/*) _client="${_client:+$_client|}$(printf '%s' "$f" | sed 's/[][\.^$*+?(){}|]/\\&/g')" ;;
     esac
     [ -n "$_re" ] && { arr_has "$_re" "${READER_RES[@]:-}" || READER_RES+=("$_re"); }
   done <<< "$CHANGED"
+  [ -n "$_client" ] && READER_RES+=("\"($_client)\"")
   for _re in "${READER_RES[@]:-}"; do
     [ -n "$_re" ] || continue
+    readers_of "$_re"
     while IFS= read -r _g; do
       [ -n "$_g" ] && { arr_has "$_g" "${GO_GROUPS[@]:-}" || GO_GROUPS+=("$_g"); }
-    done < <(server_readers "$_re")
+    done < "$READERS_FILE"
   done
+fi
+
+# runtime_named prints "<package> <path>" for each shared fixture or schema path (spec/..., schema/...) a file of an
+# integrations/<pkg> package or of sdk/ts names outside a comment line, as a path relative to itself
+# (../../../spec/fixtures/input-clip/cases.json, ../../../schema/extension/examples/). CI's runtimes lane runs for all
+# of spec/ and schema/; check-fast runs the packages that read the changed path.
+runtime_named() {
+  git grep -nE '(spec|schema)/[A-Za-z0-9_.-]' -- 'integrations/*' 'sdk/ts/*' 2>/dev/null \
+    | grep -vE '^[^:]*:[0-9]+:[[:space:]]*(//|\*|#)' \
+    | while IFS= read -r _line; do
+        case "$_line" in
+          integrations/*/*) _pkg=${_line#integrations/}; _pkg="integrations/${_pkg%%/*}" ;;
+          sdk/ts/*) _pkg=sdk/ts ;;
+          *) continue ;;
+        esac
+        printf '%s\n' "${_line#*:*:}" | grep -oE '(spec|schema)/[A-Za-z0-9_./-]*' | sed "s|^|$_pkg |"
+      done | sort -u
+}
+
+# A changed spec/ or schema/ path also runs the runtime packages that read it: the path itself, or a directory it is in.
+if [ "$ALL" -eq 0 ] && printf '%s\n' "$CHANGED" | grep -qE '^(spec|schema)/'; then
+  if [ "$RUNTIME_NAMED_READ" -eq 0 ]; then RUNTIME_NAMED=$(runtime_named); RUNTIME_NAMED_READ=1; fi
+  while IFS= read -r f; do
+    case "$f" in spec/*|schema/*) ;; *) continue ;; esac
+    while read -r _pkg _path; do
+      [ -n "$_path" ] || continue
+      case "$f" in "$_path"|"${_path%/}"/*) ;; *) continue ;; esac
+      case "$_pkg" in
+        sdk/ts) SDKTS=1 ;;
+        *) _pkg=${_pkg#integrations/}; arr_has "$_pkg" "${INTEG[@]:-}" || INTEG+=("$_pkg") ;;
+      esac
+    done <<< "$RUNTIME_NAMED"
+  done <<< "$CHANGED"
 fi
 
 # The trusted Deno adapter (server/internal/extension/denohost/adapter.mjs) is generated from adapter.ts, which bundles
@@ -905,6 +1045,17 @@ else
         script_test_add scripts/ci/test_ci.py; script_test_add scripts/test/test_check_fast.py ;;
       scripts/heavy_slot.py) script_test_add scripts/test/test_check_fast.py ;;
     esac
+    # The three selections of what a change affects (#11026): CI's lanes (paths.py, tested in test_ci.py and, for the
+    # web plan, test_check_fast.py), this script and the watcher's lanes; test_affected_drift.py compares them.
+    case "$f" in
+      scripts/ci/paths.py)
+        script_test_add scripts/ci/test_ci.py; script_test_add scripts/test/test_check_fast.py
+        script_test_add scripts/ci/test_affected_drift.py ;;
+      scripts/test/check-fast.sh) script_test_add scripts/ci/test_affected_drift.py ;;
+      scripts/operations/pr_watch_*.py)
+        script_test_add scripts/operations/test_pr_watch.py
+        case "$f" in scripts/operations/pr_watch_verify.py) script_test_add scripts/ci/test_affected_drift.py ;; esac ;;
+    esac
     # The Release binary's DEBUG checks (#10616, #10654): a list that matches no script name, whose union merges can
     # leave it out of order, the checker test_apple_release_switch_names.py imports, and release.sh, which runs it.
     case "$f" in
@@ -928,7 +1079,7 @@ else
   done <<< "$CHANGED"
 fi
 
-echo "check-fast: logs in $WORK"
+[ "$DRY_RUN" -eq 1 ] || echo "check-fast: logs in $WORK"
 
 # All jobs, privacy included, launch together in launch_all below; privacy is scheduled first so it is the first
 # line in the summary.
@@ -1049,6 +1200,48 @@ if [ "$APPLE" -eq 1 ]; then
 fi
 if [ "$UNMAPPED" -eq 1 ]; then
   INFO+=("INFO  no fast check maps to: ${UNMAPPED_FILES[*]} (privacy scan still ran; full suites in docs/operations/testing.md)")
+fi
+if [ -n "$LANES_PID" ] && wait "$LANES_PID"; then
+  _not_run=""
+  for _lane in $(cat "$WORK/lanes.txt"); do
+    case "$_lane" in
+      scripts) continue ;;  # CI's "**": the privacy scan and the scripts suites above are its fast part
+      web) [ "$WEB" -eq 1 ] && continue ;;
+      server)
+        { [ "${#GO_GROUPS[@]}" -gt 0 ] || [ "$SERVER_BUILD" -eq 1 ] || [ "$GO_GUARDS" -eq 1 ] || [ "$SDKGO" -eq 1 ]; } \
+          && continue ;;
+      runtimes) { [ "${#INTEG[@]}" -gt 0 ] || [ "$SDKTS" -eq 1 ]; } && continue ;;
+      apple) [ "$APPLE" -eq 1 ] && continue ;;  # its own SKIP line names it
+    esac
+    _not_run="${_not_run:+$_not_run, }$_lane"
+  done
+  [ -n "$_not_run" ] && INFO+=("INFO  CI lanes this change selects that check-fast does not run: $_not_run (bash scripts/ci/<lane>.sh)")
+fi
+}
+
+# --each: plan every listed path on its own. paths.py plans the web check of all of them in one scan (web_plan).
+if [ "$EACH" -eq 1 ]; then
+  printf '%s\n' "$CHANGED" > "$WORK/each.txt"
+  if [ "$HAVE_PY" -eq 1 ] && [ -f scripts/ci/paths.py ]; then
+    "$TIMEOUT_BIN" -k 5s 900 python3 scripts/ci/paths.py --web-plan-each < "$WORK/each.txt" > "$WORK/web-plans.txt" \
+      || { echo "check-fast: python3 scripts/ci/paths.py --web-plan-each failed" >&2; exit 2; }
+    exec 6< "$WORK/web-plans.txt"
+  fi
+  while IFS= read -r _each <&5; do
+    plan_reset
+    CHANGED=$_each
+    echo "== $_each"
+    plan_changes
+    plan_notes
+  done 5< "$WORK/each.txt"
+  exit 0
+fi
+
+plan_changes
+if [ "$DRY_RUN" -eq 1 ]; then
+  echo "check-fast: dry run, ${#JOB_NAME[@]} check(s) planned; nothing ran."
+  plan_notes
+  exit 0
 fi
 
 if [ ${#JOB_NAME[@]} -eq 0 ] && [ "$CORE_FAIL" -eq 0 ]; then
