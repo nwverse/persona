@@ -1174,6 +1174,9 @@ app treats as unsupported and off (no section, never offered).
 - **Send Clipboard** reads `UIPasteboard` (`PhonePasteboard`: an image first, else text, else a link; images as PNG, or JPEG when the PNG is over 8 MB). iOS asks
   "Allow Paste?" for what another app copied. Beside it the system Paste button (`SystemPasteButton`, a design-system wrapper of `PasteButton`) hands the content over
   without asking: the tap is the permission. **Get Clipboard** writes the phone's pasteboard (never prompts) and previews the text or the image under the buttons.
+  The image is decoded once, off the main thread, at the size the preview draws: 200 pt high at most, so as wide as its aspect ratio allows
+  (`ClipboardModel.previewPicture`, #7925). For a readable picture, the phone receives the original bytes; unreadable image bytes show the
+  existing `clipboard_bad_image` failure and no empty preview.
   Results are toasts; a computer's hidden content (password managers' concealed types) comes back as `concealed` and is not copied.
   Sizes are checked before sending, as the hub checks them (text up to 4 MiB, an image up to 7 MiB; an image whose PNG is bigger is tried as JPEG at falling
   quality), so a too large clipboard is said at once. The hub's refusals each have a sentence (`ClipboardFailure`): `clipboard_disabled`, `read_only`,
@@ -1188,8 +1191,10 @@ app treats as unsupported and off (no section, never offered).
 - **Shortcuts**: Send Clipboard to Computer and Get Computer's Clipboard (`docs/apple/intents.md`).
 - **Limits**: iOS can't read the clipboard in the background, so phone → computer is always a tap (no automatic sync); computer → phone needs the app (or a shortcut) too.
 - **Screenshots and tests**: `MOCK_CLIPBOARD=off|on|image python3 scripts/mock/mock_hub.py` (`MOCK_CLIPBOARD_FAIL=1`: every read and write fails as `clipboard_failed`); `-tab settings -openMachines YES -openMachineDetail macbook -openMachineClipboard YES`
-  (scrolled to the section), `-showClipboardFetch YES` (runs Get on opening), `-showClipboardHint YES`. `ClipboardSectionTests` (UI, `TEST_RUNNER_PERSONA_CLIPBOARD_HUB`)
-  runs Get → Send → hint and the offer; with `MOCK_CLIPBOARD=off` and `TEST_RUNNER_PERSONA_CLIPBOARD_STATE=off` it checks the default-off state
+  (scrolled to the section), `-showClipboardFetch YES` (runs Get on opening), `-showClipboardFetched text|image` (a self-contained preview),
+  `-showClipboardHint YES`. `ClipboardSectionTests` (UI, `TEST_RUNNER_PERSONA_CLIPBOARD_HUB`)
+  runs Get → Send → hint and the offer; with `MOCK_CLIPBOARD=image` and `TEST_RUNNER_PERSONA_CLIPBOARD_STATE=image` it checks fetched and DEBUG image previews;
+  with `MOCK_CLIPBOARD=off` and `TEST_RUNNER_PERSONA_CLIPBOARD_STATE=off` it checks the default-off state
   (the switch and its explanation only, no buttons; the offer setting off). A hub without `clipboard` on a machine hides the section and never offers it; unit tests `ClipboardModelTests`, `ClipboardOfferTests`, `ClipboardIntentsTests`. The simulator could not answer "Allow Paste?"
   for what another app copied (its TCC store refused the answer, 2026-11-10), so the prompt itself is checked on a device.
 

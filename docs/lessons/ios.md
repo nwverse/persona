@@ -31,6 +31,26 @@ of the app on its main thread: 55–70 ms each with the `assistant` perf suite's
 app switching on a cue (`FrameProbe.switchPages`, `testTabSwitchAssistantAgentsByCue`) and the test only sleeping; keep
 the tapping test for the tap's own path.
 
+## A machine's heartbeat used to tell every reader of `machines` (2026-11-18, #10231)
+
+A busy hub pushes the machines with a new `lastSeen` all the time. `AppModel.machines` was replaced on each push, so
+every body that read `machines` for anything ran again: a chat's subtitle (#1337), the Agents list (#1495), and after
+#9623 every Agents row, whose long-press menu read the machines (for Screen) in the row's body. `.contextMenu { … }`
+and `Menu(content:)` run their content when the view holding them runs its body, not when the menu opens. The first
+two were fixed where they read; the third came in through a new reader, about twice the main-thread time of the list
+under pushes. Nothing looked wrong in a single frame, and the typing and scrolling perf tests did not show it.
+
+Now the rule is in the model: a list that differs only in `lastSeen` is stored without telling who read `machines`,
+and what shows `lastSeen` reads `lastSeen(_:)` (`NamedMachineTests/aHeartbeatDoesNotTellWhoReadTheMachines`). The Agent
+menu's facts are built only by `AgentActionMenuReader` (their initializer from the model is `fileprivate`), so a row or
+header cannot observe what its menu reads. `RenderBudgetTests` has a `heartbeat` push with a budget of 0, run by hand
+with its mock hub (hosted CI runs no UI tests).
+
+To find such a cost, `sample` the app's main thread on an optimized build while the mock hub pushes
+(`/mock/churn`), with no UI test attached, and look for row bodies (`KeyedRow.body`) under the push. The typing perf
+tests are mostly XCTest's own work (`UIKeyboardTaskQueue`, accessibility snapshots), so a regression in them is not
+the app's until a sample says so.
+
 ## Scroll perf tests: which page did the test actually measure (#8824)
 
 `PerfAgentsTests/testAgentChatScrollLongHistory` opens its chat, after a fresh install, in one of two states: with the
