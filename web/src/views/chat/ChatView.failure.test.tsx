@@ -391,7 +391,11 @@ describe("a message that did not go, in an agent's chat (#1122)", () => {
     await act(async () => void (await captured.onSend!({ text: "你好", images: [] })));
     await flush();
     const words = [...host.querySelectorAll<HTMLElement>("[data-outbox] [data-user-bubble] *")].filter((el) => el.textContent === "你好").at(-1)!;
-    act(() => void words.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 20, clientY: 20 })));
+    // The message menu is a lazy chunk since #8714: wait for it, as MessagePick.test.tsx does.
+    await act(async () => {
+      words.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 20, clientY: 20 }));
+      await vi.dynamicImportSettled();
+    });
     const last = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].at(-1)!;
     expect(last.textContent?.trim()).toBe("删除");
     act(() => last.click());
