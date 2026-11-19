@@ -453,8 +453,8 @@ func (n *Node) newTab(ctx context.Context, launch host.Launcher, cwd, ws, tabNam
 			}
 			_ = renameSlot(ctx, launch, created.SlotID, tabLabel(tabName, taken))
 		}
-	} else {
-		created, err = createStartSlot(ctx, launch, ws, cwd, tabLabel(tabName, n.tabLabels(ctx, launch, ws)))
+	} else if created, err = createStartSlot(ctx, launch, ws, cwd, tabLabel(tabName, n.tabLabels(ctx, launch, ws))); err == nil {
+		n.closeWorktreeShells(ctx, launch, ws, created.Pane.String()) // the Agent's tab is the worktree's tab now
 	}
 	if err != nil {
 		return nil, fmt.Errorf("创建终端标签页失败：%w", err)
