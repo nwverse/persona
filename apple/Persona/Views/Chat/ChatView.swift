@@ -6204,7 +6204,8 @@ struct Composer: View, Equatable {
                     #endif
                 } modes: {
                     SessionModesMenu(key: key, session: model.session(key), picksModel: canPickModel, setsModes: setsModes,
-                                     setsEffortOnly: setsEffortOnly, otherModel: canPickModel ? { typingModel = true } : nil,
+                                     setsEffortOnly: setsEffortOnly, mainConversation: isMainAssistantChat,
+                                     otherModel: canPickModel ? { typingModel = true } : nil,
                                      assistantPick: assistantModelPickAvailable ? { showAssistantModel = true } : nil,
                                      assistantModelName: assistantEffectiveName, pick: pickMode)
                 }

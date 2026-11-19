@@ -557,8 +557,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if guest != nil && agent != "claude" {
 		return "", errGuestAgent
 	}
+	asked := ""
 	if agent == "claude" {
-		asked := n.startProfile(executionOption(options).ConfigDir, guestKind, resume)
+		asked = n.startProfile(executionOption(options).ConfigDir, guestKind, resume)
 		execution.ConfigDir, err = n.assistantProfileSelection(ctx, id, launcher, asked, resume)
 		if err != nil {
 			return "", err
@@ -569,7 +570,6 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if proto.IsExternalLauncher(launcher) {
 		execution.StartupContext = ctx
 	}
-	timing.mark("preflight_done", true)
 	var p *assistantProc
 	if id == "" && guest != nil {
 		// Never the warm spare: it was started with the assistant's tools. Its process reads Guest from the state.
@@ -595,6 +595,14 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		st.Origin, st.Launcher, st.Cwd = origin, launcher, cwd
 		n.state.put(id, st)
 	}
+	// A reused warm process is already running: its profile needs no sign-in check (a spare is only adopted in the
+	// start's own profile). A cold start asks before anything is spawned.
+	if p == nil && agent == "claude" && !resume {
+		if err := n.assistantNewProfileAuth(ctx, launcher, asked, execution.ConfigDir); err != nil {
+			return "", err
+		}
+	}
+	timing.mark("preflight_done", true)
 	if cwd == "" {
 		cwd = n.storedCwd(st.Cwd)
 	}
