@@ -249,6 +249,11 @@ class ModelsTest {
     @Test fun personaOwnMcpServerShowsAsPersona() {
         assertEquals("Persona · agent read", toolDisplayName("mcp__persona__agent_read"))
         assertEquals("Persona · agent send", toolDisplayName("mcp__plugin_persona__agent_send"))
+        assertEquals("Persona · notify user", toolDisplayName("mcp_persona_notify_user"))
+        assertEquals("Persona · notify user", toolDisplayName("mcp_persona_0c671287_notify_user"))
+        for (server in ProtocolCompatibility.personaServers) {
+            assertEquals("mcp__persona__task_review", canonicalMcpToolName("mcp_${server}_55a1c59d_task_review"))
+        }
         assertEquals("Persona", toolDisplayName("mcp__persona"))
         assertEquals("github · create issue", toolDisplayName("mcp__github__create_issue"))
         assertEquals("persona_extra · x", toolDisplayName("mcp__persona_extra__x"))

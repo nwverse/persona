@@ -7760,19 +7760,38 @@ def kb_meta(kind, eid):
     return KB_DETAIL.setdefault((kind, eid), {}).setdefault("meta", dict(kb_base_meta(kind, e)))
 
 
-def kb_unlink(kind, eid, lst, oid):
+def kb_unlink(kind, eid, lst, oid, lock=True):
     """remove_people / remove_chats / remove_projects as the hub's kb.Update: the other entry leaves this one's list, this
-    one leaves the other's (a project names documents, meetings, events and recordings in `items` as kind/id), both lists
-    are locked against the automatic linking, and neither detail links the other any more."""
+    one leaves the other's (a project names documents, meetings, events and recordings in `items` as kind/id), each keeps
+    the other out of the automatic linking (`excluded`, listed under the detail's `removed`), with lock (lock_lists, or
+    lock when that is unset) both lists are locked too, and neither detail links the other any more (#10333)."""
     named = kind in ("people", "chats", "projects")
     back, member = (kind, eid) if named else ("items", "%s/%s" % (kind, eid))
     for m, field, x in ((kb_meta(kind, eid), lst, oid), (kb_meta(lst, oid), back, member)):
         if m is None: continue
         m[field] = [v for v in m.get(field) or [] if v != x]
-        m["locked_fields"] = sorted(set(m.get("locked_fields") or []) | {field})
+        ex = m.setdefault("excluded", {}).setdefault(field, [])
+        if x not in ex: ex.append(x)
+        if lock: m["locked_fields"] = sorted(set(m.get("locked_fields") or []) | {field})
+    for (k, i), other in (((kind, eid), (lst, oid)), ((lst, oid), (kind, eid))):
+        d = KB_DETAIL.setdefault((k, i), {})
+        if d.get("links"): d["links"] = [l for l in d["links"] if (l["kind"], l["id"]) != other]
+        if any(x["id"] == other[1] for x in KB.get(other[0], [])) and all((r["kind"], r["id"]) != other for r in d.get("removed") or []):
+            d["removed"] = (d.get("removed") or []) + [kb_link(*other)]
+
+
+def kb_allow(kind, eid, lst, oid):
+    """allow_people / allow_chats / allow_projects: both entries stop keeping the other out; nothing is linked."""
+    named = kind in ("people", "chats", "projects")
+    back, member = (kind, eid) if named else ("items", "%s/%s" % (kind, eid))
+    for m, field, x in ((kb_meta(kind, eid), lst, oid), (kb_meta(lst, oid), back, member)):
+        if m is None or x not in (m.get("excluded") or {}).get(field, []): continue
+        m["excluded"][field].remove(x)
+        if not m["excluded"][field]: del m["excluded"][field]
+        if not m["excluded"]: del m["excluded"]
     for (k, i), other in (((kind, eid), (lst, oid)), ((lst, oid), (kind, eid))):
         d = KB_DETAIL.get((k, i))
-        if d and d.get("links"): d["links"] = [l for l in d["links"] if (l["kind"], l["id"]) != other]
+        if d and d.get("removed"): d["removed"] = [r for r in d["removed"] if (r["kind"], r["id"]) != other] or None
 
 
 # The entries the Android captures add: a summary under its name, a line of timeline, what it is about now, two links.
@@ -11588,6 +11607,9 @@ PREFS_FAIL = [os.environ.get("MOCK_PREFS_FAIL") == "1"]  # Settings › Notifica
 RESOLVED = []  # resolve calls, newest last (GET /mock/resolved)
 RESOLVE_MODE = [os.environ.get("MOCK_RESOLVE", "ok")]  # how answers to cards go: ok | slow | fail (MOCK_RESOLVE, /mock/resolve-mode)
 DEVICES = []  # POST /api/v1/devices, newest last (GET /mock/devices): each one's id, kind and push `features` (#2433)
+# GET /mock/devices/retire?on=1: the hub retired this device's push registration (#9611): its prefs writes answer 409
+# push_registration_required until the app registers again (POST /api/v1/devices), as the hub does (#9612).
+PUSH_RETIRED = [False]
 # The last client_hello's features, platform and version, and the X-Persona-Client of the last GET /api/v1/interactions
 # (GET /mock/hello): the hub lists MCP elicitation cards in REST answers only when the two match (docs/protocol/protocol.md
 # "MCP elicitation").
@@ -11658,8 +11680,22 @@ def _codex_settings():  # Settings › Codex Settings: the node's whitelist (ser
     ]
 
 
+def _agy_settings():  # Settings › Antigravity Settings: the node's whitelist (server/internal/node/agyompconfig.go)
+    return [
+        {"key": "model", "title": "默认模型", "detail": "没有指定模型时使用 Antigravity 自己的默认模型", "type": "string", "default": "", "value": None},
+        {"key": "agentMode", "title": "执行模式", "detail": "改文件、跑命令时的默认模式；auto 自动放行安全操作，需要时仍会询问", "type": "enum",
+         "options": ["default", "accept-edits", "auto", "plan"], "default": "default", "value": "default"},
+        {"key": "toolPermission", "title": "工具权限", "detail": "调用工具或跑命令前要不要问你；选 always-proceed 会自动放行所有权限检查（全部放行）", "type": "enum",
+         "options": ["ask", "always-proceed"], "default": "ask", "value": None},
+        {"key": "modelProvider", "title": "模型接入方式", "detail": "oauth 走 Google / Antigravity 登录；填了 GOOGLE_GEMINI_BASE_URL + GEMINI_API_KEY 时选 gemini", "type": "enum",
+         "options": ["oauth", "gemini"], "default": "oauth", "value": None},
+        {"key": "showFeedbackSurvey", "title": "显示反馈问卷", "detail": "在终端里偶尔弹出反馈调查", "type": "bool", "default": True, "value": None},
+    ]
+
+
 CLAUDE_SETTINGS = {}  # machine id → its settings, made on first use
 CODEX_SETTINGS = {}
+AGY_SETTINGS = {}
 
 # Settings › Claude Code › Blocked configuration directories (server/internal/hub/claudedirs.go): machine id → blocked patterns; the directories
 # every machine has (home written as ~ here, expanded with the machine's home).
@@ -14578,6 +14614,8 @@ SUPERVISE_PURPOSE = "assistant.supervise"
 SUPERVISE_LISTED = os.environ.get("MOCK_SUPERVISE_LISTED") == "1"
 # MOCK_MEETING_MODELS=1: the two editable meeting uses (#7980); without it both ids are unknown, as on an older hub.
 MEETING_MODELS = os.environ.get("MOCK_MEETING_MODELS") == "1"
+# MOCK_CHAT_EFFORT=1 adds a Chat Completions connection with exact model capabilities for browser screenshots.
+CHAT_EFFORT = os.environ.get("MOCK_CHAT_EFFORT") == "1"
 MEETING_PURPOSES = {"meeting.room": "assistant", "meeting.minutes": "kb"}
 # The hub's group of each (group_assistant, group_processing), and the uses the categories gain: in the mock's Chinese,
 # like the rest of the categories' rows, so the flag adds the uses without changing those rows' language.
@@ -14674,7 +14712,7 @@ def meeting_model_purpose(pid, lang="zh-Hans", catalog=None):
     room = pid == "meeting.room"
     provider = next((x for x in catalog["providers"] if x["id"] == effective["provider"]), {})
     fields = ["provider", "model"]
-    if room or (provider and provider.get("api", "") in ("messages", "responses", "")):  # as the hub's API purposes
+    if room or (provider and (provider.get("api", "") in ("messages", "responses", "") or provider.get("chat_effort"))):
         fields.append("effort")
     # Like every API purpose, the minutes name the main chat's computer, where a launcher picked for them runs.
     purpose = dict(id=pid, category_id=category, parent=category, name=text[pid], group=text[MEETING_GROUPS[pid]],
@@ -14727,6 +14765,11 @@ def model_configuration(include_uses=False):
                       model=l.get("model"), hidden=l.get("hidden", False)) for l in LAUNCHERS if l["source"] != "builtin"]
     providers += [{"id": "launcher.claude", "name": "claude", "kind": "launcher", "model": "model-chat"},
                   {"id": "legacy.ai", "name": "轻量 API", "kind": "api", "api": "messages", "model": "model-fast"}]
+    if MEETING_MODELS and CHAT_EFFORT:
+        providers.append({"id": "api.chat", "name": "Chat Completions", "kind": "api", "api": "chat",
+                          "model": "chat-default", "chat_effort": True, "effort": "medium",
+                          "models": [{"id": "chat-default", "efforts": ["low", "medium", "high"],
+                                      "all_efforts": ["none", "low", "medium", "high"]}]})
     if os.environ.get("MOCK_MODEL_PICK") == "otherkind":
         # The current main chat runs Codex while Main chat still defaults to Claude (#4662).
         next(p for p in providers if p["id"] == "launcher.codex").update(agent="codex", agent_type="codex")
@@ -22752,6 +22795,13 @@ def bump(what, session=None):
             s.update(state="needs_you", status="blocked", state_since=now, updated_at=now)
         push_machine(s["machine_id"])
         return {"key": s["machine_id"] + "/" + s["session_id"], "state": s["state"], "last": s.get("last_text") or ""}
+    if what == "heartbeat":  # only the machines' heartbeat (`last_seen`), which a busy hub pushes with its lists (#10231)
+        for m in MACHINES:
+            m["last_seen"] = now
+        for send, _ in list(LIVE):
+            try: send({"type": "machines", "machines": out_machines()})
+            except Exception: pass
+        return {"ok": True}
     if what == "ask":
         s = working[0] if working else SESSIONS[0]
         ix = dict(INTERACTIONS[0], id="ix_bump_%d" % n, machine_id=s["machine_id"], session_id=s["session_id"], created_at=now)
@@ -25045,6 +25095,12 @@ def markets_route(handler, p, body):
         if GAUGE_MODE and placement in ("", "nav_page"):
             ui += [{"plugin": "example-quota", "plugin_name": "Example Quota", "id": "quota", "title": "Quota",
                     "placement": "nav_page", "size": "full", "icon": "gauge"}]
+        if GRAPH_MODE and placement in ("", "nav_page"):
+            ui += [{"plugin": "example-work", "plugin_name": "Example Work", "id": "work", "title": "Work",
+                    "placement": "nav_page", "size": "full", "icon": "branch"}]
+        if GRAPH_MODE and placement in ("", "overview_card"):
+            ui += [{"plugin": "example-work", "plugin_name": "Example Work", "id": "work-card", "title": "Work",
+                    "placement": "overview_card", "size": "compact", "opens": "work"}]
         if os.environ.get("MOCK_EXTENSION_SHOWCASE") == "1" and placement in ("", "nav_page"):
             from pathlib import Path
             snapshots = Path(__file__).resolve().parents[2] / "schema/extension/examples/showcase"
@@ -26423,6 +26479,9 @@ class H(BaseHTTPRequestHandler):
             return self.send_json({"mode": RESOLVE_MODE[0]})
         if p == "/mock/screen-steps": return self.send_json(mock_screen_steps(q))
         if p == "/mock/devices": return self.send_json({"devices": DEVICES})
+        if p == "/mock/devices/retire":
+            PUSH_RETIRED[0] = q.get("on", ["1"])[0] == "1"
+            return self.send_json({"retired": PUSH_RETIRED[0]})
         if p == "/mock/desktops": return self.send_json(desktops_state())
         if p == "/mock/hello": return self.send_json(HELLO)
         if p == "/mock/phone":
@@ -27031,6 +27090,8 @@ class H(BaseHTTPRequestHandler):
             return self.send_json(_claude_dirs_state(p.split("/")[4]))
         if p.startswith("/api/v1/machines/") and p.endswith("/codex-settings"):
             return self.send_json({"settings": CODEX_SETTINGS.setdefault(p.split("/")[4], _codex_settings())})
+        if p.startswith("/api/v1/machines/") and p.endswith("/agy-settings"):
+            return self.send_json({"settings": AGY_SETTINGS.setdefault(p.split("/")[4], _agy_settings())})
         if p.startswith("/api/v1/sessions/") and p.endswith("/items"):
             sid = unquote(p.split("/")[5])  # a subagent's is "<session>@<agent>" (the web app sends %40)
             if sid == PASEO_CLOSED and not PASEO_LOADED["on"]:  # MOCK_PASEO_NOT_LOADED: no watch has loaded it yet
@@ -27336,6 +27397,7 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/v1/devices":  # a push registration: kept without its token, key or grant
             d = json.loads(self.last_body or b"{}")
             DEVICES.append({k: d.get(k) for k in ("device_id", "kind", "features")})
+            PUSH_RETIRED[0] = False
             return self.send_json({"ok": True, "push": {"route": "relay"}})
         if p == "/mock/frames":
             run = json.loads(self.last_body or b"{}")
@@ -28033,8 +28095,11 @@ class H(BaseHTTPRequestHandler):
                 m = kb_meta(kind, eid)
                 if body["pinned"]: m["pinned"] = body["pinned"]
                 else: m.pop("pinned", None)
+            lock = body["lock_lists"] if "lock_lists" in body else body.get("lock") is not False
             for field, lst in (("remove_people", "people"), ("remove_chats", "chats"), ("remove_projects", "projects")):
-                for oid in body.get(field) or []: kb_unlink(kind, eid, lst, oid)
+                for oid in body.get(field) or []: kb_unlink(kind, eid, lst, oid, lock)
+            for field, lst in (("allow_people", "people"), ("allow_chats", "chats"), ("allow_projects", "projects")):
+                for oid in body.get(field) or []: kb_allow(kind, eid, lst, oid)
             KB_UPDATES.append({"kind": kind, "id": eid, **body})
             return self.send_json({"ok": True})
         if os.environ.get("MOCK_LARK_NATIVE_OLK") and (p == "/test/lark-encryption/reset" or p == "/api/v1/lark/encryption/unlock" or p.endswith(("/encryption/covers", "/encryption/prepare", "/encrypted-messages"))):
@@ -28906,11 +28971,13 @@ class H(BaseHTTPRequestHandler):
                     pats.append(x)
             CLAUDE_DIRS_BLOCKED[mid] = pats
             return self.send_json(_claude_dirs_state(mid))
-        if p.startswith("/api/v1/machines/") and (p.endswith("/claude-settings") or p.endswith("/codex-settings")) and self.command == "PUT":
+        if p.startswith("/api/v1/machines/") and (p.endswith("/claude-settings") or p.endswith("/codex-settings") or p.endswith("/agy-settings")) and self.command == "PUT":
             body, mid = json.loads(self.last_body or b"{}"), p.split("/")[4]
             if not machine_online(mid):
                 return self.send_json({"error": "machine is offline"}, 503)
-            store, make = (CODEX_SETTINGS, _codex_settings) if p.endswith("/codex-settings") else (CLAUDE_SETTINGS, _claude_settings)
+            store, make = ((AGY_SETTINGS, _agy_settings) if p.endswith("/agy-settings")
+                           else (CODEX_SETTINGS, _codex_settings) if p.endswith("/codex-settings")
+                           else (CLAUDE_SETTINGS, _claude_settings))
             for st in store.setdefault(mid, make()):
                 if st["key"] == body.get("key"):
                     st["value"] = body.get("value")
@@ -28926,6 +28993,9 @@ class H(BaseHTTPRequestHandler):
             LN["on"] = json.loads(self.last_body or b"{}").get("enabled") is True
             return self.send_json({"enabled": LN["on"]})
         if p.startswith("/api/v1/devices/") and p.endswith("/prefs"):  # Settings › Notifications
+            if PUSH_RETIRED[0]:
+                return self.send_json({"error": "mock: register this device for notifications again",
+                                       "code": "push_registration_required"}, 409)
             body = json.loads(self.last_body or b"{}")
             PREFS.update({k: v for k, v in body.items() if k in ("input", "done", "live_activity", "lock_details")})
             if isinstance(body.get("muted_managers"), list):  # 设置 › 管理者 › 推送通知
@@ -29723,6 +29793,7 @@ def features():
 MOCK_HELP.append("MOCK_SIDEBAR_GROUPS=1  (with MOCK_EXTENSIONS=1 MOCK_EXTENSION_COLUMNS=1) Today, Lark and Calendar name the sidebar group 工作台, Assets 资产 and Home devices 家里 (#9071)")
 MOCK_HELP.append("MOCK_NAVIGATION=off  A hub (or default manager) from before the start page (#9071): GET / PUT /api/v1/navigation answer 404, so the web keeps the choice in the browser")
 MOCK_HELP.append("MOCK_EXTENSION_COLUMNS=1  (with MOCK_EXTENSIONS=1) A made-up extension's Today page, UI version 8's columns layout (#9158): a full-width Needs me card with its rows two a line, then Calendar | Lark today and WeChat | Running Agents, each with an icon, a link beside its title, a summary and a link at the bottom")
+MOCK_HELP.append("MOCK_EXTENSION_GRAPH=1  (with MOCK_EXTENSIONS=1) A made-up Work page, UI version 10's graph (#9727): a 200-node tree of work in states with groups, progress, a folded part and a selected step; a node pushes its own page; each draw moves one step to Done; an overview card shows the graph as a still preview")
 MOCK_HELP.append("MOCK_EXTENSION_GAUGE=1  (with MOCK_EXTENSIONS=1) A made-up gateway's Quota page, UI version 9's gauge (#9337): a row of status tiles, then a card of three rings (5 hours, This week, Fable this week; the last one low, in amber) with the reset times in its footer")
 MOCK_HELP.append("MOCK_EXTENSION_PICKERS=1  （配合 MOCK_EXTENSIONS=1）多一个扩展「Example 聊天」：设置里选一台电脑（format machine）、选启动器（format launcher，代答的那个已经不在了）、整数带步进（#2385）")
 MOCK_HELP.append("MOCK_EXTENSION_OPS=1|fail  （配合 MOCK_EXTENSIONS）扩展的安装 / 升级 / 卸载分步骤推进度（extension_operation 事件）：后台预览、停在等你同意、同意后同一个操作接着装；fail：每个扩展第一次安装停在「启动」、第一次卸载停在「删除」，都能重试；MOCK_EXTENSION_OPS_STEP=秒 每步的时长；MOCK_EXTENSION_INSTALL_DELAY=秒 没有分步骤的旧 hub 安装 / 卸载要这么久才回（#3307）")
@@ -30312,6 +30383,9 @@ def plugins_route(handler, p, body):
         return mock_today(handler, body)
     if PLUGINS_MODE and GAUGE_MODE and p == "/api/v1/extensions/example-quota/-/ui/quota":
         return mock_quota(handler, body)
+    if PLUGINS_MODE and GRAPH_MODE and p in ("/api/v1/extensions/example-work/-/ui/work",
+                                             "/api/v1/extensions/example-work/-/ui/work-card"):
+        return mock_work(handler, body, card=p.endswith("-card"))
     if PLUGINS_MODE and p == "/api/v1/extensions/showcase/-/ui/motion":
         handler.send_json({"view": _motion_view(_MOTION_STEP[0])})
         return True
@@ -30333,6 +30407,75 @@ def plugins_route(handler, p, body):
             except ValueError: pass
         return _plugins_route_without_extensions(_NewKeysHandler(handler), "/api/v1/plugins" + p[len("/api/v1/extensions"):], body)
     return _plugins_route_without_extensions(handler, p, body)
+
+
+# MOCK_OPENER_ICONS=1 (with MOCK_EXTENSIONS=1 MOCK_AUTO_CONVERSATIONS=1 MOCK_EXTERNAL=1, #10358): the extensions that opened
+# the external conversations are installed, each with the icon its package brings, on the hub's installed-icon route
+# (`icon_url`, served here as the hub does: a PNG for the installed version, 404 for any other). `larkext`, which opened
+# the Lark /agent conversation, stands in for a made-up third-party extension that reuses lark.agent ("Chat Bridge", a
+# chat bubble; it brings no Lark connector or messaging source), `example-ext` for the other one ("Example Docs", a page).
+# The apps draw and name those extensions on the conversations' rows and under their first messages; without the flag
+# neither is installed, and the rows keep the origin's mark, as before.
+OPENER_ICONS = PLUGINS_MODE and os.environ.get("MOCK_OPENER_ICONS") == "1"
+MOCK_HELP.append("MOCK_OPENER_ICONS=1  With MOCK_EXTENSIONS=1 MOCK_AUTO_CONVERSATIONS=1 MOCK_EXTERNAL=1: the two extensions that opened "
+                 "the external conversations are installed with icons (larkext as a made-up third-party Chat Bridge that reuses "
+                 "lark.agent, example-ext as Example Docs), which their rows and first messages draw and name (#10358)")
+
+
+def _opener_icon_png(kind, side=128):
+    """A made-up extension icon: a white chat bubble on teal, or a white page with lines on indigo."""
+    bg, ink, line = ((20, 184, 166), (255, 255, 255), None) if kind == "bubble" else ((99, 102, 241), (255, 255, 255), (165, 180, 252))
+    raw = bytearray()
+    for y in range(side):
+        raw.append(0)
+        for x in range(side):
+            c = bg
+            if kind == "bubble":
+                if 26 <= x < 102 and 30 <= y < 86 and not ((x - 26 < 8 or 101 - x < 8) and (y - 30 < 8 or 85 - y < 8)):
+                    c = ink
+                elif 40 <= x < 58 and 86 <= y < 104 and x - 40 <= 103 - y:
+                    c = ink
+            else:
+                if 38 <= x < 90 and 22 <= y < 106:
+                    c = ink
+                    if line and 46 <= x < 82 and any(r <= y < r + 5 for r in (40, 54, 68, 82)):
+                        c = line
+            raw.extend(bytes(c))
+    chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", side, side, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(bytes(raw), 9)) + chunk(b"IEND", b""))
+
+
+if OPENER_ICONS:
+    _OPENER_ICONS = {"larkext": ("Chat Bridge", "Hands a chat app's /agent messages to Persona (an example).", "bubble"),
+                     "example-ext": ("Example Docs", "Hands documents to Persona to tidy up (an example).", "page")}
+    for _id, (_name, _desc, _kind) in _OPENER_ICONS.items():
+        PLUGINS[_id] = {"id": _id, "name": _name, "kind": "", "status": "running", "version": "1.0.0", "source": "installed",
+                        "enabled": True, "description": _desc, "contributes": {}, "icon_url": "/api/v1/extensions/%s/-/icon?v=1.0.0" % _id,
+                        "form": {"fields": []}, "config": {}, "secrets": [], "permissions": []}
+    _PLUGIN_VIEW.append("icon_url")
+
+_plugins_route_without_opener_icons = plugins_route
+
+
+def plugins_route(handler, p, body):
+    """MOCK_OPENER_ICONS: GET /api/v1/extensions/{id}/-/icon?v=<installed version> answers that extension's icon."""
+    parts = p.split("/")  # ['', 'api', 'v1', 'extensions', id, '-', 'icon']
+    if OPENER_ICONS and handler.command == "GET" and len(parts) == 7 and parts[:4] == ["", "api", "v1", "extensions"] and parts[5:] == ["-", "icon"]:
+        q = {k: v[0] for k, v in parse_qs(urlparse(handler.path).query).items()}
+        pl = PLUGINS.get(parts[4])
+        if parts[4] not in _OPENER_ICONS or not pl or q.get("v") != pl.get("version"):
+            handler.send_response(404)
+            handler.send_header("Cache-Control", "no-store"); handler.send_header("Content-Length", "0")
+            handler.end_headers()
+            return True
+        data = _opener_icon_png(_OPENER_ICONS[parts[4]][2])
+        handler.send_response(200)
+        handler.send_header("Content-Type", "image/png"); handler.send_header("Content-Length", str(len(data)))
+        handler.send_header("Cache-Control", "private, max-age=300")
+        handler.end_headers(); handler.wfile.write(data)
+        return True
+    return _plugins_route_without_opener_icons(handler, p, body)
 
 
 # MOCK_EXTENSION_COLUMNS=1 (with MOCK_EXTENSIONS=1): a made-up extension's "Today" page, a dashboard of UI version 8
@@ -30407,6 +30550,83 @@ def mock_today(handler, body):
             {"type": "empty", "title": title, "detail": "Everything of this card would be listed here."}]}]}})
     else:
         handler.send_json({"view": _today_view()})
+    return True
+
+
+# MOCK_EXTENSION_GRAPH=1 (with MOCK_EXTENSIONS=1): UI version 10's graph (#9727), a made-up "Work" page: a header, then
+# a 200-node tree of work split into parts (each part's first two steps one task tried two ways, a group), in states,
+# with progress, part 6 folded, a step selected; tapping a node pushes its own page. Each draw moves one more step to
+# Done, so a redraw changes only states (same key, same nodes and edges). An overview card draws the same graph as a
+# still preview. All names are invented.
+GRAPH_MODE = os.environ.get("MOCK_EXTENSION_GRAPH") == "1"
+_WORK_DRAWS = [0]
+
+
+def _work_graph(draw):
+    nodes, edges = [], []
+    states = [("Done", "positive"), ("Running", "caution"), ("Queued", None), ("Failed", "danger")]
+
+    def add(nid, title, parent=None, **extra):
+        if len(nodes) >= 200:
+            return False
+        nodes.append({"id": nid, "title": title, **extra,
+                      "action": {"id": "open", "values": {"id": nid}, "push": {"ui": "work", "state": nid}}})
+        if parent:
+            edges.append({"from": parent, "to": nid})
+        return True
+
+    add("root", "Ship the spring release", subtitle="8 parts", icon="list", badge={"text": "Running", "tone": "caution"},
+        progress=min(1.0, 0.3 + draw * 0.05))
+    step = 0
+    for p in range(8):
+        pid = f"p{p}"
+        add(pid, f"Part {p + 1}", "root", subtitle="6 steps", icon="folder")
+        for s in range(6):
+            sid = f"{pid}.s{s}"
+            text, tone = states[(p + s + (1 if step < draw else 0)) % 4] if step >= draw else states[0]
+            step += 1
+            extra = {"badge": {"text": text, **({"tone": tone} if tone else {})}}
+            if tone:
+                extra["tone"] = tone
+            if text == "Running":
+                extra["progress"] = 0.5
+            if s < 2:
+                extra["group"] = "Two ways"
+            add(sid, f"Step {s + 1}" if s >= 2 else ("Smallest change" if s == 0 else "Remove the cause"), pid, **extra)
+            for c in range((p + s) % 5):
+                add(f"{sid}.c{c}", f"Check {c + 1}", sid, subtitle="Unit tests" if c % 2 == 0 else "Review")
+    k = 0
+    while len(nodes) < 200:
+        add(f"p{k % 8}.s5.x{k // 8}", f"Follow-up {k + 1}", f"p{k % 8}.s5")
+        k += 1
+    return {"type": "graph", "key": "work", "nodes": nodes, "edges": edges, "folded": ["p6"], "selected": "p2.s3"}
+
+
+def _work_view(draw, node=None):
+    if node:
+        return {"title": node, "sections": [{"key": "node", "items": [
+            {"type": "header", "title": node, "subtitle": "A made-up step", "badges": [{"text": "Running", "tone": "caution"}]},
+            {"type": "text", "text": "This page stands for a node's own page: its question, its result and its steps."}]}]}
+    return {"title": "Work", "refresh_after": 30, "sections": [{"key": "work", "items": [
+        {"type": "header", "title": "Ship the spring release", "subtitle": f"{min(48, draw)} of 48 steps done",
+         "badges": [{"text": "Running", "tone": "caution"}]},
+        _work_graph(draw)]}]}
+
+
+def mock_work(handler, body, card=False):
+    request = json.loads(body) if body else {}
+    state = request.get("state")
+    node = state if isinstance(state, str) and state else None
+    if request.get("action") == "open":
+        node = (request.get("values") or {}).get("id") or "root"
+        handler.send_json({"view": _work_view(0, node)})
+        return True
+    if not card and not node:
+        _WORK_DRAWS[0] += 1
+    view = _work_view(_WORK_DRAWS[0], node)
+    if card:
+        view = {"title": "Work", "sections": [{"key": "work", "items": [_work_graph(_WORK_DRAWS[0])]}]}
+    handler.send_json({"view": view})
     return True
 
 
@@ -31433,6 +31653,8 @@ MODEL_PICK_MODE = os.environ.get("MOCK_MODEL_PICK", "")
 MODEL_PICK_HOME = "claude"  # the launcher-list default a reset restores
 MODEL_PICK_DEFAULT = MODEL_PICK_HOME
 MODEL_PICK_LOG = []
+MODEL_PICK_SHARED = os.environ.get("MOCK_ASSISTANT_LAUNCHER_FIXTURE") == "1"
+MODEL_PICK_SHARED_UNAVAILABLE = []
 MODEL_PICK_LAUNCHERS = [
     {"name": "claude", "model": "opus", "source": "builtin"},
     {"name": "sonnetcc", "model": "sonnet", "source": "zshrc"},
@@ -31452,6 +31674,16 @@ MODEL_PICK_REASONS = {
 }
 if MODEL_PICK_MODE:
     LAUNCHER_MODELS["team-api"] = {"agent": "claude", "models": []}
+# MOCK_ASSISTANT_LAUNCHER_FIXTURE=1: replay the same Assistant candidates as the server, web, iOS and Android tests.
+if MODEL_PICK_MODE and MODEL_PICK_SHARED:
+    _shared_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..",
+                                "spec", "fixtures", "assistant-launchers", "cases.json")
+    with open(_shared_path, encoding="utf-8") as _f:
+        _shared_case = json.load(_f)["cases"][0]
+    MODEL_PICK_LAUNCHERS[:] = [dict(l) for l in _shared_case["candidates"] if l["name"] in _shared_case["assistant"]]
+    MODEL_PICK_SHARED_UNAVAILABLE = [dict(l) for l in _shared_case["candidates"] if l["name"] not in _shared_case["assistant"]]
+    MODEL_PICK_HOME = MODEL_PICK_DEFAULT = "runtime"
+    LAUNCHER_MODELS["runtime"] = {"agent": "claude", "models": []}
 # MOCK_MODEL_PICK_GROUPS=1: several Claude launchers whose names share their first word, as an owner with a few gateways
 # has them, for the model panel rail's captions ("claude-aster" reads "aster" beside "claude-max")
 if MODEL_PICK_MODE and os.environ.get("MOCK_MODEL_PICK_GROUPS") == "1":
@@ -31595,8 +31827,11 @@ def model_pick_route(handler, p, body):
     if handler.command == "GET" and re.fullmatch(r"/api/v1/machines/[^/]+/launchers", p) and query.get("purpose") == ["assistant"]:
         return handler.send_json({
             "launchers": [dict(l) for l in MODEL_PICK_LAUNCHERS],
-            "default": {"provider": MODEL_PICK_DEFAULT, "model": "gpt-5.5" if MODEL_PICK_DEFAULT == "codex" else "opus", "effort": "high"},
+            "default": {"provider": MODEL_PICK_DEFAULT, "model": None if MODEL_PICK_SHARED else ("gpt-5.5" if MODEL_PICK_DEFAULT == "codex" else "opus"), "effort": "high"},
             "unavailable": [
+                dict(l, code="not_main_chat", reason=MODEL_PICK_REASONS["launcher_out_of_scope"][lang])
+                for l in MODEL_PICK_SHARED_UNAVAILABLE
+            ] if MODEL_PICK_SHARED else [
                 {"name": "gpt-direct", "display_name": "GPT direct", "kind": "api", "api": "responses", "code": "api_protocol", "reason": MODEL_PICK_REASONS["api_protocol"][lang]},
                 {"name": "far-gw", "display_name": "Far gateway", "kind": "launcher", "code": "launcher_out_of_scope", "reason": MODEL_PICK_REASONS["launcher_out_of_scope"][lang]},
             ]}) or True
@@ -31649,6 +31884,7 @@ MOCK_HELP.append("MOCK_MODEL_PICK=1|picked|otherkind  Persona 对话自己的模
                  "GET /mock/model_pick 看请求，?reset=1 复原；?default=claude|codex|gone 改启动器列表的默认")
 MOCK_HELP.append("MOCK_MODEL_PICK_GROUPS=1  配合 MOCK_MODEL_PICK：几个同为 claude- 开头的启动器（claude-aster / claude-max / claude-desktop）和 codex，看模型面板分组栏的短名")
 MOCK_HELP.append("MOCK_MODEL_FAMILIES=1  配合 MOCK_MODEL_PICK：多个模型家族的长模型列表（claude-max 的 Claude 全系、codex 的 GPT-6、混合厂商的本机网关 aster、work-claude、agy），截模型面板用；主对话默认 claude-max")
+MOCK_HELP.append("MOCK_ASSISTANT_LAUNCHER_FIXTURE=1  配合 MOCK_MODEL_PICK：读取 spec/fixtures/assistant-launchers/cases.json，三端共用同一组启动器候选；默认 runtime、无显式模型，managed Codex 只在 unavailable")
 MOCK_HELP.append("MOCK_MODEL_GATEWAY=1|raw  With MOCK_MODEL_PICK: the main chat defaults to gateway-api, a gateway provider whose Claude Code tiers all name one model; 1: the list as the hub folds it (one Opus 5.5 row, the route's row says its route, #10365), raw: as it served it before (five Opus 5.5 rows)")
 
 

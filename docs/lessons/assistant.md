@@ -1,5 +1,8 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- Persist a complete delivery round before its first external send (#10393). Saving only when the call returns handles a returned error but loses the result if the manager exits inside the call, after task acceptance has committed. Keep the original timestamp/key and acceptance metadata on disk while retaining an in-memory claim to block overlapping sends. Every other book save must preserve that prepared record too; retry must not send from memory when its preparation could not be saved. Use a child-process exit at the real provider boundary and a fresh manager on the same disposable database to prove recovery, with the returned-error case as a control.
+- A review wake is not a completion verdict (#8373). PR events and judged-done candidates share the same signal. Keep its wording neutral, preserve the actual reason and criterion evidence, and leave acceptance gates and display grouping unchanged.
+
 - Snapshot display projections must not initialize the knowledge base (#10108). Publication already holds
   `pubMu`; read an already-open engine and retain the canonical cached project-name fallback rather than calling
   an accessor that may initialize storage. Let direction synchronization refresh project names asynchronously.
@@ -422,6 +425,10 @@ its task decision together before sending it to a hook. A plan approval must sel
 mode can fall back to bypass permissions on the node. Count confirmation dispatch at `tellUser`, not interaction
 creation or app presentation; quiet tasks and supervisor routing also show cards without ringing the user.
 
+## Supervisor assignment must respect the policy channel (#10338)
+
+A runtime-backed chat can plan work and receive owner replies. A task reviewer needs a separate policy channel on every supervised turn. Check the session's execution source when dispatch assigns the reviewer, including plans that waited for approval and scheduled chats listed as leaders. A permanent policy refusal ends that relay. The task and its worker reports stay available for review.
+
 ## The supervision fingerprint only sees the agent's words (#6027)
 
 `digestFingerprint` (`supervise_dedup.go`) folds a signal into the one told in the last 30 minutes when its agent's
@@ -691,6 +698,15 @@ When `session.start` never answers, the hub lists the machine and adopts the ses
 
 #3811 gave interval follow-ups in leader conversations a hidden 10-minute cadence while an open supervised todo had an active agent: `nextWithLeaderCadence` derived extra runs from `LastRun` while leaving the stored `At` / `EveryMinutes` on the original rule, and the run copy's `cadenceEvery` made `taskPrompt` print "每 10 分钟". The stored task still showed 30 minutes / 1 hour in `list_followups`, so nothing visible explained why a patrol the user asked for every 30 minutes fired every 10 minutes from its first run, and it became the main chat's biggest token sink. Lesson: a scheduler may have exactly one effective cadence, and it must be the one stored on the task and shown in every view and run prompt; an "accelerate while busy" rule that is invisible to both storage and UI is indistinguishable from a bug. If such a rule is ever wanted again, it must be an explicit, user-visible setting with its own stored field, not a second rule derived inside the scheduler. Keep interval advancement in one place (`runDue` advancing `At` by `EveryMinutes`); tests assert the prompt text states the configured interval even while supervised work is open.
 
+## Scheduled runs need observable to-do progress (#9755)
+
+- A successful scheduled run is not progress on its linked to-do (#9755). Compare transcript output, criterion
+  states and explicit progress-report content, not updated timestamps or the follow-up's own summary. Keep the
+  streak and baseline with the schedule, not only in capped shared history; test restart, history eviction,
+  replayed completions and failed persistence before emitting a supervisor signal or an owner decision. Keep the
+  first escalation attempt's identity across runs: its committed owner review repairs a lost final marker without
+  duplicating that decision or mistaking an unrelated owner question for its own.
+
 ## A stopped leader's own To-do does not list its workers (#8400)
 
 Workers planned by a task leader have separate To-dos: their `todo_agents.source` is `worker` and `via` is the leader's
@@ -743,6 +759,14 @@ as delivered instead of moving to the replacement. A check that a resource is fr
 mark the conversation as being replaced under that same lock (`relayBook.replacing`), have every drain and every direct
 delivery respect the mark (the direct ones queue), and clear it only where what waited has moved or the replacement
 failed, draining it again then (`TestNothingGoesIntoABackgroundSupervisorBeingReplaced`).
+
+## Manual compaction is not a main-only policy (#10064)
+
+The manual HTTP and node paths already accept side conversations, but all three client menus hid the action behind
+the main-chat check. Android also read and displayed only the main chat's progress. When extending a conversation
+action, trace its eligibility, request target and progress source together; progress must reset when the selected
+conversation changes. Keep automatic main-chat policy and the main-only clear/new actions separate. Menu regressions
+must exercise a real non-main selection and fail when the old guard is restored.
 
 ## A check that passes must have sent what the chat sends (#10365)
 

@@ -65,12 +65,27 @@ def domain_cases(domain):
 
 
 def todo_views():
-    """(definition, sample) of every view todo-view expects, and every counts and places todo-counts expects."""
+    """(definition, sample) of every view todo-view expects, every counts and places todo-counts expects, every
+    timeline, result and recap todo-rounds expects, every answer and reply todo-asks holds, and every decision
+    push's todo todo-push expects."""
     for where, c in domain_cases("todo-view"):
         yield "TodoSummary", f"{where}.expected.view", c["expected"]["view"]
     for where, c in domain_cases("todo-counts"):
         yield "TodoCounts", f"{where}.expected.counts", c["expected"]["counts"]
         yield "TodoPlaces", f"{where}.expected.places", c["expected"]["places"]
+    for where, c in domain_cases("todo-rounds"):
+        e = c["expected"]
+        yield "TodoTimeline", f"{where}.expected.timeline", e["timeline"]
+        for i, r in enumerate(e.get("results", [])):
+            yield "TodoResult", f"{where}.expected.results[{i}]", r
+        if "recap" in e:
+            yield "TodoRecap", f"{where}.expected.recap", e["recap"]
+    for where, c in domain_cases("todo-push"):
+        yield "TodoDecidePush", f"{where}.expected.todo", c["expected"]["todo"]
+    for where, c in domain_cases("todo-asks"):
+        yield "TodoAskAnswer", f"{where}.input.answer", c["input"]["answer"]
+        if "answered" in c["expected"]:
+            yield "TodoAskAnswered", f"{where}.expected.answered", c["expected"]["answered"]
 
 
 SAMPLES = {"recents.schema.json": recent_setups, "todo-view.schema.json": todo_views}

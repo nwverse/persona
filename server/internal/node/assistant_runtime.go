@@ -105,7 +105,7 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 		return "", errRuntimeAway(launcher)
 	}
 	n.assistantRuntimeSkills(cwd)
-	memDir := n.memoryDir(cwd)
+	memDir := n.memoryForUse(cwd)
 	turn := map[string]any{"assistant": true, "memory_dir": memDir}
 	if pickedModel != "" {
 		turn["model"] = pickedModel
@@ -167,6 +167,9 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 		return "", fmt.Errorf("%s: %w", h.label(), err)
 	}
 	commit()
+	if st.AwaitingFirstMessage {
+		n.noteRuntimeWorking(h, id)
+	}
 	awaitList(n.notifySessionsSoon()) // as a Claude conversation's send: not the whole list's time
 	return id, nil
 }

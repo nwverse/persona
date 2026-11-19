@@ -134,6 +134,17 @@ func (s *Service) taskInboxTurnEnded(ctx context.Context, t Todo, last proto.Ses
 	if !pending {
 		return false
 	}
+	if silent {
+		// Recovery also sees turns stopped by their conversation, before their
+		// receipt or after its Stop was consumed and its verdict restored.
+		_, stopped := s.stopFor(last.MachineID, last.SessionID, s.taskStretch(t))
+		if quietTurnKind(items, stopped) == proto.TurnErrorStopped {
+			return false
+		}
+		if m, ok := s.quietMarks(last.MachineID)[last.SessionID]; ok && m.kind == proto.TurnErrorStopped && m.holds(last) {
+			return false
+		}
+	}
 	ask, _ := turnExchange(items)
 	if ask == "" {
 		return false

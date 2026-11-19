@@ -392,8 +392,10 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
 path, and Gradle treats that path as the only input. A change to the Rust code rebuilt the library at the same path, and
 Gradle then called the tests up to date and skipped them. A deliberately broken rule still "passed". The fix:
 
-- The Exec task that builds the library declares it with `outputs.file(...)`.
-- The test task takes that task's outputs as inputs, with `inputs.files(buildHostCore)`.
+- The task that builds the library declares it as its output (`HostCoreLibrary` copies cargo's result into the build
+  directory, with the core's sources, manifests, lockfile and toolchain file as its inputs; #10712).
+- The test task takes that output as an input by its contents (`FileContentProperty`, `PathSensitivity.NONE`), which
+  also passes its path to the test JVM.
 
 **To check the setup**, break one rule on purpose and confirm the binding tests fail before trusting them.
 
@@ -1219,3 +1221,16 @@ To check that a failure is this, move `dev.json` aside in the app's data contain
 
 - `-showFleetSample needsYou` is only an initial DEBUG sample. A paired hub's next Fleet event or foreground fetch replaces it; the default mock's empty Fleet turns it into All Caught Up before the Lock Screen appears. For an action test, enable the mock's permission Fleet and take the interaction id from that response, so the resolve assertion names the request whose Deny is visible.
 - The first Live Activities authorization prompt can appear after the Lock Screen wake, not before a single immediate `exists` check. Wait for either the activity's Deny or the system's Allow, answer the system prompt, and then wait for Deny. Clear any launch alert before Home, and keep the unlock teardown registered immediately after locking.
+
+## Raw TCP test listeners get the port probe too (2026-11-19, #10659)
+
+`TestProxyRouteCarriesTheLinkAndItsStreams` saw one more "direct attempt" than the link made. The extra connection was the
+local node's port probe (`GET /`, `User-Agent: persona-ports`), which finds any new listener, plain TCP included, not only
+HTTP fakes. A raw listener that counts connections (`gatedDirectListener`, `link/ssh_test.go`) now counts only those
+that open with a TLS record (first byte `0x16`) and replays that byte before forwarding. Two traps on the way:
+
+- The first guess, a Happy Eyeballs second dial for a name with both address families, was wrong. Read the stray
+  connection's first bytes before explaining it.
+- Wrap the replayed connection by embedding the `net.Conn` interface, not `*net.TCPConn`. Embedding the concrete type
+  promotes `WriteTo`, which `io.Copy` uses instead of the overriding `Read`, so the replayed byte is silently dropped
+  and every forwarded TLS handshake fails.

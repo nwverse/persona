@@ -710,6 +710,10 @@ func formatTodo(t Todo) Todo {
 	})
 	out.Agents = append(out.Agents, curr...)
 	out.Agents = append(out.Agents, past...)
+	if ownerDecisionReturned(out.Supervision) {
+		out.Supervision = out.Supervision.clone()
+		out.Supervision.State = "" // its old review stays in history; only a fresh review may ask the owner again
+	}
 	return out
 }
 
@@ -907,6 +911,7 @@ func (s *Service) todoRoutes() {
 	s.todoRetitleRoute()
 	s.todoImportRoutes()
 	s.todoViewRoutes()
+	s.todoAskRoutes()
 	// GET /api/v1/todos: list all todos (newest created_at first), agents sorted (active first, then released); a todo
 	// waiting for the owner carries its ask (todo_ask.go), an open one nobody works on why (tasks_orphan.go); each its
 	// view, and the list its counts (todo_view_routes.go)
