@@ -73,7 +73,8 @@
 #                              scripts/release/debug_switches.{txt,py} and release.sh also test_debug_switches.py,
 #                              test_release_debug_guard.py and scripts/test/test_apple_release_switch_names.py;
 #                              scripts/test/go_trimpath.sh also scripts/ci/test_ci.py and scripts/test/test_check_fast.py
-#                              (they run server.sh and check-fast.sh with it)
+#                              (they run server.sh and check-fast.sh with it); scripts/heavy_slot.py also
+#                              scripts/test/test_check_fast.py (it runs check-fast.sh with it)
 #   docs/**, any *.md          scripts/test/test_doc_paths.py and test_doc_go_paths.py (paths quoted in the docs, the
 #                              CLAUDE.md doc index), test_doc_sections.py (section names quoted after a doc path),
 #                              test_doc_wire.py (the wire lists in protocol.md, extensions.md)
@@ -91,8 +92,11 @@
 # scripts/privacy_check.py runs on every invocation that has changes (it is a seconds-long local scan, no network).
 #
 # Independent checks run in parallel; each command gets a GNU timeout (override with the CHECK_FAST_TIMEOUT_*
-# variables below). Every check prints one PASS / FAIL / TIMEOUT / SKIP line with its duration, followed by a
-# summary. The temp log directory is kept when a check fails or times out and removed on a fully clean run.
+# variables below). The go test / go build and vitest commands first take a machine-wide slot of their kind
+# (scripts/heavy_slot.py; docs/operations/testing.md "Heavy build slots"), so parallel worktrees queue instead of
+# thrashing; the wait comes before the timeout, and a wait past PERSONA_HEAVY_SLOT_TIMEOUT is a TIMEOUT.
+# Every check prints one PASS / FAIL / TIMEOUT / SKIP line with its duration, followed by a summary. The temp log
+# directory is kept when a check fails or times out and removed on a fully clean run.
 #
 # Exit codes: 0 all checks passed, skipped or not needed; 1 one or more checks FAILED; 124 no failure but at least
 # one check TIMEOUT (a timeout is reported, not silently treated as success; run the full suite when that happens).
@@ -162,6 +166,9 @@ HAVE_BUN=0; have bun && HAVE_BUN=1
 if [ "$HAVE_GO" -eq 1 ] && GO_TRIMPATH_FLAGS=$(sh scripts/test/go_trimpath.sh 2>/dev/null); then
   export GOFLAGS="$GO_TRIMPATH_FLAGS"
 fi
+# A job that sets JOB_SLOT (go, web) runs its steps in a machine-wide slot of that kind (#10714); without the helper
+# or python3 they run as before.
+HEAVY_SLOT="$PWD/scripts/heavy_slot.py"
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/check-fast.XXXXXX")
 # Keep WORK after a failure or timeout (its logs are the trail to read); a clean run removes it on exit.
@@ -269,11 +276,18 @@ step() {
   #   go test panics "panic: test timed out after …" when ITS suite deadline kills the run;
   #   node's TAP reporter emits "failureType: 'testTimeoutFailure'". A node per-test timeout under the default
   #   reporter is a clean exit 1 naming the test, so it rightly stays a FAIL, not a whole-job TIMEOUT.
-  local _out="$WORK/job.${JOB_I:-x}.steps.log"
-  "$TIMEOUT_BIN" -k 5s "$_seconds" "$@" 2>&1 | tee -a "$_out"
+  local _out="$WORK/job.${JOB_I:-x}.steps.log" _slot
+  # The slot comes before the timeout, so waiting in its queue is not counted as a hung step.
+  _slot=()
+  if [ -n "${JOB_SLOT:-}" ] && [ "$HAVE_PY" -eq 1 ] && [ -f "$HEAVY_SLOT" ]; then
+    _slot=(python3 "$HEAVY_SLOT" run --kind "$JOB_SLOT" --)
+  fi
+  ${_slot[@]+"${_slot[@]}"} "$TIMEOUT_BIN" -k 5s "$_seconds" "$@" 2>&1 | tee -a "$_out"
   local _rc=${PIPESTATUS[0]}
   local _hint="${JOB_HINT:+ ($JOB_HINT)}"
   if [ "$_rc" -eq 124 ]; then
+    # The helper's own 124: no slot came free in time, so the command never ran (not a hung check).
+    grep -q '^heavy_slot: timed out' "$_out" 2>/dev/null && _hint=" (no $JOB_SLOT slot came free; it did not run)$_hint"
     printf 'TIMEOUT\t%s\t%s\t%s%s\n' "$_rc" "$SECONDS" "$_desc" "$_hint" > "$JOB_STATUS"
     exit 0
   fi
@@ -352,6 +366,7 @@ job_web() {  # $1 = ci when npm ci must run first; WEB_MODE (full or related) an
   # A node_modules from before the last lock bump runs old packages: stop with the list instead (#4776).
   in_dir web step "$TIMEOUT_OTHER" "web: node_modules matches package-lock.json" npm run check:deps || return $?
   in_dir web step "$TIMEOUT_OTHER" "web: tsc -b (typecheck)" npm run typecheck || return $?
+  JOB_SLOT=web
   if [ "$WEB_MODE" = related ]; then
     # The plan's files after its first line, relative to web/: the changed ones and those that read files from disk.
     local _files=() _f
@@ -388,6 +403,7 @@ job_sdk_ts() {
 
 job_go() {  # $1 = a package dir (internal/foo, cmd/bar, plugins/baz) or ALL for ./...
   [ "$HAVE_GO" -eq 1 ] || skip "go not found"
+  JOB_SLOT=go
   local _pattern _label _inner
   if [ "$1" = ALL ]; then _pattern=./...; _label="go test ./..."; else _pattern="./$1/..."; _label="go test ./$1/..."; fi
   _inner=$((TIMEOUT_GO_TEST - 10)); [ "$_inner" -lt 5 ] && _inner=5
@@ -408,6 +424,7 @@ GO_GUARD_TESTS='^(TestHubAnswersOnlyItsOwnRoutes|TestHubDoesNotImportTheManager|
 # job_go_guards runs both guard commands, the second one also when the first failed, so one run names every failure.
 job_go_guards() {
   [ "$HAVE_GO" -eq 1 ] || skip "go not found"
+  JOB_SLOT=go
   local _inner=$((TIMEOUT_GO_TEST - 10)) _rc=0
   [ "$_inner" -lt 5 ] && _inner=5
   in_dir server step "$TIMEOUT_GO_TEST" "go test ${GO_GUARD_PKGS[*]}" \
@@ -419,11 +436,13 @@ job_go_guards() {
 
 job_go_build() {
   [ "$HAVE_GO" -eq 1 ] || skip "go not found"
+  JOB_SLOT=go
   in_dir server step "$TIMEOUT_GO_TEST" "go build ./..." go build ./...
 }
 
 job_sdk_go() {  # sdk/go is its own Go module (its own go.mod), not part of server/.
   [ "$HAVE_GO" -eq 1 ] || skip "go not found"
+  JOB_SLOT=go
   local _inner=$((TIMEOUT_GO_TEST - 10)); [ "$_inner" -lt 5 ] && _inner=5
   in_dir sdk/go step "$TIMEOUT_GO_TEST" "sdk/go: go test ./..." go test -count=1 -timeout "${_inner}s" ./...
 }
@@ -859,7 +878,8 @@ else
     # check_bundle_privacy.py imports privacy_check; test_merge_pr_sh.py copies privacy_check.py into its temp
     # repositories, where merge-pr.sh runs it, and checks that pr_watch_merge.py's merge lock excludes merge-pr.sh's.
     # It copies changed_ratchets.py and the two ratchets it imports there too (#7977); test_changed_ratchets.py imports them.
-    # test_ci.py and test_check_fast.py run server.sh and this script with go_trimpath.sh, which composes their GOFLAGS.
+    # test_ci.py and test_check_fast.py run server.sh and this script with go_trimpath.sh, which composes their GOFLAGS;
+    # test_check_fast.py runs this script with heavy_slot.py too.
     case "$f" in
       scripts/hooks/*)
         script_test_add scripts/test/test_privacy_check.py; script_test_add scripts/test/test_check_deno_adapter_sh.py ;;
@@ -871,6 +891,7 @@ else
         script_test_add scripts/ci/test_changed_ratchets.py; script_test_add scripts/test/test_merge_pr_sh.py ;;
       scripts/test/go_trimpath.sh)
         script_test_add scripts/ci/test_ci.py; script_test_add scripts/test/test_check_fast.py ;;
+      scripts/heavy_slot.py) script_test_add scripts/test/test_check_fast.py ;;
     esac
     # The Release binary's DEBUG checks (#10616, #10654): a list that matches no script name, whose union merges can
     # leave it out of order, the checker test_apple_release_switch_names.py imports, and release.sh, which runs it.

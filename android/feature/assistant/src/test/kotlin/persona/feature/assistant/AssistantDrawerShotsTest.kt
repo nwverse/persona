@@ -488,6 +488,48 @@ class AssistantDrawerShotsTest {
         rule.onNodeWithText("结束…").assertExists()
     }
 
+    private fun showRecentBackgroundSupervisor() {
+        val background = Session(machineId = "hub", sessionId = "bg", title = "Background supervisor", origin = "supervisor",
+            status = "working", updatedAt = minutesAgo(3), lastText = "登录页修复：三条验收标准都有证据，已验收。")
+        val snapshot = persona.core.contracts.api.AssistantSnapshot(main.key, listOf(main, background) + recent,
+            backgroundSupervisor = "bg", recentTaskChats = true)
+        val groups = conversationGroups(snapshot, "", ConversationWords("新对话", "接力", "接力：%s", "后台督办"))
+        rule.setContent {
+            PersonaTheme(darkTheme = false, reduceMotion = true, style = AppStyle.Glass) {
+                Box(Modifier.testTag("shot").width(400.dp).height(900.dp).background(PersonaTheme.palette.background)) {
+                    AssistantDrawer("", {}, groups, active = null, hasMain = true, onEnd = {}, onMain = {}, onOpen = {},
+                        onInfo = {}, onNew = {}, onSettings = {}, onArchive = {}, onLeader = {}, onRename = {}, onEditTags = {})
+                }
+            }
+        }
+    }
+
+    @Test fun recentBackgroundSupervisorUsesBuiltInNameAndTaskOrigin() {
+        showRecentBackgroundSupervisor()
+        rule.onNodeWithText("后台督办").assertExists()
+        rule.onAllNodesWithText("Background supervisor").assertCountEquals(0)
+        rule.onAllNodesWithContentDescription("定时任务", useUnmergedTree = true).assertCountEquals(1)
+    }
+
+    @Test fun recentBackgroundSupervisorOmitsManagementActions() {
+        showRecentBackgroundSupervisor()
+        rule.onAllNodesWithContentDescription("对话操作")[1].performClick()
+        rule.onNodeWithText("拷贝会话 ID").assertExists()
+        rule.onAllNodesWithText("设为常驻").assertCountEquals(0)
+        rule.onAllNodesWithText("归档").assertCountEquals(0)
+        rule.onAllNodesWithText("重命名…").assertCountEquals(0)
+        rule.onAllNodesWithText("编辑标签…").assertCountEquals(0)
+        rule.onAllNodesWithText("结束…").assertCountEquals(0)
+        rule.onNodeWithText("拷贝会话 ID").performClick()
+        // An ordinary Recent row keeps the same management actions.
+        rule.onAllNodesWithContentDescription("对话操作")[2].performClick()
+        rule.onNodeWithText("设为常驻").assertExists()
+        rule.onNodeWithText("归档").assertExists()
+        rule.onNodeWithText("重命名…").assertExists()
+        rule.onNodeWithText("编辑标签…").assertExists()
+        rule.onNodeWithText("结束…").assertExists()
+    }
+
     @Test fun drawsSearchResultsInEveryStyle() {
         val said = AssistantSearchHit(itemId = "m1", snippet = "前面的话青石巷后面还有一句", ranges = listOf(listOf(4, 7)))
         val route = Session(machineId = "hub", sessionId = "route", title = "路线", status = "idle",
