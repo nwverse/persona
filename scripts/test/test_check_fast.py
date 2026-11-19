@@ -438,8 +438,9 @@ class CheckFastScriptsTests(unittest.TestCase):
         found = {str(p.relative_to(self.repo)): is_suite(p) for p in self.repo.joinpath("scripts").rglob("test_*.py")}
         dedicated = {"scripts/test/test_external_service_refs.py", "scripts/test/test_sdk_bundle.py",
                      "scripts/test/test_extension_schema.py"}
-        expected = sorted(p for p, suite in found.items()
-                          if suite and p not in dedicated and not p.startswith("scripts/app/test_android_"))
+        dedicated.update("scripts/app/test_android_%s.py" % name  # job_i18n runs these four
+                         for name in ("i18n_check", "token_baseline", "motion_baseline", "slot_order"))
+        expected = sorted(p for p, suite in found.items() if suite and p not in dedicated)
         bin_dir = Path(self.toolchain_without_node_and_go())
         (bin_dir / "python3").unlink()
         (bin_dir / "python3").write_text(FAKE_PYTHON)
@@ -503,6 +504,38 @@ class CheckFastScriptsTests(unittest.TestCase):
                 self.assertEqual(1, code, out)
                 self.assertIn("FAIL     scripts/ci/test_changed_ratchets.py", out)
                 self.assertIn("FAIL     scripts/test/test_merge_pr_sh.py", out)
+
+    def test_a_changed_module_runs_the_suites_that_import_it(self):
+        # From the suite's own directory, or from one it names (it puts scripts/<dir> on sys.path to import from it).
+        # A suite that imports a module of that name without naming its directory imports another one (#11026).
+        self.commit_on_top("scripts/tools/helper.py", "VALUE = 1\n", "base")
+        self.commit_on_top("scripts/tools/test_uses_helper.py", "import helper\n" + FAILING, "base")
+        self.commit_on_top("scripts/ci/test_named.py", 'import sys\nsys.path.insert(0, "scripts/tools")\n'
+                           "from helper import VALUE\n" + FAILING, "base")
+        self.commit_on_top("scripts/release/test_unrelated.py", "import os, helper\n" + FAILING, "base")
+        self.write("scripts/tools/helper.py", "VALUE = 2\n")
+        code, out = self.check_fast()
+        self.assertEqual(1, code, out)
+        self.assertIn("FAIL     scripts/tools/test_uses_helper.py", out)
+        self.assertIn("FAIL     scripts/ci/test_named.py", out)
+        self.assertNotIn("test_unrelated.py", out)
+        self.assertNotIn("scripts/tools/test_other.py", out)
+
+    def test_a_suite_a_dedicated_check_runs_schedules_that_check(self):
+        # test_external_service_refs.py imports compatibility_identifiers.py and runs as its own check; four of the
+        # scripts/app/test_android_* suites run in the android check, the others as suites.
+        self.commit_on_top("scripts/test/compatibility_identifiers.py", "NAMES = []\n", "base")
+        self.commit_on_top("scripts/test/test_external_service_refs.py",
+                           "from compatibility_identifiers import NAMES\n" + PASSING, "base")
+        self.commit_on_top("scripts/app/test_android_new_tool.py", PASSING, "base")
+        self.write("scripts/test/compatibility_identifiers.py", "NAMES = ['x']\n")
+        self.write("scripts/app/android_new_tool.py", "# changed\n")
+        code, out = self.check_fast("--dry-run", "--base", "base")
+        self.assertEqual(0, code, out)
+        self.assertIn("queued: external service refs", out)
+        self.assertNotIn("queued: scripts/test/test_external_service_refs.py", out)
+        self.assertIn("queued: scripts/app/test_android_new_tool.py", out)
+        self.assertIn("queued: android i18n", out)
 
     def test_a_go_trimpath_change_also_runs_the_suites_of_its_callers(self):
         # server.sh and check-fast.sh compose GOFLAGS with the helper (#10614); test_ci.py and this suite run them.
@@ -730,6 +763,18 @@ class CheckFastServerInputsTests(unittest.TestCase):
         self.write("schema/wire/x.schema.json", '{"changed": true}\n')
         out, packages = self.check_fast()
         self.assertEqual(["./internal/wirereader/..."], packages, out)
+
+    def test_any_schema_family_runs_its_readers(self):
+        # internal/configuration reads schema/configuration, a family the reader rules once left out (#11026).
+        self.write("server/internal/configuration/configuration_test.go",
+                   'package configuration\n\nvar raw, _ = os.ReadFile("../../../schema/configuration/all-types.json")\n')
+        self.write("schema/configuration/all-types.json", "{}\n")
+        self.git("add", "-A")
+        self.git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "reader")
+        self.git("tag", "-f", "base")
+        self.write("schema/configuration/all-types.json", '{"changed": true}\n')
+        out, packages = self.check_fast()
+        self.assertEqual(["./internal/configuration/..."], packages, out)
 
     def test_the_server_test_launcher_runs_its_reader(self):
         self.write("scripts/test/server_test_env.py", "# changed\n")
@@ -1389,6 +1434,13 @@ class CheckFastPlanTests(unittest.TestCase):
         # that reads it, so only the lanes it cannot run are named.
         out = self.check_fast("--dry-run", "--changed-from", "-", stdin="spec/fixtures/input-clip/cases.json\n")
         self.assertIn("does not run: server, android, apple (", out)
+
+    def test_each_path_names_the_ci_lanes_it_runs_no_part_of(self):
+        out = self.check_fast("--dry-run", "--changed-from", "-", "--each",
+                              stdin="android/app/build.gradle.kts\nserver/internal/foo/foo.go\n")
+        android, server = out.split("== server/internal/foo/foo.go\n")
+        self.assertIn("INFO  CI lanes this change selects that check-fast does not run: android (", android)
+        self.assertNotIn("CI lanes this change selects", server)
 
     def test_a_runtime_package_that_reads_a_fixture_or_schema_runs(self):
         out = self.check_fast("--dry-run", "--changed-from", "-", stdin="spec/fixtures/input-clip/cases.json\n")

@@ -378,6 +378,9 @@ def main():
     parser.add_argument("--lanes-for", action="store_true",
                         help="read changed paths from stdin, one per line, and print the lanes CI runs for them "
                              "(not image), space-separated on one line (check-fast names the ones it does not run)")
+    parser.add_argument("--lanes-for-each", action="store_true",
+                        help="read paths from stdin, one per line, and print --lanes-for of each path on its own, one "
+                             "line per path in the same order (check-fast --each)")
     parser.add_argument("--web-plan-each", action="store_true",
                         help="read paths from stdin, one per line, and print the first line of --web-plan for each "
                              "path on its own, one line per path in the same order (check-fast --each)")
@@ -392,6 +395,11 @@ def main():
     if args.lanes_for:
         selected = select([line for line in sys.stdin.read().splitlines() if line])
         print(" ".join(lane for lane in LANES if selected[lane]))
+        return
+    if args.lanes_for_each:
+        for path in [line for line in sys.stdin.read().splitlines() if line]:
+            selected = select([path])
+            print(" ".join(lane for lane in LANES if selected[lane]))
         return
     if args.web_plan_each:
         for mode, reason, _ in web_plans([line for line in sys.stdin.read().splitlines() if line]):

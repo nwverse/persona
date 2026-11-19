@@ -53,7 +53,7 @@
 #                              fall, never rise; comments, strings and a // sleep-ok: reason line do not count; a new
 #                              file starts at zero; --update only lowers). A rename out of those trees counts too.
 #                              --all runs it when the script is present.
-#   spec/fixtures/**, schema/extension/**, schema/wire/**, integrations/**, docs/<file>, scripts/test/server_test_env.py
+#   spec/fixtures/**, schema/<dir>/**, integrations/**, docs/<file>, scripts/test/server_test_env.py
 #                              also go test on each server package whose _test.go names that input (server-test.yml's
 #                              path filter), found at run time with git grep (comment lines are ignored)
 #   apple/**, android/**       also go test on each server package whose _test.go names the file whole, in quotes
@@ -76,7 +76,9 @@
 #                              ambiguous (a case "*" matches slashes, so scripts/* covers nested paths too); plus
 #                              each changed scripts/<dir>/test_*.py and the test_<name>.py of each changed script
 #                              <name>.py / <name>.sh (- read as _; db.sh's is test_db_sh.py), run from its
-#                              directory as CI does (#3968). scripts/hooks/** also runs
+#                              directory as CI does (#3968), and every scripts/**/test_*.py that imports a changed
+#                              <name>.py from its own directory or from one it names, found at run time (a suite a
+#                              dedicated check runs schedules that check; #11026). scripts/hooks/** also runs
 #                              scripts/test/test_privacy_check.py and test_check_deno_adapter_sh.py (they run the
 #                              hooks; the latter also for scripts/gen/deno_adapter.sh); scripts/privacy_check.py also
 #                              scripts/release/test_check_bundle_privacy.py (it imports privacy_check);
@@ -760,12 +762,17 @@ plan_notes() {
 # indentation it had at the top level.
 plan_changes() {
 # The CI lanes the change selects (paths.py --lanes-for, the selection CI and the PR watcher read), asked in the
-# background while the plan is made; the lanes check-fast runs no part of are named at the end.
-LANES_PID=""
-if [ "$ALL" -eq 0 ] && [ "$EACH" -eq 0 ] && [ "$HAVE_PY" -eq 1 ] && [ -f scripts/ci/paths.py ]; then
-  printf '%s\n' "$CHANGED" | "$TIMEOUT_BIN" -k 5s "$TIMEOUT_OTHER" python3 scripts/ci/paths.py --lanes-for \
-    > "$WORK/lanes.txt" 2> /dev/null &
-  LANES_PID=$!
+# background while the plan is made; the lanes check-fast runs no part of are named at the end. --each reads the next
+# line of the lanes paths.py --lanes-for-each listed for every path at once (fd 7).
+LANES_PID=""; LANES_READ=0
+if [ "$ALL" -eq 0 ] && [ "$HAVE_PY" -eq 1 ] && [ -f scripts/ci/paths.py ]; then
+  if [ "$EACH" -eq 1 ]; then
+    IFS= read -r _lanes <&7 && printf '%s\n' "$_lanes" > "$WORK/lanes.txt" && LANES_READ=1
+  else
+    printf '%s\n' "$CHANGED" | "$TIMEOUT_BIN" -k 5s "$TIMEOUT_OTHER" python3 scripts/ci/paths.py --lanes-for \
+      > "$WORK/lanes.txt" 2> /dev/null &
+    LANES_PID=$!
+  fi
 fi
 if [ "$ALL" -eq 1 ]; then
   WEB=1; SDKTS=1; ANDROID=1; PRNEEDS=1; EXTSCHEMA=1; SITE=1; SDKGO=1; EXTREFS=1; SDKBUNDLE=1
@@ -813,7 +820,7 @@ else
         # Mirror CI's extension-schema job: the conformance py, the sdk bundle py, and the Go wire round-trip.
         EXTSCHEMA=1; SDKBUNDLE=1; SDKGO=1 ;;
       scripts/app/*android*)
-        # The i18n/token checkers and their own test_android_* unittests all belong to the android check job.
+        # The i18n/token checkers and four of their test_android_* unittests belong to the android check job.
         ANDROID=1 ;;
       scripts/test/test_external_service_refs.py) EXTREFS=1 ;;
       scripts/gen/sdk_bundle.py|scripts/test/test_sdk_bundle.py) SDKBUNDLE=1 ;;
@@ -888,8 +895,8 @@ if [ "$ALL" -eq 0 ]; then
     _re=""
     case "$f" in
       spec/fixtures/*) _re='spec/fixtures|"spec", *"fixtures"' ;;
-      schema/extension/*) _re='schema/extension|"schema", *"extension"' ;;
-      schema/wire/*) _re='schema/wire|"schema", *"wire"' ;;
+      # Each schema family (extension, wire, configuration, ...): internal/configuration reads schema/configuration.
+      schema/*/*) _s=${f#schema/}; _s=${_s%%/*}; _re="schema/$_s|\"schema\", *\"$_s\"" ;;
       integrations/*/*) _re='integrations/|"integrations"' ;;
       scripts/test/server_test_env.py) _re='server_test_env\.py' ;;
       docs/*) _re=$(printf '%s' "$f" | sed 's/[][\.^$*+?(){}|]/\\&/g') ;;  # docs/example-guide.md -> docs/example-guide\.md
@@ -953,14 +960,18 @@ if [ "$ALL" -eq 0 ] && printf '%s\n' "$CHANGED" | grep -q '^sdk/ts/src/'; then
   fi
 fi
 
-# script_test_add adds a scripts/<dir>/test_*.py that exists (a deleted one is not run) and that no dedicated job above
-# already runs (refs, bundle, extension schema, the android checkers). A file that never mentions unittest is a SKIP
-# line instead, the rule of is_suite in scripts/ci/python-tests.py: python -m unittest runs no tests in such a
-# verification script and exits 5 ("NO TESTS RAN") on Python 3.12 and later.
+# script_test_add adds a scripts/<dir>/test_*.py that exists (a deleted one is not run); for one a dedicated job runs
+# (refs, bundle, extension schema, the android checkers) it schedules that job instead. A file that never mentions
+# unittest is a SKIP line instead, the rule of is_suite in scripts/ci/python-tests.py: python -m unittest runs no tests
+# in such a verification script and exits 5 ("NO TESTS RAN") on Python 3.12 and later.
 script_test_add() {
+  # job_i18n runs four of the scripts/app/test_android_* suites; the others run here (#11026).
   case "$1" in
-    scripts/test/test_external_service_refs.py|scripts/test/test_sdk_bundle.py|scripts/test/test_extension_schema.py) return 0 ;;
-    scripts/app/test_android_*) return 0 ;;
+    scripts/test/test_external_service_refs.py) EXTREFS=1; return 0 ;;
+    scripts/test/test_sdk_bundle.py) SDKBUNDLE=1; return 0 ;;
+    scripts/test/test_extension_schema.py) EXTSCHEMA=1; return 0 ;;
+    scripts/app/test_android_i18n_check.py|scripts/app/test_android_token_baseline.py|\
+    scripts/app/test_android_motion_baseline.py|scripts/app/test_android_slot_order.py) ANDROID=1; return 0 ;;
   esac
   [ -f "$1" ] || return 0
   if ! grep -q unittest "$1"; then
@@ -977,6 +988,26 @@ script_test_add() {
 # --all runs every scripts/**/test_*.py suite, the same find as CI's Scripts tests job, minus the few script_test_add
 # skips because a dedicated check above runs them; renaming or dropping one of those checks must update that skip list.
 # test_check_fast.py compares this selection with python-tests.py's.
+
+# script_importers prints the scripts/**/test_*.py suites that import the module scripts/<dir>/<name>.py ($1) with
+# "import <name>" or "from <name> import" at the start of a line: from their own directory, or from one they name (a
+# suite puts scripts/<dir> on sys.path to import from it). Found at run time, so a new importer needs no edit here;
+# scripts/ci/affected_drift.py works the same suites out on its own and compares (#11026).
+script_importers() {
+  local _dir _mod _t
+  _dir=$(dirname "$1"); _mod=$(basename "$1" .py)
+  case "$_mod" in ""|*[!A-Za-z0-9_]*) return 0 ;; esac  # android-shards.py cannot be imported by name
+  git grep -lE "^[[:space:]]*(from[[:space:]]+$_mod[[:space:]]+import|import[[:space:]]+([A-Za-z0-9_]+[[:space:]]*,[[:space:]]*)*$_mod([[:space:],]|\$))" \
+      -- 'scripts/*test_*.py' 2>/dev/null \
+    | while IFS= read -r _t; do
+        case "${_t##*/}" in test_*.py) ;; *) continue ;; esac
+        [ "$_t" != "$1" ] || continue
+        if [ "$(dirname "$_t")" = "$_dir" ] || grep -qF "$_dir" "$_t" || grep -qE "/[[:space:]]*\"${_dir##*/}\"" "$_t"; then
+          printf '%s\n' "$_t"
+        fi
+      done
+}
+
 if [ "$ALL" -eq 1 ]; then
   while IFS= read -r f; do
     script_test_add "$f"
@@ -991,6 +1022,8 @@ else
         for _t in scripts/*/"test_$_name.py"; do script_test_add "$_t"; done
         case "$f" in *.sh) for _t in scripts/*/"test_${_name}_sh.py"; do script_test_add "$_t"; done ;; esac ;;
     esac
+    # The suites that import a changed module, wherever they are (script_importers).
+    case "$f" in scripts/*.py) while IFS= read -r _t; do script_test_add "$_t"; done < <(script_importers "$f") ;; esac
     # The Linux suites in CI's Scripts tests job that guard files outside scripts/; a file can need several.
     case "$f" in
       docs/*|*.md)
@@ -1201,7 +1234,7 @@ fi
 if [ "$UNMAPPED" -eq 1 ]; then
   INFO+=("INFO  no fast check maps to: ${UNMAPPED_FILES[*]} (privacy scan still ran; full suites in docs/operations/testing.md)")
 fi
-if [ -n "$LANES_PID" ] && wait "$LANES_PID"; then
+if [ "$LANES_READ" -eq 1 ] || { [ -n "$LANES_PID" ] && wait "$LANES_PID"; }; then
   _not_run=""
   for _lane in $(cat "$WORK/lanes.txt"); do
     case "$_lane" in
@@ -1219,13 +1252,16 @@ if [ -n "$LANES_PID" ] && wait "$LANES_PID"; then
 fi
 }
 
-# --each: plan every listed path on its own. paths.py plans the web check of all of them in one scan (web_plan).
+# --each: plan every listed path on its own. paths.py plans the web check of all of them in one scan (web_plan) and
+# lists the CI lanes of each in one run (plan_changes).
 if [ "$EACH" -eq 1 ]; then
   printf '%s\n' "$CHANGED" > "$WORK/each.txt"
   if [ "$HAVE_PY" -eq 1 ] && [ -f scripts/ci/paths.py ]; then
     "$TIMEOUT_BIN" -k 5s 900 python3 scripts/ci/paths.py --web-plan-each < "$WORK/each.txt" > "$WORK/web-plans.txt" \
       || { echo "check-fast: python3 scripts/ci/paths.py --web-plan-each failed" >&2; exit 2; }
-    exec 6< "$WORK/web-plans.txt"
+    "$TIMEOUT_BIN" -k 5s 900 python3 scripts/ci/paths.py --lanes-for-each < "$WORK/each.txt" > "$WORK/lanes-each.txt" \
+      || { echo "check-fast: python3 scripts/ci/paths.py --lanes-for-each failed" >&2; exit 2; }
+    exec 6< "$WORK/web-plans.txt" 7< "$WORK/lanes-each.txt"
   fi
   while IFS= read -r _each <&5; do
     plan_reset
