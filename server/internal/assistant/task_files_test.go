@@ -27,6 +27,14 @@ func TestTaskFilePaths(t *testing.T) {
 	}
 }
 
+func TestTaskFilePathsLanguageMarkers(t *testing.T) {
+	got := taskFilePaths("文件:/tmp/zh-ascii.md\nfile：「/tmp/fullwidth.md」\n")
+	want := []string{"/tmp/zh-ascii.md", "/tmp/fullwidth.md"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("paths: %q, want %q", got, want)
+	}
+}
+
 func TestTaskFilePathsMost(t *testing.T) {
 	var b strings.Builder
 	for i := 0; i < taskFilesMost+3; i++ {
@@ -34,6 +42,40 @@ func TestTaskFilePathsMost(t *testing.T) {
 	}
 	if got := taskFilePaths(b.String()); len(got) != taskFilesMost {
 		t.Fatalf("paths: %d, want %d", len(got), taskFilesMost)
+	}
+}
+
+func TestTaskSuccessorFilesLanguage(t *testing.T) {
+	for _, tc := range []struct {
+		locale string
+		want   []string
+	}{
+		{locale: "zh-Hans", want: []string{"file: <这台电脑上的绝对路径>", "最多 5 个", "Persona 会把它们送到对话那边"}},
+		{locale: "en", want: []string{"file: <absolute path on this computer>", "up to 5", "Persona will deliver them to the conversation"}},
+		{locale: "ja", want: []string{"file: <このコンピューター上の絶対パス>", "最大 5 ファイル", "Persona が会話へ配送するため"}},
+	} {
+		t.Run(tc.locale, func(t *testing.T) {
+			f := newFakeHub().withMachine()
+			f.sessions["box"] = nil
+			f.hello.Locale = tc.locale
+			s := newStorelessService(t, f)
+			todo := Todo{ID: "todo_1", Title: "Hand over a report"}
+			putTodo(s, todo)
+			last := proto.Session{MachineID: "box", SessionID: "old", Cwd: "/code", Launcher: "claude", Agent: "claude"}
+			if _, err := s.startTaskSuccessor(context.Background(), todo, last, "Continue"); err != nil {
+				t.Fatalf("startTaskSuccessor: %v", err)
+			}
+			starts := startsOf(f)
+			if len(starts) != 1 {
+				t.Fatalf("got %d starts, want 1", len(starts))
+			}
+			prompt, _ := starts[0]["prompt"].(string)
+			for _, want := range tc.want {
+				if !strings.Contains(prompt, want) {
+					t.Errorf("successor prompt is missing %q:\n%s", want, prompt)
+				}
+			}
+		})
 	}
 }
 

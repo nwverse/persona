@@ -56,6 +56,9 @@ export const isWorkflowStep = (s: Step): s is ToolStep => s.kind === "tool" && s
 /** A tool call drawn as an action row (not a subagent card, not a plan card, not a workflow's call). */
 export const isRowStep = (s: Step): s is ToolStep => s.kind === "tool" && !isAgentStep(s) && !isPlanStep(s) && !isWorkflowStep(s);
 const isCompactStep = (s: Step) => s.kind === "notice" && Boolean(s.item.compact);
+/** A Codex visualize fragment is response content, like the answer: Codex promotes it to a first-class
+ *  InlineVisualization timeline entry instead of a tool-trace row, so it stands in the open, never in the summary. */
+const isVisualizationStep = (s: Step) => s.kind === "visualization";
 
 /** The item a step stands for (a tool: its call). */
 function stepItem(s: Step): Item {
@@ -157,14 +160,15 @@ function timeline(work: Step[], answer: Step | undefined, turnStart: number | nu
 function groupTurn(items: Step[], turnStart: number | null, live: boolean, streaming: boolean, identity?: string): WorkNode[] {
   let latest = -1;
   if (!streaming) items.forEach((s, i) => isAnswer(s) && (latest = i));
-  const interleaved = latest >= 0 && items.slice(latest + 1).some((s) => s.kind !== "text");
+  // a visualization after the words is the response itself, not work that came after it
+  const interleaved = latest >= 0 && items.slice(latest + 1).some((s) => s.kind !== "text" && !isVisualizationStep(s));
   const work: Step[] = [];
   const kept: WorkNode[] = [];
   for (let i = 0; i < items.length; i++) {
     const s = items[i];
     if (i === latest && !interleaved) continue;
-    if (!isCompactStep(s)) work.push(s);
-    else kept.push({ kind: "step", step: s });
+    if (isCompactStep(s) || isVisualizationStep(s)) kept.push({ kind: "step", step: s });
+    else work.push(s);
   }
   const answer = latest >= 0 ? items[latest] : undefined;
   const group = work.length ? createGroup(work, answer, live, turnStart) : undefined;
