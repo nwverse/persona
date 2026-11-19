@@ -13,11 +13,18 @@
 #
 # Path mapping (diff mode):
 #   web/**                     npm ci (only with no node_modules or a changed package.json/package-lock.json),
-#                              node_modules against package-lock.json, typecheck, vitest run
-#   schema/extension/**, spec/fixtures/injected/**, spec/fixtures/sync/**, spec/fixtures/attention/**,
-#   spec/fixtures/chat-search/**, spec/fixtures/triage/**, spec/fixtures/todo-view/**, scripts/mock/inbox_events.json
-#                              also the web check: web/src and its vitest suite read these files. They are the inputs
-#                              outside web/ of the web lane in scripts/ci/paths.py; test_check_fast.py keeps the two in sync
+#                              node_modules against package-lock.json, typecheck, then the tests that python3
+#                              scripts/ci/paths.py --web-plan picks (#10619):
+#     web/src/** only          npx vitest related --run: the tests whose imports reach a changed file, plus every
+#                              vitest file that reads files from disk (fs, readFileSync, import.meta.glob, ?raw) or
+#                              builds through a Vite config (imports vite): the import graph does not see those
+#                              reads. They are found by scanning the tests at run time
+#     web/src/lib/store.ts, web/src/lib/api.ts, web/src/ui/atoms.tsx, web/src/i18n/**, a web/src module the Vite
+#     configs import, anything in web/ outside web/src (configs, package.json, package-lock.json, scripts/, e2e/)
+#                              npm test, the whole suite (as --all does)
+#   files outside web/ that web/src and its tests name (spec/fixtures/<case>/..., schema/extension/..., scripts/mock/...)
+#                              also the web check, related tests as above: scripts/ci/paths.py derives the list from
+#                              the paths web/src and its tests name, the web lane's inputs in CI too (--web-inputs)
 #   integrations/<pkg>/**      node --test test/*.test.{js,mjs} (packages without tests are skipped)
 #   site/**                    node --test site/worker.test.mjs
 #   sdk/ts/**                  bun test (skipped with a reason when bun is absent)
@@ -333,7 +340,7 @@ job_privacy() {
   step "$TIMEOUT_OTHER" "python3 scripts/privacy_check.py" python3 scripts/privacy_check.py || return $?
 }
 
-job_web() {  # $1 = ci when npm ci must run first
+job_web() {  # $1 = ci when npm ci must run first; WEB_MODE (full or related) and WEB_PLAN pick the tests
   if ! node_ok; then skip "node >= 22 not found (found: $(node -v 2>/dev/null || echo none))"; fi
   if [ "$1" = ci ]; then
     JOB_HINT="a stale web/node_modules can cause this; remove web/node_modules and rerun"
@@ -343,7 +350,15 @@ job_web() {  # $1 = ci when npm ci must run first
   # A node_modules from before the last lock bump runs old packages: stop with the list instead (#4776).
   in_dir web step "$TIMEOUT_OTHER" "web: node_modules matches package-lock.json" npm run check:deps || return $?
   in_dir web step "$TIMEOUT_OTHER" "web: tsc -b (typecheck)" npm run typecheck || return $?
-  in_dir web step "$TIMEOUT_WEB_TEST" "web: vitest run" npm test
+  if [ "$WEB_MODE" = related ]; then
+    # The plan's files after its first line, relative to web/: the changed ones and those that read files from disk.
+    local _files=() _f
+    while IFS= read -r _f; do [ -n "$_f" ] && _files+=("$_f"); done < <(tail -n +2 "$WEB_PLAN")
+    in_dir web step "$TIMEOUT_WEB_TEST" "web: vitest related ($WEB_REASON)" \
+      npx --no -- vitest related --run --passWithNoTests ${_files[@]+"${_files[@]}"}
+  else
+    in_dir web step "$TIMEOUT_WEB_TEST" "web: vitest run" npm test
+  fi
 }
 
 job_integration() {  # $1 = package directory name under integrations/
@@ -633,11 +648,8 @@ else
   fi
   echo "check-fast: $(printf '%s\n' "$CHANGED" | wc -l | tr -d ' ') changed file(s) against $(git rev-parse --short "$MB") (merge-base with $BASE_REF)"
   while IFS= read -r f; do
-    # Repository files outside web/ that web/src and its vitest suite read: a change to one also runs the web check,
-    # on top of its own mapping below. The same list is the web lane's filter in scripts/ci/paths.py.
-    case "$f" in
-      schema/extension/*|spec/fixtures/injected/*|spec/fixtures/sync/*|spec/fixtures/attention/*|spec/fixtures/chat-search/*|spec/fixtures/triage/*|spec/fixtures/todo-view/*|scripts/mock/inbox_events.json) WEB=1 ;;
-    esac
+    # Files outside web/ that web/src and its tests read also run the web check, on top of their own mapping below:
+    # the web plan after this loop finds them.
     case "$f" in server/*|sdk/go/*) GO_GUARDS=1 ;; esac  # on top of the mapping below (job_go_guards)
     case "$f" in
       web/*) WEB=1 ;;
@@ -688,6 +700,35 @@ else
       *) UNMAPPED=1; UNMAPPED_FILES+=("$f") ;;
     esac
   done <<< "$CHANGED"
+fi
+
+# The web check's plan (#10619): scripts/ci/paths.py scans web/src and the web tests for the files they read, and
+# prints "none", "full" or "related" with a reason, then the files vitest related starts from. Without it (no python3,
+# or the scan failed), a change under web/ runs the whole suite and files outside web/ do not run the web check.
+WEB_MODE=full; WEB_REASON=""; WEB_PLAN="$WORK/web-plan.txt"
+if [ "$ALL" -eq 0 ]; then
+  if [ "$HAVE_PY" -eq 1 ] && [ -f scripts/ci/paths.py ]; then
+    if printf '%s\n' "$CHANGED" | "$TIMEOUT_BIN" -k 5s "$TIMEOUT_OTHER" python3 scripts/ci/paths.py --web-plan \
+        > "$WEB_PLAN" 2> "$WORK/web-plan.err"; then
+      read -r WEB_MODE WEB_REASON < "$WEB_PLAN"
+      case "$WEB_MODE" in
+        full|related) WEB=1 ;;
+        *) WEB_MODE=full ;;  # none: nothing the web check reads changed
+      esac
+    else
+      WEB_MODE=full
+      INFO+=("INFO  web plan: python3 scripts/ci/paths.py --web-plan failed ($(tail -n 1 "$WORK/web-plan.err" 2>/dev/null)): a web/ change runs the whole suite, and files outside web/ do not run the web check")
+    fi
+  elif [ "$WEB" -eq 1 ]; then
+    INFO+=("INFO  web plan: python3 or scripts/ci/paths.py not found: the whole web suite runs, and files outside web/ do not run the web check")
+  fi
+  if [ "$WEB" -eq 1 ]; then
+    if [ "$WEB_MODE" = related ]; then
+      echo "check-fast: web tests: vitest related, $WEB_REASON"
+    else
+      echo "check-fast: web tests: the whole suite${WEB_REASON:+, $WEB_REASON}"
+    fi
+  fi
 fi
 
 # Collect affected server packages: server/internal/foo/... -> ./internal/foo/..., plugins/bar/... likewise.

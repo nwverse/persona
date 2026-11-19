@@ -1175,24 +1175,27 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   backdrop) and closes once the switch is recorded. The pending pill names the engine and the target model with that
   model's own effort.
 - Panel (`web/src/ui/model-panel/`): opens above the pill, right edges aligned, 6 px gap, 8 px from the window's edges;
-  300–460 px wide, a 428 px body (a 68 px rail of Recent, Favorites, All and one cell per provider beside the model list),
-  search on top, "Configure models" at the bottom; two-line rows with hover-revealed Favorite and Customize; the model that
-  runs has a static selected fill, no check. Customize opens a 264 px flyout to the panel's left: the effort slider, Fast,
-  the engine, an exact catalog reference-price line where known, and a footer that says whether the setup is the
-  recommended one, customized or saved. A provider rail cell adds a 22 × 3 px weekly-remaining bar only when the existing
-  launcher quota answer supplies a weekly ratio; its tooltip names the window and reset time.
-- Provider identity on model rows (#7360): every row in New Agent and in the All, Recent and Favorites model lists names
-  its owning launcher at the start of the second line, on web, Android and Apple. The rest of that line keeps the model
-  ID, resolved model, description or typed-model explanation; a launcher's own filtered view may keep its description
-  alone. A sign-in, key or model-availability error that offers a repair names the affected launcher in its title, and
-  the repair opens that launcher's provider settings. This is a content rule, not a new badge, token or visual style.
-- Rail cells (`web/src/ui/model-panel/Rail.tsx`): each cell is 60 px wide, its mark (16 px
-  icon or the provider's letter tile) above a caption of up to two lines (the 11.5 px `text-submeta` on a 14 px line, centred, wrapping anywhere), the cell
-  growing to fit. A provider's caption is the part of its name that tells it apart (`railCaptions`): a trailing note in
-  brackets drops while the names stay distinct, and a first word shared with another provider drops ("claude-aster",
-  "claude-max", "codex" read "aster", "max", "codex") unless that would make two captions the same or leave only a note.
-  The full name stays the cell's accessible name and tooltip, and the list's group header. Why: providers often share a
-  letter tile, and a phone has no hover, so marks alone could not be told apart before opening one (2026-11-16).
+  300–460 px wide with a 428 px scrollable body, search on top and "Configure models" at the bottom.
+  One shared column in Agent, handover, Assistant and New Agent pickers (#10249): Follow model configuration where
+  supported, up to three distinct saved setups (Favorites first, then Recent), then every launcher in catalog order.
+  Only the current launcher starts expanded; with no current launcher all start collapsed. Each launcher summary names
+  the launcher, Agent kind, known default model, catalog model count (excluding a synthetic Default row), Current or
+  configured Default status, known weekly quota and any supplied failure reason. No launcher is hidden in another bucket.
+  Disclosure uses the existing chevron, letter tile, role colors and text tokens; Agent mark rollout remains #5497.
+  Expanded launchers reuse model Row, family folds and Flyout, including Favorite, effort, Fast and engine controls.
+  Search is flat: matching launcher summaries, then matching model rows naming their launcher even on touch screens;
+  typed-ID rows explicitly name the launcher they send. Why: identical letter tiles and a separate rail hid the account
+  and model choices from people comparing several launchers. The single column exposes that information progressively.
+  Rows are two lines, with hover-revealed Favorite and Customize; the model that runs has a static selected fill, no check.
+  Customize opens a 264 px flyout to the panel's left: the effort slider, Fast, the engine, an exact catalog
+  reference-price line where known, and a footer that says whether the setup is the recommended one, customized or saved.
+  A launcher summary adds a weekly-remaining bar only when the existing launcher quota answer supplies a weekly ratio;
+  its tooltip names the window and reset time.
+- Provider identity on model rows (#7360): search results and saved setups name their owning launcher at the start of the
+  second line, on web, Android and Apple. The rest of that line keeps the model ID, resolved model, description or
+  typed-model explanation; an expanded launcher may keep its description alone. A sign-in, key or model-availability error
+  that offers a repair names the affected launcher in its title, and the repair opens that launcher's provider settings.
+  This is a content rule, not a new badge, token or visual style.
 - Model families (`web/src/lib/model-families.ts`, `docs/web/web.md` "Model pill and model panel"): inside a provider
   group, each family's name is a 11.5 px `text-submeta` line in `ink-3` (12 px side padding, 6 px above, 2 px below)
   over its rows; its right end holds the fold, a text button in the same size and colour ("Earlier versions · N" with
