@@ -369,8 +369,13 @@ var shells = map[string]bool{"sh": true, "bash": true, "zsh": true, "fish": true
 
 // isShell: the foreground program is a shell (a login shell's name starts with "-").
 func isShell(fg *herdrcore.Foreground) bool {
-	return shellProgram(fg.Name) || len(fg.Argv) > 0 && shellProgram(fg.Argv[0])
+	return hcShell(fg.Name) || len(fg.Argv) > 0 && hcShell(fg.Argv[0])
 }
+
+// hcShell: a program herdr-core runs as a terminal's shell. Besides shellProgram's, Windows PowerShell under any of
+// its Windows names (`powershell.exe`, a full path to it), which herdr-core opens by default on Windows; the start
+// then takes the PowerShell handoff (windowsPaneShellDecision).
+func hcShell(name string) bool { return shellProgram(name) || windowsPowerShellProgram(name) }
 
 // shellProgram: a program name or path ("-zsh", "/bin/bash") is a shell's.
 func shellProgram(name string) bool { return shells[strings.TrimPrefix(filepath.Base(name), "-")] }

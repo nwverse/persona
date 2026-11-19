@@ -391,6 +391,24 @@ func TestHerdrCoreSkipsANestedHerdr(t *testing.T) {
 	}
 }
 
+// herdr-core opens Windows PowerShell by default on Windows: its terminal is a shell to start in and to type into.
+func TestHerdrCoreWindowsPowerShellIsAShell(t *testing.T) {
+	for _, name := range []string{"powershell.exe", `C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe`, "pwsh.exe", "PowerShell.EXE", "zsh", "-bash"} {
+		if !hcShell(name) {
+			t.Errorf("hcShell(%q) = false", name)
+		}
+	}
+	for _, name := range []string{"claude.exe", "node", "cmd.exe", ""} {
+		if hcShell(name) {
+			t.Errorf("hcShell(%q) = true", name)
+		}
+	}
+	fg := herdrcore.Foreground{Pid: 1, Name: "powershell.exe", Argv: []string{`C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe`, "-NoExit"}}
+	if !isShell(&fg) {
+		t.Errorf("isShell(%+v) = false", fg)
+	}
+}
+
 func TestHookPane(t *testing.T) {
 	env := func(kv ...string) func(string) string {
 		return func(k string) string {

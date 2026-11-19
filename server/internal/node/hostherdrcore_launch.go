@@ -306,7 +306,7 @@ func (h *herdrCoreHost) openShell(ctx context.Context, cwd string, labels map[st
 	if err != nil {
 		return nil, hcErr(err)
 	}
-	if len(t.Argv) == 0 || !shellProgram(t.Argv[0]) {
+	if len(t.Argv) == 0 || !hcShell(t.Argv[0]) {
 		err := host.Mark(fmt.Errorf("herdr-core: %s did not report its shell", t.Address), host.ErrNotDelivered)
 		return nil, h.failedTerminal(ctx, t, err)
 	}
