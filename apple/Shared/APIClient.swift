@@ -203,6 +203,14 @@ nonisolated struct APIClient: Sendable {
     var clientMetadata: RequestClientMetadata = .current
     /// Answers the demo config's requests (DemoHub registers it at launch); every endpoint goes through `request`.
     nonisolated(unsafe) static var local: (@Sendable (LocalRequest) async throws -> Data)?
+    /// The app's answer to a hub that retired this device's push registration (#9612): registers with the group again
+    /// and says whether that reached its hub. Set once at launch (`PushRegistrar`); nil in the extensions and the watch.
+    nonisolated(unsafe) static var onPushRegistrationRequired: (@Sendable (_ group: String) async -> Bool)?
+    /// This client's own answer in place of `onPushRegistrationRequired`: a test's.
+    var registerPush: (@Sendable (_ group: String) async -> Bool)?
+    /// A write for this device (`/api/v1/devices/{id}/…`: notification settings, Live Activity tokens) whose push
+    /// registration the hub retired (docs/protocol/protocol.md devices).
+    static let pushRegistrationRequired = "push_registration_required"
 
     /// For bytes the app caches itself (chat images, Feishu media): through `.shared` the system's URLCache kept a
     /// second copy of every one of them.
@@ -317,9 +325,36 @@ nonisolated struct APIClient: Sendable {
     /// it arrives. A repeat it cannot answer yet comes back `202 {"state":"pending" | "unknown"}`: thrown as an
     /// APIError with `OpReceipt.pendingCode` / `unknownCode`, so no caller takes it for done.
     /// `extraHeaders`: what this one request says besides (a hand-off card's approval declares its feature).
+    /// A request about the replayed meeting (`ReplayedMeeting`, #10589) never leaves the phone: it ends here, as an error
+    /// with the code `replayed_meeting`, whatever route it was for.
+    static func refuseReplayed(_ path: String, _ query: [String: String]) throws {
+        guard ReplayedMeeting.refuses(path, query: query) else { return }
+        var error = APIError(status: 409, message: String(localized: "A replayed meeting stays on this iPhone."),
+                             fields: ["code": ReplayedMeeting.refusal])
+        error.requestPath = path
+        throw error
+    }
+
     func request(_ method: String, _ path: String, query: [String: String] = [:], repeated: [URLQueryItem] = [], body: (any Encodable)? = nil,
                  timeout: TimeInterval = 30, opID: UUID? = nil, extraHeaders: [String: String] = [:]) async throws -> Data {
+        // Keep the non-Sendable Encodable body in this request's task instead of sending it to a concurrent local function.
+        nonisolated(nonsending) func send() async throws -> Data {
+            try await sendRequest(method, path, query: query, repeated: repeated, body: body, timeout: timeout, opID: opID, extraHeaders: extraHeaders)
+        }
+        do {
+            return try await send()
+        } catch let e as APIError where e.status == 409 && e.code == Self.pushRegistrationRequired && path.hasPrefix("/api/v1/devices/") {
+            // The hub retired this device's push registration (#9611): register again, then this write once more. A
+            // registration that didn't reach the hub (or one the hub just took and refuses again) leaves the 409.
+            guard let register = registerPush ?? Self.onPushRegistrationRequired, await register(group) else { throw e }
+            return try await send()
+        }
+    }
+
+    private func sendRequest(_ method: String, _ path: String, query: [String: String], repeated: [URLQueryItem], body: (any Encodable)?,
+                             timeout: TimeInterval, opID: UUID?, extraHeaders: [String: String]) async throws -> Data {
         let query = larkScoped(path, query)
+        try Self.refuseReplayed(path, query)
         let headers = clientMetadata.headers.merging(opID.map(HubNaming.operationHeaders) ?? [:]) { _, operation in operation }
             .merging(routing(path, query)) { _, manager in manager }
             .merging(extraHeaders) { _, extra in extra }
@@ -385,6 +420,7 @@ nonisolated struct APIClient: Sendable {
     /// (`If-None-Match`), else the new bytes and their tag. The fake transport has no headers: the tag rides in the query
     /// as `If-None-Match` and a 304 is an APIError with that status.
     func conditionalGet(_ path: String, query: [String: String], etag: String?) async throws -> (data: Data?, etag: String?) {
+        try Self.refuseReplayed(path, query)
         if transport != nil || config.isDemo {
             var q = query
             if let etag { q["If-None-Match"] = etag }
@@ -409,6 +445,7 @@ nonisolated struct APIClient: Sendable {
     /// Neither the fake transport nor Demo Mode streams: it throws there, and callers do what they do without it.
     func streamed(_ method: String, _ path: String, body: (any Encodable)? = nil,
                   timeout: TimeInterval = 30) async throws -> (HTTPURLResponse, URLSession.AsyncBytes) {
+        try Self.refuseReplayed(path, [:])
         if transport != nil || config.isDemo { throw APIError(status: 501, message: "Streaming isn't available here") }
         var req = URLRequest(url: url(path, query: [:]), timeoutInterval: timeout)
         req.httpMethod = method
@@ -441,6 +478,7 @@ nonisolated struct APIClient: Sendable {
     func putBytes(_ path: String, query: [String: String] = [:], data: Data, timeout: TimeInterval = 120,
                   wifiOnly: Bool = false) async throws -> Data {
         let query = larkScoped(path, query)
+        try Self.refuseReplayed(path, query)
         if config.isDemo { throw APIError(status: 403, message: DemoText.notSent) }
         let headers = clientMetadata.headers.merging(routing(path, query)) { _, manager in manager }
         if let transport {
@@ -469,6 +507,7 @@ nonisolated struct APIClient: Sendable {
     /// A bounded, staged attachment sent from disk. The fake transport reads it only in tests.
     func uploadBytes(file: URL, path: String, query: [String: String], timeout: TimeInterval = 180) async throws -> Data {
         let query = larkScoped(path, query)
+        try Self.refuseReplayed(path, query)
         if config.isDemo { throw APIError(status: 403, message: DemoText.notSent) }
         if let transport {
             return try await transport(LocalRequest(method: "POST", path: path, query: query, body: Data(contentsOf: file),
@@ -523,6 +562,7 @@ nonisolated struct APIClient: Sendable {
     func download(_ path: String, query: [String: String], to destination: URL,
                   progress: @escaping @Sendable (Int64, Int64) -> Void) async throws {
         let query = larkScoped(path, query)
+        try Self.refuseReplayed(path, query)
         if transport != nil || config.isDemo {
             let data = try await request("GET", path, query: query)
             try Task.checkCancellation()
@@ -589,6 +629,13 @@ nonisolated struct APIClient: Sendable {
         var launchers: [Launcher]
         var `default`: LauncherDefault?
         var unavailable: [UnavailableLauncher]?
+        /// New Agent's presets from the model profile in use; nil from an older hub or when none apply here.
+        var tiers: [AgentPreset]? = nil
+        var tiersProfile: AgentPresetProfile? = nil
+        enum CodingKeys: String, CodingKey {
+            case launchers, `default`, unavailable, tiers
+            case tiersProfile = "tiers_profile"
+        }
     }
 
     /// The body of PUT /api/v1/assistant/conversations/{id}/model (#5033): the pick kept for one conversation.
@@ -1364,6 +1411,18 @@ nonisolated struct APIClient: Sendable {
         try await post(sp(k) + "/modes", body: ModesBody(permissionMode: permissionMode, effort: effort, model: model), timeout: 30)
     }
 
+    private struct ServiceTierBody: Encodable {
+        var tier: String
+        enum CodingKeys: String, CodingKey { case tier = "service_tier" }
+    }
+
+    /// POST …/modes {"service_tier": tier}, always alone (docs/protocol/protocol.md "Codex speed settings"). The hub
+    /// acknowledges the native value through the session; an HTTP success does not make `tier` the value to draw.
+    func setServiceTier(_ k: SessionKey, tier: String) async throws {
+        // The hub's native speed call may take 90 seconds; leave it five seconds to answer for itself, as the web does.
+        try await post(sp(k) + "/modes", body: ServiceTierBody(tier: tier), timeout: 95)
+    }
+
     /// POST …/modes {"ultracode": on} (docs/protocol/protocol.md "Claude Code ultracode"): its own request, never with
     /// the model or effort. Success says the node took it, maybe queued (`ultracode_pending`), not that it is on: the
     /// session's fields say that. 409 `node_outdated` (the computer's node predates it) or `ultracode_unsupported`.
@@ -2032,6 +2091,14 @@ nonisolated struct APIClient: Sendable {
     }
     func setCodexSetting(machine: String, key: String, value: JSONValue) async throws -> [ClaudeSetting] {
         try JSON.decoder.decode(ClaudeSettingsResponse.self, from: try await request("PUT", "/api/v1/machines/\(machine)/codex-settings",
+            body: SetSetting(key: key, value: value))).settings
+    }
+    /// Antigravity's options (~/.gemini/antigravity-cli/settings.json), the same shape as Claude's.
+    func agySettings(machine: String) async throws -> [ClaudeSetting] {
+        try await get("/api/v1/machines/\(machine)/agy-settings", as: ClaudeSettingsResponse.self).settings
+    }
+    func setAgySetting(machine: String, key: String, value: JSONValue) async throws -> [ClaudeSetting] {
+        try JSON.decoder.decode(ClaudeSettingsResponse.self, from: try await request("PUT", "/api/v1/machines/\(machine)/agy-settings",
             body: SetSetting(key: key, value: value))).settings
     }
     struct SetSetting: Encodable { var key: String; var value: JSONValue }

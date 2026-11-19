@@ -1,6 +1,7 @@
+import { decisionSourceLabel } from "../lib/todo-decision-label";
 import { NewTodoRepositoryBindings, TodoRepositoryBindings, useRepositoryRequestContext } from "../ui/TaskRepositoryBindingsEditor";
+import { cleanRepositoryDraft, createTodoWithRepositories, repositoryDuplicateLink, validRepositoryDraft, type CreateRepositoryBindings, type RepositoryCatalog } from "../lib/task-repositories";
 import { hasRequestPieces } from "../lib/request-pieces";
-import { createTodoWithRepositories, type CreateRepositoryBindings } from "../lib/task-repositories";
 import { defaultManager, useShownManager } from "../lib/manager-choice";
 // Beautiful UI Todos View: left list (sorted by status & created_at), right detail, handover dialog.
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type InputHTMLAttributes, type ReactNode, type RefObject } from "react";
@@ -24,11 +25,11 @@ import { composing } from "../lib/send-history";
 import { useScrollMemory } from "../lib/scroll-memory";
 import { useAgentSessions, useFullAgentSessions } from "../lib/sessions";
 import { useScoped } from "../lib/current-assistant";
+import { lazyPage } from "../lib/lazy-page";
 import { dropTodo, refresh, refreshTodos, useStore, withTaskRows } from "../lib/store";
 import {
   addTodoDecision,
   createTodo,
-  decisionSourceLabel,
   DECISIONS_FIRST,
   type DecisionsView,
   deleteTodo,
@@ -119,6 +120,7 @@ import { setTodoSeen, todoSeenOn } from "../lib/todo-seen";
 import { retryKey, retryTask, useFeed } from "../lib/feed";
 import { planTaskOf, retryLauncher, retryOnLauncher } from "../lib/start-retry";
 import { dueOn, duePatch, todoRowMenu } from "./todo-row-menu";
+import { PageBoundary } from "./PageBoundary";
 
 /** What this browser was last on (#2029): the list or the calendar, the calendar's mode, and whether it shows done ones. */
 const VIEW_KEY = "persona.todos.view";
@@ -322,7 +324,7 @@ export function TodosView({
     [todos, lookup, restored, search, listFilter, superseded, triaged, tick, fromView],
   );
   // Where the status sections place each to-do the search and the filter leave: its row's section (a merged row takes
-  // its most urgent member's), and whether it counts as open (countsAsOpen, the sidebar badge's rule, its own reading).
+  // its most urgent member's), and whether it counts as open (countsAsOpen, the header's Not done, its own reading).
   // The folders and 常驻 split by the same placement, so their Done fold is the Done section to the to-do and every
   // grouping says one number for it (audit item 12).
   const placed = useMemo(() => {
@@ -671,8 +673,9 @@ export function TodosView({
             {(todosLoaded || todos.length > 0) && !(todos.length === 0 && todosError) && (
               // a phone's header has the List | Calendar switch to fit (#2029): the counts stay on wider screens
               <span className="text-[12px] whitespace-nowrap text-ink-3 max-sm:hidden" data-testid="todos-summary">
-                {/* one count in every grouping (audit item 12): open as the sidebar's badge counts it, the rest as the
-                    sections' titles do (a merged row's members under its section) */}
+                {/* one count in every grouping (audit item 12): open as countsAsOpen counts it (the sidebar's badge, the
+                    open ones that need the owner, #11085), the rest as the sections' titles do (a merged row's members
+                    under its section) */}
                 {t(listFilter === "all" ? "todos.summary_triage" : "todos.summary_filtered", { filter: filterLabel(listFilter), open: triageAll.open, parked: sectionSize(triageAll, "parked"), shelved: sectionSize(triageAll, "shelved"), done: sectionSize(triageAll, "done") })}
               </span>
             )}
@@ -1933,9 +1936,9 @@ function askText(ix: Interaction | undefined): string {
 // ── Todo Detail ──────────────────────────────────────────────
 
 // A task's brief (#3822) comes with the first to-do that has one, not with the page.
-const WorkspaceNaming = lazy(() => import("../ui/WorkspaceNaming").then((m) => ({ default: m.WorkspaceNaming })));
 const TodoRequestGraph = lazy(() => import("./TodoRequestGraph"));
 const TaskBriefPanel = lazy(() => import("./assistant/TaskBrief").then((m) => ({ default: m.TaskBriefPanel })));
+const WorkspaceNaming = lazyPage(() => import("../ui/WorkspaceNaming").then((m) => m.WorkspaceNaming));
 const TaskBriefHistory = lazy(() => import("./assistant/TaskBrief").then((m) => ({ default: m.TaskBriefHistory })));
 const BriefResultExtras = lazy(() => import("./assistant/TaskBrief").then((m) => ({ default: m.BriefResultExtras })));
 // the question a failed start's tab stopped on, answered on its page (#10365): only for such a failure
@@ -2259,9 +2262,11 @@ function TodoDetail({
 
       <TodoRepositoryBindings key={`${owner}:${todo.manager ?? defaultManager()}:${todo.id}`} manager={todo.manager ?? defaultManager()} owner={owner} todoId={todo.id}
         legacyPRs={legacyPR ? [legacyPR] : []} version={todo.updated_at} />
-      <Suspense fallback={null}>
-        <WorkspaceNaming manager={todo.manager ?? defaultManager()} owner={owner} todoId={todo.id} />
-      </Suspense>
+      <PageBoundary page="workspace-naming">
+        <Suspense fallback={<Loading />}>
+          <WorkspaceNaming manager={todo.manager ?? defaultManager()} owner={owner} todoId={todo.id} />
+        </Suspense>
+      </PageBoundary>
 
       <ThreadSection todo={todo} />
 
@@ -2802,7 +2807,7 @@ function DecisionsSection({ todo, lookup }: { todo: Todo; lookup: ReturnType<typ
  *  (lib/shortcuts.ts keeps Mod+Enter for dialogs); a multi-line field keeps Enter for its new lines. The form's own
  *  submit decides, so one busy or incomplete stays as it is. */
 function submitOnModEnter(e: React.KeyboardEvent<HTMLFormElement>) {
-  if (e.key !== "Enter" || !(e.metaKey || e.ctrlKey) || composing(e.nativeEvent)) return;
+  if (e.defaultPrevented || e.key !== "Enter" || !(e.metaKey || e.ctrlKey) || composing(e.nativeEvent)) return;
   e.preventDefault();
   e.currentTarget.requestSubmit();
 }
@@ -2906,12 +2911,18 @@ function NewTodoDialog({
 }) {
   const repositoryContext = useRepositoryRequestContext(manager, owner);
   const [repositoryBindings, setRepositoryBindings] = useState<CreateRepositoryBindings>();
+  const [repositoryCatalog, setRepositoryCatalog] = useState<RepositoryCatalog>();
+  const creating = useRef(false);
   const [title, setTitle] = useState("");
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
   const [dueDay, setDueDay] = useState("");
   const [dueTime, setDueTime] = useState("");
   const [allDay, setAllDay] = useState(true);
+  const repositoryIdentities = useMemo(() => new Map((repositoryCatalog?.repositories ?? []).map((entry) => [entry.id, entry] as const)), [repositoryCatalog]);
+  const cleanBindings = repositoryBindings ? cleanRepositoryDraft(repositoryBindings.repositories) : [];
+  const duplicateLinks = repositoryBindings ? repositoryDuplicateLink(cleanBindings, repositoryIdentities) : false;
+  const bindingsValid = !repositoryBindings || validRepositoryDraft(cleanBindings, repositoryIdentities);
 
   useEffect(() => {
     if (open) {
@@ -2937,11 +2948,12 @@ function NewTodoDialog({
 
   const submit = async (e?: React.FormEvent) => {
     e?.preventDefault();
-    if (!title.trim() || busy || !repositoryContext.isCurrent()) return;
+    if (!title.trim() || creating.current || !bindingsValid || !repositoryContext.isCurrent()) return;
+    creating.current = true;
     setBusy(true);
     try {
       const todo = repositoryBindings
-        ? await createTodoWithRepositories(repositoryContext, title, notes, due(), repositoryBindings)
+        ? await createTodoWithRepositories(repositoryContext, title, notes, due(), repositoryBindings, repositoryIdentities)
         : await createTodo(title, notes, due());
       if (!repositoryContext.isCurrent()) return;
       await refreshTodos();
@@ -2954,6 +2966,7 @@ function NewTodoDialog({
     } catch (err) {
       if (repositoryContext.isCurrent()) toast(t("todos.create_failed", { error: errorText(err) }), "error");
     } finally {
+      creating.current = false;
       setBusy(false);
     }
   };
@@ -3013,13 +3026,14 @@ function NewTodoDialog({
           />
         </div>
 
-        <NewTodoRepositoryBindings context={repositoryContext} value={repositoryBindings} onChange={setRepositoryBindings} pending={busy} />
+        <NewTodoRepositoryBindings context={repositoryContext} value={repositoryBindings} onChange={setRepositoryBindings} pending={busy} onCatalog={setRepositoryCatalog} />
+        {!bindingsValid && <p role="alert" className="text-submeta text-red">{t(duplicateLinks ? "task-repositories.duplicate_link" : "task-repositories.draft_invalid")}</p>}
 
         <div className="mt-2 flex justify-end gap-2">
           <Button tone="secondary" disabled={busy} onClick={onClose}>
             {t("common.cancel")}
           </Button>
-          <Button tone="accent" type="submit" disabled={!title.trim() || busy} busy={busy}>
+          <Button tone="accent" type="submit" disabled={!title.trim() || busy || !bindingsValid} busy={busy}>
             {t("todos.create")}
           </Button>
         </div>
@@ -3092,6 +3106,7 @@ export function HandoverDialog({
   // For "new":
   const onlineMachines = useMemo(() => machines.filter((m) => m.online), [machines]);
   const [mid, setMid] = useState(() => onlineMachines[0]?.id ?? "");
+  const machine = onlineMachines.find((m) => m.id === mid);
   const [cwd, setCwd] = useState("");
   const [launchers, setLaunchers] = useState<Launcher[]>([]);
   const [launchersOf, setLaunchersOf] = useState("");
@@ -3121,8 +3136,8 @@ export function HandoverDialog({
     wasOpen.current = open;
     if (!open) return;
     if (opening) setPrompt("");
-    if (onlineMachines[0] && (!mid || !onlineMachines.some((m) => m.id === mid))) {
-      setMid(onlineMachines[0].id);
+    if (!mid || !onlineMachines.some((m) => m.id === mid)) {
+      setMid(onlineMachines[0]?.id ?? "");
     }
     const first = eligibleSessions[0];
     setSelectedKey((key) => opening || !eligibleSessions.some((s) => `${s.machine_id}/${s.session_id}` === key)
@@ -3131,14 +3146,15 @@ export function HandoverDialog({
   }, [open, onlineMachines, eligibleSessions]);
 
   useEffect(() => {
-    if (!open || !mid) return;
-    const controller = new AbortController();
-    const owner = credentialOwner();
-    // another computer's list is not this one's
+    if (!open) return;
+    // another computer's list is not this one's; an empty computer selection clears it
     setLaunchers([]);
     setLaunchersOf("");
     setHubDefault(undefined);
     setLauncher("");
+    if (!mid) return;
+    const controller = new AbortController();
+    const owner = credentialOwner();
     machineLaunchers(mid, { signal: controller.signal })
       .then((r) => {
         if (controller.signal.aborted || owner !== credentialOwner()) return;
@@ -3168,15 +3184,14 @@ export function HandoverDialog({
   };
 
   const submitNew = async () => {
-    if (!mid) return;
+    if (!machine) return;
     setBusy(true);
     try {
       await reopenFailed();
       const fullText = [previewCard, prompt.trim()].filter(Boolean).join("\n\n");
       // It only queues the start and opens the new agent's page, which says how it went: no success toast before the hub
       // has answered (#1856).
-      const machine = onlineMachines.find((m) => m.id === mid);
-      const inline = machine && launchersOf === JSON.stringify([mid, credentialOwner()])
+      const inline = launchersOf === JSON.stringify([mid, credentialOwner()])
         ? inlineTextStart(launchers.find((l) => l.name === (launcher || hubDefault?.provider)), currentHosts(machine).default, fullText, 0)
         : undefined;
       launchAgent({
@@ -3380,7 +3395,7 @@ export function HandoverDialog({
               if (e.key !== "Enter" || !(e.metaKey || e.ctrlKey) || composing(e.nativeEvent)) return;
               e.preventDefault();
               if (busy) return;
-              if (tab === "new") void (mid && submitNew());
+              if (tab === "new") void (machine && submitNew());
               else void submitExisting();
             }}
             placeholder={t("todos.prompt_placeholder")}
@@ -3408,7 +3423,7 @@ export function HandoverDialog({
             {t("common.cancel")}
           </Button>
           {tab === "new" ? (
-            <Button tone="accent" onClick={submitNew} disabled={!mid || busy} busy={busy}>
+            <Button tone="accent" onClick={submitNew} disabled={!machine || busy} busy={busy}>
               {t("todos.launch_and_hand")}
             </Button>
           ) : (

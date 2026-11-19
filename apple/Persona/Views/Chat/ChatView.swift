@@ -1534,14 +1534,26 @@ struct ChatView: View {
 
     /// Persona's last turn ended on a model set-up error the hub named (`turn_error_code`, docs/assistant/onboarding.md 4.4):
     /// the fix to show instead of Claude Code's 「Not logged in」 as an answer. Persona's conversations only, as the web.
-    private var turnFix: TurnErrorFix? { style == .assistant ? TurnErrorFix(code: session?.turnErrorCode) : nil }
+    private var turnFix: TurnErrorFix? { style == .assistant ? TurnErrorFix(code: session?.turnErrorCode, launcher: session?.launcher) : nil }
 
     /// The Model Not Connected card for the line, when it is the turn's error: the last line, an answer or an API error.
     private func turnErrorCard(_ line: ChatLine, raw: String?) -> ReadinessCard? {
         guard let fix = turnFix, ChatLines.lastOfChat(currentLines())?.id == line.id else { return nil }
         return ReadinessCard(title: fix.title, detail: fix.detail, tone: .danger,
                              actionTitle: String(localized: "Fix it"),
-                             action: { readinessRoute = fix.action == "edit_provider" ? .provider(session?.launcher) : .providerWizard },
+                             action: {
+                                 switch fix.action {
+                                 case "edit_provider": readinessRoute = .provider(session?.launcher)
+                                 case "connect_model":
+                                     let launcher = session?.launcher?.trimmingCharacters(in: .whitespacesAndNewlines)
+                                     if let launcher, !launcher.isEmpty {
+                                         readinessRoute = .provider(launcher)
+                                     } else {
+                                         readinessRoute = .providerWizard
+                                     }
+                                 default: readinessRoute = .providerWizard
+                                 }
+                             },
                              details: [raw].compactMap { $0 })
     }
 
@@ -2859,16 +2871,20 @@ struct ChatView: View {
     private var pendingCards: [PendingCards.Card] {
         let parentPage = style == .dev && host == nil
         var cards = model.interactions(for: key).compactMap { ix -> PendingCards.Card? in
-            // Answerable exactly when nothing blocks it (`canAnswer`); what does is said under the card (#6868).
-            let blocked = model.answerBlock(ix)
+            // A stopped Agent's work card stays open for putting it off or dismissing it, which send the Agent nothing (#6839).
+            let answerable = model.canAnswer(ix)
+            let localOnly = !answerable && ix.isManagerWork
+            let blocked = answerable ? nil : model.answerBlock(ix)
+            let enabled = answerable || localOnly || blocked == nil
             // A side session's card (#7944), here by its `folded_under` as every folded child's: "From Side Session ·
             // <title>", and not while that side's own page is the one shown, which has it.
             if parentPage, ix.sessionKey != key, let side = model.sideChat(of: ix) {
                 guard side != sideUI.shown else { return nil }
                 return PendingCards.Card(
-                    interaction: ix, enabled: blocked == nil, blocked: blocked, from: Self.sideCardSource(side, ix, model))
+                    interaction: ix, enabled: enabled, localOnly: localOnly, blocked: blocked,
+                    from: Self.sideCardSource(side, ix, model))
             }
-            return PendingCards.Card(interaction: ix, enabled: blocked == nil, blocked: blocked)
+            return PendingCards.Card(interaction: ix, enabled: enabled, localOnly: localOnly, blocked: blocked)
         }
         // A card answered in a terminal dialog of several questions stays, greyed, until the next one comes (#2970).
         if let move = model.screenMoves[key], !cards.contains(where: { $0.interaction.kind == .screen }) {
@@ -2882,6 +2898,10 @@ struct ChatView: View {
         ]
         for (flag, sample) in samples where UserDefaults.standard.bool(forKey: flag) {
             if let ix = sample(key) { cards.append(PendingCards.Card(interaction: ix, enabled: true)) }
+        }
+        // `-showSampleStoppedWork YES`: a manager work card on an Agent that has stopped (#6839).
+        if UserDefaults.standard.bool(forKey: "showSampleStoppedWork"), let ix = Interaction.sampleStoppedWork(key) {
+            cards.append(PendingCards.Card(interaction: ix, enabled: true, localOnly: true))
         }
         // `-showVoiceSample asking|approval|plan_feedback`: the card the voice asks about or points to.
         cards += VoiceSample.cards(key).map { PendingCards.Card(interaction: $0, enabled: true) }
@@ -3434,7 +3454,7 @@ struct ChatView: View {
             }
         }
         #endif
-        .confirmationDialog("This Reply", isPresented: Binding(get: { menu.more != nil }, set: { if !$0 { menu.more = nil } })) {
+        .accessibleConfirmationDialog("This Reply", isPresented: Binding(get: { menu.more != nil }, set: { if !$0 { menu.more = nil } })) {
             if let id = menu.more {
                 // A new conversation with what was said up to here (#2137). Opened once the dialog is gone: a navigation
                 // made while it is still going away is dropped, and the chat stayed on the original.
@@ -3743,10 +3763,9 @@ struct ChatView: View {
         #if os(iOS)
         if style == .dev, let host { hostedMenuItems(host) }
         if style == .dev, let session {
-            AnyView(AgentActionMenu(facts: AgentActionFacts(session: session, model: model, currentPane: pane,
-                                                            hosted: host != nil, showsSpace: openSpace != nil,
-                                                            sides: sides),
-                                    handlers: agentMenuHandlers)).stackSegment()
+            // Not the header's to observe: the facts read the machines, links and pins (#10231).
+            AnyView(AgentActionMenuReader(session: session, currentPane: pane, hosted: host != nil, showsSpace: openSpace != nil,
+                                          sides: sides, handlers: agentMenuHandlers)).stackSegment()
         } else if session?.canAttach == true {
             Button { Task { await model.attach(key) } } label: { Label("Attach Live", systemImage: Theme.Icon.link).lineLimit(1) }
         }
@@ -5315,11 +5334,12 @@ struct ChatView: View {
 
     /// The extension that opened this Persona conversation (#3758), when `item` is the message it opened it with: the
     /// conversation's first user message, once the page has loaded back to its start (with more to load, the first one
-    /// here is not the first). nil for every other message and conversation.
-    private func externalOpening(_ item: Item) -> AutoConversationSource? {
+    /// here is not the first). nil for every other message and conversation. With it, which extension that was, whose
+    /// own icon the line draws when it can (#10358).
+    private func externalOpening(_ item: Item) -> (source: AutoConversationSource, opener: ConversationOpener?)? {
         guard style == .assistant, let source = AutoConversationSource.external(session?.origin), !store.hasMore,
               store.items.first(where: { $0.role == "user" && $0.kind == .text })?.id == item.id else { return nil }
-        return source
+        return (source, session.flatMap(ConversationOpener.of))
     }
 
     /// A user's line: a bubble, or what stands for it (a message from a source, one Persona injected, a loop's tick, a peer's).
@@ -5334,7 +5354,8 @@ struct ChatView: View {
         } else if let from = i.from {
             PeerMessage(item: i, from: from)
         } else {
-            UserBubble(item: i, external: externalOpening(i)).equatable()
+            let opening = externalOpening(i)
+            UserBubble(item: i, external: opening?.source, opener: opening?.opener).equatable()
         }
     }
 
@@ -5373,6 +5394,33 @@ struct ChatSkeleton: View {
             }
         }
         .onAppear { if !reduceMotion { withAnimation(.easeInOut(duration: 0.9).repeatForever()) { on = true } } }
+    }
+}
+
+/// The model request Claude is retrying now, above the composer. Its plain reason leads; the observed error stays as
+/// secondary detail. Ordinary work, a null live event, turn end and subscription cleanup leave no note behind.
+struct SessionLiveRetryNote: View {
+    let key: SessionKey
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        if let retry = model.liveRetry(key) {
+            HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
+                ThemedIcon(Theme.Icon.retry).font(Theme.Font.labelStrong).foregroundStyle(Theme.cautionText)
+                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                    Text(retry.attemptText).font(Theme.Font.secondaryStrong).foregroundStyle(Theme.cautionText)
+                    Text(retry.error.reason).font(Theme.Font.secondary)
+                    Text(retry.error.raw).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(2)
+                        .textSelection(.enabled)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, Theme.Space.m)
+            .padding(.vertical, Theme.Space.s)
+            .surface(in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("chat.model-retry")
+        }
     }
 }
 
@@ -5646,6 +5694,9 @@ struct Composer: View, Equatable {
     /// the card in every style but BeautifulUI's (its prompt bar is already one): the field, and under it Add, the model
     /// and its modes, send / stop, as Codex's and ChatGPT's desktop apps (#2113).
     private var usesShellComposer: Bool { shellChat || shell != nil || ChatComposerKind.card }
+    /// The current assistant's saved prompts for the "/" lists (#9436); observed through the store, which changes only when
+    /// the list does, never while typing.
+    private var savedPrompts: SavedPromptStore { .shared }
     let key: SessionKey
     var status: SessionStatus
     var placeholder: String?
@@ -5831,7 +5882,10 @@ struct Composer: View, Equatable {
 
     private var promptCommands: [PromptCommand] {
         // The main conversation adds `/clear` (#5100). The quick messages, /loop and extension prompts stay.
-        var commands = PromptItems.commands(clear: canClear && !offersMainClear && !status.isActive && !clearing, loop: canLoop) + declarations.prompts.map {
+        // the chat's own commands, then the user's saved prompts (#9436), then extensions' quick prompts, as on the web
+        var commands = PromptItems.commands(clear: canClear && !offersMainClear && !status.isActive && !clearing, loop: canLoop)
+            + savedPrompts.prompts.map { PromptCommand("/" + $0.name, detail: SlashMenuRow.savedDetail, insert: $0.text, id: "saved:\($0.id)") }
+            + declarations.prompts.map {
             PromptCommand(String(localized: "/extension/\($0.title)", comment: "Menu name of a prompt an extension adds"), detail: $0.ownerName, insert: $0.text)
         }
         if offersMainClear, !commands.contains(where: { $0.name == MainClearCommand.word }) {
@@ -5874,7 +5928,8 @@ struct Composer: View, Equatable {
         let mainList = offersMainClear && plain
         return SlashMenuRow.slashRows(draft: text, picked: slashPicked, showsList: agentList || mainList,
                                        model: model.session(key)?.takesModelCommand == true, loop: canLoop,
-                                       agentClear: canClear && !status.isActive && !clearing, mainClear: offersMainClear)
+                                       agentClear: canClear && !status.isActive && !clearing, mainClear: offersMainClear,
+                                       saved: plain ? savedPrompts.prompts : [])
     }
 
     /// A "/" row picked: its text in the box to send or edit, as on the web; an agent's /clear asks first, as the + menu's.
@@ -6016,6 +6071,7 @@ struct Composer: View, Equatable {
         let call = voiceCall
         let inCall = call.map { !$0.isOver } ?? false
         return VStack(spacing: Theme.Space.s) {
+            SessionLiveRetryNote(key: key)
             if let m = offlineManager {
                 ManagerOfflineNote(manager: m)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -6148,7 +6204,8 @@ struct Composer: View, Equatable {
                     #endif
                 } modes: {
                     SessionModesMenu(key: key, session: model.session(key), picksModel: canPickModel, setsModes: setsModes,
-                                     setsEffortOnly: setsEffortOnly, otherModel: canPickModel ? { typingModel = true } : nil,
+                                     setsEffortOnly: setsEffortOnly, mainConversation: isMainAssistantChat,
+                                     otherModel: canPickModel ? { typingModel = true } : nil,
                                      assistantPick: assistantModelPickAvailable ? { showAssistantModel = true } : nil,
                                      assistantModelName: assistantEffectiveName, pick: pickMode)
                 }
@@ -6271,10 +6328,10 @@ struct Composer: View, Equatable {
             if comments.wrappedValue.isEmpty { comments.wrappedValue = MessageComment.samples }
         }
         #endif
-        .task { // `-openSlashMenu YES`: "/" in the box and its list open, for screenshots
-            guard UserDefaults.standard.bool(forKey: "openSlashMenu") else { return }
+        .task { // `-openSlashMenu YES`: "/" in the box and its list open, for screenshots; `-openSlashMenu /re`: that draft
+            guard let draft = UserDefaults.standard.string(forKey: "openSlashMenu") else { return }
             try? await Task.sleep(for: .seconds(4))
-            text = "/"
+            text = draft.hasPrefix("/") ? draft : "/"
         }
         .task { // `-openMentionMenu @Sources/`: that draft ("@" for any other value) with the keyboard up and its @ list open (#2319, screenshots)
             guard let draft = UserDefaults.standard.string(forKey: "openMentionMenu") else { return }
@@ -6341,7 +6398,7 @@ struct Composer: View, Equatable {
         }
         #endif
         return AnyView(top)
-        .confirmationDialog("Clear Context?", isPresented: $confirmClear, titleVisibility: .visible) {
+        .accessibleConfirmationDialog("Clear Context?", isPresented: $confirmClear, titleVisibility: .visible) {
             Button("Clear [Chat View 1ef3de]", role: .destructive) {
                 clearing = true
                 Task {
@@ -6663,7 +6720,18 @@ struct SlashMenuRow: Identifiable, Equatable {
     var word: String
     var detail: String
     var text: String
-    var id: String { word }
+    /// A saved prompt's id (#9436): its row may share a word with a command of the chat's, and stays a row of its own.
+    var savedID: String? = nil
+    var id: String { savedID.map { "saved:\($0)" } ?? word }
+
+    /// A saved prompt as a row (docs/apple/ios.md "Saved prompts"): its name after "/", **Saved** as where it comes from,
+    /// and its text, which picking it types into the box.
+    static func saved(_ p: SavedPrompt) -> SlashMenuRow {
+        SlashMenuRow(word: "/" + p.name, detail: savedDetail, text: p.text, savedID: p.id)
+    }
+
+    /// A saved prompt's row says where it comes from (#9436), in both "/" lists.
+    static let savedDetail = String(localized: "Saved [Slash Menu 9436a1]", comment: "Slash list: where a row comes from, the user's saved prompts")
 
     /// What a quick message sends, shown at the row's end; a command is its own text.
     var preview: String? { text.hasPrefix("/") ? nil : text }
@@ -6692,10 +6760,14 @@ struct SlashMenuRow: Identifiable, Equatable {
 
     /// The composer's "/" list. The main conversation adds `/clear` to the rows it already had (#5100);
     /// an agent's own `/clear` stays where `rows` put it. The prompt bar does not use this list (`showsList` false).
-    static func slashRows(draft: String, picked: String?, showsList: Bool, model: Bool, loop: Bool, agentClear: Bool, mainClear: Bool) -> [SlashMenuRow] {
-        guard showsList, draft.hasPrefix("/"), draft != picked else { return [] }
-        var listed = rows(model: model, loop: loop, clear: agentClear && !mainClear)
-        if mainClear, !listed.contains(where: { $0.word == Self.clear.word }) { listed.append(.clear) }
+    /// `saved`: the current assistant's saved prompts (#9436), after the chat's own commands, in their list's order; a chat
+    /// with no commands of its own (`showsList` false) still lists them, as the web does.
+    static func slashRows(draft: String, picked: String?, showsList: Bool, model: Bool, loop: Bool, agentClear: Bool, mainClear: Bool,
+                          saved: [SavedPrompt] = []) -> [SlashMenuRow] {
+        guard showsList || !saved.isEmpty, draft.hasPrefix("/"), draft != picked else { return [] }
+        var listed = showsList ? rows(model: model, loop: loop, clear: agentClear && !mainClear) : []
+        if showsList, mainClear, !listed.contains(where: { $0.word == Self.clear.word }) { listed.append(.clear) }
+        listed += saved.map(Self.saved)
         return matching(draft, in: listed)
     }
 
@@ -7797,14 +7869,13 @@ struct WorkStepView: View, Equatable {
 
     func set(_ h: Handlers) { handlers = h }
 
-    private(set) lazy var openFile: (String) -> Void = { [weak self] in self?.handlers.openFile($0) }
+    private(set) lazy var openFile = FileOpener { [weak self] in self?.handlers.openFile($0) }
     private(set) lazy var openLink: (URL) -> Void = { [weak self] in self?.handlers.openLink($0) }
     private(set) lazy var openPort: (PortLink) -> Void = { [weak self] in self?.handlers.openPort($0) }
     private(set) lazy var viewImages: (ImageViewing) -> Void = { [weak self] in self?.handlers.viewImages($0) }
     private(set) lazy var attachImage: (UIImage) -> Void = { [weak self] in self?.handlers.attachImage($0) }
     // The async ones run on the main actor, where the handlers are.
-    private(set) lazy var loadImage: @Sendable (String) async -> ImagePayload? = {
-        @MainActor [weak self] path in
+    private(set) lazy var loadImage = ImageLoader { @MainActor [weak self] path in
         guard let load = self?.handlers.loadImage else { return nil }
         return await load(path)
     }

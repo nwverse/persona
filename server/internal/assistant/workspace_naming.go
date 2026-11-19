@@ -22,8 +22,12 @@ type workspaceNamingStore interface {
 	TodoWorkspaceRules(context.Context, string) (repositorystore.WorkspaceRulesRecord, error)
 	SetTodoWorkspaceRules(context.Context, string, int64, json.RawMessage) (repositorystore.WorkspaceRulesRecord, error)
 	WorkspaceNamingPlan(context.Context, string, string) (*workspacenaming.Plan, error)
+	WorkspaceNamingPlanForSave(context.Context, string, string) (*workspacenaming.Plan, error)
 	SaveWorkspaceNamingPlan(context.Context, string, string, int64, workspacenaming.Plan) (*workspacenaming.Plan, error)
 }
+
+var _ workspaceNamingStore = (*repositorystore.Store)(nil)
+
 type namingRequest struct {
 	MachineID       string            `json:"machine_id"`
 	Layout          repository.Layout `json:"layout"`
@@ -261,7 +265,7 @@ func (s *Service) workspaceNamingRoutes() {
 			return
 		}
 		id := r.PathValue("id")
-		prior, err := st.WorkspaceNamingPlan(r.Context(), id, in.OperationID)
+		prior, err := st.WorkspaceNamingPlanForSave(r.Context(), id, in.OperationID)
 		if err != nil {
 			namingError(w, err)
 			return

@@ -228,16 +228,25 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     val saved = remember(store) { if (shell.automation) ShellPosition() else store.load() }
     // With the embedded assistant chat (not in demo), assistant conversations open inside the Persona home.
     val embeddedAssistant = session.demo == null
+    fun hubRouter(kind: (String, String) -> ConversationKind?) = Router(
+        hubLink = { link ->
+            resolveHubRoute(link, session.hubAddresses(), session.groups.groups.value.firstOrNull { it.selected }?.namespace,
+                session.sessions.sessions.value.map { it.key }, session.assistant.assistant.value, session.groups.groups.value)
+        },
+        conversationKind = kind,
+    )
     val initialLaunch = remember { openNavigation.value }
     val initialRoute = remember {
-        initialLaunch?.invoke(Router { m, s ->
+        initialLaunch?.invoke(hubRouter { m, s ->
             val key = SessionKey(m, s)
             val assistant = session.assistant.assistant.value
             if (key == assistant.mainSession || assistant.conversations.any { it.key == key }) ConversationKind.Assistant
             else session.sessions.sessions.value.firstOrNull { it.key == key }?.let {
                 if (it.assistant) ConversationKind.Assistant else ConversationKind.Agent
             }
-        })
+        })?.takeIf { route ->
+            route.hubGroupId == null || route.hubGroupId == session.groups.groups.value.firstOrNull { it.selected }?.id
+        }
     }
     var selected by rememberSaveable { mutableStateOf(initialRoute?.tab ?: if (session.demo != null) AppTab.Persona else saved.tab) }
     var machine by rememberSaveable { mutableStateOf(saved.machine) }
@@ -379,6 +388,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     }
     val visibleAgentChat = remember { kotlinx.coroutines.flow.MutableStateFlow<SessionKey?>(null) }
     val heldAgentChat = remember { kotlinx.coroutines.flow.MutableStateFlow<SessionKey?>(null) }
+    val finishedAgentChat = remember { kotlinx.coroutines.flow.MutableStateFlow<SessionKey?>(null) }
     val agentPreferences = remember(session) { session.preferences.snapshots }
     val navigator = remember { AppNavigator(stacks, { selected }, { selected = it }, chatTab = { route ->
         currentKind(SessionKey(route.machineId, route.sessionId))?.let { if (it == ConversationKind.Assistant) AppTab.Persona else AppTab.Agents }
@@ -425,7 +435,8 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
         assistantRequest = conversation
         assistantPending = null
     }
-    val router = remember { Router { m, s -> currentKind(SessionKey(m, s)) } }
+    val router = remember(session) { hubRouter { m, s -> currentKind(SessionKey(m, s)) } }
+    var hubSelectionFrom by remember { mutableStateOf<String?>(null) }
     val agentsWiring by session.agentsWiring.state.collectAsStateWithLifecycle()
     val navigationWiring = remember { MutableStateFlow(agentsWiring) }
     SideEffect {
@@ -441,6 +452,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
             override fun wiring() = object : AgentsWiring { override val state = navigationWiring }
             override fun visibleChat() = visibleAgentChat
             override fun heldChat() = heldAgentChat
+            override fun finishedChat() = finishedAgentChat
         }
     }
     val assistantNavigator = remember {
@@ -451,15 +463,28 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
             }
         }
     }
-    LaunchedEffect(sessions, assistant, openNavigation.value) {
+    val pendingHubLink = MainActivity.pendingHubLink.value
+    LaunchedEffect(sessions, assistant, openNavigation.value, pendingHubLink, session.identity) {
         navigator.restoreChatTabs()
-        openNavigation.value?.invoke(router)?.let {
-            settingsOpened = false
-            sidebar.opened.value = false
-            selected = openResolved(it)
-            it.pairingLink?.let { link -> MainActivity.pendingPairLink.value = link }
-            openNavigation.value = null
+        val fromActivity = openNavigation.value != null
+        val route = if (fromActivity) openNavigation.value?.invoke(router)
+            else pendingHubLink?.let { router.parse(RouteInput.DeepLink(it)) }
+        if (route == null) return@LaunchedEffect
+        val selectedGroup = session.groups.groups.value.firstOrNull { it.selected }?.id
+        val targetGroup = route.hubGroupId
+        if (targetGroup != null && targetGroup != selectedGroup) {
+            hubSelectionFrom = session.identity
+            session.groups.select(targetGroup)
+            return@LaunchedEffect
         }
+        // Selection publishes a replacement session. Do not open another hub's page with the old one's assistant state.
+        if (hubSelectionFrom != null && hubSelectionFrom == session.identity) return@LaunchedEffect
+        settingsOpened = false
+        sidebar.opened.value = false
+        selected = openResolved(route)
+        route.pairingLink?.let { link -> MainActivity.pendingPairLink.value = link }
+        hubSelectionFrom = null
+        if (fromActivity) openNavigation.value = null else MainActivity.pendingHubLink.value = null
     }
     LaunchedEffect(store) {
         snapshotFlow {
@@ -480,12 +505,15 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     val visibleChat = when (visible) { is ChatRoute -> visible; is InteractionRoute -> visible.chat; else -> null }
     LaunchedEffect(visibleChat) {
         val agent = visibleChat?.takeIf { it.kind != ConversationKind.Assistant }?.let { SessionKey(it.machineId, it.sessionId) }
-        // Capture on entry, before ChatScreen's receipt or a conflated hub snapshot turns the row idle (iOS markSeen).
-        heldAgentChat.value = agent?.takeIf { key ->
-            sessions.firstOrNull { it.key == key }?.let {
-                it.agentState == AgentState.Unread && agentPreferences.first().seen[key.path] != "${it.updatedAt.orEmpty()}|${it.rev ?: ""}"
-            } == true
-        }
+        // Capture on entry, before ChatScreen's receipt or a conflated hub snapshot turns the row idle (iOS markSeen). A Just
+        // finished row (#9786) is held the same way, in its own place: the hub's list loses the flag once the seen is recorded.
+        val row = agent?.let { key -> sessions.firstOrNull { it.key == key } }
+        val unread = row?.agentState == AgentState.Unread
+        val finished = row?.agentState == AgentState.Idle && row.work?.justFinished == true
+        val unseen = row != null && (unread || finished) &&
+            agentPreferences.first().seen[row.key.path] != "${row.updatedAt.orEmpty()}|${row.rev ?: ""}"
+        heldAgentChat.value = agent?.takeIf { unseen && unread }
+        finishedAgentChat.value = agent?.takeIf { unseen && finished }
         visibleAgentChat.value = agent
     }
     DisposableEffect(visibleChat, session.demo) {
@@ -964,9 +992,11 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                 entry<persona.core.navigation.AddComputerRoute> { UnavailablePage(stringResource(R.string.app_demo_no_machines), navigator) }
                 entry<MachineDetailRoute> { UnavailablePage(stringResource(R.string.app_demo_no_machines), navigator) }
             }
-            session.knowledge?.let { knowledgeEntries(navigator, it, session.assistant, session.sender, uriHandler::openUri,
+            session.knowledge?.let { knowledgeEntries(navigator, it, session.assistant, session.sender, session.sessions,
+                session.knowledgeNamespace, uriHandler::openUri,
                 onNewAgent = { start -> navigator.navigate(NewAgentRoute(start.machineId, start.cwd, start.prompt)) }) } ?: run {
                 entry<KnowledgeRoute> { UnavailablePage(stringResource(R.string.app_demo_no_knowledge), navigator) }
+                entry<KnowledgeKindRoute> { UnavailablePage(stringResource(R.string.app_demo_no_knowledge), navigator) }
                 entry<KnowledgeDetailRoute> { UnavailablePage(stringResource(R.string.app_demo_no_knowledge), navigator) }
             }
             settingsDetailEntries(navigator, services, askSubscriptions)

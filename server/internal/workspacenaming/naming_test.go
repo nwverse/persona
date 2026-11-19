@@ -122,3 +122,67 @@ func TestFrozenPlanVerificationDoesNotUseManagerPathFlavor(t *testing.T) {
 		t.Fatal("tampered snapshot accepted")
 	}
 }
+
+func TestWorkspaceNamingContextUsesTargetPlatform(t *testing.T) {
+	if runtimeFlavor() != "posix" {
+		t.Skip("POSIX host control for the Windows path tests")
+	}
+	s := source()
+	s.Rules.BaseDirectory = "C:/work"
+	if err := Validate(s.Rules); err != nil {
+		t.Fatal("settings must permit a Windows target", err)
+	}
+	for _, tc := range []struct {
+		node NodeContext
+		code string
+	}{
+		{NodeContext{Home: "C:/Users/example", PathFlavor: "windows"}, "context_invalid"},
+		{NodeContext{Home: "/home/example"}, "base_scope_denied"},
+	} {
+		p := Resolve(s, tc.node)
+		if p.Plan != nil || len(p.Diagnostics) != 1 || p.Diagnostics[0].Code != tc.code {
+			t.Fatal("host path handling was mistaken for Windows resolution", p)
+		}
+	}
+}
+
+func TestRejectNamespaceBaseTemplatesOnAnyHost(t *testing.T) {
+	// Settings may be saved on a different OS from the target Node. They must
+	// reject namespace syntax there too, before target-specific resolution.
+	for _, base := range []string{"//?/C:/private-state/work", "//?/UNC/files.example.com/share/work", "//?/unc/files.example.com/share/work", "//./C:/work", "/??/C:/work"} {
+		if err := Validate(Rules{BaseDirectory: base}); err == nil {
+			t.Fatalf("accepted namespace base %q", base)
+		}
+	}
+}
+
+func TestTaskDirectoryExpansionReservedNames(t *testing.T) {
+	for _, layout := range []repository.Layout{repository.LayoutRoot, repository.LayoutContainer} {
+		for _, title := range []string{"NUL", "CON", "COM1", "LPT9"} {
+			s := source()
+			s.Layout, s.Title = layout, title
+			s.Rules.TaskDirectoryTemplate = "{task-id}/{task-slug}/work"
+			if err := Validate(s.Rules); err != nil {
+				t.Fatal("title is unavailable during static validation", err)
+			}
+			p := Resolve(s, NodeContext{Home: "/home/example"})
+			if p.Status != "invalid" || p.Plan != nil || len(p.Diagnostics) != 1 || p.Diagnostics[0].Code != "path_invalid" || p.Diagnostics[0].Field != "task_directory_template" {
+				t.Errorf("reserved expansion produced a plan: %s, %s: %+v", layout, title, p)
+			}
+			// An unused reserved title must not invalidate an ordinary task path,
+			// and a Git branch does not use directory-segment restrictions.
+			s.Rules.TaskDirectoryTemplate = Defaults().TaskDirectoryTemplate
+			s.Rules.BranchTemplate = "persona/NUL"
+			if p := Resolve(s, NodeContext{Home: "/home/example"}); p.Plan == nil {
+				t.Fatal("unused title or valid Git branch rejected", p)
+			}
+		}
+		for _, path := range portableTaskDirectories() {
+			s := source()
+			s.Layout, s.Rules.TaskDirectoryTemplate = layout, path
+			if p := Resolve(s, NodeContext{Home: "/home/example"}); p.Status != "complete" || p.Plan == nil {
+				t.Errorf("ordinary POSIX path rejected: %q: %+v", path, p)
+			}
+		}
+	}
+}

@@ -570,8 +570,14 @@ struct ChatLinesTests {
                                                           sent(3, at: t0.addingTimeInterval(600)), sent(4, at: t0.addingTimeInterval(660), role: "assistant")]), live: nil)
         let merged = ChatLines.mergeModeChanges(lines, [modeChange(t0.addingTimeInterval(120)), modeChange(t0.addingTimeInterval(900), to: "plan"),
                                                         modeChange(t0.addingTimeInterval(-60), to: "auto")])
-        // before the first message, after the first exchange (never between its message and answer), after the last
-        #expect(modeIDs(merged) == ["mode"] + modeIDs(Array(lines.prefix(2))) + ["mode"] + modeIDs(Array(lines.dropFirst(2))) + ["mode"])
+        // before the first message, after the first exchange (never between its message and answer), after the last.
+        // Built a part at a time: one chained sum of five arrays is more than Xcode 26.3's type checker takes (#10519).
+        var expected: [String] = ["mode"]
+        expected += modeIDs(Array(lines.prefix(2)))
+        expected.append("mode")
+        expected += modeIDs(Array(lines.dropFirst(2)))
+        expected.append("mode")
+        #expect(modeIDs(merged) == expected)
         #expect(Set(merged.map(\.id)).count == merged.count)
         // the last line Retry and the error cards ask about is not a mode change
         #expect(ChatLines.lastOfChat(merged)?.id == lines.last?.id)
@@ -609,6 +615,11 @@ struct ChatLinesTests {
         #expect(outcome("restart_done", "already_in") == "已经是「\(all)」了，不用重启")
         #expect(outcome("restart_dropped", "process_replaced") == "已取消，不会重启到「\(all)」：会话换了进程")
         #expect(outcome("restart_dropped", "process_exited") == "已取消，不会重启到「\(all)」：原进程已经退出")
+        #expect(outcome("restart_dropped", "replaced") == "已取消，不会重启到「\(all)」：被另一次切换取代")
+        // the mode it runs in picked again (#11089): called off, not replaced
+        #expect(outcome("restart_dropped", "cancelled") == "已取消，不会重启到「\(all)」：会话保持当前模式")
+        // a code this app does not know yet (a newer node): the plain line
+        #expect(outcome("restart_dropped", "some_later_code") == "已取消，不会重启到「\(all)」")
         #expect(outcome("restart_failed", "start_failed") == "没能重启到「\(all)」：新进程没起来，会话按原来的模式继续")
         #expect(outcome("restart_failed", nil) == "没能重启到「\(all)」")
         #expect(outcome("restart_dropped", "claude 4101, the process it was picked for, has exited") == "已取消，不会重启到「\(all)」")

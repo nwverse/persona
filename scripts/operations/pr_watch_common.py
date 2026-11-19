@@ -16,7 +16,7 @@ REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 SHA = re.compile(r"^[0-9a-f]{40}$")
 PR_FIELDS = (
     "number,title,body,state,isDraft,headRefOid,headRefName,baseRefName,"
-    "baseRefOid,isCrossRepository,mergeable,mergeStateStatus,reviewDecision,url,"
+    "isCrossRepository,mergeable,mergeStateStatus,reviewDecision,url,"
     "createdAt,updatedAt"
 )
 STALE_LABEL = "stale"
@@ -144,7 +144,11 @@ def checked(argv, cwd=None, timeout=120, environ=None, input_text=None):
         detail = (result.stderr.strip() or result.stdout.strip())[-2000:]
         if argv[:2] == ["git", "fetch"] and "exhaustive rename detection was skipped" in detail:
             # This fallback supports only the exact single-refspec shape used
-            # by the watcher, never arbitrary options or multiple refspecs.
+            # by the watcher, never arbitrary options or multiple refspecs. An
+            # empty refmap (repair fetches, #10584) never updates a tracking
+            # ref, which the FETCH_HEAD recovery below already honors.
+            if argv[3:4] == ["--refmap="]:
+                argv = argv[:3] + argv[4:]
             if len(argv) != 5 or argv[3].startswith("-"):
                 raise WatchError("unsupported fetch recovery command shape")
             if argv[4].lstrip("+").startswith("-"):
@@ -237,29 +241,35 @@ def gh_json(argv, timeout=90, environ=None, input_text=None):
 
 
 def pr_snapshot(repo, number, timeout=90, environ=None):
-    argv = ["gh", "pr", "view", str(number), "--repo", repository(repo), "--json", PR_FIELDS]
-    result = run(argv, timeout=timeout, environ=environ)
-    if result.returncode:
-        if "Unknown JSON field: \"baseRefOid\"" not in result.stderr:
-            raise WatchError("gh failed (%s): %s" % (result.returncode, bounded(result.stderr or result.stdout, 1000)))
-        # Older gh releases reject an unknown optional field before returning
-        # the PR. Re-read the supported fields, then use the commits fallback.
-        legacy = PR_FIELDS.replace("baseRefOid,", "")
-        data = gh_json(["pr", "view", str(number), "--repo", repository(repo), "--json", legacy],
+    # Resolve the live base in the same query as the PR. The PR's recorded
+    # baseRefOid is not necessarily its base branch's current tip (#10568).
+    owner, name = repository(repo).split("/", 1)
+    query = """
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      number title body state isDraft headRefOid headRefName baseRefName
+      baseRef { target { oid } }
+      isCrossRepository mergeable mergeStateStatus reviewDecision url createdAt updatedAt
+    }
+  }
+}
+"""
+    payload = {"query": query, "variables": {"owner": owner, "name": name, "number": number}}
+    response = gh_json(["api", "graphql", "--input", "-"], input_text=json.dumps(payload),
                        timeout=timeout, environ=environ)
-    else:
-        try:
-            data = json.loads(result.stdout)
-        except json.JSONDecodeError as error:
-            raise WatchError("gh returned invalid PR snapshot JSON: %s" % error) from error
+    if not isinstance(response, dict):
+        raise WatchError("GitHub returned an invalid PR snapshot")
+    try:
+        repository_data = response["data"]["repository"]
+        data = repository_data["pullRequest"]
+        base = data["baseRef"]["target"]["oid"]
+    except (KeyError, TypeError) as error:
+        raise WatchError("GitHub returned an incomplete PR snapshot") from error
     if not isinstance(data, dict) or data.get("number") != number:
         raise WatchError("unexpected PR snapshot")
+    data["baseRefOid"] = base
     for field in ("headRefOid", "baseRefOid"):
-        if field == "baseRefOid" and not data.get(field):
-            # gh pr view does not expose baseRefOid on every supported version.
-            # Resolve the actual current base tip, not the PR's original base.
-            data[field] = checked(["gh", "api", "repos/%s/commits/%s" % (repo, data["baseRefName"]),
-                                   "--jq", ".sha"], timeout=timeout, environ=environ).strip()
         if not isinstance(data.get(field), str) or not SHA.fullmatch(data[field]):
             raise WatchError("PR snapshot has no valid %s" % field)
         if field == "baseRefOid" and data[field] == "0" * 40:
@@ -347,7 +357,19 @@ def verification_env():
     # step, so it explicitly clears the linker flag. Explicit GOFLAGS wins.
     if "GOFLAGS" not in env:
         env["GOFLAGS"] = "-gcflags=all=-dwarf=false -ldflags=-w"
+    env["GOFLAGS"] = with_trimpath(env["GOFLAGS"])
     return env
+
+
+def with_trimpath(goflags):
+    """GOFLAGS with -trimpath added unless it already sets the flag (-trimpath=false included).
+
+    Without -trimpath Go's build cache key includes each package's absolute directory, so every PR worktree would
+    compile and cache every package again (#10614; scripts/test/go_trimpath.sh is the shell scripts' copy).
+    """
+    if any(flag.lstrip("-").split("=", 1)[0] == "trimpath" for flag in goflags.split()):
+        return goflags
+    return (goflags + " -trimpath").strip()
 
 
 def atomic_json(path, data):

@@ -238,11 +238,32 @@ data class AssistantLaunchers(
     val launchers: List<AgentLauncher> = emptyList(),
     val default: LauncherDefault? = null,
     val unavailable: List<UnavailableLauncher> = emptyList(),
+    /** The active model profile's Agent presets whose launcher this computer has; empty on an older hub. */
+    val tiers: List<PickerTier> = emptyList(),
+    /** The profile [tiers] belongs to; null when there is no active profile or on an older hub. */
+    @SerialName("tiers_profile") val tiersProfile: PickerTierProfile? = null,
 )
 
-/** The model a launcher names, short. Older nodes used the Chinese display placeholder for no model. */
-fun launcherModel(launcher: AgentLauncher): String? = launcher.model
-    ?.takeUnless { it == "默认" } // i18n-ignore: legacy wire value, never displayed
+/** A named Agent launch preset from the active model profile (#2225). */
+@Serializable
+data class PickerTier(
+    val name: String,
+    val launcher: String,
+    val model: String? = null,
+    val effort: String? = null,
+    val description: String? = null,
+)
+
+/** The model profile whose Agent presets a computer's launcher list offers. */
+@Serializable
+data class PickerTierProfile(val id: String, val name: String)
+
+/** The explicit model a launcher names. Older nodes used the Chinese display placeholder for no model. */
+fun launcherExplicitModel(launcher: AgentLauncher): String? = launcher.model
+    ?.takeUnless { it.isBlank() || it == "默认" } // i18n-ignore: legacy wire value, never displayed
+
+/** The model a launcher names, short. */
+fun launcherModel(launcher: AgentLauncher): String? = launcherExplicitModel(launcher)
     ?.substringAfterLast('/')
     ?.takeIf(String::isNotBlank)
 

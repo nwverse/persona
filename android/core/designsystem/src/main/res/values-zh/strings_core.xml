@@ -95,6 +95,7 @@
     <string name="designsystem_core_state_awaiting_reply">待你回复</string>
     <string name="designsystem_core_state_working">工作中</string>
     <string name="designsystem_core_state_background_waiting">后台等待中</string>
+    <string name="designsystem_core_state_just_finished">刚做完待看</string>
     <string name="designsystem_core_state_working_background">工作中（后台）</string>
     <string name="designsystem_core_state_waiting">待唤醒</string>
     <string name="designsystem_core_state_muted">已屏蔽</string>
@@ -399,6 +400,7 @@
     <string name="designsystem_core_knowledge_meetings">会议</string>
     <string name="designsystem_core_knowledge_events">日程</string>
     <string name="designsystem_core_knowledge_recordings">录音</string>
+    <string name="designsystem_core_knowledge_topics">主题</string>
     <string name="designsystem_core_mail_error">错误</string>
     <string name="designsystem_core_mail_outlook">Outlook · Microsoft 账号登录</string>
     <string name="designsystem_core_mail_gmail">Gmail · Google 账号登录</string>
@@ -548,4 +550,6 @@
     <string name="designsystem_core_always_scope_edit_directory">这段对话中，这个目录里的所有文件编辑</string>
     <string name="designsystem_core_always_scope_tool">这段对话里的所有「%1$s」调用</string>
     <string name="designsystem_core_always_scope_approved">批准的范围在这段对话中持续有效</string>
+    <string name="designsystem_core_api_conversation_invalid">此会话已失效：压缩上下文属于另一个账号。请换新会话接着做。</string>
+    <string name="designsystem_core_api_conversation_invalid_label">已失效</string>
 </resources>

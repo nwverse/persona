@@ -21,7 +21,7 @@ class HttpAssistantManagement private constructor(
     client: OkHttpClient,
     private val isCurrent: () -> Boolean,
     private val pinnedManager: String?,
-) : AssistantManagement {
+) : AssistantManagement, UsageHistoryApi {
     constructor(
         baseUrl: String, token: String, client: OkHttpClient, isCurrent: () -> Boolean = { true },
     ) : this(baseUrl, token, client, isCurrent, null)
@@ -108,7 +108,8 @@ class HttpAssistantManagement private constructor(
     override suspend fun launcherModels(machineId: String, launcher: String): LauncherModels? = try {
         require(machineId.isNotBlank() && launcher.isNotBlank())
         JsonCodec.decodeFromJsonElement(request("GET",
-            listOf("api", "v1", "machines", machineId, "launchers", launcher, "models")))
+            listOf("api", "v1", "machines", machineId, "launchers", launcher, "models"),
+            query = mapOf("purpose" to "assistant")))
     } catch (failure: HubFailure) {
         if (failure.status == 404) null else throw failure
     }
@@ -264,5 +265,17 @@ class HttpAssistantManagement private constructor(
         val code = failure.code
         if ((failure.status == 409 || (failure.status ?: 0) >= 500) && !code.isNullOrBlank()) throw AssistantRefused(code, failure.message)
         throw failure
+    }
+
+    override suspend fun usageDays(days: Int): UsageDays {
+        require(days in 1..371) { "days is 1 to 371" }
+        val answer = request("GET", listOf("api", "v1", "usage", "days"), query = mapOf("days" to days.toString()))
+        return JsonCodec.decodeFromJsonElement(answer.getValue("usage"))
+    }
+
+    override suspend fun usageHours(days: Int): UsageHours {
+        require(days in 1..7) { "days is 1 to 7" }
+        val answer = request("GET", listOf("api", "v1", "usage", "hours"), query = mapOf("days" to days.toString()))
+        return JsonCodec.decodeFromJsonElement(answer.getValue("usage"))
     }
 }

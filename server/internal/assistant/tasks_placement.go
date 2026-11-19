@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -179,6 +180,9 @@ func (s *Service) taskDirectoryExists(ctx context.Context, machine, dir string) 
 // and answers the machine's id and the session's: the machine it reached is the one the agent is linked to (looking it
 // up again after the start could find another, or none). A failed start counts against the launcher there.
 func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (mid, sid string, err error) {
+	if err := s.checkRequestStart(ctx, *t); err != nil {
+		return "", "", err
+	}
 	t.normalizeReadonlyPermission(readonlyModeOf(s.settings(ctx)))
 	if err := t.normalizeMachinePolicy(); err != nil {
 		return "", "", err
@@ -202,7 +206,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	t.planFirst = false
 	params := map[string]any{"launcher": t.Launcher, "model": t.Model, "effort": t.Effort, "tier": t.Tier}
 	// The start-defaults policy: its preset goes in before the start is resolved, as if the task had named that tier;
-	// its effort, ultracode and goal after the launcher fit.
+	// its effort and ultracode after the launcher fit, and the goal (a rule's or the Codex default) after that.
 	defaults, withDefaults := s.taskStartDefaults(ctx, t)
 	presetNote := ""
 	if withDefaults {
@@ -275,8 +279,11 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		t.Effort = ""
 	}
 	if withDefaults { // only what the task left open, after the fit, which may itself have filled some in
-		s.applyStartExtras(ctx, t, caller, defaults, fit.agent == "claude", params, presetNote)
+		s.applyStartExtras(ctx, t, caller, defaults, fit.agent, params, presetNote)
 	}
+	// The goal: a rule's, else the Codex default for a task with criteria (startGoalSource); the default is not sent
+	// where the node is known to refuse it, and its refusal elsewhere is only logged (below).
+	defaultGoal := s.applyStartGoal(t, defaults, withDefaults, fit.agent, defaultGoalRefusedOn(m, params, fit), params)
 	if t.MachinePolicy == machineFixed {
 		// Only an actual terminal start can recheck a repaired terminal shell.
 		// An explicit retry keeps that existing recovery path on the fixed target;
@@ -288,6 +295,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 				"machine": m.ID, "launcher": t.Launcher, "reason": r.Error,
 			})
 		}
+	}
+	if err := s.checkRequestStart(ctx, *t); err != nil {
+		return "", "", err
 	}
 	if err := s.admitTaskWorkspace(ctx, t); err != nil {
 		return "", "", err
@@ -323,6 +333,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	case t.Parent != "":
 		prompt += "\n\n" + prompts.RenderTaskWorker()
 	}
+	// Files for the user are named by path, never pasted into the reply (task_files.go, #10511). Always asked for,
+	// unlike the closeout form below, which depends on a switch.
+	prompt += "\n\n" + prompts.RenderTaskFiles(answerLanguage(s.hello(ctx).Locale))
 	// The closeout's form, up front (agents_closeout_brief.go): after the delivery line when both are asked for.
 	delivery := !t.Readonly && s.doneNeedsDelivery(ctx)
 	brief := s.closeoutBrief(ctx, delivery)
@@ -334,7 +347,8 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	}
 	// The project background, and the decisions of the todo and its continuation ancestors (a task started again may
 	// have some), go before the prompt (#2820, #1618); the tab is named from the title.
-	prompt = s.withProjectContext(ctx, m.ID, t.Cwd, t.Supervisor, s.withTodoDecisions(ctx, t.TodoID, prompt))
+	// The direction's notes go by who follows the task up (#10623): a leader's own plan names it only in the ledger.
+	prompt = s.withProjectContext(ctx, m.ID, t.Cwd, s.taskSupervisorOf(t), s.withTodoDecisions(ctx, t.TodoID, prompt))
 	prompt, err = s.withStandingAuthorizations(ctx, m.ID, t.Cwd, prompt)
 	if err != nil {
 		return "", "", err
@@ -345,6 +359,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		prompt = withAttachments(prompt, s.handAttachments(ctx, t.AttachFrom, m.ID, t.Attachments, t.Mentioned))
 	}
 	params["cwd"], params["prompt"], params["tab_name"] = t.Cwd, prompt, s.tabName(ctx, t.Title)
+	if t.WaitInputID != "" {
+		params["client_msg_id"] = t.WaitInputID
+	}
 	if t.WorkspaceResolved != nil && t.WorkspaceResolved.WorkspaceID != "" {
 		params["workspace_id"] = t.WorkspaceResolved.WorkspaceID
 	}
@@ -365,11 +382,18 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		params["in_pane"] = t.inPane
 	}
 	var res struct {
-		Session proto.Session `json:"session"`
+		Session  proto.Session            `json:"session"`
+		Terminal *devicewire.TaskTerminal `json:"task_terminal,omitempty"`
 		// What an engine that runs only its own launchers ran in place of what was asked (#8140).
 		Instead *proto.StartInstead `json:"instead"`
 	}
 	picked, _ := params["launcher"].(string)
+	t.TerminalTarget = taskTerminalTarget{}
+	terminalToken := ""
+	if t.CloseTabOnAccept && !retry && t.inPane == "" {
+		terminalToken = newStartSessionID()
+		params["task_terminal_token"] = terminalToken
+	}
 	// Remember the sessions already there, so a start whose answer never comes back can adopt only the session it
 	// created (the same reconciliation agent_start gets, tools.go): a slow link can leave the node building the tab
 	// after the hub's wait ends (#6540). Its own short bound keeps a slow list out of the start's wait.
@@ -388,6 +412,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if err := s.checkContinuationScope(t); err != nil {
 		return "", "", err
 	}
+	if err := s.checkRequestStart(ctx, *t); err != nil {
+		return "", "", err
+	}
 	sentAt := time.Now()
 	err = s.call(ctx, m.ID, DeviceSessionStart, params, &res)
 	// Extras the agent it landed on cannot have (ultracode #3596, a start goal: start_defaults.go) are each dropped
@@ -398,8 +425,13 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		if reason, no := s.goalRefusal(err, params); no {
 			delete(params, "goal")
 			s.logf("task %s: start: %s; starting without a goal", t.TodoID, reason)
-			t.noteWhy(i18n.T(s.lang(ctx), "assistant-tasks.start_goal_skipped", i18n.Args{"reason": reason}))
+			if !defaultGoal { // a goal the owner never asked for is no news on the task's card
+				t.noteWhy(i18n.T(s.lang(ctx), "assistant-tasks.start_goal_skipped", i18n.Args{"reason": reason}))
+			}
 			if err := s.checkContinuationScope(t); err != nil {
+				return "", "", err
+			}
+			if err := s.checkRequestStart(ctx, *t); err != nil {
 				return "", "", err
 			}
 			err = s.call(ctx, m.ID, DeviceSessionStart, params, &res)
@@ -412,6 +444,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 			if err := s.checkContinuationScope(t); err != nil {
 				return "", "", err
 			}
+			if err := s.checkRequestStart(ctx, *t); err != nil {
+				return "", "", err
+			}
 			err = s.call(ctx, m.ID, DeviceSessionStart, params, &res)
 			continue
 		}
@@ -420,6 +455,17 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if err != nil {
 		s.recordStartFailure(ctx, m.ID, s.startLauncher(ctx, picked), err)
 		if startResultUnknown(err) {
+			if t.RequestGate != "" {
+				if expectID != "" {
+					lookup, cancel := context.WithTimeout(context.WithoutCancel(ctx), agentStartListTimeout)
+					session, found := s.adoptStartedSession(lookup, m, s.startLauncher(ctx, picked), t.Cwd, expectID, nil)
+					cancel()
+					if found {
+						return m.ID, session.SessionID, nil
+					}
+				}
+				return "", "", err
+			}
 			// The node may still have built the tab and launched the agent. Ask the machine itself before this is
 			// called a failure: an adopted session returns through the normal success path, so the task is linked
 			// once, with no failure receipt, retry or reroute (and no duplicate agent on another computer, #6540).
@@ -447,6 +493,10 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	}
 	if res.Session.SessionID == "" || res.Session.MachineID != "" && res.Session.MachineID != m.ID {
 		return "", "", &rpc.Error{Code: "identity_conflict", Message: i18n.T(s.lang(ctx), "assistant-tasks.start_identity_conflict")}
+	}
+	if terminalToken != "" && res.Terminal != nil && res.Terminal.Token == terminalToken &&
+		res.Terminal.SessionID == res.Session.SessionID && res.Terminal.PaneID == res.Session.PaneID && !res.Session.Starting {
+		t.TerminalTarget = taskTerminalTarget{Machine: m.ID, TaskTerminal: *res.Terminal}
 	}
 	ran := ranLauncher(s.startLauncher(ctx, picked), res.Instead, res.Session)
 	if res.Session.StartError != "" || res.Session.Starting {

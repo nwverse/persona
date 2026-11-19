@@ -313,7 +313,7 @@ func (s *Service) ensureBackendWorkspacePlan(ctx context.Context, id string, in 
 	if !ok {
 		return taskworkspace.Failure("store_unavailable", "plan", in.OperationID, "", "")
 	}
-	prior, err := st.WorkspaceNamingPlan(ctx, id, in.OperationID)
+	prior, err := st.WorkspaceNamingPlanForSave(ctx, id, in.OperationID)
 	if err != nil {
 		return err
 	}

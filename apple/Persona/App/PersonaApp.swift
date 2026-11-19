@@ -388,6 +388,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             LiveActivityController.shared.showSample(phase, details: d.bool(forKey: "fleetDetails"), island: d.string(forKey: "fleetIsland"),
                                                      count: d.integer(forKey: "showFleetCount"))
         }
+        #if os(iOS) && canImport(AlarmKit)
+        // `-showAlarmSample timer|paused`: a 25-minute "Focus" timer set as phone_timer_start sets one (paused: then paused),
+        // so its Live Activity can be photographed (docs/apple/live-activity.md "Alarms and timers (AlarmKit)").
+        if #available(iOS 26.0, *), let sample = d.string(forKey: "showAlarmSample") {
+            AlarmsTool.showSample(paused: sample == "paused")
+        }
+        #endif
         RuntimeCLI.startIfAsked() // `-runtimeCLI <port>`: scripts/app/personactl.py drives the running app
         let automation = d.string(forKey: "pairURL") != nil
         #else
@@ -401,6 +408,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         #if os(iOS)
         RecordingDayCatchUp.register()
         #endif
+        #if os(iOS)
+        MeetingReplay.shared.clearEnded() // a replayed meeting tape (#10589) left from the last run leaves the recordings
+        #endif
         #if DEBUG
         RecordingSamples.showMeetingIfAsked() // `-showMeetingSample recording|paused|interrupted|minutes|pending|overview`
         #if os(iOS)
@@ -413,6 +423,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         // `-openDayCatchUp YES`: runs the all-day catch-up now (the simulator never runs background tasks).
         if UserDefaults.standard.bool(forKey: "openDayCatchUp") { Task { _ = await RecordingDayCatchUp.catchUp() } }
         MeetingReplay.startIfAsked() // `-showMeetingReplay <tape>|sample` (#9417)
+        MeetingTapeLibrary.installSampleIfAsked() // `-openMeetingTapes sample|empty` (#10589)
         MeetingTapeRecorder.startIfAsked() // `-openMeetingAudio <file>`: the meeting it records writes a tape
         #endif
         #endif
@@ -420,6 +431,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         AppModel.shared.start()
         AppIconBadgeWatcher.shared.start(AppModel.shared)
         LiveActivityController.shared.start()
+        // A hub that retired this device's push registration answers its writes 409 (#9612): register again, then retry.
+        APIClient.onPushRegistrationRequired = { group in await PushRegistrar.shared.registrationRequired(group: group).value }
         if !automation { PushRegistrar.shared.registerIfPossible() }
         return true
     }

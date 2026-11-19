@@ -12,12 +12,13 @@ class AssistantConversationTest {
         Item("u$n", n, ts = "2026-11-10T10:00:${n.toString().padStart(2, '0')}Z", role = "user", kind = "text",
             text = text, source = source, injected = injected, queued = queued)
     private fun reply(n: Int, text: String) = Item("a$n", n, role = "assistant", kind = "text", text = text)
+    private fun narration(n: Int, text: String) = reply(n, text).copy(narration = true)
     private fun project(items: List<Item>) = AssistantConversation.project(chatLines(items.map(::LineItem)).lines, items)
 
     @Test fun backgroundOwnershipSurvivesRecapsButEndsAtGenuineQueuedInput() {
         val items = listOf(user(1, "A real question"), reply(2, "A real answer"),
-            user(3, "A background check", MessageSource("supervision")), reply(4, "Nothing to decide"),
-            Item("compact", 5, role = "system", kind = "recap", text = "Compacted"), reply(6, "Still background"),
+            user(3, "A background check", MessageSource("supervision")), narration(4, "Checking the background work"),
+            Item("compact", 5, role = "system", kind = "recap", text = "Compacted"), narration(6, "Still checking"),
             user(7, "A genuine queued request", queued = true), reply(8, "The requested final answer"))
         val result = project(items)
         val visible = result.foreground.filterIsInstance<ChatLine.Row>().map { it.id }
@@ -43,7 +44,7 @@ class AssistantConversationTest {
 
     @Test fun scheduledMetadataIsQuietWhileWakeContinuesTheGenuineExchange() {
         val items = listOf(user(1, "A question"), reply(2, "An answer"),
-            user(3, "Scheduled model input", injected = Injected("followup", "interval")), reply(4, "Scheduled result"),
+            user(3, "Scheduled model input", injected = Injected("followup", "interval")), narration(4, "Checking the schedule"),
             user(5, "A second question"), user(6, "Automatic wake", injected = Injected("followup", "wake")), reply(7, "Final answer"))
         val visible = project(items).foreground.map { it.id }
         assertFalse("u3" in visible)
@@ -56,7 +57,7 @@ class AssistantConversationTest {
         val items = listOf(user(1, "A genuine question"), reply(2, "Initial answer"),
             user(3, "Continue after usage reset", source = MessageSource("followup")), reply(4, "The final user-facing answer"),
             user(5, "A scheduled one-off", source = MessageSource("followup", "main"), injected = Injected("followup", "once")),
-            reply(6, "The scheduled background result"))
+            narration(6, "Checking the scheduled follow-up"))
         val visible = project(items).foreground.map { it.id }
         assertTrue("u3" in visible)
         assertTrue("a4" in visible)
@@ -208,5 +209,82 @@ class AssistantConversationTest {
             .mapNotNull { (it as? ChatLine.Row)?.row?.id }
         assertTrue("$ids", "n2" in ids)
         assertTrue("$ids", "n3" !in ids)
+    }
+
+    @Test fun standaloneScheduledAndFollowupConversationsKeepExchangesInForegroundAcrossStyles() {
+        val patrolAndFollowup = listOf(
+            user(1, "Scheduled prompt", source = MessageSource("patrol", title = "Daily check"),
+                injected = Injected("followup", "daily", "Daily check", line = "Scheduled task started")),
+            Item("use2", 2, role = "assistant", kind = "tool_use", toolUseId = "call2", toolName = "mcp_persona_0c671287_notify_user"),
+            Item("res3", 3, role = "user", kind = "tool_result", toolUseId = "call2", text = "Notification sent."),
+            reply(4, "Daily check finished and pushed to your phone."),
+            user(5, "Follow-up prompt", source = MessageSource("followup", "sched-chat", "Follow-up"),
+                injected = Injected("followup", "once", "Follow-up", line = "Follow-up is due")),
+            reply(6, "Quiet follow-up note in its own chat."),
+        )
+        val lines = chatLines(patrolAndFollowup.map(::LineItem)).lines
+        for (inline in listOf(false, true)) {
+            val projected = AssistantConversation.project(
+                lines, patrolAndFollowup,
+                folding = BackgroundFolding(rounds = false),
+                inline = inline,
+                supervisingConversation = false,
+            )
+            assertTrue("inline=$inline", projected.foreground.any { it.id == "a4" })
+            assertTrue("inline=$inline", projected.foreground.any { it.id == "a6" })
+            assertTrue("inline=$inline", projected.background.isEmpty())
+        }
+    }
+
+    @Test fun standaloneBackgroundSupervisorFoldsQuietRoundsInsteadOfBlankingForeground() {
+        val quietSupervision = listOf(
+            user(1, "Supervision: 1 task running", injected = Injected("system", "supervise", "Supervision")),
+            narration(2, "Checking whether the owner is needed."),
+        )
+        val lines = chatLines(quietSupervision.map(::LineItem)).lines
+        val closed = AssistantConversation.project(
+            lines, quietSupervision,
+            folding = BackgroundFolding(rounds = false),
+            inline = false,
+            supervisingConversation = false,
+        )
+        assertTrue(closed.foreground.any { (it as? ChatLine.Extra)?.payload is BackgroundRound })
+        assertFalse(closed.foreground.any { it.id == "a2" })
+        assertTrue(closed.background.isEmpty())
+        val opened = AssistantConversation.project(
+            lines, quietSupervision,
+            folding = BackgroundFolding(open = setOf("bg-u1"), rounds = false),
+            inline = false,
+            supervisingConversation = false,
+        )
+        assertTrue(opened.foreground.any { it.id == "a2" })
+    }
+
+    @Test fun supervisingConversationsKeepSupervisionVisibleRoundsInForegroundEvenOnBriefAndBoard() {
+        val items = listOf(
+            user(1, "Supervision check", MessageSource("supervision")),
+            Item("use2", 2, role = "assistant", kind = "tool_use", toolUseId = "call2", toolName = "mcp_persona_0c671287_notify_user"),
+            Item("res3", 3, role = "user", kind = "tool_result", toolUseId = "call2", text = "Notification sent."),
+            reply(4, "Notified the owner about completion."),
+            user(5, "Quiet supervision check", MessageSource("supervision")),
+            narration(6, "Still working quietly."),
+            user(7, "Accepted review round", MessageSource("supervision")),
+            Item("use8", 8, role = "assistant", kind = "tool_use", toolUseId = "call8",
+                toolName = "mcp_persona_55a1c59d_task_review", toolInput = buildJsonObject { put("verdict", "accepted") }),
+            Item("res9", 9, role = "user", kind = "tool_result", toolUseId = "call8", text = "Accepted."),
+            reply(10, "Task accepted."),
+        )
+        val projected = AssistantConversation.project(
+            chatLines(items.map(::LineItem)).lines,
+            items,
+            folding = BackgroundFolding(rounds = true),
+            inline = false,
+            supervisingConversation = true,
+        )
+        val foregroundIds = projected.foreground.map { it.id }
+        assertTrue("a4" in foregroundIds)
+        assertTrue("a10" in foregroundIds)
+        assertFalse("Quiet supervision still moves to background on Brief/Board", "a6" in foregroundIds)
+        assertTrue(projected.background.any { it.id == "a6" })
     }
 }

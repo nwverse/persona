@@ -16,6 +16,9 @@ import (
 
 func stalledCodexNode(t *testing.T) (*Node, *fakeHerdr) {
 	t.Helper()
+	oldPaste := codexStartPaste
+	codexStartPaste = false
+	t.Cleanup(func() { codexStartPaste = oldPaste })
 	withCodexLaunchers(t, map[string][]string{"codex": {"codex"}})
 	n, f, home := herdrNode(t)
 	cwd := mkdir(t, filepath.Join(home, "proj"))
@@ -83,7 +86,7 @@ func TestCodexCancelledWaitStillCloses(t *testing.T) {
 			cancel()
 		}
 	})
-	_, err := n.startCodex(ctx, n.defaultHost().(host.Launcher), filepath.Join(filepath.Dir(n.dir), "proj"), "codex", []string{"codex"}, "do the task", "w1", "", "")
+	_, err := n.startCodex(ctx, n.defaultHost().(host.Launcher), filepath.Join(filepath.Dir(n.dir), "proj"), "codex", []string{"codex"}, modelExecution{}, "do the task", "w1", "", "")
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancellation lost: %v", err)
 	}

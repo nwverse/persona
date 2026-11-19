@@ -8,6 +8,7 @@
 #   ./scripts/app/android.sh apk        # debug APK only (android/app/build/outputs/apk/debug/app-debug.apk)
 #   ./scripts/app/android.sh release    # R8 release APK, checked, aligned and signed for your own phone
 #                                       # (android/app/build/outputs/apk/release/app-release.apk); add -s <phone> to install it
+# Gradle runs with at most ANDROID_MAX_WORKERS workers (default 4), unless org.gradle.workers.max is already set.
 # shots takes optional environment variables for repeatable, pixel-comparable captures (docs/android/android.md):
 #   SHOTS_STYLE=glass|brief|board  pass debug.style on every launch
 #   SHOTS_PLUGINS=1                the mock hub serves MOCK_EXTENSIONS (Settings › Plugins) and the plugin pages are captured too
@@ -112,10 +113,28 @@ else
   GETTING_STARTED=$(python3 ../scripts/persona_config.py get publish.getting_started_url 2>/dev/null || true)
 fi
 [ -f local.properties ] || echo "sdk.dir=$SDK" > local.properties
+# Gradle runs in a machine-wide gradle slot, so parallel worktrees queue instead of thrashing
+# (docs/operations/testing.md "Heavy build slots"). Inside the slot it takes at most ANDROID_MAX_WORKERS workers
+# (default 4; org.gradle.parallel is on) unless the caller already set org.gradle.workers.max in GRADLE_OPTS or the
+# Gradle user home's properties. With the slots off (PERSONA_HEAVY_SLOTS=0) or no python3, Gradle runs directly, as
+# check-fast's steps do: the helper would only exec it, and the build itself needs no python3.
+gradlew() {
+  local workers=()
+  if ! { [[ " ${GRADLE_OPTS:-} " == *" -Dorg.gradle.workers.max="* ]] ||
+         grep -qs '^[[:space:]]*org\.gradle\.workers\.max[[:space:]]*=' "${GRADLE_USER_HOME:-$HOME/.gradle}/gradle.properties"; }; then
+    workers=(--max-workers="${ANDROID_MAX_WORKERS:-4}")
+  fi
+  if [ "${PERSONA_HEAVY_SLOTS:-}" = 0 ] || ! command -v python3 >/dev/null 2>&1; then
+    ./gradlew ${workers[@]+"${workers[@]}"} "$@"
+  else
+    python3 ../scripts/heavy_slot.py run --kind gradle -- ./gradlew ${workers[@]+"${workers[@]}"} "$@"
+  fi
+}
+case "${ANDROID_MAX_WORKERS:-4}" in ''|*[!0-9]*|0*) echo "ANDROID_MAX_WORKERS must be a positive whole number." >&2; exit 2 ;; esac
 case "$COMMAND" in
-  test) ./gradlew -q -PpersonaApplicationId="$APP_ID" -PpersonaGettingStartedUrl="$GETTING_STARTED" test ;;
-  lint) ./gradlew -q -PpersonaApplicationId="$APP_ID" -PpersonaGettingStartedUrl="$GETTING_STARTED" lint ;;
-  apk) ./gradlew -q -PpersonaApplicationId="$APP_ID" -PpersonaGettingStartedUrl="$GETTING_STARTED" :app:assembleDebug && ls -la app/build/outputs/apk/debug/app-debug.apk ;;
+  test) gradlew -q -PpersonaApplicationId="$APP_ID" -PpersonaGettingStartedUrl="$GETTING_STARTED" test ;;
+  lint) gradlew -q -PpersonaApplicationId="$APP_ID" -PpersonaGettingStartedUrl="$GETTING_STARTED" lint ;;
+  apk) gradlew -q -PpersonaApplicationId="$APP_ID" -PpersonaGettingStartedUrl="$GETTING_STARTED" :app:assembleDebug && ls -la app/build/outputs/apk/debug/app-debug.apk ;;
   release)
     config() { python3 ../scripts/persona_config.py get "$1" 2>/dev/null || true; }
     # || true: with no build-tools ls fails, and under pipefail the script would stop here without the message below
@@ -146,7 +165,7 @@ case "$COMMAND" in
     # About shows the commit this APK is built from: this repository's HEAD, passed explicitly (unknown when it cannot be read).
     BUILD_COMMIT=$(git -C .. rev-parse HEAD 2>/dev/null || true)
     [[ $BUILD_COMMIT =~ ^[0-9a-f]{40}$ ]] || BUILD_COMMIT=unknown
-    ./gradlew -q -PpersonaApplicationId="$APP_ID" -PpersonaGettingStartedUrl="$GETTING_STARTED" -PpersonaBuildCommit="$BUILD_COMMIT" :app:assembleRelease
+    gradlew -q -PpersonaApplicationId="$APP_ID" -PpersonaGettingStartedUrl="$GETTING_STARTED" -PpersonaBuildCommit="$BUILD_COMMIT" :app:assembleRelease
     UNSIGNED=app/build/outputs/apk/release/app-release-unsigned.apk
     SIGNED=app/build/outputs/apk/release/app-release.apk
     python3 ../scripts/release/check_android_shrink.py "$UNSIGNED" app/build/outputs/mapping/release --build-tools "$TOOLS"
@@ -164,11 +183,11 @@ case "$COMMAND" in
       "$ADB" -s "$SERIAL" shell am start -n "$APP_ID/persona.android.MainActivity" >/dev/null
     fi ;;
   install)
-    ./gradlew -q -PpersonaApplicationId="$APP_ID" -PpersonaGettingStartedUrl="$GETTING_STARTED" :app:assembleDebug
+    gradlew -q -PpersonaApplicationId="$APP_ID" -PpersonaGettingStartedUrl="$GETTING_STARTED" :app:assembleDebug
     "$ADB" ${ADB_ARGS[@]+"${ADB_ARGS[@]}"} install -r app/build/outputs/apk/debug/app-debug.apk
     "$ADB" ${ADB_ARGS[@]+"${ADB_ARGS[@]}"} shell am start -n "$APP_ID/persona.android.MainActivity" >/dev/null ;;
   shots|shots-live)
-    ./gradlew -q -PpersonaApplicationId="$APP_ID" -PpersonaGettingStartedUrl="$GETTING_STARTED" -Pkotlin.compiler.execution.strategy=in-process :app:assembleDebug
+    gradlew -q -PpersonaApplicationId="$APP_ID" -PpersonaGettingStartedUrl="$GETTING_STARTED" -Pkotlin.compiler.execution.strategy=in-process :app:assembleDebug
     "$ADB" -s "$SERIAL" install -r app/build/outputs/apk/debug/app-debug.apk >/dev/null
     "$ADB" -s "$SERIAL" shell pm clear "$APP_ID" >/dev/null
     MOCK_PID=""

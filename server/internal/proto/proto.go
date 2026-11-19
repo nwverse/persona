@@ -40,6 +40,7 @@ var Features = []string{
 	"engine_switch",            // POST …/modes with a launcher of the other engine: the next message moves the conversation between Claude Code and Codex with a handoff; pending_switch.agent, engine_history (#5054)
 	"client_msg_id",            // session.send dedupes retries
 	FeatureMessageSendState,    // informational receipt support; trust only authenticated hello.message_send_state == 1
+	FeatureTodoSendState,       // informational: a to-do write's receipts (#10465); trust only authenticated hello.todo_send_state == 1
 	"client_ops",               // durable operation receipts and read-only status queries
 	"send_refusals",            // 409 dialog_open / input_draft, clear_draft
 	"screen_dialog",            // interaction.dialog, Resolution.option, 409 prompt_changed
@@ -115,6 +116,7 @@ var Features = []string{
 	"launcher_scope",           // a Persona-managed provider's share, scope_machines, delivery, own_service and machine_keys (docs/integrations/launchers.md "Device scope and on-demand delivery")
 	"file_inbox",               // POST /api/v1/machines/{mid}/files?dest=inbox: into the machine's receive folder, kept for good (docs/protocol/file-transfer.md)
 	"upload_attachment",        // POST /api/v1/machines/{mid}/files?dest=attachment: a chat attachment kept for good in the node's uploads/<date>/ (docs/protocol/protocol.md "Sending files", #8361)
+	"agent_message_hold",       // a message to an Agent whose computer is away is held and sent when it is back: 202 {"delivered":"later"}, undelivered on its row with computer, …/held/{msg} Retry / DELETE (#10661)
 	"file_transfer",            // POST/GET/DELETE /api/v1/files/transfer: computer to computer, run by the manager, file_transfer events (docs/protocol/file-transfer.md)
 	"task_push",                // Task.push on /api/v1/assistant/tasks: "Push when done", every run or only what a run sends (docs/assistant/assistant.md "Push when done")
 	"task_inbox",               // Task.inbox on /api/v1/assistant/tasks: "When done, put it in the Inbox", off / only if worth a look / every time (docs/assistant/assistant.md "Put it in the Inbox when done")

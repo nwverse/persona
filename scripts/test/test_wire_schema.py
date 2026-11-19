@@ -11,18 +11,31 @@ otherwise drop it or fail on it, changing the bytes it writes back. Every defini
 import functools
 import importlib.util
 import json
+import os
 import re
 import subprocess
 import sys
 import unittest
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
+IMPLEMENTATION_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _source_root():
+    configured = os.environ.get("PERSONA_CI_SOURCE_ROOT")
+    if configured:
+        if not Path(configured).is_absolute():
+            raise ValueError("PERSONA_CI_SOURCE_ROOT must be absolute")
+        return Path(configured)
+    return IMPLEMENTATION_ROOT
+
+
+ROOT = _source_root()
 WIRE = ROOT / "schema" / "wire"
 FIXTURES = ROOT / "spec" / "fixtures"
-GENERATOR = ROOT / "scripts" / "gen" / "extension_schema.py"
+GENERATOR = IMPLEMENTATION_ROOT / "scripts" / "gen" / "extension_schema.py"
 
-spec = importlib.util.spec_from_file_location("test_extension_schema", ROOT / "scripts/test/test_extension_schema.py")
+spec = importlib.util.spec_from_file_location("test_extension_schema", IMPLEMENTATION_ROOT / "scripts/test/test_extension_schema.py")
 ext = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ext)
 
@@ -52,12 +65,39 @@ def domain_cases(domain):
 
 
 def todo_views():
-    """(definition, sample) of every view todo-view expects, and every counts and places todo-counts expects."""
+    """(definition, sample) of every view todo-view expects, every counts and places todo-counts expects, every
+    timeline, result and recap todo-rounds expects with what the item route carries of them, every answer and
+    reply todo-asks holds, and every decision push's todo todo-push expects."""
     for where, c in domain_cases("todo-view"):
         yield "TodoSummary", f"{where}.expected.view", c["expected"]["view"]
     for where, c in domain_cases("todo-counts"):
         yield "TodoCounts", f"{where}.expected.counts", c["expected"]["counts"]
         yield "TodoPlaces", f"{where}.expected.places", c["expected"]["places"]
+    for where, c in domain_cases("todo-rounds"):
+        e = c["expected"]
+        yield "TodoTimeline", f"{where}.expected.timeline", e["timeline"]
+        for i, r in enumerate(e.get("results", [])):
+            yield "TodoResult", f"{where}.expected.results[{i}]", r
+        if "recap" in e:
+            yield "TodoRecap", f"{where}.expected.recap", e["recap"]
+        yield "TodoItemDetail", f"{where} (the item route's)", item_detail(e)
+    for where, c in domain_cases("todo-push"):
+        yield "TodoDecidePush", f"{where}.expected.todo", c["expected"]["todo"]
+    for where, c in domain_cases("todo-asks"):
+        yield "TodoAskAnswer", f"{where}.input.answer", c["input"]["answer"]
+        if "answered" in c["expected"]:
+            yield "TodoAskAnswered", f"{where}.expected.answered", c["expected"]["answered"]
+
+
+def item_detail(expected):
+    """What GET /api/v1/todos/{id} carries beside the row for a todo-rounds case (#10465): the rounds the paper shows
+    (the case's latest), how many there are, its recap and results."""
+    rounds = expected["timeline"]["rounds"]
+    detail = {"rounds": [r for r in rounds if r["id"] in expected.get("latest", [])], "rounds_total": len(rounds)}
+    for key in ("recap", "results"):
+        if key in expected:
+            detail[key] = expected[key]
+    return detail
 
 
 SAMPLES = {"recents.schema.json": recent_setups, "todo-view.schema.json": todo_views}

@@ -66,3 +66,5 @@ func MergeTaskLinks(current []TaskRepository, urls []string, catalog Catalog) ([
 func MergeTaskLinkDetails(current []TaskRepository, input []LinkInput, catalog Catalog) ([]TaskRepository, error) {
 	return repositorywire.MergeTaskLinkDetails(current, input, catalog)
 }
+
+func IsWindowsReservedName(name string) bool { return repositorywire.IsWindowsReservedName(name) }

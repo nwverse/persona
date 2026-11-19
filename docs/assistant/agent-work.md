@@ -120,8 +120,9 @@ Responses relays that refuse the output bound fail closed, without retrying unbo
 lease precedes dispatch; failures back off from ten minutes and stop after three consecutive failures.
 Each failed attempt logs its computer/session and a static reason code (for example `no_dialogue`,
 `model_call_failed`, `invalid_name`, `model_output_truncated` or `naming_timeout`), even if a subsequent title
-or settings recheck discards the result. Provider error bodies, prompts and model replies never enter these
-logs. The ledger retains `last_failure` until a successful naming clears it; old silent failures have no
+or settings recheck discards the result. `model_not_configured` (no model set up for Sorting) is logged once
+and not again until a naming call reaches a model (#10435); each session still records it. Provider error
+bodies, prompts and model replies never enter these logs. The ledger retains `last_failure` until a successful naming clears it; old silent failures have no
 recoverable reason. A deployed hub does not add missing provenance to old nodes: those nodes remain excluded
 until an explicitly authorized compatible node update reports it.
 Before committing, the worker checks settings, counters, current provenance, native title and eligibility again.
@@ -261,7 +262,7 @@ Apply in order; on a match, do not call the model:
    "questions":[{"question":"…","header":"…","options":[{"label":"…","description":"…"}],"multi_select":false}],
    "link":{"url":"https://…","minutes":10},
    "wait":{"what":"What it is waiting for","then":"What to do afterward","check_minutes":10,"agent":"<short id>","risky":false},
-   "artifacts":[{"kind":"pr|commit|doc|build|url","ref":"…"}]}
+   "artifacts":[{"kind":"pr|commit|doc|build|url|file","ref":"…"}]}
   ```
 
 - Decision principles in the prompt:
@@ -274,6 +275,7 @@ Apply in order; on a match, do not call the model:
 
 - The `session_work` table ("Storage" below), sent with the session list as `work`;
 - When done: add `完成：<结论>` ("Completed: <conclusion>") to the knowledge-base project timeline for this directory (`kbAgentDone` used to record the last words of every turn; now it records the conclusion when available);
+- A supervised worker's `report_to_supervisor(kind=done)` and the committed `WorkDone` also share one structured outcome writer. It appends the conclusion, existing links, and any model-extracted decision and reason to the project's `memory.jsonl`, deduplicated by todo, agent, turn and transcript item. The todo's explicit project wins over `ProjectsForWork(machine, cwd)`; without either, nothing is written and a title is never treated as ownership. If the model is unavailable, the original short conclusion and links are kept with decision and reason empty. A failed append logs a warning and remains retryable. This M1 record does not change the existing `log.md` conclusion or inject memory into later dispatches;
 - Replace the "Completed" push body with the conclusion; the main chat's live snapshot adds "Done" and "Waiting" sections ("What Persona knows" below).
 
 ## Closeout
@@ -283,7 +285,7 @@ A closeout is a small record an Agent ends a turn with, so that a stopped sessio
 ```text
 <closeout status="done|not_done|blocked" merged="yes|no|n/a" deployed="yes|no|n/a">
 did: <what changed, one sentence; up to three such lines>
-artifact: <pr|commit|branch|doc|build|url> <reference>
+artifact: <pr|commit|branch|doc|build|url|file> <reference>
 verified: <what was run or measured and its reading, or "untested">
 missing: <what it still needs from someone, if anything>
 waiting: <for status="blocked": who or what it waits for>
@@ -307,6 +309,16 @@ waiting: <for status="blocked": who or what it waits for>
 - **Delivery**: a reply with a closeout and no delivery line of its own (`docs/assistant/todos.md` "Delivery") states its delivery through the closeout: deployed `yes` is live, merged `yes` is merged and not live, merged `no` with a pull request is held at the PR, and a done closeout that says neither is "nothing to ship". A delivery line in the same reply wins.
 - **Not done yet** (follow-ups of #3612): the web (`docs/web/web.md`, "Pages": **Closeout**; the web and Android also have `closeout_ask`, #3616), Android (`docs/android/android.md`, "Closeout, decisions and tasks nobody works on") and the iOS app ("Clients" below) draw the closeout and have the switch, the Mac app and the watch do not; only Android gives a turn that is not finished a mark of its own (on the web and iOS it shows as the plain line of an Unread row, with a claim the hub found untrue marked in the suffix); Codex has no held stop and no starting context, so a Codex session started without a task prompt writes a closeout only if it is asked to (one it writes is read all the same); a session already running when the switch is turned on learns the form at its next start or held stop; the form reaches a task's Agent on Claude Code twice (prompt and starting context).
 
+## Files a task hands over (#10511)
+
+A task whose result is a file — a report, a PDF, an image, an archive — must not have its content pasted into the reply: the conversation sees a clipped copy of the text (1500 characters in a quiet task's notice, 600 in the receipt, 24 KiB in a paged item), and a binary file cannot be pasted at all.
+
+- **Asking for it** (always, independent of the closeout switch): every task prompt ends with `prompts/agents/task_files.md` (started by `startTaskAgent` and `startTaskSuccessor`), which asks the Agent to write one `file: <absolute path>` line per file (at most five) in its final reply, and never to paste the file's content. A closeout may name the same file as `artifact: file <path>`.
+- **Copying it** (`server/internal/assistant/task_files.go`): when a task's turn ends, `taskTurnSettled` reads the whole final reply (the paged item again with `session.item` when the node cut it), takes the paths, and copies each from the Agent's computer to the computer of the conversation that hears of the task (`taskReceiver`: its supervisor, the reporting conversation that opened it, the main conversation for a quiet one, else its origin). It uses the same node RPCs as the user's attachments in the other direction: `file.chunk` (the node's path guard refuses credentials, iCloud and the hub's own secrets) and `file.upload` with `dest=file`, which lands in `uploads/files/<date>/` and is kept, not swept (`dest=terminal` when the node is older). The same computer copies nothing. Limits: explicit paths only, regular files, 50 MB each and 100 MB a turn, five a turn; a copy that fails says why in the notice and never fails the task. The copy is the same trust as the reply it comes with: an Agent can already name any file it can read, and the read guard is what stops a credential from coming along.
+- **Telling the conversation**: the task notice (`prompts/assistant/task_notice.md`), the receipt body (`files`) and the supervision message (`prompts/assistant/supervise.md`) list the files by name and path on the conversation's computer, outside the text clip. The assistant is told to give the user the path in backticks and to read the file itself when it needs the content; never to ask the Agent to paste it or resend it in pieces.
+- **A file it did not hand over**: ask the Agent for it with `file: <path>` (its next reply carries the line, and the copy happens then) — never for the file's content, which would be clipped in the reply. An on-demand tool for pulling a path the Agent already named is a follow-up: it must free its prompt bytes from the assistant's instructions, which the size ratchet keeps from growing.
+- **Clients** need no change: the copy is on the conversation's computer, so the existing backticked-path links (web, iOS, Android) open it in the app's file viewer.
+
 ## Automatic actions
 
 An Agent still linked to a completed to-do, with no open to-do linked to it, receives no automatic continuation,
@@ -318,6 +330,15 @@ later without sending.
 
 ### Transient errors: automatic continuation
 
+- An unrecoverable conversation error overrides a runtime's generic transient kind and any upstream status.
+  Account-sealed native compaction is `turn_error_code: compaction_sealed`, `turn_error_kind: unrecoverable`:
+  the context belongs to another account, so the conversation is invalid. Clients explain the reason and direct
+  the owner to a new conversation instead of offering Continue. The manager neither schedules another retry nor
+  sends a retry queued before the cause was recognized. Adding permanent causes extends
+  `proto.UnrecoverableTurnErrorCode` and the clients' error parsers, with positive and negative regression cases.
+- An old interrupted participant does not override another participant that is working or waiting to resume.
+  Interrupted task rows stay out of Needs you when the task is parked or closed. Archive visibility still follows
+  new activity; it is not a substitute for the task-state filter.
 - On by default and independent of the main switch (`transient_retry`, #3208): it is a rule, with no triage model call. With the main switch off, only
   turns that a transient error ended are followed (`workActive`), and the lists show only the continuation on its way (`transientPending`); everything else stays as without triage.
 - Exponential backoff (`retryBackoff`): `retry_base_seconds` (default 15) doubled for each attempt, so 15 s, 30 s, 60 s, 120 s, 240 s; a rate limit (429, "rate limit",
@@ -373,8 +394,8 @@ A subscription's 5-hour or weekly usage limit (#1710) is no failure to report an
 - **The user's actions cancel it** as any automatic action ("Avoid conflicting with manual user actions"): a message, looking at it in herdr, queued input, a pending card.
 - **Moving it to another provider instead of waiting** (`agent_switch`, #5973): when the user asks, the main conversation moves a Claude Code agent its limit stopped to another launcher on its computer and sends it `prompts/agents/limit_continue.md` there, at once ([claude-integration.md](../integrations/claude-integration.md) "Switching a running Agent to another provider"). It is now or not at all: a busy agent is refused with nothing typed and no switch left waiting. The continuation that was due is not sent afterwards: the agent's turn moved on, and `workGuard` drops the wake. Persona never switches on its own; agents_list marks the agents a limit stopped (`usage_limit`) and their launcher. `agents_switch` (#6008) does the same for many agents in one call: the ones a limit stopped are switched and continued, idle ones switched with nothing sent, busy ones queued until their turn ends, stopped ones Persona started pointed at the new launcher for their next Resume.
 - **No misleading notices while it waits** (`limitTakenUp`: the reset is known and at most 10 minutes past, and the CLI said it goes on by itself, or Persona's continuation or its card is set): no "Completed" or "Interrupted" push for the turn. The turn stays followed, so the end after the reset is the one pushed, timed from the turn's start. A task dispatched from the main chat gets no receipt meanwhile; it is looked at again when the wait is over, so a turn that did not go on after all (its continuation cancelled) still gets its "Interrupted" receipt. A limit nothing takes up (the switches off and a CLI that does not go on by itself, or no reset known) is told as the turn ends, as a usage limit ("Usage limit reached; continue it once the limit resets: …"), never as "the model service failed". For the main assistant, a task waiting for the reset reads as `usage_limit` in its snapshot, not `interrupted`. A sign-in that is gone ("Please run /login · …", "Login expired · …") is no usage limit: it reads as interrupted (`turn_error_code` `auth_failed` / `not_logged_in`), never as "Completed".
-- **Scheduled tasks** (`watchScheduledRun`): a run whose conversation stopped on a usage limit with a known reset is retried a minute or so after the reset instead of after 3 minutes; that wait is not cut by the watcher's 30 minutes, and `retryStillDue` decides at that time as before (a retry that fails again is not retried); a conversation that went on meanwhile (its turn is no longer the one the limit stopped) is not retried, so what the run does is not done twice. A conversation that goes on by itself is not retried. The failure push is unchanged.
-- **Known limits**: the waits are kept in `session_work` like any wakeup and come back after a restart, but only for turns that ended within the last two days (a weekly limit can be longer); a scheduled run's retry waits in memory and is lost when the manager restarts.
+- **Scheduled tasks** (`watchScheduledRun`): a run whose conversation stopped on a usage limit with a known reset is retried a minute or so after the reset instead of after 3 minutes; that wait is not cut by the watcher's 30 minutes, and `retryStillDue` decides at that time as before (a retry that fails again is not retried); a conversation that went on meanwhile (its turn is no longer the one the limit stopped) is not retried, so what the run does is not done twice. A conversation that goes on by itself is not retried. The absolute retry deadline, failed run and target turn are persisted before the wait and restored after a restart. A claimed retry whose dispatch outcome is unknown after a restart is not sent again: its original run records the unknown outcome and the ordinary failure notification explains it. The initial failure push is unchanged.
+- **Known limits**: the waits are kept in `session_work` like any wakeup and come back after a restart, but only for turns that ended within the last two days (a weekly limit can be longer). Scheduled-run retries and delayed task receipt rechecks use the manager's durable wait backlog and resume at their original deadlines, promptly when already overdue. Receipt rechecks are fenced to the same task-agent link and reopen generation; the durable turn ledger and stable receipt ID prevent duplicate completion when a recheck is replayed.
 
 ## Safety boundary
 

@@ -21,6 +21,10 @@ func (s *Service) actOn(ctx context.Context, v *workView, machine string, c prot
 	cfg, sw := s.triageCfg(ctx), s.triageSwitches(ctx)
 	l := s.lang(ctx)
 	w := &e.Work
+	if proto.UnrecoverableTurnErrorCode(c.TurnError) != "" || c.TurnErrorKind == proto.TurnErrorUnrecoverable {
+		e.WakeAt, w.WakeAt = nil, nil
+		return // An invalid conversation needs a replacement, not a retry card or a scheduled Continue.
+	}
 	now := time.Now()
 	k := [2]string{e.MachineID, e.SessionID}
 	s.workWould(k, "") // of the stop before this one
