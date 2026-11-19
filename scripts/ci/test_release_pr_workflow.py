@@ -50,6 +50,15 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("beta.yml", text)
         self.assertIn("latest.yml", text)
 
+    def test_main_without_a_merged_release_pr_has_no_build_plan(self):
+        text = PR.read_text()
+        self.assertIn("Path('release-pr.json').write_text('{}')", text)
+        self.assertNotIn("raise SystemExit(78)", text)
+        self.assertIn("steps.source.outputs.number != '0'", str(self.pr["jobs"]["plan"]["steps"]))
+        for name, job in self.pr["jobs"].items():
+            if name != "plan":
+                self.assertIn("needs.plan.outputs.version != ''", str(job["if"]), name)
+
     def test_merge_publication_is_protected_and_binds_the_actual_merge(self):
         text = PUBLISH.read_text()
         self.assertIn("github.event.workflow_run.conclusion == 'success'", text)
