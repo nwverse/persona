@@ -2316,6 +2316,29 @@
         }
       }
     },
+    "%@ is offline. Sends when it's back." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ is offline. Sends when it's back."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 已离线，重新上线后会发送。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ はオフラインです。オンラインに戻ると送信されます。"
+          }
+        }
+      }
+    },
     "%@ is offline: it may be asleep, or Persona Link isn't running on it." : {
       "localizations" : {
         "en" : {
@@ -32870,6 +32893,29 @@
       },
       "extractionState" : "manual"
     },
+    "Can't Open Import Link" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Can't Open Import Link"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "インポートリンクを開けません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法打开导入链接"
+          }
+        }
+      }
+    },
     "Can't Open This File" : {
       "localizations" : {
         "en" : {
@@ -51294,6 +51340,29 @@
       },
       "extractionState" : "manual"
     },
+    "Couldn't read the import link: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't read the import link: %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "インポートリンクを読み込めませんでした：%@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "读取导入链接失败：%@"
+          }
+        }
+      }
+    },
     "Couldn't read the model list: %@. You can add models below." : {
       "localizations" : {
         "en" : {
@@ -56894,6 +56963,29 @@
         }
       }
     },
+    "Delete this held message?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete this held message?"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除这条待发消息？"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この保留中のメッセージを削除しますか？"
+          }
+        }
+      }
+    },
     "Delete this report?" : {
       "localizations" : {
         "en" : {
@@ -58044,6 +58136,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Delivery status unknown" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delivery status unknown"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "送达状态未知"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "配信状況を確認できません"
+          }
+        }
+      }
     },
     "Details" : {
       "localizations" : {
@@ -65702,6 +65817,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Effort %@ [Agent Preset Compatibility]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Effort %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "思考の強さ %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "思考强度 %@"
+          }
+        }
+      }
     },
     "Every %@" : {
       "localizations" : {
@@ -89517,6 +89655,29 @@
       },
       "extractionState" : "manual"
     },
+    "Loading the preset's model options…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Loading the preset's model options…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プリセットのモデルオプションを読み込み中…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在载入预设的模型选项…"
+          }
+        }
+      }
+    },
     "Loading timed out" : {
       "localizations" : {
         "en" : {
@@ -95651,6 +95812,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Model %@ [Agent Preset Compatibility]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Model %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "モデル %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模型 %@"
+          }
+        }
+      }
     },
     "Model [Assistant View c98e11]" : {
       "localizations" : {
@@ -109749,6 +109933,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Not used here: %@. The launcher or model's own settings apply. [Agent Preset Compatibility]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not used here: %@. The launcher or model's own settings apply."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ここでは使えません：%@。ランチャーまたはモデル自身の設定が適用されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这里用不上：%@，会按启动器或模型自己的设置运行。"
+          }
+        }
+      }
     },
     "Not valid JSON, showing as text: %@" : {
       "localizations" : {
@@ -125007,6 +125214,29 @@
         }
       }
     },
+    "Picking a preset fills the launcher, model and thinking effort for this start." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Picking a preset fills the launcher, model and thinking effort for this start."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プリセットを選ぶと、今回の開始に使うランチャー、モデル、思考の強さが入力されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择预设会填入本次启动的启动器、模型和思考强度。"
+          }
+        }
+      }
+    },
     "Picking one fills it in; it's sent only when you tap Send" : {
       "localizations" : {
         "en" : {
@@ -126497,6 +126727,52 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "準備中…"
+          }
+        }
+      }
+    },
+    "Preset" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Preset"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プリセット"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "预设"
+          }
+        }
+      }
+    },
+    "Preset %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Preset %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プリセット %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "预设 %@"
           }
         }
       }
@@ -169737,6 +170013,54 @@
       },
       "extractionState" : "manual"
     },
+    "Conversation invalid: its compacted context belongs to another account. Start a new conversation to continue." : {
+      "comment" : "An unrecoverable account-sealed conversation; explain why and guide the owner to a replacement.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conversation invalid: its compacted context belongs to another account. Start a new conversation to continue."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此会话已失效：压缩上下文属于另一个账号。请换新会话接着做。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この会話は無効です。圧縮されたコンテキストは別のアカウントに紐付いています。新しい会話で続けてください。"
+          }
+        }
+      }
+    },
+    "Invalid conversation" : {
+      "comment" : "An Agent conversation that cannot be resumed.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Invalid conversation"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已失效"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無効な会話"
+          }
+        }
+      }
+    },
     "The model request failed" : {
       "comment" : "Why a model request failed: the first line of the error card in a chat (PersonaKit, #5758)",
       "localizations" : {
@@ -177090,6 +177414,29 @@
       },
       "extractionState" : "manual"
     },
+    "This hub can't open import links yet. Update the hub to open them." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This hub can't open import links yet. Update the hub to open them."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このハブではまだインポートリンクを開けません。ハブを更新してからもう一度お試しください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个 hub 还无法打开导入链接，请更新 hub 后再试。"
+          }
+        }
+      }
+    },
     "This hub can't take part in meetings right now. The recording goes on as usual." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -178153,6 +178500,144 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "这张图的数据打不开"
+          }
+        }
+      }
+    },
+    "This import link couldn't be read." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This import link couldn't be read."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このインポートリンクを読み込めませんでした。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取这个导入链接。"
+          }
+        }
+      }
+    },
+    "This import link has a field Persona doesn't know." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This import link has a field Persona doesn't know."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このインポートリンクには Persona が認識できないフィールドがあります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个导入链接包含 Persona 不识别的字段。"
+          }
+        }
+      }
+    },
+    "This import link has no provider to add." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This import link has no provider to add."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このインポートリンクには追加できるプロバイダーがありません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个导入链接里没有可添加的供应商。"
+          }
+        }
+      }
+    },
+    "This import link is a version Persona doesn't know yet." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This import link is a version Persona doesn't know yet."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このインポートリンクのバージョンには、この Persona はまだ対応していません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前 Persona 还不支持这个导入链接的版本。"
+          }
+        }
+      }
+    },
+    "This import link is too long." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This import link is too long."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このインポートリンクは長すぎます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个导入链接过长。"
+          }
+        }
+      }
+    },
+    "This import link isn't valid." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This import link isn't valid."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このインポートリンクは無効です。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个导入链接无效。"
           }
         }
       }

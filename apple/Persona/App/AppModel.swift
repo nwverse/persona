@@ -172,6 +172,7 @@ final class AppModel {
         }
         countBadges()
         saveSnapshot()
+        resolveProvisionalChat()
     }
 
     /// The lists are folded again when a hub's hello says it folds side sessions now, or no longer.
@@ -323,6 +324,8 @@ final class AppModel {
     var sideLanding: SideLanding?
     /// Cancels deferred list resets even after a newer targeted open has already been consumed.
     @ObservationIgnored private(set) var agentsNavigationRevision = 0
+    /// An external link without a group can open the first hub before any hub has listed its sessions.
+    @ObservationIgnored private var provisionalChat: (key: SessionKey, latestAnswer: Bool, revision: Int)?
     /// An explicit Agents-tab selection returns to its list; targeted opens do not change this request.
     var agentsListReveal = 0
     /// Bumped each time the Inbox is entered at its root (the sidebar, a widget, a quick action, its tab on visionOS),
@@ -534,7 +537,11 @@ final class AppModel {
     /// The groups whose outbox is going out now (`flushOutbox`): one group sending does not hold back another.
     @ObservationIgnored var flushingOutbox = Set<String>()
     /// Kept messages (#10194) a Retry or Delete is on its way for: a second tap does nothing.
-    @ObservationIgnored var undeliveredActions = Set<String>()
+    @ObservationIgnored var undeliveredActions: [SessionKey: Set<String>] = [:]
+    var heldActionRequests: Set<HeldActionTarget> = []
+    var heldRetryReceipts: Set<HeldRetryOffer> = [] {
+        didSet { if heldRetryReceipts != oldValue { HeldRetryOffer.save(heldRetryReceipts, in: stateFolder) } }
+    }
     /// Per group: the one retry of its waiting messages due in a few seconds (`retryOutboxSoon`).
     @ObservationIgnored var outboxRetry: [String: Task<Void, Never>] = [:]
     #if DEBUG
@@ -551,6 +558,9 @@ final class AppModel {
     /// What each machine's New Agent list says is left out there, with why (`unavailable`, #8109: the Persona-managed
     /// providers whose own-service rule skips it), loaded with `launcherCache`; empty from an older hub.
     @ObservationIgnored private(set) var launcherUnavailable: [MachineRef: [UnavailableLauncher]] = [:]
+    /// The active model profile's Agent presets offered on each machine, loaded with `launcherCache`.
+    @ObservationIgnored private(set) var launcherTiers: [MachineRef: [AgentPreset]] = [:]
+    @ObservationIgnored private(set) var launcherTierProfile: [MachineRef: AgentPresetProfile] = [:]
     /// The main chat's own picker (`?purpose=assistant`, #5033): its eligible launchers, the effective Main chat
     /// default, and what can't run there with why. Separate from `launcherCache`, which serves the agent.new purpose.
     nonisolated struct AssistantLauncherScope: Hashable {
@@ -598,6 +608,7 @@ final class AppModel {
         Task.detached(priority: .utility) { LarkAttachment.staging.sweep() }
         connection = ConnectionStatus()
         assistantPicks = AssistantPickStore.load(folder: stateFolder)
+        heldRetryReceipts = HeldRetryOffer.read(in: stateFolder)
         DemoHub.install()
         #if DEBUG
         // `-openWelcome YES`: start unpaired and out of Demo Mode, on the pairing page (DemoModeTests); with `-demo.on YES`
@@ -1023,6 +1034,7 @@ final class AppModel {
 
     /// Sign Out of everything: every group, every hub (Settings › Disconnect with one group, a revoked credential of this device).
     func unpair() {
+        heldRetryReceipts.removeAll()
         LarkChatOutbox.forget()
         // No hub left to answer: the open questions are denied, their results have nowhere to go.
         phoneConfirmations.denyAll()
@@ -1657,11 +1669,37 @@ final class AppModel {
         }
     }
 
+    /// Keep an unqualified external open provisional until a hub supplies its row (#9167).
+    func openExternal(machineID: String, sessionID: String, group: String?, latestAnswer: Bool = false) {
+        let key = resolve(machineID: machineID, sessionID: sessionID, group: group)
+        open(key, latestAnswer: latestAnswer)
+        if group.flatMap(link) == nil, latest(key) == nil, openChat == key {
+            provisionalChat = (key, latestAnswer, agentsNavigationRevision)
+        }
+    }
+
+    private func resolveProvisionalChat() {
+        guard let pending = provisionalChat else { return }
+        guard pending.revision == agentsNavigationRevision, selectedTab == .chats else {
+            provisionalChat = nil
+            return
+        }
+        let key = resolve(machineID: pending.key.machineID, sessionID: pending.key.sessionID, group: nil)
+        guard latest(key) != nil else { return }
+        if key == pending.key { provisionalChat = nil; return }
+        // ChatsView consumes openChat when it pushes, before the view reports itself visible.
+        guard openChat == pending.key || visibleSession == pending.key else { return }
+        provisionalChat = nil
+        if latestAnswerFor == pending.key { latestAnswerFor = nil }
+        open(key, latestAnswer: pending.latestAnswer)
+    }
+
     /// Routes a notification / deep link to the right tab; `latestAnswer` lands on the start of the agent's last answer.
     /// A child whose parent row is already in hand opens that parent, with the child's card revealed. Anything else
     /// opens immediately. A child whose row is not loaded yet is looked up in the background (`refreshSessionDetail`),
     /// and moves to the parent only when that parent row exists.
     func open(_ key: SessionKey, latestAnswer: Bool = false, reveal: String? = nil) {
+        provisionalChat = nil
         // A side session lives in its parent's chat (#7944): its parent opens with the side shown over it, not with a
         // child's card revealed (`openChat` turns it into the parent and `sideLanding`).
         if reveal == nil, sideFold.home[key] == nil, let home = localChildHome(key), home.key != key {
@@ -2223,11 +2261,16 @@ final class AppModel {
         shown.append((owner, key))
         visibleSession = key
         NotificationActions.clearDelivered(key) // what it said is on screen now (#3449)
+        resolveProvisionalChat()
     }
 
     func hide(by owner: UUID) {
+        let previous = visibleSession
         shown.removeAll { $0.owner == owner }
         visibleSession = shown.last?.key
+        if let pending = provisionalChat, previous == pending.key, visibleSession != previous, openChat != pending.key {
+            provisionalChat = nil
+        }
     }
 
     /// Asks for everything after what the chat holds without holes (`covered`), or the last exchanges if nothing. Built
@@ -2629,7 +2672,8 @@ final class AppModel {
     /// update once for the lot, and only when a list really changed; the notifications, the watch and the chats kept
     /// current in the background (`AgentSync`) follow them. The one place the lists land (msg-render's SessionStore
     /// replaces its inside, docs/apple/ios-state.md).
-    func applySessions(_ byMachine: [MachineRef: [Session]]) {
+    func applySessions(_ byMachine: [MachineRef: [Session]], complete: Bool = true) {
+        if complete { reconcileHeldRetries(byMachine) }
         let byMachine = seenOutbox.land(byMachine, at: Date())
         var lists = sessionsByMachine
         var olds: [(old: [Session], new: [Session])] = []
@@ -3452,10 +3496,14 @@ final class AppModel {
     var assistantModels: [SessionKey: String] = [:]
 
     /// Check at dispatch time too: capabilities can change while a menu or outbox bubble is on screen.
-    func allowSend(_ key: SessionKey) -> Bool {
+    func allowSend(_ key: SessionKey, forMessage: Bool = false) -> Bool {
         guard let s = session(key) else { return false }
         guard s.canSend else {
             toast = Toast(s.sourceSubtitle ?? String(localized: "This session is view-only"), style: .error)
+            return false
+        }
+        if forMessage, let away = offlineAgent(s), !away.canHold {
+            toast = Toast(away.line, style: .error)
             return false
         }
         return true
@@ -3466,7 +3514,7 @@ final class AppModel {
     @discardableResult
     /// via: how the app wrote it when the user did not type it (`APIClient.MessageVia`).
     func sendNow(_ key: SessionKey, text: String, images: [ImagePayload] = [], via: APIClient.MessageVia? = nil) -> Bool {
-        guard allowSend(key) else { return false }
+        guard allowSend(key, forMessage: true) else { return false }
         // Take-back can retain pathless hub photos past the picker's cap; the person removes some before sending.
         guard images.count <= MessagePhotos.limit else {
             toast = Toast(String(localized: "Up to 4 at a time"), style: .error)
@@ -3499,7 +3547,7 @@ final class AppModel {
     }
 
     func retry(_ key: SessionKey, _ msg: PendingMessage, clearDraft: String? = nil) {
-        guard allowSend(key) else { return }
+        guard allowSend(key, forMessage: true) else { return }
         guard let i = chat(key).pending.firstIndex(where: { $0.id == msg.id }) else { return }
         guard chat(key).pending[i].mayHaveArrived == true else {
             chat(key).pending[i].state = .sending
@@ -3996,6 +4044,8 @@ final class AppModel {
         launcherCache = [:]
         launcherDefaults = [:]
         launcherUnavailable = [:]
+        launcherTiers = [:]
+        launcherTierProfile = [:]
         assistantLauncherCache = [:]
         assistantStarterCache.clear()
         // Model Settings changes are launcher changes too: wake the open main-chat composer to re-read the default.
@@ -4017,6 +4067,8 @@ final class AppModel {
         launcherCache[machine] = r.launchers
         launcherDefaults[machine] = r.default
         launcherUnavailable[machine] = r.unavailable ?? []
+        launcherTiers[machine] = r.tiers ?? []
+        launcherTierProfile[machine] = r.tiersProfile
         return r.launchers
     }
 
@@ -4142,6 +4194,22 @@ final class AppModel {
 
     func openSentRecords() {
         settingsPath = SettingsPage.sentPath
+        #if os(macOS)
+        MacShellState.shared.go(.settings, self)
+        #else
+        selectedTab = .settings
+        if tabRouter != nil { shellSettings = true }
+        #endif
+    }
+
+    /// A provider import link opened from outside (#5428): the Model providers page reads it through the hub's parse
+    /// route and opens the wizard with the draft. Held only until the wizard takes it; never logged or shown, since it
+    /// may carry a key.
+    var providerImport: ProviderImportRequest?
+    func openProviderImport(_ link: String) {
+        let request = ProviderImportRequest(link: link)
+        providerImport = request
+        settingsPath.append(ModelLaunchersRoute(id: request.id))
         #if os(macOS)
         MacShellState.shared.go(.settings, self)
         #else
@@ -4332,6 +4400,7 @@ final class AppModel {
     /// What the app holds about groups that are no longer there.
     func forgetGroups(_ gone: Set<String>, keepingPushKeys: Bool = false) {
         guard !gone.isEmpty else { return }
+        heldRetryReceipts = heldRetryReceipts.filter { !gone.contains($0.target.session.group) }
         if !keepingPushKeys { LarkChatOutbox.forget(groups: gone) }
         toolResults.forget(groups: gone)
         PortForwarder.shared.close(groups: gone)
