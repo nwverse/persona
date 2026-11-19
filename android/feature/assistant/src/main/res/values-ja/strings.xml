@@ -94,6 +94,7 @@
     <string name="assistant_full_search_no_results">「%1$s」の結果はありません</string>
     <string name="assistant_start_main">メインチャットを開始</string>
     <string name="assistant_main_chat">メインチャット</string>
+    <string name="assistant_main_conversation">メインチャット</string>
     <!-- The drawer's newest eligible chats, between 常驻 and All chats (#4922, #5196) -->
     <string name="assistant_recent">最近</string>
     <string name="assistant_directions">常駐</string>
