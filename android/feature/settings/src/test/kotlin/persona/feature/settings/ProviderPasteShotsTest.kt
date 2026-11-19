@@ -198,6 +198,28 @@ class ProviderPasteShotsTest {
         rule.onNodeWithText("Work gateway").assertExists()
     }
 
+    @Test fun reopeningTheSameImportLinkWhileWizardIsActiveParsesAgain() {
+        val api = Providers()
+        val link = "persona://provider/import?v=1&data=FAKE-EXAMPLE-KEY"
+        val services = demoSettingsServices(rule.activity.resources).copy(demo = false, providers = api)
+        ProviderImportRequests.pending.value = link
+        rule.setContent {
+            PersonaTheme(reduceMotion = true) {
+                SettingsScreen(services, initialPage = "providers")
+            }
+        }
+        rule.waitForIdle()
+        rule.onNodeWithText("Opened from a link", substring = true).assertExists()
+        assertEquals(listOf(link), api.parsed)
+
+        rule.onNodeWithText("Paste something else").performClick()
+        rule.waitForIdle()
+        ProviderImportRequests.pending.value = link
+        rule.waitForIdle()
+        assertEquals("the second external open must restart the active wizard's import", listOf(link, link), api.parsed)
+        rule.onNodeWithText("Opened from a link", substring = true).assertExists()
+    }
+
     @Test fun systemBackCancelsAnExternalImportReview() = externalImportBackCancels(toolbar = false)
 
     @Test fun toolbarBackCancelsAnExternalImportReview() = externalImportBackCancels(toolbar = true)

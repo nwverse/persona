@@ -64,6 +64,8 @@ internal fun NewProviderPage(
     startAtComputers: Boolean = false,
     /** A provider import link opened from outside (#5428); read through the hub after the form loads. */
     importLink: String? = null,
+    /** Identifies each external open, including the same link opened again while this page is active. */
+    importGeneration: Long = 0,
 ) {
     val model = remember(providers, readiness, existing) {
         NewProviderModel(providers, readiness?.let { source -> suspend { if (source.available.first()) source.readiness(false) else null } })
@@ -81,7 +83,7 @@ internal fun NewProviderPage(
     var sub by rememberSaveable { mutableStateOf(if (startAtComputers) ProviderSub.Computers else null) }
     var discarding by remember { mutableStateOf(false) }
     var foundImport by remember { mutableStateOf<FoundAlias?>(null) }
-    LaunchedEffect(model, importLink) {
+    LaunchedEffect(model, importLink, importGeneration) {
         if (existing != null) { model.prepare(existing, existing.hasScope, machines); return@LaunchedEffect }
         // "Computers" needs the computers to choose from: opened where none are known (Model configuration), it waits
         // for the provider's page, and the hub's defaults apply meanwhile.

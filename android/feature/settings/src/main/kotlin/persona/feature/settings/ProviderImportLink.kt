@@ -1,5 +1,6 @@
 package persona.feature.settings
 
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.navigation3.runtime.NavKey
 import persona.core.navigation.SettingsPage
@@ -10,8 +11,16 @@ object ProviderImportRequests {
     /** Kept across a cold start and pairing, never logged or shown. */
     val pending = mutableStateOf<String?>(null)
 
-    /** Takes the link exactly once. */
-    fun take(): String? = pending.value.also { pending.value = null }
+    /** Distinguishes repeated opens of the same link after the previous wizard is still active. */
+    val generation = mutableLongStateOf(0L)
+
+    /** Takes the link exactly once and gives each external open a new identity. */
+    fun take(): String? {
+        val link = pending.value ?: return null
+        pending.value = null
+        generation.longValue += 1
+        return link
+    }
 
     /** A provider service that is not ready yet must not consume the only pending link. */
     fun takeIfReady(ready: Boolean): String? = if (ready) take() else null

@@ -528,18 +528,22 @@ private fun SettingsPageContent(
             // Take the link only after this destination's provider service can open it. Leaving the providers page or
             // switching assistants cancels it, so a later service cannot replay a key-bearing link (#5428).
             var importLink by remember(page, assistant.id) { mutableStateOf<String?>(null) }
+            var importGeneration by remember(page, assistant.id) { mutableLongStateOf(0L) }
             DisposableEffect(page, assistant.id) { onDispose { ProviderImportRequests.cancel() } }
             val requestedImport = ProviderImportRequests.pending.value
             LaunchedEffect(requestedImport, providerService != null) {
                 if (requestedImport != null) {
                     val link = ProviderImportRequests.takeIfReady(providerService != null)
-                    if (link != null) importLink = link
+                    if (link != null) {
+                        importLink = link
+                        importGeneration = ProviderImportRequests.generation.longValue
+                    }
                 }
             }
             if (importLink != null && providerService != null) {
                 NewProviderPage(providerService, onBack = { ProviderImportRequests.cancel(); importLink = null; providerStep = null },
                     onSaved = { importLink = null; providerStep = null }, readiness = services.readiness,
-                    machines = machines, importLink = importLink)
+                    machines = machines, importLink = importLink, importGeneration = importGeneration)
             } else when {
                 providerStep == "add" && providerService != null -> NewProviderPage(providerService, onBack = { providerStep = null }, onSaved = { providerStep = null },
                     readiness = services.readiness, machines = machines)
