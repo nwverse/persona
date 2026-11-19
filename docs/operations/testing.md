@@ -48,6 +48,10 @@ No branch push or PR starts it. The issue-link Action also requires explicit dis
 The `changes` job runs repository/commit privacy and path safety, including `scripts/ci/guards.sh`, migration freeze, sleep ratchet and the no-CallKit source guard (`docs/operations/release.md`, "No CallKit").
 An edit, deletion or rename of a `.sql` file already on the base under `server/internal/db/migrations/hub` or
 `server/internal/db/migrations/manager` fails that check. Comment-only and whitespace-only edits pass; add a new migration instead.
+A new file is named by the UTC second it is written, `YYYYMMDDHHMMSS_<name>.sql` in lower case (`$(date -u +%Y%m%d%H%M%S)_<name>.sql`),
+a real time from 2026-11-18 00:00:00 UTC to a day after the check runs; a numbered `NNNN_<name>.sql` outside the frozen numbered
+files (up to `0561`) fails, whatever the base. Of two files of one set that share a version on the base, one may be renamed
+(`docs/server/server.md`, "Migrations").
 Each `_test.go` file under `server/` and `sdk/go/` has a committed count of `time.Sleep` calls (`scripts/ci/sleep_baseline.json`). The
 count may stay the same or go down, never up, and a new file starts at zero. Comments, string literals and a line carrying
 `// sleep-ok: <reason>` (the reason must be non-empty) do not count. `python3 scripts/ci/sleep_ratchet.py --update` only lowers
@@ -190,6 +194,37 @@ The Codex app-server fixture registers a reply waiter before sending each reques
 JSON-RPC response. Its five-second request budget, approval assertions and recorded responses remain intact;
 cancellation, transport errors and EOF remove pending waiters without leaving its reader blocked.
 
+## Go build cache across worktrees
+
+Unless `-trimpath` is set, Go's build cache key for a package includes the package's absolute directory. The same
+package at the same commit is then compiled and cached once per checkout: a machine with dozens of worktrees keeps a
+copy of every package for each, and every new worktree starts cold. With `-trimpath` all checkouts share one entry
+(#10614).
+
+The scripts that build and test Go for verification add `-trimpath` to `GOFLAGS`: `scripts/check-fast.sh`,
+`scripts/ci/server.sh`, `scripts/test/server_test_env.py` (so `scripts/test/test-server.sh` on the hub machine and the
+CI server shards), `scripts/test/relay_sim_e2e.sh` and the PR watcher's verification environment. Each keeps its base
+value and adds `-trimpath` unless that value already sets the flag; `-trimpath=false` opts out. All but the watcher
+start from the effective `GOFLAGS` (the environment, else `go env -w`). The watcher starts from the `GOFLAGS` in its
+own environment, else its default (`docs/operations/pr-review-automation.md`); either one overrides a
+`go env -w GOFLAGS`, so opt out there by setting `GOFLAGS` in the watcher's environment. `scripts/test/go_trimpath.sh`
+holds the rule for the shell scripts. Their steps that change one flag do it on the command line (`go vet -ldflags=`,
+`go build -mod=readonly`), never by replacing `GOFLAGS`. The server test launcher passes the value on explicitly: the
+temporary `HOME` it gives the tests would hide a `go env -w` setting.
+
+Tests find repository files from the working directory (`go test` runs in the package directory), never through
+`runtime.Caller`: under `-trimpath` its file names are module paths (#1133).
+
+On a machine with many worktrees, set it for every Go command:
+
+```sh
+go env -w GOFLAGS=-trimpath
+```
+
+The trade-off: binaries and stack traces then name source files by module path
+(`github.com/nwverse/persona/server/...`) instead of the local directory, so a debugger (Delve, an IDE) needs a
+source path mapping to open them. Release builds already use `-trimpath` (`docs/operations/release.md`).
+
 ## Fast local checks (`scripts/check-fast.sh`, #2849)
 
 Runs only relevant second-scale checks based on git changes, with independent checks in parallel; useful before committing:
@@ -208,8 +243,8 @@ Path mapping:
 
 | Changed path | Checks |
 | --- | --- |
-| `web/**` | `npm ci` (only if `node_modules` missing or `package.json` / `package-lock.json` changed) + `npm run check:deps` (fails, naming the packages and saying to run `npm ci`, when an installed direct dependency isn't the version `package-lock.json` pins: a lock bump merged from `main` leaves the old packages in place, #4776) + `npm run typecheck` (incremental, state kept in web's `node_modules/.cache/tsc/`: a second run only checks what changed, and a type error fails every run) + `npm test` (vitest run) |
-| `schema/extension/**`, `spec/fixtures/injected/**`, `spec/fixtures/sync/**`, `spec/fixtures/attention/**`, `spec/fixtures/chat-search/**`, `spec/fixtures/triage/**`, `spec/fixtures/todo-view/**`, `scripts/mock/inbox_events.json` | In addition to other checks in this table, the `web/**` checks: `web/src` and its vitest suite read these files. They are the inputs outside `web/` of the web lane in `scripts/ci/paths.py`; `scripts/test/test_check_fast.py` fails when the two lists drift apart |
+| `web/**` | `npm ci` (only if `node_modules` missing or `package.json` / `package-lock.json` changed) + `npm run check:deps` (fails, naming the packages and saying to run `npm ci`, when an installed direct dependency isn't the version `package-lock.json` pins: a lock bump merged from `main` leaves the old packages in place, #4776) + `npm run typecheck` (incremental, state kept in web's `node_modules/.cache/tsc/`: a second run only checks what changed, and a type error fails every run) + the tests `python3 scripts/ci/paths.py --web-plan` picks (#10619, see "Web tests a change reaches" below): `npx vitest related --run` when only `web/src` changed, else `npm test`, the whole suite |
+| Files outside `web/` that `web/src` and its tests read (`spec/fixtures/<case>/…`, `schema/extension/…`, `scripts/mock/…`; `python3 scripts/ci/paths.py --web-inputs` lists them) | In addition to other checks in this table, the `web/**` checks, with the related tests. The list is derived, never written down: the same scan gives CI's web lane its inputs outside `web/` |
 | `integrations/<pkg>/**` | Package `node --test test/*.test.{js,mjs}` (skip packages without tests) |
 | `site/**` | `node --test site/worker.test.mjs` |
 | `sdk/ts/**` | `bun test` (skip with reason if bun absent) |
@@ -217,7 +252,7 @@ Path mapping:
 | `sdk/go/**` | `go test ./...` in sdk/go module |
 | `server/internal/foo/**`, `server/cmd/bar/**`, `server/plugins/baz/**` | Affected packages, e.g. `go test ./internal/foo/...`; unmappable server changes fall back to `go build ./...` |
 | `server/**`, `sdk/go/**` | In addition to other checks in this table, the server's repo-wide guards (`job_go_guards` in `scripts/test/check-fast.sh`): `go test` on `internal/lazyre`, `internal/archguard`, `internal/tzguard` and `plugins`, and the named guard tests of `internal/hub` and `internal/assistant`. They read other packages' source, `go list` output, the migrations or `sdk/go`, so they fail on code outside their own package (#1936). The list is curated: not every `*guard*_test.go` is repo-wide. `--all` runs them within `go test ./...` |
-| `server/internal/db/migrations/**`, `scripts/ci/migration_freeze.py` | `python3 scripts/ci/migration_freeze.py`: a migration already on the base cannot be edited, deleted or renamed (comment-only and whitespace-only edits pass; a new file may be added). A rename out of the directory counts. `--all` runs it when the script is present |
+| `server/internal/db/migrations/**`, `scripts/ci/migration_freeze.py` | `python3 scripts/ci/migration_freeze.py`: a migration already on the base cannot be edited, deleted or renamed (comment-only and whitespace-only edits pass; a new file may be added, named `YYYYMMDDHHMMSS_<name>.sql` by the UTC second it is written, from 2026-11-18 to a day ahead; a numbered file outside the frozen ones up to `0561` fails). A rename out of the directory counts. `--all` runs it when the script is present |
 | `server/**/*_test.go`, `sdk/go/**/*_test.go`, `scripts/ci/sleep_ratchet.py`, `scripts/ci/sleep_baseline.json` | `python3 scripts/ci/sleep_ratchet.py`: the number of `time.Sleep` calls in each Go test file may stay or fall, never rise (comments, string literals and a `// sleep-ok: <reason>` line do not count; a new file starts at zero). `--update` only lowers the baseline. A rename out of those trees counts. `--all` runs it when the script is present |
 | `spec/fixtures/**`, `schema/extension/**`, `schema/wire/**`, `integrations/**`, `docs/<file>`, `scripts/test/server_test_env.py` | In addition to other checks in this table, `go test ./internal/<package>/...` for server packages reading these files (repository inputs covered by `server-test.yml` filters). At runtime, `git grep` finds packages referencing the path in `server/**/*_test.go` (strings or `filepath.Join` components; `//` comment lines excluded), so new readers need no script changes; other `spec/` files remain unmapped |
 | `android/**`, `scripts/app/*android*` (including both `test_android_*` self-tests) | `scripts/app/android_i18n_check.py` and Android checker unittests (i18n, token and motion baselines; no Gradle build) |
@@ -235,6 +270,12 @@ Path mapping:
 | Other paths | No code checks; list unmapped paths individually |
 
 Any changes always run `scripts/privacy_check.py` first: local-only, no network, a few seconds. Every check has a timeout (npm ci 600 s, vitest 300 s, one go test group 300 s, others 120 s; override with `CHECK_FAST_TIMEOUT_NPM_CI` / `CHECK_FAST_TIMEOUT_WEB_TEST` / `CHECK_FAST_TIMEOUT_GO_TEST` / `CHECK_FAST_TIMEOUT_OTHER`). Success/failure/timeout each prints a result and duration; the final summary lists passed/skipped (with reasons)/failed/timed-out checks and log directory. Exit: 0 if all pass or none needed; 1 for failure; 124 for timeout without failures (timeouts aren't passes; run full checks to confirm). Ctrl-C, SIGTERM and SIGHUP, sent to the script or to its whole process group (a closed terminal or tmux pane), stop every running check (and its child processes) before exiting with 130, 143 or 129, and keep the log directory. Missing toolchains skip relevant checks with reasons by default; under `--all`, missing core tools (node ≥ 22, go, python3) fail; bun is always optional. Requires GNU `timeout` (coreutils on macOS).
+
+**Web tests a change reaches** (#10619). In diff mode the web check runs `npx vitest related --run` from the changed files, so a change to one view runs the tests whose imports reach it (about 56 for `web/src/views/chat/ChatView.tsx`) instead of all ~1,360 test files. `python3 scripts/ci/paths.py --web-plan` makes the plan from one scan of `web/src` and every web test, done at run time, nothing listed by hand:
+
+- Every related run also includes each test that reads files from disk (`fs`, `readFileSync`, `import.meta.glob`, a `?raw` or other query import; about 85): vitest related follows only imports whose id is a file on disk, so it never sees what they read. So does each test that builds or serves through a Vite config (it imports `vite` or `vitest/node`): `web/scripts/public-share-build.test.mjs` builds the public viewer, whose config reads `web/src/styles.css` with `readFileSync`. A `web/src` module that reads through `fs` brings the tests that import it, and a module that reads through Vite joins when a file it names changes (`web/src/lib/html-runtime/host.ts` for its `frame.js`).
+- The whole suite (`npm test`) runs instead for a change to `web/src/lib/store.ts`, `web/src/lib/api.ts`, `web/src/ui/atoms.tsx` or `web/src/i18n/` (most tests import them: about 825, 1,040, 930 and 1,190), to a `web/src` module the Vite configs import, or to anything in `web/` outside `web/src` (the Vite and TypeScript configs, `package.json`, `package-lock.json`, `scripts/`, `e2e/`), and always with `--all`. Without python3, or when the scan fails, a `web/` change runs the whole suite.
+- Files outside `web/`: every path a scanned file names relative to itself that leads out of `web/` (`"../../../spec/fixtures/forward/cases.json"`, `` new URL(`../../../schema/extension/examples/View.v8-${name}.json`, import.meta.url) ``, `join(__dirname, "..", "..", "..", "spec", …)`) is an input. A file counts as itself; a directory, a glob or a path with a `${…}` part as everything under its literal part; a JSON Schema also brings the files its `$ref`s name. A path built from the working directory or from a variable root is not seen. `python3 scripts/ci/paths.py --web-inputs` prints the list; CI's web lane takes the same one, so the two agree by construction. `scripts/test/test_check_fast.py` holds the scan to a sample tree in each form and to the real reads.
 
 Not covered:
 
