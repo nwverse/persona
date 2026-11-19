@@ -101,6 +101,11 @@ const (
 	// counts (#10226, TodoPlaces). The hub lists the todo_places feature only while every manager whose to-dos it
 	// merges names it.
 	CapabilityTodoPlaces = "todo_places"
+	// CapabilityTodoAsks: the manager answers POST /api/v1/todos/{id}/asks/{ask}/answer, one route for every answer to a
+	// to-do's own asks, named by the ask ids of its view (#10465, TodoAskAnswer). The hub lists the todo_asks feature
+	// only while every manager whose to-dos it merges names it; until then clients answer through the accept,
+	// decision-dismiss and retry routes. It gates the route alone: the to-do count unit rides on its own payload.
+	CapabilityTodoAsks = "todo_asks"
 )
 
 // BodyStream is where MethodHTTPStreamed's body comes from: the relay the hub holds with ID (devicewire.RelayPath
@@ -295,6 +300,7 @@ var Routes = []string{
 	"POST /api/v1/task-plans/{id}/start",
 	"POST /api/v1/task-plans/{id}/workspace-preview",
 	"POST /api/v1/task-plans/{id}/dismiss",
+	"DELETE /api/v1/todos/{id}/terminal-cleanup",
 	"GET /api/v1/task-trust",
 	"DELETE /api/v1/task-trust",
 	// The todos (the assistant's todos.go, docs/assistant/todos.md).
@@ -324,6 +330,8 @@ var Routes = []string{
 	"POST /api/v1/todos/{id}/accept",
 	"POST /api/v1/todos/{id}/decision-dismiss",
 	"POST /api/v1/todos/{id}/decision-undo-dismiss",
+	// Any answer to a to-do's own ask, by the id its view lists (todo_asks_routes.go, #10465).
+	"POST /api/v1/todos/{id}/asks/{ask}/answer",
 	"POST /api/v1/later/{id}/handled", // a question that can wait, marked handled (later.go)
 	"POST /api/v1/todos/{id}/done-check",
 	"POST /api/v1/todos/{id}/retry",

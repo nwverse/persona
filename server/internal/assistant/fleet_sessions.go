@@ -36,6 +36,9 @@ func (s *Service) setSessions(machine string, list []proto.Session) {
 	// dropped) can list a turn still running as stopped. Its transcript says whether such a stop ended the turn.
 	reconnected := len(before) > 0 && !connected.Equal(beforeConn)
 	var unsure []proto.Session
+	var inlineUpdates []SessionRef
+	fm, hasMachine := s.fleetMachine(machine)
+	_, hasInlineStore := s.store().(inlineViewStore)
 	now := time.Now()
 	for i := range list {
 		list[i].MachineID = machine
@@ -82,6 +85,16 @@ func (s *Service) setSessions(machine string, list []proto.Session) {
 			ref := SessionRef{MachineID: machine, SessionID: sess.SessionID}
 			s.inOrder(func() { s.afterSettle(context.Background(), s.taskTurnSettled, ref.MachineID, ref.SessionID) })
 		}
+		// A stopped assistant session whose rev or last text advances (for example after an unexported runtime turn
+		// flushes to disk with final persisted item ids) registers its latest persona-view blocks without waiting for
+		// the full settle window.
+		if hasInlineStore && hasMachine &&
+			(prev == proto.StatusDone || prev == proto.StatusIdle) &&
+			(sess.Status == proto.StatusDone || sess.Status == proto.StatusIdle) &&
+			(sess.Rev != was.Rev || sess.LastText != was.LastText) &&
+			fm.isAssistant(sess) {
+			inlineUpdates = append(inlineUpdates, SessionRef{MachineID: machine, SessionID: sess.SessionID})
+		}
 		if sess.Status != prev && sess.Status != proto.StatusWorking && !(prev == proto.StatusWorking && (sess.Status == proto.StatusDone || sess.Status == proto.StatusIdle)) {
 			// Stopped with no end seen (a restart, an interrupt, a card): a meeting turn there is over (meeting_turns.go).
 			s.meetingTurnStopped(machine, sess.SessionID, sess, prev == "")
@@ -96,6 +109,9 @@ func (s *Service) setSessions(machine string, list []proto.Session) {
 	s.availSweep(machine, list, now) // the waits of conversations no longer listed (availability.go)
 	s.pruneGoneQuiet(machine)        // the verdicts and Stops of task Agents no longer listed (silent_turns.go)
 	s.fleetKeep(machine, list, connected, unsure)
+	for _, ref := range inlineUpdates {
+		s.inOrder(func() { go s.registerInlineTurn(context.Background(), ref) })
+	}
 	for _, sess := range unsure {
 		go s.reconnectedTurnEnd(machine, sess)
 	}

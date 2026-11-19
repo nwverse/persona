@@ -1080,7 +1080,7 @@ func (n *Node) switched(id string, ps proto.PendingSwitch) {
 func (n *Node) noteSwitchedModel(id string, ps proto.PendingSwitch) {
 	n.mu.Lock()
 	if m, ok := n.modes[id]; ok {
-		m.Model = nil
+		m.Model, m.Awaited = nil, nil // a switch typed into the old launcher's process is not this one's
 		n.modes[id] = m
 	}
 	n.mu.Unlock()

@@ -672,10 +672,11 @@ type UndeliveredMessage struct {
 	Images int       `json:"images,omitempty"` // how many pictures it carries (they are kept and sent with it)
 	At     time.Time `json:"at"`               // when the owner sent it
 	// State is UndeliveredWaiting (it is sent again by itself) or UndeliveredFailed (it gave up: Retry or Delete).
-	State    string     `json:"state"`
-	Attempts int        `json:"attempts,omitempty"`
-	NextAt   *time.Time `json:"next_at,omitempty"` // when the next try is due while waiting
-	Error    string     `json:"error,omitempty"`   // why the last try did not go in, in the owner's language
+	State      string     `json:"state"`
+	Attempts   int        `json:"attempts,omitempty"`
+	NextAt     *time.Time `json:"next_at,omitempty"`     // when the next try is due while waiting
+	Error      string     `json:"error,omitempty"`       // why the last try did not go in, in the owner's language
+	DeleteOnly bool       `json:"delete_only,omitempty"` // a failure the owner can delete but cannot retry
 	// Computer is set on a message held for an Agent while its computer was away (#10661, internal/devices held.go):
 	// that computer's name. Error is then the whole line to show under the bubble ("Will send when … is back"), and
 	// Retry / Delete go to the session's held routes (POST /api/v1/sessions/{mid}/{sid}/held/{msg}/retry, DELETE …).
