@@ -438,10 +438,9 @@ on-demand model panel, not the everyday Assistant home (#6887).
   `composer` container whose width sets the pill's and the picker's modes ("Model pill and unified model panel" in 3.8).
 - Web + / @ panel (#5324, `ComposerPanel.tsx`): one panel for both entries, 480 px and never wider than the composer
   (full width on phones), 12 px corners, `line` border, raised shadow, at most 400 px tall. From the + it covers the box
-  from its bottom left with a pill search box on top; from a typed @ it sits above the box. Rows: a 24 px **Add** header
-  (12 px medium, `ink-3`), action rows (14 px icon and words, a check on a checked one), 44 px resource rows (16 px
-  icon, 14 px name that truncates, 12 px `ink-3` meta at the right, up to 240 px); the slash menu's glide fill marks the
-  active row. Empty: three 44 px pulsing rows while reading, "No matching items" for a query with nothing.
+  from its bottom left with a pill search box on top. Typing @ anchors it above the box when space permits. A 24 px
+  header (12 px medium, `ink-3`) names each populated group. Rows are 36 px tall (44 px on touch), with a 16 px icon,
+  a 14 px name and 12 px secondary text. The slash menu's glide fill marks the active row. A quiet status line reports pending data while local options stay usable. An empty search shows "No matching items".
 - Web permission picker (#5324, `PermissionPicker.tsx`): the mode's symbol (14 px), its name (13 px, truncates) and a
   chevron; Full access tints the words `red`, Auto-review `mode-acts`; under a 300 px composer (a 320 px phone) only
   the symbol. A mode not reported yet is named by no value: the raised hand and "Permission mode", no tooltip (#5756). Its menu is the shared `Menu` (300 px) with each mode's symbol, name and check; descriptions are tooltips
@@ -461,15 +460,14 @@ on-demand model panel, not the everyday Assistant home (#6887).
   types in `ink-3`) 8 px beside the panel, right or left, or a line under the rows when neither side has room. Empty:
   **No matching commands**, 40 px, centered, `ink-3`. No key hint line. Ranking, keys and deviations: `docs/web/web.md`
   ("Input (Prompt Bar)").
-- Web `/` palette skill rows (#6171): where the `@` panel can select skills, the palette lists the commands first, then
-  matching skills ranked by the same exact / prefix / containing name rule with description matches last. The existing
-  25-row cap covers both groups and never drops a command for a skill. A skill row reuses the `@` row's spark icon,
-  readable name, description and source in the palette's 36 px row (44 px on touch), rather than reading as a command.
-  Picking one removes `/word` and adds the same opaque skill reference and removable chip as `@`; it never inserts
-  invocation text. The catalog is read only on palette opening, commands render before it answers, late rows do not move
-  the active row, and loading / unavailable / unsupported environments keep commands available with at most the quiet
-  skill status line. The empty state is **No matching commands or skills** where skills can be listed. This is a second
-  entry to the existing skill-selection interaction, not a new component pattern or runtime command.
+- Web skill selection (#11247): the Assistant and Agent composers use the same up-to-480 px menu for `@` and `/`.
+  Group headings, scrolling, the glide highlight, skill rows and the detail card come from the same picker. All enabled
+  skills in the scoped catalog can be browsed or searched. The slash menu keeps up to 25 ranked commands first.
+  A skill row shows its name and short description. The focused skill's detail shows the full description and the source
+  supplied by the node, including any visible directory. It fits beside the list where space permits and scrolls beneath
+  the list on a phone. The list fits the space around the composer and the keyboard. Selecting a skill adds an opaque
+  context chip. Opening either picker refreshes the inventory and can display the composer's last same-scope result
+  while waiting. Fresh results preserve the selected identity while it is available.
 - Editing state (web, #4503): editing the last message puts its words and quotes back into the box under a one-line bar at the box's top, above the context chips and quote bars. The bar has an accent pencil, **Editing last message** (`ink-2`, medium), a truncating hint (`ink-3`, precise pointers only) and a × with the quote bar's 24 px look. It is the only sign of the state, and the text field stays the same field. The irreversible step (the rewind) waits for an explicit send, which the bar's hint names. Esc or × leaves with nothing changed (`docs/web/web.md` "Pages", **Edit last message**).
 - Queued messages (web, #5327): drawn as cindy's pending queue at the owner's request (where cindy and the older design
   differ, cindy wins for this area). They sit in the composer's `top` slot, first in the card, flush with its border and
@@ -1313,6 +1311,17 @@ Explicit review-before-install is intentional even with Undo: uploaded instructi
 so selecting a file must not silently change behavior. Success refreshes the list and offers a bounded, unchanged-new-
 package-only Undo with retained recovery files; `docs/operations/hub-update.md` defines the state and discovery limits.
 
+**Web to-do images** (#11084): the existing New to-do `Dialog` takes JPEG/PNG images through the shared attachment
+picker and `AttachmentTray`; selection shows local thumbnails immediately, with an accessible Remove on each. Create is
+one single-flight busy action, with its failure inline in the dialog. Retry keeps every field, selected file and the
+operation ID; cancel releases the previews. The to-do detail uses the same tray and existing `ImageViewer` for zoom and
+download, not another gallery. Private image bytes are fetched with the to-do's credentials and manager, three at a
+time, with localized Retry on failure and object URLs released when replaced or closed. The no-image dialog and detail
+keep their previous layout and behavior. When `todo_images` is absent because any manager is too old to persist images,
+the picker is hidden and an image-less create is never sent. All controls use the existing 44 px touch expansion and en, zh-Hans and ja
+copy. The assistant manager owns persistence and handoff; the Web client does not invent a temporary upload or a local
+machine path.
+
 `EmptyStateView` (`apple/Persona/DesignSystem/Components.swift:385`): symbol, title, one-sentence message, optional prominent action. 92 uses. System `ContentUnavailableView` is used in about 22 other places and looks different (DS-15). Search results may use `ContentUnavailableView.search`. Web has no shared empty state outside admin; Android has `JEmptyState`. An offline current assistant (several assistants) takes the place of a merged list's empty state with its own: the assistant avatar faded with its offline mark, "<name> is offline" and when it last synced (web `OfflineState` in `web/src/views/ManagerParts.tsx`; Android `JAssistantOffline`, a `JEmptyState` whose `leading` slot holds `JManagerAvatar`; `docs/assistant/managers.md` "Clients").
 
 ### 3.10 Loading and error states
@@ -2141,6 +2150,7 @@ your permission" (section 5, "Notifications"); moving them to the card's words i
   space's tabs color each agent by its state. The web's top bar says no state (#5421, cindy's): the running status bar
   over the composer says it while the Agent works, the pending cards while it needs you, and its row in the sidebar always.
 - A row shows its most urgent state, in the order `AgentListOrder` ranks them.
+- A waiting to-do is named by what it waits on, never one "Waiting" for all (#11090, web): **Waiting on you** in Needs you's attention color only when it waits on the owner by the sidebar badge's predicate, every other wait and an unknown one ("Paused (nothing needed from you)") in a neutral tone; the words are in `docs/protocol/i18n.md` ("Agent states").
 - A failed run has no state of its own. It shows its state like any other run, and its row's line 2 says what failed, in red.
 - A Codex opened with no first message (`awaiting_first_message`) has no state of its own either. It is idle, never Needs You or unread, and sends no push.
   Its row's line 2 says "Waiting for its first message" (web `sidebar.codex_waiting` through `rowLine`, Apple `Session.listPreview`).

@@ -338,6 +338,7 @@ todos.read           GET /api/v1/todos
 todos.read           GET /api/v1/todos/places
 todos.read           GET /api/v1/todos/{id}
 todos.read           GET /api/v1/todos/{id}/decisions
+-                    GET /api/v1/todos/{id}/images/{image}
 todos.read           GET /api/v1/todos/{id}/repositories
 todos.read           GET /api/v1/todos/{id}/timeline
 todos.read           GET /api/v1/todos/{id}/workspace-naming/plans/{operation_id}
