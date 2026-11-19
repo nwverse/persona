@@ -167,7 +167,7 @@ fun AssistantSidebarContent(
                         try {
                             target.archiveConversation(session.key)
                             feedback?.notice(archivedWords, persona.core.designsystem.FeedbackStyle.Success)
-                            onRetired(session.key)
+                            // Archiving only hides the row; End below is what retires an open conversation.
                             repository.refresh()
                             archived = archived - session.key
                         } catch (cancelled: CancellationException) { throw cancelled }
@@ -194,8 +194,6 @@ fun AssistantSidebarContent(
         }
     }
     if (fullSearchOpen && fullWindowSearch) {
-        val roster = persona.core.designsystem.LocalManagerRoster.current
-        val assistantName = roster.assistantDisplayName(choice.shown, persona.core.designsystem.LocalPersonaName.current)
         AssistantFullSearch(
             chats = openChats,
             known = knownChats,
@@ -206,7 +204,6 @@ fun AssistantSidebarContent(
             names = received.directionNames,
             backgroundId = received.backgroundSupervisor,
             activeTag = history.activeTag,
-            mainName = assistantName,
             mainKey = received.mainSession,
             onOpen = { key ->
                 fullSearchOpen = false
