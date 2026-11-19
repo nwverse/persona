@@ -4,11 +4,14 @@ import (
 	"context"
 	"fmt"
 	"path"
+	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/closeout"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -31,13 +34,41 @@ const (
 	taskFilesMostBytes = 100 << 20
 )
 
-// taskFileLine is a hand-over line in a reply: `file: /a/b`, or `文件：/a/b`.
-var taskFileLine = lazyre.New(`(?mi)^[ \t]*(?:file|文件)[ \t]*[:：][ \t]*(.+?)[ \t]*$`)
+// taskFileAliases collects each language's parser spelling once. Every alias is accepted in every reply: the
+// viewer's language never narrows the historical file markers, colons, or path quotes a model may have used.
+func taskFileAliases(key string) []string {
+	var out []string
+	for _, lang := range i18n.Langs {
+		value := i18n.T(lang, key)
+		if value != "" && !slices.Contains(out, value) {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func taskFileLinePattern() string {
+	groups := make([]string, 0, 2)
+	for _, key := range []string{"assistant-task_files.marker", "assistant-task_files.colon"} {
+		aliases := taskFileAliases(key)
+		for i := range aliases {
+			aliases[i] = regexp.QuoteMeta(aliases[i])
+		}
+		groups = append(groups, strings.Join(aliases, "|"))
+	}
+	return fmt.Sprintf(`(?mi)^[ \t]*(?:%s)[ \t]*(?:%s)[ \t]*(.+?)[ \t]*$`, groups[0], groups[1])
+}
+
+// taskFileLine is a hand-over line in a reply: `file: /a/b`, or `文件：/a/b`. Alias catalogs load on first use.
+var taskFileLine = sync.OnceValue(func() *lazyre.Regexp { return lazyre.New(taskFileLinePattern()) })
+var taskFileQuoteCutset = sync.OnceValue(func() string {
+	return "`'\"" + strings.Join(taskFileAliases("assistant-task_files.quotes"), "")
+})
 
 // taskFilePath is p as a file path to copy, or "": absolute or ~/, without the quotes or backticks a model likes to
 // wrap it in.
 func taskFilePath(p string) string {
-	p = strings.Trim(strings.TrimSpace(p), "`'\"「」")
+	p = strings.Trim(strings.TrimSpace(p), taskFileQuoteCutset())
 	p = strings.TrimSpace(p)
 	if strings.HasPrefix(p, "~/") || strings.HasPrefix(p, "/") {
 		return p
@@ -57,7 +88,7 @@ func taskFilePaths(reply string) []string {
 		seen[p] = true
 		out = append(out, p)
 	}
-	for _, m := range taskFileLine.FindAllStringSubmatch(reply, -1) {
+	for _, m := range taskFileLine().FindAllStringSubmatch(reply, -1) {
 		add(m[1])
 	}
 	if _, arts, ok := closeout.Parse(reply); ok {
@@ -89,15 +120,17 @@ func (f taskFile) local() string {
 	return f.Path
 }
 
-// String is name and where the file is, or why it did not come, for a notice or a supervision message.
-func (f taskFile) String() string {
+// String is name and where the file is, or why it did not come, for a notice or a supervision message in lang.
+func (f taskFile) String(lang i18n.Lang) string {
 	if f.Local != "" {
-		return f.Name + "：" + f.Local
+		return i18n.T(lang, "assistant-task_files.location", i18n.Args{"name": f.Name, "path": f.Local})
 	}
 	if f.Error != "" {
-		return f.Name + "（没取回：" + clip(f.Error, 160) + "；在原电脑 " + f.Path + "）"
+		return i18n.T(lang, "assistant-task_files.copy_failed", i18n.Args{
+			"name": f.Name, "error": clip(f.Error, 160), "path": f.Path,
+		})
 	}
-	return f.Name + "：" + f.Path
+	return i18n.T(lang, "assistant-task_files.location", i18n.Args{"name": f.Name, "path": f.Path})
 }
 
 // taskFileBook is what each task handed over, by todo id. The copies themselves live on the conversation's computer;
@@ -148,11 +181,11 @@ func (s *Service) keepTaskFiles(id string, files []taskFile) []taskFile {
 	return append([]taskFile(nil), cur...)
 }
 
-// taskFileLines is files as a notice or a supervision message lists them.
-func taskFileLines(files []taskFile) []string {
+// taskFileLines is files as a notice or a supervision message lists them in lang.
+func taskFileLines(lang i18n.Lang, files []taskFile) []string {
 	out := make([]string, 0, len(files))
 	for _, f := range files {
-		out = append(out, f.String())
+		out = append(out, f.String(lang))
 	}
 	return out
 }

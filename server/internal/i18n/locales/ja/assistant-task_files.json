@@ -1,0 +1,7 @@
+{
+  "marker": "file",
+  "colon": ":",
+  "quotes": "「」",
+  "location": "{name}：{path}",
+  "copy_failed": "{name}（取得できませんでした：{error}。元のコンピューター：{path}）"
+}

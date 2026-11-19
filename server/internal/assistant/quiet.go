@@ -123,7 +123,7 @@ func (s *Service) sendQuietNotice(id string) {
 			retryWith = p.Tasks[i].RetryWith[0]
 		}
 	}
-	msg := relayMsg{From: id, FromTitle: "任务「" + n.todo.Title + "」", Tool: noticeTool, Text: renderNotice(n, reporting, retryWith), At: time.Now().UTC(), State: n.state}
+	msg := relayMsg{From: id, FromTitle: "任务「" + n.todo.Title + "」", Tool: noticeTool, Text: renderNotice(n, reporting, retryWith, s.lang(ctx)), At: time.Now().UTC(), State: n.state}
 	if s.replaceQueuedNotice(to, msg) {
 		s.publish(ctx)
 		return
@@ -185,11 +185,11 @@ func (s *Service) queueNotice(id string, n *quietNotice, to string, msg relayMsg
 	return false
 }
 
-// renderNotice is n's text; reporting: for the reporting conversation that opened the task, not the main one;
+// renderNotice is n's text in lang; reporting: for the reporting conversation that opened the task, not the main one;
 // retryWith: a failed start's launcher its card offers instead.
-func renderNotice(n *quietNotice, reporting bool, retryWith string) string {
+func renderNotice(n *quietNotice, reporting bool, retryWith string, lang i18n.Lang) string {
 	return prompts.RenderTaskNotice(prompts.TaskNotice{Title: n.todo.Title, Machine: n.machine, State: n.state, Earlier: n.earlier,
-		Ask: n.ask, Text: n.text, Files: taskFileLines(n.files), Reporting: reporting, RetryWith: retryWith})
+		Ask: n.ask, Text: n.text, Files: taskFileLines(lang, n.files), Reporting: reporting, RetryWith: retryWith})
 }
 
 // replaceQueuedNotice: a notice about the same task still waits in the queue: msg takes its place (true).

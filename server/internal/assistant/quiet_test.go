@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -301,7 +302,7 @@ func TestGoldenTaskNotice(t *testing.T) {
 		// its launcher could not start there (#10365): the card's other launcher is named
 		{"failed_retry_with", quietNotice{todo: Todo{Title: "整理材料"}, machine: "box", state: "failed", text: "box 上新开的终端运行不了「work」"}, "claude"},
 	} {
-		golden(t, "task_notice."+c.name, renderNotice(&c.n, false, c.retryWith))
+		golden(t, "task_notice."+c.name, renderNotice(&c.n, false, c.retryWith, i18n.ZhHans))
 	}
 }
 
@@ -380,8 +381,8 @@ func TestStartWithReportTasks(t *testing.T) {
 }
 
 func TestGoldenTaskNoticeReporting(t *testing.T) {
-	golden(t, "task_notice.reporting_done", renderNotice(&quietNotice{todo: Todo{Title: "提 MR"}, machine: "box", state: "done", text: "MR：https://example.com/mr/7"}, true, ""))
-	golden(t, "task_notice.reporting_needs", renderNotice(&quietNotice{todo: Todo{Title: "提 MR"}, machine: "box", state: "needs", ask: "- 合到哪个分支？"}, true, ""))
+	golden(t, "task_notice.reporting_done", renderNotice(&quietNotice{todo: Todo{Title: "提 MR"}, machine: "box", state: "done", text: "MR：https://example.com/mr/7"}, true, "", i18n.ZhHans))
+	golden(t, "task_notice.reporting_needs", renderNotice(&quietNotice{todo: Todo{Title: "提 MR"}, machine: "box", state: "needs", ask: "- 合到哪个分支？"}, true, "", i18n.ZhHans))
 }
 
 // A needs notice already queued behind its conversation's turn is dropped when the user deals with the card

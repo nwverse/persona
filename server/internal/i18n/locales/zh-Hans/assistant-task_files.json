@@ -1,0 +1,7 @@
+{
+  "marker": "文件",
+  "colon": "：",
+  "quotes": "「」",
+  "location": "{name}：{path}",
+  "copy_failed": "{name}（没取回：{error}；在原电脑 {path}）"
+}

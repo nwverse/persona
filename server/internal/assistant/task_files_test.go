@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -23,6 +24,14 @@ func TestTaskFilePaths(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("paths: %q, want %q", got, want)
 		}
+	}
+}
+
+func TestTaskFilePathsLanguageMarkers(t *testing.T) {
+	got := taskFilePaths("文件:/tmp/zh-ascii.md\nfile：「/tmp/fullwidth.md」\n")
+	want := []string{"/tmp/zh-ascii.md", "/tmp/fullwidth.md"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("paths: %q, want %q", got, want)
 	}
 }
 
@@ -178,8 +187,8 @@ func TestDeliverTaskFilesFailure(t *testing.T) {
 	if len(files) != 1 || files[0].Error == "" || files[0].Path != "/home/me/gone.md" {
 		t.Fatalf("files: %+v", files)
 	}
-	if !strings.Contains(files[0].String(), "在原电脑") {
-		t.Fatalf("String: %q", files[0].String())
+	if !strings.Contains(files[0].String(i18n.ZhHans), "在原电脑") {
+		t.Fatalf("String: %q", files[0].String(i18n.ZhHans))
 	}
 }
 
@@ -209,9 +218,30 @@ func TestDeliverTaskFilesOldNode(t *testing.T) {
 	}
 }
 
-func TestTaskFileLineInNotice(t *testing.T) {
-	got := taskFileLines([]taskFile{{Name: "manual.md", Path: "/home/me/manual.md", Local: "/x/uploads/files/2026-11-18/ab12-manual.md"}})
-	if len(got) != 1 || !strings.Contains(got[0], "manual.md：/x/uploads/files/") {
-		t.Fatalf("lines: %q", got)
+func TestTaskFileLinesLanguage(t *testing.T) {
+	files := []taskFile{
+		{Name: "manual.md", Path: "/home/me/manual.md", Local: "/x/uploads/files/2026-11-18/ab12-manual.md"},
+		{Name: "plot.png", Path: "/home/me/plot.png", Error: "read failed"},
+		{Name: "report.md", Path: "/home/me/report.md"},
+	}
+	for _, tc := range []struct {
+		lang i18n.Lang
+		want string
+	}{
+		{lang: i18n.ZhHans, want: "manual.md：/x/uploads/files/2026-11-18/ab12-manual.md\n" +
+			"plot.png（没取回：read failed；在原电脑 /home/me/plot.png）\n" +
+			"report.md：/home/me/report.md"},
+		{lang: i18n.En, want: "manual.md: /x/uploads/files/2026-11-18/ab12-manual.md\n" +
+			"plot.png (could not retrieve: read failed; on the original computer /home/me/plot.png)\n" +
+			"report.md: /home/me/report.md"},
+		{lang: i18n.Ja, want: "manual.md：/x/uploads/files/2026-11-18/ab12-manual.md\n" +
+			"plot.png（取得できませんでした：read failed。元のコンピューター：/home/me/plot.png）\n" +
+			"report.md：/home/me/report.md"},
+	} {
+		t.Run(string(tc.lang), func(t *testing.T) {
+			if got := strings.Join(taskFileLines(tc.lang, files), "\n"); got != tc.want {
+				t.Fatalf("lines:\n%s\nwant:\n%s", got, tc.want)
+			}
+		})
 	}
 }
