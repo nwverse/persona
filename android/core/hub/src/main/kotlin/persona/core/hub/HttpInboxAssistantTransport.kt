@@ -376,7 +376,8 @@ class HttpInboxAssistantTransport private constructor(
         val path = requireNotNull(base.hubPath(media)) { "Invalid media origin" }
         require(document && path.startsWith("/api/v1/lark/raw/documents/") ||
             path.startsWith("/api/v1/lark/media/") ||
-            Regex("/api/v1/lark/messages/[^/]+/media/.+").matches(path)) { "Invalid media path" }
+            Regex("/api/v1/lark/messages/[^/]+/media/.+").matches(path) ||
+            Regex("/api/v1/avatars/[^/]+/[^/]+").matches(path)) { "Invalid media path" }
         return request(path + (media.encodedQuery?.let { "?$it" } ?: ""), "GET", null, true).use { response ->
                 checkScope()
                 requireNotNull(response.body).bytes()
