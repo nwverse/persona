@@ -50,6 +50,7 @@ class LargeWindowComposerTest {
         enabled: Boolean = true,
         extraContent: Boolean = false,
         blockedLabel: String? = null,
+        onPermissions: (() -> Unit)? = null,
         onSend: () -> Unit,
     ) {
         rule.setContent {
@@ -57,7 +58,8 @@ class LargeWindowComposerTest {
                 PersonaTheme(darkTheme = false, reduceMotion = true) {
                     LargeWindowComposer(SessionKey("box", "s1"), state, working = false, sending = sending,
                         canClear = false, service = null, onSend = onSend, onCommand = {}, onNotice = {},
-                        enabled = enabled, extraContent = extraContent, blockedLabel = blockedLabel)
+                        enabled = enabled, extraContent = extraContent, blockedLabel = blockedLabel,
+                        onPermissions = onPermissions)
                 }
             }
         }
@@ -261,5 +263,30 @@ class LargeWindowComposerTest {
             withKeyDown(Key.CtrlLeft) { pressKey(Key.Enter) }
         }
         assertEquals(0, sent)
+    }
+
+    @Test fun hardwareSendInterceptsBarePermissionsInsteadOfSending() {
+        val state = ChatComposerState().apply { value = TextFieldValue(" /permissions ", TextRange(14)) }
+        var sent = 0
+        var opened = 0
+        show(state, onPermissions = { opened++ }) { sent++ }
+        rule.onNode(hasSetTextAction() and isFocused()).performKeyInput {
+            withKeyDown(Key.CtrlLeft) { pressKey(Key.Enter) }
+        }
+        assertEquals(1, opened)
+        assertEquals(0, sent)
+        assertEquals("", state.value.text)
+    }
+
+    @Test fun hardwareSendWithExtraContentKeepsPermissionsAsMessage() {
+        val state = ChatComposerState().apply { value = TextFieldValue("/permissions", TextRange(12)) }
+        var sent = 0
+        var opened = 0
+        show(state, extraContent = true, onPermissions = { opened++ }) { sent++ }
+        rule.onNode(hasSetTextAction() and isFocused()).performKeyInput {
+            withKeyDown(Key.CtrlLeft) { pressKey(Key.Enter) }
+        }
+        assertEquals(0, opened)
+        assertEquals(1, sent)
     }
 }

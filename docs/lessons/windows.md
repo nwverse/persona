@@ -189,6 +189,20 @@ This applies to Claude Code and other detected runtimes too. Codex starts open a
 first message, and still require the rollout to contain that complete message before reporting success. The startup
 readiness and delivery checks share one timeout. Codex App messages already use structured input on its IPC bus.
 
+Codex can display a paste as `[Pasted Content N chars]` followed by literal tail text, or several chips. An anchored
+chip-only check rejects such a composer even when the input arrived. Match chip lengths in Unicode characters and
+visible fragments against the full expected input; a prefix chip with its tail still in flight must wait. Codex
+normalizes line endings before counting. Confirm the complete first message in the rollout after submitting once. A chip is not a
+delivery receipt or evidence of ConPTY corruption. A compact footer with directory `~` and warnings is status, not
+draft content. Keep any real draft above that footer protected.
+
+An older desktop-bundled CLI can precede a newly upgraded npm CLI on PATH. Check the executable the launcher's
+actual environment resolves, not only npm's version. Startup skips Codex's recognized update offer with Escape on
+all systems; it must not select the default installer. A late offer can consume or hide a paste: after skipping,
+reuse a matching draft, or replay once only into an empty unqueued composer. Unknown dialogs and foreign drafts
+still refuse; failure closes only the launch's own new pane. Capture an incident's rollout and version before
+attributing an older truncation to an update offer.
+
 Closing a failed start's new pane does not archive a rollout it already published. Identify that rollout only through
 the pane's explicit thread ID or its unique rollout writer, and require its start time to belong to the launch.
 Close the owned pane before requesting Codex's reversible native archive. Never use a shared directory, title or

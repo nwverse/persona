@@ -177,8 +177,11 @@ func (s *Service) askAgain(ctx context.Context, r *channel.Run, prog *chanLive, 
 	_, body, _ := strings.Cut(text, "\n") // the first line is the context tag
 	id := channel.ClientMsgID(r.Channel, r.ID+"-again")
 	// The manager's own words, not the owner's: they preempt no background round (owner_preempt.go).
-	p, err := s.messageParams(ctx, SendParams{MachineID: r.MachineID, SessionID: r.SessionID,
-		Params: map[string]any{"session_id": r.SessionID, "text": text, "client_msg_id": id}}, false)
+	params := map[string]any{"session_id": r.SessionID, "text": text, "client_msg_id": id}
+	if r.Ext["public"] == "1" {
+		params["public"] = true
+	}
+	p, err := s.messageParams(ctx, SendParams{MachineID: r.MachineID, SessionID: r.SessionID, Params: params}, false)
 	if err == nil {
 		err = s.sendOnce(ctx, r.MachineID, p)
 	}
@@ -268,7 +271,7 @@ func (s *Service) finishChannelRun(r *channel.Run, res *channel.Result) {
 		res = recalledResult() // an answer read just before the recall does not go out
 	}
 	now := c.clock()
-	took := now.Sub(r.Started)
+	took := now.Sub(r.WaitFrom())
 	snap := *r
 	snap.Ext = cloneExt(r.Ext)
 	snap.Folded = slices.Clone(r.Folded)
