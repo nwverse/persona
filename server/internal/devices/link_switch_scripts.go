@@ -87,12 +87,14 @@ func lsLinkPaths() string {
 var lsNodeThere = `n=0; for p in ` + lsIn("U", lsNodeUnit) + ` ` + lsIn("U", lsLegacyNodeUnit) + ` ` + lsIn("D", lsNodeBackup) +
 	`; do if e "$p"; then n=1; fi; done`
 
-// lsUnsafeDirs sets w=1 when ~/.persona or its bin (followed through links) may be written by another user, who
-// could swap the program a switch runs: by others, or by its group unless that is the user's own private group (the
-// group named as the user, which a umask of 002 makes writable on distributions that give each user one). The probe
-// says so; the stage and the install look again before they write or place anything.
-var lsUnsafeDirs = `w=0; u=$(id -un); for p in "$HOME/.persona" "$HOME/.persona/bin"; do [ -e "$p" ] || continue; ` +
-	`set -- $(ls -ldL "$p" 2>/dev/null); case "${1:-}" in ????????w*) w=1;; ?????w*) [ "${4:-}" = "$u" ] || w=1;; esac; done`
+// lsUnsafeDirs sets w=1 when the home folder, ~/.persona or its bin (followed through links) is not the user's own,
+// or may be written by another user, who could swap the program a switch runs: by others, or by its group unless that
+// is the user's own private group (the group named as the user, which a umask of 002 makes writable on distributions
+// that give each user one). The probe says so; the stage and the install look again before they write or place
+// anything.
+var lsUnsafeDirs = `w=0; u=$(id -un); for p in "$HOME" "$HOME/.persona" "$HOME/.persona/bin"; do [ -e "$p" ] || continue; ` +
+	`set -- $(ls -ldL "$p" 2>/dev/null); [ -n "$u" ] && [ "${3:-}" = "$u" ] || w=1; ` +
+	`case "${1:-}" in ????????w*) w=1;; ?????w*) [ "${4:-}" = "$u" ] || w=1;; esac; done`
 
 // lsRefuseUnsafe exits with code when lsUnsafeDirs finds a directory another user may write to.
 func lsRefuseUnsafe(code int) string {

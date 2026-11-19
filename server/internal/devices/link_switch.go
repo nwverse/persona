@@ -71,16 +71,20 @@ type linkSwitchRecord struct {
 	// Install: "" not run, running (it may have placed the build, or not), placed, not_placed (refused before).
 	Install       string `json:"install,omitempty"`
 	InstallerExit *int   `json:"installer_exit,omitempty"`
-	// HubEnded: the hub took this switch's end: "" not yet, rolled_back, succeeded, refused (it never will: the
-	// computer is left as it is).
+	// HubEnded: the hub took this switch's end: "" not yet, rolled_back, rolled_back_gone (and the computer is
+	// another manager's now), succeeded, refused (it never will: the computer is left as it is).
 	HubEnded string `json:"hub_ended,omitempty"`
+	// EndSince is when the rollback first asked the hub's end: it gives up EndGiveUp after (kept, so a restart does
+	// not start the count again).
+	EndSince time.Time `json:"end_since,omitzero"`
 }
 
 // HubEnded values of a record.
 const (
-	lsEndedRolledBack = devicewire.LinkSwitchRolledBack
-	lsEndedSucceeded  = devicewire.LinkSwitchSucceeded
-	lsEndedRefused    = "refused"
+	lsEndedRolledBack     = devicewire.LinkSwitchRolledBack
+	lsEndedRolledBackGone = devicewire.LinkSwitchCodeRolledBackGone
+	lsEndedSucceeded      = devicewire.LinkSwitchSucceeded
+	lsEndedRefused        = "refused"
 )
 
 // Install states of a record.
@@ -112,6 +116,10 @@ type linkSwitchTimes struct {
 	// EndBackoff is how long the hub's end is first waited for before it is asked again, doubling up to EndBackoffMax:
 	// it is asked until it answers, as long as the manager runs.
 	EndBackoff, EndBackoffMax time.Duration
+	// EndGiveUp bounds a rollback's asking: past it (from its first ask, EndSince), the switch fails as hub_unanswered,
+	// the computer left as it is, and node updates are no longer held. A success's end has no bound: nothing waits on
+	// it.
+	EndGiveUp time.Duration
 	// Total is a switch's deadline, Resume how long a restarted manager waits for the link at least; Shown how long a
 	// finished switch stays on the machine; Poll how often a wait looks again.
 	Total, Resume, Shown, Poll time.Duration
@@ -119,7 +127,7 @@ type linkSwitchTimes struct {
 
 var defaultLinkSwitchTimes = linkSwitchTimes{Probe: 30 * time.Second, Transfer: 10 * time.Minute, Begin: 30 * time.Second,
 	Install: 3 * time.Minute, Connect: 90 * time.Second, Uninstall: time.Minute, SSHBack: 2 * time.Minute,
-	EndBackoff: time.Second, EndBackoffMax: time.Minute, Total: 20 * time.Minute, Resume: time.Minute, Shown: time.Hour,
+	EndBackoff: time.Second, EndBackoffMax: time.Minute, EndGiveUp: time.Hour, Total: 20 * time.Minute, Resume: time.Minute, Shown: time.Hour,
 	Poll: time.Second}
 
 // sshRunner runs ssh's argv (argv[0] is "ssh") with stdin, its output to stdout, and answers ssh's exit code (-1 when
@@ -928,7 +936,7 @@ func (r *linkSwitchRun) succeed(ctx context.Context) {
 // switch stays succeeded either way, and a restart asks again while the record says the hub has not taken it.
 func (r *linkSwitchRun) endSuccess(ctx context.Context, got endAnswer) {
 	if got == endNoAnswer {
-		got = r.endUntilAnswered(ctx, devicewire.LinkSwitchSucceeded)
+		got = r.endUntilAnswered(ctx, devicewire.LinkSwitchSucceeded, time.Time{})
 	}
 	if ctx.Err() != nil {
 		return
@@ -957,6 +965,9 @@ const (
 	endTaken                      // done
 	endSucceeded                  // end(rolled_back) of a switch the hub saw succeed: it stays done
 	endRefused                    // the hub will never take it: the computer is left as it is
+	endUnknown                    // the hub does not know the call (an older build): it will not take it either
+	endGone                       // end(rolled_back) taken, and the computer is another manager's now
+	endGaveUp                     // no answer within the bound: given up
 )
 
 // endOnce tells the hub once how the switch ended. The hub revokes this switch's code and credential before it looks
@@ -981,6 +992,12 @@ func (r *linkSwitchRun) endOnce(ctx context.Context, outcome string) endAnswer {
 	case errors.As(err, &re) && re.Code == devicewire.LinkSwitchCodeNotSSH && outcome == devicewire.LinkSwitchRolledBack:
 		r.logf("end(%s): %s, nothing left on the hub", outcome, re.Code)
 		return endTaken
+	case errors.As(err, &re) && re.Code == devicewire.LinkSwitchCodeRolledBackGone && outcome == devicewire.LinkSwitchRolledBack:
+		r.logf("end(%s): undone, and the computer is another manager's now", outcome)
+		return endGone
+	case errors.As(err, &re) && re.Code == bus.CodeUnknownMethod:
+		r.logf("end(%s): the hub does not know it, not asked again", outcome)
+		return endUnknown
 	case errors.As(err, &re) && (re.Code == devicewire.LinkSwitchCodeNotSSH || re.Code == devicewire.LinkSwitchCodeNoMachine ||
 		re.Code == bus.CodeInvalidParams):
 		r.logf("end(%s) refused: %s, not asked again", outcome, re.Code)
@@ -994,17 +1011,28 @@ func (r *linkSwitchRun) endOnce(ctx context.Context, outcome string) endAnswer {
 }
 
 // endUntilAnswered asks the hub's end until it answers, waiting EndBackoff between tries, doubling up to
-// EndBackoffMax, as long as the manager runs (endNoAnswer once it stops).
-func (r *linkSwitchRun) endUntilAnswered(ctx context.Context, outcome string) endAnswer {
+// EndBackoffMax, as long as the manager runs (endNoAnswer once it stops) and, unless giveUp is zero, until giveUp
+// (endGaveUp then).
+func (r *linkSwitchRun) endUntilAnswered(ctx context.Context, outcome string, giveUp time.Time) endAnswer {
 	wait := r.t.EndBackoff
 	for {
 		if got := r.endOnce(ctx, outcome); got != endNoAnswer {
 			return got
 		}
+		next := time.Now().Add(wait)
+		if !giveUp.IsZero() && !next.Before(giveUp) {
+			wait = time.Until(giveUp)
+		}
 		select {
 		case <-ctx.Done():
 			return endNoAnswer
-		case <-time.After(wait):
+		case <-time.After(max(wait, 0)):
+		}
+		if !giveUp.IsZero() && !time.Now().Before(giveUp) {
+			if got := r.endOnce(ctx, outcome); got != endNoAnswer { // a last ask at the bound
+				return got
+			}
+			return endGaveUp
 		}
 		wait = min(2*wait, r.t.EndBackoffMax)
 	}
@@ -1013,15 +1041,20 @@ func (r *linkSwitchRun) endUntilAnswered(ctx context.Context, outcome string) en
 // rollback undoes the switch that may have reached the hub's begin. First the hub's end(rolled_back), asked until it
 // answers (the switch stays rolling_back meanwhile, and a restart asks again): nothing on the computer is touched
 // before, so a computer is never left on neither Persona Link nor ssh. Then only what this switch set up on the
-// computer goes, and the computer must be back over ssh; failed with why, and rollback_unconfirmed unless both were
-// seen to work. A hub that will never take the end leaves the computer as it is (rollback_unconfirmed); one that saw
-// the switch succeed keeps it succeeded.
+// computer goes, and the computer must be back over ssh (not when it is another manager's now); failed with why, and
+// rollback_unconfirmed unless both were seen to work. A hub that will never take the end leaves the computer as it is
+// (rollback_unconfirmed); so does one that does not know it, or does not answer within EndGiveUp of the first ask
+// (hub_unanswered: the record is finished, so node updates are no longer held). One that saw the switch succeed
+// keeps it succeeded.
 func (r *linkSwitchRun) rollback(ctx context.Context, why string) {
 	r.rec.Error = why
+	if r.rec.EndSince.IsZero() && r.rec.HubEnded == "" {
+		r.rec.EndSince = time.Now().UTC() // kept with the phase below, so a restart counts from here
+	}
 	r.phase(ctx, proto.LinkSwitchPhaseRollingBack)
 	r.logf("rolling back (%s)", why)
-	if r.rec.HubEnded != lsEndedRolledBack {
-		got := r.endUntilAnswered(ctx, devicewire.LinkSwitchRolledBack)
+	if r.rec.HubEnded != lsEndedRolledBack && r.rec.HubEnded != lsEndedRolledBackGone {
+		got := r.endUntilAnswered(ctx, devicewire.LinkSwitchRolledBack, r.rec.EndSince.Add(r.t.EndGiveUp))
 		if ctx.Err() != nil {
 			return // still rolling_back: a restart asks the hub again
 		}
@@ -1035,8 +1068,15 @@ func (r *linkSwitchRun) rollback(ctx context.Context, why string) {
 			r.rec.HubEnded = lsEndedRefused
 			r.finish(ctx, proto.LinkSwitchPhaseFailed, why, true)
 			return
+		case endUnknown, endGaveUp:
+			r.logf("the hub did not take the rollback (%s): the computer is left as it is", why)
+			r.finish(ctx, proto.LinkSwitchPhaseFailed, proto.LinkSwitchReasonHubUnanswered, true)
+			return
 		}
 		r.rec.HubEnded = lsEndedRolledBack
+		if got == endGone {
+			r.rec.HubEnded = lsEndedRolledBackGone
+		}
 		if !r.save(ctx) {
 			r.logf("the hub's end was not kept: a restart asks it again, which it answers the same")
 		}
@@ -1055,7 +1095,9 @@ func (r *linkSwitchRun) rollback(ctx context.Context, why string) {
 	if kv["node_unit"] == "1" { // the install found the computer's own node service: kept, and remembered
 		r.rec.NodeUnitExisted = true
 	}
-	back := r.waitFor(ctx, time.Now().Add(r.t.SSHBack), func() bool { return r.d.sshOnline(r.rec.MachineID) })
+	// A computer that went to another manager is that one's to connect: nothing to wait for here.
+	back := r.rec.HubEnded == lsEndedRolledBackGone ||
+		r.waitFor(ctx, time.Now().Add(r.t.SSHBack), func() bool { return r.d.sshOnline(r.rec.MachineID) })
 	if ctx.Err() != nil {
 		return
 	}
