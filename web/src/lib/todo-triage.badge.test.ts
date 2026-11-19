@@ -106,6 +106,8 @@ describe("the badge's rules", () => {
     const list = [decide, personal("goal"), held, task("p", { part_of: "goal", agents: [agent("run2")] })];
     expect(counted(list)).toEqual(["d", "h"]);
     expect(waitsOnOwner(held, triage(held, lookup, NOW))).toBe("delivery_ok");
+    const heldForDecision = { ...held, supervision: decide.supervision };
+    expect(waitsOnOwner(heldForDecision, triage(heldForDecision, lookup, NOW))).toBe("owner_decides");
     // held for an Agent or for others, it is nobody's to OK: it still counts, as nothing shows an Agent on it
     const forAgent = { ...held, delivery: { state: "pr", unblock: "agent" } };
     expect(waitsOnOwner(forAgent, triage(forAgent, lookup, NOW))).toBeNull();
@@ -116,12 +118,16 @@ describe("the badge's rules", () => {
     expect(counted([asks, task("busy", { part_of: "ask-goal", agents: [agent("run3")] })])).toEqual(["ask-goal"]);
   });
 
-  it("does not read a shelved hold as waiting on the owner, nor let it carry its goal", () => {
+  it("shelves an inactive external hold, and keeps an explicit owner hold visible and counted once", () => {
     const old = hoursAgo(100);
-    const shelved = task("held", { part_of: "goal", created_at: hoursAgo(120), updated_at: old, agents: [{ ...agent("old"), linked_at: hoursAgo(110) }], delivery: { state: "pr", unblock: "user", at: old } });
+    const shelved = task("held", { part_of: "goal", created_at: hoursAgo(120), updated_at: old, agents: [{ ...agent("old"), linked_at: hoursAgo(110) }], delivery: { state: "pr", unblock: "other", at: old } });
     expect(triage(shelved, lookup, NOW).section).toBe("shelved");
     expect(waitsOnOwner(shelved, triage(shelved, lookup, NOW))).toBeNull();
     expect(counted([personal("goal"), shelved])).toEqual(["goal"]);
+    const approval = { ...shelved, delivery: { state: "pr", unblock: "user", at: old } };
+    expect(triage(approval, lookup, NOW).section).toBe("waiting");
+    expect(waitsOnOwner(approval, triage(approval, lookup, NOW))).toBe("delivery_ok");
+    expect(counted([personal("goal"), approval])).toEqual(["held"]);
   });
 
   it("counts a cut-off Agent's task, and keeps counting tasks no Agent is on", () => {
