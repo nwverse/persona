@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/nodeclient"
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -35,6 +36,7 @@ type residentAttach struct {
 	first net.Conn // the manager's end of the first transport
 	lost  chan error
 	stop  context.CancelFunc
+	hooks hookEvents // the hook.event notifications the manager got
 }
 
 func startResidentAttach(t *testing.T) *residentAttach {
@@ -63,6 +65,7 @@ func startResidentAttach(t *testing.T) *residentAttach {
 	hub.EnableResume(5 * time.Second)
 	hub.OnLost = func(err error) { r.lost <- err }
 	hub.OnRequest = func(context.Context, string, json.RawMessage) (any, error) { return map[string]any{}, nil }
+	hub.OnEvent = r.hooks.record
 	go func() { _ = hub.Serve(ctx, slowReader{m1}) }()
 	r.hub = hub
 	cctx, ccancel := context.WithTimeout(ctx, 20*time.Second)
@@ -336,4 +339,98 @@ func TestAttachIgnoresATransportThatSaidNothing(t *testing.T) {
 	case <-time.After(15 * time.Second):
 		t.Fatal("Attach did not end")
 	}
+}
+
+// sendHook sends a report-only hook's event on node.sock, as `personad hook` does, and says how long its answer took.
+func sendHook(t *testing.T, event, session string) time.Duration {
+	t.Helper()
+	start := time.Now()
+	c, err := net.Dial("unix", nodeclient.SocketPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	b, _ := json.Marshal(sockRequest{Kind: "hook", ReportOnly: true, Input: reportInput(event, session, "")})
+	if _, err := c.Write(append(b, '\n')); err != nil {
+		t.Fatal(err)
+	}
+	_ = c.SetReadDeadline(time.Now().Add(time.Minute))
+	if _, err := bufio.NewReader(c).ReadString('\n'); err != nil {
+		t.Fatalf("the hook's answer: %v", err)
+	}
+	return time.Since(start)
+}
+
+// hookSession is the session of the i-th hook these tests send.
+func hookSession(i int) string { return fmt.Sprintf("%08d-2222-3333-4444-555555555555", i) }
+
+// sessionsOf says the sessions of hook events, in the order they came.
+func sessionsOf(events []map[string]any) []string {
+	var got []string
+	for _, e := range events {
+		got = append(got, fmt.Sprint(e["session_id"]))
+	}
+	return got
+}
+
+// While the connection waits for the manager to resume it, a hook does not wait with it: its event goes out, in order,
+// once the connection is resumed. One whose connection is never resumed is kept, and the next connection gets it
+// (#10829's review).
+func TestAttachHookEventsDoNotWaitForAResume(t *testing.T) {
+	was := resumeWindow
+	resumeWindow = 3 * time.Second
+	t.Cleanup(func() { resumeWindow = was })
+	r := startResidentAttach(t)
+	cctx, ccancel := context.WithTimeout(r.ctx, time.Minute)
+	defer ccancel()
+	if took := sendHook(t, "Stop", hookSession(0)); took > hookEventWait {
+		t.Fatalf("a hook on a working connection took %v", took)
+	}
+	waitFor(t, "the first event", func() bool { return len(r.hooks.all()) == 1 })
+
+	r.first.Close()
+	<-r.lost
+	for i := 1; i <= 3; i++ {
+		if took := sendHook(t, "Stop", hookSession(i)); took > hookEventWait+time.Second/2 {
+			t.Fatalf("hook %d waited %v for the transport", i, took)
+		}
+	}
+	m2, n2 := net.Pipe()
+	r.extra <- n2
+	if err := r.hub.Resume(cctx, m2, m2); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	waitFor(t, "the events after the resume", func() bool { return len(r.hooks.all()) == 4 })
+	if got, want := sessionsOf(r.hooks.all()), []string{hookSession(0), hookSession(1), hookSession(2), hookSession(3)}; !slices.Equal(got, want) {
+		t.Fatalf("events %v, want %v", got, want)
+	}
+
+	// Lost again, and not resumed: what the hooks sent meanwhile goes to the next connection.
+	m2.Close()
+	<-r.lost
+	for i := 4; i <= 5; i++ {
+		if took := sendHook(t, "Stop", hookSession(i)); took > hookEventWait+time.Second/2 {
+			t.Fatalf("hook %d waited %v for the transport", i, took)
+		}
+	}
+	waitFor(t, "the kept events", func() bool { return len(openSpool(SpoolPath()).load()) == 2 })
+	m3, n3 := net.Pipe()
+	r.extra <- n3
+	next := rpc.New("h2", m3)
+	var replayed hookEvents
+	next.OnEvent = replayed.record
+	next.OnRequest = func(context.Context, string, json.RawMessage) (any, error) { return map[string]any{}, nil }
+	go func() { _ = next.Serve(r.ctx, m3) }()
+	if err := next.Call(cctx, "ping", map[string]any{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the kept events on the next connection", func() bool { return len(replayed.all()) == 2 })
+	got := replayed.all()
+	if !slices.Equal(sessionsOf(got), []string{hookSession(4), hookSession(5)}) || got[0]["spool_id"] == nil {
+		t.Fatalf("replayed %v", got)
+	}
+	if r.made.Load() != 2 {
+		t.Fatalf("%d Nodes made", r.made.Load())
+	}
+	r.end()
 }
