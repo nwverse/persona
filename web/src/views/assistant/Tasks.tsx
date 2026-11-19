@@ -52,8 +52,6 @@ import { Button, Collapse, cx, IconButton, Loading, Menu, toast, useNow } from "
 import { StatusMark } from "../../ui/StatusMark";
 import { Icon, type IconName } from "../../ui/icons";
 import { AcceptRow, BriefCard } from "./Brief";
-import { setTodoSeen, todoSeenOn } from "../../lib/todo-seen";
-import { triage } from "../../lib/todo-triage";
 
 // A plan task's brief (#3822) comes with the first plan card that has one, as the decision row does.
 const PlanBrief = lazy(() => import("./TaskBrief").then((m) => ({ default: m.PlanBrief })));
@@ -85,6 +83,8 @@ const PlanEditDialog = lazyPage(() => import("./PlanEdit").then((m) => m.PlanEdi
 // "All" opens it: its code and its lib/task-board load then, not with the first screen (#4656)
 const TaskBoard = lazyPage(() => import("./TaskBoard").then((m) => m.TaskBoard));
 const ParkedTasks = lazyPage(() => import("./ParkedTaskRow").then((m) => m.ParkedTaskRows));
+// the Finished tray's rows, seeing one and its empty line come with its first opening, in the Parked rows' chunk (#10922)
+const FinishedTasks = lazyPage(() => import("./ParkedTaskRow").then((m) => m.FinishedTaskRows));
 import { conversationTitle } from "./conversations";
 import { TaskWorkspaceEditor, TaskWorkspaceLine } from "./TaskWorkspace";
 import type { TaskWorkspace } from "../../lib/feed";
@@ -777,7 +777,7 @@ function TaskHandoffs({ item }: { item: FeedItem }) {
 
 /** One slot, one row: live task/session state wins over historical feed metadata. `fresh`: a Finished row the owner has
  *  not opened since it finished (#10922), drawn as new with Just finished's mark and word, as the To-dos page names it. */
-function ProgressTaskRow({ card, conversation, activity, countsOpen, supervisorReview, fresh = false, onOpen }: { card: TaskCardMetadata; conversation: string; activity?: BackgroundWork; countsOpen: boolean; supervisorReview?: boolean; fresh?: boolean; onOpen?: () => void }) {
+export function ProgressTaskRow({ card, conversation, activity, countsOpen, supervisorReview, fresh = false, onOpen }: { card: TaskCardMetadata; conversation: string; activity?: BackgroundWork; countsOpen: boolean; supervisorReview?: boolean; fresh?: boolean; onOpen?: () => void }) {
   const todo = useTodo(card.todo_id);
   const task = useTaskNow(todo);
   const plans = useFeed((s) => s.plans);
@@ -1075,15 +1075,6 @@ function WaitingTaskRow({ rowKey, todo, status, countsOpenAttr }: { rowKey?: str
   );
 }
 
-/** Opening a Finished row the owner has not seen counts as seeing it (#5707), where the hub keeps seen marks: it stays in
- *  Finished without its Just finished mark (#10922); a failure leaves the mark. */
-function seeJustFinished(todo: Todo) {
-  const s = getState();
-  if (!todoSeenOn(s.features)) return;
-  const tr = triage(todo, taskSessionLookup(s), Date.now());
-  if (tr.section === "just_done") void setTodoSeen(todo.id, true, tr.last).catch(() => undefined);
-}
-
 /** An Agent that belongs to no task, working: one row of In progress that opens its page. */
 function RunningAgentRow({ session, activity }: { session: Session; activity?: BackgroundWork }) {
   const detail = backgroundWorkLine(activity) ?? session.activity?.trim();
@@ -1270,8 +1261,7 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
           {/* how a task ended, instead of a card in the chat (#8237): what finished in the last 24 hours, newest first, seen
               or not; one nobody opened yet says Just finished (#10922) */}
           {tray === "finished" && <div data-tray-finished className="divide-y divide-line">
-            {entries.finished.map((item) => <ProgressTaskRow key={item.key} card={item.card} conversation={conversation} countsOpen={false} fresh={item.fresh} onOpen={() => seeJustFinished(item.todo)} />)}
-            {!entries.finished.length && <p className="px-3 py-3 text-sm text-ink-2">{t("assistant-tasks.tray_empty_finished")}</p>}
+            <Suspense fallback={<Loading />}><FinishedTasks items={entries.finished} conversation={conversation} /></Suspense>
           </div>}
           {tray === "review" && <div className="divide-y divide-line">
             {entries.review.map((item) => item.kind === "task" && <ProgressTaskRow key={item.key} card={item.card} conversation={conversation} countsOpen={item.countsOpen} supervisorReview />)}

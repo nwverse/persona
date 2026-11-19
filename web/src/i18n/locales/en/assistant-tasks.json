@@ -17,7 +17,6 @@
   "tray_review": "Persona reviewing",
   "tray_empty_review": "Nothing waiting for Persona to review",
   "tray_finished": "Finished",
-  "tray_empty_finished": "Nothing finished in the last 24 hours",
   "pr_blocker_review_required": "Review required",
   "pr_blocker_changes_requested": "Changes requested",
   "pr_blocker_checks_failed": "Checks failed",
