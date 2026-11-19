@@ -1045,7 +1045,7 @@ script_test_add() {
 # Changes to docs, markdown, apple/, deploy/docker/ and the root Dockerfile add the scripts/test suites that guard them.
 # --all runs every scripts/**/test_*.py suite, the same find as CI's Scripts tests job, minus the few script_test_add
 # skips because a dedicated check above runs them; renaming or dropping one of those checks must update that skip list.
-# test_check_fast.py compares this selection with python-tests.py's.
+# test_check_fast.py compares the --all selection with python-tests.py's.
 
 # script_importers prints the scripts/**/test_*.py suites that import the module scripts/<dir>/<name>.py ($1) with
 # "import <name>" or "from <name> import" at the start of a line: from their own directory, or from one they name (a
