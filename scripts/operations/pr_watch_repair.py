@@ -10,7 +10,7 @@ import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 
-from pr_watch_common import RepairAttemptError, WatchError, SHA, bounded, checked, gh_json, pr_snapshot, run, test_or_fix, verification_env
+from pr_watch_common import RepairAttemptError, WatchError, SHA, bounded, checked, gh_json, github_time, pr_snapshot, run, test_or_fix, verification_env
 from pr_watch_merge import linked_issue
 from pr_watch_review import argv_with_prefix
 from pr_watch_verify import verify
@@ -669,6 +669,16 @@ def continuation_title(number):
     return "fix: continue #%s verification repair" % number
 
 
+def continuation_contains_head(repo, fork_head, continuation_head):
+    if not isinstance(continuation_head, str) or not SHA.fullmatch(continuation_head):
+        raise WatchError("continuation PR has no valid head SHA")
+    if continuation_head == fork_head:
+        return True
+    status = checked(["gh", "api", "repos/%s/compare/%s...%s" % (repo, fork_head, continuation_head),
+                      "--jq", ".status"], timeout=90).strip()
+    return status in ("ahead", "identical")
+
+
 def existing_continuation(repo, pr):
     """An open or merged continuation of this fork PR that already contains its
     current head, whoever published it (#10881). Each watcher keeps private
@@ -687,11 +697,7 @@ def existing_continuation(repo, pr):
     # Prefer a continuation that is still open; a merged one also covers the head.
     candidates.sort(key=lambda item: (item["state"] != "OPEN", -item["number"]))
     for item in candidates:
-        if item["headRefOid"] == pr["headRefOid"]:
-            return item["number"]
-        status = checked(["gh", "api", "repos/%s/compare/%s...%s" % (repo, pr["headRefOid"], item["headRefOid"]),
-                          "--jq", ".status"], timeout=90).strip()
-        if status in ("ahead", "identical"):
+        if continuation_contains_head(repo, pr["headRefOid"], item["headRefOid"]):
             return item["number"]
     return None
 
@@ -701,12 +707,41 @@ def moved(latest, expected, follows_main):
     return latest["headRefOid"] != expected["headRefOid"] or (not follows_main and latest["baseRefOid"] != expected["baseRefOid"])
 
 
+def find_continuation(repo, fork):
+    """Find a linked continuation that suppresses a new publication."""
+    number = fork["number"]
+    target = re.escape(repo)
+    reference = re.compile(r"\b(?:continue|continuation\s+of)\s+(?:#|%s#|https://github\.com/%s/pull/)%d\b"
+                           % (target, target, number), re.I)
+    candidates = gh_json(["pr", "list", "--repo", repo, "--state", "all", "--limit", "100",
+                          "--search", '"%d" in:title,body' % number,
+                          "--json", "number,title,body,state,mergedAt,headRefOid"])
+    if not isinstance(candidates, list):
+        raise WatchError("continuation search did not return a list of PRs")
+    merged = []
+    for candidate in candidates:
+        if candidate["number"] == number or not any(reference.search(candidate[field]) for field in ("title", "body")):
+            continue
+        if candidate["state"] == "OPEN" and continuation_contains_head(repo, fork["headRefOid"], candidate.get("headRefOid")):
+            return candidate["number"]
+        if candidate["state"] == "MERGED":
+            merged.append(candidate)
+    if merged:
+        latest = max(merged, key=lambda candidate: github_time(candidate["mergedAt"]))
+        committed_at = checked(["gh", "api", "repos/%s/commits/%s" % (repo, fork["headRefOid"]),
+                                "--jq", ".commit.committer.date"]).strip()
+        if github_time(latest["mergedAt"]) > github_time(committed_at):
+            return latest["number"]
+    return None
+
+
 def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None, allow_merge_only=False, original_pr=None):
     """Run relevant checks and privacy before pushing an ordinary repair commit.
 
     A merge of main into a fork (`allow_merge_only` with `original_pr`) follows main (#7840): main may move on from
     `base`, the main it merged, while the merged head is verified, as long as it still contains it. The continuation PR
-    is reviewed again on its own head; the PR's head must still be the one merged."""
+    is reviewed again on its own head; the PR's head must still be the one merged. Reusing a continuation returns its
+    number with None for checks, since this attempt did not publish a repair."""
     if not isinstance(verify_config, dict) or not verify_config:
         raise WatchError("automatic repair requires the repository's real verification configuration")
     follows_main = allow_merge_only and original_pr is not None
@@ -768,12 +803,15 @@ def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None
     if tip != base and not (follows_main and contains(worktree, base, tip)):
         raise WatchError("base moved before the repair push; nothing was pushed")
     if pr.get("isCrossRepository"):
+        continuation = find_continuation(repo, identity_pr)
+        if continuation is not None:
+            return continuation, None
         existing = gh_json(["pr", "list", "--repo", repo, "--head", branch, "--state", "open", "--json", "number"]) or []
         if existing:
             latest = pr_snapshot(repo, existing[0]["number"])
             if latest["headRefOid"] != head:
                 raise WatchError("continuation PR has an older or different head; repair it in a fresh branch")
-            return existing[0]["number"], results
+            return existing[0]["number"], None
         issues = linked_issue(pr.get("body", ""), repo)
         if not issues:
             raise WatchError("cannot open a continuation PR without an issue link")

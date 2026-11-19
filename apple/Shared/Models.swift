@@ -1659,6 +1659,7 @@ nonisolated struct UndeliveredMessage: Codable, Hashable, Sendable, Identifiable
     var error: String? = nil
     var deleteOnly: Bool? = nil
 
+    /// The hub's names (`proto.UndeliveredMessage`): one enum, #10775 (`delete_only`) and #10440 (`next_at`) each added one.
     private enum CodingKeys: String, CodingKey {
         case id, text, images, at, state, attempts, error
         case nextAt = "next_at", deleteOnly = "delete_only"
