@@ -771,10 +771,13 @@ personad tool task_spawn '{"title":"Check the regression","prompt":"Inspect the 
   The child participates in the existing task's progress, completion review and retirement. No new task, task-leader
   role or supervision level is created. An ordinary worker still cannot use a leader's `task_plan` or `task_review`.
 - **Scope**: only `title` and `prompt` are accepted, and the assignment must remain within the current task. Task,
-  supervisor, parent, machine, directory and permissions cannot be supplied by the Agent. The current launcher's
-  model and effort are reused. Permission comes from the live parent, or its persisted original plan assignment
-  when Codex does not expose it; unknown permission stays in plan mode, never a writable owner default. Another
-  spawned session with unknown permission cannot borrow the original Agent's plan permission.
+  supervisor, parent, machine, directory and permissions cannot be supplied by the Agent. The current launcher and
+  effort are reused. For the model, an original plan assignment that names one wins for its own Agent while it still
+  runs on that assignment's launcher (the default launcher when it named none), instead of carrying over a model
+  switched in the app after the start; otherwise the parent's current model is reused (#10557). Permission comes from
+  the live parent, or its persisted original plan assignment when Codex does not expose it; unknown permission stays in
+  plan mode, never a writable owner default. Another spawned session with unknown permission cannot borrow the original
+  Agent's plan permission.
 - **Failure**: an unbound pane, unrelated Agent, completed task, guest or work-trust computer cannot dispatch this
   way. A known Codex thread needs no pane. Other `personad tool` calls retain the assistant-only connector gate.
   If ownership changes while the child

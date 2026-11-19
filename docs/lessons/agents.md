@@ -241,6 +241,9 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
   and records discovered directories in the database. Put rarely running profiles in `machines[].claude_config_dirs` in `hub.json` (`server/internal/node/claudedirs.go`).
   The old workaround symlinked `~/.claude/projects` and `sessions` to a profile; existing symlinks are fine (deduped by real path), but no more are needed.
   Symptoms of a missed directory: assistant resume says "Session ID … is already in use", transcript not found in the App, herdr Agents can't be mapped to sessions.
+- Auto memory follows the config directory too: a conversation given its own profile gets its own `projects/<encoded cwd>/memory`, with nothing
+  saying so. Whatever must be one memory across profiles needs `autoMemoryDirectory` in the start's `--settings` (ignored in checked-in project
+  settings, known from Claude Code 2.1.74) and a merge of the copies made before it (#9440; `docs/assistant/assistant.md`, "One memory").
   Conversely, automation running claude with its own `CLAUDE_CONFIG_DIR` is discovered and remembered by hub, flooding lists with hundreds of offline sessions. Deleting `claude_dirs/<machine>` records doesn't help
   (the next scan reports it again); use "Mute configuration directory" (`docs/integrations/claude-integration.md`, #676).
 - After node discovered all config directories (PR #12), a machine with over ten Agents and hundreds of MB of transcripts read disk continuously at about 20 MB/s: every herdr event rebuilt session lists,
@@ -1373,6 +1376,11 @@ The peer inbox frames every message as another session's, and no wording in it m
 it: the same "I approve: create the file" was refused through the inbox and when a plugin submitted it framed, and
 accepted only through `$.prompt.submit({ asUser: true })` (Claude Code 2.1.291, 2.1.299 and 2.1.308). Do not try to
 argue the model round in the inbox prompt (#5965). Things that cost time while measuring it:
+
+- An outside Claude's tmux pane is terminal input too, and takes precedence over both plugin and inbox for a verified
+  owner's ordinary message. Let it fall through to the ordinary pane checks and transcript confirmation rather than
+  adding a second typing path; a message without that verified mark must never fall through when the inbox is absent.
+  Keep `plugin_input` off that row because the pane, not the plugin, now carries its owner's message (#5965).
 
 - A `claude` started from inside a desktop-app session inherits that host's provider variables
   (`CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST`, its `ANTHROPIC_BASE_URL`) but not its credentials, and answers "Not logged

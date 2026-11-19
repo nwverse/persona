@@ -334,6 +334,7 @@ struct ChatsView: View {
                 searching = false
                 header.floating = false
                 header.up = false
+                header.motion = 0
                 header.setCompact(false)
                 return path = new
             }
@@ -791,6 +792,8 @@ struct ChatsView: View {
         #if DEBUG
         SearchTrace.shared.note("begin listTop=\(header.listTop) scrolled=\(header.scrolled)")
         #endif
+        header.motion = 0
+        header.rising = true
         header.floating = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { if header.floating { riseSearch() } } // no keyboard came
         #endif
@@ -1311,6 +1314,9 @@ private struct AgentsList: View {
             if let sidebarRows {
                 Section { sidebarRows }
                     .listSectionSeparator(.hidden)
+                    // No sections' gap before the Agents heading: it stands as far below Persona's last row as Persona
+                    // Chats below the pages', its own heading's room only (`SidebarHeadingBox`, #10551).
+                    .listSectionSpacing(.custom(Theme.Space.flush))
             }
             // On a phone the filter bar is the list's first row: it scrolls with the list, so the search field can
             // fold away and come back on a pull (a bar pinned in the safe area stayed put under a folded search field,
@@ -1920,9 +1926,16 @@ private struct AgentsList: View {
     /// display, fold all), Personal Agents and New Session, which the Agents page has in its bar.
     private var unifiedAgentsHeading: some View {
         HStack(spacing: Theme.Space.xs) {
-            Text("Agents").font(Theme.Font.captionStrong).foregroundStyle(.secondary).lineLimit(1)
-                .accessibilityAddTraits(.isHeader)
-            Spacer(minLength: Theme.Space.s)
+            // The name in the Persona rows' heading box (`SidebarHeadingBox`, #10551): the row is as tall as Pages' and
+            // Persona Chats', its buttons sit in it, and it stands as far below the row before it.
+            HStack(spacing: Theme.Space.xs) {
+                Text("Agents").font(Theme.Font.captionStrong).foregroundStyle(.secondary).lineLimit(1)
+                Spacer(minLength: Theme.Space.s)
+            }
+            .modifier(SidebarHeadingBox())
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isHeader)
+            .accessibilityIdentifier("sidebar-agents-heading")
             AgentsListMenu(actions: menuActions)
             if showsPersonalEntry {
                 Button { openFromList(PersonalAgentsRoute()) } label: {
@@ -1946,8 +1959,7 @@ private struct AgentsList: View {
         // Where the Persona rows' headings start (their row's inset and their own), so the three headings line up.
         .padding(.leading, Theme.Space.s + Theme.Space.m)
         .padding(.trailing, Theme.Space.s)
-        .padding(.top, Theme.Space.s)
-        .scaledFrame(minHeight: Theme.Size.tapTarget)
+        .padding(.top, SidebarHeadingBox.above)
         // The Separate layout's Agents tab has no Pages heading for the head to place its face by (`rowsLeading`): it
         // takes the Persona tab's line (`linedUpWith`, #8596). Before the Persona tab is laid out this heading gives an
         // estimate, its row's start plus the Persona rows' extra inset on an iPad. Without either the face sat
@@ -2000,6 +2012,7 @@ private struct AgentsList: View {
             searching = false
             header.floating = false
             header.up = false
+            header.motion = 0
             header.setCompact(false)
             path.append(key)
             return
@@ -2656,28 +2669,33 @@ private struct AgentsList: View {
 
     // MARK: Recently active
 
+    #if !os(iOS)
     private func workspaceAgentMenu(_ s: Session) -> AgentRowMenu {
-        #if os(iOS)
-        return AgentRowMenu(facts: AgentActionFacts(session: s, model: model), handlers: rowActions)
-        #else
-        return AgentRowMenu(key: s.key, pinned: model.isPinned(s.key), muted: model.isMuted(s), looping: s.loop != nil,
+        AgentRowMenu(key: s.key, pinned: model.isPinned(s.key), muted: model.isMuted(s), looping: s.loop != nil,
                      live: s.state.isLive, terminal: s.canTerminal, renamable: s.canRename, closable: s.canClose,
                      attachable: s.canAttach, deletable: s.canDelete,
                      paneActions: NodeMenu.offersPaneActions(s), actions: rowActions)
-        #endif
     }
+    #endif
 
 
     @ViewBuilder private func worktreeMenu(_ worktree: RepoTree.Worktree, agent: Session? = nil) -> some View {
         if let target = worktree.workspace {
             let direct = ordered(WorkspaceNavigation.directSessions(target, inventory: model.sessionsNow, catalog: workspaceCatalog.workspaces))
-            WorktreeSidebarMenu(workspace: target, parent: workspaceCatalog.workspaces.first { $0.key == target.parentKey },
-                                sessions: direct, agent: agent, menus: direct.map(workspaceAgentMenu),
-                                open: { target in
-                                    if target.key == worktree.workspace?.key { openWorktree(worktree) }
-                                    else { openWorktree(target) }
-                                }, newSession: { startingWorktree = $0 }, newChild: { creatingChild = $0 },
+            let parent = workspaceCatalog.workspaces.first { $0.key == target.parentKey }
+            let open: (HostWorkspace) -> Void = { target in
+                if target.key == worktree.workspace?.key { openWorktree(worktree) } else { openWorktree(target) }
+            }
+            #if os(iOS)
+            WorktreeSidebarMenu(workspace: target, parent: parent, sessions: direct, agent: agent, handlers: rowActions,
+                                open: open, newSession: { startingWorktree = $0 }, newChild: { creatingChild = $0 },
                                 rename: { renamingWorktree = $0 }).equatable()
+            #else
+            WorktreeSidebarMenu(workspace: target, parent: parent, sessions: direct, agent: agent,
+                                menus: direct.map(workspaceAgentMenu),
+                                open: open, newSession: { startingWorktree = $0 }, newChild: { creatingChild = $0 },
+                                rename: { renamingWorktree = $0 }).equatable()
+            #endif
         }
     }
 
@@ -3518,7 +3536,7 @@ private struct AgentsList: View {
             #endif
             .contextMenu { () -> AnyView in
                 #if os(iOS)
-                AnyView(AgentActionMenu(facts: AgentActionFacts(session: s, model: model), handlers: rowActions).equatable())
+                AnyView(AgentActionMenuReader(session: s, handlers: rowActions)) // not the row's to observe (#10231)
                 #else
                 AnyView(AgentRowMenu(s, model: model, actions: rowActions).equatable())
                 #endif
@@ -3602,7 +3620,12 @@ private struct KeyedRow<Key: Equatable & Sendable, Content: View>: View, Equatab
     nonisolated let key: Key
     @ViewBuilder let content: () -> Content
 
-    var body: some View { content() }
+    var body: some View {
+        #if DEBUG || PERF_SIGNPOST
+        let _ = PerfTrace.body("KeyedRow") // an Agents row built again (`RenderBudgetTests`)
+        #endif
+        content()
+    }
 
     nonisolated static func == (a: Self, b: Self) -> Bool { a.key == b.key }
 }
@@ -3867,14 +3890,7 @@ nonisolated struct AgentsListShown: Encodable, Equatable {
 
     /// The same machines as the list shows them: a machine's heartbeat (`lastSeen`, on every push of a busy hub) is
     /// shown only on the machines page, and drew the whole list again each time (#1495).
-    nonisolated static func sameListing(_ a: [Machine], _ b: [Machine]) -> Bool {
-        a.count == b.count && zip(a, b).allSatisfy { x, y in
-            guard x.lastSeen != y.lastSeen else { return x == y }
-            var y = y
-            y.lastSeen = x.lastSeen
-            return x == y
-        }
-    }
+    nonisolated static func sameListing(_ a: [Machine], _ b: [Machine]) -> Bool { AppModel.sameApartFromHeartbeat(a, b) }
 
     /// The rows that changed get their agent; the list gets the new list only if its structure changed.
     private func show(_ s: [Session]) {
