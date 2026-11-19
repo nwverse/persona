@@ -57,18 +57,26 @@ func (s *Service) managerOriginDecision(ctx context.Context, machine, session, s
 	}
 	b := &s.origins
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	if !s.originsLocked(ctx) {
+		b.mu.Unlock()
 		return "", false
 	}
 	o := b.m[session]
 	if o == nil {
+		b.mu.Unlock()
 		// Backfill is asynchronous. A missing record is not positive evidence of an ordinary conversation: a legacy
-		// Inbox handling chat can reach this path before its first backfill completes.
-		return "", false
+		// Inbox handling chat can reach this path before its first backfill completes. A current guest registration is
+		// separate manager-owned evidence; guests never share the assistant's origin book.
+		_, guest, err := s.guestOf(ctx, machine, session)
+		if err != nil {
+			return "", false
+		}
+		return "", guest
 	}
-	if o.Origin == OriginInbox {
-		if o.MachineID == "" || s.sameMachine(machine, o.MachineID) {
+	origin, originMachine := o.Origin, o.MachineID
+	b.mu.Unlock()
+	if origin == OriginInbox {
+		if originMachine == "" || s.sameMachine(machine, originMachine) {
 			return OriginInbox, true
 		}
 		return "", false
