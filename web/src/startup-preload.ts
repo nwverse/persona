@@ -430,7 +430,8 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // left the first screen, and startup entries only lazy chunks read (chat-navrail but target_failed, the
 // chat-interactions fields and input toggle, assistant-history.sidebar, agentspage.new_agent) went to the rest of the
 // catalog: ja 482,497 B to 477,736 B (en 479,378 B to 474,739 B, zh-Hans 480,224 B to 475,592 B), measured in one
-// environment against main b6b333e7e4. The budget stays.
+// environment against main b6b333e7e4. Main then went 16 B over (de8b2b4c41: en 479,423 B, ja 482,542 B, zh-Hans
+// 480,269 B); merged with it: en 474,792 B, ja 477,789 B, zh-Hans 475,645 B, 4,737 B of room. The budget stays.
 // Keep the stricter existing limit while combining these changes.
 export const FIRST_SCREEN_BUDGET = 482_526;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
