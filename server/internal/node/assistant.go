@@ -364,6 +364,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	restartForRecovery := recovery != nil && restart
 	resume := id != ""
 	st, _ := n.state.get(id)
+	if strings.HasPrefix(clientMsgIDFrom(ctx), "model-retry:") && st.StopCause != "" && !st.StopCause.AllowsSupervisorResume() {
+		return "", n.stoppedRefusal(id)
+	}
 	// External authority and the raw runtime must be checked before guest/resume normalization can replace options.
 	requested := executionOption(options)
 	requestedLauncher := launcherOr(launcher, st.Launcher)

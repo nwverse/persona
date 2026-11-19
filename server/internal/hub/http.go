@@ -675,9 +675,8 @@ func (h *Hub) proxyBodyFor(method string, timeout time.Duration, mutate ...func(
 	})
 }
 
-// interruptSession stops a session's turn (session.interrupt). One of the assistant's conversations stopped here is
-// the user's stop button in an app: the assistant is told, so a Feishu /agent request it works on is stopped as well
-// (#3308; the plugin's own /stop goes through the assistant, not here).
+// interruptSession stops a session's turn (session.interrupt). The manager retires any pending follow-up for every
+// known session; a reporting Assistant conversation is also marked stopped for its plugin (#3308).
 func (h *Hub) interruptSession(w http.ResponseWriter, r *http.Request, m *Machine) {
 	p, ok := optionalObject(w, r, 32<<20)
 	if !ok {
@@ -690,7 +689,7 @@ func (h *Hub) interruptSession(w http.ResponseWriter, r *http.Request, m *Machin
 	if !ok {
 		return
 	}
-	if s, ok := m.session(sid); ok && (s.Assistant || m.isAssistant(s)) {
+	if _, ok := m.session(sid); ok {
 		h.asstOf(h.sessionOwner(m.cfg.ID, sid)).UserStopped(r.Context(), assistantwire.SessionRef{MachineID: m.cfg.ID, SessionID: sid})
 	}
 	writeRawJSON(w, out)

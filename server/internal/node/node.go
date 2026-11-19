@@ -1708,6 +1708,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	case "session.send", proto.MethodSessionSendUnseen:
 		var opts sendOpts
 		_ = json.Unmarshal(params, &opts)
+		if cause := n.stopCause(p.SessionID); strings.HasPrefix(opts.ClientMsgID, "model-retry:") && cause != "" && !cause.AllowsSupervisorResume() {
+			return nil, n.stoppedRefusal(p.SessionID)
+		}
 		var retry *echoRecord
 		var previous *sendRecord
 		if method == proto.MethodSessionSendUnseen {
