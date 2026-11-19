@@ -216,6 +216,12 @@ class HttpMessageTransportTest {
                         assertFalse("model" in body)
                         assertNull("only the message that carries a launcher switch out says so", body["apply_switch"])
                     }
+                    responses.send(MockResponse().setResponseCode(202).setBody(
+                        """{"delivered":"later","undelivered":{"id":"stable-id","text":"hello","at":"2026-11-17T10:00:00Z","state":"waiting"}}"""))
+                    assertTrue("202 delivered=later is kept by the assistant, not accepted as delivered",
+                        transport.send(message) is MessageTransportResult.Kept)
+                    assertEquals("/api/v1/sessions/machine/session%2Fencoded/messages",
+                        (withTimeout(5000) { requests.receive() }.path).zhAny())
                     responses.send(MockResponse().setBody("""{"ok":true}"""))
                     assertEquals(MessageTransportResult.Accepted,
                         transport.send(message.copy(launcher = "runtime", model = "model-id")))

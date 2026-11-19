@@ -287,6 +287,9 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	if p.TaskExecution {
 		params["task_execution"] = true
 	}
+	if p.Public {
+		params["public"] = true
+	}
 	if p.Origin != "" {
 		params["origin"] = p.Origin // the node enforces the origin from the process's first tool call, before start answers
 	}

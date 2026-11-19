@@ -121,6 +121,9 @@ type StartParams struct {
 	Space string `json:"space,omitempty"`
 	// Main: it becomes the main conversation (what the old one left goes before Text).
 	Main bool `json:"main,omitempty"`
+	// Public: the first message answers in someone else's chat. It suppresses the owner's live snapshot for this turn
+	// only; never over the bus or accepted from an app's conversation-start request.
+	Public bool `json:"-"`
 	// Untitled: not one of the conversations it names and lists as its own (the inbox's AI twin: its result is the
 	// draft in the inbox).
 	Untitled bool `json:"untitled,omitempty"`

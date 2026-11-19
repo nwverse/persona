@@ -588,6 +588,17 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_task_execution")}
 		}
 	}
+	if devicewire.IsSessionStart(method) && !nodeHas(info, nodeproto.SessionStartSpeed) {
+		raw, _ := json.Marshal(params)
+		var fields struct {
+			Speed string `json:"speed"`
+		}
+		_ = json.Unmarshal(raw, &fields)
+		if proto.FasterSpeed(strings.TrimSpace(fields.Speed)) {
+			// An older node would drop the explicit, billable choice and start at the launcher's own speed.
+			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_session_start_speed")}
+		}
+	}
 	if devicewire.IsSessionStart(method) && !nodeHas(info, nodeproto.StartGoal) {
 		raw, _ := json.Marshal(params)
 		var fields struct {

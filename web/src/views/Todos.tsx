@@ -44,14 +44,12 @@ import {
   mostUrgentAgent,
   orphanedLine,
   sortTodos,
-  TODO_STATUS_INFO,
   heldDelivery,
   TODO_TONE_CLASS,
   isAutoDone,
   isOverdue,
   todoDueDay,
   todoDueText,
-  todoStatusLabel,
   shownStatus,
   todoStatus,
   unlinkAgentFromTodo,
@@ -66,6 +64,7 @@ import {
   type SessionLookup,
   taskNow,
 } from "../lib/todos";
+import { todoLook, waitOf, type WaitReason } from "../lib/todo-wait-reason";
 import type { AgentState, Interaction, Launcher, Machine } from "../lib/types";
 import { Button, cx, Dialog, IconButton, Loading, Menu, toast, useMenu } from "../ui/atoms";
 import { contextMenuProps } from "../ui/context-menu";
@@ -1467,6 +1466,8 @@ export type TodoRowView = {
   ultracode: boolean;
   /** Its status section (sectionOf), in every grouping: its checkbox reads open or done by it (checksAsOpen). */
   section?: TriageSection;
+  /** What it waits on while its status is Waiting (#11090, lib/todo-wait-reason.ts waitOf): its label says so. */
+  wait?: WaitReason;
 };
 
 const DOT_STATE: Record<TodoStatus, AgentState> = {
@@ -1516,7 +1517,7 @@ function agentRowView(todo: Todo, lookup: SessionLookup, interactions: Interacti
   const status = todoStatus(todo, lookup);
   const urgent = mostUrgentAgent(todo, lookup);
   const activeCount = (todo.agents ?? []).filter((a) => !a.released_at).length;
-  const view: TodoRowView = { status, dotState: DOT_STATE[shownStatus(todo, status)], age: lastMoved(todo, lookup), activeCount, urgentLine: false, urgentLead: "", urgentText: "", orphaned: false, ultracode: todoUltracode(todo, lookup) };
+  const view: TodoRowView = { status, dotState: DOT_STATE[shownStatus(todo, status)], age: lastMoved(todo, lookup), activeCount, urgentLine: false, urgentLead: "", urgentText: "", orphaned: false, ultracode: todoUltracode(todo, lookup), wait: waitOf(todo, status, lookup) };
   if (todo.done_at || !urgent?.session) return view;
   const limit = status === "usage_limit" ? usageLimitLabel(urgent.session) : undefined;
   if (limit) {
@@ -1574,7 +1575,8 @@ const TodoListItem = memo(function TodoListItem({
   const showWait = (section ?? view.section) === "parked";
   // the PR it waits on: its current one, or an earlier one still open (#7935)
   const openPR = (section ?? view.section) === "parked" ? openMergePRs(todo, Date.now())[0] : undefined;
-  const toneClass = TONE_CLASS[TODO_STATUS_INFO[shownStatus(todo, status)].tone];
+  // its state word and tone; a waiting one's say what it waits on, attention only on the owner (#11090)
+  const look = todoLook(todo, status, view.wait);
   const held = heldDelivery(todo);
   const thread = useStore((s) => todoThreadsOn(s.features)) ? boundThread(todo) : undefined;
   // a failed start still waiting on the owner reads open, not done, with why it did not start (#3713), in every grouping
@@ -1652,7 +1654,7 @@ const TodoListItem = memo(function TodoListItem({
         {/* Status Line */}
         <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[12px]" data-testid="todo-status-line">
           {open && <StatusMark state={dotState} size="sm" />}
-          <span className={cx("shrink-0 whitespace-nowrap font-medium", toneClass)}>{todoStatusLabel(todo, status)}</span>
+          <span className={cx("shrink-0 whitespace-nowrap font-medium", TONE_CLASS[look.tone])} data-testid="todo-status">{look.label}</span>
           {!todo.done_at && activeCount > 0 && (
             <>
               <span className="text-ink-3">·</span>
@@ -2285,7 +2287,8 @@ function TodoDetail({
   const retry = (launcher?: string) =>
     (launcher ? retryOnLauncher(todo, launcher) : retryTask(todo)).catch((e) => toast(t("todos.action_failed", { error: errorText(e) }), "error"));
   const status = todoStatus(todo, lookup);
-  const statusInfo = TODO_STATUS_INFO[shownStatus(todo, status)];
+  // its state word and tone; a waiting one's say what it waits on, attention only on the owner (#11090)
+  const look = todoLook(todo, status, waitOf(todo, status, lookup));
   // The to-do's own PR, parsed once here (the list row and the repository section's fallback share it).
   const legacyPR = prLink(todo.pr_url);
   const toneClass = {
@@ -2294,7 +2297,8 @@ function TodoDetail({
     amber: status === "needs_you" ? "bg-field text-attention" : "bg-orange-tint text-orange",
     idle: "bg-hover text-ink-2",
     off: "bg-hover text-ink-3",
-  }[statusInfo.tone];
+    attention: "bg-field text-attention",
+  }[look.tone];
 
   const shown = shownStatus(todo, status);
   const dotState =
@@ -2353,7 +2357,7 @@ function TodoDetail({
       <div className="mt-2.5 flex flex-wrap items-center gap-2.5 text-[12.5px] text-ink-2">
         <span className={cx("inline-flex h-5.5 items-center gap-1.5 rounded-md px-2 text-[12px] font-semibold", toneClass)}>
           <StatusMark state={dotState} size="sm" />
-          {todoStatusLabel(todo, status)}
+          {look.label}
         </span>
         <span className="text-ink-3">·</span>
         <span>{t("todos.agent_count", { count: activeAgents.length })}</span>

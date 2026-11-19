@@ -371,8 +371,10 @@ class OutboxMessageSender(
         check(job.isActive) { "Pairing scope is closed" }
         val entry = store.entries.first().firstOrNull { it.clientMessageId == id } ?: error("Message state changed")
         val attempt = request(entry).copy(opId = opId ?: entry.operationId)
-        val state = OutboxState.entries.first { it.delivery == delivery.state }
-        val from = if (delivery.state == DeliveryState.Sending) setOf(OutboxState.Refused) else setOf(OutboxState.Sending)
+        val state = if (result == MessageTransportResult.Kept) OutboxState.Kept
+            else OutboxState.entries.first { it.delivery == delivery.state }
+        val from = if (delivery.state == DeliveryState.Sending && result == null)
+            setOf(OutboxState.Refused) else setOf(OutboxState.Sending)
         // Refused again: nothing was delivered under that id either, so a later retry takes another.
         val next = when (state) {
             OutboxState.Refused -> newOperationId()
@@ -383,8 +385,11 @@ class OutboxMessageSender(
             else store.transition(id, from, state, delivery.refusal?.code)) { "Message state changed" }
         // Composer retries bypass attempt(), but their fresh operation still belongs to this same visible message.
         if (state == OutboxState.Sending) receiptState.begin(attempt, entry.mainTarget)
-        else receiptState.result(attempt, if (state in setOf(OutboxState.Sent, OutboxState.Shown))
-            MessageTransportResult.Accepted else MessageTransportResult.NoReceipt)
+        else receiptState.result(attempt, when (state) {
+            OutboxState.Kept, OutboxState.Held -> MessageTransportResult.Kept
+            OutboxState.Sent, OutboxState.Shown -> MessageTransportResult.Accepted
+            else -> MessageTransportResult.NoReceipt
+        })
         if (result == MessageTransportResult.Accepted) publishAuthoritative(entry)
     }
 
@@ -752,7 +757,7 @@ class OutboxMessageSender(
         /** Read-only catch-up may also find late evidence for an already shown message; transcript matching may not. */
         private val catchUpStates = reconcilable + OutboxState.Shown
         private val dispatchable = setOf(OutboxState.Queued, OutboxState.WaitingForNetwork)
-        private val hidden = setOf(OutboxState.Cancelled, OutboxState.Shown, OutboxState.Held)
+        private val hidden = setOf(OutboxState.Cancelled, OutboxState.Shown, OutboxState.Kept, OutboxState.Held)
         private val refusals = setOf("agent_stopped", "input_draft", "dialog_open", "codex_not_ready", "codex_first_text", "codex_waiting", "op_id_reused", "invalid", "stale_session")
         /** A message that keeps coming back waiting while the link is up goes again this often (iOS retryOutboxSoon). */
         private const val StallRetryMillis = 10_000L
@@ -765,6 +770,7 @@ class OutboxMessageSender(
         fun classify(result: MessageTransportResult): OutboxState = when (result) {
             MessageTransportResult.Held -> OutboxState.Held
             MessageTransportResult.Accepted -> OutboxState.Sent
+            MessageTransportResult.Kept -> OutboxState.Kept
             MessageTransportResult.NotSent -> OutboxState.WaitingForNetwork
             MessageTransportResult.NoReceipt -> OutboxState.Unknown
             is MessageTransportResult.HubError -> when {

@@ -67,12 +67,12 @@ func (n *Node) runtimeAssistant(id string) bool {
 func runtimeSessionID(id string) bool { return id != "" && !validID(id) && runtimeIDRe.MatchString(id) }
 
 // assistantSendRuntime is assistantSend on a runtime (h, nil when it is not connected): a new conversation is started
-// there (session.start with assistant), then the message goes with the snapshot as its context, the conversation's
-// permission mode and its memory directory; a new conversation's first message also carries the instructions only a
-// runtime needs (memory, Feishu). Runtimes that advertise caps.supervision_policy receive manager-owned
+// there (session.start with assistant), then the message goes with the snapshot as its context unless public is true,
+// the conversation's permission mode and its memory directory; a new conversation's first message also carries the
+// instructions only a runtime needs (memory, Feishu). Runtimes that advertise caps.supervision_policy receive manager-owned
 // supervision_instructions as an explicit protocol field on session.start and session.send; non-capable runtimes keep
 // the runtimePolicyDropped boundary (refusing supervision deliveries, dropping policy for owner messages).
-func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd, launcher, text string, images []proto.Image, mode string, modelEffortPolicy ...string) (string, error) {
+func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd, launcher, text string, images []proto.Image, mode string, public bool, modelEffortPolicy ...string) (string, error) {
 	var pickedModel, pickedEffort, policy string
 	if len(modelEffortPolicy) > 0 {
 		pickedModel = modelEffortPolicy[0]
@@ -176,7 +176,9 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 	command := runtimeCommandOnly(text, len(images)) && !st.AwaitingFirstMessage
 	live, commit := "", func() {}
 	if !command {
-		live, commit = n.turnContext(id, n.assistantContext(id))
+		if !public {
+			live, commit = n.turnContext(id, n.assistantContext(id))
+		}
 		if st.AwaitingFirstMessage {
 			live = strings.TrimSpace(n.runtimeInstructions(cwd, memDir) + "\n" + live)
 		}

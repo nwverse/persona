@@ -1566,12 +1566,13 @@ operation then read as accepted and the bubble waited for the transcript and wen
   `server/internal/assistant/undelivered.go`). The hub answers 202 `{"delivered":"later"}`, records the send as `later`
   (a retry of the id is answered the same and sends nothing) and tells the chat's subscribers `kept`. A manager that
   cannot keep it leaves the failure as before.
-- **Shown everywhere.** The row's `undelivered` (`proto.Session.Undelivered`) lists them; web and iOS draw each as the
+- **Shown everywhere.** The row's `undelivered` (`proto.Session.Undelivered`) lists them; web, iOS and Android draw each as the
   owner's bubble marked "Not delivered", with why and "It will be sent automatically", and Delete; one that gave up
   in red with Retry and Delete. Every device sees it, not only the one that sent it (`web/src/lib/undelivered.ts`;
-  iOS and Android follow in their own changes). On the web the line under the bubble, Retry and Delete are a chunk of
-  their own (`web/src/views/chat/UndeliveredBubbles.tsx`, strings in `chat-undeliveredbubbles`), off the first screen;
-  until it is in, the message shows as the owner's failed bubble alone, so it never blinks out (#10357).
+  Android `android/feature/chat/src/main/kotlin/persona/feature/chat/ChatUndeliveredBubble.kt`). On the web the line
+  under the bubble, Retry and Delete are a chunk of their own (`web/src/views/chat/UndeliveredBubbles.tsx`, strings in
+  `chat-undeliveredbubbles`), off the first screen; until it is in, the message shows as the owner's failed bubble alone,
+  so it never blinks out (#10357).
 - **Sent by itself, once.** The manager tries again with backoff (15 s, 30 s, 1 min, 2 min, then every 5 min), at once
   when the conversation is seen running again on a session list, oldest first, one pass per conversation at a time.
   A try runs `SendParams` again (the live snapshot and the pick of now) and the node's `session.send` under the
@@ -1651,7 +1652,9 @@ manager that connects the computer holds it and sends it once the computer is ba
   that ended after the send, the same Retry sends the message after a second check (#10790). With an unknown result
   or an older node, a matching ID in the latest turns still proves
   arrival. Otherwise the owner sees "Couldn't confirm it arrived. Retry to send it anyway, or delete it", with the
-  later messages still waiting. That next Retry sends as before. Three failed reads in a row also leave the message
+  later messages still waiting. On iOS, once the manager acknowledges Retry, the same instruction keeps Retry disabled
+  across reconnects and app launches. Delete stays available. A changed instruction on that operation lets the owner
+  choose again. That next Retry sends as before. Three failed reads in a row also leave the message
   unconfirmed after Retry. During a check, another Retry returns a conflict and Delete is allowed. A node that refused it
   (nothing typed), or a message that could not be made ready to send before the node was asked, fails with the reason
   and the next one goes; once the node took a message it counts as delivered, whatever came after. A message the owner

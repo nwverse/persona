@@ -10,6 +10,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/lazyre"
+	"github.com/nwverse/persona/server/internal/modelretry"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -302,6 +303,13 @@ func (n *Node) recoverAssistantResult(p *assistantProc, failed bool, result stri
 // recoverAssistantResultFor optionally requires the recovery that captured a pending result to still own the session.
 // That identity check prevents a result delayed by process replacement from restarting a turn the user has cancelled.
 func (n *Node) recoverAssistantResultFor(p *assistantProc, expected *assistantTurnRecovery, failed bool, result string, kinds ...string) bool {
+	if failed && (modelretry.Temporary(result) || modelretry.Permanent(result) || slices.Contains(kinds, assistantModelServiceFailure) || len(kinds) > 0 && kinds[0] == proto.TurnErrorTransient) &&
+		!assistantSafeguardsRefusal(result) && !assistantModelUnavailable(result) && !assistantwire.ToolSearchRefused(result) {
+		// Publish the stopped turn to the manager's durable due-wake scheduler.
+		// Keep the existing unavailable-model, safeguards and tool-search recovery
+		// paths out of this new scheduler; they have their own bounded recovery contracts.
+		return false
+	}
 	if proto.IsExternalLauncher(p.launcher) {
 		return false // an explicit adapter pick never enters automatic model recovery
 	}

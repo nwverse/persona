@@ -3167,11 +3167,12 @@ struct ChatView: View {
             }
             // The row carries kept messages to every device, even when the transcript has no earlier turns.
             let kept = keptUndelivered
-            let canManageHeld = !kept.isEmpty && model.canManageHeld(key.group)
             ForEach(kept.reversed()) { m in
-                UndeliveredBubble(message: m, canManage: !m.heldForComputer || canManageHeld,
-                                  retry: { Task { await model.retryUndelivered(key, m.id) } },
-                                  discard: { Task { await model.deleteUndelivered(key, m.id) } })
+                let target = m.heldForComputer ? model.heldTarget(key, m.id, row: session) : nil
+                let offer = HeldRetryOffer(target, m)
+                UndeliveredBubble(message: m, canManage: !m.heldForComputer || target != nil, retryDisabled: model.heldRetryDisabled(offer),
+                                  retry: { Task { await model.retryUndelivered(key, m.id, shown: offer) } },
+                                  discard: { Task { await model.deleteUndelivered(key, m.id, target: target) } })
                     .chatMark("chat.undelivered.\(m.state).\(m.id)")
                     #if os(iOS)
                     .allowsHitTesting(!pick.on) // not sent yet: never picked, and quiet while selecting

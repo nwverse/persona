@@ -112,7 +112,7 @@ data class MessageSendStateEvent(
     @SerialName("machine_id") val machineId: String,
     @SerialName("session_id") val sessionId: String,
     @SerialName("client_msg_id") val clientMessageId: String,
-    @WireEnum("processing", "delivered", "failed", "unknown") val state: String,
+    @WireEnum("processing", "delivered", "failed", "unknown", "kept") val state: String,
     @WireTime val at: String,
     /** Stamped by the authenticated socket, never read from or written to JSON. */
     @kotlinx.serialization.Transient val socketGeneration: Long? = null,
@@ -324,7 +324,7 @@ object ServerEventSerializer : KSerializer<ServerEvent> {
                 require(it.session.machineId.isNotBlank() && it.session.sessionId.isNotBlank())
             }
             "message_send_state" -> {
-                require((obj["state"] as? JsonPrimitive)?.content in setOf("processing", "delivered", "failed", "unknown"))
+                require((obj["state"] as? JsonPrimitive)?.content in setOf("processing", "delivered", "failed", "unknown", "kept"))
                 input.json.decodeFromJsonElement<MessageSendStateEvent>(obj).also {
                     require(it.machineId.isNotBlank() && it.sessionId.isNotBlank() && it.clientMessageId.isNotBlank())
                     require(parseTime(it.at) != null)
