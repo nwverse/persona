@@ -1125,10 +1125,101 @@ Now one `Task` table (`assistant/schedule.go`, settings `assistant.tasks`), four
 Readiness skips carry the optional persisted `not_ready` flag (#1857). The failure-streak counter ignores them, including temporary sleep / offline skips: they do not increase or reset the streak, and cannot trigger its notification. Other failures and skips still count as before. Existing history without the flag is not reclassified from its localized error text; the ready-again notice above is unchanged.
 
 **Failure and retry**: node accepts `assistant.send` before model output, so runs ending in API errors (quota, removed model, upstream 503) formerly counted successful.
-Before a turn is allowed to finish, node's bounded transient recovery may keep it working through a same-model retry and later launcher-model fallbacks (safeguards / 429 / 5xx only; [../integrations/claude-integration.md](../integrations/claude-integration.md) "Headless assistant"). The watcher therefore does not mistake an intermediate provider error for the run's outcome.
+Before a turn is allowed to finish, node's bounded transient recovery may keep it working through a same-model retry (scheduled task execution does not switch models; [../integrations/claude-integration.md](../integrations/claude-integration.md) "Headless assistant"). The watcher therefore does not mistake an intermediate provider error for the run's outcome.
 `watchScheduledRun` now follows the final turn, reads final text, records API errors as failed, pushes "Scheduled task failed: …", and retries after 3 minutes once
 (`Retried`, no further push on repeat failure). Retry uses the task **then** in the table, not the startup copy (before #2313, users followed failure push and disabled / deleted it,
 yet it silently reran the old prompt 3 minutes later): deleted tasks don't retry, disabled repeating tasks don't retry, once follow-ups disabled on due still retry, edited prompts use new text.
+
+### Task execution context
+
+The web task editor's **Execution options**, before the prompt, is an advanced group for people who need a task to use
+a particular assistant backend, model, computer or directory. Its collapsed summary shows the launcher name, actual
+agent backend, model and thinking effort. Every untouched control explicitly follows Assistant, with known inherited
+values shown; its title and summary share one line. Task rows use the same summary from their effective `execution`,
+while older responses without it keep their legacy display. The saved fields stay unset so future Assistant changes
+still apply. It reuses the chat's
+assistant-compatible launcher list (`purpose=task`), model picker and capability-derived thinking choices; it never changes Main chat.
+Only the explicit task purpose computes computer-scoped task inheritance; `purpose=assistant` keeps the ordinary
+Assistant picker default. Every editor discovery request names the same chosen manager as the task save. Defaults,
+launcher lists and model catalogs are scoped to that manager as well as the computer and launcher, including while
+requests are loading or fail; a former manager's late answer cannot replace them.
+Plain-text prompts work independently of rich input and content references.
+
+`POST /assistant/tasks` and `PUT /assistant/tasks/{id}` accept sparse `launcher`, `model`, `effort`,
+`execution_machine_id` and `cwd` fields. Omission keeps a saved choice; an empty string restores inheritance.
+`execution_machine_id` is the execution computer, distinct from `machine_id`, the source conversation's computer.
+Model overrides retain the existing `model_config.overrides.v1.task.<id>` record and `task.<id>` purpose. Saves that
+change both records use the existing settings transaction and publish neither on failure. `model_revision` is the
+model record's optimistic revision; a stale supplied revision returns 409. Execution-aware clients include it for
+deliberate changes, including a choice equal to today's default. Old clients that omit these fields keep them.
+An unversioned launcher/effort-only echo whose effective binding is unchanged preserves the saved record and creates
+no provider or computer pin. Explicit clears remain clears. Old dormant `model_config.task.<id>` records remain inert.
+
+Inheritance is resolved on the execution computer, then uses the existing `mergeModel` contract. A shared managed
+provider retains its binding across computers in scope; a local launcher on another computer takes that computer's
+compatible launcher defaults, even when its alias matches Main chat's. Its model, effort and profile are not
+copied from another local provider. The picker reports the same computer-scoped defaults. A different explicit provider
+starts from its own defaults. A model or effort override pins the effective provider so a later
+Main chat switch cannot pair it with another agent. Task-specific choices require the task's own conversation;
+turn off **Continue the original chat** first. Agent means a real headless-capable launcher, including compatible
+runtime launchers, rather than an orchestration role. Work-only computers remain excluded.
+This includes pinning the computer already inherited from Assistant when the save omits `execution_machine_id`.
+An explicit empty computer restores computer inheritance; clearing the launcher/model/effort and computer restores
+full inheritance. An untouched task stays sparse. The editor shows a validation error and
+disables Save and Run now while source-chat continuation and explicit execution choices coexist. Empty patches
+can clear historical choices without requiring a live computer; toggling continuation back on revalidates them.
+Existing source tasks may retain their unchanged legacy launcher/effort-only metadata, which did not affect the source
+chat's execution. Both title edits and runs keep that source's actual context; new execution choices still require
+the task's own conversation. A saved model, directory or execution computer does not qualify for this compatibility.
+
+The shared `TaskExecution` contract (`assistant/schedule_execution.go`, web `lib/routines.ts`) is returned as task
+`execution` and stored on each dispatched run as `execution`. It contains `machine_id`, `launcher`, `agent`, `model`,
+`effort`, `cwd`, `permission_mode` and a non-secret configuration `fingerprint`. Older run snapshots may retain
+`runtime` as compatibility evidence: a former Agent SDK task context starts a new conversation; new Claude runs
+follow the current CLI-only policy. Assistant-capable runtime launchers remain independently supported.
+Empty model/effort means the launcher's own default; it does not claim an unobserved concrete model.
+`execution_error` reports an unresolved
+configuration on the task view. A task's `launcher`, `model`, `effort` and `model_revision` describe its saved override.
+Content-reference consumers must use this same selected computer, launcher/runtime and directory for discovery and
+execution, rather than making a parallel context or reading files on the web host.
+
+`cwd` accepts an existing absolute or `~/` directory on the execution computer. Leading or trailing whitespace is
+refused instead of changing the chosen path. `assistant.directory` resolves its
+symlinks and checks directory read/search access there, with the workspace resolver's protected-path restrictions.
+Saving and each run validate it; the node checks again before sending. Validation never creates the requested
+directory, changes permissions, or writes assistant instructions into it. Automatic built-in skill synchronization
+also stays confined to prepared assistant directories; project-owned skill files are preserved. An empty path uses the prepared assistant
+space as before. The task records the physical directory used, so a changed symlink target requires a fresh chat.
+A node must announce `task_execution`; unsupported nodes refuse the new execution request with `node_outdated`.
+
+The scheduler and **Run now** share `runTask` and the frozen resolved binding. A reusable conversation must match its
+computer, launcher/agent, model/effort/runtime fingerprint and physical directory. The fingerprint includes the execution
+computer's advertised launcher identity; a changed local gateway starts a new chat. A runtime-owned conversation can
+resume without a local Claude/Codex state record: the node validates the owning assistant-capable runtime, its launcher
+and physical directory from runtime metadata. Missing metadata for a known owner is uncertain and cannot trigger a
+replacement send. Permission changes are applied
+on the next send. An unknown legacy context with explicit choices starts fresh. Replacements preserve previous
+conversations and run history; each run records `conversation` (`source`, `resumed`, `new`) and, when replaced,
+`conversation_reason`. For task-owned execution, offline computers, unavailable models and missing directories fail with their reason, with
+no substitute computer, model or directory. A failed send with uncertain delivery is not sent again as a new chat.
+This also covers a new conversation's first send: a lost reply or a node reporting delivery as unknown/already accepted
+keeps the one-off failure notice but does not arm its automatic retry. The run's `delivery_unknown` flag also cancels
+an older retry still pending when a later manual run loses its receipt. A request confirmed never sent still retries once;
+model snapshot and default-directory preparation failures retain that notification and retry behavior.
+A temporarily unreadable launcher list does not prove a launcher is gone: saving and running an undiscovered custom
+launcher preserve its exact binding while retaining model, effort, capability and computer-scope validation;
+an authoritative missing or incompatible launcher remains a failure, including a successful empty node list. A missing
+or null node catalog and an unreadable managed-provider catalog remain unknown, rather than evidence of deletion.
+Configured wrappers and managed providers participate in the merged list. Unknown backend metadata stays unset.
+An unconfigured source-chat follow-up can use its own conversation when the source computer is missing/offline,
+model preparation fails before sending, or the node confirms the source is gone. Source sends use `resume_only`;
+the fallback records `source_unavailable`. A timeout, closed link or other unclassified send failure records failure
+without a replacement send or automatic one-off retry. The one-off failure notice is still pushed.
+Scheduled headless runs retain bounded same-model transient recovery but never advance to another model.
+
+The web advertises this editor through the `task_execution` feature and shows run configuration under each history
+entry. Native clients can continue editing legacy fields without clearing execution choices; their task-specific
+execution controls are not added here. Acceptance uses isolated RPC/CLI and browser fixtures, with no real model call.
 
 ### Push after running (#2396)
 

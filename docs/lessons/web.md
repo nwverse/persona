@@ -1,5 +1,17 @@
 # Lessons: web UI and interactions
 
+## A retained task draft must accept canonical pins field by field (#6800)
+
+Run now saves before sending. A title edit during that save makes the draft a new object; accepting only server
+metadata then leaves canonical provider/computer pins out of the open form. A later unrelated save can clear them.
+Compare each execution field with the submitted snapshot: accept the canonical value only if that field was not
+edited in the meantime. Test save, a pending title edit, run failure, changed defaults and another save in the same
+form; reopening first masks the bug.
+
+A source task's old launcher/effort-only metadata is not a new execution choice. Pass the saved task to both the form
+validator and the execution-options notice, preserve sparse title saves, and still block changed choices. Otherwise
+the server can accept the compatibility case while the editor's Save button or duplicate notice still refuses it.
+
 ## A folded launcher must retain its identity (#10249)
 
 When replacing a launcher rail, do not promote the current launcher's models into a separate Recommended group or
@@ -8,6 +20,10 @@ reuse the existing row/setup projection, and flatten search without duplicating 
 On touch screens the model-ID line may replace the usual second line; search must keep the launcher name as well,
 or identical model names from different accounts become indistinguishable. Test typed-ID picks against their named
 launcher, not only the ID, and keep failed picks out of Recent.
+
+A preset description and a truncated model's full-ID line still need their launcher name. With no current launcher,
+all groups start collapsed: an identity-comparison test must search or expand the groups before asserting its rows.
+Keep the launcher-identity assertions; do not restore an obsolete always-expanded view just to expose the fixture.
 
 ## A lazy waiting row needs a lazy ordering boundary (#9390)
 
@@ -138,6 +154,17 @@ the first pages (`sessionSummaries`) is not a computer's count either while the 
   `server/internal/assistant/direction_tree.go`) must still place the ones it leaves out: a to-do moved out of the
   page's Done fold vanished from 常驻 and was counted as "open, under no direction". Check every grouping for each
   to-do state a rule change moves.
+
+## A failed launcher catalog must not disable inheritance (#6800)
+
+A task's saved launcher can outlive discovery. Keep that value visible and preserve its model/effort until the user
+selects Assistant inheritance; disabling the whole select also disables the recovery choice. Clearing explicitly sends
+empty launcher/model/effort values. Test failed, empty and omitted catalogs through save and reopen.
+
+Model and launcher discovery belong to the exact computer/launcher/request context. Clearing a list in an effect alone
+does not fence an older successful response. Hide mismatched catalogs during render, guard completed requests after
+cancellation, and disable model picking while the current read is pending. A new read's failure must not revive old rows
+or disable the launcher inheritance recovery control. Test deferred responses arriving before and after that failure.
 
 ## A read that only handles the expected failure loads forever (2026-11-14, workflow board)
 
@@ -307,6 +334,10 @@ off. Measure the branch and `main` at the same commit, after the last merge, and
 size. Every build prints each language's count (#7418; before, a build under its budget printed none, and the way to
 see them was a scratch build with the constant at 1 B). While the PR waits, `main` may raise the budget for its own
 changes: merge it, keep its note, and append yours with a new pair.
+
+A component shared by two lazy screens can add a chunk and preload entries to the startup bundle even when none of
+its component code loads at startup. Sharing the scheduled-task model picker with Settings added 95 B against a
+main with no room. Load Settings' picker when its editor opens so the first screen need not carry that dependency.
 
 ## A startup namespace ships every one of its strings in every first screen (#7418)
 
@@ -630,6 +661,8 @@ Retiring a generation must also wake mounted consumers to read the next generati
 ## Task detail saves acknowledge each field independently (#1478)
 
 A fresh task object can be an unchanged list read or an unrelated status update. Keep title and notes drafts with separate local and saved revisions: clean fields follow authoritative changes, while dirty fields survive reads and the other field's save. A successful PATCH acknowledges only its submitted revision, including edits away and back during that request; a failure leaves the draft available for another blur. Admit saves synchronously, and retire callbacks when the task or credential generation changes before starting a follow-up read or reporting an error. Regress the mounted detail through the real store and REST client with deferred synthetic responses, rather than asserting helper state alone.
+
+The scheduled-task editor can stay open after Save then Run fails. Its save response must accept canonical execution metadata and the state note without replacing ordinary edits typed while the request was pending. Regress that sequence with a deferred save, a later title edit and a failed run, then save again and check that the new title survives without resubmitting an unchanged note.
 
 ## Mail send admission must precede React updates (#1251)
 
