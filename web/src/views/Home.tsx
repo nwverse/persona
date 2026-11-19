@@ -27,6 +27,9 @@ import { getSession, useStore, withTaskRows } from "../lib/store";
 import { retryAgentList } from "../lib/sessions";
 import { discardOutbox, outboxEntry, queueToSession, retryOutboxEntry } from "../lib/outbox";
 import { homeTasks, type HomeTask } from "../lib/home-tasks";
+import { sessionLauncher } from "../lib/model-switch";
+import { effortTitle } from "../lib/session-actions";
+import { modelList, pillView, useModelLists } from "../lib/session-models";
 import { heldDelivery, makeSessionLookup, orphanedLine, TODO_STATUS_INFO, TODO_TONE_CLASS, todoStatusLabel } from "../lib/todos";
 import { BUSY_MOTION, spinStyle } from "../lib/busy-motion";
 import type { AgentState, Interaction, Machine, Session } from "../lib/types";
@@ -208,7 +211,7 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
               grid="tasks"
             >
               {tasks.rows.map((r) => (
-                <TaskCard key={r.todo.id} task={r} />
+                <TaskCard key={r.todo.id} task={r} machine={name} />
               ))}
             </Group>
           )}
@@ -326,13 +329,25 @@ function Group({ title, count, children, right, hint, grid }: { title: string; c
   );
 }
 
+/** Who works on a task (#10904): its lead agent's computer, then the model and effort as that agent's model pill names
+ *  them (its list's name once the pill has read the list, else the short form of the id; no effort, none said), and how
+ *  many other agents it has. With no row of its agents read, how many there are (the Tasks page's words). */
+function taskAgentLine({ agents, lead }: Pick<HomeTask, "agents" | "lead">, machine: (mid: string) => string): { who: string; more: number } {
+  if (!lead) return { who: agents > 0 ? t("todos.agent_count", { count: agents }) : "", more: 0 };
+  const view = pillView(lead, modelList(lead.machine_id, sessionLauncher(lead)));
+  return { who: [machine(lead.machine_id), view.model, view.effort && effortTitle(view.effort)].filter(Boolean).join(" · "), more: agents - 1 };
+}
+
 // One task on the overview: its title (opens the task), its status, the stage bar with its PR, and what holds its
-// delivery or how many agents it has (the Tasks page's words). The PR link is beside the title link, not inside it.
-function TaskCard({ task: { todo, status, agents } }: { task: HomeTask }) {
+// delivery, then who works on it (taskAgentLine). The PR link is beside the title link, not inside it.
+function TaskCard({ task, machine }: { task: HomeTask; machine: (mid: string) => string }) {
+  const { todo, status } = task;
+  useModelLists(); // a model list the pill reads later names the model here too
   const to: Route = { name: "todos", id: todo.id };
   const held = heldDelivery(todo);
   const orphan = status !== "needs_you" ? orphanedLine(todo) : undefined;
-  const line = [held && t(`todos.delivery_${held.state}`), agents > 0 && t("todos.agent_count", { count: agents })].filter(Boolean).join(" · ");
+  const { who, more } = taskAgentLine(task, machine);
+  const line = [held && t(`todos.delivery_${held.state}`), who].filter(Boolean).join(" · ");
   return (
     <div className="flex h-full flex-col gap-2 rounded-card bg-surface px-3 py-2.5 shadow-card" data-task={todo.id}>
       <div className="flex min-w-0 items-center gap-2">
@@ -346,7 +361,13 @@ function TaskCard({ task: { todo, status, agents } }: { task: HomeTask }) {
       {/* the lines under the stage bar sit at the card's bottom, so a row of cards of one height lines up */}
       {(line || orphan) && (
         <div className="mt-auto flex flex-col gap-2">
-          {line && <p className={cx("truncate text-[11.5px]", held ? "text-orange" : "text-ink-3")}>{line}</p>}
+          {/* the other agents' count stays when the line is cut short */}
+          {line && (
+            <p data-task-agents className={cx("flex min-w-0 gap-1 text-[11.5px]", held ? "text-orange" : "text-ink-3")}>
+              <span className="truncate">{line}</span>
+              {more > 0 && <span className="shrink-0 tabular-nums">{t("home.task_agents_more", { count: more })}</span>}
+            </p>
+          )}
           {/* nobody is working on it (#3618): the hub's finding and why; a card that waits for the user says that instead */}
           {orphan && (
             <p data-orphaned-line className="truncate text-[11.5px] text-ink-3">

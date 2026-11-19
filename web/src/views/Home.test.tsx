@@ -361,7 +361,8 @@ describe("tasks in progress", () => {
     expect(html).not.toContain('data-task="c"');
     expect(html).toContain('data-stage="review" data-state="current"');
     expect(html).toContain("https://example.com/o/r/pull/42");
-    expect(html).toContain("1 个 Agent");
+    // the agent's computer (its row has no model or effort to name; Home.task-agents.test.tsx has the rest, #10904)
+    expect(html.slice(html.indexOf('data-task="a"'), html.indexOf('data-task="b"'))).toContain('<span class="truncate">Mac</span>');
     expect(html).not.toContain("查看全部");
     expect(html).toContain("已合未上线");
   });
