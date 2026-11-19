@@ -4194,6 +4194,22 @@ final class AppModel {
         if tabRouter != nil { shellSettings = true }
         #endif
     }
+
+    /// A provider import link opened from outside (#5428): the Model providers page reads it through the hub's parse
+    /// route and opens the wizard with the draft. Held only until the wizard takes it; never logged or shown, since it
+    /// may carry a key.
+    var providerImport: ProviderImportRequest?
+    func openProviderImport(_ link: String) {
+        let request = ProviderImportRequest(link: link)
+        providerImport = request
+        settingsPath.append(ModelLaunchersRoute(id: request.id))
+        #if os(macOS)
+        MacShellState.shared.go(.settings, self)
+        #else
+        selectedTab = .settings
+        if tabRouter != nil { shellSettings = true }
+        #endif
+    }
     /// The space's other agent a chat page switched to in its header (`ChatView.switchTo`), by the session it opened
     /// with: the page built again for that path goes to it. Cleared back at the list.
     var chatSwitched: [SessionKey: SessionKey] = [:]

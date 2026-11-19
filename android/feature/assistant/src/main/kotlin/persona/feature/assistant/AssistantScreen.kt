@@ -176,6 +176,7 @@ fun AssistantScreen(
     mentionFiles: persona.core.contracts.api.SessionFiles? = assistantSessionFiles(),
     /** The selected hub group's name while several are paired, which ends the title menu's heading as on iOS; null with one. */
     hubGroup: String? = null,
+    composerUpload: persona.feature.chat.ComposerAttachmentUpload? = null,
 ) = PersonaTheme {
     val receivedSnapshot by repository.assistant.collectAsStateWithLifecycle()
     val conversationsOf = repository as? persona.core.contracts.api.AssistantConversations
@@ -929,12 +930,30 @@ fun AssistantScreen(
                         }
                         val mentions = if (mentionsHere) mentionSessions?.collectAsStateWithLifecycle()?.value
                             ?.let { starterMentionSource(it, folders) } else null
-                        // A forward waiting for the new conversation (#3901): its card over the composer, sent with it.
+                        // A forward waiting for the new conversation (#3901): its card and source photos over the composer.
                         val homeForwards = if (active == null) persona.feature.chat.ForwardPlacements.home else emptyList()
+                        val homePhotoHandoffs = if (active == null) persona.feature.chat.ForwardPlacements.homePhotoHandoffs() else emptyMap()
+                        LaunchedEffect(homeForwards, composer, homePhotoHandoffs, composer.attachments.map { it.id }) {
+                            if (homeForwards.isEmpty()) return@LaunchedEffect
+                            val present = composer.attachments.mapTo(mutableSetOf()) { it.id }
+                            val pending = homePhotoHandoffs.mapValues { (_, handoff) ->
+                                handoff.copy(attachments = handoff.attachments.filterNot { it.id in present })
+                            }
+                            val rejected = persona.feature.chat.attachForwardedPhotos(context, composer, pending.values.toList())
+                            val lost = pending.values.sumOf { it.lost } + rejected.size
+                            if (lost > 0) {
+                                val message = persona.feature.chat.forwardedPhotoNotice(resources, lost)
+                                if (feedback?.notice(message) != true) toast.show(persona.core.designsystem.FeedbackNotice(message))
+                            }
+                            if (rejected.isNotEmpty() || pending.values.any { it.lost > 0 }) {
+                                persona.feature.chat.ForwardPlacements.finishHomePhotoHandoffs(rejected.mapTo(mutableSetOf()) { it.id })
+                            }
+                        }
                         ChatComposer(uploadTarget, composer, working = false, sending = sending || !draftReady,
                             // The health page sends no files: an upload goes to the main chat's machine, outside the health space.
                             canClear = false, service = composerService?.takeIf { uploadTarget.machineId.isNotBlank() && !healthPage },
                             uploadDestination = if (onHealthChat) "health" else null,
+                            upload = composerUpload,
                             onSend = { submit() }, onCommand = { composer.insert(it, composer.focused) },
                             onNotice = { message ->
                                 if (feedback?.notice(message) != true) toast.show(persona.core.designsystem.FeedbackNotice(message))

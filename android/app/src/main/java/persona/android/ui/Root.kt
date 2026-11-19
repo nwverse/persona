@@ -149,7 +149,8 @@ private fun PersonaRootContent(
                     LaunchedEffect(openNavigation.value, active) {
                         openNavigation.value?.invoke(router)?.let { route ->
                             if (route.key == SettingsPageRoute(SettingsPage.Diagnostics)) diagnostics = true
-                            if (route.key == PairingRoute || route.key is SettingsPageRoute) openNavigation.value = null
+                            val retainImport = ProviderImportRequests.retainProviderNavigationDuringPairing(route.key)
+                            if (route.key == PairingRoute || route.key is SettingsPageRoute && !retainImport) openNavigation.value = null
                         }
                     }
                     // Keep the pairing state in memory while diagnostics is open.
