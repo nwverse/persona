@@ -24,6 +24,11 @@ Node's `session.start`:
      Persona's hooks file or the launcher's own, so it would drop one of them. Persona writes no Claude config either way, but accepting the
      confirmation (by hand or by the node) makes Claude Code itself record `"skipDangerousModePermissionPrompt": true` in that profile's `settings.json`
      (checked on 2.1.322), so the confirmation shows once per profile, and later bypass starts there, Persona's or the user's own, no longer ask.
+   - In an Orca tab, Orca naming claude counts as claude having come only with the start's own evidence (#10588, `node/startevidence.go`): Claude Code's
+     screen (banner, input box, a dialog), or the start file gone (the shell ran the line) with no not-found or parse-error line on screen. Until then the
+     start waits for the shell (3 minutes) and reads the shell's answers; a start line that never showed in the tab, its start file still unread, ends as
+     `terminal_not_ready` (nothing ran, the tab is closed), not as a Claude stall. Orca keeps an exited agent's identity on its terminal, and its sends do not
+     say whether the text arrived; other engines' word is taken as before.
    - State idle/done and composer footer visible (`shift+tab` / `? for shortcuts` / `bypass permissions` / `esc to interrupt`), twice consecutively → ready.
    - Other blocked state (model selection, a permission Claude asks even in bypass, etc.) → return immediately; hub pushes the screen to the phone as a `screen`
      interaction. The first message is held, not dropped (`firstAfterDialog` in `node/firstprompt.go`): the session is Needs you saying the message goes in once the
