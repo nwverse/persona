@@ -1481,24 +1481,10 @@ func TestLinkSwitchSuccessEndIsAskedUntilTaken(t *testing.T) {
 // directory or bin others may write to is refused before anything is written there (stage) or placed (install), and
 // what was linked into place is checked again before it runs; a mismatch takes it out again and runs nothing.
 func TestLinkSwitchRunsOnlyTheBuildItSent(t *testing.T) {
-	groupWritable := func(h *lsHarness, dir string) {
-		if err := os.Chmod(dir, 0o775); err != nil {
-			h.t.Fatal(err)
-		}
-	}
 	for _, c := range []struct {
 		name, want string
 		setup      func(h *lsHarness)
 	}{
-		{"bin writable by its group, at the stage", proto.LinkSwitchReasonTransferFailed, func(h *lsHarness) { groupWritable(h, h.binOf) }},
-		{"data directory writable by others, at the stage", proto.LinkSwitchReasonTransferFailed, func(h *lsHarness) {
-			if err := os.Chmod(h.persona, 0o757); err != nil {
-				h.t.Fatal(err)
-			}
-		}},
-		{"bin writable by its group, at the install", proto.LinkSwitchReasonInstallFailed, func(h *lsHarness) {
-			h.hub.onBegin = func() { groupWritable(h, h.binOf) }
-		}},
 		{"the staged build changed", proto.LinkSwitchReasonInstallFailed, func(h *lsHarness) {
 			h.hub.onBegin = func() {
 				staged, _ := filepath.Glob(filepath.Join(h.binOf, lsStagePrefix+"*"))
@@ -1528,9 +1514,93 @@ func TestLinkSwitchRunsOnlyTheBuildItSent(t *testing.T) {
 			if h.exists(".persona/bin/persona-link") || h.exists(stagedName(rec.Operation)) {
 				t.Error("a build is left on the computer")
 			}
-			if c.want == proto.LinkSwitchReasonTransferFailed {
-				if begins, _ := h.hub.calls(); len(begins) > 0 {
-					t.Errorf("the hub was asked: %+v", begins)
+		})
+	}
+}
+
+// asUser has the computer's `id -un` say name (a stub first on PATH), with a linger file for it.
+func (h *lsHarness) asUser(name string) {
+	real, err := exec.LookPath("id")
+	if err != nil {
+		h.t.Skip("no id")
+	}
+	mustWrite(h.t, filepath.Join(h.stubs, "id"), "#!/bin/sh\nif [ \"$1\" = -un ]; then echo "+shellQuote(name)+"; exit 0; fi\nexec "+
+		shellQuote(real)+" \"$@\"\n", 0o755)
+	mustWrite(h.t, filepath.Join(h.root, "linger", name), "", 0o644)
+}
+
+// groupOf is the name of the group a directory belongs to, as ls says it.
+func groupOf(t *testing.T, dir string) string {
+	out, err := exec.Command("ls", "-ld", dir).Output()
+	f := strings.Fields(string(out))
+	if err != nil || len(f) < 4 {
+		t.Fatalf("ls -ld %s: %v %q", dir, err, out)
+	}
+	return f[3]
+}
+
+// A ~/.persona or bin another user may write to (others; a group but the user's own private group) is refused in the
+// probe, with nothing changed, and again by the stage and the install when it became so after the probe: its own
+// reason, unsafe_permissions. The group a umask of 002 makes writable on distributions with a private group per user
+// is the user's own, and is taken.
+func TestLinkSwitchRefusesUnsafePermissions(t *testing.T) {
+	chmod := func(h *lsHarness, dir string, mode os.FileMode) {
+		if err := os.Chmod(dir, mode); err != nil {
+			h.t.Fatal(err)
+		}
+	}
+	for _, c := range []struct {
+		name  string
+		setup func(h *lsHarness)
+		want  string   // "": succeeds
+		runs  []string // the ssh runs
+	}{
+		{"data directory writable by others", func(h *lsHarness) { chmod(h, h.persona, 0o757) },
+			proto.LinkSwitchReasonUnsafePermissions, []string{"probe"}},
+		{"bin writable by others", func(h *lsHarness) { chmod(h, h.binOf, 0o757) },
+			proto.LinkSwitchReasonUnsafePermissions, []string{"probe"}},
+		{"bin writable by another group", func(h *lsHarness) {
+			chmod(h, h.binOf, 0o775)
+			h.asUser("someone-else-" + groupOf(h.t, h.binOf))
+		}, proto.LinkSwitchReasonUnsafePermissions, []string{"probe"}},
+		{"bin writable by the user's own group", func(h *lsHarness) {
+			chmod(h, h.binOf, 0o775)
+			chmod(h, h.persona, 0o775)
+			h.asUser(groupOf(h.t, h.binOf))
+		}, "", []string{"probe", "stage", "install", "remove staged"}},
+		{"writable by others since the probe, at the stage", func(h *lsHarness) {
+			h.onRun = func(what string) {
+				if what == "stage" {
+					chmod(h, h.binOf, 0o757)
+				}
+			}
+		}, proto.LinkSwitchReasonUnsafePermissions, []string{"probe", "stage", "remove staged"}},
+		{"writable by others since the probe, at the install", func(h *lsHarness) {
+			h.hub.onBegin = func() { chmod(h, h.binOf, 0o757) }
+		}, proto.LinkSwitchReasonUnsafePermissions, []string{"probe", "stage", "install", "uninstall"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := newLSHarness(t, lsOptions{setup: c.setup})
+			before := h.tree()
+			h.start()
+			rec := h.finished()
+			want := orDefault(c.want, proto.LinkSwitchPhaseSucceeded)
+			if got := orDefault(rec.Error, rec.Phase); got != want || rec.RollbackUnconfirmed {
+				t.Fatalf("record %+v, want %s", rec, want)
+			}
+			if got := h.whats(); !slices.Equal(got, c.runs) {
+				t.Errorf("ssh runs %q, want %q", got, c.runs)
+			}
+			begins, _ := h.hub.calls()
+			switch {
+			case slices.Equal(c.runs, []string{"probe"}):
+				if after := h.tree(); fmt.Sprint(before) != fmt.Sprint(after) || len(begins) > 0 {
+					t.Errorf("the probe changed something: hub %+v\nbefore %v\nafter  %v", begins, before, after)
+				}
+			case c.want != "":
+				if _, err := os.Stat(filepath.Join(h.persona, ".pair-got")); err == nil || h.exists(".persona/bin/persona-link") ||
+					h.exists(stagedName(rec.Operation)) {
+					t.Error("the installer ran, or a build is left")
 				}
 			}
 		})

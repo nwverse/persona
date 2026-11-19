@@ -20,11 +20,11 @@ const (
 	lsExitStageCopy      = 11 // the gzipped build on stdin did not arrive whole
 	lsExitStageSum       = 12 // what arrived is not the build sent (sha-256), or nothing here can tell
 	lsExitStageVersion   = 13 // the staged build does not run `version` here
-	lsExitStageUnsafe    = 14 // ~/.persona or its bin is writable by others: nothing written
+	lsExitStageUnsafe    = 14 // ~/.persona or its bin may be written by other users (lsUnsafeDirs): nothing written
 	lsExitInstallExists  = 20 // Persona Link appeared since the probe: nothing placed
 	lsExitInstallStaged  = 21 // the staged build is gone: nothing placed
 	lsExitInstallPlace   = 22 // the staged build could not be linked into place: nothing placed
-	lsExitInstallUnsafe  = 23 // ~/.persona or its bin is writable by others: nothing placed
+	lsExitInstallUnsafe  = 23 // ~/.persona or its bin may be written by other users (lsUnsafeDirs): nothing placed
 	lsExitInstallSum     = 24 // what was linked into place is not the build sent: taken out again, nothing run
 	lsExitUninstallStays = 30 // something this switch should have removed is still there
 )
@@ -87,11 +87,16 @@ func lsLinkPaths() string {
 var lsNodeThere = `n=0; for p in ` + lsIn("U", lsNodeUnit) + ` ` + lsIn("U", lsLegacyNodeUnit) + ` ` + lsIn("D", lsNodeBackup) +
 	`; do if e "$p"; then n=1; fi; done`
 
-// lsSafeDirs exits with code when ~/.persona or its bin is writable by its group or others (followed through links):
-// anyone else who can write there could swap the program a switch runs.
-func lsSafeDirs(code int) string {
-	return `for p in "$HOME/.persona" "$HOME/.persona/bin"; do case "$(ls -ldL "$p" 2>/dev/null | cut -c6,9)" in *w*) exit ` +
-		strconv.Itoa(code) + `;; esac; done`
+// lsUnsafeDirs sets w=1 when ~/.persona or its bin (followed through links) may be written by another user, who
+// could swap the program a switch runs: by others, or by its group unless that is the user's own private group (the
+// group named as the user, which a umask of 002 makes writable on distributions that give each user one). The probe
+// says so; the stage and the install look again before they write or place anything.
+var lsUnsafeDirs = `w=0; u=$(id -un); for p in "$HOME/.persona" "$HOME/.persona/bin"; do [ -e "$p" ] || continue; ` +
+	`set -- $(ls -ldL "$p" 2>/dev/null); case "${1:-}" in ????????w*) w=1;; ?????w*) [ "${4:-}" = "$u" ] || w=1;; esac; done`
+
+// lsRefuseUnsafe exits with code when lsUnsafeDirs finds a directory another user may write to.
+func lsRefuseUnsafe(code int) string {
+	return lsUnsafeDirs + `; if [ "$w" = 1 ]; then exit ` + strconv.Itoa(code) + `; fi`
 }
 
 // lsSum sets s to the sha-256 (hex) of the file in shell variable file, "" when nothing here computes one.
@@ -106,7 +111,8 @@ func lsScript(lines ...string) string { return posixCommand(strings.Join(lines, 
 func lsStaged(op string) string { return lsIn("B", lsStagePrefix+op) }
 
 // lsProbeScript looks at the computer and changes nothing: it prints os, arch, systemd (a user manager answers),
-// linger, link (Persona Link there already), custom (another data directory than ~/.persona would be used),
+// linger, link (Persona Link there already), custom (another data directory than ~/.persona would be used), unsafe
+// (another user may write to ~/.persona or its bin),
 // node_unit (a node service exists, or a backup of one persona-link may restore), node_bin (a node program to run as
 // one) and end=1 last. Exit 0.
 func lsProbeScript(p lsPaths) string {
@@ -117,6 +123,7 @@ func lsProbeScript(p lsPaths) string {
 		`if [ -e `+shellQuote(p.linger)+`/"$(id -un)" ]; then echo linger=1; else echo linger=0; fi`,
 		`k=0; for p in `+lsLinkPaths()+`; do if e "$p"; then k=1; fi; done; echo "link=$k"`,
 		`c=0; if [ -n "${`+current+`:-}" ] || [ -n "${`+legacy+`:-}" ]; then c=1; fi; if e "$O" && ! [ "$O" -ef "$D" ]; then c=1; fi; echo "custom=$c"`,
+		lsUnsafeDirs+`; echo "unsafe=$w"`,
 		lsNodeThere+`; echo "node_unit=$n"`,
 		`x=0; for p in `+lsIn("B", nodeproto.ProgramPersonad)+` `+lsIn("B", nodeproto.ProgramPersonaNode)+` `+lsIn("B", compat.DaemonBinary)+
 			`; do if [ -f "$p" ] && [ -x "$p" ]; then x=1; fi; done; echo "node_bin=$x"`,
@@ -128,7 +135,7 @@ func lsProbeScript(p lsPaths) string {
 // runs here (`version`), and prints staged=1; on any failure it removes what it wrote (lsExitStage*).
 func lsStageScript(op, sum string) string {
 	return lsScript("set -u", "umask 022", `B="$HOME/.persona/bin"`, "f="+lsStaged(op),
-		lsSafeDirs(lsExitStageUnsafe),
+		lsRefuseUnsafe(lsExitStageUnsafe),
 		`mkdir -p "$B" || exit `+strconv.Itoa(lsExitStageWrite),
 		`rm -f `+lsStagedAll, // what an earlier switch left
 		`if ! gzip -dc > "$f"; then rm -f "$f"; exit `+strconv.Itoa(lsExitStageCopy)+`; fi`,
@@ -152,7 +159,7 @@ func lsInstallScript(op, sum string, limit time.Duration) string {
 	lines := append(lsPrelude(), "f="+lsStaged(op), "t="+lsIn("B", lsLinkBin),
 		`for p in `+lsLinkPaths()+`; do if e "$p"; then rm -f "$f"; exit `+strconv.Itoa(lsExitInstallExists)+`; fi; done`,
 		`[ -f "$f" ] || exit `+strconv.Itoa(lsExitInstallStaged),
-		lsSafeDirs(lsExitInstallUnsafe),
+		lsRefuseUnsafe(lsExitInstallUnsafe),
 		`ln "$f" "$t" 2>/dev/null || { rm -f "$f"; exit `+strconv.Itoa(lsExitInstallPlace)+`; }`,
 		lsSum("t")+`; [ "$s" = `+shellQuote(sum)+` ] || { rm -f "$t" "$f"; exit `+strconv.Itoa(lsExitInstallSum)+`; }`,
 		`rm -f "$f"`, "echo placed=1",

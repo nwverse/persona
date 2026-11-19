@@ -526,12 +526,12 @@ func (r *linkSwitchRun) run(ctx context.Context) {
 		r.fail(ctx, proto.LinkSwitchReasonUnknown)
 		return
 	}
-	if !r.stage(ctx, path) {
+	if why := r.stage(ctx, path); why != "" {
 		if ctx.Err() != nil {
 			return
 		}
 		r.removeStaged(ctx)
-		r.fail(ctx, proto.LinkSwitchReasonTransferFailed)
+		r.fail(ctx, why)
 		return
 	}
 	r.logf("build %s staged", version)
@@ -719,6 +719,8 @@ func (r *linkSwitchRun) probe(ctx context.Context) string {
 		return proto.LinkSwitchReasonExistingLink
 	case kv["custom"] == "1":
 		return proto.LinkSwitchReasonCustomNode
+	case kv["unsafe"] != "0":
+		return proto.LinkSwitchReasonUnsafePermissions
 	case !r.rec.NodeUnitExisted && kv["node_bin"] != "1":
 		return proto.LinkSwitchReasonNoNode
 	}
@@ -740,17 +742,23 @@ func fileSHA256(path string) (string, error) {
 }
 
 // stage sends the build at path, gzipped, to the staged file and has it checked there.
-func (r *linkSwitchRun) stage(ctx context.Context, path string) bool {
+func (r *linkSwitchRun) stage(ctx context.Context, path string) (why string) {
 	f, err := os.Open(path)
 	if err != nil {
 		r.logf("open the build: %v", err)
-		return false
+		return proto.LinkSwitchReasonTransferFailed
 	}
 	defer f.Close()
 	pr := gzipPipe(f)
 	defer pr.Close() // once ssh is done (gzipPipe)
 	exit, out := r.ssh(ctx, "stage", lsStageScript(r.rec.Operation, r.rec.SHA256), pr, r.t.Transfer)
-	return exit == 0 && outputOf(out)["staged"] == "1"
+	switch {
+	case exit == 0 && outputOf(out)["staged"] == "1":
+		return ""
+	case exit == lsExitStageUnsafe:
+		return proto.LinkSwitchReasonUnsafePermissions
+	}
+	return proto.LinkSwitchReasonTransferFailed
 }
 
 // removeStaged removes every file a switch staged or marked on the computer, if any (a failure before the hub's
@@ -829,6 +837,8 @@ func (r *linkSwitchRun) install(ctx context.Context, link string) string {
 	switch {
 	case !placed && exit == lsExitInstallExists:
 		return proto.LinkSwitchReasonExistingLink
+	case !placed && exit == lsExitInstallUnsafe:
+		return proto.LinkSwitchReasonUnsafePermissions
 	case !placed && lsRefusedBeforeInstall(exit):
 		return proto.LinkSwitchReasonInstallFailed
 	case placed && exit > 0 && !sshFailed(exit) && !paired:
