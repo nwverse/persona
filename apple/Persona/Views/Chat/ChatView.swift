@@ -3446,7 +3446,7 @@ struct ChatView: View {
             }
         }
         #endif
-        .confirmationDialog("This Reply", isPresented: Binding(get: { menu.more != nil }, set: { if !$0 { menu.more = nil } })) {
+        .accessibleConfirmationDialog("This Reply", isPresented: Binding(get: { menu.more != nil }, set: { if !$0 { menu.more = nil } })) {
             if let id = menu.more {
                 // A new conversation with what was said up to here (#2137). Opened once the dialog is gone: a navigation
                 // made while it is still going away is dropped, and the chat stayed on the original.
@@ -6382,7 +6382,7 @@ struct Composer: View, Equatable {
         }
         #endif
         return AnyView(top)
-        .confirmationDialog("Clear Context?", isPresented: $confirmClear, titleVisibility: .visible) {
+        .accessibleConfirmationDialog("Clear Context?", isPresented: $confirmClear, titleVisibility: .visible) {
             Button("Clear [Chat View 1ef3de]", role: .destructive) {
                 clearing = true
                 Task {
