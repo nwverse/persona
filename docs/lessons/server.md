@@ -1923,6 +1923,19 @@ framing the connection on lanes (protocol.md "Lanes") changes the queue instead.
 - **A delay-based window compares like with like.** Once short interactive frames fed it round trips, the link's base
   delay came from them, and a full frame's own 137 ms on the wire at 30 KB/s read as queueing: the window sat at its
   least and a 1 MiB transfer took 109 s instead of 47 s. Only frames cut to the frame size are samples now.
+- **A round trip has two directions.** The window first judged round trips, and an acknowledgement waits behind
+  whatever the other side sends: with the node's events filling the way back, the manager's port bytes fell from
+  31.9 to 14.7 KB/s (64 KiB of queue) and from 36.9 to 5.5 KB/s (256 KiB). An acknowledgement now carries when its
+  frame was read, so the queueing judged is one way's. That alone still left the link idle: acknowledgements bunched
+  behind the other side's 32 KiB frames come late by turns, so the window also keeps what the other side reads in the
+  longest recent round trip, and grows at most a quarter past it, since on a long round trip a queue shows only a
+  round trip later.
+- **Two queues reorder.** Port bytes went to the bulk queue and the stream's close to the other one, so the close
+  overtook the last bytes and the tail of a download was lost. What must arrive in order shares one writer.
+- **A stall is no progress, not a long wait.** The notes' watchdog judged how long one write took; a write waiting for
+  credit while the connection carries other frames is not stuck. It now asks when the connection last wrote anything.
+- **The read-ahead must cost a read, not a line.** Decoding the pieces ahead again for every line made a framed
+  connection read 0.45 MB/s of small events where lines read 2.8: the reader scans what a read brought once.
 - **Taking turns among long lines finishes all of them last.** Ten 200 KiB answers sharing a link frame by frame all
   end at the end, so every caller with a deadline gives up where one after another most would finish. Within a lane,
   short lines take turns with the oldest long line; the other long lines wait, as on the one writer.
