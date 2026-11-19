@@ -49,6 +49,11 @@ func TestFoldPreservesSupervisionVisibility(t *testing.T) {
 		{"legacy-explicit", "mcp__" + compat.MCPServer + "__supervision_finish", `{}`, `{"visibility":"user"}`, false, true},
 		{"legacy-accepted-review", "mcp__" + compat.MCPServer + "__task_review", `{"verdict":"accepted"}`, "Accepted.", false, true},
 		{"legacy-failed", "mcp__" + compat.MCPServer + "__notify_user", `{}`, "Not sent.", true, false},
+		{"agy-notification", "mcp_persona_notify_user", `{}`, "Notification sent.", false, true},
+		{"agy-scoped-notification", "mcp_persona_0c671287_notify_user", `{}`, "Notification sent.", false, true},
+		{"agy-scoped-finish", "mcp_persona_55a1c59d_supervision_finish", `{"visibility":"user"}`, `{"visibility":"user"}`, false, true},
+		{"agy-legacy-scoped-review", "mcp_" + compat.MCPServer + "_0c671287_task_review", `{"verdict":"accepted"}`, "Accepted.", false, true},
+		{"agy-other-server", "mcp_persona_other_notify_user", `{}`, "Not a Persona notification.", false, false},
 		{"decision-review", "task_review", `{"verdict":"needs_user"}`, "Decision card sent.", false, true},
 		{"rework", "task_review", `{"verdict":"rework"}`, "Sent back.", false, false},
 		{"other-server-notification", "mcp__example__notify_user", `{}`, "Not a Persona notification.", false, false},
@@ -74,17 +79,21 @@ func TestFoldPreservesSupervisionVisibility(t *testing.T) {
 }
 
 func TestFoldRetainsSilentFinishAlongsideAReply(t *testing.T) {
-	items := []proto.Item{
-		{ID: "thought", Seq: 1, Kind: proto.KindThinking},
-		{ID: "call", Seq: 2, Kind: proto.KindToolUse, ToolUseID: "finish", ToolName: "mcp__persona__supervision_finish",
-			ToolInput: json.RawMessage(`{"visibility":"user"}`)},
-		{ID: "result", Seq: 3, Kind: proto.KindToolResult, ToolUseID: "finish", Text: `{"visibility":"silent"}`},
-		{ID: "reply", Seq: 4, Kind: proto.KindText, Role: "assistant", Text: "The example build passed."},
-	}
-	for _, fold := range []func([]proto.Item) []proto.Item{FoldWork, FoldWorkLatest} {
-		page := fold(items)
-		if len(page) != len(items) || page[1].ID != "call" || page[2].ID != "result" || page[3].ID != "reply" {
-			t.Fatalf("silent disposition and reply must survive transit together: %+v", page)
-		}
+	for _, tool := range []string{"mcp__persona__supervision_finish", "mcp_persona_55a1c59d_supervision_finish"} {
+		t.Run(tool, func(t *testing.T) {
+			items := []proto.Item{
+				{ID: "thought", Seq: 1, Kind: proto.KindThinking},
+				{ID: "call", Seq: 2, Kind: proto.KindToolUse, ToolUseID: "finish", ToolName: tool,
+					ToolInput: json.RawMessage(`{"visibility":"user"}`)},
+				{ID: "result", Seq: 3, Kind: proto.KindToolResult, ToolUseID: "finish", Text: `{"visibility":"silent"}`},
+				{ID: "reply", Seq: 4, Kind: proto.KindText, Role: "assistant", Text: "The example build passed."},
+			}
+			for _, fold := range []func([]proto.Item) []proto.Item{FoldWork, FoldWorkLatest} {
+				page := fold(items)
+				if len(page) != len(items) || page[1].ID != "call" || page[2].ID != "result" || page[3].ID != "reply" {
+					t.Fatalf("silent disposition and reply must survive transit together: %+v", page)
+				}
+			}
+		})
 	}
 }

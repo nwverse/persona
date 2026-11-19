@@ -12,6 +12,7 @@ import (
 var supervisionMCPTools = compat.MCPToolNames([]string{"notify_user", "ask_user", "supervision_finish", "task_review"})
 
 func supervisionToolName(name string) string {
+	name = compat.CanonicalMCPToolName(name)
 	if !strings.HasPrefix(name, "mcp__") {
 		return name
 	}

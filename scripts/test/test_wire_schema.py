@@ -11,18 +11,31 @@ otherwise drop it or fail on it, changing the bytes it writes back. Every defini
 import functools
 import importlib.util
 import json
+import os
 import re
 import subprocess
 import sys
 import unittest
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
+IMPLEMENTATION_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _source_root():
+    configured = os.environ.get("PERSONA_CI_SOURCE_ROOT")
+    if configured:
+        if not Path(configured).is_absolute():
+            raise ValueError("PERSONA_CI_SOURCE_ROOT must be absolute")
+        return Path(configured)
+    return IMPLEMENTATION_ROOT
+
+
+ROOT = _source_root()
 WIRE = ROOT / "schema" / "wire"
 FIXTURES = ROOT / "spec" / "fixtures"
-GENERATOR = ROOT / "scripts" / "gen" / "extension_schema.py"
+GENERATOR = IMPLEMENTATION_ROOT / "scripts" / "gen" / "extension_schema.py"
 
-spec = importlib.util.spec_from_file_location("test_extension_schema", ROOT / "scripts/test/test_extension_schema.py")
+spec = importlib.util.spec_from_file_location("test_extension_schema", IMPLEMENTATION_ROOT / "scripts/test/test_extension_schema.py")
 ext = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ext)
 
@@ -52,12 +65,20 @@ def domain_cases(domain):
 
 
 def todo_views():
-    """(definition, sample) of every view todo-view expects, and every counts and places todo-counts expects."""
+    """(definition, sample) of every view todo-view expects, every counts and places todo-counts expects, and every
+    timeline, result and recap todo-rounds expects."""
     for where, c in domain_cases("todo-view"):
         yield "TodoSummary", f"{where}.expected.view", c["expected"]["view"]
     for where, c in domain_cases("todo-counts"):
         yield "TodoCounts", f"{where}.expected.counts", c["expected"]["counts"]
         yield "TodoPlaces", f"{where}.expected.places", c["expected"]["places"]
+    for where, c in domain_cases("todo-rounds"):
+        e = c["expected"]
+        yield "TodoTimeline", f"{where}.expected.timeline", e["timeline"]
+        for i, r in enumerate(e.get("results", [])):
+            yield "TodoResult", f"{where}.expected.results[{i}]", r
+        if "recap" in e:
+            yield "TodoRecap", f"{where}.expected.recap", e["recap"]
 
 
 SAMPLES = {"recents.schema.json": recent_setups, "todo-view.schema.json": todo_views}
