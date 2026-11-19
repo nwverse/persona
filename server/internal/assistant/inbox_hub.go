@@ -92,29 +92,29 @@ func (s *Service) inboxMailBody(ctx context.Context, ref assistantwire.InboxMail
 
 // connectorReply sends a reply (or a document's status moves) through connector source at the hub, once per sendID
 // ("": no such guard; inboxSent).
-func (s *Service) connectorReply(ctx context.Context, source string, r connector.InboxReply, sendID string) error {
+func (s *Service) connectorReply(ctx context.Context, source string, r connector.InboxReply, sendID string) (bool, error) {
 	var sent assistantwire.InboxSent
 	params := map[string]any{"source": source, "reply": r, "send_id": sendID}
 	if source == "larkcli" {
 		identity, err := s.outboundIdentity(ctx)
 		if err != nil {
-			return err
+			return false, err
 		}
 		params["sender_identity"] = identity
 	}
 	approval, automatic := ctx.Value(outboundApprovalKey{}).(outboundApproval)
 	if automatic && params["sender_identity"] != approval.Identity {
-		return i18n.Err("assistant-outbound.scope_changed")
+		return false, i18n.Err("assistant-outbound.scope_changed")
 	}
 	if automatic && approval.Kind == "standing_authorization" {
 		// Collection may have updated the item after its suggestion was checked.
 		// Authorize the actual recipient at the transport boundary, not the snapshot.
 		grant, err := s.messageGrant(ctx, source, messageTarget(r.Thread), approval.Scenario, approval.Identity)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if grant == nil || grant.ID != approval.ID {
-			return i18n.Err("assistant-outbound.scope_changed")
+			return false, i18n.Err("assistant-outbound.scope_changed")
 		}
 	}
 	if automatic || params["sender_identity"] == "user" {
@@ -122,7 +122,7 @@ func (s *Service) connectorReply(ctx context.Context, source string, r connector
 			SenderIdentity bool `json:"sender_identity"`
 		}
 		if err := s.appCall(ctx, AppInbox, assistantwire.InboxMessagePolicy, map[string]any{}, &policy); err != nil || !policy.SenderIdentity {
-			return errors.New("message not sent: upgrade the extension manager before using outward-message settings")
+			return false, errors.New("message not sent: upgrade the extension manager before using outward-message settings")
 		}
 	}
 	send := func() (bool, error) {
@@ -130,6 +130,7 @@ func (s *Service) connectorReply(ctx context.Context, source string, r connector
 		return sent.Already, err
 	}
 	var err error
+	var already bool
 	if automatic {
 		approval.Thread = r.Thread
 		params["sender_identity"] = approval.Identity
@@ -139,12 +140,12 @@ func (s *Service) connectorReply(ctx context.Context, source string, r connector
 			sendID = "auto-reply:" + namedClientID(source+"\n"+r.Thread+"\n"+r.Last+"\n"+approval.Identity)
 			params["send_id"] = sendID
 		}
-		err = s.auditedMessage(ctx, source, messageTarget(r.Thread), r.Text, sendID, approval, send)
+		already, err = s.auditedMessage(ctx, source, messageTarget(r.Thread), r.Text, sendID, approval, send)
 	} else {
-		_, err = send()
+		already, err = send()
 	}
 	s.inboxSent(sent, sendID)
-	return err
+	return already, err
 }
 
 // inboxSent notes a reply the hub had sent before under the same send id (a retry after the answer was lost): it is

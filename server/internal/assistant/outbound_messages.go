@@ -141,31 +141,33 @@ type outboundAuditStore interface {
 
 // Persist the complete attempt before contacting the transport. An unavailable
 // audit store stops an automatic send, rather than silently losing its evidence.
-func (s *Service) auditedMessage(ctx context.Context, source, target, text, sendID string, a outboundApproval, send func() (bool, error)) error {
+func (s *Service) auditedMessage(ctx context.Context, source, target, text, sendID string, a outboundApproval, send func() (bool, error)) (bool, error) {
 	st, ok := s.store().(outboundAuditStore)
 	if !ok {
-		return errors.New("outward messages need a persistent audit ledger")
+		return false, errors.New("outward messages need a persistent audit ledger")
 	}
 	attempt := "outbound-audit:" + sendID
 	state, err := st.ClaimSend(ctx, attempt, a.Machine, a.Session)
 	if err != nil {
-		return fmt.Errorf("message not sent: cannot claim audited attempt: %w", err)
+		return false, fmt.Errorf("message not sent: cannot claim audited attempt: %w", err)
 	}
 	if state != "" {
-		return errors.New("this message was already attempted; inspect its audit and destination before a manual retry")
+		return false, errors.New("this message was already attempted; inspect its audit and destination before a manual retry")
 	}
 	marshal := func(v any) json.RawMessage { raw, _ := json.Marshal(v); return raw }
 	through := map[string]string{"kind": a.Kind, "authorization_id": a.ID, "scenario": a.Scenario, "outcome": "pending"}
 	if a.Kind == "card" {
 		through["interaction_id"] = a.ID
 	}
-	id, err := st.RecordSentAsUser(ctx, db.SentAsUser{Connector: source, Action: "message_send", Text: text,
+	id, err := st.RecordSentAsUser(ctx, db.SentAsUser{Connector: source, Action: "message_send",
+		Text:       proto.WrittenText(marshal(map[string]string{"text": text}), connector.SentTextMost),
+		Summary:    clipRunesTo(oneLine(text), 300),
 		Target:     marshal(map[string]string{"chat": target, "thread": a.Thread, "identity": a.Identity}),
 		Origin:     marshal(map[string]string{"machine_id": a.Machine, "session_id": a.Session}),
 		LetThrough: marshal(through)})
 	if err != nil {
 		_ = st.SettleSend(ctx, attempt, "") // no transport call happened
-		return fmt.Errorf("message not sent: cannot persist audit: %w", err)
+		return false, fmt.Errorf("message not sent: cannot persist audit: %w", err)
 	}
 	already, err := send()
 	outcome := "sent"
@@ -177,19 +179,16 @@ func (s *Service) auditedMessage(ctx context.Context, source, target, text, send
 	saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
 	if saveErr := st.SetSentAsUserOutcome(saveCtx, id, outcome); saveErr != nil {
-		return fmt.Errorf("delivery may have occurred; audit %d is pending; inspect before retrying: %w", id, saveErr)
+		return false, fmt.Errorf("delivery may have occurred; audit %d is pending; inspect before retrying: %w", id, saveErr)
 	}
 	state = "delivered"
 	if err != nil {
 		state = "unknown" // even a known failure needs a deliberate, manual retry
 	}
 	if settleErr := st.SettleSend(saveCtx, attempt, state); settleErr != nil {
-		return fmt.Errorf("delivery may have occurred; inspect audit %d before retrying: %w", id, settleErr)
+		return false, fmt.Errorf("delivery may have occurred; inspect audit %d before retrying: %w", id, settleErr)
 	}
-	if err == nil && already {
-		return i18n.Err("assistant-outbound.already_delivered")
-	}
-	return err
+	return already, err
 }
 
 func messageTarget(thread string) string {
@@ -299,10 +298,13 @@ func (s *Service) toolMessageSend(ctx context.Context, machine, session string, 
 		defer s.standingMu.Unlock()
 	}
 	ctx = context.WithValue(ctx, outboundApprovalKey{}, a)
-	err = s.connectorReply(ctx, in.Channel, connectorMessage(in.Target, in.Text),
+	already, err := s.connectorReply(ctx, in.Channel, connectorMessage(in.Target, in.Text),
 		"outbound:"+namedClientID(machine+"\n"+session+"\n"+in.Key))
 	if err != nil {
 		return "", err
+	}
+	if already {
+		return "", i18n.Err("assistant-outbound.already_delivered")
 	}
 	return `{"sent":true}`, nil
 }

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
@@ -343,6 +344,88 @@ func TestOutboundAssistantToolUsesGrantAndSendOnce(t *testing.T) {
 	}
 }
 
+func TestOutboundAuditCapsTextWithoutTruncatingTransport(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		text string
+	}{
+		{"short", "An example update.\nAnother line."},
+		{"boundary", strings.Repeat("x", 4000)},
+		{"long_ascii", strings.Repeat("x", 16000)},
+		{"multibyte", strings.Repeat("\u754c", 4001)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, st, c, _ := outboundTestHub(t)
+			putMessageGrant(t, st, "assistant_message")
+			payload := map[string]string{
+				"channel": "larkcli", "target": "oc_example_group", "text": tc.text, "idempotency_key": "long-audit",
+			}
+			if _, err := h.toolMessageSend(context.Background(), "server", "s1", standingJSON(t, payload)); err != nil {
+				t.Fatal(err)
+			}
+			if len(c.got) != 1 || c.got[0].Text != tc.text {
+				t.Fatal("audit truncation changed the transport's full text")
+			}
+			if len(st.audit) != 1 {
+				t.Fatalf("audit rows = %d, want 1", len(st.audit))
+			}
+			row := st.audit[0]
+			runes := []rune(tc.text)
+			if !utf8.ValidString(row.Text) || row.Text != string(runes[:min(len(runes), 4000)]) {
+				t.Errorf("audit text has %d characters, want the first %d", utf8.RuneCountInString(row.Text), min(len(runes), 4000))
+			}
+			summary := []rune(oneLine(tc.text))
+			if row.Summary != string(summary[:min(len(summary), 300)]) {
+				t.Errorf("audit summary has %d characters, want a bounded single-line summary", utf8.RuneCountInString(row.Summary))
+			}
+		})
+	}
+}
+
+func TestOutboundInboxDuplicateSettlesSentAndFollowUp(t *testing.T) {
+	h, st, c, it := outboundTestHub(t)
+	ctx := context.Background()
+	text := "The example reply was already delivered."
+	reply := connector.InboxReply{Thread: it.Connector.Thread, ItemID: it.ID, Last: it.Last, Text: text}
+	sendID := "auto-reply:" + namedClientID(it.Source+"\n"+reply.Thread+"\n"+reply.Last+"\nbot")
+	// The extension kept the delivered ID, but the assistant lost its audit
+	// claim and Inbox bookkeeping before receiving the transport's answer.
+	if _, err := h.in.sendOnce(sendID, func() error {
+		return c.Reply(connector.WithSendIdentity(ctx, "bot"), reply)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	putMessageGrant(t, st, "inbox_reply")
+	if _, err := suggestTool(t, h, string(standingJSON(t, map[string]string{"kind": "reply", "text": text}))); err != nil {
+		t.Fatalf("delivered duplicate failed confirmation: %v", err)
+	}
+	if len(c.got) != 1 || len(c.identities) != 1 || c.identities[0] != "bot" {
+		t.Fatalf("duplicate resent or changed identity: sends=%d identities=%v", len(c.got), c.identities)
+	}
+	if len(st.audit) != 1 || !strings.Contains(string(st.audit[0].LetThrough), `"outcome":"already_delivered"`) {
+		t.Fatalf("duplicate lost its audit outcome: %+v", st.audit)
+	}
+	h.inbox.mu.Lock()
+	if it.Handling.State != HandlingWaiting || it.Agent.SentOf != it.Last || it.Follow == nil ||
+		it.Follow.CheckAt.IsZero() || currentSuggestion(it) != nil {
+		t.Errorf("delivered duplicate lost sent/waiting state: handling=%+v agent=%+v follow=%+v", it.Handling, it.Agent, it.Follow)
+	}
+	kinds := chainKinds(it)
+	if len(kinds) < 2 || kinds[len(kinds)-2] != ChainSent || kinds[len(kinds)-1] != ChainWaiting {
+		t.Errorf("delivered duplicate lost sent/waiting chain: %v", kinds)
+	}
+	h.inbox.mu.Unlock()
+	st.imu.Lock()
+	raw := append([]byte(nil), st.rows[it.ID]...)
+	st.imu.Unlock()
+	var saved InboxItem
+	if err := json.Unmarshal(raw, &saved); err != nil || saved.Handling == nil ||
+		saved.Handling.State != HandlingWaiting || saved.Agent == nil || saved.Agent.SentOf != it.Last || saved.Follow == nil {
+		t.Errorf("delivered duplicate did not persist sent/waiting state: %s / %v", raw, err)
+	}
+	toldConv(t, h, text)
+}
+
 func TestOutboundFailureNeverRetriesOrChangesIdentity(t *testing.T) {
 	h, st, c, _ := outboundTestHub(t)
 	putMessageGrant(t, st, "assistant_message")
@@ -477,7 +560,7 @@ func TestOutboundTransportRechecksTheActualScope(t *testing.T) {
 			ctx := context.WithValue(context.Background(), outboundApprovalKey{}, outboundApproval{
 				ID: g.ID, Kind: "standing_authorization", Scenario: "inbox_reply", Identity: "bot",
 			})
-			err := h.connectorReply(ctx, "larkcli", connectorMessage(target, "Do not send outside the checked scope."), "scope-race")
+			_, err := h.connectorReply(ctx, "larkcli", connectorMessage(target, "Do not send outside the checked scope."), "scope-race")
 			if err == nil || len(c.identities) != 0 || len(st.audit) != 0 {
 				t.Fatalf("changed %s escaped the final scope check: sends=%v audit=%+v err=%v", change, c.identities, st.audit, err)
 			}
