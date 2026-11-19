@@ -2102,6 +2102,8 @@ a follow-up's prompt (`injected.detail`, or the raw input) is never shown while 
 visible one; its block shows only the one-line `injected.line` (`ChatLine.hidesPrompt`). A round stays shown by exactly
 the supervision rule (`Supervision.visible`): a successful `ask_user` / `notify_user`, a pending live `ask_user`, an
 accepted / needs-user `task_review`, a `supervision_finish` receipt with user visibility, or `fold.supervision_user`.
+A completed round with a nonblank final reply also stays visible unless it successfully finished silent. The reply
+uses the usual bubble and the work stays collapsed. See `docs/assistant/assistant.md` "Background rounds".
 
 While folding is on, the main chat's Needs You tray groups task rows by the conversation that supervises them (the
 to-do's `origin`) when they come from more than one: the conversation's own group first without a header, then each

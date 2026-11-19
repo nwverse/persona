@@ -42,10 +42,16 @@ import PersonaWire
             filter: AgentFilter(rawValue: settings.text("quick") ?? "all") ?? .all,
             query: settings.text("query") ?? "", machine: machineFilter,
             preferences: preferences)
+        nativeSettings.searchScope = settings.text("search_scope").flatMap(AgentSearchScope.init(rawValue:)) ?? .all
+        nativeSettings.searchAsCode = settings["search_as_code"]?.bool ?? false
+        nativeSettings.harness = settings.text("harness_filter") ?? ""
+        nativeSettings.project = settings.text("project_filter") ?? ""
+        nativeSettings.model = settings.text("model_filter") ?? ""
+        nativeSettings.pinnedOnly = settings["pinned_only"]?.bool ?? false
         if let held = settings.text("held") { nativeSettings.held = SessionKey(path: held) }
         nativeSettings.kept = Set((settings["kept"]?.array?.compactMap(\.string) ?? []).compactMap(SessionKey.init(path:)))
         // These shared fixtures predate multi-pane rows. They describe the underlying session order, not a tab-card UI.
-        let sessions = try (input["sessions"]?.array ?? []).map(session)
+        let sessions = try (input["native_sessions"]?.array ?? input["sessions"]?.array ?? []).map(session)
         let native = AgentListProjection.Input(sessions: sessions, machines: machines, settings: nativeSettings)
         var presentation = AgentSortPresentation()
         presentation.folded = Set(settings["folded"]?.array?.compactMap(\.string) ?? [])
@@ -215,6 +221,85 @@ import PersonaWire
         #expect(reports.map(\.rule) == ["summary-compared-1-mismatches-0"])
     }
 
+    @Test func shadowComparesScopedComposableFiltersThroughTheRealCABI() async throws {
+        let machine = try JSON.decoder.decode(Machine.self, from: Data(#"{"id":"m","name":"Build Mac","kind":"local","online":true}"#.utf8))
+        let claude = try session(.object([
+            "machine_id": .string("m"), "session_id": .string("claude"), "title": .string("Needle"),
+            "cwd": .string("/code/persona"), "repo_root": .string("/code/persona"), "state": .string("working"),
+            "status": .string("idle"), "agent": .string("claude"), "model": .string("claude-opus-5"),
+        ]))
+        let codex = try session(.object([
+            "machine_id": .string("m"), "session_id": .string("codex"), "title": .string("Needle"),
+            "cwd": .string("/code/persona"), "repo_root": .string("/code/persona"), "state": .string("working"),
+            "status": .string("idle"), "agent": .string("codex"), "model": .string("gpt-5"),
+        ]))
+        var settings = AgentListProjection.Settings(grouping: "state", query: "needle")
+        settings.searchScope = .title
+        settings.harness = "claude"
+        settings.project = "persona"
+        settings.model = "opus"
+        settings.pinnedOnly = true
+        settings.preferences[""] = .init(pins: Pins(), mutes: Pins())
+        settings.preferences[""]!.pins.sessions = ["m/claude", "m/codex"]
+        let input = AgentListProjection.Input(sessions: [claude, codex], machines: [machine], settings: settings)
+        #expect(AgentListProjection.build(input).base.map(\.sessionID) == ["claude"])
+        let recorder = Recorder()
+        let shadow = AgentSortShadow(report: { value in Task { await recorder.report(value) } })
+        shadow.submit(input)
+        try await recorder.waitForSummary()
+        let reports = await recorder.reports
+        #expect(reports.map(\.rule) == ["summary-compared-1-mismatches-0"])
+    }
+
+    private func codeSubtaskInput() throws -> AgentListProjection.Input {
+        let machine = try JSON.decoder.decode(Machine.self, from: Data(#"{"id":"m","name":"Build Mac","kind":"local","online":true}"#.utf8))
+        let parent = try session(.object([
+            "machine_id": .string("m"), "session_id": .string("parent"), "title": .string("Parent"),
+            "cwd": .string("/code/plain"), "state": .string("working"), "status": .string("idle"),
+            "agent": .string("codex"), "source_kind": .string("codex_history"), "source_thread_id": .string("parent"),
+        ]))
+        let child = try session(.object([
+            "machine_id": .string("m"), "session_id": .string("child"), "title": .string("Failed"),
+            "cwd": .string("/code/plain"), "state": .string("working"), "status": .string("idle"),
+            "agent": .string("codex"), "source_kind": .string("codex_history"), "source_thread_id": .string("child"),
+            "is_subagent": .bool(true), "parent_session_id": .string("parent"), "turn_error": .string("Failed child"),
+            "goal": .object(["objective": .string("Needle objective"), "status": .string("active")]),
+        ]))
+        var settings = AgentListProjection.Settings(grouping: "state", query: "failed needle")
+        settings.searchScope = .user
+        settings.searchAsCode = true
+        return AgentListProjection.Input(sessions: [parent, child], machines: [machine], settings: settings)
+    }
+
+    @Test func shadowComparesCodeModeAndSubtaskSummaryEvidenceThroughTheRealCABI() async throws {
+        let input = try codeSubtaskInput()
+        #expect(AgentListProjection.build(input).base.map(\.sessionID) == ["parent"])
+        let encoded = try AgentSortProjectionAdapter.coreInput(input)
+        let object = try #require(JSONSerialization.jsonObject(with: Data(encoded.utf8)) as? [String: Any])
+        let encodedSettings = try #require(object["settings"] as? [String: Any])
+        #expect(encodedSettings["search_as_code"] as? Bool == true)
+        let encodedSessions = try #require(object["sessions"] as? [[String: Any]])
+        let encodedSubtasks = try #require(encodedSessions.first?["search_subtasks"] as? [[String: Any]])
+        #expect(encodedSubtasks.map { $0["session_id"] as? String } == ["child"])
+        let recorder = Recorder()
+        let shadow = AgentSortShadow(report: { value in Task { await recorder.report(value) } })
+        shadow.submit(input)
+        try await recorder.waitForSummary()
+        let reports = await recorder.reports
+        #expect(reports.map(\.rule) == ["summary-compared-1-mismatches-0"])
+    }
+
+    @Test func productionAdapterKeepsExtendedSearchOnTheSwiftProjection() throws {
+        let input = try codeSubtaskInput()
+        let expected = AgentListProjection.build(input)
+        let actual = AgentSortProjectionAdapter().build(input)
+        #expect(actual.base == expected.base)
+        #expect(actual.filtered == expected.filtered)
+        #expect(actual.pinnedAgents == expected.pinnedAgents)
+        #expect(actual.unread == expected.unread)
+        #expect(actual.taskMatches.mapValues { $0.map(\.id) } == expected.taskMatches.mapValues { $0.map(\.id) })
+    }
+
     @Test func shadowRunsOffMainCoalescesAndNeverLeaksContent() async throws {
         let recorder = Recorder()
         let gate = Gate()
@@ -314,6 +399,27 @@ import PersonaWire
         let core = try AgentSortComparable(core: JSONDecoder().decode(AgentSortCoreProjection.self, from: Data(PersonaCoreProjections.sort(inputJSON: json).utf8)), input: input)
         #expect(core.filtered == ["m/recent"])
         #expect(AgentSortComparable.differences(native: AgentSortComparable(native: input, now: now), core: core) == [])
+    }
+
+    @Test func searchAsCodeCapturesTheInferredWindowReference() throws {
+        let updated = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-3600))
+        let recent = try session(.object([
+            "machine_id": .string("m"), "session_id": .string("recent"), "title": .string("24h needle"),
+            "state": .string("working"), "status": .string("idle"), "updated_at": .string(updated),
+        ]))
+        var settings = AgentListProjection.Settings(grouping: "state", query: "24h needle")
+        settings.searchAsCode = true
+        let input = AgentListProjection.Input(sessions: [recent], machines: [], settings: settings)
+        let cache = AgentListProjectionCache()
+        let key = AgentListProjectionCache.Key(revision: 1, partitions: [], settings: settings)
+        _ = cache.resolve(key, immediate: true, input: { input }, valid: { _ in true }, canPublish: { _ in true }, willPublish: {})
+        let shadow = try #require(cache.shadowValue)
+        #expect(shadow.now != nil)
+        #expect(shadow.projection.filtered.map(\.sessionID) == ["recent"])
+        let json = try AgentSortProjectionAdapter.coreInput(shadow.input, now: shadow.now)
+        let core = try AgentSortComparable(core: JSONDecoder().decode(AgentSortCoreProjection.self, from: Data(PersonaCoreProjections.sort(inputJSON: json).utf8)), input: shadow.input)
+        #expect(core.filtered == ["m/recent"])
+        #expect(AgentSortComparable.differences(native: AgentSortComparable(native: shadow.input, projection: shadow.projection, now: shadow.now), core: core) == [])
     }
 
     @Test func realTabRowsAndFoldedChildrenCompareThroughTheCABI() throws {

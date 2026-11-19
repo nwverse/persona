@@ -42,6 +42,13 @@ export const BADGE_TONE: Record<UITone, "red" | "orange" | "green" | "accent"> =
 /** Where an extension's page opens: its own route (a nav_page, or a plugin_page a card opens). */
 export const pageRoute = (extension: string, ui: string): Route => ({ name: "extension", extension, ui });
 
+/** The extension's name where it is written beside a place's title (a page's top bar, an Overview card's and a
+ *  machine section's heading): nothing when it only says the title again ("Example Example", #3115, #10940), compared
+ *  without case and the spaces around it. */
+export function nameBesideTitle(name: string | undefined, title: string): string | undefined {
+  return name && name.trim().toLowerCase() !== title.trim().toLowerCase() ? name : undefined;
+}
+
 /** An extension's page, full size (a nav_page opened from the sidebar, or what a card opens). */
 export function ExtensionNavPage({ extension, ui, onToggleSidebar }: { extension: string; ui: string; onToggleSidebar: () => void }) {
   const place = useExtensionPlace(extension, ui);
@@ -49,9 +56,8 @@ export function ExtensionNavPage({ extension, ui, onToggleSidebar }: { extension
   // a page a card or a section pushed opens here with the state it was pushed with (?state=)
   const state = useMemo(() => new URLSearchParams(location.search).get("state") ?? undefined, [extension, ui]);
   const title = place?.title || ui;
-  // the extension's name after the title, unless it only says the title again ("Example Example", #3115)
-  const name = place?.extension_name;
-  const showName = !!name && name.trim().toLowerCase() !== title.trim().toLowerCase();
+  // the extension's name after the title, unless it only says the title again
+  const name = nameBesideTitle(place?.extension_name, title);
   // a code review or a file browser (UI version 4) and a dashboard of columns (8) take the page's whole width; everything
   // else stays a column
   const [wide, setWide] = useState(false);
@@ -63,7 +69,7 @@ export function ExtensionNavPage({ extension, ui, onToggleSidebar }: { extension
           <Icon name={navIcon(place?.icon)} size={14} />
         </span>
         <h1 className="min-w-0 truncate text-[14px] font-semibold text-ink">{title}</h1>
-        {showName && <span className="hidden min-w-0 truncate text-[12px] text-ink-3 sm:inline">{name}</span>}
+        {name && <span className="hidden min-w-0 truncate text-[12px] text-ink-3 sm:inline">{name}</span>}
         <span className="flex-1" />
         <IconButton icon="retry" label={t("extensions-extensionslots.redraw")} onClick={() => setN((x) => x + 1)} />
       </header>
@@ -129,6 +135,8 @@ function OverviewCard({ place, i, span = "half", hidden = false, edit }: { place
   const [entered, setEntered] = useState(false);
   const context = useMemo(() => ({ size: "compact" as const }), []);
   const to = place.opens ? pageRoute(place.extension, place.opens) : null;
+  // whose card it is, unless its title already is that name
+  const name = nameBesideTitle(place.extension_name, place.title);
   if (gone) return null;
   // the whole card opens the page; a button, a row or the chart inside it keeps its own click
   const open = (e: React.MouseEvent) => {
@@ -148,7 +156,7 @@ function OverviewCard({ place, i, span = "half", hidden = false, edit }: { place
       ) : (
         <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink">{place.title}</span>
       )}
-      {place.extension_name && <span className="max-w-[45%] shrink-0 truncate text-[11px] text-ink-3">{place.extension_name}</span>}
+      {name && <span data-extension-name className="max-w-[45%] shrink-0 truncate text-[11px] text-ink-3">{name}</span>}
     </div>
   );
   return (
@@ -207,15 +215,16 @@ export function MachineExtensionSections({ mid, heading }: { mid: string; headin
 function MachineSection({ place, mid, manager, heading }: { place: UIPlace; mid: string; manager?: string; heading: (title: string, right?: React.ReactNode) => React.ReactNode }) {
   const [gone, setGone] = useState(false);
   const context = useMemo(() => ({ machine: mid }), [mid]);
+  const name = nameBesideTitle(place.extension_name, place.title);
   if (gone) return null;
   return (
     <section data-extension-section={`${place.extension}/${place.id}`}>
       {heading(
         place.title,
-        place.extension_name && (
-          <span className="flex min-w-0 items-center gap-1 text-[11.5px] text-ink-3">
+        name && (
+          <span data-extension-name className="flex min-w-0 items-center gap-1 text-[11.5px] text-ink-3">
             <Icon name="extension" size={11} className="shrink-0" />
-            <span className="truncate">{place.extension_name}</span>
+            <span className="truncate">{name}</span>
           </span>
         ),
       )}
