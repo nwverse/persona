@@ -1,11 +1,15 @@
 package persona.core.hub
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.StateFlow
 import okhttp3.HttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import persona.core.contracts.HeldAgentMessage
 import persona.core.contracts.SessionKey
 import persona.core.contracts.api.AgentMessageHoldFeature
 import persona.core.contracts.api.HeldAgentActions
@@ -14,13 +18,35 @@ import persona.core.contracts.api.HeldAgentActions
 class HttpHeldAgentActions(
     private val session: SessionKey,
     override val features: StateFlow<Set<String>>,
+    private val receipts: HeldAgentRetryReceipts,
+    private val pairingScope: CoroutineScope,
     private val request: suspend (String, String, RequestBody?) -> Response,
     private val completed: suspend (String, Boolean) -> Unit,
 ) : HeldAgentActions {
-    override suspend fun retry(id: String) = act(id, retry = true)
-    override suspend fun cancel(id: String) = act(id, retry = false)
+    override fun canRetry(row: HeldAgentMessage) = receipts.canRetry(session, row)
 
-    private suspend fun act(id: String, retry: Boolean) {
+    override suspend fun retry(row: HeldAgentMessage) = pairingScope.async {
+        require(AgentMessageHoldFeature in features.value && row.id.isNotBlank() && !row.computer.isNullOrBlank() &&
+            row.state == "failed" && !row.deleteOnly)
+        if (!receipts.claim(session, row)) return@async
+        val present = try {
+            act(row.id, retry = true)
+        } catch (e: CancellationException) {
+            // If the pairing closes after dispatch, the outcome may already be committed.
+            throw e
+        } catch (e: Exception) {
+            receipts.release(session, row)
+            throw e
+        }
+        completed(row.id, present)
+    }.await()
+
+    override suspend fun cancel(id: String) {
+        act(id, retry = false)
+        completed(id, false)
+    }
+
+    private suspend fun act(id: String, retry: Boolean): Boolean {
         require(id.isNotBlank() && AgentMessageHoldFeature in features.value)
         val path = HttpUrl.Builder().scheme("https").host("example.com").addPathSegments("api/v1/sessions")
             .addPathSegment(session.machineId).addPathSegment(session.sessionId).addPathSegment("held").addPathSegment(id)
@@ -32,9 +58,8 @@ class HttpHeldAgentActions(
             }
         } catch (failure: HubFailure) {
             if (failure.status != 404) throw failure
-            completed(id, false)
-            return
+            return false
         }
-        completed(id, retry)
+        return true
     }
 }
