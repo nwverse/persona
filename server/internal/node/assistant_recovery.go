@@ -148,9 +148,13 @@ func assistantRecoverableError(failed bool, result string, limitWords bool) bool
 		strings.Contains(t, "too many requests") || assistantServerError.MatchString(t)
 }
 
-// assistantSafeguardsRefusal: the provider's safeguards refused the turn.
+// assistantSafeguardsRefusal: the provider's safeguards refused the turn. Newer CLIs do not name the safeguard: they
+// stop on a frontier model's refusal and tell the user to start a new session, the refused prompt being stuck in the
+// resumed context.
 func assistantSafeguardsRefusal(result string) bool {
-	return strings.Contains(strings.ToLower(result), "safeguards flagged")
+	t := strings.ToLower(result)
+	return strings.Contains(t, "safeguards flagged") ||
+		strings.Contains(t, "can't help with this") && strings.Contains(t, "start a new session to continue")
 }
 
 // assistantModelUnavailable: the model asked for does not exist there, or this account cannot use it (Claude Code's
@@ -206,7 +210,7 @@ func assistantRecoverable(failed bool, result string, kinds []string) bool {
 		case proto.TurnErrorUsageLimit:
 			return false
 		case proto.TurnErrorUser:
-			if !strings.Contains(strings.ToLower(result), "safeguards flagged") {
+			if !assistantSafeguardsRefusal(result) {
 				return false
 			}
 		}
@@ -304,10 +308,10 @@ func (n *Node) recoverAssistantResult(p *assistantProc, failed bool, result stri
 // That identity check prevents a result delayed by process replacement from restarting a turn the user has cancelled.
 func (n *Node) recoverAssistantResultFor(p *assistantProc, expected *assistantTurnRecovery, failed bool, result string, kinds ...string) bool {
 	if failed && (modelretry.Temporary(result) || modelretry.Permanent(result) || slices.Contains(kinds, assistantModelServiceFailure) || len(kinds) > 0 && kinds[0] == proto.TurnErrorTransient) &&
-		!assistantSafeguardsRefusal(result) && !assistantModelUnavailable(result) && !assistantwire.ToolSearchRefused(result) {
+		!assistantSafeguardsRefusal(result) && !assistantModelUnavailable(result) && !assistantwire.ToolSearchRefused(result) && ModelRecoveryReason(result) != proto.ModelRecoveryReasonQuota {
 		// Publish the stopped turn to the manager's durable due-wake scheduler.
-		// Keep the existing unavailable-model, safeguards and tool-search recovery
-		// paths out of this new scheduler; they have their own bounded recovery contracts.
+		// Keep the existing unavailable-model, safeguards, tool-search and gateway-
+		// quota recovery paths out of this scheduler; they have their own contracts.
 		return false
 	}
 	if proto.IsExternalLauncher(p.launcher) {

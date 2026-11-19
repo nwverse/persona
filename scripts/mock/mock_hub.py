@@ -54,7 +54,7 @@ def features():
     return ["error_codes", "client_hello", "heartbeat", "app_ping", "client_msg_id", "send_refusals",
             "screen_dialog", "resumable_interactions", "secret_prompts", "request_id", "file_upload", "upload_attachment",
             "tls", "endpoints", "connectors", "lark_attachments", "file_stream", "file_thumb", "git_blob", "task_push", "task_inbox",
-            "machine_rename"] + ([] if os.environ.get("MOCK_MANAGERS") == "0" else ["sessions_manager"]) + (["git_write"] if os.environ.get("MOCK_GIT_WRITE") and os.environ.get("MOCK_GIT_WRITE_FEATURE") != "0" else []) + (["git_review"] if os.environ.get("MOCK_REVIEW") else []) + (["terminal_stream"] if TERMINAL_STREAM else []) + (
+            "machine_rename"] + ([] if os.environ.get("MOCK_MANAGERS") == "0" else ["sessions_manager"]) + (["git_write"] if os.environ.get("MOCK_GIT_WRITE") and os.environ.get("MOCK_GIT_WRITE_FEATURE") != "0" else []) + (["git_review"] if os.environ.get("MOCK_REVIEW") else []) + (["session_review"] if os.environ.get("MOCK_AGENT_REVIEW") else []) + (["terminal_stream"] if TERMINAL_STREAM else []) + (
                 ["terminal_control", "terminal_scroll", "terminal_click", "terminal_mouse"] if TERMINAL_CONTROL else []) + (
                 ["terminal_panes", "pane_new_space"] if os.environ.get("MOCK_TERMINAL_PANES") else []) + (["herdr_client"] + ([] if os.environ.get("MOCK_TERMINAL_FULL_NOFOCUS") else ["herdr_focus"]) if TERMINAL_FULL else []) + (
                 ["assistant_compact", "assistant_main_new", "assistant_main_clear"] if os.environ.get("MOCK_MAIN_ACTIONS") == "1" else []) + (
@@ -904,6 +904,13 @@ if os.environ.get("MOCK_BYPASS_AVAILABLE") == "1":
 # agent waits until it is idle) the "restart" comes up in it, with bypass_available. Any other mode drops it: the mode it
 # runs in calls it off (cancelled, #11089), another replaces it.
 BYPASS_RESTART_SECONDS = float(os.environ.get("MOCK_BYPASS_RESTART_SECONDS") or 6)
+
+# MOCK_BYPASS_PENDING=1 (#6513): the widget agent (working, in Auto-Edit) already has Allow All picked and waits for its
+# turn to end before the restart (bypass_pending), so the apps' pending state can be screenshotted without a pick. It
+# stays pending: the restart above never runs for it.
+if os.environ.get("MOCK_BYPASS_PENDING") == "1":
+    for _s in SESSIONS:
+        if _s["session_id"] == WIDGET: _s["bypass_pending"] = True
 
 
 # The machine's record of permission mode changes (#10297, GET /api/v1/sessions/{mid}/{sid}/mode-changes): what /modes
@@ -10746,6 +10753,8 @@ def mock_interactions():
     with REQUEST_LOCK:
         seen = {x["id"] for x in INTERACTIONS}
         out = list(INTERACTIONS) + [x for x in MOCK_INTERACTIONS if x["id"] not in seen]
+        if AGENT_REVIEW and (review_card := mock_agent_review.card()) is not None and review_card["id"] not in seen:
+            out.append(review_card)
         # MOCK_TASKS_NO_ASKS=1: the tasks' agents ask nothing, so the conversation shows above the composer whole.
         if os.environ.get("MOCK_TASKS_NO_ASKS") == "1":
             out = [x for x in out if x.get("session_id") not in (TESTS, WIDGET, RELEASE)]
@@ -10993,6 +11002,8 @@ def renew_requests(minutes):
 def resolve_mock_interaction(request_id, resolution):
     with REQUEST_LOCK:
         request = next((r for r in mock_interactions() if r["id"] == request_id), None)
+        if AGENT_REVIEW and request_id.startswith("review_"):
+            mock_agent_review.note_answer(resolution)
         if request is not None:
             for lst in (MOCK_INTERACTIONS, INTERACTIONS):
                 lst[:] = [x for x in lst if x["id"] != request_id]
@@ -21035,6 +21046,10 @@ MOCK_REPO = "code/weather"
 # MOCK_REVIEW=1 (#151): git/review answers for this checkout (mock_review.py), with the files its review shows on disk.
 # Not `REVIEW`: that is the PR #42 review agent's session id, which later code (MOCK_AGENT_LIVE, MOCK_IMAGES…) still uses.
 GIT_REVIEW = bool(os.environ.get("MOCK_REVIEW"))
+AGENT_REVIEW = bool(os.environ.get("MOCK_AGENT_REVIEW"))
+if AGENT_REVIEW:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import mock_agent_review
 if GIT_REVIEW:
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import mock_review
@@ -25329,6 +25344,8 @@ def markets_route(handler, p, body):
                     "placement": "nav_page", "size": "full", "icon": "gauge"}]
         if GRAPH_MODE and placement in ("", "nav_page"):
             ui += [{"plugin": "example-work", "plugin_name": "Example Work", "id": "work", "title": "Work",
+                    "placement": "nav_page", "size": "full", "icon": "branch"},
+                   {"plugin": "example-work", "plugin_name": "Example Work", "id": "control-room", "title": "Control room",
                     "placement": "nav_page", "size": "full", "icon": "branch"}]
         if GRAPH_MODE and placement in ("", "overview_card"):
             ui += [{"plugin": "example-work", "plugin_name": "Example Work", "id": "work-card", "title": "Work",
@@ -26452,6 +26469,8 @@ class H(BaseHTTPRequestHandler):
             return self.send_json({"ok": True, "sent": fs_changed(mid, [path] if add else [], git), "path": path})
         if p == "/mock/review" and GIT_REVIEW:
             return self.send_json(mock_review.control(q))
+        if p == "/mock/agent-review" and AGENT_REVIEW:
+            return self.send_json(mock_agent_review.control(q))
         if p == "/mock/git-write" and os.environ.get("MOCK_GIT_WRITE"):
             global GIT_W
             if q.get("reset"): GIT_W = git_write_fresh()
@@ -26722,6 +26741,9 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/v1/interactions":
             HELLO["request_client"] = self.headers.get("X-Persona-Client")
             return self.send_json({"interactions": out_by_machine(mock_interactions())})
+        review_match = AGENT_REVIEW and re.fullmatch(r"/api/v1/sessions/([^/]+)/([^/]+)/review", p)
+        if review_match:
+            return self.send_json(mock_agent_review.state())
         if p == "/api/v1/fleet":
             return self.send_json({"fleet": mock_fleet() if MOCK_FLEET else {"phase": "", "needsYou": 0, "working": 0, "unread": 0, "items": []}})
         if p == "/api/v1/interactions/history":
@@ -29231,6 +29253,10 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/v1/bots/feishu/test": return self.send_json({"ok": True})
         if p.startswith("/api/v1/interactions/") and p.endswith("/reanswer") and p.count("/") == 5:
             return self.send_json(*mock_reanswer(p.split("/")[4], json.loads(self.last_body or b"{}")))
+        review_match = AGENT_REVIEW and re.fullmatch(r"/api/v1/sessions/([^/]+)/([^/]+)/review", p)
+        if review_match:
+            body, status = mock_agent_review.start(review_match[1], review_match[2])
+            return self.send_json(body, status)
         if p.startswith("/api/v1/interactions/") and p.endswith("/resolve"):  # notification buttons (UI test reads it back)
             # MOCK_RESOLVE=slow holds every answer for 6 s before it goes through; =fail refuses it with a 400 (nothing is
             # resolved): an answer being sent, and one that failed (#6279). GET /mock/resolve-mode?mode=ok|slow|fail switches it.
@@ -30686,6 +30712,8 @@ def plugins_route(handler, p, body):
     if PLUGINS_MODE and GRAPH_MODE and p in ("/api/v1/extensions/example-work/-/ui/work",
                                              "/api/v1/extensions/example-work/-/ui/work-card"):
         return mock_work(handler, body, card=p.endswith("-card"))
+    if PLUGINS_MODE and GRAPH_MODE and p == "/api/v1/extensions/example-work/-/ui/control-room":
+        return mock_control_room(handler, body)
     if PLUGINS_MODE and p == "/api/v1/extensions/showcase/-/ui/motion":
         handler.send_json({"view": _motion_view(_MOTION_STEP[0])})
         return True
@@ -30946,6 +30974,82 @@ def mock_work(handler, body, card=False):
     if card:
         view = {"title": "Work", "sections": [{"key": "work", "items": [_work_graph(_WORK_DRAWS[0])]}]}
     handler.send_json({"view": view})
+    return True
+
+
+# MOCK_EXTENSION_GRAPH=1, the "control room" page (#11234): a made-up parallel workflow with the inspector and timeline
+# fields in full — one root, a Plan, a Parallel Sweep fanning out to thirty workers and three grouped candidates, and a
+# Verify stage with its verifier. The timestamps span the last eighteen minutes and two workers are still running (no
+# ended_at), so the wall-clock timeline draws a real fan-out with stragglers; the verifier, still running with its
+# feedback, is selected and carries facts and session links. Thirty-eight nodes, all names invented, every URL a
+# placeholder host. Tapping a node pushes its own page, as on the Work page.
+def _control_room_graph():
+    now = int(time.time())
+    base = now - 18 * 60
+    nodes, edges = [], []
+
+    def add(nid, title, parent=None, at=0, **extra):
+        nodes.append({"id": nid, "title": title, "started_at": base + at, **extra,
+                      "action": {"id": "open", "values": {"id": nid}, "push": {"ui": "work", "state": nid}}})
+        if parent:
+            edges.append({"from": parent, "to": nid})
+
+    add("root", "Ship the billing release", subtitle="3 stages · 36 steps", icon="list",
+        badge={"text": "Running", "tone": "caution"}, tone="caution", progress=0.62,
+        facts=[{"label": "Owner", "value": "Dev box"}, {"label": "Attempts", "value": "2"}],
+        detail="Three stages run at once; the verifier reviews both attempts before sign-off.")
+    add("plan", "Plan", "root", at=0, ended_at=base + 95, icon="list", tone="positive",
+        badge={"text": "Done", "tone": "positive"})
+    add("sweep", "Parallel Sweep", "root", at=70, icon="branch", tone="caution",
+        badge={"text": "Running", "tone": "caution"}, progress=0.5,
+        detail="Thirty workers and three candidate fixes sweep the flaky checkout path together.")
+    add("verify", "Verify", "root", at=95, icon="check", badge={"text": "Reviewing", "tone": "caution"},
+        detail="Two attempts are compared; the faster one moves on.")
+    for i in range(1, 31):
+        nid = f"w{i:02d}"
+        started = 140 + (i - 1) * 26
+        running = i in (27, 30)
+        extra = {
+            "icon": "list",
+            "subtitle": "Checkout retry path",
+            "facts": [{"label": "Files", "value": str(2 + i % 5)}, {"label": "Tests", "value": "passing" if i % 7 else "1 failing"}],
+        }
+        if running:
+            extra.update(tone="caution", badge={"text": "Running", "tone": "caution"}, progress=0.45)
+        elif i == 14:
+            extra.update(tone="danger", badge={"text": "Failed", "tone": "danger"},
+                         detail="Retries storm past 40 in one second; the backoff is capped too low.")
+        else:
+            extra.update(tone="positive", badge={"text": "Done", "tone": "positive"})
+            extra["ended_at"] = base + started + 55 + (i * 7) % 70
+        add(nid, f"Worker {i:02d}", "sweep", at=started, **extra)
+    for i in range(1, 4):
+        add(f"c{i}", f"Candidate {i}", "sweep", at=330 + i * 40, group="Candidates", icon="branch", tone="caution",
+            badge={"text": "Candidate", "tone": "caution"}, subtitle="Same task, a different way",
+            detail=f"Attempt {i} narrows the retry window instead of widening it.")
+    add("v1", "Verifier", "verify", at=now - base - 130, icon="check", tone="danger",
+        badge={"text": "Blocked", "tone": "danger"}, progress=0.7,
+        subtitle="Reviews both attempts",
+        facts=[{"label": "Attempt 1", "value": "fails on retries"}, {"label": "Attempt 2", "value": "still running"},
+               {"label": "Verdict", "value": "waiting"}],
+        detail="Attempt 1 fails on the retry storm; attempt 2 is still running. Sign-off waits for it.")
+    nodes[-1]["links"] = [
+        {"title": "Attempt 1 · Work session", "url": "https://hub.example.com/s/dev-box/session-work-1"},
+        {"title": "Attempt 1 · Verifier session", "url": "https://hub.example.com/s/dev-box/session-verify-1"},
+        {"title": "Attempt 2 · Work session", "url": "https://hub.example.com/s/dev-box/session-work-2"}]
+    return {"type": "graph", "key": "control-room", "nodes": nodes, "edges": edges, "selected": "v1"}
+
+
+def mock_control_room(handler, body):
+    request = json.loads(body) if body else {}
+    node = (request.get("values") or {}).get("id") if request.get("action") == "open" else None
+    if node:
+        handler.send_json({"view": _work_view(0, node)})
+        return True
+    handler.send_json({"view": {"title": "Control room", "refresh_after": 30, "sections": [{"key": "control-room", "items": [
+        {"type": "header", "title": "Ship the billing release", "subtitle": "3 stages · 38 nodes · 2 running",
+         "badges": [{"text": "Running", "tone": "caution"}]},
+        _control_room_graph()]}]}})
     return True
 
 

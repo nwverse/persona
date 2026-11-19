@@ -1,7 +1,7 @@
 // Skill-aware second stage of the / palette, loaded only after the palette opens.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { imeKey, type ImeState } from "../../lib/ime";
 import { rankCommands } from "../../lib/composer-commands";
+import { imeKey, type ImeState } from "../../lib/ime";
 import type { ComposerCommand as Command } from "../../lib/extension-prompts";
 import type { MentionSkill } from "../../lib/skill-mentions";
 import { SkillDetail, SkillRow } from "./SkillRow";
@@ -43,8 +43,8 @@ export function SlashSkillPalette(input: SlashPaletteInput) {
     input.onPick(skill ? { kind: "skill", id: `skill:${skill.id}`, skill } : row);
   };
   // the listener below reads the list as it is now, so it is added once per composer, not again on every render
-  const latest = useRef({ entries, current, pick, onHover: input.onHover });
-  latest.current = { entries, current, pick, onHover: input.onHover };
+  const latest = useRef({ entries, current, pick, select });
+  latest.current = { entries, current, pick, select };
   // Capture inside this composer, before its special /model and /permissions handling. Commands fall through to it;
   // arrows and a highlighted skill are handled here across the combined list.
   const within = input.within;
@@ -62,7 +62,7 @@ export function SlashSkillPalette(input: SlashPaletteInput) {
     const out = () => { own.current.active = false; };
     const key = (e: KeyboardEvent) => {
       if (imeKey(e, ime.current)) return;
-      const { entries, current, pick, onHover } = latest.current;
+      const { entries, current, pick, select } = latest.current;
       // a plain Enter picks; Shift+Enter and Alt+Enter stay a new line, Mod+Enter sends
       const pickEnter = e.key === "Enter" && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey;
       if ((e.key === "ArrowDown" || e.key === "ArrowUp") && entries.length) {
