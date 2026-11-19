@@ -603,12 +603,6 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			id = newUUID()
 		}
 	}
-	// A later message names no folder (session.send, a supervision round, a recovery): the conversation runs where it
-	// ran before, its own manager's assistant directory, and is recorded there below. Resolved after the origin was
-	// written, the record got "" and the conversation of another manager moved to the built-in one's (#11047).
-	if cwd == "" {
-		cwd = n.storedCwd(st.Cwd)
-	}
 	if id != "" && (origin != "" || resume && originKnown) {
 		// A Claude process can discover MCP as soon as it starts. Persist the origin before spawning it so even that
 		// first request is classified as this conversation, not as an ordinary Agent with the same session id. An
@@ -629,6 +623,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		}
 	}
 	timing.mark("preflight_done", true)
+	if cwd == "" {
+		cwd = n.storedCwd(st.Cwd)
+	}
 	selectionSession := id
 	if !resume {
 		selectionSession = "" // a newly allocated Claude id has no resumable profile yet

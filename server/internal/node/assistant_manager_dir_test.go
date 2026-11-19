@@ -62,7 +62,7 @@ func TestAssistantLaterMessagesKeepManagerDir(t *testing.T) {
 				// The folder is what this test is about. Each message attests its own origin (#11170): a later one
 				// that names none records none, wherever it runs.
 				st, ok := n.state.get(id)
-				if !ok || st.Cwd != dir || round == "first message" && st.Origin != tc.origin {
+				if !ok || st.Cwd != dir || st.Origin != tc.origin {
 					t.Fatalf("%s: recorded cwd=%q origin=%q, want %q %q", round, st.Cwd, st.Origin, dir, tc.origin)
 				}
 				if p := f.proc(id); p == nil || p.cwd != dir {
@@ -86,9 +86,17 @@ func TestAssistantLaterMessagesKeepManagerDir(t *testing.T) {
 					}
 				}
 			}
+			// A later message of the thread carries the origin the extension attests for it, as the first did (#11170).
+			later := func(text string) map[string]any {
+				p := map[string]any{"session_id": id, "text": text}
+				if tc.origin != "" {
+					p["origin"] = tc.origin
+				}
+				return p
+			}
 			check("first message", 1)
 			// Continued: the next message of the thread goes to the running process.
-			if _, err := nodeCall(t, n, "session.send", map[string]any{"session_id": id, "text": "second"}); err != nil {
+			if _, err := nodeCall(t, n, "session.send", later("second")); err != nil {
 				t.Fatal(err)
 			}
 			f.idle(t, id)
@@ -98,7 +106,7 @@ func TestAssistantLaterMessagesKeepManagerDir(t *testing.T) {
 			writeFile(t, filepath.Join(n.home, ".claude", "projects", "-assistant", id+".jsonl"),
 				`{"type":"user","cwd":`+jsonString(t, dir)+`,"message":{"role":"user","content":"first"}}`+"\n")
 			n.stopAssistant(id)
-			if _, err := nodeCall(t, n, "session.send", map[string]any{"session_id": id, "text": "third"}); err != nil {
+			if _, err := nodeCall(t, n, "session.send", later("third")); err != nil {
 				t.Fatal(err)
 			}
 			f.idle(t, id)
