@@ -1383,6 +1383,19 @@ rather than counting on the model to follow the prompt, and check a real transcr
 parsing it. Once the card worked, the prompt went back to asking with AskUserQuestion as usual (#8558): a prompt's
 workaround that outlives the fix it stood in for is wrong advice to the model.
 
+## Peer attestation needs the receiver's live permission mode (#9672)
+
+Claude Code 2.1.326's `sessions/<pid>.json` names the live process, session and tmux pane, but not its permission mode or
+bypass availability. A transcript's standalone `permission-mode` row is not rewritten on shift+tab; the next prompt records
+the mode instead. Reading even the newest transcript at send time therefore states the old class immediately after a switch:
+none after default became bypass is held, and stale bypass after the return to default is a mismatch. For an external tmux
+session, read the footer through the pane named by the PID file before using transcript evidence. A visible composer
+without a bypass or plan indicator is prompting even when a draft or dialog hides default's idle hint; do not fall back
+to a stale bypass transcript just because `tuiMode` has no exact idle-text match. Question and permission dialogs draw
+rules too; they are not composers and must not override transcript bypass. Plan has no single class:
+Claude counts it as bypass only when bypass is available, so use the live process's argv for the enabling flag rather than
+treating every plan session as prompting. Without those live sources, keep the old fail-closed outcome instead of guessing.
+
 ## A plugin's asUser prompt is the only way in that counts as the person's (Persona's Claude Code plugin)
 
 The peer inbox frames every message as another session's, and no wording in it makes the model take a go-ahead from

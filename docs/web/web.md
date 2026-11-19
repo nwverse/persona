@@ -2535,7 +2535,10 @@ and Android follow in #5117.
   Cindy's new-task composer and create-agent toolbar; the attach hint gives way to it (on a phone it is only the + button's
   tooltip). It replaces the **Preset**, **Launcher** / **Launcher (this time only)**, **Model** and **Thinking effort**
   fields and **Manage launchers** ("Configure models" at the panel's foot closes the sheet and opens Settings › Model
-  providers). The pill is off, with a spinner, until the computer's launchers are read.
+  providers). The pill is off, with a spinner, until the computer's launchers are read. When they can't be (#10952: the
+  hub gave up on the computer), the pill shows its failed state instead and a click reads them again; the line under the
+  box says why with **Retry**, and Start runs the computer's default. A read still on its way for a computer picked
+  before never lands on the one picked since.
 - **What the pill says**: what this start runs: the mark of the Agent the launcher runs, the model (the one picked; else Model
   settings' model on their launcher; else the model the launcher's default entry stands for, by its list's name; a
   launcher that fixes its own `--model`, that model) and, for Claude Code and Antigravity, the effort
