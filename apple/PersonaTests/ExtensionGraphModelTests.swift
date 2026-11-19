@@ -152,6 +152,8 @@ struct ExtensionGraphModelTests {
         let viewport = CGSize(width: 400, height: 400)
         let fit = ExtensionGraphTransform.fit(content, in: viewport)
         #expect(fit.scale == 0.5 && fit.x == 0 && fit.y == 100)
+        let portrait = ExtensionGraphTransform.fit(CGSize(width: 400, height: 800), in: viewport)
+        #expect(portrait.scale == 0.5 && portrait.x == 100 && portrait.y == 0)
         let opening = ExtensionGraphTransform.fit(content, in: viewport, minimum: 0.5, maximum: 1)
         #expect(opening.scale == 0.5)
         let preview = ExtensionGraphTransform.fit(content, in: CGSize(width: 100, height: 100), minimum: 0.01)
