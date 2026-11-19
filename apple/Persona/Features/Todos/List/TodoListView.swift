@@ -3,13 +3,11 @@ import PersonaWire
 import SwiftUI
 
 extension TodosListDeps {
-    /// The app's: the shared store, the hub, the knowledge base's projects, toasts and errors on the app.
+    /// The app's: the shared store, the hub and the knowledge base's projects.
     @MainActor static var live: TodosListDeps {
         let app = AppModel.shared
-        return TodosListDeps(store: TodoStore.shared, api: { app.api }, features: { app.todoFeatures }, now: { Date() },
-                             calendar: { TodoCalendar.userCalendar }, toast: { app.toast = $0 }, report: { app.show($0) },
-                             projects: { TodoProjects.shared.list },
-                             land: { body in withAnimation(Theme.Motion.reduced ? nil : Theme.Motion.conceal) { body() } })
+        return TodosListDeps(store: TodoStore.shared, api: { app.api }, now: { Date() }, calendar: { TodoCalendar.userCalendar },
+                             projects: { TodoProjects.shared.list })
     }
 }
 
@@ -25,37 +23,80 @@ struct TodoListView: View {
     @State private var model = TodosListModel(deps: .live)
     @StoredValue("todos.v1.grouping") private var grouping = TodosListGrouping.phase
     @StoredValue("todos.v1.sort") private var sort = TodosListSort.suggested
-    /// The rows in sight, for where the list is left (not observed: scrolling redraws nothing).
+    /// The rows in sight, for where the list rests (not observed: scrolling redraws nothing).
     @State private var sight = TodoListSight()
+    /// Whether this page has put its list back where the place was left: once, as the page is made. A list kept in its
+    /// navigation stack keeps its own place when a to-do pushed over it pops.
+    @State private var placed = false
     private let workspace = TodoWorkspace.shared
 
     /// Whether this page's tree is the one the window shows: a tree on its way out leaves the workspace alone.
     private var shownHere: Bool { builtTree == nil || shownTree?.tree === builtTree }
 
+    /// iOS 26 pins the bar over the list, which scrolls under it behind the scroll edge's effect. iOS 18 has no such
+    /// effect to draw behind a pinned bar: the bar is the list's first row there, as the Inbox's (#10465 review).
+    private static var pinsBar: Bool {
+        if #available(iOS 26.0, *) { true } else { false }
+    }
+
+    private var drawsBar: Bool { model.ready && !model.calm && model.hasRows }
+
     var body: some View {
         ScrollViewReader { proxy in
             List {
-                if model.ready { content }
+                if model.ready {
+                    if drawsBar && !Self.pinsBar {
+                        TodosSectionBar(model: model, grouping: $grouping)
+                            .listRowInsets(EdgeInsets())
+                            .listRowSeparator(.hidden)
+                            .themedRow()
+                    }
+                    content
+                }
             }
             .listStyle(.plain)
             .accessibilityIdentifier("todos.v1") // the list itself: on the page, the bar's grouping menu took it too
             .themedPage()
             .contentMargins(.top, Theme.Space.xs, for: .scrollContent)
             .safeAreaBarWhenSupported(edge: .top, spacing: Theme.Space.flush) {
-                if model.ready && !model.calm && model.hasRows { sectionBar }
+                if drawsBar && Self.pinsBar { TodosSectionBar(model: model, grouping: $grouping) }
             }
             .refreshable { await model.refresh() }
-            .onScrollPhaseChange { _, phase in model.hold.set(.scrolling, phase != .idle) }
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentInsets.top } action: { _, top in sight.covered = top }
+            .onScrollPhaseChange { old, phase in
+                model.hold.set(.scrolling, phase != .idle)
+                // Where a scroll came to rest; not the idle a page is made in, before its rows are drawn.
+                if phase == .idle, old != .idle, let top = sight.top(in: model.groups) {
+                    workspace.rested(workspace.place, at: top, shown: shownHere)
+                }
+            }
             .onAppear {
                 model.grouping = grouping
                 model.sort = sort
                 model.start()
                 model.hold.set(.outOfSight, false)
-                if let key = workspace.scrolled(in: workspace.place) { proxy.scrollTo(key, anchor: .top) }
             }
-            .onDisappear {
-                model.hold.set(.outOfSight, true)
-                workspace.leave(workspace.place, at: sight.top(in: model.groups), shown: shownHere)
+            .onDisappear { model.hold.set(.outOfSight, true) }
+            // Back where the place's list last rested, once its rows are laid out: only for a page made anew (another
+            // place opened in between), never when a to-do pushed over it pops.
+            .task(id: model.ready) {
+                guard model.ready, !placed else { return }
+                guard let key = workspace.scrolled(in: workspace.place), model.row(key) != nil else {
+                    placed = true
+                    return
+                }
+                // Once the list has drawn its first rows under its bars (a second at most): until then it has nothing to
+                // scroll to, and a bar laid out after moves it again. Once more if a late layout moved it all the same;
+                // a page that went meanwhile tries again as it comes back.
+                for _ in 0..<20 where (sight.visible.isEmpty || sight.covered == 0) && !Task.isCancelled {
+                    try? await Task.sleep(for: .milliseconds(50))
+                }
+                guard !Task.isCancelled else { return }
+                proxy.scrollTo(key, anchor: .top)
+                try? await Task.sleep(for: .milliseconds(150))
+                guard !Task.isCancelled else { return }
+                if sight.top(in: model.groups) != key { proxy.scrollTo(key, anchor: .top) }
+                placed = true
             }
         }
         .detailTitle(String(localized: "All To-dos [To-dos List]"))
@@ -65,11 +106,12 @@ struct TodoListView: View {
         }
         .onChange(of: grouping) { _, g in model.grouping = g }
         .onChange(of: sort) { _, s in model.sort = s }
-        // Each minute while the page is in front: the rows' times, and what the clock moves.
+        // Each minute while the page is in front, and as it comes back to the front: the rows' times, and what the clock
+        // moves (Done today, the due days).
         .tabActiveTask {
             while !Task.isCancelled {
+                model.tick()
                 try? await Task.sleep(for: .seconds(60))
-                if !Task.isCancelled { model.tick() }
             }
         }
         // The projects' names, read when the page opens and for the assistant made current.
@@ -93,7 +135,7 @@ struct TodoListView: View {
                         if fold.open { ForEach(fold.keys, id: \.self) { key in row(key) } }
                     }
                 } header: {
-                    if let title = group.title { header(group, title: title) }
+                    if let title = group.title { TodosSectionHeader(model: model, group: group, title: title) }
                 }
                 .listSectionSeparator(.hidden, edges: .top) // no line over a section's first row, the calm list's included
             }
@@ -108,38 +150,41 @@ struct TodoListView: View {
                 .background { NavigationLink(value: TodoDetailRoute(id: cell.todoID)) { EmptyView() }.opacity(0) }
                 .themedRow()
             .onAppear { sight.visible.insert(key) }
-            .onDisappear { sight.visible.remove(key) }
+            .onDisappear {
+                sight.visible.remove(key)
+                sight.middles[key] = nil
+            }
+            // Where its middle is in the list's frame, kept unobserved: whether the bars cover it.
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .scrollView).midY } action: { sight.middles[key] = $0 }
             .id(key)
         }
     }
 
-    /// A section's title with its count: Needs you's is N in the needs-you tone, as the bar and the drawer say it; the
-    /// others count the rows under them (DESIGN_SYSTEM 3.4, the Agents list's state headers).
-    private func header(_ group: TodosListGroup, title: String) -> some View {
-        let count = group.needs ? model.needsYou : group.count
-        return SectionHeader(title: title, count: count, tone: group.needs ? StatusPalette.needsYou : StatusPalette.idle)
-            .font(Theme.Font.sectionHeader)
-            .textCase(nil)
-            .lineLimit(1)
-            .accessibilityElement(children: .combine)
-            .accessibilityAddTraits(.isHeader)
-            .accessibilityValue(String(count))
-            .accessibilityIdentifier("todos.section." + group.id)
-    }
-
-    /// "Can wait · 1 ›": what is folded at a section's foot, opened in place.
+    /// "Can wait · 1 ›": what is folded at a section's foot, opened in place. A row of the list, the whole row its button
+    /// (at least a finger's height, as every row), its words in the titles' column (a tick's room before them, unseen);
+    /// spoken as `FoldButton` speaks a fold.
     private func foldLine(_ fold: TodosListGroup.Fold) -> some View {
         let detail = String(localized: "\(fold.keys.count) to-dos [To-dos List]")
-        return FoldButton(title: fold.title, folded: !fold.open, detail: detail) {
+        let state = fold.open ? String(localized: "Expanded") : String(localized: "Collapsed [Readiness Card ee6046]")
+        return Button {
             Haptics.tap()
             withAnimation(Theme.Motion.reduced ? nil : Theme.Motion.state) { model.toggle(fold.id) }
         } label: {
-            Text(verbatim: fold.title + TodoTimeWords.separator + String(fold.keys.count))
-                .font(Theme.Font.secondary)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+            HStack(alignment: .firstTextBaseline, spacing: Theme.Space.m) {
+                TodoTickGlyph(closed: false).hidden()
+                Text(verbatim: fold.title + TodoTimeWords.separator + String(fold.keys.count))
+                    .font(Theme.Font.secondary)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer(minLength: Theme.Space.sm)
+                FoldChevron(folded: !fold.open)
+            }
         }
         .themedRow()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel([fold.title, state, detail]
+            .joined(separator: String(localized: ", ", comment: "Separator between parts of an accessibility label")))
+        .accessibilityAddTraits(.isButton)
         .accessibilityIdentifier("todos.fold." + fold.id)
     }
 
@@ -167,52 +212,7 @@ struct TodoListView: View {
         }
     }
 
-    // MARK: Bar and menus
-
-    /// All · Needs you · In progress · To do · Done with their counts, the grouping at its end (the Inbox's bar,
-    /// DESIGN_SYSTEM 3.4 "List controls"). A choice swaps the list at once.
-    private var sectionBar: some View {
-        CapsuleFilterBar(items: model.entries.map { e in
-            CapsuleFilterItemData(id: e.id, title: e.choice.title, count: e.count, countLook: e.look.map(Self.badgeLook))
-        }, selection: model.choice.rawValue, choose: { id in
-            guard let choice = TodosChoice(rawValue: id), choice != model.choice else { return }
-            Haptics.tap()
-            model.choice = choice
-        }, scrollID: "todos.bar", itemIDPrefix: "todos.bar.", revealsSelection: true, showsTrailing: model.choice != .done) {
-            groupingMenu
-        }
-        .padding(.horizontal, Theme.Space.page)
-        .padding(.vertical, Theme.Space.xs)
-    }
-
-    private static func badgeLook(_ look: TodosBar.Look) -> CountBadge.Look {
-        switch look {
-        case .needs: .needs
-        case .neutral: .neutral
-        }
-    }
-
-    /// Group By: Phase · Project · Due Date, kept on this device; Needs you stays a section at the top in each.
-    private var groupingMenu: some View {
-        Menu {
-            Picker(String(localized: "Group By [To-dos Grouping]"), selection: Binding(get: { grouping }, set: { g in
-                Haptics.tap()
-                grouping = g
-            })) {
-                ForEach(TodosListGrouping.allCases) { Text($0.title).tag($0) }
-            }
-        } label: {
-            ThemedIcon(Theme.Icon.capsuleGrouping)
-                .font(Theme.Font.secondaryMedium)
-                .foregroundStyle(Color.primary)
-                .tapTargetFrame()
-                .contentShape(.rect)
-        }
-        .labelOnlyMenu()
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("todos.grouping")
-        .accessibilityLabel(String(localized: "Group By: \(grouping.title) [To-dos Grouping]"))
-    }
+    // MARK: Menus
 
     /// The list's ⋯: the order inside each section, and Someday and Done today shown or folded.
     private var moreMenu: some View {
@@ -244,13 +244,99 @@ struct TodoListView: View {
     }
 }
 
-/// The rows a list has in sight, as they appear and go: where the list was left, by its top row in sight.
-@MainActor final class TodoListSight {
-    var visible: Set<String> = []
+/// All · Needs You · In Progress · To Do · Done with their counts, the grouping at its end (the Inbox's bar,
+/// DESIGN_SYSTEM 3.4 "List controls"). A choice swaps the list at once. A view of its own, so a count that changes
+/// redraws the bar alone (P5).
+private struct TodosSectionBar: View {
+    var model: TodosListModel
+    @Binding var grouping: TodosListGrouping
 
+    var body: some View {
+        CapsuleFilterBar(items: model.entries.map { e in
+            CapsuleFilterItemData(id: e.id, title: e.choice.title, count: e.count, countLook: e.look.map(Self.badgeLook))
+        }, selection: model.choice.rawValue, choose: { id in
+            guard let choice = TodosChoice(rawValue: id), choice != model.choice else { return }
+            Haptics.tap()
+            model.choice = choice
+        }, scrollID: "todos.bar", itemIDPrefix: "todos.bar.", revealsSelection: true, showsTrailing: model.choice != .done) {
+            groupingMenu
+        }
+        .padding(.horizontal, Theme.Space.page)
+        .padding(.vertical, Theme.Space.xs)
+    }
+
+    private static func badgeLook(_ look: TodosBar.Look) -> CountBadge.Look {
+        switch look {
+        case .needs: .needs
+        case .neutral: .neutral
+        }
+    }
+
+    /// Group By: Phase · Project · Due Date, kept on this device; Needs you stays a section at the top in each.
+    private var groupingMenu: some View {
+        Menu {
+            // Under its heading, as the frame draws it (an inline picker's own title is not drawn in a menu).
+            Section(String(localized: "Group By [To-dos Grouping]")) {
+                ForEach(TodosListGrouping.allCases) { g in
+                    Toggle(g.title, isOn: Binding(get: { grouping == g }, set: { on in
+                        guard on, g != grouping else { return }
+                        Haptics.tap()
+                        grouping = g
+                    }))
+                }
+            }
+        } label: {
+            ThemedIcon(Theme.Icon.capsuleGrouping)
+                .font(Theme.Font.secondaryMedium)
+                .foregroundStyle(Color.primary)
+                .tapTargetFrame()
+                .contentShape(.rect)
+        }
+        .labelOnlyMenu()
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("todos.grouping")
+        .accessibilityLabel(String(localized: "Group By: \(grouping.title) [To-dos Grouping]"))
+    }
+}
+
+/// A section's title with its count: Needs you's is N in the needs-you tone, as the bar and the drawer say it; the
+/// others count the rows under them (DESIGN_SYSTEM 3.4, the Agents list's state headers). A view of its own, so N
+/// changing redraws the header, not the list (P5). Spoken once: the title, then the count as its value.
+private struct TodosSectionHeader: View {
+    var model: TodosListModel
+    var group: TodosListGroup
+    var title: String
+
+    var body: some View {
+        let count = group.needs ? model.needsYou : group.count
+        SectionHeader(title: title, count: count, tone: group.needs ? StatusPalette.needsYou : StatusPalette.idle)
+            .font(Theme.Font.sectionHeader)
+            .textCase(nil)
+            .lineLimit(1)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(title)
+            .accessibilityValue(String(count))
+            .accessibilityAddTraits(.isHeader)
+            .accessibilityIdentifier("todos.section." + group.id)
+    }
+}
+
+/// The rows a list has drawn, and where they are: where the list rests, by its top row in sight. Not observed: scrolling
+/// redraws nothing.
+@MainActor final class TodoListSight {
+    /// The rows drawn, the ones under the bars included.
+    var visible: Set<String> = []
+    /// Each drawn row's middle in the list's frame.
+    var middles: [String: CGFloat] = [:]
+    /// How much of the list's top the bars cover (the navigation bar, the pinned section bar).
+    var covered: CGFloat = 0
+
+    /// The first row whose middle is clear of the bars.
     func top(in groups: [TodosListGroup]) -> String? {
         for group in groups {
-            for key in group.keys + group.folds.filter(\.open).flatMap(\.keys) where visible.contains(key) { return key }
+            for key in group.keys + group.folds.filter(\.open).flatMap(\.keys) where visible.contains(key) {
+                if (middles[key] ?? covered) >= covered { return key }
+            }
         }
         return nil
     }

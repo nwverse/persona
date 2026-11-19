@@ -24,12 +24,13 @@ nonisolated enum TodosChoice: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
+    /// The choice's name: a button's, in Title Case, the words the Inbox's bar says for the same choices.
     var title: String {
         switch self {
-        case .all: String(localized: "All [To-dos Bar]")
-        case .needsYou: StateName.todoNeedsYou
-        case .inProgress: String(localized: "In progress [To-dos Bar]")
-        case .todo: StateName.todoToDo
+        case .all: String(localized: "All")
+        case .needsYou: StateName.needsYou.text
+        case .inProgress: String(localized: "In Progress")
+        case .todo: StateName.todoToDoChoice
         case .done: StateName.done.text
         }
     }

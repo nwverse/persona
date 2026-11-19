@@ -118,7 +118,8 @@ struct TodosListLayoutTests {
         #expect(out.groups[0].folds.map(\.id) == [TodoListSection.someday])
     }
 
-    /// D12: rank, then manager, then id; a sort orders inside a section and never moves one.
+    /// The list's order: rank, then manager, then id (`TodoFiling.ordered`); a sort orders inside a section and never
+    /// moves one.
     @Test func ranksThenManagersThenIdsAndTheSortStaysInside() {
         let rows = [filed("z", TodoListSection.working, rank: 0, manager: "work"), filed("y", TodoListSection.working, rank: 0, manager: "home"),
                     filed("x", TodoListSection.working, rank: 1, manager: "home"), filed("n", TodoListSection.needsYou, rank: 5)]
@@ -160,5 +161,32 @@ struct TodosListLayoutTests {
         #expect(all.groups.last?.folds.map(\.id) == [TodoListSection.done] && all.groups.last?.folds.last?.keys == ["/today"])
         i.choice = .done
         #expect(TodosListLayout.layout(i).groups.map(\.id) == ["done:today", "done:earlier"])
+    }
+}
+
+/// Where the owner is in To-dos (#10465): each place's list is put back where it last rested, written only from an
+/// active scene; a page that still draws today's list is known until it is gone, so the drawer's number follows it.
+@MainActor
+struct TodoWorkspaceTests {
+    @Test func whereAListRestedIsKeptFromAnActiveSceneOnly() {
+        var active = true
+        let workspace = TodoWorkspace(active: { active })
+        workspace.rested("all", at: "/t05", shown: true)
+        #expect(workspace.scrolled(in: "all") == "/t05")
+        workspace.rested("all", at: "/t11", shown: false)
+        active = false
+        workspace.rested("all", at: "/t11", shown: true)
+        #expect(workspace.scrolled(in: "all") == "/t05", "a tree on its way out, or a scene going away, moves nothing")
+    }
+
+    @Test func aPageOnTodaysListIsKnownUntilItIsGone() {
+        let workspace = TodoWorkspace(active: { true })
+        let a = UUID(), b = UUID()
+        workspace.todayPage(a, open: true)
+        workspace.todayPage(b, open: true)
+        workspace.todayPage(a, open: false)
+        #expect(workspace.holdsToday)
+        workspace.todayPage(b, open: false)
+        #expect(!workspace.holdsToday)
     }
 }

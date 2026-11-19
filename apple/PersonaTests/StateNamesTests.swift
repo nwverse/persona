@@ -49,7 +49,7 @@ struct StateNamesTests {
     /// is the direction tree's word, which in Chinese is not a session's.
     @Test func areTheToDosWords() {
         #expect(StateName.todoNeedsYou == "需要你" && StateName.taskWorking == "在做" && StateName.taskWaiting.text == "等待中")
-        #expect(StateName.todoJustFinished == "刚做完待看" && StateName.todoToDo == "待做")
+        #expect(StateName.todoJustFinished == "刚做完待看" && StateName.todoToDo == "待做" && StateName.todoToDoChoice == "待做")
         #expect(StateName.todoSomeday == "以后再做" && StateName.todoInactive == "暂无进展")
     }
 

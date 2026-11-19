@@ -80,8 +80,10 @@ nonisolated enum StateName: String, CaseIterable, Sendable {
     }
 
     /// The To-dos list's own words for where a to-do stands (#10465, docs/design/proposals/todos-redesign.md 3.11): a
-    /// to-do's Needs you in sentence case, as its section says it; Working and Waiting are the direction tree's
-    /// (`taskWorking`, `taskWaiting`), whose Chinese words are not a session's.
+    /// to-do's Needs you in sentence case, as its section heading and its line say it (DESIGN_SYSTEM 5: headings in
+    /// sentence case), the shipped sentence form (`needsYouSentence`); its section bar's choice is a button, in Title
+    /// Case: `needsYou.text`, as the Inbox's bar says it. Working and Waiting are the direction tree's (`taskWorking`,
+    /// `taskWaiting`), whose Chinese words are not a session's.
     static var todoNeedsYou: String {
         kept("todoNeedsYou") { interfaceText("Needs you [State Names]") } // perf-ok: resolved once per locale
     }
@@ -92,6 +94,10 @@ nonisolated enum StateName: String, CaseIterable, Sendable {
     /// The owner's own; nobody works on it and nothing waits.
     static var todoToDo: String {
         kept("todoToDo") { interfaceText("To do [State Names]") } // perf-ok: resolved once per locale
+    }
+    /// To do as the section bar's choice, a button: Title Case (DESIGN_SYSTEM 5), the same words as `todoToDo`.
+    static var todoToDoChoice: String {
+        kept("todoToDoChoice") { interfaceText("To Do [State Names]") } // perf-ok: resolved once per locale
     }
     /// The owner's own "not now"; never Later, which is an ask's.
     static var todoSomeday: String {

@@ -15,18 +15,25 @@ nonisolated struct TodoWords: Sendable {
 
     /// The locale dates and times are written in.
     var formatting: Locale { locale ?? .interface }
+
+    /// Between the parts of a spoken label, in the language.
+    var listSeparator: String {
+        var resource = LocalizedStringResource(", ", comment: "Separator between parts of an accessibility label")
+        if let locale { resource.locale = locale }
+        return String(localized: resource)
+    }
 }
 
 /// A row's second line in words (#10465; docs/design/proposals/todos-redesign.md 3.4): the hub sends a key and string
 /// arguments (`TodoLine`, spec/fixtures/todo-view/README.md "Line keys"), and the app says it in its language. Absolute
-/// times become "since Tue" here, in the list's model, never in a view's body. A key this build does not know draws no
-/// line. Pure.
+/// times become "since Tue" here, in the list's model, never in a view's body. A key this build does not know is not
+/// said: the row says its section's word instead (`TodoRowContentLogic`). Pure.
 nonisolated enum TodoLineText {
     /// What the line's lead is drawn in; the rest is always the secondary color.
     enum Tone: Equatable, Sendable {
         /// The ask's own words, in the needs-you text tone.
         case needs
-        /// A failed start: both parts in danger text, with the shipped state word.
+        /// A failed start: both parts in danger text ("Didn't start", the shipped word for it in a line's sentence case).
         case danger
         /// What finished, in the unread green.
         case ready
@@ -41,7 +48,7 @@ nonisolated enum TodoLineText {
         var tone: Tone = .plain
 
         /// One string, for the row's spoken label.
-        var spoken: String { [lead, rest].compactMap { $0 }.joined(separator: ", ") }
+        func spoken(separator: String) -> String { [lead, rest].compactMap { $0 }.joined(separator: separator) }
     }
 
     /// Every key this build says: the README's table (`TodoLineTextTests` keeps the two the same).
@@ -80,10 +87,15 @@ nonisolated enum TodoLineText {
             said = Said(lead: arg("text") ?? words("A decision for you [To-dos Line]"),
                         rest: arg("recommend").map { words("\($0) recommended [To-dos Line]") }, tone: .needs)
         case "decision_default":
-            let when = time("default_at").map(day)
+            // "on Fri", "on Apr 3", or "at 10:00" today.
+            let at = time("default_at")
+            let today = at.map { calendar.isDate($0, inSameDayAs: now) } ?? false
+            let when = at.map(day)
             let rest: String? = switch (arg("recommend"), when) {
-            case let (pick?, when?): words("Persona picks \(pick) \(when) unless you answer [To-dos Line]")
-            case let (nil, when?): words("Persona decides \(when) unless you answer [To-dos Line]")
+            case let (pick?, when?) where today: words("Persona picks \(pick) at \(when) unless you answer [To-dos Line]")
+            case let (pick?, when?): words("Persona picks \(pick) on \(when) unless you answer [To-dos Line]")
+            case let (nil, when?) where today: words("Persona decides at \(when) unless you answer [To-dos Line]")
+            case let (nil, when?): words("Persona decides on \(when) unless you answer [To-dos Line]")
             case let (pick?, nil): words("Persona picks \(pick) unless you answer [To-dos Line]")
             case (nil, nil): nil
             }
@@ -184,5 +196,34 @@ nonisolated enum TodoTimeWords {
         if seconds < 3600 { return words("\(Int(seconds / 60))m [To-dos Age]") }
         if seconds < 86_400 { return words("\(Int(seconds / 3600))h [To-dos Age]") }
         return day(date, now: now, words: words, calendar: calendar)
+    }
+
+    // Said in full for VoiceOver, where "16m" reads as a length and "Apr 4" does not say what it is.
+
+    /// "10:00" today; "Tuesday" within six days either way; "April 3" further.
+    static func spokenDay(_ date: Date, now: Date, words: TodoWords, calendar: Calendar) -> String {
+        var style = Date.FormatStyle(calendar: calendar, timeZone: calendar.timeZone).locale(words.formatting)
+        if calendar.isDate(date, inSameDayAs: now) { return date.formatted(style.hour().minute()) }
+        let days = abs(calendar.dateComponents([.day], from: calendar.startOfDay(for: now), to: calendar.startOfDay(for: date)).day ?? 99)
+        style = days <= 6 ? style.weekday(.wide) : style.month(.wide).day()
+        return date.formatted(style)
+    }
+
+    /// "Due today", "Due Saturday", "Due April 3".
+    static func spokenDue(_ date: Date, now: Date, words: TodoWords, calendar: Calendar) -> String {
+        if calendar.isDate(date, inSameDayAs: now) { return words("Due today [To-dos Spoken]") }
+        var style = Date.FormatStyle(calendar: calendar, timeZone: calendar.timeZone).locale(words.formatting)
+        let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: now), to: calendar.startOfDay(for: date)).day ?? 99
+        style = (1...6).contains(days) ? style.weekday(.wide) : style.month(.wide).day()
+        return words("Due \(date.formatted(style)) [To-dos Spoken]")
+    }
+
+    /// "Just now", "16 minutes ago", "3 hours ago", then "Since Tuesday".
+    static func spokenAge(_ date: Date, now: Date, words: TodoWords, calendar: Calendar) -> String {
+        let seconds = now.timeIntervalSince(date)
+        if seconds < 60 { return words("Just now [To-dos Spoken]") }
+        if seconds < 3600 { return words("\(Int(seconds / 60)) minutes ago [To-dos Spoken]") }
+        if seconds < 86_400 { return words("\(Int(seconds / 3600)) hours ago [To-dos Spoken]") }
+        return words("Since \(spokenDay(date, now: now, words: words, calendar: calendar)) [To-dos Spoken]")
     }
 }

@@ -3,29 +3,25 @@ import Observation
 import PersonaWire
 
 /// What the To-dos list needs from the app (docs/apple/ios.md "Logic-layer choice"): the store whose rows, views and
-/// numbers it draws, the hub, the clock, toasts and error reporting, the projects' names, and how a re-filing that
-/// waited lands. `live` is the app's (`TodoListView.swift`); tests pass a store of their own and a `FakeHub`'s client.
+/// numbers it draws, the hub, the clock and the projects' names. `live` is the app's (`TodoListView.swift`); tests pass
+/// a store of their own and a `FakeHub`'s client.
 struct TodosListDeps {
     var store: TodoStore
     var api: @MainActor () -> APIClient?
-    var features: @MainActor () -> TodoFeatures
     var now: @MainActor () -> Date
     var calendar: @MainActor () -> Calendar
-    var toast: @MainActor (Toast) -> Void
-    var report: @MainActor (Error) -> Void
     var projects: @MainActor () -> [TodoProject]
-    /// Runs a re-filing that waited for the list to rest: in the view's fade (`Theme.Motion.conceal`), at once with Reduce
-    /// Motion.
-    var land: @MainActor (() -> Void) -> Void = { $0() }
 }
 
 /// The V1 To-dos list (#10465; docs/design/proposals/todos-redesign.md 3.3, 3.4; DESIGN_SYSTEM 3.4 "To-dos list"): the
 /// current assistant's rows as the hub files them (`TodoStore.countsSource.filed`, the rows its numbers are counted
 /// from), drawn in sections for the bar's choice, the grouping and the sort.
 ///
-/// - Rows never move under a finger: a new filing waits while the list is scrolled or out of sight (`hold`, the page
-///   reports what it does) and then lands at once, faded; a row that comes to need the owner lands at once. What a row
-///   says (its line, its time) changes in its own cell at once, and the numbers are the store's, never held.
+/// - Rows never move under a finger: while the list is scrolled or out of sight (`hold`, the page reports what it does)
+///   a new filing waits, and so does what each row says, since a new line can wrap or a door come and go, and a row's
+///   new height moves every row under it (the Agents list learned it, `ChatsView`'s `landCritical`). Once the list rests
+///   it all lands at once, the rows that changed place fading in. A row that comes to need the owner lands at once,
+///   alone; the numbers are the store's, never held.
 /// - The structure holds keys; each row reads its own cell (`Row`), so a run's new line draws its row alone (P5).
 @MainActor @Observable
 final class TodosListModel {
@@ -38,6 +34,10 @@ final class TodosListModel {
         let id: String
         let todoID: String
         fileprivate(set) var content: TodoRowContent
+        /// How many re-filings put it in another group: each fades it in where it now is (`TodoListRow`).
+        fileprivate(set) var arrivals = 0
+        /// What it will say once the list rests (nil: what it says is the latest).
+        @ObservationIgnored fileprivate var waiting: TodoRowContent?
         /// What the content was worked out from: worked out again only when one of these or the clock changes.
         @ObservationIgnored fileprivate var inputs: Inputs
 
@@ -80,11 +80,16 @@ final class TodosListModel {
     @ObservationIgnored private(set) lazy var hold = Hold("To-dos list")
     @ObservationIgnored private let deps: Deps
     @ObservationIgnored private var cells: [String: Row] = [:]
+    /// What the store has now.
     @ObservationIgnored private var snapshot = Snapshot.empty
+    /// What the drawn layout was laid out from: the store as it was when it last landed, and the needs landed since.
+    @ObservationIgnored private var drawn = Snapshot.empty
     @ObservationIgnored private var watching = false
     @ObservationIgnored private var following = false
     /// The time the rows' times are said from: set when the list starts and each minute after.
     @ObservationIgnored private var now = Date.distantPast
+    /// A minute passed while the list was held: every row's time is said again once it rests, not mid-glide.
+    @ObservationIgnored private var clockWaits = false
 
     /// What the list reads of the store and the app.
     private struct Snapshot: Equatable {
@@ -114,17 +119,18 @@ final class TodosListModel {
     /// The list has rows, under any choice: the bar is drawn (unless calm), so an empty choice can be left.
     var hasRows: Bool { !layout.sections.isEmpty }
 
+    /// A drawn row's cell; kept until the layout that drops its row lands.
     func row(_ key: String) -> Row? { cells[key] }
 
-    /// Follows the store from now on; the first layout lands at once. The store's minute clock for rows filed by the
-    /// app's own rules starts with the list's first draw.
+    /// Follows the store from now on; the first layout lands at once.
     func start() {
         guard !following else { return }
         following = true
         now = deps.now()
-        hold.land = { [weak self] in self?.landWaiting() }
-        pull(animated: false)
-        deps.store.listShown()
+        hold.land = { [weak self] in self?.landAll(animated: true) }
+        snapshot = current()
+        ready = snapshot.ready
+        landAll(force: true, animated: false)
     }
 
     func toggle(_ fold: String) {
@@ -137,10 +143,12 @@ final class TodosListModel {
         toggle(fold)
     }
 
-    /// A minute passed: the rows' times are said again, and rows that moved by the clock (Done today) are filed again.
+    /// The page's minute: the rows' times are said again, and rows that moved by the clock (Done today) are filed
+    /// again. Nothing within the minute the times were last said in.
     func tick() {
-        now = deps.now()
-        updateCells(force: true)
+        let at = deps.now()
+        guard !deps.calendar().isDate(at, equalTo: now, toGranularity: .minute) else { return }
+        now = at
         changed(clock: true)
     }
 
@@ -170,88 +178,127 @@ final class TodosListModel {
                         projects: deps.projects())
     }
 
-    /// The store changed (or, `clock`, a minute passed): rows say what is new at once; a new filing lands now, or when
-    /// the list rests.
+    /// The store changed (or, `clock`, a minute passed): it all lands now, or once the list rests, but a row that comes
+    /// to need the owner.
     private func changed(clock: Bool = false) {
         let next = current()
         guard next != snapshot || clock else { return }
         if next != snapshot {
             snapshot = next
             if ready != next.ready { ready = next.ready }
-            updateCells(force: false)
         }
-        let laid = makeLayout()
-        guard laid != layout else {
-            hold.landed()
-            return
-        }
-        if !hold.wait() || bringsANeed(laid) { apply(laid, animated: true) }
+        guard hold.wait() else { return landAll(force: clock, animated: true) }
+        if clock { clockWaits = true }
+        updateCells(force: false, held: true)
+        landNeeds()
     }
 
-    /// What waited lands.
-    private func landWaiting() {
-        let laid = makeLayout()
-        if laid != layout { apply(laid, animated: true) } else { hold.landed() }
-    }
-
-    /// The first read of the list.
-    private func pull(animated: Bool) {
-        snapshot = current()
-        ready = snapshot.ready
-        updateCells(force: true)
-        apply(makeLayout(), animated: animated)
-    }
-
-    /// A choice, the grouping, the sort or a fold changed: the owner's own tap, never held.
-    private func relayout(contents: Bool = false) {
-        if contents { updateCells(force: true) }
-        let laid = makeLayout()
-        if laid != layout { layout = laid }
-    }
-
-    private func apply(_ laid: TodosListLayout.Output, animated: Bool) {
+    /// Everything that waited lands: what the rows say, then where they are.
+    private func landAll(force: Bool = false, animated: Bool) {
+        updateCells(force: force || clockWaits, held: false)
+        clockWaits = false
         hold.landed()
-        guard laid != layout else { return }
-        if animated && !layout.groups.isEmpty { deps.land { self.layout = laid } } else { layout = laid }
-    }
-
-    /// A row that comes to need the owner is never held (DESIGN_SYSTEM 3.4: what needs the user is given to its row at
-    /// once).
-    private func bringsANeed(_ laid: TodosListLayout.Output) -> Bool {
-        laid.sections.contains { key, section in
-            section == TodoListSection.needsYou && layout.sections[key] != TodoListSection.needsYou
+        drawn = snapshot
+        // A row gone from the store keeps its cell until now: the layout drawn until now still listed it.
+        let keys = Set(snapshot.filed.map(TodosListLayout.key))
+        if cells.count > keys.count || cells.keys.contains(where: { !keys.contains($0) }) {
+            cells = cells.filter { keys.contains($0.key) }
         }
+        show(makeLayout(drawn), animated: animated)
     }
 
-    private func makeLayout() -> TodosListLayout.Output {
-        let projects = snapshot.projects
+    /// While held, the rows that come to need the owner land at once, alone (DESIGN_SYSTEM 3.4; `Hold`: critical changes
+    /// land "at once, alone, and the rest goes on waiting"): onto the list as drawn, saying what they say now.
+    private func landNeeds() {
+        let needs = snapshot.filed.filter { row in
+            row.section == TodoListSection.needsYou && layout.sections[TodosListLayout.key(row)] != TodoListSection.needsYou
+        }
+        guard !needs.isEmpty else { return }
+        let keys = Set(needs.map(TodosListLayout.key))
+        var next = drawn
+        next.filed = TodoFiling.ordered(drawn.filed.filter { !keys.contains(TodosListLayout.key($0)) } + needs)
+        for row in needs {
+            next.items[row.id] = snapshot.items[row.id]
+            if let cell = cells[TodosListLayout.key(row)], let waiting = cell.waiting {
+                cell.waiting = nil
+                cell.content = waiting
+            }
+        }
+        drawn = next
+        show(makeLayout(drawn), animated: true)
+    }
+
+    /// A choice, the grouping, the sort or a fold changed: the owner's own tap, never held, never faded.
+    private func relayout(contents: Bool = false) {
+        landAll(force: contents, animated: false)
+    }
+
+    /// Draws `laid`, not animated: rows it puts in another group fade in where they now are (proposal 3.9, "Hub
+    /// re-files a row"), so nothing slides across the list.
+    private func show(_ laid: TodosListLayout.Output, animated: Bool) {
+        guard laid != layout else { return }
+        if animated && !layout.groups.isEmpty {
+            for key in Self.moved(from: layout, to: laid) { cells[key]?.arrivals += 1 }
+        }
+        layout = laid
+    }
+
+    /// The drawn rows of `to` that `from` drew elsewhere or not at all.
+    nonisolated static func moved(from: TodosListLayout.Output, to: TodosListLayout.Output) -> [String] {
+        let before = places(from)
+        return places(to).compactMap { key, at in before[key] == at ? nil : key }
+    }
+
+    /// Where each drawn row is: its group, and the fold it is in (an open one; a closed fold's rows are not drawn).
+    private nonisolated static func places(_ out: TodosListLayout.Output) -> [String: String] {
+        var at: [String: String] = [:]
+        for group in out.groups {
+            for key in group.keys { at[key] = group.id }
+            for fold in group.folds where fold.open {
+                for key in fold.keys { at[key] = group.id + "/" + fold.id }
+            }
+        }
+        return at
+    }
+
+    private func makeLayout(_ from: Snapshot) -> TodosListLayout.Output {
+        let projects = from.projects
         return TodosListLayout.layout(.init(
-            rows: snapshot.filed, items: snapshot.items, choice: choice, grouping: grouping, sort: sort, unfolded: unfolded,
+            rows: from.filed, items: from.items, choice: choice, grouping: grouping, sort: sort, unfolded: unfolded,
             now: now, calendar: deps.calendar(),
             projectName: { TodoProjectLogic.name($0, in: projects) }))
     }
 
     /// Each row's content, worked out again only where its facts, its view, its filing or the clock (`force`) changed.
-    private func updateCells(force: Bool) {
+    /// `held`: a drawn row keeps what it says until the list rests (`waiting`); otherwise what waited lands.
+    private func updateCells(force: Bool, held: Bool) {
         let calendar = deps.calendar()
         let projects = snapshot.projects
-        var seen = Set<String>()
         for filed in snapshot.filed {
             guard let item = snapshot.items[filed.id] else { continue }
             let key = TodosListLayout.key(filed)
-            seen.insert(key)
             let inputs = Row.Inputs(item: item, view: snapshot.views[filed.id], filed: filed, grouping: grouping, projects: projects)
-            if let cell = cells[key], !force, cell.inputs == inputs { continue }
+            if let cell = cells[key], !force, cell.inputs == inputs {
+                if !held, let waiting = cell.waiting {
+                    cell.waiting = nil
+                    if cell.content != waiting { cell.content = waiting }
+                }
+                continue
+            }
             let content = TodoRowContentLogic.content(filed, item: item, view: inputs.view, grouping: grouping, now: now,
                                                       calendar: calendar,
                                                       projectName: { TodoProjectLogic.name($0, in: projects) })
             if let cell = cells[key] {
                 cell.inputs = inputs
-                if cell.content != content { cell.content = content }
+                if held {
+                    cell.waiting = content == cell.content ? nil : content
+                } else {
+                    cell.waiting = nil
+                    if cell.content != content { cell.content = content }
+                }
             } else {
                 cells[key] = Row(id: key, inputs: inputs, content: content)
             }
         }
-        if cells.count > seen.count { cells = cells.filter { seen.contains($0.key) } }
     }
 }

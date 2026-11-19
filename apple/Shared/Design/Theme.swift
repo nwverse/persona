@@ -801,6 +801,8 @@ nonisolated enum Theme {
         static let concealTime = 0.2
         static let reveal = Animation.easeOut(duration: revealTime)
         static let conceal = Animation.easeIn(duration: concealTime)
+        /// `conceal`'s curve, for a keyframe that fades in over `concealTime` (a re-filed To-dos row, #10465).
+        static let concealCurve: UnitCurve = .easeIn
         /// The system's Reduce Motion, outside a view (a view reads `\.accessibilityReduceMotion`): what would move or fade
         /// on its own is there, or gone, at once.
         @MainActor static var reduced: Bool {

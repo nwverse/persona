@@ -8329,6 +8329,41 @@
         }
       }
     },
+    "%lld hours ago [To-dos Spoken]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld hour ago"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld hours ago"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld時間前"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 小时前"
+          }
+        }
+      }
+    },
     "%lld hours late" : {
       "localizations" : {
         "en" : {
@@ -9451,6 +9486,41 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%1$lld 分钟"
+          }
+        }
+      }
+    },
+    "%lld minutes ago [To-dos Spoken]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld minute ago"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld minutes ago"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld分前"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 分钟前"
           }
         }
       }
@@ -11903,9 +11973,21 @@
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld to-dos"
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld to-do"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld to-dos"
+                }
+              }
+            }
           }
         },
         "ja" : {
@@ -16616,29 +16698,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "録音から AI が作成しました。重要な内容は確認してください。"
-          }
-        }
-      }
-    },
-    "All [To-dos Bar]" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "All"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "すべて"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "全部"
           }
         }
       }
@@ -61370,6 +61429,29 @@
         }
       }
     },
+    "Done %@ [To-dos Spoken]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Done %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@に完了"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@完成"
+          }
+        }
+      }
+    },
     "Done after review [To-dos Line]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -63046,6 +63128,29 @@
       },
       "extractionState" : "manual"
     },
+    "Due %@ [To-dos Spoken]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Due %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "期限は%@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@到期"
+          }
+        }
+      }
+    },
     "Due Date" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -63133,6 +63238,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "期限の日"
+          }
+        }
+      }
+    },
+    "Due today [To-dos Spoken]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Due today"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "今日が期限"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "今天到期"
           }
         }
       }
@@ -71371,29 +71499,6 @@
         }
       }
     },
-    "In progress [To-dos Bar]" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "In progress"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "進行中"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "进行中"
-          }
-        }
-      }
-    },
     "Inactive [State Names]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -71854,25 +71959,25 @@
         }
       }
     },
-    "Persona decides %@ unless you answer [To-dos Line]" : {
+    "Overdue [To-dos Spoken]" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Persona decides %@ unless you answer"
+            "value" : "Overdue"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "回答がなければ、Personaが%@に決めます"
+            "value" : "期限切れ"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "你不回答的话，Persona 会在%@自己决定"
+            "value" : "已过期"
           }
         }
       }
@@ -71896,29 +72001,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Persona 在做"
-          }
-        }
-      }
-    },
-    "Persona picks %@ %@ unless you answer [To-dos Line]" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Persona picks %1$@ %2$@ unless you answer"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "回答がなければ、Personaが%2$@に%1$@を選びます"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "你不回答的话，Persona 会在%2$@选 %1$@"
           }
         }
       }
@@ -85464,6 +85546,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Just now [To-dos Spoken]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Just now"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "たった今"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "刚刚"
+          }
+        }
+      }
     },
     "Just speak; it goes to %@" : {
       "localizations" : {
@@ -124194,6 +124299,52 @@
         }
       }
     },
+    "Persona decides on %@ unless you answer [To-dos Line]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona decides on %@ unless you answer"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回答がなければ、Personaが%@に決めます"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你不回答的话，Persona 会在%@自己决定"
+          }
+        }
+      }
+    },
+    "Persona decides at %@ unless you answer [To-dos Line]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona decides at %@ unless you answer"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回答がなければ、Personaが%@に決めます"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你不回答的话，Persona 会在%@自己决定"
+          }
+        }
+      }
+    },
     "Persona didn't answer that. Ask again." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -125259,6 +125410,52 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Persona picks %@ on %@ unless you answer [To-dos Line]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona picks %1$@ on %2$@ unless you answer"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回答がなければ、Personaが%2$@に%1$@を選びます"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你不回答的话，Persona 会在%2$@选 %1$@"
+          }
+        }
+      }
+    },
+    "Persona picks %@ at %@ unless you answer [To-dos Line]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona picks %1$@ at %2$@ unless you answer"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回答がなければ、Personaが%2$@に%1$@を選びます"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你不回答的话，Persona 会在%2$@选 %1$@"
+          }
+        }
+      }
     },
     "Persona reads it directly" : {
       "extractionState" : "manual",
@@ -153439,6 +153636,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%1$@ 起"
+          }
+        }
+      }
+    },
+    "Since %@ [To-dos Spoken]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Since %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@から"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从%@起"
           }
         }
       }
@@ -182744,6 +182964,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "To Do [State Names]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "To Do"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "やること"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "待做"
+          }
+        }
+      }
     },
     "To do [State Names]" : {
       "extractionState" : "manual",

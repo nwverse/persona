@@ -464,11 +464,8 @@ final class TodoStore {
         }
     }
 
-    /// The V1 list draws its rows from `countsSource.filed` (#10465): the minute clock for rows filed by the app's own
-    /// rules runs from its first draw, whatever filed them last.
-    func listShown() {
-        armRulesClock()
-    }
+    /// Whether the minute clock for rows filed by the app's own rules runs (tests read it).
+    var rulesClockRuns: Bool { rulesClock != nil }
 
     /// Counts again while V1 is on (nothing reads the numbers before).
     private func recount() {

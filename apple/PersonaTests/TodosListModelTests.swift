@@ -11,18 +11,23 @@ private final class TodoListPick {
     var scope: AssistantScope { AssistantScope(group: "", current: current, defaultID: "home", installed: ["home", "work"]) }
 }
 
+/// The test's clock: the list's minute moves when a test moves it.
+@MainActor private final class TodoListClock {
+    var now = Date(timeIntervalSince1970: 1_800_000_000)
+}
+
 /// The V1 To-dos list's model (#10465) against a `FakeHub` through a store of its own: the rows as the hub files them,
 /// a 304, rows from an older manager filed by the app's rules, the hub's order, the calm rule, two managers, and rows
 /// that never move under a finger while the numbers never wait.
 @MainActor
 struct TodosListModelTests {
-    private let now = Date(timeIntervalSince1970: 1_800_000_000)
+    private let clock = TodoListClock()
 
     private func model(_ store: TodoStore, hub: FakeHub) -> TodosListModel {
-        let now = now
-        return TodosListModel(deps: TodosListDeps(store: store, api: { hub.client }, features: { TodoFeatures(view: true) },
-                                                  now: { now }, calendar: { Calendar(identifier: .gregorian) }, toast: { _ in },
-                                                  report: { _ in }, projects: { [TodoProject(slug: "kyoto", name: "Kyoto trip", long: false)] }))
+        let clock = clock
+        return TodosListModel(deps: TodosListDeps(store: store, api: { hub.client }, now: { clock.now },
+                                                  calendar: { Calendar(identifier: .gregorian) },
+                                                  projects: { [TodoProject(slug: "kyoto", name: "Kyoto trip", long: false)] }))
     }
 
     private static func list(_ rows: [String], needsYou: Int = 1, inProgress: Int = 1) -> String {
@@ -117,8 +122,9 @@ struct TodosListModelTests {
         try await waitForListTest { list.groups.first?.keys == ["home/h1"] }
     }
 
-    /// Rows never move under a finger: while the list is scrolled a new filing waits, what a row says changes at once,
-    /// the numbers change at once; once the list rests the filing lands. A row that comes to need the owner lands at once.
+    /// Rows never move under a finger: while the list is scrolled a new filing waits, and so does what a row says (a
+    /// new line can change its height); the numbers change at once. A row that comes to need the owner lands at once,
+    /// alone, saying what it says now. Once the list rests the rest lands, the moved rows fading in.
     @Test func aNewFilingWaitsForTheListToRest() async throws {
         let hub = FakeHub()
         let first = Self.list([TodoViewJSON.row("a", view: TodoViewJSON.view(TodoListSection.working, line: "working")),
@@ -132,30 +138,86 @@ struct TodosListModelTests {
         await store.refresh(api: hub.client)
         try await waitForListTest { list.groups.count == 2 }
         list.hold.set(.scrolling, true)
-        // a moves to Waiting, with a line of its own: its words change now, its place once the list rests.
+        // a moves to Waiting, with a line of its own: its words and its place wait for the list to rest.
         hub.on("GET", "/api/v1/todos", json: Self.list([
             TodoViewJSON.row("a", view: TodoViewJSON.view(TodoListSection.waiting, line: "pr_open")),
             TodoViewJSON.row("b", view: TodoViewJSON.view(TodoListSection.todo, line: "rest"))], needsYou: 0, inProgress: 4))
         await store.refresh(api: hub.client)
-        try await waitForListTest { list.row("/a")?.content.mark == .waiting }
+        try await waitForListTest { list.entries.first { $0.choice == .inProgress }?.count == 4 } // the numbers never wait
+        // Held: a proof that something did not happen needs a moment to have happened in; the store has told the list.
+        try await Task.sleep(for: .milliseconds(100))
         #expect(list.groups.map(\.id) == [TodoListSection.working, TodoListSection.todo], "held while scrolled")
-        #expect(list.entries.first { $0.choice == .inProgress }?.count == 4, "the numbers never wait")
-        // b comes to need the owner: that lands at once, held or not.
+        #expect(list.row("/a")?.content.mark == .working, "what it says waits too")
+        // b comes to need the owner: that lands at once, alone; a's move and words still wait.
         hub.on("GET", "/api/v1/todos", json: Self.list([
             TodoViewJSON.row("a", view: TodoViewJSON.view(TodoListSection.waiting, line: "pr_open")),
             TodoViewJSON.row("b", view: TodoViewJSON.view(TodoListSection.needsYou, asks: ["todo:decision@1"], line: "decision"))]))
         await store.refresh(api: hub.client)
         try await waitForListTest { list.groups.first?.id == TodoListSection.needsYou }
-        #expect(list.groups.map(\.id) == [TodoListSection.needsYou, TodoListSection.waiting])
-        // Back to a filing that only moves rows: held again, then landed when the list rests.
-        hub.on("GET", "/api/v1/todos", json: Self.list([
-            TodoViewJSON.row("a", view: TodoViewJSON.view(TodoListSection.todo, line: "rest")),
-            TodoViewJSON.row("b", view: TodoViewJSON.view(TodoListSection.needsYou, asks: ["todo:decision@1"], line: "decision"))]))
-        await store.refresh(api: hub.client)
-        try await Task.sleep(for: .milliseconds(100))
-        #expect(list.groups.map(\.id) == [TodoListSection.needsYou, TodoListSection.waiting], "held")
+        #expect(list.groups.map(\.id) == [TodoListSection.needsYou, TodoListSection.working])
+        #expect(list.row("/b")?.content.mark == .needs && list.row("/b")?.content.door == .review)
+        #expect(list.row("/a")?.content.mark == .working)
+        let arrived = try #require(list.row("/a")?.arrivals)
+        // The list rests: the rest lands, a fading in where it now is.
         list.hold.set(.scrolling, false)
-        try await waitForListTest { list.groups.map(\.id) == [TodoListSection.needsYou, TodoListSection.todo] }
+        try await waitForListTest { list.groups.map(\.id) == [TodoListSection.needsYou, TodoListSection.waiting] }
+        #expect(list.row("/a")?.content.mark == .waiting)
+        #expect(list.row("/a")?.arrivals == arrived + 1, "a re-filed row fades in")
+        #expect(list.row("/b")?.arrivals == 1, "b faded in once, when it came to need the owner")
+    }
+
+    /// A row gone from the store while the list is held keeps its place and its words until the list rests: the rows
+    /// under it never jump up mid-glide.
+    @Test func aRowGoneWhileHeldStaysUntilItLands() async throws {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/todos", json: Self.list([TodoViewJSON.row("a", view: TodoViewJSON.view(TodoListSection.working)),
+                                                       TodoViewJSON.row("b", view: TodoViewJSON.view(TodoListSection.working, rank: 1))]))
+        hub.on("GET", "/api/v1/todos/places", json: Self.places)
+        let store = TodoStore(cachedTodos: [], cacheWriter: nil, hubListChanged: {}, v1: .on())
+        defer { store.forget() }
+        let list = model(store, hub: hub)
+        list.start()
+        await store.refresh(api: hub.client)
+        try await waitForListTest { list.groups.first?.keys == ["/a", "/b"] }
+        list.hold.set(.scrolling, true)
+        hub.on("GET", "/api/v1/todos", json: Self.list([TodoViewJSON.row("b", view: TodoViewJSON.view(TodoListSection.working, rank: 1))]))
+        await store.refresh(api: hub.client)
+        try await waitForListTest { store.byID["a"] == nil }
+        try await Task.sleep(for: .milliseconds(100)) // the list was told; held, nothing moved
+        #expect(list.groups.first?.keys == ["/a", "/b"] && list.row("/a") != nil, "kept, with its cell, while held")
+        list.hold.set(.scrolling, false)
+        try await waitForListTest { list.groups.first?.keys == ["/b"] }
+        #expect(list.row("/a") == nil)
+    }
+
+    /// The page's minute: the rows' times are said again each minute, and nothing within the minute they were said in.
+    @Test func timesAreSaidAgainEachMinute() async throws {
+        let hub = FakeHub()
+        let at = clock.now.addingTimeInterval(-16 * 60).formatted(.iso8601)
+        hub.on("GET", "/api/v1/todos", json: Self.list([
+            TodoViewJSON.row("a", extra: #""updated_at":"\#(at)""#, view: TodoViewJSON.view(TodoListSection.working))]))
+        hub.on("GET", "/api/v1/todos/places", json: Self.places)
+        let store = TodoStore(cachedTodos: [], cacheWriter: nil, hubListChanged: {}, v1: .on())
+        defer { store.forget() }
+        let list = model(store, hub: hub)
+        list.start()
+        await store.refresh(api: hub.client)
+        try await waitForListTest { list.row("/a") != nil }
+        let before = try #require(list.row("/a")?.content)
+        clock.now = clock.now.addingTimeInterval(20)
+        list.tick()
+        #expect(list.row("/a")?.content == before, "the same minute: nothing said again")
+        clock.now = clock.now.addingTimeInterval(120)
+        list.tick()
+        let next = try #require(list.row("/a")?.content)
+        #expect(next.trailing != before.trailing, "said from the new minute")
+        // Held: the minute is said once the list rests, not mid-glide.
+        list.hold.set(.scrolling, true)
+        clock.now = clock.now.addingTimeInterval(120)
+        list.tick()
+        #expect(list.row("/a")?.content == next, "held while scrolled")
+        list.hold.set(.scrolling, false)
+        try await waitForListTest { list.row("/a")?.content.trailing != next.trailing }
     }
 
     /// The bar's choice, the grouping and the sort are the owner's taps: they land at once, folds too.
@@ -201,16 +263,13 @@ struct TodosListModelTests {
                               v1: v1)
         defer { store.forget() }
         await store.refresh(api: hub.client)
-        #expect(!store.countsSource.byRules)
-        try await Task.sleep(for: .milliseconds(100))
-        let quiet = ticks
-        try await Task.sleep(for: .milliseconds(300))
-        #expect(ticks == quiet, "no clock while every counted row has a view")
+        #expect(!store.countsSource.byRules && !store.rulesClockRuns, "no clock while every counted row has a view")
         pick.current = "work"
-        try await waitForListTest { store.countsSource.byRules }
-        try await waitForListTest { ticks >= quiet + 3 } // the test's clock ticks each 0.1 s
-        store.listShown() // the list's first draw: the clock is already running, and stays one
-        #expect(store.countsSource.byRules)
+        try await waitForListTest { store.countsSource.byRules && store.rulesClockRuns }
+        let started = ticks
+        try await waitForListTest { ticks >= started + 3 } // the test's clock ticks each 0.1 s, counting again each time
+        pick.current = "home"
+        try await waitForListTest { !store.countsSource.byRules && !store.rulesClockRuns }
     }
 }
 

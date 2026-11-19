@@ -32,6 +32,9 @@ nonisolated struct TodoRowContent: Equatable, Sendable {
     /// Line 3, in caption: what the grouping does not already show, or nil.
     var caption: String?
     var inactive = false
+    /// The row in words, for VoiceOver: the title, the state its mark draws, its line, the door and how many asks, line
+    /// 3, then its time said in full ("Due Saturday", "16 minutes ago").
+    var spoken = ""
 }
 
 /// How the list groups its rows (the bar's trailing menu): by phase, the sections; by project; by due date. In every
@@ -114,7 +117,8 @@ nonisolated enum TodosListLayout {
         static let empty = Output()
     }
 
-    /// A row's identity in the list: its manager and its id (D12's tie-breakers), unique in a merged list.
+    /// A row's identity in the list: its manager and its id, unique in a merged list (and the list's tie-breakers after
+    /// the rank, `TodoFiling.ordered`).
     static func key(_ row: TodoFiled) -> String { (row.manager ?? "") + "/" + row.id }
 
     static func layout(_ input: Input) -> Output {
@@ -305,23 +309,29 @@ nonisolated enum TodosListLayout {
     }
 }
 
-/// A row's content from its facts and its view (#10465): the trailing time, the mark, the line in words, the door and
-/// line 3. Pure.
+/// A row's content from its facts and its view (#10465): the trailing time, the mark, the line in words, the door,
+/// line 3 and the row in words. Pure.
 nonisolated enum TodoRowContentLogic {
     static func content(_ filed: TodoFiled, item: TodoItem, view: TodoSummary?, grouping: TodosListGrouping, now: Date,
                         words: TodoWords = TodoWords(), calendar: Calendar = .current,
                         projectName: (String) -> String = { $0 }) -> TodoRowContent {
         var c = TodoRowContent(id: filed.id, title: item.title, closed: filed.closed, inactive: filed.inactive)
         let since = view?.since.flatMap(JSON.parseDate)
+        // The time as drawn at the title's end, and as VoiceOver says it.
+        var heard: [String] = []
         if let due = TodosLogic.dueBy(item, calendar: calendar), !filed.closed {
             let day = item.dueAt ?? TodosLogic.dueDay(item, calendar: calendar) ?? due
             c.trailing = TodoTimeWords.due(day, now: now, words: words, calendar: calendar)
             c.overdue = due < now
+            if c.overdue { heard.append(words("Overdue [To-dos Spoken]")) }
+            heard.append(TodoTimeWords.spokenDue(day, now: now, words: words, calendar: calendar))
         } else if filed.closed, let done = item.doneAt {
             c.trailing = TodoTimeWords.day(done, now: now, words: words, calendar: calendar)
+            heard.append(words("Done \(TodoTimeWords.spokenDay(done, now: now, words: words, calendar: calendar)) [To-dos Spoken]"))
         } else if ![TodoListSection.todo, TodoListSection.someday].contains(filed.section),
                   let at = since ?? item.updatedAt ?? item.createdAt {
             c.trailing = TodoTimeWords.age(at, now: now, words: words, calendar: calendar)
+            heard.append(TodoTimeWords.spokenAge(at, now: now, words: words, calendar: calendar))
         }
         c.unseen = filed.section == TodoListSection.justFinished && view?.seen != true
         c.mark = mark(filed, view: view)
@@ -333,10 +343,10 @@ nonisolated enum TodoRowContentLogic {
             if [TodoListSection.needsYou, TodoListSection.canWait].contains(filed.section), let first = asks.first {
                 c.door = first.kind == OwnerAskKind.plan ? .reviewPlan : .review
             }
-        } else {
-            // Filed by the app's own rules (an older manager's row): its section's word, as no line comes with it.
-            c.said = legacy(filed)
         }
+        // A row filed by the app's own rules (an older manager's), and one whose line this build cannot say (a newer
+        // manager's key), say their section's word: the mark is drawn on line 2, and Working must not lose its ◐.
+        if c.said == nil { c.said = legacy(filed) }
         // A plain To do says the first line of its notes, which every client has (the hub sends no line for it).
         if c.said == nil, [TodoListSection.todo, TodoListSection.someday].contains(filed.section),
            let notes = item.notes.flatMap(firstLine) {
@@ -350,10 +360,33 @@ nonisolated enum TodoRowContentLogic {
             facts.insert(projectName(project), at: 0)
         }
         c.caption = facts.isEmpty ? nil : facts.joined(separator: TodoTimeWords.separator)
+        c.spoken = spoken(c, heard: heard, words: words)
         return c
     }
 
-    /// A row without a view says only where it is.
+    /// The row in words: the title; the state its mark draws (its line may already say it); the line; the door and
+    /// how many asks; line 3; the time.
+    private static func spoken(_ c: TodoRowContent, heard: [String], words: TodoWords) -> String {
+        let separator = words.listSeparator
+        var parts = [c.title]
+        let state: String? = switch c.mark {
+        case .needs: StateName.todoNeedsYou
+        case .working: StateName.taskWorking
+        case .ready: StateName.todoJustFinished
+        case .waiting: StateName.taskWaiting.text
+        case nil: c.closed && heard.isEmpty ? StateName.done.text : nil
+        }
+        if let state, c.said?.lead != state { parts.append(state) }
+        if let said = c.said { parts.append(said.spoken(separator: separator)) }
+        if let door = c.door {
+            parts.append(door == .reviewPlan ? words("Review Plan [To-dos Door]") : words("Review [To-dos Door]"))
+            if c.asks > 1 { parts.append(words("\(c.asks) asks [To-dos Door]")) }
+        }
+        if let caption = c.caption { parts.append(caption) }
+        return (parts + heard).joined(separator: separator)
+    }
+
+    /// Where it is, when no line can be said (no view, or a key this build does not know).
     private static func legacy(_ filed: TodoFiled) -> TodoLineText.Said? {
         switch filed.section {
         case TodoListSection.needsYou: TodoLineText.Said(lead: StateName.todoNeedsYou, tone: .needs)

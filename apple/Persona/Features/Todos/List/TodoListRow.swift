@@ -8,15 +8,12 @@ import SwiftUI
 /// the next step of #10465; until then the whole row opens the to-do.
 struct TodoListRow: View {
     var row: TodosListModel.Row
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let c = row.content
         HStack(alignment: .firstTextBaseline, spacing: Theme.Space.m) {
-            // The tick's 24-pt glyph on the title's first line.
-            ThemedIcon(c.closed ? Theme.Icon.successFilled : Theme.Icon.unchecked)
-                .font(Theme.Font.title)
-                .foregroundStyle(c.closed ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(.tertiary))
-                .accessibilityHidden(true)
+            TodoTickGlyph(closed: c.closed)
             VStack(alignment: .leading, spacing: Theme.Space.xs) {
                 titleLine(c)
                 if let said = c.said { lineTwo(said, mark: c.mark) }
@@ -30,8 +27,19 @@ struct TodoListRow: View {
             }
             .padding(.vertical, Theme.Space.s)
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(spoken(c))
+        // A re-filing that put it in another group: it fades in where it now is (proposal 3.9), still with Reduce Motion.
+        .keyframeAnimator(initialValue: 1.0, trigger: row.arrivals) { view, opacity in
+            view.opacity(opacity)
+        } keyframes: { _ in
+            if reduceMotion {
+                MoveKeyframe(1)
+            } else {
+                MoveKeyframe(0)
+                LinearKeyframe(1, duration: Theme.Motion.concealTime, timingCurve: Theme.Motion.concealCurve)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(c.spoken)
         .accessibilityIdentifier("todos.row." + row.todoID)
     }
 
@@ -67,10 +75,23 @@ struct TodoListRow: View {
         .font(Theme.Font.secondary)
     }
 
+    /// The door to what it asks, drawn as the style's button (proposal 3.4: "[ Review Plan › ]"). Until the row answers
+    /// in place (#10465's answers step) a tap on it is the row's, which opens the to-do where its asks are answered;
+    /// the row's label says it.
     private func doorLine(_ door: TodoDoor, asks: Int) -> some View {
         HStack(spacing: Theme.Space.sm) {
-            Chip(text: door == .reviewPlan ? String(localized: "Review Plan [To-dos Door]") : String(localized: "Review [To-dos Door]"),
-                 look: .tint(Theme.accent))
+            Button {} label: {
+                HStack(spacing: Theme.Space.xxs) {
+                    Text(door == .reviewPlan ? String(localized: "Review Plan [To-dos Door]") : String(localized: "Review [To-dos Door]"))
+                    ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.captionStrong)
+                }
+                .lineLimit(1)
+            }
+            .font(Theme.Font.secondaryStrong)
+            .themedButton()
+            .tint(Theme.accent)
+            .fixedSize()
+            .allowsHitTesting(false)
             if asks > 1 {
                 Text("\(asks) asks [To-dos Door]")
                     .font(Theme.Font.caption)
@@ -101,17 +122,18 @@ struct TodoListRow: View {
         }
         return out
     }
+}
 
-    private func spoken(_ c: TodoRowContent) -> String {
-        var parts = [c.title]
-        if c.closed { parts.append(StateName.done.text) }
-        if let said = c.said { parts.append(said.spoken) }
-        if let door = c.door {
-            parts.append(door == .reviewPlan ? String(localized: "Review Plan [To-dos Door]") : String(localized: "Review [To-dos Door]"))
-        }
-        if let caption = c.caption { parts.append(caption) }
-        if let trailing = c.trailing { parts.append(trailing) }
-        return parts.joined(separator: String(localized: ", ", comment: "Separator between parts of an accessibility label"))
+/// The tick's 24-pt glyph on the title's first line (a 44-pt hit area once it acts, the next step of #10465); a fold's
+/// line keeps its room, unseen, so its words sit in the titles' column.
+struct TodoTickGlyph: View {
+    var closed: Bool
+
+    var body: some View {
+        ThemedIcon(closed ? Theme.Icon.successFilled : Theme.Icon.unchecked)
+            .font(Theme.Font.title)
+            .foregroundStyle(closed ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(.tertiary))
+            .accessibilityHidden(true)
     }
 }
 #endif

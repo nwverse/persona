@@ -993,9 +993,14 @@ struct AssistantSidebar: View {
             HStack(spacing: Theme.Space.xs) {
                 if inbox > 0 { CountBadge(count: inbox, look: .needs, label: String(localized: "Inbox")) }
                 if todos > 0 {
-                    CountBadge(count: todos, look: .needs, label: String(localized: "To-dos"))
-                        .accessibilityValue(String(todos))
-                        .accessibilityIdentifier("sidebar-fold-places.todos")
+                    if TodosV1.shared.isOn {
+                        // The V1 list's N, readable by its tests (#10465); today's tally stays as it was.
+                        CountBadge(count: todos, look: .needs, label: String(localized: "To-dos"))
+                            .accessibilityValue(String(todos))
+                            .accessibilityIdentifier("sidebar-fold-places.todos")
+                    } else {
+                        CountBadge(count: todos, look: .needs, label: String(localized: "To-dos"))
+                    }
                 }
             }
         }
