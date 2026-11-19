@@ -2093,9 +2093,10 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
   of its bottom row, before voice / Stop / Send (`Composer`'s `trailing` slot, `views/chat/ModelPill.tsx`). The permission
   chip stays at the left; the thinking-effort chip, a Persona chat's launcher chip and an Agent's "launcher · model" text
   are gone, and the context bar below the composer does not name the model.
-- **What the pill shows**: `[provider][model][engine][effort][⚡][⌄]`: the launcher's letter tile, the model as its
-  launcher's list names it (before that list is in, a short form of the ID such as `opus 5.5`), the engine's mark (no "·"
-  before it: the mark is the separator), the thinking effort in the text colour (English says "Extra" for "Very high" on
+- **What the pill shows**: `[engine][model][effort][⚡][⌄]`: the mark of the Agent the launcher runs, drawn once and first
+  (#5497: `AgentMark`, as in the Agents list; an Agent with no mark of its own gets the generic `agent` icon, never a
+  letter, unless its runtime names it, #8142), the model as its launcher's list names it (before that list is in, a short form of the ID such as `opus 5.5`),
+  the thinking effort in the text colour (English says "Extra" for "Very high" on
   the pill only), a filled bolt for Codex's Fast, and the workflow mark while ultracode (or a Codex thread's ultra) is on.
   No frame at rest; on hover and while the panel is open, a 1 px `--line-strong` capsule on `--hover`. Tooltip:
   "Claude Code · Opus 5.5 · gateway · High[ · Fast]"; accessible name "Select model. Current: Opus 5.5, thinking effort: High".
@@ -2107,7 +2108,7 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
   model and stays as a short mark, as the model change divider has it ("Opus 5.5 (1M context)" and "Opus 5.5 [1m]" read
   "Opus 5.5 1M"; `pillShortName`, the tooltip and the accessible name keep the whole name). A fixed 148 px used to cut "Opus 5.5" to "Opus …" beside free room (web usability
   audit 2026-11-14, item 50). It shrinks only when the row is short of room: the name gives way first, the engine mark stays, and the effort truncates only
-  once the name has no room left (Cindy lets both shrink alike; her own rule says the name goes first); under 520 its text is 12 px and its marks a step smaller; under 420 it is 64 px: the tile and the chevron; only a
+  once the name has no room left (Cindy lets both shrink alike; her own rule says the name goes first); under 520 its text is 12 px and its marks a step smaller; under 420 it is 64 px: the engine's mark and the chevron; only a
   waiting switch's clock makes it grow there (a spinner or a warning stays within the 64 px).
 - **Agent launcher label (#10248)**: an explicit session launcher is shown as **launcher · model**, matching its
   model-panel row. The launcher's name and shortened model remain visible on phones, with full names in the tooltip
@@ -2116,8 +2117,8 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
   fallback apply. Persona's pill is unchanged. This changes presentation only, never the model-selection payload.
 - **States**: reading the list for the first time with no model known: a spinner and "Loading model…"; that read failed: a
   warning in the error colour ("Model loading failed" in the tooltip); a switch to another launcher waiting for the next
-  message (`pending_switch` on the session, #5035): a clock first, then the setup the next message runs on: that launcher's
-  tile, its name before the model (gone when the pill is narrow; the engine's name instead when the engine changes, as in
+  message (`pending_switch` on the session, #5035): a clock first, then the setup the next message runs on: its engine's
+  mark, the launcher's name before the model (gone when the pill is narrow; the engine's name instead when the engine changes, as in
   Cindy), the model as that launcher's list names it (none picked: its default) and the effort, with the tooltip
   "Current: …" / "Next message: …" and the accessible name "Select model. Next message: work · GLM 5.3, thinking effort:
   High"; a switch on its way: dimmed, no clicks. An Agent that can switch neither its model nor its effort (offline, a
@@ -2214,7 +2215,8 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
 - **Kept in this browser**: favorites, the last five setups that applied (Recent) and per-model customizations (effort,
   Fast) live in `localStorage` (`persona.modelPanel.<base>.agent.*`, apart from a Persona chat's). The hub has no store for
   such preferences, so they do not follow you to another browser: a choice for this step.
-- **Deviations from Cindy**: provider marks are letter tiles (Persona has no vendor logos); quota and price are drawn only
+- **Deviations from Cindy**: provider marks are the mark of the Agent each launcher runs (Persona has no model-vendor
+  logos, #5497), so launchers of one Agent share its mark and each launcher summary names its launcher; quota and price are drawn only
   where the existing launcher answer / exact catalog entry supplies them; ↑↓ also move between rows; a pending switch to
   another launcher of the same engine names that launcher rather than the engine (it stays Claude Code), and its warning
   line speaks of a restart on that launcher rather than a handoff summary (the conversation is resumed as it is); a
@@ -2314,7 +2316,7 @@ resumes the conversation's earlier session of it.
 - **Recording**: the same `POST …/modes {"launcher", "from", "model"?, "effort"?}` as a switch to another launcher; the node
   works out the engine and the row's `pending_switch` names it (`agent`), drawn at once (put back with the hub's words if
   it says no). A toast says "Switch scheduled: will change to Codex · 5.5 when your next message is sent". The pill shows
-  the clock, the target's tile, the engine's name and the model with the effort that model runs by default (Claude Code's
+  the clock, the target engine's mark, the engine's name and the model with the effort that model runs by default (Claude Code's
   effort is not carried to Codex, nor back); its tooltip and accessible name say "Next message: Codex · 5.5". While it
   waits, the panel's list starts with the warning line "Switching engines rebuilds context and may lose content" (it wraps
   rather than truncating), and reopening the panel stands on the model that runs now.
@@ -2396,9 +2398,9 @@ and Android follow in #5117.
   tooltip). It replaces the **Preset**, **Launcher** / **Launcher (this time only)**, **Model** and **Thinking effort**
   fields and **Manage launchers** ("Configure models" at the panel's foot closes the sheet and opens Settings › Model
   providers). The pill is off, with a spinner, until the computer's launchers are read.
-- **What the pill says**: what this start runs: the launcher's letter tile, the model (the one picked; else Model
+- **What the pill says**: what this start runs: the mark of the Agent the launcher runs, the model (the one picked; else Model
   settings' model on their launcher; else the model the launcher's default entry stands for, by its list's name; a
-  launcher that fixes its own `--model`, that model), the engine's mark and, for Claude Code and Antigravity, the effort
+  launcher that fixes its own `--model`, that model) and, for Claude Code and Antigravity, the effort
   (the one picked, else Model settings'). Codex shows no effort: a start doesn't set it. The workflow mark while ultracode
   is on.
 - **Providers** (`lib/new-agent-panel.ts`): the chosen computer's launchers in the hub's order (`GET
@@ -2444,7 +2446,7 @@ and Android follow in #5117.
 - **Deviations from Cindy**: a Persona launcher is a provider and an engine at once, so another engine is another
   launcher's row of the same model, picked from the flyout, rather than an engine override kept on the model; the follow
   row and the row that runs are both drawn (Cindy's follow row lights no model, but there the effort and ultracode of
-  the default would have nowhere to be set); presets are Persona's own; letter tiles, no prices and no quota bars, as in
+  the default would have nowhere to be set); presets are Persona's own; Agent marks, no prices and no quota bars, as in
   the chat.
 - **Tests**: `lib/new-agent-panel.test.ts`, `ui/model-panel/ModelPanel.new-agent.test.tsx`,
   `ui/model-panel/EffortSlider.test.tsx` (no level set), `views/NewAgent.*.test.tsx`; end to end, `web/e2e/new-agent-model.mjs`
