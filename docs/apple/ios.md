@@ -2032,9 +2032,11 @@ built in stages behind the hub's `todo_view`; this section grows with it.
   `TodoStore.countsSource` (`TodoCountsSource`): the hub's `counts` and places with one manager; with several, counted
   from the current assistant's filed rows (`TodoCountsFallback`, the hub's rules, replayed against
   `spec/fixtures/todo-counts`) with only its own project places; less the answers given on the device that the hub's
-  view does not show yet. A row filed by the app's own rules is counted when the store reads, not as its sessions
-  change: such rows exist only while a manager is older than the hub's features say, or sends a section this build
-  does not know.
+  view does not show yet. The rows are filed there once (`countsSource.filed`, the current assistant's in the list's
+  order), for the V1 list to take its sections from, so the list and the numbers cannot disagree. A row filed
+  by the app's own rules (a manager older than the hub's features say, or a section this build does not know) is
+  filed again when one of its Agents' sessions changes (each read through its own cell, so only those are watched)
+  and each minute while the scene is in front, since those rules read the clock and no `next_change_at` says when.
 - **The gate and its memory.** `TodoFeatures` reads `todo_view`, `todo_places`, `todo_timeline` and `todo_asks` from each
   group's hello and remembers them per group (`hubTodoFeatures.<group>`, written only when they change); before a
   group's hello in this run the remembered value is used. `TodosV1` is on while the hub-level group's hello listed

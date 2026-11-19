@@ -9,7 +9,7 @@ extension TodoStore.V1 {
     static func on(features: TodoFeatures = TodoFeatures(view: true, places: true), cache: TodoViewCache? = nil,
                    saved: (@MainActor (TodoViewCache?) -> Void)? = nil, api: APIClient? = nil,
                    timing: Timing = .fast) -> TodoStore.V1 {
-        TodoStore.V1(isOn: { true }, features: { features }, lookup: { nil }, loadCache: { cache }, saveCache: saved,
+        TodoStore.V1(isOn: { true }, features: { features }, lookup: { _ in nil }, loadCache: { cache }, saveCache: saved,
                      api: { api }, timing: timing)
     }
 }
@@ -17,7 +17,8 @@ extension TodoStore.V1 {
 extension TodoStore.V1.Timing {
     /// Waits a test can sit through: the cache written within milliseconds, the timer read again soon after.
     static var fast: Self {
-        .init(slack: 0, retries: [0.15, 0.3], floor: 0, hold: 0.3, saveFirst: .milliseconds(10), saveGap: .milliseconds(10))
+        .init(slack: 0, retries: [0.15, 0.3], floor: 0, hold: 0.3, saveFirst: .milliseconds(10), saveGap: .milliseconds(10),
+              rulesTick: 0.1)
     }
 }
 

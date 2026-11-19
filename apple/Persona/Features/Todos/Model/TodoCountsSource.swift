@@ -13,14 +13,21 @@ import PersonaWire
 /// - Less what the owner answered on this device that the hub's view does not show yet (`answered(_:of:)`): a to-do in
 ///   Needs you whose every ask is answered leaves N at once, and comes back if the answer is undone.
 ///
-/// Each number is set only when it changes, so a push that moves none redraws nothing that reads them.
+/// Each number is set only when it changes, so a push that moves none redraws nothing that reads them. The rows are
+/// filed here once for the list and the numbers alike (`filed`), so the list's sections and the numbers cannot disagree.
 @MainActor @Observable
 final class TodoCountsSource {
     private(set) var counts = TodoCounts(sections: Dictionary(uniqueKeysWithValues: TodoListSection.all.map { ($0, 0) }))
     /// All To-dos, Today, Upcoming, then the projects; All only from a hub without places.
     private(set) var places: [TodoPlace] = [TodoPlace(id: TodoPlaceKind.allValue, kind: TodoPlaceKind.allValue)]
+    /// The current assistant's rows as filed, in the list's order (`TodoFiling.ordered`): the V1 list draws its sections
+    /// from these, the rows the numbers were counted from.
+    private(set) var filed: [TodoFiled] = []
     /// N: the to-dos that need the owner.
     var needsYou: Int { counts.needsYou }
+    /// Whether a counted row is filed by the app's own rules, which read the clock: the store counts again each minute
+    /// while there is one (its sessions are watched here).
+    @ObservationIgnored private(set) var byRules = false
 
     /// What the store holds: every row (each manager's), their views, and the hub's counts and places.
     struct Input {
@@ -35,14 +42,23 @@ final class TodoCountsSource {
     /// The asks answered on this device that the hub's view still lists, by to-do id.
     @ObservationIgnored private var overlay: [String: Set<String>] = [:]
     @ObservationIgnored private let scope: @MainActor () -> AssistantScope?
-    @ObservationIgnored private let lookup: @MainActor () -> TodosLogic.SessionLookup?
+    @ObservationIgnored private let lookup: @MainActor ([TodoItem]) -> TodosLogic.SessionLookup?
+    @ObservationIgnored private let now: @MainActor () -> Date
     @ObservationIgnored private var watchesScope = false
+    /// The Agents of the rows filed by the app's own rules whose sessions are watched, and the watch's token: a session
+    /// of theirs changing files them again (an older manager sends no push for it).
+    @ObservationIgnored private var watched: (agents: Set<String>, token: Int)?
+    @ObservationIgnored private var watchToken = 0
 
     /// `scope`: the current assistant's, nil with one manager (`TodoStore.Managers.scope`). `lookup`: the sessions of the
-    /// rows' Agents, read only to file a row without a view.
-    init(scope: @escaping @MainActor () -> AssistantScope?, lookup: @escaping @MainActor () -> TodosLogic.SessionLookup? = { nil }) {
+    /// given rows' Agents, read only to file a row without a view, one session at a time so only theirs are watched.
+    /// `now`: the time a row is filed at again when the clock or a session moves it (`tick()`).
+    init(scope: @escaping @MainActor () -> AssistantScope?,
+         lookup: @escaping @MainActor ([TodoItem]) -> TodosLogic.SessionLookup? = { _ in nil },
+         now: @escaping @MainActor () -> Date = { Date() }) {
         self.scope = scope
         self.lookup = lookup
+        self.now = now
     }
 
     /// The store's rows, views, counts or places changed: answers the hub now shows are let go, and the numbers counted
@@ -81,16 +97,26 @@ final class TodoCountsSource {
     /// Another hub, or none: nothing kept.
     func reset() {
         overlay = [:]
+        watched = nil
         update(Input())
+    }
+
+    /// Counts again now: the rows filed by the app's own rules move with the clock and their sessions.
+    func tick() {
+        input.now = now()
+        recount()
     }
 
     private func recount() {
         let scope = watchedScope()
         let rows = scope.map { s in input.rows.filter { s.has($0.manager) } } ?? input.rows
         let hubCounts = scope == nil ? input.counts : nil
-        // Filing is needed to count, to place several managers' projects, or to take answers off.
-        let filed = hubCounts == nil || scope != nil || !overlay.isEmpty
-            ? TodoFiling.file(rows, views: input.views, now: input.now, lookup: { lookup() }) : []
+        let ruled = rows.filter { row in input.views[row.id].map(TodoFiling.knows) != true }
+        byRules = !ruled.isEmpty
+        if ruled.isEmpty { watched = nil }
+        let filed = TodoFiling.file(rows, views: input.views, now: input.now, lookup: { sessions(of: ruled) })
+        let ordered = TodoFiling.ordered(filed)
+        if ordered != self.filed { self.filed = ordered }
         var next = hubCounts ?? TodoCountsFallback.counts(filed)
         let carried = overlay.isEmpty ? [] : TodoCountsFallback.carried(filed)
         var awayByProject: [String: Int] = [:]
@@ -129,6 +155,24 @@ final class TodoCountsSource {
             out.append(place)
         }
         return out
+    }
+
+    /// The sessions of `rows`' Agents, watched: when one changes the rows are filed again. Watched anew only when the
+    /// Agents change or the last watch fired, so a read that changes nothing adds no watch.
+    private func sessions(of rows: [TodoItem]) -> TodosLogic.SessionLookup? {
+        let agents = Set(rows.flatMap { $0.agents.map { "\($0.machineID)/\($0.sessionID)" } })
+        if watched?.agents == agents { return lookup(rows) }
+        watchToken += 1
+        let token = watchToken
+        watched = (agents, token)
+        return withObservationTracking { lookup(rows) } onChange: { [weak self] in
+            // Called once, before the change lands: filed again once it has.
+            Task { @MainActor [weak self] in
+                guard let self, watched?.token == token else { return }
+                watched = nil
+                tick()
+            }
+        }
     }
 
     /// The current assistant, followed: when the owner switches assistants the numbers are counted for the new one.

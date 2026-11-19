@@ -71,6 +71,8 @@ final class TodoStore {
     @ObservationIgnored private var lastTimerRead = Date.distantPast
     /// Ends the first V1 launch's wait for the views (`viewsRead`) when the first read is slow.
     @ObservationIgnored private var holdTimer: Task<Void, Never>?
+    /// Counts again each `Timing.rulesTick` while a row is filed by the app's own rules, which read the clock.
+    @ObservationIgnored private var rulesClock: Task<Void, Never>?
     /// The scene is in front: the timer runs only then (P9).
     @ObservationIgnored private var active = true
     @ObservationIgnored private var sceneObservers: [NSObjectProtocol] = []
@@ -83,12 +85,16 @@ final class TodoStore {
     struct V1 {
         var isOn: @MainActor () -> Bool
         var features: @MainActor () -> TodoFeatures
-        var lookup: @MainActor () -> TodosLogic.SessionLookup?
+        /// The sessions of the given rows' Agents, each read through its own cell (`AppModel.session(_:)`), so the
+        /// counts watch only theirs.
+        var lookup: @MainActor ([TodoItem]) -> TodosLogic.SessionLookup?
         var loadCache: @MainActor () -> TodoViewCache?
         /// nil: take the entry away.
         var saveCache: (@MainActor (TodoViewCache?) -> Void)?
         /// The client the store's own reads go through (the timer's, V1 coming on); nil: the app's hub.
         var api: @MainActor () -> APIClient? = { nil }
+        /// The time the rows are filed at: the app's own rules read it (tests move it).
+        var now: @MainActor () -> Date = { Date() }
         var timing = Timing()
 
         /// How long the store waits (tests make these short).
@@ -105,11 +111,17 @@ final class TodoStore {
             /// The views' cache entry: written this long after a quiet spell, then at most once per `saveGap`.
             var saveFirst: Duration = .seconds(2)
             var saveGap: Duration = .seconds(15)
+            /// How often rows filed by the app's own rules are counted again, as today's list files them again.
+            var rulesTick: TimeInterval = 60
         }
 
         static var live: V1 {
             .init(isOn: { TodosV1.shared.isOn }, features: { AppModel.shared.todoFeatures },
-                  lookup: { TodosLogic.makeSessionLookup(AppModel.shared.sessionsNow) },
+                  lookup: { rows in
+                      let app = AppModel.shared
+                      return TodosLogic.makeSessionLookup(TodosLogic.linkedSessions(of: rows, hubGroup: app.hub?.group ?? "",
+                                                                                    session: { app.session($0) }))
+                  },
                   loadCache: { StateCache.load(TodoStore.viewStateName, as: TodoViewCache.self) },
                   saveCache: { cache in
                       if let cache { StateCache.save(TodoStore.viewStateName, cache) } else { StateCache.remove(TodoStore.viewStateName) }
@@ -185,7 +197,7 @@ final class TodoStore {
         self.managers = managers
         self.v1 = v1
         viewSaver = Throttle(first: v1.timing.saveFirst, gap: v1.timing.saveGap)
-        countsSource = TodoCountsSource(scope: managers.scope, lookup: v1.lookup)
+        countsSource = TodoCountsSource(scope: managers.scope, lookup: v1.lookup, now: v1.now)
         let initial = cachedTodos ?? StateCache.load(Self.stateName, as: [TodoItem].self) ?? []
         let initialIndex = Self.index(initial)
         todos = initial
@@ -280,6 +292,7 @@ final class TodoStore {
         timerReads = nil
         armTimer()
         if v1.isOn() { countsSource.reset() }
+        armRulesClock()
         // Whether V1 is on or not (it may have been for the last hub), and now: a write of the last hub's views still
         // waiting is replaced, so it cannot land after this.
         if let save = v1.saveCache {
@@ -303,6 +316,7 @@ final class TodoStore {
         } else {
             countsSource.reset()
             holdTimer?.cancel()
+            armRulesClock()
         }
     }
 
@@ -451,7 +465,26 @@ final class TodoStore {
     /// Counts again while V1 is on (nothing reads the numbers before).
     private func recount() {
         guard v1.isOn() else { return }
-        countsSource.update(.init(rows: todos, views: views, counts: counts, places: places, now: Date()))
+        countsSource.update(.init(rows: todos, views: views, counts: counts, places: places, now: v1.now()))
+        armRulesClock()
+    }
+
+    /// While a counted row is filed by the app's own rules (an older manager's, or a view this build cannot read), it
+    /// is counted again each `Timing.rulesTick` the scene is in front: those rules read the clock, and no
+    /// `next_change_at` says when.
+    private func armRulesClock() {
+        let due = v1.isOn() && active && countsSource.byRules
+        guard due != (rulesClock != nil) else { return }
+        rulesClock?.cancel()
+        rulesClock = nil
+        guard due else { return }
+        rulesClock = Task { [weak self, tick = v1.timing.rulesTick] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(tick))
+                guard !Task.isCancelled, let self else { return }
+                countsSource.tick()
+            }
+        }
     }
 
     // MARK: Rows that change by time alone (docs/apple/ios.md "The data")
@@ -503,6 +536,7 @@ final class TodoStore {
         self.active = active
         if !active { viewSaver.flush() }
         armTimer()
+        armRulesClock()
     }
 
     private func persist(_ list: [TodoItem]) {

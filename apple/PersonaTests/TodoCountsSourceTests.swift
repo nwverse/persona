@@ -11,6 +11,16 @@ private final class TodoAssistantPick {
     var scope: AssistantScope { AssistantScope(group: "", current: current, defaultID: "home", installed: ["home", "work"]) }
 }
 
+/// An Agent's session as the app holds it: watched, as `AppModel.session(_:)`'s cell is.
+@MainActor @Observable
+private final class TodoSessionCell {
+    var state: AgentState = .working
+    func session(_ id: String) -> Session? {
+        let json = #"{"machine_id":"m","session_id":"\#(id)","title":"\#(id)","cwd":"/tmp","status":"idle","state":"\#(state.rawValue)"}"#
+        return try? JSON.decoder.decode(Session.self, from: Data(json.utf8))
+    }
+}
+
 /// One number per place (#10465, docs/apple/ios.md "Filing and counts"): with one manager the hub's counts and places as
 /// sent; with several, counted from the current assistant's rows, with only its own project places; less the answers
 /// given on this device that the hub's view does not show yet.
@@ -114,6 +124,43 @@ struct TodoCountsSourceTests {
         }
         await store.refresh(api: hub.client)
         #expect(!changed.on)
+    }
+
+    /// The rows are filed once, for the list and the numbers alike: the current assistant's, in the list's order.
+    @Test func theListAndTheNumbersShareOneFiling() async throws {
+        let hub = Self.hub()
+        let pick = TodoAssistantPick()
+        let store = TodoStore(cachedTodos: [], cacheWriter: nil, hubListChanged: {},
+                              managers: .init(scope: { pick.scope }, naming: { $0 }), v1: .on())
+        defer { store.forget() }
+        await store.refresh(api: hub.client)
+        let source = store.countsSource
+        #expect(source.filed.map(\.id) == ["w1", "w2", "w3"], "work's, Needs you by rank, then Working")
+        #expect(source.filed.filter { $0.section == TodoListSection.needsYou }.count == source.needsYou)
+        #expect(!source.byRules)
+
+        let one = TodoStore(cachedTodos: [], cacheWriter: nil, hubListChanged: {}, v1: .on())
+        defer { one.forget() }
+        await one.refresh(api: hub.client)
+        #expect(one.countsSource.filed.map(\.id) == ["h1", "w1", "w2", "w3"], "one manager, the hub's counts: filed all the same")
+    }
+
+    /// A row filed by the app's own rules (no view this build can read) is filed again when its Agent's session changes,
+    /// without a read: an older manager sends no push for it.
+    @Test func aRowFiledByTheRulesFollowsItsSessions() async throws {
+        let cell = TodoSessionCell()
+        let source = TodoCountsSource(scope: { nil }, lookup: { rows in
+            TodosLogic.makeSessionLookup(rows.flatMap { $0.agents.compactMap { cell.session($0.sessionID) } })
+        })
+        let row = TodoItem(id: "t", title: "Older manager's", createdAt: Date(), updatedAt: Date(),
+                           agents: [TodoItem.Agent(machineID: "m", sessionID: "s1")])
+        source.update(.init(rows: [row], now: Date()))
+        #expect(source.byRules && source.filed.first?.section == TodoListSection.working && source.needsYou == 0)
+        cell.state = .needsYou
+        try await waitForCount { source.needsYou == 1 }
+        #expect(source.filed.first?.section == TodoListSection.needsYou)
+        cell.state = .working
+        try await waitForCount { source.needsYou == 0 }
     }
 
     private func waitForCount(_ condition: @MainActor () -> Bool) async throws {

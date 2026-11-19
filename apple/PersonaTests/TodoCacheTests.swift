@@ -885,6 +885,30 @@ struct TodoCacheTests {
         #expect(reads == 3)
     }
 
+    /// A row filed by the app's own rules (an older manager's, without a view) moves with the clock: it is counted
+    /// again while the scene is in front, without a read, and not while it is away.
+    @Test func aRowFiledByTheRulesMovesWithTheClock() async throws {
+        let hub = FakeHub()
+        var now = Date()
+        // Closed a minute less than Just finished lasts, by the store's clock.
+        let closed = ISO8601DateFormatter().string(from: now.addingTimeInterval(-TodoTriageLogic.justDone + 60))
+        hub.on("GET", "/api/v1/todos", json: TodoViewJSON.list([TodoViewJSON.row("old", extra: #""done_at":"\#(closed)""#)]))
+        hub.on("GET", "/api/v1/todos/places", json: #"{"places":[],"counts":{}}"#)
+        var v1 = TodoStore.V1.on()
+        v1.now = { now }
+        let store = TodoStore(cachedTodos: [], cacheWriter: nil, hubListChanged: {}, v1: v1)
+        defer { store.forget() }
+        await store.refresh(api: hub.client)
+        #expect(store.countsSource.byRules && store.countsSource.filed.first?.section == TodoListSection.justFinished)
+        store.sceneActive(false)
+        now += 120
+        try await Task.sleep(for: .milliseconds(300)) // three of the test's ticks
+        #expect(store.countsSource.filed.first?.section == TodoListSection.justFinished, "away from the front: no clock")
+        store.sceneActive(true)
+        try await waitForTodoTest { store.countsSource.filed.first?.section == TodoListSection.done }
+        #expect(hub.sent("GET", "/api/v1/todos").count == 1, "counted again, not read again")
+    }
+
     /// A hub whose moments keep coming a moment ahead is read no more often than the floor allows.
     @Test func theTimerHasAFloor() async throws {
         let hub = FakeHub()
