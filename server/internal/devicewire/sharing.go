@@ -20,6 +20,11 @@ type Submission struct {
 	Kind         string `json:"kind"`
 	OriginalText string `json:"original_text"`
 }
+
+// SubmissionApprovalClarification is created only by the hub after consuming a
+// one-time proof bound to an authenticated question on a prepared approval.
+const SubmissionApprovalClarification = "approval_clarification"
+
 type ShareAuthority struct {
 	Issuer     string `json:"issuing_authority"`
 	Machine    string `json:"machine_reference"`

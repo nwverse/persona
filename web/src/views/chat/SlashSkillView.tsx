@@ -1,7 +1,5 @@
-// Skill-aware / palette and its loading/error view. This module loads on / intent, never with the idle command palette.
-// Command-only markup mirrors SlashPalette.tsx; SlashPalette.test.tsx compares both views.
-import type { ImeState } from "../../lib/ime";
 import { Suspense, type ComponentProps, type ReactNode } from "react";
+import type { ImeState } from "../../lib/ime";
 import type { ComposerCommand as Command } from "../../lib/extension-prompts";
 import { t } from "../../i18n";
 import { lazyPage } from "../../lib/lazy-page";

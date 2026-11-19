@@ -1180,7 +1180,7 @@ func (s *Service) sendParamsOwn(ctx context.Context, p SendParams) (map[string]a
 		}
 		return nil, false, badRequest(err, s.appLang(ctx, p.Lang)) // a typed model that is no id is the app's user's to read
 	}
-	if text, ok := params["text"].(string); ok {
+	if text, ok := params["text"].(string); ok && !p.VerbatimText {
 		text, own = s.fillWorkspaces(ctx, text) // an @-mentioned workspace: where it is and what worked there (workspace_mention.go)
 		if main {
 			left := s.handoffFor(ctx, p.SessionID, text)
@@ -1316,10 +1316,16 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 			s.logf("[%s] %s: its launcher can't run it any more, using %s", machine, short(sid), l)
 			p["launcher"] = l
 			delete(p, "model")
-		case model != "" && !picked && !s.launcherHasModel(ctx, machine, l, model):
-			s.logf("[%s] %s: model %s is not in %s's list any more, using its default", machine, short(sid), model, l)
-			delete(p, "model")
-			leaveLauncherNote(ctx, i18n.T(lang, "assistant-start.model_missing", i18n.Args{"model": model, "launcher": l}))
+		case model != "" && !picked:
+			resolved, ok := s.resolveLauncherModel(ctx, machine, l, model)
+			if !ok {
+				s.logf("[%s] %s: model %s is not in %s's list any more, using its default", machine, short(sid), model, l)
+				delete(p, "model")
+				leaveLauncherNote(ctx, i18n.T(lang, "assistant-start.model_missing", i18n.Args{"model": model, "launcher": l}))
+			} else if resolved != "" && resolved != model {
+				// The gateway echoed a routed name for an older node's row: send the launcher's clean declared id.
+				p["model"] = resolved
+			}
 		}
 	}
 	pickedLauncher := l != ""

@@ -185,9 +185,10 @@ Not in the SDK (used by only one runtime, or the two read different things): eac
   node rejects a second process with the same id (`runtime_conflict`). If a runtime changes its id but still runs the same kind of Agent, set `agent` to that Agent (a renamed DSH sets `dsh`), and session rows carry `agent_label`.
 - Session ids are unique on the machine, at most 128 characters, and can't be paths. `launcher` names shouldn't clash with launchers in `~/.zshrc` (on a clash the shell's wins and the runtime's isn't listed, except where every start goes to the runtime as an engine with `caps.same_kind`: there its own wins);
   if two runtimes' launchers clash, only the one that connected first provides it.
-  The ordinary `agy` executable discovered on PATH is a terminal fallback, not an explicit shell override: its connected
-  companion supplies the launcher, models and assistant support. An actual alias, function or helper definition of that
-  name keeps shell precedence. Discovery provenance stays inside the node and adds no wire field (#9181).
+  A local `agy` launcher supplies the model catalog and starts in a pane when the selected host is herdr (#10237),
+  including when herdr is the default and the node detects the local CLI. The connected companion serves Assistant
+  and terminal-less Agent requests (the node RPC can target `host: "agy"`). A shell alias, function or helper definition
+  named `agy` still has precedence over automatic companion selection (#9181).
 
 ## Minimal example
 

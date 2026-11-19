@@ -40,6 +40,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
             self.assertIn("release-pr-" + name + "-", str(jobs[name]))
         self.assertNotIn("cli-web", jobs["cli-web"].get("environment", ""))
         self.assertNotIn("secrets.", str(jobs["cli-web"]))
+        self.assertEqual(jobs["android"]["steps"][2]["with"]["packages"], "platform-tools")
+        self.assertEqual(jobs["cli-web"]["steps"][5]["env"]["NODE_OPTIONS"], "--max-old-space-size=4096")
 
     def test_windows_requires_native_execution_and_authenticode(self):
         text = PR.read_text()

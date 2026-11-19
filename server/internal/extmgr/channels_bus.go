@@ -55,15 +55,32 @@ func (h *Manager) channelsAppCall(ctx context.Context, p assistantwire.AppCall) 
 			Action        string `json:"action"`
 			Channel       string `json:"channel"`
 			Kind          string `json:"kind"`
+			Clarify       bool   `json:"clarify"`
+			Text          string `json:"text"`
+			ClientMsgID   string `json:"client_msg_id"`
+			MachineID     string `json:"machine_id"`
+			SessionID     string `json:"session_id"`
 		}
 		if err := json.Unmarshal(p.Params, &a); err != nil {
 			return nil, true, err
+		}
+		var question assistantwire.ClarificationProof
+		if a.Clarify {
+			question = assistantwire.ClarificationProof{InteractionID: strings.TrimSpace(a.InteractionID), MachineID: a.MachineID,
+				SessionID: a.SessionID, Text: a.Text, ClientMsgID: a.ClientMsgID}
+			if a.Channel != channel.Feishu || !validClarificationProof(question) {
+				return nil, true, errors.New("invalid clarification proof request")
+			}
 		}
 		// The assistant answers a card from a channel only with the owner's action handed over with that press or
 		// message in that channel (a card's for that card, a message's for a kind it takes typed), once
 		// (fleet_routes.go channelResolve there; kind is the queue's).
 		err = h.takeOwnerAction(a.Action, a.Channel, strings.TrimSpace(a.InteractionID), a.Kind)
-		out = map[string]any{}
+		if err == nil && a.Clarify {
+			out = map[string]any{"clarification_proof": h.clarificationProofs.issue(question)}
+		} else {
+			out = map[string]any{}
+		}
 	default:
 		return nil, false, nil
 	}
