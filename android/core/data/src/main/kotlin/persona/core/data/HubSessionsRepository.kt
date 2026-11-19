@@ -152,6 +152,7 @@ class HubSessionsRepository(
                         }
                         is SessionRowEvent -> {
                             val row = event.session
+                            if (row.waiting != null && row.undelivered == null) return@withLock
                             reconcileHeldRow(row)
                             updateHeld(row.key) { row.undelivered.orEmpty() }
                         }

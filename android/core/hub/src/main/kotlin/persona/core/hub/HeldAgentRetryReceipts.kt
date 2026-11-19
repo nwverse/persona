@@ -52,12 +52,15 @@ class HeldAgentRetryReceipts(
 
     /** A cached paint never rearms an action. Only an observed manager waiting → failed cycle can repeat a decision. */
     suspend fun reconcile(previous: Session, session: Session) {
+        if (previous.assistant || session.assistant || (session.waiting != null && session.undelivered == null)) return
         val rows = session.undelivered.orEmpty().associateBy { it.id }
         edit { saved ->
             if (saved.isEmpty()) return@edit saved
             saved.toMutableSet().apply {
                 for (before in previous.undelivered.orEmpty()) {
+                    if (before.computer.isNullOrBlank()) continue
                     val row = rows[before.id]
+                    if (row != null && row.computer.isNullOrBlank()) continue
                     if (row == null) {
                         val prefix = operation(session.key, before.id)
                         removeAll { it.startsWith(prefix) }

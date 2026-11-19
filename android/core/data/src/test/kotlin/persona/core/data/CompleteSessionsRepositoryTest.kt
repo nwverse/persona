@@ -62,6 +62,9 @@ class CompleteSessionsRepositoryTest {
             val (repository, actions) = open(restarted, connection)
             val cached = repository.sessions.first { it.isNotEmpty() }.single().undelivered!!.single()
             actions.retry(cached)
+            connection.events.emit(SessionRowEvent(original.copy(waiting = false, undelivered = null)))
+            runCurrent()
+            assertEquals(listOf(cached), repository.sessions.value.single().undelivered)
             suspend fun apply(status: String, state: String = "failed", machineList: Boolean = false): HeldAgentMessage {
                 val event = row(status, state)
                 connection.events.emit(if (machineList) SessionsEvent(original.machineId, listOf(event.session)) else event)

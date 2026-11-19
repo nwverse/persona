@@ -15,6 +15,8 @@ import persona.core.contracts.Session
 import persona.core.contracts.SessionKey
 import persona.core.contracts.api.AgentMessageHoldFeature
 import java.io.IOException
+import java.net.ConnectException
+import java.net.SocketTimeoutException
 
 class HttpHeldAgentActionsTest {
     private val unclear = HeldAgentMessage("k/1", "Review screenshots", at = "2026-06-06T12:00:00Z", state = "failed",
@@ -63,7 +65,7 @@ class HttpHeldAgentActionsTest {
             HttpHeldAgentActions(session, MutableStateFlow(setOf(AgentMessageHoldFeature)), receipts(storage), owner,
                 { path, method, _ ->
                     calls += "$method $path"
-                    if (disconnected) throw IOException("fixture disconnected")
+                    if (disconnected) throw ConnectException("fixture refused the connection")
                     Response.Builder().request(Request.Builder().url("https://example.com/").build())
                         .protocol(Protocol.HTTP_1_1).code(status).message("fixture").body("{}".toResponseBody()).build()
                 }, { _, _ -> if (failRefresh) error("refresh failed") })
@@ -156,5 +158,47 @@ class HttpHeldAgentActionsTest {
         assertFalse(store.claim(key, unclear))
         frame()
         assertTrue(store.canRetry(key, unconfirmed).first())
+    }
+
+    @Test fun assistantRowsAndSummariesCannotAuthorizeOrReleaseAnAgentAction() = runBlocking {
+        val key = SessionKey("demo", "chat")
+        val store = receipts()
+        val session = Session(key.machineId, key.sessionId, undelivered = listOf(unclear))
+        val assistant = unclear.copy(computer = null, attempts = 2, nextAt = "2026-06-07T12:00:00Z")
+        val scope = CoroutineScope(coroutineContext + SupervisorJob())
+        val actions = HttpHeldAgentActions(key, MutableStateFlow(setOf(AgentMessageHoldFeature)), store, scope,
+            { _, _, _ -> error("A different queue must not reach the held route") }, { _, _ -> })
+        assertTrue(store.claim(key, unclear))
+        store.reconcile(session, session.copy(waiting = false, undelivered = null))
+        store.reconcile(session, session.copy(assistant = true, undelivered = listOf(assistant)))
+        store.reconcile(session, session.copy(undelivered = listOf(assistant.copy(state = "waiting"))))
+        assertFalse(actions.canRetry(unclear).first())
+        assertFalse(actions.canRetry(assistant).first())
+        assertTrue(runCatching { actions.retry(assistant) }.exceptionOrNull() is IllegalArgumentException)
+        scope.cancel()
+    }
+
+    @Test fun losingTheReplyAfterTheManagerCheckedCannotTurnTheSameWarningIntoASend() = runBlocking {
+        val scope = CoroutineScope(coroutineContext + SupervisorJob())
+        val effects = mutableListOf<String>()
+        var refreshes = 0
+        val actions = HttpHeldAgentActions(SessionKey("demo", "chat"), MutableStateFlow(setOf(AgentMessageHoldFeature)),
+            receipts(), scope, { _, _, _ ->
+                if (effects.isEmpty()) {
+                    effects += "checked"
+                    throw SocketTimeoutException("fixture lost response after accepting the check")
+                }
+                effects += "sent"
+                Response.Builder().request(Request.Builder().url("https://example.com/").build())
+                    .protocol(Protocol.HTTP_1_1).code(200).message("OK").body("{}".toResponseBody()).build()
+            }, { _, refresh -> if (refresh) refreshes++ })
+        assertTrue(runCatching { actions.retry(unclear) }.exceptionOrNull() is SocketTimeoutException)
+        actions.retry(unclear)
+        assertEquals(listOf("checked"), effects)
+        assertEquals(1, refreshes)
+        val newDecision = unclear.copy(error = "Couldn't confirm it arrived. Retry to send it anyway, or delete it.")
+        actions.retry(newDecision)
+        assertEquals(listOf("checked", "sent"), effects)
+        scope.cancel()
     }
 }
