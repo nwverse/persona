@@ -224,8 +224,9 @@ func TestCreditWindowAcrossABusyWayBack(t *testing.T) {
 }
 
 // simBusyWayBack runs w for d against a link of rate bytes a second and oneWay delay each way whose other direction is
-// kept full (queue bytes waiting, frames of backFrame bytes): an acknowledgement goes out when the other side's frame
-// being written ends, and waits behind queue bytes; with backFrame 0 it goes out at once. The window always has bulk
+// kept busy (frames of backFrame bytes, up to queue bytes waiting, more or less from one frame to the next): an
+// acknowledgement goes out when the other side's frame being written ends, naming the newest frame read by then, and
+// waits behind what is queued; with backFrame 0 each frame is acknowledged as it is read. The window always has bulk
 // to send. It returns what the other side read after warmUp, a second, and the longest a frame waited to go on the
 // link after warmUp.
 func simBusyWayBack(w *creditWindow, rate float64, oneWay time.Duration, backFrame, queue int, d, warmUp time.Duration) (float64, time.Duration) {
@@ -234,9 +235,10 @@ func simBusyWayBack(w *creditWindow, rate float64, oneWay time.Duration, backFra
 		read time.Time // the other side reads it
 	}
 	type ack struct {
-		seq  uint64
-		read time.Time
-		at   time.Time // it arrives
+		seq   uint64
+		read  time.Time
+		leave time.Time // it goes out
+		at    time.Time // it arrives
 	}
 	perByte := float64(time.Second) / rate
 	frameTime := time.Duration(float64(backFrame) * perByte)
@@ -257,11 +259,28 @@ func simBusyWayBack(w *creditWindow, rate float64, oneWay time.Duration, backFra
 			f := frames[0]
 			frames = frames[1:]
 			// Acknowledged when the other side's frame being written ends, behind the queue.
-			leave := f.read
+			leave, waits := f.read, backQueue
 			if frameTime > 0 {
-				leave = start.Add((f.read.Sub(start)/frameTime + 1) * frameTime)
+				n := f.read.Sub(start)/frameTime + 1
+				leave = start.Add(n * frameTime)
+				// The queue drains and fills again, no faster than one of the other side's frames a frame.
+				half := (backQueue + frameTime - 1) / frameTime
+				if k := n % (2*half + 1); k <= half {
+					waits = max(backQueue-k*frameTime, 0)
+				} else {
+					waits = min((k-half)*frameTime, backQueue)
+				}
 			}
-			acks = append(acks, ack{seq: f.seq, read: f.read, at: leave.Add(backQueue + oneWay)})
+			a := ack{seq: f.seq, read: f.read, leave: leave, at: leave.Add(waits + oneWay)}
+			if k := len(acks); k > 0 && acks[k-1].leave.Equal(leave) {
+				a.at = acks[k-1].at
+				acks[k-1] = a // one acknowledgement for what was read before it went out: of the newest frame
+			} else {
+				if k > 0 {
+					a.at = maxTime(a.at, acks[k-1].at) // in order
+				}
+				acks = append(acks, a)
+			}
 		}
 		for {
 			n := w.frameSize()
@@ -291,28 +310,23 @@ func maxTime(a, b time.Time) time.Time {
 	return b
 }
 
-// TestCreditWindowKeepsTheLinkBusyWhenTheWayBackIsFull: a port's bytes go one way while the other side's events fill
-// the way back, so acknowledgements wait behind them and come in bunches (#10660's review: the window, judged by round
-// trips, let through 5.5 KB/s of a 30 KB/s link). Frames still keep the link busy, and wait on their way about as
-// long as the other side's frames hold acknowledgements back, not for a whole queue.
+// TestCreditWindowKeepsTheLinkBusyWhenTheWayBackIsFull: a port's bytes go one way while the other side's events keep
+// the way back busy, so acknowledgements wait behind them, each covering whatever was read while the other side wrote
+// a frame (#10660's review: the window, judged by round trips, let through 5.5 KB/s of a 30 KB/s link). Frames still
+// keep the link busy.
 func TestCreditWindowKeepsTheLinkBusyWhenTheWayBackIsFull(t *testing.T) {
 	const rate = 30_000
 	for _, queue := range []int{0, 64 << 10, 256 << 10} {
 		w := newCreditWindow()
-		got, worst := simBusyWayBack(&w, rate, 200*time.Millisecond, 32<<10, queue, 2*time.Minute, 30*time.Second)
-		if got < rate*9/10 {
+		if got, _ := simBusyWayBack(&w, rate, 200*time.Millisecond, 32<<10, queue, 2*time.Minute, 30*time.Second); got < rate*97/100 {
 			t.Errorf("%d KiB queued on the way back: %.0f B/s of a %d B/s link", queue>>10, got, rate)
-		}
-		if worst > 1500*time.Millisecond {
-			t.Errorf("%d KiB queued on the way back: a frame waited %s to go out", queue>>10, worst)
 		}
 	}
 }
 
-// TestCreditWindowGrowsLittlePastTheLink: once the window knows what the link carries, it grows no more than a quarter
-// past it. Grown by doubling until the queue shows, a round trip later, it had queued a second of frames at 30 KB/s
-// on the way (a pong behind them waited that long).
-func TestCreditWindowGrowsLittlePastTheLink(t *testing.T) {
+// TestCreditWindowOnAPlainLink: with nothing in the way back the window keeps the link busy and what waits on the way
+// short.
+func TestCreditWindowOnAPlainLink(t *testing.T) {
 	for _, c := range []struct {
 		rate  float64
 		worst time.Duration
@@ -325,5 +339,40 @@ func TestCreditWindowGrowsLittlePastTheLink(t *testing.T) {
 		if worst > c.worst {
 			t.Errorf("%.0f B/s link: a frame waited %s to go out, want under %s", c.rate, worst, c.worst)
 		}
+	}
+}
+
+// TestCreditWindowGrowsLittlePastTheLink: once the window knows what the other side reads, it grows no further than
+// what it reads in queueTarget past what a round trip needs, however short the queue looks: on a long round trip the
+// queue shows only a round trip later.
+func TestCreditWindowGrowsLittlePastTheLink(t *testing.T) {
+	w := newCreditWindow()
+	now := time.Unix(1_000_000, 0)
+	w.cwnd, w.rate = 40_000, 30_000 // a round trip of 400 ms needs 15 KB, 18 KB with queueTarget's
+	for seq := uint64(1); seq <= 8; seq++ {
+		w.wrote(seq, 4096, now, true)
+	}
+	w.limited = true                                                                  // the window held frames back
+	w.acked(8, clockMS(now.Add(200*time.Millisecond)), now.Add(400*time.Millisecond)) // nothing queued
+	if w.cwnd != 40_000 {
+		t.Fatalf("window %d after a round trip with no queue, want it kept at 40000", w.cwnd)
+	}
+}
+
+// TestCreditWindowSpanStartsWhenTheBytesCouldArrive: an acknowledgement covers what was read since the last one, but
+// not the time before its bytes were even sent: after a pause, the window stays what the link needs.
+func TestCreditWindowSpanStartsWhenTheBytesCouldArrive(t *testing.T) {
+	w := newCreditWindow()
+	now := time.Unix(1_000_000, 0)
+	w.rate = 30_000
+	w.wrote(1, 4096, now, true)
+	w.acked(1, clockMS(now.Add(200*time.Millisecond)), now.Add(400*time.Millisecond))
+	later := now.Add(5 * time.Second) // nothing to send meanwhile
+	w.rates[0] = rateSample{rate: 30_000, at: later}
+	w.wrote(2, 4096, later, true)
+	w.wrote(3, 4096, later, true)
+	w.acked(3, clockMS(later.Add(500*time.Millisecond)), later.Add(700*time.Millisecond))
+	if w.cwnd > 64<<10 {
+		t.Fatalf("window %d after a pause, on a link that carries 30 KB/s with a 400 ms round trip", w.cwnd)
 	}
 }

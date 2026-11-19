@@ -18,23 +18,27 @@ import "time"
 // Frames with credit are cut to a quarter of the window (frameSize): on a slow link a frame takes long to go out, and
 // a frame behind it waits for the whole of it.
 type creditWindow struct {
-	cwnd     int
-	inFlight int
-	sent     []sentFrame  // sent and not acknowledged, oldest first; one entry per frame
-	limited  bool         // a frame waited for the window since it last grew
-	base     [2]baseDelay // the link's own delay as short frames [0] and full ones [1] see it (sentFrame.full)
-	lastCut  time.Time
-	rtt      time.Duration // the latest round trip: how often the window may shrink
-	queued   time.Duration // the time the latest sample spent queued on its way
-	done     int64         // bytes acknowledged so far
-	mark     rateMark      // where the delivery rate is measured from
-	rates    [rateSlots]rateSample
-	rate     float64 // bytes a second the other side has read, the most of the last rateFor (0: not known yet)
-	paths    [rateSlots]pathSample
+	cwnd        int
+	inFlight    int
+	sent        []sentFrame  // sent and not acknowledged, oldest first; one entry per frame
+	limited     bool         // a frame waited for the window since it last grew
+	base        [2]baseDelay // the link's own delay as short frames [0] and full ones [1] see it (sentFrame.full)
+	lastCut     time.Time
+	rtt         time.Duration // the latest round trip: how often the window may shrink
+	queued      time.Duration // the time the latest sample spent queued on its way
+	done        int64         // bytes acknowledged so far
+	mark        rateMark      // where the delivery rate is measured from
+	rates       [rateSlots]rateSample
+	rate        float64 // bytes a second the other side has read, the most of the last rateFor (0: not known yet)
+	paths       [rateSlots]pathSample
+	lastRecv    uint32 // when the latest sample's frame was read, by the other side's clock
+	lastRecvSet bool
 }
 
-// pathSample is a round trip with the time its frame spent queued on the way left out: the link's own delay both ways
-// and however long the acknowledgement waited behind the other side's frames.
+// pathSample is how long the bytes an acknowledgement covers waited from being written to being acknowledged, the time
+// they spent queued on the way left out: the link's own delay both ways, however long the acknowledgement waited
+// behind the other side's frames, and how long before the frame it names the first of them was read (one
+// acknowledgement for whatever was read while the other side was writing something else).
 type pathSample struct {
 	d  time.Duration
 	at time.Time
@@ -135,6 +139,7 @@ func (w *creditWindow) acked(seq uint64, recv uint32, now time.Time) {
 	if i == 0 {
 		return
 	}
+	oldest := w.sent[0].at
 	var at time.Time
 	full := false
 	if sample != nil {
@@ -157,24 +162,34 @@ func (w *creditWindow) acked(seq uint64, recv uint32, now time.Time) {
 	base.add(delay, now)
 	queued := time.Duration(int32(delay-base.min())) * time.Millisecond
 	w.queued = queued
-	// need: what the other side reads in a round trip, the time frames spent queued on the way left out. The
+	// need: what the other side reads in the time its bytes wait to be acknowledged (pathSample). The
 	// acknowledgements wait behind what the other side sends (a busy other direction), and how long changes from one
 	// to the next (one waits behind a whole frame, the next gets through between two): the longest of the last
 	// rateFor counts, or the window runs out while acknowledgements are late and the link idles. A window much past
-	// it only fills the queue, and on a long round trip the queue shows a round trip later: growing stops a quarter
-	// past it, which still lets the rate rise by that much each round trip.
+	// it only fills the queue, and on a long round trip the queue shows a round trip later: growing stops at what the
+	// other side reads in queueTarget past it, which still lets the rate rise each round trip.
+	// The first byte covered was read after the last sample's frame, and no sooner than it could arrive.
+	from := clockMS(oldest) + base.min()
+	if w.lastRecvSet && before(from, w.lastRecv) {
+		from = w.lastRecv
+	}
+	var span time.Duration
+	if before(from, recv) {
+		span = time.Duration(recv-from) * time.Millisecond
+	}
+	w.lastRecv, w.lastRecvSet = recv, true
 	copy(w.paths[1:], w.paths[:rateSlots-1])
-	w.paths[0] = pathSample{d: max(rtt-queued, 0), at: now}
+	w.paths[0] = pathSample{d: max(rtt-queued, 0) + span, at: now}
 	need, limit := 0, windowMax
 	if w.rate > 0 {
 		var path time.Duration
 		for _, p := range w.paths {
-			if !p.at.IsZero() && now.Sub(p.at) < rateFor {
+			if !p.at.IsZero() && now.Sub(p.at) <= rtt {
 				path = max(path, p.d)
 			}
 		}
 		need = min(int(w.rate*(path+queueTarget).Seconds()), windowMax)
-		limit = max(min(need+need/4, windowMax), w.cwnd)
+		limit = max(min(need+int(w.rate*queueTarget.Seconds()), windowMax), w.cwnd)
 	}
 	switch {
 	case queued > queueTarget:

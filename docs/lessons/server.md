@@ -1926,10 +1926,11 @@ framing the connection on lanes (protocol.md "Lanes") changes the queue instead.
 - **A round trip has two directions.** The window first judged round trips, and an acknowledgement waits behind
   whatever the other side sends: with the node's events filling the way back, the manager's port bytes fell from
   31.9 to 14.7 KB/s (64 KiB of queue) and from 36.9 to 5.5 KB/s (256 KiB). An acknowledgement now carries when its
-  frame was read, so the queueing judged is one way's. That alone still left the link idle: acknowledgements bunched
-  behind the other side's 32 KiB frames come late by turns, so the window also keeps what the other side reads in the
-  longest recent round trip, and grows at most a quarter past it, since on a long round trip a queue shows only a
-  round trip later.
+  frame was read, so the queueing judged is one way's. That alone still left the link idle: an acknowledgement waiting
+  behind the other side's 32 KiB frame covers everything read meanwhile but names only the newest frame, so the window
+  also keeps what the other side reads while its first byte waits to be acknowledged (a simulation that acknowledged
+  every frame on its own hid this: 100% there, 87% with one acknowledgement a frame of the other side's), and grows
+  little past it, since on a long round trip a queue shows only a round trip later.
 - **Two queues reorder.** Port bytes went to the bulk queue and the stream's close to the other one, so the close
   overtook the last bytes and the tail of a download was lost. What must arrive in order shares one writer.
 - **A stall is no progress, not a long wait.** The notes' watchdog judged how long one write took; a write waiting for
