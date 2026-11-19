@@ -20,6 +20,7 @@ export type Step =
   | { kind: "text"; id: string; item: Item }
   | { kind: "notice"; id: string; item: Item }
   | { kind: "image"; id: string; item: Item }
+  | { kind: "visualization"; id: string; item: Item }
   | { kind: "fold"; id: string; item: Item };
 
 export interface UserMessage {
@@ -347,6 +348,9 @@ export function segments(items: Item[], results?: ReadonlyMap<string, Item>): Se
         else cur.steps.push({ kind: "image", id: it.id, item: it });
         break;
       }
+      case "visualization":
+        cur.steps.push({ kind: "visualization", id: it.id, item: it });
+        break;
       case "thinking":
         // an empty thought (Claude Code mostly writes them without words) still shows as "Thinking Ns"
         cur.steps.push({ kind: "thinking", id: it.id, item: it });

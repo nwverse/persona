@@ -7760,19 +7760,38 @@ def kb_meta(kind, eid):
     return KB_DETAIL.setdefault((kind, eid), {}).setdefault("meta", dict(kb_base_meta(kind, e)))
 
 
-def kb_unlink(kind, eid, lst, oid):
+def kb_unlink(kind, eid, lst, oid, lock=True):
     """remove_people / remove_chats / remove_projects as the hub's kb.Update: the other entry leaves this one's list, this
-    one leaves the other's (a project names documents, meetings, events and recordings in `items` as kind/id), both lists
-    are locked against the automatic linking, and neither detail links the other any more."""
+    one leaves the other's (a project names documents, meetings, events and recordings in `items` as kind/id), each keeps
+    the other out of the automatic linking (`excluded`, listed under the detail's `removed`), with lock (lock_lists, or
+    lock when that is unset) both lists are locked too, and neither detail links the other any more (#10333)."""
     named = kind in ("people", "chats", "projects")
     back, member = (kind, eid) if named else ("items", "%s/%s" % (kind, eid))
     for m, field, x in ((kb_meta(kind, eid), lst, oid), (kb_meta(lst, oid), back, member)):
         if m is None: continue
         m[field] = [v for v in m.get(field) or [] if v != x]
-        m["locked_fields"] = sorted(set(m.get("locked_fields") or []) | {field})
+        ex = m.setdefault("excluded", {}).setdefault(field, [])
+        if x not in ex: ex.append(x)
+        if lock: m["locked_fields"] = sorted(set(m.get("locked_fields") or []) | {field})
+    for (k, i), other in (((kind, eid), (lst, oid)), ((lst, oid), (kind, eid))):
+        d = KB_DETAIL.setdefault((k, i), {})
+        if d.get("links"): d["links"] = [l for l in d["links"] if (l["kind"], l["id"]) != other]
+        if any(x["id"] == other[1] for x in KB.get(other[0], [])) and all((r["kind"], r["id"]) != other for r in d.get("removed") or []):
+            d["removed"] = (d.get("removed") or []) + [kb_link(*other)]
+
+
+def kb_allow(kind, eid, lst, oid):
+    """allow_people / allow_chats / allow_projects: both entries stop keeping the other out; nothing is linked."""
+    named = kind in ("people", "chats", "projects")
+    back, member = (kind, eid) if named else ("items", "%s/%s" % (kind, eid))
+    for m, field, x in ((kb_meta(kind, eid), lst, oid), (kb_meta(lst, oid), back, member)):
+        if m is None or x not in (m.get("excluded") or {}).get(field, []): continue
+        m["excluded"][field].remove(x)
+        if not m["excluded"][field]: del m["excluded"][field]
+        if not m["excluded"]: del m["excluded"]
     for (k, i), other in (((kind, eid), (lst, oid)), ((lst, oid), (kind, eid))):
         d = KB_DETAIL.get((k, i))
-        if d and d.get("links"): d["links"] = [l for l in d["links"] if (l["kind"], l["id"]) != other]
+        if d and d.get("removed"): d["removed"] = [r for r in d["removed"] if (r["kind"], r["id"]) != other] or None
 
 
 # The entries the Android captures add: a summary under its name, a line of timeline, what it is about now, two links.
@@ -14595,6 +14614,8 @@ SUPERVISE_PURPOSE = "assistant.supervise"
 SUPERVISE_LISTED = os.environ.get("MOCK_SUPERVISE_LISTED") == "1"
 # MOCK_MEETING_MODELS=1: the two editable meeting uses (#7980); without it both ids are unknown, as on an older hub.
 MEETING_MODELS = os.environ.get("MOCK_MEETING_MODELS") == "1"
+# MOCK_CHAT_EFFORT=1 adds a Chat Completions connection with exact model capabilities for browser screenshots.
+CHAT_EFFORT = os.environ.get("MOCK_CHAT_EFFORT") == "1"
 MEETING_PURPOSES = {"meeting.room": "assistant", "meeting.minutes": "kb"}
 # The hub's group of each (group_assistant, group_processing), and the uses the categories gain: in the mock's Chinese,
 # like the rest of the categories' rows, so the flag adds the uses without changing those rows' language.
@@ -14691,7 +14712,7 @@ def meeting_model_purpose(pid, lang="zh-Hans", catalog=None):
     room = pid == "meeting.room"
     provider = next((x for x in catalog["providers"] if x["id"] == effective["provider"]), {})
     fields = ["provider", "model"]
-    if room or (provider and provider.get("api", "") in ("messages", "responses", "")):  # as the hub's API purposes
+    if room or (provider and (provider.get("api", "") in ("messages", "responses", "") or provider.get("chat_effort"))):
         fields.append("effort")
     # Like every API purpose, the minutes name the main chat's computer, where a launcher picked for them runs.
     purpose = dict(id=pid, category_id=category, parent=category, name=text[pid], group=text[MEETING_GROUPS[pid]],
@@ -14744,6 +14765,11 @@ def model_configuration(include_uses=False):
                       model=l.get("model"), hidden=l.get("hidden", False)) for l in LAUNCHERS if l["source"] != "builtin"]
     providers += [{"id": "launcher.claude", "name": "claude", "kind": "launcher", "model": "model-chat"},
                   {"id": "legacy.ai", "name": "轻量 API", "kind": "api", "api": "messages", "model": "model-fast"}]
+    if MEETING_MODELS and CHAT_EFFORT:
+        providers.append({"id": "api.chat", "name": "Chat Completions", "kind": "api", "api": "chat",
+                          "model": "chat-default", "chat_effort": True, "effort": "medium",
+                          "models": [{"id": "chat-default", "efforts": ["low", "medium", "high"],
+                                      "all_efforts": ["none", "low", "medium", "high"]}]})
     if os.environ.get("MOCK_MODEL_PICK") == "otherkind":
         # The current main chat runs Codex while Main chat still defaults to Claude (#4662).
         next(p for p in providers if p["id"] == "launcher.codex").update(agent="codex", agent_type="codex")
@@ -22769,6 +22795,13 @@ def bump(what, session=None):
             s.update(state="needs_you", status="blocked", state_since=now, updated_at=now)
         push_machine(s["machine_id"])
         return {"key": s["machine_id"] + "/" + s["session_id"], "state": s["state"], "last": s.get("last_text") or ""}
+    if what == "heartbeat":  # only the machines' heartbeat (`last_seen`), which a busy hub pushes with its lists (#10231)
+        for m in MACHINES:
+            m["last_seen"] = now
+        for send, _ in list(LIVE):
+            try: send({"type": "machines", "machines": out_machines()})
+            except Exception: pass
+        return {"ok": True}
     if what == "ask":
         s = working[0] if working else SESSIONS[0]
         ix = dict(INTERACTIONS[0], id="ix_bump_%d" % n, machine_id=s["machine_id"], session_id=s["session_id"], created_at=now)
@@ -28056,8 +28089,11 @@ class H(BaseHTTPRequestHandler):
                 m = kb_meta(kind, eid)
                 if body["pinned"]: m["pinned"] = body["pinned"]
                 else: m.pop("pinned", None)
+            lock = body["lock_lists"] if "lock_lists" in body else body.get("lock") is not False
             for field, lst in (("remove_people", "people"), ("remove_chats", "chats"), ("remove_projects", "projects")):
-                for oid in body.get(field) or []: kb_unlink(kind, eid, lst, oid)
+                for oid in body.get(field) or []: kb_unlink(kind, eid, lst, oid, lock)
+            for field, lst in (("allow_people", "people"), ("allow_chats", "chats"), ("allow_projects", "projects")):
+                for oid in body.get(field) or []: kb_allow(kind, eid, lst, oid)
             KB_UPDATES.append({"kind": kind, "id": eid, **body})
             return self.send_json({"ok": True})
         if os.environ.get("MOCK_LARK_NATIVE_OLK") and (p == "/test/lark-encryption/reset" or p == "/api/v1/lark/encryption/unlock" or p.endswith(("/encryption/covers", "/encryption/prepare", "/encrypted-messages"))):
@@ -30361,6 +30397,75 @@ def plugins_route(handler, p, body):
             except ValueError: pass
         return _plugins_route_without_extensions(_NewKeysHandler(handler), "/api/v1/plugins" + p[len("/api/v1/extensions"):], body)
     return _plugins_route_without_extensions(handler, p, body)
+
+
+# MOCK_OPENER_ICONS=1 (with MOCK_EXTENSIONS=1 MOCK_AUTO_CONVERSATIONS=1 MOCK_EXTERNAL=1, #10358): the extensions that opened
+# the external conversations are installed, each with the icon its package brings, on the hub's installed-icon route
+# (`icon_url`, served here as the hub does: a PNG for the installed version, 404 for any other). `larkext`, which opened
+# the Lark /agent conversation, stands in for a made-up third-party extension that reuses lark.agent ("Chat Bridge", a
+# chat bubble; it brings no Lark connector or messaging source), `example-ext` for the other one ("Example Docs", a page).
+# The apps draw and name those extensions on the conversations' rows and under their first messages; without the flag
+# neither is installed, and the rows keep the origin's mark, as before.
+OPENER_ICONS = PLUGINS_MODE and os.environ.get("MOCK_OPENER_ICONS") == "1"
+MOCK_HELP.append("MOCK_OPENER_ICONS=1  With MOCK_EXTENSIONS=1 MOCK_AUTO_CONVERSATIONS=1 MOCK_EXTERNAL=1: the two extensions that opened "
+                 "the external conversations are installed with icons (larkext as a made-up third-party Chat Bridge that reuses "
+                 "lark.agent, example-ext as Example Docs), which their rows and first messages draw and name (#10358)")
+
+
+def _opener_icon_png(kind, side=128):
+    """A made-up extension icon: a white chat bubble on teal, or a white page with lines on indigo."""
+    bg, ink, line = ((20, 184, 166), (255, 255, 255), None) if kind == "bubble" else ((99, 102, 241), (255, 255, 255), (165, 180, 252))
+    raw = bytearray()
+    for y in range(side):
+        raw.append(0)
+        for x in range(side):
+            c = bg
+            if kind == "bubble":
+                if 26 <= x < 102 and 30 <= y < 86 and not ((x - 26 < 8 or 101 - x < 8) and (y - 30 < 8 or 85 - y < 8)):
+                    c = ink
+                elif 40 <= x < 58 and 86 <= y < 104 and x - 40 <= 103 - y:
+                    c = ink
+            else:
+                if 38 <= x < 90 and 22 <= y < 106:
+                    c = ink
+                    if line and 46 <= x < 82 and any(r <= y < r + 5 for r in (40, 54, 68, 82)):
+                        c = line
+            raw.extend(bytes(c))
+    chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", side, side, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(bytes(raw), 9)) + chunk(b"IEND", b""))
+
+
+if OPENER_ICONS:
+    _OPENER_ICONS = {"larkext": ("Chat Bridge", "Hands a chat app's /agent messages to Persona (an example).", "bubble"),
+                     "example-ext": ("Example Docs", "Hands documents to Persona to tidy up (an example).", "page")}
+    for _id, (_name, _desc, _kind) in _OPENER_ICONS.items():
+        PLUGINS[_id] = {"id": _id, "name": _name, "kind": "", "status": "running", "version": "1.0.0", "source": "installed",
+                        "enabled": True, "description": _desc, "contributes": {}, "icon_url": "/api/v1/extensions/%s/-/icon?v=1.0.0" % _id,
+                        "form": {"fields": []}, "config": {}, "secrets": [], "permissions": []}
+    _PLUGIN_VIEW.append("icon_url")
+
+_plugins_route_without_opener_icons = plugins_route
+
+
+def plugins_route(handler, p, body):
+    """MOCK_OPENER_ICONS: GET /api/v1/extensions/{id}/-/icon?v=<installed version> answers that extension's icon."""
+    parts = p.split("/")  # ['', 'api', 'v1', 'extensions', id, '-', 'icon']
+    if OPENER_ICONS and handler.command == "GET" and len(parts) == 7 and parts[:4] == ["", "api", "v1", "extensions"] and parts[5:] == ["-", "icon"]:
+        q = {k: v[0] for k, v in parse_qs(urlparse(handler.path).query).items()}
+        pl = PLUGINS.get(parts[4])
+        if parts[4] not in _OPENER_ICONS or not pl or q.get("v") != pl.get("version"):
+            handler.send_response(404)
+            handler.send_header("Cache-Control", "no-store"); handler.send_header("Content-Length", "0")
+            handler.end_headers()
+            return True
+        data = _opener_icon_png(_OPENER_ICONS[parts[4]][2])
+        handler.send_response(200)
+        handler.send_header("Content-Type", "image/png"); handler.send_header("Content-Length", str(len(data)))
+        handler.send_header("Cache-Control", "private, max-age=300")
+        handler.end_headers(); handler.wfile.write(data)
+        return True
+    return _plugins_route_without_opener_icons(handler, p, body)
 
 
 # MOCK_EXTENSION_COLUMNS=1 (with MOCK_EXTENSIONS=1): a made-up extension's "Today" page, a dashboard of UI version 8

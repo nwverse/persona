@@ -415,6 +415,12 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 	shown, via := r.sessions, r.marks
 	r.mu.RUnlock()
 	lang := s.lang(context.Background())
+	// The owner's messages to Agents held while their computer is away (internal/devices held.go, #10661): once for
+	// the whole list, worded as the rows are.
+	var held map[string][]proto.UndeliveredMessage
+	if s.devs != nil {
+		held = s.devs.HeldMessages(machine, lang)
+	}
 	// A done turn nobody has seen is Just finished when it ended after this (#9751).
 	finishedSince := time.Now().Add(-justFinishedFor(s.triageCfg(context.Background())))
 	dir := m.assistantCwd() // once, not a path.Join for each row
@@ -453,6 +459,9 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 				kept := slices.Clone(u) // the owner's messages that could not go in (undelivered.go, #10194)
 				list[i].Undelivered = &kept
 			}
+		} else if u := held[list[i].SessionID]; len(u) > 0 {
+			kept := u // an Agent's, fresh from HeldMessages; its own variable, so only a row with some is allocated
+			list[i].Undelivered = &kept
 		}
 		list[i].SeenAt = seen[list[i].SessionID]
 		localizeSession(lang, &list[i]) // the node's Chinese activity line… (fleet_text.go)
