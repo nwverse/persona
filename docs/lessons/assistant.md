@@ -794,3 +794,15 @@ again. Evidence about a model is about one request shape: resolve the probe's ta
 (`sendModel`, read-only), have the node build the check as the turn (`launchers.check` `assistant_turn`), and key the
 evidence and its reuse by machine, launcher and model, so a pass of something else, or of an older plain check, never
 outranks the real turn's failure (`TestReadinessProbeOtherModelDoesNotClearModelRoute`).
+
+## An agent's own slash command works only as the whole prompt (#10950)
+
+In an Antigravity conversation, sending `/compact` reached the model as `/compact/compact` and compacted nothing. The
+web composer was not at fault: the hub's `sent_messages` held `/compact` once for every send. The node put the
+`<persona-context>` block in front of the text, and `agy` runs a command only when it is the whole prompt; with a block
+before it, it records the line as plain text. Reproduced with `agy acp` alone: the block plus `/compact` is recorded as
+`/compact/compact`, the bare `/compact` writes a compaction checkpoint. `assistantSendRuntime` now sends a one-line
+slash-only message on its own, leaves the snapshot unsent for the next message, and after `/compact` forgets the
+snapshot the conversation has seen (`TestAssistantOnARuntimeSendsASlashCommandOnItsOwn`). The chat bubble showed the
+doubled text because the chat is drawn from the agent's own transcript: when a user bubble looks wrong, compare it with
+the hub's record of what was sent before looking at the client.

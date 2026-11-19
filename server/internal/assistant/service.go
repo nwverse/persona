@@ -460,6 +460,12 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 			return err
 		}
 		if method == DeviceSessionSend {
+			// Inbox continuations use session.send, not assistant.send's SendParams. Re-attest the manager's persisted
+			// origin on this real path too; caller input can neither downgrade an Inbox conversation nor invent one.
+			delete(p, "origin")
+			if s.isInboxModelCall(ctx, device, id, "") {
+				p["origin"] = OriginInbox
+			}
 			cfg := s.settings(ctx)
 			if id != "" && id == cfg.Main && device == cfg.mainRouteMachine() {
 				p["is_main"] = true // internal sends must not restart main on ordinary-chat compaction settings
