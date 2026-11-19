@@ -209,9 +209,9 @@ func scanBackground(f *os.File, off *int64, m *transcript.Meta, size int64) {
 			m.ObserveModelFallback(bytes.TrimSuffix(refusalLine, []byte("\n")))
 		}
 		if !long {
-			m.ObserveListMetadata(line)
+			m.ObserveNamingMetadata(line)
 		} else if refusalLine != nil {
-			m.ObserveListMetadata(refusalLine)
+			m.ObserveNamingMetadata(refusalLine)
 		}
 		refusalLine = nil
 		long = false

@@ -295,9 +295,9 @@ type Meta struct {
 	Updated      time.Time
 }
 
-// ObserveListMetadata reads title provenance, usage and Codex turn settings during an existing incremental scan.
+// ObserveNamingMetadata reads title provenance, usage and Codex turn settings during an existing incremental scan.
 // It never decodes message content (which can contain large screenshots or tool output).
-func (m *Meta) ObserveListMetadata(line []byte) {
+func (m *Meta) ObserveNamingMetadata(line []byte) {
 	if !bytes.Contains(line, []byte(`"custom-title"`)) && !bytes.Contains(line, []byte(`"ai-title"`)) &&
 		!bytes.Contains(line, []byte(`"usage"`)) && !bytes.Contains(line, []byte(`"turn_context"`)) &&
 		!bytes.Contains(line, []byte(`"compact_boundary"`)) && !bytes.Contains(line, []byte(`"compacted"`)) &&
