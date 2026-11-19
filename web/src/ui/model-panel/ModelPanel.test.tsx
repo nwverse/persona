@@ -181,6 +181,8 @@ describe("the model panel", () => {
   it("distinguishes identical model names by their launcher in All", async () => {
     const shared = [{ id: "fable", name: "Fable", efforts: [] }];
     await open({ providers: [claude({ models: shared }), codex({ models: shared, unavailable: undefined })], state: { current: null, recommended: [], starting: true } });
+    act(() => launcher("claude").click());
+    act(() => launcher("codex").click());
     const duplicates = rows().filter((r) => r.textContent?.includes("Fable"));
     expect(duplicates).toHaveLength(2);
     expect(duplicates[0].textContent).toContain("Claude");
