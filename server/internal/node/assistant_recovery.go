@@ -322,7 +322,7 @@ func (n *Node) recoverAssistantResultFor(p *assistantProc, expected *assistantTu
 	p.mu.Unlock()
 	if failed && (!strict || modelretry.Permanent(result)) &&
 		(modelretry.Temporary(result) || modelretry.Permanent(result) || slices.Contains(kinds, assistantModelServiceFailure) || len(kinds) > 0 && kinds[0] == proto.TurnErrorTransient) &&
-		!assistantSafeguardsRefusal(result) && !assistantModelUnavailable(result) && !assistantwire.ToolSearchRefused(result) {
+		!assistantSafeguardsRefusal(result) && !assistantModelUnavailable(result) && !assistantwire.ToolSearchRefused(result) && ModelRecoveryReason(result) != proto.ModelRecoveryReasonQuota {
 		// Ordinary service failures go to the manager's durable scheduler. Strict task turns keep their
 		// bounded same-model retry here, where the exact execution and existing retry budget are known.
 		return false
