@@ -333,6 +333,7 @@ extension Session {
         row.queued = old.queued
         row.ports = old.ports
         row.permissionMode = old.permissionMode
+        row.bypassAvailable = old.bypassAvailable
         row.effort = old.effort
         row.efforts = old.efforts
         row.ultracode = old.ultracode

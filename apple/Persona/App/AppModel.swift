@@ -3712,7 +3712,7 @@ final class AppModel {
         do {
             try await api.setModes(key, permissionMode: permissionMode, effort: effort, model: claudeModel)
             if var list = sessionsByMachine[key.machineRef], let i = list.firstIndex(where: { $0.sessionID == key.sessionID }) {
-                if let permissionMode { list[i].permissionMode = permissionMode }
+                if let permissionMode { SessionModes.applyOptimistic(&list[i], permissionMode: permissionMode) }
                 if let effort { list[i].effort = effort }
                 if let claudeModel { list[i].model = claudeModel } // the node lists the pick too until the transcript moves on
                 sessionsByMachine[key.machineRef] = list

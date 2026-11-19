@@ -4410,8 +4410,9 @@ struct ChatView: View {
     /// says so (into Allow Everything; out of it when the agent cannot come back), else switches at once.
     private func requestMode(_ mode: String) {
         // Against the mode it runs in as the menus tick it: a session that lists its own modes (#8261) is in its own
-        // approval when it reports none.
-        guard mode != SessionModes.current(session), !modeChanging else { return }
+        // approval when it reports none. While a restart into Allow Everything waits (`bypassPending`), picking the
+        // checked mode again sends it to the node so the restart is called off without switching modes (#7996 review).
+        guard SessionModes.appliesPick(session, to: mode), !modeChanging else { return }
         if let kind = SessionModes.confirmation(session, to: mode) {
             modeConfirm = ModeConfirm(mode: mode, kind: kind)
         } else {
@@ -4443,7 +4444,8 @@ struct ChatView: View {
 
     private func modeConfirmMessage(_ c: ModeConfirm) -> String {
         switch c.kind {
-        case .allowEverything: String(localized: "Edits files and runs commands without asking")
+        // A restart into it (#6513) says so, as its row does.
+        case .allowEverything: [String(localized: "Edits files and runs commands without asking"), session.flatMap(SessionModes.bypassNote)].compactMap { $0 }.joined(separator: "\n")
         case .leaveAllowEverything: String(localized: "This agent wasn't started with Allow Everything, so it can't be switched back to it from here.")
         }
     }
@@ -5746,6 +5748,10 @@ struct Composer: View, Equatable {
     @State private var clearing = false
     /// The draft a "/" row was picked into: the list stays closed for it until the draft changes.
     @State private var slashPicked: String?
+    /// `/permissions` (#6513): the mode list it opens, and the mode picked there, applied through `pickMode` once the
+    /// sheet is gone (the page's confirmation is an alert, which can't show over it).
+    @State private var showPermissions = false
+    @State private var permissionsPick: String?
     #if os(macOS)
     @State private var macWindow: Int?
     #endif
@@ -5878,8 +5884,9 @@ struct Composer: View, Equatable {
     }
 
     private var promptCommands: [PromptCommand] {
-        // The main conversation adds `/clear` (#5100). The quick messages, /loop and extension prompts stay.
-        var commands = PromptItems.commands(clear: canClear && !offersMainClear && !status.isActive && !clearing, loop: canLoop) + declarations.prompts.map {
+        // The main conversation adds `/clear` (#5100). The quick messages, /loop, /permissions and extension prompts stay.
+        var commands = PromptItems.commands(clear: canClear && !offersMainClear && !status.isActive && !clearing, loop: canLoop,
+                                            permissions: canPickPermissions) + declarations.prompts.map {
             PromptCommand(String(localized: "/extension/\($0.title)", comment: "Menu name of a prompt an extension adds"), detail: $0.ownerName, insert: $0.text)
         }
         if offersMainClear, !commands.contains(where: { $0.name == MainClearCommand.word }) {
@@ -5911,23 +5918,37 @@ struct Composer: View, Equatable {
         }
     }
 
+    /// `/permissions` where the page can switch this session's mode (#6513): a picked mode goes through `pickMode`.
+    private var canPickPermissions: Bool { pickMode != nil && SessionModes.offersPermissionsCommand(model.session(key)) }
+
     /// The "/" list for the draft (`SlashMenu`): an agent's chat in the composers without the prompt bar's own menu,
     /// and the main conversation's, which adds `/clear` to those rows (#5100).
     /// `/model` only where typing it switches the model (`Session.takesModelCommand`): a runtime's session that takes a
-    /// model through its menus would get the words as a message (#8144).
+    /// model through its menus would get the words as a message (#8144). `/permissions` where the mode can be switched
+    /// here (#6513); another Persona conversation lists it alone, never an Agent's quick messages (#7996 review).
     private var slashRows: [SlashMenuRow] {
         let plain = usesShellComposer || !AppStyle.current.usesBeautifulUI
-        let agentList = !shellChat && model.session(key)?.assistant != true && plain
+        let assistant = model.session(key)?.assistant == true
+        let agentList = !shellChat && !assistant && plain
         // The prompt bar has its own "/" menu; this list is the shell's and the plain input line's.
         let mainList = offersMainClear && plain
+        if assistant, !mainList {
+            guard !shellChat, plain, canPickPermissions, text != slashPicked else { return [] }
+            return SlashMenuRow.matching(text, in: [.permissions])
+        }
         return SlashMenuRow.slashRows(draft: text, picked: slashPicked, showsList: agentList || mainList,
-                                       model: model.session(key)?.takesModelCommand == true, loop: canLoop,
-                                       agentClear: canClear && !status.isActive && !clearing, mainClear: offersMainClear)
+                                       model: model.session(key)?.takesModelCommand == true, permissions: canPickPermissions,
+                                       loop: canLoop, agentClear: canClear && !status.isActive && !clearing, mainClear: offersMainClear)
     }
 
     /// A "/" row picked: its text in the box to send or edit, as on the web; an agent's /clear asks first, as the + menu's.
-    /// The main conversation's /clear runs at once.
+    /// The main conversation's /clear runs at once; /permissions opens the mode list (#6513).
     private func pickSlash(_ row: SlashMenuRow) {
+        if row == .permissions {
+            text = ""
+            showPermissions = true
+            return
+        }
         if row == .clear {
             text = ""
             if offersMainClear { Task { await runMainClear() } } else { confirmClear = true }
@@ -6248,6 +6269,10 @@ struct Composer: View, Equatable {
                                        Task { @MainActor in startDraft(SlashCommand.loop.text) }
                                        return true
                                    }
+                                   if command.name == SessionModes.permissionsCommand {
+                                       showPermissions = true
+                                       return true
+                                   }
                                    guard command.name == MainClearCommand.word else { return false }
                                    if offersMainClear { Task { await runMainClear() } } else { confirmClear = true }
                                    return true
@@ -6320,10 +6345,16 @@ struct Composer: View, Equatable {
             if comments.wrappedValue.isEmpty { comments.wrappedValue = MessageComment.samples }
         }
         #endif
-        .task { // `-openSlashMenu YES`: "/" in the box and its list open, for screenshots
-            guard UserDefaults.standard.bool(forKey: "openSlashMenu") else { return }
+        .task { // `-openSlashMenu YES`: "/" in the box and its list open, for screenshots; `-openSlashMenu /per`: that draft
+            guard let value = UserDefaults.standard.string(forKey: "openSlashMenu") else { return }
             try? await Task.sleep(for: .seconds(4))
-            text = "/"
+            text = value.hasPrefix("/") ? value : "/"
+        }
+        .task { // `-openPermissionModes YES`: the mode list `/permissions` opens (#6513), for screenshots
+            guard UserDefaults.standard.bool(forKey: "openPermissionModes") else { return }
+            try? await Task.sleep(for: .seconds(4))
+            for _ in 0..<20 where !canPickPermissions { try? await Task.sleep(for: .seconds(1)) } // the session list loads
+            if canPickPermissions { showPermissions = true }
         }
         .task { // `-openMentionMenu @Sources/`: that draft ("@" for any other value) with the keyboard up and its @ list open (#2319, screenshots)
             guard let draft = UserDefaults.standard.string(forKey: "openMentionMenu") else { return }
@@ -6447,6 +6478,14 @@ struct Composer: View, Equatable {
         #endif
         .modifier(ComposerCaptureSheets(camera: $showCamera, glasses: $showGlasses, scan: $showScan, pages: { addScan($0) }) { add($0) })
         .sheet(isPresented: $typingModel) { SessionTypedModelSheet(key: key, session: model.session(key)) }
+        // `/permissions` (#6513): the pick goes through the page once the sheet is gone, where its confirmation can show.
+        .sheet(isPresented: $showPermissions, onDismiss: {
+            guard let mode = permissionsPick else { return }
+            permissionsPick = nil
+            pickMode?(mode)
+        }) {
+            PermissionModeSheet(key: key) { permissionsPick = $0 }
+        }
         .onChange(of: showAssistantModel) { _, on in
             if on, assistantPanel == nil {
                 assistantPanel = AssistantModelPanelModel(key: key, machine: key.machineRef)
@@ -6574,6 +6613,13 @@ struct Composer: View, Equatable {
 
     @discardableResult
     private func sendText(_ raw: String) async -> Bool {
+        // `/permissions` typed and sent opens the mode list, as picking it does; nothing goes to the agent (#6513). With
+        // anything attached it is a message (#7996 review).
+        if SessionModes.opensPermissions(raw, offered: canPickPermissions, attached: hasAttachments) {
+            if raw == text { text = "" }
+            showPermissions = true
+            return true
+        }
         if offersMainClear, MainClearCommand.isCommand(raw, attachments: ridingAlong) {
             let restoring = raw
             text = ""
@@ -6718,6 +6764,8 @@ struct SlashMenuRow: Identifiable, Equatable {
     var preview: String? { text.hasPrefix("/") ? nil : text }
 
     static let model = SlashMenuRow(word: "/model", detail: String(localized: "Switch model"), text: "/model ")
+    /// Persona's own (#6513, the web's #6476): opens the permission mode list instead of going to the agent.
+    static let permissions = SlashMenuRow(word: SessionModes.permissionsCommand, detail: String(localized: "Switch permission mode"), text: SessionModes.permissionsCommand)
     static let clear = SlashMenuRow(word: "/clear", detail: String(localized: "Clear the chat and start over"), text: "/clear")
     /// Picked from this list the draft is only the "/word" typed so far, so the row's text replaces it as any row's does.
     static let loop = SlashMenuRow(word: SlashCommand.loop.word, detail: SlashCommand.loop.detail, text: SlashCommand.loop.text)
@@ -6728,12 +6776,14 @@ struct SlashMenuRow: Identifiable, Equatable {
                                 String(localized: "/commit", comment: "Slash command word the user can type"),
                                 String(localized: "/report", comment: "Slash command word the user can type"), "/compact", "/context"]
 
-    /// The rows an agent's chat offers: /model where the phone can pick one, /loop for a Claude agent
-    /// (`LoopCommand.offered`), /clear where the pane takes it.
-    static func rows(model: Bool, loop: Bool = false, clear: Bool) -> [SlashMenuRow] {
+    /// The rows an agent's chat offers: /model where the phone can pick one, /permissions where its mode can be switched
+    /// (`SessionModes.offersPermissionsCommand`), /loop for a Claude agent (`LoopCommand.offered`), /clear where the pane
+    /// takes it.
+    static func rows(model: Bool, permissions: Bool = false, loop: Bool = false, clear: Bool) -> [SlashMenuRow] {
         let quick = SlashCommand.all.sorted { (order.firstIndex(of: $0.word) ?? order.count) < (order.firstIndex(of: $1.word) ?? order.count) }
         var out = quick.map { SlashMenuRow(word: $0.word, detail: $0.detail, text: $0.text) }
         if model { out.append(.model) }
+        if permissions { out.append(.permissions) }
         if loop { out.append(.loop) }
         if clear { out.append(.clear) }
         return out
@@ -6741,9 +6791,10 @@ struct SlashMenuRow: Identifiable, Equatable {
 
     /// The composer's "/" list. The main conversation adds `/clear` to the rows it already had (#5100);
     /// an agent's own `/clear` stays where `rows` put it. The prompt bar does not use this list (`showsList` false).
-    static func slashRows(draft: String, picked: String?, showsList: Bool, model: Bool, loop: Bool, agentClear: Bool, mainClear: Bool) -> [SlashMenuRow] {
+    static func slashRows(draft: String, picked: String?, showsList: Bool, model: Bool, permissions: Bool = false, loop: Bool,
+                          agentClear: Bool, mainClear: Bool) -> [SlashMenuRow] {
         guard showsList, draft.hasPrefix("/"), draft != picked else { return [] }
-        var listed = rows(model: model, loop: loop, clear: agentClear && !mainClear)
+        var listed = rows(model: model, permissions: permissions, loop: loop, clear: agentClear && !mainClear)
         if mainClear, !listed.contains(where: { $0.word == Self.clear.word }) { listed.append(.clear) }
         return matching(draft, in: listed)
     }

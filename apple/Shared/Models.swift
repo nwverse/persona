@@ -1066,6 +1066,10 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// a flag that puts that mode in its shift+tab cycle (`bypass_available`, #1379, read off the process by the node).
     /// False while unknown and from older hubs; then Allow Everything is only a start's choice.
     var bypassAvailable: Bool = false
+    /// Allow Everything was picked for this Claude Code while it cannot reach it with shift+tab (`bypassAvailable` false):
+    /// the node restarts it in that mode once its turn is over, resuming the same conversation (`bypass_pending`, #6476).
+    /// Until then `permissionMode` stays the mode it runs in. False from older hubs.
+    var bypassPending: Bool = false
     var effort: String? = nil
     /// The levels `effort` may be set to when they are not Claude Code's (`SessionModes.effortOptions`): a Codex thread
     /// the hub drives through its app-server, where only the effort changes (node/codex_effort.go). Nil elsewhere.
@@ -1418,8 +1422,9 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// The listed modes can be switched now (`POST …/modes`): it runs and takes messages.
     var canSwitchListedModes: Bool { canSend && status.isLive && listedModes != nil }
     /// Only the thinking effort changes from the phone, among `efforts` (the hub says so by listing them): a Codex
-    /// thread driven through its app-server. Claude Code and the assistant change both, the rest neither.
-    var setsEffortOnly: Bool { canSend && !assistant && !isClaude && !(efforts ?? []).isEmpty }
+    /// thread driven through its app-server. Claude Code, the assistant and a runtime that declares `capabilities.modes`
+    /// (such as Antigravity) change both, the rest neither.
+    var setsEffortOnly: Bool { canSend && !assistant && !isClaude && !canChangeModes && !(efforts ?? []).isEmpty }
     /// Who the user talks to in this session: "Claude", "Codex", "TRAEX", or what the hub calls a runtime's agent ("DSH",
     /// a Paseo provider's label such as "Grok"). Never the engine of several providers that runs it: a row that names
     /// only Paseo (no label of its own, or the node's "Paseo") names its provider by its launcher instead (#8144).
@@ -1475,7 +1480,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         case codexRoute = "codex_route", codexRouteNote = "codex_route_note"
         case agentLabelHint = "agent_label"
         case agentSurface = "agent_surface"
-        case permissionMode = "permission_mode", bypassAvailable = "bypass_available"
+        case permissionMode = "permission_mode", bypassAvailable = "bypass_available", bypassPending = "bypass_pending"
         case contextTokens = "context_tokens", contextWindow = "context_window"
         case ultracode, ultracodeNote = "ultracode_note", ultracodePending = "ultracode_pending", ultracodeLostAt = "ultracode_lost_at"
         case repoRoot = "repo_root", worktree, branch
@@ -1538,6 +1543,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         model = try c.decodeIfPresent(String.self, forKey: .model)
         permissionMode = try c.decodeIfPresent(String.self, forKey: .permissionMode)
         bypassAvailable = (try? c.decodeIfPresent(Bool.self, forKey: .bypassAvailable)).flatMap { $0 } ?? false
+        bypassPending = (try? c.decodeIfPresent(Bool.self, forKey: .bypassPending)).flatMap { $0 } ?? false
         effort = try c.decodeIfPresent(String.self, forKey: .effort)
         efforts = try c.decodeIfPresent([String].self, forKey: .efforts)
         // The conversation's own pick (#5033): an odd one never drops the session, which then follows its default.

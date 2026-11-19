@@ -91,6 +91,11 @@ fun ChatComposer(
     onMentionOpen: (Boolean) -> Unit = {},
     /** /model in the "/" list, which opens the model choices instead of typing (Claude in a terminal pane). */
     onModel: (() -> Unit)? = null,
+    /**
+     * /permissions in the "/" list (#6513): opens the chat's permission mode menu with every mode, nothing sent. Null where
+     * the chat has no mode picker, so the words are an ordinary message there.
+     */
+    onPermissions: (() -> Unit)? = null,
     /** /loop in the "/" list, with a line under the box saying what it will do (Claude Code only, web `hasLoop`). */
     loop: Boolean = false,
     /**
@@ -331,9 +336,11 @@ fun ChatComposer(
     // Both the "/" list and the + sheet offer only what an Assistant conversation runs, never an Agent's quick messages.
     val useMainCommands = assistantChat || mainClear != null
     val suggestions = if (!enabled) emptyList() else if (useMainCommands) {
-        SlashCommand.mainSuggestions(state.value.text, clear = mainClear != null, resources = resources)
+        SlashCommand.mainSuggestions(state.value.text, clear = mainClear != null, resources = resources,
+            permissions = onPermissions != null)
     } else {
-        SlashCommand.suggestions(state.value.text, canClear && !working, resources, model = onModel != null, loop = loop)
+        SlashCommand.suggestions(state.value.text, canClear && !working, resources, model = onModel != null, loop = loop,
+            permissions = onPermissions != null)
     }
     val hint = if (enabled && loop) loopHint(state.value.text, resources) else null
     // @: the word being typed just before the caret, while nothing is selected and no "/" list is open.
@@ -400,7 +407,15 @@ fun ChatComposer(
     // /clear sent alone in the main conversation clears it instead of going to Persona (web `isClearCommand`).
     fun send() {
         val clear = mainClear
-        if (clear != null && isMainClearCommand(state.value.text, state.attachments.size, extraContent)) clearMain(clear) else onSend()
+        val permissions = onPermissions
+        when {
+            clear != null && isMainClearCommand(state.value.text, state.attachments.size, extraContent) -> clearMain(clear)
+            // /permissions typed out opens the menu as a pick does; with photos or quotes it is a message (web `isPermissionsCommand`)
+            permissions != null && SlashCommand.isPermissions(state.value.text) && state.attachments.isEmpty() && !extraContent -> {
+                state.beginEdit(); state.value = TextFieldValue(); permissions()
+            }
+            else -> onSend()
+        }
     }
     // Picking a quick message puts its words in the box to send; /clear empties the box and asks first (the main
     // conversation's clears at once).
@@ -410,6 +425,7 @@ fun ChatComposer(
             command.clear && mainClear != null -> clearMain(mainClear)
             command.clear -> { state.value = TextFieldValue(); confirmClear = true }
             command.model -> { state.value = TextFieldValue(); onModel?.invoke() }
+            command.permissions -> { state.value = TextFieldValue(); onPermissions?.invoke() }
             else -> state.value = TextFieldValue(command.text, TextRange(command.text.length))
         }
     }
