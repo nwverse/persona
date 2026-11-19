@@ -31,6 +31,9 @@ var (
 // agyReadyHint is the hint under agy's input box: the box is up, so no trust dialog is coming.
 const agyReadyHint = "? for shortcuts"
 
+// agyNoticeDismiss is the line under a notice agy draws above its input box on start, which holds the keyboard.
+const agyNoticeDismiss = "esc to dismiss"
+
 // agyTrustKeys are the keys that answer agy's trust dialog by trusting the folder, nil when the screen does not show it.
 // The dialog is known by its question ("Do you trust the contents of this project?") and the option by what it says
 // ("Yes, I trust this folder"), not by its place.
@@ -54,10 +57,11 @@ func agyTrustKeys(text string) []string {
 // once agy's input box is drawn (its hint) with no dialog, or after agyTrustWait; errors only when ctx ends or keys cannot
 // be sent. herdr reports agy by its process before agy's screen takes the terminal, and calls it idle then: a message
 // typed in that window is echoed by the terminal and dropped by agy (#11437), so herdr's status alone never lets the
-// first message go.
+// first message go. A start notice over the box is dismissed with one Esc first.
 func (n *Node) agyTrustFolder(ctx context.Context, pane string) error {
 	deadline := time.Now().Add(agyTrustWait)
 	answered := "" // the dialog screen last answered: the same screen is not answered twice
+	dismissed := false
 	for {
 		text, err := n.readPane(ctx, pane, "visible", 40)
 		if err == nil {
@@ -70,7 +74,16 @@ func (n *Node) agyTrustFolder(ctx context.Context, pane string) error {
 					answered = text
 				}
 			} else if !screen.Choosing(text) && strings.Contains(text, agyReadyHint) {
-				return nil
+				// A notice agy shows over its input box on start ("Auto is now the default agent mode … esc to
+				// dismiss", 1.5.13) swallows typed input until it is dismissed (#11437): Esc once, then the box.
+				if dismissed || !strings.Contains(strings.ToLower(text), agyNoticeDismiss) {
+					return nil
+				}
+				if err := n.sendKeys(ctx, pane, "escape"); err != nil {
+					return err
+				}
+				log.Printf("agy start in pane %s: dismissed agy's start notice before the first message (#11437)", pane)
+				dismissed = true
 			}
 		}
 		if time.Now().After(deadline) {
