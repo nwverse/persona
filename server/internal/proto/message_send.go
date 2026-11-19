@@ -50,3 +50,24 @@ type MessageSendState struct {
 	State       string    `json:"state"`
 	At          time.Time `json:"at"`
 }
+
+// FeatureTodoSendState is informational as FeatureMessageSendState is: trust only the authenticated hello's top-level
+// todo_send_state version. An app declares the same name in client_hello to get the events.
+const (
+	FeatureTodoSendState = "todo_send_state"
+	TodoSendStateVersion = 1
+)
+
+// TodoSendState is MessageSendState for a to-do's writes (#10465): a message on its conversation's route or an
+// answer to one of its asks, sent with X-Persona-Op-Id. Processing once the hub has claimed the op id, before the
+// manager has the write (which may wait for a node, or for a new Agent to start); then delivered (the route answered
+// 200), failed (a refusal: the same op id gets it again, a new one sends again) or unknown (it may have been taken:
+// ask again with the same op id). Only to the full devices that declared todo_send_state, outside the event log. The
+// HTTP answer, or the op id's receipt, stays authoritative.
+type TodoSendState struct {
+	Type       string    `json:"type"`
+	TodoID     string    `json:"todo_id"`
+	ClientOpID string    `json:"client_op_id"`
+	State      string    `json:"state"`
+	At         time.Time `json:"at"`
+}
