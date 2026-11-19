@@ -107,7 +107,7 @@ func (s *Service) recheckQueuedDigest(ctx context.Context, to string, msg relayM
 		return msg, false, true
 	}
 	// Do not change the identity or destination of a send that may already have landed.
-	if _, doubtful := b.doubted[relayMsgID(to, msg)]; doubtful && (next.Text != msg.Text || len(groups) > 1 || len(groups[to]) == 0) {
+	if !msg.TriedAt.IsZero() && (next.Text != msg.Text || len(groups) > 1 || len(groups[to]) == 0) {
 		return msg, false, true
 	}
 	state := b.st
