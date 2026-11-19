@@ -5,19 +5,19 @@
   alone leaves those checks failing. Exercise allowed and refused tokens, another manager's Todo and explicit manager
   selectors, and body-named machines before recording the classification; keep every existing scope unchanged.
 
-- A UI test that lands on the wrong page in the wrong language did not get its launch (#10109). xcodebuild installs the
-  app at the start of each run; a Live Activity the previous run left is stopped by that install, and liveactivitiesd
-  wakes the app in the background a few milliseconds before XCTest's launch, which then attaches to that argument-less
-  process. Longer waits never help: read SpringBoard's `OpenApplication … ForRequester(…)` lines around the launch, and
-  end what a test leaves (Debug builds end their Live Activities on SIGTERM). A test that waits for one of two
-  renderings (a folded box shows the caption, not the line) waits on the hub's own count first, then either rendering.
-
 - Fixture teardown is part of a test's elapsed time (#5730). A scripted terminal whose shell is ready immediately
   does not need a fixed startup pause. When a test has finished its assertions, cancel background prompt checks
   owned by that fixture and join them before restoring package settings or closing sockets. Delivery/recovery tests
   must still await the check before their assertions; cancellation at teardown must not substitute for those checks.
   Keep normal detached delivery and production wait limits unchanged, and measure serial and partitioned commands
   separately when evaluating the gain.
+
+- A UI test that lands on the wrong page in the wrong language did not get its launch (#10109). xcodebuild installs the
+  app at the start of each run; a Live Activity the previous run left is stopped by that install, and liveactivitiesd
+  wakes the app in the background a few milliseconds before XCTest's launch, which then attaches to that argument-less
+  process. Longer waits never help: read SpringBoard's `OpenApplication … ForRequester(…)` lines around the launch, and
+  end what a test leaves (Debug builds end their Live Activities on SIGTERM). A test that waits for one of two
+  renderings (a folded box shows the caption, not the line) waits on the hub's own count first, then either rendering.
 
 - A fake peer recording a user line is not the send's completion (#9673). The desktop launcher's first message
   continues in the background and still reads the shared confirmation timeout. After observing inbox receipt, wait
@@ -397,8 +397,10 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
 path, and Gradle treats that path as the only input. A change to the Rust code rebuilt the library at the same path, and
 Gradle then called the tests up to date and skipped them. A deliberately broken rule still "passed". The fix:
 
-- The Exec task that builds the library declares it with `outputs.file(...)`.
-- The test task takes that task's outputs as inputs, with `inputs.files(buildHostCore)`.
+- The task that builds the library declares it as its output (`HostCoreLibrary` copies cargo's result into the build
+  directory, with the core's sources, manifests, lockfile and toolchain file as its inputs; #10712).
+- The test task takes that output as an input by its contents (`FileContentProperty`, `PathSensitivity.NONE`), which
+  also passes its path to the test JVM.
 
 **To check the setup**, break one rule on purpose and confirm the binding tests fail before trusting them.
 
@@ -1224,18 +1226,6 @@ To check that a failure is this, move `dev.json` aside in the app's data contain
 
 - `-showFleetSample needsYou` is only an initial DEBUG sample. A paired hub's next Fleet event or foreground fetch replaces it; the default mock's empty Fleet turns it into All Caught Up before the Lock Screen appears. For an action test, enable the mock's permission Fleet and take the interaction id from that response, so the resolve assertion names the request whose Deny is visible.
 - The first Live Activities authorization prompt can appear after the Lock Screen wake, not before a single immediate `exists` check. Wait for either the activity's Deny or the system's Allow, answer the system prompt, and then wait for Deny. Clear any launch alert before Home, and keep the unlock teardown registered immediately after locking.
-
-## Workspace naming review reproductions (#7100)
-
-- Exercise a task save with Assistant defaults changed by another editor. Check the placeholder against the actual preview after the save, and keep the explicit draft separate from the refreshed saved baseline/revision. A failed follow-up read must not replay an acknowledged write or reset the preview computer/layout; include an empty computer choice as well as a different valid one.
-- A lazily imported editor can still add first-screen bytes through shared modules and preload metadata. Keep the general repository API free of React and reuse the existing editor-owned request-context guard when that avoids an extra shared chunk. Compare a normal build with one fixed clean main; retain the startup budget and the guard's credential/manager lifetime checks.
-- Tailwind's global stylesheet can also include utilities used only by a lazy editor. Keep that editor's unique rules in its own imported stylesheet, applying the existing utilities through a reference to the shared design tokens. This preserves its exact layout without charging those rules to every first screen.
-- Seed legacy PRs in persisted task progress without first reading the repository API: that read imports them. Pause the synthetic Node after source capture and inspect the real PostgreSQL association set and import receipt. Naming already imports before capture; a link-only edit changes the association revision but not the selected preparation digest. Changing a selected ref must still conflict, and a saved operation must survive restart without resolving again.
-- A Windows-looking `NodeContext` does not make a Linux process use Windows `filepath` semantics. Run the Windows-specific naming tests on Windows, or explicitly label any extracted lexical-path fixture and its substitutions. Cross-compilation checks compilation only. Keep settings syntax, target-native resolution, Node authorization and actual filesystem behavior as separate claims; never widen path permissions to make a host-mismatched reproduction pass.
-- Windows namespace prefixes can make `filepath.Rel` reject an equivalent ordinary path as a different volume. Test both workspace and private-state spellings, including drive and UNC forms; a failed containment comparison is not proof that a path is outside private state. Naming rejects these namespaces rather than stripping their special semantics.
-- A lazy settings subtree needs its own `PageBoundary` inside the surrounding settings page. Reproduce a chunk failure by blocking the browser's actual module request, then verify that sibling settings remain editable and their drafts can still save. Restore the resource and use the existing Reload action to verify recovery of the module and persisted rules; a mocked component or a JSX-shape assertion cannot establish that behavior.
-
-- An export-only change in a deferred editor need not reduce the first screen. Measure it, revert an ineffective trial, and inspect the shared code that startup actually ships. Remove duplicated work there while retaining validation and request-lifetime guards; keep the original budget and verify the normal app/public build.
 
 ## Raw TCP test listeners get the port probe too (2026-11-19, #10659)
 
