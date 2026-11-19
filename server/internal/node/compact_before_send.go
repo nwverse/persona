@@ -411,7 +411,6 @@ func compactionSince(path string, off int64) (compacted, grew bool, reason strin
 			}
 		}
 	}
-	reason := ""
 	if all := compactErrorRE.FindAll(b, -1); len(all) > 0 {
 		reason = strings.TrimSpace(string(all[len(all)-1]))
 	}
