@@ -171,6 +171,7 @@ type lsHarness struct {
 	gates                 map[string]chan struct{}
 	force                 map[string]int
 	forceOut              map[string]string // what a forced script prints
+	onRun                 func(what string) // before each script runs
 	pkgErr                error
 	logs                  bytes.Buffer
 	cancel                context.CancelFunc
@@ -399,7 +400,11 @@ func (h *lsHarness) run(ctx context.Context, what string, argv []string, stdin i
 	code, forced := h.force[what]
 	forcedOut := h.forceOut[what]
 	env := slices.Clone(h.extraEnv)
+	onRun := h.onRun
 	h.mu.Unlock()
+	if onRun != nil {
+		onRun(what)
+	}
 	if gate != nil {
 		select {
 		case <-gate:
@@ -575,7 +580,7 @@ func TestLinkSwitchSucceeds(t *testing.T) {
 	if len(ends) != 1 || ends[0] != (devicewire.LinkSwitchEnd{MachineID: "box", Operation: rec.Operation, PairHash: lsTestHash, Outcome: devicewire.LinkSwitchSucceeded}) {
 		t.Errorf("ends %+v", ends)
 	}
-	if got := h.whats(); !slices.Equal(got, []string{"probe", "stage", "install"}) {
+	if got := h.whats(); !slices.Equal(got, []string{"probe", "stage", "install", "remove staged"}) {
 		t.Errorf("ssh runs %q", got)
 	}
 	if got, _ := os.ReadFile(filepath.Join(h.persona, ".pair-got")); string(got) != lsTestLink+"\n" {
@@ -1006,7 +1011,7 @@ func TestLinkSwitchResumesAfterARestart(t *testing.T) {
 		if _, ends := h.hub.calls(); len(ends) != 1 || ends[0].Outcome != devicewire.LinkSwitchSucceeded || ends[0].PairHash != lsTestHash {
 			t.Errorf("ends %+v", ends)
 		}
-		if !h.exists(".persona/link.json") || len(h.whats()) > 0 {
+		if !h.exists(".persona/link.json") || !slices.Equal(h.whats(), []string{"remove staged"}) {
 			t.Errorf("touched the computer: %q", h.whats())
 		}
 	})
@@ -1431,7 +1436,7 @@ func TestLinkSwitchNeverRollsBackASuccess(t *testing.T) {
 		if rec.Phase != proto.LinkSwitchPhaseSucceeded || rec.Error != "" {
 			t.Fatalf("record %+v", rec)
 		}
-		if got := h.whats(); len(got) > 0 {
+		if got := h.whats(); !slices.Equal(got, []string{"remove staged"}) {
 			t.Errorf("ssh runs %q", got)
 		}
 		if !h.exists(".persona/link.json") || !h.exists(".persona/bin/persona-link") {
@@ -1526,6 +1531,54 @@ func TestLinkSwitchBeginFailingOtherwiseRollsBack(t *testing.T) {
 			}
 			if h.hub.kind() != "ssh" || !h.d.sshOnline("box") {
 				t.Error("not back on ssh")
+			}
+		})
+	}
+}
+
+// A switch that succeeded on a computer with its own node service leaves no .node marker: once the record says
+// succeeded and the hub was told, the files the switch staged or marked are removed over ssh. That failing leaves the
+// switch succeeded, nothing rolled back.
+func TestLinkSwitchSuccessRemovesWhatItStaged(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(fmt.Sprintf("removal fails %t", fail), func(t *testing.T) {
+			var atRemoval linkSwitchRecord
+			var endsAtRemoval int
+			h := newLSHarness(t, lsOptions{setup: func(h *lsHarness) {
+				mustWrite(t, filepath.Join(h.units, "personad-node.service"), "the computer's own", 0o644)
+				h.onRun = func(what string) {
+					if what == "remove staged" && atRemoval.Phase == "" { // the first removal
+						_, _ = h.store.Setting(context.Background(), linkSwitchKey("box"), &atRemoval)
+						_, ends := h.hub.calls()
+						endsAtRemoval = len(ends)
+					}
+				}
+				if fail {
+					h.force["remove staged"] = 255
+				}
+			}})
+			h.start()
+			rec := h.finished()
+			eventually(t, 10*time.Second, "the removal ran", func() bool { return slices.Contains(h.whats(), "remove staged") })
+			h.close() // the switch's goroutine is done
+			if rec.Phase != proto.LinkSwitchPhaseSucceeded || !rec.NodeUnitExisted {
+				t.Fatalf("record %+v", rec)
+			}
+			if got := h.d.linkSwitchRecordOf("box"); got.Phase != proto.LinkSwitchPhaseSucceeded || got.Error != "" {
+				t.Errorf("record after the removal %+v", got)
+			}
+			if atRemoval.Phase != proto.LinkSwitchPhaseSucceeded || endsAtRemoval != 1 {
+				t.Errorf("removed before the record said succeeded (%q) or before the hub was told (%d ends)", atRemoval.Phase, endsAtRemoval)
+			}
+			if _, ends := h.hub.calls(); len(ends) != 1 || ends[0].Outcome != devicewire.LinkSwitchSucceeded {
+				t.Errorf("ends %+v", ends)
+			}
+			marker := h.exists(stagedName(rec.Operation) + ".node")
+			if marker == !fail {
+				t.Errorf("the .node marker left %t, removal failed %t", marker, fail)
+			}
+			if b, _ := os.ReadFile(filepath.Join(h.units, "personad-node.service")); string(b) != "the computer's own" || !h.exists(".persona/link.json") {
+				t.Error("the success was undone")
 			}
 		})
 	}
