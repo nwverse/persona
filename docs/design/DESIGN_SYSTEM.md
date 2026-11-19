@@ -1418,6 +1418,14 @@ The widget extension doesn't build `Theme`: Persona's widgets take their colors,
 - Charts never take a hex: series use role colors, the data hues or `Theme.Hue`; text around them stays in the text's colors.
 - Machine monitoring has its own `MetricColor` palette on both Apple and Android: CPU blue, memory teal, download orange, upload purple and load magenta, with separate light/dark values from `spec/tokens/color.metric.json`. These series never reuse Agent state colors and do not change with interface style or theme accent. Android's additional disk series uses the registered neutral slate token. Holding a chart keeps one shared timestamp across the detail's charts; only **Back to now**, or that timestamp leaving the selected range, returns to current values. Missing series remain unknown and gaps never borrow a neighboring value.
 
+### 3.15.1 Token usage calendar (Android)
+
+`UsageCalendarCard` and `UsageCalendarPage` (`feature/assistant/UsageCalendar.kt`) are the daily-token counterpart of the Machine monitoring charts. They compare magnitude over time, so they use one hue rather than categorical series colors: the current theme accent in four quantile steps, with `sunken` for no usage. Text, dates, legends and breakdown rows stay in the ordinary ink tokens. The exact number and the four token kinds are available by selecting a day; the details page also lists every computer and kind in text, so color is never the only way to read a value.
+
+The daily grid is Monday-first, seven rows per week, with the current week last and a thin outline on today. A day with usage ranks among only the days with usage: `ceil(4 × rank / count)`, where rank includes every equal or smaller day, gives steps 1–4; no usage is step 0. The hourly grid uses the same quantile rule among its hours and retains repeated clock-change hours by timestamp. Small chart cells are not the sole controls: selected days have 48dp previous / next buttons and an exact spoken value, while the card's non-cell area opens the details page. Home reads while resumed and keeps the previous devices section until real data arrives; it never substitutes an all-zero calendar for a failed or unsupported read.
+
+Month labels have their own visible header above the scrolling weeks. The header follows the scroll position and keeps only the latest complete labels that fit the width and text scale; it never clips a month to a partial word. Weekday labels keep their full localized glyphs inside a dedicated column, while the day cells themselves stay the same size at every text size.
+
 ### 3.14 Tabletop hinge safety (Android)
 
 A horizontal separating hinge divides a page into safe regions; the window and hinge alone select this behavior, never a device model. All three Android styles use the same measured policy in `PageFrame`.

@@ -89,6 +89,15 @@ chat-rendering preferences are independent of home navigation and remain availab
 Apple PR #1696 removed the old root-navigation switch; PR #2539 separately removed conversation-presentation settings.
 The latter is not a home-layout toggle and is not a reason to remove Android's Inbox rendering preference.
 
+### Assistant token calendar (#9507)
+
+The blank Assistant / New chat page replaces its computer chips with a token calendar only after `GET /api/v1/usage/days?days=371` returns real days. An older hub, an empty answer, or a failed first read leaves the original devices section in place; a failed refresh keeps the last good calendar.
+
+- **Home card**: today and the last 30 days use `ChartMath.compact` in the page language. Tapping a day selects its date and four token kinds, and tapping it again returns to the summary. The calendar's Monday-first geometry, quantile rule, theme-color steps, and previous / next-day accessibility controls follow [the shared token-calendar rule](../design/DESIGN_SYSTEM.md#3151-token-usage-calendar-android), rather than an Android-only palette or count definition.
+- **Details**: tapping the card outside a day opens `UsageCalendarRoute`. The page has today / last 7 days / last 30 days, the calendar with its legend, the last 7 days by the hour, each computer's share, and the four token-kind totals. Hour cells retain the hub's `t`, `date`, and `hour`, so a clock-change day is not forced into 24 cells or deduplicated by its clock label.
+- **Data**: `UsageHistoryApi` is implemented by `HttpAssistantManagement`, preserving the selected manager's query and header. The detail page reads days and hours together. Home and details read while their Compose lifecycle is `RESUMED`, and details also offer pull-to-refresh; there is no timer or continuing animation. A refresh failure keeps the last good answer and offers Retry.
+- **Tests**: `UsageCalendarDataTest`, `UsageCalendarModelTest`, `UsageHistoryApiTest`, `UsageCalendarUiTest`, and `UsageCalendarIntegrationTest` cover the arithmetic, wire contract, reload behavior, chip replacement in both directions, selection, real-home navigation, invalid-zone fallback, single-scaled compact spacing, and visible month/weekday bounds. `UsageCalendarShotsTest` drives the real home and details for all three styles, light/dark, default and 2.0 text, phone and 840dp tablet, plus en / zh-Hans / ja. These are native JVM Compose captures, not device or emulator screenshots.
+
 ### Simplified Assistant conversation and action trays (#2878)
 
 Since #3387 the actions are two, **Needs you** and **In progress**, and each thing is in one only: the split is
