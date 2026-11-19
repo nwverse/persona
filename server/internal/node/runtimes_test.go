@@ -672,7 +672,7 @@ func TestRuntimeItemsAndDeltasReachTheHub(t *testing.T) {
 	if w := host.got("session.watch"); len(w) != 1 {
 		t.Fatal("watch not forwarded")
 	}
-	_ = host.peer.Notify("session.items", map[string]any{"session_id": "session-4", "from_seq": 5, "to_seq": 7, "history": "h",
+	_ = host.peer.Notify("session.items", map[string]any{"session_id": "session-4", "from_seq": 5, "to_seq": 7, "history": "h", "update": true,
 		"items": []proto.Item{{ID: "a", Seq: 7, Role: "assistant", Kind: proto.KindText, Text: "done"}}})
 	_ = host.peer.Notify("session.delta", map[string]any{"session_id": "session-4", "text": "do"})
 	_ = host.peer.Notify("session.items", map[string]any{"session_id": "someone-else", "to_seq": 1})
@@ -686,6 +686,12 @@ func TestRuntimeItemsAndDeltasReachTheHub(t *testing.T) {
 	defer hub.mu.Unlock()
 	if len(hub.items) != 1 {
 		t.Fatalf("items for a session the host does not list were forwarded: %d", len(hub.items))
+	}
+	var pushed struct {
+		Update bool `json:"update"`
+	}
+	if err := json.Unmarshal(hub.items[0], &pushed); err != nil || !pushed.Update {
+		t.Fatalf("in-place update flag lost: %s (%v)", hub.items[0], err)
 	}
 	if n.runtimes.watching["session-4"] != 7 {
 		t.Fatalf("watched seq %d", n.runtimes.watching["session-4"])

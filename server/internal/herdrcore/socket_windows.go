@@ -35,11 +35,10 @@ func pipeUser() string {
 	return ""
 }
 
-// socketStat asks for the pipe without opening it (opening one takes the server's only free instance for a moment).
-func socketStat(path string) error {
-	_, err := os.Stat(path)
-	return err
-}
+// socketStat checks nothing on Windows: os.Stat on a pipe opens it (CreateFile), which takes one of the server's
+// instances and, when they are all busy, fails at once where the dial would wait. The dial itself reports a missing
+// pipe as not found (socketGone), so a core that is not running is still told apart.
+func socketStat(string) error { return nil }
 
 // dialSocket connects to herdr-core's named pipe.
 func dialSocket(ctx context.Context, path string) (net.Conn, error) {

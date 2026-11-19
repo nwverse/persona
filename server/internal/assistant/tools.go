@@ -13,6 +13,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/compat"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -419,7 +420,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if a.Task != nil {
 			text, err = s.withStandingAuthorizations(ctx, am.ID, c.Cwd, text)
 			if err != nil {
-				return "", task.sendFailed(ctx, s, err)
+				return "", task.sendFailed(ctx, s, rpc.NotSent(err))
 			}
 		}
 		// The user's attachments, copied to the agent's computer when it is another one: the text ends with them, the
@@ -482,13 +483,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 				s.progressMade(am.ID, c.SessionID, time.Now()) // the supervisor told it something: a new stretch (supervise_progress.go)
 			}
 			if err != nil {
-				if errCode(err) == proto.CodeCompactFailed {
+				if errCode(err) == proto.CodeCompactFailed && !sendUnknown(err) {
 					return "", task.sendFailed(ctx, s, compactFailed(c, am, err, false))
-				}
-				if note.reopens() && sendUnknown(err) {
-					// Its own wait ran out, or the link dropped, while the node may still type it in: the model reads
-					// the agent before it sends the text twice.
-					err = fmt.Errorf("%w (it may still arrive; check with agent_read before sending again)", err)
 				}
 				return "", task.sendFailed(ctx, s, err)
 			}
@@ -550,6 +546,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			Launcher string `json:"launcher"`
 			Model    string `json:"model"`
 			Effort   string `json:"effort"`
+			Speed    string `json:"speed"`
 			Tier     string `json:"tier"`
 			Worktree struct {
 				Branch string `json:"branch"`
@@ -581,7 +578,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			return "", fmt.Errorf("%w; no agent was started", err)
 		}
 		a.Cwd = proto.ExpandHome(a.Cwd, am.Home)
-		own := startPick{launcher: strings.TrimSpace(a.Launcher), effort: strings.TrimSpace(a.Effort)} // before the tier
+		own := startPick{launcher: strings.TrimSpace(a.Launcher), effort: strings.TrimSpace(a.Effort), speed: strings.TrimSpace(a.Speed)} // before the tier
 		// The tier is resolved first (an unknown one asks and starts nothing), then Model Settings' Agents laid over it as
 		// the start lays it: what runs is said on the card (a hand-off from the health space asks) and in the answer.
 		tier, runs := strings.TrimSpace(a.Tier), ""
@@ -590,21 +587,26 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			if err != nil {
 				return "", fmt.Errorf("%w; no agent was started", err)
 			}
+			model := a.Model
 			if !layTier(t, &a.Launcher, &a.Model, &a.Effort) {
 				tier = "" // a launcher of its own: the tier gives it nothing
 			} else {
-				picks := map[string]any{"launcher": a.Launcher, "model": a.Model, "effort": a.Effort}
+				if a.Speed == "" && (model == "" || model == t.Model) {
+					a.Speed = t.Speed
+				}
+				picks := map[string]any{"launcher": a.Launcher, "model": a.Model, "effort": a.Effort, "speed": a.Speed}
 				if s.applyModel(ctx, "agent.new", picks) == nil { // one that can't run is the start's to say
 					l, _ := picks["launcher"].(string)
 					m, _ := picks["model"].(string)
 					e, _ := picks["effort"].(string)
-					runs = ModelTier{Launcher: l, Model: m, Effort: e}.runs()
+					v, _ := picks["speed"].(string)
+					runs = ModelTier{Launcher: l, Model: m, Effort: e, Speed: v}.runs()
 				}
 			}
 		}
 		// What it runs on this computer, before the user is asked (#2640, launcher_fit.go): a launcher named here that
 		// the computer lacks starts nothing; a default it lacks gives way to one it has, and the card and answer say so.
-		run := map[string]any{"launcher": a.Launcher, "model": a.Model, "effort": a.Effort}
+		run := map[string]any{"launcher": a.Launcher, "model": a.Model, "effort": a.Effort, "speed": a.Speed}
 		if err := s.applyModel(ctx, "agent.new", run); err != nil {
 			return "", err
 		}
@@ -612,10 +614,15 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if err != nil {
 			return "", fmt.Errorf("%w; no agent was started", err)
 		}
+		a.Speed, _ = run["speed"].(string)
+		if err := checkStartSpeed(run, fit, ""); err != nil {
+			return "", fmt.Errorf("%w; no agent was started", err)
+		}
 		if swapped != "" {
 			a.Launcher, _ = run["launcher"].(string)
 			a.Model, _ = run["model"].(string)
 			a.Effort, _ = run["effort"].(string)
+			a.Speed, _ = run["speed"].(string)
 			tier, runs = "", "" // the tier's launcher is not what runs
 		}
 		// traex, omp…: no effort (launcher_modes.go). One this call names is refused before the user is asked, rather
@@ -644,6 +651,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			where += i18n.T(s.lang(ctx), "assistant-tools.with_tier", i18n.Args{"tier": tier, "runs": runs})
 		case a.Model != "":
 			where += i18n.T(s.lang(ctx), "assistant-tools.with_model", i18n.Args{"model": a.Model})
+		case proto.FasterSpeed(a.Speed):
+			where += " · " + a.Speed
 		}
 		if a.Ultracode {
 			where += " · ultracode"
@@ -664,7 +673,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), agentStartTimeout)
 		defer cancel()
 		// The tab is named from the prompt as written; the agent gets its project's background before it (#2820).
-		params := map[string]any{"cwd": a.Cwd, "launcher": a.Launcher, "model": a.Model, "effort": a.Effort, "tab_name": s.tabName(sctx, a.Prompt)}
+		params := map[string]any{"cwd": a.Cwd, "launcher": a.Launcher, "model": a.Model, "effort": a.Effort, "speed": a.Speed, "tab_name": s.tabName(sctx, a.Prompt)}
 		prompt := s.withCloseoutBrief(sctx, a.Prompt, false)
 		params["prompt"] = s.withProjectContext(sctx, am.ID, a.Cwd, self, prompt)
 		if a.Ultracode {
@@ -684,6 +693,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			if _, fit, err = s.fitLauncher(ctx, am, own, params); err != nil {
 				return "", fmt.Errorf("%w; no agent was started", err)
 			}
+		}
+		if err := checkStartSpeed(params, fit, ""); err != nil {
+			return "", fmt.Errorf("%w; no agent was started", err)
 		}
 		// Allow all for Claude Code and for a provider whose approval is an Auto Accept switch (startAgent.allowAll, #8141).
 		if fit.allowAll() {
@@ -765,6 +777,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			return "", fmt.Errorf("%w; no agent was started", err)
 		}
 		defer release()
+		clearStandardSpeed(params)
 		s.setPlanThen(ctx, am.ID, params)
 		var values *handoffValues
 		if hand != nil {
@@ -853,27 +866,76 @@ func startResultUnknown(err error) bool {
 		errors.Is(err, rpc.ErrClosed) || errors.As(err, &re) && re.Message == rpc.ErrClosed.Error()
 }
 
-// sendUnknown: a session.send or session.start that failed though its text may have reached the agent: its answer
-// never came back (startResultUnknown), or the node's error says the text may have arrived or did (nodeMayHaveTaken).
-// Not when the manager's own connection says it never went out (rpc.ErrNotSent: the caller's wait ran out, or the
-// connection closed, before it was written, or the node's not-started refusals outlasted the retries).
+// sendUnknown reports whether a failed node write may have taken effect. An explicit delivery result takes
+// precedence over the transport's words. An uncoded error relayed across the bus keeps only its message.
 func sendUnknown(err error) bool {
-	return (startResultUnknown(err) || nodeMayHaveTaken(err)) && !errors.Is(err, rpc.ErrNotSent)
+	if _, ok := errors.AsType[*completedNodeWriteError](err); ok {
+		return true // a later validation error describes a different operation
+	}
+	if err == nil || errors.Is(err, rpc.ErrNotSent) {
+		return false
+	}
+	switch nodeDelivered(err) {
+	case "none":
+		return false
+	case "unknown", "yes":
+		return true
+	}
+	var re *rpc.Error
+	if errors.As(err, &re) {
+		if re.Code != "" {
+			return re.Code == devicewire.CodeDeadline || re.Code == devicewire.CodeNodeClosed
+		}
+		return noSendAnswer(re.Message)
+	}
+	return startResultUnknown(err) || noSendAnswer(err.Error())
 }
 
-// nodeMayHaveTaken: err is the node's, and its delivered says the text may have arrived ("unknown": typing failed part
-// way, or a Claude's inbox read it but the session has not confirmed it yet, peer_unconfirmed) or did ("yes"). A refusal
-// says "none" (nothing was typed); an error that says neither is read by its kind alone (startResultUnknown).
+// Only the transport's complete, canonical message substitutes for a lost Go error type.
+func noSendAnswer(message string) bool {
+	return message == context.DeadlineExceeded.Error() || message == context.Canceled.Error() || message == rpc.ErrClosed.Error()
+}
+
+// A node already answered a write successfully, but the manager could not validate or decode the answer.
+// Keep the original error for diagnostics without turning it into permission to send again.
+type completedNodeWriteError struct{ error }
+
+func (e *completedNodeWriteError) Unwrap() error { return e.error }
+
+func tracksNodeWrite(method string) bool {
+	return method == DeviceSessionSend || method == DeviceSessionStart || method == devicewire.MethodCloseTaskTerminal
+}
+
+func beforeNodeWrite(method string, err error) error {
+	if tracksNodeWrite(method) {
+		return rpc.NotSent(err)
+	}
+	return err
+}
+
+func afterNodeWrite(method string, err error) error {
+	if err != nil && tracksNodeWrite(method) {
+		return &completedNodeWriteError{err}
+	}
+	return err
+}
+
+// nodeMayHaveTaken counts only a delivery the node itself marked as possible or confirmed.
 func nodeMayHaveTaken(err error) bool {
+	d := nodeDelivered(err)
+	return d == "unknown" || d == "yes"
+}
+
+func nodeDelivered(err error) string {
 	var re *rpc.Error
 	if !errors.As(err, &re) || len(re.Data) == 0 {
-		return false
+		return ""
 	}
 	var d struct {
 		Delivered string `json:"delivered"`
 	}
 	_ = json.Unmarshal(re.Data, &d)
-	return d.Delivered == "unknown" || d.Delivered == "yes"
+	return d.Delivered
 }
 
 // liveSendWait bounds a send to an agent that runs when the send may reopen its accepted task (agent_send), and the

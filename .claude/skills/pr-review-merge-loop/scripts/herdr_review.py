@@ -540,6 +540,32 @@ def run(slot, flags):
                 cleanup_scope()
 
 
+def acquire_slot(root, slots, flags):
+    """Wait for a real free slot rather than failing a queued review.
+
+    The lock itself is the bound: no extra interactive agent is created while
+    waiting. Each request still has the watcher's overall review timeout.
+    """
+    while True:
+        for slot in range(slots):
+            lock = (root / ("slot-%02d.lock" % slot)).open("a+")
+            try:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    lock.close()
+                    continue
+                try:
+                    return run(slot, flags)
+                finally:
+                    fcntl.flock(lock, fcntl.LOCK_UN)
+                    lock.close()
+            except BaseException:
+                lock.close()
+                raise
+        time.sleep(0.1)
+
+
 def main():
     global _config
     signal.signal(signal.SIGTERM, terminate_signal)
@@ -575,24 +601,11 @@ def main():
     slots = int(_config.get("slots", 1))
     if not 1 <= slots <= 64:
         raise RuntimeError("reviewer slots must be between 1 and 64")
-    locks = []
     try:
-        for slot in range(slots):
-            lock = (root / ("slot-%02d.lock" % slot)).open("a+")
-            try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                lock.close()
-                continue
-            locks.append(lock)
-            return run(slot, flags)
-        raise RuntimeError("all %d bounded reviewer slots are occupied" % slots)
+        acquire_slot(root, slots, flags)
     finally:
         cleanup_tab()
         cleanup_scope()
-        for lock in locks:
-            fcntl.flock(lock, fcntl.LOCK_UN)
-            lock.close()
 
 
 if __name__ == "__main__":

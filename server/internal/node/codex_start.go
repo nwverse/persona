@@ -179,6 +179,9 @@ func codexExecutionArgs(argv []string, e modelExecution) []string {
 	if e.Effort != "" {
 		extra = append(extra, "-c", "model_reasoning_effort="+e.Effort)
 	}
+	if e.ServiceTier != "" {
+		extra = append(extra, "-c", "service_tier="+e.ServiceTier)
+	}
 	return insertBeforeDashDash(argv, extra)
 }
 

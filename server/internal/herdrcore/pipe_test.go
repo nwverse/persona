@@ -4,8 +4,8 @@ import "testing"
 
 func TestPipeName(t *testing.T) {
 	for _, tc := range []struct{ user, session, want string }{
-		{"alice", "default", `\\.\pipe\herdr-core-alice-default`},
-		{"alice", "iso", `\\.\pipe\herdr-core-alice-iso`},
+		{"alice", "default", `\\.\pipe\herdr-core-alice-default.sock`},
+		{"alice", "iso", `\\.\pipe\herdr-core-alice-iso.sock`},
 		{"", "default", ""},
 		{"alice", "", ""},
 	} {
