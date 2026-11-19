@@ -158,6 +158,34 @@ const (
 	// "Tool search behind a gateway"). Only then do the hub's words for tool_search_unsupported say Persona now sends
 	// every tool there; an older node keeps tool search on, and a retry meets the same refusal.
 	AssistantToolSearchFallback = "assistant_tool_search_fallback"
+	// NodeLanes: the node answers rpc.lanes and frames its connection when the manager asks, its messages on the lanes of
+	// ControlLane and BulkLane (docs/protocol/protocol.md "Lanes"). Without it the manager never asks, and the connection
+	// stays JSON lines.
+	NodeLanes = "node_lanes_v1"
+	// NodeResume: a resident node keeps a framed connection whose transport ended for ResumeWindow and takes it back
+	// when the manager comes again with its token (rpc.Peer.EnableResume, docs/protocol/protocol.md "Resuming"). Only
+	// a resident node announces it: one started for the connection ends with it. Without it the manager never asks.
+	NodeResume = "node_resume_v1"
+)
+
+// ResumeWindowSeconds is how long the manager tries to resume a dropped connection that can resume, from when it
+// noticed the drop: the machine shows as connected meanwhile and its calls wait, as during a reconnect.
+const ResumeWindowSeconds = 30
+
+// ResumeKeepSeconds is how long a resident node keeps such a connection for the manager, from when it noticed the drop.
+// The node may notice first (it read the end, or its silence check fired) while nothing told the manager: its next
+// ping comes up to 30 s later and its silence check takes 15 s more, then it tries. The node keeps it past all that.
+const ResumeKeepSeconds = 60
+
+// ControlLane and BulkLane say which messages of a framed node connection go on those lanes (rpc.Peer.EnableLanes,
+// docs/protocol/protocol.md "Lanes"): a method names a request and its answer, an event itself. Every other request and
+// answer goes on the interactive lane, every other event on the events lane, rpc.cancel on control. Both ends use these
+// lists; a name one end does not know only changes the order its own side writes in.
+var (
+	// ControlLane: the heartbeat, and the port streams' credit, which bulk waits for.
+	ControlLane = []string{"ping", "stream.ack"}
+	// BulkLane: what carries a file's or a package's bytes, and a forwarded port's.
+	BulkLane = []string{"file.chunk", "file.read", "file.upload.chunk", "node.update.chunk", "stream.data"}
 )
 
 // Error codes in the manager's answers to a resident node's replayed notifications (a notify with spool_id,
@@ -187,7 +215,7 @@ const (
 const RestartExitCode = 75
 
 // Announced is what a node built from this code announces.
-var Announced = []string{OwnerControls, SessionSkills, ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, MCPWait, Sessions, ModelConfiguration, AssistantConfigDir, AssistantSupervisionInstructions, AssistantServiceTier, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, Clipboard, SecretEnv, LauncherSwitch, ModelHTTP, EngineSwitch, ModelRun, LauncherSwitchNow, LauncherSwitchIdle, PaneCwd, NodeUpdateIdle, PaneNewSpace, MachineDiagnose, StartGoal, StartContinue, LauncherCheckAssistantTurn, StartAnswer, AssistantToolSearchFallback}
+var Announced = []string{OwnerControls, SessionSkills, ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, MCPWait, Sessions, ModelConfiguration, AssistantConfigDir, AssistantSupervisionInstructions, AssistantServiceTier, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, Clipboard, SecretEnv, LauncherSwitch, ModelHTTP, EngineSwitch, ModelRun, LauncherSwitchNow, LauncherSwitchIdle, PaneCwd, NodeUpdateIdle, PaneNewSpace, MachineDiagnose, StartGoal, StartContinue, LauncherCheckAssistantTurn, StartAnswer, AssistantToolSearchFallback, NodeLanes}
 
 // ShareProjection is the bounded complete-source sharing projection, not light Items.
 const ShareProjection = "share_projection.v1"
