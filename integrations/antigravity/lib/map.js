@@ -169,6 +169,10 @@ export function stepsToItems(steps, opts = {}) {
     const identity = step[STEP_IDENTITY] ?? stepIdentity(step)
     const line = identity ? `${seq}@${identity}` : String(seq)
 
+    // A call's result follows its planner step. One that never came (interrupted, dropped) must not stay queued to
+    // take the next result, which would shift every later result onto the wrong call.
+    if (step.type === 'PLANNER_RESPONSE' || step.type === 'USER_INPUT' || step.type === 'ERROR_MESSAGE') pendingCalls.length = 0
+
     switch (step.type) {
       case 'USER_INPUT': {
         if (step.source && step.source !== 'USER_EXPLICIT') break
@@ -293,7 +297,8 @@ export function readTranscript(brainDir, full = false) {
   const file = join(brainDir, '.system_generated', 'logs', full ? 'transcript_full.jsonl' : 'transcript.jsonl')
   const fallback = full ? join(brainDir, '.system_generated', 'logs', 'transcript.jsonl') : null
   const target = existsSync(file) ? file : fallback && existsSync(fallback) ? fallback : null
-  if (!target) return { steps: [], branch: '' }
+  if (!target) return { steps: [], branch: '', revision: '', compact: false }
+  const compact = Boolean(full && target !== file)
   try {
     const info = statSync(target, { bigint: true })
     const version = [info.dev, info.ino, info.size, info.mtimeNs, info.ctimeNs].join(':')
@@ -325,20 +330,32 @@ export function readTranscript(brainDir, full = false) {
         const step = JSON.parse(trimmed)
         const previous = out.at(-1)
         const index = step?.step_index
+        let at = out.length
         if (Number.isInteger(index) && Number.isInteger(previous?.step_index) && index <= previous.step_index) {
-          // Native exports append replacement steps after a rewind. A status update keeps the step's identity.
-          if (index < previous.step_index || step.type !== previous.type || step.created_at !== previous.created_at) {
-            branch = createHash('sha256').update(branch).update('\n').update(trimmed).digest('hex').slice(0, 20)
-            revision = ''
-          } else if (JSON.stringify(previous) !== JSON.stringify(step)) {
-            // A planner step can gain its completed response while keeping its index and branch.
-            revision = createHash('sha256').update(JSON.stringify(step)).digest('hex').slice(0, 20)
+          // A step whose index nothing retained has is a late arrival, not a rewind: parallel tool calls are exported
+          // as they finish, so a call that fails at once lands before its sibling's result. It takes its place in
+          // step order, keeps the branch (every item identity) and marks the content as changed.
+          const floor = out.findLastIndex((s) => s.step_index <= index)
+          const late = index < previous.step_index && out[floor]?.step_index !== index
+          if (late) {
+            at = floor + 1
+            revision = createHash('sha256').update(trimmed).digest('hex').slice(0, 20)
+          } else {
+            // Native exports append replacement steps after a rewind. A status update keeps the step's identity.
+            if (index < previous.step_index || step.type !== previous.type || step.created_at !== previous.created_at) {
+              branch = createHash('sha256').update(branch).update('\n').update(trimmed).digest('hex').slice(0, 20)
+              revision = ''
+            } else if (JSON.stringify(previous) !== JSON.stringify(step)) {
+              // A planner step can gain its completed response while keeping its index and branch.
+              revision = createHash('sha256').update(JSON.stringify(step)).digest('hex').slice(0, 20)
+            }
+            while (out.length && out.at(-1).step_index >= index) out.pop()
+            at = out.length
           }
-          while (out.length && out.at(-1).step_index >= index) out.pop()
         }
         // Compute once with the parsed record, rather than rehashing every step on each session-list pass.
         if (step && typeof step === 'object') Object.defineProperty(step, STEP_IDENTITY, { value: stepIdentity(step, branch) })
-        out.push(step)
+        out.splice(at, 0, step)
       } catch {}
     }
     const nativeRevision = revision
@@ -352,7 +369,7 @@ export function readTranscript(brainDir, full = false) {
     // Keep small revision records independently of the parsed-body LRU, including fresh native rewrites.
     transcriptRevisions.set(target, { length: raw.length, hash, branch, nativeRevision, revision })
     while (transcriptRevisions.size > MAX_TRANSCRIPT_REVISIONS) transcriptRevisions.delete(transcriptRevisions.keys().next().value)
-    const transcript = { steps: out, branch, revision }
+    const transcript = { steps: out, branch, revision, compact }
     const size = Number(info.size)
     if (settled && size <= MAX_TRANSCRIPT_CACHE_BYTES) {
       while (transcriptCache.size >= MAX_CACHED_TRANSCRIPTS || transcriptCacheBytes + size > MAX_TRANSCRIPT_CACHE_BYTES) {
@@ -365,7 +382,7 @@ export function readTranscript(brainDir, full = false) {
     }
     return transcript
   } catch {
-    return full ? readTranscript(brainDir, false) : { steps: [], branch: '' }
+    return full ? { ...readTranscript(brainDir, false), compact: true } : { steps: [], branch: '', revision: '', compact: false }
   }
 }
 

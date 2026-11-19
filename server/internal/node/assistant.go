@@ -65,6 +65,10 @@ const assistantAllowedTools = "mcp__persona"
 // (#5839).
 const assistantBuiltinTools = "Bash,Read,Write,Edit,Monitor,Skill,Agent,ListAgents,SendMessage,TaskStop,WebFetch,WebSearch,ToolSearch"
 
+// SendMessage is a Claude built-in, not a Persona MCP call, so the manager/node origin guard cannot classify its
+// cross-Agent resume or message. Inbox handling keeps the investigation tools but must finish through inbox_suggest.
+const assistantInboxBuiltinTools = "Bash,Read,Write,Edit,Monitor,Skill,Agent,ListAgents,TaskStop,WebFetch,WebSearch,ToolSearch"
+
 type assistantProc struct {
 	id       string
 	agent    string // "claude" (stream-json) or "codex" (app-server, assistant_codex.go)
@@ -100,6 +104,9 @@ type assistantProc struct {
 	effort      string
 	model       modelExecution
 	fingerprint string
+	// turnRecovery belongs to the turn currently answering on this process. A newer request may cancel the
+	// conversation-map entry, but must not rewrite this older turn's retry budget before its result arrives.
+	turnRecovery *assistantTurnRecovery
 	// instructions is the digest of the CLAUDE.md / AGENTS.md in cwd when it started (instructionsDigest): the agent
 	// reads them only at start, so once the hub rewrites them (new prompts, assistant.prepare) the next idle message
 	// resumes the conversation in a fresh process (instructionsStale).
@@ -116,10 +123,15 @@ type assistantProc struct {
 	tasksRevision uint64   // changes to background evidence, including invalidation
 	context       int      // tokens in the conversation's context at its last request (claude), or after a compaction
 	compactIdleAt int
-	compacting    bool     // an idle compaction is running (compactIdle)
-	compacted     bool     // compactIdle ran in this process: it is let go when idle again
-	manual        bool     // an explicit /compact (manual or idle-aware delivery): its end is reported
-	requested     bool     // its first request was logged
+	compacting    bool // an idle compaction is running (compactIdle)
+	compacted     bool // compactIdle ran in this process: it is let go when idle again
+	manual        bool // an explicit /compact (manual or idle-aware delivery): its end is reported
+	requested     bool // its first request was logged
+	// tui: started as interactive Claude Code through `personad assistant-tui` (assistant_tui.go). tuiNote: why it
+	// runs claude -p although interactive was asked for (the bridge fell back, or a recent fallback holds new starts
+	// off); "" when it runs as asked.
+	tui           bool
+	tuiNote       string
 	stderrTail    []string // its last assistantStderrTail stderr lines (watchAssistantStderr)
 	claudeVersion string   // the Claude Code its system/init named (claude_code_version), "" before it
 
@@ -452,7 +464,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			return "", errors.New("inbox handling requires a built-in Claude or Codex launcher")
 		}
 		if policy != "" {
-			return "", supervisionRuntimeRefusal(ctx)
+			if err := n.runtimePolicyDropped(ctx, id); err != nil {
+				return "", err
+			}
 		}
 		if startTier != "" {
 			return "", serviceTierRefusal(ctx, "assistant_service_tier_unsupported")
@@ -475,7 +489,10 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	}
 	if len(options) == 0 || (execution.Fingerprint == "" && execution.Model == "") {
 		if launcher == "" || launcher == st.Launcher {
-			execution = modelExecution{Model: st.Model, Effort: st.ModelEffort, UseEffort: st.ModelFingerprint != "", Fingerprint: st.ModelFingerprint, SupervisionInstructions: st.SupervisionInstructions, Origin: origin}
+			// What it ran, with this message's claude_interactive: the manager's switch, sent with every message, not a
+			// model pick (assistant_tui.go). Without it a message that picks no model (a supervision message, a relay)
+			// started claude -p, and restarted a conversation that runs interactive Claude Code.
+			execution = modelExecution{Model: st.Model, Effort: st.ModelEffort, UseEffort: st.ModelFingerprint != "", Fingerprint: st.ModelFingerprint, SupervisionInstructions: st.SupervisionInstructions, Origin: origin, Interactive: execution.Interactive}
 		}
 	}
 	if launcher != "" && st.Launcher != "" && launcher != st.Launcher && execution.Fingerprint == "" {
@@ -540,8 +557,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if guest != nil && agent != "claude" {
 		return "", errGuestAgent
 	}
+	asked := ""
 	if agent == "claude" {
-		asked := n.startProfile(executionOption(options).ConfigDir, guestKind, resume)
+		asked = n.startProfile(executionOption(options).ConfigDir, guestKind, resume)
 		execution.ConfigDir, err = n.assistantProfileSelection(ctx, id, launcher, asked, resume)
 		if err != nil {
 			return "", err
@@ -552,7 +570,6 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if proto.IsExternalLauncher(launcher) {
 		execution.StartupContext = ctx
 	}
-	timing.mark("preflight_done", true)
 	var p *assistantProc
 	if id == "" && guest != nil {
 		// Never the warm spare: it was started with the assistant's tools. Its process reads Guest from the state.
@@ -578,6 +595,14 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		st.Origin, st.Launcher, st.Cwd = origin, launcher, cwd
 		n.state.put(id, st)
 	}
+	// A reused warm process is already running: its profile needs no sign-in check (a spare is only adopted in the
+	// start's own profile). A cold start asks before anything is spawned.
+	if p == nil && agent == "claude" && !resume {
+		if err := n.assistantNewProfileAuth(ctx, launcher, asked, execution.ConfigDir); err != nil {
+			return "", err
+		}
+	}
+	timing.mark("preflight_done", true)
 	if cwd == "" {
 		cwd = n.storedCwd(st.Cwd)
 	}
@@ -662,7 +687,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if proto.IsExternalLauncher(launcher) && p != nil && p.alive() && !otherTools && !restartForRecovery && !p.needsRestartFor(want) && !p.instructionsStale() {
 		execution = pinExternalExecution(p, launcher, execution)
 	}
-	if p != nil && (!p.alive() || p.launcher != launcher || p.fingerprint != n.executionFingerprint(launcher, execution) || p.needsRestartFor(want) || p.instructionsStale() || otherTools || n.toolSearchStale(p)) {
+	if p != nil && (!p.alive() || p.launcher != launcher || p.fingerprint != n.executionFingerprint(launcher, execution) || p.needsRestartFor(want) || n.tuiEffortStale(p, execution) || p.instructionsStale() || otherTools || n.toolSearchStale(p)) {
 		p.mu.Lock()
 		active := p.busy || len(p.tasks) > 0
 		if proto.IsExternalLauncher(p.launcher) || proto.IsExternalLauncher(launcher) {
@@ -803,10 +828,15 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	}
 	if p.agent == "codex" {
 		p.mu.Lock()
+		wasBusy := p.busy
 		p.busy = true
 		p.turnError = ""
 		p.turnErrorKind = ""
 		p.lastActive = time.Now()
+		p.model.NewModelChoice = execution.NewModelChoice
+		if recovery != nil || !wasBusy {
+			p.turnRecovery = recovery
+		}
 		p.mu.Unlock()
 		if err := p.cx.deliver(ctx, live, text, images, selected...); err != nil {
 			p.mu.Lock()
@@ -814,6 +844,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			p.mu.Unlock()
 			return "", fmt.Errorf("send to codex: %w", err)
 		}
+		n.commitModelChoice(id, execution)
 		commit()
 		awaitList(n.notifySessionsSoon())
 		return id, nil
@@ -873,12 +904,17 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			return id, nil
 		}
 		p.mu.Lock()
+		wasBusy := p.busy
 		p.busy = true
 		p.turnError = ""
 		p.turnErrorKind = ""
 		p.compacted = false // a new turn: compact again when it is idle and long
 		p.lastActive = time.Now()
 		p.partial.Reset()
+		p.model.NewModelChoice = execution.NewModelChoice
+		if recovery != nil || !wasBusy {
+			p.turnRecovery = recovery
+		}
 		p.mu.Unlock()
 		var timeout *assistantControlTimeoutError
 		retryControl := errors.As(controlErr, &timeout)
@@ -888,6 +924,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		}
 		if werr == nil {
 			werr = p.writeInput(in) // a new id each attempt: a process that died may have written the last one down
+			if werr == nil {
+				n.commitModelChoice(id, execution)
+			}
 			timing.mark("input_written", werr == nil)
 		}
 		switch {
@@ -1041,15 +1080,21 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 			ParentToolUseID *string                     `json:"parent_tool_use_id"`
 			IsError         bool                        `json:"is_error"`
 			Result          string                      `json:"result"`
+			Reason          string                      `json:"reason"` // tuiFallbackSubtype: why interactive did not start
 			ModelUsage      map[string]claudeModelUsage `json:"modelUsage"`
 		}
 		if json.Unmarshal(line, &ev) != nil {
 			p.invalidateUpdateTasks()
 			continue
 		}
-		if p.round {
+		switch {
+		case p.round:
 			n.settleSoon(p) // its row says working until it settled (assistant_round.go); it starts with its init (below)
-		} else {
+		case p.tui && tuiFallbackLine(line):
+			// the bridge's notice that it runs claude -p instead (assistant_tui_bridge.go fallback) is no start: the
+			// print-mode command's own first line is, and one that exits before printing any fails the start as it
+			// would without the bridge
+		default:
 			p.started()
 		}
 		if p.round && ev.Type == "result" && !p.hasStarted() {
@@ -1079,8 +1124,10 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 					p.busy, p.lastActive = true, time.Now()
 				}
 				p.mu.Unlock()
-				p.started() // a round's process's start; any other's started with its first line
-				n.toolsAtStart(p.id, ev.Tools)
+				p.started()          // a round's process's start; any other's started with its first line
+				if ev.Tools != nil { // an interactive Claude Code's bridge names none (assistant_tui.go)
+					n.toolsAtStart(p.id, ev.Tools)
+				}
 				if resumed {
 					n.notifySessionsSoon()
 				}
@@ -1097,6 +1144,10 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 				if manual {
 					n.compactionEnded(p.id, "")
 				}
+				continue
+			}
+			if ev.Subtype == tuiFallbackSubtype {
+				n.tuiFellBack(p, ev.Reason)
 				continue
 			}
 			if ev.Subtype != "background_tasks_changed" {
@@ -1314,7 +1365,25 @@ func (p *assistantProc) needsRestartFor(mode string) bool {
 
 // needsRestartForLocked is needsRestartFor with p.mu held.
 func (p *assistantProc) needsRestartForLocked(mode string) bool {
+	if p.agent == "claude" && p.tui && p.tuiNote == "" {
+		// Interactive Claude Code takes its permission mode as a start flag only (assistant_tui.go).
+		return mode != "" && cmpMode(mode) != cmpMode(p.mode)
+	}
 	return p.agent == "claude" && mode == proto.ModeBypass && !p.canBypass
+}
+
+// cmpMode is a permission mode for comparing: no mode is the default one.
+func cmpMode(m string) string {
+	if m == "" {
+		return "default"
+	}
+	return m
+}
+
+// effortNeedsRestartLocked: an interactive process takes its effort as a start flag only, so another one needs a new
+// process (assistant_tui.go). p.mu is held.
+func (p *assistantProc) effortNeedsRestartLocked(effort string) bool {
+	return p.agent == "claude" && p.tui && p.tuiNote == "" && effort != "" && effort != p.effort
 }
 
 // rememberTasks keeps a conversation's running background tasks in the session state (the hub's Postgres), so a

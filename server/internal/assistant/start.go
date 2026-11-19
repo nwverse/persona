@@ -1209,6 +1209,9 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 	if cfg.InterjectBackground != nil && *cfg.InterjectBackground {
 		p["interject_background"] = true
 	}
+	if cfg.ClaudeInteractive != nil && *cfg.ClaudeInteractive {
+		p["claude_interactive"] = true // what the conversation's Claude runs in (#10058, node/assistant_tui.go)
+	}
 	// A leader conversation and the background supervisor follow it too: the hub's own messages (supervision, digests)
 	// drive them and pick nothing, so a model a failed turn's recovery moved one to (node/assistant_recovery.go: Opus
 	// down to Haiku on a run of 429s) was carried over as what it runs, for good.
@@ -1271,8 +1274,14 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 				p["launcher"] = l
 			}
 			// And the model it runs, so no pick keeps it; one that is no model id (Claude's "<synthetic>") is not.
-			if _, asked := p["model"]; !asked && proto.ValidModelID(c.Model) {
-				p["model"] = c.Model
+			if _, asked := p["model"]; !asked {
+				model := c.Model // older nodes only report the transcript name
+				if c.RequestedModel != nil {
+					model = *c.RequestedModel
+				}
+				if proto.ValidModelID(model) {
+					p["model"] = model
+				}
 			}
 		}
 	}
@@ -1296,6 +1305,7 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 		case model != "" && !picked && !s.launcherHasModel(ctx, machine, l, model):
 			s.logf("[%s] %s: model %s is not in %s's list any more, using its default", machine, short(sid), model, l)
 			delete(p, "model")
+			leaveLauncherNote(ctx, i18n.T(lang, "assistant-start.model_missing", i18n.Args{"model": model, "launcher": l}))
 		}
 	}
 	pickedLauncher := l != ""
