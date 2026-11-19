@@ -10,7 +10,7 @@ import { href, navigate, onLinkClick, type Route } from "../../lib/router";
 import { useKnownDefault } from "../../lib/manager-choice";
 import { useStore } from "../../lib/store";
 import { t } from "../../i18n";
-import { cx, EASE, IconButton, Loading } from "../../ui/atoms";
+import { cx, EASE, IconButton, Loading, Spinner } from "../../ui/atoms";
 import { Icon, type IconName } from "../../ui/icons";
 import { lazyPage } from "../../lib/lazy-page";
 import { NEW_ICON_GLYPH } from "./icon-map";
@@ -155,6 +155,10 @@ function OverviewCard({ place, i, span = "half", hidden = false, edit }: { place
       ) : (
         <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink">{place.title}</span>
       )}
+      {/* its last view is on screen while it is drawn again (KeptView): a quiet mark, only once that takes a moment */}
+      <span aria-hidden data-card-updating className="hidden shrink-0 group-has-[[data-kept-view]]/card:inline-flex" style={{ animation: `fade-in 200ms ${EASE} 600ms both` }}>
+        <Spinner size={10} />
+      </span>
       {name && <span data-extension-name className="max-w-[45%] shrink-0 truncate text-[11px] text-ink-3">{name}</span>}
     </div>
   );
@@ -163,7 +167,7 @@ function OverviewCard({ place, i, span = "half", hidden = false, edit }: { place
       data-extension-card={`${place.extension}/${place.id}`}
       onClick={edit ? undefined : open}
       className={cx(
-        "flex min-w-0 flex-col rounded-card pb-1.5",
+        "group/card flex min-w-0 flex-col rounded-card pb-1.5",
         span === "full" && "col-span-full",
         // a hidden card, drawn only while arranging, is its outline: nothing of it is loaded
         hidden ? "shadow-hairline" : "bg-surface shadow-card",
@@ -184,8 +188,9 @@ function OverviewCard({ place, i, span = "half", hidden = false, edit }: { place
       {/* while arranging, what the card draws stays (nothing is asked again) but takes no click or focus */}
       {!hidden && (
         <div className="contents" inert={edit !== undefined}>
+          {/* `remember`: a card drawn before is there at once, as tall as it was, while its extension draws it again (#11091) */}
           <Suspense fallback={<Loading />}>
-            <OwnerScope extension={place.extension}><ExtensionUI extension={place.extension} ui={place.id} context={context} compact onMissing={() => setGone(true)} /></OwnerScope>
+            <OwnerScope extension={place.extension}><ExtensionUI extension={place.extension} ui={place.id} context={context} compact remember onMissing={() => setGone(true)} /></OwnerScope>
           </Suspense>
         </div>
       )}
