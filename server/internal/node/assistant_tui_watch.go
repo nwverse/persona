@@ -8,11 +8,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/screen"
 )
 
@@ -125,13 +125,13 @@ func (b *tuiBridge) readTranscript() {
 
 // tuiSpinnerRe is the line Claude Code shows while a turn runs ("· Zesting…", "✻ Zesting… (3s · ↓ 120 tokens)"), not
 // the one after it ("✻ Brewed for 4s · done").
-var tuiSpinnerRe = regexp.MustCompile(`(?m)^\s*[·✢✳✶✻✽*]\s+\S[^\n]*…`)
+var tuiSpinnerRe = lazyre.New(`(?m)^\s*[·✢✳✶✻✽*]\s+\S[^\n]*…`)
 
 // tuiTasksRe counts what runs in the background, on the mode line ("⏵⏵ bypass permissions on · 1 shell").
-var tuiTasksRe = regexp.MustCompile(`·\s+(\d+)\s+(?:shells?|monitors?|background tasks?)\b`)
+var tuiTasksRe = lazyre.New(`·\s+(\d+)\s+(?:shells?|monitors?|background tasks?)\b`)
 
 // tuiTaskRowRe is one of them listed above the mode line ("◐ Bash: sleep 40").
-var tuiTaskRowRe = regexp.MustCompile(`(?m)^\s*[◐◓◑◒]\s+(.+?)\s*$`)
+var tuiTaskRowRe = lazyre.New(`(?m)^\s*[◐◓◑◒]\s+(.+?)\s*$`)
 
 // tuiIdleQuiet is how long a turn's transcript must be quiet, its screen showing no turn running, before the bridge
 // ends the turn without a line that says so (a local command such as /compact writes none).
