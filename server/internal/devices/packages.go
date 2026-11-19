@@ -424,10 +424,14 @@ func releaseNodeIncompatible(m *update.Manifest) string {
 	}
 }
 
-// fileFor: f is named as a release names a node build for plat (personad-<plat>.gz, persona-node-<plat>.gz): its name
-// goes into a URL and the cache's paths, so nothing else is taken.
+// fileFor: f is named as a release names a node build for plat (personad-<plat>[.exe].gz,
+// persona-node-<plat>[.exe].gz). Its name goes into a URL and the cache's paths, so nothing else is taken.
 func fileFor(f update.File, plat string) bool {
-	return f.Name == "personad-"+plat+".gz" || f.Name == nodeproto.ProgramPersonaNode+"-"+plat+".gz"
+	suffix := ""
+	if strings.HasPrefix(plat, "windows-") {
+		suffix = ".exe"
+	}
+	return f.Name == "personad-"+plat+suffix+".gz" || f.Name == nodeproto.ProgramPersonaNode+"-"+plat+suffix+".gz"
 }
 
 // fileProgram is the kind of program a release download is, by its name.
