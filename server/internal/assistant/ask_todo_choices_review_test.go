@@ -2,6 +2,8 @@ package assistant
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -193,5 +195,88 @@ func TestExpiredQuestionClaimedAnswerSurvivesOwnerCloseOrDelete(t *testing.T) {
 				t.Logf("interleave=%q action=%s answer_http=200 asker_messages=1 answered=true dropped=false resurrected=false", when, action)
 			})
 		}
+	}
+}
+
+type beforeExpiredQuestionHistoryRead struct{}
+
+type expiredQuestionHistoryStore struct{ *db.DB }
+
+func (s *expiredQuestionHistoryStore) InteractionRecord(ctx context.Context, id string) (*db.InteractionRecord, error) {
+	if beforeRead, ok := ctx.Value(beforeExpiredQuestionHistoryRead{}).(func()); ok {
+		beforeRead()
+	}
+	return s.DB.InteractionRecord(ctx, id)
+}
+
+func TestExpiredQuestionDropWinsBeforeInlineAnswerClaim(t *testing.T) {
+	for _, action := range []struct{ name, method, body string }{
+		{"close", http.MethodPatch, `{"done":true}`},
+		{"delete", http.MethodDelete, ""},
+	} {
+		t.Run(action.name, func(t *testing.T) {
+			ctx := context.Background()
+			database := todoTestDB(t)
+			e := newAskTodoEnv(t, database)
+			ix, _ := expireRecorded(e, database, askTodoArgs)
+			todo := e.onlyAskTodo()
+			a, _ := e.s.askTodoOf(ctx, todo.ID)
+			// A legacy question reads its card after initial validation and before claiming the answer.
+			a.QuestionDetails = nil
+			if err := database.PutSetting(ctx, askTodosKey, []askTodo{a}); err != nil {
+				t.Fatal(err)
+			}
+			e = newAskTodoEnv(t, &expiredQuestionHistoryStore{DB: database})
+			path := "/api/v1/todos/" + todo.ID
+			dropClaimed := false
+			closeFirst := func() {
+				e.must(action.method, path, action.body)
+				a, ok := e.s.askTodoOf(ctx, todo.ID)
+				if !ok || a.DroppedAt.IsZero() || !a.ClaimedAt.IsZero() {
+					t.Fatalf("the drop must claim the unanswered question first: %+v", a)
+				}
+				waitFor(t, "the drop notice", func() bool { return len(e.told("c1x1x1")) == 1 })
+				dropClaimed = true
+			}
+			body := `{"asked_at":"` + ix.CreatedAt.Format(time.RFC3339Nano) + `","option":"Wait"}`
+			req := httptest.NewRequest(http.MethodPost, path+"/accept", strings.NewReader(body))
+			req = req.WithContext(context.WithValue(req.Context(), beforeExpiredQuestionHistoryRead{}, closeFirst))
+			reply := httptest.NewRecorder()
+			e.s.ServeHTTP(reply, req)
+			if !dropClaimed {
+				t.Fatal("the answer did not reach the interleaving point")
+			}
+			if reply.Code != http.StatusConflict {
+				t.Errorf("an inline answer after the drop: HTTP %d, want 409", reply.Code)
+			}
+			a, _ = e.s.askTodoOf(ctx, todo.ID)
+			if a.DroppedAt.IsZero() || !a.AnsweredAt.IsZero() || !a.ClaimedAt.IsZero() {
+				t.Errorf("the drop must be the only terminal outcome: %+v", a)
+			}
+			if messages := e.told("c1x1x1"); len(messages) != 1 || !strings.Contains(messages[0], "没有在待办里给答案") {
+				t.Errorf("the asking conversation needs one drop notice: %q", messages)
+			}
+			if rows, err := database.ListTodoDecisions(ctx, todo.ID, true); err != nil || len(rows) != 0 {
+				t.Errorf("a losing inline answer must not record decisions: %+v, %v", rows, err)
+			}
+		})
+	}
+}
+
+func TestReopenedAskTodoManualDecisionStillReturns(t *testing.T) {
+	database := todoTestDB(t)
+	e := newAskTodoEnv(t, database)
+	e.expire()
+	todo := e.onlyAskTodo()
+	path := "/api/v1/todos/" + todo.ID
+	e.must(http.MethodPatch, path, `{"done":true}`)
+	waitFor(t, "the drop notice", func() bool { return len(e.told("c1x1x1")) == 1 })
+	e.must(http.MethodPatch, path, `{"done":false}`)
+	e.must(http.MethodPost, path+"/decisions", `{"question":"Merge the release PR now?","choice":"Wait"}`)
+	waitFor(t, "the reopened question to close after its manual answer", func() bool {
+		return e.get(todo.ID).DoneAt != nil
+	})
+	if messages := e.told("c1x1x1"); len(messages) != 2 || !strings.Contains(messages[1], "Wait") {
+		t.Fatalf("the explicit decision after reopening must reach the asker once: %q", messages)
 	}
 }

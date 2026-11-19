@@ -292,12 +292,13 @@ func (s *Service) askTodoOf(ctx context.Context, id string) (askTodo, bool) {
 // before it is told; false when it is no such to-do, it was answered (or an answer is being sent), or, for a drop, that
 // was told already.
 func (s *Service) claimAskTodo(ctx context.Context, id string, answered bool) (askTodo, bool) {
-	a, claimed, _ := s.claimAskTodoChecked(ctx, id, answered)
+	a, claimed, _ := s.claimAskTodoChecked(ctx, id, answered, false)
 	return a, claimed
 }
 
-// An inline answer must distinguish an unwritten claim (retry) from an already answered question.
-func (s *Service) claimAskTodoChecked(ctx context.Context, id string, answered bool) (askTodo, bool, error) {
+// An inline answer must distinguish an unwritten claim (retry) from a question already answered or dropped.
+// The manual decision and topic paths allow an answer after the owner explicitly reopens a dropped to-do.
+func (s *Service) claimAskTodoChecked(ctx context.Context, id string, answered, inline bool) (askTodo, bool, error) {
 	if !isAskTodo(id) {
 		return askTodo{}, false, nil
 	}
@@ -310,7 +311,7 @@ func (s *Service) claimAskTodoChecked(ctx context.Context, id string, answered b
 	i := slices.IndexFunc(b.list, func(a askTodo) bool { return a.TodoID == id })
 	now := time.Now()
 	if i < 0 || !b.list[i].AnsweredAt.IsZero() || b.list[i].held(now) ||
-		answered && b.list[i].ByDefault || !answered && !b.list[i].DroppedAt.IsZero() {
+		answered && b.list[i].ByDefault || (!answered || inline) && !b.list[i].DroppedAt.IsZero() {
 		return askTodo{}, false, nil
 	}
 	prev := b.list[i]

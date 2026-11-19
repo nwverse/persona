@@ -131,7 +131,8 @@ func (s *Service) chooseExpiredQuestion(ctx context.Context, id, asked, option s
 	if st == nil {
 		return acceptResult{}, errAcceptStore
 	}
-	a, claimed, err := s.claimAskTodoChecked(ctx, id, true)
+	// A close may have claimed the drop while the inline form was being validated.
+	a, claimed, err := s.claimAskTodoChecked(ctx, id, true, true)
 	if err != nil {
 		return acceptResult{}, errors.Join(errAcceptStore, err)
 	}
