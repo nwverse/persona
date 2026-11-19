@@ -238,6 +238,8 @@ struct ChatsView: View {
     /// Which space page sits at which depth of `path` (only this view pushes them), so a chat opened from a space
     /// page goes back to it instead of stacking another copy.
     @State private var spaceAt: [Int: String] = [:]
+    /// Opens a space's page from a chat on this page (`\.openSpace`): the same object for the page's life (#10303).
+    @State private var spaceOpener = SpaceOpener()
     @State private var query = ""
     @State private var searching = false
     /// What was searched for when a result was opened: closing the search empties the system field (our text stays,
@@ -326,24 +328,24 @@ struct ChatsView: View {
     /// first and pushes on the next turn of the run loop. The search's text and results stay for coming back.
     private var pushing: Binding<NavigationPath> {
         Binding(get: { path }, set: { new in
-            guard searching, new.count > path.count else { return path = new }
+            guard new.count > path.count else { return path = new }
             #if os(iOS) || os(visionOS)
-            if ownsTop {
-                // Our own field holds no navigation bar up: the search closes (the keyboard goes, the text and the
-                // results stay for coming back) and the page goes on at once.
+            if ownsTop, searching || header.floating {
+                // The custom field holds no navigation bar up: close it and push in the same turn.
+                header.closeSearchForPush(wasSearching: searching)
                 searching = false
-                header.floating = false
-                header.up = false
-                header.motion = 0
-                header.setCompact(false)
                 return path = new
             }
             #endif
+            guard searching else { return path = new }
             searchedBeforePush = query
             searching = false
             DispatchQueue.main.async { path = new }
         })
     }
+
+    /// Programmatic list opens close the custom field just like a NavigationLink. System search keeps its own closing.
+    private var listPushPath: Binding<NavigationPath> { ownsTop ? pushing : $path }
 
     var body: some View {
         #if DEBUG || PERF_SIGNPOST
@@ -432,9 +434,9 @@ struct ChatsView: View {
         }
         #endif
         .animation(Theme.Motion.state, value: path.isEmpty)
-        .environment(\.openSpace) { space in
+        .environment(\.openSpace, spaceOpener.set { space in
             if spaceAt[path.count - 2] == space { path.removeLast() } else { pushSpace(space) }
-        }
+        })
     }
 
     /// The list column: its own property, so Xcode 26.0 type-checks it apart from the split around it (#5333, #7173).
@@ -485,7 +487,9 @@ struct ChatsView: View {
     @ViewBuilder private func withBarItems(_ column: some View) -> some View {
         // The Mac's buttons are in the list column's own title row (below); the shell is the phone's.
         #if os(iOS) || os(visionOS)
-        if #available(iOS 26.0, *) {
+        if columnHidesBar {
+            column
+        } else if #available(iOS 26.0, *) {
             column.pageToolbar { barItems }
         } else {
             column.pageToolbar { barItemsBeforeGlass }
@@ -517,7 +521,7 @@ struct ChatsView: View {
             .onChange(of: workAtRoot, initial: true) { _, root in shell?.workAtRoot = root }
             .onChange(of: path) { _, p in stackPathChanged(to: p) }
             .onChange(of: pickedRoot) { _, root in sidebarRootPicked(root) }
-            .onChange(of: model.agentsListReveal) { _, request in revealAgentsList(request) }
+            .background { AgentsRevealWatch { request in revealAgentsList(request) } }
     }
 
     /// Stage 4: taking what is asked for from outside, the list's first appearance and the assistant's switches.
@@ -559,6 +563,18 @@ struct ChatsView: View {
             if showsHideList { hideListItem }
             #endif
         }
+    }
+
+    /// The one sidebar's column hides its navigation bar (`agentsColumn`); its head and its Agents heading have the bar's
+    /// buttons. Handed to the hidden bar all the same, UIKit was given them anew, their images looked up again, each time
+    /// the column came back into the window: about a fifth of the main thread of every switch between the tabs of the
+    /// open iPhone Duo or the iPad (#10303).
+    private var columnHidesBar: Bool {
+        #if os(iOS)
+        unified != nil
+        #else
+        false
+        #endif
     }
 
     /// The shell's own bar floats over this one (AgentsTopBar). Searching on a phone the field takes the bar's row: no
@@ -742,7 +758,7 @@ struct ChatsView: View {
     }
 
     private func agentsList(rows: AnyView?) -> AgentsList {
-        AgentsList(path: $path, spaceAt: $spaceAt, query: $query, searching: $searching,
+        AgentsList(path: listPushPath, spaceAt: $spaceAt, query: $query, searching: $searching,
                    searchedBeforePush: $searchedBeforePush, showNew: newSession, menuActions: menuActions, ownsTop: ownsTop,
                    showsPersonalEntry: showsPersonalEntry, beginSearch: beginSearch, sidebarRows: rows)
     }
@@ -763,7 +779,7 @@ struct ChatsView: View {
             unified.select(.page(AnyHashable(key)), path: $path)
             unified.askedFromOutside = .page(AnyHashable(key)) // what the app came up for: kept through an assistant switch
         } else {
-            path = NavigationPath([key])
+            listPushPath.wrappedValue = NavigationPath([key])
         }
         #if DEBUG
         // `-openOverSpace YES` with `-openSession`: the chat on its space's page, a page under it (its ‹, #1337).
@@ -794,23 +810,24 @@ struct ChatsView: View {
         #endif
         header.motion = 0
         header.rising = true
-        header.floating = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { if header.floating { riseSearch() } } // no keyboard came
+        let start = header.startSearch()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { riseSearch(start) } // no keyboard came
         #endif
     }
 
+    #if os(iOS) || os(visionOS)
     /// The floating field has the keyboard: up into the bar's row.
-    private func riseSearch() {
-        #if os(iOS) || os(visionOS)
-        guard !searching else { return }
+    private func riseSearch(_ start: UUID?) {
+        let listInFront = path.isEmpty && ownsTop && !leaving && model.selectedTabNow == .chats
+        guard !searching, header.completeSearchStart(start, listInFront: listInFront) else { return }
         var still = Transaction()
         still.disablesAnimations = true
         withTransaction(still) { searching = true }
         // Laid out for searching once the list has slid up with it (`ListShift.arrived`).
         header.rising = true
         withAnimation(Theme.Motion.state) { header.up = true }
-        #endif
     }
+    #endif
 
     /// 「取消」: the whole list again, at once (results and list drawn together ghosted), from its top with the field out;
     /// the field goes back down into the row, the shell's bar fading back as it goes.
@@ -819,6 +836,7 @@ struct ChatsView: View {
         var still = Transaction()
         still.disablesAnimations = true
         withTransaction(still) { query = "" }
+        if header.cancelPendingSearch() { return }
         // Laid out at rest again, drawn where it is (shifted up by the difference), then down with the field.
         header.setCompact(false)
         // A turn later, once the whole list is in and laid out again.
@@ -1936,7 +1954,8 @@ private struct AgentsList: View {
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(.isHeader)
             .accessibilityIdentifier("sidebar-agents-heading")
-            AgentsListMenu(actions: menuActions)
+            // In a view graph of its own: the list's updates replaced the open menu and scrolled it to its top (#10738).
+            MenuIsland(content: SidebarAgentsListMenu(actions: menuActions))
             if showsPersonalEntry {
                 Button { openFromList(PersonalAgentsRoute()) } label: {
                     ThemedIcon(Theme.Icon.personalAgents).font(Theme.Font.label).foregroundStyle(.secondary)
@@ -2008,12 +2027,8 @@ private struct AgentsList: View {
     private func openFromSearch(_ key: SessionKey) {
         #if os(iOS) || os(visionOS)
         if ownsTop {
+            // The compact path binding closes the custom field before pushing (`AgentsHeader.closeSearchForPush`).
             // Nothing to wait for: our own field holds no navigation bar up. The text and results stay.
-            searching = false
-            header.floating = false
-            header.up = false
-            header.motion = 0
-            header.setCompact(false)
             path.append(key)
             return
         }
@@ -4123,7 +4138,8 @@ struct QuickFilterBar: View, Equatable {
         }, selection: selection.rawValue, choose: { id in
             if let filter = AgentFilter(rawValue: id), filter != selection { choose(filter) }
         }) {
-            AgentsGroupingMenu(iconOnly: true)
+            // In a view graph of its own: the list's updates replaced the open menu and scrolled it to its top (#10738).
+            MenuIsland(content: AgentsGroupingMenu(iconOnly: true))
         }
     }
     #endif
@@ -4932,6 +4948,21 @@ struct QuietSpaceRow: View {
             Spacer()
             Text(Fmt.relative(group.updatedAt(feed))).font(Theme.Font.label).foregroundStyle(.secondary)
         }
+    }
+}
+
+/// An explicit Agents-tab selection (`AppModel.agentsListReveal`), read in a view of its own: `ChatsView` only acts on it.
+/// Read in the page's body, every choice of the Agents tab ran both tabs' pages again, the Persona conversation and each
+/// of its messages with them (#10303).
+private struct AgentsRevealWatch: View {
+    @Environment(AppModel.self) private var model
+    let reveal: (Int) -> Void
+
+    var body: some View {
+        Color.clear
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+            .onChange(of: model.agentsListReveal) { _, request in reveal(request) }
     }
 }
 

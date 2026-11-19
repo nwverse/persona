@@ -212,6 +212,7 @@ seedSSHTunnel
 showAddComputer
 showAgentInfo
 showAgentSortShadow
+showAlarmSample
 showAnswerPartLines
 showAnswerWhole
 showAsUnread
@@ -400,6 +401,7 @@ showSamplePermission
 showSampleQuestion
 showSampleQuotes
 showSampleScreen
+showSampleStoppedWork
 showScreenFallbackDemo
 showScreenMobileData
 showScreenRoutes

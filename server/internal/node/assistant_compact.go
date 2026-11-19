@@ -76,8 +76,16 @@ func (n *Node) assistantCompact(ctx context.Context, id string, onlyRunning bool
 		// A guest (a meeting's room too) starts as on any resume: spawnClaude reads its tools and kind from its record
 		// (no built-in tools, strict MCP config, project setting sources, its own settings and profile), and
 		// spawnAssistant refuses one whose launcher runs another agent by now.
-		execution := modelExecution{Model: st.Model, Effort: st.ModelEffort, UseEffort: st.ModelFingerprint != "", Fingerprint: st.ModelFingerprint, IsMain: st.IsMain, MainCompactWindow: st.MainCompactWindow, ConfigDir: st.ConfigDir, SupervisionInstructions: st.SupervisionInstructions, Origin: st.Origin}
-		resolved, current := n.assistantModel(ctx, id)
+		execution := modelExecution{Model: st.Model, Effort: st.ModelEffort, UseEffort: st.ModelFingerprint != "", Fingerprint: st.ModelFingerprint, IsMain: st.IsMain, MainCompactWindow: st.MainCompactWindow, ConfigDir: st.ConfigDir, SupervisionInstructions: st.SupervisionInstructions, Origin: st.Origin, OriginKnown: st.OriginKnown}
+		resolved, current, _ := n.assistantModelDecision(ctx, id)
+		if current.OriginKnown {
+			execution.Origin, execution.OriginKnown = current.Origin, true
+		}
+		if st.Guest == nil && !execution.OriginKnown {
+			// Cold compaction spawns directly rather than passing through assistantSend. Apply the same fail-closed
+			// boundary: a successful empty model answer and an older hub are not ordinary-origin attestations.
+			return errAssistantOriginUnknown
+		}
 		if proto.IsExternalLauncher(launcher) {
 			if resolved != launcher || current.External == nil {
 				return externalRefusal(ctx, "adapter_scope_required")
@@ -98,8 +106,16 @@ func (n *Node) assistantCompact(ctx context.Context, id string, onlyRunning bool
 		if current.SupervisionResolved {
 			execution.SupervisionInstructions = current.SupervisionInstructions
 		}
+		// It starts as a send would: in interactive Claude Code while the setting is on (#10058; tuiWanted leaves guests
+		// and plan mode in print mode), so neither the compaction nor the next message runs a process of the other kind.
+		execution.Interactive = current.Interactive
 		if proto.IsExternalLauncher(launcher) {
 			execution.StartupContext = ctx
+		}
+		if st.Origin != execution.Origin || st.OriginKnown != execution.OriginKnown {
+			// Tool selection reads session state during spawn. Record the explicit decision before the process can start.
+			st.Origin, st.OriginKnown = execution.Origin, execution.OriginKnown
+			n.state.put(id, st)
 		}
 		if p, err = n.spawnAssistant(id, cwd, launcher, true, false, execution); err != nil {
 			return err
