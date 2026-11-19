@@ -247,7 +247,175 @@ final class AppModel {
         didSet {
             saveSnapshot(); countBadges(); withdrawSettled(Set(oldValue.keys).subtracting(interactions.keys))
             PermissionDiff.prewarm(interactions.lazy.filter { oldValue[$0.key] == nil }.map(\.value))
+            lookUpCardSessions()
         }
+    }
+    /// Pending cards' sessions no list holds, from an exact lookup each (#8584): a paging hub leaves directory-hidden
+    /// and off-page sessions out of its list but sends every pending card, so whether a card shows (Needs you, the
+    /// scoped attention views, the badges) is read from this row when the list has none (`cardSession`). Kept while the
+    /// card is; asked again when a list hint names the session (hidden or shown again), at most every few seconds.
+    private(set) var cardSessionRows: [SessionKey: Session] = [:]
+    private struct CardLookup { var answered = false; var tries = 0; var nextAt = Date.distantPast }
+    @ObservationIgnored private var cardLookups: [SessionKey: CardLookup] = [:]
+    @ObservationIgnored private var cardLookupsOut: Set<SessionKey> = []
+    @ObservationIgnored private var cardLookupWake: (at: Date, task: Task<Void, Never>)?
+    /// Lookups out when a list hint named their session: their answer may be older than the hint, so they ask again.
+    @ObservationIgnored private var cardLookupsStale: Set<SessionKey> = []
+    /// Card sessions the lists of a hub that leaves hidden sessions out held at the last pass: one that leaves them
+    /// (hidden, or off the page) is asked about again.
+    @ObservationIgnored private var cardSessionsListed: Set<SessionKey> = []
+    /// The list rows of each hub that leaves hidden sessions out, as last landed (`rememberListedRows`): what stands while
+    /// its list reloads.
+    @ObservationIgnored private var lastListedRows: [String: [SessionKey: Session]] = [:]
+    /// Watched sessions an exact lookup found the hub no longer has: a kept row of one is not counted as waiting.
+    @ObservationIgnored private var cardSessionsGone: Set<SessionKey> = []
+
+    /// The rows the lists of a hub that leaves hidden sessions out hold now (`currentListedRows`). A row kept in
+    /// `sessionIndex` from an earlier page or an opened chat is not refreshed when the list leaves it out, so it does not
+    /// say whether that session is hidden now. A list between a new query and its first page (`SessionListModel.reset`)
+    /// has no rows and says neither paged nor complete; the hub has not changed, so the last landed rows stand until the
+    /// new page lands.
+    private func listedSessionRows(_ group: String) -> [SessionKey: Session]? {
+        if let rows = currentListedRows(group) { return rows }
+        if let list = sessionLists.lists[group], !list.loaded { return lastListedRows[group] }
+        return nil
+    }
+
+    /// The lists landed: their rows stand for the hub until the next landing (nil: an older hub, whose lists annotate
+    /// hidden rows).
+    func rememberListedRows(_ group: String) {
+        guard let list = sessionLists.lists[group], list.loaded else { return }
+        lastListedRows[group] = currentListedRows(group)
+    }
+
+    func forgetListedRows() { lastListedRows = [:] }
+
+    /// Kept rows as the counts read them for waiting sessions: through the cards' resolver, without the ones the hub no
+    /// longer has or that are directory-hidden.
+    func waitingRows(_ rows: [Session], reading session: (SessionKey) -> Session?) -> [Session] {
+        rows.compactMap { cardSessionsGone.contains($0.key) ? nil : session($0.key) ?? $0 }.filter { $0.hiddenByDirectory != true }
+    }
+
+    /// The rows a hub that leaves directory-hidden sessions out of its lists holds in them now (the Agents list and its
+    /// sections): a window of pages, or a complete copy read from its pages (`query.legacy`, the repository grouping;
+    /// `SessionListModel.complete`). nil for an older hub, whose complete lists annotate hidden rows instead.
+    private func currentListedRows(_ group: String) -> [SessionKey: Session]? {
+        guard let list = sessionLists.lists[group], list.paged || list.complete else { return nil }
+        var rows: [SessionKey: Session] = [:]
+        for row in list.rows where rows[row.key] == nil { rows[row.key] = row }
+        for (scope, page) in sessionLists.sections where scope.hub == group {
+            for row in page.rows where rows[row.key] == nil { rows[row.key] = row }
+        }
+        return rows
+    }
+
+    /// Which session a pending card is shown by, for the pages, counts and badges alike: on a hub that leaves hidden
+    /// sessions out, the lists' current row, else the card's exact lookup, else a kept row; elsewhere the app's row, else the lookup. Made once
+    /// for a pass over many cards (each paging hub's rows are read once).
+    func cardSessionResolver() -> (SessionKey) -> Session? {
+        var listed: [String: [SessionKey: Session]] = [:]
+        var read: Set<String> = []
+        return { [self] key in
+            if read.insert(key.group).inserted, let rows = listedSessionRows(key.group) { listed[key.group] = rows }
+            guard let rows = listed[key.group] else { return latest(key) ?? cardSessionRows[key] }
+            return rows[key] ?? cardSessionRows[key] ?? latest(key)
+        }
+    }
+
+    /// The session one pending card is shown by (`cardSessionResolver`).
+    func cardSession(_ key: SessionKey) -> Session? { cardSessionResolver()(key) }
+
+    /// The pending cards whose session is not directory-hidden, oldest first: what the pages of cards and every count
+    /// start from.
+    var directoryVisibleInteractions: [Interaction] { directoryVisibleInteractions(reading: cardSessionResolver()) }
+
+    /// `directoryVisibleInteractions` with a resolver the caller reads the same pass with.
+    func directoryVisibleInteractions(reading session: (SessionKey) -> Session?) -> [Interaction] {
+        pendingInteractions.filter { session($0.sessionKey)?.hiddenByDirectory != true }
+    }
+
+    /// The sessions whose visibility the cards and counts read from an exact lookup when no list holds them: pending
+    /// cards' sessions, and kept rows that wait for the user (a prompt only the terminal shows has no card). A kept row
+    /// is not refreshed once a paging list leaves it out, so its lookup says whether it is hidden or only off the page.
+    private var visibilityWatchedSessions: Set<SessionKey> {
+        var keys = Set(interactions.values.lazy.filter { !$0.isSessionless }.map(\.sessionKey))
+        for s in allSessions where !s.assistant && s.countedState == .needsYou { keys.insert(s.key) }
+        return keys
+    }
+
+    /// Asks for the rows of pending cards' sessions that no list holds, four at a time until each is answered (a
+    /// session the hub does not have is an answer too). A failed one is asked again after 1, 2, 4 s, then left as it
+    /// is until a list hint names it. Answers for cards that are gone go with them.
+    func lookUpCardSessions() {
+        let keys = visibilityWatchedSessions
+        if cardSessionRows.keys.contains(where: { !keys.contains($0) }) { cardSessionRows = cardSessionRows.filter { keys.contains($0.key) } }
+        cardLookups = cardLookups.filter { keys.contains($0.key) }
+        var listed: [String: Set<SessionKey>] = [:]
+        for group in Set(keys.map(\.group)) {
+            if let rows = listedSessionRows(group) { listed[group] = Set(rows.keys) }
+        }
+        let nowListed = keys.filter { listed[$0.group]?.contains($0) == true }
+        // Left the lists since the last pass (hidden, or off the page): whatever an earlier lookup said, ask again; one
+        // out now may answer from before, so it asks again when it lands.
+        for key in cardSessionsListed.subtracting(nowListed) where keys.contains(key) {
+            // at most once every 5 s a session (a search typed into the list moves rows in and out)
+            if cardLookupsOut.contains(key) { cardLookupsStale.insert(key) } else { cardLookups[key] = CardLookup(nextAt: cardLookups[key]?.nextAt ?? .distantPast) }
+        }
+        cardSessionsListed = nowListed
+        cardSessionsGone = cardSessionsGone.filter { keys.contains($0) && !nowListed.contains($0) }
+        let now = Date()
+        var wake: Date?
+        for key in keys where cardLookupsOut.count < 4 && !cardLookupsOut.contains(key) && !nowListed.contains(key) {
+            guard listed[key.group] != nil, let api = api(key.group), api.sessionLookup else { continue }
+            let lookup = cardLookups[key] ?? CardLookup()
+            if lookup.answered || lookup.tries >= 4 { continue }
+            if lookup.nextAt > now { wake = min(wake ?? lookup.nextAt, lookup.nextAt); continue }
+            cardLookupsOut.insert(key)
+            Task { [weak self] in
+                let answer: Session??
+                do { answer = .some(try await api.sessionListDetail(key, title: "")) } catch { answer = nil }
+                guard let self else { return }
+                self.cardLookupsOut.remove(key)
+                let stale = self.cardLookupsStale.remove(key) != nil
+                guard self.visibilityWatchedSessions.contains(key) else { return self.lookUpCardSessions() }
+                if let answer {
+                    self.cardLookups[key] = CardLookup(answered: !stale, nextAt: Date().addingTimeInterval(5))
+                    self.cardSessionRows[key] = answer
+                    if answer == nil { self.cardSessionsGone.insert(key) } else { self.cardSessionsGone.remove(key) }
+                    self.countBadges()
+                } else {
+                    var failed = self.cardLookups[key] ?? CardLookup()
+                    failed.tries += 1
+                    failed.nextAt = Date().addingTimeInterval(pow(2, Double(failed.tries - 1)))
+                    self.cardLookups[key] = failed
+                }
+                self.lookUpCardSessions()
+            }
+        }
+        if let wake, wake < cardLookupWake?.at ?? .distantFuture {
+            cardLookupWake?.task.cancel()
+            cardLookupWake = (wake, Task { [weak self] in
+                guard (try? await Task.sleep(for: .seconds(max(0, wake.timeIntervalSinceNow)))) != nil else { return }
+                self?.cardLookupWake = nil
+                self?.lookUpCardSessions()
+            })
+        }
+    }
+
+    /// A `sessions_list` hint: the card sessions it names are asked about again, at most every 5 s, so a session hidden
+    /// or shown again since its lookup shows its card as the list does. A hint that cannot say which rows changed asks
+    /// again only about answers older than 30 s.
+    private func cardSessionsListChanged(_ group: String, _ changes: SessionListChanges?) {
+        let now = Date()
+        for key in cardLookupsOut where key.group == group && changes?.names(key) == true { cardLookupsStale.insert(key) }
+        var stale = false
+        for (key, lookup) in cardLookups where key.group == group && (lookup.answered || lookup.tries > 0) {
+            // an answer's nextAt is 5 s after it came
+            guard changes?.names(key) ?? (lookup.answered && lookup.nextAt < now.addingTimeInterval(-25)) else { continue }
+            cardLookups[key] = CardLookup(nextAt: lookup.answered ? lookup.nextAt : max(lookup.nextAt, now.addingTimeInterval(5)))
+            stale = true
+        }
+        if stale { lookUpCardSessions() }
     }
     /// When each group's whole list of pending interactions was last asked for (NotificationWithdrawal.stale).
     @ObservationIgnored var interactionsListedAt: [String: Date] = [:]
@@ -420,14 +588,15 @@ final class AppModel {
     /// Session whose chat is on screen; its completion pings are suppressed.
     var visibleSession: SessionKey? {
         didSet {
-            if heldInList != visibleSession { heldInList = nil }
+            if heldInList != visibleSession { heldInList = nil; heldJustFinished = false }
             // the recently opened conversations: the home screen menu's (#2191)
             if visibleSession != oldValue { RecentChatsStore.shared.shown(visibleSession) }
         }
     }
-    /// The open agent that was Unread and was marked seen by being open: the Agents list keeps it where it was until
+    /// The open agent that was Unread or Just finished: the Agents list keeps it in that section until
     /// its chat is left (`AgentListOrder.held`, #2213; user, 2026-11-05: it moves to Idle only after you leave).
     private(set) var heldInList: SessionKey?
+    private(set) var heldJustFinished = false
     private(set) var assistantConfig: APIClient.AssistantState? {
         didSet {
             if let g = hub?.group, let a = assistantConfig {
@@ -537,7 +706,11 @@ final class AppModel {
     /// The groups whose outbox is going out now (`flushOutbox`): one group sending does not hold back another.
     @ObservationIgnored var flushingOutbox = Set<String>()
     /// Kept messages (#10194) a Retry or Delete is on its way for: a second tap does nothing.
-    @ObservationIgnored var undeliveredActions = Set<String>()
+    @ObservationIgnored var undeliveredActions: [SessionKey: Set<String>] = [:]
+    var heldActionRequests: Set<HeldActionTarget> = []
+    var heldRetryReceipts: Set<HeldRetryOffer> = [] {
+        didSet { if heldRetryReceipts != oldValue { HeldRetryOffer.save(heldRetryReceipts, in: stateFolder) } }
+    }
     /// Per group: the one retry of its waiting messages due in a few seconds (`retryOutboxSoon`).
     @ObservationIgnored var outboxRetry: [String: Task<Void, Never>] = [:]
     #if DEBUG
@@ -604,6 +777,7 @@ final class AppModel {
         Task.detached(priority: .utility) { LarkAttachment.staging.sweep() }
         connection = ConnectionStatus()
         assistantPicks = AssistantPickStore.load(folder: stateFolder)
+        heldRetryReceipts = HeldRetryOffer.read(in: stateFolder)
         DemoHub.install()
         #if DEBUG
         // `-openWelcome YES`: start unpaired and out of Demo Mode, on the pairing page (DemoModeTests); with `-demo.on YES`
@@ -1029,6 +1203,8 @@ final class AppModel {
 
     /// Sign Out of everything: every group, every hub (Settings › Disconnect with one group, a revoked credential of this device).
     func unpair() {
+        forgetSeen()
+        heldRetryReceipts.removeAll()
         LarkChatOutbox.forget()
         // No hub left to answer: the open questions are denied, their results have nowhere to go.
         phoneConfirmations.denyAll()
@@ -2666,7 +2842,8 @@ final class AppModel {
     /// update once for the lot, and only when a list really changed; the notifications, the watch and the chats kept
     /// current in the background (`AgentSync`) follow them. The one place the lists land (msg-render's SessionStore
     /// replaces its inside, docs/apple/ios-state.md).
-    func applySessions(_ byMachine: [MachineRef: [Session]]) {
+    func applySessions(_ byMachine: [MachineRef: [Session]], complete: Bool = true) {
+        if complete { reconcileHeldRetries(byMachine) }
         let byMachine = seenOutbox.land(byMachine, at: Date())
         var lists = sessionsByMachine
         var olds: [(old: [Session], new: [Session])] = []
@@ -2885,6 +3062,7 @@ final class AppModel {
             }
         case .sessionsList(let revision, let changes):
             sessionLists.invalidate(group, revision: revision)
+            cardSessionsListChanged(group, changes)
             if isHub { followNeedsYou() }
             for key in subscribers.keys where key.group == group {
                 if passesOver(key, revision: revision, changes: changes) {
@@ -3489,10 +3667,14 @@ final class AppModel {
     var assistantModels: [SessionKey: String] = [:]
 
     /// Check at dispatch time too: capabilities can change while a menu or outbox bubble is on screen.
-    func allowSend(_ key: SessionKey) -> Bool {
+    func allowSend(_ key: SessionKey, forMessage: Bool = false) -> Bool {
         guard let s = session(key) else { return false }
         guard s.canSend else {
             toast = Toast(s.sourceSubtitle ?? String(localized: "This session is view-only"), style: .error)
+            return false
+        }
+        if forMessage, let away = offlineAgent(s), !away.canHold {
+            toast = Toast(away.line, style: .error)
             return false
         }
         return true
@@ -3503,7 +3685,7 @@ final class AppModel {
     @discardableResult
     /// via: how the app wrote it when the user did not type it (`APIClient.MessageVia`).
     func sendNow(_ key: SessionKey, text: String, images: [ImagePayload] = [], via: APIClient.MessageVia? = nil) -> Bool {
-        guard allowSend(key) else { return false }
+        guard allowSend(key, forMessage: true) else { return false }
         // Take-back can retain pathless hub photos past the picker's cap; the person removes some before sending.
         guard images.count <= MessagePhotos.limit else {
             toast = Toast(String(localized: "Up to 4 at a time"), style: .error)
@@ -3536,7 +3718,7 @@ final class AppModel {
     }
 
     func retry(_ key: SessionKey, _ msg: PendingMessage, clearDraft: String? = nil) {
-        guard allowSend(key) else { return }
+        guard allowSend(key, forMessage: true) else { return }
         guard let i = chat(key).pending.firstIndex(where: { $0.id == msg.id }) else { return }
         guard chat(key).pending[i].mayHaveArrived == true else {
             chat(key).pending[i].state = .sending
@@ -3634,10 +3816,28 @@ final class AppModel {
         sendSeen(key)
         // Optimistic: flip the local copy right away.
         if var list = sessionsByMachine[key.machineRef], let i = list.firstIndex(where: { $0.sessionID == key.sessionID }),
-           list[i].state == .unread {
-            if key == visibleSession { heldInList = key }
-            list[i].state = .idle
+           list[i].needsSeen() {
+            if key == visibleSession && (list[i].state == .unread || list[i].showsJustFinished(muted: isMuted(list[i]))) {
+                heldInList = key
+                heldJustFinished = list[i].state == .idle
+            }
+            list[i].markLocallySeen()
             sessionsByMachine[key.machineRef] = list
+            sessionLists.markSeen([key], model: self)
+        }
+    }
+
+    func keepSeen(in list: SessionListModel<Session>) {
+        guard !seenOutbox.marks.isEmpty else { return }
+        list.keepSeen { seenOutbox.marks[$0] != nil }
+    }
+
+    /// Retire marks and their held row when their pairing is forgotten. Reconnecting keeps both.
+    func forgetSeen(in groups: Set<String>? = nil) {
+        seenOutbox.forget(groups: groups)
+        if let heldInList, groups?.contains(heldInList.group) ?? true {
+            self.heldInList = nil
+            heldJustFinished = false
         }
     }
 
@@ -3654,10 +3854,14 @@ final class AppModel {
             socket.send(["type": "seen", "machine_id": key.machineID, "session_id": key.sessionID])
             scheduleSeenCheck()
         } else if let api = api(key.group) {
-            seenOutbox.sent(key, .http, at: Date())
+            let owner = link(key.group)
+            let markID = seenOutbox.sent(key, .http, at: Date())
             Task {
+                guard link(key.group) === owner else { return }
                 // A failed one waits for the socket to come back (`hello`).
-                if (try? await api.post("/api/v1/sessions/\(key.machineID)/\(key.sessionID)/seen")) != nil { seenOutbox.answered(key) }
+                if (try? await api.post("/api/v1/sessions/\(key.machineID)/\(key.sessionID)/seen")) != nil {
+                    seenOutbox.answered(key, markID: markID)
+                }
             }
         }
     }
@@ -3675,14 +3879,21 @@ final class AppModel {
 
     /// Mark All as Read: every finished-unread one of these, in one update of the list.
     func markSeen(_ keys: [SessionKey]) {
-        let unread = keys.filter { session($0)?.state == .unread }
+        let unread = keys.filter { key in sessionIndex[key].map { $0.needsSeen(muted: isMuted($0)) } == true }
         guard !unread.isEmpty else { return }
         for key in unread { sendSeen(key) }
         var lists = sessionsByMachine
-        for key in unread {
-            if let i = lists[key.machineRef]?.firstIndex(where: { $0.sessionID == key.sessionID }) { lists[key.machineRef]![i].state = .idle }
+        for (machine, keys) in Dictionary(grouping: unread, by: \.machineRef) {
+            guard var list = lists[machine] else { continue }
+            var remaining = Set(keys.map(\.sessionID))
+            for i in list.indices {
+                if remaining.isEmpty { break }
+                if remaining.remove(list[i].sessionID) != nil { list[i].markLocallySeen() }
+            }
+            lists[machine] = list
         }
         sessionsByMachine = lists
+        sessionLists.markSeen(unread, model: self)
         Haptics.success()
     }
 
@@ -3754,7 +3965,7 @@ final class AppModel {
         do {
             try await api.setModes(key, permissionMode: permissionMode, effort: effort, model: claudeModel)
             if var list = sessionsByMachine[key.machineRef], let i = list.firstIndex(where: { $0.sessionID == key.sessionID }) {
-                if let permissionMode { list[i].permissionMode = permissionMode }
+                if let permissionMode { SessionModes.applyOptimistic(&list[i], permissionMode: permissionMode) }
                 if let effort { list[i].effort = effort }
                 if let claudeModel { list[i].model = claudeModel } // the node lists the pick too until the transcript moves on
                 sessionsByMachine[key.machineRef] = list
@@ -4190,6 +4401,22 @@ final class AppModel {
         if tabRouter != nil { shellSettings = true }
         #endif
     }
+
+    /// A provider import link opened from outside (#5428): the Model providers page reads it through the hub's parse
+    /// route and opens the wizard with the draft. Held only until the wizard takes it; never logged or shown, since it
+    /// may carry a key.
+    var providerImport: ProviderImportRequest?
+    func openProviderImport(_ link: String) {
+        let request = ProviderImportRequest(link: link)
+        providerImport = request
+        settingsPath.append(ModelLaunchersRoute(id: request.id))
+        #if os(macOS)
+        MacShellState.shared.go(.settings, self)
+        #else
+        selectedTab = .settings
+        if tabRouter != nil { shellSettings = true }
+        #endif
+    }
     /// The space's other agent a chat page switched to in its header (`ChatView.switchTo`), by the session it opened
     /// with: the page built again for that path goes to it. Cleared back at the list.
     var chatSwitched: [SessionKey: SessionKey] = [:]
@@ -4373,6 +4600,8 @@ final class AppModel {
     /// What the app holds about groups that are no longer there.
     func forgetGroups(_ gone: Set<String>, keepingPushKeys: Bool = false) {
         guard !gone.isEmpty else { return }
+        forgetSeen(in: gone)
+        heldRetryReceipts = heldRetryReceipts.filter { !gone.contains($0.target.session.group) }
         if !keepingPushKeys { LarkChatOutbox.forget(groups: gone) }
         toolResults.forget(groups: gone)
         PortForwarder.shared.close(groups: gone)
@@ -4521,8 +4750,10 @@ final class AppModel {
         func place(_ key: SessionKey) -> TabBadges.Place {
             TabBadges.place(key, session: sessionIndex[key], quiet: isQuiet(key), mutes: pinsStore(key.group)?.mutes)
         }
-        for ix in interactions.values {
-            guard scope.has(ix.manager ?? sessionIndex[ix.sessionKey]?.manager, group: ix.group) else { continue }
+        // A directory-hidden session's cards count nowhere, as the pages leave them out (`directoryVisibleInteractions`).
+        let session = cardSessionResolver()
+        for ix in interactions.values where session(ix.sessionKey)?.hiddenByDirectory != true {
+            guard scope.has(ix.manager ?? session(ix.sessionKey)?.manager, group: ix.group) else { continue }
             // A quiet task's agent asking is the main conversation's to tell (#1731): its count goes there, not on Agents.
             switch place(ix.sessionKey) {
             case .assistant, .quiet: b.assistant += 1
@@ -4530,7 +4761,10 @@ final class AppModel {
             }
         }
         // Agents counts what its Needs You section lists: one per session that waits for the user, not one per card.
-        b.agents = AgentsNeedsYou.badge(AgentsNeedsYou.rows(cards: scopedInteractions, waiting: AgentsNeedsYou.waiting(scoped(allSessions))),
+        // A kept row of a session the paging list has since left out (hidden) is not one waiting: read through the same
+        // projection as its cards.
+        let waitingNow = waitingRows(scoped(allSessions), reading: session)
+        b.agents = AgentsNeedsYou.badge(AgentsNeedsYou.rows(cards: scopedInteractions, waiting: AgentsNeedsYou.waiting(waitingNow)),
                                         place: place)
         if b != badges { badges = b }
         let waiting = waitingAgents()
@@ -4543,8 +4777,12 @@ final class AppModel {
     private func waitingAgents() -> [String: Int] {
         guard let group = hub?.group, let roster = managerRosters[group], roster.isMulti else { return [:] }
         let rows = needsYou.flatMap { $0.group == group ? $0.rows : nil } ?? allSessions
-        return AssistantBadges.waiting(roster: roster, group: group, sessions: rows, interactions: interactions.values,
-                                       known: { sessionIndex[$0] }) { key, session in
+        // The cards and their sessions as the pages and the tab badges read them (`directoryVisibleInteractions`).
+        let resolve = cardSessionResolver()
+        return AssistantBadges.waiting(roster: roster, group: group, sessions: waitingRows(rows, reading: resolve),
+                                       interactions: directoryVisibleInteractions(reading: resolve),
+                                       known: resolve) { key, session in
+            if session?.hiddenByDirectory == true || resolve(key)?.hiddenByDirectory == true { return false }
             switch TabBadges.place(key, session: session, quiet: session?.quiet == true || isQuiet(key), mutes: pinsStore(key.group)?.mutes) {
             case .assistant, .agents: return true
             case .quiet, .muted: return false

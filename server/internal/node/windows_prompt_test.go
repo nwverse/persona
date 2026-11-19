@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -101,7 +102,7 @@ func TestWindowsCodexStartPastesTheCompleteFirstMessage(t *testing.T) {
 			}
 		case "pane.send_text":
 			pasted = str(c.Params["text"])
-			f.setScreen("w1:p2", "› [Pasted Content 100 chars]\n\n  gpt-6 xhigh · /tmp/proj\n")
+			f.setScreen("w1:p2", fmt.Sprintf("› [Pasted Content %d chars]\n\n  gpt-6 xhigh · /tmp/proj\n", len([]rune(prompt))))
 		case "pane.send_keys":
 			if slices.Equal(keysOf(c), []string{"enter"}) {
 				if pasted != pasteStart+prompt+pasteEnd {

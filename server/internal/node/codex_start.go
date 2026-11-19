@@ -179,6 +179,9 @@ func codexExecutionArgs(argv []string, e modelExecution) []string {
 	if e.Effort != "" {
 		extra = append(extra, "-c", "model_reasoning_effort="+e.Effort)
 	}
+	if e.ServiceTier != "" {
+		extra = append(extra, "-c", "service_tier="+e.ServiceTier)
+	}
 	return insertBeforeDashDash(argv, extra)
 }
 
@@ -313,14 +316,17 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 	defer n.unclaimCodexThread(id)
 	n.bindPane(pane, id)
 	n.namePersonaTab(ctx, pane, id) // the tab was marked before the thread was known (personatab.go)
-	st := sessionState{Pane: pane, Launcher: launcher, Cwd: cwd, StartedAt: began.UTC(), Model: execution.Model, ModelEffort: execution.Effort}
+	st := sessionState{Pane: pane, Launcher: launcher, Cwd: cwd, StartedAt: began.UTC(), Model: execution.Model, ModelEffort: execution.Effort, TaskInstructions: execution.TaskInstructions}
+	if st.TaskInstructions != "" && slices.Contains(argv, codexTaskConfig(st.TaskInstructions)) {
+		st.TaskInstructionChannel = "codex"
+	}
 	if mode == "plan" {
 		st.AppMode = mode
 	}
 	if legs, ok := engineHistoryOf(ctx); ok { // a switch from Claude Code starts it (engine_switch.go)
 		st.EngineHistory = legs
 	}
-	n.state.put(id, st)
+	n.putAgentState(ctx, launch, id, st)
 	_ = n.refreshHosts(ctx)
 	a, ok := n.agent(id)
 	if !ok {
@@ -344,13 +350,7 @@ func (n *Node) pasteCodexFirst(ctx context.Context, pane, cwd, prompt string, be
 	if err = n.waitCodexBox(wait, pane); err != nil {
 		return "", err
 	}
-	// A user may have typed into the new pane while startup was waiting.
-	if err = n.codexReady(wait, pane, true); err != nil {
-		return "", err
-	}
-	if err = n.codexType(wait, pane, prompt, func(draft string) bool {
-		return stillPrompted(draft, prompt) || pastedRE.MatchString(draft)
-	}); err != nil {
+	if err = n.typeCodexFirst(wait, pane, prompt); err != nil {
 		return "", err
 	}
 	return n.waitCodexThread(wait, pane, cwd, prompt, began)
@@ -447,14 +447,9 @@ func (n *Node) waitCodexThread(ctx context.Context, pane, cwd, prompt string, be
 			}
 			continue
 		}
-		if strings.Contains(text, "Update available") && strings.Contains(text, "Skip") {
-			if d := screen.ParseDialog(text); d != nil {
-				for _, o := range d.Options {
-					if o.Label == "Skip" {
-						_ = n.sendKeys(ctx, pane, o.Keys...)
-					}
-				}
-			}
+		if keys := codexSkipUpdateKeys(text); keys != nil {
+			_ = n.sendKeys(ctx, pane, keys...)
+			_ = sleepCtx(ctx, codexDialogPause)
 		}
 	}
 	message := fmt.Sprintf("Codex 已经在电脑上的新标签里打开了，但 %d 秒内没认出它这次的会话（第一条消息还没进它的会话记录）", int(codexStartWait.Seconds()))

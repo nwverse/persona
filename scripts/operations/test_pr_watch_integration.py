@@ -44,8 +44,10 @@ if args[:2] == ["api", "graphql"]:
                 if variables["needThreads"] else None,
             }
             pr = {key: value for key, value in pr.items() if value is not None}
-        else:
+        elif "baseRef { target { oid } }" in query:
             pr["baseRef"] = {"target": {"oid": pr["baseRefOid"]}}
+        else:
+            raise AssertionError("unexpected GraphQL query")
         print(json.dumps({"data": {"repository": {"pullRequest": pr}}}))
     entry["returncode"] = 0
     with open(log_path, "a") as log:

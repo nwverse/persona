@@ -28,6 +28,15 @@ class DevScrubTest {
         assertFalse(cleaned.contains("abcDEF123"))
     }
 
+    @Test fun authenticationSchemesAndHeaderCredentialsAreCaseInsensitive() {
+        assertEquals("bearer <redacted>", DevScrub.text("bearer abc123"))
+        assertEquals("BASIC <redacted>", DevScrub.text("BASIC abc123"))
+        assertEquals("tOkEn <redacted>", DevScrub.text("tOkEn abc123"))
+        val header = DevScrub.text("authorization: bearer abc123")
+        assertFalse(header.contains("abc123"))
+        assertFalse(header.contains("bearer abc123", ignoreCase = true))
+    }
+
     @Test fun wordsAreCodeChosenOnly() {
         assertEquals("sessions_list", DevScrub.word("sessions_list"))
         assertEquals("other", DevScrub.word("hello world"))
