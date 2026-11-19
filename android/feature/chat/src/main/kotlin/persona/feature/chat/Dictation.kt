@@ -20,12 +20,14 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import persona.core.contracts.SessionKey
 
 /** Both writing fields use the phone's speech service. Phones with only a voice-input activity retain their system UI. */
 class DictationControl internal constructor(internal val session: DictationSession?, private val fallback: () -> Unit) {
     val active get() = session?.active == true
     val heard get() = session?.heard.orEmpty()
-    fun finish(keepWords: Boolean) { session?.finish(keepWords) }
+    fun cancel() { session?.finish(false) }
+    internal fun stopListening() { session?.stopListening() }
     internal fun tap() { if (session == null) fallback() else session.tap() }
 }
 
@@ -70,12 +72,20 @@ fun rememberDictation(onHeard: (String) -> Unit, onError: (String) -> Unit, prom
     }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     DisposableEffect(session, lifecycle) {
-        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_STOP && session.active) session.finish(true) }
+        fun leave() {
+            answer = null
+            session.finish(true)
+        }
+        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_STOP) leave() }
         lifecycle.addObserver(observer)
-        onDispose { lifecycle.removeObserver(observer); session.finish(true) }
+        onDispose { lifecycle.removeObserver(observer); leave() }
     }
     return remember(session) { DictationControl(session) {} }
 }
+
+@Composable
+internal fun rememberComposerDictation(session: SessionKey, state: ChatComposerState, available: Boolean, onNotice: (String) -> Unit) =
+    key(session, state) { if (available) rememberDictation(onHeard = state::appendDictation, onError = onNotice) else null }
 
 private fun platformInput(context: Context, onDevice: Boolean, intent: Intent, listener: DictationSession.Listener): DictationSession.Input {
     val speech = if (onDevice && Build.VERSION.SDK_INT >= 31) SpeechRecognizer.createOnDeviceSpeechRecognizer(context)

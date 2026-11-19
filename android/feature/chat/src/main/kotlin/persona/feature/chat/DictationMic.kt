@@ -38,9 +38,10 @@ internal fun cancelDictationHold(dx: Float, release: Boolean, velocityX: Float =
 fun DictationMic(control: DictationControl, label: String, enabled: Boolean = true) {
     val session = control.session
     val listening = session?.listening == true
+    val canActivate = enabled && (session?.active != true || listening)
     val stop = stringResource(R.string.chat_dictation_stop)
     val state = stringResource(R.string.chat_dictation_listening)
-    val gesture = if (!enabled || session == null) Modifier else Modifier.pointerInput(session) {
+    val gesture = if (!canActivate || session == null) Modifier else Modifier.pointerInput(session) {
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
             down.consume()
@@ -68,7 +69,7 @@ fun DictationMic(control: DictationControl, label: String, enabled: Boolean = tr
     }
     val semantics = if (listening) Modifier.semantics { stateDescription = state; onClick(label = stop, action = null) } else Modifier
     JIconButton(if (listening) PersonaIcons.interrupt else PersonaIcons.dictate, if (listening) stop else label,
-        control::tap, modifier = gesture.then(semantics), enabled = enabled,
+        control::tap, modifier = gesture.then(semantics), enabled = canActivate,
         tint = if (listening) PersonaTheme.palette.accent else null, selected = listening)
 }
 

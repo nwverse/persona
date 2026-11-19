@@ -42,6 +42,20 @@ class DictationSessionTest {
         assertEquals(listOf("revised words"), phone.saved); assertFalse(phone.mic.active)
     }
 
+    @Test fun anotherActivationWaitsForThePreviousFinalOrTimeout() = runTest {
+        val phone = Phone(this)
+        phone.mic.tap(); phone.mic.tap()
+        val first = phone.listener
+        phone.mic.tap(); phone.mic.hold()
+        assertEquals(1, phone.starts)
+        first.result("Final only"); first.result("Repeated")
+        assertEquals(listOf("Final only"), phone.saved)
+        phone.mic.tap(); phone.listener.partial("Second"); phone.mic.tap()
+        phone.mic.tap(); advanceTimeBy(1501)
+        assertEquals(listOf("Final only", "Second"), phone.saved)
+        phone.mic.hold(); assertEquals(3, phone.starts); phone.mic.release(true)
+    }
+
     @Test fun aPauseBetweenPhrasesKeepsListeningAndAReleaseKeepsBoth() = runTest {
         val phone = Phone(this)
         phone.mic.hold(); phone.listener.partial("first"); phone.listener.result("first phrase"); runCurrent()

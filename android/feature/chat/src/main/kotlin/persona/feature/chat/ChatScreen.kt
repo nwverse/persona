@@ -695,8 +695,9 @@ private fun ChatPage(
     val turnFix = if (renderStyle == ChatRenderStyle.Assistant) TurnErrorFix.of(session?.turnErrorCode) else null
     val fixModel = chrome.onFixModel?.let { open -> { action: persona.core.designsystem.ReadinessActionId -> open(action, session?.launcher, session?.manager) } }
     // Nothing is up over the page: the header may fold by itself (iOS waits while a sheet or menu is presented).
-    val headerBusy by rememberUpdatedState(chrome.covered || overlay || chromeOverlay || linkVisible || statusSheet || activitySheet ||
-        terminalHelp || taskPageVisible || fullText != null || search.visible || pushedDetail != null)
+    val pageCovered = chrome.covered || overlay || linkVisible || statusSheet || activitySheet || terminalHelp ||
+        taskPageVisible || fullText != null || search.visible || pushedDetail != null
+    val headerBusy by rememberUpdatedState(pageCovered || chromeOverlay)
     LaunchedEffect(headerFold, foldsHeader, reduceMotion) {
         if (!foldsHeader || reduceMotion) return@LaunchedEffect
         while (true) {
@@ -1008,7 +1009,7 @@ private fun ChatPage(
                                     onSend = { send() }, onCommand = { send(it) }, onNotice = { notice = it },
                                     extraContent = linkContexts.isNotEmpty(),
                                     assistantChat = assistantChat,
-                                    useShellSurface = compactGlassAgent,
+                                    useShellSurface = compactGlassAgent, covered = pageCovered,
                                     enabled = canSend, wrapPlaceholder = offlineHint != null, placeholder = when {
                                         !canSend -> READ_ONLY.text()
                                         // "Ask Persona…", as the assistant's blank page and iOS say (#4339 C18).

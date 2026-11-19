@@ -108,6 +108,50 @@ class TodoDetailEditTest {
         assertEquals(listOf("Review" to "Original notes and more"), api.patches)
     }
 
+    @Test fun aCorrectedFinalReachesSaveAfterAnImmediateAttempt() = saveAfterStop("some seeds", "sunflower seeds")
+
+    @Test fun finalOnlyRecognitionReachesSaveAfterAnImmediateAttempt() = saveAfterStop(null, "sunflower seeds")
+
+    @Test fun aMissingFinalAllowsSavingTheLastPartialAfterTheTimeout() = saveAfterStop("some seeds", null)
+
+    private fun saveAfterStop(partial: String?, final: String?) {
+        ShadowSpeechRecognizer.setIsOnDeviceRecognitionAvailable(true)
+        shadowOf(ApplicationProvider.getApplicationContext<Application>()).grantPermissions(Manifest.permission.RECORD_AUDIO)
+        val api = Api(Todo("t1", title = "Review", notes = "Original"))
+        open(api)
+        rule.onNodeWithContentDescription("Dictate notes").performClick()
+        val recognition = shadowOf(ShadowSpeechRecognizer.getLatestSpeechRecognizer())
+        fun words(text: String) = Bundle().apply { putStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION, arrayListOf(text)) }
+        if (partial != null) rule.runOnIdle { recognition.triggerOnPartialResults(words(partial)) }
+        rule.onNodeWithContentDescription("Stop dictation").performClick()
+        val save = rule.onNodeWithText("Save")
+        save.performClick()
+        assertTrue("an immediate Save must not write an unfinished transcript", api.patches.isEmpty())
+        save.assertIsNotEnabled()
+        if (final != null) rule.runOnIdle { recognition.triggerOnResults(words(final)) }
+        else rule.mainClock.advanceTimeBy(1600)
+        rule.waitForIdle()
+        save.performClick()
+        rule.waitForIdle()
+        assertEquals(listOf("Review" to "Original ${final ?: partial}"), api.patches)
+    }
+
+    @Test fun cancellingNotesWhileTheFinalIsPendingCannotPatchOrReopenTheDraft() {
+        ShadowSpeechRecognizer.setIsOnDeviceRecognitionAvailable(true)
+        shadowOf(ApplicationProvider.getApplicationContext<Application>()).grantPermissions(Manifest.permission.RECORD_AUDIO)
+        val api = Api(Todo("t1", title = "Review", notes = "Original"))
+        open(api)
+        rule.onNodeWithContentDescription("Dictate notes").performClick()
+        val recognition = shadowOf(ShadowSpeechRecognizer.getLatestSpeechRecognizer())
+        rule.onNodeWithContentDescription("Stop dictation").performClick()
+        rule.onNodeWithText("Cancel").performClick()
+        val words = Bundle().apply { putStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION, arrayListOf("late final")) }
+        rule.runOnIdle { recognition.triggerOnResults(words) }
+        assertTrue(api.patches.isEmpty())
+        rule.onNodeWithContentDescription("Edit").performClick()
+        rule.onNodeWithText("Original").assertExists()
+    }
+
     @Test fun blankTitleCannotBeSaved() {
         val api = Api(Todo("t1", title = "Ship the fix", notes = "Run tests first"))
         open(api)

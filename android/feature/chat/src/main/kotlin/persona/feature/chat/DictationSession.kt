@@ -37,12 +37,18 @@ internal class DictationSession(
     fun tap() {
         when {
             listening -> stop()
+            active -> return // The service still owes the previous recording its final words.
             requested != null -> requested = null
             else -> begin(Mode.Tap)
         }
     }
 
-    fun hold() { if (!listening && requested == null) begin(Mode.Hold) }
+    fun stopListening() {
+        requested = null
+        if (listening) stop()
+    }
+
+    fun hold() { if (!active && requested == null) begin(Mode.Hold) }
 
     fun release(cancel: Boolean) {
         if (requested == Mode.Hold) requested = null
@@ -50,7 +56,6 @@ internal class DictationSession(
     }
 
     private fun begin(next: Mode) {
-        if (active) finish(true)
         if (hasPermission()) start(next) else {
             requested = next
             askPermission(::permission)

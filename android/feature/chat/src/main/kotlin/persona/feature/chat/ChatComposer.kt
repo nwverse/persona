@@ -106,6 +106,7 @@ fun ChatComposer(
      */
     modelPill: (@Composable (ModelPillWidth) -> Unit)? = null,
     wrapPlaceholder: Boolean = false,
+    dictate: DictationControl? = rememberComposerDictation(session, state, visible && enabled, onNotice),
 ) {
     val context = LocalContext.current
     val compactShell = useShellSurface && PersonaTheme.style == AppStyle.Glass
@@ -131,8 +132,10 @@ fun ChatComposer(
     var editOpening by remember { mutableStateOf(false) }
     // The draft full screen (#5688): offered once the field has grown to its line limit and scrolls.
     var expandedEditor by rememberSaveable { mutableStateOf(false) }
-    LaunchedEffect(menu, confirmClear, cameraDenied, editing, expandedEditor) {
-        onOverlay(menu || confirmClear || cameraDenied || editing != null || expandedEditor)
+    val composerCovered = menu || confirmClear || cameraDenied || editing != null || expandedEditor
+    LaunchedEffect(composerCovered, dictate) {
+        if (composerCovered) dictate?.stopListening()
+        onOverlay(composerCovered)
     }
     DisposableEffect(Unit) { onDispose { onOverlay(false) } }
     var cameraUri by rememberSaveable { mutableStateOf<String?>(null) }
@@ -318,8 +321,6 @@ fun ChatComposer(
         key(edit) { ImageEditor(edit.source, onCancel = { if (editing === edit) editing = null }, onDone = { finishEdit(edit, it, done) },
             start = edit.prior?.state ?: ImageEditState(), onEdited = { done = it }) }
     }
-    // Voice input: what the phone's recognizer heard goes at the end of the draft, to edit before sending.
-    val dictate = key(session, state) { if (visible && enabled) rememberDictation(onHeard = { state.appendDictation(it) }, onError = onNotice) else null }
     if (!visible) return
     if (AdaptiveProbe.enabled) {
         AdaptiveComposerProbe(adaptiveProbePage, state.value, state.attachments.map { it.id to it.uploadState.name }, state.draftLoaded)
@@ -422,7 +423,7 @@ fun ChatComposer(
     val offersExpand = enabled && (composerOffersExpand(lineCount, growLines) ||
         compactShell && (state.focused || '\n' in state.value.text))
     LaunchedEffect(enabled) { if (!enabled) expandedEditor = false }
-    val canSend = enabled && state.ready && !sending
+    val canSend = enabled && state.ready && !sending && dictate?.active != true
     val homeAssistant = LocalHomeChrome.current?.let { it.items.firstOrNull()?.key == it.selected } == true
     val fullToolbar = !homeAssistant || state.focused || hasContent
     // Expand once on focus, not when the first character arrives. ComposerFrame keeps the field in the same row across
@@ -475,7 +476,7 @@ fun ChatComposer(
             if (blockedLabel != null && enabled) BlockedSendButton(blockedLabel, onBlocked)
             else ComposerActionSlot(
                 when {
-                    hasContent && (!compactShell || enabled) -> ComposerAction(SendKind.Send, enabled = canSend && dictate?.active != true, loading = sending)
+                    hasContent && (!compactShell || enabled) -> ComposerAction(SendKind.Send, enabled = canSend, loading = sending)
                     working && canInterrupt && (!compactShell || enabled) ->
                         ComposerAction(SendKind.Stop, enabled = !sending && !interruptPending && service != null)
                     dictate == null && (!compactShell || enabled && sending) -> ComposerAction(SendKind.Send, enabled = false, loading = sending)

@@ -303,7 +303,7 @@ fun TodoDetailScreen(
                                 horizontalArrangement = Arrangement.End
                             ) {
                                 JTextButton(stringResource(R.string.agents_todo_cancel), onClick = {
-                                    dictate?.finish(false)
+                                    dictate?.cancel()
                                     titleText = todo.title
                                     notesText = todo.notes
                                     editingTitle = false
@@ -312,8 +312,7 @@ fun TodoDetailScreen(
                                 Spacer(Modifier.width(Tokens.Space.s))
                                 // The hub refuses a blank title; the editor stays, with what was typed, until the save goes through.
                                 JButton(stringResource(R.string.agents_todo_save), onClick = {
-                                    if (saving || titleText.isBlank()) return@JButton
-                                    dictate?.finish(true)
+                                    if (saving || titleText.isBlank() || dictate?.active == true) return@JButton
                                     saving = true
                                     scope.launch {
                                         try {
@@ -328,7 +327,7 @@ fun TodoDetailScreen(
                                             saving = false
                                         }
                                     }
-                                }, enabled = titleText.isNotBlank() && !saving, loading = saving)
+                                }, enabled = titleText.isNotBlank() && !saving && dictate?.active != true, loading = saving)
                             }
                         } else if (todo.notes.isNotBlank()) {
                             Text(
