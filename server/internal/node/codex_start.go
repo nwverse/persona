@@ -344,13 +344,7 @@ func (n *Node) pasteCodexFirst(ctx context.Context, pane, cwd, prompt string, be
 	if err = n.waitCodexBox(wait, pane); err != nil {
 		return "", err
 	}
-	// A user may have typed into the new pane while startup was waiting.
-	if err = n.codexReady(wait, pane, true); err != nil {
-		return "", err
-	}
-	if err = n.codexType(wait, pane, prompt, func(draft string) bool {
-		return stillPrompted(draft, prompt) || pastedRE.MatchString(draft)
-	}); err != nil {
+	if err = n.typeCodexFirst(wait, pane, prompt); err != nil {
 		return "", err
 	}
 	return n.waitCodexThread(wait, pane, cwd, prompt, began)
@@ -447,14 +441,9 @@ func (n *Node) waitCodexThread(ctx context.Context, pane, cwd, prompt string, be
 			}
 			continue
 		}
-		if strings.Contains(text, "Update available") && strings.Contains(text, "Skip") {
-			if d := screen.ParseDialog(text); d != nil {
-				for _, o := range d.Options {
-					if o.Label == "Skip" {
-						_ = n.sendKeys(ctx, pane, o.Keys...)
-					}
-				}
-			}
+		if keys := codexSkipUpdateKeys(text); keys != nil {
+			_ = n.sendKeys(ctx, pane, keys...)
+			_ = sleepCtx(ctx, codexDialogPause)
 		}
 	}
 	message := fmt.Sprintf("Codex 已经在电脑上的新标签里打开了，但 %d 秒内没认出它这次的会话（第一条消息还没进它的会话记录）", int(codexStartWait.Seconds()))

@@ -38,7 +38,7 @@ const (
 		"╰──────────────────────────────────────────╯\n\n› Ask Codex to do anything\n\n  gpt-6 xhigh · /tmp/proj\n"
 )
 
-// codexWaitHerdr is codexStartHerdr whose new tab shows Codex's update offer once the launcher runs, then (after "2")
+// codexWaitHerdr is codexStartHerdr whose new tab shows Codex's update offer once the launcher runs, then (after Escape)
 // its box with the model loading, then ready a few reads later. The pane lists as a Codex herdr says works (it starts
 // its MCP servers), with no session id.
 func codexWaitHerdr(t *testing.T) (*Node, *fakeHerdr, string, *[]string) {
@@ -58,7 +58,7 @@ func codexWaitHerdr(t *testing.T) (*Node, *fakeHerdr, string, *[]string) {
 		switch {
 		case c.Method == "pane.send_input" && strings.Contains(str(c.Params["text"]), "codex-start"):
 			f.setScreen("w1:p2", cxUpdateOffer)
-		case c.Method == "pane.send_keys" && slices.Equal(keysOf(c), []string{"2"}):
+		case c.Method == "pane.send_keys" && slices.Equal(keysOf(c), []string{"escape"}):
 			f.setScreen("w1:p2", cxLoading)
 			reads = 0
 		case c.Method == "pane.read" && reads >= 0:
@@ -100,7 +100,7 @@ func TestCodexStartWithoutAMessage(t *testing.T) {
 		t.Fatalf("ran %q (commands %q)", ran, *cmds)
 	}
 	// The update offer was skipped with its own key: never enter, which takes the highlighted "Update now".
-	if keys := f.trace("pane.send_keys"); len(keys) != 1 || !strings.Contains(keys[0], `"2"`) {
+	if keys := f.trace("pane.send_keys"); len(keys) != 1 || !strings.Contains(keys[0], `"escape"`) {
 		t.Fatalf("keys %q", keys)
 	}
 	// Listed as the waiting row while herdr says the pane works (Codex starting its MCP servers): idle, not a turn.
@@ -205,7 +205,7 @@ func TestCodexFirstMessageRefusals(t *testing.T) {
 	}
 }
 
-// The first message waits out a model still loading and the update offer, skipping the offer with "2" only.
+// The first message waits out a model still loading and the update offer, skipping the offer with Escape only.
 func TestCodexFirstMessageWaitsForTheBox(t *testing.T) {
 	n, f, cwd, _ := codexWaitHerdr(t)
 	home := filepath.Dir(cwd)
@@ -502,7 +502,7 @@ func TestCodexFirstMessageExit(t *testing.T) {
 }
 
 func TestCodexStartScreens(t *testing.T) {
-	if keys := codexSkipUpdateKeys(cxUpdateOffer); !slices.Equal(keys, []string{"2"}) {
+	if keys := codexSkipUpdateKeys(cxUpdateOffer); !slices.Equal(keys, []string{"escape"}) {
 		t.Errorf("update offer keys %v", keys)
 	}
 	if codexSkipUpdateKeys(cxTrust0153) != nil || codexSkipUpdateKeys(cxReady) != nil {

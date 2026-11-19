@@ -427,7 +427,7 @@ and answers with a **waiting row** for the pane (`node/codex_waiting.go`).
 - **Before its thread exists, Codex has no session id**: herdr lists the pane as `agent: codex` with no `session_id` (Codex 0.153.4, herdr 0.9.3), and no rollout or `threads` row exists yet. About two seconds after the first message
   the rollout appears, and the pane's `codex` process holds it open. herdr still reports no session id.
 - **The start**: `codex-start` runs the launcher words alone. The node waits for Codex's input box, at most 60 seconds. On the way it trusts the folder, waits out a model still loading (`model: loading` in the header),
-  and skips the update offer. The offer is skipped with "Skip"'s own key (`2`), never Enter: Enter takes the highlighted "Update now", which runs the installer. On 0.153.4, `2` alone closes the offer.
+  and skips the update offer. Codex's own three-choice offer (`Update now`, `Skip`, `Skip until next version`) is skipped with Escape on every operating system, never Enter: Enter takes the highlighted "Update now", which runs the installer. Version upgrades belong to operations, not a message-delivery attempt.
   If the launcher fails (a `personad codex-start:` line), the start fails and the tab closes, as above. If Codex runs but its box has not come up in time, the row is still returned and the tab stays.
   Nothing is queued in that tab that could run later.
 - **The waiting row**: its id is the node's own: a UUID whose first group is `c0de0000`, which no Codex thread id (a UUIDv7) or Claude session id takes. It carries `awaiting_first_message: true`,
@@ -453,7 +453,8 @@ and answers with a **waiting row** for the pane (`node/codex_waiting.go`).
 - **The first message from the Apps** (`session.send` to the row): text only (photos refuse with `codex_first_text`, nothing typed). The node brings Codex to its empty input box first, at most 20 seconds.
   On the way it answers the trust dialog and the update offer, and waits out the model loading and "Starting MCP servers".
   It types nothing, and refuses with the usual codes, when the box holds a draft (`input_draft`), when an approval, question or dialog that isn't ours is open (`dialog_open`), or when the box doesn't come (`codex_not_ready`).
-  The message goes in as one bracketed paste, unchanged, and Enter is pressed only once the box shows it (or Codex's `[Pasted Content N chars]`).
+  The message goes in as one bracketed paste, unchanged, and Enter is pressed only once the box shows it (or Codex's `[Pasted Content N chars]` chips with matching visible text before, between or after them). Chip counts are sanity-checked, not proof of delivery: only a complete first-message rollout match confirms startup. A compact status row whose directory is just `~` is excluded from the draft too.
+  If the recognized update offer appears after paste, startup skips it once. A retained matching draft is submitted without pasting again; only an empty, unqueued composer may receive one replay. A different draft or unknown dialog is never cleared or submitted. This recovery has a bounded confirmation window within the original startup request.
   The send then waits up to 45 seconds for the thread (rules 1–3) and answers `{ok, session}` with the thread's session. Rule 3 finding two threads answers `{ok}` alone, and the row stays until rule 1 or 2 knows it.
   No thread in time is `codex_first_unconfirmed` with `delivered: unknown`: the message went in, so it is not sent again.
   First messages to one row go one at a time: a second one (another phone, a quick second tap) waits for the first, then goes to the thread it began as any message does.
@@ -474,7 +475,7 @@ and answers with a **waiting row** for the pane (`node/codex_waiting.go`).
   - both attachments used rule 1.
 
   Rule 4 (the daemon route) is covered by unit tests only.
-- **Tests**: `node/codex_waiting_test.go`. It covers: the start skipping the update offer with `2` and never Enter; the row listed idle while herdr says working; the App's first message as one paste and the row becoming the thread;
+- **Tests**: `node/codex_waiting_test.go` and `node/codex_start_input_test.go`. They cover: the start skipping the update offer with Escape and never Enter; late update offers, retained/lost pastes, mixed chips and visible text, complete transcript confirmation and bounded failure cleanup; the row listed idle while herdr says working; the App's first message as one paste and the row becoming the thread;
   drafts, photos and dialogs refused with nothing typed; a model loading and MCP servers starting waited out; two rows in one directory;
   an app-server holding a pane's thread ignored; rule 4's ambiguities; the row known again after a restart and gone with Codex.
   The clients: the web's unit tests (`web/src/lib/codex-waiting.test.ts`, `web/src/lib/new-agent.test.ts`,

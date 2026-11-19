@@ -1,0 +1,172 @@
+package node
+
+import (
+	"context"
+	"fmt"
+	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/nwverse/persona/server/internal/host"
+)
+
+const cxUpdate0169 = "  Update available · 0.169.0 → 0.170.0\n\n› 1. Update now\n  2. Skip\n  3. Skip until next version\n\n  enter continue · esc skip\n"
+
+func TestCodexUpdateOfferUsesEscapeOnly(t *testing.T) {
+	for _, offer := range []string{cxUpdateOffer, cxUpdate0169, strings.Replace(cxUpdate0169, "› 1.", "  1.", 1)} {
+		if keys := codexSkipUpdateKeys(offer); !slices.Equal(keys, []string{"escape"}) {
+			t.Fatalf("update offer keys %v", keys)
+		}
+	}
+	for _, other := range []string{
+		cxTrust0153, cxReady,
+		strings.Replace(cxUpdate0169, "3. Skip until next version", "3. Delete history", 1),
+		strings.Replace(cxUpdate0169, "Update available", "Other setup", 1),
+		cxUpdate0169 + "\n› Ask Codex to do anything\n",
+	} {
+		if keys := codexSkipUpdateKeys(other); keys != nil {
+			t.Fatalf("keys %v for a different dialog or quoted offer", keys)
+		}
+	}
+}
+
+func TestCodexFirstPromptWithPasteChips(t *testing.T) {
+	prompt := "context body\nmiddle line\nfinal tail"
+	for _, tc := range []struct {
+		draft string
+		want  bool
+	}{
+		{prompt, true},
+		{"[Pasted Content 35 chars]", true},
+		{"[Pasted Content 13 chars]middle line\nfinal tail", true},
+		{"[Pasted Content 13 chars]middle line[Pasted Content 1 chars]final tail", true},
+		{"context body", false},
+		{"[Pasted Content 0 chars]", false},
+		{"[Pasted Content 999999999999999999999 chars]", false},
+		{"[Pasted Content 500 chars]", false},
+		{"[Pasted Content 13 chars]somebody else's draft", false},
+		{"[Pasted Content 13 chars]final tail middle line", false},
+		{"final tail[Pasted Content 13 chars]context body", false},
+	} {
+		if got := codexFirstPromptShown(tc.draft, prompt); got != tc.want {
+			t.Errorf("%q: %v, want %v", tc.draft, got, tc.want)
+		}
+	}
+}
+
+// Model both launch policies, and a modal arriving between readiness and the
+// post-paste check. The transcript, not the chip, determines startup success.
+func TestCodexStartupSkipsUpdateAndConfirmsCompletePrompt(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		windows, late     bool
+		retained, partial bool
+		pastes            int
+	}{
+		{name: "Windows update before paste", windows: true, pastes: 1},
+		{name: "Unix argv update", pastes: 0},
+		{name: "Windows update consumes paste", windows: true, late: true, pastes: 2},
+		{name: "Windows update retains paste", windows: true, late: true, retained: true, pastes: 1},
+		{name: "Windows partial transcript refuses success", windows: true, partial: true, pastes: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n, f := stalledCodexNode(t)
+			withCodexWaits(t)
+			codexStartPaste, codexStartWait = tc.windows, time.Second
+			oldStep := codexStep
+			codexStep = 5 * time.Millisecond
+			t.Cleanup(func() { codexStep = oldStep })
+			home := filepath.Dir(n.dir)
+			cwd := filepath.Join(home, "proj")
+			prefix := strings.Repeat("Context 中文\n", 150)
+			tail := "Final instruction: reply only COMPLETE_MESSAGE_OK."
+			prompt := prefix + tail
+			shown := fmt.Sprintf("› [Pasted Content %d chars]%s\n  GPT-6.1-Sol xhigh · ~      ⚠ 4 warnings · f2 to view\n", len([]rune(prefix)), tail)
+			var mu sync.Mutex
+			pastes, skips, submits := 0, 0, 0
+			f.after(func(c herdrCall) {
+				mu.Lock()
+				defer mu.Unlock()
+				switch {
+				case c.Method == "pane.send_input" && strings.Contains(str(c.Params["text"]), "codex-start"):
+					if tc.late {
+						f.setScreen("w1:p2", cxReady)
+					} else {
+						f.setScreen("w1:p2", cxUpdate0169)
+					}
+				case isKeys("escape")(c):
+					skips++
+					if tc.retained {
+						f.setScreen("w1:p2", shown)
+					} else {
+						f.setScreen("w1:p2", cxReady)
+					}
+					if !tc.windows {
+						writeWaitRollout(t, home, cwd, startThread, time.Now(), prompt)
+					}
+				case c.Method == "pane.send_text":
+					pastes++
+					if str(c.Params["text"]) != pasteStart+prompt+pasteEnd {
+						t.Error("paste did not contain exactly one complete frame")
+					}
+					if tc.late && pastes == 1 {
+						f.setScreen("w1:p2", cxUpdate0169)
+					} else {
+						f.setScreen("w1:p2", shown)
+					}
+				case isKeys("enter")(c):
+					submits++
+					first := prompt
+					if tc.partial {
+						first = "Context 中文"
+					}
+					writeWaitRollout(t, home, cwd, startThread, time.Now(), first)
+					f.setScreen("w1:p2", cxReady)
+				case c.Method == "pane.send_keys":
+					t.Errorf("unexpected startup keys %v", keysOf(c))
+				}
+			})
+			s, err := n.startCodex(context.Background(), n.defaultHost().(host.Launcher), cwd, "codex", []string{"codex"}, modelExecution{}, prompt, "w1", "", "")
+			if tc.partial {
+				if err == nil || len(f.trace("tab.close", "pane.close")) == 0 {
+					t.Fatalf("partial transcript succeeded or left its pane: %+v %v", s, err)
+				}
+			} else if err != nil || s.SessionID != startThread {
+				t.Fatalf("complete prompt not confirmed: %+v %v", s, err)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			wantSubmits := 0
+			if tc.windows {
+				wantSubmits = 1
+			}
+			if skips != 1 || pastes != tc.pastes || submits != wantSubmits {
+				t.Fatalf("skip/paste/submit=%d/%d/%d, want 1/%d/%d", skips, pastes, submits, tc.pastes, wantSubmits)
+			}
+		})
+	}
+}
+
+func TestCodexStartupUpdateDoesNotOverwriteDraftOrLoop(t *testing.T) {
+	for _, next := range []string{cxUpdate0169, "› somebody else's draft\n\n  gpt-6 xhigh · /tmp/proj\n"} {
+		t.Run(next[:min(12, len(next))], func(t *testing.T) {
+			n, f := stalledCodexNode(t)
+			withCodexWaits(t)
+			codexStartPaste, codexStartWait = true, time.Second
+			oldStep := codexStep
+			codexStep = 5 * time.Millisecond
+			t.Cleanup(func() { codexStep = oldStep })
+			f.setScreen("w1:p2", cxReady)
+			f.screenSteps("w1:p2", func(c herdrCall) bool { return c.Method == "pane.send_text" || isKeys("escape")(c) }, cxReady, cxUpdate0169, next)
+			ctx, cancel := context.WithTimeout(context.Background(), 350*time.Millisecond)
+			defer cancel()
+			_, err := n.startCodex(ctx, n.defaultHost().(host.Launcher), filepath.Join(filepath.Dir(n.dir), "proj"), "codex", []string{"codex"}, modelExecution{}, "heading\nbody", "w1", "", "")
+			if err == nil || len(f.trace("pane.send_text")) != 1 || len(f.trace("pane.send_keys")) != 1 || len(f.trace("tab.close", "pane.close")) == 0 {
+				t.Fatalf("update recovery overwrote/submitted/looped or left pane open: %v, %v", err, f.trace("pane.send_text", "pane.send_keys", "tab.close"))
+			}
+		})
+	}
+}
