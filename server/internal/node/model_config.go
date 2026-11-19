@@ -44,9 +44,10 @@ type modelExecution struct {
 	// It changes the execution fingerprint so a role change resumes in a fresh process.
 	SupervisionInstructions string `json:",omitempty"`
 	SupervisionResolved     bool   `json:"-"`
-	// Origin is the conversation's manager-recorded source. It is authorization metadata, not a model choice, so it
-	// never changes the execution fingerprint; the node carries it into session state and model tool calls.
-	Origin string `json:"-"`
+	// Origin is the conversation's manager-recorded source. It is authorization metadata, not a model choice, but it
+	// changes Claude's built-in tool list. Include it in the fingerprint so re-attestation never keeps a process with
+	// the previous origin's tools; OriginKnown itself only gates resumes and does not select tools.
+	Origin string `json:",omitempty"`
 	// OriginKnown distinguishes a manager's explicit ordinary (empty-origin) decision from a pre-upgrade record whose
 	// origin is unknown. It is likewise authorization metadata and never changes the execution fingerprint.
 	OriginKnown bool `json:"-"`

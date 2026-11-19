@@ -228,6 +228,28 @@ func TestSessionSendWithoutNewAttestationRetainsPersistedInbox(t *testing.T) {
 	}
 }
 
+func TestUnattestedOriginCannotOverridePersistedInbox(t *testing.T) {
+	f := cliTest(t)
+	const id = "11111111-1111-4111-8111-111111111118"
+	cwd := filepath.Join(t.TempDir(), ".persona", "assistant")
+	if err := os.MkdirAll(cwd, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	f.n.state.put(id, sessionState{Launcher: "claude", Cwd: cwd, AppMode: "default", Origin: originInbox, OriginKnown: true})
+	inboxResumeTranscript(t, f.n, id)
+	// An older manager can supply a non-empty origin string, but without origin_known it is not a new decision and
+	// cannot replace the node's persisted Inbox policy with ordinary tools.
+	if _, err := nodeCallWithoutAttestation(t, f.n, "session.send", map[string]any{"session_id": id, "text": "Continue", "origin": "user"}); err != nil {
+		t.Fatal(err)
+	}
+	f.idle(t, id)
+	st, _ := f.n.state.get(id)
+	argv := f.file("cli-argv")
+	if st.Origin != originInbox || !st.OriginKnown || !strings.Contains(argv, "--tools "+wantInboxClaudeBuiltins) || strings.Contains(argv, "SendMessage") {
+		t.Fatalf("unattested caller origin replaced persisted Inbox: state=%+v argv=%s", st, argv)
+	}
+}
+
 // Node-owned recovery runs before any manager continuation can re-attest the conversation. Load the hub's persisted
 // NodeSession representation through the real state.load/fetchState path, then recover its lost background task. Both
 // a new record with origin and a pre-upgrade record without it must recover safely; assistant.model re-attests the latter.
@@ -462,6 +484,94 @@ func TestAutonomousRetriesRequireKnownOrigin(t *testing.T) {
 				t.Fatalf("unattested %s restarted ordinary tools: err=%v argv=%q", name, err, f.file("cli-argv"))
 			}
 		})
+	}
+}
+
+func TestOriginReattestationRestartsClaudeToolPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name, initialOrigin, targetOrigin, wantTools string
+	}{
+		{name: "ordinary to Inbox", targetOrigin: originInbox, wantTools: wantInboxClaudeBuiltins},
+		{name: "Inbox to ordinary", initialOrigin: originInbox, wantTools: assistantBuiltinTools},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := cliTest(t)
+			cwd := t.TempDir()
+			id, err := f.n.assistantSend(context.Background(), "", cwd, "claude", "Investigate", nil, "default", "", modelExecution{Origin: tc.initialOrigin})
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.idle(t, id)
+			first := f.proc(id)
+			inboxResumeTranscript(t, f.n, id)
+			if _, err := f.n.assistantSend(context.Background(), id, cwd, "claude", "Continue", nil, "default", "", modelExecution{Origin: tc.targetOrigin, OriginKnown: true, OriginDecisionRequired: true}); err != nil {
+				t.Fatal(err)
+			}
+			f.idle(t, id)
+			second := f.proc(id)
+			if second == nil || second == first {
+				t.Fatal("origin re-attestation retained the process with the previous built-in tools")
+			}
+			lines := strings.Split(strings.TrimSpace(f.file("cli-argv")), "\n")
+			argv := lines[len(lines)-1]
+			if !strings.Contains(argv, "--tools "+tc.wantTools) {
+				t.Fatalf("re-attested process argv has the wrong tool policy: %s", argv)
+			}
+			if tc.targetOrigin == originInbox && strings.Contains(argv, "SendMessage") {
+				t.Fatalf("ordinary process retained SendMessage after Inbox re-attestation: %s", argv)
+			}
+			if tc.targetOrigin == "" && !strings.Contains(argv, "SendMessage") {
+				t.Fatalf("ordinary re-attestation did not restore SendMessage: %s", argv)
+			}
+			st, _ := f.n.state.get(id)
+			if st.Origin != tc.targetOrigin || !st.OriginKnown {
+				t.Fatalf("re-attested state origin=%q known=%v, want %q/true", st.Origin, st.OriginKnown, tc.targetOrigin)
+			}
+		})
+	}
+}
+
+func TestInboxReattestationRefusesBusyOrdinaryProcess(t *testing.T) {
+	f := cliTest(t)
+	cwd := t.TempDir()
+	id, err := f.n.assistantSend(context.Background(), "", cwd, "claude", "Investigate", nil, "default", "", modelExecution{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.idle(t, id)
+	p := f.proc(id)
+	p.mu.Lock()
+	p.busy = true
+	p.mu.Unlock()
+	defer func() {
+		p.mu.Lock()
+		p.busy = false
+		p.mu.Unlock()
+	}()
+	argvBefore, stdinBefore := f.file("cli-argv"), f.file("stdin.jsonl")
+	_, err = f.n.assistantSend(context.Background(), id, cwd, "claude", "Continue as Inbox", nil, "default", "", modelExecution{Origin: originInbox, OriginKnown: true, OriginDecisionRequired: true})
+	if !errors.Is(err, errAssistantOriginBusy) {
+		t.Fatalf("busy origin re-attestation error=%v, want errAssistantOriginBusy", err)
+	}
+	if f.proc(id) != p || f.file("cli-argv") != argvBefore || f.file("stdin.jsonl") != stdinBefore {
+		t.Fatal("Inbox message reached the busy process that still had ordinary built-in tools")
+	}
+}
+
+func TestExplicitOrdinaryDecisionClearsPersistedInboxBeforeSpawn(t *testing.T) {
+	f := cliTest(t)
+	const id = "11111111-1111-4111-8111-111111111119"
+	cwd := t.TempDir()
+	f.n.state.put(id, sessionState{Launcher: "claude", Cwd: cwd, AppMode: "default", Origin: originInbox, OriginKnown: true})
+	inboxResumeTranscript(t, f.n, id)
+	if _, err := f.n.assistantSend(context.Background(), id, cwd, "claude", "Continue", nil, "default", "", modelExecution{OriginKnown: true, OriginDecisionRequired: true}); err != nil {
+		t.Fatal(err)
+	}
+	f.idle(t, id)
+	st, _ := f.n.state.get(id)
+	argv := f.file("cli-argv")
+	if st.Origin != "" || !st.OriginKnown || !strings.Contains(argv, "--tools "+assistantBuiltinTools) || !strings.Contains(argv, "SendMessage") {
+		t.Fatalf("stale Inbox state restricted explicitly ordinary spawn: state=%+v argv=%s", st, argv)
 	}
 }
 

@@ -70,6 +70,7 @@ const assistantBuiltinTools = "Bash,Read,Write,Edit,Monitor,Skill,Agent,ListAgen
 const assistantInboxBuiltinTools = "Bash,Read,Write,Edit,Monitor,Skill,Agent,ListAgents,TaskStop,WebFetch,WebSearch,ToolSearch"
 
 var errAssistantOriginUnknown = errors.New("manager origin attestation unavailable; resume refused")
+var errAssistantOriginBusy = errors.New("conversation origin changed while the previous assistant process is busy")
 
 type assistantProc struct {
 	id       string
@@ -411,7 +412,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	}
 	requestedOrigin := executionOption(options)
 	origin, originKnown := requestedOrigin.Origin, requestedOrigin.OriginKnown || st.OriginKnown || !resume
-	if !requestedOrigin.OriginKnown && origin == "" {
+	if resume && !requestedOrigin.OriginKnown && (st.OriginKnown || st.Origin != "" || origin == "") {
+		// An unattested caller origin is not evidence. A persisted decision, including a legacy non-empty Inbox origin,
+		// wins over it; only an explicit origin_known can replace that decision with an ordinary empty origin.
 		origin = st.Origin
 	}
 	if resume && requestedOrigin.OriginDecisionRequired && !originKnown && guest == nil {
@@ -595,10 +598,11 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			id = newUUID()
 		}
 	}
-	if id != "" && origin != "" {
+	if id != "" && (origin != "" || originKnown) {
 		// A Claude process can discover MCP as soon as it starts. Persist the origin before spawning it so even that
-		// first request is classified as this conversation, not as an ordinary Agent with the same session id.
-		st.Origin, st.Launcher, st.Cwd = origin, launcher, cwd
+		// first request is classified as this conversation, not as an ordinary Agent with the same session id. An
+		// explicitly ordinary decision must also clear a persisted Inbox origin before tool selection and spawn.
+		st.Origin, st.OriginKnown, st.Launcher, st.Cwd = origin, originKnown, launcher, cwd
 		n.state.put(id, st)
 	}
 	if cwd == "" {
@@ -687,6 +691,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	}
 	if p != nil && (!p.alive() || p.launcher != launcher || p.fingerprint != n.executionFingerprint(launcher, execution) || p.needsRestartFor(want) || n.tuiEffortStale(p, execution) || p.instructionsStale() || otherTools || n.toolSearchStale(p)) {
 		p.mu.Lock()
+		originChanged := p.origin != origin || p.model.Origin != origin
 		active := p.busy || len(p.tasks) > 0
 		if proto.IsExternalLauncher(p.launcher) || proto.IsExternalLauncher(launcher) {
 			active = p.workingLocked() // compactions and accepted/unacknowledged queued input also belong to this process
@@ -706,6 +711,11 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			active = !n.stopSettled(ctx, p) // once it settled: one that began to work meanwhile is not cut
 		}
 		if active && p.alive() && !restartForRecovery { // a recovery's busy is its own hold on the failed turn
+			if originChanged {
+				// Unlike a model switch, an origin change cannot queue onto the old process: its built-in tools are the
+				// security boundary. Keep the old work intact and let the manager retry once the process is idle.
+				return "", errAssistantOriginBusy
+			}
 			if proto.IsExternalLauncher(p.launcher) || proto.IsExternalLauncher(launcher) {
 				return "", externalRefusal(ctx, "adapter_busy")
 			}
