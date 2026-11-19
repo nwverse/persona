@@ -109,3 +109,22 @@ func TestAgyStartTrustDialogThatStaysIsBounded(t *testing.T) {
 		t.Errorf("the dialog was never answered")
 	}
 }
+
+// agyTrustKeys picks "Yes, I trust this folder" wherever the cursor is, and answers no other dialog.
+func TestAgyTrustKeys(t *testing.T) {
+	moved := strings.Replace(strings.Replace(agyTrustScreen, "> Yes", "  Yes", 1), "  No, exit", "> No, exit", 1)
+	other := strings.Replace(agyTrustScreen, "Do you trust the contents of this project?", "Run this command?", 1)
+	for name, tc := range map[string]struct {
+		screen string
+		want   []string
+	}{
+		"cursor on yes":  {agyTrustScreen, []string{"enter"}},
+		"cursor on no":   {moved, []string{"up", "enter"}},
+		"another dialog": {other, nil},
+		"input box":      {agyIdleScreen, nil},
+	} {
+		if got := agyTrustKeys(tc.screen); !slices.Equal(got, tc.want) {
+			t.Errorf("%s: keys %v, want %v", name, got, tc.want)
+		}
+	}
+}
