@@ -57,26 +57,33 @@ func (s *Service) superviseInbox(ctx context.Context, items []*InboxItem, linked
 		}
 	}
 	b.mu.Unlock()
-	hears := map[string]bool{}
+	type recipient struct {
+		task             Todo
+		active, accepted bool
+	}
+	tasks := map[string]recipient{}
 	for _, id := range todos {
-		if _, seen := hears[id]; !seen && id != "" {
-			t, ok := s.todoNow(id)
-			hears[id] = ok && s.inboxSignalHolds(t)
+		if _, seen := tasks[id]; !seen && id != "" {
+			t, _ := s.todoNow(id)
+			tasks[id] = recipient{task: t, active: s.inboxSignalHolds(t), accepted: taskAcceptedForFeedback(t) && !s.agentSupervised(t)}
 		}
 	}
 	var out []superviseSignal
 	b.mu.Lock()
 	for i, it := range items {
-		if it.Agent == nil || it.Agent.TodoID != todos[i] || !hears[todos[i]] {
+		r := tasks[todos[i]]
+		afterAcceptance := r.accepted && acceptedPRFeedback(r.task, inboxOpenPR(it))
+		if it.Agent == nil || it.Agent.TodoID != todos[i] || !afterAcceptance && !r.active {
 			continue // relinked meanwhile, or its task cannot hear it: the messages wait, uncounted
 		}
 		if g, ok := inboxSignalOf(it, linked[it]); ok {
+			g.Inbox.AfterAcceptance = afterAcceptance
 			out = append(out, g)
 		}
 	}
 	b.mu.Unlock()
 	for _, g := range out {
-		if g.Inbox.URL == "" || !s.taskHasAgent(g.Todo) {
+		if g.Inbox.AfterAcceptance || g.Inbox.URL == "" || !s.taskHasAgent(g.Todo) {
 			s.signal(g)
 			continue
 		}
@@ -124,6 +131,40 @@ func inboxThreadURL(it *InboxItem) string {
 		return ""
 	}
 	return it.Connector.URL
+}
+
+// inboxOpenPR is an open pull request observed by the GitHub connector. Called while holding the inbox lock.
+func inboxOpenPR(it *InboxItem) string {
+	if it.Source != "github" || it.Connector == nil || it.Connector.ThreadState != "open" {
+		return ""
+	}
+	u := triageNormalizePRURL(it.Connector.URL)
+	if u != "" && ciPRURL.FindString(u) == u {
+		return u
+	}
+	return ""
+}
+
+func taskAcceptedForFeedback(t Todo) bool {
+	return t.DoneAt != nil && !t.Cancelled() && acceptanceStands(t)
+}
+
+func acceptedPRFeedback(t Todo, url string) bool {
+	return url != "" && taskAcceptedForFeedback(t) && (triageNormalizePRURL(t.PRURL) == url ||
+		slices.ContainsFunc(t.PRs, func(u string) bool { return triageNormalizePRURL(u) == url }))
+}
+
+// acceptedFeedbackHolds rechecks the PR's latest connector state when a queued supervisor notice is sent.
+func (s *Service) acceptedFeedbackHolds(t Todo, in *prompts.SuperviseInbox) bool {
+	b := &s.inbox
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	it := b.items[in.Item]
+	if it == nil || !it.open() || it.Agent == nil || it.Agent.TodoID != t.ID {
+		return false
+	}
+	url := inboxOpenPR(it)
+	return url == triageNormalizePRURL(in.URL) && acceptedPRFeedback(t, url)
 }
 
 // continuesHops bounds how far a closed task's link follows the tasks that continue it.

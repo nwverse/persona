@@ -15,12 +15,13 @@ import (
 
 // InboxConnector is an item's thread in a connector, and how it is answered.
 type InboxConnector struct {
-	Thread   string `json:"thread"`
-	Label    string `json:"label,omitempty"`    // the row's tag: "Review requested"
-	URL      string `json:"url,omitempty"`      // the thread on the web, opened in the app
-	OpenURL  string `json:"open_url,omitempty"` // a link the system opens (sms:…), not the app
-	ReplyTo  string `json:"reply_to,omitempty"` // where a reply goes and who sees it
-	CanReply bool   `json:"can_reply,omitempty"`
+	Thread      string `json:"thread"`
+	Label       string `json:"label,omitempty"` // the row's tag: "Review requested"
+	URL         string `json:"url,omitempty"`   // the thread on the web, opened in the app
+	ThreadState string `json:"thread_state,omitempty"`
+	OpenURL     string `json:"open_url,omitempty"` // a link the system opens (sms:…), not the app
+	ReplyTo     string `json:"reply_to,omitempty"` // where a reply goes and who sees it
+	CanReply    bool   `json:"can_reply,omitempty"`
 	// RuleTier is the connector's tier for triage without a model.
 	RuleTier string `json:"rule_tier,omitempty"`
 	// Tags are what the thread is about (its repository, chat, sender…): what it can be muted by.
@@ -173,6 +174,9 @@ func (b *inboxBook) settleThing(open *InboxItem, t connector.InboxThing, now tim
 		return false
 	}
 	b.roundWrite(open)
+	if t.ThreadState != "" && open.Connector != nil {
+		open.Connector.ThreadState = t.ThreadState
+	}
 	if t.Done == connector.DoneReplied {
 		b.noteSelfReplied(open, now)
 		open.done(now, t.Done)
@@ -211,7 +215,8 @@ func fillConnectorItem(it *InboxItem, t connector.InboxThing) {
 	if rule == "" && t.Extra != nil && connector.Tier(t.Extra.RuleTier).Known() {
 		rule = connector.Tier(t.Extra.RuleTier) // its fallback (capability fallback): the model still sorts it first
 	}
-	it.Connector = &InboxConnector{Thread: t.Thread, Label: t.Label, URL: t.URL, OpenURL: t.OpenURL, ReplyTo: t.ReplyTo, CanReply: t.CanReply, RuleTier: string(rule), Tags: t.Tags}
+	it.Connector = &InboxConnector{Thread: t.Thread, Label: t.Label, URL: t.URL, ThreadState: t.ThreadState, OpenURL: t.OpenURL,
+		ReplyTo: t.ReplyTo, CanReply: t.CanReply, RuleTier: string(rule), Tags: t.Tags}
 	if where := whereOf(t.Tags); where != "" {
 		it.Where = where
 	}

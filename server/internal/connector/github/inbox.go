@@ -597,6 +597,9 @@ func (c *Connector) describe(ctx context.Context, n notification, me string) (co
 	if it.Merged {
 		state = "merged"
 	}
+	if pr {
+		t.ThreadState = state
+	}
 	fmt.Fprintf(&b, "GitHub %s %s：%s\n状态：%s · 作者 %s", what, ref, it.Title, state, it.User)
 	if rv := logins(it.Reviewers); rv != "" {
 		fmt.Fprintf(&b, " · 等这些人 review：%s", rv)

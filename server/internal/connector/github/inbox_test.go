@@ -208,7 +208,7 @@ func TestReviewRequestWithdrawnOrMerged(t *testing.T) {
 	f.notifications = "[" + note("1", "review_requested", "PullRequest", "https://api.github.com"+api12, t1) + "]"
 	c := f.server(t)
 	c.poll(context.Background())
-	if th := things(t, c)["example-org/example-repo#12"]; th.Done != connector.DoneRead {
+	if th := things(t, c)["example-org/example-repo#12"]; th.Done != connector.DoneRead || th.ThreadState != "open" {
 		t.Errorf("withdrawn: %+v", th)
 	}
 
@@ -224,7 +224,7 @@ func TestReviewRequestWithdrawnOrMerged(t *testing.T) {
 	f.notifications = "[" + note("1", "review_requested", "PullRequest", "https://api.github.com"+api12, fixtureAt(10*time.Hour)) + "]"
 	c.inbox.fullAt = time.Time{}
 	c.poll(context.Background())
-	if th := things(t, c)["example-org/example-repo#12"]; th.Done != connector.DoneRead {
+	if th := things(t, c)["example-org/example-repo#12"]; th.Done != connector.DoneRead || th.ThreadState != "merged" {
 		t.Errorf("merged: %+v", th)
 	}
 }

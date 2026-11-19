@@ -915,7 +915,8 @@ type SuperviseInbox struct {
 	Count                        int
 	// URL is a GitHub PR's or issue's address; ToAgent is "sent" once the note reached the task's agent (InboxToAgent,
 	// #7346), "" when the supervisor is the only one told.
-	URL, ToAgent string
+	URL, ToAgent    string
+	AfterAcceptance bool // new feedback on a still-open PR of an accepted task
 }
 
 // InboxToAgent is the note a task's agent gets when someone else writes on the task's GitHub thread (#7346): who,
