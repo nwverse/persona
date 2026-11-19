@@ -505,9 +505,6 @@
     <string name="agents_source_feishu_open">このトピックを Lark で開く</string>
     <string name="agents_filter_feishu">Lark グループ</string>
     <string name="agents_filter_terminal">ターミナル</string>
-    <string name="agents_botmux">botmux</string>
-    <string name="agents_botmux_hide">botmux のセッションを隠す</string>
-    <string name="agents_botmux_show">botmux のセッションを表示</string>
     <string name="agents_menu_sort">並び順：%1$s</string>
     <string name="agents_sort_state">状態優先</string>
     <string name="agents_sort_updated">最近の更新</string>
