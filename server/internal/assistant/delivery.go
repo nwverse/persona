@@ -196,7 +196,9 @@ func (s *Service) setTaskDelivery(ctx context.Context, id string, d TodoDelivery
 		return false
 	}
 	cur := b.stages[id]
-	if dd := cur.Delivery; dd != nil && dd.State == d.State && dd.Gate == d.Gate && dd.Unblock == d.Unblock {
+	// A later owner hold can ask for the same action again after a review cleared it.
+	if dd := cur.Delivery; dd != nil && dd.State == d.State && dd.Gate == d.Gate && dd.Unblock == d.Unblock &&
+		(d.Unblock != unblockUser || !d.At.After(dd.At)) {
 		b.mu.Unlock()
 		return true
 	}
@@ -259,7 +261,7 @@ func currentDelivery(t Todo) *TodoDelivery {
 		switch {
 		case v.parking() != nil && slices.Contains(parkWaitingOn, r.WaitingOn):
 			d.Gate, d.Unblock = r.Reason, unblockOther
-		case r.Verdict == reviewNeedsUser && v.State == reviewNeedsUser && !ownerDecisionReturned(v):
+		case r.Verdict == reviewNeedsUser && triageReviewState(t) == reviewNeedsUser:
 			d.Gate, d.Unblock = cmp.Or(r.Reason, r.Note), unblockUser
 		case acceptanceStands(t) && !r.At.Before(d.At):
 			d.Gate, d.Unblock = "", ""

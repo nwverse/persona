@@ -218,8 +218,8 @@ func acceptanceStands(t Todo) bool {
 	return t.Supervision != nil && t.Supervision.State == reviewAccepted && r != nil && r.Verdict == reviewAccepted
 }
 
-// triageReviewState is the review state that holds now (the web's reviewState): a cancelled task reopened goes on
-// again; an accepted one stays accepted while its acceptance stands.
+// triageReviewState is the current review for the task list. A decision from before reopening stays in history;
+// an accepted task stays accepted while its acceptance stands.
 func triageReviewState(t Todo) string {
 	if t.Supervision == nil {
 		return ""
@@ -228,6 +228,11 @@ func triageReviewState(t Todo) string {
 		return ""
 	}
 	st := t.Supervision.State
+	if st == reviewNeedsUser && t.ReopenedAt != nil {
+		if r := triageLatestReview(t.Supervision); r == nil || r.At.Before(*t.ReopenedAt) {
+			return "" // the previous round's decision stays in review history
+		}
+	}
 	if t.DoneAt == nil && (st == reviewAccepted && !acceptanceStands(t) || st == reviewCancelled) {
 		return ""
 	}
