@@ -10,6 +10,7 @@ import { useEffect, useRef, useSyncExternalStore } from "react";
 import { api, ApiError } from "./api";
 import { stripBase } from "./base";
 import { hasSlots } from "./extension-slots";
+import { feedCacheScope } from "./feed-cache";
 import { NAV_PAGES } from "./persona-nav";
 import { adoptOverview, getOverviewPrefs, noteOverviewKept, onOverviewSaved, overviewChosen, overviewKept, type OverviewEntry } from "./overview-cards";
 import { adoptSidebarPrefs, chosen, getSidebarPrefs, onSidebarPrefsSaved } from "./sidebar-pages";
@@ -219,10 +220,11 @@ function settleOverview() {
   if (!unsentOverview && last >= 0 && last < heard.length - 1) adoptOverview(heard[heard.length - 1]);
 }
 
-/** The hub's arrangement, read or pushed: taken at once, or settled with the change on its way or its push to come. */
+/** The hub's arrangement, read or pushed: taken at once, or settled with the change on its way or its push to come. A
+ *  change the hub did not take stays over it until the next hello sends it again. */
 function hubOverview(v: unknown[]) {
   noteOverviewKept(true);
-  if (!sendingOverview && !answeredOverview.length) return adoptOverview(v);
+  if (!sendingOverview && !answeredOverview.length && !unsentOverview) return adoptOverview(v);
   heardOverview.push(v);
   if (!sendingOverview) settleOverview();
 }
@@ -232,7 +234,8 @@ function hubOverview(v: unknown[]) {
 onHubEvent("hello", (msg) => {
   if (isResumed(msg)) return;
   // what the hub pushed before it does not come again: its read stands for it
-  helloOverview++;
+  const hello = ++helloOverview;
+  const scope = feedCacheScope();
   heardOverview = [];
   answeredOverview = [];
   const edits = sendingOverview ? -1 : editsOverview;
@@ -246,7 +249,9 @@ onHubEvent("hello", (msg) => {
       else if (chosen(getSidebarPrefs())) handover.pages = getSidebarPrefs();
       if (Object.keys(handover).length) void api("/navigation", { method: "PUT", json: handover }).then(() => (unsent = false), () => {});
       // ours, unless a change of it did not reach the hub or one was on its way or made since this read began (newer than
-      // its answer); else handed over, or asked again where it was refused
+      // its answer); else handed over, or asked again where it was refused. A read a later hello or another sign-in
+      // overtook is left to that one.
+      if (hello !== helloOverview || scope !== feedCacheScope()) return;
       if (Array.isArray(r.overview) && !unsentOverview && edits === editsOverview) hubOverview(r.overview);
       else if (overviewChosen() || unsentOverview || overviewKept() === false) sendOverview(true);
     },

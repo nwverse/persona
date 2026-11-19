@@ -252,6 +252,25 @@ describe("arranging them", () => {
     }
   });
 
+  // review of #9778, P2: a newer arrangement that is none too was taken for the one Reset left
+  it("an older Reset's Undo leaves a newer one alone: reset, arranged again, reset again", () => {
+    const list = [{ extension: "example-today", id: "needs", span: "full" as const }];
+    arrange(list);
+    draw(true);
+    press(byText(t("extensions-overviewarrange.reset")));
+    press(byLabel(t("extensions-overviewarrange.later", { name: "Usage today" }))); // arranged again
+    press(byText(t("extensions-overviewarrange.reset")));
+    const undos = [...document.querySelectorAll<HTMLElement>("button")].filter((b) => b.textContent === t("extensions-overviewarrange.undo"));
+    expect(undos).toHaveLength(2);
+    saved = [];
+    press(undos[0]); // the first Reset's
+    expect(getOverviewPrefs()).toEqual([]);
+    expect(saved).toEqual([]);
+    expect(document.body.textContent).toContain(t("extensions-overviewarrange.undo_stale"));
+    press(undos[1]); // the second's still puts back what it reset
+    expect(saved).toEqual([[{ extension: "example-quota", id: "left" }, { extension: "example-gateway", id: "today" }, { extension: "example-today", id: "needs" }]]);
+  });
+
   it("says where the arrangement is kept: every device, or this browser only", () => {
     draw(true);
     const head = () => host.querySelector("[data-overview-arrange]")!.textContent;
