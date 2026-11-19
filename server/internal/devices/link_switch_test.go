@@ -39,6 +39,7 @@ const (
 // lsTestTimes are the steps' times, short.
 var lsTestTimes = linkSwitchTimes{Probe: 20 * time.Second, Transfer: 20 * time.Second, Begin: 5 * time.Second,
 	Install: 20 * time.Second, Connect: 3 * time.Second, EndBackoff: 20 * time.Millisecond, EndBackoffMax: 200 * time.Millisecond,
+	EndGiveUp: time.Minute,
 	Uninstall: 20 * time.Second, SSHBack: 3 * time.Second, Total: time.Minute, Resume: 300 * time.Millisecond,
 	Shown: time.Hour, Poll: 20 * time.Millisecond}
 
@@ -249,7 +250,7 @@ func newLSHarness(t *testing.T, o lsOptions) *lsHarness {
 	for _, dir := range []string{h.binOf, h.stubs, h.runDir, filepath.Dir(h.pkg), filepath.Join(root, "systemd"), filepath.Join(root, "linger")} {
 		mustMkdir(t, dir)
 	}
-	for _, dir := range []string{h.persona, h.binOf} { // writable by the user alone, whatever the umask here
+	for _, dir := range []string{h.home, h.persona, h.binOf} { // writable by the user alone, whatever the umask here
 		if err := os.Chmod(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -1261,7 +1262,9 @@ func TestLinkSwitchEndAnswers(t *testing.T) {
 		{devicewire.LinkSwitchCodeNoMachine, devicewire.LinkSwitchRolledBack, endRefused},
 		{"invalid_params", devicewire.LinkSwitchRolledBack, endRefused},
 		{devicewire.LinkSwitchCodeChanged, devicewire.LinkSwitchRolledBack, endNoAnswer},
-		{"unknown_method", devicewire.LinkSwitchRolledBack, endNoAnswer},
+		{"unknown_method", devicewire.LinkSwitchRolledBack, endUnknown},
+		{devicewire.LinkSwitchCodeRolledBackGone, devicewire.LinkSwitchRolledBack, endGone},
+		{"unknown_method", devicewire.LinkSwitchSucceeded, endUnknown},
 		{"", devicewire.LinkSwitchSucceeded, endTaken},
 		{devicewire.LinkSwitchCodeSucceeded, devicewire.LinkSwitchSucceeded, endTaken},
 		{devicewire.LinkSwitchCodeNotSSH, devicewire.LinkSwitchSucceeded, endRefused},
@@ -1529,14 +1532,18 @@ func (h *lsHarness) asUser(name string) {
 	mustWrite(h.t, filepath.Join(h.root, "linger", name), "", 0o644)
 }
 
-// groupOf is the name of the group a directory belongs to, as ls says it.
-func groupOf(t *testing.T, dir string) string {
-	out, err := exec.Command("ls", "-ld", dir).Output()
-	f := strings.Fields(string(out))
-	if err != nil || len(f) < 4 {
-		t.Fatalf("ls -ld %s: %v %q", dir, err, out)
+// lsAs has the computer's user be user (asUser), and its ls say every directory is owned by user and of group
+// (a stub first on PATH), but foreign ("": none), owned by someone else: the owners and groups a test cannot make.
+func (h *lsHarness) lsAs(user, group, foreign string) {
+	real, err := exec.LookPath("ls")
+	if err != nil {
+		h.t.Skip("no ls")
 	}
-	return f[3]
+	h.asUser(user)
+	mustWrite(h.t, filepath.Join(h.stubs, "ls"), "#!/bin/sh\nfor a; do last=$a; done\n"+shellQuote(real)+
+		` "$@" | awk -v p="$last" -v f="${LS_FOREIGN:-}" -v o="${LS_OWNER:-}" -v g="${LS_GROUP:-}" `+
+		`'{ if (o != "") $3 = o; if (g != "") $4 = g; if (f != "" && p == f) $3 = "someone-else"; print }'`+"\n", 0o755)
+	h.extraEnv = append(h.extraEnv, "LS_OWNER="+user, "LS_GROUP="+group, "LS_FOREIGN="+foreign)
 }
 
 // A ~/.persona or bin another user may write to (others; a group but the user's own private group) is refused in the
@@ -1559,15 +1566,30 @@ func TestLinkSwitchRefusesUnsafePermissions(t *testing.T) {
 			proto.LinkSwitchReasonUnsafePermissions, []string{"probe"}},
 		{"bin writable by others", func(h *lsHarness) { chmod(h, h.binOf, 0o757) },
 			proto.LinkSwitchReasonUnsafePermissions, []string{"probe"}},
-		{"bin writable by another group", func(h *lsHarness) {
+		{"home folder writable by others", func(h *lsHarness) { chmod(h, h.home, 0o757) },
+			proto.LinkSwitchReasonUnsafePermissions, []string{"probe"}},
+		{"bin writable by a shared group", func(h *lsHarness) {
 			chmod(h, h.binOf, 0o775)
-			h.asUser("someone-else-" + groupOf(h.t, h.binOf))
+			h.lsAs("me-test", "staff", "")
 		}, proto.LinkSwitchReasonUnsafePermissions, []string{"probe"}},
-		{"bin writable by the user's own group", func(h *lsHarness) {
-			chmod(h, h.binOf, 0o775)
-			chmod(h, h.persona, 0o775)
-			h.asUser(groupOf(h.t, h.binOf))
+		{"home folder writable by a shared group", func(h *lsHarness) {
+			chmod(h, h.home, 0o775)
+			h.lsAs("me-test", "staff", "")
+		}, proto.LinkSwitchReasonUnsafePermissions, []string{"probe"}},
+		{"umask 002 with the user's own private group", func(h *lsHarness) {
+			for _, dir := range []string{h.home, h.persona, h.binOf} {
+				chmod(h, dir, 0o775)
+			}
+			h.lsAs("me-test", "me-test", "")
 		}, "", []string{"probe", "stage", "install", "remove staged"}},
+		{"home folder not the user's", func(h *lsHarness) { h.lsAs("me-test", "me-test", h.home) },
+			proto.LinkSwitchReasonUnsafePermissions, []string{"probe"}},
+		{"data directory not the user's", func(h *lsHarness) { h.lsAs("me-test", "me-test", h.persona) },
+			proto.LinkSwitchReasonUnsafePermissions, []string{"probe"}},
+		{"bin not the user's", func(h *lsHarness) { h.lsAs("me-test", "me-test", h.binOf) },
+			proto.LinkSwitchReasonUnsafePermissions, []string{"probe"}},
+		{"the user's own, through the stub", func(h *lsHarness) { h.lsAs("me-test", "me-test", "") },
+			"", []string{"probe", "stage", "install", "remove staged"}},
 		{"writable by others since the probe, at the stage", func(h *lsHarness) {
 			h.onRun = func(what string) {
 				if what == "stage" {
@@ -1901,5 +1923,102 @@ func TestLinkSwitchSuccessRemovesWhatItStaged(t *testing.T) {
 				t.Error("the success was undone")
 			}
 		})
+	}
+}
+
+// A rollback the hub cannot take is not asked for ever, which would keep the switch unfinished and hold the
+// computer's node updates: a hub that does not know end (an older build) is asked once, one that never answers
+// until EndGiveUp from the first ask, counted across a restart. Either fails as hub_unanswered, the computer left as
+// it is (it may still be set to Persona Link), and a node update may start again.
+func TestLinkSwitchRollbackHubUnanswered(t *testing.T) {
+	left := func(h *lsHarness) {
+		h.t.Helper()
+		if slices.Contains(h.whats(), "uninstall") || !h.exists(".persona/link.json") || !h.exists(".persona/bin/persona-link") {
+			h.t.Errorf("the computer was touched: %q", h.whats())
+		}
+	}
+	unanswered := func(h *lsHarness, rec linkSwitchRecord) {
+		h.t.Helper()
+		if rec.Phase != proto.LinkSwitchPhaseFailed || rec.Error != proto.LinkSwitchReasonHubUnanswered || !rec.RollbackUnconfirmed {
+			h.t.Fatalf("record %+v", rec)
+		}
+		if h.d.linkSwitchUnfinished("box") {
+			h.t.Error("still unfinished")
+		}
+		if err := h.d.cfgMachine("box").startDeploy(); errors.Is(err, errLinkSwitchDeploy) {
+			h.t.Error("a node update is still held")
+		}
+	}
+	t.Run("the hub does not know end", func(t *testing.T) {
+		h := newLSHarness(t, lsOptions{setup: func(h *lsHarness) { mustWrite(t, filepath.Join(h.home, ".fail-install"), "", 0o644) }})
+		h.hub.endCode = "unknown_method"
+		h.start()
+		unanswered(h, h.finished())
+		if _, ends := h.hub.calls(); len(ends) != 1 {
+			t.Errorf("end asked %d times", len(ends))
+		}
+		left(h)
+	})
+	t.Run("the hub never answers", func(t *testing.T) {
+		h := newLSHarness(t, lsOptions{setup: func(h *lsHarness) {
+			mustWrite(t, filepath.Join(h.home, ".fail-install"), "", 0o644)
+			h.d.switches.times.EndGiveUp = 700 * time.Millisecond
+		}})
+		h.hub.endHeld.Store(true)
+		h.start()
+		rec := h.finished()
+		unanswered(h, rec)
+		if _, ends := h.hub.calls(); len(ends) < 3 {
+			t.Errorf("end asked %d times", len(ends))
+		}
+		if st := h.stored(); st.EndSince.IsZero() || st.Phase != proto.LinkSwitchPhaseFailed {
+			t.Errorf("stored %+v", st)
+		}
+		left(h)
+	})
+	t.Run("a restart keeps when it began asking", func(t *testing.T) {
+		const giveUp = 3 * time.Second
+		h := newLSHarness(t, lsOptions{kind: kindLink, setup: func(h *lsHarness) {
+			h.installed()
+			h.d.switches.times.EndGiveUp = giveUp
+		}})
+		h.hub.endHeld.Store(true)
+		since := time.Now().Add(-giveUp + 300*time.Millisecond).UTC().Round(time.Millisecond)
+		_ = h.store.PutSetting(context.Background(), linkSwitchKey("box"), linkSwitchRecord{Operation: "ls_1", MachineID: "box",
+			Phase: proto.LinkSwitchPhaseRollingBack, Error: proto.LinkSwitchReasonInstallFailed, Deadline: time.Now(),
+			SSHHost: "box.example", BeginIntended: true, PairHash: lsTestHash, Install: lsInstallPlaced, EndSince: since})
+		begun := time.Now()
+		h.d.resumeLinkSwitches(context.Background())
+		rec := h.finished()
+		if took := time.Since(begun); took > giveUp/2 {
+			t.Errorf("gave up after %s: the bound began again at the restart", took)
+		}
+		unanswered(h, rec)
+		if !rec.EndSince.Equal(since) {
+			t.Errorf("the first ask moved: %s, was %s", rec.EndSince, since)
+		}
+		left(h)
+	})
+}
+
+// A rollback the hub took for a computer that is another manager's now (rolled_back_gone): what this switch set up is
+// removed as after {}, and there is no wait for the computer over ssh, which is that manager's to connect.
+func TestLinkSwitchRollbackOfAComputerGone(t *testing.T) {
+	h := newLSHarness(t, lsOptions{setup: func(h *lsHarness) { mustWrite(t, filepath.Join(h.home, ".fail-install"), "", 0o644) }})
+	h.hub.endCode = devicewire.LinkSwitchCodeRolledBackGone
+	h.start()
+	rec := h.finished()
+	if rec.Phase != proto.LinkSwitchPhaseFailed || rec.Error != proto.LinkSwitchReasonInstallFailed || rec.RollbackUnconfirmed ||
+		rec.HubEnded != lsEndedRolledBackGone {
+		t.Fatalf("record %+v", rec)
+	}
+	if _, ends := h.hub.calls(); len(ends) != 1 {
+		t.Errorf("end asked %d times", len(ends))
+	}
+	for _, rel := range []string{".persona/bin/persona-link", ".persona/link.json", ".config/systemd/user/persona-link.service",
+		".config/systemd/user/personad-node.service"} {
+		if h.exists(rel) {
+			t.Errorf("%s is left", rel)
+		}
 	}
 }
