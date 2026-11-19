@@ -232,24 +232,8 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		s.turnsTold(ctx, holds) // and how a turn ended: kept went, the rest of them was said the same within the window
 	}()
 	background := to != here.Main && to == here.BackgroundSupervisor // the leader's message, told that the tasks are not its own (supervise_background.go)
-	leader := background || to != here.Main && s.isLeader(ctx, to)
-	fresh := background && !backgroundKeepsContext(here) // a round that starts from the first turn (supervise_round.go)
-	render := func(list []prompts.SuperviseEntry) string {
-		return prompts.RenderSupervise(prompts.Supervise{Entries: sortEntries(list), Leader: leader, Background: background, Fresh: fresh, Side: to != here.Main && !leader, Escalated: escalatedIn(list),
-			BackgroundEscalated: slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigEscalated && e.Background }),
-			LeaderStuck:         slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigLeaderStuck }),
-			Overdue:             slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigOverdue }),
-			ParkedDue:           slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigParkedDue }),
-			ParkDecided:         slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigParkDecided }),
-			Decisions: slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool {
-				return e.Kind == sigRecheck || e.Kind == sigUndecidable || e.Kind == sigOwnerCannot
-			}),
-			Inbox: slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigInbox }),
-			Asked: askedIn(list), AskMinutes: int(askHoldFor.Minutes()), LowDistraction: askedIn(list) && s.quietModeOn(ctx)})
-	}
-	b.mu.Lock()
-	queued := b.queued[to]
-	b.mu.Unlock()
+	render := func(list []prompts.SuperviseEntry) string { return s.renderQueuedDigest(ctx, to, list) }
+	queued := s.queuedDigestSignals(to)
 	msg := relayMsg{From: superviseTool, FromTitle: "督办", Tool: superviseTool, At: now.UTC()}
 	if len(queued) > 0 && !slices.ContainsFunc(kept, func(g superviseSignal) bool {
 		return g.Kind == sigPRConflict || g.Kind == sigDraftPR || g.Kind == sigDecisionReply
@@ -263,6 +247,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 			}
 		}
 		msg.Text, msg.Urgent = render(allEntries), anyDecision(all)
+		msg.Signals = encodeDigestSignals(all)
 		if s.replaceQueuedSupervise(to, msg) {
 			accepted = true
 			b.mu.Lock()
@@ -273,6 +258,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		}
 	}
 	msg.Text, msg.Urgent = render(entries), anyDecision(kept)
+	msg.Signals = encodeDigestSignals(kept)
 	msg.Interject = slices.ContainsFunc(kept, func(g superviseSignal) bool { return g.Kind == sigDecisionReply })
 	if background {
 		s.logf("supervise: %d signal(s) to the background supervisor %s", len(entries), short(to))
