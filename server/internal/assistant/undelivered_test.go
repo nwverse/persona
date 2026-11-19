@@ -706,3 +706,108 @@ func TestUndeliveredFailureBeforeTheSendIsNoDoubt(t *testing.T) {
 		t.Fatalf("still kept: %+v", q)
 	}
 }
+
+// failBeforeSend has every try fail in SendParams, before session.send, with err (the computer away, as the deletion
+// ledger cannot be read in time); nil lets tries through again. A non-durable store caches the ledger's first read,
+// so the cache is dropped first.
+func failBeforeSend(s *Service, st *memStore, err error) {
+	s.deletedConversations.mu.Lock()
+	s.deletedConversations.loaded, s.deletedConversations.rows = false, nil
+	s.deletedConversations.mu.Unlock()
+	st.failKey(deletedConversationsKey, err)
+}
+
+// failedAfterDoubt leaves kept message id failed after a try in doubt that began at started, for the owner's Retry.
+func failedAfterDoubt(t *testing.T, s *Service, f *fakeHub, id string, started time.Time) {
+	t.Helper()
+	tryInDoubt(t, s, f, id)
+	s.undelivered.mu.Lock()
+	s.updateKeptLocked("conv1", id, func(m *keptMessage) { m.TriedAt = started })
+	s.undelivered.mu.Unlock()
+	endLook(s, id)
+	s.undeliveredPass(context.Background(), time.Now().Add(time.Hour))
+	failedMaybeIn(t, s, id)
+}
+
+// The owner pressed Retry after a try in doubt while the computer was still away: the Retry's try failed before
+// session.send. Once the computer is back, the earlier try is still looked for first: its line there (the node kept
+// the id) means it went in and nothing is sent; no line, and the Retry sends it.
+func TestUndeliveredRetryWhileAwayLooksFirstWhenBack(t *testing.T) {
+	for _, landed := range []bool{true, false} {
+		st := &memStore{}
+		s, f := newQuietServiceOn(t, st)
+		keepFor(t, s, "msg-1", "check the backup job")
+		failedAfterDoubt(t, s, f, "msg-1", time.Now().Add(-time.Minute))
+		if code := ownerRetry(s, "msg-1"); code != http.StatusOK {
+			t.Fatalf("retry: %d", code)
+		}
+		failBeforeSend(s, st, errors.New("the computer is not connected"))
+		f.mu.Lock()
+		f.itemsFail = 1000 // away: nothing can be read either
+		f.mu.Unlock()
+		s.undeliveredPass(context.Background(), time.Now().Add(time.Hour))
+		if q := undeliveredOf(t, s, "conv1"); len(q) != 1 || q[0].State != proto.UndeliveredWaiting || q[0].inDoubt() || q[0].TriedAt.IsZero() {
+			t.Fatalf("landed=%v: after the Retry's try failed before the send: %+v", landed, q)
+		}
+		failBeforeSend(s, st, nil) // the computer is back
+		f.mu.Lock()
+		f.itemsFail = 0
+		if landed {
+			f.items = []proto.Item{{ID: "u1", Seq: 1, Role: "user", Kind: proto.KindText, Text: "check the backup job", ClientMsgID: "msg-1", TS: time.Now().Add(-time.Minute)}}
+		}
+		f.mu.Unlock()
+		s.undeliveredPass(context.Background(), time.Now().Add(time.Hour))
+		if q := undeliveredOf(t, s, "conv1"); len(q) != 0 {
+			t.Fatalf("landed=%v: still kept once the computer was back: %+v", landed, q)
+		}
+		want := 2 // the try in doubt, then the Retry's
+		if landed {
+			want = 1
+		}
+		if n := sendCalls(f, "msg-1"); n != want {
+			t.Fatalf("landed=%v: sent %d times, want %d", landed, n, want)
+		}
+	}
+}
+
+// The Retry's own try is in doubt too, or the manager stops during it: the look still goes from the first try in
+// doubt, so that try's line, written minutes before the Retry and no longer tied to its id (the node restarted), is
+// found by its words and nothing more is sent.
+func TestUndeliveredRetryInDoubtLooksFromTheFirstTry(t *testing.T) {
+	st := &memStore{}
+	s, f := newQuietServiceOn(t, st)
+	keepFor(t, s, "msg-1", "check the backup job")
+	first := time.Now().Add(-5 * time.Minute).UTC()
+	failedAfterDoubt(t, s, f, "msg-1", first)
+	if code := ownerRetry(s, "msg-1"); code != http.StatusOK {
+		t.Fatalf("retry: %d", code)
+	}
+	var left *memStore
+	beforeSend(f, func() { left = st.copyOf() })
+	failSends(f, rpc.ErrDropped)
+	s.undeliveredPass(context.Background(), time.Now().Add(time.Hour))
+	failSends(f, nil)
+	if n := sendCalls(f, "msg-1"); n != 2 {
+		t.Fatalf("the Retry sent %d times in all, want 2", n)
+	}
+	if left == nil {
+		t.Fatal("the Retry's try did not reach the send")
+	}
+	stopped, _ := newQuietServiceOn(t, left)
+	if q := undeliveredOf(t, stopped, "conv1"); len(q) != 1 || !q[0].inDoubt() || !q[0].TriedAt.Equal(first) {
+		t.Fatalf("a manager stopped during the Retry's try finds %+v, want it in doubt since %v", q, first)
+	}
+	if q := undeliveredOf(t, s, "conv1"); len(q) != 1 || !q[0].inDoubt() || !q[0].TriedAt.Equal(first) {
+		t.Fatalf("after the Retry's try in doubt: %+v, want it looked for since %v", q, first)
+	}
+	f.mu.Lock()
+	f.items = []proto.Item{{ID: "u1", Seq: 1, Role: "user", Kind: proto.KindText, Text: "check the backup job", TS: first.Add(time.Second)}}
+	f.mu.Unlock()
+	s.undeliveredPass(context.Background(), time.Now().Add(time.Hour))
+	if q := undeliveredOf(t, s, "conv1"); len(q) != 0 {
+		t.Fatalf("the first try's line is there but it is still kept: %+v", q)
+	}
+	if n := sendCalls(f, "msg-1"); n != 2 {
+		t.Fatalf("sent %d times, want 2", n)
+	}
+}

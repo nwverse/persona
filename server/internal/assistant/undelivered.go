@@ -37,8 +37,9 @@ import (
 //     it went in; not found by then (the transcript unreadable, only pictures and no id to know them by, or not there),
 //     the row says failed, that it may have gone in, and the owner looks and picks Retry or Delete (#10669);
 //   - gives up after undeliveredGiveUp: the row then says failed and the owner picks Retry or Delete. The owner's Retry
-//     sends it even after a try in doubt (a line found first still counts as in); a try of its own in doubt is again
-//     only looked for.
+//     sends it even after a try in doubt, looking for that try first on every attempt (one that cannot reach the
+//     computer keeps the Retry and the look for later); a try of its own in doubt is again only looked for, still from
+//     the first try's time.
 // A newer owner message to a conversation with kept ones is kept behind them (CodeUndeliveredAhead), never sent first.
 
 // undeliveredKey is the setting the kept messages live in.
@@ -81,15 +82,18 @@ type keptMessage struct {
 	State    string    `json:"state"`
 	Attempts int       `json:"attempts,omitempty"`
 	NextAt   time.Time `json:"next_at"`
-	// TriedAt: when the latest try that may have gone in began (its outcome in doubt, or the manager stopped during it);
-	// zero when every try so far surely typed nothing. Saved before each try. While it is set the message is only
-	// looked for, never sent again by itself (inDoubt), unless the owner's Retry says so (OwnerRetry).
+	// TriedAt: when the first try that may have gone in began (its outcome in doubt, or the manager stopped during it);
+	// zero when every try so far surely typed nothing. Saved before each try, and kept, never moved later, until the
+	// message goes in or the owner deletes it: every later look, the owner's Retry's included, looks from then. While
+	// it is set the message is only looked for, never sent again by itself (inDoubt), unless the owner's Retry says so
+	// (OwnerRetry).
 	TriedAt time.Time `json:"tried_at,omitempty"`
 	// LookUntil: when the look for a try in doubt ends (zero: it begins at the next look, as for a try the manager
 	// stopped during); Looks: the looks made so far, for the wait before the next.
 	LookUntil time.Time `json:"look_until,omitempty"`
 	Looks     int       `json:"looks,omitempty"`
-	// OwnerRetry: the owner pressed Retry; the next try is made even after one in doubt.
+	// OwnerRetry: the owner pressed Retry; tries are made even after one in doubt, each looking for it first, until one
+	// goes in or ends in doubt itself (tries that typed nothing keep it).
 	OwnerRetry bool   `json:"owner_retry,omitempty"`
 	Error      string `json:"error,omitempty"`
 }
@@ -448,8 +452,12 @@ func (s *Service) undeliveredSend(ctx context.Context, id string) {
 		}
 		tried := time.Now().UTC()
 		// The mark that this try may go in is saved before it: a manager stopped during the try finds it and only looks.
+		// After a try in doubt (the owner's Retry) the mark keeps that try's time, so it is still the one looked for.
 		if err := s.updateKeptLocked(id, k.ID, func(m *keptMessage) {
-			m.TriedAt, m.LookUntil, m.Looks, m.OwnerRetry = tried, time.Time{}, 0, false
+			if m.TriedAt.IsZero() {
+				m.TriedAt = tried
+			}
+			m.LookUntil, m.Looks, m.OwnerRetry = time.Time{}, 0, false
 		}); err != nil {
 			// Not saved: a try now could go in twice after a restart. None now; the next after a wait.
 			if m := s.keptLocked(id, k.ID); m != nil {
@@ -486,7 +494,9 @@ func (s *Service) undeliveredSend(ctx context.Context, id string) {
 				m.Attempts++
 				m.NextAt = time.Now().UTC().Add(undeliveredWait(m.Attempts))
 				m.Error = undeliveredReason(i18n.Lang(m.Lang), keptErrCode(err))
-				m.TriedAt = time.Time{} // nothing typed: the next try need not look first
+				// Nothing typed: the mark is as before the try. A first try's is cleared (the next need not look
+				// first); an owner's Retry after a try in doubt still has that try to look for, and stays a Retry.
+				m.TriedAt, m.OwnerRetry = k.TriedAt, k.OwnerRetry
 			})
 			s.logf("undelivered: %s still does not take a kept message (try %d): %v", short(id), k.Attempts+1, err)
 		}

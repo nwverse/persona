@@ -1292,8 +1292,11 @@ operation then read as accepted and the bubble waited for the transcript and wen
 - **Gives up after a day.** A message not delivered within 24 hours is marked failed; the owner picks Retry (a new day
   of tries) or Delete. A conversation that was deleted fails it at once. Retry sends the message even after a try in
   doubt (the owner looked and said so; a line found by a last look still counts as delivered), and a Retry that cannot
-  be saved answers an error and changes nothing. If the Retry's own try ends in doubt, it is again only looked for and
-  then left to the owner.
+  be saved answers an error and changes nothing. Until the message goes in, each try of the Retry first looks for the
+  earlier try, also when the computer was still away at the Retry and comes back later (a try that typed nothing keeps
+  the Retry and the look), and the look always goes from the first try in doubt: `tried_at` is never moved later, so a
+  line that try wrote before the node forgot its id is still found by its words. If the Retry's own try ends in doubt,
+  it is again only looked for and then left to the owner.
 - **Between conversations.** `conversation_send` to a conversation that cannot take the message now no longer fails:
   the message goes into its relay queue and is tried again under the same `once_id`. A conversation that failed to
   take a relayed message is tried again after `relayRetryGap` (30 s), not on every session list.
