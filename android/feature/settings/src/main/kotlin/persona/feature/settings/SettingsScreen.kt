@@ -352,7 +352,10 @@ private fun SettingsContent(
         knowledgeSelection = knowledgeSelection, knowledgeSelectionAvailable = knowledgeSelectionAvailable,
         translationValue = translationValue, hubUpdateStatusState = hubUpdateStatusState,
         slotsState = slotsState, slotCards = slotCards, detailKey = detailKey,
-        back = back, openPage = ::open, deviceFeedback = deviceFeedback, connectorItems = connectorItems,
+        back = back, openPage = ::open, openDiagnosticsExport = {
+            parents = parents + page
+            page = "about-export"
+        }, deviceFeedback = deviceFeedback, connectorItems = connectorItems,
         onNavigate = onNavigate, onClose = onClose, onDemo = onDemo, onExitDemo = onExitDemo,
     )
     // Routed Back leaves a page in one step. Pairing handles its own steps before returning to Settings or Hubs.
@@ -427,6 +430,7 @@ private fun SettingsPageContent(
     detailKey: androidx.navigation3.runtime.NavKey?,
     back: () -> Unit,
     openPage: (SettingsPage) -> Unit,
+    openDiagnosticsExport: () -> Unit,
     deviceFeedback: @Composable () -> Unit,
     connectorItems: LazyListScope.() -> Unit,
     onNavigate: ((androidx.navigation3.runtime.NavKey) -> Unit)?,
@@ -564,9 +568,9 @@ private fun SettingsPageContent(
             item { PersonaSettings(demo = services.demo) }
             item { deviceFeedback() }
         }
-        "about-export" -> services.developing?.let { DevelopingDiagnosticsExportPage(it, onBack = { page = "about" }) }
+        "about-export" -> services.developing?.let { DevelopingDiagnosticsExportPage(it, onBack = back) }
         "about" -> JListPage(title = stringResource(R.string.settings_home_about), onBack = back) {
-            item { AboutSettingsPage(developing = services.developing, onExport = { page = "about-export" }) }
+            item { AboutSettingsPage(developing = services.developing, onExport = openDiagnosticsExport) }
             item { JGroupItem(GroupPosition.Single, Modifier.padding(top = Tokens.Space.m)) {
                 JRow(stringResource(R.string.settings_update_check), subtitle = updateSubtitle, subtitleLines = 6, value = when {
                     busy -> stringResource(R.string.settings_update_checking)

@@ -1,9 +1,10 @@
 package persona.feature.settings
 
 import android.content.Context
+import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -26,7 +27,9 @@ import persona.core.designsystem.PersonaTheme
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35], qualifiers = "en-w420dp-h900dp-xhdpi")
 class DevelopingDiagnosticsPagesTest {
-    @get:Rule val rule = createComposeRule()
+    @get:Rule val rule = createAndroidComposeRule<ComponentActivity>()
+
+    private fun back() = rule.runOnIdle { rule.activity.onBackPressedDispatcher.onBackPressed() }
 
     @Test fun theSwitchStartsRecordingAndTheEnabledGroupOpensExport() {
         val fake = FakeDevelopingDiagnostics()
@@ -82,6 +85,20 @@ class DevelopingDiagnosticsPagesTest {
         rule.onNodeWithText("Send to Agent…").performClick()
         assertEquals(listOf(fake.archive), fake.shared)
         assertEquals(listOf(fake.archive), fake.sent)
+    }
+
+    @Test fun exportBackReturnsToAboutBeforeLeavingSettings() {
+        val fake = FakeDevelopingDiagnostics(DevelopingDiagnosticsSnapshot(true, recordedBytes = 2048))
+        val services = demoSettingsServices(rule.activity.resources).copy(developing = fake)
+        rule.setContent { PersonaTheme { SettingsScreen(services, initialPage = "about") } }
+        rule.onNodeWithText("Export Diagnostics…").performClick()
+        rule.onNodeWithText("Create Archive").assertIsDisplayed()
+
+        back()
+        rule.onNodeWithText("Export Diagnostics…").assertIsDisplayed()
+        back()
+        rule.onNodeWithText("Export Diagnostics…").assertDoesNotExist()
+        rule.onNodeWithText("Settings").assertIsDisplayed()
     }
 
     @Test fun aFailedExportCanBeRetriedAndBusyCannotStartAnotherExport() {
