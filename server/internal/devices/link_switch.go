@@ -729,9 +729,10 @@ func (r *linkSwitchRun) stage(ctx context.Context, path string) bool {
 	return exit == 0 && outputOf(out)["staged"] == "1"
 }
 
-// removeStaged removes the staged build, if any (a failure before the hub's begin; best effort).
-func (r *linkSwitchRun) removeStaged(ctx context.Context) {
-	r.ssh(ctx, "remove staged", lsUninstallScript(r.rec.Operation, "", false, false), nil, r.t.Uninstall)
+// removeStaged removes every file a switch staged or marked on the computer, if any (a failure before the hub's
+// begin, a success; best effort).
+func (r *linkSwitchRun) removeStaged(ctx context.Context) (int, []byte) {
+	return r.ssh(ctx, "remove staged", lsUninstallScript(r.rec.Operation, "", false, false), nil, r.t.Uninstall)
 }
 
 // lsBeginRefusal is the reason the apps are told for each refusal of the hub's begin.
@@ -859,7 +860,7 @@ func (r *linkSwitchRun) waitLink(ctx context.Context, until time.Time) bool {
 
 // succeed: the computer is on Persona Link. The record says so first (tried a few times), so a restart never rolls
 // back a switch the hub was told succeeded; then the hub's end(succeeded) is asked a few times, it failing undoes
-// nothing.
+// nothing; then what the switch staged or marked on the computer (the .node marker) goes (afterSuccess).
 func (r *linkSwitchRun) succeed(ctx context.Context) {
 	r.logf("connected through Persona Link")
 	r.rec.Error, r.rec.RollbackUnconfirmed = "", false
@@ -877,6 +878,16 @@ func (r *linkSwitchRun) succeed(ctx context.Context) {
 		r.logf("the hub's end(succeeded) did not answer: the switch stays done")
 	}
 	r.logf("succeeded")
+	r.afterSuccess(ctx)
+}
+
+// afterSuccess removes the files a switch that succeeded leaves in the bin (the uninstall would have, but a success
+// never runs it), over ssh, which still reaches the computer (its entry keeps ssh_host); best effort: the switch stays
+// succeeded whatever it says.
+func (r *linkSwitchRun) afterSuccess(ctx context.Context) {
+	if exit, out := r.removeStaged(ctx); exit != 0 || outputOf(out)["clean"] != "1" {
+		r.logf("the files it staged on the computer may be left: they go with the next switch")
+	}
 }
 
 // end tells the hub how the switch ended, again until it answers or within passes; true once it did. The hub revokes
@@ -934,6 +945,7 @@ func (r *linkSwitchRun) rollback(ctx context.Context, why string) {
 	}
 	if succeeded { // a record that missed the success (it was not kept): nothing to undo
 		r.finish(ctx, proto.LinkSwitchPhaseSucceeded, "", false)
+		r.afterSuccess(ctx)
 		return
 	}
 	// Only what this switch set up: the node service when there was none and its installer may have run, Persona
