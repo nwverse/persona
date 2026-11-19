@@ -4329,6 +4329,8 @@ export interface ConnectorKBItem {
   locked_fields?: string[];
   /** The store's: which extension holds a locked field. A connector's is ignored. */
   provenance?: Record<string, ConnectorKBProvenance>;
+  /** The store's: the links the user removed, by list. A connector's is ignored. */
+  excluded?: Record<string, string[]>;
 }
 
 /**
@@ -4949,6 +4951,11 @@ export interface KBDetail {
   log?: string[];
   recent?: string;
   links?: KBEntry[];
+  /**
+   * The links the user removed by hand (meta's excluded), named as links are; automatic organizing and extensions
+   * leave them out until the user links them again (docs/assistant/knowledge.md "Removed links").
+   */
+  removed?: KBEntry[];
   moments?: KBMomentRef[];
   segments?: KBRecordingSegment[];
   /** A recording's meeting minutes, once written (docs/assistant/meeting-minutes.md); kept as the hub sends them. */
@@ -5199,8 +5206,8 @@ export interface KBUpdateResult {
    */
   before?: Record<string, unknown>;
   /**
-   * Fields the update carried that its kind does not use (a person's summary and log, for one): not applied, each
-   * with why.
+   * Fields the update carried that its kind does not use (a person's summary and log, for one), and links to make
+   * that the user removed: not applied, each with why.
    */
   ignored?: KBIgnoredField[];
 }

@@ -62,7 +62,8 @@ export function assistantPanel(setup: AssistantSetup, info: AssistantLaunchers |
     const kind = agentId(providerAgent(l.agent_type || l.agent || "claude", l.name));
     const e = listOf(l.name);
     const isDefault = info?.def?.provider === l.name;
-    const configured = (isDefault && info?.def?.model) || explicitLauncherModel(l.model);
+    const configuredModel = explicitLauncherModel(l.model);
+    const configured = (isDefault && info?.def?.model) || configuredModel;
     const defaultRow = currentModelRow(e.list?.models ?? [], configured) ?? defaultModel(e.list?.models ?? []);
     const defaultName = defaultRow ? (defaultRow.resolved ? modelLabel(defaultRow.resolved) : modelName(defaultRow)) : configured ? modelLabel(configured) : undefined;
     const p: PanelProvider = { id: l.name, name: providerTitle(l), engine: kind, models: null, isDefault, defaultModel: defaultName };

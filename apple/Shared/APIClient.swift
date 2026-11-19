@@ -2073,6 +2073,14 @@ nonisolated struct APIClient: Sendable {
         try JSON.decoder.decode(ClaudeSettingsResponse.self, from: try await request("PUT", "/api/v1/machines/\(machine)/codex-settings",
             body: SetSetting(key: key, value: value))).settings
     }
+    /// Antigravity's options (~/.gemini/antigravity-cli/settings.json), the same shape as Claude's.
+    func agySettings(machine: String) async throws -> [ClaudeSetting] {
+        try await get("/api/v1/machines/\(machine)/agy-settings", as: ClaudeSettingsResponse.self).settings
+    }
+    func setAgySetting(machine: String, key: String, value: JSONValue) async throws -> [ClaudeSetting] {
+        try JSON.decoder.decode(ClaudeSettingsResponse.self, from: try await request("PUT", "/api/v1/machines/\(machine)/agy-settings",
+            body: SetSetting(key: key, value: value))).settings
+    }
     struct SetSetting: Encodable { var key: String; var value: JSONValue }
     func setClaudeSetting(machine: String, key: String, value: JSONValue) async throws -> [ClaudeSetting] {
         try JSON.decoder.decode(ClaudeSettingsResponse.self, from: try await request("PUT", "/api/v1/machines/\(machine)/claude-settings",

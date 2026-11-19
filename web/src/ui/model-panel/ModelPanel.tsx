@@ -441,7 +441,7 @@ export function ModelPanel({ anchor, onClose, providers, state, scope, onPick, o
 
   const second = (row: PanelRow): { text: string; describes?: boolean } => {
     if (row.kind === "typed") return { text: `${row.provider.name} · ${t("ui-modelpanel.use_typed_note")}` };
-    if (row.kind === "preset") return { text: `${row.provider.name} · ${row.preset?.description || row.model.name}` };
+    if (row.kind === "preset") return { text: row.preset?.description || `${row.provider.name} · ${row.model.name}` };
     if (row.model.custom) return { text: `${row.provider.name} · ${t("ui-modelpanel.typed_before")}` };
     if (!searching && row.kind === "model") return { text: row.model.description ?? "", describes: true };
     return { text: row.provider.name };
