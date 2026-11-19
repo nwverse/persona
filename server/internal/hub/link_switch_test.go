@@ -829,45 +829,42 @@ func TestAPairingCodeStartsNoSwitch(t *testing.T) {
 	}
 }
 
-// Right after a start the admin page's switch waits for the manager to report its machines, as the apps' routes wait
-// for it, before it says there is no such computer.
+// During startup the admin switch waits for the machine's own manager to report it, even if the carrier is up.
 func TestAdminLinkSwitchWaitsForTheManager(t *testing.T) {
 	h := newTestHub(t)
-	h.devices.mu.Lock()
-	// No up channel yet: waitDevices makes it, which is how this test knows the request is waiting for the manager
-	// (a lookup before the wait answers 404 at once and never makes it).
-	h.devices.up, h.devices.warmUntil = nil, time.Now().Add(5*time.Second)
-	h.devices.mu.Unlock()
+	const mid, owner = "lsw-box", "m-0e0e0e"
+	h.cfg.Machines = []MachineConfig{{ID: mid, Kind: "ssh"}}
+	h.devices.assign = map[string]string{mid: owner}
+	h.devices.warmUntil = time.Now().Add(devicesWarmGrace)
+	h.applyDeviceStatesFrom(devicesOwner, devicewire.States{})
+
 	mux := http.NewServeMux()
 	h.adminLinkSwitchRoutes(mux)
-	done := make(chan int, 1)
+	r := httptest.NewRequestWithContext(t.Context(), "POST", "/api/v1/admin/machines/"+mid+"/link-switch", strings.NewReader(`{}`))
+	w := httptest.NewRecorder()
+	done := make(chan struct{})
 	go func() {
-		w := httptest.NewRecorder()
-		mux.ServeHTTP(w, httptest.NewRequest("POST", "/api/v1/admin/machines/lsw-box/link-switch", strings.NewReader(`{}`)))
-		done <- w.Code
+		mux.ServeHTTP(w, r)
+		close(done)
 	}()
-	var up chan struct{}
-	eventually(t, 5*time.Second, "the request waiting for the manager", func() bool {
+	eventually(t, 5*time.Second, "the request waiting for the machine's manager", func() bool {
+		select {
+		case <-done:
+			t.Fatalf("answered before the machine's manager reported: %d %s", w.Code, w.Body.String())
+		default:
+		}
 		h.devices.mu.Lock()
 		defer h.devices.mu.Unlock()
-		up = h.devices.up
-		return up != nil
+		return h.devices.up[owner] != nil
 	})
-	m := newMachine(h, MachineConfig{ID: "lsw-box", Kind: "ssh"})
-	h.fleet.mu.Lock()
-	h.machines, h.byID["lsw-box"] = append(h.machines, m), m
-	h.fleet.mu.Unlock()
-	h.devices.mu.Lock()
-	h.devices.upOpen = true
-	h.devices.mu.Unlock()
-	close(up)
+	h.applyDeviceStatesFrom(owner, devicewire.States{Machines: []devicewire.State{{Machine: proto.Machine{ID: mid}}}})
 	select {
-	case status := <-done:
-		if status == http.StatusNotFound {
-			t.Fatal("answered no such computer before the manager reported")
+	case <-done:
+		if w.Code != http.StatusServiceUnavailable {
+			t.Fatalf("after the report, want 503 from forwarding without a bus connection: %d %s", w.Code, w.Body.String())
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("no answer")
+		t.Fatal("still waiting after the machine's manager reported")
 	}
 }
 
