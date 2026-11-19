@@ -2600,6 +2600,7 @@ final class AppModel {
             olds.append((old, list))
         }
         if lists != sessionsByMachine { sessionsByMachine = lists }
+        // WatchSync drops unchanged content; repeated calls still drive its freshness resend and the widget writer.
         summariesChanged()
         for (old, new) in olds {
             for session in new where session.status != .working {
