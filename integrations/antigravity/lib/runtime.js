@@ -1258,7 +1258,7 @@ export function createAgyRuntime(options = {}) {
     } catch (err) {
       if (hasPolicy) throw new RpcError(`Failed to read supervision policy: ${err.message}`, SUPERVISION_ERROR_CODE)
     }
-    const nextPolicy = hasPolicy ? requestedPolicy : prevPolicy
+    let nextPolicy = hasPolicy ? requestedPolicy : prevPolicy
     if (hasPolicy && nextPolicy !== prevPolicy && (activeTurns.has(pid) || nativeWorking(readConversationStates().get(rawId)))) {
       throw new RpcError('Wait for the current turn to finish before changing supervision policy', 'busy')
     }
@@ -1324,6 +1324,7 @@ export function createAgyRuntime(options = {}) {
       .then(() => busyCall(async () => {
         turn.previous = undefined
         if (stopped || turn.cancelled || archived.has(rawId)) { readyResolve?.(); return }
+        if (prevTurn && !hasPolicy) nextPolicy = readPolicy(policyRoot, rawId)
         cancelledAt.delete(rawId)
         completedTurns.delete(pid)
         beginLiveTurn(rawId, pid, turn)
