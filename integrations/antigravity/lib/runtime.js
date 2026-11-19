@@ -1355,6 +1355,7 @@ export function createAgyRuntime(options = {}) {
             })
             if (turn.cancelled || stopped || archived.has(rawId)) { readyResolve?.(); return }
             if (!prepared) {
+              cancelling.delete(rawId)
               cancelledAt.delete(rawId)
               completedTurns.delete(pid)
               beginLiveTurn(rawId, pid, turn)

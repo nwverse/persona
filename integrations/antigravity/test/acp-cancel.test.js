@@ -298,3 +298,39 @@ test('interrupt does not report settled while a later send is running', async (t
   assert.notEqual((await interrupted).settled, true)
   await n.peer.call('session.interrupt', { session_id: pid })
 })
+
+test('an uncancelled successor clears cancellation left by a preparing turn', async (t) => {
+  const { n, record, start } = await agyRuntime(t)
+  const pid = await start()
+  n.resolve = () => ({ allow: true })
+  let release, entered = false, hold = true
+  const gate = new Promise((resolve) => { release = resolve })
+  const original = AgyAcpClient.prototype.ensureSessionLoaded
+  const mocked = t.mock.method(AgyAcpClient.prototype, 'ensureSessionLoaded', async function (...args) {
+    if (hold) {
+      hold = false
+      entered = true
+      await gate
+    }
+    return original.apply(this, args)
+  })
+  const first = n.peer.call('session.send', { session_id: pid, text: 'hold' })
+  let interrupted
+  try {
+    await until('first turn preparing', () => entered, SLOW)
+    interrupted = n.peer.call('session.interrupt', { session_id: pid })
+    await until('preparing turn cancelled', () => received(record).some((call) => call.method === 'session/cancel'), SLOW)
+    assert.equal((await n.peer.call('session.send', { session_id: pid, text: 'ask' })).queued, true)
+    assert.equal(received(record).some((call) => call.method === 'session/prompt'), false)
+  } finally {
+    release()
+    mocked.mock.restore()
+    await first
+    await interrupted
+  }
+  await until('successor permission answered', () => permissionAnswers(record).length === 1, SLOW)
+  assert.equal(received(record).filter((call) => call.method === 'session/prompt').length, 1)
+  assert.equal(n.asked.length, 1)
+  assert.deepEqual(permissionAnswers(record)[0].result, { outcome: { outcome: 'selected', optionId: 'allow' } })
+  await n.peer.call('session.interrupt', { session_id: pid })
+})
