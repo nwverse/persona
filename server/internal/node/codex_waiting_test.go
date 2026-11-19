@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -141,7 +142,7 @@ func TestCodexFirstMessageFromTheApp(t *testing.T) {
 			mu.Lock()
 			pasted = str(c.Params["text"])
 			mu.Unlock()
-			f.setScreen("w1:p2", "› [Pasted Content 9035 chars]\n\n  gpt-6 xhigh · /tmp/proj\n")
+			f.setScreen("w1:p2", fmt.Sprintf("› [Pasted Content %d chars]\n\n  gpt-6 xhigh · /tmp/proj\n", len([]rune(specialPrompt))))
 		case c.Method == "pane.send_keys" && slices.Equal(keysOf(c), []string{"enter"}):
 			f.setScreen("w1:p2", "› fix\n\n• Working (0s • esc to interrupt)\n\n› Ask Codex to do anything\n")
 			writeWaitRollout(t, home, cwd, startThread, time.Now(), specialPrompt)
