@@ -180,13 +180,13 @@ func (s *Service) launcherRoutes() {
 		l, err := s.saveLauncher(ctx, in, nil)
 		if err != nil {
 			status := http.StatusInternalServerError
-			if errors.Is(err, errAPITransport) || errors.Is(err, errChatTransport) || errors.Is(err, errChatLaunchSettings) || errors.Is(err, errScopeEmpty) {
+			if errors.Is(err, errAPITransport) || errors.Is(err, errChatTransport) || errors.Is(err, errChatLaunchSettings) || errors.Is(err, errRuntimeHeaders) || errors.Is(err, errScopeEmpty) {
 				status = http.StatusBadRequest
 			}
 			apierr.Write(w, status, err)
 			return
 		}
-		out := map[string]any{"launcher": s.withKeyMachines(ctx, []LauncherView{launcherView(l)})[0]}
+		out := map[string]any{"launcher": s.withKeyMachines(ctx, []LauncherView{s.launcherView(l)})[0]}
 		if in.Assign != nil {
 			assigned, kept := s.assignIfDefault(ctx, launcherProvider(l.Name), in.Assign)
 			out["assigned"], out["kept"] = assigned, kept
@@ -239,7 +239,7 @@ func (s *Service) launcherRoutes() {
 		saved, err := s.saveLauncher(r.Context(), in, old)
 		if err != nil {
 			status := http.StatusInternalServerError
-			if errors.Is(err, errChatProtocolChange) || errors.Is(err, errAPITransport) || errors.Is(err, errChatTransport) || errors.Is(err, errChatLaunchSettings) || errors.Is(err, errScopeEmpty) {
+			if errors.Is(err, errChatProtocolChange) || errors.Is(err, errAPITransport) || errors.Is(err, errChatTransport) || errors.Is(err, errChatLaunchSettings) || errors.Is(err, errRuntimeHeaders) || errors.Is(err, errScopeEmpty) {
 				status = http.StatusBadRequest
 			}
 			apierr.Write(w, status, err)
@@ -248,7 +248,7 @@ func (s *Service) launcherRoutes() {
 		if launcherSetupChanged(*old, saved) {
 			s.forgetLauncherFailures(r.Context(), saved.Name)
 		}
-		apierr.WriteJSON(w, map[string]any{"launcher": s.withKeyMachines(r.Context(), []LauncherView{launcherView(saved)})[0]})
+		apierr.WriteJSON(w, map[string]any{"launcher": s.withKeyMachines(r.Context(), []LauncherView{s.launcherView(saved)})[0]})
 	})
 	s.handle("DELETE /api/v1/launchers/{name}", func(w http.ResponseWriter, r *http.Request) {
 		ctx, name := r.Context(), r.PathValue("name")

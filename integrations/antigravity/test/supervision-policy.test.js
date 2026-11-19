@@ -8,6 +8,7 @@ import { startFakeNode, until } from '../../runtime-sdk/testing/fake-node.js'
 import { toAgyId, workspacePathOf } from '../lib/map.js'
 import { AGY_RULE_MAX_BYTES, isPolicyDir, POLICY_DIR_NAME, policyDirOf, readPolicy, SUPERVISION_ERROR_CODE, syncPolicy } from '../lib/policy.js'
 import { createAgyRuntime } from '../lib/runtime.js'
+import { AgyAcpClient } from '../lib/acp.js'
 
 const FAKE = fileURLToPath(new URL('./fake-acp-policy.mjs', import.meta.url))
 const SLOW = 15_000
@@ -242,9 +243,12 @@ test('busy role change is refused without altering disk policy; same policy whil
     client_msg_id: 'busy-same',
   })
 
-  // Interrupt ends the held turn and lets the queued follow-up finish.
+  // Interrupt cancels both the held turn and its queued follow-up.
   await n.peer.call('session.interrupt', { session_id: pid })
-  await until('both turns finished', () => received(env.record).filter((m) => m.ended === raw).length >= 2, SLOW)
+  await until('session stopped', () => n.last('runtime.sessions')?.sessions.find((row) => row.session_id === pid)?.status !== 'working', SLOW)
+  assert.equal(received(env.record).filter((m) => m.ended === raw).length, 1)
+  assert.equal(received(env.record).filter((m) => m.method === 'session/prompt').length, 1)
+  assert.equal(readPolicy(env.policyRoot, raw), policyV1)
 })
 
 test('fail closed when agy acp does not advertise additionalDirectories; ordinary chats still work', async (t) => {
@@ -349,4 +353,53 @@ test('fail closed on unwritable policyRoot, oversized policy (>48KB), and roll b
   assert.ok(created)
   assert.equal(received(failEnv.record).filter((m) => m.method === 'session/prompt').length, 0)
   assert.equal(existsSync(join(failEnv.policyRoot, '11111111-2222-4333-8444-000000000001')), false, 'failed start cleans up policy dir')
+})
+
+
+test('queued messages inherit a policy applied while the preceding send prepares', async (t) => {
+  const env = setupAgy(t)
+  const { n } = await startRuntime(t, env)
+  const { session } = await n.peer.call('session.start', { cwd: env.assistantDir, assistant: true })
+  const pid = session.session_id
+  let release, entered = false, hold = true
+  const gate = new Promise((resolve) => { release = resolve })
+  const original = AgyAcpClient.prototype.ensureStarted
+  const mocked = t.mock.method(AgyAcpClient.prototype, 'ensureStarted', async function () {
+    if (hold) { hold = false; entered = true; await gate }
+    return original.call(this)
+  })
+  const first = n.peer.call('session.send', { session_id: pid, text: 'First.', supervision_instructions: 'Review before acting.' })
+  try {
+    await until('first send preparing', () => entered, SLOW)
+    assert.equal((await n.peer.call('session.send', { session_id: pid, text: 'Second.' })).queued, true)
+  } finally {
+    release()
+    mocked.mock.restore()
+  }
+  await first
+  await until('both prompts started', () => received(env.record).filter((call) => call.method === 'session/prompt').length === 2, SLOW)
+  const resumes = received(env.record).filter((call) => call.method === 'session/resume')
+  assert.deepEqual(resumes.at(-1).params.additionalDirectories, [policyDirOf(env.policyRoot, toAgyId(pid))])
+})
+
+
+test('rejected supervision preparation preserves an idle session without publishing a prompt', async (t) => {
+  const env = setupAgy(t, { acpFlags: ['--no-additional-dirs'] })
+  const { n } = await startRuntime(t, env)
+  const { session } = await n.peer.call('session.start', { cwd: env.assistantDir, assistant: true })
+  const pid = session.session_id
+  await n.peer.call('session.watch', { session_id: pid })
+  const before = await n.peer.call('session.items', { session_id: pid })
+  const batches = n.all('session.items').length
+  await assert.rejects(n.peer.call('session.send', {
+    session_id: pid, text: 'Not accepted.', supervision_instructions: 'Review before acting.',
+  }), (err) => err.code === SUPERVISION_ERROR_CODE)
+  assert.deepEqual(await n.peer.call('session.items', { session_id: pid }), before)
+  const inventories = n.all('runtime.sessions').length
+  await n.peer.call('session.rename', { session_id: pid, title: 'Checked' })
+  await until('inventory refreshed', () => n.all('runtime.sessions').length > inventories, SLOW)
+  const row = n.last('runtime.sessions').sessions.find((row) => row.session_id === pid)
+  assert.equal(row.status, 'idle')
+  assert.equal(row.turn_error, undefined)
+  assert.equal(n.all('session.items').slice(batches).flatMap((batch) => batch.items).some((item) => item.text === 'Not accepted.'), false)
 })

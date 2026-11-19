@@ -15947,18 +15947,18 @@ def _link_payload(data):
 
 
 def _paste_link(t):
-    """(drafts, notes) of an import link (t trimmed), None when t is no link: one word, cindy:// or an http(s) address
-    whose fragment has import. A link going on after a blank is one a chat app broke: refused whole."""
+    """(drafts, notes) of an import link (t trimmed), None when t is no link: one word, cindy://, persona:// or an
+    http(s) address whose fragment has import. A link going on after a blank is one a chat app broke: refused whole."""
     word = re.split(r"\s", t, maxsplit=1)[0]
-    head = word[:8].lower()
-    if not head.startswith(("cindy://", "http://", "https://")): return None
-    cindy = head.startswith("cindy://")
-    part = word[len("cindy://"):] if cindy else word.partition("#")[2]  # what follows cindy://, a web link's fragment
-    if not cindy and "import" not in _link_query(part)[0]: return None
+    head = word[:10].lower()
+    if not head.startswith(("cindy://", "persona://", "http://", "https://")): return None
+    scheme = "persona://" if head.startswith("persona://") else "cindy://" if head.startswith("cindy://") else ""
+    part = word[len(scheme):] if scheme else word.partition("#")[2]  # what follows the scheme, a web link's fragment
+    if not scheme and "import" not in _link_query(part)[0]: return None
     try:
         if word != t: _link_bad()  # which part of a broken link is its data is unknown
         if len(part.encode()) > LINK_MOST: _link_bad(code="link_too_long")
-        if cindy:
+        if scheme:
             path, sep, q = part.partition("?")
             if not sep or path != "provider/import" or "#" in part: _link_bad()
             data = _link_data(q, "data", True)
@@ -26226,8 +26226,16 @@ if OWN_SERVICE_SKIP:
 class H(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
+    def parse_request(self):
+        self.network_checked = False  # bad_network, once each request on a kept-alive connection
+        return super().parse_request()
+
     def bad_network(self):
-        """True when the hub is "down" (the connection is closed without an answer); otherwise waits out the delay."""
+        """True when the hub is "down" (the connection is closed without an answer); otherwise waits out the delay.
+        Once a request: a domain route that hands it on (scripts/mock/mock_domains.py) has already waited."""
+        if getattr(self, "network_checked", False):
+            return False
+        self.network_checked = True
         if time.time() < NET["down_until"]:
             self.close_connection = True
             return True
@@ -26702,7 +26710,6 @@ class H(BaseHTTPRequestHandler):
             ARCHIVE_CLOSE["mode"] = q.get("close", [""])[0]
             return self.send_json({"close": ARCHIVE_CLOSE["mode"], "archived": [x["session_id"] for x in ARCHIVED_AGENTS]})
         if p == "/mock/reset":  # MachinePagesTests: each test starts from the same machines
-            DOMAINS.reset()
             BOTMUX_ON.clear()
             TAB_NAMES.clear()  # TerminalsRenameUITests: the tabs' own names again
             machine_alerts.reset()  # cleaned caches and launcher checks (#8037)
@@ -26774,6 +26781,7 @@ class H(BaseHTTPRequestHandler):
                 QUEUED_PHOTOS["请看图片"] = [photo for _ in range(int(q.get("photos", ["1"])[0] or 1))]
                 QUEUE_EDITS.clear()
                 push_machine(ASSISTANT[0]["machine_id"])
+            DOMAINS.reset()  # last, so a domain's hook can put back what the reset above rebuilt
             return self.send_json({"ok": True})
         if p == "/mock/session_close":
             if "fail" in q: SESSION_CLOSE["fail"] = q["fail"][0] == "1"

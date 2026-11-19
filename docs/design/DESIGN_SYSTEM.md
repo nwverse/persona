@@ -619,6 +619,11 @@ on-demand model panel, not the everyday Assistant home (#6887).
   screen). Markdown rendered with `askImages` (Inbox connector and Lark threads) keeps a run its size with Load image
   over it; a hub without `remote_images` keeps every picture behind a click (#8162's gate), loaded from its host with
   no Referer.
+  Android (#9476) uses a 240 dp single and a 480 dp maximum column in Glass, Brief and Board. Inline pictures use the
+  measured text line height, including at large system text sizes. A tap opens that reply’s pictures in the existing
+  viewer, including inline and overflow pictures. Each third-party thumbnail and previously unopened gallery page
+  asks before loading. Mail keeps its Show images action. A pairing that has yet to advertise `remote_images` waits
+  for a tap and uses a separate HTTPS reader. WebView link preloading skips picture-bearing replies.
 - No shared bubble component exists. Messages, Tasks and Lark rebuild it with different paddings and gutters (DS-20).
 - Web: user bubble 14 px radius; replies unboxed. Android: 20 dp in Glass, max width 86%.
 - Web reply bar (#5314, `ReplyBar`; the owner's requested alignment with cindy's `MessageActionBar`, 2026-11-12): only
@@ -1436,6 +1441,8 @@ The widget extension doesn't build `Theme`: Persona's widgets take their colors,
 ### 3.15.1 Token usage calendar (Android)
 
 `UsageCalendarCard` and `UsageCalendarPage` (`feature/assistant/UsageCalendar.kt`) are the daily-token counterpart of the Machine monitoring charts. They compare magnitude over time, so they use one hue rather than categorical series colors: the current theme accent in four quantile steps, with `sunken` for no usage. Text, dates, legends and breakdown rows stay in the ordinary ink tokens. The exact number and the four token kinds are available by selecting a day; the details page also lists every computer and kind in text, so color is never the only way to read a value.
+
+On the detail page, each agent’s seven-day total adds input, output, cache write and cache read. Each positive total gets a grouped row with its Android agent mark, its name and a localized short number. The meter below the name compares the total to the largest agent on the same scale across rows. Historical usage gets a labeled row without a mark. At large text sizes the name can wrap above the meter. TalkBack reads the name and exact count together.
 
 The daily grid is Monday-first, seven rows per week, with the current week last and a thin outline on today. A day with usage ranks among only the days with usage: `ceil(4 × rank / count)`, where rank includes every equal or smaller day, gives steps 1–4; no usage is step 0. The hourly grid uses the same quantile rule among its hours and retains repeated clock-change hours by timestamp. Small chart cells are not the sole controls: selected days have 48dp previous / next buttons and an exact spoken value, while the card's non-cell area opens the details page. Home reads while resumed and keeps the previous devices section until real data arrives; it never substitutes an all-zero calendar for a failed or unsupported read.
 
@@ -2981,8 +2988,11 @@ stopped changing for 0.7 s, it runs once for that input. An address being typed 
 field to something else on the page (not when the window loses focus), the step is left, or a paste fills all of it,
 so a key never goes to a half-typed host; until then the form says leaving the field starts the check. It never runs
 on opening something already saved, only after the fields the form names as its connection change (the provider
-wizard: address, key, sign-in method); fields that play no part in the connection (a name) never block or repeat it.
-Each part runs whatever an earlier part said, since one part failing does not prove another will (a key may chat
+wizard: address, key, sign-in method, request headers); fields that play no part in the connection (a name) never block or repeat it.
+The optional request-header editor stays visible on the custom gateway's Connect step before the check, in add and edit,
+with configured names but never saved values and with the selected runtime's support or limitation beside it. Reserved or
+unsupported headers stop the check instead of letting it imply a launch would send them. A header-only edit invalidates
+old results and starts the same 0.7 s check. Each part runs whatever an earlier part said, since one part failing does not prove another will (a key may chat
 without listing models); a part that is running or passed is not sent again. A line says it will check by itself, then
 shows progress with a spinner, then the result; a failure keeps the server's words and offers to run that part again
 (Retry on the Connect step). Manual buttons, where the form has them, and the note that a test may cost a little stay;
@@ -3306,7 +3316,9 @@ that view in its link mode: no text area, a row with the link icon saying it was
 text, that nothing is saved until Save, with **Paste something else** (the status line's action) to go back to the text
 area. The link is read at once and its drafts, choices and notes look exactly like a paste's, so the wizard does not
 grow a second way to review a provider; a refused link is one plain line about what is wrong with it, never its
-content. Copying a link starts from the provider's dialog: a ⋯ `IconButton` before Edit opens a `Menu` (one row, **Copy
+content. Android uses this same link mode for `persona://provider/import` (#5428). iOS has no paste step, so the hub's
+returned draft opens its existing connection form directly. On both phone apps the link itself is never shown and is
+dropped when the wizard closes. Copying a link starts from the provider's dialog: a ⋯ `IconButton` before Edit opens a `Menu` (one row, **Copy
 import link**), and the row opens a `Dialog` in place of the provider's (Edit does the same), with one line on what the
 link brings, a `Switch` **Put a key in the link** that is off, and **Copy link** as the one primary button. Turning the
 switch on widens what the link exposes, so, as in "Sharing a conversation publicly" (4.9), the key field comes with an
@@ -3455,3 +3467,14 @@ New copy ships in English, Simplified Chinese and Japanese. Evidence:
 ## Lark topic group policy (#10238)
 
 Settings › Connectors › Lark bot › Topic groups serves owners who want one group to require their explicit bot mention. It reuses Group, Row, Switch, Button, the native select and settings input styles; policy defaults off. Each group shows its saved switch. Enrollment allows choosing the policy before adding the group; a strict first enrollment stays separate from the home choice. The home select shows the effective home or the private-chat fallback. Both writes wait for the existing acknowledged save; failures preserve saved values and enrollment drafts. No primary chat screen or model setting changes.
+
+## Shared botmux display setting (#10241)
+
+For people using Agents, Web Settings › Agents reuses `Row`, `Switch`,
+`SettingsHint` and `RowFailed` for **Show botmux sessions in Agents**. The row
+shows the acknowledged shared value; a save disables the switch and shows Saving,
+a failure keeps the last acknowledged value and offers Retry. A nearby Computers
+link explains the independent per-computer inventory switch. The sidebar's
+botmux chip is removed; its Lark group quick filter is absent when its count is
+zero. Complete and paged lists exclude the same hosts before grouping and counts.
+This requested interaction change adds no component, theme or motion pattern.

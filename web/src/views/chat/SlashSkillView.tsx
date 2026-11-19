@@ -1,4 +1,5 @@
 import { Suspense, type ComponentProps, type ReactNode } from "react";
+import type { ImeState } from "../../lib/ime";
 import type { ComposerCommand as Command } from "../../lib/extension-prompts";
 import { t } from "../../i18n";
 import { lazyPage } from "../../lib/lazy-page";
@@ -24,6 +25,9 @@ export type SlashPaletteInput = {
   machineId?: string;
   memory?: CatalogMemory;
   within: React.RefObject<HTMLElement | null>;
+  /** The composer's own input-method state (`useComposition().tracker`, lib/ime.ts). The palette mounts just after a
+   *  composition ends, so a state of its own would miss that end and take Safari's committing Enter as a pick. */
+  ime?: { readonly current: ImeState };
   /** The skill stage's chunk or catalog state; loading also suppresses a premature empty message. */
   status?: "loading" | "error" | "partial";
 };

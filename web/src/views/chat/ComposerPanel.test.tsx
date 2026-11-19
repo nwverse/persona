@@ -109,6 +109,21 @@ describe("the + (#5324)", () => {
     expect(option("Composer.tsx").className).toContain("[@media(pointer:coarse)]:h-11");
   });
 
+  it("closes on a touch outside it, not only a mouse press (#11237)", async () => {
+    render();
+    click(plus());
+    await settle();
+    expect(panel()).not.toBeNull();
+    // inside it, or on the + (which toggles it), it stays
+    act(() => void panel()!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerType: "touch" })));
+    expect(panel()).not.toBeNull();
+    const outside = document.createElement("div");
+    document.body.append(outside);
+    act(() => void outside.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerType: "touch" })));
+    expect(panel()).toBeNull();
+    outside.remove();
+  });
+
   it("filters as the search is typed, and Backspace in an empty search or Esc closes it, the caret back in the box", async () => {
     render();
     click(plus());

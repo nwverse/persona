@@ -722,6 +722,9 @@ func serveHTTP(ctx context.Context, s http.Handler, p assistantwire.HTTPRequest,
 	if p.ShareAuthority != nil {
 		ctx = devicewire.WithShareAuthority(ctx, *p.ShareAuthority)
 	}
+	if p.ModeActor != nil {
+		ctx = devicewire.WithModeActor(ctx, p.ModeActor)
+	}
 	if p.OwnerAnswer {
 		ctx = devicewire.WithOwnerAnswer(ctx)
 	}
@@ -730,6 +733,9 @@ func serveHTTP(ctx context.Context, s http.Handler, p assistantwire.HTTPRequest,
 	}
 	if p.Human { // the same: a new conversation a person's own app opens (start.go's route)
 		ctx = assistantwire.WithHumanStart(ctx)
+	}
+	if p.ReplyInput {
+		ctx = assistantwire.WithReplyInput(ctx)
 	}
 	r, err := http.NewRequestWithContext(ctx, p.Method, target, bytes.NewReader(p.Body))
 	if err != nil {
