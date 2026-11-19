@@ -1,5 +1,13 @@
 # Lessons: hub / node and networking
 
+## Queue admission decides notification replay (#10394)
+
+A connected WebSocket is not evidence that its outbound queue accepted a notification. Record admission per device
+and retain the event in the existing reconnect ring when every eligible socket rejects it. If another socket for the
+same credential accepts it, do not retain a duplicate. Keep recipient-selection counts separate from queue admission
+and delivery. Exercise the real notification bus handler with a full queue, same-ID outbox retry and reconnect;
+keep push-route, capability and preference exclusions intact.
+
 ## Contribution identity must match both preview and commit (#10272)
 
 UI routes and switches identify a contribution by extension plus local ID. A global UI-ID conflict check can therefore
