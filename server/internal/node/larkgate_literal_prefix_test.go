@@ -60,7 +60,8 @@ func TestLarkLiteralLoopCommandAssignments(t *testing.T) {
 		cards         int
 	}{
 		{"literal loop executable", `QUERY=/opt/example/metric; for psm in dev host; do timeout 90 $QUERY --json apm metric query "sum{job=$psm}" > /tmp/metric-$psm.json 2>/tmp/metric-$psm.err; done`, 0},
-		{"conditional literal loop assignment", `cd /tmp && QUERY=/opt/example/metric; for psm in dev host; do timeout 90 $QUERY --json apm metric query "sum{job=$psm}" > /tmp/metric-$psm.json; echo "$psm rc=$?"; done`, 0},
+		{"conditional literal loop assignment stays unknown", `cd /tmp && QUERY=/opt/example/metric; for psm in dev host; do timeout 90 $QUERY --json apm metric query "sum{job=$psm}" > /tmp/metric-$psm.json; echo "$psm rc=$?"; done`, 1},
+		{"conditional assignment cannot hide a deletion route", `action=delete; false && action=read; for i in one; do ex GET "/documents/$action"; done`, 1},
 		{"conditional gated write assignment", `cd /tmp && QUERY=ex; for id in one; do $QUERY POST /messages/$id/recall; done`, 1},
 		{"literal loop with environment", `QUERY=/opt/example/metric; for id in one two; do TOKEN="$(auth token)" timeout 60 $QUERY query --id $id > /tmp/query-$id.json; done`, 0},
 		{"literal loop with heredoc reader", "QUERY=/opt/example/metric; for id in one two; do timeout 60 $QUERY query --id $id > /tmp/query-$id.json; python3 -I - /tmp/query-$id.json <<'EOF'\nimport sys\nprint(len(open(sys.argv[1]).read()))\nEOF\ndone", 0},

@@ -202,7 +202,7 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 				if syntax.NewPrinter().Print(&text, stmt) != nil || strings.TrimSpace(text.String()) == strings.TrimSpace(cmd) {
 					return false // never recursively classify the same unsplittable text
 				}
-				child := classifyLarkDepth(text.String(), gates, cwd, risk, depth+1)
+				child := classifyLarkAt(text.String(), gates, cwd, risk, depth+1, remote)
 				merge(child)
 				v.other = true
 				v.unsure = v.unsure || child.unsure

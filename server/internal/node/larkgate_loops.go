@@ -69,9 +69,9 @@ func literalLarkLoopCommands(cmd string, gates []proto.CommandGate) ([]string, b
 			return true
 		case *syntax.BinaryCmd:
 			if n.Op == syntax.AndStmt || n.Op == syntax.OrStmt {
-				// Both arms run in this shell. Whether an assignment ran or its variable stayed empty, every later
-				// literal CLI/gate word remains visible to the expanded command and whole-command write checks.
-				return visit(n.X, top) && visit(n.Y, top)
+				// The right arm may be skipped. An assignment there must not replace a binding used by a later loop:
+				// the old value (or no value) remains reachable, so the expansion stays conservative.
+				return visit(n.X, top) && visit(n.Y, false)
 			}
 			return visit(n.X, false) && visit(n.Y, false) // a pipe's assignments do not reach the parent shell
 		case *syntax.Block:
