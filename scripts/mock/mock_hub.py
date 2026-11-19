@@ -9337,8 +9337,9 @@ if MOCK_TASKS:
             TASK_FEED[ASK1].append(_feed("feed_receipt_review_%d" % _n, 0.2 - _n / 100, "receipt", _tid,
                                         {"title": _title, "state": "done", "summary": "检查结果已整理好，等待验收。",
                                          "review": {"state": "awaiting", "criteria": _n}}))
-    # MOCK_TASKS_FINISHED=1 (#8237): two handed-out tasks closed in the last hour and not looked at since, so In Progress
-    # lists them under Just Finished: one the hub closed with its reason, one its review accepted, each with its receipt.
+    # MOCK_TASKS_FINISHED=1 (#8237, #10922): handed-out tasks closed in the last hours, each with its receipt, so the
+    # Finished entry lists them: two not looked at since (new, the To-dos page's Just Finished): one the hub closed with
+    # its reason, one its review accepted; and one the owner already opened, which Finished still lists, as Done.
     if os.environ.get("MOCK_TASKS_FINISHED") == "1":
         for _tid, _title, _min, _extra, _summary in [
             ("todo_done_login", "修复登录页闪退", 12, {"done_by": "auto", "done_reason": "改好了：登录页不再闪退，PR #43 已合并"},
@@ -9347,6 +9348,9 @@ if MOCK_TASKS:
                 "supervisor": ASK1, "state": "accepted", "round": 0, "done_when": [], "updated_at": ago(minutes=40),
                 "reviews": [{"at": ago(minutes=40), "verdict": "accepted", "note": "写好了：7 个 PR 分成新功能、修复和其他三组"}]}},
              "发布说明分好了三组，放在 docs/release-notes.md。"),
+            ("todo_done_faq", "更新常见问题页", 150, {"done_by": "auto", "done_reason": "改好了：常见问题页补了三条付款问题",
+                                                    "seen_at": ago(minutes=100)},
+             "常见问题页补了三条付款相关的问答。"),
         ]:
             _todo = dict(_task_todo(_tid, _title, "", "macbook", "", "/Users/me/code/example", _min + 30, ""), agents=[],
                          done_at=ago(minutes=_min), **_extra)
@@ -19099,7 +19103,7 @@ def summary_row(s):
     subagents or workflows arrays; counts and the newest running run's progress, without its agents and phases."""
     runs = [w for w in s.get("workflows") or [] if w.get("running")]
     bg = s.get("background") or []
-    out = {k: v for k, v in s.items() if k not in ("background", "subagents", "workflows", "queued")}
+    out = {k: v for k, v in s.items() if k not in ("background", "subagents", "workflows", "queued", "service_tier", "service_tiers")}
     out["background_count"] = len(bg)
     out["running_subagents"] = sum(1 for a in s.get("subagents") or [] if a.get("running"))
     out["running_workflows"] = len(runs) or (0 if s.get("workflows") else sum(1 for b in bg if b.get("kind") == "workflow"))
@@ -32008,9 +32012,105 @@ if MODEL_PICK_MODE and MODEL_GATEWAY_MODE:
         ]}
 
 
+MODEL_SPEED_FIELDS = ("agent", "launcher", "model", "effort", "efforts", "service_tier", "service_tiers",
+                      "status", "state", "capabilities")
+MODEL_SPEED_BASE = None
+MODEL_SPEED_MODE = ""
+MODEL_SPEED_PENDING = None
+MODEL_SPEED_GATE = threading.Event()
+MODEL_SPEED_LOG = []
+
+
+def model_speed_reset():
+    """Restore the ordinary model-picker main chat and clear the current-session speed fixture."""
+    global MODEL_SPEED_BASE, MODEL_SPEED_MODE, MODEL_SPEED_PENDING, MODEL_SPEED_GATE
+    main = next((s for s in ASSISTANT if s["session_id"] == ASK1), None)
+    if main is not None:
+        if MODEL_SPEED_BASE is None:
+            MODEL_SPEED_BASE = {k: copy.deepcopy(main[k]) for k in MODEL_SPEED_FIELDS if k in main}
+        for k in MODEL_SPEED_FIELDS:
+            if k in MODEL_SPEED_BASE: main[k] = copy.deepcopy(MODEL_SPEED_BASE[k])
+            else: main.pop(k, None)
+    MODEL_SPEED_MODE = ""
+    MODEL_SPEED_PENDING = None
+    MODEL_SPEED_GATE.set()  # release a request a failed test left waiting before the next fixture starts
+    MODEL_SPEED_GATE = threading.Event()
+    del MODEL_SPEED_LOG[:]
+
+
+def model_speed_configure(mode):
+    """MOCK_MODEL_PICK speed=<case>: a Codex main chat with synthetic acknowledged speed state."""
+    global MODEL_SPEED_MODE
+    MODEL_SPEED_MODE = mode
+    main = next((s for s in ASSISTANT if s["session_id"] == ASK1), None)
+    if main is None: return
+    main.update(agent="codex", launcher="codex", model="gpt-5.5-codex", effort="medium",
+                efforts=["low", "medium", "high", "xhigh"],
+                model_pick={"launcher": "codex", "model": "gpt-5.5-codex", "effort": "medium"},
+                status="working" if mode == "working" else "idle", state="working" if mode == "working" else "idle")
+    if mode == "no-tier":
+        main.pop("service_tier", None)
+        main.pop("service_tiers", None)
+    else:
+        main.update(service_tier="default", service_tiers=[
+            {"id": "default", "name": "Standard"},
+            {"id": "priority", "name": "Fast", "description": "Increased usage"},
+        ])
+
+
+def model_speed_acknowledge():
+    """Release the tier held back by speed=ack, as the native session push would acknowledge it."""
+    global MODEL_SPEED_PENDING
+    main = next((s for s in ASSISTANT if s["session_id"] == ASK1), None)
+    if main is not None and MODEL_SPEED_PENDING is not None:
+        main["service_tier"] = MODEL_SPEED_PENDING
+        MODEL_SPEED_PENDING = None
+        push_machine(main["machine_id"])
+    MODEL_SPEED_GATE.set()
+
+
+def model_speed_modes(handler, p, body):
+    """The speed fixture's running /modes calls, including independent effort changes. False outside it."""
+    global MODEL_SPEED_PENDING
+    if not MODEL_SPEED_MODE or handler.command != "POST": return False
+    m = re.fullmatch(r"/api/v1/sessions/([^/]+)/([^/]+)/modes", p)
+    if not m or m.group(2) != ASK1: return False
+    main = next((s for s in ASSISTANT if s["session_id"] == ASK1), None)
+    if main is None: return False
+    req = json.loads(body or b"{}")
+    MODEL_SPEED_LOG.append({"method": handler.command, "path": p, "body": req})
+    if "service_tier" in req:
+        if set(req) != {"service_tier"}:
+            return handler.send_json({"error": "service_tier must be its own request"}, 400) or True
+        tier = req["service_tier"]
+        if tier not in {t["id"] for t in main.get("service_tiers") or []}:
+            return handler.send_json({"error": "This model cannot apply the requested service tier",
+                                      "code": "service_tier_unsupported"}, 409) or True
+        if MODEL_SPEED_MODE == "refusal":
+            return handler.send_json({"error": "Codex refused the speed change", "code": "service_tier_refused"}, 409) or True
+        if MODEL_SPEED_MODE == "timeout":
+            return handler.send_json({"error": "The speed change was not confirmed", "code": "timeout"}, 504) or True
+        if MODEL_SPEED_MODE == "pending":
+            gate = MODEL_SPEED_GATE
+            MODEL_SPEED_PENDING = tier
+            if not gate.wait(15):
+                MODEL_SPEED_PENDING = None
+                return handler.send_json({"error": "The speed change was not confirmed", "code": "timeout"}, 504) or True
+        elif MODEL_SPEED_MODE == "ack":
+            MODEL_SPEED_PENDING = tier
+        else:
+            main["service_tier"] = tier
+            push_machine(main["machine_id"])
+        return handler.send_json({"ok": True}) or True
+    main.update({k: v for k, v in req.items() if k in ("permission_mode", "effort", "model") and v})
+    push_machine(main["machine_id"])
+    return handler.send_json({"ok": True}) or True
+
+
 def model_pick_reset():
     global MODEL_PICK_DEFAULT
     MODEL_PICK_DEFAULT = MODEL_PICK_HOME
+    model_speed_reset()
     for s in ASSISTANT:
         s.pop("model_pick", None)
     if MODEL_PICK_MODE == "picked":
@@ -32032,14 +32132,20 @@ def model_pick_route(handler, p, body):
     if p == "/mock/model_pick":
         if query.get("reset"):
             model_pick_reset()
+            if not query.get("speed"): push_machine(ASSISTANT_CONFIG["machine_id"])
+        if query.get("speed"):
+            model_speed_configure(query["speed"][0])
             push_machine(ASSISTANT_CONFIG["machine_id"])
+        if query.get("speed_ack"):
+            model_speed_acknowledge()
         if query.get("default"):
             MODEL_PICK_DEFAULT = query["default"][0]
             main = next((s for s in ASSISTANT if s["session_id"] == ASK1), None)
             if main is not None:
                 main["rev"] = (main.get("rev") or 0) + 1
             push_machine(ASSISTANT_CONFIG["machine_id"])
-        return handler.send_json({"requests": MODEL_PICK_LOG, "default": MODEL_PICK_DEFAULT}) or True
+        return handler.send_json({"requests": MODEL_PICK_LOG, "default": MODEL_PICK_DEFAULT,
+                                  "speed_requests": MODEL_SPEED_LOG}) or True
     if handler.command == "GET" and re.fullmatch(r"/api/v1/machines/[^/]+/launchers", p) and query.get("purpose") == ["assistant"]:
         return handler.send_json({
             "launchers": [dict(l) for l in MODEL_PICK_LAUNCHERS],
@@ -32051,6 +32157,7 @@ def model_pick_route(handler, p, body):
                 {"name": "gpt-direct", "display_name": "GPT direct", "kind": "api", "api": "responses", "code": "api_protocol", "reason": MODEL_PICK_REASONS["api_protocol"][lang]},
                 {"name": "far-gw", "display_name": "Far gateway", "kind": "launcher", "code": "launcher_out_of_scope", "reason": MODEL_PICK_REASONS["launcher_out_of_scope"][lang]},
             ]}) or True
+    if model_speed_modes(handler, p, body): return True
     m = re.fullmatch(r"/api/v1/assistant/conversations/([^/]+)/model", p)
     if not m or handler.command not in ("PUT", "DELETE"): return False
     s = next((x for x in ASSISTANT if x["session_id"] == m.group(1)), None)
@@ -32097,7 +32204,9 @@ def features():
 MOCK_HELP.append("MOCK_MODEL_PICK=1|picked|otherkind  Persona 对话自己的模型（#5033）：features 带 assistant_model_pick；主对话的启动器（?purpose=assistant）带默认和 unavailable"
                  "（一个 Responses 直连 API、一个不对这台电脑开放的服务商）；PUT / DELETE /api/v1/assistant/conversations/{id}/model 记下或清掉 model_pick。"
                  "picked：第二个对话一开始就有自己的选择；otherkind：当前主对话跑 Codex、默认仍是 Claude（#4662）。"
-                 "GET /mock/model_pick 看请求，?reset=1 复原；?default=claude|codex|gone 改启动器列表的默认")
+                 "GET /mock/model_pick 看请求，?reset=1 复原；?default=claude|codex|gone 改启动器列表的默认。"
+                 "reset=1&speed=idle|working|no-tier|ack|pending|refusal|timeout：主对话的 Codex 当前 Speed；speed_requests 记每个 /modes 的 method/path/body；"
+                 "ack 先不确认，pending 最多等 15 秒，?speed_ack=1 推送并放行；refusal 409，timeout 504；不带 speed 的 reset 还原普通模型选择")
 MOCK_HELP.append("MOCK_MODEL_PICK_GROUPS=1  配合 MOCK_MODEL_PICK：几个同为 claude- 开头的启动器（claude-aster / claude-max / claude-desktop）和 codex，看模型面板分组栏的短名")
 MOCK_HELP.append("MOCK_MODEL_FAMILIES=1  配合 MOCK_MODEL_PICK：多个模型家族的长模型列表（claude-max 的 Claude 全系、codex 的 GPT-6、混合厂商的本机网关 aster、work-claude、agy），截模型面板用；主对话默认 claude-max")
 MOCK_HELP.append("MOCK_ASSISTANT_LAUNCHER_FIXTURE=1  配合 MOCK_MODEL_PICK：读取 spec/fixtures/assistant-launchers/cases.json，三端共用同一组启动器候选；默认 runtime、无显式模型，managed Codex 只在 unavailable")
