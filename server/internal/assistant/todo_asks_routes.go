@@ -305,6 +305,9 @@ func (s *Service) answerRetry(ctx context.Context, ask ownAsk, in assistantwire.
 		out.Outcome = assistantwire.TodoAskOutcomeLater
 		return nil
 	}
+	if f := s.askRetryHook; f != nil {
+		f(ask.todo)
+	}
 	_, started, err := s.retryTaskStart(ctx, ask.todo, retryWith{failedAt: at})
 	switch {
 	case err != nil:

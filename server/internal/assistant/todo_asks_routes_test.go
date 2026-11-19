@@ -523,6 +523,60 @@ func TestTodoAskRetriesOnce(t *testing.T) {
 	}
 }
 
+// A Retry answers only the failure its ask names, even when the to-do changes after the route found that failure and
+// before the start reads it again: reopened by another start, whose agent the model service then cut off, it is not
+// told to go on; failed anew, it is not started again. Either way the answer is stale (409 ask_stale with the row) and
+// nothing goes out.
+func TestTodoAskRetryChangedMeanwhileIsStale(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		cut    bool // the to-do's agent s1 on box is cut off by the model service
+		change func(todo *Todo)
+	}{
+		{"reopened", true, func(todo *Todo) {
+			todo.DoneAt = nil
+			todo.Agents = append(todo.Agents, TodoAgent{MachineID: "box", SessionID: "s1"})
+		}},
+		{"failed anew", false, func(todo *Todo) {
+			later := todo.DoneAt.Add(time.Minute)
+			todo.DoneAt = &later
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			sc := todoAskScene(t, "failed_start")
+			sent, starts := len(sentToAgent(sc.f)), len(startsOf(sc.f))
+			changed := false
+			sc.s.askRetryHook = func(id string) { // the route found the failure the ask names
+				if c.cut {
+					cut := apiErrorTurn("s1", "API Error: 529 overloaded")
+					cut.MachineID = "box"
+					sc.f.setSessions("box", cut)
+				}
+				sc.s.todos.mu.Lock()
+				c.change(sc.s.todos.todos[id])
+				sc.s.todos.mu.Unlock()
+				changed = true
+			}
+			rec := answerTodoAsk(sc.s, sc.row, sc.own, `{}`)
+			var reply struct {
+				Code string
+				Todo struct{ ID string }
+			}
+			if !changed || rec.Code != http.StatusConflict || json.Unmarshal(rec.Body.Bytes(), &reply) != nil ||
+				reply.Code != "ask_stale" || reply.Todo.ID != sc.row {
+				t.Fatalf("changed %v: %d %s", changed, rec.Code, rec.Body)
+			}
+			waitFor(t, "the starts to end", func() bool { return sc.s.taskStarting.Load() == 0 })
+			if got := sentToAgent(sc.f)[sent:]; len(got) != 0 {
+				t.Fatalf("the Agent was told %q", got)
+			}
+			if n := len(startsOf(sc.f)) - starts; n != 0 {
+				t.Fatalf("%d starts", n)
+			}
+		})
+	}
+}
+
 // A to-do that closes while the owner's words are on their way is stale (409 ask_stale with the row), not 502 "answer
 // again": the send's own guard saw the ask end, and nothing reached the Agent.
 func TestTodoAskClosedWhileSendingIsStale(t *testing.T) {
