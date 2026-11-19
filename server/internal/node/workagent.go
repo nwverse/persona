@@ -189,7 +189,7 @@ func (n *Node) finishPiStart(ctx context.Context, launch host.Launcher, created 
 
 // noteWorkAgent records the session as Persona's, bound to its pane, so herdr resumes it the way it was started.
 func (n *Node) noteWorkAgent(ctx context.Context, launch host.Launcher, pane, id, cwd, launcher, kind, model string) {
-	n.state.put(id, sessionState{Pane: pane, Launcher: launcher, Cwd: cwd, Model: model, StartedAt: time.Now().UTC()})
+	n.putAgentState(ctx, launch, id, sessionState{Pane: pane, Launcher: launcher, Cwd: cwd, Model: model, StartedAt: time.Now().UTC()})
 	n.bindPane(pane, id)
 	n.holdResume(ctx, launch, pane, id, agentLaunch{Agent: kind, Launcher: launcher, Model: model, ID: id})
 }

@@ -633,13 +633,23 @@ func (s *Service) sendTaskInput(ctx context.Context, t Todo, text string, wait b
 		}
 	}
 	live, _ := liveTaskAgents(agents)
-	if len(live) == 0 { // stopped agents are read-only (#4754): Persona's follow-ups start nothing (tasks_successor.go)
+	resumeStopped := false
+	if len(live) == 0 {
 		if event != nil && event.Retried {
 			return "", errors.New("the event's agent is stopped and read-only")
 		}
-		return "", errTaskAgentsStopped
+		if _, ok := s.taskSpaceOf(ctx, t.ID); !ok {
+			return "", errTaskAgentsStopped // other stopped tasks' follow-ups still start nothing (tasks_successor.go)
+		}
+		// A herdr leader task explicitly resumes the same session for rework (#4786). The node still checks the
+		// recorded stop cause; the shared call path supplies its task workspace and tab label.
+		s.ensureSupervisor(ctx, t.ID) // this resume stays under the task's existing supervision ledger
+		resumeStopped = true
 	}
-	c := pickTaskAgent(live)
+	c := pickTaskAgent(agents)
+	if len(live) > 0 {
+		c = pickTaskAgent(live)
+	}
 	if _, ok := s.device(ctx, c.MachineID); !ok {
 		return "", errors.New("its machine is offline")
 	}
@@ -664,7 +674,11 @@ func (s *Service) sendTaskInput(ctx context.Context, t Todo, text string, wait b
 				return nil
 			}
 		}
-		if err := s.call(ctx, c.MachineID, DeviceSessionSend, map[string]any{"session_id": c.SessionID, "text": text}, nil); err != nil {
+		if resumeStopped {
+			if err := s.call(ctx, c.MachineID, DeviceSessionStart, resumeParams(c, text), nil); err != nil {
+				return err
+			}
+		} else if err := s.call(ctx, c.MachineID, DeviceSessionSend, map[string]any{"session_id": c.SessionID, "text": text}, nil); err != nil {
 			return err
 		}
 		_, err := s.appendFeed(ctx, t.Origin, feedRouted, t.ID, map[string]string{"text": text, "from": routedFromAssistant,
@@ -675,6 +689,14 @@ func (s *Service) sendTaskInput(ctx context.Context, t Todo, text string, wait b
 			return nil
 		}
 		return err
+	}
+	if resumeStopped {
+		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
+		defer cancel()
+		if err := send(sctx); err != nil {
+			return "", err
+		}
+		return "sent to the agent after resuming it in the task workspace", nil
 	}
 	if c.Status == proto.StatusOffline && wait {
 		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
