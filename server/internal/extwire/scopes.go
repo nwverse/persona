@@ -105,7 +105,7 @@ var RouteScopes = map[string]string{
 	// The todos (the assistant's, relayed): reading them, adding, editing and attaching agents and spaces, and writing
 	// outcome decisions (an extension writes no other source). Deleting a todo, superseding decisions, the done check, a
 	// retry and the owner's own marks (seen, restored, Someday) stay with full credentials.
-	"GET /api/v1/todos/{id}/workspace-rules":                      ScopeTodosRead,
+	"GET /api/v1/todos/{id}/workspace-rules":                       ScopeTodosRead,
 	"PUT /api/v1/todos/{id}/workspace-rules":                       ScopeTodosWrite,
 	"POST /api/v1/todos/{id}/workspace-naming/preview":             ScopeTodosWrite,
 	"POST /api/v1/todos/{id}/workspace-naming/plans":               ScopeTodosWrite,
