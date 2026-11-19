@@ -152,11 +152,11 @@ func TestAssistantResumesAStoppedAgentOnItsOwnTask(t *testing.T) {
 
 // A resume is refused before anything is asked, started or sent when it has no reason, would leave the agent
 // unsupervised (no task given and none of its own), would take another conversation's or the user's task, its
-// computer is offline, or the agent's context is nearly full; each refusal says why, and the last two suggest a new
-// agent.
+// computer is offline, or the agent's context is nearly full on a runtime Persona cannot compact (#11137: Claude Code
+// and Codex are compacted instead); each refusal says why, and the last two suggest a new agent.
 func TestAssistantResumeRefusals(t *testing.T) {
 	full := stoppedBoxAgent("full0001")
-	full.ContextTokens, full.ContextWindow = 190_000, 200_000
+	full.ContextTokens, full.ContextWindow, full.Agent = 190_000, 200_000, "pi"
 	roomy := stoppedBoxAgent("roomy001")
 	roomy.ContextTokens, roomy.ContextWindow = 100_000, 200_000
 	for _, c := range []struct {
@@ -170,7 +170,7 @@ func TestAssistantResumeRefusals(t *testing.T) {
 		{"another conversation's task", "peer0001", "needs its context", false, false, []string{"of another conversation", "not yours to resume"}},
 		{"the user's own todo", "user0001", "needs its context", false, false, []string{"user's own todo", "not yours to resume"}},
 		{"offline", "free0001", "needs its context", true, true, []string{"could not resume free0001 on box", "agent_start"}},
-		{"context nearly full", "full0001", "needs its context", true, false, []string{"context is nearly full (190000 of 200000 tokens)", "agent_start"}},
+		{"context nearly full", "full0001", "needs its context", true, false, []string{"context is nearly full (190000 of 200000 tokens)", "pi has no compaction", "agent_start"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s, f := newQuietService(t)

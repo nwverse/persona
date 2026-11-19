@@ -603,7 +603,9 @@ following the destination. Run the same helper in preflight and exec the agent a
 `CAP_SYS_ADMIN` to harden these mounts: that breaks `unshare -rm`, which was working; direct `umount` in the original
 namespace therefore remains an explicit boundary. Bubblewrap keeps a supervisor even without `--unshare-pid` or with
 `--as-pid-1`: verify the agent's `PPID` in the host pid namespace, not equal pids, and use `--die-with-parent` for
-lifecycle cleanup.
+lifecycle cleanup. A kernel can pass the basic bwrap probe yet refuse `open_tree` on an alias symlink with `EPERM`
+(observed on Linux 5.4). Keep that start fail closed. Real tests may skip only the structured alias-`open_tree` `EPERM`
+from the full-profile preflight, never every unavailable result or a `move_mount` failure (#11073).
 
 ## Runtime policy and publisher-owned node packages (#2566)
 
