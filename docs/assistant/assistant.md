@@ -738,8 +738,15 @@ Known strict-plugin policy or `Skill` deny/ask rules refuse this adapter rather 
 customization/approval gates.
 The launcher's existing `--settings` file or inline object is checked through the same settings reader as startup;
 its values are never returned in the catalog or diagnostics.
-Known managed-policy files/drop-in directories or a server-policy cache also refuse the bounded adapter:
-it checks their presence without reading a potentially credential-bearing cache or executing policy helpers.
+The administrator's settings files are read and checked the same way (#9862): `managed-settings.json` and the `*.json`
+drop-ins in `managed-settings.d` (hidden files skipped) under `/Library/Application Support/ClaudeCode`,
+`/etc/claude-code` and `%ProgramFiles%\ClaudeCode`, each system's in Claude Code's merge order (the file, then the
+drop-ins alphabetically). They apply last, so a managed `skillOverrides: off` cannot be turned back on by the profile,
+project or launcher settings. Besides `strictPluginOnlyCustomization` and `Skill` deny/ask rules, a managed
+`policyHelper` refuses too: its output would replace these files, and the node never runs it. A managed file that is
+missing is skipped; one that cannot be read or parsed refuses. A file with only unrelated keys (for example only
+`hooks`) leaves the menu listed. The profile's server-policy cache (`remote-settings.json`) still refuses by presence
+alone: it may carry credentials and is never read. MDM configuration profiles and the Windows registry are not checked.
 This bounded adapter deliberately does **not** claim to enumerate plugin, bundled or remote skills.
 It sends an explicit, server-resolved exact-file reading instruction under existing permissions rather than a native
 slash command, which could resolve a same-name skill elsewhere or apply frontmatter tool/permission overrides.

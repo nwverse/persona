@@ -739,6 +739,18 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	switch method {
 	case "session.share_projection":
 		return n.shareProjection(ctx, params)
+	case devicewire.MethodCloseTaskTerminal:
+		var a devicewire.TaskTerminalCloseRequest
+		if err := json.Unmarshal(params, &a); err != nil {
+			return nil, err
+		}
+		status := n.closeTaskTerminal(ctx, a.Terminal, func() bool {
+			var out struct {
+				Authorized bool `json:"authorized"`
+			}
+			return n.peer != nil && n.peer.Call(ctx, devicewire.MethodAuthorizeTaskTerminal, a, &out) == nil && out.Authorized
+		})
+		return map[string]string{"status": status}, nil
 	case "node.doctor": // the machine page's "What this computer can do": node doctor's report, read-only unless {"fix":true} (doctor_rpc.go)
 		return n.doctor(ctx, params, false)
 	case "node.doctor.fix": // the same path as `node doctor --fix`: Persona's own generated files only
@@ -777,6 +789,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		SessionID               string        `json:"session_id"`
 		CreationID              string        `json:"creation_id"`
 		Incarnation             string        `json:"incarnation"`
+		TaskTerminalToken       string        `json:"task_terminal_token"`
 		Cwd                     string        `json:"cwd"`
 		Launcher                string        `json:"launcher"`
 		AgentType               string        `json:"agent_type"`
@@ -1475,11 +1488,21 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		if validID(p.SessionID) {
 			newID = p.SessionID
 		}
+		mark := taskTerminalStart{token: p.TaskTerminalToken}
+		if method == "session.start" && p.ResumeSessionID == "" && p.InPane == "" && validID(mark.token) {
+			ctx = context.WithValue(ctx, taskTerminalStartKey{}, &mark)
+		}
 		s, err := n.start(ctx, r.cwd, r.launcher, p.Prompt, p.ResumeSessionID, p.WorkspaceID, r.mode, r.effort, r.tab, newID, p.AgentType, r.execution)
 		if err == nil && p.ResumeSessionID != "" {
 			n.forkStarted(p.ResumeSessionID)
 		}
-		return n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation)
+		result, err := n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation)
+		if err == nil && s != nil && mark.pane != "" {
+			if target := n.taskTerminalReceipt(ctx, s, mark); target != nil {
+				result.(map[string]any)["task_terminal"] = target
+			}
+		}
+		return result, err
 	case "session.fork": // "Branch to new chat" (fork.go)
 		id, err := n.fork(ctx, p.SessionID, p.AtItemID)
 		return map[string]any{"session_id": id}, err
