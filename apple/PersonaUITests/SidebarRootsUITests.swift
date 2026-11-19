@@ -597,52 +597,33 @@ final class SidebarRootsUITests: XCTestCase {
         XCTAssertEqual(shown.transitions, second.transitions, "bringing the column back moved the page: \(second) → \(shown)")
     }
 
-    /// A sidebar row that says it is selected (`isSelected`): the main conversation, a place, a Persona chat or an Agent's
-    /// row; not the Agents' quick filters or other controls in the column.
-    private struct Selected: CustomStringConvertible {
-        var id: String
-        var label: String
-        var description: String { "\(id) \"\(label)\"" }
+    /// Exactly one row of the sidebar is selected, `id` (whose label holds `text`), with the column brought out first.
+    @MainActor private func assertOneSelected(_ id: String, containing text: String? = nil, _ step: String) {
+        let main = element("sidebar-main")
+        // A pick slides a column laid over the page (or a drawer) away: brought out again once it has gone.
+        if !(main.exists && main.isHittable) || app.windows.firstMatch.frame.width < 900 { Thread.sleep(forTimeInterval: 1.0) }
+        // The conversation's sidebar button can read as not hittable under the page's top for a moment: tapped at its frame.
+        let button = element("assistant-sidebar-button")
+        if !(main.exists && main.isHittable), button.exists, let frame = (try? button.snapshot())?.frame, !frame.isEmpty {
+            app.windows.firstMatch.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: frame.midX, dy: frame.midY)).tap()
+            _ = main.waitForExistence(timeout: 3)
+        }
+        reveal(main)
+        app.assertOneSelectedSidebarRow(id, containing: text, step)
     }
 
-    @MainActor private func selectedRows() -> [Selected] {
-        guard let root = try? app.snapshot() else { return [] }
-        var found: [Selected] = []
-        func walk(_ e: XCUIElementSnapshot) {
-            let id = e.identifier
-            let row = id.hasPrefix("sidebar-") || id == "agents.row" || id == "agents.compactRow"
-            if row, e.isSelected { found.append(Selected(id: id, label: e.label)) }
-            e.children.forEach(walk)
-        }
-        walk(root)
-        return found
-    }
-
-    /// Exactly one row of the sidebar is selected, `id` (whose label holds `text`): the column brought out first unless
-    /// `bringOut` is false (a pushed page has Back alone, which would pop it).
-    @MainActor private func assertOneSelected(_ id: String, containing text: String? = nil, bringOut: Bool = true, _ step: String) {
-        if bringOut { reveal(element("sidebar-main")) }
-        func right(_ rows: [Selected]) -> Bool {
-            rows.count == 1 && rows[0].id == id && (text.map { rows[0].label.contains($0) } ?? true)
-        }
-        var rows = selectedRows()
-        let deadline = Date.now.addingTimeInterval(5)
-        while !right(rows), Date.now < deadline {
-            Thread.sleep(forTimeInterval: 0.3)
-            rows = selectedRows()
-        }
-        XCTAssertTrue(right(rows), "\(step): the selected rows are \(rows), not \(id) \(text ?? "") alone:\n\(app.debugDescription)")
-    }
-
-    /// One row of the whole sidebar is selected at a time, and it is the page's root (#11032): the main conversation at
-    /// launch; an Agent picked in the Agents list (its row, no longer the main conversation's), also after the column is
-    /// folded and brought back; a place (Recordings); the main conversation again; and an Agent opened from inside the
-    /// main conversation (a drill-down, pushed) leaves the main conversation selected. The column beside the page, laid
-    /// over it (the open Duo upright) and a phone's drawer.
+    /// One row of the whole sidebar is selected at a time, and it is the page's root (#11032): Main Chat picked; an Agent
+    /// picked in the Agents list (its row, no longer Main Chat's), also after the column is folded and brought back; a
+    /// place (Recordings); a Persona chat; Main Chat again. The column beside the page, laid over it (the open Duo
+    /// upright) and a phone's drawer. An Agent pushed from inside the main conversation:
+    /// `SecondaryPageBackTests.testAnAgentPushedFromTheMainConversationLeavesItSelected`.
     @MainActor func testOneRowIsSelectedAndItFollowsTheRoot() {
         launch()
         _ = settled("conversation", "launch")
-        assertOneSelected("sidebar-main", "launch on the main conversation")
+        // The app can come up on a new chat's page, which no row stands for: Main Chat picked first.
+        pick("sidebar-main", "Main Chat")
+        _ = settled("conversation", "Main Chat")
+        assertOneSelected("sidebar-main", "Main Chat picked")
         shot("11032-0-main")
 
         _ = pickAgent("an Agent")
@@ -668,32 +649,16 @@ final class SidebarRootsUITests: XCTestCase {
         assertOneSelected("sidebar-meeting-recording", "a place picked")
         shot("11032-2-place")
 
-        pick("sidebar-main", "the main conversation")
-        let before = settled("conversation", "the main conversation from Recordings")
-        assertOneSelected("sidebar-main", "the main conversation picked again")
+        // A Persona chat: the conversation is the root again, its row (not Main Chat's) the selected one.
+        pick("sidebar-conversation", "a Persona chat")
+        _ = settled("conversation", "a Persona chat from Recordings")
+        assertOneSelected("sidebar-conversation", "a Persona chat picked")
+        shot("11032-3-persona-chat")
 
-        // An Agent opened from inside the main conversation (a waiting Agent's card): pushed, the selection stays.
-        let card = app.buttons.matching(identifier: "shell-needs-agent").firstMatch
-        let beside = element("sidebar-main").exists && element("sidebar-main").isHittable
-        for _ in 0..<6 where card.waitForExistence(timeout: 3) && !card.isHittable {
-            app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.7))
-                .press(forDuration: 0.05, thenDragTo: app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.4)))
-        }
-        XCTAssertTrue(card.exists && card.isHittable, "no waiting Agent's card on the main conversation:\n\(app.debugDescription)")
-        card.tap()
-        let pushed = settled("conversation", "an Agent opened from the main conversation")
-        XCTAssertEqual(pushed.path, 1, "the Agent's chat was not pushed on the main conversation: \(pushed)")
-        XCTAssertEqual(pushed.transitions, before.transitions + 1, "the Agent's chat did not push: \(before) → \(pushed)")
-        // Where the column stays beside the page it is read as it is; laid over the page or in a drawer it is away, and
-        // the pushed page's Back would pop: the root (the probe) is what it shades.
-        if beside, element("sidebar-main").isHittable {
-            assertOneSelected("sidebar-main", bringOut: false, "an Agent pushed from the main conversation")
-        }
-        shot("11032-3-pushed")
-        let back = app.buttons.matching(NSPredicate(format: "identifier == 'chevron.left' OR identifier == 'BackButton' OR label IN %@", ["返回", "Back"]))
-        back.allElementsBoundByIndex.first { $0.exists && $0.isHittable }?.tap()
-        let popped = settled("conversation", "Back from the pushed Agent")
-        XCTAssertEqual(popped.path, 0, "Back did not go back to the main conversation: \(popped)")
-        assertOneSelected("sidebar-main", "back on the main conversation")
+        pick("sidebar-main", "the main conversation")
+        _ = settled("conversation", "the main conversation from a Persona chat")
+        assertOneSelected("sidebar-main", "the main conversation picked again")
+        shot("11032-4-main-again")
+        // An Agent pushed from inside the main conversation keeps it selected: SecondaryPageBackTests (a task's card).
     }
 }
