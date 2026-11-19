@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/nodeclient"
+	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
@@ -22,21 +24,48 @@ type noTranscript struct{ id string }
 
 func (e noTranscript) Error() string { return fmt.Sprintf("transcript for session %s not found", e.id) }
 
-// readErr is the error a read of a session's history (session.items, session.item, session.image) answers: no
-// transcript is codeNotFound, which the hub serves as 404 not_found (apierr.Call), not a 502 internal error (#9551).
-// Sends, rewinds and the other callers of file keep the plain error: the manager takes a not_found send as "the
-// session is gone" and withdraws its card (assistant sessionNotFound), which a missing file alone must not do.
-func readErr(err error) error {
+// readErr is the error a read of session id's history (session.items, session.item, session.image,
+// session.visualization) answers: no transcript is codeNotFound, which the hub serves as 404 not_found (apierr.Call),
+// not a 502 internal error (#9551), with why in data.reason (readReason), which the hub words (#11388). The message
+// stays the one the node has always given. Sends, rewinds and the other callers of file keep the plain error: the
+// manager takes a not_found send as "the session is gone" and withdraws its card (assistant sessionNotFound), which a
+// missing file alone must not do.
+func (n *Node) readErr(id string, err error) error {
 	var nt noTranscript
-	if errors.As(err, &nt) {
-		return &rpc.Error{Code: codeNotFound, Message: nt.Error()}
+	if !errors.As(err, &nt) {
+		return err
 	}
-	return err
+	re := &rpc.Error{Code: codeNotFound, Message: nt.Error()}
+	if reason := n.readReason(id, nt.id); reason != "" {
+		re.Data, _ = json.Marshal(map[string]string{"reason": reason})
+	}
+	return re
 }
 
-// startingSession reports whether a session without a transcript is one that exists but has not written its first
-// line yet (a headless conversation, or an agent that is live or that Persona started), rather than an unknown id.
-func (n *Node) startingSession(id string) bool {
+// readReason is why the node has no transcript of session id to read (missing: the session whose transcript it looked
+// for): proto.NotFoundNoTranscript for a session it knows (knownSession), proto.NotFoundUnknownSession for one it has
+// no record of. A subagent ("<session>@<agent>") goes by its session. None while the node is still loading its records
+// from the hub (a session missing from them may still be Persona's), nor for the transcript a runtime names for its
+// session (runtimetranscript.go): what the node knows of that session is the runtime's to say.
+func (n *Node) readReason(id, missing string) string {
+	if parent, _, ok := splitSubagent(id); ok && parent == missing {
+		id = parent
+	}
+	if id != missing || n.runtimes.transcriptOf(id) != "" {
+		return ""
+	}
+	if n.knownSession(id) {
+		return proto.NotFoundNoTranscript
+	}
+	if n.state.isLoading() {
+		return ""
+	}
+	return proto.NotFoundUnknownSession
+}
+
+// knownSession reports whether the node knows session id, which may have no transcript: a headless conversation, an
+// agent that is live, a Codex thread it registered, or a session Persona started (its record, kept 60 days).
+func (n *Node) knownSession(id string) bool {
 	if n.isAssistantSession(id) {
 		return true
 	}
@@ -48,6 +77,28 @@ func (n *Node) startingSession(id string) bool {
 	}
 	_, known := n.state.get(id)
 	return known
+}
+
+// startingSession reports whether a session without a transcript may not have written its first line yet, so a read
+// of its history answers an empty page rather than not_found: it runs (a live agent, an assistant process, an external
+// start under way), waits for its first message, has a start in progress or one that failed within the time a failed
+// start stays listed (startFailedFor), or was started less than the start bound (startWait) ago. A read of any other
+// session without one is not_found (readErr): what it had to read is gone, or it never got a message (#11388).
+func (n *Node) startingSession(id string) bool {
+	n.mu.Lock()
+	_, proc := n.procs[id]
+	n.mu.Unlock()
+	if proc || n.externalStarts.has(id) {
+		return true
+	}
+	if _, live := n.agent(id); live {
+		return true
+	}
+	if n.starts.get(id) != nil {
+		return true
+	}
+	st, ok := n.state.get(id)
+	return ok && (st.AwaitingFirstMessage || !st.StartedAt.IsZero() && time.Since(st.StartedAt) < n.startWait())
 }
 
 // transcriptPath finds <config dir>/projects/*/<id>.jsonl. One session can have a file in two config directories

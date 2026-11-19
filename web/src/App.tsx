@@ -35,7 +35,7 @@ import { focusables, trapTabIn } from "./ui/overlay";
 import { Empty } from "./views/session/files/parts";
 import { AgentsPage } from "./views/AgentsPage";
 import { ChatView } from "./views/chat/ChatView";
-import { preloadCloseoutEvidence } from "./views/chat/CloseoutCard";
+import { preloadCloseout } from "./views/chat/closeout-chunks";
 import { Home } from "./views/Home";
 import { PersonaAssistant } from "./views/PersonaAssistant";
 import { NewWorktreeHost } from "./views/NewWorktreeHost";
@@ -47,7 +47,6 @@ import { setAgentGrouping } from "./lib/sidebar-api";
 import type { WorkspaceTarget } from "./lib/workspace-target";
 import { ForwardHost } from "./views/chat/ForwardHost";
 import { onOpenNewAgent, type NewAgentPreset } from "./lib/new-agent";
-import { StartingAgent } from "./views/StartingAgent";
 import { closeHelp, useHelpOpen } from "./lib/shortcut-help";
 import { closePalette, openPalette, usePalette } from "./lib/palette";
 import { sidebarRail, sidebarShown, useLayout } from "./lib/layout";
@@ -91,6 +90,7 @@ const NotFound = lazyPage(() => import("./views/NotFound").then((m) => m.NotFoun
 // Keep the shortcut palette warm. The new-agent dialog loads only when opened.
 const Palette = lazyPage(() => import("./views/Palette").then((m) => m.Palette), { idle: true });
 const NewAgent = lazyPage(() => import("./views/NewAgent").then((m) => m.NewAgent));
+const StartingAgent = lazyPage(() => import("./views/StartingAgent").then((m) => m.StartingAgent));
 const ShortcutHelpDialog = lazyDialog(() => import("./views/ShortcutHelp").then((m) => m.ShortcutHelp));
 // The keyboard opener stays in the eager shell even before this dialog's first load.
 function ShortcutHelp() {
@@ -364,12 +364,15 @@ function Shell() {
   const [newAgent, setNewAgent] = useState(false);
   const [preset, setPreset] = useState<NewAgentPreset | null>(null);
   useEffect(() => preloadPages(), []);
-  useEffect(() => preloadCloseoutEvidence(), []);
+  useEffect(() => preloadCloseout(), []);
   useEffect(() => onOpenNewAgent((p) => {
     setPreset(p);
     setNewAgent(true);
   }), []);
   const openNewAgent = useCallback(() => setNewAgent(true), []);
+  useEffect(() => {
+    if (newAgent) void StartingAgent.preload().catch(() => {});
+  }, [newAgent]);
   const closeNewAgent = useCallback(() => {
     setNewAgent(false);
     setPreset(null);
