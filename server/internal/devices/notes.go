@@ -3,18 +3,16 @@ package devices
 import (
 	"encoding/json"
 	"errors"
-	"slices"
+	"strings"
 	"sync"
 	"time"
-
-	"github.com/nwverse/persona/server/internal/nodeproto"
 )
 
 // The hub's one-way events for a node (devices.notify: terminal input, a forwarded port's bytes) come in on the bus's
 // read loop, which must not wait for any one computer: they are queued per machine and written by one writer each, in
 // the order they came, so a computer slow to take them holds up only its own. One whose write stalls noteStall, or
 // that lets maxNoteBytes pile up, is connected again (what ran on the connection ends, as with any dropped one). A
-// forwarded port's bytes (nodeproto.BulkLane) queue apart from the rest: on a framed connection they wait for credit,
+// forwarded port's streams queue apart from the rest (portNote): on a framed connection their bytes wait for credit,
 // and terminal input behind them would wait with them.
 var (
 	noteStall    = 30 * time.Second
@@ -33,10 +31,15 @@ type nodeNote struct {
 	params json.RawMessage
 }
 
+// portNote: event belongs to a forwarded port's stream and stays in order with its bytes: its data and its close
+// (streams.EventData, EventClose), which once ran apart and closed a stream ahead of its last bytes. Its
+// acknowledgements (stream.ack) go with the other events: they wait for no credit, and nothing waits behind them.
+func portNote(event string) bool { return strings.HasPrefix(event, "stream.") && event != "stream.ack" }
+
 // queueNote queues an event for the node.
 func (m *Machine) queueNote(event string, params json.RawMessage) {
 	n := &m.notes
-	if slices.Contains(nodeproto.BulkLane, event) {
+	if portNote(event) {
 		n = &m.bulkNotes
 	}
 	n.mu.Lock()

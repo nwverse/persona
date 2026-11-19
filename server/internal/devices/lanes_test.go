@@ -114,3 +114,39 @@ func (s *seenBytes) String() string {
 	defer s.mu.Unlock()
 	return string(s.b)
 }
+
+// A forwarded port's close reaches the node after all its bytes, framed or not: the close used to queue apart from the
+// bytes, and framed it went ahead of bytes waiting for credit, so the node dropped the stream's last bytes.
+func TestPortStreamClosesAfterItsBytes(t *testing.T) {
+	for _, framed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("framed=%t", framed), func(t *testing.T) {
+			d := newTestDevices(t)
+			info := proto.NodeInfo{Hostname: "box", OS: "linux", Arch: "amd64", Home: "/home/me", Version: "test",
+				Protocol: nodeproto.Version, ProtocolMin: nodeproto.MinManagerVersion, Capabilities: nodeproto.Required}
+			if framed {
+				info.Capabilities = append(info.Capabilities, nodeproto.NodeLanes)
+			}
+			n := &testNode{info: &info, lanes: framed}
+			m := connectedMachine(t, d, "box", n)
+			const chunks = 8
+			for i := range chunks { // more than a window's worth: framed, the later ones wait for credit
+				raw, _ := json.Marshal(map[string]any{"id": "p1", "i": i, "data": strings.Repeat("A", 24<<10)})
+				m.queueNote("stream.data", raw)
+			}
+			m.queueNote("stream.close", json.RawMessage(`{"id":"p1"}`))
+			var stream []string
+			eventually(t, 10*time.Second, "the stream's events at the node", func() bool {
+				stream = stream[:0]
+				for _, e := range n.eventsSeen() {
+					if event, _, _ := strings.Cut(e, " "); strings.HasPrefix(event, "stream.") {
+						stream = append(stream, event)
+					}
+				}
+				return len(stream) == chunks+1
+			})
+			if stream[chunks] != "stream.close" {
+				t.Fatalf("the close came before the stream's last bytes: %v", stream)
+			}
+		})
+	}
+}
