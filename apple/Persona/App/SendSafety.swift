@@ -256,6 +256,8 @@ extension AppModel {
                 defer { heldActionRequests.remove(target) }
                 if retry { try await api.retryUndelivered(key, message) }
                 else { try await api.deleteUndelivered(key, message) }
+            } catch let error as URLError where retry && (error.isTimeout || error.code == .networkConnectionLost) {
+                // The manager may already have checked the chat. Reconcile its instruction before allowing another Retry.
             }
             let row = latest(key)
             let stillHere = heldTarget(key, target.id, row: row) == target
@@ -267,7 +269,7 @@ extension AppModel {
             guard let offer = HeldRetryOffer(target, message),
                   registry.hubs.contains(where: { $0.id == target.pairing && DeviceCredentialTrade.fingerprint($0.config.token) == target.credential })
             else { return }
-            // A successful POST belongs to this pairing even if its chat is no longer showing. A push on this same
+            // The POST belongs to this pairing even if its chat is no longer showing. A push on this same
             // target may already have replaced or removed its instruction while the request was in flight.
             if stillHere, row?.undelivered?.first(where: { $0.id == target.id }).flatMap({ HeldRetryOffer(target, $0) }) != offer { return }
             heldRetryReceipts.insert(offer)

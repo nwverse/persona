@@ -186,6 +186,51 @@ struct UndeliveredTests {
         #expect(!model.heldRetryDisabled(try visibleOffer(model)))
     }
 
+    @Test(arguments: [URLError.Code.networkConnectionLost, .timedOut])
+    func losingTheReplyAfterTheManagerChecksCannotAuthorizeASend(_ code: URLError.Code) async throws {
+        let hub = FakeHub()
+        let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        let model = try heldModel(hub, folder: folder)
+        let check = try visibleOffer(model)
+        var actions: [String] = []
+        hub.on("POST", retryPath) { _ in
+            if actions.isEmpty {
+                actions.append("checked")
+                throw URLError(code)
+            }
+            actions.append("sent")
+            return Data(#"{"ok":true}"#.utf8)
+        }
+        answerDetail(hub, heldJSON)
+        await model.retryUndelivered(key, "x", shown: check)
+        let opened = try heldModel(hub, folder: folder)
+        await opened.retryUndelivered(key, "x", shown: try visibleOffer(opened))
+        #expect(actions == ["checked"])
+        #expect(opened.heldRetryDisabled(check))
+
+        let resend = heldJSON.replacingOccurrences(of: "Might not have arrived. Retry checks the chat first.",
+                                                   with: "Couldn't confirm it arrived. Retry to send it anyway, or delete it.")
+        opened.applySessions([ref: [try agent(resend)]])
+        await opened.retryUndelivered(key, "x", shown: check)
+        #expect(actions == ["checked"])
+        answerDetail(hub, "")
+        await opened.retryUndelivered(key, "x", shown: try visibleOffer(opened))
+        #expect(actions == ["checked", "sent"])
+    }
+
+    @Test func aRefusedConnectionLeavesTheSameManagerCheckAvailable() async throws {
+        let hub = FakeHub()
+        let model = try heldModel(hub)
+        let check = try visibleOffer(model)
+        hub.on("POST", retryPath) { _ in throw URLError(.cannotConnectToHost) }
+        await model.retryUndelivered(key, "x", shown: check)
+        #expect(!model.heldRetryDisabled(check))
+        hub.on("POST", retryPath, json: #"{"ok":true}"#)
+        answerDetail(hub, heldJSON)
+        await model.retryUndelivered(key, "x", shown: check)
+        #expect(hub.sent("POST", retryPath).count == 2 && model.heldRetryDisabled(check))
+    }
+
     @Test func aRejectedPostCanBeRetriedButAnAcknowledgedPostSurvivesAFailedReadAndRelaunch() async throws {
         let hub = FakeHub()
         let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
@@ -240,11 +285,15 @@ struct UndeliveredTests {
         #expect(model.heldRetryDisabled(check))
     }
 
-    @Test func deleteStillWorksWhileTheManagerIsReadingAndALateCopyCannotRestoreIt() async throws {
+    @Test(arguments: [false, true])
+    func deleteStillWorksWhileTheManagerIsReadingAndALateCopyCannotRestoreIt(replyLost: Bool) async throws {
         let hub = FakeHub()
         let model = try heldModel(hub)
         let check = try visibleOffer(model)
-        hub.on("POST", retryPath, json: #"{"ok":true}"#)
+        hub.on("POST", retryPath) { _ in
+            if replyLost { throw URLError(.networkConnectionLost) }
+            return Data(#"{"ok":true}"#.utf8)
+        }
         hub.on("DELETE", "/api/v1/sessions/m/s/held/x", json: #"{"ok":true}"#)
         hub.onAsync("GET", detailPath) { _ in
             #expect(model.heldRetryDisabled(check))
