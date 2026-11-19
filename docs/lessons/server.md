@@ -1930,7 +1930,9 @@ framing the connection on lanes (protocol.md "Lanes") changes the queue instead.
   behind the other side's 32 KiB frame covers everything read meanwhile but names only the newest frame, so the window
   also keeps what the other side reads while its first byte waits to be acknowledged (a simulation that acknowledged
   every frame on its own hid this: 100% there, 87% with one acknowledgement a frame of the other side's), and grows
-  little past it, since on a long round trip a queue shows only a round trip later.
+  little past it, since on a long round trip a queue shows only a round trip later. Pacing bulk at the measured rate
+  was tried and left out: a rate measured from the handshake's small frames is a few hundred bytes a second, and a
+  pace held to it stopped a port's bytes until the notes' stall check closed the connection.
 - **Two queues reorder.** Port bytes went to the bulk queue and the stream's close to the other one, so the close
   overtook the last bytes and the tail of a download was lost. What must arrive in order shares one writer.
 - **A stall is no progress, not a long wait.** The notes' watchdog judged how long one write took; a write waiting for

@@ -184,7 +184,7 @@ func (w *creditWindow) acked(seq uint64, recv uint32, now time.Time) {
 	if w.rate > 0 {
 		var path time.Duration
 		for _, p := range w.paths {
-			if !p.at.IsZero() && now.Sub(p.at) <= rtt {
+			if !p.at.IsZero() && now.Sub(p.at) < rateFor {
 				path = max(path, p.d)
 			}
 		}
