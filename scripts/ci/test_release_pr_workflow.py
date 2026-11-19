@@ -96,6 +96,29 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("verify-merged-pr", PUBLISH.read_text())
         self.assertIn("Create the immutable tag only after the merged source passed every platform check", PUBLISH.read_text())
 
+    def test_review_regressions_checkout_sources_and_upload_order(self):
+        pr = PR.read_text()
+        publish = PUBLISH.read_text()
+        self.assertIn('ref: ${{ needs.plan.outputs.commit }}\n          fetch-depth: 0', pr)
+        self.assertIn('ref: ${{ github.event.workflow_run.head_sha || github.sha }}', publish)
+        self.assertLess(publish.index('actions/checkout@v4'), publish.index('verify-merged-pr'))
+        self.assertLess(pr.index('actions/checkout@v4', pr.index('name: All available release-PR checks passed')), pr.index('verify-artifacts --plan', pr.index('name: All available release-PR checks passed')))
+        self.assertIn('GITHUB_WORKSPACE', pr)
+        self.assertIn('ci_release_config.py public', pr)
+        self.assertIn('releases/latest/download', (ROOT / 'scripts/operations/ci_release_config.py').read_text())
+        self.assertIn('targetCommitish', publish)
+        self.assertLess(publish.index('for name in VERSION SHA256SUMS android.json latest.json'), publish.index('Independently download every uploaded artifact'))
+        self.assertLess(publish.index('Wait for the tag-triggered container and Release workflow'), publish.index('Upload verified downloads'))
+        self.assertIn('github.event.workflow_run.actor.login', publish)
+        self.assertIn('PERSONA_APPLE_DISTRIBUTION_P12_BASE64', pr)
+        self.assertIn('PERSONA_APPLE_PROFILE_6_BASE64', pr)
+
+    def test_old_darwin_job_cannot_overwrite_release_pr_artifacts(self):
+        text = (ROOT / '.github/workflows/release.yml').read_text()
+        self.assertIn('release-pr: [0-9]+', text)
+        self.assertIn("steps.owner.outputs.release_pr == 'false'", text)
+        self.assertIn('release-publish owns its exact artifacts', text)
+
     def test_workflows_lint(self):
         result = subprocess.run(["actionlint", str(PR), str(PUBLISH), str(SCHEDULE)], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

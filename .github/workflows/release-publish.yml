@@ -26,7 +26,8 @@ jobs:
     if: >-
       (github.event_name == 'workflow_dispatch' || (
       github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.head_branch == 'main')) &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.actor.login == 'chyroc')) &&
       github.actor == 'chyroc' &&
       github.triggering_actor == 'chyroc'
     runs-on: ubuntu-latest
@@ -41,6 +42,11 @@ jobs:
       version: ${{ steps.source.outputs.version }}
       commit: ${{ steps.source.outputs.commit }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
       - name: Read the merged release PR metadata
         id: pr
         env:
@@ -100,7 +106,7 @@ jobs:
           PR_NUMBER: ${{ steps.pr.outputs.number || inputs.pr }}
           CHANNEL: ${{ steps.source.outputs.channel }}
           COMMIT: ${{ steps.source.outputs.commit }}
-          ACTOR: ${{ github.actor }}
+          ACTOR: ${{ github.event.workflow_run.actor.login || github.actor }}
         run: |
           set -euo pipefail
           version="$(python3 scripts/operations/release_pr.py --repository "$REPOSITORY" --channel "$CHANNEL" verify-merged-pr --pr-json release/merged-pr.json --commit "$COMMIT" --actor "$ACTOR")"
@@ -157,6 +163,18 @@ jobs:
             git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" push "https://github.com/$REPOSITORY.git" "refs/tags/$TAG"
           fi
           test "$(git rev-parse "$TAG^{commit}")" = "$COMMIT"
+      - name: Mark the Release as owned by this verified release PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          TAG: v${{ steps.source.outputs.version }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          body="$(gh release view "$TAG" --repo "$REPOSITORY" --json body --jq .body)"
+          if [[ "$body" != release-pr:* ]]; then
+            gh release edit "$TAG" --repo "$REPOSITORY" --notes "release-pr: $PR_NUMBER"
+          fi
 
   cli-web:
     name: Attach the release PR's verified CLI and Web downloads
@@ -176,6 +194,25 @@ jobs:
         with:
           name: release-pr-verified-${{ needs.authorize.outputs.pr || inputs.pr }}-${{ needs.authorize.outputs.commit }}
           path: release
+      - name: Wait for the tag-triggered container and Release workflow
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          TAG: v${{ needs.authorize.outputs.version }}
+          COMMIT: ${{ needs.authorize.outputs.commit }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 90); do
+            status="$(gh run list --repo "$REPOSITORY" --workflow release.yml --event push --branch "$TAG" --limit 1 --json status,conclusion,headSha --jq '.[0] | [.status,.conclusion,.headSha] | @tsv')"
+            read -r state conclusion sha <<< "$status"
+            test "$sha" = "$COMMIT"
+            if [[ "$state" = completed ]]; then
+              test "$conclusion" = success
+              break
+            fi
+            test "$attempt" -lt 90 || { echo 'tag release workflow did not finish in time' >&2; exit 1; }
+            sleep 20
+          done
       - name: Verify the Release, tag source and manifest before any upload
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -185,12 +222,13 @@ jobs:
           PYTHONPATH: scripts/operations
         run: |
           set -euo pipefail
-          gh release view "$TAG" --repo "$REPOSITORY" --json tagName,isDraft,isPrerelease > release/release.json
+          gh release view "$TAG" --repo "$REPOSITORY" --json tagName,isDraft,isPrerelease,targetCommitish > release/release.json
           python3 - <<'PY'
           import json,os,subprocess
           from pathlib import Path
           release=json.loads(Path('release/release.json').read_text())
           assert release['tagName']==os.environ['TAG'] and not release['isDraft']
+          assert release['targetCommitish']==os.environ['COMMIT']
           assert release['isPrerelease']==(os.environ['TAG'].find('-beta.')>=0)
           manifest=json.loads(Path('release/downloads/latest.json').read_text())
           assert manifest['version']==os.environ['TAG'][1:]
@@ -222,11 +260,24 @@ jobs:
             test -f "$path"
             name="$(basename "$path")"
             case "$name" in
+              latest.json|SHA256SUMS|VERSION|android.json)
+                # Update indexes go last: a hub must never see metadata whose referenced downloads are absent.
+                continue
+                ;;
               *.verification.json|receipt.json|plan.json|release.json|merged-pr.json|store-verified.json|authorization.json|beta-receipt.json)
                 printf 'receipt_kept_out_of_release_assets %s\n' "$name"
                 continue
                 ;;
             esac
+            gh release upload "$TAG" "$path" --repo "$REPOSITORY" --clobber
+            expected="$(shasum -a 256 "$path" | awk '{print $1}')"
+            remote="$(gh api "repos/$REPOSITORY/releases/tags/$TAG" --jq '.assets[] | select(.name == "'"$name"'") | .digest')"
+            test "$remote" = "sha256:$expected"
+            printf 'verified %s %s\n' "$name" "$expected"
+          done
+          for name in VERSION SHA256SUMS android.json latest.json; do
+            path="release/downloads/$name"
+            test -f "$path" || continue
             gh release upload "$TAG" "$path" --repo "$REPOSITORY" --clobber
             expected="$(shasum -a 256 "$path" | awk '{print $1}')"
             remote="$(gh api "repos/$REPOSITORY/releases/tags/$TAG" --jq '.assets[] | select(.name == "'"$name"'") | .digest')"

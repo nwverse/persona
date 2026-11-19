@@ -1,5 +1,7 @@
 """An explicit release PR is the only new CI publication input."""
 import json
+import gzip
+import hashlib
 from pathlib import Path
 import re
 import subprocess
@@ -43,7 +45,7 @@ class ReleasePRTests(unittest.TestCase):
             return ("a" * 40 + "\trefs/tags/v0.9.1\n" + "b" * 40 + "\trefs/tags/v0.9.1-beta.1\n"
                     + "c" * 40 + "\trefs/tags/v0.9.1-beta.2\n")
         with patch.object(release, "tags", return_value={"v0.9.1": "a" * 40, "v0.9.1-beta.1": "b" * 40, "v0.9.1-beta.2": "c" * 40}):
-            self.assertEqual(release.next_version("nwverse/persona", True), "0.9.1-beta.3")
+            self.assertEqual(release.next_version("nwverse/persona", True, stable_tag="v0.9.1"), "0.9.1-beta.3")
             self.assertEqual(release.next_version("nwverse/persona", False, "0.9.2"), "0.9.2")
         with patch.object(release, "tags", return_value={"v0.9.2": "a" * 40}):
             with self.assertRaises(release.ReleaseError):
@@ -53,7 +55,7 @@ class ReleasePRTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "release.json"
             with patch.object(release.subprocess, "check_output", return_value="1794790000\n"):
-                data = release.write_plan(path, "nwverse/persona", "beta", "0.9.1-beta.3", COMMIT, 12, OTHER)
+                data = release.write_plan(path, "nwverse/persona", "beta", "0.9.1-beta.3", COMMIT, 12, OTHER, build=202611191200)
             self.assertEqual(data["tag"], "v0.9.1-beta.3")
             self.assertEqual(data["merge_commit"], OTHER)
             self.assertEqual(release.load_plan(path, "nwverse/persona", "beta", COMMIT)["pr"], 12)
@@ -71,7 +73,7 @@ class ReleasePRTests(unittest.TestCase):
             (artifacts / "latest.json").write_text('{"version":"0.9.1-beta.3"}')
             (artifacts / "Persona-test.apk").write_bytes(b"signed fixture")
             plan = root / "release.json"
-            release.write_plan(plan, "nwverse/persona", "beta", "0.9.1-beta.3", COMMIT, 12, COMMIT, timestamp=1794790000)
+            release.write_plan(plan, "nwverse/persona", "beta", "0.9.1-beta.3", COMMIT, 12, COMMIT, build=202611191200)
             data = release.verify_artifacts(plan, "nwverse/persona", "beta", COMMIT, (artifacts,))
             self.assertEqual(len(data["artifacts"]), 2)
             self.assertNotIn("release.json", {item["name"] for item in data["artifacts"]})
@@ -97,14 +99,23 @@ class ReleasePRTests(unittest.TestCase):
             downloads = root / "downloads"
             downloads.mkdir()
             plan_path = root / "plan.json"
-            release.write_plan(plan_path, "nwverse/persona", "beta", "0.9.1-beta.3", COMMIT, 12, COMMIT, timestamp=1794790000)
+            release.write_plan(plan_path, "nwverse/persona", "beta", "0.9.1-beta.3", COMMIT, 12, COMMIT, build=202611191200)
             manifest = {"version": "0.9.1-beta.3", "commit": COMMIT, "build": release.load_plan(plan_path, "nwverse/persona", "beta", COMMIT)["build"],
-                        "channel": "beta", "files": {"linux-amd64": {"name": "personad-linux-amd64.gz"}},
-                        "links": {"windows-amd64": {"name": "persona-link-windows-amd64.exe.gz"}},
-                        "nodes": {"persona-node": {"windows-amd64": {"name": "persona-node-windows-amd64.exe.gz"}}}}
+                        "channel": "beta", "files": {}, "links": {}, "nodes": {}}
+            for group, name in (("files", "personad-linux-amd64.gz"), ("links", "persona-link-windows-amd64.exe.gz"),
+                                ("nodes", "persona-node-windows-amd64.exe.gz")):
+                raw = name.encode()
+                packed = gzip.compress(raw, mtime=0)
+                entry = {"name": name, "size": len(packed), "sha256": hashlib.sha256(packed).hexdigest(),
+                         "binary_sha256": hashlib.sha256(raw).hexdigest()}
+                if group == "files":
+                    manifest[group]["linux-amd64"] = entry
+                elif group == "links":
+                    manifest[group]["windows-amd64"] = entry
+                else:
+                    manifest[group].setdefault("persona-node", {})["windows-amd64"] = entry
+                (downloads / name).write_bytes(packed)
             (downloads / "latest.json").write_text(json.dumps(manifest))
-            for name in ("personad-linux-amd64.gz", "persona-link-windows-amd64.exe.gz", "persona-node-windows-amd64.exe.gz"):
-                (downloads / name).write_bytes(name.encode())
             data = release.bind_cli_web(plan_path, downloads)
             self.assertEqual(len(data["artifacts"]), 4)
             release.verify_artifacts(plan_path, "nwverse/persona", "beta", COMMIT)
@@ -130,6 +141,32 @@ class ReleasePRTests(unittest.TestCase):
             self.assertEqual(release.schedule_version("nwverse/persona", "release", "v0.9.1", COMMIT, COMMIT, []), None)
             self.assertEqual(release.schedule_version("nwverse/persona", "release", "v0.9.1", COMMIT, OTHER, ["fix: repair a bug"]), "0.9.2")
             self.assertEqual(release.schedule_version("nwverse/persona", "release", "v0.9.1", COMMIT, OTHER, ["feat(ui): a feature"]), "0.10.0")
+
+
+    def test_manifest_size_and_both_digests_must_match_the_download(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            raw = b"exact executable bytes"
+            packed = gzip.compress(raw, mtime=0)
+            (root / "personad-linux-amd64.gz").write_bytes(packed)
+            good = {"name": "personad-linux-amd64.gz", "size": len(packed),
+                    "sha256": hashlib.sha256(packed).hexdigest(), "binary_sha256": hashlib.sha256(raw).hexdigest()}
+            release.check_manifest_bytes(root, good)
+            for key, value in (("size", len(packed) + 1), ("sha256", "0" * 64), ("binary_sha256", "0" * 64)):
+                with self.subTest(key=key), self.assertRaises(release.ReleaseError):
+                    release.check_manifest_bytes(root, {**good, key: value})
+
+    def test_build_numbers_are_unique_and_monotonic_not_commit_minutes(self):
+        with patch.object(release.subprocess, "check_output", return_value="202611191201\n"):
+            self.assertEqual(release.next_build(202611191200), 202611191201)
+            self.assertEqual(release.next_build(202611191201), 202611191202)
+        with self.assertRaises(release.ReleaseError):
+            release.next_build(999999999999)
+
+    def test_beta_allocation_skips_all_existing_versions_even_with_pending_stable(self):
+        with patch.object(release, "tags", return_value={"v0.9.1": "a" * 40, "v0.9.2": "b" * 40, "v0.9.1-beta.2": "c" * 40}):
+            self.assertEqual(release.next_version("nwverse/persona", True), "0.9.2-beta.3")
+            self.assertEqual(release.next_version("nwverse/persona", True, stable_tag="v0.9.1"), "0.9.1-beta.3")
 
 
 if __name__ == "__main__":

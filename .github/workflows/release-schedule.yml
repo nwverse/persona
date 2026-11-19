@@ -55,6 +55,9 @@ jobs:
             fi
           fi
           version="$(python3 scripts/operations/release_pr.py --repository "$REPOSITORY" --channel "$CHANNEL" schedule-version --stable-tag "$stable" --commit "$commit" --previous-commit "$previous" --subjects release-subjects.txt)"
+          if [[ "$CHANNEL" = beta ]] && gh release view "v$version" --repo "$REPOSITORY" --json tagName >/dev/null 2>&1; then
+            version="$(python3 scripts/operations/release_pr.py --repository "$REPOSITORY" --channel beta next-version --stable-tag "$stable")"
+          fi
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?$ ]] || exit 0
           branch="release/$version"
           title="release: v$version"

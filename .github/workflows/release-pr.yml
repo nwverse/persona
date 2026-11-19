@@ -101,10 +101,29 @@ jobs:
             version="$(python3 scripts/operations/release_pr.py --repository "$REPOSITORY" --channel "$CHANNEL" verify-pr --pr-json release-pr.json)"
           fi
           python3 scripts/operations/release_pr.py --repository "$REPOSITORY" --channel "$CHANNEL" next-version --version "$version"
+          current_build="$(python3 - <<'PY'
+          import json,subprocess,os
+          repository=os.environ['REPOSITORY']
+          build=0
+          try:
+              data=json.loads(subprocess.check_output(['gh','release','download','beta-channel','--repo',repository,'--pattern','latest.json','--output','-'],text=True,stderr=subprocess.DEVNULL))
+              build=max(build,int(data.get('build',0)))
+          except Exception:
+              pass
+          try:
+              data=json.loads(subprocess.check_output(['gh','release','view','--repo',repository,'--json','tagName'],text=True))
+              data=json.loads(subprocess.check_output(['gh','release','download',data['tagName'],'--repo',repository,'--pattern','latest.json','--output','-'],text=True))
+              build=max(build,int(data.get('build',0)))
+          except Exception:
+              pass
+          print(build)
+          PY
+          )"
+          build="$(python3 scripts/operations/release_pr.py --repository "$REPOSITORY" --channel "$CHANNEL" next-build --current "$current_build")"
           test "$GIT_COMMIT" = "$MERGE_COMMIT"
           mkdir -p release
           python3 scripts/operations/release_pr.py --repository "$REPOSITORY" --channel "$CHANNEL" plan \
-            --version "$version" --commit "$GIT_COMMIT" --pr "$PR_NUMBER" --merge-commit "$MERGE_COMMIT" \
+            --version "$version" --commit "$GIT_COMMIT" --pr "$PR_NUMBER" --merge-commit "$MERGE_COMMIT" --build "$build" \
             --source-commit "$(python3 -c 'import json; print(json.load(open("release-pr.json"))["headRefOid"])')" --out release/plan.json
           python3 scripts/operations/release_pr.py --repository "$REPOSITORY" --channel "$CHANNEL" check-plan --plan release/plan.json --commit "$GIT_COMMIT"
           {
@@ -148,6 +167,10 @@ jobs:
         with:
           name: release-pr-plan-${{ needs.plan.outputs.pr }}-${{ needs.plan.outputs.commit }}
           path: release
+      - name: Prepare the public GitHub update source without a personal config
+        run: |
+          set -euo pipefail
+          printf 'PERSONA_CONFIG=%s\n' "$(python3 scripts/operations/ci_release_config.py public --directory "$RUNNER_TEMP/persona-public")" >> "$GITHUB_ENV"
       - name: Verify the complete CLI/Web build from the exact merge result
         env:
           VERSION: ${{ needs.plan.outputs.version }}
@@ -300,6 +323,43 @@ jobs:
           set -euo pipefail
           python3 scripts/operations/ci_release_config.py apple --directory "$RUNNER_TEMP/persona-apple"
           printf 'PERSONA_CONFIG=%s\n' "$RUNNER_TEMP/persona-apple/config.json" >> "$GITHUB_ENV"
+      - name: Install the Apple Distribution identity and provisioning profiles
+        env:
+          PERSONA_APPLE_DISTRIBUTION_P12_BASE64: ${{ secrets.PERSONA_APPLE_DISTRIBUTION_P12_BASE64 }}
+          PERSONA_APPLE_DISTRIBUTION_P12_PASSWORD: ${{ secrets.PERSONA_APPLE_DISTRIBUTION_P12_PASSWORD }}
+          PERSONA_APPLE_PROFILE_1_BASE64: ${{ secrets.PERSONA_APPLE_PROFILE_1_BASE64 }}
+          PERSONA_APPLE_PROFILE_2_BASE64: ${{ secrets.PERSONA_APPLE_PROFILE_2_BASE64 }}
+          PERSONA_APPLE_PROFILE_3_BASE64: ${{ secrets.PERSONA_APPLE_PROFILE_3_BASE64 }}
+          PERSONA_APPLE_PROFILE_4_BASE64: ${{ secrets.PERSONA_APPLE_PROFILE_4_BASE64 }}
+          PERSONA_APPLE_PROFILE_5_BASE64: ${{ secrets.PERSONA_APPLE_PROFILE_5_BASE64 }}
+          PERSONA_APPLE_PROFILE_6_BASE64: ${{ secrets.PERSONA_APPLE_PROFILE_6_BASE64 }}
+          PERSONA_SIGNING_KEYCHAIN: ${{ runner.temp }}/persona-release.keychain
+          PERSONA_SIGNING_KEYCHAIN_PASSWORD: ${{ secrets.PERSONA_SIGNING_KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$PERSONA_APPLE_DISTRIBUTION_P12_BASE64"
+          test -n "$PERSONA_APPLE_DISTRIBUTION_P12_PASSWORD"
+          test -n "$PERSONA_APPLE_PROFILE_1_BASE64"
+          test -n "$PERSONA_APPLE_PROFILE_2_BASE64"
+          test -n "$PERSONA_APPLE_PROFILE_3_BASE64"
+          test -n "$PERSONA_APPLE_PROFILE_4_BASE64"
+          test -n "$PERSONA_APPLE_PROFILE_5_BASE64"
+          test -n "$PERSONA_APPLE_PROFILE_6_BASE64"
+          test -n "$PERSONA_SIGNING_KEYCHAIN_PASSWORD"
+          umask 077
+          printf '%s' "$PERSONA_APPLE_DISTRIBUTION_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/apple-distribution.p12"
+          security create-keychain -p "$PERSONA_SIGNING_KEYCHAIN_PASSWORD" "$PERSONA_SIGNING_KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$PERSONA_SIGNING_KEYCHAIN"
+          security unlock-keychain -p "$PERSONA_SIGNING_KEYCHAIN_PASSWORD" "$PERSONA_SIGNING_KEYCHAIN"
+          security import "$RUNNER_TEMP/apple-distribution.p12" -k "$PERSONA_SIGNING_KEYCHAIN" -P "$PERSONA_APPLE_DISTRIBUTION_P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$PERSONA_SIGNING_KEYCHAIN_PASSWORD" "$PERSONA_SIGNING_KEYCHAIN"
+          security find-identity -v -p codesigning "$PERSONA_SIGNING_KEYCHAIN" | grep 'Apple Distribution'
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          for i in 1 2 3 4 5 6; do
+            name="PERSONA_APPLE_PROFILE_${i}_BASE64"
+            printf '%s' "${!name}" | base64 --decode > "$RUNNER_TEMP/profile-$i.mobileprovision"
+            cp "$RUNNER_TEMP/profile-$i.mobileprovision" "$HOME/Library/MobileDevice/Provisioning Profiles/"
+          done
       - name: Archive, export and upload the formal iPhone/Watch build
         env:
           RUSTUP_TOOLCHAIN: '1.98.0'
@@ -441,6 +501,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
           name: release-pr-plan-${{ needs.plan.outputs.pr }}-${{ needs.plan.outputs.commit }}

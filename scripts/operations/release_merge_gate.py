@@ -43,7 +43,7 @@ def require_verified(repository, number, head, title, runner=None):
         if not matching or any(check.get("status") != "completed" or check.get("conclusion") != "success" for check in matching):
             raise ReleaseMergeError("all required release-PR checks must pass at the exact merge result")
         artifact_name = f"release-pr-verified-{number}-{merge_commit}"
-        artifacts = json.loads(runner(["gh", "api", f"repos/{repository}/actions/artifacts?per_page=100"], text=True))
+        artifacts = json.loads(runner(["gh", "api", f"repos/{repository}/actions/artifacts?per_page=100&page=1", "--paginate"], text=True))
         found = [item for item in artifacts.get("artifacts", [])
                  if item.get("name") == artifact_name and item.get("expired") is False]
         if not found:

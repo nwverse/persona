@@ -46,10 +46,14 @@ def prepare_android(directory, env):
         raise ConfigurationError("Android keystore must not be empty")
     write_private(keystore, raw)
     repository = required("GITHUB_REPOSITORY", env)
+    workspace = env.get("GITHUB_WORKSPACE", "")
+    if not workspace or not Path(workspace).is_dir():
+        raise ConfigurationError("Android release must use the checked-out fixed-source workspace")
     config = {
         "repository": repository,
         "git_url": "https://github.com/" + repository + ".git",
-        "checkout": str(directory / "checkout"),
+        "checkout": workspace,
+        "branch": "main",
         "application_id": required("PERSONA_ANDROID_APPLICATION_ID", env),
         "certificate_sha256": certificate,
         "state_directory": str(directory / "state"),
@@ -98,9 +102,22 @@ def prepare_apple(directory, env):
     return path
 
 
+def prepare_public(directory, env):
+    repository = required("GITHUB_REPOSITORY", env)
+    config = {
+        "publish": {
+            "site_url": "https://github.com/" + repository,
+            "update_url": "https://github.com/" + repository + "/releases/latest/download",
+        },
+    }
+    path = directory / "public-config.json"
+    write_private(path, (json.dumps(config, indent=2) + "\n").encode())
+    return path
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("platform", choices=("android", "apple"))
+    parser.add_argument("platform", choices=("android", "apple", "public"))
     parser.add_argument("--directory", type=Path, required=True)
     args = parser.parse_args(argv)
     directory = args.directory.resolve()
@@ -112,8 +129,12 @@ def main(argv=None):
         raise ConfigurationError("private release configuration directory must not be a symlink")
     if args.platform == "android":
         print(prepare_android(directory, os.environ))
-    else:
+    elif args.platform == "apple":
         print(prepare_apple(directory, os.environ))
+    elif args.platform == "public":
+        print(prepare_public(directory, os.environ))
+    else:
+        raise ConfigurationError("unknown release configuration platform")
 
 
 if __name__ == "__main__":

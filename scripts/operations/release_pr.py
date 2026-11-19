@@ -9,7 +9,7 @@ publishes verified artifacts to that tag. Ordinary PR merges do nothing here.
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
+import gzip
 import hashlib
 import json
 import os
@@ -75,7 +75,7 @@ def tags(repository, runner=subprocess.check_output):
     return result
 
 
-def next_version(repository, beta, requested="", runner=subprocess.check_output):
+def next_version(repository, beta, requested="", runner=subprocess.check_output, stable_tag=""):
     known = tags(repository, runner)
     if not beta:
         # A stable release is a deliberate PR decision: feature commits bump minor, fix-only commits bump patch.
@@ -86,15 +86,21 @@ def next_version(repository, beta, requested="", runner=subprocess.check_output)
             raise ReleaseError("version already exists; choose a new immutable release PR version")
         return requested
     stable = []
-    for tag in known:
-        match = STABLE.fullmatch(tag)
-        if match:
-            stable.append(tuple(map(int, match.groups())))
-    if not stable:
-        raise ReleaseError("no existing stable release version was found")
-    base = max(stable)
+    if stable_tag:
+        match = STABLE.fullmatch(stable_tag)
+        if not match:
+            raise ReleaseError("latest stable Release is not a semantic version")
+        base = tuple(map(int, match.groups()))
+    else:
+        for tag in known:
+            match = STABLE.fullmatch(tag)
+            if match:
+                stable.append(tuple(map(int, match.groups())))
+        if not stable:
+            raise ReleaseError("no existing stable release version was found")
+        base = max(stable)
     if beta:
-        number = max((int(match.group(4)) for tag in known if (match := BETA.fullmatch(tag)) and tuple(map(int, match.groups()[:3])) == base), default=0) + 1
+        number = max((int(match.group(4)) for tag in known if (match := BETA.fullmatch(tag))), default=0) + 1
         version = "%d.%d.%d-beta.%d" % (*base, number)
     else:
         raise ReleaseError("version already exists; choose a new immutable release PR version")
@@ -118,7 +124,7 @@ def schedule_version(repository, channel, stable_tag, commit, previous_commit, s
     if channel == "beta":
         if previous_commit == commit:
             return None
-        return next_version(repository, True)
+        return next_version(repository, True, stable_tag=stable_tag)
     if channel != "release":
         raise ReleaseError("schedule channel must be release or beta")
     if previous_commit == commit:
@@ -126,15 +132,16 @@ def schedule_version(repository, channel, stable_tag, commit, previous_commit, s
     return next_version(repository, False, stable_version(stable_tag, subjects))
 
 
+def next_build(current_build):
+    if type(current_build) is not int or not 0 <= current_build < 999999999999:
+        raise ReleaseError("current release build is invalid")
+    candidate = current_build + 1
+    now = int(subprocess.check_output(["date", "-u", "+%Y%m%d%H%M"], text=True).strip())
+    return max(candidate, now)
+
+
 def write_plan(path, repository, channel, version, commit, pr_number, merge_commit, build=None, source_commit="", timestamp=None):
     validate_identity(repository, commit)
-    if build is None:
-        # Commit time, not the wall clock of a retry: the same source keeps one build identity, and two different
-        # squash commits cannot share a TestFlight build number. A commit in the future is rejected by the caller's
-        # immutable-source checks; this conversion uses UTC like the existing publisher.
-        if timestamp is None:
-            timestamp = int(subprocess.check_output(["git", "show", "-s", "--format=%ct", commit], text=True).strip())
-        build = int(datetime.fromtimestamp(timestamp, timezone.utc).strftime("%Y%m%d%H%M"))
     if source_commit and not SHA.fullmatch(source_commit):
         raise ReleaseError("release PR source head must be a full commit")
     if channel not in ("release", "beta"):
@@ -142,6 +149,11 @@ def write_plan(path, repository, channel, version, commit, pr_number, merge_comm
     tag = "v" + version
     if not ((channel == "beta" and BETA.fullmatch(tag)) or (channel == "release" and STABLE.fullmatch(tag))):
         raise ReleaseError("version and channel differ")
+    if build is None:
+        # The administrator chooses a previously unused build number through the protected release workflow.
+        # A wall-clock minute is not unique across squash merges, and an older/newer commit must not share TestFlight's
+        # build number. Retries keep this plan's number rather than minting another one from the current minute.
+        raise ReleaseError("release plan requires an explicit unused build number")
     if type(build) is not int or not re.fullmatch(r"[0-9]{12}", str(build)):
         raise ReleaseError("release build must be a UTC twelve-digit number")
     data = {"schema": 1, "repository": repository, "channel": channel, "version": version,
@@ -189,6 +201,19 @@ def verify_merged_pr(pr, repository, channel, commit, actor):
     return version
 
 
+def check_manifest_bytes(directory, item):
+    path = directory / item["name"]
+    if not path.is_file() or path.stat().st_size != item.get("size"):
+        raise ReleaseError("a release download's size differs from its manifest")
+    with path.open("rb") as stream:
+        if hashlib.file_digest(stream, "sha256").hexdigest() != item.get("sha256"):
+            raise ReleaseError("a release download's archive digest differs from its manifest")
+    with path.open("rb") as stream:
+        with gzip.open(stream, "rb") as unpacked:
+            if hashlib.file_digest(unpacked, "sha256").hexdigest() != item.get("binary_sha256"):
+                raise ReleaseError("a release download's executable digest differs from its manifest")
+
+
 def bind_cli_web(plan_path, directory):
     plan = json.loads(Path(plan_path).read_text())
     directory = Path(directory)
@@ -208,11 +233,13 @@ def bind_cli_web(plan_path, directory):
         for item in manifest.get(group, {}).values():
             if item.get("name") not in names:
                 raise ReleaseError("the release manifest names a download absent from the verified artifacts")
+            check_manifest_bytes(directory, item)
     for group in ("programs", "nodes", "helpers"):
         for platforms in manifest.get(group, {}).values():
             for item in platforms.values():
                 if item.get("name") not in names:
                     raise ReleaseError("the release manifest names a node/helper absent from the verified artifacts")
+                check_manifest_bytes(directory, item)
     plan["artifacts"] = artifacts
     Path(plan_path).write_text(json.dumps(plan, indent=2) + "\n")
     return plan
@@ -255,6 +282,7 @@ def main(argv=None):
     verify.add_argument("--commit", default="")
     version = sub.add_parser("next-version")
     version.add_argument("--version", default="")
+    version.add_argument("--stable-tag", default="")
     schedule = sub.add_parser("schedule-version")
     schedule.add_argument("--stable-tag", required=True)
     schedule.add_argument("--commit", required=True)
@@ -265,12 +293,14 @@ def main(argv=None):
     plan.add_argument("--commit", required=True)
     plan.add_argument("--pr", type=int, required=True)
     plan.add_argument("--merge-commit", required=True)
-    plan.add_argument("--build", type=int)
+    plan.add_argument("--build", type=int, required=True)
     plan.add_argument("--source-commit", default="")
     plan.add_argument("--out", type=Path, required=True)
     check = sub.add_parser("check-plan")
     check.add_argument("--plan", type=Path, required=True)
     check.add_argument("--commit", required=True)
+    build_parser = sub.add_parser("next-build")
+    build_parser.add_argument("--current", type=int, required=True)
     bind = sub.add_parser("bind-cli-web")
     bind.add_argument("--plan", type=Path, required=True)
     bind.add_argument("--downloads", type=Path, required=True)
@@ -288,7 +318,7 @@ def main(argv=None):
     if args.command == "verify-pr":
         print(verify_pr(json.loads(args.pr_json.read_text()), args.repository, args.channel == "beta", args.merged, args.commit))
     elif args.command == "next-version":
-        print(next_version(args.repository, args.channel == "beta", args.version))
+        print(next_version(args.repository, args.channel == "beta", args.version, stable_tag=args.stable_tag))
     elif args.command == "schedule-version":
         subjects = args.subjects.read_text().splitlines()
         selected = schedule_version(args.repository, args.channel, args.stable_tag, args.commit, args.previous_commit, subjects)
@@ -296,6 +326,8 @@ def main(argv=None):
             print(selected)
         else:
             print('No new release needed; the exact source is already published.')
+    elif args.command == "next-build":
+        print(next_build(args.current))
     elif args.command == "plan":
         if args.pr < 1:
             raise ReleaseError("release PR number must be positive")

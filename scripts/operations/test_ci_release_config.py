@@ -15,7 +15,7 @@ class CIReleaseConfigTests(unittest.TestCase):
     def test_android_configuration_reuses_the_existing_signer_contract(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            env = {"GITHUB_REPOSITORY": "nwverse/persona", "ANDROID_HOME": "/sdk",
+            env = {"GITHUB_REPOSITORY": "nwverse/persona", "ANDROID_HOME": "/sdk", "GITHUB_WORKSPACE": str(root),
                    "PERSONA_ANDROID_CERTIFICATE_SHA256": "a" * 64,
                    "PERSONA_ANDROID_KEYSTORE_BASE64": base64.b64encode(b"fixture keystore").decode(),
                    "PERSONA_ANDROID_KEY_ALIAS": "release", "PERSONA_ANDROID_APPLICATION_ID": "example.app"}
@@ -23,7 +23,7 @@ class CIReleaseConfigTests(unittest.TestCase):
             data = json.loads(path.read_text())
             self.assertEqual(data["repository"], "nwverse/persona")
             self.assertEqual(data["git_url"], "https://github.com/nwverse/persona.git")
-            self.assertEqual(data["checkout"], str(root / "checkout"))
+            self.assertEqual(data["checkout"], str(root))
             self.assertEqual(data["build_environment"]["ANDROID_HOME"], "/sdk")
             self.assertEqual((root / "android-release.jks").read_bytes(), b"fixture keystore")
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
