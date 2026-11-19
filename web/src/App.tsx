@@ -407,6 +407,13 @@ function Shell() {
   });
   // Back closes it first
   useCloseOnBack(drawer, close, narrow);
+  // Its Search hands over to the palette: closed in the same commit, the drawer's history entry becomes the palette's
+  // (lib/back-close.ts), so one Back closes the palette, and a pick's page replaces it with no copy of this page left under.
+  // (A wide screen has no drawer open to close.)
+  const searchFromSidebar = useCallback(() => {
+    close();
+    openPalette("jump");
+  }, [close]);
   // Esc closes it (a menu or a dialog over it closes first); Tab stays in it, like a dialog's
   useEffect(() => {
     if (!a11y.modal) return;
@@ -584,7 +591,7 @@ function Shell() {
         )}
         style={{ transitionTimingFunction: EASE }}
       >
-        {rail ? <SidebarRail route={route} onSearch={() => openPalette("jump")} onNewAgent={openNewAgent} /> : <Sidebar route={route} onSearch={() => openPalette("jump")} onNewAgent={openNewAgent} onNavigate={close} workspaceActions={workspaceActions} />}
+        {rail ? <SidebarRail route={route} onSearch={() => openPalette("jump")} onNewAgent={openNewAgent} /> : <Sidebar route={route} onSearch={searchFromSidebar} onNewAgent={openNewAgent} onNavigate={close} workspaceActions={workspaceActions} />}
         {!narrow && !rail && <SidebarResize column={sidebarId} />}
       </div>
       {/* the scrim fades out as well as in; a drag sets its opacity as it goes (lib/drawer.ts) */}
