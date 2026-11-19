@@ -50,9 +50,26 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("beta.yml", text)
         self.assertIn("latest.yml", text)
 
+    def test_pr_metadata_survives_the_clean_source_checkout(self):
+        text = PR.read_text()
+        self.assertIn("PR_JSON: ${{ runner.temp }}/release-pr.json", text)
+        self.assertIn("PR_LIST_JSON: ${{ runner.temp }}/release-pr-list.json", text)
+        self.assertIn("PR_REST_JSON: ${{ runner.temp }}/release-pr-rest.json", text)
+        self.assertNotIn("json.load(open(\"release-pr.json\"))", text)
+        self.assertNotIn("Path('release-pr.json')", text)
+        self.assertNotIn("> release-pr.json", text)
+        self.assertNotIn("> release-pr-list.json", text)
+        self.assertNotIn("> release-pr-rest.json", text)
+        self.assertIn('verify-pr --pr-json "$PR_JSON"', text)
+        self.assertIn("GIT_COMMIT: ${{ github.event.pull_request.merge_commit_sha || github.sha }}", text)
+        self.assertIn("COMMIT=\"$commit\" python3", text)
+        self.assertIn("--json number,title,state,isDraft,baseRefName", text)
+        self.assertNotIn("open(os.environ['PR_JSON'])", text)
+        self.assertIn('json.load(open(sys.argv[1]))', text)
+
     def test_main_without_a_merged_release_pr_has_no_build_plan(self):
         text = PR.read_text()
-        self.assertIn("Path('release-pr.json').write_text('{}')", text)
+        self.assertIn("Path(os.environ['PR_JSON']).write_text('{}')", text)
         self.assertNotIn("raise SystemExit(78)", text)
         self.assertIn("steps.source.outputs.number != '0'", str(self.pr["jobs"]["plan"]["steps"]))
         for name, job in self.pr["jobs"].items():
@@ -97,7 +114,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn("gh pr create", text)
         self.assertIn("refs/heads/$branch", text)
         self.assertIn("preserve its failed source", text)
-        self.assertIn("--reserved $reserved", text)
+        self.assertIn("release-reserved.txt", text)
+        self.assertIn("--reserved $(tr '\\n' ' ' < release-reserved.txt)", text)
         self.assertNotIn("--force", text)
         self.assertNotIn('refs/tags/$TAG', text)
         self.assertNotIn("gh release create", text)

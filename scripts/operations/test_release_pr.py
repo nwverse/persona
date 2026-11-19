@@ -144,11 +144,13 @@ class ReleasePRTests(unittest.TestCase):
 
 
     def test_orphaned_release_branches_reserve_their_versions(self):
-        with patch.object(release, "tags", return_value={"v0.9.1": "a" * 40, "v0.9.1-beta.1": "b" * 40, "v0.9.1-beta.9": "c" * 40}):
+        with patch.object(release, "tags", return_value={"v0.9.1": "a" * 40, "v0.9.1-beta.1": "b" * 40, "v0.9.1-beta.8": "c" * 40}):
             self.assertEqual(release.next_version("nwverse/persona", True, stable_tag="v0.9.1",
                 reserved=("0.9.1-beta.9",)), "0.9.1-beta.10")
+            self.assertEqual(release.next_version("nwverse/persona", True, stable_tag="v0.9.1",
+                reserved=("0.9.1-beta.9", "0.9.1-beta.10")), "0.9.1-beta.11")
             self.assertEqual(release.schedule_version("nwverse/persona", "beta", "v0.9.1", COMMIT, OTHER, [],
-                reserved=("0.9.1-beta.10",)), "0.9.1-beta.10")
+                reserved=("0.9.1-beta.10",)), "0.9.1-beta.11")
 
 
     def test_manifest_size_and_both_digests_must_match_the_download(self):

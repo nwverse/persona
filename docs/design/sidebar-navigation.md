@@ -237,7 +237,10 @@ switch the detail without a push when a sidebar item is chosen; only drilling do
 **Android** (#9667). A regular window — the sidebar column beside the page, or over it — follows this section. `SidebarPageRoots`
 (`android/app/src/main/java/persona/android/navigation/SidebarPageRoots.kt`) is the pure model, with the same steps as `SidebarPageRoots.swift`: a place
 replaces the Assistant stack's root and does not animate; a drill-down pushes; each root keeps its path; picking the root in
-front pops; the shaded row follows the root (`AssistantSidebarShade`). The conversation and the fixed places (Inbox, To-dos,
+front pops; the shaded row follows the root (`AssistantSidebarShade`). An Agent root shades its exact Directions row with the
+same `JRow` selected look and semantics as the other rows; a nested sub-Agent opens its parent without selecting both rows.
+An Agent pushed from inside Persona keeps Persona's root shade on either tab, including compact windows; compact Persona
+retains its existing conversation shading. The conversation and the fixed places (Inbox, To-dos,
 Knowledge and Computers) stay composed while another is in front, so the conversation keeps its non-saveable history, local
 operations, running effects and list anchor, and those places keep their list, filter and scroll. Folding inserts the
 conversation under that same list and unfolding removes it, so that page is not rebuilt. A to-do opened as its own root, or an
