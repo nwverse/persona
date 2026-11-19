@@ -144,8 +144,10 @@ worktree at the same commit rebuilds and retests everything. Nothing warns about
 - `Test.systemProperty("persona.repo.root", <path>)` and the native library's path. Pass a path through
   `jvmArgumentProviders` (`android/build-logic/convention/src/main/kotlin/persona/buildlogic/TestArguments.kt`):
   `@Internal` for a location, or `@InputFiles` with `PathSensitivity.NONE` when the file's contents are the input.
-- `-Xfriend-paths=<build dir>` in `freeCompilerArgs`. The Kotlin compile task's `friendPaths` collection is `@Internal`,
-  and the classpath already tracks the friend's contents.
+- `-Xfriend-paths=<build dir>` in `freeCompilerArgs`. Use the Kotlin compile task's `friendPaths` instead: Kotlin keys
+  it by each friend's path relative to the module's build directory (the classpath tracks the contents). Keep the friends
+  to project outputs with a non-transitive configuration; a jar from the Gradle cache sits at a different relative path
+  in every checkout, so a transitive friend list still splits the key.
 - An `Exec` task's `commandLine` / `args` set at configuration time, and KSP's `arg(key, "$projectDir/…")`. Set the
   command line inside `exec()`, and give KSP a `CommandLineArgumentProvider` with a relative fingerprint.
 - `inputs.files(…)` without `withPathSensitivity(…)`: its default is `ABSOLUTE`.

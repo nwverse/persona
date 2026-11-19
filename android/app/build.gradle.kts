@@ -177,7 +177,9 @@ dependencies {
 }
 
 // Only DEBUG can link the separately compiled answer observer. Release never evaluates a shadow/native dependency.
-val answerFriend = configurations.create("answerFriend")
+// Only these modules' own jars: Kotlin fingerprints friend paths relative to this build directory, so a transitive jar
+// from the Gradle cache would put the checkout's depth in the cache key (#10712).
+val answerFriend = configurations.create("answerFriend") { isTransitive = false }
 dependencies {
     add("answerFriend", project(":core:domain"))
     add("answerFriend", project(path = ":core:domain", configuration = "shadowRuntimeElements"))
