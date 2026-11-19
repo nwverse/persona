@@ -555,6 +555,9 @@ func (s *Service) machineLauncherRoutes() {
 			apierr.Write(w, http.StatusNotFound, errUnknownMachine)
 			return
 		}
+		if host := r.URL.Query().Get("host"); launcherPurpose(ctx) == "" && proto.IsEngineHost(host) {
+			ctx = context.WithValue(ctx, launcherModelHostKey{}, host)
+		}
 		res, err := s.askLauncherModels(ctx, mid, r.PathValue("name"), r.URL.Query().Get("refresh") == "1")
 		if err != nil {
 			writeLauncherModelsErr(w, err)
