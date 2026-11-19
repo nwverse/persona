@@ -23,6 +23,7 @@ struct AssistantAvatar: View {
     #endif
 
     private var held: Bool { still || reduceMotion }
+    static let stillSchedule = VisiblePeriodicSchedule(interval: Theme.Motion.personaFrameInterval, paused: true)
     static func moves(state: PersonaState, still: Bool, reduceMotion: Bool, eligible: Bool) -> Bool {
         !(still || reduceMotion) && eligible && [.thinking, .working, .needsYou].contains(state)
     }
@@ -47,7 +48,7 @@ struct AssistantAvatar: View {
                 PersonaFaceMotion(face: face(at: Date(timeIntervalSinceReferenceDate: 0), eligible: eligible))
             } else {
                 // Keep the original paused timeline container: still frames retain its exact compositing and never tick.
-                TimelineView(VisiblePeriodicSchedule(interval: Theme.Motion.personaFrameInterval, paused: true)) { tl in
+                TimelineView(Self.stillSchedule) { tl in
                     face(at: tl.date, eligible: eligible)
                 }
             }

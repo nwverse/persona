@@ -21,6 +21,13 @@ import UIKit
         }
     }
 
+    @Test func stillScheduleEmitsOnlyItsInitialDate() {
+        let start = Date(timeIntervalSinceReferenceDate: 1234)
+        var entries = AssistantAvatar.stillSchedule.entries(from: start, mode: .normal)
+        #expect(entries.next() == start)
+        #expect(entries.next() == nil)
+    }
+
     @Test func animationsUseTheSharedFunctionsAndWallPhase() throws {
         let working = face(.working), needsYou = face(.needsYou), thinking = face(.thinking)
         let wall: TimeInterval = 123.25
