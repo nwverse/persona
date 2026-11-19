@@ -367,8 +367,8 @@ func TestOpenElsewhereSpeaksTheClientsLanguage(t *testing.T) {
 	}
 }
 
-func TestAssistantServiceTierFailuresWithholdNativeDiagnostics(t *testing.T) {
-	for _, code := range []string{"assistant_service_tier_start_only", "assistant_service_tier_unsupported", "assistant_service_tier_refused"} {
+func TestAssistantActionableRefusalsWithholdNativeDiagnostics(t *testing.T) {
+	for _, code := range []string{"assistant_launcher_profile_switch", "assistant_service_tier_start_only", "assistant_service_tier_unsupported", "assistant_service_tier_refused"} {
 		for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
 			rec := httptest.NewRecorder()
 			raw := &rpc.Error{Code: code, Message: "native English diagnostic", Data: json.RawMessage(`{"delivered":"none","retryable":false}`)}

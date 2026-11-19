@@ -110,7 +110,7 @@ func (p ModelPurpose) launch() string {
 	return ""
 }
 
-var modelCategoryIDs = []string{"assistant", "agent.new", "kb", "inbox.triage", "agent.delegate"}
+var modelCategoryIDs = []string{"assistant", "agent.new", "kb", "inbox.triage", "agent.delegate", "translate"}
 
 // The catalog also includes the uses set apart from their category: the opt-in overrides of Agents (agentsOverride),
 // in the order of Agents' uses, then the background supervisor's (#5806), then the In-meeting conversation's and
@@ -127,17 +127,17 @@ func agentsOverride(id string) bool { return id == purposeAgent || id == purpose
 var modelPurposes = []ModelPurpose{
 	{ID: "assistant", Group: "group_default", Kind: "launcher", ConfigDirs: assistantConfigDirs, Uses: []ModelUse{{Name: "use_chat"}, {Name: "use_schedule"}, {Name: "use_meeting_room"}}},
 	{ID: "agent.new", Group: "group_default", Kind: "launcher", Uses: []ModelUse{{Name: "use_new_agent"}, {Name: "use_inbox_agent"}, {Name: "use_lark_agent"}}},
-	{ID: "kb", Group: "group_default", Kind: "api", Uses: []ModelUse{{Name: "use_translate"}, {Name: "use_draft"}, {Name: "use_knowledge"}, {Name: "use_projects"}, {Name: "use_titles"},
+	{ID: "kb", Group: "group_default", Kind: "api", Uses: []ModelUse{{Name: "use_draft"}, {Name: "use_knowledge"}, {Name: "use_projects"}, {Name: "use_titles"},
 		{Name: "use_meeting_minutes"}, {Name: "use_meeting_answer"}}},
 	{ID: "inbox.triage", Group: "group_default", Kind: "api", Uses: []ModelUse{{Name: "use_triage"}, {Name: "use_importance"}, {Name: "use_reply_or_agent"}}},
 	// "Answering agents' questions" (delegate.go) is a category of its own, so it can run on a stronger model than the triage's (#3029).
 	{ID: "agent.delegate", Group: "group_default", Kind: "api", Uses: []ModelUse{{Name: "use_delegate"}}},
+	{ID: "translate", Group: "group_default", Kind: "api", Uses: []ModelUse{{Name: "use_translate"}}},
 	{ID: "inbox.agent", Group: "group_agents", Kind: "launcher", Parent: "agent.new"},
 	{ID: "lark.agent", Group: "group_agents", Kind: "launcher", Parent: "agent.new"},
 	{ID: "inbox.judge", Group: "group_triage", Kind: "api", Parent: "inbox.triage"},
 	{ID: "agent.triage", Group: "group_triage", Kind: "api", Parent: "inbox.triage"},
 	{ID: "inbox.draft", Group: "group_processing", Kind: "api", Parent: "kb"},
-	{ID: "translate", Group: "group_processing", Kind: "api", Parent: "kb"},
 	{ID: "kb.compress", Group: "group_processing", Kind: "api", Parent: "kb"},
 	{ID: "kb.project", Group: "group_processing", Kind: "api", Parent: "kb"},
 	{ID: "kb.dedupe", Group: "group_processing", Kind: "api", Parent: "kb"},
