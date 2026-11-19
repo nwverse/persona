@@ -1,11 +1,13 @@
 package node
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"github.com/nwverse/persona/server/internal/acceptloop"
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/rpc"
 	"io"
 	"net"
 	"os"
@@ -138,15 +140,29 @@ func AttachWithTransport(ctx context.Context, newNode func() (*Node, error), ext
 	sb := newStandby(sp, logf)
 	sb.want()
 	defer sb.unwant()
-	var mu sync.Mutex        // served, and standby's want / unwant with it
+	var mu sync.Mutex        // served, cur, and standby's want / unwant with them
 	var served chan struct{} // closed when the connection being served has ended
+	var cur *attached        // the connection being served (attach_resume.go)
 	var current context.CancelFunc
 	var wg sync.WaitGroup
 	defer keeper.stopAll() // after the last connection handed them over: this resident node is ending
 	defer wg.Wait()
+	// A new transport is served once its first line says what it is (attach_resume.go): read beside the loop, so one
+	// that says nothing holds up no other.
+	peeked := make(chan peekedConn)
+	peek := func(c net.Conn) {
+		first, rest := readFirstLine(c)
+		select {
+		case peeked <- peekedConn{c: c, first: first, rest: rest}:
+		case <-ctx.Done():
+			c.Close()
+		}
+	}
 	for {
 		var c net.Conn
 		var ok bool
+		var first []byte
+		var rest io.Reader
 		select {
 		case <-ctx.Done():
 			return nil
@@ -154,12 +170,33 @@ func AttachWithTransport(ctx context.Context, newNode func() (*Node, error), ext
 			if !ok {
 				return nil
 			}
+			go peek(c)
+			continue
 		case c, ok = <-extra:
 			if !ok {
 				extra = nil // that way is gone; relays go on
 				continue
 			}
+			go peek(c)
+			continue
+		case f := <-peeked:
+			c, first, rest = f.c, f.first, f.rest
 		}
+		if req, ok := rpc.ParseResume(first); ok { // the manager takes its connection back (attach_resume.go)
+			mu.Lock()
+			a := cur
+			mu.Unlock()
+			if a != nil && a.resume(req, c, rest) {
+				logf("connection resumed on a new transport")
+				continue
+			}
+			_ = rpc.RefuseResume(c, req)
+			_ = c.Close()
+			logf("refused to resume a connection this node does not have")
+			continue
+		}
+		a := &attached{conn: c}
+		reader := connReader{Reader: io.MultiReader(bytes.NewReader(first), rest), a: a}
 		if current != nil {
 			current() // the previous connection's node shuts down; its hooks retry on the new one (hooks.go)
 		}
@@ -168,7 +205,7 @@ func AttachWithTransport(ctx context.Context, newNode func() (*Node, error), ext
 		wg.Add(1)
 		mu.Lock()
 		prev, done := served, make(chan struct{})
-		served = done
+		served, cur = done, a
 		sb.unwant() // the new connection's Node takes node.sock; under mu, so an ending one cannot want it back
 		mu.Unlock()
 		began := time.Now()
@@ -186,7 +223,7 @@ func AttachWithTransport(ctx context.Context, newNode func() (*Node, error), ext
 				sb.want()
 			}()
 			defer close(done)
-			defer c.Close()
+			defer a.end(errReplaced)
 			defer cancel()
 			if prev != nil { // the last connection's Node hands its conversations over as it ends (assistant_keep.go)
 				select {
@@ -204,10 +241,13 @@ func AttachWithTransport(ctx context.Context, newNode func() (*Node, error), ext
 			}
 			n.adoptBgScans(scans)
 			n.share.Store(switches)
-			n.keeper = keeper                        // conversations go on from one connection to the next (assistant_keep.go)
-			n.spool = sp                             // what standby took goes to this connection first (spool.go)
-			go func() { <-cctx.Done(); c.Close() }() // a replaced connection stops reading at once
-			if err := n.Serve(cctx, c, c); err != nil && !errors.Is(err, io.EOF) && cctx.Err() == nil {
+			n.keeper = keeper // conversations go on from one connection to the next (assistant_keep.go)
+			n.spool = sp      // what standby took goes to this connection first (spool.go)
+			// The connection outlives a transport that ends, for the manager to resume (attach_resume.go): writes go to
+			// whichever transport is in use.
+			n.resumeWindow, n.onPeer, n.onLost = resumeWindow, a.setPeer, func(error) { a.closeConn() }
+			go func() { <-cctx.Done(); a.end(errReplaced) }() // a replaced connection stops at once, a waiting one too
+			if err := n.Serve(cctx, reader, attachedWriter{a}); err != nil && !errors.Is(err, io.EOF) && cctx.Err() == nil {
 				n.logger.Printf("connection ended: %v", err)
 			}
 			n.handOverBgScans(scans)

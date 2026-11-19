@@ -162,7 +162,15 @@ const (
 	// ControlLane and BulkLane (docs/protocol/protocol.md "Lanes"). Without it the manager never asks, and the connection
 	// stays JSON lines.
 	NodeLanes = "node_lanes_v1"
+	// NodeResume: a resident node keeps a framed connection whose transport ended for ResumeWindow and takes it back
+	// when the manager comes again with its token (rpc.Peer.EnableResume, docs/protocol/protocol.md "Resuming"). Only
+	// a resident node announces it: one started for the connection ends with it. Without it the manager never asks.
+	NodeResume = "node_resume_v1"
 )
+
+// ResumeWindowSeconds is how long a dropped connection that can resume waits for it, on the node and on the manager
+// alike: the machine shows as connected meanwhile and its calls wait, as during a reconnect.
+const ResumeWindowSeconds = 30
 
 // ControlLane and BulkLane say which messages of a framed node connection go on those lanes (rpc.Peer.EnableLanes,
 // docs/protocol/protocol.md "Lanes"): a method names a request and its answer, an event itself. Every other request and

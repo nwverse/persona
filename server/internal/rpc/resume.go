@@ -338,6 +338,16 @@ func (p *Peer) AcceptResume(req ResumeRequest, r io.Reader, w io.Writer) error {
 	return nil
 }
 
+// RefuseResume answers req on w: this side has no connection to take back for it. The other side connects anew.
+func RefuseResume(w io.Writer, req ResumeRequest) error {
+	line, err := encodeLine(message{ID: req.ID, Error: &Error{Message: "rpc: resume refused", Code: CodeResumeRefused}})
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(line)
+	return err
+}
+
 // installLocked makes r / w the connection's transport (p.mu held): the next generation, the writer writing again what
 // came after peerRead, the reader reading on from r.
 func (p *Peer) installLocked(r io.Reader, w io.Writer, peerRead uint64) {
