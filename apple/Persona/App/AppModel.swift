@@ -551,6 +551,9 @@ final class AppModel {
     /// What each machine's New Agent list says is left out there, with why (`unavailable`, #8109: the Persona-managed
     /// providers whose own-service rule skips it), loaded with `launcherCache`; empty from an older hub.
     @ObservationIgnored private(set) var launcherUnavailable: [MachineRef: [UnavailableLauncher]] = [:]
+    /// The active model profile's Agent presets offered on each machine, loaded with `launcherCache`.
+    @ObservationIgnored private(set) var launcherTiers: [MachineRef: [AgentPreset]] = [:]
+    @ObservationIgnored private(set) var launcherTierProfile: [MachineRef: AgentPresetProfile] = [:]
     /// The main chat's own picker (`?purpose=assistant`, #5033): its eligible launchers, the effective Main chat
     /// default, and what can't run there with why. Separate from `launcherCache`, which serves the agent.new purpose.
     nonisolated struct AssistantLauncherScope: Hashable {
@@ -3996,6 +3999,8 @@ final class AppModel {
         launcherCache = [:]
         launcherDefaults = [:]
         launcherUnavailable = [:]
+        launcherTiers = [:]
+        launcherTierProfile = [:]
         assistantLauncherCache = [:]
         assistantStarterCache.clear()
         // Model Settings changes are launcher changes too: wake the open main-chat composer to re-read the default.
@@ -4017,6 +4022,8 @@ final class AppModel {
         launcherCache[machine] = r.launchers
         launcherDefaults[machine] = r.default
         launcherUnavailable[machine] = r.unavailable ?? []
+        launcherTiers[machine] = r.tiers ?? []
+        launcherTierProfile[machine] = r.tiersProfile
         return r.launchers
     }
 

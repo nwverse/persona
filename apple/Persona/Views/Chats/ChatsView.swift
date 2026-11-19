@@ -3269,6 +3269,9 @@ private struct AgentsList: View {
     private static let hostHeadingInsets = EdgeInsets(top: Theme.Space.l, leading: Theme.Space.page, bottom: Theme.Space.xs, trailing: Theme.Space.page)
     #endif
 
+    /// How far the Sidebar layout's selected shade reaches past an Agent row's content, into the row's insets (#11032).
+    private static let selectedOutset = EdgeInsets(top: -Theme.Space.xs, leading: -Theme.Space.s,
+                                                   bottom: -Theme.Space.xs, trailing: -Theme.Space.s)
     /// A capsule's room: the page's edges, a little air above and below.
     private static let capsuleInsets = EdgeInsets(top: Theme.Space.xs, leading: Theme.Space.page, bottom: Theme.Space.xs, trailing: Theme.Space.page)
     /// A capsule `level` levels in, under a working tree's row or a tab's starter: a level is as far in as a quiet space's
@@ -3445,14 +3448,19 @@ private struct AgentsList: View {
     /// An agent row's background: the tree's (`treeBackground`), none of its own in By Repository's cards on the Mac and
     /// in the floating list, else the list's.
     private func slotBackground(_ open: Bool) -> AnyView? {
-        if repoTree { return treeBackground(open) }
+        // The Sidebar layout's column shades its open Agent as its other rows (`SidebarSelectedShade`, `slotRowBody`).
+        if repoTree { return treeBackground(open && unified == nil) }
         return grouping == .repo || floating ? AnyView(Color.clear) : nil
     }
 
     /// The agent open beside the list in By Repository's cards (#2531; the split's list, not a phone's, whose list is
-    /// never beside a chat): its row is washed. The split's column is compact itself, so not its width class.
+    /// never beside a chat): its row is washed. The split's column is compact itself, so not its width class. In the
+    /// Sidebar layout's column (the drawer on a phone too) the root's Agent in every grouping (#11032): the column's one
+    /// selected row, as the main conversation's, a place's or a Persona chat's.
     private var treeOpenSession: SessionKey? {
-        repoTree && !ownsTop && openedWorkspace == nil ? shownAgent : nil
+        guard openedWorkspace == nil else { return nil }
+        if unified != nil { return shownAgent }
+        return repoTree && !ownsTop ? shownAgent : nil
     }
 
     private func treeSelected(_ key: SessionKey) -> Bool {
@@ -3462,7 +3470,7 @@ private struct AgentsList: View {
     /// The Agent whose row is shaded: the Sidebar layout's root while it is an Agent's chat, also with pages opened on it
     /// (#8359); elsewhere the chat on screen.
     private var shownAgent: SessionKey? {
-        if let unified { return unified.root.value?.base as? SessionKey }
+        if let unified { return unified.shownAgent }
         return model.visibleSession
     }
 
@@ -3512,6 +3520,11 @@ private struct AgentsList: View {
                 }
             }
         }
+            #if os(iOS)
+            // The Sidebar layout's one selected look (#11032): the shade under the main conversation's, a place's and a
+            // Persona chat's row, to the row's edges in every grouping.
+            .background { if open && unified != nil { SidebarSelectedShade().padding(Self.selectedOutset) } }
+            #endif
             .accessibilityIdentifier(compact ? "agents.compactRow" : "agents.row")
             .accessibilityAddTraits(open ? .isSelected : [])
             #if os(macOS)

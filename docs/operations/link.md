@@ -242,6 +242,7 @@ Both sides ignore a message type they don't know.
 
 **Reconnect**
 - Exponential backoff: starts at 1 second, doubles up to 1 minute; randomized between half and full delay each time. After a link connected for a full minute disconnects, it starts over.
+- When a normal wait exceeds 3 seconds, Link races eligible direct addresses and outbound proxy targets with an unauthenticated `GET /api/v1/health`, using the same TLS verification as the link. If none returns a 2xx response with `"ok": true` at the start, Link probes every 2 seconds and retries as soon as one does. SSH logins happen only on full connection attempts. SSH-only configurations, including **Always use SSH**, skip these probes, as do credential, replacement and rate-limit waits.
 - Special cases:
 
   | Case | Wait |
@@ -975,13 +976,14 @@ including active control candidates, SSH tunnel handshakes, direct recovery prob
 streams. `attempt` is a process-local sequence, not a persistent identifier. `role` distinguishes
 `control` from `stream`; `candidate` is the one-based position in the ranked, deduplicated
 control candidates, the tunnel bind attempt, or 1 for the selected stream route. `kind` is
-`lan`, `ipv6`, `ipv4`, `name`, `ssh` or `other`; unrecognized input is never echoed.
+`lan`, `ipv6`, `ipv4`, `name`, `ssh`, `proxy` or `other`; unrecognized input is never echoed.
 
 `phase` is the last observed boundary (`dial`, `dns`, `tcp`, `tls`, `upgrade`). `outcome` is
 `success`, `error`, `timeout`, `canceled` or `http_refused`. The phase distinguishes a TLS
 stall from an Upgrade stall; an RPC pong fix does not explain either automatically.
 `dns_us`, `tcp_us`, `tls_us`, `upgrade_us` and `total_us` are monotonic elapsed microseconds.
 Zero means no observed work, reuse, or less than a microsecond; a literal IP needs no DNS.
+On a proxy route, TCP time measures the connection to the proxy. TLS time measures the Hub handshake inside CONNECT.
 For SSH, TCP time measures connecting to the local forwarding listener, not a public TCP
 connection or the SSH authentication duration. TCP time sums observed address attempts,
 including overlapping address-family attempts,

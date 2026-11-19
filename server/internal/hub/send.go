@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/devicewire"
+	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -142,6 +144,17 @@ func (h *Hub) sendMessage(w http.ResponseWriter, r *http.Request, m *Machine) {
 		return
 	}
 	sid := r.PathValue("sid")
+	if caller := principalOf(r.Context()); caller.Role == roleScoped {
+		row, exists := m.session(sid)
+		if !exists || healthSession(&row) {
+			writeErr(w, http.StatusNotFound, errors.New("no such session"))
+			return
+		}
+		if !slices.Contains(caller.Scopes, extwire.ScopeAgentsPermissionMode) && scopedSendNeedsPermissionMode(row, p) {
+			scopedPermissionDenied(w, extwire.ScopeAgentsPermissionMode)
+			return
+		}
+	}
 	if todoID, _ := p["todo_id"].(string); todoID != "" && principalOf(r.Context()).Role != roleFull {
 		writeErr(w, http.StatusForbidden, errors.New("read-only role cannot modify todos"))
 		return
