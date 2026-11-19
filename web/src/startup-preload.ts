@@ -445,16 +445,17 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // effortTitle, and home.task_agents_more). 205 B in ja, measured in one environment against main e7a12f7323 (ja
 // 482,497 B to 482,702 B; en 479,378 B to 479,585 B, zh-Hans 480,224 B to 480,422 B). Main had 29 B of room, so the
 // budget is this ja size plus those 29 B.
-// #9745: Overview's extension cards drawn as the user arranged them add 785 B in ja, measured in one environment
-// against main 4999ad6d91 (ja 479,051 B to 479,836 B; en 476,160 B to 476,928 B, zh-Hans 476,915 B to 477,704 B): the
+// #9745: Overview's extension cards drawn as the user arranged them add 900 B in ja, measured in one environment
+// against main 4cb7450ec4 (ja 479,051 B to 479,951 B; en 476,160 B to 477,043 B, zh-Hans 476,915 B to 477,819 B): the
 // arrangement's store, kept per hub and sign-in, with the revision Reset's Undo checks, and the order, hidden cards and
 // widths it draws (lib/overview-cards.ts), Arrange cards in Overview's top bar (opening the cards' section and scrolling
 // to it, the page's last block), and the arrangement to and from the hub
 // with the start page, one change on its way at a time and pushes heard during it settled once the hub pushed it, a
-// read a later hello or another sign-in overtook left alone (lib/start-page.ts). The editor (its heading, each card's
+// read a later hello, another sign-in, a push or another tab's change overtook left alone, and what was on its way
+// under another sign-in dropped (lib/start-page.ts). The editor (its heading, each card's
 // controls, the drag and the edits) is a chunk of its own (views/extensions/OverviewArrange.tsx, lib/overview-edit.ts).
 // Main had 3,680 B of room, so the budget is this ja size plus those 3,680 B.
-export const FIRST_SCREEN_BUDGET = 483_516;
+export const FIRST_SCREEN_BUDGET = 483_631;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
