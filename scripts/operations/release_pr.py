@@ -142,13 +142,6 @@ def write_plan(path, repository, channel, version, commit, pr_number, merge_comm
     tag = "v" + version
     if not ((channel == "beta" and BETA.fullmatch(tag)) or (channel == "release" and STABLE.fullmatch(tag))):
         raise ReleaseError("version and channel differ")
-    if build is None:
-        # Commit time, not the wall clock of a retry: the same source keeps one build identity, and two different
-        # squash commits cannot share a TestFlight build number. A commit in the future is rejected by the caller's
-        # immutable-source checks; this conversion uses UTC like the existing publisher.
-        if timestamp is None:
-            timestamp = int(subprocess.check_output(["git", "show", "-s", "--format=%ct", commit], text=True).strip())
-        build = int(datetime.fromtimestamp(timestamp, timezone.utc).strftime("%Y%m%d%H%M"))
     if type(build) is not int or not re.fullmatch(r"[0-9]{12}", str(build)):
         raise ReleaseError("release build must be a UTC twelve-digit number")
     data = {"schema": 1, "repository": repository, "channel": channel, "version": version,
