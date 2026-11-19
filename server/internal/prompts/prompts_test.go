@@ -201,6 +201,45 @@ func TestSmallPrompts(t *testing.T) {
 	}
 }
 
+// Working agents stay count-only in the Agents heading, with no top-level working or workflow rows; a task opened from
+// chat still renders its own running workflow (#11261).
+func TestSnapshotWorkingAndWorkflowsStayCounts(t *testing.T) {
+	now := time.Date(2026, 11, 20, 10, 0, 0, 0, time.UTC)
+	got := RenderSnapshot(Snapshot{
+		Now:  now,
+		Zone: "UTC",
+		Working: []SnapshotAgent{
+			{Label: "无关后台编译任务", Machine: "box-1", Session: "w1111111", Ultracode: "on",
+				Plan: &SnapshotAgentPlan{Done: 1, Total: 3, Current: "跑构建"}},
+			{Label: "无关后台巡检任务", Machine: "box-2", Session: "w2222222"},
+		},
+		Tasks: []SnapshotTask{{
+			ID: "todo_42", Title: "整理接口文档", State: "在做", Machine: "box-1", Session: "t3333333",
+			Last:      "在等子工作流",
+			Workflows: []SnapshotWorkflow{{Name: "doc-audit", Phase: "Verify", PhaseIndex: 2, Phases: 2, Done: 3, Started: 4, For: "5 分钟"}},
+		}},
+	})
+	for _, want := range []string{
+		"- Agents：需要你 0 个，完成未看 0 个，工作中 2 个（详情用 agents_list）",
+		"整理接口文档（todo_42）：在做，box-1 session_id=t3333333：在等子工作流；后台 workflow 在跑（在等它的结果，没做完）：「doc-audit」阶段 Verify（2/2），3/4 个 agent 完成，已跑 5 分钟",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q:\n%s", want, got)
+		}
+	}
+	for _, unwanted := range []string{
+		"  - 工作中：",
+		"  - 后台 workflow 在跑（这些 Agent",
+		"无关后台编译任务",
+		"无关后台巡检任务",
+		"跑构建",
+	} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("top-level working/workflow detail leaked into snapshot (%q):\n%s", unwanted, got)
+		}
+	}
+}
+
 // Every MCP tool file is offered by some server code (named in a Go file outside this package), and has a
 // description and an object schema.
 func TestEveryMCPToolIsUsed(t *testing.T) {
