@@ -1460,3 +1460,7 @@ toolbar opts into Menu's focus scope, accepts keys only from its own trigger or 
 trigger when opening. Check a real xterm textarea and a non-editable element as well as ordinary search input. Raw
 pane addresses also need to resolve a listed Agent before closing, or they would fall back to a shell confirmation
 and lose the busy-Agent warning.
+
+## Deep tree rows need space for their counts (#10477)
+
+A shrinking file name cannot protect an end count when the row itself has unbounded indentation padding. Put the indentation and icon inside the name's shrinkable, clipped region; keep the count outside it with no wrapping. Bound deep indentation to a share of that region so the file name still has room for an ellipsis. Measure bounds against the containing panel, not the viewport, and keep the requested width separate from its temporary fitted width. Verify deep rows at minimum width in a real browser: jsdom cannot detect a clipped minus sign.

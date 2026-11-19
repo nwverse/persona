@@ -251,6 +251,12 @@ class AssistantTest {
         // The task chat would be the newest one: it still leaves Recent, and the next eligible chat takes its place.
         val taskFirst = AssistantSnapshot(main.key, listOf(main, chat("task", 1, "task"), chat("mine", 2, "user"), chat("inbox", 3, "inbox")))
         assertEquals(listOf("mine", "inbox"), recentConversations(taskFirst).map { it.sessionId })
+        assertEquals("the field being absent and false keeps today's list", recentConversations(taskFirst), recentConversations(taskFirst.copy(recentTaskChats = false)))
+        assertEquals("opting in brings the task chat back by activity", listOf("task", "mine", "inbox"),
+            recentConversations(taskFirst.copy(recentTaskChats = true)).map { it.sessionId })
+        assertEquals("the background supervisor follows the same opt-in", listOf("background", "mine"),
+            recentConversations(AssistantSnapshot(main.key, listOf(main, chat("background", 0, "task"), chat("mine", 1, "user")),
+                backgroundSupervisor = "background", recentTaskChats = true)).map { it.sessionId })
         assertEquals("ending the leader lets it back in", "lead", recentConversations(snapshot.copy(leaders = emptyList())).first().sessionId)
         val groups = conversationGroups(snapshot, "", words)
         assertEquals(listOf("ext", "future", "inbox", "lark", "spawned"), groups.recent.map { it.sessionId })

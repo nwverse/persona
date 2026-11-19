@@ -1156,6 +1156,12 @@ its canonical associations. The additive tool accepts `{id, links: [{url, title}
 with full source titles, or legacy `{id, urls}` (one to 50 exact issue/PR URLs in
 total), infers repository groups offline (an address on a host a provider
 extension claims is read by that extension) and needs no preconfigured catalog.
+Creation and replacement tool schemas leave `requested_ref` optional. When
+present, it requires `kind`: `default` omits `value`, while `branch`, `tag`,
+`commit` and `ref` require a nonempty string value. The manager still validates
+Git ref syntax and commit hashes; its older omitted-ref default is unchanged.
+Each repository has at most 50 links, and structured link numbers are decimal
+strings matching `^[1-9][0-9]{0,19}$` across creation and replacement tools.
 Titles are optional plain text, limited to 1,024 UTF-8 bytes after trimming; control
 characters are rejected. The tool schemas describe this byte limit explicitly;
 their `maxLength` is only a character ceiling, not a UTF-8 byte validator.
