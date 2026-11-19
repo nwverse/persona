@@ -44,16 +44,21 @@ func (ix Interaction) AskedWithoutWaiting() bool { return ix.ToolName == "ask_us
 
 // OneTapQuestion is the question ix asks when one tap may answer it without opening the app (a notification's
 // options, a to-do's row): a question card with exactly one question, options to choose from and no fields to fill in,
-// not raised in a Just me turn (whose push says nothing of what it asks). A health conversation's card is never
-// answered so either; only the hub and the manager can tell one (identity.InHealthSpace on its cwd), and each checks
-// it beside this. False otherwise.
+// not raised in a Just me turn (whose push says nothing of what it asks), and whose asker did not say going ahead
+// cannot be undone (cannotUndo: an answer that cannot be taken back needs a look first). A health conversation's card
+// is never answered so either; only the hub and the manager can tell one (identity.InHealthSpace on its cwd), and each
+// checks it beside this. False otherwise.
 func (ix Interaction) OneTapQuestion() (Question, bool) {
-	if ix.Kind != IxQuestion || len(ix.Questions) != 1 || len(ix.Fields) > 0 || len(ix.Questions[0].Options) == 0 ||
-		ix.Private {
+	if ix.Kind != IxQuestion || ix.ToolName == "persona_session_review" || len(ix.Questions) != 1 || len(ix.Fields) > 0 || len(ix.Questions[0].Options) == 0 ||
+		ix.Private || ix.cannotUndo() {
 		return Question{}, false
 	}
 	return ix.Questions[0], true
 }
+
+// cannotUndo: ix's asker said going ahead cannot be undone (an ask_user's reversible false), the card's twin of a
+// decision that cannot be undone. A card that said nothing can be.
+func (ix Interaction) cannotUndo() bool { return ix.Reversible != nil && !*ix.Reversible }
 
 // QuestionOptionDefer dismisses a triage question without sending an agent reply.
 // Other question runtimes do not interpret this triage-only action.
@@ -80,26 +85,33 @@ type Interaction struct {
 	Manager string `json:"manager,omitempty"`
 	// Private: a Just me turn raised it (docs/assistant/meeting-minutes.md "Just me"): its push and the Fleet Live
 	// Activity say nothing of what it asks, as a health conversation's card, and it never goes to Lark or a channel.
-	Private      bool            `json:"private,omitempty"`
-	ID           string          `json:"id"`
-	MachineID    string          `json:"machine_id"`
-	SessionID    string          `json:"session_id"`
-	SessionTitle string          `json:"session_title,omitempty"`
-	TaskTitle    string          `json:"task_title,omitempty"` // the task its agent works for (docs/assistant/unified-entry.md), set when sent to clients
-	Cwd          string          `json:"cwd,omitempty"`
-	Kind         string          `json:"kind"`
-	CreatedAt    time.Time       `json:"created_at"`
-	ExpiresAt    time.Time       `json:"expires_at"`
-	ToolName     string          `json:"tool_name,omitempty"`
-	ToolUseID    string          `json:"tool_use_id,omitempty"`
-	Questions    []Question      `json:"questions,omitempty"`
-	Plan         string          `json:"plan,omitempty"`
-	ToolInput    json.RawMessage `json:"tool_input,omitempty"`
+	Private      bool       `json:"private,omitempty"`
+	ID           string     `json:"id"`
+	MachineID    string     `json:"machine_id"`
+	SessionID    string     `json:"session_id"`
+	SessionTitle string     `json:"session_title,omitempty"`
+	TaskTitle    string     `json:"task_title,omitempty"` // the task its agent works for (docs/assistant/unified-entry.md), set when sent to clients
+	Cwd          string     `json:"cwd,omitempty"`
+	Kind         string     `json:"kind"`
+	CreatedAt    time.Time  `json:"created_at"`
+	ExpiresAt    time.Time  `json:"expires_at"`
+	ToolName     string     `json:"tool_name,omitempty"`
+	ToolUseID    string     `json:"tool_use_id,omitempty"`
+	Questions    []Question `json:"questions,omitempty"`
+	Plan         string     `json:"plan,omitempty"`
+	// An explicit independent session review (tool persona_session_review) keeps the report beside its ordinary
+	// question-card fallback. Older clients ignore these additive fields and retain every other card's decoding.
+	ReviewReport      string          `json:"review_report,omitempty"`
+	ReviewCount       *int            `json:"review_count,omitempty"`
+	ReviewerSessionID string          `json:"reviewer_session_id,omitempty"`
+	ToolInput         json.RawMessage `json:"tool_input,omitempty"`
 	// PlanThen is the permission mode recorded at a plan-mode start to use after approval; empty on legacy cards.
 	PlanThen string `json:"plan_then,omitempty"`
 	// EditableText is the outgoing body text a Claude Code Lark send/reply approval card may let the user edit before
 	// allowing. It is set only by that command gate; runtimes and other cards cannot declare it.
-	EditableText    string       `json:"editable_text,omitempty"`
+	EditableText string `json:"editable_text,omitempty"`
+	// Format is a script ask's opt-in card rendering. Only "markdown" is emitted; absent keeps literal text.
+	Format          string       `json:"format,omitempty"`
 	Summary         string       `json:"summary,omitempty"`
 	Screen          string       `json:"screen,omitempty"`
 	AgentID         string       `json:"agent_id,omitempty"`
@@ -225,6 +237,8 @@ func PlanAfterMode(mode string) string {
 }
 
 type Resolution struct {
+	// ModeActor is manager-authenticated display provenance for a plan mode change; callers cannot set it.
+	ModeActor *ModeActor `json:"mode_actor,omitempty"`
 	// Cancel discards only this question, without supplying answers or interrupting the task.
 	Cancel   bool              `json:"cancel,omitempty"`
 	Action   string            `json:"action,omitempty"`

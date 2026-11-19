@@ -15,6 +15,12 @@ const (
 	CodeRestarting  = "node_restarting"
 )
 
+// TaskInstructions separates delegated framework rules from the first user message.
+const TaskInstructions = "task_instructions_v1"
+
+// EventUpdatePreflightFailed reports a refused resident reload for a committed node update.
+const EventUpdatePreflightFailed = "node.update.preflight_failed"
+
 // PersonaContracts is the optional bidirectional naming capability. It does not
 // change the node protocol floor or become a required capability.
 const PersonaContracts = "persona_contracts_v1"
@@ -50,6 +56,8 @@ const MinManagerVersion = 1
 const (
 	// Sessions: sessions.list / session.watch / session.unwatch / session.start / session.send and the session events.
 	Sessions = "sessions"
+	// SessionEchoStatus supports checking and conditionally resending a held message by its client_msg_id.
+	SessionEchoStatus = "session_echo_status"
 	// ModelConfiguration: assistant.send / assistant.warm / session.start / session.send take a launcher's model and
 	// model_fingerprint (docs/assistant/model-config.md). Older nodes said so with node.info's model_configuration.
 	ModelConfiguration = "model_configuration"
@@ -63,9 +71,14 @@ const (
 	SessionSkills = "session_skills_v1"
 	// OwnerControls separates verified owner actions from legacy RPCs that can carry arbitrary params.
 	OwnerControls = "owner_controls_v1"
+	// SourcePermissions isolates node-attested Agent messages from caller parameters.
+	SourcePermissions = "source_permissions_v1"
 	// AssistantServiceTier: assistant.send takes service_tier for a new Codex conversation and acknowledges it before
 	// the first turn. A node without it would start the conversation and silently drop an explicit, billable choice.
 	AssistantServiceTier = "assistant_service_tier"
+	// SessionStartSpeed: session.start and session.start.work take speed for a new terminal Codex or Claude Code Agent.
+	// A node without it would silently drop the explicit choice and start at the launcher's own speed.
+	SessionStartSpeed = "session_start_speed"
 	// NodeUpdate: the node.update.* methods (docs/operations/node-update.md). Whether an update can run right now is still
 	// node.info's node_update / node_update_reason.
 	NodeUpdate = "node_update"
@@ -162,7 +175,20 @@ const (
 	// ControlLane and BulkLane (docs/protocol/protocol.md "Lanes"). Without it the manager never asks, and the connection
 	// stays JSON lines.
 	NodeLanes = "node_lanes_v1"
+	// NodeResume: a resident node keeps a framed connection whose transport ended for ResumeWindow and takes it back
+	// when the manager comes again with its token (rpc.Peer.EnableResume, docs/protocol/protocol.md "Resuming"). Only
+	// a resident node announces it: one started for the connection ends with it. Without it the manager never asks.
+	NodeResume = "node_resume_v1"
 )
+
+// ResumeWindowSeconds is how long the manager tries to resume a dropped connection that can resume, from when it
+// noticed the drop: the machine shows as connected meanwhile and its calls wait, as during a reconnect.
+const ResumeWindowSeconds = 30
+
+// ResumeKeepSeconds is how long a resident node keeps such a connection for the manager, from when it noticed the drop.
+// The node may notice first (it read the end, or its silence check fired) while nothing told the manager: its next
+// ping comes up to 30 s later and its silence check takes 15 s more, then it tries. The node keeps it past all that.
+const ResumeKeepSeconds = 60
 
 // ControlLane and BulkLane say which messages of a framed node connection go on those lanes (rpc.Peer.EnableLanes,
 // docs/protocol/protocol.md "Lanes"): a method names a request and its answer, an event itself. Every other request and
@@ -202,7 +228,7 @@ const (
 const RestartExitCode = 75
 
 // Announced is what a node built from this code announces.
-var Announced = []string{OwnerControls, SessionSkills, ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, MCPWait, Sessions, ModelConfiguration, AssistantConfigDir, AssistantSupervisionInstructions, AssistantServiceTier, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, Clipboard, SecretEnv, LauncherSwitch, ModelHTTP, EngineSwitch, ModelRun, LauncherSwitchNow, LauncherSwitchIdle, PaneCwd, NodeUpdateIdle, PaneNewSpace, MachineDiagnose, StartGoal, StartContinue, LauncherCheckAssistantTurn, StartAnswer, AssistantToolSearchFallback, NodeLanes}
+var Announced = []string{TaskInstructions, SourcePermissions, OwnerControls, SessionSkills, ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, MCPWait, Sessions, SessionEchoStatus, ModelConfiguration, AssistantConfigDir, AssistantSupervisionInstructions, AssistantServiceTier, SessionStartSpeed, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, Clipboard, SecretEnv, LauncherSwitch, ModelHTTP, EngineSwitch, ModelRun, LauncherSwitchNow, LauncherSwitchIdle, PaneCwd, NodeUpdateIdle, PaneNewSpace, MachineDiagnose, StartGoal, StartContinue, LauncherCheckAssistantTurn, StartAnswer, AssistantToolSearchFallback, NodeLanes}
 
 // ShareProjection is the bounded complete-source sharing projection, not light Items.
 const ShareProjection = "share_projection.v1"
@@ -215,3 +241,6 @@ const (
 	OwnerInterrupt  = "session.owner_interrupt"
 	OwnerCardAnswer = "codex.owner_answer"
 )
+
+// SourceSend is emitted only by a devices manager holding source provenance.
+const SourceSend = "session.source_send"

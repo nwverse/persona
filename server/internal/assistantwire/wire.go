@@ -150,6 +150,8 @@ type Device struct {
 	ModelConfiguration bool   `json:"model_configuration,omitempty"`
 	// ExternalInventory is announced only by a node with an enabled, trusted local model adapter.
 	ExternalInventory bool `json:"external_inventory,omitempty"`
+	// TaskInstructions: this node preserves delegated instructions separately, including fallback/resume.
+	TaskInstructions bool `json:"task_instructions,omitempty"`
 	// ClaudeVersion is Claude Code's version there ("" when it has none or never said): 设置 › 模型供应商's built-in
 	// claude lists the machines that have it.
 	ClaudeVersion string `json:"claude_version,omitempty"`
@@ -319,6 +321,12 @@ type NotifyTodo struct {
 	// `response`. Left out by a hub from before them.
 	Options   []string `json:"options,omitempty"`
 	Responses []string `json:"responses,omitempty"`
+	// Ask is the decision's ask in the to-do's view (OwnerAsk.ID), which an answer from the notification names, and
+	// Lockscreen what its push may offer on the lock screen (OwnerAskLockscreen: answer, its options as actions;
+	// open_only, none, a tap opens it), from how risky answering it is (#10465). The hub forwards the options only
+	// with answer, and sends an older manager's push, which has neither, as before.
+	Ask        string `json:"ask,omitempty"`
+	Lockscreen string `json:"lockscreen,omitempty"`
 }
 
 // NotifyPush is the kind of the assistant's pushes.

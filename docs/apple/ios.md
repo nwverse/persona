@@ -418,7 +418,7 @@ Chat page:
   same web ordering; command and description per row, quick-message original text right; further typing filters command prefixes/descriptions. Tap fills input, does not send
   (/clear uses existing confirmation); an exact inserted command such as /context does not reopen the list until draft changes. Beyond 5½ rows scroll internally.
   Assistant chats have none, like web, except the main chat keeps those rows and adds `/clear` when the hub has `assistant_main_clear` (#5100); that `/clear` does not ask first. In `Composer` VStack, not overlay, because the composer's own hosting controller makes out-of-bounds overlays untappable (#518).
-  + Shortcuts unchanged; `-openSlashMenu YES` screenshots, `PersonaUITests/SlashMenuTests` both layouts.
+  + Shortcuts unchanged; `-openSlashMenu YES` screenshots (`-openSlashMenu /re` opens it on that draft), `PersonaUITests/SlashMenuTests` both layouts.
 - **Typing @ offers files, folders, workspaces and sessions** (#2319, workspaces #2599; matches web `ComposerPanel` / `lib/mentions.ts`): in `ShellComposerBar` (Agent and assistant chats, and the shell's
   new conversation, `StarterComposer`), an `@word` before the caret, at the start or after whitespace (an e-mail address opens nothing) and not while the keyboard still
   has marked text (Pinyin; `TypedText.composingFocused`), shows `ComposerMentionMenu` above the input where `SlashMenu` sits: the files this chat's tools read or wrote
@@ -474,7 +474,7 @@ Chat page:
   - @: recently accessed tool files (12, `@relative/path`, understood by Claude Code and Codex), then recent 8 sessions, selected as
     `<persona-context>` before message, quote capsule above input. Only loaded-step files; folded work never expanded in long chats yields none.
   - /: `SlashCommand.all`, quick words /继续 (continue), /提交 (commit), /汇报 (report), fills request text for explicit Send (formerly menu sent immediately);
-    /compact and /context unchanged; /clear when supported, confirmation first.
+    /compact and /context unchanged; /clear when supported, confirmation first. The user's saved prompts follow the chat's own commands ("Saved prompts (#9436)").
   - /loop (#2601, web #1600): Claude Agents only, not Codex, internal Codex fork or assistant (`LoopCommand.offered`), in / and + Shortcuts;
     prefixes existing input with `/loop ` (existing text becomes task, cursor after command to enter interval), never sends directly (other + shortcuts still send on tap). A `/loop` draft shows shared `LoopDraftNote`
     explaining "Repeat every 10 minutes: Check CI" / "Repeat at Claude's chosen pace: …", gray usage when task absent;
@@ -1233,11 +1233,22 @@ The new shell's Model · Effort menu still sends `/model <id>` as a message.
 - Effort changes wait until the turn ends and the terminal input is empty (otherwise `/effort` appends to someone else's unsent draft); herdr Agents can choose Allow everything only at creation, not in the cycle,
   unless their claude was started with `--dangerously-skip-permissions`, `--allow-dangerously-skip-permissions` or `--permission-mode bypassPermissions`, which puts it in the cycle:
   the node reads the arguments of the claude its hooks run under, once per process (`claudeCanBypass`, kern.procargs2 / `/proc/<pid>/cmdline`, no exec), and lists the session with
-  `bypass_available` (#1379). The web and the app then offer it, red and asked again (`SessionModes.switchableModes`, `confirmation`); without it the app's header menu lists it disabled, with why.
+  `bypass_available` (#1379). The web and the app then offer it, red and asked again (`SessionModes.switchableModes`, `confirmation`); without it the app's header menu lists it disabled, with why (except Antigravity `agy` runtimes with `capabilities.modes`, which switch all five modes including Allow Everything directly via ACP with no restart or confirmation and are not `setsEffortOnly` even when `efforts` are listed).
+- Allow Everything by a restart (#6513, the web's #6476; `docs/integrations/claude-integration.md` "Full access by a restart"): without `bypass_available`, a Claude Code in a pane
+  Persona can type into (`SessionModes.paneClaude`, `bypassRestarts`) is offered it anyway, with "Restarts the session to apply it once this turn ends; the conversation carries on" under it
+  and in the confirmation (`bypassNote`); the node restarts it once its turn is over. While the row has `bypass_pending`, every mode button keeps the mode the agent still runs in
+  (the header capsule's look does not change) and says "The session restarts in Allow Everything once this turn ends": the header menu's title, VoiceOver's hint and the
+  pointer's tooltip, a line over the composer menus' modes, and Allow Everything's own row. Picking the checked mode while `bypass_pending` sends `session.modes` without a confirmation
+  (`SessionModes.appliesPick`, `MenuChoice.reselect`) so the node drops the queued restart directly. An assistant conversation's Allow Everything says "Takes effect from the next message".
+- `/permissions` (#6513): in an agent's "/" list (`SlashMenuRow.permissions`; the BeautifulUI prompt bar's commands too) and in Persona conversations wherever a session's mode can be switched from here
+  (`SessionModes.offersPermissionsCommand`, including Antigravity `agy` runtimes with `capabilities.modes`). Picked, or typed and sent (with nothing attached: `SessionModes.opensPermissions`), it opens `PermissionModeSheet`: the header menu's choices with Plan Only (`SessionModes.commandRows`), the current
+  one checked, Allow Everything disabled with its reason where it can't be taken, `SheetClose` at the top leading corner, and a section footer only when Allow Everything's row does not already carry the pending restart note; a menu can't be opened from code, so it is a full-height sheet (a medium one hid Allow Everything and its note). A pick closes it and goes through
+  `ChatView.requestMode` (its confirmation); nothing is sent to the agent. On the phone, Persona's shell composer has no "/" list so typing and sending `/permissions` opens the sheet (`PermissionsCommandUITests`); where a plain "/" list shows, it lists `/permissions` (beside `/clear` in the main conversation). `-openPermissionModes YES` opens the sheet
+  and `-openSlashMenu /per` types that draft, for screenshots (with `MOCK_BYPASS_PENDING=1` for the waiting state).
 - Agents header (#3719): the agent's mode at the end of the open header's second row, icon and color only (`HeaderModeButton`,
   `SessionModes.headerLook`, `Theme.ModeTone`): Ask First a quiet gray hand, Plan Only a teal clipboard, Auto-Edit a purple pencil, Auto a purple
   wand, Allow Everything a red shield; not reported yet the plain permissions shield (never a guessed Ask First). A tap opens the mode menu; going into
-  Allow Everything asks first, and so does leaving it when `bypass_available` is false (no way back from the phone); the composer's model menu
+  Allow Everything asks first, and so does leaving it when `bypass_available` is false (no way back from the phone; assistant conversations and Antigravity `agy` switch directly without confirmation); the composer's model menu
   goes through the same `ChatView.requestMode`. Shown where the agent has a mode to see or change (`SessionModes.showsInHeader`): not Codex,
   TRAEX or a runtime without modes, not hosted pages (one-row header, #3255), not the folded bar. A row that lists its own modes (#8261, Paseo's
   Grok, OpenCode or Codex) shows its two rows instead, its own approval as the plain shield, a switch both ways (`SessionModes.menuOptions`,
@@ -1314,6 +1325,14 @@ and what this device asked are `AppModel.setUltracode` / `dismissUltracodeLost`,
   `apple/Persona/Views/Assistant/Tasks/PlanUltracodeViews.swift`; tests: `PlanUltracodeTests`.
 - **Tests**: `UltracodeTests` (FakeHub: decoding with older hubs, the requests, where it shows, graying, the ask, the quota) and `UltracodeUITests`
   against the mock hub with `MOCK_ULTRACODE=1` (`TEST_RUNNER_PERSONA_ULTRACODE_HUB`, screenshots with `TEST_RUNNER_PERSONA_SHOTS`).
+
+## Agent presets in New Agent and plan cards (#2225)
+
+`AgentPreset` / `AgentPresetProfile` decode `tiers` and `tiers_profile` from New Agent's `GET /api/v1/machines/{mid}/launchers`; `AppModel` caches them beside the launchers, default and unavailable lists and clears them with those caches. An older hub, no active profile, or no tier this computer can run leaves **Preset** out and keeps the ordinary defaults and start body unchanged. The body never carries `tier`: a preset is only a way to fill launcher, model and effort.
+
+When tiers exist, New Agent's Preset NavigationLink opens `AgentPresetPicker`, naming the active profile and showing each tier's name, description and launcher/model/effort. A launcher with blocked health has its reason on a disabled row, so it cannot be picked. Picking another row fills the three fields through the existing `restoredModel` path; manual launcher/model/effort edits unmark it, reselecting restores its defaults, and machine changes or recent-setup fills clear the pick. Explicitly choosing the list's default model through a preset remains an explicit `model` in `POST /api/v1/sessions` (`LauncherModelChoice.presetDefault`), rather than collapsing to Model Settings' default.
+
+A preset with a model or effort waits for its own launcher's model-list request: Start is disabled and guarded, with **Loading the preset's model options…**, until that request settles. This prevents the previous launcher's list from dropping or replacing the preset's values. Once the list is available (or its absence/failure is known), the form names a locked or unlisted model and an unsupported effort that the start cannot send, using the launcher's or model's own settings for the omitted field; the existing list error and locked-model explanation remain visible too. Plan tasks decode and encode their optional `tier`. Their model chip gives an explicit model precedence, then shows `launcher · Preset <tier>` or `Preset <tier>`, then the existing launcher/Default Model label.
 
 ## Launcher health in New Agent (#1643)
 
@@ -1735,7 +1754,7 @@ iOS, Mac, visionOS, watch and extensions support Simplified Chinese, English and
   Affirmative buttons require unlocking (`.authenticationRequired`); Deny does not. Plan approval from a notification uses `acceptEdits` (the whole plan has not been viewed, so commands still need individual approval),
   and "Approve and run automatically" is App-only. Buttons call resolve directly in the background without opening the App; failure (already handled, cannot reach hub) produces a local notification explaining why. Questions and terminal interactions have no buttons; tap to handle them.
   MCP forms and links are pushed too (#2433, `docs/protocol/protocol.md` "MCP elicitation"): the iOS app alone registers `features: ["withdraw", "elicitation"]` (`PushRegistrar.features`, the rule of `LiveConnection.helloFeatures`), so the hub pushes it these cards and waits for it while no app that shows them is open. Category `INTERACTION_ELICITATION` has no buttons: a tap opens the conversation, where the card arrives over the socket; the hub's withdrawal push takes it back like any card's. The alert names the MCP server and never carries the link or a form's values.
-  What the hub gives for taking a to-do's recommendation with one tap (#2056, `docs/assistant/todos.md` "Waiting for the owner"; the App's side is not built yet): each to-do waiting for the owner has `ask: {outcome?, verdict, recommend?, asked_at}` in `GET /api/v1/todos` (a `{"type":"todos"}` event when it comes up, is taken or ends), and a decision with a recommended option is pushed with category `TODO_DECIDE` and a top-level `todo: {id, asked_at, recommend}`; both are taken with `POST /api/v1/todos/{id}/accept {"asked_at"}` (409: already handled, refresh; 423 with a `code` such as `dialog_open`: the Agent's node refused it and nothing was taken, #7343; 502: the recommendation did not reach the Agent, nothing taken). The watch's answer-only credential cannot call either route yet.
+  What the hub gives for taking a to-do's recommendation with one tap (#2056, `docs/assistant/todos.md` "Waiting for the owner"; the App's rows are in "Closeout, orphaned tasks and answerable decisions (#3612, #3618, #3804)"): each to-do waiting for the owner has `ask: {outcome?, verdict, recommend?, asked_at}` in `GET /api/v1/todos` (a `{"type":"todos"}` event when it comes up, is taken or ends), and a decision with a recommended option is pushed with category `TODO_DECIDE`, whose Take Recommendation action takes it, and a top-level `todo: {id, asked_at, recommend, manager}`; from a manager that says how the push may answer it, `todo` also has `ask` and `lockscreen`, with `options` and `aps.mutable-content: 1` when `lockscreen` is `answer`, while `open_only` sends category `TODO_DECIDE_OPEN`, with no action (#10465); both are taken with `POST /api/v1/todos/{id}/accept {"asked_at"}` (409: already handled, refresh; 423 with a `code` such as `dialog_open`: the Agent's node refused it and nothing was taken, #7343; 502: the recommendation did not reach the Agent, nothing taken). The watch's answer-only credential cannot call either route yet.
   Settings › Notifications (`NotificationSettingsView`): "When you are needed" toggle, "When an Agent finishes" never / long tasks only / every time, Live Activities (Lock Screen and Dynamic Island / show details on Lock Screen / what each side of Dynamic Island shows, `IslandSettingsView`, `docs/apple/live-activity.md`), stored per device on the hub (`PushRegistrar.deviceID`). Changes save one at a time in the order they were made, each PUT the hub's last answer plus that one change, so a failed one reverts alone and no later PUT carries it (`NotificationSettingsModel.change`, #1913; the web's queue, #1285); quiet hours keep their own endpoint.
   Tapping a notification opens its session: use the completion-handler version of `UNUserNotificationCenterDelegate`, switch to the main queue to handle it, then call back (the async version returns on a background executor,
   UIKit receives completion off the main thread and a notification-triggered cold launch crashes).
@@ -1789,6 +1808,7 @@ state in `AppModel.readiness`, `AssistantReadinessModel`), using the same presen
 - Welcome (`WelcomeView`) shows no commands: the main button is Scan to connect hub (Mac: Paste pairing link), followed by where to find the code (the screen after installing the hub, or Settings › Devices › Connect a new device on a connected device);
   No hub yet? opens the public page from build configuration `publish.getting_started_url` (Info.plist `PersonaGettingStartedURL`, hidden if absent), alongside Try it first and Other ways.
   Manual entry, SSH tunnels and command-line instructions appear only under Other ways in `PairView`. Expired or used codes (401 `invalid_token`) say "This code expired or was already used; generate another", with Scan again on iPhone; externally opened pairing links behave the same (`AppModel.showPairing`).
+  On iPhone, **Choose from Photos** uses the system `PhotosPicker` without full-library access, even when `DataScannerViewController` is unsupported or unavailable. Vision accepts exactly one QR and feeds the same `PairConfirmation` path as the camera; unreadable, zero-code and multiple-code photos get localized errors without changing pairing state.
 - After pairing (`AppModel.checklistPending`, after engine selection), when the hub has `assistant_readiness` and the user has not chosen Later, the page becomes `OnboardingChecklistView`:
   Computer, Claude Code, Model and Try a message, using readiness `state` for checkmarks, crosses, spinners and question marks, with the same actions as main-chat cards (`ReadinessRoute`). Later calls dismiss;
   when all are checked, show Get started. Settings top "N steps left to get started" (`ChecklistSettingsRow`, N counts unfinished computer / claude / model steps) returns to the checklist. Old hubs add no post-pairing checklist.
@@ -1982,8 +2002,8 @@ Mac app is frozen: it decodes the same models and draws none of this (`#if os(ma
   `BriefAcceptRow` has them there (`TodoAskRow`'s `deferrable`). A decision held for the briefing says so, and a
   suggested rule's line (`RuleSuggestionLine`) sits under it, as on `BriefAcceptRow`. An ask without options, and every
   ask on the Mac, keeps `BriefAcceptRow`.
-- **Not built**: the `TODO_DECIDE` notification's option and response actions (the push payload carries `options` and
-  `responses`); the watch.
+- **Not built**: the `TODO_DECIDE` notification's option actions (the push payload carries `options` when its
+  `lockscreen` is `answer`, and `TODO_DECIDE_OPEN`, no actions, when it is `open_only`, #10465); the watch.
 - **Tests**: `CloseoutTests` (decoding, claims, the rows' line, the stripped block, nothing new without a closeout),
   `DecisionRowTests` (the ask's fields, the default line and its memo, every answer with `FakeHub`, the row staying
   answerable after a fixed answer, the row held during Complete Directly, the armed option keeping its button,
@@ -2006,6 +2026,61 @@ built in stages behind the hub's `todo_view`; this section grows with it.
   the path that reads the hub's counts and places as sent; the default roster lists several.
   `docs/operations/testing.md` has the details, including `GET /mock/churn?todos=1` for measuring a push on the list
   and where the mock is not a hub.
+- **The data** (`TodoStore`, `apple/Persona/Features/Todos/`): `GET /api/v1/todos` is decoded into its rows and, beside
+  them, each row's `view` (by to-do id) and the list's `counts` (`TodosPage`); a view that does not decode is none.
+  `TodoItem` gains only facts (`part_of`, `after`, `restored_at`, `someday_until`); the store keeps `views`, `counts` and
+  `places` apart from `todos`, so a change to a view alone (a run's latest line) redraws nothing that reads the rows and
+  does not refresh the watch or the widgets. A 304 applies the views and counts read with that tag again. Views and
+  counts are read whether V1 is on or not (V1 coming on in a run has them); everything else is done only while it is on:
+  - the `todo-view` StateCache entry beside `todo-items`: the views, counts and places, with the numbers the pages
+    showed, so the first frame draws them. It is written at most every 15 s while a run's line moves (`Throttle`) and
+    at once when the scene leaves the front; forgetting the hub removes it whether V1 is on or not, and an entry none
+    of whose views is for the kept rows is not used at all;
+  - the first V1 launch without it: `viewsRead` stays false until the first read ends, so the list does not file its
+    rows twice, but no longer than a second (no connection yet, or a hub that does not answer);
+  - the places, read with the list while the hub lists `todo_places`, again only when the list changed; a hub without
+    the route, or whose hello stopped listing it, has none (All only);
+  - one timer, to the earliest `next_change_at` of any row, reads the list again (coalesced) through the app's hub, only
+    while the scene is in front. A read that still shows that moment (the hub's clock behind) is tried again after 5 s
+    and 30 s, then left to the next push, and the timer never reads sooner than 5 s after its last read. The timer is
+    the store's, not the page's: the drawer's and sidebar's counts change by time too.
+
+  Tests inject all of this through `TodoStore.V1` (whether V1 is on, the features, the cache, the client the store's
+  own reads go through, and `Timing`); only `TodoStore.shared` follows the scene (`followsScene`). When the gate
+  changes, `TodosV1` tells the store (`v1Changed`), which counts, writes the cache, arms the timer and reads the places
+  from what the last read had, or lets the numbers go. `TodosAPI.swift` has the item, places, Someday, restore and
+  origin-route calls (the last with its op id and a timeout above the hub's five-minute relay).
+- **Filing and counts.** `TodoFiling` files a row by its `view` when its section is one this build knows, else by the
+  app's own rules (`TodoTriageLogic`, frozen) mapped onto the V1 sections (Needs you → Needs you, Working → Working,
+  PR to merge → Waiting, Other open → To do, Just finished → Just finished, Shelved → To do with the Inactive mark,
+  Done → Done); a section's rows go by `rank`, then `manager`, then `id`. Every To-dos number comes from
+  `TodoStore.countsSource` (`TodoCountsSource`): the hub's `counts` and places with one manager; with several, counted
+  from the current assistant's filed rows (`TodoCountsFallback`, the hub's rules, replayed against
+  `spec/fixtures/todo-counts`) with only its own project places; less the answers given on the device that the hub's
+  view does not show yet. The rows are filed there once (`countsSource.filed`, the current assistant's in the list's
+  order), for the V1 list to take its sections from, so the list and the numbers cannot disagree. A row filed
+  by the app's own rules (a manager older than the hub's features say, or a section this build does not know) is
+  filed again when one of its Agents' sessions changes (each read through its own cell, so only those are watched)
+  and each minute while the scene is in front, since those rules read the clock and no `next_change_at` says when.
+- **The gate and its memory.** `TodoFeatures` reads `todo_view`, `todo_places`, `todo_timeline` and `todo_asks` from each
+  group's hello and remembers them per group (`hubTodoFeatures.<group>`, written only when they change); before a
+  group's hello in this run the remembered value is used. `TodosV1` is on while the hub-level group's hello listed
+  `todo_view` in this run, or, before that hello, its last one did; once on for a group it stays on for that group
+  until the app quits, so a hello without it while a manager reconnects never swaps the page back, and such a hello is
+  not remembered as a downgrade (the first hello of a run is). It follows the owner's pick of the hub-level group:
+  picking an older group's hub turns it off, picking back a group it was on for turns it on without another hello.
+  Signing out of every hub forgets the remembered values, and a group that goes while others stay (signed out of, or
+  merged into another: `TodosV1.forget`) loses its own, since the app's stored pick, written only when the owner picks
+  a hub, can still name that group at the next launch. The gate turns on at the first hello that lists `todo_view`, also in the
+  middle of a run: holding that change while To-dos is on screen, so a visible page never swaps, is the page's job and
+  arrives with the V1 list; the gate stays a plain value. It is off in every build until the switch-on
+  (`TodosV1.released`), and on the iPhone and iPad only (`TodosV1.platform`): visionOS keeps today's To-dos. The data
+  and model files under `apple/Persona/Features/Todos/` compile on every platform, since `TodoStore` (shared with
+  visionOS) names them; the V1 views will be iOS only. The hub's `todo_send_state` marker is not read yet.
+- **404 and 405.** An older hub answers 405 for `GET /api/v1/todos/{id}` and `GET /api/v1/todos/places` (the `PATCH` and
+  `DELETE` routes of `/api/v1/todos/{id}` match the path) and 404 for the other new routes: `TodoNotThere` takes both
+  as "not there". A 404 with `todo_not_found` is the to-do itself gone. `GET /api/v1/todos` answering 404 still hides
+  the To-dos entrance, as before.
 
 ## Quiet supervision rounds (#2092)
 
@@ -2047,6 +2122,8 @@ a follow-up's prompt (`injected.detail`, or the raw input) is never shown while 
 visible one; its block shows only the one-line `injected.line` (`ChatLine.hidesPrompt`). A round stays shown by exactly
 the supervision rule (`Supervision.visible`): a successful `ask_user` / `notify_user`, a pending live `ask_user`, an
 accepted / needs-user `task_review`, a `supervision_finish` receipt with user visibility, or `fold.supervision_user`.
+A completed round with a nonblank final reply also stays visible unless it successfully finished silent. The reply
+uses the usual bubble and the work stays collapsed. See `docs/assistant/assistant.md` "Background rounds".
 
 While folding is on, the main chat's Needs You tray groups task rows by the conversation that supervises them (the
 to-do's `origin`) when they come from more than one: the conversation's own group first without a header, then each
@@ -2059,7 +2136,7 @@ and the count are unchanged (`ActionTrayContent.grouped`); with one group the tr
 - **Progress rows (§3.2).** The status word is the right-hand column in its tone (red for interrupted and failed, `cautionText` for a usage limit, the Needs You tone), a second line carries the reason (usage limit: "You've hit your usage limit. · Resets 15:20", from `Session.usageLimitWhen`; interrupted: the error's reason; starting: "Starting the agent"; needing you: what it asks; working: its step; finished: its last words), and a › ends every row that opens something. Marks: a `caution` clock for a usage limit, ⓘ for interrupted, a hollow circle with a `caution` dot for starting. The usage limit's reading is `Shared/UsageLimit.swift` (the web's `lib/usage-limit.ts`: `turn_error_resets_at`, `turn_error_resumes`, `work.resets_at`, a 10-minute grace after the reset); `AssistantEntries.todoStatus` is unchanged (the shared fixture does not know the grace).
 - **Decision rows (P1, P4).** `BriefAcceptRow` has no "Actions" menu: when its buttons do not fit one line the secondary ones (Open, Complete Directly, Later, Don't handle) wrap in their own row and the main one has the line below to itself. Later and Don't handle show only on the tray's decision rows (`decision:` arg of `BriefAcceptRow`, an owner decision or a `needs_user` review): Later hides the round for this app session (`TasksStore.laterDecisions`, keyed `decision:<manager>:<id>:<round>` like the web's `decisionLaterKey`); Don't handle is `POST /todos/{id}/decision-dismiss` with the hub's own `decision_review.review_at` string (never a `Date`: sub-second digits matter) and the manager header, a six-second Undo toast (`decision-undo-dismiss` with the receipt), and a 409 reloads the to-dos. `AssistantEntries.split` leaves a hidden decision out (`decisionHidden`) unless a live Agent question gives the task its status. The words are one pair on every surface: "Later" / "Don't handle".
 - **Plan card (§3.1).** Start is full width, Edit and Don't Start under it when the three do not fit one line; a task's brief (`PlanTask.brief`, decode-only, never sent back) shows folded under its "why" (`PlanBriefView`: who asked, a summary line, Show All).
-- **Receipts (§3.3).** Gone since #8237: the chat draws no receipt, review or report (`ChatLines.drawnFeed`); the hand-off card says a failed start or an interrupted turn in place (`DispatchHandoffCard.interruption`), Retry, Remove and Continue are on the Needs You rows (`AssistantActionBar.actions`, `TasksStore.retry`), and finished tasks are In Progress's Just Finished group (`docs/assistant/unified-entry.md` "Receipts").
+- **Receipts (§3.3).** Gone since #8237: the chat draws no receipt, review or report (`ChatLines.drawnFeed`); the hand-off card says a failed start or an interrupted turn in place (`DispatchHandoffCard.interruption`), Retry, Remove and Continue are on the Needs You rows (`AssistantActionBar.actions`, `TasksStore.retry`), and finished tasks are the Finished entry's rows (#10922; In Progress's Just Finished group until then; `docs/assistant/unified-entry.md` "Receipts").
 - **Hand-off cards (D6).** See `docs/assistant/unified-entry.md` ("What a dispatch opens").
 - Removed (P7): the unused `TaskCard`, `TaskNowLine`, `TaskLine`, `TaskSentList`, `TaskProgressLine`, `TaskOpenButton`.
 
@@ -2652,6 +2729,36 @@ group's. With one installed manager, or a hub without a roster, nothing below sh
   `.aPushIsThePagesOwnUnlessAnotherManagerSentIt`,
   `ExtensionOperationsTests.anotherManagersOperationIsKeptApart`, `MacAttentionTests.aManagerSwitchedOffHereRingsNoBanner`.
 
+## Saved prompts (#9436)
+
+The user's own `/` prompts (web #7329, `docs/web/web.md` "Saved prompts (#7329)"): the instructions they send again and
+again, kept on the hub as the current assistant's settings, so the phone, the iPad and the web have one list. iOS uses the
+web's routes (`docs/protocol/protocol.md`, `/api/v1/assistant/saved-prompts`) and adds no hub change.
+
+- **One list** (`Persona/App/SavedPromptStore.swift`, types, API and rules in `Shared/SavedPrompts.swift`): read on hello,
+  on `assistant_saved_prompts` when it is the shown assistant's (no `manager`: the default one; `SavedPromptStore.concerns`),
+  and after the current assistant or hub changes, which first forgets the list before so another assistant's prompts are
+  never offered. Until a read answers the `/` lists have none; an assistant from before them (404) has none and its page
+  says so; a failed read keeps a list already read.
+- **The `/` lists**: the plain composer's (`SlashMenuRow.slashRows`, also in chats that have no commands of their own) and
+  BeautifulUI's prompt bar (`promptCommands`) list them after the chat's own commands and before extensions' quick
+  prompts, as `/name` with **Saved**; picking one types its text into the box and never sends it. A saved `/commit`
+  beside the chat's own is a row of its own (ids `saved:<id>`). Persona chats, which have no agent commands, list the saved prompts (the main chat after its `/clear`).
+- **Assistant Profile › In Chats › Saved Prompts** (`Views/Settings/SavedPromptsView.swift`; both styles): each prompt's
+  `/name` and its text's first two lines, New Prompt, and per row (context menu, swipe, VoiceOver actions) Edit, Move Up /
+  Move Down (`PUT …/order`) and Delete, confirmed. Delete and a move show at once and come back with the reason when the
+  hub refuses; a list changed on another device meanwhile (409) is read again with a word. A change that answers after
+  the current assistant or hub changed leaves the new list alone, and a move that answers after a delete made meanwhile
+  does not bring the deleted prompt back.
+- **The editor** (`SavedPromptEditor`): Name after a fixed `/` and Text. It says the hub's rules before asking it
+  (`SavedPromptRules`: a taken name at once, the others once something is typed or Save was tapped); a count shows past
+  80% of 8,000 characters; the hub's own refusal shows in the sheet and keeps what was typed.
+- Save as Prompt… on a message's menu, and Android, follow in their own issues.
+- DEBUG: `-tab settings -openAssistantPage prompts|prompt|newPrompt` (`promptsEntry`: the profile scrolled to In Chats).
+  Tests: `PersonaTests/SavedPromptsTests.swift`; UI suite `SavedPromptsUITests` against the mock with
+  `MOCK_SAVED_PROMPTS=1` (`TEST_RUNNER_PERSONA_MOCK_HUB`; skips without it) swipes a row, checks Delete asks first and
+  Cancel sends nothing, light and dark; `TEST_RUNNER_PERSONA_SHOTS=<dir>` keeps `saved-prompts-<light|dark>-<swipe|confirm>.png`.
+
 ## The pages show the current assistant
 
 [managers.md](../assistant/managers.md) "The current assistant" ("Pages", "Counts") on iOS and the Mac: with several installed
@@ -2831,7 +2938,7 @@ Requested 2026-11-17 (#9508): a screenshot of a chat carries Persona's brand whe
 ## DEBUG launch arguments (Debug only; Release checks exclude these strings)
 
 `-pairURL persona://pair?...` (pair without scanning a QR code, no notification permission prompt), `-openSession <machine>/<session>`,
-`-showNewChat YES`, `-tab dev|mail|settings`, `-openAssistant <machine>/<session>`, `-newAssistant YES`, `-openDictationControl YES` (the Dictate to Persona intent; combine with `-showDictationSample "<words>"` in the simulator), `-openAssistantSidebar YES|0.5` (Persona tab sidebar open / halfway open), `-openAssistantManager <id>` (that manager as the current assistant once the roster is in), `-showAssistantSwitcher YES` (the sidebar's assistant list open, several assistants), `-openFirstImage YES` (open the viewer for the first image in the chat), `-showScrollState YES|visible` (chat-list position and following state, readable by UI tests; `visible` draws it), `-openTerminalPane YES`, `-showPad YES`, `-showKeyMods locked,once,held` (set the terminal key bar's ctrl / alt / shift to these states), `-terminalWrap NO`, `-terminalTheme ink|midnight|persona|solarized`, `-terminalInputMode direct|field` (terminal direct typing / input field), `-terminalTipsSeen YES` (skip "Terminal tips"), `-openTerminalTips YES` (show them again), `-focusTerminalInput YES` (shows the keyboard in direct-typing mode), `-openShortcutsPanel YES`, `-openTerminalSettings YES`, `-showLark YES` (go directly to Inbox), `-larkFocus <messageId>` (scroll to that message), `-larkProfile <userId>` (show this person's profile card in the chat), `-larkPicker YES` (show the reaction picker for the last message), `-larkMoments <postId>` (open a Moments post), `-openInboxFirst YES` (open the first unhandled Inbox item), `-larkTop YES` (show the Lark chat from its earliest message, for screenshots of long cards), `-addMail YES` (open Manage email accounts › Add email account), `-tab settings -openHubUpdate YES` (Settings › hub, `docs/operations/hub-update.md`), `-tab settings -openSkills YES` (Settings › Assistant › Skills), `-tab settings -openAssistantPage assistant|routines|routine|intervalTask|cronTask|followup|bypassTask|newRoutine|memory|memoryFile|memoryEdit|places|place|newPlace|deletePlace|about` (pages under Settings › Assistant; `routine` opens the first scheduled task, `intervalTask` / `cronTask` / `followup` the first interval / cron / one-time task, `bypassTask` shows the "Allow everything?" confirmation in the editor, `newRoutine` shows the creation sheet with the "End-of-day review" template, `memoryFile` / `memoryEdit` opens the first memory / its editor; `places` is Saved Places, `place` opens the first place's editor, `newPlace` the new-place sheet, `deletePlace` the list's Delete confirmation for the first place). `scripts/app/sim.sh` wraps building, installation, pairing and launch (`SIM=<udid>` changes the simulator; concurrent agents must use separate simulators or overwrite each other's installs).
+`-showNewChat YES`, `-tab dev|mail|settings`, `-openAssistant <machine>/<session>`, `-newAssistant YES`, `-openDictationControl YES` (the Dictate to Persona intent; combine with `-showDictationSample "<words>"` in the simulator), `-openAssistantSidebar YES|0.5` (Persona tab sidebar open / halfway open), `-openAssistantManager <id>` (that manager as the current assistant once the roster is in), `-showAssistantSwitcher YES` (the sidebar's assistant list open, several assistants), `-openFirstImage YES` (open the viewer for the first image in the chat), `-showScrollState YES|visible` (chat-list position and following state, readable by UI tests; `visible` draws it), `-openTerminalPane YES`, `-showPad YES`, `-showKeyMods locked,once,held` (set the terminal key bar's ctrl / alt / shift to these states), `-terminalWrap NO`, `-terminalTheme ink|midnight|persona|solarized`, `-terminalInputMode direct|field` (terminal direct typing / input field), `-terminalTipsSeen YES` (skip "Terminal tips"), `-openTerminalTips YES` (show them again), `-focusTerminalInput YES` (shows the keyboard in direct-typing mode), `-openShortcutsPanel YES`, `-openTerminalSettings YES`, `-showLark YES` (go directly to Inbox), `-larkFocus <messageId>` (scroll to that message), `-larkProfile <userId>` (show this person's profile card in the chat), `-larkPicker YES` (show the reaction picker for the last message), `-larkMoments <postId>` (open a Moments post), `-openInboxFirst YES` (open the first unhandled Inbox item), `-larkTop YES` (show the Lark chat from its earliest message, for screenshots of long cards), `-addMail YES` (open Manage email accounts › Add email account), `-tab settings -openHubUpdate YES` (Settings › hub, `docs/operations/hub-update.md`), `-tab settings -openSkills YES` (Settings › Assistant › Skills), `-tab settings -openAssistantPage assistant|routines|routine|intervalTask|cronTask|followup|bypassTask|newRoutine|memory|memoryFile|memoryEdit|places|place|newPlace|deletePlace|about` (pages under Settings › Assistant; `routine` opens the first scheduled task, `intervalTask` / `cronTask` / `followup` the first interval / cron / one-time task, `bypassTask` shows the "Allow everything?" confirmation in the editor, `newRoutine` shows the creation sheet with the "End-of-day review" template, `memoryFile` / `memoryEdit` opens the first memory / its editor; `places` is Saved Places, `place` opens the first place's editor, `newPlace` the new-place sheet, `deletePlace` the list's Delete confirmation for the first place). `scripts/app/sim.sh` wraps building, installation, pairing and launch (`SIM=<udid>` changes the simulator; concurrent agents must use separate simulators or overwrite each other's installs). It leaves the watch app and the share extension out of the build unless given `--with-watch` (`docs/operations/testing.md`, "Development builds").
 Check history rendering: `-loadAll YES` (load all history and scroll to the top), `-showFromSeq <seq>` (display from the turn containing this user message; scroll positioning can drift in long histories),
 `-dropUsers YES` (hide that turn's user bubbles to fit its process rows and answer on one screen). `-openPane terminal|git|files` opens the chat page's terminal (from the bottom) / Git / Files;
 `-openNeedsRow plan:|task:|message:` (the Needs You tray with the first row of that kind opened in place; use with `-openAssistant`), `-simulateTap <machine>/<session>` runs the notification-tap handler 4 seconds after launch; `-tab settings -openNotificationSettings YES` (Settings › Notifications; add `-openIslandSettings YES` for Dynamic Island); `-tab settings -openSentAsYou YES` (Settings › Sent as You, #5278); `-showFleetSample needsYou|working|done` (`-fleetDetails YES`, `-fleetIsland b|c|custom:<left>,<right>`) starts a Live Activity with fake data; `-showTestNotification permission|plan` shows a local notification matching an interaction push 3 seconds after backgrounding (UI tests use it to test buttons); `-openFilePath <path>` (open this file after opening the chat; `-openFileLine <line>` jumps to that line), `-showFilePerf YES` (write file-open timings and per-second frame rates to Caches/file-perf.log; `-showFileAutoScroll YES` scrolls the file at constant speed, `-showFileAutoScrollSpeed 1500` changes the speed); `-showMenu YES` opens the long-press action bar on the last reply (with `-showFromSeq`, that turn's reply); `-openWelcome YES` forgets pairing and exits demo mode at launch, stopping on the pairing page (`DemoModeTests`); `-openChangeAnswer YES` opens Change Answer on the first **Answered by the assistant** card (#544).

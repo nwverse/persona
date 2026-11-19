@@ -80,7 +80,10 @@ const (
 // Closeout is what an agent says of its own work as a turn ends: the agent's claim, not something the hub checked.
 // Its artifacts are the work state's (WorkState.Artifacts).
 type Closeout struct {
-	Status string `json:"status"` // done, not_done or blocked
+	// Delivery, Unblock: explicit delivery disposition and the party responsible for its gate.
+	Delivery string `json:"delivery,omitempty"`
+	Unblock  string `json:"unblock,omitempty"`
+	Status   string `json:"status"` // done, not_done or blocked
 	// Waiting: who or what a blocked turn waits for.
 	Waiting string `json:"waiting,omitempty"`
 	// Did: what changed, at most three sentences.
@@ -100,8 +103,9 @@ type Closeout struct {
 // CloseoutChecked: "yes" or "no" where the hub could tell, empty where it could not. Deployed is about the running
 // hub, so it is only ever known for the hub's own repository.
 type CloseoutChecked struct {
-	Merged   string `json:"merged,omitempty"`
-	Deployed string `json:"deployed,omitempty"`
+	Merged          string `json:"merged,omitempty"`
+	Deployed        string `json:"deployed,omitempty"`
+	LocalDeployment bool   `json:"local_deployment,omitempty"` // the running build names the PR independently of its upstream merge
 }
 
 // WorkCI records the target and fallback across manager restarts.

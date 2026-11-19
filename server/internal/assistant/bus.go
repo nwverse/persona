@@ -138,12 +138,17 @@ func NewBusHub(o BusOptions) *BusHub {
 					assistantwire.CapabilityMeetingHighlights, assistantwire.CapabilityMeetingNotes, assistantwire.CapabilityMeetingEcho, assistantwire.CapabilityMeetingTranscription,
 					assistantwire.CapabilityRecordingDay, assistantwire.CapabilityAssistantSearch, assistantwire.CapabilityHTTPBodyStream, assistantwire.CapabilityAssistantStartServiceTier,
 					assistantwire.CapabilityMCPWait, assistantwire.CapabilitySessionsSideFold, assistantwire.CapabilityRemoteImages, assistantwire.CapabilityTodoView,
-					assistantwire.CapabilityTodoPlaces, devicewire.SharingCapability}}
+					assistantwire.CapabilityTodoPlaces, assistantwire.CapabilityTodoAsks, assistantwire.CapabilityTodoTimeline, assistantwire.CapabilityTodoImages, devicewire.SharingCapability}}
 		},
 		OnHello: b.onHello,
 		// A node's tool call that its caller stopped waiting for ends at the hub too (fleet_tools.go).
 		OnRequest: b.answer,
 		OnEvent: func(event string, params json.RawMessage) {
+			// Credential revocation goes to both managers and can write to their stores.
+			if event == bus.EventCredentialRevoked {
+				b.queueEvent(event, params)
+				return
+			}
 			if o.Devices != nil && o.Devices.Event(event, params) {
 				return // the computers' (devices.go), in the order they came
 			}
@@ -193,6 +198,11 @@ func (b *BusHub) Serve(ctx context.Context, svc *Service) error {
 
 // Connected: the connection to the hub is up now (the knowledge base closes while it is not, kb.go).
 func (b *BusHub) Connected() bool { return b.client.Peer() != nil }
+
+// CredentialRevoked checks the hub's credential status for a kept message's sender.
+func (b *BusHub) CredentialRevoked(ctx context.Context, id string) (bool, error) {
+	return bus.CredentialRevoked(ctx, b.client.Call, id)
+}
 
 // onHello keeps the hub's answer to manager.hello. A new connection: the hub shows nothing of the assistant until it
 // reports the whole of it again.
@@ -712,14 +722,23 @@ func serveHTTP(ctx context.Context, s http.Handler, p assistantwire.HTTPRequest,
 	if p.ShareAuthority != nil {
 		ctx = devicewire.WithShareAuthority(ctx, *p.ShareAuthority)
 	}
+	if p.ModeActor != nil {
+		ctx = devicewire.WithModeActor(ctx, p.ModeActor)
+	}
 	if p.OwnerAnswer {
 		ctx = devicewire.WithOwnerAnswer(ctx)
+	}
+	if p.ClarificationProof != "" {
+		ctx = assistantwire.WithClarificationProof(ctx, p.ClarificationProof)
 	}
 	if p.HandoffApprover != nil { // set by the hub only, never from a header (secret_handoff.go there)
 		ctx = assistantwire.WithHandoffApprover(ctx, *p.HandoffApprover)
 	}
 	if p.Human { // the same: a new conversation a person's own app opens (start.go's route)
 		ctx = assistantwire.WithHumanStart(ctx)
+	}
+	if p.ReplyInput {
+		ctx = assistantwire.WithReplyInput(ctx)
 	}
 	r, err := http.NewRequestWithContext(ctx, p.Method, target, bytes.NewReader(p.Body))
 	if err != nil {
@@ -818,6 +837,17 @@ func (b *BusHub) event(ctx context.Context, ev busEvent) error {
 	s := b.service()
 	decode := func(v any) error { return json.Unmarshal(ev.params, v) }
 	switch ev.name {
+	case bus.EventCredentialRevoked:
+		var p bus.DeviceCredential
+		if err := decode(&p); err != nil {
+			return err
+		}
+		if p.ID != "" {
+			s.undeliveredCredentialRevoked(ctx, p.ID)
+			if b.opts.Devices != nil {
+				b.opts.Devices.Event(ev.name, ev.params)
+			}
+		}
 	case assistantwire.EventUserSpoke:
 		var p assistantwire.UserSpokeParams
 		if err := decode(&p); err != nil {

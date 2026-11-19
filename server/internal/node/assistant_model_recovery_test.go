@@ -221,6 +221,7 @@ func TestRecoveryReturnsToTheConfiguredModelOnTheNextRequest(t *testing.T) {
 	if r := n.modelRecovery(id); r.Reason != proto.ModelRecoveryReasonQuota || r.ResetsAt == nil {
 		t.Fatalf("quota marker %+v", r)
 	}
+
 	// The fallback answered: the hold starts, as before.
 	fp := &assistantProc{id: id, agent: "claude", launcher: "claude", model: modelExecution{Model: "fallback-model"}}
 	n.mu.Lock()
@@ -294,9 +295,9 @@ func TestDefaultModelRecoveryReturnsAfterProbe(t *testing.T) {
 			st, _ := n.state.get(id)
 			st.Model = requested
 			n.state.put(id, st)
-			p := &assistantProc{id: id, agent: "claude", launcher: "claude", model: modelExecution{Model: requested}}
+			p := &assistantProc{id: id, agent: "codex", launcher: "claude", model: modelExecution{Model: requested}}
 			n.procs[id] = p
-			const failure = "API Error: 503 no eligible upstream account is currently available"
+			const failure = "API Error: safeguards flagged"
 			if !n.recoverAssistantResult(p, true, failure, "", assistantRecordKind) {
 				t.Fatal("the first default-model failure was not recovered")
 			}
@@ -328,7 +329,7 @@ func TestDefaultModelRecoveryReturnsAfterProbe(t *testing.T) {
 			if st, _ := n.state.get(id); st.ModelRecovery == nil || st.ModelRecovery.From != requested || st.ModelRecovery.ProbeFrom != "primary-model" {
 				t.Fatalf("the default probe identity was not persisted: %+v", st.ModelRecovery)
 			}
-			fp := &assistantProc{id: id, agent: "claude", launcher: "claude", model: modelExecution{Model: "fallback-model"}}
+			fp := &assistantProc{id: id, agent: "codex", launcher: "claude", model: modelExecution{Model: "fallback-model"}}
 			n.mu.Lock()
 			n.procs[id] = fp
 			n.mu.Unlock()
@@ -713,11 +714,13 @@ func TestRecoveryHoldExpiryKeepsStickyFallback(t *testing.T) {
 	if !unavailableKept {
 		t.Fatal("natural expiry cleared the configured model's unavailable record")
 	}
-	if !n.recoverAssistantResult(p, true, "API Error: 429 Too many requests", "", assistantRecordKind) {
-		t.Fatal("the new 429 was not recovered")
+	if n.recoverAssistantResult(p, true, "API Error: 429 Too many requests", "", assistantRecordKind) {
+		t.Fatal("throttling bypassed manager scheduling")
 	}
-	if first := waitRecoverySend(t, sent); first.Model != "fallback-model" {
-		t.Fatalf("the first recovery send used %q, want the sticky fallback without a same-model retry", first.Model)
+	select {
+	case <-sent:
+		t.Fatal("throttling sent an immediate recovery")
+	default:
 	}
 }
 
@@ -777,6 +780,7 @@ func TestRecoveryReturnHonorsNewModelChoice(t *testing.T) {
 			other := modelExecution{Model: "other-model", IsMain: true}
 			execution, expired := n.heldFallbackWithExpiry(id, "claude", other)
 			execution = n.applyModelRecoveryReturn(context.Background(), id, other.Model, execution, expired)
+			n.commitModelChoice(id, execution) // the direct helper models the delivery boundary in assistantSend
 			if execution.Model != "other-model" {
 				t.Fatalf("automatic return overrode the newer model choice with %q", execution.Model)
 			}

@@ -698,6 +698,8 @@ export interface Item {
   full_size?: number;
   queued?: boolean;
   wake?: boolean;
+  narration?: boolean;
+  codex_heartbeat_quiet?: boolean;
   task?: TaskNote;
   fold?: { items: number; tools: number; thoughts: number; until?: string; through_seq: number; through_id?: string; images?: FoldImage[]; tasks?: FoldTaskSnapshot[]; latest_thinking?: Item; supervision_user?: boolean; changes?: FoldChange[] | null; usage?: TokenUsage[]; sources?: FoldSource[] };
   image?: { mime: string; data?: string; lazy?: boolean; size?: number; width?: number; height?: number };
@@ -859,6 +861,13 @@ export interface SessionChildren {
   sides_unread?: number;
 }
 
+export const SESSION_REVIEW_FEATURE = "session_review";
+export const SESSION_REVIEW_TOOL = "persona_session_review";
+
+export function isSessionReview(ix: Pick<Interaction, "kind" | "tool_name">): boolean {
+  return ix.kind === "question" && ix.tool_name === SESSION_REVIEW_TOOL;
+}
+
 export interface Interaction {
   id: string;
   /** The manager it belongs to (docs/protocol/protocol.md "Per-manager routing"); none: the default one. */
@@ -877,7 +886,13 @@ export interface Interaction {
   tool_input?: Record<string, unknown>;
   /** The outgoing text the server lets the user edit before Allow, only for a Claude Code Lark send/reply card. */
   editable_text?: string;
+  /** Script asks opt into Markdown for their summary or question; absent and unknown values stay plain (#10857). */
+  format?: "markdown" | (string & {});
   summary?: string;
+  /** A finished independent session review's finding count, full report, and hidden reviewer (#1808). */
+  review_count?: number;
+  review_report?: string;
+  reviewer_session_id?: string;
   screen?: string;
   secret?: boolean;
   dialog?: ScreenDialog;
@@ -1069,6 +1084,8 @@ export interface UndeliveredMessage {
   attempts?: number;
   next_at?: string;
   error?: string;
+  /** A failed message that can only be deleted. */
+  delete_only?: boolean;
   /** Held for an Agent while its computer was away (#10661): that computer's name. `error` is then the whole line to
    *  show under the bubble, and Retry / Delete go to the session's held routes (lib/undelivered-actions.ts). */
   computer?: string;

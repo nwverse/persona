@@ -51,6 +51,11 @@ func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, 
 		return err
 	}
 	defer unlock()
+	return n.sendLocked(ctx, id, text, images, opts)
+}
+
+// sendLocked sends to the agent with its input lock held.
+func (n *Node) sendLocked(ctx context.Context, id, text string, images []proto.Image, opts sendOpts) error {
 	selectionText := text
 	if opts.SwitchNow {
 		// The assistant's agent_switch (#5973): the switch it picked goes with this message now, or nothing does
@@ -175,7 +180,7 @@ func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, 
 			return n.stoppedRefusal(id)
 		}
 		r := n.resumeWith(id, opts)
-		s, err := n.start(ctx, r.cwd, r.launcher, "", id, "", r.mode, r.effort, r.tab, "", "", r.execution)
+		s, err := n.start(ctx, r.cwd, r.launcher, "", id, r.workspaceID, r.mode, r.effort, r.tab, "", "", r.execution)
 		if err != nil {
 			return err
 		}

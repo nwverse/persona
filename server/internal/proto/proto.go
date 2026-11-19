@@ -40,6 +40,7 @@ var Features = []string{
 	"engine_switch",            // POST …/modes with a launcher of the other engine: the next message moves the conversation between Claude Code and Codex with a handoff; pending_switch.agent, engine_history (#5054)
 	"client_msg_id",            // session.send dedupes retries
 	FeatureMessageSendState,    // informational receipt support; trust only authenticated hello.message_send_state == 1
+	FeatureTodoSendState,       // informational: a to-do write's receipts (#10465); trust only authenticated hello.todo_send_state == 1
 	"client_ops",               // durable operation receipts and read-only status queries
 	"send_refusals",            // 409 dialog_open / input_draft, clear_draft
 	"screen_dialog",            // interaction.dialog, Resolution.option, 409 prompt_changed
@@ -61,6 +62,7 @@ var Features = []string{
 	"git_blob",                 // GET /api/v1/machines/{mid}/git/blob: a file at a version, for comparing
 	"git_write",                // the Git panel's writes and the branch's pull request under /api/v1/machines/{mid}/git/ (#6121)
 	"git_review",               // GET /api/v1/machines/{mid}/git/review: every file a scope changed, with its hunks (#151)
+	"session_review",           // POST/GET /api/v1/sessions/{mid}/{sid}/review: explicit independent read-only reviewer (#1808)
 	"preview",                  // GET …/preview/servers, POST …/preview/start, WebSocket …/preview/connect: dev server previews in a headless browser on the computer (docs/web/preview.md)
 	"file_upload",              // POST /api/v1/machines/{mid}/files (docs/protocol/protocol.md "Sending files")
 	"machine_trust",            // machines' trust and error_code, POST /api/v1/machines/{id}/confirm|reject (docs/assistant/onboarding.md 5.3)

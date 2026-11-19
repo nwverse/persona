@@ -1501,7 +1501,7 @@ struct InboxRow: View {
     private var from: String {
         if item.isAssistantRow { return item.linePreview } // the tag says who: no "Assistant:" in front
         #if !os(macOS)
-        if let meta = InboxNow.meta(item, lang: interfaceTextLocale.identifier) { return meta }
+        if let meta = InboxNow.meta(item, lang: interfaceTextLocale.identifier, translatedPreview: translated?.preview) { return meta }
         #endif
         if let doc = item.doc { return doc.typeName + " · " + item.preview } // the preview names who: Li Lei mentioned you
         if item.moment != nil { return String(localized: "\(item.sender ?? ""): \(item.preview)", comment: "Who wrote it: what they wrote") } // who commented, on the post in the title
@@ -1538,8 +1538,9 @@ struct InboxRow: View {
             } else if item.isLark {
                 LarkAvatarImage(name: item.title, url: item.avatar, isGroup: item.lark?.isGroup ?? false, size: Theme.Size.avatar)
             } else {
-                let disc = Theme.monogram(item.sender ?? "")
-                Monogram(name: item.sender ?? "", fill: disc.fill, ink: disc.ink)
+                // A connector's thread picture (the other person, a group's own) over the initial; the initial alone
+                // without one, mail's included.
+                ChatAvatar(url: item.connector?.avatarURL, name: item.sender ?? "")
             }
             }
             .opacity(item.isDone ? 0.6 : 1)

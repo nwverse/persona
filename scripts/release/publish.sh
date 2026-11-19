@@ -71,7 +71,7 @@ served_is() { [ "$(curl -fsSL "$PERSONA_PUBLISH_URL/dl/$1" 2>/dev/null)" = "$(ca
 node_archives() {
   local gz
   for gz in "$1"/*.gz; do
-    [[ "${gz##*/}" =~ ^(personad|persona-node|persona-link|persona-iphone-bridge)-(linux|darwin)-(amd64|arm64)\.gz$ ]] && printf '%s\n' "$gz"
+    [[ "${gz##*/}" =~ ^(personad|persona-node|persona-link|persona-iphone-bridge)-(linux|darwin|windows)-(amd64|arm64)(\.exe)?\.gz$ ]] && printf '%s\n' "$gz"
   done
   return 0
 }
@@ -162,8 +162,10 @@ if [ -n "${SITE_ONLY:-}" ]; then
   exit 0
 fi
 
-# The build number orders releases (UTC YYYYMMDDHHMM): hubs install only a larger one.
-BUILD="$(date -u +%Y%m%d%H%M)"
+# The build number orders releases (UTC YYYYMMDDHHMM): hubs install only a larger one. A release-PR workflow pins it
+# in its immutable plan so a retry verifies exactly the same downloads; ordinary builds keep the current UTC minute.
+BUILD="${PERSONA_RELEASE_BUILD:-$(date -u +%Y%m%d%H%M)}"
+[[ "$BUILD" =~ ^[0-9]{12}$ ]] || { echo "PERSONA_RELEASE_BUILD must be UTC YYYYMMDDHHMM" >&2; exit 2; }
 # The nearest vX.Y.Z tag, a lightweight one too, as deploy.sh names its builds (#7201).
 VERSION="${VERSION:-$(git describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null || echo dev)-$BUILD}"
 COMMIT="$(git rev-parse HEAD)"
@@ -225,11 +227,14 @@ for t in linux/amd64 linux/arm64 darwin/arm64 darwin/amd64; do
   (cd server && GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" \
     -o "../$OUT/bin/persona-node-${t%/*}-${t#*/}" ./cmd/persona-node)
 done
-# The independent connector also runs on Windows. The hub, manager and node programs keep their existing platforms;
-# their update feeds do not acquire Windows entries along with the connector (docs/operations/windows.md).
+# The Windows connector and resident-node programs run natively on Windows. They are node downloads, not a native hub:
+# Windows personad is listed under Files so the manager can send it to a node; a hub never selects another OS for its
+# own self-update. The connector and persona-node keep their separate Links and Nodes entries.
 for t in windows/amd64 windows/arm64; do
-  (cd server && GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" \
-    -o "../$OUT/bin/persona-link-${t%/*}-${t#*/}.exe" ./cmd/persona-link)
+  for p in personad persona-link persona-node; do
+    (cd server && GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" \
+      -o "../$OUT/bin/$p-${t%/*}-${t#*/}.exe" "./cmd/$p")
+  done
 done
 # The hub and manager programs are released and swapped together with personad (update.ProgramNames).
 for t in linux/amd64 linux/arm64 darwin/arm64 darwin/amd64; do
