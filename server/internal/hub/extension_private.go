@@ -10,7 +10,8 @@ import (
 // What an extension's token never sees of the conversations, whatever scopes it was granted (docs/extensions/extensions.md
 // "Never shown to extensions"): the health space's conversations are not listed (the legacy list, the paged
 // list, its totals and counts) and their items, images, info and screen are not read. A conversation the hub does not
-// know is not read either: its space cannot be told.
+// know is not read either: its space cannot be told. The extensions' agent.needs_you and agent.finished are not sent
+// of a card or a session they are not shown (notifyws.go).
 
 // healthSession: s runs in a health space, by its own Space or its directory (identity.InHealthSpace counts a folder
 // inside one, which only hides more).
@@ -56,6 +57,21 @@ func (h *Hub) hiddenFromExtensions(ix proto.Interaction) bool {
 		}
 	}
 	return ix.Cwd == ""
+}
+
+// sessionHiddenFromExtensions: the extensions are not told of session sid of computer machine (agent.finished): one of
+// the health space, or one the hub does not list, whose space cannot be told. A push about no session is the manager's
+// own.
+func (h *Hub) sessionHiddenFromExtensions(machine, sid string) bool {
+	if sid == "" {
+		return false
+	}
+	if m := h.localMachine(machine); m != nil {
+		if s, ok := m.session(sid); ok {
+			return healthSession(&s)
+		}
+	}
+	return true
 }
 
 // extensionReadable wraps a route of one conversation ({mid}/{sid}): an extension's token is answered 404, as for a

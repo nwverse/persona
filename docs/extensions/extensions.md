@@ -441,7 +441,7 @@ To call the hub's HTTP API, an extension lists the scopes it uses in `permission
 | `agents.permission_mode` | Change the permission mode of the chats it started itself | A chat's `modes` with `permission_mode` only, `POST /api/v1/sessions` resuming a chat with a `permission_mode`, approving a plan (`POST /api/v1/interactions/{id}/resolve` with `approve: true`, which sets the chat's mode) and answering a terminal card (`kind: "screen"`, whose keys can change it): only of a chat its extension opened (see below) |
 | `machines.read` | See your computers | `GET /api/v1/machines`, `/machines/{id}/metrics`, `/machines/{mid}/stat` |
 | `notify` | Send notifications to your devices | `POST /api/v1/notify` (see "Sending notifications") |
-| `assistant.ask` | Start chats with Persona and read chat activity | `GET /api/v1/assistant`, `POST /api/v1/assistant/conversations`, `GET …/conversations/{id}/feed` |
+| `assistant.ask` | Start chats with Persona and read chat activity | `GET /api/v1/assistant`, `POST /api/v1/assistant/conversations`, `GET …/conversations/{id}/feed`; never the health space's chats, nor what a feed holds of a to-do it is not shown (see "Never shown to extensions") |
 | `todos.read` | See to-dos | `GET /api/v1/todos`, `GET /api/v1/todos/{id}`, `GET /api/v1/todos/places`, `GET /api/v1/todos/{id}/decisions`, `GET /api/v1/todos/{id}/repositories`, `GET /api/v1/todos/{id}/timeline`. From a manager naming `todo_timeline`, the to-do's conversation too: the timeline, and on `GET /api/v1/todos/{id}` its latest rounds, recap and results (what the owner told its runs and their turn summaries), less what "Never shown to extensions" leaves out. Never a to-do it is not shown (same section): it is not listed, and every route of it answers 404 |
 | `leaders.read` | See leader conversations (directions) and what they report | `GET /api/v1/assistant/leaders`; the events `leader.changed` and `leader.report` (see "Leader events") |
 | `assistant.dispatch_policy` | Read and change the assistant dispatch policy | `GET` / `PUT /api/v1/assistant/dispatch-policy`; a policy written by an extension must expire within one hour (see "Dispatch policy") |
@@ -797,11 +797,14 @@ Whatever scopes it was granted, an extension's token never sees:
 - **The health space's conversations** (`docs/assistant/health.md`): not in `GET /api/v1/sessions` (the full list, the paged list, its
   totals and counts) or `/sessions/archived`, and their items, images, info and screen answer 404 as for a chat that does not exist.
   A chat the hub does not list answers 404 too, as its space cannot be told. `assistant.conversations` and `assistant.messages` leave
-  them out the same way, and `assistant.memory` reads only the assistant's own memory.
+  them out the same way, and `assistant.memory` reads only the assistant's own memory. `GET /api/v1/assistant` lists none of them
+  (`?space=health` lists nothing), and a chat's feed (`GET …/conversations/{id}/feed`) answers 404 for one of them, or for one
+  whose space cannot be told. `agent.finished` is not sent of such a chat either.
 - **Private and health cards**: a card a Just me turn raised (`private`, `docs/assistant/meeting-minutes.md` "Just me"), a card of
   the health space (by its directory or its conversation's space), and a card without a directory whose conversation cannot be found
-  are left out of `GET /api/v1/interactions` and `/interactions/history`.
-- **Values typed into a card's fields** (`resolution.values` in the history).
+  are left out of `GET /api/v1/interactions` and `/interactions/history`, and `agent.needs_you` is not sent of them.
+- **Values typed into a card's fields** (`resolution.values` in the history), and the answer to a card: a `resolve` of a card
+  answered already says so (`already`) without its `resolution`.
 - **A to-do that may hold the health space's words, and a to-do's answered cards** (#10941;
   `docs/assistant/todo-status-sop.md` "The to-do's timeline"): the timeline leaves out every answered card, since its
   record holds what was typed into the card and does not say whose card it was. A to-do may hold the space's words when
@@ -820,6 +823,9 @@ Whatever scopes it was granted, an extension's token never sees:
   numbers, the to-dos it is not shown too. What told a to-do's history stays: a run's link keeps a directory in the
   space when the run's shell leaves it, and a space's unlink, move or void releases such a link rather than delete it.
   Such a task's outcome is not written into a knowledge-base project's timeline either, where `kb.read` would read it.
+  A chat's feed (`assistant.ask`) leaves out the same: the items, plans and task cards of such a to-do, a plan with a task in
+  the space, every answered card, and the digests that gather many to-dos and cards at once (a routine's `brief`, the
+  Today card).
   A manager from before #10941 lists such a to-do as any other, and the hub cannot tell which manager it relays to.
 
 The apps' and devices' credentials are not affected.
@@ -3080,8 +3086,8 @@ Extensions contribute `events` to subscribe to things happening on the hub. Thes
 | Event | Parameters |
 | --- | --- |
 | `inbox.changed` | `id`, `source`, `kind`, `title`: new or updated Inbox item (if more than 50 items are stored at once, only the first 50 are sent) |
-| `agent.needs_you` | `machine_id`, `machine`, `session_id`, `interaction_id`, `kind`, `summary`: an Agent is waiting for your answer or approval |
-| `agent.finished` | `machine_id`, `machine`, `session_id`, `title`: an Agent finished |
+| `agent.needs_you` | `machine_id`, `machine`, `session_id`, `interaction_id`, `kind`, `summary`: an Agent is waiting for your answer or approval (never of a card it is not shown, "Never shown to extensions") |
+| `agent.finished` | `machine_id`, `machine`, `session_id`, `title`: an Agent finished (never of a chat it is not shown) |
 | `todo.changed` | `id`, `title`, `thread?`, `done?`, `supervisor?`, `kind?`, `what`: a to-do was created, deleted, or its title, whether it is done, its supervisor, or the thread it is bound to changed (needs `todos.read`, see below; never of a to-do it is not shown, "Never shown to extensions") |
 | `todo.decision` | `id`, `title`, `thread?`, `decision`: a decision was written on a to-do (needs `todos.read`, see below; never of a to-do it is not shown) |
 | `leader.changed` | `id`, `title`, `project?`, `ended?`: a leader conversation was made, retitled, filed under another project, ended or made a leader again (needs `leaders.read`, see "Leader events") |

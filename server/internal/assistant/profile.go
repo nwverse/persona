@@ -664,6 +664,7 @@ func (s *Service) profileRoutes() {
 		}
 		if r.Header.Get(RoleHeader) == roleExtension {
 			out.StartDefaults = nil // read with its own scope (GET /api/v1/assistant/start-defaults), not assistant.ask
+			out.Conversations = extensionConversations(out.Conversations)
 		}
 		apierr.WriteJSON(w, out)
 	})

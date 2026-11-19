@@ -887,6 +887,11 @@ func (s *Service) taskRoutes() {
 			apierr.Write(w, http.StatusBadRequest, errFeedCursor)
 			return
 		}
+		ext := r.Header.Get(RoleHeader) == roleExtension
+		if ext && s.feedHiddenFromExtension(r.Context(), r.PathValue("id")) { // feed_scope.go
+			apierr.Write(w, http.StatusNotFound, errNoSuchConversation)
+			return
+		}
 		var items []FeedItem
 		var nextCursor string
 		var err error
@@ -904,6 +909,10 @@ func (s *Service) taskRoutes() {
 			return
 		}
 		plans := s.feedPlans(r.Context(), items)
+		var shown func(TaskCard) bool
+		if ext {
+			items, plans, shown = s.extensionFeed(r.Context(), items, plans)
+		}
 		for id, p := range plans {
 			plans[id] = s.planWithSuggestion(r.Context(), p, s.requestLang(r))
 		}
@@ -928,6 +937,9 @@ func (s *Service) taskRoutes() {
 		cards, cardErr := s.taskCards(r.Context(), items, plans)
 		if cardErr != nil {
 			s.logf("feed: task card projection: %v", cardErr)
+		}
+		if shown != nil && cards != nil {
+			cards = slices.DeleteFunc(cards, func(c TaskCard) bool { return !shown(c) })
 		}
 		out := map[string]any{"items": items, "plans": plans, "task_cards": cards, "views": views, "view_actions": actions, "view_blocks": blocks}
 		if paginated {
