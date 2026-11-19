@@ -917,6 +917,7 @@ use it only on the intranet / VPN, and put an HTTPS reverse proxy in front befor
   **Confirmed facts** shows your explicit corrections separately from the inferred profile for projects, chats, people, docs, meetings, events and recordings. Add or edit the text; remove all text and save to clear it. Cancel discards the draft without writing; ⌘↩ / Ctrl+↩ in the box saves as **Save** does (audit item 70). Saving sends only the confirmed facts, preserving text and newlines as entered and leaving tagging, locks and the inferred profile alone.
   A failed save keeps the draft for retry. After saving, the page reloads authoritative detail; if that read fails, **Retry refresh** repeats only the read and explains that the facts were already saved. Drafts and delayed results belong to the requested entry, authenticated credentials and default manager, and are discarded when that identity changes.
   **Remove relationship** appears beside explicit metadata-backed related entries. Confirming names both entries and preserves their records, content, tags and confirmed facts. Provenance links, such as a document's source chat, remain navigation-only. Project links to documents, meetings, events and recordings are removed by updating the linked item's project list.
+  By default only that link is kept out (#10333, "Removed links" in `docs/assistant/knowledge.md`): the dialog says Persona won't link the two again on its own and the rest keeps updating, and sends `lock_lists: false`. **Also stop automatic changes to both lists** (a switch, off by default, fixed once the request is sent) sends `lock_lists: true` and shows which two whole lists it protects. The readback confirms the link is gone and `excluded` on both entries (plus `locked_fields` when the switch was on); a hub that only locks reads as unconfirmed. **Removed by you** under the related entries lists `detail.removed` with **Allow again** (`allow_people` / `allow_chats` / `allow_projects`; a project's document is allowed through the document), which links nothing and lets Persona decide again; the page reloads the entry and says so if the link is still kept out.
   **Minutes** (a recording that is a meeting, `docs/assistant/meeting-minutes.md`) sits under the recording's facts: the title, time, place and attendees, then key points, decisions, action items and open questions. Each item's clock time scrolls the transcript to its line and highlights it; an item that cites a meeting photo shows the photo instead (see the photos below).
   Minutes that carry an overview (#6563, `docs/assistant/meeting-minutes.md` "Summary card (#6563)") read as one summary card instead (`knowledge/MinutesOverview.tsx`, read and cleaned by `src/lib/minutes-overview.ts`): the headline (or the title) with the time, place and attendees on one line, **Core conclusions** on the AI tint, then the points and decisions as topic cards under their group headings, two to a row in the page's column (a card alone in its row takes all of it) and one on a phone, each card tinted by its group, its key figures in bold, a decision marked with a flag and the word **Decision**, folded after 4 lines (**Show N more**, whose name for a screen reader names its topic), then the action items, the open questions and a note that AI wrote it. The times, photos and to-do buttons work as in the other layout; minutes whose overview is missing or unusable look exactly as before. Design and tokens: `docs/design/DESIGN_SYSTEM.md` "Minutes cards (#5026)".
   Each action item has **Add to to-dos**, and the remaining ones have **Add all**. Both go through `POST /api/v1/recordings/{id}/minutes/todos`; an item already added shows **Added**. **Copy** copies the minutes' Markdown. **Regenerate** (or **Make minutes** on a complete recording that has none) asks the hub to write them again.
@@ -2127,17 +2128,29 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
   read before at once and reads every list again behind them, the session's own first, at most three at a time.
 - **Quota and prices** (#5056): the opening also reads each launcher's existing `GET /launchers/{name}/quota?machine=<mid>`
   answer without `refresh=1`, so the hub's one-minute cache absorbs repeated openings and an unsupported gateway draws
-  nothing. A provider rail cell shows the tightest weekly window's remaining percentage in its 22 × 3 px bar and the reset
+  nothing. A launcher summary shows the tightest weekly window's remaining percentage and bar and the reset
   time in its tooltip (warning at ≤ 30% left, critical at ≤ 10% or exhausted, matching `quotaTone`). An exact built-in
   catalog entry's global, standard USD reference price (without an input-size tier) gives the model row one to three `$`
   marks by output price (≤ 3 / ≤ 15 / > 15 per million tokens) and the flyout's "Per 1M tokens · Input · Output · Cache
   read" line. Unknown, inherited, malformed, regional-only and input-size-tiered prices draw nothing; a reference price is
   not a quote from the gateway and is never inherited by another model.
-- **Long lists** (#6478): the rail fades its top / bottom edge while more cells lie beyond it (it has no scrollbar). Not
-  searching, the All view shows each provider group's first 8 rows (and the one that runs now) when several providers
-  are listed, then **Show all N models** (显示全部 N 个; N 件をすべて表示), which opens that provider's view. A row whose name
-  is cut short shows the whole model ID as its second line (monospace, wrapping, two lines at most); on a touch screen,
-  which has no tooltips, every row whose name is not its ID shows the ID there instead of the provider's name.
+- **Launcher-first column** (#10249): Agent, handover, Assistant and New Agent all use the same shared column.
+  Panel-only color and motion values load from `web/src/ui/model-panel/ModelPanel.css`, keeping the first screen
+  within its unchanged budget; Tailwind color aliases remain shared. Reduce Motion skips the opening clip entirely,
+  avoiding a stale initial compositor frame from a 1 ms morph. New Agent loads the panel on intent through the same lazy overlay boundary as chat pickers; the pill and draft stay
+  mounted while it loads, and a failed chunk closes only the panel so opening it again retries.
+  Follow model configuration stays first where supported. Below it are up to three distinct saved setups, favorites
+  first then recent, labeled with launcher and model and preserving their saved effort/speed; a pick is one action.
+  Every launcher has a disclosure row in one scrollable list: full name, Agent kind, known default model, model count
+  (catalog entries except the synthetic New Agent Default row), Current/configured Default, known weekly quota and
+  supplied health or unavailable reason. Only the current launcher starts expanded; with no current launcher all start
+  collapsed. A collapsed launcher takes two actions to pick a model, an expanded one one. There is no separate rail,
+  eight-row cutoff or More launchers bucket. The existing model rows, family folds, setup controls and selection gates
+  are reused. Unknown model defaults use the existing Default model wording, not an inferred first model.
+  Search shows matching launcher rows first, then one flat model list; every model and typed-ID result names its
+  launcher, including on phones and when a long model ID wraps. Selecting a matching launcher clears search and opens
+  its models. Typed-ID selection sends exactly its named launcher. Clearing search restores the disclosure state.
+  Existing model-ID disclosure on touch screens and clipped names remains, alongside the launcher in search results.
 - **Families and earlier versions** (`lib/model-families.ts`): a provider group (and Recommended, after the model that
   runs) keeps each model family together under its name in small type: Claude Fable, Opus, Sonnet and Haiku (in that
   order, by capability), a GPT line per variant ("GPT Sol", "GPT Terra"), a Gemini tier ("Gemini Pro", "Gemini Flash";
@@ -2159,15 +2172,14 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
 - **Context below the composer** (#5056): `ContextMeter` sits in the right-aligned usage row below the composer card.
   The visible label and fill show the used share at every width (#9155). The popover still shows the remaining share and
   token counts. Unknown context mounts no meter.
-- **Switching rules**: the session's own launcher switches its model at once. Its group "Recommended" is the model that
-  runs, then its other models. On a hub with `launcher_switch` (#5035, docs/protocol/protocol.md "Switching a running
+- **Switching rules**: the session's own launcher switches its model at once. Its models stay under its launcher. On a hub with `launcher_switch` (#5035, docs/protocol/protocol.md "Switching a running
   Agent to another provider"), a Claude Code Agent in a terminal may also pick a model of another Claude Code launcher on
   its computer (never one a runtime runs, Paseo's: the node refuses it, so its other launchers stay off with why, #8142): the pick is recorded and the user's next message from this chat carries it out (the node quits the agent
   and resumes the same conversation through that launcher in the same terminal), so a pick never interrupts the agent.
   Only that message does: the composer sends it with `apply_switch: true` while the session shows `pending_switch`;
   every other sender's message goes on the launcher the agent runs on. A message sent while the agent works, waits on
   you or has background work goes there too, and the switch waits for a later one. Those launchers keep
-  their own groups (they don't switch at once, so they are not "Recommended"); one that fixes its own `--model` offers
+  their own groups; one that fixes its own `--model` offers
   only its default entry. While a switch waits, the panel's list starts with a warning line: "Switches on your next
   message: the Agent restarts on work and keeps this conversation", and its target is the panel's `pending` setup.
   Picking the session's own launcher drops the waiting switch first. On an older hub another launcher of the same engine
