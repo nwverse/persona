@@ -277,12 +277,26 @@ The `xcode-slot` runner that `scripts/release/release.sh` and `sim.sh`'s Rust co
   not offered. `--with-watch` builds and embeds both, for anything on the watch or in the share sheet
   (`./scripts/app/sim.sh --with-watch -openSession <machine>/<id>`); a later build without it first takes them out of the
   app again, since Xcode leaves in place the watch app it no longer embeds. Nothing else sets the switch, so
-  `xcodegen generate` alone builds the whole project, and CI, release and the UI tests clear it first, whatever the shell
-  exported. After `sim.sh`, the project Xcode opens is the lean one until the next `xcodegen generate`, and its Rust
-  core has the simulator slice only (the last item).
+  `xcodegen generate` alone builds the whole project, and every other script that generates it (CI, release, the UI,
+  share-sheet and performance tests) clears it first, whatever the shell exported; `scripts/test/test_apple_dev_build.py`
+  finds them by searching. After `sim.sh`, the project Xcode opens is the lean one until the next `xcodegen generate`,
+  and its Rust core has the simulator slice only (the last item).
+- **A lean build says when it skipped what the branch changed.** The watch app compiles all of `apple/Shared/` for
+  watchOS 10 and the share extension compiles it as an app extension, and no hosted CI runs on a PR, so with lean builds
+  alone a change that breaks either would first fail on `main`. When the branch, against its merge base with `origin/main` and
+  with uncommitted and new files counted, changes `apple/Shared/`, `apple/PersonaWatch/`, `apple/PersonaWatchWidgets/`
+  or `apple/PersonaShare/`, `sim.sh` prints one line naming the check (`scripts/app/lean-build-note.sh`):
+  `./scripts/app/sim.sh --with-watch` when `Shared/` or the share extension changed (the extension has no scheme of its
+  own), and for the watch alone
+  `xcodebuild -project apple/Persona.xcodeproj -scheme PersonaWatch -destination 'generic/platform=watchOS Simulator' -derivedDataPath build/DerivedData build`,
+  which works on the lean project too (after `eval "$(python3 scripts/persona_config.py env)"`, as any manual
+  `xcodebuild`).
 - **The commit stamp is Release only.** "Stamp the commit" (`apple/project.yml`, the iPhone and Vision apps) does nothing
-  in Debug: a Debug build's Settings › About › Build says Unknown, and a build with nothing changed writes no Info.plist
-  and signs nothing again. Every Release build, and so every TestFlight build, is stamped as before; a Debug build that
+  in Debug: a Debug build's Settings › About › Build says Unknown, its Developing Persona package
+  (`docs/operations/developing-persona.md`) has an empty `commit`, and a build with nothing changed writes no Info.plist
+  and signs nothing again, unless the opt-in Siri calls (`apple/siri-calls.yml`) or Meta glasses
+  (`apple/meta-wearables.yml`) include is on: their build phases rewrite the built Info.plist on every build, so the app
+  is signed again each time. Every Release build, and so every TestFlight build, is stamped as before; a Debug build that
   must name its commit (the README's captures, `scripts/assets/make_readme_assets.py`) passes the build setting
   `PERSONA_STAMP_COMMIT=YES`.
 - **Generated files are written only when they change.** `scripts/persona_config.py xcconfig` leaves `apple/Config.xcconfig`
@@ -291,10 +305,12 @@ The `xcode-slot` runner that `scripts/release/release.sh` and `sim.sh`'s Rust co
 - **The Rust core's simulator slice, shared between worktrees.** `native/app-core/scripts/build-apple.sh --simulator`
   builds only the slice the simulator runs; without it (release, CI, `swift test` on the Mac) it builds the device,
   simulator and macOS slices. A built framework is kept in `~/Library/Caches/persona/app-core/<key>/`, keyed by the
-  inputs' content (never their path), the Mac's architecture, the Apple SDKs and the caller's `RUSTFLAGS` and deployment
-  targets: another worktree at the same Rust inputs copies it instead of building, and a full entry also serves a
-  simulator request. The newest three keys stay (`PERSONA_APP_CORE_CACHE_KEEP`); `PERSONA_APP_CORE_CACHE=<directory>`
-  moves the cache and `PERSONA_APP_CORE_CACHE=0` turns it off. **Before a phone or "My Mac (Designed for iPad)" build in
+  inputs' content and their paths in the checkout (never the checkout's own path), the Mac's architecture, the Apple SDKs
+  and the caller's `RUSTFLAGS` and deployment targets: another worktree at the same Rust inputs copies it instead of
+  building, and a full entry also serves a simulator request. The newest three keys stay (`PERSONA_APP_CORE_CACHE_KEEP`);
+  `PERSONA_APP_CORE_CACHE=<directory>` moves the cache and `PERSONA_APP_CORE_CACHE=0` turns it off. The cache is best
+  effort: an entry that cannot be read is built again, and a cache that cannot be written keeps the framework in the
+  worktree only, each with one line on stderr. **Before a phone or "My Mac (Designed for iPad)" build in
   Xcode after `sim.sh`, run `native/app-core/scripts/build-apple.sh` with no flag:** a simulator-only framework has no
   device slice, so Xcode stops with "no library for this platform was found", which looks like a broken build. The
   script prints the same reminder whenever it leaves the simulator slice only.
