@@ -34,7 +34,7 @@ func (h *Hub) channelNoted(id, machine, session string) {
 // channelsDeviceCall answers the device methods of the channels' turns; false for the others.
 func (h *Hub) channelsDeviceCall(ctx context.Context, m *Machine, p assistantwire.DeviceCall) (json.RawMessage, bool, error) {
 	switch p.Method {
-	case assistantwire.DeviceSessionSendOnce:
+	case assistantwire.DeviceSessionSendOnce, assistantwire.DeviceAssistantAnswerAgain:
 		var a map[string]any
 		if err := json.Unmarshal(p.Params, &a); err != nil {
 			return nil, true, err
@@ -43,7 +43,14 @@ func (h *Hub) channelsDeviceCall(ctx context.Context, m *Machine, p assistantwir
 			return nil, true, errors.New("session.send_once needs client_msg_id")
 		}
 		manager, _ := callerOf(ctx)
-		return json.RawMessage(`{}`), true, h.sendOnce(ctx, m, a, manager)
+		method := "session.send"
+		if p.Method == assistantwire.DeviceAssistantAnswerAgain {
+			method = p.Method
+			if after, _ := a["answer_again_after"].(string); after == "" {
+				return nil, true, errors.New("assistant.answer_again needs the transcript tail")
+			}
+		}
+		return json.RawMessage(`{}`), true, h.sendOnce(ctx, m, method, a, manager)
 	}
 	return nil, false, nil
 }
@@ -51,7 +58,7 @@ func (h *Hub) channelsDeviceCall(ctx context.Context, m *Machine, p assistantwir
 // sendOnce sends with the same once-only guard as the app (send.go): a message id is sent at most once.
 // A clarification proof is consumed only after that guard agrees to send, and is
 // valid for its exact card, manager, destination, text and client_msg_id.
-func (h *Hub) sendOnce(ctx context.Context, m *Machine, p map[string]any, manager string) error {
+func (h *Hub) sendOnce(ctx context.Context, m *Machine, method string, p map[string]any, manager string) error {
 	id, _ := p["client_msg_id"].(string)
 	sid, _ := p["session_id"].(string)
 	token, _ := p[assistantwire.ClarificationProofParam].(string)
@@ -89,7 +96,11 @@ func (h *Hub) sendOnce(ctx context.Context, m *Machine, p map[string]any, manage
 		}
 		ctx = withVerifiedClarification(ctx, proof.Text)
 	}
-	err := m.call(ctx, "session.send", p, nil)
+	if method == assistantwire.DeviceAssistantAnswerAgain {
+		p["once_id"] = id
+		delete(p, "client_msg_id") // the persisted follow-up is Persona's message
+	}
+	err := m.call(ctx, method, p, nil)
 	if h.store != nil {
 		if serr := h.store.SettleSend(context.WithoutCancel(ctx), id, sendOutcome(err)); serr != nil {
 			h.logf("channels: settle send: %v", serr)

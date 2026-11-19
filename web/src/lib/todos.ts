@@ -38,6 +38,23 @@ export interface TodoSpace {
   linked_at: string;
 }
 
+/** Private image metadata on a to-do; bytes are read separately from `url`. */
+export interface TodoImage {
+  id: string;
+  mime: string;
+  width: number;
+  height: number;
+  url: string;
+  name?: string;
+  size?: number;
+}
+
+/** The additive image upload accepted by both to-do creation paths. */
+export interface TodoCreateOptions {
+  images?: { id: string; mime: string; data: string; name?: string }[];
+  operationId?: string;
+}
+
 /** What the hub last read of a PR on GitHub (pr_status.go). */
 export interface PRFacts { url: string; state: "open" | "merged" | "closed"; draft: boolean; review: "required" | "approved" | "changes_requested" | "pending"; checks: "failure" | "pending" | "success" | "none"; conflicts: boolean; checked_at: string }
 
@@ -69,6 +86,8 @@ export interface Todo {
   updated_at: string;
   agents?: TodoAgent[];
   spaces?: TodoSpace[];
+  /** Stored pictures; their private bytes are not embedded in list responses (#11084). */
+  images?: TodoImage[];
   /** The assistant conversation that opened it as a task, and the plan (docs/assistant/unified-entry.md); unset for a todo made by hand. */
   origin?: string;
   plan_id?: string;
@@ -762,14 +781,40 @@ export async function setDecisionSupersedes(todoId: string, id: string, supersed
 // ── API helpers ──────────────────────────────────────────────
 
 /** A new to-do; `due` makes it due at a moment or on a day (one made on the calendar, #2029). */
-export async function createTodo(title: string, notes?: string, due?: { due_at?: string; due_date?: string }): Promise<Todo> {
+type TodoCreateResponse = { todo?: Todo; state?: string };
+
+/** A 202 receipt is not a created to-do. An older manager may also accept the request while ignoring its new image
+ * field; never call that a success or leave its image-less to-do behind (#11084). */
+export async function confirmTodoCreate(result: TodoCreateResponse, images: TodoCreateOptions["images"], request: Parameters<typeof api>[1]): Promise<Todo> {
+  if (request?.isAuthContextCurrent && !request.isAuthContextCurrent()) throw new Error("The editor connection changed");
+  if (result.state === "pending" || result.state === "unknown") throw new Error(t("lib-todos.create_unconfirmed"));
+  const todo = result.todo;
+  if (!todo || typeof todo.id !== "string" || !todo.id) throw new Error(t("lib-todos.create_unconfirmed"));
+  if (images?.length) {
+    const stored = todo.images ?? [];
+    const matches = stored.length === images.length && images.every((wanted) => stored.some((image) => image.id === wanted.id && image.mime === wanted.mime));
+    if (!matches) {
+      try {
+        await api(`/todos/${enc(todo.id)}`, { ...request, method: "DELETE" });
+      } catch {
+        throw new Error(t("lib-todos.images_cleanup_failed"));
+      }
+      throw new Error(t("lib-todos.images_not_saved"));
+    }
+  }
+  return todo;
+}
+
+export async function createTodo(title: string, notes?: string, due?: { due_at?: string; due_date?: string }, options?: TodoCreateOptions): Promise<Todo> {
+  const withImages = Boolean(options?.images?.length);
+  const headers = withImages ? { ...currentHeaders(), "X-Persona-Op-Id": options!.operationId! } : currentHeaders();
   // a to-do made here is the current assistant's (the list shows only its own)
-  const r = await api<{ todo: Todo }>("/todos", {
+  const r = await api<TodoCreateResponse>("/todos", {
     method: "POST",
-    headers: currentHeaders(),
-    json: { title: title.trim(), notes: notes?.trim() || undefined, ...due },
+    headers,
+    json: { title: title.trim(), notes: notes?.trim() || undefined, ...due, ...(withImages ? { images: options!.images } : {}) },
   });
-  return r.todo;
+  return confirmTodoCreate(r, options?.images, { headers });
 }
 
 /** A todo change as PATCH takes it; due_at / due_date / remind_at null clears them (#1683). */

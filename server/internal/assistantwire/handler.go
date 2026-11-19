@@ -86,6 +86,19 @@ func ClarificationProofOf(ctx context.Context) string {
 	return token
 }
 
+type replyInputKey struct{}
+
+// WithReplyInput marks a conversation start as a direct legacy app start for missing-reply recovery.
+func WithReplyInput(ctx context.Context) context.Context {
+	return context.WithValue(ctx, replyInputKey{}, true)
+}
+
+// ReplyInputOf reports whether WithReplyInput marked ctx.
+func ReplyInputOf(ctx context.Context) bool {
+	reply, _ := ctx.Value(replyInputKey{}).(bool)
+	return reply
+}
+
 // ToolCall is assistant.tool's params.
 type ToolCall struct {
 	Name      string          `json:"name"`

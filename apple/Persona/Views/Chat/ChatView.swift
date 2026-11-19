@@ -3165,9 +3165,12 @@ struct ChatView: View {
                     .allowsHitTesting(!pick.on)
                     #endif
             }
-            // Your messages the assistant keeps after they could not go in, from the row: on every device (#10194).
-            ForEach(keptUndelivered.reversed()) { m in
-                UndeliveredBubble(message: m, retry: { Task { await model.retryUndelivered(key, m.id) } },
+            // The row carries kept messages to every device, even when the transcript has no earlier turns.
+            let kept = keptUndelivered
+            let canManageHeld = !kept.isEmpty && model.canManageHeld(key.group)
+            ForEach(kept.reversed()) { m in
+                UndeliveredBubble(message: m, canManage: !m.heldForComputer || canManageHeld,
+                                  retry: { Task { await model.retryUndelivered(key, m.id) } },
                                   discard: { Task { await model.deleteUndelivered(key, m.id) } })
                     .chatMark("chat.undelivered.\(m.state).\(m.id)")
                     #if os(iOS)
@@ -3208,7 +3211,7 @@ struct ChatView: View {
                 }
             }
             switch ChatLines.placeholder(lines: lines, hasTranscript: !rows.isEmpty,
-                                         hasPending: !pending.isEmpty || !store.pending.isEmpty || !store.arriving.isEmpty,
+                                         hasPending: !kept.isEmpty || !pending.isEmpty || !store.pending.isEmpty || !store.arriving.isEmpty,
                                          hasLiveText: drawsLive && !(frozen?.text ?? store.liveText).isEmpty,
                                          loadedOnce: store.loadedOnce) {
             case .loading:
@@ -5794,7 +5797,10 @@ struct Composer: View, Equatable {
         return s.canSend && s.canTerminal && s.paneID != nil && !s.isCodex && !s.isTraex
     }
 
-    private var allowsSend: Bool { model.session(key)?.canSend == true && offlineManager == nil }
+    private var allowsSend: Bool {
+        guard let session = model.session(key), session.canSend, offlineManager == nil else { return false }
+        return model.offlineAgent(session)?.canHold != false
+    }
     /// The manager whose conversation this is, while a hub with several has it offline: nothing goes to it until it is
     /// back; its history reads.
     private var offlineManager: HubManager? {
@@ -6072,6 +6078,12 @@ struct Composer: View, Equatable {
         let inCall = call.map { !$0.isOver } ?? false
         return VStack(spacing: Theme.Space.s) {
             SessionLiveRetryNote(key: key)
+            if offlineManager == nil, let session = model.session(key), let away = model.offlineAgent(session) {
+                Text(verbatim: away.line)
+                    .font(Theme.Font.caption).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("chat-offline-agent")
+            }
             if let m = offlineManager {
                 ManagerOfflineNote(manager: m)
                     .transition(.move(edge: .bottom).combined(with: .opacity))

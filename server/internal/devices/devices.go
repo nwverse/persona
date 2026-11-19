@@ -984,9 +984,14 @@ func (d *Devices) CallNode(ctx context.Context, id, method string, params json.R
 			ctx = context.WithValue(ctx, ownerControlKey{}, method)
 		}
 	}
+	actor := devicewire.ModeActorOf(ctx)
+	sid, from, to, record := m.modeSetFrom(devicewire.NodeCall{Method: method, Actor: actor}, params)
 	var out json.RawMessage
 	if err := m.call(ctx, method, params, &out); err != nil {
 		return nil, err
+	}
+	if record {
+		m.recordModeSet(actor, sid, from, to, out)
 	}
 	return out, nil
 }
