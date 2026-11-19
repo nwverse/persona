@@ -25,6 +25,14 @@ if [[ -n "${PERSONA_DESKTOP_VERSION:-}" ]]; then
     exit 2
   fi
   args+=("-c.extraMetadata.version=$PERSONA_DESKTOP_VERSION")
+  if [[ "$PERSONA_DESKTOP_VERSION" == *-beta.* ]]; then
+    # electron-builder otherwise writes latest.yml even for a prerelease version. The beta updater channel and
+    # immutable prerelease are a pair: a stable package's latest.yml is never named or replaced here.
+    args+=("-c.publish.channel=beta" "-c.publish.releaseType=prerelease")
+  elif [[ "$PERSONA_DESKTOP_VERSION" == *-* ]]; then
+    printf 'desktop-package: FAIL only beta prereleases have a supported update channel: %s\n' "$PERSONA_DESKTOP_VERSION" >&2
+    exit 2
+  fi
 fi
 if [[ "${PERSONA_DESKTOP_REQUIRE_SIGNING:-}" == 1 ]]; then
   if [[ -z "${CSC_LINK:-}" ]]; then

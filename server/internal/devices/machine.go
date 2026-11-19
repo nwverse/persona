@@ -667,6 +667,15 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 		snapshot.peer, snapshot.revision = p, m.sessionRevision
 		m.mu.Unlock()
 	}
+	if method == proto.MethodSessionEchoStatus && !nodeHas(info, nodeproto.SessionEchoStatus) {
+		return errEchoStatusUnsupported
+	}
+	if try, ok := ctx.Value(heldDeliveryKey{}).(*heldTry); ok && try.checkUnseen && method == "session.send" {
+		if !nodeHas(info, nodeproto.SessionEchoStatus) {
+			return errEchoStatusUnsupported
+		}
+		method = proto.MethodSessionSendUnseen
+	}
 	if nodeHas(info, nodeproto.OwnerControls) {
 		method = ownerControlMethod(ctx, method)
 	}

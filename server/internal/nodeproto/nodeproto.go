@@ -50,6 +50,8 @@ const MinManagerVersion = 1
 const (
 	// Sessions: sessions.list / session.watch / session.unwatch / session.start / session.send and the session events.
 	Sessions = "sessions"
+	// SessionEchoStatus supports checking and conditionally resending a held message by its client_msg_id.
+	SessionEchoStatus = "session_echo_status"
 	// ModelConfiguration: assistant.send / assistant.warm / session.start / session.send take a launcher's model and
 	// model_fingerprint (docs/assistant/model-config.md). Older nodes said so with node.info's model_configuration.
 	ModelConfiguration = "model_configuration"
@@ -215,7 +217,7 @@ const (
 const RestartExitCode = 75
 
 // Announced is what a node built from this code announces.
-var Announced = []string{OwnerControls, SessionSkills, ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, MCPWait, Sessions, ModelConfiguration, AssistantConfigDir, AssistantSupervisionInstructions, AssistantServiceTier, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, Clipboard, SecretEnv, LauncherSwitch, ModelHTTP, EngineSwitch, ModelRun, LauncherSwitchNow, LauncherSwitchIdle, PaneCwd, NodeUpdateIdle, PaneNewSpace, MachineDiagnose, StartGoal, StartContinue, LauncherCheckAssistantTurn, StartAnswer, AssistantToolSearchFallback, NodeLanes}
+var Announced = []string{OwnerControls, SessionSkills, ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, MCPWait, Sessions, SessionEchoStatus, ModelConfiguration, AssistantConfigDir, AssistantSupervisionInstructions, AssistantServiceTier, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, Clipboard, SecretEnv, LauncherSwitch, ModelHTTP, EngineSwitch, ModelRun, LauncherSwitchNow, LauncherSwitchIdle, PaneCwd, NodeUpdateIdle, PaneNewSpace, MachineDiagnose, StartGoal, StartContinue, LauncherCheckAssistantTurn, StartAnswer, AssistantToolSearchFallback, NodeLanes}
 
 // ShareProjection is the bounded complete-source sharing projection, not light Items.
 const ShareProjection = "share_projection.v1"
