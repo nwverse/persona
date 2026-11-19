@@ -139,7 +139,7 @@ func (s *Service) relayOrQueue(ctx context.Context, to string, msg relayMsg) {
 		}
 		return
 	}
-	if err := s.deliverRelay(ctx, machine, to, msg); err != nil {
+	if err := s.tryDirectRelay(ctx, machine, to, &msg); err != nil {
 		if supervisionRuntimeRefused(err) {
 			s.reportRuntimeRelayFailure(ctx, machine, to, msg)
 			return

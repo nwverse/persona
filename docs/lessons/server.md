@@ -2439,6 +2439,13 @@ time when binding evidence to activation: later transport, REST and validation w
 renew its lifetime. Test embedded publisher modules in an isolated interpreter as well as
 ordinary imports; a transitive import can be available locally and missing remotely.
 
+An unset assistant settings row is not explicit empty authority (#2628): zero-value product
+settings do not settle that contract. Require an existing empty row's revision, and use a
+guaranteed-row read with a database timestamp to distinguish absence from a failed read. Do
+not create an empty row or a synthetic main. Require an explicit unassigned plan and deliberately
+empty flags, then prove empty Hub ownership twice. Zero owned machines needs no node dial, but
+any conversation, runtime row, partial assignment or revision change must still fail closed.
+
 
 ## Release status reporting is opt-in (#2671)
 
@@ -2731,6 +2738,7 @@ computer every 2 s): the manager allocated 555 MB and used about 2.1 s of CPU a 
 - `cmd.Cancel` runs only when the context ends before the process exits. A shell that exits at once and leaves a background child holding its stdout or stderr (`sleep 4 & echo $!`) keeps `Wait` reading the pipe until that child exits or `WaitDelay`, counted from the shell's exit, closes it: the deadline passes unnoticed. `secret.run` held a 1-second run for 4 seconds, and the next command, which could no longer start, came back as timed out.
 - Watch the context for as long as `Wait` runs and stop the group at the deadline, sharing one "stopped" flag with `Cancel` so the group gets one SIGTERM (`runSecretCommand`). Classify the result by that flag, not the exit status: the shell exited 0.
 - A command that never started because the time was used up gets no result. A timed-out result for it reads as a command that ran and was stopped, and makes the Agent check the computer for one that never ran.
+- The same hole sat in the node's launcher scan (`launchers.go`, #10952): a `~/.zshrc` that left a job running in the background (or the script's children when the 20 s cap killed only the shell) kept `Output()` waiting, under the lock every launcher read takes. Each `GET /machines/{mid}/launchers` then ran into the hub's 30 s and nothing was cached. A login-shell read whose output matters takes `killGroupOnCancel`; `time zsh -ic true | cat` against `time zsh -ic true` shows such an rc file.
 
 ## An id the node makes up for a message ends up on its line (2026-11-12, #5225)
 
@@ -2858,6 +2866,17 @@ nothing ran the old build after the new one.
   it. When a fence refuses a live, authenticated client, either let it prove the move or tell it plainly what to do;
   and check what a "looks unused" revocation still owns before treating it as cleanup.
 
+## Trace custom TLS boundaries explicitly (#10533)
+
+An `http.Transport` with `DialTLSContext` can emit TLS callbacks only after the custom
+function has already completed its real handshake. Invoke the context's TLS start/done
+hooks around the unchanged `HandshakeContext`, including tunnel transports, and retain
+that first measurement when the transport announces the completed handshake again.
+Otherwise a TLS stall is indistinguishable from a TCP failure. DNS and connect hooks can run concurrently
+or finish after cancellation, so synchronize snapshots and distinguish overlapping connects.
+Keep diagnostic output to finite categories and durations: never format trace payloads or
+wrapped network errors, which carry addresses, stream query parameters and certificate data.
+
 ## A restore check must not start what it checks (2026-11-18, #10497)
 
 - Starting a restored hub or manager to see whether the restore worked changes the state under test: startup marks
@@ -2943,3 +2962,7 @@ documenting an order.
   guards against moving a switching computer were checked in memory and acted on without a lock. Each of these could leave
   the computer at `kind: link` with nobody able to undo it. Write the intent row first and decide under the lock. Keep what
   must survive a restart in the database.
+
+## Compile production and test callers after shared helper changes
+
+A helper refactor can leave a missing tuple return, a test caller without a new context argument, or a runtime reader naming the old helper. Compile both production and test packages after merging; retain the existing read-only database helper and exercise its failure paths rather than adding a parallel implementation.

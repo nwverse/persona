@@ -146,6 +146,8 @@ export function tokens(n: number): string {
 // the sidebar (NavRow). Every other category draws with the Settings chunk as before.
 const Extensions = lazyPage(() => import("./settings/Extensions").then((m) => m.Extensions));
 const Connectors = lazyPage(() => import("./settings/Connectors").then((m) => m.Connectors));
+// Labs and its configuration form come with their own chunk, on first open (src/startup-preload.ts FIRST_SCREEN_BUDGET)
+const LabsSettings = lazyPage(() => import("./settings/Labs").then((m) => m.LabsSettings));
 const TAB_PAGES: Partial<Record<Tab, { preload: () => Promise<unknown> }>> = { extensions: Extensions, connectors: Connectors };
 // a failed load is not kept (lazyPage): opening the page asks again, and PageBoundary shows the failure then
 const preloadTab = (k: Tab) => void TAB_PAGES[k]?.preload().catch(() => {});
@@ -391,6 +393,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
                 <Extensions open={sub} headerBack={phone} onOpen={(id) => pick("extensions", id)} onChannel={(id, manager) => pick("channels", ownedSub(id, manager))} onConnector={(id, manager) => pick("connectors", ownedSub(id, manager))} />
               )}</Suspense>}
               {tab === "shortcuts" && <ShortcutSettings />}
+              {tab === "labs" && <Suspense fallback={<Loading />}><LabsSettings /></Suspense>}
               {tab === "devices" && <Devices />}
               {tab === "hub" && <>
                 <HubSettings />

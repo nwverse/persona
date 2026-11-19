@@ -1659,9 +1659,10 @@ nonisolated struct UndeliveredMessage: Codable, Hashable, Sendable, Identifiable
     var error: String? = nil
     var deleteOnly: Bool? = nil
 
+    /// The hub's names (`proto.UndeliveredMessage`): one enum, #10775 (`delete_only`) and #10440 (`next_at`) each added one.
     private enum CodingKeys: String, CodingKey {
-        case id, text, images, at, state, attempts, nextAt, error
-        case deleteOnly = "delete_only"
+        case id, text, images, at, state, attempts, error
+        case nextAt = "next_at", deleteOnly = "delete_only"
     }
 
     var gaveUp: Bool { state == "failed" }
@@ -1674,11 +1675,6 @@ nonisolated struct UndeliveredMessage: Codable, Hashable, Sendable, Identifiable
         guard let list, !list.isEmpty else { return [] }
         let skip = Set((landed + drawn).map { $0.lowercased() })
         return list.filter { !skip.contains($0.id.lowercased()) }
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case id, text, images, at, state, attempts, error
-        case nextAt = "next_at"
     }
 }
 

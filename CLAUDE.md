@@ -187,9 +187,11 @@ People and Agents follow the same steps, each with their own GitHub account. Tem
   platform checks; no hosted repository guards run automatically on PRs.
 - Server: `scripts/test/test-server.sh` (real Postgres on the hub machine); portable CI creates its own disposable Postgres 18 container.
   Deploy: `scripts/deploy/deploy.sh [machine id…]`.
-- iOS: `scripts/app/sim.sh [-openSession <machine>/<session>]` builds, installs on your simulator and pairs it. Before xcodegen / Xcode,
-  run `python3 scripts/persona_config.py xcconfig`; before a manual `xcodebuild`, `eval "$(python3 scripts/persona_config.py env)"` or an
-  old Xcode reports errors that look like someone else's breakage.
+- iOS: `scripts/app/sim.sh [--with-watch] [-openSession <machine>/<session>]` builds, installs on your simulator and pairs it; without
+  `--with-watch` it leaves out the watch app and share extension, and it builds only the Rust core's simulator slice
+  (`docs/operations/testing.md`, "Development builds"). Before xcodegen / Xcode, run `python3 scripts/persona_config.py xcconfig`, and
+  before a phone or Designed-for-iPad build in Xcode, `native/app-core/scripts/build-apple.sh` with no flag; before a manual `xcodebuild`,
+  `eval "$(python3 scripts/persona_config.py env)"` or an old Xcode reports errors that look like someone else's breakage.
 - Android: `scripts/app/android.sh [install|apk|test|lint|shots]` (`docs/android/android.md`).
 - Shared Rust core: `scripts/ci/core.sh` (needs rustup); a change to a wire type regenerates the clients' codecs (`native/app-core/README.md`).
 - HarmonyOS: from `harmony/`, run `node --test tests/*.test.mjs` and `node tests/run-domain.mjs` (Node.js 24+), then `devecocli build --build-mode release` with the API 26 SDK and locked native SSH core. Native device checks and fixture setup: `docs/harmony/harmony.md` ("Verification").
