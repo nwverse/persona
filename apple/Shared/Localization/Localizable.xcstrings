@@ -173495,6 +173495,29 @@
         }
       }
     },
+    "This Agent has stopped. You can put this off or dismiss it." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This Agent has stopped. You can put this off or dismiss it."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このエージェントは停止しています。あとで対応するか、このまま閉じることができます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个 Agent 已停止。你可以稍后再说，或者不用管它。"
+          }
+        }
+      }
+    },
     "This Agent stopped before it left any messages." : {
       "extractionState" : "manual",
       "localizations" : {

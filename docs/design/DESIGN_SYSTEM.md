@@ -1208,10 +1208,11 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   saved. A launcher summary adds its weekly-remaining bar only when the existing launcher quota answer supplies a
   weekly ratio; its tooltip names the window and reset time.
 - Provider identity on model rows (#7360): every row in New Agent and in saved setups and flat search results names
-  its owning launcher at the start of the second line, on web, Android and Apple. The rest of that line keeps the model
-  ID, resolved model, description or typed-model explanation; an expanded launcher's model rows may keep the description
-  alone. A sign-in, key or model-availability error that offers a repair names the affected launcher in its title, and
-  the repair opens that launcher's provider settings. This is a content rule, not a new badge, token or visual style.
+  its owning launcher in its model label or at the start of the second line, on web, Android and Apple. The rest of
+  that line keeps the model ID, resolved model, description or typed-model explanation; an expanded or filtered
+  launcher's own model rows may keep the description alone. A sign-in, key or model-availability error that offers a
+  repair names the affected launcher in its title, and the repair opens that launcher's provider settings. This is a
+  content rule, not a new badge, token or visual style.
   Launcher summaries retain each provider's full name as their accessible name and tooltip; the former provider rail
   and its shortened captions are replaced by the shared column (#10249).
 - Model families (`web/src/lib/model-families.ts`, `docs/web/web.md` "Model pill and model panel"): inside a provider
@@ -3331,3 +3332,7 @@ agent may have added a link. Manager/Todo/credential changes retire old results.
 New copy ships in English, Simplified Chinese and Japanese. Evidence:
 `web/src/ui/TaskRepositoryBindingsEditor.test.tsx` and
 `web/e2e/todo-repositories-browser.py`.
+
+## Lark topic group policy (#10238)
+
+Settings › Connectors › Lark bot › Topic groups serves owners who want one group to require their explicit bot mention. It reuses Group, Row, Switch, Button, the native select and settings input styles; policy defaults off. Each group shows its saved switch. Enrollment allows choosing the policy before adding the group; a strict first enrollment stays separate from the home choice. The home select shows the effective home or the private-chat fallback. Both writes wait for the existing acknowledged save; failures preserve saved values and enrollment drafts. No primary chat screen or model setting changes.
