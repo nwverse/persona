@@ -96,6 +96,7 @@
   "machine_switch_link_why_hub_old": "hub 需要更新后才能切换电脑。",
   "machine_switch_link_why_pending": "请先确认这台电脑是你的。",
   "machine_switch_link_why_custom_node": "这台电脑上的 Persona 装在自定义位置，不能在这里切换。",
+  "machine_switch_link_why_unsafe_permissions": "这台电脑上的其他用户可以改动 Persona 的文件夹（~/.persona），所以不能在这里切换。把它改成只有你能写入后再试。",
   "machine_switch_link_why_busy": "Persona 正在更新这台电脑，完成后再试。",
   "machine_switch_link_why_in_progress": "这台电脑正在切换到 Persona Link。",
   "machine_switch_link_why_no_systemd": "这台电脑没有 systemd 用户服务，Persona Link 需要它来保持运行。",

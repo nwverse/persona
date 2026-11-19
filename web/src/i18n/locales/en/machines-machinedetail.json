@@ -96,6 +96,7 @@
   "machine_switch_link_why_hub_old": "The hub needs an update before it can switch computers.",
   "machine_switch_link_why_pending": "Confirm that this computer is yours first.",
   "machine_switch_link_why_custom_node": "Persona runs from a custom location on this computer, so it can't be switched from here.",
+  "machine_switch_link_why_unsafe_permissions": "Other users on this computer can change Persona's folder there (~/.persona), so it can't be switched from here. Make it writable only by you, then try again.",
   "machine_switch_link_why_busy": "Persona is updating this computer. Try again once that's done.",
   "machine_switch_link_why_in_progress": "This computer is already switching to Persona Link.",
   "machine_switch_link_why_no_systemd": "This computer has no systemd user services, which Persona Link needs to keep running.",

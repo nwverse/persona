@@ -71,6 +71,7 @@ describe("LinkSwitch states", () => {
     ["unsupported_os", "只有 Linux 电脑可以在这里切换。Mac 或 Windows 电脑请在电脑上自行安装 Persona Link。"],
     ["pending", "请先确认这台电脑是你的。"],
     ["custom_node", "装在自定义位置"],
+    ["unsafe_permissions", "其他用户可以改动 Persona 的文件夹"],
     ["hub_old", "hub 需要更新后才能切换电脑。"],
     ["something_new", "这台电脑暂时不能切换到 Persona Link。"],
   ])("says why it can't start (%s), with no button", async (reason, words) => {

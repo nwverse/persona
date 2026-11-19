@@ -96,6 +96,7 @@
   "machine_switch_link_why_hub_old": "コンピューターを切り替えるには、ハブを更新する必要があります。",
   "machine_switch_link_why_pending": "先に、このコンピューターがご自身のものであることを確認してください。",
   "machine_switch_link_why_custom_node": "このコンピューターのPersonaはカスタムの場所で動いているため、ここからは切り替えられません。",
+  "machine_switch_link_why_unsafe_permissions": "このコンピューターの他のユーザーがPersonaのフォルダー（~/.persona）を変更できるため、ここからは切り替えられません。自分だけが書き込めるようにしてから、もう一度お試しください。",
   "machine_switch_link_why_busy": "Personaがこのコンピューターを更新しています。完了してからもう一度お試しください。",
   "machine_switch_link_why_in_progress": "このコンピューターはすでにPersona Linkへの切り替え中です。",
   "machine_switch_link_why_no_systemd": "このコンピューターにはsystemdのユーザーサービスがありません。Persona Linkを動かし続けるために必要です。",
