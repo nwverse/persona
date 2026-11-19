@@ -96,22 +96,30 @@ func (s *Service) toolAgentInterrupt(ctx context.Context, machine, self string, 
 	// Only a turn under way is stopped: an agent still starting has none yet (then is queued for it, as agent_send does).
 	working := c.Status == proto.StatusWorking
 	stopped := false // its turn is known to have ended
+	// over: the node found its turn already ended, only its background work keeping it Working (#10828): nothing was
+	// interrupted and that work goes on, so it is not said to have been stopped.
+	over := false
 	if working {
 		var res struct {
 			Settled bool `json:"settled"`
 		}
 		err := s.call(ctx, am.ID, "session.interrupt", map[string]any{"session_id": c.SessionID}, &res)
 		var re *rpc.Error
-		over := errors.As(err, &re) && re.Code == proto.CodeTurnOverBackground // its turn ended while the phone was asked
+		over = errors.As(err, &re) && re.Code == proto.CodeTurnOverBackground // its turn ended while the phone was asked
 		if err != nil && !over {
 			return "", fmt.Errorf("stop: %w", err)
 		}
 		s.logf("agent_interrupt %s on %s (from %s)", short(c.SessionID), am.ID, short(self))
-		stopped = over || res.Settled || s.interruptLanded(ctx, am.ID, c.SessionID)
+		stopped = !over && (res.Settled || s.interruptLanded(ctx, am.ID, c.SessionID))
 	}
+	const overSaid = "%s on %s had already ended its turn: nothing was interrupted, and its background work is still running " +
+		"(it can be stopped in the terminal on that computer). Do not tell the user it stopped."
 	if then == "" {
 		if !working {
 			return fmt.Sprintf("%s on %s was not working: nothing to stop.", agentLabel(c), am.Name), nil
+		}
+		if over {
+			return fmt.Sprintf(overSaid, agentLabel(c), am.Name), nil
 		}
 		if !stopped {
 			return fmt.Sprintf("Asked %s on %s to stop, but its turn has not ended yet: it still reads as working after %s. "+
@@ -133,7 +141,7 @@ func (s *Service) toolAgentInterrupt(ctx context.Context, machine, self string, 
 	}
 	note.sent(sctx, err) // an unknown answer counts for the agent's next turn: it may still arrive
 	if err != nil {
-		if working {
+		if working && !over {
 			return "", fmt.Errorf("stopped it, but sending the new instruction failed: %w", err)
 		}
 		return "", err
@@ -141,13 +149,20 @@ func (s *Service) toolAgentInterrupt(ctx context.Context, machine, self string, 
 	if t, ok := s.taskOf(ctx, am.ID, c.SessionID); ok && (t.Origin == self || t.Supervision != nil && t.Supervision.Supervisor == self) {
 		// The conversation shows what it told its task, as for agent_send to a task (routed); marked when it cut in, and
 		// naming the run it told (#10465).
-		if _, err := s.appendFeed(ctx, self, feedRouted, t.ID, map[string]any{"text": then, "interrupted": working, "from": routedFromAssistant,
+		if _, err := s.appendFeed(ctx, self, feedRouted, t.ID, map[string]any{"text": then, "interrupted": working && !over, "from": routedFromAssistant,
 			"machine_id": am.ID, "session_id": c.SessionID}); err != nil {
 			s.logf("task %s: routed feed: %v", t.ID, err)
 		}
 	}
 	if !working {
 		return fmt.Sprintf("%s on %s was not working: sent the new instruction.", agentLabel(c), am.Name), nil
+	}
+	if over {
+		said := fmt.Sprintf(overSaid, agentLabel(c), am.Name)
+		if sent.Queued {
+			return said + " The new instruction is queued behind what it is doing now and is read when that ends.", nil
+		}
+		return said + " The new instruction was sent.", nil
 	}
 	if !stopped {
 		return fmt.Sprintf("Asked %s on %s to stop, but its turn has not ended yet (it still reads as working after %s): the new "+

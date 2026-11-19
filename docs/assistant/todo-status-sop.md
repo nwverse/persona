@@ -439,5 +439,23 @@ asks the owner off it.
 Receipts and relayed messages written since #10465 name their run; an older receipt goes to the one run on its
 computer at its time, else to "A run". Stage 3 stores the entries themselves (`todo_activity`) and with them what the
 stores cannot show today: messages sent straight to a run, the steward's replies, message states other than
-delivered, and the rounds of the to-do a take-over continues. No route serves the timeline yet; the item route's rounds
-and a timeline route follow, behind a capability of their own.
+delivered, and the rounds of the to-do a take-over continues.
+
+The manager works the timeline out on each read, from the feed's items about the to-do in any conversation (the newest
+1000, read through the feed's existing `assistant_feed_unsent` index), its decisions, its ledger, brief and runs' links,
+the sessions of its runs and the owner's zone (`server/internal/assistant/todo_timeline.go`), and keeps nothing of it.
+`GET /api/v1/todos/{id}/timeline` pages through the rounds, oldest first, back from the latest;
+`GET /api/v1/todos/{id}` carries what the paper shows beside the row (the rounds above, how many there are in all, the
+results and the recap), so opening the paper takes one read. Both are behind `todo_timeline`, which the hub lists only
+while every manager names it (`docs/protocol/protocol.md`, their rows). There is no push of its own: a client with the
+to-do open reads it again on `{"type":"todos"}` (decisions, supervision and scope changes send one) or on an
+`assistant_feed` whose item's `ref` is the to-do, and since each item read works the whole list's view out, it reads
+only while the paper is on screen and coalesces them.
+
+A to-do with more than 1000 such feed items serves the rounds that began within its newest 1000: its decisions, brief
+log and ledger reviews are cut at the same time, and the rounds that began earlier are left out, so every round served
+is whole and keeps its id as newer items come. An extension's token reads it without the answered cards, whose records
+hold what the owner typed into a card and do not say whose card it was, and not at all for a to-do that may hold the
+health space's words: one opened from or written to by a health conversation, one any of whose runs ever worked there
+(taken off it or not, done or not), and, since this fails closed, one with a conversation or run whose space cannot be
+told (`docs/extensions/extensions.md` "Never shown to extensions").

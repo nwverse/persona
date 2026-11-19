@@ -37,6 +37,7 @@ export const SEARCH_INDEX: SearchGroup[] = [
   { tab: "general", group: words(t("settings.theme_light"), t("settings.theme_dark")), hint: t("language.system"), anchor: "theme" },
   { tab: "general", group: t("ui-look.accent"), anchor: "theme-color" },
   { tab: "general", group: t("ui-look.text_size"), anchor: "text-size" },
+  { tab: "general", group: t("ui-look.font"), hint: words(t("ui-look.font_sans"), t("ui-look.font_mono")), anchor: "font" },
   { tab: "general", group: t("language.label"), anchor: "language" },
   { tab: "general", group: t("settings.reply_motion"), anchor: "reply-motion" },
   { tab: "general", group: t("ui-look.recent_chats"), anchor: "recent-chats" },
