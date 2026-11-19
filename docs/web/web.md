@@ -1624,8 +1624,8 @@ Two-column pages (Inbox, Knowledge) switch to one column according to their own 
     The program receives them if mouse mode is enabled, otherwise they are dropped (herdr does not tell us the program's mouse mode). Default is Pass to program: Shift-drag selects locally, Shift+right-click opens the menu above (then right-click is no longer the browser menu).
     Terminal settings › Mouse › Local selection restores the original drag-selection / context-menu behavior, with Shift passing to the program. ⌘ and touch remain local. No hover events sent. Feature `terminal_mouse`.
   - **Mac line-editing keys** (while in control, in xterm's custom key handler, `lineEdit`): ⌘⌫ → ^U, ⌘← → ^A, ⌘→ → ^E, alongside existing Shift+Enter (ESC CR); combinations with extra modifiers are unchanged.
-  - **New terminal settings**: cursor style (Block / Bar / Underline), cursor blink, WebGL rendering (`@xterm/addon-webgl`, loaded on first enable; disabling or losing context disposes it and falls back to default rendering).
-    Stored as `persona.terminal.cursorStyle` / `cursorBlink` / `webgl`; defaults (block, no blink, DOM rendering) write no keys and leave default appearance pixel-identical. Cursor style only affects xterm's cursor; the page-drawn cursor in Wrap mode is unchanged.
+  - **New terminal settings**: cursor style (Block / Bar / Underline) and cursor blink, stored as `persona.terminal.cursorStyle` / `cursorBlink`; defaults (block, no blink) write no keys and leave default appearance pixel-identical. Cursor style only affects xterm's cursor; the page-drawn cursor in Wrap mode is unchanged.
+    The renderer (DOM or WebGL, `persona.terminal.webgl`) is chosen in Settings › Labs ("Labs" above, #9877); Terminal settings shows this terminal's renderer and links there.
   - **Focus policy**: while in control, clicking anywhere in the panel or regaining window focus returns the keyboard to the terminal, unless text is selected, a dialog / menu / overlay is open, focus is in another input (including search), focus is on a control outside the panel, or this terminal is covered by another (`shouldRefocus` in `lib/terminal-details.ts`; page facts in `terminal/focus.ts`). View only never steals focus.
   - **Search** (`terminal/FindBar.tsx`, `@xterm/addon-search`): with terminal focus, ⌘F (Mac) / Ctrl+Shift+F (other OS; Ctrl+F also works when not in control, while ^F belongs to the program in control) opens a find bar at the top of the panel: search as you type, Enter next, Shift+Enter previous, Aa case-sensitive, Esc or × closes (Esc not sent to the program).
     A selected line becomes the initial query. The find bar only acts within the panel and registers no global shortcut. Search scope is in `docs/integrations/terminal.md` section 20.
@@ -2002,6 +2002,126 @@ hello's `features`, `hub_name` and `mesh` are kept in the store. Lark through th
 
 **Request failures** (#3728): `errorText` in `lib/api.ts` explains common failures in the page's language. A 404, `not_found` or a bare `not found` says the item does not exist or this version does not support it yet, and suggests refreshing or checking whether the hub or the computer needs an update; 502 / 503 / 504 say the hub cannot answer right now, other 5xx that the service hit an error, both with retry and check-that-it-runs advice. The HTTP status and the hub's original text stay in brackets for diagnosis; the terminal list's error line stays on one line and shows the whole text on hover. Wrong credentials and other business errors show as before. Code that decides on compatibility or an error code reads the raw `ApiError`, never the explained text.
 For `node_unreachable` and `timeout` (#5031) the hub did answer; the computer did not. `errorText` goes by the code and says what to do next: offline when `delivered` is `none` (check that the computer is on, online and running Persona Link), a connection cut mid-call for any other `node_unreachable` (reconnect, check whether the last action went through), a timeout (check, then try again later). These carry no status in brackets, so offline feedback does not fold them into "can't reach the hub"; the hub's words stay on the `ApiError`.
+
+## Configuration forms
+
+A module that has settings for one resource describes them as a configuration **Document** and the web draws it with one
+generic form (#9877; `web/src/lib/configuration/`, `web/src/views/settings/configuration/ConfigurationForm.tsx`). The JSON
+is the hub's portable contract (the server's `configuration` package defines the same types), so every client can read the
+same thing.
+
+**The contract.** A Document (`schema_version` 1, an opaque `id` and `revision`, `title`, `description`) has titled
+groups of fields and `values`: one effective value per field, defaults included, plus optional per-field `notices`
+(info / warning). A field is one of `toggle`, `text` (single line or `multiline`, placeholder, lengths), `select` (options
+shown as a `list`, `dropdown` or `segmented` control), `multiselect` (checks, minimum and maximum chosen) and `number`
+(integer or not, minimum, maximum, a `step` that only nudges), each with a title, description, typed `default`,
+`read_only`, `disabled_reason` and `details` (title + description lines the module writes: scope, activation, rollback).
+An Update names the document, the revision it was made against, the `changes` it makes and the fields to `reset` (remove
+the override); missing fields stay as they are. The answer is the whole committed Document, or `{ error, code,
+field_errors }`; a `configuration_conflict` carries no replacement values. The codes are the shared contract's root codes
+(`configuration_bad_request`, `configuration_version`, `configuration_too_large`, `configuration_invalid`,
+`configuration_conflict`, `configuration_forbidden`, `configuration_not_found`, `configuration_unavailable`) and field
+codes (`type`, `option`, `duplicate`, `min_length`, `max_length`, `min_selected`, `max_selected`, `integer`, `minimum`,
+`maximum`, `range`, `unknown`, `read_only`, `unsupported`), and the client says a code it knows in the reader's language
+(a module's own localized message wins for a code it doesn't know). `contract.ts` mirrors the TypeScript union and the
+writer's checks: lengths in Unicode scalar values, numbers finite and inside the safe integer range (decimal bounds
+allowed), choices known and distinct, counts within their limits. The shared `schema/configuration/validation-cases.json`
+(26 cases, the same file the Go checks run) is a Web test input; there is no Web-only copy of it or of the all-types
+document. A kind it doesn't know, or a definition that isn't valid, is shown read-only with a line saying so; a saved value
+that isn't valid is not shown as a value, but the field still draws its empty state with the invalid-value line so it can
+be chosen again, and offers **Reset**; a schema version it doesn't know is shown and never written. Nothing in a Document
+is a URL, a scope or an instruction.
+
+**Sources.** The form takes a `ConfigurationSource` injected by the owning module, already bound to its one resource:
+`key` (the resource's identity: another key starts the form over), `read`, `update` and, when the module can tell,
+`subscribe` (the resource may have changed elsewhere; the form reads it again). `httpConfigurationSource` reads with GET
+and writes with PATCH at an endpoint and through a transport the module supplies (its authentication and base address);
+nothing in an answer chooses another address. A local module implements the same four members itself. The generic layer
+imports no module, assistant, hub or storage.
+
+**The form.** It reuses the settings pieces (`Group`, `RowFailed`, `Switch`, `Segmented`, `ChoiceRows`, `CheckMark`, the
+field and button classes). A single-step choice (a switch, a list, dropdown or segmented selection) is written at once and
+shows **Saving…** until the source has committed; only then **Saved**. Typed text, numbers and a multiselect's checks are
+drafts until **Save** (Enter on one line; Escape puts a typed one back), so a fixed count can move from one choice to
+another without an invalid write in between. A multiselect whose maximum is one is a single choice: it is drawn as
+`role="radio"` rows with round marks and arrow keys, and choosing another option replaces the old one in one click (the
+wire value stays an array). It has exactly one Tab stop — the chosen option, or the first option when none is chosen, with
+no radio marked chosen — and a larger maximum keeps ordinary checks, whose pending count can pass through a temporary
+value. Every field ends in one footer row that holds its default value, the count where a text field has a maximum, the
+save state and the **Reset** / **Cancel** / **Save** actions that apply, so the actions never sit between the control and
+its explanation. The footer reserves the small-button height when no action is shown and can grow for wrapping content.
+The invalid-value hint accompanies the control and is part of its accessible description. A valid choice or entry
+replaces the unavailable value, and **Reset** returns the default. A change or reset to an unsupported field is
+rejected locally with `unsupported`.
+Drafts stay through a failed write, a conflict, a re-read or a change elsewhere, including what is typed or checked
+while its save is on the way (that newer edit stays unsaved). One write at a time, each against the revision
+shown. A conflict, or a write whose outcome is unknown (`configuration_unavailable`, a request that threw or timed out, or
+a successful answer that isn't a Document), says so and offers **Reload**, which keeps every draft; nothing else is
+written until it has read again, and a version it can't write blocks writing altogether. A refusal the writer names (a
+validation or storage failure) is retriable at once. Field errors appear on their fields in the client's words for codes
+it knows; an unknown code shows the module's own message. A source replaced while it is still answering is ignored, and so
+is a read that started before a newer Document arrived, or before a write (or while it was in flight): a stale read cannot
+replace the document a write returned, drop its pending choice, or clear the barrier a failed write set. A read that times
+out is reported, not mistaken for the form's own cancellation. The form loads with its page, in its own chunk. Every control is named by its field's title and described by
+its description. `web/e2e/configuration-form.html` shows the form over the shared `schema/configuration/all-types.json`
+for screenshots (`web/e2e/configuration-form.mjs`); it is never built. `web/e2e/configuration-showcase.html`
+(`web/e2e/configuration-showcase.mjs`, `web/e2e/configuration-showcase-data.mjs`) is a fixture-only page that presents
+three genuine-looking module settings — a browser-local terminal renderer, a server-style daily digest and a local editor
+— exactly as the real form draws them, with no mock or test framing on the page itself. Its sources are in that page's
+memory and read or write no real setting; the page checks its own documents with the real parser. Coverage scenarios use
+the URL only (`?scenario=slow|load-fail|reject|conflict|unconfirmed|keyboard|contract|invalid|empty|unsupported`; the
+product view with no query or `?scenario=overview`), and none of that navigation is drawn. `contract` shows the shared
+all-types example unchanged, `invalid` shows a document whose saved values are missing or unreadable so every control is in
+its empty, correctable state, `keyboard` refuses the first single-choice save so its Tab stop can be checked, `empty` shows
+a document without groups, `unsupported` shows an unknown kind and a newer schema version, and the failure scenarios show
+only the module they happen in. The page is never built.
+
+## Labs
+
+Settings › Labs (#9877; `web/src/views/settings/Labs.tsx`) is the one place for trial features and for choosing between a
+stable and a new implementation of the same thing. It is a sidebar group of its own, after the hub's, without a title:
+each module says in its own document whose setting it holds. The page explains Labs and says that each item states its
+own scope (the terminal one is this browser only), then draws each module's source with the configuration form. Modules
+inject their source in `Labs.tsx`; the page and the form know nothing else of them. Only real features: never a demo
+entry.
+
+**Terminal renderer** (the first module; `web/src/lib/labs-terminal.ts` over `web/src/lib/labs.ts`). Single pane terminals
+(`views/session/terminal/feed.ts`) draw with xterm's DOM renderer (Standard, the default) or WebGL (`@xterm/addon-webgl`,
+its own chunk, loaded only when chosen). Full view always uses the DOM renderer and is not affected. It is kept by this
+browser (`localStorage`) because GPU support differs per browser and machine; it never reaches the hub, another browser,
+device or user. Its document has one segmented choice with details for scope, activation and rollback. No request
+leaves the page.
+- Storage: the key `persona.terminal.webgl` with WebGL as `1`, the Terminal settings switch's from before Labs, so a saved
+  choice keeps working and an older build reads the same value back. Standard writes nothing. A value this build doesn't
+  recognize reads as Standard, is left in place and is named in a notice until a choice replaces it; storage the page
+  can't read shows Standard with a notice. A write the browser throws on or doesn't read back fails with the module's
+  message, which says only that the save couldn't be confirmed (the stored value may or may not have changed). The
+  revision follows what is stored, so a choice made in another tab is a conflict for a stale page, and the page follows
+  other tabs through `subscribe`.
+- A terminal reads the choice when it is made (`rendererChosen`); a change in Labs leaves open terminals, and what was
+  typed in them, as they are; the next terminal opened (or the page after a reload) uses it.
+- Terminal settings has no WebGL switch of its own: its Renderer row says what draws this terminal (Standard, WebGL, or
+  Standard after WebGL stopped) and has a Labs button. It opens the same Labs page in a dialog over the page (a sheet on a
+  phone; `LabsDialog`, loaded on first open), as Edit shortcuts opens its editor, never Settings in place of the page:
+  the chat beside the terminal stays mounted, so an unsent draft keeps its text, its images (held only by the composer,
+  released when it unmounts) and an image being edited.
+- If WebGL cannot start or its GPU context is lost, that terminal disposes the addon, xterm repaints with the DOM renderer
+  from its unchanged buffer, input keeps flowing, and the choice is set back to Standard so the next terminal does not fail
+  the same way. A toast says so; if Standard could not be saved, it says that instead. A terminal that fell back stays on
+  Standard until it is opened again.
+
+### Adding, graduating and removing an entry
+
+1. **Add** an entry only for a real feature with both paths in the code, where going back is safe: no irreversible data
+   migration, no restored removed implementation, no bypassed security fix. The module adds a source (its document, with
+   details for scope, activation and rollback, its words in `en`, `zh-Hans` and `ja`) to `Labs.tsx`, a search index entry,
+   and tests for both paths and the fallback. Keep the old path the default until the new one has been used for a while.
+2. **Graduate** when the new path is ready for everyone: make it the default in a PR linked to the entry's issue, say so
+   in the release notes, and keep the entry for at least one release so people can still go back.
+3. **Remove** after that release: delete the module's source, its words and the old path. Stop reading its key; leave
+   stored values alone (they are ignored). An entry whose new path is abandoned is removed the same way with the old path kept.
+
+An entry should not stay in Labs indefinitely; each one's issue stays open until it graduates or is removed.
 
 ## Developing Persona (#9617)
 
