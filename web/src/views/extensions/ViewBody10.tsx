@@ -4,13 +4,13 @@
 // Fit, and a Full screen overlay with the same canvas. A chunk of its own, loaded with the first view that has a
 // graph (ViewBody.tsx), never the first screen or the idle preload. The layout is lib/graph-layout.ts, the shared
 // rules in slots; this file only multiplies by the web's node pitch and draws.
-import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useContext, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { t } from "../../i18n";
 import { layOutGraph } from "../../lib/graph-layout";
 import { toneOf, type UIAction, type UIItem, type UIGraphNode } from "../../lib/extension-ui";
 import { hue } from "../../lib/extension-ui-v6";
-import { useExtensionOwner } from "../../lib/extension-owner";
+import { ownerContext } from "../../lib/extension-owner";
 import { useCloseOnBack } from "../../lib/back-close";
 import { cx, EASE, IconButton, Spinner } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
@@ -266,7 +266,7 @@ export function GraphCanvas({ item, compact, busy, onPress, canPress }: {
   onPress: (a: UIAction, destructive?: boolean) => void;
   canPress?: (a: UIAction) => boolean;
 }) {
-  const scoped = useExtensionOwner();
+  const scoped = useContext(ownerContext) ?? (typeof location !== "undefined" ? location.pathname : "");
   const keyed = typeof item.key === "string" ? item.key : null;
   // A keyless graph keeps its state in this instance alone; a keyed one shares it per owner and key. A still
   // (compact) canvas never reads or writes the shared entry: whatever the person does to a card, the page's own

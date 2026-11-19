@@ -829,8 +829,56 @@ func TestAPairingCodeStartsNoSwitch(t *testing.T) {
 	}
 }
 
-// During startup the admin switch waits for the machine's own manager to report it, even if the carrier is up.
+// Right after a start the admin page's switch waits for the manager to report its machines, as the apps' routes wait
+// for it, before it says there is no such computer.
 func TestAdminLinkSwitchWaitsForTheManager(t *testing.T) {
+	for _, owner := range []string{devicesOwner, "other-manager"} {
+		t.Run(owner, func(t *testing.T) {
+			h := newTestHub(t)
+			h.cfg.Machines = []MachineConfig{{ID: "lsw-box", Kind: "ssh"}}
+			h.devices.assign = map[string]string{"lsw-box": owner}
+			h.devices.mu.Lock()
+			// No up channel yet: waitDevicesFor makes it, which is how this test knows the request is waiting for the manager
+			// (a lookup before the wait answers 404 at once and never makes it).
+			h.devices.up, h.devices.warmUntil = nil, time.Now().Add(5*time.Second)
+			h.devices.mu.Unlock()
+			mux := http.NewServeMux()
+			h.adminLinkSwitchRoutes(mux)
+			done := make(chan int, 1)
+			go func() {
+				w := httptest.NewRecorder()
+				mux.ServeHTTP(w, httptest.NewRequest("POST", "/api/v1/admin/machines/lsw-box/link-switch", strings.NewReader(`{}`)))
+				done <- w.Code
+			}()
+			var up chan struct{}
+			eventually(t, 5*time.Second, "the request waiting for the manager", func() bool {
+				h.devices.mu.Lock()
+				defer h.devices.mu.Unlock()
+				up = h.devices.up[owner]
+				return up != nil
+			})
+			m := newMachine(h, MachineConfig{ID: "lsw-box", Kind: "ssh"})
+			h.fleet.mu.Lock()
+			h.machines, h.byID["lsw-box"] = append(h.machines, m), m
+			h.fleet.mu.Unlock()
+			h.devices.mu.Lock()
+			h.devices.upOpen[owner] = true
+			h.devices.mu.Unlock()
+			close(up)
+			select {
+			case status := <-done:
+				if status == http.StatusNotFound {
+					t.Fatal("answered no such computer before the manager reported")
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("no answer")
+			}
+		})
+	}
+}
+
+// During startup the assigned manager must report its machine even when the carrier is already up.
+func TestAdminLinkSwitchWaitsForAssignedManagerWithCarrierUp(t *testing.T) {
 	h := newTestHub(t)
 	const mid, owner = "lsw-box", "m-0e0e0e"
 	h.cfg.Machines = []MachineConfig{{ID: mid, Kind: "ssh"}}

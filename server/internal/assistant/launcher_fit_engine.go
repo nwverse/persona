@@ -131,7 +131,7 @@ func ranLauncher(asked string, in *proto.StartInstead, ran proto.Session) string
 func (s *Service) launchersHereOn(ctx context.Context, machine, host string) (list []proto.Launcher, hostRuntime, known bool) {
 	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	list, hostRuntime, err := s.machineLaunchersOn(cctx, machine, host)
+	list, hostRuntime, _, err := s.machineLaunchersOn(cctx, machine, host)
 	if err != nil || !slices.ContainsFunc(list, func(l proto.Launcher) bool {
 		source := compat.Source(l.Source)
 		return source != "persona" && source != "builtin"
