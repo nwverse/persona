@@ -50,9 +50,9 @@ export function DisconnectConfirm({ open, busy, onCancel, onConfirm, problem, on
           </div>
         }
       >
-        <p className="text-[13px] leading-relaxed text-ink-2">{nothing ? t("disconnect.nothing_body") : t("disconnect.failed_body")}</p>
+        <p className="text-meta leading-relaxed text-ink-2">{nothing ? t("disconnect.nothing_body") : t("disconnect.failed_body")}</p>
         {/* why, in the hub's (or the page's) own words */}
-        {problem?.error !== undefined && <p className="mt-2 text-[12px] leading-relaxed text-ink-3">{problem.error}</p>}
+        {problem?.error !== undefined && <p className="mt-2 text-label leading-relaxed text-ink-3">{problem.error}</p>}
       </Dialog>
     </>
   );

@@ -17,6 +17,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -286,6 +287,9 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 		"effort": p.Effort, "is_main": main}
 	if p.TaskExecution {
 		params["task_execution"] = true
+		if p.LegacyTaskExecution {
+			params[devicewire.LegacyTaskExecution] = true
+		}
 	}
 	if p.Public {
 		params["public"] = true
@@ -471,7 +475,8 @@ func (s *Service) startConversationOn(ctx context.Context, p StartParams, main b
 // in the profile the assistant's conversations had, not a new private one with no login in it (#6015).
 func (s *Service) startConversation(ctx context.Context, p startParams) (proto.Session, error) {
 	return s.startSignedIn(ctx, StartParams{Text: prompts.MessageSourceText(p.Text, p.Source), PermissionMode: p.PermissionMode, Purpose: p.Purpose, Space: p.Space,
-		Origin: p.Origin, OriginRef: p.OriginRef, MachineID: p.MachineID, Cwd: p.Cwd, TaskExecution: p.TaskExecution, TaskModel: p.TaskModel, NewSessionID: p.NewSessionID})
+		Origin: p.Origin, OriginRef: p.OriginRef, MachineID: p.MachineID, Cwd: p.Cwd, TaskExecution: p.TaskExecution,
+		LegacyTaskExecution: p.LegacyTaskExecution, TaskModel: p.TaskModel, NewSessionID: p.NewSessionID})
 }
 
 // Start is assistant.start: a conversation one of the hub's features starts (the inbox's AI twin), or the channels'

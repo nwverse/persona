@@ -8,10 +8,111 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
+
+type olderTaskNodeHub struct{ *fakeHub }
+
+func (h olderTaskNodeHub) DeviceCall(ctx context.Context, call DeviceCall) (json.RawMessage, error) {
+	if call.Method == DeviceAssistantSend || call.Method == assistantwire.DeviceAssistantDirectory {
+		var params map[string]json.RawMessage
+		if err := json.Unmarshal(call.Params, &params); err != nil {
+			return nil, err
+		}
+		if call.Method == assistantwire.DeviceAssistantDirectory || string(params["task_execution"]) == "true" && string(params[devicewire.LegacyTaskExecution]) != "true" {
+			return nil, &rpc.Error{Code: proto.CodeNodeOutdated, Message: "node lacks scheduled task execution"}
+		}
+		delete(params, "task_execution")
+		delete(params, devicewire.LegacyTaskExecution)
+		if len(params["session_id"]) != 0 {
+			delete(params, "cwd")
+		}
+		call.Params, _ = json.Marshal(params)
+	}
+	return h.fakeHub.DeviceCall(ctx, call)
+}
+
+func TestTaskExecutionStrictContextsRefuseAnOlderNode(t *testing.T) {
+	for _, name := range []string{"directory", "computer", "launcher", "model", "effort", "health", "strict snapshot"} {
+		t.Run(name, func(t *testing.T) {
+			f := readyHub()
+			st := &memStore{}
+			s := withSettings(t, f, New(Options{Hub: olderTaskNodeHub{f}, Store: func() Store { return st }, Logf: testLogf(t)}))
+			task := Task{ID: "job", Title: "Check", Prompt: "Check files", Repeat: repeatInterval, EveryMinutes: 30, Enabled: true}
+			switch name {
+			case "directory":
+				task.Cwd = "/work/project"
+			case "computer":
+				task.ExecutionMachineID = "server"
+			case "launcher":
+				setModel(t, s, "task.job", ModelBinding{Provider: "launcher.claude"})
+			case "model":
+				setModel(t, s, "task.job", ModelBinding{Provider: "launcher.claude", Model: "chosen-model"})
+			case "effort":
+				setModel(t, s, "task.job", ModelBinding{Provider: "launcher.claude", Effort: "low"})
+			case "health":
+				task.Space = SpaceHealth
+			case "strict snapshot":
+				f.known["own"] = true
+				task.RunSessionID, task.RunMachineID, task.RunLauncher = "own", "server", "claude"
+				// A previous run's snapshot has no opt-in to the old-node protocol.
+				ex, err := s.taskExecution(t.Context(), task, true, ModelBinding{Provider: "launcher.claude"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				ex.Cwd, err = s.prepareSpace(t.Context(), "server", "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				task.RunExecution = &ex
+			}
+			setTasks(s, task)
+			r := request(s, "POST", "/api/v1/assistant/tasks/job/run", `{}`)
+			if r.Code == http.StatusOK || !strings.Contains(r.Body.String(), "node lacks scheduled task execution") || f.sent() != 0 {
+				t.Fatalf("strict task used old-node dispatch: %d %s, sent %d", r.Code, r.Body, f.sent())
+			}
+		})
+	}
+}
+
+func TestTaskExecutionDefaultRunsOnAnOlderNode(t *testing.T) {
+	for _, oldNode := range []bool{true, false} {
+		t.Run(fmt.Sprintf("older node %t", oldNode), func(t *testing.T) {
+			f := readyHub()
+			var h Hub = f
+			if oldNode {
+				h = olderTaskNodeHub{f}
+			}
+			s := withSettings(t, f, New(Options{Hub: h, Store: func() Store { return nil }, Logf: testLogf(t)}))
+			setTasks(s, Task{ID: "job", Title: "Default task", Prompt: "Check files", Repeat: repeatInterval, EveryMinutes: 30, Enabled: true, At: time.Now()})
+			var session string
+			for i := 1; i <= 3; i++ {
+				task, _ := taskByID(s, "job")
+				if i == 3 {
+					// Tasks saved before execution snapshots still own their recorded conversation.
+					task.RunExecution = nil
+					setTasks(s, task)
+				}
+				s.runDue(t.Context(), task.At)
+				s.sched.inflight.Wait()
+				got := waitRuns(t, s, i)[i-1]
+				if got.Status != runOK || got.SessionID == "" || i > 1 && (got.SessionID != session || got.Conversation != "resumed") {
+					t.Fatalf("default scheduled run %d: %+v", i, got)
+				}
+				sent := f.lastSend(t)
+				if (sent["task_execution"] == true) == oldNode || i > 1 && sent["resume_only"] != true {
+					t.Fatalf("default task used the wrong protocol: %v", sent)
+				}
+				session = got.SessionID
+			}
+		})
+	}
+}
 
 func TestTaskExecutionUndiscoveredCatalogSaveAndDispatch(t *testing.T) {
 	for _, catalog := range []string{"omitted", "null", "failed"} {

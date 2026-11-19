@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -188,6 +190,100 @@ type taskDirectoryWaitHub struct {
 	release chan struct{}
 }
 
+type taskEditReadKey struct{}
+
+type taskEditReadStore struct {
+	*memStore
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (st *taskEditReadStore) Setting(ctx context.Context, key string, out any) (bool, error) {
+	if ctx.Value(taskEditReadKey{}) == true && key == modelRecordKey("task.job") {
+		st.once.Do(func() { close(st.entered) })
+		select {
+		case <-st.release:
+		case <-ctx.Done():
+			return false, ctx.Err()
+		}
+	}
+	return st.memStore.Setting(ctx, key, out)
+}
+
+func TestTaskExecutionLegacyEditMergesConcurrentRun(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		want int
+	}{
+		{"runs while editing", http.StatusOK},
+		{"deleted while editing", http.StatusNotFound},
+		{"retimed while editing", http.StatusConflict},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := readyHub()
+			st := &taskEditReadStore{memStore: &memStore{}, entered: make(chan struct{}), release: make(chan struct{})}
+			release := sync.OnceFunc(func() { close(st.release) })
+			defer release()
+			s := withSettings(t, f, New(Options{Hub: f, Store: func() Store { return st }, Logf: testLogf(t)}))
+			now := time.Now().UTC()
+			setTasks(s, Task{ID: "job", Title: "Before", Prompt: "Check files", Repeat: repeatInterval, EveryMinutes: 30, Enabled: true, At: now})
+			const path = "/api/v1/assistant/tasks/job"
+			r := httptest.NewRequest(http.MethodPut, path, strings.NewReader(`{"title":"Updated","prompt":"New prompt","repeat":"interval","every_minutes":30,"enabled":true}`))
+			r = r.WithContext(context.WithValue(r.Context(), taskEditReadKey{}, true))
+			response := httptest.NewRecorder()
+			done := make(chan struct{})
+			go func() { s.ServeHTTP(response, r); close(done) }()
+			select {
+			case <-st.entered:
+			case <-done:
+				t.Fatalf("edit returned before its snapshot was held: %d %s", response.Code, response.Body)
+			case <-time.After(3 * time.Second):
+				t.Fatal("edit did not reach the model record")
+			}
+
+			switch tc.name {
+			case "runs while editing":
+				s.runDue(t.Context(), now)
+				s.sched.inflight.Wait()
+				if run := waitRuns(t, s, 1)[0]; run.Status != runOK || run.Manual || run.SessionID == "" {
+					t.Fatalf("concurrent due run: %+v", run)
+				}
+			case "deleted while editing":
+				if deleted := request(s, "DELETE", path, ""); deleted.Code != http.StatusOK {
+					t.Fatalf("delete: %d %s", deleted.Code, deleted.Body)
+				}
+			case "retimed while editing":
+				body := fmt.Sprintf(`{"title":"Before","prompt":"Check files","repeat":"interval","every_minutes":30,"enabled":true,"at":%q}`, now.Add(5*time.Minute).Format(time.RFC3339))
+				if retimed := request(s, "PUT", path, body); retimed.Code != http.StatusOK {
+					t.Fatalf("retime: %d %s", retimed.Code, retimed.Body)
+				}
+			}
+			beforeRelease, exists := taskByID(s, "job")
+			release()
+			<-done
+			if response.Code != tc.want {
+				t.Fatalf("edit: got %d, want %d: %s", response.Code, tc.want, response.Body)
+			}
+			after, stillExists := taskByID(s, "job")
+			if exists != stillExists {
+				t.Fatalf("edit changed task existence: %+v", after)
+			}
+			if tc.want == http.StatusOK {
+				if after.Title != "Updated" || after.Prompt != "New prompt" || after.RunExecution == nil ||
+					after.RunSessionID == "" || after.LastSessionID != after.RunSessionID || !after.LastRun.Equal(now) ||
+					!after.At.Equal(now.Add(30*time.Minute)) {
+					t.Fatalf("edit lost the schedule or run: %+v", after)
+				}
+				beforeRelease.Title, beforeRelease.Prompt = after.Title, after.Prompt
+			}
+			if stillExists && !reflect.DeepEqual(beforeRelease, after) {
+				t.Fatalf("edit lost concurrent task state: before=%+v after=%+v", beforeRelease, after)
+			}
+		})
+	}
+}
+
 func (h taskDirectoryWaitHub) DeviceCall(ctx context.Context, call DeviceCall) (json.RawMessage, error) {
 	if call.Method == assistantwire.DeviceAssistantDirectory {
 		close(h.entered)
@@ -206,6 +302,7 @@ func TestTaskExecutionSaveAllowsConcurrentScheduleActivity(t *testing.T) {
 		want               int
 	}{
 		{"create", "POST", "/api/v1/assistant/tasks", http.StatusOK},
+		{"same task runs", "PUT", "/api/v1/assistant/tasks/job", http.StatusOK},
 		{"task changed", "PUT", "/api/v1/assistant/tasks/job", http.StatusConflict},
 		{"model changed", "PUT", "/api/v1/assistant/tasks/job", http.StatusConflict},
 	} {
@@ -215,11 +312,12 @@ func TestTaskExecutionSaveAllowsConcurrentScheduleActivity(t *testing.T) {
 			st := &memStore{}
 			s := withSettings(t, f, New(Options{Hub: h, Store: func() Store { return st }, Logf: testLogf(t)}))
 			now := time.Now()
+			jobRuns := tc.name == "same task runs"
 			setTasks(s,
-				Task{ID: "job", Title: "Before", Prompt: "Check", Repeat: repeatInterval, EveryMinutes: 30},
+				Task{ID: "job", Title: "Before", Prompt: "Check", Repeat: repeatInterval, EveryMinutes: 30, Enabled: jobRuns, At: now},
 				Task{ID: "manual", Title: "Manual", Prompt: "Check", Repeat: repeatInterval, EveryMinutes: 30},
 				Task{ID: "due", Title: "Due", Prompt: "Check", Repeat: repeatInterval, EveryMinutes: 30, Enabled: true, At: now})
-			const body = `{"title":"Slow edit","prompt":"Check","repeat":"interval","every_minutes":30,"cwd":"/work/project","model":"slow-model","model_revision":0}`
+			body := fmt.Sprintf(`{"title":"Slow edit","prompt":"Check","repeat":"interval","every_minutes":30,"enabled":%t,"cwd":"/work/project","model":"slow-model","model_revision":0}`, jobRuns)
 			slow := make(chan *httptest.ResponseRecorder, 1)
 			go func() { slow <- request(s, tc.method, tc.path, body) }()
 			release := sync.OnceFunc(func() { close(h.release) })
@@ -243,7 +341,11 @@ func TestTaskExecutionSaveAllowsConcurrentScheduleActivity(t *testing.T) {
 				}
 				s.runDue(context.Background(), now)
 				s.sched.inflight.Wait()
-				if f.sent() != 2 {
+				wantSends := 2
+				if jobRuns {
+					wantSends++
+				}
+				if f.sent() != wantSends {
 					progress <- fmt.Errorf("manual and due tasks did not both send: %d sends", f.sent())
 					return
 				}
@@ -280,6 +382,14 @@ func TestTaskExecutionSaveAllowsConcurrentScheduleActivity(t *testing.T) {
 			}
 			task, _ := taskByID(s, "job")
 			model := modelRecordOf(t, s, "task.job")
+			if jobRuns {
+				if task.Title != "Slow edit" || task.Cwd != "/work/project" || model.Binding.Model != "slow-model" ||
+					model.Revision != 1 || task.RunExecution == nil || task.LastSessionID != task.RunSessionID ||
+					!task.At.Equal(now.Add(30*time.Minute)) {
+					t.Fatalf("validated edit lost scheduling state or settings: %+v %+v", task, model)
+				}
+				return
+			}
 			wantTitle, wantRevision := "Before", int64(0)
 			if tc.name == "task changed" {
 				wantTitle = "Concurrent"

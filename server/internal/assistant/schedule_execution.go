@@ -37,6 +37,7 @@ type TaskExecution struct {
 	PermissionMode     string `json:"permission_mode,omitempty"`
 	BindingFingerprint string `json:"binding_fingerprint,omitempty"` // independent of node discovery
 	Fingerprint        string `json:"fingerprint,omitempty"`         // includes the observed launcher identity
+	LegacyCompatible   bool   `json:"legacy_compatible,omitempty"`   // the conversation was admitted with inherited, ordinary execution
 }
 
 func (s *Service) taskMachine(ctx context.Context, t Task) string {
@@ -359,11 +360,57 @@ func (s *Service) checkTaskLauncher(ctx context.Context, machine, name string) (
 	return true, i18n.Err("assistant-models.err_provider_missing")
 }
 
-// commitTaskExecutionEdit compares the validated task and model with the live pair under the writers' lock order.
-// Keep concurrent schedule updates, including runs that finished while the node was validating the edit.
+var errTaskEditGone = i18n.Err("assistant-schedule.gone")
+
+// taskEditConfig keeps the fields that identify the edit's validated configuration and authorization.
+func taskEditConfig(t Task) Task {
+	t.RunMachineID, t.RunSessionID, t.RunLauncher, t.RunExecution = "", "", "", nil
+	t.LastRun, t.StatusRun = time.Time{}, time.Time{}
+	t.LastSessionID, t.LastStatus, t.LastError = "", "", ""
+	t.TodoProgress, t.StateNote = nil, nil
+	if t.Repeat == repeatInterval {
+		t.At = time.Time{} // due runs advance At; ArmedAt records a deliberate retime
+	}
+	return t
+}
+
+func mergeTaskEditRuntime(task *Task, before, current Task) error {
+	if !reflect.DeepEqual(taskEditConfig(before), taskEditConfig(current)) {
+		return errModelConflict
+	}
+	if reflect.DeepEqual(before.StateNote, task.StateNote) {
+		task.StateNote = current.StateNote
+	} else if !reflect.DeepEqual(before.StateNote, current.StateNote) {
+		return errTaskStateChanged
+	}
+	task.RunMachineID, task.RunSessionID = current.RunMachineID, current.RunSessionID
+	task.RunLauncher, task.RunExecution = current.RunLauncher, current.RunExecution
+	task.LastRun, task.StatusRun = current.LastRun, current.StatusRun
+	task.LastSessionID, task.LastStatus, task.LastError = current.LastSessionID, current.LastStatus, current.LastError
+	task.TodoProgress = current.TodoProgress
+	if before.Repeat == repeatInterval && task.Repeat == repeatInterval && task.EveryMinutes == before.EveryMinutes &&
+		task.ArmedAt.Equal(before.ArmedAt) && task.Enabled == before.Enabled && !current.At.Equal(before.At) {
+		task.At = current.At
+	}
+	return nil
+}
+
+// commitTaskExecutionEdit commits the validated configuration with the scheduler's latest runtime state.
 func (s *Service) commitTaskExecutionEdit(ctx context.Context, before *Task, task Task, edit taskExecutionEdit) error {
 	s.models.mu.Lock()
 	defer s.models.mu.Unlock()
+	sc, err := s.lockedSchedule(ctx)
+	if err != nil {
+		return err
+	}
+	defer sc.mu.Unlock()
+	i := sc.indexLocked(task.ID)
+	if before != nil && i < 0 {
+		return errTaskEditGone
+	}
+	if before == nil && i >= 0 {
+		return errModelConflict
+	}
 	current, err := s.modelRecord(ctx, "task."+task.ID)
 	if err != nil {
 		return err
@@ -371,14 +418,10 @@ func (s *Service) commitTaskExecutionEdit(ctx context.Context, before *Task, tas
 	if current.Revision != edit.revision {
 		return errModelConflict
 	}
-	sc, err := s.lockedSchedule(ctx)
-	if err != nil {
-		return err
-	}
-	defer sc.mu.Unlock()
-	i := sc.indexLocked(task.ID)
-	if before == nil && i >= 0 || before != nil && (i < 0 || !reflect.DeepEqual(sc.tasks[i], *before)) {
-		return errModelConflict
+	if before != nil {
+		if err := mergeTaskEditRuntime(&task, *before, sc.tasks[i]); err != nil {
+			return err
+		}
 	}
 	tasks := slices.Clone(sc.tasks)
 	if i < 0 {
@@ -390,11 +433,16 @@ func (s *Service) commitTaskExecutionEdit(ctx context.Context, before *Task, tas
 }
 
 func writeTaskExecutionCommitError(w http.ResponseWriter, err error) {
-	if errors.Is(err, errModelConflict) {
+	switch {
+	case errors.Is(err, errTaskEditGone):
+		apierr.Write(w, http.StatusNotFound, err)
+	case errors.Is(err, errTaskStateChanged):
+		writeTaskStateError(w, err)
+	case errors.Is(err, errModelConflict):
 		writeTaskExecutionError(w, err)
-		return
+	default:
+		apierr.Write(w, http.StatusServiceUnavailable, err)
 	}
-	apierr.Write(w, http.StatusServiceUnavailable, err)
 }
 
 func (s *Service) saveTaskConfiguredLocked(ctx context.Context, sc *schedule, tasks []Task, id string, record *modelRecord) error {
@@ -430,6 +478,7 @@ func compatibleTaskExecution(old, next TaskExecution) bool {
 		old.Agent, next.Agent = "", ""
 	}
 	old.BindingFingerprint, next.BindingFingerprint = "", ""
+	old.LegacyCompatible, next.LegacyCompatible = false, false
 	// Permission changes can be applied to a compatible session; the agent, directory and model identity cannot.
 	old.PermissionMode, next.PermissionMode = "", ""
 	return old == next

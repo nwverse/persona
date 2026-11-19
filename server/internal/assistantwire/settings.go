@@ -102,16 +102,17 @@ const ConfigDirClaudeOnly = "config_dir is only supported for Claude assistant c
 
 // StartParams is assistant.start's params.
 type StartParams struct {
-	TaskModel      *ModelBinding `json:"-"`
-	Cwd            string        `json:"-"` // internal scheduled task directory; validated on the target computer
-	TaskExecution  bool          `json:"-"` // refuse execution substitutions
-	Text           string        `json:"text"`
-	Images         []proto.Image `json:"images,omitempty"`
-	Launcher       string        `json:"launcher,omitempty"`
-	Model          string        `json:"model,omitempty"`      // the first message's model, picked as a message's is (#5033)
-	ConfigDir      string        `json:"config_dir,omitempty"` // Claude profile on the target machine; "" private, "legacy" old resolution, "default" unset
-	PermissionMode string        `json:"permission_mode,omitempty"`
-	Effort         string        `json:"effort,omitempty"`
+	TaskModel           *ModelBinding `json:"-"`
+	Cwd                 string        `json:"-"` // internal scheduled task directory; validated on the target computer
+	TaskExecution       bool          `json:"-"` // refuse execution substitutions
+	LegacyTaskExecution bool          `json:"-"` // an unconfigured scheduled turn may use an older node
+	Text                string        `json:"text"`
+	Images              []proto.Image `json:"images,omitempty"`
+	Launcher            string        `json:"launcher,omitempty"`
+	Model               string        `json:"model,omitempty"`      // the first message's model, picked as a message's is (#5033)
+	ConfigDir           string        `json:"config_dir,omitempty"` // Claude profile on the target machine; "" private, "legacy" old resolution, "default" unset
+	PermissionMode      string        `json:"permission_mode,omitempty"`
+	Effort              string        `json:"effort,omitempty"`
 	// ServiceTier: the native speed for a new Codex conversation, acknowledged before its first turn. Independent of Effort.
 	ServiceTier string `json:"service_tier,omitempty"`
 	Purpose     string `json:"purpose,omitempty"`    // the model configuration's purpose; "" is the main chat's

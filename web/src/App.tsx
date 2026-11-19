@@ -35,7 +35,7 @@ import { focusables, trapTabIn } from "./ui/overlay";
 import { Empty } from "./views/session/files/parts";
 import { AgentsPage } from "./views/AgentsPage";
 import { ChatView } from "./views/chat/ChatView";
-import { preloadCloseoutEvidence } from "./views/chat/CloseoutCard";
+import { preloadCloseout } from "./views/chat/closeout-chunks";
 import { Home } from "./views/Home";
 import { PersonaAssistant } from "./views/PersonaAssistant";
 import { NewWorktreeHost } from "./views/NewWorktreeHost";
@@ -364,7 +364,7 @@ function Shell() {
   const [newAgent, setNewAgent] = useState(false);
   const [preset, setPreset] = useState<NewAgentPreset | null>(null);
   useEffect(() => preloadPages(), []);
-  useEffect(() => preloadCloseoutEvidence(), []);
+  useEffect(() => preloadCloseout(), []);
   useEffect(() => onOpenNewAgent((p) => {
     setPreset(p);
     setNewAgent(true);

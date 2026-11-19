@@ -6,6 +6,7 @@ import (
 	"errors"
 
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -20,12 +21,17 @@ func taskSourceParams(t Task, text, cwd string) map[string]any {
 }
 
 func taskResumeParams(t Task, text string, ex TaskExecution) map[string]any {
-	return map[string]any{"session_id": t.RunSessionID, "text": text, "message_source": taskMessageSource(t), "permission_mode": t.PermissionMode, "resume_only": true, "cwd": ex.Cwd, "task_execution": true}
+	params := map[string]any{"session_id": t.RunSessionID, "text": text, "message_source": taskMessageSource(t), "permission_mode": t.PermissionMode, "resume_only": true, "cwd": ex.Cwd, "task_execution": true}
+	if ex.LegacyCompatible {
+		params[devicewire.LegacyTaskExecution] = true
+	}
+	return params
 }
 
 func taskStartParams(t Task, text string, ex TaskExecution) startParams {
 	return startParams{Text: text, Source: taskMessageSource(t), PermissionMode: t.PermissionMode,
-		Purpose: "task." + t.ID, Space: t.Space, Origin: OriginTask, OriginRef: t.ID, MachineID: ex.MachineID, Cwd: ex.Cwd, TaskExecution: true, TaskModel: &ModelBinding{Provider: launcherProvider(ex.Launcher), Model: ex.Model, Effort: ex.Effort}}
+		Purpose: "task." + t.ID, Space: t.Space, Origin: OriginTask, OriginRef: t.ID, MachineID: ex.MachineID, Cwd: ex.Cwd,
+		TaskExecution: true, LegacyTaskExecution: ex.LegacyCompatible, TaskModel: &ModelBinding{Provider: launcherProvider(ex.Launcher), Model: ex.Model, Effort: ex.Effort}}
 }
 
 func (s *Service) sourceTaskExecution(ctx context.Context, t Task, params map[string]any) *TaskExecution {

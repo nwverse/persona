@@ -142,8 +142,8 @@ type Task struct {
 	// A cron task's expression in words in the reader's language and its next runs; set on the view (tasksView), never stored.
 	CronText string      `json:"cron_text,omitempty"`
 	NextRuns []time.Time `json:"next_runs,omitempty"`
-	// ArmedAt is when a daily or cron task was last created, switched on or given another time or weekdays (rearm): a run
-	// due before that is no run it missed (#3816).
+	// ArmedAt records the owner's schedule changes. A daily or cron run due before it was never missed (#3816).
+	// For interval tasks it distinguishes an explicit start edit from the scheduler advancing At.
 	ArmedAt time.Time `json:"armed_at,omitempty"`
 }
 
@@ -1918,6 +1918,8 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 		}
 		return s.failTaskRun(ctx, t, run, err, false)
 	}
+	legacyExecution := t.SessionID == "" && t.Space == "" && t.StartGrant == nil &&
+		t.ExecutionMachineID == "" && t.Cwd == "" && model.override == (ModelBinding{})
 	fresh := t.startsFresh()
 	if fresh {
 		// Override the destination only for this dispatch. Keeping the origin on the saved task
@@ -2018,6 +2020,7 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 		return s.failTaskRun(ctx, t, run, err, false)
 	}
 	here, launcher := ex.MachineID, ex.Launcher
+	ex.LegacyCompatible = legacyExecution && !proto.IsExternalLauncher(launcher)
 	t.PermissionMode = ex.PermissionMode
 	run.Conversation = "new"
 	// With default directories, prepare once per run so the canonical node directory is part of compatibility.
@@ -2054,7 +2057,11 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 		case fresh || clean:
 			// Keep the prior session for busy detection, then start a new one below.
 		default:
-			params := taskResumeParams(t, taskPrompt(t, due, now, loc, manual, kb, true), ex)
+			resumed := ex
+			// Older snapshots without provenance may have started with explicit choices.
+			resumed.LegacyCompatible = ex.LegacyCompatible && (t.RunExecution == nil || t.RunExecution.LegacyCompatible) &&
+				s.taskOwnOrigin(ctx, t) && !s.mayBeMain(ctx, t.RunSessionID)
+			params := taskResumeParams(t, taskPrompt(t, due, now, loc, manual, kb, true), resumed)
 			err := s.finishModel(ctx, "task."+t.ID, params, ModelBinding{Provider: launcherProvider(ex.Launcher), Model: ex.Model, Effort: ex.Effort})
 			preparationFailed := err != nil // no task text has been sent while building the model parameters
 			if err == nil {
@@ -2066,6 +2073,7 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 			if err == nil {
 				run.MachineID, run.SessionID = t.RunMachineID, t.RunSessionID
 				run.Conversation = "resumed"
+				run.Execution = &resumed
 				s.scheduledWake(t.RunSessionID, time.Now()) // a new chain of messages between conversations (#10099)
 				s.logf("task %s ran %s after its time (its conversation %s)", t.ID, lateness(due, time.Now()), short(t.RunSessionID))
 				startRun(&m)
@@ -2872,6 +2880,7 @@ func editTask(old, in Task, now time.Time) Task {
 		switch {
 		case !in.At.IsZero() && in.At.After(now) && !in.At.Equal(old.At) && in.At.Before(now.Add(every)):
 			t.At = in.At
+			t.ArmedAt = now.UTC()
 		case old.Repeat != repeatInterval || old.EveryMinutes != t.EveryMinutes || !old.At.After(now) || (!old.Enabled && t.Enabled):
 			t.At = now.Add(every)
 		}
