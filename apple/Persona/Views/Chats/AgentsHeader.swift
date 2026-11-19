@@ -59,11 +59,16 @@ nonisolated enum AgentsSearchVisibility {
     /// when it changes, so what reads it is not drawn again on every frame of a scroll.
     var rowsUnder = false
     /// The field floats in the bar's row: searching, and until it has come back down after.
-    var floating = false
-    /// Where the field is on its way, animated: up in the bar's row (searching) or down in the list's row. What moves
-    /// follows it (`AgentsSearchOverlay`, `ListShift`, `AgentsTopBarFade`); the page's `searching` changes without an
-    /// animation, so the list's rows (links at rest, buttons while searching) are not cross-faded.
+    var floating = false {
+        didSet { if !floating, refoldAfterClose { refold() } }
+    }
+    /// Where the field is on its way, animated: up in the bar's row (searching) or down in the list's row. The field,
+    /// list and bar use the same target, with `Rise` publishing its actual progress through `motion` for the bar;
+    /// the page's `searching` changes without an animation, so the list's rows are not cross-faded.
     var up = false
+    /// The floating field's actual animated progress. The shell's bar follows it instead of starting an independent
+    /// fade that could run while the field is still in the bar's row on a busy main thread.
+    var motion = 0.0
     /// On the way up and not laid out for searching yet: what `ListShift.arrived` does it for. `setCompact` clears it
     /// either way, so a slide still at the top as a search closes is not taken for an arrival.
     @ObservationIgnored var rising = false
@@ -93,6 +98,7 @@ nonisolated enum AgentsSearchVisibility {
     @ObservationIgnored fileprivate weak var probe: UIView?
     @ObservationIgnored private weak var foundList: UIScrollView?
     @ObservationIgnored private var folded = false
+    @ObservationIgnored private var refoldAfterClose = false
 
     /// Starts the page with the field folded away (2026-11-01 user request: it shows on a pull, like Mail): the list
     /// scrolled by the field's band, once it is laid out, if it still sits at its top. A list too short to scroll gets
@@ -122,7 +128,13 @@ nonisolated enum AgentsSearchVisibility {
     }
 
     /// The page came back to the front: folded again if the list sits at its top with the field out (#740).
+    /// If a search is still closing, wait for its field to leave instead of consuming the one-shot fold (#10166).
     func refold() {
+        if floating, !up {
+            refoldAfterClose = true
+            return
+        }
+        refoldAfterClose = false
         folded = false
         foldOnce()
     }
@@ -169,6 +181,11 @@ nonisolated enum AgentsSearchVisibility {
     func showField() {
         guard let list = listScrollView else { return }
         list.setContentOffset(CGPoint(x: list.contentOffset.x, y: -list.adjustedContentInset.top), animated: false)
+    }
+
+    /// Publish only new frame values: a list redraw at rest must not redraw the field or bar too.
+    func updateMotion(_ progress: Double) {
+        if motion != progress { motion = progress }
     }
 
     /// The list's scroll view: the largest collection view in the page the probe is in (List is one). Kept once found
@@ -325,19 +342,24 @@ struct AgentsSearchOverlay: View {
                 .frame(height: AgentsHeader.band, alignment: .top)
                 .background { if !header.floating { Theme.groupedPage } }
                 .searchTraceMark(header.floating ? "float" : "retained")
-                .modifier(Rise(progress: header.up ? 1 : 0, from: from, to: 0))
+                .modifier(Rise(progress: header.up ? 1 : 0, from: from, to: 0, onProgress: header.updateMotion))
             }
         }
     }
 
-    /// The field between the row (0) and the bar's row (1).
+    /// The field between the row (0) and the bar's row (1). Its actual progress also drives the shell bar's fade.
     private struct Rise: ViewModifier, Animatable {
         var progress: Double
         var from: CGFloat
         var to: CGFloat
+        var onProgress: (Double) -> Void
         var animatableData: Double {
             get { progress }
-            set { progress = newValue }
+            set {
+                progress = newValue
+                let report = onProgress, value = newValue
+                DispatchQueue.main.async { report(value) }
+            }
         }
 
         func body(content: Content) -> some View {
@@ -390,6 +412,16 @@ struct AgentsSearchField: UIViewRepresentable {
     var focused: () -> Void = {}
 
     static var prompt: String { AgentsSearchPrompt.text }
+
+    /// The text size the field's words stop growing at: the top bars' (`Theme.Shell.topBarLargestTypeSize`), whose row
+    /// it rises into. Its capsule and its band keep their height at every size, so the fold, the pull and the rise do
+    /// not change with the text (#10165).
+    static let largestTypeSize = UIContentSizeCategory(Theme.Shell.topBarLargestTypeSize)
+
+    /// The size the field's words are drawn at for its own text size.
+    static func textSize(for size: UIContentSizeCategory) -> UIContentSizeCategory {
+        size == .unspecified ? size : min(size, largestTypeSize)
+    }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -446,9 +478,28 @@ struct AgentsSearchField: UIViewRepresentable {
             super.init(frame: .zero)
             field.frame = bounds
             field.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            // `fitText` sizes the words; UIKit's own following would undo the cap.
+            field.adjustsFontForContentSizeCategory = false
             addSubview(field)
+            registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (holder: Holder, _: UITraitCollection) in
+                holder.fitText()
+            }
         }
         required init?(coder: NSCoder) { nil }
+
+        /// The field's words (what is typed and the placeholder) at its text size, no larger than `largestTypeSize`.
+        /// UIKit sizes them once, as the bar is made, and then follows only a change of the field's own size: the field
+        /// in the list's row is made at launch, before the window's cap is set, and kept the system's AX5 words (53 pt)
+        /// in its 44 pt capsule while everything around it was drawn at xxxLarge (#10165). Fitted again on entering a
+        /// window and on every change of the text size.
+        func fitText() {
+            let size = AgentsSearchField.textSize(for: traitCollection.preferredContentSizeCategory)
+            guard size != .unspecified, let font = field.font else { return }
+            let style = (font.fontDescriptor.object(forKey: .textStyle) as? String).map(UIFont.TextStyle.init) ?? .body
+            let points = UIFont.preferredFont(forTextStyle: style, compatibleWith: UITraitCollection(preferredContentSizeCategory: size)).pointSize
+            // The placeholder's words take the field's font with them.
+            if font.pointSize != points { field.font = font.withSize(points) }
+        }
 
         override func accessibilityActivate() -> Bool {
             guard let activateSearch else { return super.accessibilityActivate() }
@@ -476,6 +527,7 @@ struct AgentsSearchField: UIViewRepresentable {
                 cell = nil
             } else {
                 unclipCell()
+                fitText()
             }
         }
 
@@ -641,7 +693,7 @@ struct AgentsTopBarPlace: ViewModifier {
                 if header.bar != y { header.bar = y }
             }
             // The field on its way up into the bar's row, animated (`AgentsHeader.up`).
-            .modifier(AgentsTopBarFade(progress: header.up ? 1 : 0,
+            .modifier(AgentsTopBarFade(progress: header.up ? 1 : 0, published: header.motion, resting: !header.floating,
                                        gone: AgentsTopBarFade.gone(bar: header.bar, field: header.listTop + AgentsHeader.room(shell: true))))
     }
 }
@@ -651,6 +703,10 @@ struct AgentsTopBarPlace: ViewModifier {
 /// field has gone below it. `progress` is the same animated value as the field's (`AgentsSearchOverlay`).
 struct AgentsTopBarFade: ViewModifier, Animatable {
     var progress: Double
+    /// The field's published progress. Taking the later value keeps the bar transparent if either animation is late.
+    var published = 0.0
+    /// At rest the bar is fully visible, even if the field's last published animation value never arrived.
+    var resting = false
     /// The share of the field's way up by which the bar has gone (`gone(bar:field:)`).
     var gone = Self.standard
     var animatableData: Double {
@@ -673,6 +729,6 @@ struct AgentsTopBarFade: ViewModifier, Animatable {
     }
 
     func body(content: Content) -> some View {
-        content.opacity(max(0, 1 - progress / gone))
+        content.opacity(resting ? 1 : max(0, 1 - max(progress, published) / gone))
     }
 }
