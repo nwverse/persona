@@ -9,7 +9,10 @@ import (
 // the answer to one of its asks, which a notification action or a phone that lost the reply asks again with the same
 // X-Persona-Op-Id, gets the first reply back instead of a second effect or a 409 for the round it already ended. The
 // id is the header (withClientOp, whose digest covers the path and the body), never the body; a request without it
-// goes through as before. The manager decides the answer; the hub only keeps the reply.
+// goes through as before. The manager decides the answer; the hub only keeps the reply. It is relayed as a send
+// (forwardSend): an answer the link lost while the manager had it may have been taken, so it is 502
+// assistant_in_doubt, kept and replayed, never assistant_offline, which says nothing reached a manager and keeps no
+// receipt.
 
 // todoAnswerOp is the receipt kind of an answer to a to-do's ask.
 const todoAnswerOp = "todo_answer"

@@ -138,6 +138,53 @@ func TestTodoAnswerReceiptReplaysRefusalsAndForgetsOffline(t *testing.T) {
 	}
 }
 
+// An answer cut off while the manager has it may have been taken: 502 assistant_in_doubt, delivered unknown, kept as
+// unknown, so the same op id gets that reply again and the manager is asked once, never 503 assistant_offline, whose
+// receipt is forgotten and whose retry would answer the round again.
+func TestTodoAnswerCutOffStaysUnknown(t *testing.T) {
+	h := newTestHub(t)
+	store := &receiptStore{memStore: newMemStore(), ops: &clientOpsStore{ops: map[string]db.ClientOp{}}}
+	h.store = store
+	manager, link := connectInboxManager(t, h)
+	got := make(chan struct{}, 1)
+	var calls atomic.Int32
+	manager.mu.Lock()
+	manager.http = func(ctx context.Context, _ assistantwire.HTTPRequest) (any, error) {
+		calls.Add(1)
+		got <- struct{}{}
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	manager.mu.Unlock()
+	go func() {
+		<-got
+		_ = link.ws.CloseNow()
+	}()
+	mux := h.routes()
+	const op = "00000000-0000-4000-8000-000000010467"
+	answer := func() (int, map[string]any) {
+		code, out := postTodoAnswer(t, context.Background(), h, mux, op, `{"option":"Kaede"}`)
+		var body map[string]any
+		if err := json.Unmarshal([]byte(out), &body); err != nil {
+			t.Fatalf("reply %d %s", code, out)
+		}
+		return code, body
+	}
+	if code, out := answer(); code != http.StatusBadGateway || out["code"] != assistantwire.CodeAssistantInDoubt || out["delivered"] != "unknown" {
+		t.Fatalf("cut off: %d %v", code, out)
+	}
+	if got := receiptStates(store); got[op] != "unknown" {
+		t.Fatalf("receipt = %v", got)
+	}
+	connectInboxManager(t, h)
+	if code, out := answer(); code != http.StatusBadGateway || out["code"] != assistantwire.CodeAssistantInDoubt {
+		t.Fatalf("asked again: %d %v", code, out)
+	}
+	if n := calls.Load(); n != 1 {
+		t.Fatalf("the manager was asked %d times", n)
+	}
+}
+
 // todo_asks is listed only while every manager whose to-dos the list merges is connected and names it, and an
 // extension's report cannot add it.
 func TestTodoAsksFeatureWhileEveryManagerNamesIt(t *testing.T) {

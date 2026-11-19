@@ -405,10 +405,11 @@ data class TodoPlaces(
 
 /**
  * What came of an answer to one of a to-do's asks (TodoAskAnswered): answered, the answer was taken (an option, a
- * fixed answer, the owner's words, a failed start started again, a conclusion acknowledged); declined, Don't handle
- * was kept, with a receipt that undoes it; later, nothing was written and the ask still waits (the client keeps Later
- * for its app session); undone, a Don't handle was undone and the ask waits again. Open: a newer hub may send other
- * values.
+ * fixed answer, the owner's words, a failed start started again, a conclusion acknowledged), though the ask may still
+ * wait (explain_first leaves it waiting while the supervisor explains), so a client draws the reply's todo rather
+ * than dropping the ask; declined, Don't handle was kept, with a receipt that undoes it; later, nothing was written
+ * and the ask still waits (the client keeps Later for its app session); undone, a Don't handle was undone and the ask
+ * waits again. Open: a newer hub may send other values.
  */
 object TodoAskOutcome {
     const val ANSWERED = "answered"
@@ -416,6 +417,18 @@ object TodoAskOutcome {
     const val LATER = "later"
     const val UNDONE = "undone"
     val ALL = listOf("answered", "declined", "later", "undone")
+}
+
+/**
+ * An answer that is an outcome rather than an option, a fixed answer or words (TodoAskAnswer.outcome): later, not
+ * now: nothing is written; decline, Don't handle a decision, kept with a receipt; undo, that Don't handle undone,
+ * with its receipt.
+ */
+object TodoAskAnswerOutcome {
+    const val LATER = "later"
+    const val DECLINE = "decline"
+    const val UNDO = "undo"
+    val ALL = listOf("later", "decline", "undo")
 }
 
 /**
@@ -436,13 +449,10 @@ data class TodoAskAnswer(
      */
     val response: String? = null,
     /**
-     * The owner's own words answering a decision: sent to the to-do's Agent as they are, and kept with its decisions.
+     * The owner's own words answering a decision, at most 4000 characters (400 beyond): sent to the to-do's Agent as
+     * they are, and kept with its decisions.
      */
     val text: String? = null,
-    /**
-     * later, not now: nothing is written; decline, Don't handle a decision, kept with a receipt; undo, that Don't
-     * handle undone, with its receipt.
-     */
     val outcome: String? = null,
     /**
      * With outcome undo: the receipt the decline answered.
@@ -472,7 +482,8 @@ data class TodoAskAnswered(
     val receipt: String? = null,
     /**
      * The to-do's row with its view, as GET /api/v1/todos/{id} answers it under todo (for a step's ask, the to-do
-     * whose row lists it); absent when it could not be read after the answer.
+     * whose row lists it), read after the answer: it says whether the ask still waits, whatever the outcome; absent
+     * when it could not be read.
      */
     val todo: JsonElement? = null,
 )

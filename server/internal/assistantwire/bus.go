@@ -104,7 +104,7 @@ const (
 	// CapabilityTodoAsks: the manager answers POST /api/v1/todos/{id}/asks/{ask}/answer, one route for every answer to a
 	// to-do's own asks, named by the ask ids of its view (#10465, TodoAskAnswer). The hub lists the todo_asks feature
 	// only while every manager whose to-dos it merges names it; until then clients answer through the accept,
-	// decision-dismiss and retry routes. It gates the route alone.
+	// decision-dismiss and retry routes. It gates the route alone: the to-do count unit rides on its own payload.
 	CapabilityTodoAsks = "todo_asks"
 )
 

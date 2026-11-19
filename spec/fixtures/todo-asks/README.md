@@ -7,11 +7,11 @@ error code, the answer (`TodoAskAnswered`) and what changed. The manager replays
 (`server/internal/assistant/todo_asks_routes_test.go`), `scripts/test/test_wire_schema.py` holds every answer and reply
 to the schema, and the generated Go types read each back unchanged (`server/internal/assistantwire/todo_view_gen_test.go`).
 Clients answer through the route only while the hub lists `todo_asks` (`docs/protocol/protocol.md`, "Health check and
-feature flags").
+feature flags"). The operation's id is the `X-Persona-Op-Id` header, never a body field.
 
 | File | What it pins | Cases |
 | --- | --- | --- |
-| `answers.json` | What waits, an ask id and an answer → status, code, reply and its effect | 27: every answer each kind of ask takes (an option, the recommendation, a fixed answer, words, Later, Don't handle and its Undo, a retry, an acknowledgement), the answers each refuses, a round that no longer asks, a step's ask, a run's ask, an id of no known form |
+| `answers.json` | What waits, an ask id and an answer → status, code, reply and its effect | 28: every answer each kind of ask takes (an option, the recommendation, a fixed answer, words, Later, Don't handle and its Undo, a retry, an acknowledgement), the answers each refuses, a round that no longer asks, a step's ask, a run's ask, an id of no known form |
 
 ## Format
 
@@ -45,6 +45,7 @@ round (`2026-11-09T09:00:00Z`) is a screen that is behind, and `todo_other` is n
 | `decision` | A to-do a conversation opened, supervised and reviewed `needs_user`: the decision "Which ryokan?" (`why_owner` `priority`, so it can be undone), options Ryokan Hanami (recommended), Kaede and Tsuki; its Agent is live |
 | `decision_no_agent` | The same decision, and no Agent can receive an answer (its session is gone) |
 | `decision_no_origin` | The same decision on a to-do no conversation opened, supervised by the main conversation |
+| `decision_no_origin_no_agent` | The same decision on a to-do no conversation opened, and no Agent can receive an answer |
 | `decision_declined` | The decision after Don't handle; `dismiss_receipt` is the decline's receipt |
 | `cannot` | A conclusion that says the work cannot be done, which the supervisor did not pass itself, waiting for the owner to see it (`kind` `decision` with no options) |
 | `failed_start` | A to-do a conversation opened whose Agent failed to start (`todo:retry@<done_at>`) |
@@ -57,9 +58,11 @@ round (`2026-11-09T09:00:00Z`) is a screen that is behind, and `todo_other` is n
   the Agent as they are), `outcome` `later`, `decline` or `undo` with `receipt`; a conclusion that says the work cannot
   be done takes no answer (acknowledged), `later` and, while a review waits on the owner, `decline`.
   `todo:retry@<done_at>` takes no answer (started again) and `later`. `step:<step>/<id>` is the step's own ask `<id>`,
-  answered on the step.
+  answered on the step. Words are at most 4000 characters (400 beyond).
+- **Answered is not always gone.** `explain_first` answers `answered` while the ask still waits for the supervisor's
+  explanation; the reply's `todo` says what waits, so a client draws that rather than dropping the ask.
 - **Answered elsewhere first.** The id names the round; once it is over (taken, answered on another device, a newer
-  review, a retry started) the answer is 409 `ask_stale` and takes nothing, with the row as it is now.
+  review, a retry started or on its way) the answer is 409 `ask_stale` and takes nothing, with the row as it is now.
 - **Nothing a client cannot undo by mistake.** A decision has no one action, so an empty answer is 400 rather than its
   recommendation; one answer per call (400 otherwise); a receipt goes only with `undo`.
 - **Not delivered is still answered.** Words or an option no Agent can receive are recorded and handed to the to-do's
@@ -69,5 +72,6 @@ round (`2026-11-09T09:00:00Z`) is a screen that is behind, and `todo_other` is n
 - **An id of no known form** (or naming a to-do that is no step of this one) is 404 `ask_not_found`.
 
 Not here, since one call cannot show them: two answers at once make one effect, and the first wins
-(`TestTodoAskAnswersOnce`); the same `X-Persona-Op-Id` gets the first reply back (the hub's receipt,
-`server/internal/hub/todo_receipts_test.go`).
+(`TestTodoAskAnswersOnce`, `TestTodoAskRetriesOnce`); a decline's receipt undoes it through the route
+(`TestTodoAskDeclineThenUndo`); the same `X-Persona-Op-Id` gets the first reply back, and one cut off on the way is
+kept as in doubt (the hub's receipt, `server/internal/hub/todo_receipts_test.go`).

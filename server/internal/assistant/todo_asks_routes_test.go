@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -15,7 +16,9 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // A to-do's own asks answered through one route (todo_asks_routes.go, #10465): the shared cases of
@@ -147,10 +150,13 @@ func todoAskScene(t *testing.T, state string) askScene {
 	case "decision":
 	case "decision_no_agent":
 		f.setSessions("box")
-	case "decision_no_origin":
+	case "decision_no_origin", "decision_no_origin_no_agent":
 		s.todos.mu.Lock()
 		s.todos.todos[todo.ID].Origin = ""
 		s.todos.mu.Unlock()
+		if state == "decision_no_origin_no_agent" {
+			f.setSessions("box")
+		}
 	case "decision_declined":
 		r := currentDecisionReview(todoNow(s, todo.ID))
 		review, err := s.changeDecisionDismissal(ctx, todo.ID, r.ReviewAt, "", false)
@@ -341,7 +347,8 @@ func TestTodoAskAnswerRefusals(t *testing.T) {
 		}
 	}
 	for _, body := range []string{`{"option":"a","response":"explain_first"}`, `{"text":"  "}`, `{"response":"later"}`,
-		`{"outcome":"never"}`, `{"outcome":"undo"}`, `{"outcome":"decline","receipt":"dismiss_x"}`, `not json`} {
+		`{"outcome":"never"}`, `{"outcome":"undo"}`, `{"outcome":"decline","receipt":"dismiss_x"}`, `not json`,
+		`{"text":"` + strings.Repeat("a", decisionTextMax+1) + `"}`} {
 		if rec := answerTodoAsk(e.s, id, "todo:retry@"+fixtureRound, body); rec.Code != http.StatusBadRequest {
 			t.Errorf("%s: %d %s", body, rec.Code, rec.Body)
 		}
@@ -364,6 +371,153 @@ func TestTodoAskAnswerRefusals(t *testing.T) {
 		e.s.ServeHTTP(rec, httptest.NewRequest("POST", c.path, strings.NewReader(`{}`)))
 		if rec.Code != c.code || !strings.Contains(rec.Body.String(), c.want) {
 			t.Errorf("%s: %d %s", c.path, rec.Code, rec.Body)
+		}
+	}
+}
+
+// Words no Agent can receive are still the owner's answer (delivered none): kept whole as a manual decision, and the
+// supervisor handed them to pass on, on a to-do a conversation opened and on one none did.
+func TestTodoAskWordsNoAgentRecorded(t *testing.T) {
+	for _, state := range []string{"decision_no_agent", "decision_no_origin_no_agent"} {
+		t.Run(state, func(t *testing.T) {
+			sc := todoAskScene(t, state)
+			asked := askOf(sc.s, sc.row).AskedAt
+			const words = "Hanami, but only with a late check-in"
+			rec := answerTodoAsk(sc.s, sc.row, sc.own, `{"text":"`+words+`"}`)
+			if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"delivered":"none"`) {
+				t.Fatalf("%d %s", rec.Code, rec.Body)
+			}
+			rows, err := sc.s.todoDB().ListTodoDecisions(context.Background(), sc.row, true)
+			if err != nil || len(rows) != 1 || rows[0].Choice != words || rows[0].Source != db.DecisionManual {
+				t.Fatalf("decisions %+v, %v", rows, err)
+			}
+			sc.s.supervise.mu.Lock()
+			g, pending := sc.s.supervise.pending[sc.row+"|"+sigIdle]
+			sc.s.supervise.mu.Unlock()
+			if !pending || g.Key != "undelivered|"+asked.UTC().Format(time.RFC3339Nano) || !strings.Contains(g.Detail, words) {
+				t.Fatalf("the supervisor was not handed the words: %+v", g)
+			}
+			sc.s.waitWorkEvents()
+		})
+	}
+}
+
+// Don't handle through the route answers a receipt the route's Undo takes: the ask leaves the row, then comes back.
+func TestTodoAskDeclineThenUndo(t *testing.T) {
+	sc := todoAskScene(t, "decision")
+	rec := answerTodoAsk(sc.s, sc.row, sc.own, `{"outcome":"decline"}`)
+	var declined assistantwire.TodoAskAnswered
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &declined) != nil ||
+		declined.Outcome != assistantwire.TodoAskOutcomeDeclined || declined.Receipt == "" {
+		t.Fatalf("decline: %d %s", rec.Code, rec.Body)
+	}
+	if slices.Contains(rowAsks(t, sc.s, sc.row), sc.own) {
+		t.Fatalf("declined, the row still lists %s", sc.own)
+	}
+	undo, _ := json.Marshal(assistantwire.TodoAskAnswer{Outcome: assistantwire.TodoAskAnswerOutcomeUndo, Receipt: declined.Receipt})
+	rec = answerTodoAsk(sc.s, sc.row, sc.own, string(undo))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"outcome":"undone"`) ||
+		!slices.Contains(rowAsks(t, sc.s, sc.row), sc.own) {
+		t.Fatalf("undo: %d %s; the row lists %v", rec.Code, rec.Body, rowAsks(t, sc.s, sc.row))
+	}
+	sc.s.waitWorkEvents()
+}
+
+// Don't handle from a screen that is behind never declines a newer review whose ask is still on its way: a review
+// written after the ask was asked is another question, so the answer is stale and nothing is dismissed.
+func TestTodoAskDeclineNewerReview(t *testing.T) {
+	sc := todoAskScene(t, "decision")
+	ctx := context.Background()
+	if _, _, err := sc.s.updateSupervision(ctx, sc.row, func(v *Supervision) bool {
+		r := v.Reviews[len(v.Reviews)-1]
+		r.At = time.Now().UTC()
+		v.Reviews = append(v.Reviews, r)
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if rec := answerTodoAsk(sc.s, sc.row, sc.own, `{"outcome":"decline"}`); rec.Code != http.StatusConflict ||
+		!strings.Contains(rec.Body.String(), "ask_stale") {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	if dismissed, err := sc.s.decisionDismissed(ctx, todoNow(sc.s, sc.row)); err != nil || dismissed {
+		t.Fatalf("the newer review was dismissed: %v, %v", dismissed, err)
+	}
+	sc.s.waitWorkEvents()
+}
+
+// Two Retries at once, from two devices: one starts the to-do's Agent again, the other is told it is stale, and one
+// start goes out. -race runs it.
+func TestTodoAskRetriesOnce(t *testing.T) {
+	sc := todoAskScene(t, "failed_start")
+	starts := len(startsOf(sc.f))
+	var wg sync.WaitGroup
+	codes := make([]int, 2)
+	for i := range codes {
+		wg.Go(func() { codes[i] = answerTodoAsk(sc.s, sc.row, sc.own, `{}`).Code })
+	}
+	wg.Wait()
+	slices.Sort(codes)
+	if codes[0] != http.StatusOK || codes[1] != http.StatusConflict {
+		t.Fatalf("codes %v, want one 200 and one 409", codes)
+	}
+	waitFor(t, "the start", func() bool { return len(startsOf(sc.f)) > starts })
+	waitFor(t, "the starts to end", func() bool { return sc.s.taskStarting.Load() == 0 })
+	if n := len(startsOf(sc.f)) - starts; n != 1 {
+		t.Fatalf("%d starts", n)
+	}
+}
+
+// A to-do that closes while the owner's words are on their way is stale (409 ask_stale with the row), not 502 "answer
+// again": the send's own guard saw the ask end, and nothing reached the Agent.
+func TestTodoAskClosedWhileSendingIsStale(t *testing.T) {
+	sc := todoAskScene(t, "decision")
+	sent := len(sentToAgent(sc.f))
+	sc.f.mu.Lock()
+	sc.f.afterList = map[string]func(){"box": func() { // the to-do's agents were just read
+		now := time.Now()
+		sc.s.todos.mu.Lock()
+		sc.s.todos.todos[sc.row].DoneAt = &now
+		sc.s.todos.mu.Unlock()
+	}}
+	sc.f.mu.Unlock()
+	ask, err := sc.s.ownAskOf(sc.row, sc.own)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out assistantwire.TodoAskAnswered
+	if err := sc.s.answerDecision(listHooked(context.Background()), ask, assistantwire.TodoAskAnswer{Text: "Tsuki, please"}, &out); !errors.Is(err, errAskStale) {
+		t.Fatalf("closed during the send: %v", err)
+	}
+	if got := len(sentToAgent(sc.f)) - sent; got != 0 {
+		t.Fatalf("the Agent heard %d answers", got)
+	}
+	sc.s.waitWorkEvents()
+}
+
+// What the route answers for what its callees refuse: the retry route's 409s only for a failed start it did not start
+// again (a decision's words that found the computer offline are the accept route's 502), a node's own refusal 423 with
+// its code, the store 503, any other failure 502 accept_not_taken.
+func TestTodoAskAnswerErrorCodes(t *testing.T) {
+	e := newTodoEnv(t, nil)
+	for _, c := range []struct {
+		err  error
+		code int
+		want string
+	}{
+		{machineOffline("box"), http.StatusBadGateway, "accept_not_taken"},
+		{startNotRetried{machineOffline("box")}, http.StatusConflict, ""},
+		{startNotRetried{errTaskNotRetryable}, http.StatusConflict, ""},
+		{startNotRetried{errors.New("the plan is gone")}, http.StatusBadGateway, "accept_not_taken"},
+		{&rpc.Error{Code: "dialog_open", Message: "a dialog is open"}, http.StatusLocked, "dialog_open"},
+		{errAcceptStore, http.StatusServiceUnavailable, ""},
+		{errors.New("the link dropped"), http.StatusBadGateway, "accept_not_taken"},
+	} {
+		rec := httptest.NewRecorder()
+		e.s.writeAnswerError(rec, httptest.NewRequest("POST", "/", nil), "todo_x", c.err)
+		var body struct{ Code string }
+		if rec.Code != c.code || json.Unmarshal(rec.Body.Bytes(), &body) != nil || c.want != "" && body.Code != c.want {
+			t.Errorf("%v: %d %s, want %d %q", c.err, rec.Code, rec.Body, c.code, c.want)
 		}
 	}
 }

@@ -875,6 +875,12 @@ func (s *Service) retryTaskStart(ctx context.Context, todoID string, with retryW
 	if cur.Origin == "" {
 		return nil, false, errTaskNotRetryable
 	}
+	// A caller that saw one failure starts only that one again: once the to-do is open or failed anew it is answered as
+	// it is, and no cut-off agent of it is told to go on.
+	if !with.failedAt.IsZero() && (cur.DoneAt == nil || !cur.DoneAt.Equal(with.failedAt) || !cur.failedStart()) {
+		view, err := s.todoView(ctx, todoID)
+		return view, false, err
+	}
 	if cur.DoneAt == nil {
 		if with.answer != "" { // open: started again, or remedied by the assistant
 			return nil, false, errAnswerNotWaiting

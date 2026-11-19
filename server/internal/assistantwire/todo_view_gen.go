@@ -298,10 +298,11 @@ type TodoPlaces struct {
 }
 
 // TodoAskOutcome: what came of an answer to one of a to-do's asks (TodoAskAnswered): answered, the answer was taken
-// (an option, a fixed answer, the owner's words, a failed start started again, a conclusion acknowledged); declined,
-// Don't handle was kept, with a receipt that undoes it; later, nothing was written and the ask still waits (the
-// client keeps Later for its app session); undone, a Don't handle was undone and the ask waits again. Open: a newer
-// hub may send other values.
+// (an option, a fixed answer, the owner's words, a failed start started again, a conclusion acknowledged), though the
+// ask may still wait (explain_first leaves it waiting while the supervisor explains), so a client draws the reply's
+// todo rather than dropping the ask; declined, Don't handle was kept, with a receipt that undoes it; later, nothing
+// was written and the ask still waits (the client keeps Later for its app session); undone, a Don't handle was undone
+// and the ask waits again. Open: a newer hub may send other values.
 const (
 	TodoAskOutcomeAnswered = "answered"
 	TodoAskOutcomeDeclined = "declined"
@@ -311,6 +312,18 @@ const (
 
 // TodoAskOutcomes are the values of TodoAskOutcome, in order.
 var TodoAskOutcomes = []string{"answered", "declined", "later", "undone"}
+
+// TodoAskAnswerOutcome: an answer that is an outcome rather than an option, a fixed answer or words
+// (TodoAskAnswer.outcome): later, not now: nothing is written; decline, Don't handle a decision, kept with a receipt;
+// undo, that Don't handle undone, with its receipt.
+const (
+	TodoAskAnswerOutcomeLater   = "later"
+	TodoAskAnswerOutcomeDecline = "decline"
+	TodoAskAnswerOutcomeUndo    = "undo"
+)
+
+// TodoAskAnswerOutcomes are the values of TodoAskAnswerOutcome, in order.
+var TodoAskAnswerOutcomes = []string{"later", "decline", "undo"}
 
 // TodoAskAnswer: the body of POST /api/v1/todos/{id}/asks/{ask}/answer (#10465), the answer to one of the to-do's own
 // asks, named by its view's ask id: at most one of option, response, text and outcome. None is the ask's one action:
@@ -322,10 +335,9 @@ type TodoAskAnswer struct {
 	// A fixed answer to a decision that says the owner cannot answer it as asked: nothing is taken, and the to-do's
 	// supervisor is told.
 	Response string `json:"response,omitempty"`
-	// The owner's own words answering a decision: sent to the to-do's Agent as they are, and kept with its decisions.
-	Text string `json:"text,omitempty"`
-	// later, not now: nothing is written; decline, Don't handle a decision, kept with a receipt; undo, that Don't handle
-	// undone, with its receipt.
+	// The owner's own words answering a decision, at most 4000 characters (400 beyond): sent to the to-do's Agent as
+	// they are, and kept with its decisions.
+	Text    string `json:"text,omitempty"`
 	Outcome string `json:"outcome,omitempty"`
 	// With outcome undo: the receipt the decline answered.
 	Receipt string `json:"receipt,omitempty"`
@@ -343,7 +355,8 @@ type TodoAskAnswered struct {
 	// With outcome declined: the receipt outcome undo takes.
 	Receipt string `json:"receipt,omitempty"`
 	// The to-do's row with its view, as GET /api/v1/todos/{id} answers it under todo (for a step's ask, the to-do whose
-	// row lists it); absent when it could not be read after the answer.
+	// row lists it), read after the answer: it says whether the ask still waits, whatever the outcome; absent when it
+	// could not be read.
 	Todo json.RawMessage `json:"todo,omitempty"`
 }
 

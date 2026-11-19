@@ -190,6 +190,31 @@
       }
     },
     {
+      "name": "decision_in_words_no_origin_no_agent",
+      "description": "Words on a to-do no conversation opened, with no Agent to take them, are still the owner's answer: recorded, the decision ends, the supervisor passes them on.",
+      "source": [
+        "server/internal/assistant/decision.go answerDecisionText",
+        "server/internal/assistant/acceptance_reply.go decisionNotDelivered"
+      ],
+      "input": {
+        "state": "decision_no_origin_no_agent",
+        "ask": "todo:decision@2026-11-10T09:00:00Z",
+        "answer": {
+          "text": "Hanami, but only with a late check-in"
+        }
+      },
+      "expected": {
+        "status": 200,
+        "answered": {
+          "ask": "todo:decision@2026-11-10T09:00:00Z",
+          "outcome": "answered",
+          "delivered": "none"
+        },
+        "sent": false,
+        "waits": false
+      }
+    },
+    {
       "name": "decision_option_no_agent",
       "description": "An option no Agent can receive is recorded and handed to the supervisor, as the accept route does.",
       "source": [
