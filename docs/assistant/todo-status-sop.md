@@ -398,6 +398,11 @@ redesign changes them:
   says why it did not start. The table is in `spec/fixtures/todo-view/README.md` ("Risk and the lock screen"). The
   decision's push says the same rule (`lockscreen`; `open_only` sends `TODO_DECIDE_OPEN`, which offers no action,
   `docs/assistant/todos.md` "Waiting for the owner").
+- **Every ask is answered by its id** (#10465): `POST /api/v1/todos/{id}/asks/{ask}/answer` takes the id an ask has in the
+  row's `view` (a step's ask on its parent's row too) and an option, a fixed answer, words, Later, Don't handle or its
+  Undo, or nothing for a retry or a conclusion to acknowledge. An id whose round is over is 409 `ask_stale` with the
+  row as it is now, so what was answered elsewhere is never answered twice; a run's ask is answered at its card. The
+  hello feature `todo_asks` says every manager takes it (`docs/assistant/todos.md` "Decisions the owner can answer").
 
 The list carries it: every row of `GET /api/v1/todos` has its `view` and the answer the list's `counts`, worked out
 once per read over the whole list (`server/internal/assistant/todo_view_routes.go`); `GET /api/v1/todos/{id}` answers
