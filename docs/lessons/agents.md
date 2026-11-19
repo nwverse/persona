@@ -62,6 +62,17 @@ a pre-existing draft merely because it equals earlier assistant text: equality p
 Use an isolated fixture that acknowledges Enter without consuming the paste, and prove it fails without the production
 check. This demonstrates the confirmation gap, not the cause of any particular live incident.
 
+## herdr's "idle" is not "ready for the first message", and `agent.prompt` only types (#11345)
+
+herdr reports a work agent as soon as it sees its process, and calls agy idle as soon as its input box shows, but agy
+keeps signing in after that (model list, slash commands, skills and hooks reloaded) and can drop a message typed then.
+herdr's `agent.prompt` without `wait` answers `ok` once it has typed the text and Enter, so a start that sends once and
+returns reports a dropped task as started. On one Windows node two of three agy starts lost their task this way, with
+the Enter landing at the same time after agy's "ready" line in the lost and the delivered starts alike, so a fixed
+delay is no fix. Confirm instead: the agent turns working, blocked or done, or its integration reports a session.
+Retype only what is provably gone (the agent still idle, nothing of the message or a `[Pasted text …]` chip on screen),
+and otherwise list the session as needing the user.
+
 # A continuation must stay on its original to-do (#6820)
 
 When replacing an Agent to fix or retry work, keep the original to-do and immutable brief. Stop/release prior Agents at Start and reopen a closed to-do in place; failed starts must not create successor tasks. For Codex edits, a plan/read-only sandbox needs a fresh process with explicit writable permission. Keep takeover and legacy-successor duplicate refusals intact.
@@ -1503,3 +1514,11 @@ pin while the final catalog bytes equal the earlier unpinned snapshot.
 ## A transcript directory is not the selected launcher's sign-in
 
 When restoring an assistant conversation, finding its newest transcript does not establish that a newly selected launcher can authenticate in that profile. Check private-profile ownership before stopping the old process or writing input; a later CLI sign-in error has already accepted the wrong launch and may forward a provider-only model. A refusal should preserve the original process and session state and explain how to continue. Regression coverage needs cold resumes and live idle processes, with both an omitted model and the old provider's explicit model (#10453).
+
+## Cross-session permission evidence (#9671)
+
+- A session-list mode is a display snapshot, not evidence of the mode in which a message was written. Capture at the source node while handling the producing call; delayed reports and retries retain that observation.
+- A caller's session ID is not process identity. Resolve the nearest known Agent in the socket peer's ancestry: a nested Agent may not claim a more privileged parent. Bind external registry data to the process generation; on macOS the kernel creation time also lets an old registry file fail closed after PID reuse.
+- `encoding/json` matches struct fields case-insensitively. Drop every spelling of authority fields and rebuild them from internal context. Ordinary RPCs must ignore source claims even if an older intermediary forwards extra parameters.
+- RPC marshaling compacts `json.RawMessage` and escapes HTML characters. A call digest must use that representation at both ends, or a valid message containing `<` or `&` loses its evidence in transit.
+- A worker's observation cannot grant a class to a later automatic judge or an unknown source in the same digest. Preserve unknown evidence rather than deriving authority from copied text, labels or cached modes. This provenance never makes Agent text the owner's input.

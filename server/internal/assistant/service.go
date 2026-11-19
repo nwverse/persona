@@ -41,6 +41,8 @@ type Options struct {
 	// Trust says which computers wait to be confirmed (machine_trust.go): the devices, from the hub's handover; nil
 	// (unit tests): none.
 	Trust MachineTrust
+	// AgentDirs keeps each computer's hidden Agent folders (hidden_agent_dirs.go): the devices; nil: nothing hidden.
+	AgentDirs AgentDirs
 	// SecretKey is the path of the key the model providers' keys are sealed with (the manager's own secret.key,
 	// models_launchers.go); "" makes one for this run only (tests).
 	SecretKey string
@@ -59,6 +61,8 @@ type Options struct {
 
 // Service is the assistant. It implements Handler.
 type Service struct {
+	// agentDirs keeps each computer's hidden Agent folders (hidden_agent_dirs.go); nil: none.
+	agentDirs AgentDirs
 	// remoteImages fetches the pictures replies name by address for the apps (remote_image.go).
 	remoteImages *remoteimage.Fetcher
 	// inboxExt is what the extensions wrote for the Inbox, read at most once a minute (extension_context.go).
@@ -220,8 +224,9 @@ type Service struct {
 	delayedRecoveryMu        sync.Mutex   // one restore pass; tracks entries already armed by this incarnation
 	delayedReceiptsRecovered bool         // initial receipt-claim requeue has completed for this incarnation
 	delayedRestored          map[string]bool
-	tasks                    tasksState // tasks.go
-	questions                questions  // tools.go (ask_user)
+	tasks                    tasksState    // tasks.go
+	taskSpaces               taskSpaceBook // task_space.go: herdr leader-task placement and ownership
+	questions                questions     // tools.go (ask_user)
 	// deadlineSweeping: a sweep of the decisions past their deadline is running (decision_deadline.go).
 	deadlineSweeping atomic.Bool
 	askTodos         askTodoBook  // ask_todo.go: the questions nobody answered, now to-dos
@@ -314,7 +319,7 @@ var _ Handler = (*Service)(nil)
 // New makes the assistant; nothing runs until the hub calls it.
 func New(o Options) *Service {
 	s := &Service{hub: o.Hub, store: o.Store, logf: o.Logf, mux: http.NewServeMux(), epoch: randomHex(8), tasks: newTasksState(), born: time.Now(),
-		devs: o.Devices, trustSrc: o.Trust, id: o.ID, build: o.Build, repositoryConfig: o.RepositoryConfig, urgentWake: make(chan struct{}, 1)}
+		devs: o.Devices, trustSrc: o.Trust, agentDirs: o.AgentDirs, id: o.ID, build: o.Build, repositoryConfig: o.RepositoryConfig, urgentWake: make(chan struct{}, 1)}
 	s.inbox.lang = func() i18n.Lang { return s.lang(context.Background()) }
 	s.remoteImages = remoteimage.New(remoteimage.Options{CacheDir: o.RemoteImageCache, Logf: o.Logf, DoH: s.remoteImageDoH})
 	if s.store == nil {
@@ -568,6 +573,16 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 	if p, ok := params.(map[string]any); ok && method == DeviceAssistantSend && !meetingSource(p) {
 		round = s.roundStarting(device, p, roundKind) // read before the send: its conversation is working right after
 	}
+	taskRoot, taskSpaceHeld := taskSpaceRootFromContext(ctx)
+	if taskRoot == "" && (method == DeviceSessionSend || method == deviceTaskStart) {
+		if p, ok := params.(map[string]any); ok && (method == DeviceSessionSend || p["resume_session_id"] != nil) {
+			taskRoot = s.attachTaskSpaceResume(ctx, device, method, p)
+		}
+	}
+	if taskRoot != "" && !taskSpaceHeld && (method == DeviceSessionSend || method == deviceTaskStart) {
+		unlock := s.lockTaskSpace(taskRoot)
+		defer unlock()
+	}
 	raw, err := json.Marshal(params)
 	if err != nil {
 		return beforeNodeWrite(method, err)
@@ -576,6 +591,9 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 	res, ok, err := s.localFleetDeviceCall(ctx, p) // what the hub answered before the nodes' events were the manager's
 	if !ok {
 		res, err = s.hub.DeviceCall(ctx, p)
+	}
+	if taskRoot != "" && (method == DeviceSessionSend || method == deviceTaskStart) {
+		s.noteTaskSpaceResult(ctx, taskRoot, device, res)
 	}
 	if err == nil && method != DeviceSessionGet && method != "session.unwatch" {
 		err = afterNodeWrite(method, s.conversationParamsAvailable(ctx, device, params))
@@ -975,6 +993,7 @@ func (s *Service) SessionsChanged(ctx context.Context, d DeviceSessions) {
 	s.undeliveredSeen(d)                      // kept owner messages go once their conversation runs again (undelivered.go)
 	s.originsChanged(d.MachineID, d.Sessions) // conversations from before origins were noted (origins.go)
 	s.todosSessionsChanged(ctx, d)
+	s.taskSpacesSessionsChanged(ctx, d)
 	s.todoRunsChanged(d.MachineID) // a to-do's view may file it elsewhere now (todo_view_push.go)
 	s.taskStageSessions(ctx, d)
 	s.nativeArchivesListed(d.MachineID) // agent_archive_native.go
