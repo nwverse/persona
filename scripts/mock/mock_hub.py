@@ -806,6 +806,13 @@ _WIDGET_SUBAGENTS = ([
     {"id": "a2", "session_id": f"{WIDGET}@a2", "type": "Explore", "description": "核对降雨概率的格式", "running": True,
      "background": True, "started_at": ago(minutes=2)}] if os.environ.get("MOCK_TASKS_SUBAGENTS") == "1" else []) + MOCK_TOPBAR_SUBAGENTS
 
+# MOCK_BG_MONITOR=1 (#10852): the widget chat also runs a Monitor started a minute ago whose start result names no output
+# file, as a Monitor's does until its first event; GET /mock/monitor_event names it, as that event would (the hub's
+# taskFinished). The background command's and the Monitor's output files have a few lines (FILES).
+MOCK_BG_MONITOR = os.environ.get("MOCK_BG_MONITOR") == "1"
+BG_MONITOR = {"id": "bm1", "kind": "monitor", "description": "盯小组件构建日志里的报错",
+              "command": 'tail -n 0 -f logs/widget-build.log | grep --line-buffered -E "error|warning"', "started_at": ago(minutes=1)}
+
 SESSIONS = [
     sess("macbook", WIDGET, "给天气 App 加主屏幕小组件", "/Users/me/code/weather", "working", "working", "weather", 1, "widget", 1, 0,
          "小组件的时间线已经能按小时刷新了，正在跑测试确认降雨概率的格式化没问题。", permission_mode="acceptEdits",
@@ -818,6 +825,7 @@ SESSIONS = [
          background=[{"id": "b1", "kind": "shell", "description": "跑小组件快照测试",
                       "command": "xcodebuild test -scheme WeatherWidget -only-testing:SnapshotTests",
                       "output_file": "/tmp/claude/b1.output", "started_at": ago(minutes=4)}]
+                    + ([dict(BG_MONITOR)] if MOCK_BG_MONITOR else [])
                     # MOCK_WORKFLOWS=1|legacy (#2935): a background workflow running; legacy: a hub without workflows
                     + ([{"id": "wdemo1", "kind": "workflow", "description": "widget-audit", "run_id": "wf_demo1", "started_at": ago(minutes=14)}]
                        if os.environ.get("MOCK_WORKFLOWS") in ("1", "legacy") else []),
@@ -8089,6 +8097,18 @@ def wf_runs(step):
 def wf_call(tid, name, ts_min):
     return [it("assistant", "tool_use", ts_min, tool_use_id=tid, tool_name="Workflow", tool_input={"name": name}),
             it("user", "tool_result", ts_min, tool_use_id=tid, text="Workflow launched in background: %s" % name)]
+
+
+def bg_monitor_event():
+    """GET /mock/monitor_event (MOCK_BG_MONITOR): the Monitor's first event names its output file, pushed as the hub would."""
+    for s in SESSIONS:
+        task = next((b for b in s.get("background") or [] if s["session_id"] == WIDGET and b["id"] == BG_MONITOR["id"]), None)
+        if task:
+            task["output_file"] = "/tmp/claude/bm1.output"
+            s.update(rev=(s.get("rev") or 0) + 1, updated_at=ago(minutes=0))
+            push_machine(s["machine_id"])
+            return {"output_file": task["output_file"]}
+    return {"error": "MOCK_BG_MONITOR is off"}
 
 
 def set_wf_step(step):
@@ -19150,6 +19170,11 @@ if os.environ.get("MOCK_MESSAGE_LIFT") == "1":  # the paths in the lift's long m
     FILES["/Users/me/.config/example-gateway/management.key"] = b"placeholder\n"
 if os.environ.get("MOCK_CJK_PATHS") == "1":  # its files are there (#8386)
     mock_cjk_paths()
+if MOCK_BG_MONITOR:  # the background command's output, and the Monitor's before its first event names it (#10852)
+    FILES["/tmp/claude/b1.output"] = (b"Test Suite 'SnapshotTests' started\n"
+                                      b"Test Case 'HourlyTimelineTests.testRainChanceFormat' passed (0.012 seconds)\n"
+                                      b"Test Case 'HourlyTimelineTests.testEntryBudget' passed (0.034 seconds)\n")
+    FILES["/tmp/claude/bm1.output"] = b"warning: Timeline entries exceed the refresh budget (42 of 40)\n"
 VIDEO_READS = []
 VIDEO_READ_LOCK = threading.Lock()
 FILE_PAGE = 2 << 20
@@ -26597,6 +26622,8 @@ class H(BaseHTTPRequestHandler):
             return self.send_json({k: SESSION_CLOSE[k] for k in ("fail", "attempts", "closed")})
         if p == "/mock/subagent-step" and os.environ.get("MOCK_SUBAGENT_CARDS") == "1":
             return self.send_json(subagent_step())
+        if p == "/mock/monitor_event":
+            return self.send_json(bg_monitor_event())
         if p == "/mock/workflow" and MOCK_WORKFLOW_CARDS:  # MOCK_WORKFLOW_CARDS: the small run at ?step=0..3
             return self.send_json(set_wf_step(int(q.get("step", ["0"])[0] or 0)))
         if p == "/mock/workflow" and os.environ.get("MOCK_WORKFLOW") == "1":  # MOCK_WORKFLOW=1: parity-audit at ?step=0..4
@@ -26750,10 +26777,14 @@ class H(BaseHTTPRequestHandler):
             start, end = 0, len(value)
             if header:
                 match = re.fullmatch(r"bytes=(\d+)-(\d*)", header)
-                if not match or int(match[1]) >= len(value):
+                suffix = re.fullmatch(r"bytes=-(\d+)", header)  # the last n bytes: a background task's output (#10852)
+                if suffix and int(suffix[1]) and value:
+                    start = max(0, len(value) - int(suffix[1]))
+                elif not match or int(match[1]) >= len(value):
                     return self.send_json({"error": "invalid range"}, 416)
-                start = int(match[1])
-                end = min(int(match[2]) + 1 if match[2] else len(value), len(value))
+                else:
+                    start = int(match[1])
+                    end = min(int(match[2]) + 1 if match[2] else len(value), len(value))
                 if end <= start: return self.send_json({"error": "invalid range"}, 416)
             read = {"start": start, "end": end, "sent": 0, "active": True, "cancelled": False}
             with VIDEO_READ_LOCK: VIDEO_READS.append(read)
@@ -29784,6 +29815,7 @@ def features():
     return _features_without_channels() + (["channels"] if CHANNELS_MODE else [])
 
 
+MOCK_HELP.append("MOCK_BG_MONITOR=1  The widget chat's Background tasks also list a running Monitor whose output file is not known yet (#10852); GET /mock/monitor_event names it, as its first event would")
 MOCK_HELP.append("MOCK_SIDEBAR_GROUPS=1  (with MOCK_EXTENSIONS=1 MOCK_EXTENSION_COLUMNS=1) Today, Lark and Calendar name the sidebar group 工作台, Assets 资产 and Home devices 家里 (#9071)")
 MOCK_HELP.append("MOCK_NAVIGATION=off  A hub (or default manager) from before the start page (#9071): GET / PUT /api/v1/navigation answer 404, so the web keeps the choice in the browser")
 MOCK_HELP.append("MOCK_EXTENSION_COLUMNS=1  (with MOCK_EXTENSIONS=1) A made-up extension's Today page, UI version 8's columns layout (#9158): a full-width Needs me card with its rows two a line, then Calendar | Lark today and WeChat | Running Agents, each with an icon, a link beside its title, a summary and a link at the bottom")
