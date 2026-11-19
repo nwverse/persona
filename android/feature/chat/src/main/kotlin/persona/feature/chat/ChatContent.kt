@@ -426,10 +426,12 @@ internal fun ChatLineContent(
                     val hideCloseout = closeoutReply == line.row.id && update?.streaming != true
                     // only the block goes; a reply that said nothing else is not drawn at all
                     if (!hideCloseout || !onlyCloseout(update?.text ?: item.text, cut = item.fullSize != null)) {
-                        MessageContent(item, false, update, boxed = true, hideCloseout = hideCloseout)
-                        val usage = LocalReplyUsage.current[item.id]
-                        // A reply still streaming has no total yet (the web hides the bar while the turn is live).
-                        if (usage != null && update?.streaming != true) ReplyUsageFooter(item, usage)
+                        Column(Modifier.fillMaxWidth()) {
+                            MessageContent(item, false, update, boxed = true, hideCloseout = hideCloseout)
+                            val usage = LocalReplyUsage.current[item.id]
+                            // A reply still streaming has no total yet (the web hides the bar while the turn is live).
+                            if (usage != null && update?.streaming != true) ReplyUsageFooter(item, usage)
+                        }
                     }
                 }
             }
