@@ -571,10 +571,14 @@ entry can import a secret target. Recreate ordinary links with `--symlink` so th
 close links for special read-only files or partially closed directories. Keep the view root read-only so later secret
 backups cannot be created. File binds still pin their inode and the top-level entry list: a replaced `node.sock` stays
 old, so a node restart requires an agent restart. Do not permanently cache probes or preflight success; bwrap/PATH and
-namespace availability can change, and full per-cwd profiles make an unbounded key space. A tmpfs mounted directly on a symlink follows it and masks the target; give an alias its own view, but do not
-claim this protects the link from unlink. Stock bwrap 0.8 has no path-aware unlink/rename filter, so protecting the link
-while keeping its parent writable needs another mechanism. It also keeps a supervisor even without `--unshare-pid` or
-with `--as-pid-1`: verify the agent's `PPID` in the host pid namespace, not equal pids, and use `--die-with-parent` for
+namespace availability can change, and full per-cwd profiles make an unbounded key space. A tmpfs mounted directly on a
+symlink follows it and masks the target; the alias view alone does not protect the link from unlink. Stock bwrap 0.8 has
+no path-aware unlink/rename filter. To protect an explicit alias while its parent stays writable, a pre-exec helper can
+`open_tree` the symlink inode with `AT_SYMLINK_NOFOLLOW`, then `move_mount` the detached clone onto the alias without
+following the destination. Run the same helper in preflight and exec the agent at the same pid. Do not drop
+`CAP_SYS_ADMIN` to harden these mounts: that breaks `unshare -rm`, which was working; direct `umount` in the original
+namespace therefore remains an explicit boundary. Bubblewrap keeps a supervisor even without `--unshare-pid` or with
+`--as-pid-1`: verify the agent's `PPID` in the host pid namespace, not equal pids, and use `--die-with-parent` for
 lifecycle cleanup.
 
 ## Runtime policy and publisher-owned node packages (#2566)
