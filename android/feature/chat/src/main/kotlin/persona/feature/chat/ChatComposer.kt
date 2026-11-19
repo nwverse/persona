@@ -319,14 +319,13 @@ fun ChatComposer(
             start = edit.prior?.state ?: ImageEditState(), onEdited = { done = it }) }
     }
     // Voice input: what the phone's recognizer heard goes at the end of the draft, to edit before sending.
-    val dictation = rememberDictation(onHeard = { state.appendDictation(it) }, onError = onNotice)
+    val dictate = key(session, state) { if (visible && enabled) rememberDictation(onHeard = { state.appendDictation(it) }, onError = onNotice) else null }
     if (!visible) return
     if (AdaptiveProbe.enabled) {
         AdaptiveComposerProbe(adaptiveProbePage, state.value, state.attachments.map { it.id to it.uploadState.name }, state.draftLoaded)
     }
     LaunchedEffect(state.focusRequest) { if (state.focusRequest > 0) focusRequester.requestFocus() }
     // A read-only session (enabled = false) offers nothing to type with: no +, no mic, no "/" list, no send.
-    val dictate = dictation?.takeIf { enabled }
     // The main conversation's /clear (#5100): offered while it works too (the hub stops the turn), and it never asks first.
     val mainClear = LocalMainChatClear.current?.takeIf { enabled }
     // Both the "/" list and the + sheet offer only what an Assistant conversation runs, never an Agent's quick messages.
@@ -400,6 +399,7 @@ fun ChatComposer(
     }
     // /clear sent alone in the main conversation clears it instead of going to Persona (web `isClearCommand`).
     fun send() {
+        if (dictate?.active == true) return
         val clear = mainClear
         if (clear != null && isMainClearCommand(state.value.text, state.attachments.size, extraContent)) clearMain(clear) else onSend()
     }
@@ -471,11 +471,11 @@ fun ChatComposer(
             // The mic stays (iOS ShellComposerBar): more can be dictated after what is typed. Send beside it once there is
             // something to send, else a stop while the agent works; nothing else while the box is empty. On Glass the button
             // changing grows and shrinks as iOS's does (ComposerActionSlot, #4210 T3).
-            dictate?.let { JIconButton(PhIcons.Microphone, stringResource(R.string.chat_composer_dictate), it, enabled = !sending) }
+            dictate?.let { DictationMic(it, stringResource(R.string.chat_composer_dictate), enabled = !sending) }
             if (blockedLabel != null && enabled) BlockedSendButton(blockedLabel, onBlocked)
             else ComposerActionSlot(
                 when {
-                    hasContent && (!compactShell || enabled) -> ComposerAction(SendKind.Send, enabled = canSend, loading = sending)
+                    hasContent && (!compactShell || enabled) -> ComposerAction(SendKind.Send, enabled = canSend && dictate?.active != true, loading = sending)
                     working && canInterrupt && (!compactShell || enabled) ->
                         ComposerAction(SendKind.Stop, enabled = !sending && !interruptPending && service != null)
                     dictate == null && (!compactShell || enabled && sending) -> ComposerAction(SendKind.Send, enabled = false, loading = sending)
@@ -497,6 +497,7 @@ fun ChatComposer(
             )
         },
         accessory = {
+            dictate?.let { DictationStatus(it) }
             if (state.oldVersion) Text(stringResource(R.string.chat_composer_old_version), style = PersonaTheme.type.caption,
                 color = PersonaTheme.palette.cautionText)
             if (PersonaTheme.style == AppStyle.Glass && enabled && !sending && service != null && state.focused && clipboardImages.offered)

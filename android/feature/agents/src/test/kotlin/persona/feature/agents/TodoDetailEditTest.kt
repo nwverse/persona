@@ -1,5 +1,12 @@
 package persona.feature.agents
 
+import android.Manifest
+import android.app.Application
+import android.os.Bundle
+import android.speech.SpeechRecognizer
+import androidx.test.core.app.ApplicationProvider
+import org.robolectric.Shadows.shadowOf
+import org.robolectric.shadows.ShadowSpeechRecognizer
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -82,6 +89,24 @@ class TodoDetailEditTest {
     }
 
     private fun fields() = rule.onAllNodes(hasSetTextAction())
+
+    @Test fun stoppingDictationKeepsNotesLocalUntilSave() {
+        ShadowSpeechRecognizer.setIsOnDeviceRecognitionAvailable(true)
+        shadowOf(ApplicationProvider.getApplicationContext<Application>()).grantPermissions(Manifest.permission.RECORD_AUDIO)
+        val api = Api(Todo("t1", title = "Review", notes = "Original notes"))
+        open(api)
+        rule.onNodeWithContentDescription("Dictate notes").performClick()
+        val speech = shadowOf(ShadowSpeechRecognizer.getLatestSpeechRecognizer())
+        val words = Bundle().apply { putStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION, arrayListOf("and more")) }
+        rule.runOnIdle { speech.triggerOnPartialResults(words) }
+        rule.onNodeWithContentDescription("Stop dictation").performClick()
+        rule.runOnIdle { speech.triggerOnResults(words) }
+        rule.onNodeWithText("Original notes and more").assertExists()
+        assertTrue(api.patches.isEmpty())
+        rule.onNodeWithText("Save").performClick()
+        rule.waitForIdle()
+        assertEquals(listOf("Review" to "Original notes and more"), api.patches)
+    }
 
     @Test fun blankTitleCannotBeSaved() {
         val api = Api(Todo("t1", title = "Ship the fix", notes = "Run tests first"))
