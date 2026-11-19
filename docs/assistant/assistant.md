@@ -1511,10 +1511,10 @@ manager that connects the computer holds it and sends it once the computer is ba
   never goes ahead of them; otherwise it goes as before.
 - **Shown everywhere.** The row's `undelivered` lists held messages with `computer` (the computer's name) and the whole
   line to show in `error`: "Will send when <computer> is back", "Sending…", "Waits behind the message above", or why it
-  was not sent, with Delete, and Retry once it failed. Every client that draws `undelivered` shows them; the web sends
+  was not sent, with Delete, and Retry once it failed. Every client that draws `undelivered` shows them. The web and iOS send
   Retry and Delete to `…/sessions/{mid}/{sid}/held/{msg}`, and older apps' calls to the assistant's routes reach them
   too. Only a person's own full device may (the hub's `X-Persona-Person` on the relayed request): a Retry sends the
-  message with its sender's provenance again. An Agent with held messages cannot be deleted until they are (409). The web's message box on such an Agent stays open and says "<computer> is offline. Sends when it's back."
+  message with its sender's provenance again. An Agent with held messages cannot be deleted until they are (409). On the web and iOS, the message box of an Agent whose computer is offline stays open on a supported hub and says "<computer> is offline. Sends when it's back."
 - **Sent when the computer and the Agent are back, once.** A held message goes while its computer's node is connected
   and its current session list has the Agent (a runtime Agent comes back a moment after the node; a node connected for
   two minutes without it gets the message anyway, and its answer decides). Each Agent's messages go oldest first, under

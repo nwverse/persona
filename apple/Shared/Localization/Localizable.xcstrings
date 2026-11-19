@@ -2316,6 +2316,29 @@
         }
       }
     },
+    "%@ is offline. Sends when it's back." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ is offline. Sends when it's back."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 已离线，重新上线后会发送。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ はオフラインです。オンラインに戻ると送信されます。"
+          }
+        }
+      }
+    },
     "%@ is offline: it may be asleep, or Persona Link isn't running on it." : {
       "localizations" : {
         "en" : {
@@ -56894,6 +56917,29 @@
         }
       }
     },
+    "Delete this held message?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete this held message?"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除这条待发消息？"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この保留中のメッセージを削除しますか？"
+          }
+        }
+      }
+    },
     "Delete this report?" : {
       "localizations" : {
         "en" : {
@@ -58044,6 +58090,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Delivery status unknown" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delivery status unknown"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "送达状态未知"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "配信状況を確認できません"
+          }
+        }
+      }
     },
     "Details" : {
       "localizations" : {
