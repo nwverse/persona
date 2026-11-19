@@ -157,8 +157,10 @@ final class LiveUpdateTests: XCTestCase {
         sleep(2)
         menuButton.tap()
         let machines = app.buttons["全部机器"]
-        XCTAssertTrue(machines.waitForExistence(timeout: 5), "the menu opened")
+        // Its first item: a short screen (the Duo on its side) leaves the rows below the fold out of the tree.
+        let opened = app.buttons[Self.menuItems[0]].waitForExistence(timeout: 5)
         keep("menu-opened")
+        XCTAssertTrue(opened, "the menu opened:\n\(app.debugDescription)")
         let last = app.buttons["训练机"]
         scrollMenu(to: last)
         sleep(1)
@@ -169,13 +171,18 @@ final class LiveUpdateTests: XCTestCase {
         keep("menu-scrolled")
         let before = counts()
         churn(waiting: true, real: true)
-        // Where the menu is, before the counts: reading the probe while the menu is open moves the menu itself.
-        let open = last.exists
-        let (lastAfter, machinesAfter) = (last.frame.minY, machines.frame.minY)
+        // Where the menu is, before the counts: reading the probe while the menu is open moves the menu itself. A menu
+        // put back to its top may no longer list the machines at all (a phone's).
+        let (lastShown, machinesShown) = (last.exists, machines.exists)
+        let lastAfter = lastShown ? last.frame.minY : .infinity
+        let machinesAfter = machinesShown ? machines.frame.minY : .infinity
+        let onScreen = lastShown && last.isHittable && machines.isHittable
         keep("menu-after-updates")
         let after = counts()
         report("Sidebar Agents heading, ⋯ menu open", from: before, to: after)
-        XCTAssertTrue(open, "the menu is still open")
+        XCTAssertTrue(app.buttons[Self.menuItems[0]].exists || lastShown, "the menu is still open")
+        XCTAssertTrue(lastShown && machinesShown, "the menu still lists the machines it was scrolled to")
+        XCTAssertTrue(onScreen, "the machines it was scrolled to are still on screen")
         XCTAssertEqual(lastAfter, lastY, accuracy: 1, "the menu did not scroll or jump")
         XCTAssertEqual(machinesAfter, machinesY, accuracy: 1, "the menu did not scroll or jump")
         XCTAssertLessThanOrEqual((after.bodies["ListMenu.content"] ?? 0) - (before.bodies["ListMenu.content"] ?? 0), 1,
