@@ -2,6 +2,7 @@ package persona.android.dev
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import java.io.File
 import java.time.Instant
 import java.util.zip.ZipFile
 import kotlinx.coroutines.CoroutineScope
@@ -54,6 +55,29 @@ class DevelopingPersonaTest {
         DevProbe.frame("sessions", 3)
         dev.refresh()
         assertEquals(0, dev.store.recordedBytes())
+    }
+
+    @Test fun disablingDeletesExportedArchives() = runBlocking {
+        dev.start()
+        dev.setEnabled(true)
+        val zip = dev.export(setOf(DevCategory.Logs))
+        assertTrue(zip.isFile)
+
+        dev.setEnabled(false)
+
+        assertFalse(zip.exists())
+        assertFalse(File(context.cacheDir, "dev-exports").exists())
+    }
+
+    @Test fun aSuccessfulExportRemovesEarlierExportWorkDirectories() = runBlocking {
+        dev.start()
+        dev.setEnabled(true)
+        val first = dev.export(setOf(DevCategory.Logs))
+        val second = dev.export(setOf(DevCategory.Logs))
+
+        assertFalse(first.parentFile.exists())
+        assertTrue(second.isFile)
+        assertEquals(listOf(second.parentFile), File(context.cacheDir, "dev-exports").listFiles()?.toList())
     }
 
     @Test fun localExitReasonsAreRecordedWithoutDuplicatingAnrReports() = runBlocking {

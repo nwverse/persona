@@ -98,6 +98,7 @@ class DevelopingPersona internal constructor(
             withContext(io) {
                 recorder.settle()
                 store.clear()
+                exportRoot.deleteRecursively()
             }
         }
     }
@@ -126,7 +127,9 @@ class DevelopingPersona internal constructor(
         withContext(io) {
             recorder.settle()
             val now = clock()
-            DevPackage.exportZip(exportRoot, store, categories, state.value.since, deviceInfo(now), logReader(), now)
+            val archive = DevPackage.exportZip(exportRoot, store, categories, state.value.since, deviceInfo(now), logReader(), now)
+            exportRoot.listFiles().orEmpty().filter { it != archive.parentFile }.forEach(File::deleteRecursively)
+            archive
         }
     }
 
