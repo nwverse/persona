@@ -177,6 +177,7 @@ func TestCalls(t *testing.T) {
 		switch method {
 		case "terminal.list":
 			return map[string]any{"terminals": []any{map[string]any{"address": "t1", "state": "live", "pid": nil,
+				"parent":     "t0",
 				"status":     map[string]any{"app": "claude-code", "state": "blocked", "kind": "permission"},
 				"foreground": map[string]any{"pid": 42, "name": "2.1.0", "argv": []string{"claude"}, "cwd": "/x"}},
 				map[string]any{"address": "m/t2", "state": "live"}}}
@@ -195,6 +196,7 @@ func TestCalls(t *testing.T) {
 	ctx := context.Background()
 	terms, err := c.List(ctx)
 	if err != nil || len(terms) != 2 || terms[0].Status.Kind != "permission" || terms[0].Foreground.Pid != 42 ||
+		terms[0].Parent != "t0" || terms[1].Parent != "" ||
 		terms[0].Remote() || !terms[1].Remote() {
 		t.Fatalf("List = %+v, %v", terms, err)
 	}

@@ -582,8 +582,8 @@ export function createAgyRuntime(options = {}) {
   }
 
   function historyOf(rawId) {
-    // Refresh cached items emitted before native failures used the shared API-error format or MCP tool normalization.
-    return `agy:${rawId}:full:api-errors:content-v2:step-ids-v2:mcp-tools`
+    // Refresh cached items emitted before native failures used the shared API-error format, MCP tool normalization, or tool-media omission.
+    return `agy:${rawId}:full:api-errors:content-v2:step-ids-v2:mcp-tools:no-tool-media`
   }
 
   function cutMatches(cut, transcript) {
