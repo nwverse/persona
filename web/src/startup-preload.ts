@@ -439,7 +439,7 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // 482,497 B to 482,702 B; en 479,378 B to 479,585 B, zh-Hans 480,224 B to 480,422 B). Main had 29 B of room, so the
 // budget is this ja size plus those 29 B.
 // #9745: Overview's extension cards drawn as the user arranged them add 757 B in ja, measured in one environment
-// against main 99a3def65a (ja 478,078 B to 478,835 B; en 475,068 B to 475,872 B, zh-Hans 475,930 B to 476,724 B): the
+// against main 009f5c061f (ja 478,078 B to 478,835 B; en 475,068 B to 475,872 B, zh-Hans 475,930 B to 476,724 B): the
 // arrangement's store, kept per hub and sign-in, with the revision Reset's Undo checks, and the order, hidden cards and
 // widths it draws (lib/overview-cards.ts), Arrange cards in Overview's top bar, and the arrangement to and from the hub
 // with the start page, one change on its way at a time and pushes heard during it settled once the hub pushed it, a
