@@ -257,8 +257,9 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 		return proto.Session{}, badRequest(fmt.Errorf("space %q: health or none", p.Space))
 	}
 	if p.Origin == OriginInbox {
-		// The handling chat investigates and suggests; it never needs the assistant's bypass mode.
-		p.PermissionMode = proto.ModePlan
+		// Default keeps the explicit Persona MCP allowlist effective: Plan rejects MCP before consulting it. The
+		// manager/node origin policy, not the launcher's permission mode, prevents externally visible work.
+		p.PermissionMode = "default"
 	} else if p.PermissionMode == "" && p.GuestTools == nil {
 		p.PermissionMode = s.settings(ctx).DefaultPermissionMode
 		if p.PermissionMode == "" {
@@ -1126,7 +1127,7 @@ func (s *Service) sendParamsOwn(ctx context.Context, p SendParams) (map[string]a
 	delete(params, "origin") // only the manager's origin book may attest an Inbox conversation
 	if s.isInboxModelCall(ctx, p.MachineID, p.SessionID, "") {
 		// A node reload does not restore the node's in-memory origin field. Re-attest it on every later send so the
-		// first resumed process is clamped to Plan and its Lark gate cannot fall back to an ordinary conversation.
+		// first resumed process is clamped to non-bypass default and its Lark gate cannot fall back to an ordinary conversation.
 		params["origin"] = OriginInbox
 	}
 	text, _ := params["text"].(string)
@@ -1256,8 +1257,13 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 			}
 		}
 	}
-	if l == "" && !followsSetting {
-		if c, known := s.session(ctx, machine, sid); known {
+	if l == "" {
+		c, known := s.session(ctx, machine, sid)
+		if known && c.SourceKind == proto.SourceRuntime {
+			// The node resumes the session on the runtime that owns it, even for scheduled chats and leaders.
+			return nil
+		}
+		if known && !followsSetting {
 			l = c.Launcher // no launcher picked: the one this conversation runs
 			if l != "" {
 				p["launcher"] = l

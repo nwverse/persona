@@ -24450,6 +24450,29 @@
       },
       "extractionState" : "manual"
     },
+    "Antigravity Settings" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Antigravity Settings"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Antigravity設定"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Antigravity 设置"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Any Computer [Home Widgets]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -95513,6 +95536,75 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Model not connected: %@ isn't signed in" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Model not connected: %1$@ isn't signed in"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@にログインしてください"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模型没接好：%1$@ 没登录"
+          }
+        }
+      }
+    },
+    "Model not connected: the key for %@ is wrong" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Model not connected: the key for %1$@ is wrong"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@のキーが無効です"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模型没接好：%1$@ 的 Key 不对"
+          }
+        }
+      }
+    },
+    "Model not connected: this model isn't available on %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Model not connected: this model isn't available on %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@でモデルを使えません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模型没接好：%1$@ 用不了这个模型"
+          }
+        }
+      }
     },
     "Model not connected: Claude Code CLI isn't signed in" : {
       "localizations" : {
@@ -173449,6 +173541,29 @@
         }
       }
     },
+    "This Agent has stopped. You can put this off or dismiss it." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This Agent has stopped. You can put this off or dismiss it."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このエージェントは停止しています。あとで対応するか、このまま閉じることができます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个 Agent 已停止。你可以稍后再说，或者不用管它。"
+          }
+        }
+      }
+    },
     "This Agent stopped before it left any messages." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -176056,6 +176171,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "改的是那台机器的 ~/.codex/config.toml，只动下面这几项，文件里别的配置（模型提供方、项目信任等）原样保留；新开的 Codex 会话生效。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "This edits ~/.gemini/antigravity-cli/settings.json on that machine and changes only the settings below. New Antigravity (agy) sessions pick them up." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This edits ~/.gemini/antigravity-cli/settings.json on that machine and changes only the settings below. New Antigravity (agy) sessions pick them up."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "そのマシンの~/.gemini/antigravity-cli/settings.jsonのうち、下の項目だけを変更します。新しいAntigravity（agy）セッションに反映されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "改的是那台机器的 ~/.gemini/antigravity-cli/settings.json，只动下面这几项；新开的 Antigravity (agy) 会话生效。"
           }
         }
       },
@@ -206130,19 +206268,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Agent Claude Code Codex session triage runtime"
+            "value" : "Agent Claude Code Codex Antigravity agy session triage runtime"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Agent Claude Code Codex 会话 分诊 运行时"
+            "value" : "Agent Claude Code Codex Antigravity agy 会话 分诊 运行时"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Agent Claude Code Codex セッション トリアージ ランタイム"
+            "value" : "Agent Claude Code Codex Antigravity agy セッション トリアージ ランタイム"
           }
         }
       }
