@@ -438,6 +438,20 @@ end to end in `integrations/dsh/e2e/assistant.mjs`.
 | Antigravity CLI (`antigravity`) | `integrations/antigravity/companion.mjs`: companion process; reads CLI transcripts and runs terminal-less Agent and assistant sessions through `agy acp` | "Antigravity CLI" below |
 | echo (example) | `integrations/runtime-sdk/examples/echo-runtime.mjs` (with `--listen <port>` it's a daemon) | "Minimal example" in this doc, `docs/integrations/daemons.md` |
 
+### Antigravity Desktop (macOS, experimental)
+
+With Antigravity Desktop open and the Persona node running, start the desktop companion from the checkout:
+
+```sh
+node integrations/antigravity/desktop.mjs
+```
+
+It discovers the local desktop hub through the current user's private descriptor under
+`~/.gemini/antigravity/daemon/`, lists existing conversations, watches exported transcript items,
+and forwards text replies and interrupts to the selected Cascade. Start each conversation with a message in the desktop app so replies can reuse its model and tool configuration.
+Handle approvals there as well. The desktop and CLI companions can run together. Override the desktop data directory
+with `--desktop-dir` or the Persona runtime socket with `--socket`. The desktop RPC is private and version dependent.
+
 ### Antigravity CLI
 
 The session's `last_text` preview contains assistant response text after the latest explicit user input. A new user
@@ -454,7 +468,7 @@ fields, including a subscription reset timestamp supplied in native quota metada
 that result. Rejected ACP prompts also publish their failure through the session's error state.
 The history token includes the error format so connected clients refresh items cached before this representation.
 
-The implemented integration is for the **Antigravity CLI (`agy`)**, not the Antigravity desktop app. When `personad node`
+The CLI companion runs the **Antigravity CLI (`agy`)**. When `personad node`
 runs (`--attach` or `--stdio`), `agy` is installed, Node.js 22.5+ (`node:sqlite`) is available, and no external `agy`
 runtime is connected on `runtime.sock`, the node automatically writes out the embedded `persona-antigravity-runtime`
 package and supervises `antigravity/companion.mjs` (passing `--no-update --parent-stdin`), yielding whenever an external

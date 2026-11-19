@@ -377,6 +377,15 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 	} else {
 		s.putWork(ctx, e)
 	}
+	if e.Work.Phase == proto.WorkDone {
+		s.work.mu.Lock()
+		var items []proto.Item
+		if t, ok := s.work.tried[k]; ok && sameTurn(c, t.turn) && t.read != nil {
+			items = t.read.items
+		}
+		s.work.mu.Unlock()
+		s.goRecordWorkerDone(ctx, e, items)
+	}
 	s.logf("triage %s/%s: %s%s (%s %.1fs): %s", machine, short(c.SessionID), e.Work.Phase, orEmpty("/", e.Work.On), by,
 		time.Since(start).Seconds(), e.Work.Line)
 	s.workEvent(machine, c.SessionID, "triaged", map[string]any{"phase": e.Work.Phase, "on": e.Work.On, "by": by,
