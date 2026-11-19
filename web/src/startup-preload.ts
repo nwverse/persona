@@ -425,15 +425,15 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // extension's view (ExtensionSlots, the assistant's cards, an inbox item's body, the subscription pages, the launcher
 // sections), all in the first screen's static closure; the canvas itself is a chunk of its own (ViewBody10.tsx).
 // Main had 1,583 B of room; the budget stays.
-// #9745: Overview's extension cards drawn as the user arranged them add 775 B in ja, measured in one environment
-// against main fb78f39c07 (ja 482,625 B to 483,400 B; en 479,542 B to 480,312 B, zh-Hans 480,393 B to 481,167 B): the
+// #9745: Overview's extension cards drawn as the user arranged them add 785 B in ja, measured in one environment
+// against main f6bc983821 (ja 483,026 B to 483,811 B; en 479,925 B to 480,731 B, zh-Hans 480,780 B to 481,576 B): the
 // arrangement's store, kept per hub and sign-in, and the order, hidden cards and widths it draws
 // (lib/overview-cards.ts), Arrange cards in Overview's top bar, and the arrangement to and from the hub with the start
 // page, one change on its way at a time and pushes heard during it settled once the hub pushed it (lib/start-page.ts).
 // The editor (its heading, each card's controls, the drag and the edits) is a chunk of its own
-// (views/extensions/OverviewArrange.tsx, lib/overview-edit.ts). Main had 58 B of room, so the budget is this ja
-// size plus those 58 B.
-export const FIRST_SCREEN_BUDGET = 483_458;
+// (views/extensions/OverviewArrange.tsx, lib/overview-edit.ts). Main was itself 343 B over its budget (#10925), so,
+// as in #9847, the budget is this ja size, with no room.
+export const FIRST_SCREEN_BUDGET = 483_811;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
