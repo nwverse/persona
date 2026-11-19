@@ -12,6 +12,7 @@ import persona.core.navigation.MachinesRoute
 import persona.core.navigation.TodoDetailRoute
 import persona.core.navigation.TodosRoute
 import persona.feature.assistant.AssistantSidebarShade
+import persona.feature.knowledge.KnowledgeKindRoute
 import persona.feature.knowledge.KnowledgeRoute
 
 /**
@@ -99,12 +100,14 @@ internal class SidebarPageRoots {
  */
 internal fun retainsSidebarComposition(root: NavKey): Boolean = when (root) {
     AssistantRoute, InboxRoute, TodosRoute, KnowledgeRoute, MachinesRoute -> true
+    is KnowledgeKindRoute -> true
     else -> false
 }
 
 /** A sidebar place that is its own root at regular width. A pushed extension page (`depth > 0`) is a drill-down. */
 internal fun isSidebarPlaceRoot(key: NavKey): Boolean = when (key) {
     InboxRoute, TodosRoute, KnowledgeRoute, MachinesRoute -> true
+    is KnowledgeKindRoute -> true
     is TodoDetailRoute -> true
     is ExtensionUiRoute -> key.depth == 0
     else -> false
@@ -119,6 +122,7 @@ internal fun sidebarShadeKey(root: NavKey): String = when (root) {
     InboxRoute -> AssistantSidebarShade.Inbox
     TodosRoute -> AssistantSidebarShade.Todos
     KnowledgeRoute -> AssistantSidebarShade.Knowledge
+    is KnowledgeKindRoute -> AssistantSidebarShade.Knowledge
     MachinesRoute -> AssistantSidebarShade.Machines
     is ExtensionUiRoute -> if (root.depth == 0) extensionSidebarKey(root.extensionId, root.uiId) else AssistantSidebarShade.None
     else -> AssistantSidebarShade.None
@@ -195,6 +199,7 @@ internal fun placeRootFor(key: NavKey): NavKey? = when {
     isInboxDestination(key) -> InboxRoute
     key == TodosRoute -> TodosRoute
     key == KnowledgeRoute -> KnowledgeRoute
+    key is KnowledgeKindRoute -> key
     key == MachinesRoute -> MachinesRoute
     else -> null
 }
@@ -205,6 +210,7 @@ internal fun sidebarHostId(root: NavKey): String = when (root) {
     InboxRoute -> "inbox"
     TodosRoute -> "todos"
     KnowledgeRoute -> "knowledge"
+    is KnowledgeKindRoute -> "knowledge:${root.kind.wire}"
     MachinesRoute -> "machines"
     is TodoDetailRoute -> "todo:${root.todoId}"
     is ExtensionUiRoute -> "extension:${root.extensionId}/${root.uiId}"

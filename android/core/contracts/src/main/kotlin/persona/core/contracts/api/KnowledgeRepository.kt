@@ -7,6 +7,7 @@ import persona.core.contracts.Session
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 import kotlinx.serialization.json.JsonObject
 
 /** The kinds of the knowledge base, in the order the list offers them (docs/assistant/knowledge.md). */
@@ -38,6 +39,12 @@ data class KnowledgeEntry(
     val tags: List<String>? = null,
     val updated: String? = null,
     val extra: String? = null,
+    /** A document's, meeting's or event's connector; null on other kinds and from an older hub. */
+    val source: String? = null,
+    /** A recording's imported meeting, as the meetings list has its id; null before a match and from an older hub. */
+    @SerialName("meeting_id") val meetingId: String? = null,
+    /** Client-only: the imported meeting this recording stands for in the merged Meetings list. */
+    @Transient val imported: KnowledgeEntry? = null,
 ) {
     val key: String get() = "$kind/$id"
 }
@@ -162,6 +169,30 @@ data class KnowledgeHit(val path: String, val line: String)
 @Serializable
 data class KnowledgeSearch(val hits: List<KnowledgeHit> = emptyList())
 
+/** One meeting hand-off as the hub keeps it, in `detail.meta.handoffs` and the write's answer (#8852). */
+@Serializable
+data class MeetingHandoff(
+    val id: String,
+    val at: String,
+    @SerialName("machine_id") val machineId: String,
+    @SerialName("session_id") val sessionId: String,
+    val title: String? = null,
+    val transcript: Boolean? = null,
+    /** `sent`, or `failed` with [problem]. */
+    val state: String,
+    val problem: String? = null,
+)
+
+/** The owner's choices for `POST /api/v1/recordings/{id}/handoff`; text and transcript are always on the wire. */
+@Serializable
+data class MeetingHandoffRequest(
+    @SerialName("machine_id") val machineId: String,
+    @SerialName("session_id") val sessionId: String,
+    val title: String,
+    val text: String,
+    val transcript: Boolean,
+)
+
 /** An immutable repository belongs to exactly one pairing generation. */
 interface KnowledgeRepository {
     val scope: HubScope
@@ -184,6 +215,10 @@ interface KnowledgeRepository {
      * as shown; `409 minutes_stale` when they were rewritten since (read them again first).
      */
     suspend fun addMinutesTodos(id: String, version: Int, actions: List<String>): Unit = throw UnsupportedOperationException("Minutes unavailable")
+
+    /** Hands a finished recording to an Agent; the answer is the try the hub kept, sent or failed. */
+    suspend fun handOff(id: String, request: MeetingHandoffRequest): MeetingHandoff =
+        throw UnsupportedOperationException("Meeting handoff unavailable")
 }
 
 /** The composition root clears this before disposing a pairing's HTTP client. */

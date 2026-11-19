@@ -551,6 +551,9 @@ final class AppModel {
     /// What each machine's New Agent list says is left out there, with why (`unavailable`, #8109: the Persona-managed
     /// providers whose own-service rule skips it), loaded with `launcherCache`; empty from an older hub.
     @ObservationIgnored private(set) var launcherUnavailable: [MachineRef: [UnavailableLauncher]] = [:]
+    /// The active model profile's Agent presets offered on each machine, loaded with `launcherCache`.
+    @ObservationIgnored private(set) var launcherTiers: [MachineRef: [AgentPreset]] = [:]
+    @ObservationIgnored private(set) var launcherTierProfile: [MachineRef: AgentPresetProfile] = [:]
     /// The main chat's own picker (`?purpose=assistant`, #5033): its eligible launchers, the effective Main chat
     /// default, and what can't run there with why. Separate from `launcherCache`, which serves the agent.new purpose.
     nonisolated struct AssistantLauncherScope: Hashable {
@@ -2439,6 +2442,7 @@ final class AppModel {
                 InboxStore.shared.reload()
                 TodoStore.shared.reload()
                 TasksStore.shared.reconnected()
+                SavedPromptStore.shared.reload()
             }
         }
         if plan.refetch { AgentSync.shared.schedule() }
@@ -2885,6 +2889,9 @@ final class AppModel {
             if isHub { InboxStore.shared.reload() }
         case .todos:
             if isHub { TodoStore.shared.reload() }
+        case .savedPrompts(let manager):
+            // another device changed the list: only the shown assistant's is read again (#9436)
+            if isHub, SavedPromptStore.concerns(eventManager: manager, shownManager: api?.shownManager) { SavedPromptStore.shared.reload() }
         case .personas:
             // The new tier's package is downloaded whole before the face changes (PersonaStore.load). The list changed
             // just now: a refresh already under way may have asked before, so it is read again after that one (#2405).
@@ -3053,6 +3060,7 @@ final class AppModel {
         case .agents: "agents"
         case .inbox: "inbox"
         case .todos: "todos"
+        case .savedPrompts: "assistant_saved_prompts"
         case .personas: "personas"
         case .look: "look"
         case .managers: "managers"
@@ -3726,6 +3734,33 @@ final class AppModel {
         }
     }
 
+    /// Speed requests in flight, shared by every rendering of a chat's native menu. The menu closes on a pick, so this
+    /// cannot live in the view: reopening must show why the choices wait and must not issue the request twice.
+    private(set) var serviceTierChanges: Set<SessionKey> = []
+
+    /// Codex speed is different from an optimistic mode edit: only the hub's acknowledged session value moves the
+    /// selection. A refusal or an unconfirmed request keeps that value and is always said, including a timeout.
+    @discardableResult
+    func setServiceTier(_ key: SessionKey, tier: String) async -> Bool {
+        guard !serviceTierChanges.contains(key), allowSend(key), let api = api(key.group) else { return false }
+        serviceTierChanges.insert(key)
+        defer { serviceTierChanges.remove(key) }
+        do {
+            try await api.setServiceTier(key, tier: tier)
+            Haptics.success()
+            return true
+        } catch {
+            if !error.isCancellation {
+                let reason = error.isTimeout
+                    ? String(localized: "The hub didn't respond. Try again later.")
+                    : error.localizedDescription
+                toast = Toast(String(localized: "Couldn't change Speed: \(reason)"), style: .error)
+                Haptics.error()
+            }
+            return false
+        }
+    }
+
     // MARK: Claude Code's ultracode switch (#1307, docs/apple/ios.md "Claude Code ultracode")
 
     /// What this device asked of a session's ultracode switch (`Ultracode.Ask`), until the session moved past it.
@@ -3964,6 +3999,8 @@ final class AppModel {
         launcherCache = [:]
         launcherDefaults = [:]
         launcherUnavailable = [:]
+        launcherTiers = [:]
+        launcherTierProfile = [:]
         assistantLauncherCache = [:]
         assistantStarterCache.clear()
         // Model Settings changes are launcher changes too: wake the open main-chat composer to re-read the default.
@@ -3985,6 +4022,8 @@ final class AppModel {
         launcherCache[machine] = r.launchers
         launcherDefaults[machine] = r.default
         launcherUnavailable[machine] = r.unavailable ?? []
+        launcherTiers[machine] = r.tiers ?? []
+        launcherTierProfile[machine] = r.tiersProfile
         return r.launchers
     }
 
@@ -4347,6 +4386,8 @@ final class AppModel {
         InboxStore.shared.reload()
         TodoStore.shared.forget()
         TodoStore.shared.reload()
+        SavedPromptStore.shared.forget()
+        SavedPromptStore.shared.reload()
         followScope()
         // The avatar is the new hub's from now, before its list is read below: a card tapped meanwhile goes to it.
         personas.switchHub(api)
@@ -4382,6 +4423,9 @@ final class AppModel {
         if switched {
             if let a = assistantCurrent, let s = session(a), s.assistant, !s.isHealth, !assistantShows(s.manager) { assistantCurrent = assistantMain }
             assistantSwitches += 1
+            // the "/" list offers the new assistant's saved prompts, never the one before's (#9436)
+            SavedPromptStore.shared.forget()
+            SavedPromptStore.shared.reload()
         }
         let newChat = assistantNewChat
         Task {

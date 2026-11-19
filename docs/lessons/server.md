@@ -1,5 +1,19 @@
 # Lessons: hub / node and networking
 
+## Under a full-tunnel VPN the default route's address is the tunnel's (#11125)
+
+A UDP "connect" towards a far address reports the source address of the route it would take, the usual way to find
+"the address traffic goes out of". When a VPN routes general traffic through its tunnel, that is the tunnel's own
+address (`utun*` on macOS), and many VPN clients give the tunnel a new one on every reconnect. `hub setup` wrote it into
+`public_url` and `public.tls_listen` as the LAN address, so after the next reconnect the TLS port refused everyone, LAN
+clients included. Before an address goes into config as the LAN address, check the interface it is on: up, not
+loopback, not virtual (`pickLANIPv4` in `server/internal/hub/setup_machine.go`), else take the first private IPv4 on
+such an interface.
+
+## A cancelled RPC test must acknowledge cancellation before releasing work (#10342)
+
+A local context cancellation only starts delivery of `rpc.cancel`; it does not prove the node has processed it. A test that releases a held file write immediately can let the operation finish as `done`, after which polling for `cancelled` times out and the original destination is not restored. Keep the write held until a following `file.operation` request on the same ordered connection has been answered, then release it. Exercise cancellation and normal completion in the same command, and keep the existing deadline, cleanup and restoration assertions.
+
 ## Queue admission decides notification replay (#10394)
 
 A connected WebSocket is not evidence that its outbound queue accepted a notification. Record admission per device
@@ -589,7 +603,9 @@ following the destination. Run the same helper in preflight and exec the agent a
 `CAP_SYS_ADMIN` to harden these mounts: that breaks `unshare -rm`, which was working; direct `umount` in the original
 namespace therefore remains an explicit boundary. Bubblewrap keeps a supervisor even without `--unshare-pid` or with
 `--as-pid-1`: verify the agent's `PPID` in the host pid namespace, not equal pids, and use `--die-with-parent` for
-lifecycle cleanup.
+lifecycle cleanup. A kernel can pass the basic bwrap probe yet refuse `open_tree` on an alias symlink with `EPERM`
+(observed on Linux 5.4). Keep that start fail closed. Real tests may skip only the structured alias-`open_tree` `EPERM`
+from the full-profile preflight, never every unavailable result or a `move_mount` failure (#11073).
 
 ## Runtime policy and publisher-owned node packages (#2566)
 
@@ -2075,6 +2091,12 @@ A connection that outlives its transport (protocol.md "Resuming") changes what s
 - **A side that decides the transport is dead must tell the other.** One side's silence check fired while the other's
   read loop was busy (not dead); the busy side then waited for its own pings, past the other side's window. The side
   that loses a transport closes it, and the node keeps the connection longer than the manager takes to notice.
+- **A resumed connection can change path, not only transport (#10944).** After a failed try on the old path, a better
+  path may take the connection back. `path` / `via` can no longer be captured for the connection's lifetime: final
+  `pathEnded`, the better-path watcher, the machine's route and the tailcat watcher all need the pair after a successful
+  move. Commit it only after `Peer.Resume` succeeds; a failed attempt must leave the route and its accounting alone.
+  Callbacks that outlive a route (a planned switch, an RTT ping or a tailcat probe) carry its generation and check it
+  before acting. Path failure and SSH flap timing use the current route's own start, not the whole connection's.
 
 ## A new value for an existing RPC parameter may be silently ignored by an old node (2026-11-06, #4858)
 
@@ -2980,3 +3002,13 @@ documenting an order.
 ## Compile production and test callers after shared helper changes
 
 A helper refactor can leave a missing tuple return, a test caller without a new context argument, or a runtime reader naming the old helper. Compile both production and test packages after merging; retain the existing read-only database helper and exercise its failure paths rather than adding a parallel implementation.
+
+## A custom `DialTLSContext` owns its handshake deadline (2026-11-19, #11028)
+
+`http.Transport.TLSHandshakeTimeout` bounds only the handshake the transport runs itself. #10681 moved the link's hub
+handshake into a custom `DialTLSContext` (to trace it) and so dropped that bound, and the transport dials under a
+context that a given-up request does not end. A hub, or a proxy's tunnel, that took the connection and never answered
+the TLS hello then held it open forever, on the direct route and through the proxy alike; #10716 put the deadline back.
+Whoever writes a `DialTLSContext` gives the handshake its own deadline and closes the raw connection when it runs out.
+Test it by waiting for the far end to see the connection close, not by how long the request took: the request returns
+on its own deadline either way (`TestDirectStalledHandshakeIsClosed`, `TestProxyStallingInsideTheTunnelIsClosed`).
