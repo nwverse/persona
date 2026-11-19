@@ -14,7 +14,7 @@ import { splitAgentSessions, type AgentGroup, type AgentMutes } from "./agent-gr
 import type { AgentState, Machine, Session } from "./types";
 import type { Route } from "./router";
 import { byTime } from "./times";
-import { stateName } from "./state-labels";
+import { stateName, waitName } from "./state-labels";
 import { usageLimitAgent } from "./usage-limit";
 
 export type TodoAgentSource = "manual" | "space" | "spawned" | "chat";
@@ -295,13 +295,18 @@ export const TODO_STATUS_RANK: Record<TodoStatus, number> = {
   done: 8,
 };
 
-/** The text color of a status's tone (TODO_STATUS_INFO), as the Tasks page and the overview draw it. */
-export const TODO_TONE_CLASS: Record<(typeof TODO_STATUS_INFO)[TodoStatus]["tone"], string> = {
+/** A status's tone. `attention` is a waiting to-do's that waits on its owner (lib/todo-wait-reason.ts todoLook, #11090):
+ *  no status has it of its own. */
+export type TodoTone = "red" | "green" | "amber" | "idle" | "off" | "attention";
+
+/** The text color of a status's tone (TODO_STATUS_INFO, todoLook), as the Tasks page and the overview draw it. */
+export const TODO_TONE_CLASS: Record<TodoTone, string> = {
   red: "text-red",
   green: "text-green",
   amber: "text-orange",
   idle: "text-ink-3",
   off: "text-ink-3",
+  attention: "text-attention",
 };
 
 /** A task that waits for the user's review while nothing of it runs or asks, so it is the user's rather than just stopped
@@ -316,14 +321,16 @@ export function todoRank(todo: Todo, status: TodoStatus): number {
   return awaitsReview(todo, status) ? 2 : TODO_STATUS_RANK[status];
 }
 
-export const TODO_STATUS_INFO: Record<TodoStatus, { label: string; tone: "red" | "green" | "amber" | "idle" | "off" }> = {
+/** Each status's word and tone. Waiting's are the word for a wait nothing names, neutral: where the to-do and its Agents
+ *  are at hand, lib/todo-wait-reason.ts todoLook names what it waits on (#11090). */
+export const TODO_STATUS_INFO: Record<TodoStatus, { label: string; tone: TodoTone }> = {
   done: { label: stateName("done"), tone: "off" },
   needs_you: { label: stateName("needs_you"), tone: "amber" },
   interrupted: { label: stateName("interrupted"), tone: "red" },
   usage_limit: { label: t("lib-usage-limit.short"), tone: "amber" },
   unread: { label: stateName("unread"), tone: "green" },
   working: { label: stateName("working"), tone: "amber" },
-  waiting: { label: stateName("task_waiting"), tone: "amber" },
+  waiting: { label: waitName("unknown"), tone: "idle" },
   follow_up: { label: stateName("follow_up"), tone: "idle" },
   not_started: { label: stateName("not_started"), tone: "off" },
   failed: { label: stateName("failed"), tone: "red" },
