@@ -13,12 +13,12 @@ let consumed = 0
 const timer = setInterval(() => {
   const commands = readFileSync(`${directory}/updates.jsonl`, 'utf8').split('\n').filter(Boolean)
   for (const line of commands.slice(consumed)) {
-    const update = JSON.parse(line)
+    const { sessionId: target = sessionId, ...update } = JSON.parse(line)
     if (update.end) {
       send({ id: prompt, result: { stopReason: 'end_turn' } })
       prompt = undefined
     } else {
-      send({ method: 'session/update', params: { sessionId, update } })
+      send({ method: 'session/update', params: { sessionId: target, update } })
     }
   }
   consumed = commands.length
