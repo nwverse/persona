@@ -3174,6 +3174,8 @@ When Claude Code answers an upstream refusal with another model and keeps the se
   (the box holds the words of the transcript's last prompt, which was answered and whose turn ended, and the conversation above the box no longer shows that prompt) and marks the segment the same way (`File.RewoundAt`), so `history` changes within a few seconds.
   If Claude then writes a message or a reply **under** the segment (the guess was wrong: the user had typed the same words again), the segment comes back: the node reads the file again and `history` changes once more (it then differs from what a freshly started node would compute, so clients re-fetch once more after a node restart).
 
+Optional inline tool waits use the input-echo ledger below: a successful `session.start` with `client_msg_id` records its first prompt, or a resume prompt after the transcript boundary captured before resuming. This does not make `session.start` a retry-deduplicating endpoint. The assistant generates the correlator and observes it through `session.items`; older nodes without this echo cannot satisfy the wait. `task_plan` persists its hub-generated `wait_input_id` with its single task across asynchronous admission/start; caller-supplied values are discarded. No public item or session schema changes. See [Assistant](../assistant/assistant.md) for `wait_seconds` and observation states.
+
 ### Matching pending messages
 
 A message the App sends shows as a pending bubble until it appears in the transcript. Claude Code, Codex and runtimes all use their own item ids for the user's line, not

@@ -675,6 +675,7 @@ func copyTodoLocked(t *Todo) Todo {
 // that worked for it (latest released first).
 func formatTodo(t Todo) Todo {
 	out := t
+	out.Delivery = currentDelivery(t)
 	if out.Source != nil && out.Source.ReportFullReply {
 		source := *out.Source
 		source.ReportText = "" // the delivery payload is not part of the to-do list
