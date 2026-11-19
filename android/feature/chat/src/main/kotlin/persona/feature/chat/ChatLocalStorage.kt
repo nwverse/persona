@@ -10,6 +10,7 @@ import java.io.File
 /** Optional local capabilities supplied by the app's pairing-scoped repository facade. */
 interface ChatLocalStorage {
     val localStorage: StateFlow<ChatStorageSnapshot?>
+    fun heldMessages(session: SessionKey): persona.core.contracts.api.HeldAgentActions? = null
     suspend fun imageFile(session: SessionKey, item: Item, width: Int, height: Int): File
     /** A pairing-owned decoder; the page must not shut it down. Null outside paired hub storage. */
     fun imageLoader(session: SessionKey): ImageLoader? = null

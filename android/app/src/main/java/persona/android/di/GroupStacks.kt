@@ -90,6 +90,12 @@ class GroupStacks @Inject constructor(application: Application, private val runt
         }
         val names = GroupNames(group.namespace)
         group.adoptSession = { previous, session -> if (current()) repositories.sessions.adoptThread(previous, session) }
+        group.heldActions = { session ->
+            persona.core.hub.HttpHeldAgentActions(session, connection.serverFeatures, { path, method, body ->
+                if (!current()) throw CancellationException("Pairing changed")
+                connection.request(path, method, body)
+            }, { id, retry -> if (current()) repositories.sessions.heldActionCompleted(session, id, retry) })
+        }
         val view = object : HubConnection {
             override val state = group.state
             override val resumed get() = connection.resumed
