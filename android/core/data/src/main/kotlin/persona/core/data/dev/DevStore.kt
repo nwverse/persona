@@ -92,7 +92,7 @@ class DevStore(val directory: File, private val maxBytes: Long = defaultMaxBytes
         }
         if (total > maxBytes && kept.size == 1) {
             total -= kept.single().length()
-            trimCurrentEventFile(kept.single())
+            trimCurrentEventFile(kept.single(), (maxBytes - errors.length()).coerceAtLeast(0))
             total += kept.single().length()
         }
         if (total > maxBytes) {
@@ -121,15 +121,16 @@ class DevStore(val directory: File, private val maxBytes: Long = defaultMaxBytes
         Instant.parse(checkNotNull(JsonCodec.parseToJsonElement(line).jsonObject.getValue("t").jsonPrimitive.contentOrNull))
     }.getOrNull()
 
-    /** Even one oversized current hour cannot bypass the cap; keep its newest complete JSON lines. */
-    private fun trimCurrentEventFile(file: File) {
+    /** Even one oversized current hour cannot bypass the remaining budget; keep its newest complete JSON lines. */
+    private fun trimCurrentEventFile(file: File, budget: Long) {
+        if (budget <= 0) { file.delete(); return }
         val lines = file.readLines()
         val kept = ArrayDeque<String>()
         var bytes = 0L
         for (line in lines.asReversed()) {
             val size = line.toByteArray(Charsets.UTF_8).size + 1L
-            if (size > maxBytes) continue
-            if (bytes + size > maxBytes) break
+            if (size > budget) continue
+            if (bytes + size > budget) break
             kept.addFirst(line)
             bytes += size
         }

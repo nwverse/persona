@@ -94,6 +94,21 @@ class DevStoreTest {
         assertTrue(store.recordedBytes() <= 256)
     }
 
+    @Test fun anOversizedEventFileLeavesRoomForRecentErrors() {
+        val store = DevStore(directory, maxBytes = 512)
+        store.appendEvents(listOf(
+            """{"t":"$now","kind":"app","event":"old","payload":"${"x".repeat(220)}"}""",
+            """{"t":"$now","kind":"app","event":"new","payload":"${"y".repeat(40)}"}""",
+        ), now)
+        store.appendError(ExtensionErrorReport(id = "recent", time = now.toString(), message = "n".repeat(300)), now)
+
+        val events = store.eventFiles().flatMap { it.readLines() }
+        assertFalse(events.any { "\"event\":\"old\"" in it })
+        assertTrue(events.any { "\"event\":\"new\"" in it })
+        assertEquals(listOf("recent"), store.errorLines(now).map { JsonCodec.decodeFromString<ExtensionErrorReport>(it).id })
+        assertTrue(store.recordedBytes() <= 512)
+    }
+
     @Test fun clearDeletesEveryRecordedCategory() {
         val store = DevStore(directory)
         store.appendEvents(listOf("""{"t":"$now","kind":"app"}"""), now)
