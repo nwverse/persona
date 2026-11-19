@@ -171,6 +171,7 @@ type Service struct {
 	origins      originBook           // origins.go
 	guests       guestBook            // guest.go
 	relays       relayBook            // conversations.go
+	chatReplies  chatReplyBook        // chat_reply.go: what conversations that wrote as the user were told of the chats
 	undelivered  undeliveredBook      // undelivered.go: the owner's messages that could not go in
 	quotes       quoteBook            // relay_quote.go: the owner's messages relays carried, verified
 	avail        availBook            // availability.go
@@ -209,13 +210,17 @@ type Service struct {
 	reviewDismissals taskReviewDismissalBook // task_review_dismissals.go
 	repoRootsMu      sync.Mutex              // pr_number_ref.go: one write of the repository roots at a time
 	// ownerVerifiesAll: every deployed task asks the owner to verify, not only the big ones (ownerVerifies; tests).
-	ownerVerifiesAll bool
-	later            laterBook    // later.go: questions that can wait for a briefing
-	brief            briefBook    // briefing.go
-	reporters        reporterBook // reporters.go
-	sched            schedule     // schedule.go
-	tasks            tasksState   // tasks.go
-	questions        questions    // tools.go (ask_user)
+	ownerVerifiesAll         bool
+	later                    laterBook    // later.go: questions that can wait for a briefing
+	brief                    briefBook    // briefing.go
+	reporters                reporterBook // reporters.go
+	sched                    schedule     // schedule.go
+	delayedMu                sync.Mutex   // delayed_waits.go: one local writer to the durable wait backlog
+	delayedRecoveryMu        sync.Mutex   // one restore pass; tracks entries already armed by this incarnation
+	delayedReceiptsRecovered bool         // initial receipt-claim requeue has completed for this incarnation
+	delayedRestored          map[string]bool
+	tasks                    tasksState // tasks.go
+	questions                questions  // tools.go (ask_user)
 	// deadlineSweeping: a sweep of the decisions past their deadline is running (decision_deadline.go).
 	deadlineSweeping atomic.Bool
 	askTodos         askTodoBook  // ask_todo.go: the questions nobody answered, now to-dos
@@ -284,6 +289,9 @@ type Service struct {
 	// sendsSettleHook, when set, runs in sendsSettle once the task is opened again, before the turn held for it is
 	// taken up (tests).
 	sendsSettleHook func()
+	// askRetryHook, when set, runs as the asks route's Retry has found the failed start its ask names, before the start
+	// reads the to-do again (tests: the to-do reopens or fails anew in between).
+	askRetryHook func(id string)
 	// sessionsSeen, when set, sees every machine's list SessionsChanged is handed (tests).
 	sessionsSeen func(DeviceSessions)
 
@@ -456,6 +464,12 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 			return err
 		}
 		if method == DeviceSessionSend {
+			// Inbox continuations use session.send, not assistant.send's SendParams. Re-attest the manager's persisted
+			// origin on this real path too; caller input can neither downgrade an Inbox conversation nor invent one.
+			delete(p, "origin")
+			if s.isInboxModelCall(ctx, device, id, "") {
+				p["origin"] = OriginInbox
+			}
 			cfg := s.settings(ctx)
 			if id != "" && id == cfg.Main && device == cfg.mainRouteMachine() {
 				p["is_main"] = true // internal sends must not restart main on ordinary-chat compaction settings
@@ -510,6 +524,11 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 		// on its launcher's window (and never adopts the spare).
 		if _, set := p["main_compact_window"]; !set && p["is_main"] == true {
 			putMainCompactWindow(s.settings(ctx), p)
+		}
+		// Interactive Claude Code (#10058) is part of what a process runs: every send and warm carries it, or the node
+		// restarts a conversation between the two kinds as messages without it come.
+		if _, set := p["claude_interactive"]; !set && s.claudeInteractive(ctx) {
+			p["claude_interactive"] = true
 		}
 	}
 	if p, ok := params.(map[string]any); ok && startScopeMethods[method] {
@@ -871,6 +890,7 @@ func (s *Service) turnEnded(ctx context.Context, r SessionRef, meeting bool) {
 	s.stopTurnEnded(r.MachineID, r.SessionID, time.Now()) // the turn a Stop interrupted, if one did (silent_turns.go)
 	s.clearToolLoop([2]string{r.MachineID, r.SessionID}, loopTurnChanged)
 	go s.registerInlineTurn(context.WithoutCancel(ctx), r)
+	s.afterSettle(context.WithoutCancel(ctx), s.registerInlineTurnSettled, r.MachineID, r.SessionID)
 	if !meeting {
 		s.availTurnEnded(ctx, r.MachineID, r.SessionID, time.Now()) // an assistant conversation's round (availability.go)
 		s.afterSettle(context.WithoutCancel(ctx), s.taskTurnSettled, r.MachineID, r.SessionID)

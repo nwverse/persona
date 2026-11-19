@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -49,6 +50,13 @@ type modelExecution struct {
 	// Interject: a message this one carries, sent while the conversation answers, moves its foreground work to the
 	// background (assistant_interject.go). Per message, never part of the fingerprint.
 	Interject bool `json:"-"`
+	// Interactive: run a Claude conversation as interactive Claude Code instead of claude -p (assistant_tui.go), the
+	// assistant's claude_interactive setting. Part of the fingerprint, so a change resumes an idle conversation in a
+	// new process; omitted when off, so fingerprints from before it stay the same.
+	Interactive bool `json:",omitempty"`
+	// NewModelChoice classifies this request against the previous recovery chain. It is per-turn provenance, never
+	// persisted or included in the execution fingerprint, and is committed only when the input is delivered.
+	NewModelChoice bool `json:"-"`
 	// SecretTicket: the hand-off a new Claude Code start puts in its environment (secretenv.go). Per start, never
 	// part of a fingerprint, never kept for a resume.
 	SecretTicket string `json:"-"`
@@ -62,7 +70,7 @@ type modelExecution struct {
 }
 
 func supervisionRuntimeRefusal(ctx context.Context) error {
-	return refusal("assistant_supervision_runtime", i18n.T(i18n.From(ctx), "rpc-errors.assistant_supervision_runtime"), nil)
+	return refusal(assistantwire.CodeSupervisionRuntime, i18n.T(i18n.From(ctx), "rpc-errors.assistant_supervision_runtime"), nil)
 }
 
 // check refuses a model that is not a model id (proto.ValidModelID, #1644) before anything runs; the error's text is
@@ -111,7 +119,8 @@ func (m modelExecution) withSupervision(policy *string) modelExecution {
 // assistantModel is the launcher and model the hub runs conversation id's next message on (as a message from the phone
 // would be), for a message the node sends it by itself (recoverAssistantTasks). Started on the model it last ran, the
 // conversation's next message from the phone would need another process (#1554). Nothing when the hub can't say (an
-// older hub): the conversation's own then.
+// older hub): the conversation's own then. The manager also re-attests origin here, so a pre-upgrade node session
+// with no persisted origin still recovers under its Inbox policy.
 func (n *Node) assistantModel(ctx context.Context, id string) (string, modelExecution) {
 	var res struct {
 		Launcher                string                   `json:"launcher"`
@@ -122,10 +131,12 @@ func (n *Node) assistantModel(ctx context.Context, id string) (string, modelExec
 		IsMain                  bool                     `json:"is_main"`
 		MainCompact             int                      `json:"main_compact_window"`
 		External                *proto.ExternalExecution `json:"external"`
+		Origin                  string                   `json:"origin"`
 		SupervisionInstructions *string                  `json:"supervision_instructions"`
+		ClaudeInteractive       bool                     `json:"claude_interactive"` // #10058: a send's own flag, here for starts no send makes
 	}
 	if n.peer == nil || n.peer.Call(ctx, "assistant.model", map[string]any{"session_id": id}, &res) != nil {
 		return "", modelExecution{}
 	}
-	return res.Launcher, (modelExecution{Model: res.Model, Effort: res.Effort, UseEffort: res.ModelFingerprint != "", Fingerprint: res.ModelFingerprint, Runtime: n.externalRuntime(id, res.Launcher, res.Runtime), IsMain: res.IsMain, MainCompactWindow: res.MainCompact, External: res.External}).withSupervision(res.SupervisionInstructions)
+	return res.Launcher, (modelExecution{Model: res.Model, Effort: res.Effort, UseEffort: res.ModelFingerprint != "", Fingerprint: res.ModelFingerprint, Runtime: n.externalRuntime(id, res.Launcher, res.Runtime), IsMain: res.IsMain, MainCompactWindow: res.MainCompact, External: res.External, Origin: res.Origin, Interactive: res.ClaudeInteractive}).withSupervision(res.SupervisionInstructions)
 }

@@ -25,6 +25,7 @@ import { composing } from "../lib/send-history";
 import { useScrollMemory } from "../lib/scroll-memory";
 import { useAgentSessions, useFullAgentSessions } from "../lib/sessions";
 import { useScoped } from "../lib/current-assistant";
+import { lazyPage } from "../lib/lazy-page";
 import { dropTodo, refresh, refreshTodos, useStore, withTaskRows } from "../lib/store";
 import {
   addTodoDecision,
@@ -119,6 +120,7 @@ import { setTodoSeen, todoSeenOn } from "../lib/todo-seen";
 import { retryKey, retryTask, useFeed } from "../lib/feed";
 import { planTaskOf, retryLauncher, retryOnLauncher } from "../lib/start-retry";
 import { dueOn, duePatch, todoRowMenu } from "./todo-row-menu";
+import { PageBoundary } from "./PageBoundary";
 
 /** What this browser was last on (#2029): the list or the calendar, the calendar's mode, and whether it shows done ones. */
 const VIEW_KEY = "persona.todos.view";
@@ -1935,6 +1937,7 @@ function askText(ix: Interaction | undefined): string {
 // A task's brief (#3822) comes with the first to-do that has one, not with the page.
 const TodoRequestGraph = lazy(() => import("./TodoRequestGraph"));
 const TaskBriefPanel = lazy(() => import("./assistant/TaskBrief").then((m) => ({ default: m.TaskBriefPanel })));
+const WorkspaceNaming = lazyPage(() => import("../ui/WorkspaceNaming").then((m) => m.WorkspaceNaming));
 const TaskBriefHistory = lazy(() => import("./assistant/TaskBrief").then((m) => ({ default: m.TaskBriefHistory })));
 const BriefResultExtras = lazy(() => import("./assistant/TaskBrief").then((m) => ({ default: m.BriefResultExtras })));
 // the question a failed start's tab stopped on, answered on its page (#10365): only for such a failure
@@ -2258,6 +2261,11 @@ function TodoDetail({
 
       <TodoRepositoryBindings key={`${owner}:${todo.manager ?? defaultManager()}:${todo.id}`} manager={todo.manager ?? defaultManager()} owner={owner} todoId={todo.id}
         legacyPRs={legacyPR ? [legacyPR] : []} version={todo.updated_at} />
+      <PageBoundary page="workspace-naming">
+        <Suspense fallback={<Loading />}>
+          <WorkspaceNaming manager={todo.manager ?? defaultManager()} owner={owner} todoId={todo.id} />
+        </Suspense>
+      </PageBoundary>
 
       <ThreadSection todo={todo} />
 
@@ -3097,6 +3105,7 @@ export function HandoverDialog({
   // For "new":
   const onlineMachines = useMemo(() => machines.filter((m) => m.online), [machines]);
   const [mid, setMid] = useState(() => onlineMachines[0]?.id ?? "");
+  const machine = onlineMachines.find((m) => m.id === mid);
   const [cwd, setCwd] = useState("");
   const [launchers, setLaunchers] = useState<Launcher[]>([]);
   const [launchersOf, setLaunchersOf] = useState("");
@@ -3126,8 +3135,8 @@ export function HandoverDialog({
     wasOpen.current = open;
     if (!open) return;
     if (opening) setPrompt("");
-    if (onlineMachines[0] && (!mid || !onlineMachines.some((m) => m.id === mid))) {
-      setMid(onlineMachines[0].id);
+    if (!mid || !onlineMachines.some((m) => m.id === mid)) {
+      setMid(onlineMachines[0]?.id ?? "");
     }
     const first = eligibleSessions[0];
     setSelectedKey((key) => opening || !eligibleSessions.some((s) => `${s.machine_id}/${s.session_id}` === key)
@@ -3136,14 +3145,15 @@ export function HandoverDialog({
   }, [open, onlineMachines, eligibleSessions]);
 
   useEffect(() => {
-    if (!open || !mid) return;
-    const controller = new AbortController();
-    const owner = credentialOwner();
-    // another computer's list is not this one's
+    if (!open) return;
+    // another computer's list is not this one's; an empty computer selection clears it
     setLaunchers([]);
     setLaunchersOf("");
     setHubDefault(undefined);
     setLauncher("");
+    if (!mid) return;
+    const controller = new AbortController();
+    const owner = credentialOwner();
     machineLaunchers(mid, { signal: controller.signal })
       .then((r) => {
         if (controller.signal.aborted || owner !== credentialOwner()) return;
@@ -3173,15 +3183,14 @@ export function HandoverDialog({
   };
 
   const submitNew = async () => {
-    if (!mid) return;
+    if (!machine) return;
     setBusy(true);
     try {
       await reopenFailed();
       const fullText = [previewCard, prompt.trim()].filter(Boolean).join("\n\n");
       // It only queues the start and opens the new agent's page, which says how it went: no success toast before the hub
       // has answered (#1856).
-      const machine = onlineMachines.find((m) => m.id === mid);
-      const inline = machine && launchersOf === JSON.stringify([mid, credentialOwner()])
+      const inline = launchersOf === JSON.stringify([mid, credentialOwner()])
         ? inlineTextStart(launchers.find((l) => l.name === (launcher || hubDefault?.provider)), currentHosts(machine).default, fullText, 0)
         : undefined;
       launchAgent({
@@ -3385,7 +3394,7 @@ export function HandoverDialog({
               if (e.key !== "Enter" || !(e.metaKey || e.ctrlKey) || composing(e.nativeEvent)) return;
               e.preventDefault();
               if (busy) return;
-              if (tab === "new") void (mid && submitNew());
+              if (tab === "new") void (machine && submitNew());
               else void submitExisting();
             }}
             placeholder={t("todos.prompt_placeholder")}
@@ -3413,7 +3422,7 @@ export function HandoverDialog({
             {t("common.cancel")}
           </Button>
           {tab === "new" ? (
-            <Button tone="accent" onClick={submitNew} disabled={!mid || busy} busy={busy}>
+            <Button tone="accent" onClick={submitNew} disabled={!machine || busy} busy={busy}>
               {t("todos.launch_and_hand")}
             </Button>
           ) : (

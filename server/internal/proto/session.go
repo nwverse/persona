@@ -515,8 +515,9 @@ const (
 	CodeMachinePending  = "machine_pending"  // the machine has not been confirmed as the user's yet
 	CodeClaudeMissing   = "claude_missing"   // Claude Code is not installed (or not on the launcher's PATH) there
 	CodeLauncherMissing = "launcher_missing" // the launcher (a ~/.zshrc function or alias) is not there
-	// CodeTerminalNotReady: the new tab's terminal would not take the start command (herdr's pane_send_failed); nothing
-	// ran, the tab is closed, a retry may work (node/typedstart.go). 503, retryable.
+	// CodeTerminalNotReady: the new tab's terminal would not take the start command (herdr's pane_send_failed), or the
+	// start line never showed in an Orca tab and never ran (node/startevidence.go, #10588); nothing ran, the tab is
+	// closed, a retry may work (node/typedstart.go). 503, retryable.
 	CodeTerminalNotReady = "terminal_not_ready"
 	// CodeAgentStartStalled: the agent opened but its session never became identifiable. This says nothing about
 	// launcher health and must not trigger an automatic retry or a health detour.
@@ -548,6 +549,11 @@ const (
 // open, docs/integrations/runtimes.md "What to implement", #8132). Nothing was read; the text is in the request's
 // language (apierr.Call). 409.
 const CodeNotLoaded = "not_loaded"
+
+// CodeTurnOverBackground is session.interrupt's answer when the Escape went to a session whose turn was already over
+// and only its background work (a background command, a subagent, a workflow) keeps it Working: nothing was
+// interrupted and that work goes on (#10828).
+const CodeTurnOverBackground = "turn_over_background"
 
 // CodeAgentStopped is what session.send refuses with for an Agent that has stopped and is read-only (node/stopped.go,
 // #4754): nothing was typed, and it takes no message until it is resumed (the user's Resume on its terminal page).
@@ -667,10 +673,15 @@ type UndeliveredMessage struct {
 	Images int       `json:"images,omitempty"` // how many pictures it carries (they are kept and sent with it)
 	At     time.Time `json:"at"`               // when the owner sent it
 	// State is UndeliveredWaiting (it is sent again by itself) or UndeliveredFailed (it gave up: Retry or Delete).
-	State    string     `json:"state"`
-	Attempts int        `json:"attempts,omitempty"`
-	NextAt   *time.Time `json:"next_at,omitempty"` // when the next try is due while waiting
-	Error    string     `json:"error,omitempty"`   // why the last try did not go in, in the owner's language
+	State      string     `json:"state"`
+	Attempts   int        `json:"attempts,omitempty"`
+	NextAt     *time.Time `json:"next_at,omitempty"`     // when the next try is due while waiting
+	Error      string     `json:"error,omitempty"`       // why the last try did not go in, in the owner's language
+	DeleteOnly bool       `json:"delete_only,omitempty"` // a failure the owner can delete but cannot retry
+	// Computer is set on a message held for an Agent while its computer was away (#10661, internal/devices held.go):
+	// that computer's name. Error is then the whole line to show under the bubble ("Will send when … is back"), and
+	// Retry / Delete go to the session's held routes (POST /api/v1/sessions/{mid}/{sid}/held/{msg}/retry, DELETE …).
+	Computer string `json:"computer,omitempty"`
 }
 
 // UndeliveredMessage states.

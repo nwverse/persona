@@ -147,9 +147,11 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		// textAt: when the transcript last had the agent's words; rollout: a Codex pane's rollout meta, for its effort.
 		var textAt, promptAt time.Time
 		var rollout quickMeta
+		var rolloutPath string
 		if p := n.transcriptPath(id); p != "" {
 			if st, err := os.Stat(p); err == nil {
 				m := n.meta(p, st)
+				rolloutPath = p
 				textAt = m.lastTextAt
 				rollout = m
 				if m.title != "" && a.Agent != "codex" && a.Agent != traexAgent {
@@ -184,6 +186,12 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				s.Subagents = n.subagents(id)
 			}
 		}
+		blockedSince := n.noteBlockedAt(id, s.Status == proto.StatusBlocked, now)
+		if a.Agent == "codex" && host.ParsePane(a.PaneID).Kind != host.Botmux && s.Status == proto.StatusBlocked &&
+			n.codexRolloutWorkingOverBlocked(ctx, id, a.PaneID, rolloutPath, rollout, blockedSince, now) {
+			s.Status = proto.StatusWorking
+			s.AttentionReason = ""
+		}
 		// The host's record of the answer (botmux's reply in the topic), unless the transcript has words well after it:
 		// the session went on outside the host (a `claude --resume` in a terminal). Text written in the same turn
 		// right after the reply (the sentinel, a closing line) comes within minutes.
@@ -214,7 +222,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			s.Title = opencodeTitle(a.Title)
 			n.mergeOpencodeRow(&s) // its conversation is the plugin's (opencode.go)
 		case a.Agent == cursorAgent || a.Agent == agyAgent:
-			// herdr drives the pane (agent.prompt, the keys); Persona does not read the conversation (workagent.go).
+			// Herdr drives the pane (agent.prompt, the keys). Agy can also read its verified conversation (workagent.go).
 		case otherAgent(a):
 			s.ReadOnlyReason = otherNoReader(a.Agent)
 		}

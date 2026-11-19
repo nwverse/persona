@@ -224,6 +224,42 @@ describe("the overview", () => {
     expect(buttonLabels(html)).not.toContain("打开机器页");
   });
 
+  it("keeps an agent that only waits in the background out of 工作中, in its own section with the clock (#10938)", () => {
+    const bg = { background_working: true, background_waiting: true, state_since: "2026-01-01T00:00:00Z" };
+    const html = render([agent(1, 0, "working", { title: "busy one" }), agent(2, 0, "working", { title: "busy two" }), agent(3, 0, "working", { title: "watching CI", ...bg })]);
+    expect(html).toContain("2 个工作中，1 个后台等待中。");
+    const working = heading(html, "工作中"), waiting = heading(html, "后台等待中");
+    expect(working).toBeGreaterThan(-1);
+    expect(waiting).toBeGreaterThan(working);
+    // each section's count is its rows'
+    expect(html.slice(working, waiting)).toContain(">2</span>");
+    expect(html.slice(working, waiting)).not.toContain("watching CI");
+    const row = html.slice(waiting);
+    expect(row).toContain("watching CI");
+    expect(row).toContain('data-state="bg_waiting"');
+    expect(row).not.toContain("busy one");
+    // the spinner is Working's
+    expect(html.slice(working, waiting).split("busy-motion").length - 1).toBe(2);
+    expect(row).not.toContain("busy-motion");
+  });
+
+  it("is not all quiet with only an agent waiting in the background (#10938)", () => {
+    const html = render([agent(1, 0, "working", { background_working: true, background_waiting: true })]);
+    expect(html).toContain("1 个后台等待中。");
+    expect(heading(html, "后台等待中")).toBeGreaterThan(-1);
+    expect(heading(html, "工作中")).toBe(-1);
+    expect(html).not.toContain("一切就绪");
+  });
+
+  it("marks the pane that only waits in a working tab's row (#10938)", () => {
+    const html = render([agent(1, 0, "working", { state_since: "2026-01-01T00:00:00Z" }), agent(1, 1, "working", { background_working: true, background_waiting: true })]);
+    expect(html).toContain("1 个工作中，1 个后台等待中。");
+    expect(heading(html, "后台等待中")).toBe(-1);
+    const row = html.slice(heading(html, "工作中"));
+    expect(row.split('data-state="bg_waiting"').length - 1).toBe(1);
+    expect(row).toContain("后台等待中");
+  });
+
   it("does not say nothing needs you above a waiting card", () => {
     const asking = agent(1, 0, "needs_you");
     const html = render([asking, agent(2, 0, "idle")], [{ id: "i1", kind: "permission", machine_id: "mac", session_id: asking.session_id, tool_name: "Bash" } as Interaction]);
@@ -306,6 +342,17 @@ describe("compact rows", () => {
     expect(tags(html)[0]).toContain("DSH");
     expect(html).not.toContain("DSH · Report ready.");
     expect(html).toContain(">Report ready.<");
+  });
+
+  it("shows the latest words without their Markdown, a tab's row too (#10939)", () => {
+    const words = "Done. **Result** is in `src/app.ts`:\n- see [the notes](https://example.com/notes)";
+    const plain = "Done. Result is in src/app.ts: see the notes";
+    const one = render([agent(1, 0, "unread", { last_text: words })]);
+    expect(one).toContain(`>${plain}<`);
+    expect(one).not.toContain("**Result**");
+    const tab = render([agent(2, 0, "working", { last_text: words, state_since: "2026-01-01T00:00:00Z" }), agent(2, 1, "idle")]);
+    expect(tab).toContain(`>${plain}<`);
+    expect(tab).not.toContain("`src/app.ts`");
   });
 
   it("puts the rows of every agent section in columns on a wide page, cards with buttons later", () => {

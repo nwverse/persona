@@ -557,6 +557,18 @@ final class AppModel {
         var machine: MachineRef
         var manager: String?
     }
+    /// Only the assistant settings that decide whose launcher catalog and effective default the picker shows. Volatile
+    /// conversation and preference fields are deliberately not part of this signature.
+    nonisolated struct AssistantLauncherSignature: Equatable, Sendable {
+        var group: String
+        var requestedManager: String?
+        var respondingManager: String?
+        var machineID: String
+        var launcher: String
+    }
+    nonisolated static let assistantLauncherRecheckInterval: TimeInterval = 10 * 60
+    @ObservationIgnored private var lastAssistantLauncherSignature: AssistantLauncherSignature?
+    @ObservationIgnored private var lastAssistantLauncherInvalidation: Date?
     @ObservationIgnored private(set) var assistantLauncherCache: [AssistantLauncherScope: APIClient.LaunchersResponse] = [:]
     @ObservationIgnored private var assistantLauncherReads: [AssistantLauncherScope: Int] = [:]
     @ObservationIgnored private var assistantLauncherReadID = 0
@@ -989,6 +1001,9 @@ final class AppModel {
         sessionLists.forget()
         pendingSessions = [:]
         interactions = [:]
+        // Pairing a real hub after Demo Mode must not reuse a same-scoped demo signature.
+        lastAssistantLauncherSignature = nil
+        lastAssistantLauncherInvalidation = nil
     }
 
     /// What the demo's conversations left behind: drafts, and cached chats (a new demo starts over).
@@ -1032,6 +1047,9 @@ final class AppModel {
         for g in Set(registry.groups).union(PushCrypto.allKeys().map(\.group)) { PushCrypto.removeKey(group: g) }
         links = []
         registry = HubRegistry()
+        // A later pairing's first snapshot must invalidate even when it has the same assistant scope.
+        lastAssistantLauncherSignature = nil
+        lastAssistantLauncherInvalidation = nil
         saveRegistry(registry)
         // The watch drops the credential it holds only when told (#1870): an empty push, as `removeGroup` sends for one group.
         pushWatchConfigs()
@@ -1282,6 +1300,17 @@ final class AppModel {
         st.timezonePicked != true && !zone.isEmpty && st.timezone != zone
     }
 
+    /// Whether an assistant snapshot must wake the launcher's readers: first sight, a scope change, an empty cache
+    /// (a failed read must retry), or the periodic recheck for changes made on another device (there is no
+    /// launcher-settings live event for apps).
+    nonisolated static func shouldInvalidateAssistantLaunchers(signature: AssistantLauncherSignature,
+                                                               lastSignature: AssistantLauncherSignature?,
+                                                               lastInvalidation: Date?, hasCachedLaunchers: Bool,
+                                                               now: Date) -> Bool {
+        guard hasCachedLaunchers, lastSignature == signature, let lastInvalidation else { return true }
+        return now.timeIntervalSince(lastInvalidation) >= assistantLauncherRecheckInterval
+    }
+
     /// Loads the assistant config; with no remembered conversation, picks up the newest one.
     func refreshAssistant() async {
         guard let api else { return }
@@ -1303,9 +1332,19 @@ final class AppModel {
             // Assistant snapshots are the settings-level refresh signal. Session.rev is deliberately not used here:
             // it ticks during transcript streaming and is not published through SessionCell to the composer.
             // Invalidate only the assistant picker; New Chat and Model Providers use launchersRevision instead.
-            assistantLauncherCache = [:]
-            assistantStarterCache.clear()
-            assistantLauncherRequestRevision += 1
+            let signature = AssistantLauncherSignature(group: api.group, requestedManager: assistantManagerID,
+                                                       respondingManager: st.manager, machineID: st.machineID,
+                                                       launcher: st.launcher)
+            let now = Date()
+            if Self.shouldInvalidateAssistantLaunchers(signature: signature, lastSignature: lastAssistantLauncherSignature,
+                                                       lastInvalidation: lastAssistantLauncherInvalidation,
+                                                       hasCachedLaunchers: !assistantLauncherCache.isEmpty, now: now) {
+                assistantLauncherCache = [:]
+                assistantStarterCache.clear()
+                assistantLauncherRequestRevision += 1
+                lastAssistantLauncherSignature = signature
+                lastAssistantLauncherInvalidation = now
+            }
             if sessionLists.lists[api.group]?.paged == true { landSessionSummaries(api.stamp(st.conversations), group: api.group) }
             // Only on the very first launch: after New Chat the key exists but is empty, and the home page stays.
             let neverChosen = UserDefaults.standard.object(forKey: "assistant.current") == nil
@@ -2600,6 +2639,7 @@ final class AppModel {
             olds.append((old, list))
         }
         if lists != sessionsByMachine { sessionsByMachine = lists }
+        // WatchSync drops unchanged content; repeated calls still drive its freshness resend and the widget writer.
         summariesChanged()
         for (old, new) in olds {
             for session in new where session.status != .working {
@@ -3111,7 +3151,8 @@ final class AppModel {
     /// the hub would refuse it (`SecretHandoff`).
     func resolve(_ ix: Interaction, _ r: Resolution, handoffCard: Bool = false) async {
         // To the hub of the interaction's own group (docs/protocol/multi-hub.md「Connections and routing」).
-        guard canAnswer(ix), let api = api(ix.group) else { return }
+        // A stopped Agent's work card still takes the answers that send it nothing: put off, or dismissed (#6839).
+        guard canAnswer(ix) || ix.isLocalResolution(r), let api = api(ix.group) else { return }
         let handoff = ix.isSecretHandoff && r.allow == true
         if handoff && !handoffCard {
             toast = Toast(String(localized: "Approve it on its card in the chat."), style: .error)
@@ -4269,6 +4310,7 @@ final class AppModel {
         drafts = drafts.filter { !gone.contains($0.key.group) }
         heldAttachments = heldAttachments.filter { !gone.contains($0.key.group) }
         healthReports = healthReports.filter { !gone.contains($0.key) }
+        TodosV1.shared.forget(gone)
         if let k = openChat, gone.contains(k.group) { openChat = nil }
         if let k = assistantCurrent, gone.contains(k.group) { assistantCurrent = nil }
         for g in gone {

@@ -65,6 +65,18 @@ func TestPlainStartRefusalLocalization(t *testing.T) {
 	}
 }
 
+// A Stop that found the turn already over (#10828) is said in the request's language, not the node's.
+func TestTurnOverBackgroundLocalization(t *testing.T) {
+	for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
+		want := i18n.T(lang, "rpc-errors."+proto.CodeTurnOverBackground)
+		err := &rpc.Error{Code: proto.CodeTurnOverBackground, Message: i18n.T(i18n.Default, "rpc-errors."+proto.CodeTurnOverBackground), Data: json.RawMessage(`{"delivered":"none"}`)}
+		body := LocalizedBody(http.StatusConflict, proto.CodeTurnOverBackground, err, lang)
+		if body["error"] != want || body["code"] != proto.CodeTurnOverBackground {
+			t.Fatalf("%s: %v, want %q", lang, body, want)
+		}
+	}
+}
+
 func call(t *testing.T, w http.ResponseWriter, rec *httptest.ResponseRecorder, err error) map[string]any {
 	t.Helper()
 	Call(w, err)
@@ -305,6 +317,10 @@ func TestRPCFailureLocalePreservesOutcomeAndDiagnostics(t *testing.T) {
 		{"omp stopped", &rpc.Error{Code: "omp_stopped", Message: "node's own words"}, "rpc-errors.omp_stopped"},
 		// a read of an agent its engine let go, which only an open chat starts (Paseo, #8132)
 		{"not loaded", &rpc.Error{Code: proto.CodeNotLoaded, Message: "the runtime's own words"}, "rpc-errors.not_loaded"},
+		// an owner's message to an Agent with older ones held for it (devices held.go, #10661)
+		{"held ahead", &rpc.Error{Code: "held_ahead", Message: "the manager's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.held_ahead"},
+		{"held not kept", &rpc.Error{Code: "held_not_kept", Message: "the manager's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.held_not_kept"},
+		{"held full", &rpc.Error{Code: "held_full", Message: "the manager's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.held_full"},
 	}
 	for _, tc := range cases {
 		legacy := httptest.NewRecorder()
@@ -364,6 +380,20 @@ func TestOpenElsewhereSpeaksTheClientsLanguage(t *testing.T) {
 		rec := httptest.NewRecorder()
 		if body := call(t, langWriter{rec, i18n.En}, rec, err); body["error"] != words {
 			t.Fatalf("%s: %v", data, body)
+		}
+	}
+}
+
+func TestCodexWriterConflictSpeaksTheClientsLanguage(t *testing.T) {
+	for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
+		rec := httptest.NewRecorder()
+		raw := &rpc.Error{Code: "codex_writer_busy", Message: "node recovery words", Data: json.RawMessage(`{"delivered":"none","detail":"codex: thread 11111111-2222-3333-4444-555555555555 already has an active writer (-32600)"}`)}
+		body := call(t, langWriter{rec, lang}, rec, raw)
+		if rec.Code != http.StatusConflict || body["code"] != "codex_writer_busy" || body["error"] != i18n.T(lang, "rpc-errors.codex_writer_busy") {
+			t.Fatalf("%s: %d %v", lang, rec.Code, body)
+		}
+		if body["delivered"] != "none" || body["detail"] != "codex: thread 11111111-2222-3333-4444-555555555555 already has an active writer (-32600)" {
+			t.Fatalf("%s lost delivery or diagnostic evidence: %v", lang, body)
 		}
 	}
 }

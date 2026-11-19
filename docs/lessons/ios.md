@@ -31,6 +31,38 @@ of the app on its main thread: 55–70 ms each with the `assistant` perf suite's
 app switching on a cue (`FrameProbe.switchPages`, `testTabSwitchAssistantAgentsByCue`) and the test only sleeping; keep
 the tapping test for the tap's own path.
 
+## What a development build redid with nothing changed (2026-11-19, #10713)
+
+`scripts/app/sim.sh` rebuilt more than the change it was run for (`docs/operations/testing.md`, "Development builds"):
+
+- **A script that runs on every build and edits a built file makes every task that reads that file run again.** "Stamp
+  the commit" (no dependency analysis, so it always runs) edited the built Info.plist in place on every build, so on
+  every unchanged build App Intents' training step read it again (Xcode 26.3), and a signed build signs the app again.
+  Declaring the plist as the script's input only orders the script after the task that writes it; no declaration makes
+  an in-place edit free. Without the edit, the built plist kept its time through every unchanged and one-file build.
+  The stamp now runs in Release only (an archive builds from clean anyway) or when a build asks for it
+  (`PERSONA_STAMP_COMMIT=YES`). The opt-in overlays that edit the plist the same way (`apple/siri-calls.yml`,
+  `apple/meta-wearables.yml`) still cost a signature per build while they are on.
+- **An XcodeGen include can add to `project.yml` but never take anything out of it.** Dictionaries merge, arrays append,
+  and `project.yml`'s own values are merged last, over every include's. A later include's `key:REPLACE` replaces only
+  what the includes before it merged. So what a switch must be able to remove lives in an include that is always on
+  (`apple/watch-and-share.yml`), and the switch's include, right after it, replaces those dependencies with nothing
+  (`apple/lean-dev-build.yml`); an include after the switch (Siri calls, Meta glasses) keeps its own.
+- **`enable: ${VAR}` is false while `VAR` is unset.** XcodeGen leaves an unknown `${VAR}` as it is, which is no boolean.
+  A switch can only be on when set, so the whole project has to be what an unset switch gives: CI, release and every
+  script that has never heard of the switch get it.
+- **Xcode leaves in place a watch app it no longer embeds.** After the watch dependency goes, `Persona.app/Watch/` from
+  the last whole build stays in the app and is installed with it (Xcode 26.3; the share extension's `.appex` did go).
+  `sim.sh` removes both before a lean build.
+- **A hash of files that names their absolute paths is one checkout's.** `shasum -a 256 <file>` prints the path after
+  the hash, so `native/app-core/scripts/build-apple.sh`'s input hash held each worktree's root and no worktree could use
+  another's build. Hash `< <file>`, name each file by its path in the checkout, and add what the environment changes
+  about the output (SDKs, `RUSTFLAGS`, deployment targets) before sharing the result.
+- **A slice-only framework in the worktree breaks the next build for another platform.** After `sim.sh` asked for the
+  Rust core's simulator slice only, Xcode building for a phone or "My Mac (Designed for iPad)" stopped with "no library
+  for this platform was found in PersonaCoreC.xcframework", which reads like a broken build. Every way the builder leaves
+  a simulator-only framework now says to run it with no flag first, and the docs that send people to Xcode say the same.
+
 ## A machine's heartbeat used to tell every reader of `machines` (2026-11-18, #10231)
 
 A busy hub pushes the machines with a new `lastSeen` all the time. `AppModel.machines` was replaced on each push, so
@@ -973,7 +1005,10 @@ Use an invalidation revision as the task key and handle the flag after completio
 - The hub continuously pushes lists, machines and steps; every push reevaluates consumers. Do not attach active controls to them (`docs/archive/apple/live-updates.md`):
   toolbars in data-driven views are resubmitted to UIKit each push, resetting open overflow-menu scroll position even with unchanged content. `ChatsView` handles navigation / toolbar, `AgentsList` handles the list
   (after splitting, `ChatsView.body` must read `searching`, otherwise chats opened from search retain the system navigation bar, `SearchOpenTests`);
-  closure environment values in body (`.environment(\.openFile) { … }`) are new each time, reevaluating every reading row (all visible work steps per push); use once-created `ChatActions`;
+  closure environment values in body (`.environment(\.openFile) { … }`) are new each time, reevaluating every reading row (all visible work steps per push); use once-created `ChatActions`.
+  A closure read from the environment is reported changed each time SwiftUI looks, even the same one handed down once (`_printChanges`): a list moving windows, a tab switch or anything above
+  that makes SwiftUI look at a row's inputs again runs every row that reads one. Hand an object down instead, one for the life of the view that makes it (`FileOpener`, `SpaceOpener`,
+  `SplitShowList`, #10303); a `Binding(get:set:)` and a binding through `Bindable` are reported changed the same way, a `@State` binding is not;
   observe `model.session(key)` per session (`SessionCell`), not all-machine lists. Keep fullscreen viewers and row expansion state on the page, not lazy rows.
   Measure with `LiveUpdateTests` (`/mock/churn` continuous pushes, `-perfCounts YES` reporting body counts and main-thread time per round).
 - Badges (pending count, Inbox Needs you) change almost every push; their consumers must not contain pages or menus (2026-11-01, TestFlight 70 "it's back", `docs/archive/apple/live-updates.md`):
@@ -1080,6 +1115,7 @@ Use an invalidation revision as the task key and handle the flag after completio
   The switcher itself read `pager.page` (selected segment as Menu or button), participating too: high simulator load (another running in parallel) still hit `settle lost`; fallback changing `moving` redrew it, and callback followed 20 ms later.
   Now the switcher reads only `moving` (set outside animation), never `position`-derived values. Rule: native-header content reads only `moving` / `lingering` / `shell.page`, not `position` / `pager.page`.
   Failed attempt: a zero-size `Animatable` view reporting per-frame `position` (offscreen drawing does not evaluate body per frame). Diagnose long `slide` → `settled` delays or `settle lost` (forbidden by `ShellInboxAgentTests`).
+- A pager drag whose recognizer never delivers `.ended`, `.cancelled` or `.failed` leaves `moving` set with no goal: the page can be wholly visible while its composer rejects every tap (#9961). The window's last-touch watcher cancels that abandoned drag on the next run loop, after an ordinary `letGo` has had its chance to choose a target. Recovery restores the drag's starting page's input before the next tap and settles selection and position together; it never exposes the destination page while cancelling past halfway, and a late cancel does nothing when a newer slide already owns the pager. Record a new finger before cancelling, so a no-displacement `rest` leaves the moving switch in place until that finger lets go. `ShellPagerTests.testComposerFirstTapAfterHeldStrip` proves first-tap keyboard input, `testRecoveryExposesOnlyTheDragStartingPage` covers the past-halfway case, the urgent-call interruption test covers a real full-screen cancellation, and `ShellStateTests` keeps ordinary releases, the moving switch and newer routes intact.
 - Topmost nonblocking content (toast) uses its own scene `UIWindow`: `windowLevel = .normal + 1`, `hitTest` returns nil, letting taps reach the underlying window;
   shell sheets, drawers and pushed pages are below it (2026-11-04, #1053, `ToastWindow`). SwiftUI overlays are covered by sheets, and `allowsHitTesting(false)` does not stop UIKit interception.
   Supply dark / light appearance (copy shell window `overrideUserInterfaceStyle`; later `ColorSchemeChoice` updates all scene windows), `app` text size
@@ -1360,6 +1396,9 @@ Use an invalidation revision as the task key and handle the flag after completio
 - Removing conditionally inserted tappable views (`if moving { replacement header }`) during a held touch loses that touch:
   no `Button` action, and the identical underlying button never receives it because touch began on the removed view. Shell settling mid-tap does this,
   losing nearly every other rapid tap in slower BeautifulUI animations (2026-11-02,`testQuickTapsEndOnTheLast`). Wait for finger release before removing (`ShellPager.lingering`).
+- A spring's animation completion is not the destination top bar's first complete layout. On a cold Assistant the strip had already reported `settled`,
+  yet its bar was still about 30 pt out of place; removing the stand-in then lost the next switch tap or delivered it to New Chat (#10227).
+  Leave the stationary stand-in in charge for two main-queue turns so the transparent destination bar can commit its resting layout, and invalidate that handoff when a new slide starts.
 - Both shell pages remain built; hidden-page `onAppear` still runs. Launching on Agents "appeared" assistant chat, subscribing, marking seen,
   and running DEBUG switches despite no user view (2026-11-02, a test lane logged repeated `appeared()` and duplicate sends). Side-effectful appearance is not visibility:
   do not build unselected pages (`ShellState.assistantBuilt`) or use `.onTabVisibility`. Do not run one-shot DEBUG actions on `onAppear` either.
@@ -1453,6 +1492,8 @@ Use an invalidation revision as the task key and handle the flag after completio
   Store results first when one argument changes a variable used by another.
 - Build-product Info.plist script stages (Settings › About › Build commit, `project.yml` `Stamp the commit`) must declare `$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)`
   as input, or Xcode may run the script then rewrite the plist, losing values (bundle-id changes trigger this, 2026-10-31). Reading `.git` requires disabling `ENABLE_USER_SCRIPT_SANDBOXING` for this target.
+  Run on every build, such a stage also makes everything that reads the plist (App Intents, the signature) run again on
+  every build, so the stamp runs in Release only ("What a development build redid with nothing changed", #10713).
 
 ### iOS 18.6 floor
 
@@ -3020,6 +3061,12 @@ coordinate space (`onGeometryChange` into a store that redraws nothing), read th
 (`onScrollGeometryChange`), work out the least offset that clears the fade (`CapsuleReveal.offset`, pure and tested),
 and set it through `ScrollPosition.scrollTo(x:)`. `InboxSectionBarUITests.testAChosenChoiceComesWhollyIntoViewAtTheLargestText`
 checks the chip's frame against the strip's.
+
+## Confirmation-dialog labels ignore the window's text-size traits (2026-11-18, #8127)
+
+- On iOS 27 at AX5, the window's xxxLarge trait override reaches an action sheet's title, message and button capsules, but its button labels still use the application's uncapped size. Plain string titles and custom labels draw alike; `lineLimit`, `dynamicTypeSize` on a label, and environment or scene trait overrides do not change that label. An alert's labels and capsules stay consistent.
+- Pages use `.accessibleConfirmationDialog`: the original confirmation dialog through xxxLarge, an alert above it on iOS. The alert needs exactly one Cancel. Since a generic `ViewBuilder` cannot reveal whether its actions already contain one, each call says `hasCancel: true` only for an existing cancel action; otherwise the shared modifier adds Cancel. `ConfirmationDialogRuleTests` keeps pages on that rule.
+- XCTest sees two nested button elements with the capsule's frame and no static-text element for the action label, at both ordinary and AX5 sizes. For a frame assertion, the DEBUG `-probes YES` element `probe.confirmation-dialog-labels` reads the presented `UIAlertController`'s real `UILabel` frames. Compare those with the XCTest button frame; do not assert containment between the two nested buttons, which stays equal even while the glyphs overflow.
 
 ## A place chosen again while in front keeps its page and its state (2026-11-16, #9053)
 
