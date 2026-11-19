@@ -428,7 +428,7 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // Keep the stricter existing limit while combining these changes.
 // #10904: the overview's task cards name who works on each task, the lead Agent's computer, model and effort and "+N"
 // for the others (lib/home-tasks.ts leadAgent; views/Home.tsx taskAgentLine over the model pill's pillView, modelList and
-// effortTitle, and home.task_agents_more). 205 B in ja, measured in one environment against main 8038ebaf10 (ja
+// effortTitle, and home.task_agents_more). 205 B in ja, measured in one environment against main e7a12f7323 (ja
 // 482,497 B to 482,702 B; en 479,378 B to 479,585 B, zh-Hans 480,224 B to 480,422 B). Main had 29 B of room, so the
 // budget is this ja size plus those 29 B.
 export const FIRST_SCREEN_BUDGET = 482_731;
