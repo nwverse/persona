@@ -4,6 +4,7 @@ import java.io.File
 import java.nio.file.Files
 import java.time.Instant
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.AbstractExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -110,6 +111,33 @@ class DevRecorderTest {
         assertEquals(120, java.time.Duration.between(Instant.parse(background.string("from")), Instant.parse(background.string("to"))).seconds)
         assertTrue(events.any { it.string("kind") == "app" && it.string("event") == "background" })
         assertTrue(events.any { it.string("kind") == "app" && it.string("event") == "foreground" })
+    }
+
+    @Test fun storageFailuresStayInsideWriterTasks() {
+        val uncaught = CopyOnWriteArrayList<Throwable>()
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { _, error -> uncaught += error }
+        try {
+            val events = DevRecorder(DevStore(File(directory, "event-store").apply { writeText("x") }), fake::now, { fake.cpu }, "512")
+            events.start(active = true, page = "assistant", device = DevDeviceState())
+            events.flush()
+            val eventsDone = CountDownLatch(1)
+            events.afterWrites { eventsDone.countDown() }
+            assertTrue("event writer finished", eventsDone.await(5, TimeUnit.SECONDS))
+            events.close()
+
+            val errors = DevRecorder(DevStore(File(directory, "error-store").apply { writeText("x") }), fake::now, { fake.cpu }, "512")
+            errors.start(active = true, page = "assistant", device = DevDeviceState())
+            errors.error(ExtensionErrorReport(id = "ordinary", time = fake.now().toString()))
+            val errorsDone = CountDownLatch(1)
+            errors.afterWrites { errorsDone.countDown() }
+            assertTrue("error writer finished", errorsDone.await(5, TimeUnit.SECONDS))
+            errors.close()
+
+            assertTrue("writer exceptions escaped: $uncaught", uncaught.isEmpty())
+        } finally {
+            Thread.setDefaultUncaughtExceptionHandler(previous)
+        }
     }
 
     @Test fun stoppingDropsBufferedRecordsAndForgetsTheSink() {

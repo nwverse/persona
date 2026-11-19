@@ -101,6 +101,25 @@ class DevelopingDiagnosticsPagesTest {
         rule.onNodeWithText("Settings").assertIsDisplayed()
     }
 
+    @Test fun routedExportBackClosesOnlyTheExportOverlay() {
+        val fake = FakeDevelopingDiagnostics(DevelopingDiagnosticsSnapshot(true, recordedBytes = 2048))
+        val services = demoSettingsServices(rule.activity.resources).copy(developing = fake)
+        var exits = 0
+        rule.setContent {
+            PersonaTheme {
+                SettingsScreen(services, initialPage = "about", onBack = { exits++ })
+            }
+        }
+        rule.onNodeWithText("Export Diagnostics…").performClick()
+        rule.onNodeWithText("Create Archive").assertIsDisplayed()
+
+        back()
+        rule.onNodeWithText("Export Diagnostics…").assertIsDisplayed()
+        assertEquals(0, exits)
+        back()
+        assertEquals(1, exits)
+    }
+
     @Test fun aFailedExportCanBeRetriedAndBusyCannotStartAnotherExport() {
         val gate = CompletableDeferred<File>()
         val fake = FakeDevelopingDiagnostics(DevelopingDiagnosticsSnapshot(true, recordedBytes = 2048)).apply { exportGate = gate }

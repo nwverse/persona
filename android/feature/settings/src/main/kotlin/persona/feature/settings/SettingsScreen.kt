@@ -94,6 +94,7 @@ private fun SettingsContent(
     var tunnelPage by tunnelPageState
     val pairingDiagnosticsState = rememberSaveable(initialPage) { mutableStateOf(false) }
     var pairingDiagnostics by pairingDiagnosticsState
+    var diagnosticsExport by rememberSaveable(initialPage) { mutableStateOf(false) }
     // Model providers's own steps when they open in place: one provider, adding one, importing from ~/.zshrc.
     val providerState = rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
     var provider by providerState
@@ -353,8 +354,10 @@ private fun SettingsContent(
         translationValue = translationValue, hubUpdateStatusState = hubUpdateStatusState,
         slotsState = slotsState, slotCards = slotCards, detailKey = detailKey,
         back = back, openPage = ::open, openDiagnosticsExport = {
-            parents = parents + page
-            page = "about-export"
+            if (onBack == null) {
+                parents = parents + page
+                page = "about-export"
+            } else diagnosticsExport = true
         }, deviceFeedback = deviceFeedback, connectorItems = connectorItems,
         onNavigate = onNavigate, onClose = onClose, onDemo = onDemo, onExitDemo = onExitDemo,
     )
@@ -367,6 +370,13 @@ private fun SettingsContent(
     BackHandler(page == "managers" && manager != null) { manager = null }
     BackHandler(page == "providers" && (provider != null || providerStep != null)) { if (providerStep != null) providerStep = null else provider = null }
     BackHandler(page == "hubs" && tunnelPage != null) { tunnelPage = null }
+    if (diagnosticsExport && onBack != null) {
+        val close = { diagnosticsExport = false }
+        BackHandler(onBack = close)
+        JFullScreen(onDismiss = close) {
+            services.developing?.let { DevelopingDiagnosticsExportPage(it, onBack = close) }
+        }
+    }
     if (pairingDiagnostics && (page == "pair" || page == "hubs-add")) {
         val close = { pairingDiagnostics = false }
         JFullScreen(onDismiss = close) { DiagnosticsScreen(services, onBack = close, footer = deviceFeedback) }
