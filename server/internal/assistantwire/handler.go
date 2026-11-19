@@ -29,6 +29,11 @@ const AdminHeader = "X-Persona-Admin"
 // RoleHeader, never the client's.
 const DeviceNameHeader = "X-Persona-Device-Name"
 
+// PersonHeader is "1" on a relayed request from a person's own full device (a device token with its own id, not the
+// hub's token or a pairing code), set by the hub like RoleHeader, never the client's: what may change a message held
+// for an Agent while its computer is away (#10661), whose delivery carries that person's provenance.
+const PersonHeader = "X-Persona-Person"
+
 // HandoffApprover is the device the hub found may approve a hand-off card (proto.SecretHandoffTool): a full device
 // whose app shows the card (docs/extensions/secret-providers.md "Who may approve a hand-off"). It travels in
 // HTTPRequest, never in a header, so no client can set it, and an older hub never sends it: a manager approves a
@@ -63,6 +68,19 @@ func WithHumanStart(ctx context.Context) context.Context {
 func HumanStartOf(ctx context.Context) bool {
 	human, _ := ctx.Value(humanStartKey{}).(bool)
 	return human
+}
+
+type replyInputKey struct{}
+
+// WithReplyInput marks a conversation start as a direct legacy app start for missing-reply recovery.
+func WithReplyInput(ctx context.Context) context.Context {
+	return context.WithValue(ctx, replyInputKey{}, true)
+}
+
+// ReplyInputOf reports whether WithReplyInput marked ctx.
+func ReplyInputOf(ctx context.Context) bool {
+	reply, _ := ctx.Value(replyInputKey{}).(bool)
+	return reply
 }
 
 // ToolCall is assistant.tool's params.
@@ -193,6 +211,11 @@ const InterruptedSummary = "模型服务出错，中断了"
 // refusalMarkers, or is Claude Code's usage-limit line).
 func CutOff(answer string) bool {
 	answer = strings.TrimSpace(answer)
+	const sealedPrefix = "this conversation was compacted natively by "
+	if len(answer) >= len(sealedPrefix) && strings.EqualFold(answer[:len(sealedPrefix)], sealedPrefix) &&
+		proto.UnrecoverableTurnErrorCode(answer) != "" {
+		return true
+	}
 	return startsWithAny(answer, APIErrorMarkers) || startsWithAny(answer, refusalMarkers) || UsageLimitText(answer)
 }
 

@@ -323,14 +323,14 @@ func (s *Service) triageRead(ctx context.Context, machine string, c proto.Sessio
 	if ok && t.read != nil && sameTurn(c, t.turn) {
 		return t.read.ask, t.read.reply
 	}
-	ask, reply, err := s.lastTurnOf(ctx, machine, c.SessionID)
+	ask, reply, items, err := s.lastTurnRead(ctx, machine, c.SessionID)
 	var re *rpc.Error
 	if err != nil && !(errors.As(err, &re) && re.Code == proto.CodeNotLoaded) {
 		return "", ""
 	}
 	s.work.mu.Lock()
 	if t, ok := s.work.tried[k]; ok && sameTurn(c, t.turn) {
-		t.read = &turnRead{ask: ask, reply: reply}
+		t.read = &turnRead{ask: ask, reply: reply, items: items}
 		s.work.tried[k] = t
 	}
 	s.work.mu.Unlock()
@@ -340,13 +340,19 @@ func (s *Service) triageRead(ctx context.Context, machine string, c proto.Sessio
 // lastTurnOf is a session's latest turn: what the user asked in it ("" when none) and its last reply ("" when none);
 // err when the turn could not be read.
 func (s *Service) lastTurnOf(ctx context.Context, machine, sid string) (ask, answer string, err error) {
+	ask, answer, _, err = s.lastTurnRead(ctx, machine, sid)
+	return ask, answer, err
+}
+
+// lastTurnRead also retains the exact items, so a later asynchronous step cannot mistake a newer turn for this one.
+func (s *Service) lastTurnRead(ctx context.Context, machine, sid string) (ask, answer string, items []proto.Item, err error) {
 	var res struct {
 		Items []proto.Item `json:"items"`
 	}
 	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	if err := s.call(cctx, machine, DeviceSessionItems, map[string]any{"session_id": sid, "turns": 1}, &res); err != nil {
-		return "", "", err
+	if err := s.call(cctx, machine, DeviceSessionItems, map[string]any{"session_id": sid, "turns": 1, "lazy_images": true}, &res); err != nil {
+		return "", "", nil, err
 	}
 	for _, it := range res.Items {
 		if it.Kind == proto.KindText && it.Role == "user" && strings.TrimSpace(it.Text) != "" {
@@ -356,10 +362,10 @@ func (s *Service) lastTurnOf(ctx context.Context, machine, sid string) (ask, ans
 	}
 	for i := len(res.Items) - 1; i >= 0; i-- {
 		if it := res.Items[i]; it.Kind == proto.KindText && it.Role == "assistant" && strings.TrimSpace(it.Text) != "" {
-			return ask, strings.TrimSpace(it.Text), nil
+			return ask, strings.TrimSpace(it.Text), res.Items, nil
 		}
 	}
-	return ask, "", nil
+	return ask, "", res.Items, nil
 }
 
 // clipMiddleRunes keeps a long text's first and last n runes: a last answer says what was done first and what is

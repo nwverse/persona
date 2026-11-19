@@ -32,7 +32,7 @@ import { runStep, sameStep, turnDone, type RunStep } from "../../lib/run-step";
 import { stabilizeLines, stableValue } from "../../lib/stable-lines";
 import { planProgress, workLineStyle } from "../../lib/work-groups";
 import { echoed, taggedSeen } from "../../lib/echo";
-import { assertDelivered, isKept, keptBubble, showKept, shownUndelivered, type KeptReply } from "../../lib/undelivered";
+import { AGENT_MESSAGE_HOLD_FEATURE, assertDelivered, isKept, keptBubble, showKept, shownUndelivered, type KeptReply } from "../../lib/undelivered";
 import { lazyPage } from "../../lib/lazy-page";
 import { acceptOutgoing, forgetOutgoing, inSendOrder, keepFailed, keepOutgoing, noteWritten, outboxKey, placeFailed, registerOutboxRecheck, relayNotice, restoreOutbox, retryOutbox, SENT_GRACE_MS, settleOutbox, type DeliveryReply } from "../../lib/outbox";
 import { apiOp } from "../../lib/ops";
@@ -61,7 +61,7 @@ import { agentCommands } from "../../lib/composer-commands";
 import { CLEAR_MAIN_FEATURE, clearMainContext, isClearCommand, mainCommands } from "../../lib/main-clear";
 import { PendingCards } from "./Interactions";
 import { focusedCard, focusedFirst } from "../../lib/card-focus";
-import { lostWith } from "../../lib/dock-focus";
+import { COMPOSER_INPUT, lostWith } from "../../lib/dock-focus";
 import { FailureNote, showsFailureNote } from "./FailureNote";
 import { CloseoutCard } from "./CloseoutCard";
 import { shownCloseout } from "../../lib/closeout";
@@ -91,7 +91,6 @@ import { seekCall } from "./jump";
 import { navRailTicks, type NavRailSource, type NavRailTick } from "../../lib/nav-rail";
 import { containsInput, indexedNavTicks, userInputRevision, windowUserInputs, USER_INPUT_PAGE_SIZE } from "../../lib/user-input-index";
 import { useRevealedInputSeq, useUserInputs } from "./useUserInputs";
-import { NavRail } from "./NavRail";
 import { useChatScrollbar } from "./useChatScrollbar";
 import { ChatLineView, closedRecap, closeRecap, dismissedError, dismissError, ErrorBanner, errorKey, OpenRecapLine } from "./Lines";
 import { useTranscript } from "./useTranscript";
@@ -117,7 +116,7 @@ import { pickParts } from "./picking-parts";
 import type { MessagePick } from "../../lib/message-pick";
 import { foldHolding, lineOfItem, loadEarlierForSearch, untilStill, type ChatSearchHit, type SearchLoadOutcome } from "../../lib/chat-search";
 import { chatFiles } from "../../lib/mentions";
-import { sameMessage } from "../../lib/queue";
+import { pairPhotoOnly, sameMessage } from "../../lib/queue";
 import { OutboxBubbles } from "./OutboxBubbles";
 import { MainRuntimeSlot } from "../assistant/MainRuntimeSlot";
 import { AssistantFace, CompactionStrip, useAssistantMenu } from "../assistant/AssistantChat";
@@ -130,8 +129,7 @@ import { externalOpening, openerOf } from "../../lib/conversation-origins";
 import { usePersona } from "../assistant/Persona";
 import { voiceCalls, useVoiceCall, useVoiceState } from "../../lib/voice/calls";
 import { agentLabel } from "../../lib/mentions";
-import { VoiceBar } from "./voice/VoiceBar";
-import { useVoiceEntry, VoiceEnded, VoiceTail } from "./voice/VoiceParts";
+import { useVoiceEntry, VoiceBar, VoiceEnded, VoiceTail } from "./voice/VoiceParts";
 import { ChatOnlyNote, FailureCard, ReadinessCard, useReadinessGate, type ReadinessGate } from "../assistant/Readiness";
 import { codedFailure, knownAction, refreshReadiness, type CodedFailure } from "../../lib/readiness";
 import { FALLBACK_UNAVAILABLE, recoveryExhausted } from "../../lib/model-fallback";
@@ -170,6 +168,7 @@ const LazyNotFoundNotice = lazy(() => import("./NotFoundNotice").then((m) => ({ 
 const ShellQuestion = lazy(() => import("../ShellQuestionCard"));
 // only in a conversation that moved between Claude Code and Codex (#5054): its earlier sessions, read above the live one
 const EarlierStretches = lazy(() => import("./EarlierStretches"));
+const NavRail = lazy(() => import("./NavRail").then((m) => ({ default: m.NavRail })));
 // Recovery cards are rare: their rendering and words load only when the session actually carries a fallback record.
 const ModelFallbackCard = lazy(() => import("./ModelFallbackCard").then((m) => ({ default: m.ModelFallbackCard })));
 // A message the assistant keeps after it could not go in (#10194) is rare: its status line, Retry and Delete load only in
@@ -212,6 +211,17 @@ const SEARCH_NOTICE: Record<SearchLoadOutcome, string | null> = {
   page_cap: "chat-chatview.search_page_cap",
 };
 const nextFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
+
+// An earlier A page in A → B → A does not change the live stretch. Read the rendered stretch
+// rather than the raw session or the parent's last report, which can trail the child DOM.
+function visibleHistoryFront(scroller: HTMLElement, live: number) {
+  const oldest = scroller.querySelector<HTMLElement>("[data-stretch-index]");
+  return {
+    live,
+    stretch: oldest ? Number(oldest.dataset.stretchIndex) : Infinity,
+    stretchSeq: Number(oldest?.dataset.stretchFirst ?? Infinity),
+  };
+}
 
 interface Pending {
   /** The client_msg_id it went with. */
@@ -337,6 +347,13 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const subagents = stableSubagents(lastSubagents.current, listed);
   lastSubagents.current = subagents;
   const machineName = useStore((s) => machineWithHub(mid, s.machines));
+  // An Agent's computer away, on a hub that holds what is sent meanwhile (#10661): the box stays open and says the
+  // messages go once it is back, in words from the held bubbles' chunk, off the first screen (UndeliveredBubbles).
+  const computerAway = useStore((s) => !assistant && hubHas(s.features, AGENT_MESSAGE_HOLD_FEATURE) && s.machines.find((m) => m.id === mid)?.online === false);
+  const [awayLine, setAwayLine] = useState("");
+  useEffect(() => {
+    if (computerAway) void import("./UndeliveredBubbles").then((m) => setAwayLine(m.heldPlaceholder(machineName)), () => {});
+  }, [computerAway, machineName]);
   // A Codex opened with no first message (lib/codex-waiting.ts): once its thread comes (the message went in from here
   // or its terminal) the row goes and the thread's comes in the same pane, and this page follows it there.
   const waitsFirst = waitsForFirstMessage(session);
@@ -424,7 +441,11 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const sendFeedback = useMessageFeedback(mid, sid);
   // a message Claude queued shows in the queue strip, not as a sending bubble too (ChatView.swift chatScroll)
   const queued = session?.queued ?? [];
-  const shownPending = queued.length ? pending.filter((p) => !queued.some((q) => sameMessage(q, p.msg.text))) : pending;
+  // a photo-only one by its photos, as no words match it (#10871)
+  const photoOnly = useMemo(() => pairPhotoOnly(queued, pending.map((p) => ({ text: p.msg.text, images: p.msg.images?.length ?? 0,
+    carries: Boolean(p.msg.files?.length || p.msg.contexts?.length) }))), [queued, pending]);
+  const pairedPending = useMemo(() => new Set(photoOnly.values()), [photoOnly]);
+  const shownPending = queued.length ? pending.filter((p, i) => !pairedPending.has(i) && !queued.some((q) => sameMessage(q, p.msg.text))) : pending;
   // the owner's messages the assistant keeps after they could not go in, from the row: on every device (#10194)
   // (not one this page still draws as sending: the row can come before the send's answer)
   const keptUndelivered = shownUndelivered(session, tr.items, pending.map((p) => p.id));
@@ -434,11 +455,12 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // Both stay the same while `pending` does: the queue is drawn in the memoized composer.
   const queuedPhotos = useCallback((raw: string) => pending.find((p) => sameMessage(raw, p.msg.text))?.msg.images?.length ?? 0, [pending]);
   const withdrawn = useCallback((text: string) => {
-    const gone = pending.find((p) => !p.posting && sameMessage(text, p.msg.text));
+    const paired = photoOnly.get(text);
+    const gone = pending.find((p) => !p.posting && sameMessage(text, p.msg.text)) ?? (paired !== undefined && !pending[paired]?.posting ? pending[paired] : undefined);
     if (!gone) return;
     forgetOutgoing(outboxKey(mid, sid), gone.id);
     setPending((ps) => ps.filter((p) => p.id !== gone.id));
-  }, [pending, mid, sid]);
+  }, [pending, photoOnly, mid, sid]);
   const outgoing = shownPending.length + outbox.filter((e) => e.state !== "failed").length;
   const persona = usePersona();
   const state = session ? stateOf(session) : "unknown";
@@ -457,31 +479,34 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // the message is in, the hub has not said working yet (#3654): the live row covers that wait too
   const segs = useMemo(() => segments(tr.items), [tr.items]);
   const lastSeg = segs[segs.length - 1];
-  // the last message's send time: it stays on screen without a hover (#5285)
-  const latestTime = lastSeg?.answer?.ts ?? lastSeg?.user?.ts;
   const [awaitNow, setAwaitNow] = useState(() => Date.now());
-  const turnFailure = session?.failure_reason ? { since: session.state_since } : undefined;
+  const turnFailure = session?.failure_reason || session?.turn_error || lastSeg?.cut ? { since: session?.state_since } : undefined;
   // a message whose wait the hub took a stop for (#2450): it is no longer worked on, so Working… and Interrupt go at
   // once instead of after AWAIT_MS; a turn the hub reports later still shows through `state`
   const [stoppedTurn, setStoppedTurn] = useState<string>();
-  const awaitedTurn = awaitingTurn(lastSeg, state, awaitNow, turnFailure) ? lastSeg?.user?.id : undefined;
-  const awaiting = awaitedTurn !== undefined && awaitedTurn !== stoppedTurn;
+  const awaitedTurn = awaitingTurn(lastSeg, state, awaitNow, turnFailure, session?.state_since) ? lastSeg?.user?.id : undefined;
+  const awaiting = awaitedTurn !== undefined && awaitedTurn !== stoppedTurn && !tr.streamEnded;
   const awaitingNow = useRef<string | undefined>(undefined);
   awaitingNow.current = awaiting ? awaitedTurn : undefined;
-  const lastAnswered = Boolean(lastSeg?.steps.length || lastSeg?.answer);
+  const waitStart = awaitedTurn ? lastSeg?.user?.ts : undefined;
   useEffect(() => {
     // draw again when the wait runs out, so a message nobody picks up stops looking worked on; once something answers
     // it there is nothing to wait for (and no clock to reset on every streamed item)
-    if (lastAnswered) return;
-    const at = lastSeg?.user?.ts ? Date.parse(lastSeg.user.ts) : NaN;
+    const at = waitStart ? Date.parse(waitStart) : NaN;
     if (Number.isNaN(at)) return;
     setAwaitNow(Date.now());
     const left = at + AWAIT_MS - Date.now();
     if (left <= 0) return;
     const timer = window.setTimeout(() => setAwaitNow(Date.now()), left + 10);
     return () => clearTimeout(timer);
-  }, [lastSeg, state, lastAnswered]);
-  const working = state === "working" || Boolean(tr.streaming) || outgoing > 0 || awaiting;
+  }, [waitStart]);
+  const stopped = Boolean(stoppedTurn && stoppedTurn === lastSeg?.user?.id);
+  const canShowPreview = state !== "offline" && state !== "needs_you" && !stopped && !turnFailure;
+  const streaming = Boolean(tr.streaming) && !tr.streamEnded && (state === "working" || canShowPreview);
+  const working = state === "working" || streaming || outgoing > 0 || awaiting;
+  // The user's time stays in its row until the finished reply can show its own. An item that lands
+  // while the turn is still running otherwise removes a line above the live work and moves it up.
+  const latestTime = (!working && lastSeg?.answer?.ts) || lastSeg?.user?.ts;
   // still starting only until the conversation has anything in it: the flag the caller passes may outlive the start
   const starting = Boolean(launching) && !tr.items.length && !tr.streaming && state !== "working";
   // a new conversation with its first message on the way and no transcript yet (#1697): the lines the transcript opens
@@ -527,13 +552,17 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // waits for its row, because the node would start an Agent for an id nobody has. A lookup that found nothing leaves
   // `session` a stand-in (useRuntimeSession), which is no row either. Retries are refused along with sends.
   const noRow = !session || detail.missing;
+  // A runtime's list row can be here before its full detail: without `capabilities.send` yet it says nothing about sending, so
+  // the box keeps taking words and Send waits until the detail answers (#11237), as it does with no row at all
+  const hydrating = Boolean(session?.source_kind && session.capabilities?.send === undefined && !detail.ready && !detail.legacy && !detail.missing);
   // the hub could not say what this chat is (an older hub without the cached row, or a session it no longer has): the
   // notice above the chat says so, and an opening line under it would claim the chat started
   const noDetails = Boolean(detail.error) && (detail.missing || !session);
   const gone = detail.missing && !isMain;
-  const refusedNoRow = noRow && !isMain;
+  const refusedNoRow = (noRow && !isMain) || hydrating;
   const unknownGate = useRef({ isMain, gone: detail.missing });
   unknownGate.current = { isMain, gone: detail.missing };
+  // A gone chat is read again a few times by itself (runtime-session.ts), and the notice above it keeps a Retry for after
   const noRowBlock = useMemo(() => (refusedNoRow ? { label: t(gone ? "chat-chatview.session_gone" : "chat-chatview.connecting") } : undefined), [refusedNoRow, gone]);
   // A Persona conversation without a title yet is "New chat", as All chats and the sidebar call it, not its folder's name (#1697)
   const named = session ?? archivedHere;
@@ -774,7 +803,40 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   }, []);
   const lastTop = useRef(0);
   const dragging = useRef(false);
-  const before = useRef<{ h: number; top: number } | null>(null);
+  const firstLiveSeq = earlier.liveItems[0]?.seq ?? Infinity;
+  const liveFront = useRef(firstLiveSeq);
+  liveFront.current = firstLiveSeq;
+  const historyScope = `${mid}/${sid}/${tr.history ?? ""}`;
+  const historyScopeNow = useRef(historyScope);
+  historyScopeNow.current = historyScope;
+  type HistoryScrollAnchor = {
+    el: HTMLDivElement; scope: string; front: ReturnType<typeof visibleHistoryFront>;
+    h: number; top: number; readers: number; pages: Set<symbol>;
+  };
+  const before = useRef<HistoryScrollAnchor | null>(null);
+  const projectedPages = useRef<(symbol | undefined)[]>([]);
+  const loadWithScrollAnchor = useCallback(async (load: () => Promise<symbol | undefined>) => {
+    const el = scroller.current;
+    if (!el) { await load(); return; }
+    // Scroll, search and the rail may all wait for the same page. A join can establish the anchor
+    // if the read had none, and a caller returning early must not clear it for the others.
+    if (before.current?.el !== el || before.current.scope !== historyScopeNow.current) {
+      before.current = {
+        el, scope: historyScopeNow.current, front: visibleHistoryFront(el, liveFront.current),
+        h: el.scrollHeight, top: el.scrollTop, readers: 0, pages: new Set(),
+      };
+    }
+    const saved = before.current;
+    saved.readers++;
+    try {
+      const page = await load();
+      if (page && !projectedPages.current.includes(page)) saved.pages.add(page);
+    } finally {
+      saved.readers--;
+      // A successful read can finish before its rows are visible. Only a no-op can release the anchor here.
+      if (!saved.readers && !saved.pages.size && before.current === saved) before.current = null;
+    }
+  }, []);
   const first = useRef(true);
   // Back from an Agent's page this conversation handed work to (#5096): where the chat was, kept on its history entry
   // (lib/handoff.ts); it opens there instead of at the end, once, and goes to the end if that line does not come in time.
@@ -791,6 +853,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
 
   useEffect(() => {
     lastTop.current = 0;
+    before.current = null;
     if (kept.current.back) {
       if (kept.current.place) follow(false); // still waiting for its line: not pulled to the end meanwhile
       return;
@@ -819,16 +882,32 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   useLayoutEffect(() => {
     const el = scroller.current;
     if (!el) return;
-    if (before.current) {
-      el.scrollTop = before.current.top + (el.scrollHeight - before.current.h);
-      before.current = null;
-      return;
+    const { projectedLivePage, projectedOtherPage } = earlier;
+    projectedPages.current = [projectedLivePage, projectedOtherPage];
+    let saved = before.current;
+    if (saved && (saved.el !== el || saved.scope !== historyScope)) {
+      before.current = saved = null;
+    }
+    if (saved) {
+      const front = visibleHistoryFront(el, firstLiveSeq);
+      if (front.live < saved.front.live || front.stretch < saved.front.stretch ||
+        (front.stretch === saved.front.stretch && front.stretchSeq < saved.front.stretchSeq)) {
+        el.scrollTop = saved.top + (el.scrollHeight - saved.h);
+        before.current = null;
+        return;
+      }
+      const livePageCommitted = projectedLivePage !== undefined && saved.pages.delete(projectedLivePage);
+      const otherPageCommitted = projectedOtherPage !== undefined && saved.pages.delete(projectedOtherPage);
+      // The committed page can be wholly outside the rendered stretch. In that case there is no
+      // prepend to offset, but the page still settles the anchor.
+      if ((livePageCommitted || otherPageCommitted) && !saved.readers && !saved.pages.size) before.current = saved = null;
     }
     const place = kept.current.place;
     // the line it was at, `offset` under the view's top again; until that line comes in, the chat opens at its end as
     // it always does (and goes to the line once it is there)
     const row = place && el.querySelector(`[data-line="${CSS.escape(place.line!)}"]`)?.firstElementChild;
     if (place && row) {
+      before.current = null;
       kept.current.place = undefined;
       el.scrollTop += row.getBoundingClientRect().top - el.getBoundingClientRect().top - place.offset;
       first.current = false;
@@ -840,7 +919,13 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       el.scrollTop = el.scrollHeight;
       if (tr.items.length) first.current = false;
     }
-  }, [tr.items, earlier.stretches, pending, outbox, tr.streaming, interactions.length]);
+    // Live updates below the viewport can change the height while a history page is held.
+    // Record that change without spending the anchor needed for the eventual prepend.
+    if (saved) {
+      saved.h = el.scrollHeight;
+      saved.top = el.scrollTop;
+    }
+  }, [tr.items, earlier.stretches, earlier.projectedLivePage, earlier.projectedOtherPage, pending, outbox, tr.streaming, interactions.length, historyScope, firstLiveSeq]);
 
   // A card that unfolds (#1124): following holds off for UNFOLD_PAUSE while the clicked row stays where it was on
   // screen (anchoredScroll), then picks up again if the end is still near; a long card opened at the end stays put to
@@ -998,16 +1083,14 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const loadEarlierNearTop = () => {
     const el = scroller.current;
     if (!el || el.scrollTop >= 300 || !earlier.hasMore || earlier.loadingEarlier || first.current) return;
-    before.current = { h: el.scrollHeight, top: el.scrollTop };
-    void earlier.loadEarlier().finally(() => {
-      // nothing came: forget the anchor
-      requestAnimationFrame(() => (before.current = null));
-    });
+    void loadWithScrollAnchor(earlier.loadEarlier);
   };
 
   const onScroll = () => {
     const el = scroller.current;
     if (!el) return;
+    const saved = before.current;
+    if (saved?.el === el && saved.scope === historyScope) saved.top = el.scrollTop;
     const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
     const delta = el.scrollTop - lastTop.current;
     lastTop.current = el.scrollTop;
@@ -1275,10 +1358,9 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // any run's card inside it) instead of keeping the turn's "Working…" clock going: first a workflow (#3434), then
   // background subagents (#5030), commands that only wait (#6045), and finally a real background command or Monitor
   // (#7341). A message of yours on its way, streaming, or an answer being written is a turn again.
-  const streaming = Boolean(tr.streaming);
   const backgroundState = backgroundTurn(session, subagents, { streaming, outgoing: outgoing > 0, awaiting });
   const backgroundOnly = backgroundState !== null;
-  const lastLive = working && !backgroundOnly && !tr.loading;
+  const lastLive = working && !backgroundOnly && (!tr.loading || tr.items.length > 0);
   // the main conversation's readiness: the card for what is missing, and the send button saying it (4.4)
   const gate = useReadinessGate(isMain);
   blockedRef.current = gate.blocked;
@@ -1387,6 +1469,9 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       const deadline = Date.now() + 120_000;
       const target = inputIndex?.inputs.find((input) => `seg:${input.id}` === lineId);
       const cancelled = () => railChat.current !== scope || run !== railRun.current || Boolean(inputIndex?.history && trNow.current.history && inputIndex.history !== trNow.current.history);
+      stopGlide();
+      clearTimeout(landing.current?.quiet);
+      landing.current = null;
       follow(false);
       if (!target || containsInput(trNow.current.items, target)) {
         const owner = target ? lineOfItem(linesNow.current, trNow.current.items, target.id) : lineId;
@@ -1397,16 +1482,12 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         // Reuse ordinary backward pages, keeping history contiguous rather than inserting an isolated window.
         await loadEarlierForSearch({
           get: () => trNow.current,
-          load: async () => {
-            const sc = scroller.current;
-            if (sc) before.current = { h: sc.scrollHeight, top: sc.scrollTop };
-            try { await trNow.current.loadEarlier(); }
-            finally { requestAnimationFrame(() => (before.current = null)); }
-          },
+          load: () => loadWithScrollAnchor(() => trNow.current.loadEarlier({ waitForRetry: true })),
           frame: nextFrame,
           stopped: () => cancelled() || Date.now() >= deadline || containsInput(trNow.current.items, target),
           onPage: () => {},
           pages: Number.MAX_SAFE_INTEGER,
+          joinEarlier: true,
         });
         if (cancelled()) return;
         if (!containsInput(trNow.current.items, target)) { toast(t("chat-navrail.target_failed"), "error"); return; }
@@ -1423,7 +1504,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       if (result === "missing") { toast(t("chat-navrail.target_failed"), "error"); return; }
       landRow(result.value, -12);
     },
-    [mid, sid, inputIndex, follow, landRow],
+    [mid, sid, inputIndex, follow, landRow, stopGlide, loadWithScrollAnchor],
   );
   const railSource = useMemo<NavRailSource>(() => ({ ticks: railTicks, total: inputIndex?.total, select: railJump }), [railTicks, inputIndex?.total, railJump]);
   // the calls with a terminal result: a subagent call without one is one the agent still waits on (the bar's step)
@@ -1675,23 +1756,14 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const loadForSearch = useCallback(async (onPage: (n: number) => void, stopped: () => boolean): Promise<LoadOutcome> => {
     const outcome = await loadEarlierForSearch({
       get: () => trNow.current,
-      load: async () => {
-        const sc = scroller.current;
-        if (sc) before.current = { h: sc.scrollHeight, top: sc.scrollTop };
-        try {
-          await trNow.current.loadEarlier();
-        } finally {
-          // nothing came: forget the anchor, or the next change of the chat jumps to it
-          requestAnimationFrame(() => (before.current = null));
-        }
-      },
+      load: () => loadWithScrollAnchor(trNow.current.loadEarlier),
       frame: nextFrame,
       stopped,
       onPage,
     });
     const key = SEARCH_NOTICE[outcome];
     return key ? t(key) : null;
-  }, []);
+  }, [loadWithScrollAnchor]);
   // a message to open the chat at: a search hit's (`?at=`, #6283) or a forward card's original (#3899, lib/forward.ts
   // jumpWhenOpen). Brought into view once the transcript is in and holds it; one further up is paged back for, as "Load
   // earlier and keep searching" does (at most SEARCH_PAGES pages, the reader scrolling away or another landing stops
@@ -1742,6 +1814,10 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // Close Plan in the pill's flyout hides it until the plan changes (cindy's PinnedPlanPanel)
   const [planClosed, closePlan] = usePlanClosed(`${mid}/${sid}`, plan);
   const lastLine = lines[lines.length - 1];
+  // After the end marker the last reply can still be waiting for its item. Its text stays visible
+  // without keeping the exchange working, even if the host already reported completion.
+  const wordsFor = (line: ChatLine) => (line.kind === "segment" || line.kind === "supervision") &&
+    ((line.live && streaming) || (line === lastLine && tr.streamEnded && canShowPreview)) ? tr.streaming || undefined : undefined;
   // "Retry" on the error banner and the failure note: sends "continue" alone, not what is in the box. Whether it went:
   // deliver can refuse without leaving a bubble (the setup gate, a row that cannot send, a refused launcher switch)
   const retry = useCallback(() => deliver({ text: t("chat-chatview.continue_text"), images: [] }, uuid()), [deliver]);
@@ -1753,7 +1829,9 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // a turn that failed on the refusal fallback's missing model (#2528): "Continue" would send it to the same model; the
   // main conversation's setup gate would only open its missing step, as it does for every send while it holds (`deliver`)
   const canRetry =
-    lastLine?.kind === "apiError" && state !== "working" && !outgoing && sessionCan(session, "send") && session?.turn_error_code !== FALLBACK_UNAVAILABLE && !gate.blocked;
+    lastLine?.kind === "apiError" && state !== "working" && !outgoing && sessionCan(session, "send") &&
+    session?.turn_error_code !== FALLBACK_UNAVAILABLE && session?.turn_error_code !== "compaction_sealed" &&
+    session?.turn_error_kind !== "unrecoverable" && !gate.blocked;
   // An exhausted recovery chain (#7824): the last error card names the cause and reset time, and Retry stays offered
   // even for a safeguards-class error the parser calls non-transient. The marker is session-level, so only the last
   // API error line carries it; whether Retry is enabled at all still follows canRetry (idle and able to send).
@@ -1773,7 +1851,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // the banner's buttons go with it: the keyboard goes back to the composer, not on a touch screen alone (that would raise
   // the keyboard). Called on a press, by when the composer's box (declared below) is there.
   const backToComposer = () => {
-    if (fine) composerBox.current?.querySelector("textarea")?.focus({ preventScroll: true });
+    if (fine) composerBox.current?.querySelector<HTMLTextAreaElement>(COMPOSER_INPUT)?.focus({ preventScroll: true });
   };
   // gone at once; a retry that did not go brings it back, as nothing else on the page could retry then
   const retryError = () => {
@@ -1839,8 +1917,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     shown.current = view;
     if (!fine) return;
     const frame = requestAnimationFrame(() => {
-      const box = view === "term" ? termLayer.current : composerBox.current;
-      box?.querySelector("textarea")?.focus({ preventScroll: true });
+      const field = view === "term" ? termLayer.current?.querySelector("textarea") : composerBox.current?.querySelector<HTMLTextAreaElement>(COMPOSER_INPUT);
+      field?.focus({ preventScroll: true });
     });
     return () => cancelAnimationFrame(frame);
   }, [view, fine]);
@@ -1850,10 +1928,11 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const onDockFocus = (e: React.FocusEvent) => {
     dockFocus.current = composerBox.current?.contains(e.target) ? null : e.target;
   };
+  // Checked after each render only while a control above the composer holds the focus (nothing to do otherwise)
   useEffect(() => {
-    if (!lostWith(dockFocus.current, document.activeElement, document.body)) return;
+    if (!dockFocus.current || !lostWith(dockFocus.current, document.activeElement, document.body)) return;
     dockFocus.current = null;
-    if (fine) composerBox.current?.querySelector("textarea")?.focus({ preventScroll: true });
+    if (fine) composerBox.current?.querySelector<HTMLTextAreaElement>(COMPOSER_INPUT)?.focus({ preventScroll: true });
   });
   // the run's time counts from the turn's start, as its "Working…" does (not from the session's last state change)
   const stateSince = session?.state_since;
@@ -1863,9 +1942,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   }, [lines]);
   const runStart = (liveSeg ? turnStart(liveSeg) : undefined) ?? stateSince;
   // what the turn is doing, for the bar's words (cindy's status): kept as it was while it says the same
-  const streamingNow = Boolean(tr.streaming);
   const lastStep = useRef<RunStep | undefined>(undefined);
-  const step = useMemo(() => sameStep(lastStep.current, runStep(liveSeg, streamingNow, subagents, callsAnswered)), [liveSeg, streamingNow, subagents, callsAnswered]);
+  const step = useMemo(() => sameStep(lastStep.current, runStep(liveSeg, streaming, subagents, callsAnswered)), [liveSeg, streaming, subagents, callsAnswered]);
   lastStep.current = step;
   // as cindy's: gone once every step is done or a later message of the user's started another turn
   const planPill = plan && planOut && !plan.superseded && !planClosed && !planProgress(plan.todos).allDone ? (
@@ -1891,7 +1969,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // A Persona chat on either route — the Persona tab's prop, or on the generic /s route the session's own assistant
   // flag — so the dock never repeats its foreground turn (#6230). Background work keeps the bar either way.
   const dockBarShown = !(assistant || session?.assistant) || backgroundOnly;
-  const running = session && dockBarShown ? <RunningStatusBar mid={mid} sid={sid} working={state === "working" || awaiting} done={done} startedAt={runStart} clock={barClock.current} plain={assistant} step={step} background={!backgroundState || backgroundState.kind === "workflow" ? background : null} wait={wait} subtasks={subtasks} command={command} /> : null;
+  const running = session && dockBarShown ? <RunningStatusBar mid={mid} sid={sid} working={state === "working" || awaiting || streaming} done={done} startedAt={runStart} clock={barClock.current} plain={assistant} step={step} background={!backgroundState || backgroundState.kind === "workflow" ? background : null} wait={wait} subtasks={subtasks} command={command} /> : null;
   // at the top of the composer's card, as cindy's pending queue (#5327); a phone on its side keeps it to one line beside
   // the run's status. The same element while nothing in it changes: the composer is memoized.
   const hasQueue = queued.length > 0;
@@ -1975,7 +2053,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       narrow={compactDock}
       short={short}
       keyboard={keyboard}
-      onDismissKeyboard={() => composerBox.current?.querySelector("textarea")?.blur()}
+      onDismissKeyboard={() => composerBox.current?.querySelector<HTMLTextAreaElement>(COMPOSER_INPUT)?.blur()}
     />
   );
 
@@ -2085,7 +2163,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
                         line={d.line}
                         mid={mid}
                         sid={sid}
-                        streaming={(d.line.kind === "segment" || d.line.kind === "supervision") && d.line.live ? tr.streaming || undefined : undefined}
+                        streaming={wordsFor(d.line)}
                         expandFold={tr.expandFold}
                         launcher={session?.launcher}
                         fix={d.line.id === lastLine?.id ? turnFix : undefined}
@@ -2110,7 +2188,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
                   // only a live line streams: the others keep their memo
                   mid={mid}
                   sid={sid}
-                  streaming={(row.line.kind === "segment" || row.line.kind === "supervision") && row.line.live ? tr.streaming || undefined : undefined}
+                  streaming={wordsFor(row.line)}
                   expandFold={tr.expandFold}
                   limit={row.line.kind === "apiError" && row.line.id === limitOn ? limitLine : undefined}
                   exhausted={row.line.kind === "apiError" && row.line.id === lastLine?.id ? exhausted : undefined}
@@ -2130,9 +2208,11 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
               </div>
             ) })), ...placed.rest.map((e) => ({ at: e.at, el: <OutboxBubbles key={`outbox:${e.id}`} mid={mid} sid={sid} entries={[e]} canRetry={!refusedNoRow} /> })),
               ...keptUndelivered.map((m) => ({ at: Date.parse(m.at) || 0, el: (
-                <Suspense key={`undelivered:${m.id}`} fallback={<UserBubble msg={keptBubble(m)} mid={mid} sid={sid} sendState="failed" />}>
-                  <UndeliveredBubble mid={mid} sid={sid} m={m} />
-                </Suspense>
+                <PageBoundary key={`undelivered:${m.id}`} page="undelivered">
+                  <Suspense fallback={<UserBubble msg={keptBubble(m)} mid={mid} sid={sid} sendState="failed" />}>
+                    <UndeliveredBubble mid={mid} sid={sid} m={m} />
+                  </Suspense>
+                </PageBoundary>
               ) }))]
               .sort((a, b) => a.at - b.at)
               .map((x) => x.el)}
@@ -2147,7 +2227,11 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
           </ChatActionsContext.Provider>
         </div>
         {/* A transient edge overlay; native scrolling and the centered text column keep their existing layout. */}
-        <NavRail ticks={railSource.ticks} total={railSource.total} scroller={scrollEl} onJump={railSource.select} reset={`${mid}/${sid}`} />
+        {railSource.ticks.length > 0 && (
+          <Suspense fallback={null}>
+            <NavRail ticks={railSource.ticks} total={railSource.total} scroller={scrollEl} onJump={railSource.select} reset={`${mid}/${sid}`} />
+          </Suspense>
+        )}
         {away && !jumpInDock && <JumpPill label={jumpLabel(newSince)} onClick={toEnd} />}
         {picked && !search.open && <ReturnPill onClick={backToOrigin} />}
       </div>
@@ -2246,13 +2330,13 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         ) : (
         <Composer
           draftKey={draftKey}
-          placeholder={offlineLine ? offlineLine : waitsFirst ? t("chat-chatview.codex_first_placeholder") : refusedNoRow ? t(gone ? "chat-chatview.session_gone_placeholder" : "chat-chatview.connecting_placeholder") : viewOnlyRow(session) ? t("chat-chatview.view_only") : state === "working" || state === "needs_you" ? t("chat-chatview.queue_placeholder") : assistant ? askPlaceholder ?? t("chat-chatview.ask_placeholder", { name: persona.name }) : state === "offline" ? t("chat-chatview.resume_placeholder") : t("chat-chatview.agent_placeholder")}
+          placeholder={offlineLine ? offlineLine : waitsFirst ? t("chat-chatview.codex_first_placeholder") : refusedNoRow ? t(gone ? "chat-chatview.session_gone_placeholder" : "chat-chatview.connecting_placeholder") : viewOnlyRow(session) ? t("chat-chatview.view_only") : computerAway && awayLine ? awayLine : state === "working" || state === "needs_you" ? t("chat-chatview.queue_placeholder") : assistant ? askPlaceholder ?? t("chat-chatview.ask_placeholder", { name: persona.name }) : state === "offline" ? t("chat-chatview.resume_placeholder") : t("chat-chatview.agent_placeholder")}
           machineId={mid}
           uploadDest={session?.space === "health" ? "health" : undefined}
           working={state === "working" || awaiting}
           needsYou={state === "needs_you"}
           onSend={send}
-          disabled={Boolean(offlineLine) || (!noRow && !sessionCan(session, "send"))}
+          disabled={Boolean(offlineLine) || (!noRow && !hydrating && !sessionCan(session, "send"))}
           onEditLastMessage={onEditLastMessage}
           editingLast={editProp}
           loadingDraft={editingLast}
@@ -2264,6 +2348,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
           suggestionRisky={session?.suggestion_risky}
           mention={mention}
           autoFocus
+          carryDraft={Boolean(assistant)}
           onFocusChange={setTyping}
           blocked={gate.blocked ?? noRowBlock}
           leading={leading}

@@ -171,6 +171,7 @@ type Service struct {
 	origins      originBook           // origins.go
 	guests       guestBook            // guest.go
 	relays       relayBook            // conversations.go
+	chatReplies  chatReplyBook        // chat_reply.go: what conversations that wrote as the user were told of the chats
 	undelivered  undeliveredBook      // undelivered.go: the owner's messages that could not go in
 	quotes       quoteBook            // relay_quote.go: the owner's messages relays carried, verified
 	avail        availBook            // availability.go
@@ -209,13 +210,17 @@ type Service struct {
 	reviewDismissals taskReviewDismissalBook // task_review_dismissals.go
 	repoRootsMu      sync.Mutex              // pr_number_ref.go: one write of the repository roots at a time
 	// ownerVerifiesAll: every deployed task asks the owner to verify, not only the big ones (ownerVerifies; tests).
-	ownerVerifiesAll bool
-	later            laterBook    // later.go: questions that can wait for a briefing
-	brief            briefBook    // briefing.go
-	reporters        reporterBook // reporters.go
-	sched            schedule     // schedule.go
-	tasks            tasksState   // tasks.go
-	questions        questions    // tools.go (ask_user)
+	ownerVerifiesAll         bool
+	later                    laterBook    // later.go: questions that can wait for a briefing
+	brief                    briefBook    // briefing.go
+	reporters                reporterBook // reporters.go
+	sched                    schedule     // schedule.go
+	delayedMu                sync.Mutex   // delayed_waits.go: one local writer to the durable wait backlog
+	delayedRecoveryMu        sync.Mutex   // one restore pass; tracks entries already armed by this incarnation
+	delayedReceiptsRecovered bool         // initial receipt-claim requeue has completed for this incarnation
+	delayedRestored          map[string]bool
+	tasks                    tasksState // tasks.go
+	questions                questions  // tools.go (ask_user)
 	// deadlineSweeping: a sweep of the decisions past their deadline is running (decision_deadline.go).
 	deadlineSweeping atomic.Bool
 	askTodos         askTodoBook  // ask_todo.go: the questions nobody answered, now to-dos
@@ -284,6 +289,9 @@ type Service struct {
 	// sendsSettleHook, when set, runs in sendsSettle once the task is opened again, before the turn held for it is
 	// taken up (tests).
 	sendsSettleHook func()
+	// askRetryHook, when set, runs as the asks route's Retry has found the failed start its ask names, before the start
+	// reads the to-do again (tests: the to-do reopens or fails anew in between).
+	askRetryHook func(id string)
 	// sessionsSeen, when set, sees every machine's list SessionsChanged is handed (tests).
 	sessionsSeen func(DeviceSessions)
 
@@ -448,23 +456,43 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 	}
 	if method != DeviceSessionGet && method != "session.unwatch" {
 		if err := s.conversationParamsAvailable(ctx, device, params); err != nil {
-			return err
+			return beforeNodeWrite(method, err)
 		}
 	}
-	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || method == DeviceSessionSend) {
+	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || method == DeviceSessionSend || method == DeviceSessionSendOnce) {
 		id, _ := p["session_id"].(string)
 		if err := s.putSupervisionInstructions(ctx, device, id, p); err != nil {
-			return err
+			return beforeNodeWrite(method, err)
 		}
-		if method == DeviceSessionSend {
-			cfg := s.settings(ctx)
-			if id != "" && id == cfg.Main && device == cfg.mainRouteMachine() {
-				p["is_main"] = true // internal sends must not restart main on ordinary-chat compaction settings
+		if method == DeviceAssistantSend || method == DeviceSessionSend || method == DeviceSessionSendOnce {
+			// Initial assistant.send starts do not pass through SendParams, and Inbox continuations use session.send.
+			// The hub forwards session.send_once to the same node entry, so attest it here before that forwarding too.
+			// Attest the explicit ordinary/unknown decision on every manager-owned node send.
+			newConversation := method == DeviceAssistantSend && id == ""
+			startOrigin := ""
+			if newConversation {
+				startOrigin, _ = p["origin"].(string)
+			} else {
+				delete(p, "origin") // an existing conversation trusts only the manager's origin book
+			}
+			origin, originKnown := s.managerOriginDecision(ctx, device, id, startOrigin, newConversation)
+			delete(p, "origin_known")
+			if originKnown {
+				p["origin_known"] = true
+			}
+			if origin != "" {
+				p["origin"] = origin
+			}
+			if method == DeviceSessionSend || method == DeviceSessionSendOnce {
+				cfg := s.settings(ctx)
+				if id != "" && id == cfg.Main && device == cfg.mainRouteMachine() {
+					p["is_main"] = true // internal sends must not restart main on ordinary-chat compaction settings
+				}
 			}
 		}
 	}
 	roundKind := "" // the round the message starts, when it is one the owner did not start (owner_preempt.go)
-	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceSessionSend) {
+	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceSessionSend || method == DeviceSessionSendOnce) {
 		if text, ok := p["text"].(string); ok {
 			source, _ := p["message_source"].(*proto.MessageSource)
 			if id, _ := p["session_id"].(string); source != nil && method == DeviceAssistantSend {
@@ -482,7 +510,7 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 			}
 		}
 	}
-	if p, ok := params.(map[string]any); ok && method == DeviceSessionSend {
+	if p, ok := params.(map[string]any); ok && (method == DeviceSessionSend || method == DeviceSessionSendOnce) {
 		if id, _ := p["session_id"].(string); id != "" {
 			s.workTold(device, id) // the turn it starts is this manager's doing, not the owner's hand (setup_suggest.go)
 		}
@@ -500,17 +528,22 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 			p["interject_background"] = true // what the node does with a message that comes while it answers
 		}
 	}
-	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceSessionSend) && p["is_main"] == true {
+	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceSessionSend || method == DeviceSessionSendOnce) && p["is_main"] == true {
 		p["idle_compaction"] = assistantwire.IdleCompaction{
 			Enabled: s.idleAutoCompact(ctx), IdleMinutes: s.idleAutoCompactMinutes(ctx), ContextTokens: s.idleAutoCompactTokens(ctx),
 		}
 	}
-	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || method == DeviceSessionSend) {
+	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || method == DeviceSessionSend || method == DeviceSessionSendOnce) {
 		// The window the main conversation is held to (main_compact_window.go), as sendModel puts it: a start, a relay,
 		// an internal message and the spare warmed for its next start carry it with is_main, or the node starts it again
 		// on its launcher's window (and never adopts the spare).
 		if _, set := p["main_compact_window"]; !set && p["is_main"] == true {
 			putMainCompactWindow(s.settings(ctx), p)
+		}
+		// Interactive Claude Code (#10058) is part of what a process runs: every send and warm carries it, or the node
+		// restarts a conversation between the two kinds as messages without it come.
+		if _, set := p["claude_interactive"]; !set && s.claudeInteractive(ctx) {
+			p["claude_interactive"] = true
 		}
 	}
 	if p, ok := params.(map[string]any); ok && startScopeMethods[method] {
@@ -520,7 +553,7 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 				if method == DeviceAssistantSend {
 					s.recordManagerSend(device, p, nil, err) // a failed start or resume all the same (north_star.go)
 				}
-				return err
+				return beforeNodeWrite(method, err)
 			}
 		}
 	}
@@ -536,7 +569,7 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 	}
 	raw, err := json.Marshal(params)
 	if err != nil {
-		return err
+		return beforeNodeWrite(method, err)
 	}
 	p := DeviceCall{Device: device, Method: method, Params: raw}
 	res, ok, err := s.localFleetDeviceCall(ctx, p) // what the hub answered before the nodes' events were the manager's
@@ -544,7 +577,7 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 		res, err = s.hub.DeviceCall(ctx, p)
 	}
 	if err == nil && method != DeviceSessionGet && method != "session.unwatch" {
-		err = s.conversationParamsAvailable(ctx, device, params)
+		err = afterNodeWrite(method, s.conversationParamsAvailable(ctx, device, params))
 	}
 	if err == nil {
 		round.sent(s, res) // whose round it is, for the owner's next message (owner_preempt.go)
@@ -555,7 +588,7 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 	if err != nil || out == nil || len(res) == 0 {
 		return err
 	}
-	return json.Unmarshal(res, out)
+	return afterNodeWrite(method, json.Unmarshal(res, out))
 }
 
 // appCall is an AppCall whose answer is read into out (nil: not read).
@@ -824,6 +857,9 @@ func (s *Service) UserSpoke(ctx context.Context, r SessionRef) {
 
 func (s *Service) userSpokeText(ctx context.Context, r SessionRef, text string) {
 	s.availOwnerSpoke(r, time.Now()) // before anything else: what the conversation is doing as the message comes (availability.go)
+	if exitText(text) {
+		s.retireTodoWork([2]string{r.MachineID, r.SessionID}) // /exit or /quit starts no turn that could cancel the wake
+	}
 	s.agentDecisionSpoke(ctx, r, time.Now(), text)
 	s.ownerHeard(r.SessionID)
 	s.clearToolLoop([2]string{r.MachineID, r.SessionID}, loopUserInput)
@@ -872,6 +908,7 @@ func (s *Service) turnEnded(ctx context.Context, r SessionRef, meeting bool) {
 	s.stopTurnEnded(r.MachineID, r.SessionID, time.Now()) // the turn a Stop interrupted, if one did (silent_turns.go)
 	s.clearToolLoop([2]string{r.MachineID, r.SessionID}, loopTurnChanged)
 	go s.registerInlineTurn(context.WithoutCancel(ctx), r)
+	s.afterSettle(context.WithoutCancel(ctx), s.registerInlineTurnSettled, r.MachineID, r.SessionID)
 	if !meeting {
 		s.availTurnEnded(ctx, r.MachineID, r.SessionID, time.Now()) // an assistant conversation's round (availability.go)
 		s.afterSettle(context.WithoutCancel(ctx), s.taskTurnSettled, r.MachineID, r.SessionID)

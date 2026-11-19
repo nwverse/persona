@@ -33,11 +33,13 @@ import (
 // that was cleaned up), a model (a Messages API the hello's "ai" points at, fakeModel), and what the assistant pushed
 // and reported. settings are the assistant's own a test service starts with (newTestService…).
 type fakeHub struct {
-	mu            sync.Mutex
-	inboxHook     func(ctx context.Context) // runs first in InboxChanged, no lock held (#4924)
-	readHooks     receiptHooks              // around session.items reads and on receipt broadcasts, no lock held
-	itemReads     int                       // session.items reads since the hooks were set
-	onDevicesList func()                    // runs once, then clears, before the next devices.list; no lock held
+	mu                 sync.Mutex
+	revokedDevices     map[string]bool
+	credentialCheckErr error
+	inboxHook          func(ctx context.Context) // runs first in InboxChanged, no lock held (#4924)
+	readHooks          receiptHooks              // around session.items reads and on receipt broadcasts, no lock held
+	itemReads          int                       // session.items reads since the hooks were set
+	onDevicesList      func()                    // runs once, then clears, before the next devices.list; no lock held
 	// beforeSend runs once, then clears, when session.send is called, before it is answered (what happens on the
 	// agent's computer while the send is out); afterList, by machine, once after that machine's next sessions.list made
 	// with a listHooked context was answered. No lock held. sendHangs: session.send is never answered while the link
@@ -185,14 +187,15 @@ type fakeHub struct {
 	checkParams []map[string]any
 	oldCheck    bool
 
-	repairs   []map[string]any
-	repairRes *proto.LauncherRepair
-	onRepair  func(f *fakeHub)
-	onSend    func(f *fakeHub, p map[string]any) // runs (under the fake's lock) after each session.send
-	onStart   func(f *fakeHub, p map[string]any) // runs (under the fake's lock) when session.start arrives, before slowStart blocks
-	down      map[string]bool                    // machines listed as not connected (devices.list) while f.devices is nil
-	downLists map[string]int                     // and for how many more devices.list answers a machine is listed so
-	onList    func(f *fakeHub, machine string)   // runs (under the fake's lock) before a sessions.list is answered, which then sends the list as it left it
+	repairs    []map[string]any
+	repairRes  *proto.LauncherRepair
+	onRepair   func(f *fakeHub)
+	onSend     func(f *fakeHub, p map[string]any) // runs (under the fake's lock) after each session.send
+	onSendOnce func(f *fakeHub, p map[string]any) // runs under the fake's lock when a once-only send is accepted
+	onStart    func(f *fakeHub, p map[string]any) // runs (under the fake's lock) when session.start arrives, before slowStart blocks
+	down       map[string]bool                    // machines listed as not connected (devices.list) while f.devices is nil
+	downLists  map[string]int                     // and for how many more devices.list answers a machine is listed so
+	onList     func(f *fakeHub, machine string)   // runs (under the fake's lock) before a sessions.list is answered, which then sends the list as it left it
 	// onAssistantSend runs (under the fake's lock) when assistant.send arrives, before it is answered
 	onAssistantSend func(f *fakeHub, p map[string]any)
 	// assistantAnswer adds to assistant.send's answer (under the fake's lock): what a node says of a supervision round
@@ -375,6 +378,20 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 			return nil, f.failSendOnce[p.Device+"/"+sid]
 		}
 		f.sentOnce = append(f.sentOnce, a)
+		if id, _ := a["client_msg_id"].(string); strings.HasPrefix(id, "model-retry:") {
+			for _, prior := range f.agentSent {
+				if prior["client_msg_id"] == id {
+					return json.RawMessage(`{}`), nil
+				}
+			}
+			f.agentSent = append(f.agentSent, a)
+			if f.onSend != nil {
+				f.onSend(f, a)
+			}
+		}
+		if f.onSendOnce != nil {
+			f.onSendOnce(f, a)
+		}
 		return json.RawMessage(`{}`), nil
 	case DeviceSessionsList:
 		if f.sessionsFail[p.Device] > 0 { // a node that answers offline for a few tries, then recovers
@@ -806,6 +823,12 @@ func (f *fakeHub) Broadcast(_ context.Context, b Broadcast) {
 	}
 }
 
+func (f *fakeHub) CredentialRevoked(_ context.Context, id string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.revokedDevices[id], f.credentialCheckErr
+}
+
 func (f *fakeHub) InboxChanged(ctx context.Context, c assistantwire.InboxChanged) {
 	f.mu.Lock()
 	hook := f.inboxHook
@@ -989,6 +1012,9 @@ func (noPlans) FeedItem(context.Context, string) (*db.FeedRow, error) {
 	return nil, errors.New("no assistant_feed here")
 }
 func (noPlans) MarkFeedSent(context.Context, string, string, time.Time, json.RawMessage) ([]db.FeedRow, error) {
+	return nil, errors.New("no assistant_feed here")
+}
+func (noPlans) FeedByRef(context.Context, string, []string, int) ([]db.FeedRow, error) {
 	return nil, errors.New("no assistant_feed here")
 }
 

@@ -3,11 +3,13 @@ package persona.core.domain.models
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import persona.core.contracts.ModelPick
 import persona.core.contracts.PendingSwitch
 import persona.core.contracts.Session
 import persona.core.contracts.SessionCompaction
+import persona.core.contracts.UndeliveredMessage
 
 /**
  * A summary row landing on a conversation the app holds (#5055, riba2534's note on #5055; iOS `preservingDetails`):
@@ -62,5 +64,14 @@ class SummaryRowsTest {
         val summary = complete.copy(waiting = true)
         assertSame(summary, summary.keepingDetails(null))
         assertSame(summary, summary.keepingDetails(full.copy(sessionId = "other")))
+    }
+
+    @Test fun aSummaryKeepsUndeliveredButACompleteEmptyListClearsIt() {
+        val kept = UndeliveredMessage("kept", "words", at = "2026-11-17T10:00:00Z", state = "waiting")
+        val detailed = full.copy(undelivered = listOf(kept))
+        val summary = Session(machineId = "mac", sessionId = "c1", assistant = true, waiting = false)
+        assertEquals(listOf(kept), summary.keepingDetails(detailed).undelivered)
+        val complete = Session(machineId = "mac", sessionId = "c1", assistant = true)
+        assertTrue(complete.keepingDetails(detailed).undelivered.isNullOrEmpty())
     }
 }

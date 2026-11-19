@@ -1838,10 +1838,17 @@ type Component struct {
 	Aspect string `json:"aspect,omitempty"`
 	Fit    string `json:"fit,omitempty"`
 	// Tapping does nothing (else it shows the picture full screen).
-	NoZoom     bool   `json:"no_zoom,omitempty"`
-	Tiles      []Tile `json:"tiles,omitempty"`
-	MaxColumns int    `json:"max_columns,omitempty"`
-	Width      string `json:"width,omitempty"`
+	NoZoom     bool        `json:"no_zoom,omitempty"`
+	Tiles      []Tile      `json:"tiles,omitempty"`
+	MaxColumns int         `json:"max_columns,omitempty"`
+	Width      string      `json:"width,omitempty"`
+	Nodes      []GraphNode `json:"nodes,omitempty"`
+	Edges      []GraphEdge `json:"edges,omitempty"`
+	Layout     string      `json:"layout,omitempty"`
+	Direction  string      `json:"direction,omitempty"`
+	// Ids of nodes whose children start folded. Once the person folds or unfolds one, the app keeps their choice for
+	// this key.
+	Folded []string `json:"folded,omitempty"`
 }
 
 // Component types.
@@ -1872,13 +1879,75 @@ const (
 	ComponentImage         = "image"
 	ComponentGrid          = "grid"
 	ComponentCarousel      = "carousel"
+	ComponentGraph         = "graph"
 )
 
 // ComponentTypes are the types of Component, in order.
-var ComponentTypes = []string{"text", "metric", "progress", "row", "button", "link", "field", "divider", "chart", "stat_grid", "segmented", "markdown", "table", "empty", "loading", "html", "header", "breadcrumb", "file_tree", "code", "diff", "comment_thread", "composer", "image", "grid", "carousel"}
+var ComponentTypes = []string{"text", "metric", "progress", "row", "button", "link", "field", "divider", "chart", "stat_grid", "segmented", "markdown", "table", "empty", "loading", "html", "header", "breadcrumb", "file_tree", "code", "diff", "comment_thread", "composer", "image", "grid", "carousel", "graph"}
 
 // ComponentSince is the UI version that brought each type.
-var ComponentSince = map[string]int{"text": 1, "metric": 1, "progress": 1, "row": 1, "button": 1, "link": 1, "field": 1, "divider": 1, "chart": 2, "stat_grid": 2, "segmented": 2, "markdown": 3, "table": 3, "empty": 3, "loading": 3, "html": 4, "header": 4, "breadcrumb": 4, "file_tree": 4, "code": 4, "diff": 4, "comment_thread": 4, "composer": 4, "image": 6, "grid": 6, "carousel": 6}
+var ComponentSince = map[string]int{"text": 1, "metric": 1, "progress": 1, "row": 1, "button": 1, "link": 1, "field": 1, "divider": 1, "chart": 2, "stat_grid": 2, "segmented": 2, "markdown": 3, "table": 3, "empty": 3, "loading": 3, "html": 4, "header": 4, "breadcrumb": 4, "file_tree": 4, "code": 4, "diff": 4, "comment_thread": 4, "composer": 4, "image": 6, "grid": 6, "carousel": 6, "graph": 10}
+
+// GraphNode: one node of a graph (UI version 10): a box with a title, a state line, a badge, an icon and a progress
+// bar, in tone's role color or color's named color (never both), with optional timing and inspector details.
+type GraphNode struct {
+	ID       string `json:"id"`
+	Title    string `json:"title"`
+	Subtitle string `json:"subtitle,omitempty"`
+	Badge    *Badge `json:"badge,omitempty"`
+	Tone     string `json:"tone,omitempty"`
+	Color    string `json:"color,omitempty"`
+	Icon     string `json:"icon,omitempty"`
+	// A thin bar along the node's foot, 0 to 1.
+	Progress *float64 `json:"progress,omitempty"`
+	// Nodes with the same parents and the same group sit next to each other inside one frame titled with it (the same
+	// task tried several ways).
+	Group  string  `json:"group,omitempty"`
+	Action *Action `json:"action,omitempty"`
+	// Unix timestamp in seconds when this node started.
+	StartedAt *float64 `json:"started_at,omitempty"`
+	// Unix timestamp in seconds when this node ended; omitted while still running.
+	EndedAt *float64 `json:"ended_at,omitempty"`
+	// Short label/value readings shown in the node inspector.
+	Facts []Fact `json:"facts,omitempty"`
+	// Plain-text summary, verifier feedback or error shown in the node inspector.
+	Detail string `json:"detail,omitempty"`
+	// HTTPS links shown in the node inspector (for example work and verifier sessions across attempts).
+	Links []GraphNodeLink `json:"links,omitempty"`
+}
+
+// GraphNodeLink: an https link shown in a graph node's inspector (UI version 10).
+type GraphNodeLink struct {
+	Title string `json:"title"`
+	URL   string `json:"url"`
+}
+
+// GraphEdge: an edge from one node to another (UI version 10): from is the parent, to the child.
+type GraphEdge struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+// GraphLayout: tree (the default): every node has at most one parent, children under it, a parent centred over its
+// children. layered: a node may have several parents; each node sits one layer past its furthest parent (a plan whose
+// steps wait for several others).
+const (
+	GraphLayoutTree    = "tree"
+	GraphLayoutLayered = "layered"
+)
+
+// GraphLayouts are the values of GraphLayout, in order.
+var GraphLayouts = []string{"tree", "layered"}
+
+// GraphDirection: right (the default): roots at the start, children after them, so a wide fan-out reads down the
+// screen like an outline. down: roots at the top, children below.
+const (
+	GraphDirectionRight = "right"
+	GraphDirectionDown  = "down"
+)
+
+// GraphDirections are the values of GraphDirection, in order.
+var GraphDirections = []string{"right", "down"}
 
 // ImageSource: where a picture comes from (UI version 6): an https url the app loads without credentials, or a ref
 // the extension serves itself (ui.image) through the hub; exactly one. path is written by the hub only, for a ref:
@@ -3771,6 +3840,10 @@ type ConnectorInboxThing struct {
 	// Where a reply goes and who sees it.
 	ReplyTo  string `json:"reply_to,omitempty"`
 	CanReply bool   `json:"can_reply,omitempty"`
+	// The thread's picture: one of the connector's own media refs (thread.media, as a ThreadChat's avatar) or an https
+	// address the hub fetches, either always naming the same bytes (docs "Avatars"). The other person of a private chat,
+	// a group's own. The Inbox row draws it; without one, the initial.
+	Avatar string `json:"avatar,omitempty"`
 	// ConnectorTier, or empty for the model.
 	Tier string `json:"tier,omitempty"`
 	Why  string `json:"why,omitempty"`
@@ -4450,6 +4523,16 @@ type ChannelMessage struct {
 	// The chat app's id of the message: the same message delivered again is taken once.
 	ID   string `json:"id"`
 	Text string `json:"text,omitempty"`
+	// The chat where the owner invoked a mention channel, as display context rather than an instruction.
+	Chat string `json:"chat,omitempty"`
+	// The topic or thread within chat, when the request came from one.
+	Topic string `json:"topic,omitempty"`
+	// Context the extension gathered for this request, such as nearby chat history. It is data, not owner-authored
+	// instructions.
+	Context string `json:"context,omitempty"`
+	// The extension's attestation that this is the owner's own request. A mention channel must send true; false or
+	// omitted is refused. Optional for an im channel's older messages.
+	Owner *bool `json:"owner,omitempty"`
 	// At most 4 are kept.
 	Images []ChannelBlob `json:"images,omitempty"`
 	Files  []ChannelBlob `json:"files,omitempty"`
@@ -6275,6 +6358,14 @@ func (v requiredJSONComponent) MarshalJSON() ([]byte, error) {
 			plain: plain(v),
 			Tiles: v.Tiles,
 		})
+	case "graph":
+		return json.Marshal(struct {
+			plain
+			Nodes []GraphNode `json:"nodes"`
+		}{
+			plain: plain(v),
+			Nodes: v.Nodes,
+		})
 	default:
 		return json.Marshal(plain(v))
 	}
@@ -6454,6 +6545,9 @@ var newDef = map[string]func() any{
 	"View":                          func() any { return new(View) },
 	"Section":                       func() any { return new(Section) },
 	"Component":                     func() any { return new(Component) },
+	"GraphNode":                     func() any { return new(GraphNode) },
+	"GraphNodeLink":                 func() any { return new(GraphNodeLink) },
+	"GraphEdge":                     func() any { return new(GraphEdge) },
 	"ImageSource":                   func() any { return new(ImageSource) },
 	"RowControl":                    func() any { return new(RowControl) },
 	"RowAction":                     func() any { return new(RowAction) },

@@ -113,7 +113,7 @@ struct SettingsView: View {
             // (Channels; `-openChannel <id>` one of them).
             .onAppear(perform: openDebugPage)
             #endif
-            .confirmationDialog("After disconnecting, you'll need to scan the code to pair again.", isPresented: $confirmUnpair, titleVisibility: .visible) {
+            .accessibleConfirmationDialog("After disconnecting, you'll need to scan the code to pair again.", isPresented: $confirmUnpair, titleVisibility: .visible) {
                 Button("Disconnect", role: .destructive) { Task { await model.disconnectAll() } }
             }
             .sheet(isPresented: $showPair) { PairView() }
@@ -500,7 +500,7 @@ private struct SettingsDestinations: ViewModifier {
         content
             .navigationDestination(for: SettingsPage.self) { destination($0).splitDetailPage() }
             .navigationDestination(for: MachineListRoute.self) { _ in MachinesView(settingsScope: true).splitDetailPage() }
-            .navigationDestination(for: ModelLaunchersRoute.self) { _ in ModelLaunchersView().splitDetailPage() }
+            .navigationDestination(for: ModelLaunchersRoute.self) { r in ModelLaunchersView(route: r).splitDetailPage() }
             .navigationDestination(for: ModelPurposeRoute.self) { r in ModelPurposeEditorView(purposeID: r.id).splitDetailPage() }
             .navigationDestination(for: ModelLauncherRoute.self) { r in ModelLauncherDetailView(name: r.name).splitDetailPage() }
             .navigationDestination(for: MachineDetailRoute.self) { r in MachineDetailView(ref: r.ref).splitDetailPage() }

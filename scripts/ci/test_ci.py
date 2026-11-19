@@ -66,8 +66,8 @@ class PathTests(unittest.TestCase):
         self.assertTrue(paths.select(["schema/extension/example.json"])["apple"])
 
     def test_desktop_inputs_select_the_desktop_lane(self):
-        for filename in ["desktop/src/main.ts", "web/src/main.tsx", "scripts/mock/mock_hub.py",
-                         "scripts/mock/test_desktops_mock.py", "scripts/mock/stream_trace.py", "spec/desktop-bridge.d.ts",
+        for filename in ["desktop/src/main.ts", "web/src/main.tsx", "scripts/mock/mock_hub.py", "scripts/mock/mock_domains.py",
+                         "scripts/mock/desktops_mock.py", "scripts/mock/test_desktops_mock.py", "scripts/mock/stream_trace.py", "spec/desktop-bridge.d.ts",
                          "server/cmd/password-wasm/main.go", "server/internal/passwordpake/pake.go", "server/go.mod", "server/go.sum"]:
             self.assertTrue(paths.select([filename])["desktop"], filename)
         self.assertFalse(paths.select(["server/internal/hub/hub.go"])["desktop"])
@@ -243,22 +243,25 @@ class ManualWorkflowTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[2]
         workflows = sorted((root / '.github/workflows').glob('*.yml'))
         self.assertTrue(workflows)
+        release_triggers = {
+            'release.yml': {'push': {'tags': ['v*']}},
+            'release-publish.yml': {'workflow_run': {'workflows': ['release-pr'], 'types': ['completed']}},
+            'release-schedule.yml': {'schedule': [{'cron': '0 4 * * *'}, {'cron': '0 */2 * * *'}]},
+        }
         for workflow in workflows:
-            text = workflow.read_text()
-            trigger = text.split('\non:\n', 1)[1].split('\npermissions:', 1)[0]
-            self.assertNotIn('    branches:', trigger, workflow.name)
-            self.assertNotIn('    branch:', trigger, workflow.name)
-            if workflow.name == 'release.yml':
-                self.assertIn("    tags: ['v*']", trigger)
-                self.assertIn('  push:', trigger, workflow.name)
-            else:
-                self.assertNotIn('  push:', trigger, workflow.name)
-            triggers = {name for name in ('merge_group', 'pull_request', 'pull_request_target',
-                                          'schedule', 'workflow_dispatch', 'workflow_run')
-                        if f'  {name}:' in trigger}
-            for name in ('merge_group', 'pull_request', 'pull_request_target', 'schedule', 'workflow_run'):
-                self.assertNotIn(name, triggers, workflow.name)
-            self.assertIn('workflow_dispatch', triggers, workflow.name)
+            with self.subTest(workflow=workflow.name):
+                triggers = yaml.load(workflow.read_text(), Loader=yaml.BaseLoader)['on']
+                if workflow.name == 'release-pr.yml':
+                    self.assertEqual(set(triggers), {'pull_request', 'push'})
+                    self.assertEqual(triggers['push'], {'branches': ['main']})
+                    self.assertEqual(set(triggers['pull_request']), {'types'})
+                    self.assertCountEqual(triggers['pull_request']['types'],
+                                          ['opened', 'synchronize', 'reopened', 'ready_for_review', 'edited'])
+                else:
+                    self.assertIn('workflow_dispatch', triggers)
+                    automatic = {event: value for event, value in triggers.items()
+                                 if event not in ('workflow_dispatch', 'workflow_call')}
+                    self.assertEqual(automatic, release_triggers.get(workflow.name, {}))
         ci = (root / '.github/workflows/ci.yml').read_text()
         self.assertNotIn('pull_request:', ci)
         full = ci.split('      full:\n', 1)[1].split('      lanes:\n', 1)[0]

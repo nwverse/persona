@@ -3,11 +3,13 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"net/http"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/devices"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/link"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -68,6 +70,14 @@ type Devices interface {
 	// confirmed it handed card's notification to Notification Center: false at once while there is none
 	// (notifyInteraction).
 	LinkRang(ctx context.Context, card string, within time.Duration) bool
+	// HeldMessages are the owner's messages held for machine's Agents while it was away (internal/devices held.go,
+	// #10661), by session id, oldest first, worded in lang for their rows; nil when there are none.
+	HeldMessages(machine string, lang i18n.Lang) map[string][]proto.UndeliveredMessage
+	// HeldRetry and HeldDelete are Retry and Delete on held message msg of session sid, whatever its machine: the
+	// assistant's undelivered routes, which older apps call for every row, end there for one they do not keep.
+	// found is false when no machine holds such a message; err is an *rpc.Error coded for the app otherwise.
+	HeldRetry(ctx context.Context, sid, msg string) (found bool, err error)
+	HeldDelete(ctx context.Context, sid, msg string) (found bool, err error)
 }
 
 // localDeviceCall is a device.call the manager answers itself: a node's method on a machine it has. The hub still
@@ -77,6 +87,9 @@ func (b *BusHub) localDeviceCall(ctx context.Context, p DeviceCall) (json.RawMes
 	d := b.opts.Devices
 	if d == nil || p.Device == assistantwire.DeviceAll || assistantwire.HubDeviceMethods[p.Method] || !d.Has(p.Device) {
 		return nil, false, nil
+	}
+	if p.Method == DeviceSessionModes && devicewire.ModeActorOf(ctx) == nil {
+		ctx = devicewire.WithModeActor(ctx, devicewire.AssistantModeActor())
 	}
 	out, err := d.CallNode(ctx, p.Device, p.Method, p.Params)
 	return out, true, err

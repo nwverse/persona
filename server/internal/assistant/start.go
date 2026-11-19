@@ -278,6 +278,9 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	}
 	params := map[string]any{"cwd": cwd, "launcher": p.Launcher, "text": p.Text, "images": p.Images, "permission_mode": p.PermissionMode,
 		"effort": p.Effort, "is_main": main}
+	if p.Public {
+		params["public"] = true
+	}
 	if p.Origin != "" {
 		params["origin"] = p.Origin // the node enforces the origin from the process's first tool call, before start answers
 	}
@@ -324,8 +327,10 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	if _, err := s.finishMainChatModel(ctx, machine, purpose, params, false); err != nil {
 		return proto.Session{}, err
 	}
-	// A guest's profile is its own: the main chat's setting is for the user's conversations only.
-	fromSetting := p.GuestTools == nil && s.withNewConversationProfile(ctx, machine, purpose, params)
+	// A guest's profile is its own: the main chat's setting is for the user's conversations only. So is the Inbox AI
+	// twin's: it acts on what strangers sent, and the user's own setup (allow rules, hooks, MCP servers) stays out of it
+	// in Persona's profile (#10859).
+	fromSetting := p.GuestTools == nil && purpose != purposeAgent && s.withNewConversationProfile(ctx, machine, params)
 	used, _ := params["launcher"].(string)
 	// A profile is Claude Code's: the node refuses a config_dir for any other agent before starting it (#6467). Judged
 	// here, by the launcher the start finally runs on, not the one asked for: the model configuration and a fallback
@@ -372,6 +377,9 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	sess.MachineID, sess.Assistant, sess.State, sess.Space = machine, true, proto.StateWorking, p.Space
 	if strings.TrimSpace(p.Text) == "" && len(p.Images) == 0 {
 		sess.Status, sess.State = proto.StatusIdle, proto.StateIdle
+	}
+	if p.Human && (p.Origin == "" || p.Origin == OriginUser) && strings.TrimSpace(p.Text) != "" {
+		s.humanSent.noteForReply(sess.SessionID, firstReplySendID, p.Text)
 	}
 	sess.Model, _ = params["model"].(string) // what it was started with ("": the launcher's default)
 	return sess, nil
@@ -457,8 +465,8 @@ func (s *Service) Start(ctx context.Context, p StartParams) (proto.Session, erro
 		p.Text = prompts.ProtectUserMessage(p.Text)
 	}
 	// The first message gets no client_msg_id of the manager's own (#5200): the node would tag its line with it, and the
-	// iPhone app, which matches its pending bubble by the id a line carries, would show the message twice. So it is not
-	// a message the hub vouched for, and an Always rule does not cover the turn it starts (the card is shown).
+	// iPhone app, which matches its pending bubble by the id a line carries, would show the message twice. An Always
+	// rule still needs a vouched client_msg_id. Missing-reply recovery can also use the vouched start in startOn.
 	sess, err := s.start(ctx, p)
 	if err != nil {
 		return proto.Session{}, err
@@ -930,7 +938,8 @@ func (s *Service) startRoutes() {
 		ctx, note := withLauncherNote(ctx)
 		sess, err := s.Start(ctx, StartParams{Text: in.Prompt, Images: in.Images, Launcher: in.Launcher, Model: in.Model, PermissionMode: in.PermissionMode,
 			Effort: in.Effort, ServiceTier: in.ServiceTier, Purpose: in.Purpose, MachineID: in.MachineID, Main: in.Main, Space: in.Space, Origin: origin, OriginRef: ref,
-			OpenedBy: requestOpener(r), GuestTools: guestTools, Human: own && in.Via == "" && assistantwire.HumanStartOf(r.Context())})
+			OpenedBy: requestOpener(r), GuestTools: guestTools,
+			Human: own && in.Via == "" && (assistantwire.HumanStartOf(r.Context()) || assistantwire.ReplyInputOf(r.Context()))})
 		var refused *pickError
 		switch {
 		case errors.As(err, &refused):
@@ -1080,12 +1089,14 @@ func (s *Service) messageParams(ctx context.Context, p SendParams, owner bool) (
 		err = s.validateSkillSelections(ctx, p.MachineID, p.SessionID, params)
 	}
 	switch {
-	case !p.Human || !own || marked: // anyone else's id, a person's carrying another's words (a mail handed on, the
+	case (!p.Human && !p.ReplyInput) || !own || marked: // anyone else's id, a person's carrying another's words (a mail handed on, the
 		// old main conversation's) or sent by Siri or the share sheet, never counts, nor does a person's id once
 		// another sent it (secret_handoff.go)
 		s.humanSent.voidSend(p.SessionID, id)
-	case err == nil: // the hub's word: a person's own app sent it (handoffUserTurn)
+	case err == nil && p.Human: // a paired device can also vouch for handoffUserTurn
 		s.humanSent.note(p.SessionID, id, sent)
+	case err == nil:
+		s.humanSent.noteForReply(p.SessionID, id, sent)
 	}
 	if err == nil && said && owner {
 		s.ownerInterjects(p.SessionID, params)
@@ -1124,11 +1135,16 @@ func (s *Service) sendParamsOwn(ctx context.Context, p SendParams) (map[string]a
 	}
 	// Keep the raw value until external admission checks it; ordinary conversations ignore it, even on an early return.
 	defer delete(params, "runtime")
-	delete(params, "origin") // only the manager's origin book may attest an Inbox conversation
-	if s.isInboxModelCall(ctx, p.MachineID, p.SessionID, "") {
+	delete(params, "origin") // only the manager's origin book may attest an existing conversation
+	delete(params, "origin_known")
+	origin, originKnown := s.managerOriginDecision(ctx, p.MachineID, p.SessionID, "", false)
+	if originKnown {
+		params["origin_known"] = true // an empty origin is an explicit ordinary decision, including on assistant.model
+	}
+	if origin != "" {
 		// A node reload does not restore the node's in-memory origin field. Re-attest it on every later send so the
 		// first resumed process is clamped to non-bypass default and its Lark gate cannot fall back to an ordinary conversation.
-		params["origin"] = OriginInbox
+		params["origin"] = origin
 	}
 	text, _ := params["text"].(string)
 	own := !contextTagRe.MatchString(text)
@@ -1207,6 +1223,9 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 	if cfg.InterjectBackground != nil && *cfg.InterjectBackground {
 		p["interject_background"] = true
 	}
+	if cfg.ClaudeInteractive != nil && *cfg.ClaudeInteractive {
+		p["claude_interactive"] = true // what the conversation's Claude runs in (#10058, node/assistant_tui.go)
+	}
 	// A leader conversation and the background supervisor follow it too: the hub's own messages (supervision, digests)
 	// drive them and pick nothing, so a model a failed turn's recovery moved one to (node/assistant_recovery.go: Opus
 	// down to Haiku on a run of 429s) was carried over as what it runs, for good.
@@ -1257,15 +1276,26 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 			}
 		}
 	}
-	if l == "" && !followsSetting {
-		if c, known := s.session(ctx, machine, sid); known {
+	if l == "" {
+		c, known := s.session(ctx, machine, sid)
+		if known && c.SourceKind == proto.SourceRuntime {
+			// The node resumes the session on the runtime that owns it, even for scheduled chats and leaders.
+			return nil
+		}
+		if known && !followsSetting {
 			l = c.Launcher // no launcher picked: the one this conversation runs
 			if l != "" {
 				p["launcher"] = l
 			}
 			// And the model it runs, so no pick keeps it; one that is no model id (Claude's "<synthetic>") is not.
-			if _, asked := p["model"]; !asked && proto.ValidModelID(c.Model) {
-				p["model"] = c.Model
+			if _, asked := p["model"]; !asked {
+				model := c.Model // older nodes only report the transcript name
+				if c.RequestedModel != nil {
+					model = *c.RequestedModel
+				}
+				if proto.ValidModelID(model) {
+					p["model"] = model
+				}
 			}
 		}
 	}
@@ -1289,6 +1319,7 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 		case model != "" && !picked && !s.launcherHasModel(ctx, machine, l, model):
 			s.logf("[%s] %s: model %s is not in %s's list any more, using its default", machine, short(sid), model, l)
 			delete(p, "model")
+			leaveLauncherNote(ctx, i18n.T(lang, "assistant-start.model_missing", i18n.Args{"model": model, "launcher": l}))
 		}
 	}
 	pickedLauncher := l != ""

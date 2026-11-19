@@ -13,6 +13,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/compat"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -30,7 +31,7 @@ import (
 // toolNames are the tools only assistant conversations get; their descriptions and schemas are in prompts/mcp
 // (docs/assistant/prompts.md).
 var toolNames = []string{"ask_user", "notify_user", "supervision_finish", "schedule_followup", "schedule_routine", "schedule_state_set", "delete_routine", "list_followups",
-	"cancel_followup", "list_places", "save_place", "machines_list", "agents_list", "agent_read", "agent_send", "agent_switch", "agents_switch", "agent_interrupt", "agent_start", "agent_supervise", "agent_transfer", "agent_archive", "agent_unarchive", "agent_autoname", "agent_autoname_receipt", "interaction_answer", "ask_escalate", "inbox_suggest", "inbox_draft",
+	"cancel_followup", "list_places", "save_place", "machines_list", "machine_redeploy", "agents_list", "agent_read", "agent_send", "agent_switch", "agents_switch", "agent_interrupt", "agent_start", "agent_supervise", "agent_transfer", "agent_archive", "agent_unarchive", "agent_autoname", "agent_autoname_receipt", "interaction_answer", "ask_escalate", "inbox_suggest", "inbox_draft",
 	"inbox_folders", "inbox_move", "inbox_post", "message_send", "kb_search", "kb_list", "kb_get", "kb_update", "kb_history_plan", "kb_history_status", "kb_history_stop", "kb_history_resume", "persona_settings", "secret_run", "skill_import",
 	"model_profiles_list", "model_profile_get", "model_profile_switch", "model_profile_rollback",
 	"repositories_list", "repository_get", "repository_add", "view_show", "view_update", "view_get",
@@ -313,6 +314,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		return "Cancelled.", nil
 	case "machines_list":
 		return s.toolMachinesList(ctx)
+	case "machine_redeploy":
+		return s.toolMachineRedeploy(ctx, machine, args)
 	case "agents_list":
 		var a struct{ State, Machine, Query string }
 		_ = json.Unmarshal(args, &a)
@@ -326,6 +329,10 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		_ = json.Unmarshal(args, &a)
 		return s.toolAgentRead(ctx, a.Machine, a.SessionID, a.Turns)
 	case "agent_send":
+		wait, waitErr := agentWaitDuration(args)
+		if waitErr != nil {
+			return "", waitErr
+		}
 		var a struct {
 			Machine   string `json:"machine"`
 			SessionID string `json:"session_id"`
@@ -417,12 +424,20 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if a.Task != nil {
 			text, err = s.withStandingAuthorizations(ctx, am.ID, c.Cwd, text)
 			if err != nil {
-				return "", task.sendFailed(ctx, s, err)
+				return "", task.sendFailed(ctx, s, rpc.NotSent(err))
 			}
 		}
 		// The user's attachments, copied to the agent's computer when it is another one: the text ends with them, the
 		// pictures in the <attached_images> block a picture sent straight to the agent ends with (#2437).
 		params := sendParams(c.SessionID, text, a.DismissNotice)
+		inputID := ""
+		if wait > 0 {
+			inputID = "wait_" + randomHex(16)
+			params["client_msg_id"] = inputID
+		}
+		finish := func(receipt string) string {
+			return s.waitAgentReply(ctx, receipt, inputID, wait, fixedWaitTarget(am.ID, c.SessionID))
+		}
 		var handed handedAttachments
 		if mentioned := s.mentionedAttachments(ctx, machine, self, a.Text, atts); len(atts)+len(mentioned) > 0 {
 			handed = s.handAttachments(ctx, machine, am.ID, atts, mentioned)
@@ -431,7 +446,11 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		sending, _ := params["text"].(string)
 		// A resume goes through the user's Resume's node call, the text as its first message (agent_resume.go).
 		if resume != "" {
-			return s.resumeAndSend(ctx, self, am, c, params, resume, a.Text, handed.said(), task)
+			receipt, err := s.resumeAndSend(ctx, self, am, c, params, resume, a.Text, handed.said(), task)
+			if err != nil {
+				return "", err
+			}
+			return finish(receipt), nil
 		}
 		if c.Status != proto.StatusOffline {
 			// A running agent takes it at once. A send of more for an accepted task holds a turn of the agent that
@@ -446,8 +465,21 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			if !note.reopens() {
 				lctx = ctx
 			}
+			// A nearly full Claude Code or Codex agent is compacted with its own /compact before the text goes in, by
+			// its node as it delivers, which checks again then (#11137): that takes minutes, so the wait is not the live
+			// send's. Any other send goes exactly as before.
+			if contextFull(c) && compactable(c) {
+				params["compact_if_full"] = true
+				var ccancel context.CancelFunc
+				lctx, ccancel = context.WithTimeout(context.WithoutCancel(ctx), compactSendWait)
+				defer ccancel()
+			}
 			var sent struct {
 				Queued bool `json:"queued"` // the runtime holds it behind the turn under way (#8097)
+				// CompactAfterTurn: nearly full mid-turn, the node holds it and compacts once the turn ends; Compacted:
+				// it compacted the agent before the text went in (#11137).
+				CompactAfterTurn bool `json:"compact_after_turn"`
+				Compacted        bool `json:"compacted"`
 			}
 			err = s.call(lctx, am.ID, DeviceSessionSend, params, &sent)
 			note.sent(lctx, err) // an unknown answer counts for the agent's next turn: it may still arrive
@@ -455,18 +487,25 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 				s.progressMade(am.ID, c.SessionID, time.Now()) // the supervisor told it something: a new stretch (supervise_progress.go)
 			}
 			if err != nil {
-				if note.reopens() && sendUnknown(err) {
-					// Its own wait ran out, or the link dropped, while the node may still type it in: the model reads
-					// the agent before it sends the text twice.
-					err = fmt.Errorf("%w (it may still arrive; check with agent_read before sending again)", err)
+				if errCode(err) == proto.CodeCompactFailed && !sendUnknown(err) {
+					return "", task.sendFailed(ctx, s, compactFailed(c, am, err, false))
 				}
 				return "", task.sendFailed(ctx, s, err)
 			}
-			if sent.Queued {
-				return fmt.Sprintf("Queued for %s on %s: it is in the middle of a turn and reads the message once what it is doing now ends.",
-					agentLabel(c), am.Name) + handed.said() + task.sent(ctx, s, a.Text), nil
+			if sent.CompactAfterTurn {
+				return finish(fmt.Sprintf("Queued for %s on %s: it is in the middle of a turn and its context is nearly full, so once "+
+					"the turn ends it is compacted with its own /compact and then reads the message.", agentLabel(c), am.Name) +
+					handed.said() + task.sent(ctx, s, a.Text)), nil
 			}
-			return fmt.Sprintf("Sent to %s on %s.", agentLabel(c), am.Name) + handed.said() + task.sent(ctx, s, a.Text), nil
+			if sent.Compacted {
+				return finish(fmt.Sprintf("Sent to %s on %s after compacting its nearly full context with its own /compact.",
+					agentLabel(c), am.Name) + handed.said() + task.sent(ctx, s, a.Text)), nil
+			}
+			if sent.Queued {
+				return finish(fmt.Sprintf("Queued for %s on %s: it is in the middle of a turn and reads the message once what it is doing now ends.",
+					agentLabel(c), am.Name) + handed.said() + task.sent(ctx, s, a.Text)), nil
+			}
+			return finish(fmt.Sprintf("Sent to %s on %s.", agentLabel(c), am.Name) + handed.said() + task.sent(ctx, s, a.Text)), nil
 		}
 		// Not running and not read-only: a branch nothing has started yet (node fork.go), or a node from before #4754
 		// that still resumes a stopped agent. Its node starts it first, which can take minutes and goes on if this call
@@ -482,7 +521,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if err != nil {
 			return "", task.sendFailed(sctx, s, err)
 		}
-		return fmt.Sprintf("Resumed %s on %s (same session, directory and launcher) and sent.", agentLabel(c), am.Name) + handed.said() + task.sent(sctx, s, a.Text), nil
+		return finish(fmt.Sprintf("Resumed %s on %s (same session, directory and launcher) and sent.", agentLabel(c), am.Name) + handed.said() + task.sent(sctx, s, a.Text)), nil
 	case "agent_switch": // moves a running agent to another launcher and goes on with it (agent_switch.go, #5973)
 		return s.toolAgentSwitch(ctx, machine, self, args)
 	case "agents_switch": // moves many running agents to another launcher at once (agents_switch.go, #6008)
@@ -500,6 +539,10 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 	case "agent_autoname_receipt":
 		return s.toolAgentAutonameReceipt(ctx, machine, self, args) // agent_naming_receipt.go
 	case "agent_start":
+		wait, waitErr := agentWaitDuration(args)
+		if waitErr != nil {
+			return "", waitErr
+		}
 		var a struct {
 			Machine  string `json:"machine"`
 			Cwd      string `json:"cwd"`
@@ -507,6 +550,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			Launcher string `json:"launcher"`
 			Model    string `json:"model"`
 			Effort   string `json:"effort"`
+			Speed    string `json:"speed"`
 			Tier     string `json:"tier"`
 			Worktree struct {
 				Branch string `json:"branch"`
@@ -538,7 +582,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			return "", fmt.Errorf("%w; no agent was started", err)
 		}
 		a.Cwd = proto.ExpandHome(a.Cwd, am.Home)
-		own := startPick{launcher: strings.TrimSpace(a.Launcher), effort: strings.TrimSpace(a.Effort)} // before the tier
+		own := startPick{launcher: strings.TrimSpace(a.Launcher), effort: strings.TrimSpace(a.Effort), speed: strings.TrimSpace(a.Speed)} // before the tier
 		// The tier is resolved first (an unknown one asks and starts nothing), then Model Settings' Agents laid over it as
 		// the start lays it: what runs is said on the card (a hand-off from the health space asks) and in the answer.
 		tier, runs := strings.TrimSpace(a.Tier), ""
@@ -547,21 +591,26 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			if err != nil {
 				return "", fmt.Errorf("%w; no agent was started", err)
 			}
+			model := a.Model
 			if !layTier(t, &a.Launcher, &a.Model, &a.Effort) {
 				tier = "" // a launcher of its own: the tier gives it nothing
 			} else {
-				picks := map[string]any{"launcher": a.Launcher, "model": a.Model, "effort": a.Effort}
+				if a.Speed == "" && (model == "" || model == t.Model) {
+					a.Speed = t.Speed
+				}
+				picks := map[string]any{"launcher": a.Launcher, "model": a.Model, "effort": a.Effort, "speed": a.Speed}
 				if s.applyModel(ctx, "agent.new", picks) == nil { // one that can't run is the start's to say
 					l, _ := picks["launcher"].(string)
 					m, _ := picks["model"].(string)
 					e, _ := picks["effort"].(string)
-					runs = ModelTier{Launcher: l, Model: m, Effort: e}.runs()
+					v, _ := picks["speed"].(string)
+					runs = ModelTier{Launcher: l, Model: m, Effort: e, Speed: v}.runs()
 				}
 			}
 		}
 		// What it runs on this computer, before the user is asked (#2640, launcher_fit.go): a launcher named here that
 		// the computer lacks starts nothing; a default it lacks gives way to one it has, and the card and answer say so.
-		run := map[string]any{"launcher": a.Launcher, "model": a.Model, "effort": a.Effort}
+		run := map[string]any{"launcher": a.Launcher, "model": a.Model, "effort": a.Effort, "speed": a.Speed}
 		if err := s.applyModel(ctx, "agent.new", run); err != nil {
 			return "", err
 		}
@@ -569,10 +618,15 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if err != nil {
 			return "", fmt.Errorf("%w; no agent was started", err)
 		}
+		a.Speed, _ = run["speed"].(string)
+		if err := checkStartSpeed(run, fit, ""); err != nil {
+			return "", fmt.Errorf("%w; no agent was started", err)
+		}
 		if swapped != "" {
 			a.Launcher, _ = run["launcher"].(string)
 			a.Model, _ = run["model"].(string)
 			a.Effort, _ = run["effort"].(string)
+			a.Speed, _ = run["speed"].(string)
 			tier, runs = "", "" // the tier's launcher is not what runs
 		}
 		// traex, omp…: no effort (launcher_modes.go). One this call names is refused before the user is asked, rather
@@ -601,6 +655,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			where += i18n.T(s.lang(ctx), "assistant-tools.with_tier", i18n.Args{"tier": tier, "runs": runs})
 		case a.Model != "":
 			where += i18n.T(s.lang(ctx), "assistant-tools.with_model", i18n.Args{"model": a.Model})
+		case proto.FasterSpeed(a.Speed):
+			where += " · " + a.Speed
 		}
 		if a.Ultracode {
 			where += " · ultracode"
@@ -621,7 +677,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), agentStartTimeout)
 		defer cancel()
 		// The tab is named from the prompt as written; the agent gets its project's background before it (#2820).
-		params := map[string]any{"cwd": a.Cwd, "launcher": a.Launcher, "model": a.Model, "effort": a.Effort, "tab_name": s.tabName(sctx, a.Prompt)}
+		params := map[string]any{"cwd": a.Cwd, "launcher": a.Launcher, "model": a.Model, "effort": a.Effort, "speed": a.Speed, "tab_name": s.tabName(sctx, a.Prompt)}
 		prompt := s.withCloseoutBrief(sctx, a.Prompt, false)
 		params["prompt"] = s.withProjectContext(sctx, am.ID, a.Cwd, self, prompt)
 		if a.Ultracode {
@@ -641,6 +697,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			if _, fit, err = s.fitLauncher(ctx, am, own, params); err != nil {
 				return "", fmt.Errorf("%w; no agent was started", err)
 			}
+		}
+		if err := checkStartSpeed(params, fit, ""); err != nil {
+			return "", fmt.Errorf("%w; no agent was started", err)
 		}
 		// Allow all for Claude Code and for a provider whose approval is an Auto Accept switch (startAgent.allowAll, #8141).
 		if fit.allowAll() {
@@ -722,6 +781,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			return "", fmt.Errorf("%w; no agent was started", err)
 		}
 		defer release()
+		clearStandardSpeed(params)
 		s.setPlanThen(ctx, am.ID, params)
 		var values *handoffValues
 		if hand != nil {
@@ -737,6 +797,11 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 				values.wipe() // no retry can need them again
 			}
 			note += hand.granted(approvedBy)
+		}
+		inputID := ""
+		if wait > 0 {
+			inputID = "wait_" + randomHex(16)
+			params["client_msg_id"] = inputID
 		}
 		err = s.call(sctx, am.ID, DeviceSessionStart, params, &res)
 		if reason, refused := s.ultracodeRefusal(ctx, err, params); refused {
@@ -766,12 +831,15 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if said := s.startInsteadNote(ctx, am, res.Instead, res.Session); said != "" {
 			note += " Note: " + said + "." // the engine ran another of the same kind, its default model, a lower effort (#8140)
 		}
+		finish := func(receipt string) string {
+			return s.waitAgentReply(ctx, receipt, inputID, wait, fixedWaitTarget(am.ID, res.Session.SessionID))
+		}
 		s.inboxAgentStarted(ctx, self, am.ID, res.Session.SessionID, a.Prompt) // an inbox event's conversation: its chain
 		if told, ok := s.quietAgentTask(ctx, self, am, a.Cwd, a.Prompt, params["tab_name"], res.Session.SessionID); ok {
-			return fmt.Sprintf("Started on %s in %s: session %s, a task of this conversation (its card is in the conversation; "+
-				"%s).%s", am.Name, a.Cwd, res.Session.SessionID, told, note), nil
+			return finish(fmt.Sprintf("Started on %s in %s: session %s, a task of this conversation (its card is in the conversation; "+
+				"%s).%s", am.Name, a.Cwd, res.Session.SessionID, told, note)), nil
 		}
-		return fmt.Sprintf("Started on %s in %s: session %s. It shows up in the app's Agents tab.%s", am.Name, a.Cwd, res.Session.SessionID, note), nil
+		return finish(fmt.Sprintf("Started on %s in %s: session %s. It shows up in the app's Agents tab.%s", am.Name, a.Cwd, res.Session.SessionID, note)), nil
 	}
 	return "", fmt.Errorf("unknown tool %s", name)
 }
@@ -802,27 +870,76 @@ func startResultUnknown(err error) bool {
 		errors.Is(err, rpc.ErrClosed) || errors.As(err, &re) && re.Message == rpc.ErrClosed.Error()
 }
 
-// sendUnknown: a session.send or session.start that failed though its text may have reached the agent: its answer
-// never came back (startResultUnknown), or the node's error says the text may have arrived or did (nodeMayHaveTaken).
-// Not when the manager's own connection says it never went out (rpc.ErrNotSent: the caller's wait ran out, or the
-// connection closed, before it was written, or the node's not-started refusals outlasted the retries).
+// sendUnknown reports whether a failed node write may have taken effect. An explicit delivery result takes
+// precedence over the transport's words. An uncoded error relayed across the bus keeps only its message.
 func sendUnknown(err error) bool {
-	return (startResultUnknown(err) || nodeMayHaveTaken(err)) && !errors.Is(err, rpc.ErrNotSent)
+	if _, ok := errors.AsType[*completedNodeWriteError](err); ok {
+		return true // a later validation error describes a different operation
+	}
+	if err == nil || errors.Is(err, rpc.ErrNotSent) {
+		return false
+	}
+	switch nodeDelivered(err) {
+	case "none":
+		return false
+	case "unknown", "yes":
+		return true
+	}
+	var re *rpc.Error
+	if errors.As(err, &re) {
+		if re.Code != "" {
+			return re.Code == devicewire.CodeDeadline || re.Code == devicewire.CodeNodeClosed
+		}
+		return noSendAnswer(re.Message)
+	}
+	return startResultUnknown(err) || noSendAnswer(err.Error())
 }
 
-// nodeMayHaveTaken: err is the node's, and its delivered says the text may have arrived ("unknown": typing failed part
-// way, or a Claude's inbox read it but the session has not confirmed it yet, peer_unconfirmed) or did ("yes"). A refusal
-// says "none" (nothing was typed); an error that says neither is read by its kind alone (startResultUnknown).
+// Only the transport's complete, canonical message substitutes for a lost Go error type.
+func noSendAnswer(message string) bool {
+	return message == context.DeadlineExceeded.Error() || message == context.Canceled.Error() || message == rpc.ErrClosed.Error()
+}
+
+// A node already answered a write successfully, but the manager could not validate or decode the answer.
+// Keep the original error for diagnostics without turning it into permission to send again.
+type completedNodeWriteError struct{ error }
+
+func (e *completedNodeWriteError) Unwrap() error { return e.error }
+
+func tracksNodeWrite(method string) bool {
+	return method == DeviceSessionSend || method == DeviceSessionStart || method == devicewire.MethodCloseTaskTerminal
+}
+
+func beforeNodeWrite(method string, err error) error {
+	if tracksNodeWrite(method) {
+		return rpc.NotSent(err)
+	}
+	return err
+}
+
+func afterNodeWrite(method string, err error) error {
+	if err != nil && tracksNodeWrite(method) {
+		return &completedNodeWriteError{err}
+	}
+	return err
+}
+
+// nodeMayHaveTaken counts only a delivery the node itself marked as possible or confirmed.
 func nodeMayHaveTaken(err error) bool {
+	d := nodeDelivered(err)
+	return d == "unknown" || d == "yes"
+}
+
+func nodeDelivered(err error) string {
 	var re *rpc.Error
 	if !errors.As(err, &re) || len(re.Data) == 0 {
-		return false
+		return ""
 	}
 	var d struct {
 		Delivered string `json:"delivered"`
 	}
 	_ = json.Unmarshal(re.Data, &d)
-	return d.Delivered == "unknown" || d.Delivered == "yes"
+	return d.Delivered
 }
 
 // liveSendWait bounds a send to an agent that runs when the send may reopen its accepted task (agent_send), and the
