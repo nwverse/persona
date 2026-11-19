@@ -65,6 +65,10 @@ const assistantAllowedTools = "mcp__persona"
 // (#5839).
 const assistantBuiltinTools = "Bash,Read,Write,Edit,Monitor,Skill,Agent,ListAgents,SendMessage,TaskStop,WebFetch,WebSearch,ToolSearch"
 
+// SendMessage is a Claude built-in, not a Persona MCP call, so the manager/node origin guard cannot classify its
+// cross-Agent resume or message. Inbox handling keeps the investigation tools but must finish through inbox_suggest.
+const assistantInboxBuiltinTools = "Bash,Read,Write,Edit,Monitor,Skill,Agent,ListAgents,TaskStop,WebFetch,WebSearch,ToolSearch"
+
 type assistantProc struct {
 	id       string
 	agent    string // "claude" (stream-json) or "codex" (app-server, assistant_codex.go)
@@ -100,6 +104,9 @@ type assistantProc struct {
 	effort      string
 	model       modelExecution
 	fingerprint string
+	// turnRecovery belongs to the turn currently answering on this process. A newer request may cancel the
+	// conversation-map entry, but must not rewrite this older turn's retry budget before its result arrives.
+	turnRecovery *assistantTurnRecovery
 	// instructions is the digest of the CLAUDE.md / AGENTS.md in cwd when it started (instructionsDigest): the agent
 	// reads them only at start, so once the hub rewrites them (new prompts, assistant.prepare) the next idle message
 	// resumes the conversation in a fresh process (instructionsStale).
@@ -811,10 +818,15 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	}
 	if p.agent == "codex" {
 		p.mu.Lock()
+		wasBusy := p.busy
 		p.busy = true
 		p.turnError = ""
 		p.turnErrorKind = ""
 		p.lastActive = time.Now()
+		p.model.NewModelChoice = execution.NewModelChoice
+		if recovery != nil || !wasBusy {
+			p.turnRecovery = recovery
+		}
 		p.mu.Unlock()
 		if err := p.cx.deliver(ctx, live, text, images, selected...); err != nil {
 			p.mu.Lock()
@@ -822,6 +834,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			p.mu.Unlock()
 			return "", fmt.Errorf("send to codex: %w", err)
 		}
+		n.commitModelChoice(id, execution)
 		commit()
 		awaitList(n.notifySessionsSoon())
 		return id, nil
@@ -881,12 +894,17 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			return id, nil
 		}
 		p.mu.Lock()
+		wasBusy := p.busy
 		p.busy = true
 		p.turnError = ""
 		p.turnErrorKind = ""
 		p.compacted = false // a new turn: compact again when it is idle and long
 		p.lastActive = time.Now()
 		p.partial.Reset()
+		p.model.NewModelChoice = execution.NewModelChoice
+		if recovery != nil || !wasBusy {
+			p.turnRecovery = recovery
+		}
 		p.mu.Unlock()
 		var timeout *assistantControlTimeoutError
 		retryControl := errors.As(controlErr, &timeout)
@@ -896,6 +914,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		}
 		if werr == nil {
 			werr = p.writeInput(in) // a new id each attempt: a process that died may have written the last one down
+			if werr == nil {
+				n.commitModelChoice(id, execution)
+			}
 			timing.mark("input_written", werr == nil)
 		}
 		switch {

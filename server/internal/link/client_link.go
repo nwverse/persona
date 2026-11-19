@@ -81,19 +81,22 @@ func (l *link) getEndpoints() []Endpoint {
 	return slices.Clone(l.eps)
 }
 
-func dial(ctx context.Context, c *Config) (*link, error) { return dialVia(ctx, c, c.Endpoints, nil) }
+func dial(ctx context.Context, c *Config) (*link, error) {
+	return dialVia(ctx, c, ranked(c.Endpoints), nil)
+}
 
 // dialVia races eps for the link: straight to the hub, or through outbound proxy p when it is set (proxied); every
-// stream later opened on the link takes the same route.
+// stream later opened on the link takes the same route. eps is already in its intended race order.
 func dialVia(ctx context.Context, c *Config, eps []Endpoint, p *url.URL) (*link, error) {
-	l, ep, err := race(ctx, eps, func(ctx context.Context, ep Endpoint) (*link, error) {
+	candidates := ranked(eps)
+	l, ep, err := race(ctx, candidates, func(ctx context.Context, ep Endpoint) (*link, error) {
 		var local netip.Addr
 		hc := hubClient(c, p, func(raw net.Conn) {
 			if a, err := netip.ParseAddrPort(raw.LocalAddr().String()); err == nil {
 				local = a.Addr().Unmap()
 			}
 		})
-		conn, resp, err := websocket.Dial(ctx, wsURL(ep.URL, Path), &websocket.DialOptions{HTTPClient: hc, HTTPHeader: bearer(c.Token)})
+		conn, resp, err := diagnosticDial(ctx, wsURL(ep.URL, Path), &websocket.DialOptions{HTTPClient: hc, HTTPHeader: bearer(c.Token)}, "control", ep.Kind, slices.Index(candidates, ep)+1)
 		if err != nil {
 			return nil, handshakeError(resp, err)
 		}
@@ -608,8 +611,8 @@ func (l *link) forward(ctx context.Context, id, target string) error {
 	defer node.Close()
 	dctx, dcancel := context.WithTimeout(ctx, dialTimeout) // the handshake only: the stream lives as long as the link
 	defer dcancel()
-	ws, resp, err := websocket.Dial(dctx, wsURL(cmp.Or(l.baseURL, l.ep.URL), StreamPath+"?id="+id), &websocket.DialOptions{
-		HTTPClient: l.streams, HTTPHeader: bearer(l.token), CompressionMode: StreamCompression})
+	ws, resp, err := diagnosticDial(dctx, wsURL(cmp.Or(l.baseURL, l.ep.URL), StreamPath+"?id="+id), &websocket.DialOptions{
+		HTTPClient: l.streams, HTTPHeader: bearer(l.token), CompressionMode: StreamCompression}, "stream", l.ep.Kind, 1)
 	if err != nil {
 		return newTextError("link-errors.stream_open_failed", handshakeError(resp, err))
 	}

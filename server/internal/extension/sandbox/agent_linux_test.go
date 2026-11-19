@@ -130,9 +130,11 @@ func TestLinuxAgentSandboxForReal(t *testing.T) {
 	t.Logf("bwrap profile: %s", strings.Join(prefix, " "))
 	control := []string{sup.Bwrap, "--die-with-parent", "--unshare-user", "--bind", "/", "/", "--dev-bind", "/dev", "/dev", "--chdir", work}
 	run := func(prefix []string, script string) (string, error) {
-		args := append([]string(nil), prefix[1:]...)
-		args = append(args, "--", "/bin/sh", "-c", script)
-		cmd := exec.Command(prefix[0], args...)
+		command, err := linuxAgentCommand(prefix, []string{"/bin/sh", "-c", script})
+		if err != nil {
+			return "", err
+		}
+		cmd := exec.Command(command[0], command[1:]...)
 		cmd.Dir = work
 		cmd.Env = append(os.Environ(), "HOME="+f.home)
 		out, err := cmd.CombinedOutput()
@@ -177,6 +179,7 @@ func TestLinuxAgentSandboxForReal(t *testing.T) {
 		"create a top-level secret backup":   "echo new > " + q(D+"/hub.json.new") + " && cat " + q(D+"/hub.json.new"),
 		"mv the data directory":              "mv " + q(D) + " " + q(D+"2") + " && mv " + q(D+"2") + " " + q(D),
 		"mv the folder above it":             "mv " + q(f.home) + " " + q(f.home+"2") + " && mv " + q(f.home+"2") + " " + q(f.home),
+		"replace .state-link":                "rm " + q(alias) + " && ln -s .persona " + q(alias),
 		"rm the switch":                      "rm " + q(D+"/"+AgentOnFile) + " && touch " + q(D+"/"+AgentOnFile),
 		"dial an extension's proxy":          q(self) + " agent-dial " + q(proxySock),
 		"dial the hub's edge socket":         q(self) + " agent-dial " + q(edgeSock),
@@ -221,7 +224,6 @@ func TestLinuxAgentSandboxForReal(t *testing.T) {
 	}
 
 	t.Logf("running %d must-fail and %d must-work commands, then the unmasked controls", len(mustFail), len(mustWork))
-	t.Log("documented gap: replacing the data-directory symlink is checked separately below, not counted as a refusal")
 	for name, script := range mustFail {
 		if out, err := run(prefix, script); err == nil {
 			t.Errorf("%s: worked in the sandbox: %s", name, out)
@@ -282,20 +284,6 @@ func TestLinuxAgentSandboxForReal(t *testing.T) {
 		t.Errorf("agent is not a direct host-pid-namespace child of node-started bwrap pid %d: %q", pid, output.String())
 	}
 
-	// The remaining alias-replacement gap is real, but replacing the link must not expose the secret through either
-	// name. Recreating the same relative link leaves the host fixture equivalent to its original state.
-	replaceAlias := "rm " + q(alias) + " && ln -s .persona " + q(alias) + " && printf 'alias=replaced\\n'"
-	out, err := run(prefix, replaceAlias+"; cat "+q(alias+"/secret.key"))
-	if err == nil || !strings.Contains(out, "alias=replaced") {
-		t.Errorf("alias replacement was not exercised: %v %s", err, out)
-	}
-	if out, err := run(prefix, "cat "+q(D+"/secret.key")); err == nil {
-		t.Errorf("real data path exposed after alias replacement: %s", out)
-	}
-	if out, err := run(control, replaceAlias+"; cat "+q(alias+"/secret.key")); err != nil {
-		t.Errorf("control alias replacement: %v %s", err, out)
-	}
-
 	// Special read-only entries never follow a symlink to a different file. The regular switch was checked above;
 	// replace it only after all other cases and verify that its linked form is closed instead.
 	switchPath := filepath.Join(D, AgentOnFile)
@@ -345,6 +333,37 @@ func TestLinuxAgentSandboxForReal(t *testing.T) {
 		if out, err := run(control, "cat "+q(path)); err != nil {
 			t.Errorf("control extensions directory symlink %s: %v %s", rel, err, out)
 		}
+	}
+}
+
+// A name found through a relative PATH entry runs exactly as it did when bwrap performed the exec itself.
+func TestLinuxAgentSandboxRelativePathForReal(t *testing.T) {
+	sup := AgentProbe()
+	if st := AgentSupport(sup); st.State != AgentActive {
+		t.Skip("no Linux agent sandbox here: " + st.Why)
+	}
+	f := newAgentFixture(t)
+	work := filepath.Join(f.home, "work")
+	if err := os.Mkdir(work, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	plan := f.plan()
+	plan.Cwd = work
+	if err := os.WriteFile(filepath.Join(work, "relative-agent"), []byte("#!/bin/sh\nprintf 'relative-agent-ok\\n'\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	env := withoutKey(withoutKey(os.Environ(), AgentEnv), "PATH")
+	env = append(env, "PATH=."+string(os.PathListSeparator)+os.Getenv("PATH"))
+	wrapped, env, st := WrapAgent(plan, []string{"relative-agent"}, env)
+	if st.State != AgentActive {
+		t.Fatalf("WrapAgent did not wrap: %+v", st)
+	}
+	cmd := exec.Command(wrapped[0], wrapped[1:]...)
+	cmd.Dir = work
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil || strings.TrimSpace(string(out)) != "relative-agent-ok" {
+		t.Fatalf("relative PATH agent: %v %s", err, out)
 	}
 }
 
@@ -460,9 +479,11 @@ func TestLinuxAgentSandboxSnapshotForReal(t *testing.T) {
 		"IFS= read -r _; " + shellQuote(self) + " agent-socket-read " + shellQuote(nodeSock) + "; printf '\\n'; " +
 		"if [ -e " + shellQuote(publicFile) + " ]; then printf 'top=present\\n'; else printf 'top=missing\\n'; fi; " +
 		"if [ -e " + shellQuote(nestedFile) + " ]; then printf 'nested=present\\n'; else printf 'nested=missing\\n'; fi"
-	args := append([]string(nil), prefix[1:]...)
-	args = append(args, "--", "/bin/sh", "-c", script)
-	cmd := exec.Command(prefix[0], args...)
+	command, err := linuxAgentCommand(prefix, []string{"/bin/sh", "-c", script})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(command[0], command[1:]...)
 	cmd.Dir = work
 	cmd.Env = os.Environ()
 	stdin, err := cmd.StdinPipe()
@@ -577,9 +598,11 @@ func TestLinuxAgentSandboxNamespaceBoundariesForReal(t *testing.T) {
 		return strings.TrimSpace(string(out)), err
 	}
 	bwrap := func(script string) (string, error) {
-		args := append([]string{prefix[0]}, prefix[1:]...)
-		args = append(args, "--", "/bin/sh", "-c", script)
-		return run(args...)
+		command, err := linuxAgentCommand(prefix, []string{"/bin/sh", "-c", script})
+		if err != nil {
+			return "", err
+		}
+		return run(command...)
 	}
 
 	t.Run("proc_root", func(t *testing.T) {
@@ -603,10 +626,11 @@ func TestLinuxAgentSandboxNamespaceBoundariesForReal(t *testing.T) {
 		if out, err := run(nestedArgs...); err != nil || !strings.Contains(out, "secret=readable") {
 			t.Fatalf("nested unshare control: %v %s", err, out)
 		}
-		args := append([]string{prefix[0]}, prefix[1:]...)
-		args = append(args, "--", nestedArgs[0])
-		args = append(args, nestedArgs[1:]...)
-		out, err := run(args...)
+		command, err := linuxAgentCommand(prefix, nestedArgs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, err := run(command...)
 		if err == nil || strings.Contains(out, "secret=readable") {
 			t.Errorf("nested unshare/umount exposed the secret: %v %s", err, out)
 		}

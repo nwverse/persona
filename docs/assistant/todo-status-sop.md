@@ -206,10 +206,11 @@ to-do with priority `high`, still asks the owner with the card, as before.
 Just finished used to empty itself only by time: a to-do the owner had already looked at stayed there for 24 hours, on
 top of the list (#5707). Now the owner files it:
 
-- **Got it** on a Just finished row (on the web a small button at the end of its status line, under the time, #6578; on
-  iOS a button under its words, moving to the web's place in #7148, and a leading swipe action) marks it seen. The row
-  goes to Done at once, before the hub answers; a toast says so with **Undo**, which takes the mark off. A failed write
-  puts the row back and says why.
+- **Got it** on a Just finished row (a small button at the end of its status line, under the time, #6578, #7148; on iOS
+  a compact accent `Chip` and a leading swipe action) marks it seen. On iOS the chip shares the status line when it fits;
+  otherwise `ViewThatFits` puts it at the right of the next line, with the status's wrapping unchanged, through the
+  xxxLarge interface-text cap (#6813). The row goes to Done at once, before the hub answers; a toast says so with
+  **Undo**, which takes the mark off. A failed write puts the row back and says why.
 - **Opening it** counts too: the iPhone marks it seen when its page opens (the list behind has it in Done on the way
   back); the web when the page leaves it (another to-do, the list, another page), so its row does not move while it is
   read. Nothing is said about it. The Mac (frozen) and Android do neither yet; both file what another device marked.
@@ -396,8 +397,8 @@ redesign changes them:
   `safe`; a run's ask is what its pending card asks (`question`, `plan`, `tool`, `form` or `secret`, the card's id as
   `interaction`; the session's own card before Persona's about its turn, then the oldest), `safe` only when a
   notification may answer that card too (one question with options, not a Just me turn's or a health conversation's,
-  and its asker did not say going ahead cannot be undone; the hub's push for such a card offers no options either,
-  Android's own notification actions not yet, `docs/protocol/protocol.md` "Answering a question from its notification").
+  and its asker did not say going ahead cannot be undone. The hub and Android omit option actions for an explicitly
+  irreversible question. See `docs/protocol/protocol.md`, "Answering a question from its notification").
   A failed start of a to-do no conversation opened carries no retry, since the hub would refuse it; its row still
   says why it did not start. The table is in `spec/fixtures/todo-view/README.md` ("Risk and the lock screen"). The
   decision's push says the same rule (`lockscreen`; `open_only` sends `TODO_DECIDE_OPEN`, which offers no action,
