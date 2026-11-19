@@ -10,6 +10,9 @@ import { SESSIONS_LIST_FEATURE } from "./session-list";
 import { runtimeAgents, runtimeSessions, supportsPagedAgents } from "./runtime-list";
 import type { Session } from "./types";
 
+// Filter before folding: a hidden parent must not swallow a visible child, or a hidden child raise its parent’s state.
+const directoryVisible = (rows: Session[]) => rows.some((s) => s.hidden_by_directory) ? rows.filter((s) => !s.hidden_by_directory) : rows;
+
 /** The agents the lists show and count: without the child sessions folded under one of them, each parent in its folded
  *  state (lib/folded-rows.ts, #5120). A child's own row is in the store (`sessions`, `sessionSummaries`) for its card. */
 export function useAgentSessions(): Session[] {
@@ -17,7 +20,7 @@ export function useAgentSessions(): Session[] {
   const summaries = useStore((s) => s.sessionSummaries);
   const bounded = useStore((s) => s.features.includes(SESSIONS_LIST_FEATURE));
   // folded before the assistant's conversations go: a child folded under one of them is no Agent of its own either
-  return useMemo(() => foldRows(bounded ? summaries : Object.values(by).flat()).filter((s) => !s.assistant), [by, summaries, bounded]);
+  return useMemo(() => foldRows(directoryVisible(bounded ? summaries : Object.values(by).flat())).filter((s) => !s.assistant), [by, summaries, bounded]);
 }
 
 /** The complete list as its readers get it: `error` says why it has not loaded (its read failed; it is read again in a
@@ -73,7 +76,7 @@ function createFullCache(owner: string) {
       const result = await complete.read(controller.signal);
       // An unchanged delta leaves the published snapshot (and its older base, which only widens the overlay) as it is.
       if (valid() && (result.changed || !fullSnapshot.loaded)) {
-        fullSnapshot = { sessions: foldRows(result.sessions).filter((s) => !s.assistant), loaded: true, error: "", base, epoch: fullSnapshot.epoch };
+        fullSnapshot = { sessions: foldRows(directoryVisible(result.sessions)).filter((s) => !s.assistant), loaded: true, error: "", base, epoch: fullSnapshot.epoch };
         fullChanged();
       }
     } catch (e) {
@@ -158,7 +161,7 @@ export function retryFullAgentSessions() {
 export function useFullAgentSessions(on = true): FullAgentSessions {
   const full = useCompleteAgentSessions(on);
   return useMemo(() => {
-    const sessions = foldRows(full.sessions);
+    const sessions = foldRows(directoryVisible(full.sessions));
     return sessions === full.sessions ? full : { sessions, loaded: full.loaded, error: full.error };
   }, [full]);
 }
@@ -179,7 +182,7 @@ function useCompleteAgentSessions(on: boolean): FullAgentSessions {
   return useMemo(() => {
     // `on` false: the caller has no use for the list now and asks the hub for nothing
     if (!on) return EMPTY_FULL_LIST;
-    if (!bounded) return { sessions: foldRows(Object.values(by).flat()).filter((s) => !s.assistant), loaded, error: "" };
+    if (!bounded) return { sessions: foldRows(directoryVisible(Object.values(by).flat())).filter((s) => !s.assistant), loaded, error: "" };
     if (!loaded) return EMPTY_FULL_LIST;
     if (by === full.base) return full;
     // Reflect actions on retained details (rename, mark seen) without copying the complete list into the store.
@@ -200,6 +203,7 @@ function useCompleteAgentSessions(on: boolean): FullAgentSessions {
 export function stateCounts(all: Session[]) {
   const c = { needs: 0, working: 0, unread: 0, badge: 0 };
   for (const s of all) {
+    if (s.hidden_by_directory) continue;
     const st = stateOf(s);
     if (st === "needs_you") {
       c.needs++;
@@ -213,7 +217,7 @@ export function stateCounts(all: Session[]) {
 /** `badge` without `open`, the agent on screen: it says it is waiting itself, so a count of only it would tell nothing.
  *  `quietCounted`: `badge` is the hub's own count, which has quiet agents in it. */
 export function othersWaiting(badge: number, open: Session | undefined, quietCounted = false): number {
-  return Math.max(0, badge - (open && !open.assistant && (quietCounted || !open.quiet) && foldedState(open) === "needs_you" ? 1 : 0));
+  return Math.max(0, badge - (open && !open.assistant && !open.hidden_by_directory && (quietCounted || !open.quiet) && foldedState(open) === "needs_you" ? 1 : 0));
 }
 
 const scopedAgentCounts = () => runtimeAgents.getSnapshot().counts;
