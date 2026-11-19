@@ -1967,6 +1967,36 @@ The workspace catalog, selection and management actions follow the current assis
 
 Removal uses the confirmation sheet pattern in section 4.4 because it needs branch and uncommitted-file choices. The dialog identifies the workspace and explains which files and running sessions will be lost. Keep the branch by default; require an explicit discard choice for uncommitted files. Confirmation stays unavailable until the computer supplies a valid preview. A changed target requires another preview, and an uncertain dispatched removal offers status reconciliation rather than another destructive submission. Renaming uses the existing text-entry dialog pattern and preserves workspace, branch and Agent identities.
 
+Backend naming (#7100) is a single collapsed row inside Assistant settings’
+Starting tasks group, directly after the workspace preference. It appears only
+for a confirmed matching assistant with `prefer-new`; missing or unknown values
+keep it hidden. Hiding never clears saved rules. Todo details retain their own
+independent advanced entry. Both reuse `Button` and the standard settings input.
+Each mount confines import/render failures to a local `PageBoundary` around its
+`Suspense`, keeping sibling editors mounted and saveable. Recovery retains the
+existing one-time page reload and explicit Reload behavior.
+The editor pairs each label with a wide input and small, always-visible template
+guidance; labels stack above inputs on phones. It serves people configuring
+coding tasks; ordinary tasks need no new fields. Unset fields stay empty and
+show their system default in a placeholder; Todo overrides show the effective
+Assistant default instead. Clearing a field and saving removes that override
+using the existing null patch, without saving a fallback as a custom value.
+There are no inheritance status labels or reset buttons. Preview options remain
+folded until requested. The preview result shows the task folder once and then
+either the root repository's labeled branch or each container repository's
+folder-to-branch mapping, never the internal `.` path and never the same absolute
+path twice. The computer and layout selectors and the preview action form one
+compact row, stacked full-width on phones; a task's repository choices sit above
+that row, and the result carries no routine planning time, time zone or
+disclaimer text. A failed save retains its draft; reloading
+updates the saved baseline without replacing local edits.
+After a task save, refresh its saved revision and effective Assistant defaults
+without replacing the draft, computer, layout or remaining repository selection.
+If that read fails, keep the acknowledged save and offer the same read recovery.
+Changing a field, computer or assistant retires earlier previews. The panel
+changes no creation mode and starts nothing. This is a secondary settings
+surface, not another workspace management destination.
+
 ### 4.11 Questions of several
 
 A card that asks several questions at once shows where it is and lets the answers be checked before they go (a pending

@@ -5451,3 +5451,17 @@ save that needs a provider answers 409 `task_repositories_providers_starting`
 (`repository_providers_starting` on the repository routes) when the extensions
 are still starting at the end of its budget; it never reports the provider as
 not installed.
+
+### Backend workspace naming metadata
+
+Manager routes and the operation snapshot contract are documented in
+`docs/assistant/todos.md` ("Backend workspace naming").
+
+| Node method | Input and result |
+| --- | --- |
+| `workspace.naming.resolve` | `workspacenaming.Source` → `Preview {status, sample, plan?, diagnostics[]}`. The target supplies `NodeContext`; paths may be absent on disk. Version `workspace-naming/v1`. Local format validation only, with no resource creation, Git network access or Engine call. |
+
+Legacy workspace resolution and `new/existing/none` do not call this method.
+The new Assistant view field `workspace_naming_version` advertises manager
+support; an unavailable computer or unsupported method never falls back to an
+Engine naming path.
