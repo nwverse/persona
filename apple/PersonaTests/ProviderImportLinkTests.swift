@@ -29,6 +29,16 @@ struct ProviderImportLinkTests {
         #expect(input.apiKey == "FAKE-EXAMPLE-KEY" && input.auth == "bearer")
     }
 
+    @Test func blankAuthenticationUsesTheWizardDefault() throws {
+        let json = #"{"format":"link","drafts":[{"provider":{"kind":"api","api":"messages","name":"Messages Gateway","base_url":"https://example.invalid/v1","auth":"","api_key":"FAKE-EXAMPLE-KEY","model":"m1"}}]}"#
+        let result = try JSON.decoder.decode(ProviderImportResult.self, from: Data(json.utf8))
+        let provider = try #require(result.drafts?.first?.provider)
+        let wizard = ProviderWizardModel(deps: .init(api: { nil }))
+        wizard.applyImport(provider)
+        #expect(wizard.auth == "api_key")
+        #expect(wizard.input.auth == "api_key")
+    }
+
     @Test func aSixtyCharacterDisplayNameIsAValidProviderID() throws {
         let displayName = String(repeating: "a", count: 60) // cindy's link limit; Persona has no 40-character provider-ID limit.
         let provider = try JSON.decoder.decode(ProviderImportProvider.self, from: Data(#"{"display_name":"\#(displayName)"}"#.utf8))

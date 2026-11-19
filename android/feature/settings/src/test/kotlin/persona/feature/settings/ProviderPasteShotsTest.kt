@@ -29,6 +29,7 @@ import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.flowOf
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -60,6 +61,7 @@ class ProviderPasteShotsTest {
         val imports = mutableListOf<Triple<String, List<String>, String?>>()
         val added = mutableListOf<NewProvider>()
         val parsed = mutableListOf<String>()
+        var parseGate: CompletableDeferred<Unit>? = null
         override suspend fun presets() = emptyList<ProviderPreset>()
         override suspend fun add(provider: NewProvider) { added += provider }
         override suspend fun launchers() = listOf(
@@ -71,15 +73,19 @@ class ProviderPasteShotsTest {
             HubLauncher("old", source = "persona", origin = "zshrc:cc_imported@mac"),
         )
         override suspend fun launcher(name: String) = launchers().first { it.name == name }
-        override suspend fun parse(text: String) = ProviderPasteResult(format = if (text.startsWith("persona://provider/import")) "link" else "shell", drafts = listOf(ProviderPasteDraft(
-            label = "cc_work",
-            provider = PastedProvider(name = "cc_work", displayName = "Work gateway", baseUrl = "https://work.example.com", apiKey = "eg-secret", auth = "bearer",
-                model = "new-model", models = parsedModels, env = "MAX_OUTPUT=8000", headers = "X-Team: synthetic"),
-            envNames = listOf("MAX_OUTPUT"), skippedEnv = listOf(ProviderPasteSkipped("OTHER_TOKEN", "credential")),
-            skippedHeaders = listOf(ProviderPasteSkipped("X-Api-Key", "credential")),
-            matches = listOf(ProviderPasteMatch("work", "Work", sameKey = true)),
-            notes = listOf(ProviderPasteNote("args_left_out", line = 2)),
-        )), notes = listOf(ProviderPasteNote("not_claude", name = "other"))).also { parsed += text }
+        override suspend fun parse(text: String): ProviderPasteResult {
+            parsed += text
+            parseGate?.await()
+            return ProviderPasteResult(format = if (text.startsWith("persona://provider/import")) "link" else "shell", drafts = listOf(ProviderPasteDraft(
+                label = "cc_work",
+                provider = PastedProvider(name = "cc_work", displayName = "Work gateway", baseUrl = "https://work.example.com", apiKey = "eg-secret", auth = "bearer",
+                    model = "new-model", models = parsedModels, env = "MAX_OUTPUT=8000", headers = "X-Team: synthetic"),
+                envNames = listOf("MAX_OUTPUT"), skippedEnv = listOf(ProviderPasteSkipped("OTHER_TOKEN", "credential")),
+                skippedHeaders = listOf(ProviderPasteSkipped("X-Api-Key", "credential")),
+                matches = listOf(ProviderPasteMatch("work", "Work", sameKey = true)),
+                notes = listOf(ProviderPasteNote("args_left_out", line = 2)),
+            )), notes = listOf(ProviderPasteNote("not_claude", name = "other")))
+        }
         override suspend fun importPreview(machine: String, alias: String?): List<ImportedProvider> {
             previews += machine to alias
             return listOf(ImportedProvider("cc-work", "https://work.example.com", "new-model", hasKey = true, aliases = listOf("cc_work")))
@@ -173,6 +179,23 @@ class ProviderPasteShotsTest {
         rule.onNodeWithText("Save").assertExists()
         assertTrue("the prefilled form still has not saved", api.added.isEmpty())
         capture("provider-import-link-prefill-$suffix")
+    }
+
+    @Test fun anImportLinkParsesOnlyOnceWhileItsAnswerIsPending() {
+        val api = Providers().apply { parseGate = CompletableDeferred() }
+        val link = "persona://provider/import?v=1&data=FAKE-EXAMPLE-KEY"
+        rule.setContent {
+            PersonaTheme(reduceMotion = true) {
+                NewProviderPage(api, onBack = {}, onSaved = {}, machines = machines, importLink = link)
+            }
+        }
+        rule.waitUntil(5_000) { api.parsed.isNotEmpty() }
+        rule.mainClock.advanceTimeBy(1_000)
+        assertEquals("the delayed answer must not trigger a second request", listOf(link), api.parsed)
+        api.parseGate?.complete(Unit)
+        rule.waitForIdle()
+        assertEquals(listOf(link), api.parsed)
+        rule.onNodeWithText("Work gateway").assertExists()
     }
 
     @Test fun systemBackCancelsAnExternalImportReview() = externalImportBackCancels(toolbar = false)

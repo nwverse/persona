@@ -246,7 +246,7 @@ enum LauncherName {
         let url = p.baseURL ?? ""
         kind = url.trimmingCharacters(in: CharacterSet(charactersIn: "/ ")) == Self.anthropicURL ? .anthropic : .custom
         baseURL = kind == .custom ? url : ""
-        auth = p.auth ?? "api_key"
+        auth = p.auth == "bearer" ? "bearer" : "api_key"
         apiKey = p.apiKey ?? ""
         models = p.models ?? []
         defaultModel = p.model ?? ""

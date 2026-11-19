@@ -106,7 +106,7 @@ internal fun NewProviderPage(
     }
     // A pasted configuration is read at once; typed changes settle for the same 0.7 s as the web wizard.
     LaunchedEffect(model, state.step, state.paste.text, state.paste.readImmediately) {
-        if (state.step == WizardStep.Paste && state.paste.answerText != state.paste.text) {
+        if (state.step == WizardStep.Paste && !state.paste.fromLink && state.paste.answerText != state.paste.text) {
             delay(if (state.paste.readImmediately || state.paste.text.isBlank()) 0 else AutoTestMillis)
             model.parsePaste()
         }
