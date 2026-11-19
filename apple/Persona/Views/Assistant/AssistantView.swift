@@ -367,12 +367,12 @@ struct AssistantView: View {
             .transformEnvironment(\.macTitleRowLeading) { if columns != .detailOnly { $0 = 0 } }
             #endif
             #if os(iOS)
-            .liftBlur(liftHost.menu)
+            .liftBlur(host: liftHost)
             #endif
         }
         #if os(iOS)
         // A message pressed in the conversation, over the bar too: the whole page dims (#3188).
-        .overlay { if let menu = liftHost.menu { MessageLiftLayer(menu: menu) } }
+        .overlay { MessageLiftHostLayer(host: liftHost) }
         #endif
         #if os(macOS)
         // The bar is the title bar's row, as the list beside it (#830); pushed pages keep their own.
@@ -397,14 +397,13 @@ struct AssistantView: View {
             // Erased here and in `dressedRoot` (#6735): unoptimized, this getter reserved a stack slot for every
             // modifier below, each holding the whole page (375 KB of an iPhone's 1 MB main-thread stack).
             AnyView(dressedRoot)
-            // Full Screen in an agent's sheet (TasksStore.expand): its page pushed here, as from the Agents tab.
+            // A task's card in the conversation, or Full Screen in an agent's sheet (TasksStore.expand): its page pushed
+            // here, a drill-down from the conversation in every layout (#9971). In the Sidebar layout too it is pushed, not
+            // made a root (a root is what the sidebar picks, #8359): it has Back to the conversation, and the sidebar's
+            // selection stays on the conversation.
             .onChange(of: TasksStore.shared.fullAgent, initial: true) { _, key in
                 guard let key else { return }
                 TasksStore.shared.fullAgent = nil
-                #if os(iOS)
-                // The Sidebar layout: an Agent's chat is a root of the page, as its row opens it (#8359).
-                if embedded, let unified { unified.select(.page(AnyHashable(key)), path: navPath); return }
-                #endif
                 navPath.wrappedValue.append(key)
             }
             // On appear too (a cold launch onto Inbox asks before this page exists), but each request once: the root
@@ -480,6 +479,7 @@ struct AssistantView: View {
                 default: break
                 }
                 // `-openShellPage inbox|machines|routines|knowledge|profile` (the new shell): that page pushed.
+                let atRoot = (navPath.wrappedValue.count, showRecordings)
                 switch UserDefaults.standard.string(forKey: "openShellPage") {
                 case "inbox": show(.inbox)
                 case "todos": show(.todos)
@@ -490,6 +490,16 @@ struct AssistantView: View {
                 case "health": backToRoot(); showHealth = true // the page itself, for its screenshots
                 case "recordings": show(.recordings)
                 default: break
+                }
+                // A conversation picked after the push (a launch with `-openChatsFresh` reads it from the hub, late on a
+                // busy Mac) goes back to the root and takes Recordings with it: pushed again while that can happen. Only
+                // where the push shows in this stack's state (the sidebar layout picks a root instead).
+                if UserDefaults.standard.string(forKey: "openShellPage") == "recordings",
+                   (navPath.wrappedValue.count, showRecordings) != atRoot {
+                    for _ in 0..<10 {
+                        try? await Task.sleep(for: .milliseconds(500))
+                        if (navPath.wrappedValue.count, showRecordings) == atRoot { show(.recordings) }
+                    }
                 }
             }
             .onAppear {
@@ -841,7 +851,8 @@ struct AssistantView: View {
             backToRoot()
             model.assistantCurrent = nil
         }
-        withAnimation(Theme.Motion.standard) { pending = PendingStart(text: text, imageCount: images.count) }
+        withAnimation(Theme.Motion.standard) { pending = PendingStart(text: text, imageCount: images.count, op: op) }
+        let newChat = model.assistantNewChat
         do {
             // The first one becomes the main conversation; with the settings not read yet, whether there is one is unknown.
             let makesMain = space == nil && model.assistantConfig != nil && model.assistantMain == nil
@@ -861,31 +872,39 @@ struct AssistantView: View {
                                                 effort: starterEffort.isEmpty ? nil : starterEffort,
                                                 main: makesMain, space: space, opID: op)
             }
-            // The accepted conversation is visible before a follow-up configuration refresh.
             if makesMain { Task { await model.refreshAssistant() } }
-            Haptics.success()
-            model.began(s, text: text, images: images) // the message stays on screen until claude has written it
+            let decision = AssistantStartDecision(startGeneration: newChat, currentGeneration: model.assistantNewChat,
+                                                  pendingOp: pending?.op, op: op, succeeded: true,
+                                                  space: space, showsPage: model.showsPage(of: api))
+            if decision.haptic == .success { Haptics.success() }
+            if decision.began { model.began(s, text: text, images: images) } // keep it until claude has written it
             withAnimation(Theme.Motion.standard) {
                 // Another manager's page by now: the conversation is listed on its own page, not opened on this one.
-                if space != nil || model.showsPage(of: api) { model.assistantCurrent = s.key }
-                pending = nil
-                failedStart.clear { $0.space == space && (space != nil || model.sameManager($0.manager, api.shownManager)) }
+                if decision.open { model.assistantCurrent = s.key }
+                if decision.clearPending { pending = nil }
+                if decision.failure == .clear {
+                    failedStart.clear { $0.space == space && (space != nil || model.sameManager($0.manager, api.shownManager)) }
+                }
             }
         } catch {
             // A coded refusal (no computer, Claude Code missing…) is a card with what to do, not a red line (5.2).
             // The message stays where it was sent, as the chat's failed bubble, with Resend and Delete (#1368).
             let coded = CodedFailure(error)
-            let here = space != nil || model.showsPage(of: api) // the card belongs to the page it failed on
+            let decision = AssistantStartDecision(startGeneration: newChat, currentGeneration: model.assistantNewChat,
+                                                  pendingOp: pending?.op, op: op, succeeded: false,
+                                                  space: space, showsPage: model.showsPage(of: api))
             withAnimation(Theme.Motion.standard) {
-                pending = nil
-                if here { model.readiness.failure = coded }
-                failedStart.fail(FailedStart.Message(text: text, images: images, space: space, op: op,
-                                                     mayHaveStarted: FailedStart.mayHaveStarted(error),
-                                                     reason: coded == nil || !here ? error.shown : nil, at: .now,
-                                                     manager: space == nil ? api.shownManager : nil))
+                if decision.clearPending { pending = nil }
+                if decision.failure == .show { model.readiness.failure = coded }
+                if decision.failure == .show || decision.failure == .record {
+                    failedStart.fail(FailedStart.Message(text: text, images: images, space: space, op: op,
+                                                         mayHaveStarted: FailedStart.mayHaveStarted(error),
+                                                         reason: coded == nil || decision.failure != .show ? error.shown : nil, at: .now,
+                                                         manager: space == nil ? api.shownManager : nil))
+                }
             }
-            if here, coded != nil { model.readinessChanged() }
-            Haptics.error()
+            if decision.failure == .show, coded != nil { model.readinessChanged() }
+            if decision.haptic == .error { Haptics.error() }
         }
     }
 }
@@ -895,6 +914,8 @@ struct PendingStart: Equatable {
     var imageCount: Int
     /// A start that failed (#1368): drawn as the chat's failed bubble, with Resend and Delete, and no typing line.
     var failed: FailedStart.Message? = nil
+    /// Which invocation owns the sending bubble; a late completion never clears a newer send's.
+    var op: UUID? = nil
 }
 
 /// The first message of a new conversation while it spins up, laid out as the chat will lay it out the moment it takes
@@ -1081,6 +1102,10 @@ struct AssistantWelcome: View {
     /// The cards' rows at most (the shell: two, the page ends at their bottom, with no third row peeking out under the
     /// fade over Needs You, #5648); every suggestion when nil.
     var cardRows: Int? = nil
+    /// The token calendar's days (#9506) and its page.
+    @State private var usage = TokenUsageModel()
+    @State private var showUsage = false
+    @Environment(\.horizontalSizeClass) private var sizeClass
 
     /// A thing to ask: sent as `prompt`, or (`local`) opening help on this device; `needs`: the phone data it reads.
     struct Suggestion {
@@ -1147,6 +1172,14 @@ struct AssistantWelcome: View {
         .coordinateSpace(.named(WelcomeFold.space))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("assistant-welcome")
+        // Read when the page shows and when the app comes back to the front: no timer (the home stays still).
+        .tabActiveTask(id: sizeClass == .regular) {
+            await usage.loadDays(sizeClass == .regular ? TokenUsageModel.yearDays : TokenUsageModel.phoneDays)
+        }
+        .navigationDestination(isPresented: $showUsage) { TokenUsagePage() }
+        #if DEBUG
+        .onAppear { if UserDefaults.standard.bool(forKey: "openTokenUsage") { showUsage = true } } // screenshots
+        #endif
     }
 
     @ViewBuilder private var things: some View {
@@ -1213,17 +1246,10 @@ struct AssistantWelcome: View {
                  : String(localized: "Start a new side chat. I can see your computers, iPhone, email, Lark, and organized projects, and I can keep an eye on things and remind you when it's time."))
                 .font(Theme.Font.secondary).lineHeight(.secondary)
                 .foregroundStyle(.secondary)
-            // Wraps: in one HStack, a few more machines (or larger text) widened the whole page past the screen.
-            LarkFlowLayout(spacing: 8, lineSpacing: 8) {
-                ForEach(model.machines.filter { $0.online && model.assistantShows($0.manager) }) { m in
-                    Chip(text: m.name, symbol: m.symbol)
-                }
-                #if os(macOS)
-                // What this chip shows is this device's own link to the hub: on the Mac, this Mac.
-                Chip(text: ConnectorText.device, symbol: model.live.looksConnected ? Theme.Icon.laptop : Theme.Icon.laptopOffline)
-                #else
-                Chip(text: "iPhone", symbol: model.live.looksConnected ? Theme.Icon.phone : "iphone.slash")
-                #endif
+            // Tokens a day (#9506), where the computers' chips were: labels that did nothing (the connection is in the
+            // title). Only once the hub has history with usage in it: an older hub, or one with no computers, shows none.
+            if usage.hasUsage, let days = usage.days {
+                TokenCalendarCard(days: days) { showUsage = true }
             }
         }
     }
@@ -1415,10 +1441,10 @@ struct StarterComposer: View {
     }
 
     #if os(iOS)
-    /// What + offers besides photos and files, as in a conversation (`AttachMoreSection.common`): no voice call before
-    /// the conversation exists, and an agent's quick commands are not Persona's.
+    /// What + offers besides photos and files, as in a conversation (`AttachMoreSection.common`): an agent's quick
+    /// commands are not Persona's.
     private var moreSections: [AttachMoreSection] {
-        var sections = AttachMoreSection.common(voice: nil, camera: CameraPicker.isAvailable ? { showCamera = true } : nil,
+        var sections = AttachMoreSection.common(camera: CameraPicker.isAvailable ? { showCamera = true } : nil,
                                                 scan: DocumentScanner.isAvailable ? { showScan = true } : nil,
                                                 glasses: MetaGlasses.isBuiltIn ? { showGlasses = true } : nil, mention: { typeMention() },
                                                 context: { contextPick = $0 })
@@ -1557,7 +1583,9 @@ struct StarterComposer: View {
                 ShellComposerBar(placeholder: placeholder ?? String(localized: "Ask \(model.assistantShownName)"), text: textBinding, selection: $selection, focused: $focused,
                                  canSend: canSend, hasAttachments: !images.isEmpty || !videos.items.isEmpty || !files.items.isEmpty || !quotes.isEmpty,
                                  modesTitle: StarterModesMenu.title(modes: shell, launchers: starterModels.launchers, model: model),
-                                 quotes: quotesBinding, history: "assistant.new", gate: gate, openAttach: attachOpener, send: submit) {
+                                 quotes: quotesBinding, history: "assistant.new", gate: gate, openAttach: attachOpener,
+                                 dictationRequest: uploadDest == nil ? model.dictationRequest : nil,
+                                 takeDictation: { request in model.takeDictationRequest(request, uploadDest: uploadDest) }, send: submit) {
                     #if os(iOS)
                     // As a conversation's + (#3225): the iPhone's touch and hold, the iPad's tap with Photos and Files first.
                     if attachOpener == nil {
@@ -1746,6 +1774,8 @@ struct BeautifulStarterComposer: View {
                                return true
                            },
                            quotes: quotesBinding,
+                           dictationRequest: uploadDest == nil ? model.dictationRequest : nil,
+                           takeDictation: { request in model.takeDictationRequest(request, uploadDest: uploadDest) },
                            send: {
                                let typed = text
                                let t = typed.trimmingCharacters(in: .whitespacesAndNewlines)

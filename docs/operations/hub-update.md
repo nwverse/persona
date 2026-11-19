@@ -97,7 +97,7 @@ native-hash check after copying. Malformed metadata is rejected as `ValueError`;
 damaged snapshots stay on disk for manual inspection and are not pruned as verified material.
 Invalid schemas are omitted from listings; payload damage is checked before application.
 
-Source settings accept only the exact values `release` and `web-dev`; invalid supplied values
+Source settings accept only the exact values `release`, `beta` and `web-dev`; invalid supplied values
 are rejected before changing any preference or selection. A manual request overtaken while
 probing services is rejected without transferring its interruption consent to the accepted
 operation. Explicit Update now for an already accepted waiting attempt still requires confirmation.
@@ -115,9 +115,9 @@ can still overlap the restart. This path does not guarantee interruption-free se
 Link/connector node updates retain their own idle and commit checks; direct SSH deployment instead
 replaces the program and restarts the node, so it can interrupt work. See [node-update.md](node-update.md).
 
-The compile gate runs `npm ci` and `npm run build:development` for Web, builds the Agent SDK bridge as a
-runtime asset, generates runtime packages, then runs tagged `go build` for `personad` on the
-Hub's platform and each registered computer's last-reported OS/architecture, deduplicated, plus
+The compile gate runs `npm ci` and `npm run build:development` for Web, generates runtime packages,
+then runs tagged `go build` for `personad` on the Hub's platform and each registered computer's
+last-reported OS/architecture, deduplicated, plus
 `persona-hub`/`persona-manager` on the Hub's platform. Web assets
 are embedded and precompressed. No full tests, vet, mobile builds, release publication or hosted
 CI are required. The development command retains TypeScript, Vite, WebAssembly, localization
@@ -853,6 +853,17 @@ Where a release hub reads `latest.json` and downloads from (#4522). v0.2.1's bin
 - **A source that stopped** (#8108): when the newest release a check reads is older than the hub's own build and older than the release its code contains (the `vX.Y.Z` its version starts with: `git describe` names a build after the newest tag in it), the source no longer takes releases, and the hub would otherwise find itself up to date at every check while its phones get no newer Android app. `GET /api/v1/hub/update` then carries `source_behind: true` (`latest` is the source's newest release), Settings › hub says so in place of "Up to date", naming the source and `update.url`, and the log says it once per source and release, not at every check. A source as new as the hub, newer, or holding the release the hub's code starts from (GitHub Releases for a hub deployed from `main` after that release) reports nothing. A version that names no release (`dev-…`, `master-<commit>-…`) cannot tell a stopped source from a quiet one, and reports nothing either.
 - **A hub deployed with `deploy.sh`** carries the config's `publish.update_url`, else `<publish.site_url>/dl`: a config with only `site_url` pointing at the publish site gets the frozen `dl/` below, so the hub never sees a newer release or offers its phones the Android app. `deploy.sh` prints which source the hub will carry when `publish.update_url` is not set; set it (for example to the GitHub Releases base) before deploying, or `update.url` in the hub's `hub.json` afterwards.
 - **The default of official builds** is the GitHub Releases base (`https://github.com/nwverse/persona/releases/latest/download`, through `publish.update_url`), the same base the Release's `install.sh` downloads from; v0.5.2 and later carry it. Releases up to v0.4.0 were built with the publish site's `dl/`, which has stayed on the 2026-11-07 build since the repository history was rewritten (the rollback guard refuses to publish over it), so those hubs never see a newer release: set `update.url` to the GitHub base, or upgrade once by hand. The getting-started guide and the website's install command point new installs at the Release's `install.sh` for the same reason. `update.url` still lets a hub choose another source without a new build.
+
+### Beta updates (opt-in)
+
+**Stable remains the default.** Settings › hub lets a person choose the beta update source explicitly; nothing about an existing installation switches it to prereleases. Choosing **Release** returns to the stable source. A running check, download or confirmation must finish before changing channels, and switching discards the other channel's candidate rather than installing it. The existing `web-dev` private build/backup channel stays separate.
+
+- **Feed contract**: the official stable feed is `https://github.com/<owner>/<repo>/releases/latest/download`. Beta uses the independent prerelease pointer `https://github.com/<owner>/<repo>/releases/download/beta-channel/latest.json`; it never moves the stable `releases/latest` pointer. Its manifest has `"channel":"beta"` and a `X.Y.Z-beta.N` version. Stable manifests without a `channel` remain valid only on the stable source. The hub rejects a stable/beta manifest or pointer mix-up rather than silently falling back. Custom/private `update.url` sources have no automatic beta replacement.
+- **Immutable files**: `beta-channel` carries only the index. `scripts/operations/beta_channel_release.py` verifies the immutable prerelease's source, manifest and remote index digests, then points it at the newest verified beta. Actual programs still download from `releases/download/vX.Y.Z-beta.N/`, so a subsequent prerelease cannot replace bytes selected by an earlier check. Beta build numbers are UTC timestamps like stable ones and must increase; the channel choice is not permission to downgrade silently.
+- **Android**: the same selection controls `GET /api/v1/app/android/latest`. Stable keeps the existing `apps/android/` cache; beta uses a separate `apps/android/beta/` signed-APK cache. This avoids a higher stable `versionCode` blocking a return to stable, or a beta APK masquerading as the stable offer. Package and signing-certificate checks remain mandatory. A beta without `android.json` never falls back to the stable APK. Android installation still asks the user; no device is silently upgraded.
+- **Publisher**: use a new immutable `vX.Y.Z-beta.N` tag and GitHub prerelease, not an existing stable tag or `beta-channel` as the version tag. Build with `RELEASE_CHANNEL=beta scripts/release/publish.sh` so `latest.json` declares the channel, and use the normal formal Android signing pipeline (`--version X.Y.Z-beta.N`). Only after those verified assets exist may the pointer publisher run. A Release marked stable is rejected for a beta tag.
+- **Apple**: TestFlight has its own signed beta build/review lifecycle. A GitHub prerelease does not make an iPhone or Watch beta available; report `VALID`, Internal availability and external Beta App Review separately. Formal stable and beta IPA/TestFlight identities are never inferred from a development IPA.
+- **Compatibility**: an older hub ignores the new setting and remains on its configured stable source. New clients do not invent a beta source when `update.url` is private or a hub is Docker/development; Docker images still follow their registry's stable tags. The beta setting is stored in the same `hub_update` Postgres settings record and follows the same save-failure rollback as the other update choices.
 
 ### The Android app
 

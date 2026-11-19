@@ -158,22 +158,22 @@ type clientOpForgetter interface {
 // coming back for good. A notification choice and a conversation's start only release a definitely offline receipt;
 // uncertain delivery stays recorded.
 func clientOpRetry(kind string, body []byte) bool {
-	if kind == meetingJustMeOp || kind == meetingFollowupOp { // never reached the manager: the same call runs again
+	if kind == meetingJustMeOp || kind == meetingFollowupOp || kind == todoAnswerOp { // never reached the manager: the same call runs again
 		var res struct {
 			Code string `json:"code"`
 		}
 		_ = json.Unmarshal(body, &res)
 		return res.Code == assistantwire.CodeAssistantOffline
 	}
-	if kind != "inbox_reply" && kind != "inbox_handoff" && kind != "choose" && kind != "assistant_start" {
+	if kind != "inbox_reply" && kind != "inbox_handoff" && kind != "choose" && kind != "assistant_start" && kind != "clarify" {
 		return false
 	}
 	var res struct {
 		Code string `json:"code"`
 	}
 	_ = json.Unmarshal(body, &res)
-	if kind == "choose" || kind == "assistant_start" { // No request reached the manager; the same op can safely retry.
-		return res.Code == assistantwire.CodeAssistantOffline
+	if kind == "choose" || kind == "assistant_start" || kind == "clarify" { // No request reached the manager; the same op can safely retry.
+		return res.Code == assistantwire.CodeAssistantOffline || kind == "clarify" && res.Code == assistantwire.CodeAssistantInDoubt
 	}
 	return res.Code == assistantwire.CodeAssistantOffline || res.Code == assistantwire.CodeAssistantInDoubt
 }
@@ -268,9 +268,10 @@ func (h *Hub) waitClientOp(w http.ResponseWriter, r *http.Request, op *db.Client
 		case "unknown":
 			// Start, checkout and reply retries must not repeat side effects or replace a recorded HTTP outcome.
 			// A recovered pending operation has no result and remains explicitly unknown. A meeting's Just me or
-			// follow-up call replays what it answered, a definite failure too (meeting_receipts.go).
+			// follow-up call, and an answer to a to-do's ask, replay what they answered, a definite failure too
+			// (meeting_receipts.go, todo_receipts.go).
 			if op.Kind == "start" || op.Kind == "assistant_start" || op.Kind == "worktree_create" || op.Kind == "lark_send" || op.Kind == "inbox_reply" || op.Kind == "inbox_handoff" || op.Kind == "lark_thread_reply" ||
-				op.Kind == meetingJustMeOp || op.Kind == meetingFollowupOp {
+				op.Kind == meetingJustMeOp || op.Kind == meetingFollowupOp || op.Kind == todoAnswerOp {
 				var result clientOpResult
 				if json.Unmarshal(op.Result, &result) == nil && result.Status >= 200 && result.Status <= 599 {
 					writeClientOpResult(w, result)

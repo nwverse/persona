@@ -28,7 +28,7 @@ import sys
 import tempfile
 import time
 
-from windows_release import check_windows_archives
+from windows_release import check_windows_artifacts
 
 TAG = re.compile(r"v[0-9A-Za-z][0-9A-Za-z._-]*\Z")
 COMMIT = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
@@ -232,16 +232,17 @@ def drop_missing_helpers(assets, state_dir):
     helpers = manifest.get("helpers")
     if not isinstance(helpers, dict):
         return assets
-    kept, dropped = {}, []
-    for program, platforms in helpers.items():
-        for plat, item in (platforms or {}).items():
-            name = item.get("name") if isinstance(item, dict) else None
-            if name in by_name:
-                kept.setdefault(program, {})[plat] = item
-            else:
-                dropped.append(str(name))
-    if not dropped:
-        return assets
+    if helpers:
+        kept, dropped = {}, []
+        for program, platforms in helpers.items():
+            for plat, item in (platforms or {}).items():
+                name = item.get("name") if isinstance(item, dict) else None
+                if name in by_name:
+                    kept.setdefault(program, {})[plat] = item
+                else:
+                    dropped.append(str(name))
+        if not dropped:
+            return assets
     print("warning: latest.json lists helper builds this receipt does not carry; uploading it without them: "
           + ", ".join(sorted(dropped)), file=sys.stderr, flush=True)
     if kept:
@@ -387,6 +388,10 @@ def verify_remote_assets(repository, tag, assets, listed, gh="gh", missing=False
             raise ConfigError("uploaded asset digest verification failed: " + item["name"])
 
 
+def is_beta_tag(tag):
+    return bool(re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+-beta\.[1-9][0-9]*", tag))
+
+
 def upload(repository, tag, assets, gh="gh"):
     # The workflow owns Release creation; never create a tag from this machine.
     release = json.loads(subprocess.check_output(
@@ -394,6 +399,11 @@ def upload(repository, tag, assets, gh="gh"):
         text=True, timeout=60))
     if release.get("tagName") != tag or release.get("isDraft") is not False:
         raise ConfigError("published GitHub Release for the exact tag is required")
+    if is_beta_tag(tag):
+        details = json.loads(subprocess.check_output(
+            [gh, "release", "view", tag, "--repo", repository, "--json", "isPrerelease"], text=True, timeout=60))
+        if details.get("isPrerelease") is not True:
+            raise ConfigError("beta tags require a prerelease, never the stable Release")
     if not assets:
         print("Store publication verified; this platform has no Release assets", flush=True)
         return
@@ -438,6 +448,18 @@ def write_state(path, state):
     temporary.replace(path)
 
 
+def check_beta_manifest(assets, version):
+    """Independent beta platforms need no hub manifest; a supplied one must be this exact beta."""
+    manifests = [Path(item["path"]) for item in assets if item["name"] == "latest.json"]
+    if len(manifests) > 1:
+        raise ConfigError("beta publication requires at most one latest.json")
+    if not manifests:
+        return
+    manifest = json.loads(manifests[0].read_text())
+    if manifest.get("channel") != "beta" or manifest.get("version") != version:
+        raise ConfigError("beta latest.json must carry this beta version/channel")
+
+
 def publish_once(config, tag, commit):
     platform = config["platform"]
     state = config["state_dir"] / "state.json"
@@ -458,9 +480,13 @@ def publish_once(config, tag, commit):
     assets = read_receipt(Path(config["receipt"]).expanduser(), commit)
     assets = drop_missing_helpers(assets, config["state_dir"])
     try:
-        check_windows_archives(assets, tag[1:])
+        check_windows_artifacts(assets, tag[1:])
     except ValueError as error:
         raise ConfigError(str(error)) from error
+    if is_beta_tag(tag):
+        # A platform receipt is independent: Android has its signed APK and index, iOS only its store receipt.
+        # Only the hub worker has latest.json; if present it can never point beta at a stable or another version.
+        check_beta_manifest(assets, tag[1:])
     check_release_manifest(assets)
     check_android_index(assets, tag[1:])
     upload(config["repository"], tag, assets)

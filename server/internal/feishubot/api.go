@@ -57,6 +57,8 @@ func (c *Client) WithHTTP(h *http.Client) *Client {
 
 func (c *Client) AppID() string { return c.appID }
 
+func (c *Client) Domain() string { return c.domain }
+
 // APIError is Feishu's {code, msg} for a failed call.
 type APIError struct {
 	Op   string
@@ -137,6 +139,10 @@ func (c *Client) callRetry(ctx context.Context, op, method, path string, in, out
 	if in != nil {
 		payload, _ = json.Marshal(in)
 	}
+	return c.callBody(ctx, op, method, path, payload, "application/json; charset=utf-8", out, idempotent)
+}
+
+func (c *Client) callBody(ctx context.Context, op, method, path string, payload []byte, contentType string, out any, idempotent bool) error {
 	var lastErr error
 	giveUp := func() error {
 		if e := ctx.Err(); e != nil {
@@ -167,7 +173,7 @@ func (c *Client) callRetry(ctx context.Context, op, method, path string, in, out
 		}
 		req.Header.Set("Authorization", "Bearer "+tok)
 		if payload != nil {
-			req.Header.Set("Content-Type", "application/json; charset=utf-8")
+			req.Header.Set("Content-Type", contentType)
 		}
 		retry, after := false, time.Duration(0)
 		resp, err := c.http.Do(req)
@@ -308,6 +314,7 @@ func (c *Client) BotInfo(ctx context.Context) (BotInfo, error) {
 const (
 	TypeText        = "text"
 	TypePost        = "post"
+	TypeFile        = "file"
 	TypeInteractive = "interactive"
 )
 

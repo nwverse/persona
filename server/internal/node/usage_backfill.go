@@ -5,9 +5,7 @@ import (
 	"context"
 	"io"
 	"os"
-	"path/filepath"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
@@ -46,11 +44,64 @@ const (
 	backfillSmall = 256 << 10
 )
 
-// backfillStatus is the manager's answer to usage.backfill.status.
-type backfillStatus struct {
+// backfillRange is what the manager wants read: nothing (done), or from Since to Before.
+type backfillRange struct {
 	Done   bool  `json:"done"`
 	Since  int64 `json:"since"`  // Unix: the first hour to count
 	Before int64 `json:"before"` // Unix: count only what came before (the live window starts there)
+}
+
+// backfillStatus is the manager's answer to usage.backfill.status: its own range (the agents read before agents
+// were kept apart; an older manager's for every agent) and, from a manager that keeps a record per agent (#9984),
+// each agent's the node named.
+type backfillStatus struct {
+	backfillRange
+	Agents map[string]backfillRange `json:"agents"`
+}
+
+// backfillPlan is what to read of each of agents (those with nothing to read left out), and from when to when all
+// of them; ok is false when there is nothing.
+func backfillPlan(agents []string, st backfillStatus) (ranges map[string]backfillRange, since, before time.Time, ok bool) {
+	ranges = map[string]backfillRange{}
+	for _, a := range agents {
+		r := st.backfillRange
+		if st.Agents != nil {
+			var answered bool
+			if r, answered = st.Agents[a]; !answered {
+				continue
+			}
+		}
+		if r.Done || r.Since >= r.Before {
+			continue
+		}
+		ranges[a] = r
+		if s := time.Unix(r.Since, 0); since.IsZero() || s.Before(since) {
+			since = s
+		}
+		if b := time.Unix(r.Before, 0); b.After(before) {
+			before = b
+		}
+	}
+	return ranges, since, before, len(ranges) > 0
+}
+
+// backfillWeek is what of a week's buckets (from start to end) the manager asked for: each agent's within its range,
+// and the agents whose range the week reads (the requests say them: their records move on).
+func backfillWeek(buckets []proto.UsageBucket, ranges map[string]backfillRange, start, end time.Time) ([]proto.UsageBucket, []string) {
+	var agents []string
+	for a, r := range ranges {
+		if r.Since < end.Unix() && r.Before > start.Unix() {
+			agents = append(agents, a)
+		}
+	}
+	slices.Sort(agents)
+	keep := buckets[:0]
+	for _, b := range buckets {
+		if r, ok := ranges[b.Agent]; ok && b.Minute >= r.Since && b.Minute < r.Before {
+			keep = append(keep, b)
+		}
+	}
+	return keep, agents
 }
 
 // backfillUsage asks the manager whether this machine's history wants a backfill and does it.
@@ -68,27 +119,41 @@ func (n *Node) backfillUsage(ctx context.Context, stateLoaded <-chan struct{}) {
 	if n.peer == nil {
 		return
 	}
+	names := n.usageAgents()
 	var st backfillStatus
 	cctx, cancel := context.WithTimeout(ctx, backfillCall)
-	err := n.peer.Call(cctx, "usage.backfill.status", map[string]any{}, &st)
+	err := n.peer.Call(cctx, "usage.backfill.status", map[string]any{"agents": names}, &st)
 	cancel()
-	if err != nil || st.Done || st.Since >= st.Before { // an older manager does not know it
+	if err != nil { // an older manager does not know it
 		return
 	}
-	since, before := time.Unix(st.Since, 0), time.Unix(st.Before, 0)
+	ranges, since, before, ok := backfillPlan(names, st)
+	if !ok {
+		return
+	}
 	started := time.Now()
 	lim := &readLimiter{rate: backfillRate, start: started}
+	files := n.backfillFiles(ctx, since, lim)
+	files = slices.DeleteFunc(files, func(f backfillFile) bool { _, want := ranges[f.ad.agent()]; return !want })
+	queries := slices.DeleteFunc(n.usageQueries(), func(q usageQuery) bool { _, want := ranges[q.agent()]; return !want })
+	var firsts []time.Time
+	for _, q := range queries {
+		firsts = append(firsts, q.first(ctx, n))
+	}
 	read, hours := 0, 0
-	for start := since; start.Before(before); {
+	// The weeks before the transcripts' first day hold nothing: start there (#9616).
+	for start := backfillStart(files, firsts, since); start.Before(before); {
 		end := start.Add(backfillSlice)
 		if end.After(before) {
 			end = before
 		}
-		buckets, err := n.backfillScan(ctx, start, end, lim)
+		buckets, err := n.backfillScan(ctx, files, queries, start, end, lim)
 		if err != nil {
 			return
 		}
+		buckets, agents := backfillWeek(buckets, ranges, start, end)
 		for _, req := range backfillRequests(buckets, end, end.Equal(before)) {
+			req["agents"] = agents
 			var res struct {
 				Stored int `json:"stored"`
 			}
@@ -128,18 +193,85 @@ func backfillRequestsSized(buckets []proto.UsageBucket, end time.Time, done bool
 	return out
 }
 
-// backfillScan sums the replies of every transcript from start to end by the hour, model and launcher, in time
-// order. Only ctx ending stops it (its error).
-func (n *Node) backfillScan(ctx context.Context, start, end time.Time, lim *readLimiter) ([]proto.UsageBucket, error) {
+// backfillFile is a transcript the backfill reads, with the time of its first line (zero: none found in its head).
+type backfillFile struct {
+	usagePath
+	first time.Time
+}
+
+// backfillHead is how much of a transcript's start is read for its first timestamp.
+const backfillHead = 64 << 10
+
+// backfillFiles lists the transcripts changed since since, each with its first line's time (read once, through lim).
+func (n *Node) backfillFiles(ctx context.Context, since time.Time, lim *readLimiter) []backfillFile {
+	paths := n.usageFiles(since)
+	out := make([]backfillFile, 0, len(paths))
+	buf := make([]byte, backfillHead)
+	for _, p := range paths {
+		f := backfillFile{usagePath: p}
+		if fh, err := os.Open(p.path); err == nil {
+			nr, _ := io.ReadFull(fh, buf)
+			fh.Close()
+			_ = lim.wait(ctx, nr)
+			f.first = firstTime(buf[:nr])
+		}
+		out = append(out, f)
+	}
+	return out
+}
+
+// backfillStart is where the weeks begin: since, or the hour of the earliest first line when all the files have one
+// and it is later; firsts are the databases' earliest requests (zero: none).
+func backfillStart(files []backfillFile, firsts []time.Time, since time.Time) time.Time {
+	var first time.Time
+	for _, f := range files {
+		if f.first.IsZero() {
+			return since
+		}
+		if first.IsZero() || f.first.Before(first) {
+			first = f.first
+		}
+	}
+	for _, t := range firsts {
+		if !t.IsZero() && (first.IsZero() || t.Before(first)) {
+			first = t
+		}
+	}
+	if first.IsZero() || !first.After(since) {
+		return since
+	}
+	return first.Truncate(time.Hour)
+}
+
+// overlaps: the file can hold lines from start to end: it changed after start, and its first line is before end.
+func (f backfillFile) overlaps(start, end time.Time) bool {
+	return f.st.ModTime().After(start) && (f.first.IsZero() || f.first.Before(end))
+}
+
+// backfillScan sums the replies of every transcript and database from start to end by the hour, model, launcher and
+// agent, in time order. Only ctx ending stops it (its error).
+func (n *Node) backfillScan(ctx context.Context, files []backfillFile, queries []usageQuery, start, end time.Time, lim *readLimiter) ([]proto.UsageBucket, error) {
 	m := newUsageMeter()
 	m.step, m.until, m.seen = 3600, end, map[uint64]struct{}{}
 	m.launcherOf = func(session string) string {
 		st, _ := n.state.get(session)
 		return st.Launcher
 	}
-	for _, f := range n.usageFiles(start) { // the files changed since the week began
-		if _, err := m.scanSlice(ctx, f.path, f.st, start, end, lim); err != nil {
+	for _, f := range files {
+		if !f.overlaps(start, end) {
+			continue
+		}
+		if _, err := m.scanSlice(ctx, f.usagePath, start, end, lim); err != nil {
 			return nil, err
+		}
+	}
+	for _, q := range queries {
+		recs, err := q.between(ctx, n, start, end)
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range recs {
+			m.add(&usageFile{}, r, start)
 		}
 	}
 	out := make([]proto.UsageBucket, 0, len(m.buckets))
@@ -169,18 +301,20 @@ func backfillChunks(buckets []proto.UsageBucket, size int) [][]proto.UsageBucket
 	return append(out, buckets[start:])
 }
 
-// scanSlice reads path from about start (startOffset, from its start when small) through lim until its lines are
-// past end (backfillPast of them in a row), as scan reads what a file gained; read is how far it got.
-func (m *usageMeter) scanSlice(ctx context.Context, path string, st os.FileInfo, start, end time.Time, lim *readLimiter) (read int64, err error) {
-	f, err := os.Open(path)
+// scanSlice reads f from about start (startOffset, from its start when small) through lim until its lines are past
+// end (backfillPast of them in a row), as scan reads what a file gained; read is how far it got.
+func (m *usageMeter) scanSlice(ctx context.Context, f usagePath, start, end time.Time, lim *readLimiter) (read int64, err error) {
+	fh, err := os.Open(f.path)
 	if err != nil {
 		return 0, ctx.Err()
 	}
-	defer f.Close()
-	uf := &usageFile{session: usageSession(path)}
-	off := startOffsetFrom(path, st.Size(), start, backfillSmall)
-	codex := strings.HasPrefix(filepath.Base(path), "rollout-")
-	r := &limitedReader{ctx: ctx, r: io.NewSectionReader(f, off, st.Size()-off), lim: lim}
+	defer fh.Close()
+	off, probed := startOffsetFrom(f.path, f.st.Size(), start, backfillSmall)
+	if err := lim.wait(ctx, int(probed)); err != nil { // the search's reads count against the rate too
+		return 0, err
+	}
+	uf := newUsageFile(f, off)
+	r := &limitedReader{ctx: ctx, r: io.NewSectionReader(fh, off, f.st.Size()-off), lim: lim}
 	past := 0
 	read = off + eachLineAt(r, func(line []byte, _, _ int64) bool {
 		if ts := firstTime(line); !ts.IsZero() {
@@ -190,10 +324,8 @@ func (m *usageMeter) scanSlice(ctx context.Context, path string, st os.FileInfo,
 				return false
 			}
 		}
-		if codex {
-			m.codexLine(uf, line, start)
-		} else {
-			m.claudeLine(uf, line, start)
+		if rec, ok := uf.parser.Line(line); ok {
+			m.add(uf, rec, start)
 		}
 		return true
 	})

@@ -108,7 +108,7 @@ struct MeetingThreadView: View {
             if apart != next { apart = next }
         }
         .onChange(of: report, initial: true) { _, now in shown = now }
-        .confirmationDialog("Delete This Photo?", isPresented: confirmingBinding, titleVisibility: .visible, presenting: confirming) { item in
+        .accessibleConfirmationDialog("Delete This Photo?", isPresented: confirmingBinding, titleVisibility: .visible, presenting: confirming) { item in
             Button("Delete Photo", role: .destructive) { delete(item) }
                 .accessibilityIdentifier("meeting-photo-delete-confirm")
         } message: { item in
@@ -964,8 +964,8 @@ struct MeetingPhotoViewer: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .themedGroupedPage()
-                .overlay(alignment: .topTrailing) {
-                    RecordingSheetCloseButton(title: String(localized: "Done"), identifier: "meeting-photo-viewer-done") { dismiss() }
+                .overlay(alignment: .topLeading) {
+                    RecordingCornerButton(kind: .close, identifier: "meeting-photo-viewer-done") { dismiss() }
                         .padding(.horizontal, Theme.Space.page)
                 }
             }

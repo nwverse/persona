@@ -3,6 +3,7 @@
 from pathlib import Path
 import os
 import plistlib
+import re
 import shlex
 import subprocess
 import sys
@@ -103,6 +104,35 @@ class AppleCIPreparationTests(unittest.TestCase):
         self.assertIn('"${IOS_UNIT_SELECTION[@]}" build-for-testing', script[build:create])
         self.assertIn('"${IOS_UNIT_SELECTION[@]}"', script[execution:])
         self.assertIn('IOS_TESTS=("${IOS_COMMON[@]}"', script)
+
+    def test_callkit_is_checked_before_any_build_and_in_both_built_apps(self):
+        # #9290: the source guard in every lane before anything compiles; the binary check on each app right after
+        # its build, the device one before the simulator build, the simulator one before a simulator is created.
+        script = SCRIPT.read_text()
+        source = script.index(
+            "ci_run 'No CallKit in Apple sources and build settings' 120 python3 \"$CI_ROOT/scripts/test/test_apple_no_callkit.py\"")
+        self.assertLess(script.index('trap cleanup EXIT'), source)
+        self.assertLess(source, script.index("ci_run 'Build PersonaCore XCFramework before package resolution'"))
+        self.assertLess(source, script.index('if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = packages ]'))
+        device_build = script.index("ci_run 'Unsigned iOS and embedded watch/extensions build' 1800")
+        device_check = script.index("ci_run 'No CallKit in the device build' 300")
+        simulator_build = script.index("ci_run 'Build iOS offline unit tests' 1800")
+        simulator_check = script.index("ci_run 'No CallKit in the simulator build' 300")
+        create = script.index("ci_run 'Create stock iOS 26.0 test simulator' 100")
+        self.assertLess(device_build, device_check)
+        self.assertLess(device_check, simulator_build)
+        self.assertLess(simulator_build, simulator_check)
+        self.assertLess(simulator_check, create)
+        # Each check reads the products of the build before it.
+        self.assertIn('-derivedDataPath "$OUTPUT/ios-device"', script[device_build:device_check])
+        self.assertIn('python3 "$CI_ROOT/scripts/release/check_no_callkit.py" \\\n'
+                      '    "$OUTPUT/ios-device/Build/Products/Debug-iphoneos/Persona.app"', script[device_check:simulator_build])
+        self.assertIn('IOS_COMMON=("${XCODE[@]}" -scheme Persona -derivedDataPath "$OUTPUT/ios-tests"', script)
+        self.assertIn('python3 "$CI_ROOT/scripts/release/check_no_callkit.py" \\\n'
+                      '    "$OUTPUT/ios-tests/Build/Products/Debug-iphonesimulator/Persona.app"', script[simulator_check:create])
+        guards = (ROOT / 'scripts/ci/guards.sh').read_text()
+        self.assertIn("ci_run 'No CallKit in Apple sources and build settings' 120 python3 scripts/test/test_apple_no_callkit.py",
+                      guards)
 
     def test_native_mac_lane_is_removed_and_ios_excludes_the_old_hub_lab(self):
         script = SCRIPT.read_text()
@@ -237,6 +267,43 @@ class AppleRuntimeTests(unittest.TestCase):
         expected = self.runtime("26.0.10")
         self.assertEqual(apple_runtime.select([self.runtime("26.0"), self.runtime("26.0.2"),
                                                self.runtime("26.5"), expected]), expected["identifier"])
+
+
+class MacOSDeploymentFloorTests(unittest.TestCase):
+    AFFECTED_PACKAGES = {
+        "BeautifulUI": [".iOS(.v18)", ".visionOS(.v26)"],
+        "PersonaCore": [".iOS(.v18)"],
+        "PersonaKit": [".iOS(.v18)", ".visionOS(.v26)"],
+        "PersonaSSH": [".iOS(.v18)", ".visionOS(.v26)"],
+        "PersonaWire": [".iOS(.v18)", ".visionOS(.v26)", ".watchOS(.v10)"],
+    }
+
+    def test_every_tracked_swift_package_with_macos_support_has_a_15_or_older_floor(self):
+        listed = subprocess.run(["git", "ls-files", "-z"], cwd=ROOT, check=True, capture_output=True,
+                                text=True).stdout
+        packages = {name for name in listed.split("\0")
+                    if name == "Package.swift" or name.endswith("/Package.swift")}
+        required = {f"apple/Packages/{name}/Package.swift" for name in self.AFFECTED_PACKAGES}
+        self.assertTrue(required <= packages, f"package inventory is incomplete: {sorted(required - packages)}")
+        for name in sorted(packages):
+            with self.subTest(package=name):
+                manifest = (ROOT / name).read_text()
+                declarations = re.findall(r"\.macOS\(\s*([^()]+?)\s*\)", manifest)
+                if not declarations and re.search(r"\bplatforms\s*:", manifest):
+                    continue  # An explicit platform list without macOS does not claim Mac support.
+                self.assertEqual(len(declarations), 1, f"{name} must declare one explicit macOS floor")
+                match = re.fullmatch(r"\.v(\d+)(?:_\d+)?", declarations[0])
+                self.assertIsNotNone(match, f"{name} has an unrecognized macOS floor: {declarations[0]}")
+                self.assertLessEqual(int(match.group(1)), 15,
+                                     f"{name} must support macOS 15, not {declarations[0]}")
+
+    def test_lowering_macos_floors_preserves_the_other_apple_platform_floors(self):
+        for package, expected in self.AFFECTED_PACKAGES.items():
+            with self.subTest(package=package):
+                manifest = (ROOT / f"apple/Packages/{package}/Package.swift").read_text()
+                actual = [f".{platform}({version})" for platform, version in
+                          re.findall(r"\.(iOS|visionOS|watchOS|tvOS)\((\.[^)]+)\)", manifest)]
+                self.assertCountEqual(actual, expected)
 
 
 if __name__ == "__main__":

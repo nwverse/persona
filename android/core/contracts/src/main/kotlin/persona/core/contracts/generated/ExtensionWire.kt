@@ -415,6 +415,7 @@ data class ExtensionContributes(
     @SerialName("error_reports") val errorReports: List<ExtensionErrorReportsItem>? = null,
     @SerialName("auth_relay") val authRelay: List<ExtensionAuthRelayItem>? = null,
     @SerialName("secret_providers") val secretProviders: List<ExtensionSecretProviderItem>? = null,
+    @SerialName("repository_providers") val repositoryProviders: List<ExtensionRepositoryProviderItem>? = null,
     val messaging: List<ExtensionMessagingItem>? = null,
     /** Extra keys stay at this object's level on the wire; declared fields always win. */
     val additionalProperties: Map<String, JsonElement> = emptyMap(),
@@ -449,12 +450,13 @@ private data class ExtensionContributesKnown(
     @SerialName("error_reports") val errorReports: List<ExtensionErrorReportsItem>? = null,
     @SerialName("auth_relay") val authRelay: List<ExtensionAuthRelayItem>? = null,
     @SerialName("secret_providers") val secretProviders: List<ExtensionSecretProviderItem>? = null,
+    @SerialName("repository_providers") val repositoryProviders: List<ExtensionRepositoryProviderItem>? = null,
     val messaging: List<ExtensionMessagingItem>? = null,
 )
 
 object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
     private val known = ExtensionContributesKnown.serializer()
-    private val keys = setOf<String>("connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging")
+    private val keys = setOf<String>("connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "messaging")
     override val descriptor: SerialDescriptor = known.descriptor
 
     override fun deserialize(decoder: Decoder): ExtensionContributes {
@@ -490,6 +492,7 @@ object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
             errorReports = fields.errorReports,
             authRelay = fields.authRelay,
             secretProviders = fields.secretProviders,
+            repositoryProviders = fields.repositoryProviders,
             messaging = fields.messaging,
             additionalProperties = obj.filterKeys { it !in keys },
         )
@@ -525,6 +528,7 @@ object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
             errorReports = value.errorReports,
             authRelay = value.authRelay,
             secretProviders = value.secretProviders,
+            repositoryProviders = value.repositoryProviders,
             messaging = value.messaging,
         )
         val obj = output.json.encodeToJsonElement(known, fields) as JsonObject
@@ -824,6 +828,53 @@ data class ExtensionSecretProviderItem(
      */
     val schemes: List<String> = emptyList(),
 )
+
+/**
+ * A code-hosting source on the exact hosts it names, for the repository catalog and a to-do's repositories and links
+ * there: the manager asks the program (repo.parse, repo.check, repo.link, repo.describe; repository.schema.json) and
+ * re-checks every answer. Needs the program to speak the protocol. A host another installed extension claims, on or
+ * off, fails the install, and so does one host in two items.
+ */
+@Serializable
+data class ExtensionRepositoryProviderItem(
+    val id: String = "",
+    /**
+     * What the source is called (Acme Code): the catalog and a to-do's repositories show it. Not only spaces, no
+     * control characters.
+     */
+    val name: String = "",
+    /**
+     * The exact host names whose addresses it reads (code.example.com): lowercase, no scheme, port, path or wildcard,
+     * not an IP address, and not a host the built-in GitHub and GitLab read.
+     */
+    val hosts: List<String> = emptyList(),
+    /**
+     * What it calls the link kinds it names (each at most once; the others keep their usual words). Only relabels:
+     * the kinds stay issue and pull_request.
+     */
+    @SerialName("link_kinds") val linkKinds: List<ExtensionRepositoryLinkLabel>? = null,
+)
+
+/**
+ * The word a repository provider shows for one kind of its links (MR for a pull_request).
+ */
+@Serializable
+data class ExtensionRepositoryLinkLabel(
+    val kind: String = "",
+    /**
+     * Not only spaces, no control characters.
+     */
+    val label: String = "",
+)
+
+/**
+ * The kinds of a to-do's links to a repository: an issue, or a pull request (a merge request).
+ */
+object ExtensionRepositoryLinkKind {
+    const val ISSUE = "issue"
+    const val PULL_REQUEST = "pull_request"
+    val ALL = listOf("issue", "pull_request")
+}
 
 /**
  * It is given the error and crash reports of the hub and the user's devices (error_reports.deliver): needs the
@@ -1967,6 +2018,15 @@ object ExtensionTextStyle {
 }
 
 /**
+ * A progress drawing hint: bar (the default) or ring.
+ */
+object ExtensionProgressStyle {
+    const val BAR = "bar"
+    const val RING = "ring"
+    val ALL = listOf("bar", "ring")
+}
+
+/**
  * date, time, datetime, multichoice and multiline are UI version 6. Values stay strings: date YYYY-MM-DD, time HH:MM
  * (24 hours), datetime YYYY-MM-DDTHH:MM local to context.tz, multichoice a JSON array of the chosen values, multiline
  * the text with \n.
@@ -2242,8 +2302,8 @@ sealed interface ExtensionComponent {
     data class Unknown(override val type: String, val raw: JsonObject = JsonObject(emptyMap())) : ExtensionComponent
 
     companion object {
-        val TYPES = listOf("text", "metric", "progress", "row", "button", "link", "field", "divider", "chart", "stat_grid", "segmented", "markdown", "table", "empty", "loading", "html", "header", "breadcrumb", "file_tree", "code", "diff", "comment_thread", "composer", "image", "grid", "carousel")
-        val SINCE = mapOf("text" to 1, "metric" to 1, "progress" to 1, "row" to 1, "button" to 1, "link" to 1, "field" to 1, "divider" to 1, "chart" to 2, "stat_grid" to 2, "segmented" to 2, "markdown" to 3, "table" to 3, "empty" to 3, "loading" to 3, "html" to 4, "header" to 4, "breadcrumb" to 4, "file_tree" to 4, "code" to 4, "diff" to 4, "comment_thread" to 4, "composer" to 4, "image" to 6, "grid" to 6, "carousel" to 6)
+        val TYPES = listOf("text", "metric", "progress", "row", "button", "link", "field", "divider", "chart", "stat_grid", "segmented", "markdown", "table", "empty", "loading", "html", "header", "breadcrumb", "file_tree", "code", "diff", "comment_thread", "composer", "image", "grid", "carousel", "graph")
+        val SINCE = mapOf("text" to 1, "metric" to 1, "progress" to 1, "row" to 1, "button" to 1, "link" to 1, "field" to 1, "divider" to 1, "chart" to 2, "stat_grid" to 2, "segmented" to 2, "markdown" to 3, "table" to 3, "empty" to 3, "loading" to 3, "html" to 4, "header" to 4, "breadcrumb" to 4, "file_tree" to 4, "code" to 4, "diff" to 4, "comment_thread" to 4, "composer" to 4, "image" to 6, "grid" to 6, "carousel" to 6, "graph" to 10)
     }
 }
 
@@ -2283,6 +2343,7 @@ object ExtensionComponentSerializer : KSerializer<ExtensionComponent> {
                 "image" -> input.json.decodeFromJsonElement(ExtensionImageComponent.serializer(), obj)
                 "grid" -> input.json.decodeFromJsonElement(ExtensionGridComponent.serializer(), obj)
                 "carousel" -> input.json.decodeFromJsonElement(ExtensionCarouselComponent.serializer(), obj)
+                "graph" -> input.json.decodeFromJsonElement(ExtensionGraphComponent.serializer(), obj)
                 else -> ExtensionComponent.Unknown(tag, obj)
             }
         } catch (_: SerializationException) {
@@ -2321,6 +2382,7 @@ object ExtensionComponentSerializer : KSerializer<ExtensionComponent> {
             is ExtensionImageComponent -> output.json.encodeToJsonElement(ExtensionImageComponent.serializer(), value) as JsonObject
             is ExtensionGridComponent -> output.json.encodeToJsonElement(ExtensionGridComponent.serializer(), value) as JsonObject
             is ExtensionCarouselComponent -> output.json.encodeToJsonElement(ExtensionCarouselComponent.serializer(), value) as JsonObject
+            is ExtensionGraphComponent -> output.json.encodeToJsonElement(ExtensionGraphComponent.serializer(), value) as JsonObject
             is ExtensionComponent.Unknown -> value.raw
         }
         output.encodeJsonElement(JsonObject(obj + ("type" to JsonPrimitive(value.type))))
@@ -2355,7 +2417,7 @@ data class ExtensionMetricComponent(
 ) : ExtensionComponent
 
 /**
- * A bar filled to ratio (0 to 1).
+ * Progress toward a goal, filled to ratio (0 to 1).
  */
 @Serializable
 data class ExtensionProgressComponent(
@@ -2363,6 +2425,12 @@ data class ExtensionProgressComponent(
     val key: String? = null,
     val label: String = "",
     val ratio: Double = 0.0,
+    /**
+     * A drawing hint; omitted means bar. Apple Home Screen widgets (small, medium and large) draw ring as a ring;
+     * other surfaces draw a bar. Apps that do not recognize this field keep drawing a bar. Native stream does not
+     * accept this field.
+     */
+    val style: String? = null,
     val detail: String? = null,
     val tone: String? = null,
 ) : ExtensionComponent
@@ -2764,6 +2832,91 @@ data class ExtensionCarouselComponent(
     val tiles: List<ExtensionTile> = emptyList(),
     val width: String? = null,
 ) : ExtensionComponent
+
+/**
+ * Nodes joined by edges, drawn as a canvas the person can pan, zoom, fit and open full screen (UI version 10): work
+ * split into parts, a plan's steps, a family of things. The app lays it out (layout, direction) and draws each node
+ * with its own design system; tapping a node does its action, as a row's; a node with children folds them. Each node
+ * counts as a component of the page. The hub refuses ids that repeat, an edge naming an unknown node or itself, a
+ * repeated edge, a cycle, a second parent in a tree, and selected or folded naming an unknown node. In a card it is a
+ * still preview that opens full screen. An older app gets a row per node in reading order, indented.
+ */
+@Serializable
+data class ExtensionGraphComponent(
+    override val type: String = "graph",
+    /**
+     * Keeps the person's pan, zoom and folding across redraws of the page.
+     */
+    val key: String? = null,
+    val nodes: List<ExtensionGraphNode> = emptyList(),
+    val edges: List<ExtensionGraphEdge>? = null,
+    val layout: String? = null,
+    val direction: String? = null,
+    /**
+     * A node's id: drawn as selected, and the canvas opens centred on it.
+     */
+    val selected: String? = null,
+    /**
+     * Ids of nodes whose children start folded. Once the person folds or unfolds one, the app keeps their choice for
+     * this key.
+     */
+    val folded: List<String>? = null,
+) : ExtensionComponent
+
+/**
+ * One node of a graph (UI version 10): a box with a title, a state line, a badge, an icon and a progress bar, in
+ * tone's role color or color's named color (never both).
+ */
+@Serializable
+data class ExtensionGraphNode(
+    val id: String = "",
+    val title: String = "",
+    val subtitle: String? = null,
+    val badge: ExtensionBadge? = null,
+    val tone: String? = null,
+    val color: String? = null,
+    val icon: String? = null,
+    /**
+     * A thin bar along the node's foot, 0 to 1.
+     */
+    val progress: Double? = null,
+    /**
+     * Nodes with the same parents and the same group sit next to each other inside one frame titled with it (the same
+     * task tried several ways).
+     */
+    val group: String? = null,
+    val action: ExtensionAction? = null,
+)
+
+/**
+ * An edge from one node to another (UI version 10): from is the parent, to the child.
+ */
+@Serializable
+data class ExtensionGraphEdge(
+    val from: String = "",
+    val to: String = "",
+)
+
+/**
+ * tree (the default): every node has at most one parent, children under it, a parent centred over its children.
+ * layered: a node may have several parents; each node sits one layer past its furthest parent (a plan whose steps
+ * wait for several others).
+ */
+object ExtensionGraphLayout {
+    const val TREE = "tree"
+    const val LAYERED = "layered"
+    val ALL = listOf("tree", "layered")
+}
+
+/**
+ * right (the default): roots at the start, children after them, so a wide fan-out reads down the screen like an
+ * outline. down: roots at the top, children below.
+ */
+object ExtensionGraphDirection {
+    const val RIGHT = "right"
+    const val DOWN = "down"
+    val ALL = listOf("right", "down")
+}
 
 /**
  * Where a picture comes from (UI version 6): an https url the app loads without credentials, or a ref the extension

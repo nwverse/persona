@@ -1,11 +1,11 @@
 package persona.feature.chat
 
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import persona.core.designsystem.text
 import persona.core.designsystem.stableAlpha
-import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.draw.rotate
@@ -75,6 +75,8 @@ import persona.core.designsystem.Status
 import persona.core.designsystem.Tokens
 import persona.core.designsystem.WorkflowIcon
 import persona.core.designsystem.rememberCopy
+import persona.core.designsystem.rememberOpenEdge
+import persona.core.designsystem.unfolding
 import persona.core.domain.sort.WorkflowSummary
 import persona.core.designsystem.icons.PhIcon
 import persona.core.designsystem.icons.PhIcons
@@ -239,14 +241,16 @@ private fun FeedLine(item: FeedItem, host: AssistantTaskHost) {
 @Composable
 internal fun AnsweredLine(item: FeedItem, title: String, onOpenTask: (() -> Unit)?) {
     var open by rememberSaveable(item.id) { mutableStateOf(false) }
+    val edge = rememberOpenEdge(item.id)
+    val revealing = edge.revealing(open)
     val items = remember(item) { item.answeredItems() }
     val expandable = items.isNotEmpty()
     val shape = if (open) PersonaTheme.shapes.cardShape else CircleShape
     val toggleLabel = stringResource(if (open) R.string.chat_tasks_collapse else R.string.chat_tasks_expand)
     val toggleState = stringResource(if (open) R.string.chat_tasks_expanded else R.string.chat_tasks_collapsed)
     val openTaskLabel = stringResource(R.string.chat_tasks_open_task)
-    Column(Modifier.then(if (open) Modifier.fillMaxWidth() else Modifier).clip(shape).background(PersonaTheme.palette.surfaceStrong)
-        .animateContentSize()) {
+    // Opened answers fade in place (iOS AnsweredLine, TaskViews.swift:587, ChatPin.swift:707-726). The same on iPhone and iPad.
+    Column(Modifier.then(if (open) Modifier.fillMaxWidth() else Modifier).clip(shape).background(PersonaTheme.palette.surfaceStrong)) {
         Row(Modifier.then(if (expandable) Modifier.clickable(onClickLabel = toggleLabel) { open = !open } else Modifier)
             .semantics { if (expandable) stateDescription = toggleState }
             .padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.xs),
@@ -261,7 +265,7 @@ internal fun AnsweredLine(item: FeedItem, title: String, onOpenTask: (() -> Unit
                 modifier = Modifier.rotate(if (open) 90f else 0f))
         }
         if (open) SelectionContainer {
-            Column(Modifier.fillMaxWidth().padding(start = Tokens.Space.m, end = Tokens.Space.m, bottom = Tokens.Space.m)
+            Column(Modifier.unfolding(revealing).fillMaxWidth().padding(start = Tokens.Space.m, end = Tokens.Space.m, bottom = Tokens.Space.m)
                 .testTag("answered-detail"), verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
                 items.forEach { qa ->
                     Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.xxs)) {
@@ -289,13 +293,17 @@ private fun sentTitle(item: FeedItem, title: String): String =
 @Composable
 internal fun SentLine(item: FeedItem, title: String, onOpenTask: (() -> Unit)?) {
     var open by rememberSaveable(item.id) { mutableStateOf(false) }
+    val edge = rememberOpenEdge(item.id)
+    val revealing = edge.revealing(open)
     val text = item.field("text").orEmpty()
     val first = remember(text) { SentToAgents.firstLine(text) }
     val shape = if (open) PersonaTheme.shapes.cardShape else CircleShape
     val toggleLabel = stringResource(if (open) R.string.chat_tasks_collapse else R.string.chat_tasks_expand)
     val toggleState = stringResource(if (open) R.string.chat_tasks_expanded else R.string.chat_tasks_collapsed)
+    // Brief and Board keep AgentSentLine, which fades its text (SentViews.swift:30, ChatPin.swift:707-726).
+    // iPhone assistant chats use the new layout and draw RoutedExchange instead, which has no .unfolding (AgentExchange.swift:29, ChatLayout.swift:39-40).
     Column(Modifier.then(if (open) Modifier.fillMaxWidth() else Modifier).clip(shape).background(PersonaTheme.palette.surfaceStrong)
-        .animateContentSize().testTag("sent-line")) {
+        .testTag("sent-line")) {
         Row(Modifier.clickable(onClickLabel = toggleLabel) { open = !open }.semantics { stateDescription = toggleState }
             .padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.xs),
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
@@ -309,7 +317,7 @@ internal fun SentLine(item: FeedItem, title: String, onOpenTask: (() -> Unit)?) 
             JIcon(PhIcons.CaretRight, decorative = true, size = Tokens.Space.m, tint = PersonaTheme.palette.ink3,
                 modifier = Modifier.rotate(if (open) 90f else 0f))
         }
-        if (open) SentText(text, Modifier.padding(start = Tokens.Space.m, end = Tokens.Space.m, bottom = Tokens.Space.m))
+        if (open) SentText(text, Modifier.unfolding(revealing).padding(start = Tokens.Space.m, end = Tokens.Space.m, bottom = Tokens.Space.m))
     }
 }
 
@@ -343,7 +351,6 @@ private fun TaskSentList(todoId: String, host: AssistantTaskHost) {
 internal fun TaskSentRows(sent: List<FeedItem>) {
     var open by rememberSaveable(sent.first().id) { mutableStateOf(false) }
     var shown by rememberSaveable(sent.first().id) { mutableStateOf<String?>(null) }
-    val locale = currentLocale
     val toggleState = stringResource(if (open) R.string.chat_tasks_expanded else R.string.chat_tasks_collapsed)
     Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
         Row(Modifier.clip(PersonaTheme.shapes.controlShape).clickable { open = !open }.semantics { stateDescription = toggleState }
@@ -355,25 +362,32 @@ internal fun TaskSentRows(sent: List<FeedItem>) {
             JIcon(PhIcons.CaretRight, decorative = true, size = Tokens.Space.m, tint = PersonaTheme.palette.ink3,
                 modifier = Modifier.rotate(if (open) 90f else 0f))
         }
-        if (open) sent.forEach { item ->
-            val text = item.field("text").orEmpty()
-            val isOpen = shown == item.id
-            Column(Modifier.fillMaxWidth().clip(PersonaTheme.shapes.controlShape).background(PersonaTheme.palette.surfaceStrong)
-                .animateContentSize().testTag("task-sent-entry")) {
-                Row(Modifier.fillMaxWidth().clickable { shown = if (isOpen) null else item.id }
-                    .padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.xs),
-                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                    AssistantLines.time(item.at)?.let { Text(LocalizedFormats.format(it, LocalizedFormats.TIME, locale),
-                        style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3, maxLines = 1) }
-                    if (item.interrupting) JIcon(PhIcons.Stop, decorative = true, size = Tokens.Space.m, tint = PersonaTheme.palette.ink2)
-                    Text(SentToAgents.firstLine(text), Modifier.weight(1f), style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    JIcon(PhIcons.CaretRight, decorative = true, size = Tokens.Space.m, tint = PersonaTheme.palette.ink3,
-                        modifier = Modifier.rotate(if (isOpen) 90f else 0f))
-                }
-                if (isOpen) SentText(text, Modifier.padding(start = Tokens.Space.m, end = Tokens.Space.m, bottom = Tokens.Space.m))
-            }
+        if (open) sent.forEach { item -> TaskSentEntry(item, shown == item.id) { shown = if (shown == item.id) null else item.id } }
+    }
+}
+
+/**
+ * One instruction Persona sent: its time and first line, and the whole text when opened.
+ * iOS removed `TaskSentList` (#5569), so this row is not `.unfolding`. It keeps the size change it had.
+ */
+@Composable
+private fun TaskSentEntry(item: FeedItem, open: Boolean, onToggle: () -> Unit) {
+    val text = item.field("text").orEmpty()
+    val locale = currentLocale
+    Column(Modifier.fillMaxWidth().clip(PersonaTheme.shapes.controlShape).background(PersonaTheme.palette.surfaceStrong)
+        .animateContentSize().testTag("task-sent-entry")) {
+        Row(Modifier.fillMaxWidth().clickable(onClick = onToggle)
+            .padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.xs),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+            AssistantLines.time(item.at)?.let { Text(LocalizedFormats.format(it, LocalizedFormats.TIME, locale),
+                style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3, maxLines = 1) }
+            if (item.interrupting) JIcon(PhIcons.Stop, decorative = true, size = Tokens.Space.m, tint = PersonaTheme.palette.ink2)
+            Text(SentToAgents.firstLine(text), Modifier.weight(1f), style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+            JIcon(PhIcons.CaretRight, decorative = true, size = Tokens.Space.m, tint = PersonaTheme.palette.ink3,
+                modifier = Modifier.rotate(if (open) 90f else 0f))
         }
+        if (open) SentText(text, Modifier.padding(start = Tokens.Space.m, end = Tokens.Space.m, bottom = Tokens.Space.m))
     }
 }
 
@@ -502,7 +516,7 @@ private fun TaskCard(todo: Todo, host: AssistantTaskHost) {
     val asks = remember(card) { card?.askLine() }
     val now = when {
         state == TaskState.NeedsYou -> asks?.text() ?: stringResource(R.string.chat_tasks_now_needs_you)
-        cut != null -> stringResource(R.string.chat_tasks_now_cut, cut.reason)
+        cut != null -> if (cut.plain) cut.reason.text() else stringResource(R.string.chat_tasks_now_cut, cut.reason)
         state == TaskState.Failed -> stringResource(R.string.chat_tasks_now_failed, todo.startError.orEmpty().trim())
         progress != null -> progress.text
         todo.agents.any { !it.startError.isNullOrBlank() } ->
@@ -648,7 +662,12 @@ private fun InterruptedReceipt(item: FeedItem, host: AssistantTaskHost, todos: L
     val todo = todos.firstOrNull { it.id == item.ref }
     val title = receiptTitle(item, todo) ?: stringResource(R.string.chat_tasks_default_title)
     val state = todo?.let { host.tasks.stateOf(it, host.sessions) }
-    if (todo != null && state != TaskState.Interrupted) {
+    // A turn with no output the hub still has pending (#10187): the hub's resolution says when it went on (it is sent
+    // again then), so its own sentence stands, not "resumed", unless the task is seen working or done here. The rows of
+    // the task's other Agents (or an offline stand-in for a missing one) say nothing of it.
+    val pendingSilent = todo != null && item.field("resolution") == "pending" && item.field("cause") in silentCauses &&
+        state != TaskState.Working && state != TaskState.Done
+    if (todo != null && state != TaskState.Interrupted && !pendingSilent) {
         Row(Modifier.clip(PersonaTheme.shapes.controlShape).clickable { openTask(host, todo) }.padding(vertical = Tokens.Space.xs),
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
             JIcon(if (state == TaskState.Done) PhIcons.Check else PhIcons.ArrowClockwise, decorative = true, size = Tokens.Space.m,
@@ -661,13 +680,16 @@ private fun InterruptedReceipt(item: FeedItem, host: AssistantTaskHost, todos: L
     val busy by host.tasks.busy.collectAsStateWithLifecycle()
     val cut = todo?.let { Interruption.of(host.tasks.lead(it, host.sessions)) }
     val reason = cut?.reason ?: ApiErrorInfo.parse(item.field("error") ?: item.field("summary"))?.reason
+    // A turn with no output (#10187): the hub's own sentence, from the lead's row, or the receipt's (its cause says so)
+    // when the row is not at hand: never "Model service error".
+    val plain = cut?.takeIf { it.plain }?.reason?.text() ?: item.field("error")?.takeIf { item.field("cause") in silentCauses }
     val tone = PersonaTheme.palette.danger
     Row(Modifier.fillMaxWidth().clip(PersonaTheme.shapes.cardShape).background(PersonaTheme.palette.statusSurface).padding(Tokens.Space.l),
         horizontalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
         JIcon(PhIcons.WarningCircle, decorative = true, tint = tone.dot)
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
             Text(stringResource(R.string.chat_tasks_interrupted_title, title), style = PersonaTheme.type.headline, color = PersonaTheme.palette.ink)
-            Text(if (reason != null) stringResource(R.string.chat_tasks_now_cut, reason) else stringResource(R.string.chat_tasks_now_cut_plain), style = PersonaTheme.type.callout,
+            Text(plain ?: if (reason != null) stringResource(R.string.chat_tasks_now_cut, reason) else stringResource(R.string.chat_tasks_now_cut_plain), style = PersonaTheme.type.callout,
                 color = PersonaTheme.palette.ink2, maxLines = 4, overflow = TextOverflow.Ellipsis)
             Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
                 if (todo != null && cut?.canContinue != false) JButton(stringResource(R.string.chat_tasks_continue), { host.tasks.retryTask(todo, host.onError) },
@@ -689,6 +711,9 @@ private fun resolutionLabel(r: InterruptResolution): String = stringResource(whe
     InterruptResolution.Done -> R.string.chat_tasks_interrupt_done
 })
 
+/** The receipt causes of a turn with no output (#10187), whose `error` is the hub's own sentence for it. */
+private val silentCauses = setOf("no_output", "stopped")
+
 /** What cut a batch off (the hub's `cause`); one this build doesn't know reads as a model service error. */
 @Composable
 private fun causeLabel(cause: String): String = stringResource(when (cause) {
@@ -696,6 +721,7 @@ private fun causeLabel(cause: String): String = stringResource(when (cause) {
     "auth" -> R.string.chat_tasks_interrupt_cause_auth
     "model_route" -> R.string.chat_tasks_interrupt_cause_model_route
     "no_output" -> R.string.chat_tasks_interrupt_cause_no_output
+    "stopped" -> R.string.chat_tasks_interrupt_cause_stopped
     else -> R.string.chat_tasks_interrupt_cause_model_error
 })
 
@@ -779,6 +805,11 @@ internal fun QuickResultCard(result: QuickResult, undoState: QuickResultUndo = Q
     val locale = currentLocale
     val time = AssistantLines.time(result.time)?.let { LocalizedFormats.format(it, LocalizedFormats.MONTH_DAY_TIME, locale) }
     val undone = undoState == QuickResultUndo.Undone
+    val source = result.sourceDeviceName?.trim()?.takeIf { it.isNotEmpty() } ?: when (result.sourceDevicePlatform?.trim()?.lowercase()) {
+        "android" -> "Android"
+        "ios", "ios-app", "iphone" -> "iPhone"
+        else -> null
+    }
     // Undone gives way, as the same card does on iOS.
     val alpha by animateFloatAsState(if (undone) QuickResultUndoneAlpha else 1f,
         if (PersonaTheme.reduceMotion) snap() else tween(PersonaTheme.motion.standard), label = "quick-result-undone")
@@ -795,6 +826,10 @@ internal fun QuickResultCard(result: QuickResult, undoState: QuickResultUndo = Q
             }), style = PersonaTheme.type.bodyStrong, color = PersonaTheme.palette.ink)
             Text(listOfNotNull(time, result.title, result.place).joinToString(" · "), style = PersonaTheme.type.caption,
                 color = PersonaTheme.palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (source != null) {
+                Text(stringResource(R.string.chat_content_from, source), style = PersonaTheme.type.caption,
+                    color = PersonaTheme.palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
         }
         if (!undone && onUndo != null) JButton(stringResource(R.string.chat_tasks_quick_undo), onUndo,
             kind = JButtonKind.Secondary, size = JButtonSize.Small, enabled = undoState != QuickResultUndo.Undoing)

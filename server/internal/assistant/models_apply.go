@@ -16,16 +16,6 @@ import (
 // applyModel fills params (a node call's: session.start, assistant.send…) with what purpose id runs on; a launcher,
 // model or effort already in params is this call's own pick. The permission mode is left as it is.
 func (s *Service) applyModel(ctx context.Context, id string, params map[string]any) error {
-	return s.applyModelOn(ctx, id, params, false)
-}
-
-// applyModelCLI is applyModel on the CLI whatever purpose id's runtime: the purpose's launcher and model for a guest
-// conversation, which never runs on the Agent SDK (its built-in tools cannot be taken away, node/assistant_guest.go).
-func (s *Service) applyModelCLI(ctx context.Context, id string, params map[string]any) error {
-	return s.applyModelOn(ctx, id, params, true)
-}
-
-func (s *Service) applyModelOn(ctx context.Context, id string, params map[string]any, cli bool) error {
 	p, err := s.modelPurposeDef(ctx, id)
 	if err != nil {
 		return err
@@ -36,7 +26,7 @@ func (s *Service) applyModelOn(ctx context.Context, id string, params map[string
 	}
 	params["launch"] = p.launch() // a caller cannot override the purpose's execution form
 	if name, _ := params["launcher"].(string); name != "" && launcherProvider(name) != b.Provider {
-		b = ModelBinding{Provider: launcherProvider(name), Runtime: b.Runtime}
+		b = ModelBinding{Provider: launcherProvider(name)}
 	}
 	if b.Model != "" && strings.HasPrefix(b.Provider, "launcher.") && !proto.ValidModelID(b.Model) {
 		// Configured before a launcher's model was held to the model id rule (#1644; Model configuration refuses it as
@@ -52,9 +42,6 @@ func (s *Service) applyModelOn(ctx context.Context, id string, params map[string
 	if effort, _ := params["effort"].(string); effort != "" {
 		b.Effort = effort
 	}
-	if cli {
-		b.Runtime = ""
-	}
 	return s.finishModel(ctx, id, params, b)
 }
 
@@ -62,11 +49,15 @@ func (s *Service) applyModelOn(ctx context.Context, id string, params map[string
 // conversation's params (assistant.send, assistant.warm): only when the start names none of its own, and only for
 // Claude Code, the one agent with profiles. True when it did, so a node too old for config_dir can be asked again
 // without it. Nothing else is told it: an existing conversation keeps the profile it was started in.
-func (s *Service) withNewConversationProfile(ctx context.Context, machine, purpose string, params map[string]any) bool {
+//
+// The setting is read from the main chat whatever purpose the conversation starts under: only `assistant` stores it,
+// and a purpose that inherits from Agents (an extension's lark.agent) would otherwise resolve without it and start in
+// Persona's own, possibly signed-out profile (#10859). startOn leaves out guests and the Inbox AI twin.
+func (s *Service) withNewConversationProfile(ctx context.Context, machine string, params map[string]any) bool {
 	if _, asked := params["config_dir"]; asked {
 		return false
 	}
-	b, err := s.resolveModel(ctx, purpose)
+	b, err := s.resolveModel(ctx, "assistant")
 	if err != nil || b.ConfigDir == "" {
 		return false
 	}
@@ -96,12 +87,6 @@ func (s *Service) applyPickedModel(ctx context.Context, params map[string]any) e
 	if e, _ := params["effort"].(string); e != "" {
 		b.Effort = e
 	}
-	// A pick is a launcher and model for one message; the runtime stays the main chat's.
-	configured, err := s.resolveModel(ctx, "assistant")
-	if err != nil {
-		return err
-	}
-	b.Runtime = configured.Runtime
 	return s.finishModel(ctx, "assistant", params, b)
 }
 
@@ -109,6 +94,7 @@ func (s *Service) applyPickedModel(ctx context.Context, params map[string]any) e
 // A launcher's model goes to the agent as --model, so it has to be a model id (#1644): a call's own pick that is not
 // one is refused here (a configured one that is not was dropped by applyModel).
 func (s *Service) finishModel(ctx context.Context, id string, params map[string]any, b ModelBinding) error {
+	delete(params, "external")
 	name, ok := strings.CutPrefix(b.Provider, "launcher.")
 	if !ok {
 		if strings.HasPrefix(id, "plugin.") {
@@ -116,6 +102,11 @@ func (s *Service) finishModel(ctx context.Context, id string, params map[string]
 			return nil
 		}
 		return i18n.Err("assistant-models.err_not_launcher")
+	}
+	if externalProvider(b.Provider) {
+		if err := s.applyExternalScope(ctx, id, params, b); err != nil {
+			return err
+		}
 	}
 	if err := checkModelID(b.Model); err != nil {
 		return err
@@ -127,11 +118,9 @@ func (s *Service) finishModel(ctx context.Context, id string, params map[string]
 			return i18n.Err("assistant-models.err_api_as_launcher")
 		}
 	}
-	if b.Runtime != "" {
-		params["runtime"] = b.Runtime
-	} else {
-		delete(params, "runtime") // the CLI: nothing a caller left
-	}
+	// Every assistant conversation runs on Claude Code's CLI: a "runtime" a caller left never reaches the node (an
+	// older node would read "agentsdk" as the Agent SDK).
+	delete(params, "runtime")
 	params["launcher"] = name
 	if b.Model != "" {
 		params["model"] = b.Model

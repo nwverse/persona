@@ -1,5 +1,9 @@
 {
   "copy": "コピー",
+  "translate": "翻訳",
+  "translating": "翻訳中…",
+  "show_original": "原文を表示",
+  "translation_failed": "翻訳に失敗しました。もう一度お試しください。",
   "select_text": "テキストを選択",
   "quote": "引用",
   "me": "自分",
@@ -14,5 +18,6 @@
   "context_title": "{title} · メッセージ",
   "fork_chat": "新しいチャットで続ける",
   "cut_short": "この返信は完了しませんでした。内容は参考情報としてご覧ください。",
-  "save_as_prompt": "プロンプトとして保存…"
+  "save_as_prompt": "プロンプトとして保存…",
+  "pick": "複数選択"
 }

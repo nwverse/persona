@@ -1,5 +1,14 @@
 # Lessons: web UI and interactions
 
+## A folded launcher must retain its identity (#10249)
+
+When replacing a launcher rail, do not promote the current launcher's models into a separate Recommended group or
+cap its rows in a second view: both hide the account behind another navigation step. Keep one disclosure per launcher,
+reuse the existing row/setup projection, and flatten search without duplicating recommended or favorite models.
+On touch screens the model-ID line may replace the usual second line; search must keep the launcher name as well,
+or identical model names from different accounts become indistinguishable. Test typed-ID picks against their named
+launcher, not only the ID, and keep failed picks out of Recent.
+
 ## A lazy waiting row needs a lazy ordering boundary (#9390)
 
 Ordering an unopened tray from its shared classifier imports the age computation on the first screen even when the
@@ -28,6 +37,8 @@ when no usable timestamp was returned; a file that stopped safely must not look 
 
 Do not format a past event with the UTC offset at page load: daylight-saving changes can shift the displayed time
 and date. Resolve the browser's local offset at the event's instant, and test both seasonal directions across midnight.
+Chart axes too (#9863): a step added to one offset-shifted start drifts an hour off midnight across a change; lay each
+day's round times out with `Date`'s local fields (`clockTicks` in `web/src/lib/machine-detail.ts`).
 
 ## ZIP preview limits must check actual bytes (#9384)
 
@@ -43,6 +54,36 @@ and test with real streamed responses (#9405).
 with Vite's `normalizePath` before comparing allowlisted module IDs or removing build-machine paths from a graph.
 Keep the isolation rules strict: verify the actual public viewer build on Windows, its relative graph paths, and
 the rejection of an injected module outside the allowed graph.
+
+## Translate the full item, not the page's preview (#8650)
+
+A hub-paged answer's `text` is only a prefix until `useFullText` loads its full item. Passing that prefix to a
+translation action produced a partial translation and replaced the very control that could load the rest.
+Load through the existing full-text hook before the model request; share manual/in-flight loads and keep its
+loading/failure control readable. Use the item's stable source identity while the visible text expands, so the
+translation is not discarded as a stale result. A regression must render the real `Answer` with `full_size`,
+not only `MessageActions` around already complete text; assert the exact full payload and no spend on load failure.
+
+Reuse the existing translation module on intent rather than adding request/cache code to the first screen. Check
+owner/item/unmount both before loading the full text and after it; a module or source load can outlive the reply.
+
+Measure the normalized first-screen chunks, not a helper's standalone compressed size: a small lazy state wrapper
+can cost more than it removes. Menu-only actions and text selection can share the existing reply-controls chunk
+through `lazyOverlay` / `lazyDialog`, preserving the visible phone actions and dialog exits. List only their
+remaining eager translation keys in the startup catalog; moving code alone still ships a whole namespace's words.
+Build the touch menu's Select text action there as well as its dialog, so its label does not remain eager.
+Use `Menu.point` for a right-click position instead of creating and cleaning up a zero-sized DOM anchor.
+The fork action's label and callback belong in that same cold chunk; its opener needs only eligibility. Read the
+conversation context and filter the reply's More actions there too, rather than preparing closed-menu state.
+The side bar's clipping measurement can share it on pointer/focus intent: keep the same buttons safely below
+until it arrives, and do not publish placement for disconnected elements.
+Keep one anchor and scope for the message's overlay: opening its full context menu from an open More menu must
+replace that menu, not leave two copies with different action scopes.
+Check whole startup namespaces: an already lazy dialog (such as New main chat) can still ship all its words there.
+Keep its header and immediate feedback keys eager, and let the existing dialog loader bring the rest.
+When merging a new menu row, keep its label and callback in that cold menu too, preserving the upstream scope and
+payload. Select messages belongs last in the full menu, not the compact More menu; await the intent-loaded menu
+in its regression rather than dropping the original selection assertions.
 
 ## A refused credential-mirror write must not erase the readable legacy login (#9023)
 
@@ -246,6 +287,14 @@ every later alias moves on by one, the list reorders and every first-screen impo
 grew 9 B, but the ja count grew 255 B and `main` failed the build, with no first-screen code changed. `firstScreenBytes`
 now counts imported names as one fixed string and export lists as empty ones. To check a surprising move, compare the
 number of entries in each first-screen chunk's `export{…}` between the two builds.
+
+## A chunk that can load before App takes first-screen code through App (#10226)
+
+#3962's fix (a small module of its own) does not work for a chunk that may load before App, such as the Developing
+Persona recorder's: a module both it and App import becomes a new chunk on the first screen. The To-dos view's shadow
+reads `lib/todo-triage.ts` through App's re-export instead (`view-shadow.test.ts` fails on a value import there); a direct
+import split the triage out at about 700 B. Under `npm run dev` an edit to the triage then reloads the page rather than
+refreshing it in place.
 
 ## A change's first-screen cost depends on the main it is measured on (#6348)
 
@@ -1272,6 +1321,19 @@ own and reloads when idle (docs/web/web.md "New versions"). When verifying a web
 before it, not only a fresh load.
 ## Workspace identity outlives its Agents
 
+An optional lazy panel needs a local error boundary at every mount (#7100).
+Settings' boundary did not protect the Todo detail: a naming import failure
+reached the route boundary and unmounted its dirty title and notes. Exercise the
+real Todo lifecycle with the import pending, reject it after both fields are
+dirty, and check that the same editors can still save. Test actual chunk failure
+and Reload in a browser too; saved-field recovery after a full reload is distinct
+from retaining unsaved drafts while the local error is displayed.
+
+Naming-preview retries must reconcile selected repository IDs after reloading task associations (#7100). Keeping a
+draft does not mean keeping IDs for removed repositories: an invisible stale ID made every retry fail even after
+reloading. Intersect the selection with the fetched associations, preserve unchecked choices, and leave newly added
+repositories unselected. Verify the request after a real association removal, not only the rendered checkbox list.
+
 An Agent collection cannot serve as a workspace inventory: empty ancestors disappear, and pinning or filtering can remove the only row carrying a parent edge. Keep discovery independent of the board and count actual Agents separately from catalog containers. Bind actions to credential generation, manager, computer, host and runtime workspace ID; matching paths do not grant ownership. A combined browser fixture must stamp its sessions and discovery with the same manager, or it correctly exercises isolation instead of navigation.
 
 The current assistant and the roster's default are different scopes. Workspace discovery and management entry points follow `shownManager`, while an item without a manager still belongs to `defaultManager`. A choice change must cancel reads and invalidate deletion previews immediately, even if the user switches back before a response arrives; subscribing only to changes of the roster's default misses that transition.
@@ -1402,3 +1464,28 @@ approval (bypass permissions mode holds Persona's peer messages) read as "Not se
 owner retyped it on the computer. Keep the node's code on the entry and word the bubble from it (`entryReason`, also for
 entries kept from before), draw an uncertain one as waiting (caution color, no "Not sent"), and make a Check that finds
 nothing new say so. The node tells held from merely unconfirmed by the session's permission mode (`peer_held`).
+
+- Keep delivery receipts on the synchronous send path when deferring optional failure UI. The kept-message renderer and its retry/delete actions can load together, while receipt validation and row reconciliation stay immediate. Put the deferred row under a local error boundary and show the existing user bubble while it loads; verify that a failed import leaves the composer and its draft mounted. Keep words used only by deferred dialogs in the full client catalog: the existing lazy-import wait loads it before rendering. The startup literal-key guard and normal app/public build must still pass without changing the budget or counter. Startup selectors are prefixes: rewind.editing also selects rewind.editing_hint, so do not list both.
+
+## Filter history after folding, and reconcile search snapshots (#10240)
+
+A stopped parent can own a working child or a pending side request. Fold the complete sidebar rows before selecting non-running history, or the parent disappears from live work and its children become duplicate history rows. A frozen content-search result can also outlive Resume or deletion: use the current complete row for its identity and drop identities removed from a loaded snapshot. Compute day headings and counts after all filters, with local calendar fields rather than UTC date substrings.
+
+## A terminal menu must own focus before taking typing keys (#10239)
+
+An open Menu listens in the window's capture phase. Merely hiding pane controls from session rows does not make its
+N, I and Backspace accelerators safe: a program or a field can regain focus while the menu is still open. The terminal
+toolbar opts into Menu's focus scope, accepts keys only from its own trigger or menu levels, and explicitly focuses the
+trigger when opening. Check a real xterm textarea and a non-editable element as well as ordinary search input. Raw
+pane addresses also need to resolve a listed Agent before closing, or they would fall back to a shell confirmation
+and lose the busy-Agent warning.
+
+## Local font preferences (#10243)
+
+A stylesheet's normal custom property loses to a theme's inline value. An explicit font preference needs precedence while keeping the inline default intact for reset and fallback. Do not replace the theme's token in place. Keep before-paint validation and runtime validation contract-tested, quote a custom family as one CSS string, and treat FontFaceSet checks as advisory: they cannot reliably establish whether every installed family exists.
+
+Full UI retains a machine's xterm feed between surfaces. Reading font family only in `mount()` misses a newly opened surface that reuses that feed. Refresh its family on attachment, preserve font size, and guard asynchronous local CJK loading against a later family choice.
+
+## Deep tree rows need space for their counts (#10477)
+
+A shrinking file name cannot protect an end count when the row itself has unbounded indentation padding. Put the indentation and icon inside the name's shrinkable, clipped region; keep the count outside it with no wrapping. Bound deep indentation to a share of that region so the file name still has room for an ellipsis. Measure bounds against the containing panel, not the viewport, and keep the requested width separate from its temporary fitted width. Verify deep rows at minimum width in a real browser: jsdom cannot detect a clipped minus sign.

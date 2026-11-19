@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { hasRequestPieces } from "./request-pieces";
 import type { Machine, Session } from "./types";
 import {
   DECISIONS_FIRST,
@@ -834,6 +835,14 @@ describe("模型服务出错中断的任务 (#1516)", () => {
     });
     expect(interruption(mockSession("mac-1", "s1", "unread", { last_text: "修好了" }))).toBeUndefined();
   });
+
+  it("没有输出的一轮说 hub 的原话，不说模型请求失败 (#10187)", () => {
+    for (const kind of ["no_output", "stopped"]) {
+      const s = mockSession("mac-1", "s1", "unread", { turn_error: "随对话一起停下了，这一轮还没有任何输出", turn_error_kind: kind });
+      expect(interruption(s)).toEqual({ reason: "随对话一起停下了，这一轮还没有任何输出", canContinue: true });
+      expect(todoStatus(todo, makeSessionLookup([s]))).toBe("interrupted");
+    }
+  });
 });
 
 describe("任务卡片的进度 (taskNow, #1583)", () => {
@@ -894,5 +903,17 @@ describe("a to-do's decisions shown (#6447)", () => {
     expect(shownDecisions(["a", "b"], "first")).toEqual(["a", "b"]);
     expect(shownDecisions([], "first")).toEqual([]);
     expect(list).toHaveLength(12);
+  });
+});
+
+describe("hasRequestPieces", () => {
+  const td = (id: string, extra: Partial<Todo> = {}): Todo => ({ id, title: id, created_at: "2026-11-10T00:00:00Z", updated_at: "2026-11-10T00:00:00Z", ...extra });
+  it("is a to-do part_of another listed one, or two to-dos of one plan", () => {
+    expect(hasRequestPieces([td("a"), td("b")])).toBe(false);
+    expect(hasRequestPieces([td("a"), td("b", { part_of: "a" })])).toBe(true);
+    // a request whose to-do is not listed, or a to-do naming itself, is no piece here
+    expect(hasRequestPieces([td("b", { part_of: "gone" }), td("c", { part_of: "c" })])).toBe(false);
+    expect(hasRequestPieces([td("a", { plan_id: "p" }), td("b", { plan_id: "q" })])).toBe(false);
+    expect(hasRequestPieces([td("a", { plan_id: "p" }), td("b", { plan_id: "p" })])).toBe(true);
   });
 });

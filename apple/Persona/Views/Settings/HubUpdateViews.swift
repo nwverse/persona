@@ -98,6 +98,11 @@ struct HubUpdateDeps {
         do { apply(try await api.setHubUpdate(auto: on)) } catch { deps.report(error) }
     }
 
+    func setBeta(_ on: Bool) async {
+        guard let api = deps.api() else { return }
+        do { apply(try await api.setHubUpdate(beta: on)) } catch { deps.report(error) }
+    }
+
     /// 「自动更新已开启」 seen: not shown again.
     func noticeSeen() async {
         guard let api = deps.api() else { return }
@@ -140,7 +145,7 @@ struct HubSettingsPage: View {
         .onChange(of: app.hubUpdate) { _, s in
             if let s, s != model.status { model.apply(s) }
         }
-        .confirmationDialog("Update Now?", isPresented: $confirmNow, titleVisibility: .visible) {
+        .accessibleConfirmationDialog("Update Now?", isPresented: $confirmNow, titleVisibility: .visible) {
             Button("Update Now", role: .destructive) { Task { await model.update(now: true) } }
         } message: {
             Text("This won't wait for them to finish: anything waiting on the hub is interrupted (the assistant's current turn, uploads in progress, terminal connections). Agents in herdr aren't affected and reconnect once the hub is back.")
@@ -286,8 +291,18 @@ struct HubSettingsPage: View {
                 Text("Update Hub Automatically").lineLimit(1)
             }
             .accessibilityIdentifier("hub.auto")
+            if s.source != nil, s.channel == "release" {
+                Toggle(isOn: Binding(get: { s.betaUpdates }, set: { on in Task { await model.setBeta(on) } })) {
+                    Text("Beta Updates").lineLimit(1)
+                }
+                .accessibilityIdentifier("hub.beta")
+            }
         } footer: {
-            Text("When on, new versions install themselves once the assistant and all agents are idle, and you get a notification afterward.")
+            if s.betaUpdates {
+                Text("Beta updates install prereleases from the beta channel. Turn this off to return to stable releases. An update already in progress must finish before changing channels.")
+            } else {
+                Text("When on, new versions install themselves once the assistant and all agents are idle, and you get a notification afterward.")
+            }
         }
     }
 
@@ -372,9 +387,7 @@ struct HubNoticeRow: View {
     }
 
     private var closeButton: some ToolbarContent {
-        ToolbarItem(placement: .cancellationAction) {
-            Button { page = false } label: { ThemedIcon(Theme.Icon.close) }.accessibilityLabel("Close")
-        }
+        SheetClose { page = false }
     }
 
     private func text(_ n: HubNotice) -> String {

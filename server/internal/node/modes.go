@@ -85,7 +85,10 @@ type sessionModes struct {
 	// App: the effort the phone set for the next turn of a chat of the Codex App (codex_desktop_effort.go); nil none.
 	App *codexAppPick
 	// Model: the model the app switched a Claude Code session to, shown until its transcript shows another (model_switch.go).
-	Model     *pendingModel
+	Model *pendingModel
+	// Awaited: a model switch typed into Claude Code and not confirmed in time, taken up as Model once Claude Code's
+	// own record of it shows in the transcript (model_switch.go).
+	Awaited   *awaitedModel
 	Ultracode *ultracodeState // independent, session-only workflow switch (ultracode.go)
 }
 
@@ -265,14 +268,36 @@ func (n *Node) setModes(ctx context.Context, id, mode, effort string) error {
 		if p != nil && p.alive() && p.agent == "claude" {
 			p.settingsMu.Lock()
 			defer p.settingsMu.Unlock()
+			p.mu.Lock()
+			effortRestart := p.effortNeedsRestartLocked(effort) // an interactive process's effort (assistant_tui.go)
+			p.mu.Unlock()
+			if effortRestart && !p.needsRestartFor(mode) {
+				n.noteModes(id, mode, effort)
+				n.persistModes(id, mode, effort)
+				p.mu.Lock()
+				active := p.busy || len(p.tasks) > 0
+				p.mu.Unlock()
+				if !active {
+					n.stopAssistant(id)
+				}
+				n.notifySessions()
+				return nil // an active one restarts with it at the next idle message
+			}
 			if p.needsRestartFor(mode) {
-				// bypassPermissions requires a new process. Record the choice while holding the same
-				// lock as ordinary changes, so an older ACK cannot overwrite it.
+				// bypassPermissions requires a new process, as does any mode for interactive Claude Code. Record the
+				// choice while holding the same lock as ordinary changes, so an older ACK cannot overwrite it.
 				n.noteModes(id, mode, "")
 				n.persistModes(id, mode, "")
 				p.mu.Lock()
 				active := p.busy || len(p.tasks) > 0
+				tui := p.tui && p.tuiNote == ""
 				p.mu.Unlock()
+				if active && tui {
+					n.noteModes(id, "", effort)
+					n.persistModes(id, "", effort)
+					n.notifySessions()
+					return nil // both wait for the restart at the next idle message
+				}
 				if !active {
 					n.stopAssistant(id)
 					n.noteModes(id, "", effort)
@@ -315,7 +340,9 @@ func (n *Node) setModes(ctx context.Context, id, mode, effort string) error {
 		// over (mode_restart.go, #6476). Any other pick drops such a restart that waits.
 		if n.needsModeRestart(id, mode) {
 			if err := n.restartable(ctx, id); err == nil {
-				n.queueModeRestart(id, mode)
+				if err := n.queueModeRestart(id, mode); err != nil {
+					return err
+				}
 				mode = ""
 				if effort == "" {
 					return nil
@@ -625,7 +652,7 @@ func (n *Node) setAssistantModes(ctx context.Context, p *assistantProc, mode, ef
 		if field == "effort" {
 			want, previous = effort, p.effort
 		}
-		restart := field == "mode" && p.needsRestartForLocked(want)
+		restart := field == "mode" && p.needsRestartForLocked(want) || field == "effort" && p.effortNeedsRestartLocked(want)
 		p.mu.Unlock()
 		if want == "" || restart {
 			continue
@@ -656,8 +683,17 @@ func (n *Node) setAssistantModes(ctx context.Context, p *assistantProc, mode, ef
 			if !errors.As(err, &refused) {
 				// An unconfirmed request might still apply later. Retire this process so a late response
 				// cannot leave the conversation running with a setting the client was told had failed.
+				var timeout *assistantControlTimeoutError
+				if errors.As(err, &timeout) {
+					n.logf("assistant %s: control_timeout stage=%s wait_ms=%d", short(p.id), timeout.stage, timeout.wait.Milliseconds())
+				}
+				p.mu.Lock()
+				p.stopReason = err.Error()
+				p.mu.Unlock()
+				n.logf("assistant %s: control request %s failed after startup elapsed_ms=%d: %v; stopping process from node", short(p.id), field, time.Since(p.born).Milliseconds(), err)
 				p.stop()
-				return &assistantControlUnconfirmed{refusal("assistant_control_failed", err.Error(), nil)}
+				message := i18n.T(i18n.Default, "node-assistant-start.stopped_by_node", i18n.Args{"reason": err.Error()})
+				return &assistantControlUnconfirmed{error: refusal("assistant_control_failed", message, nil), cause: err}
 			}
 			return err
 		}

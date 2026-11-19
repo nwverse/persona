@@ -13,6 +13,28 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
+func TestAssistantManualCompactionRejectsCanceledExternalRequest(t *testing.T) {
+	n := assistantNode(t)
+	const id = "11111111-2222-3333-4444-555555555555"
+	launcher := proto.ExternalLauncherName("example-adapter", "example-target")
+	in := &stdinBuf{}
+	p := &assistantProc{id: id, agent: "claude", launcher: launcher, stdin: in}
+	n.procs[id] = p
+	n.state.put(id, sessionState{Launcher: launcher})
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	if code := refusalCode(n.assistantCompact(ctx, id, false)); code != "adapter_unavailable" {
+		t.Fatalf("canceled external compaction: %q", code)
+	}
+	if in.Len() != 0 || p.compacting || p.compacted || p.manual {
+		t.Fatal("a canceled external compaction wrote input or changed the process")
+	}
+	if st, _ := n.state.get(id); st.Compaction != nil || n.externalStarts.has(id) {
+		t.Fatal("a canceled external compaction recorded a start or retained its startup token")
+	}
+}
+
 // The user's compaction: refused while the conversation answers or compacts, /compact sent otherwise; it is running
 // until the boundary comes (done), the turn ends without one (failed, with claude's words), or the process is gone.
 func TestAssistantManualCompaction(t *testing.T) {
@@ -88,6 +110,44 @@ func TestAssistantManualCompaction(t *testing.T) {
 	n.decorate(&s)
 	if s.Compaction == nil || s.Compaction.State != proto.CompactionFailed {
 		t.Fatalf("on the session list: %+v", s.Compaction)
+	}
+}
+
+// The node's manual path is independent of the main-only automatic policy: every Assistant process can compact.
+func TestAssistantManualCompactionDoesNotRequireMain(t *testing.T) {
+	for _, main := range []bool{true, false} {
+		name := "non-main"
+		if main {
+			name = "main"
+		}
+		t.Run(name, func(t *testing.T) {
+			n := assistantNode(t)
+			const id = "11111111-2222-3333-4444-555555555555"
+			n.state.put(id, sessionState{IsMain: main})
+			in := &stdinBuf{}
+			p := &assistantProc{id: id, agent: "claude", stdin: in, busy: true}
+			n.procs[id] = p
+			if code := refusalCode(n.assistantCompact(t.Context(), id, false)); code != "busy" {
+				t.Fatalf("answering: %q", code)
+			}
+			p.busy = false
+			if err := n.assistantCompact(t.Context(), id, false); err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.TrimSpace(in.String()); got != `{"message":{"content":"/compact","role":"user"},"type":"user"}` {
+				t.Fatalf("not compacting the selected conversation: %s", got)
+			}
+			if code := refusalCode(n.assistantCompact(t.Context(), id, false)); code != "compacting" {
+				t.Fatalf("already compacting: %q", code)
+			}
+			n.readAssistant(p, strings.NewReader(
+				"{\"type\":\"system\",\"subtype\":\"compact_boundary\",\"compact_metadata\":{\"trigger\":\"manual\",\"pre_tokens\":380000,\"post_tokens\":9500}}\n"+
+					"{\"type\":\"result\",\"subtype\":\"success\"}\n"))
+			st, _ := n.state.get(id)
+			if st.IsMain != main || st.Compaction == nil || st.Compaction.State != proto.CompactionDone || st.Compaction.FinishedAt == nil {
+				t.Fatalf("compaction did not finish or changed the main flag: %+v", st)
+			}
+		})
 	}
 }
 

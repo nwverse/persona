@@ -90,14 +90,10 @@ struct SettingsView: View {
                 plugins = nil
             }
             .pageToolbar {
-                    // As a sheet over the shell (docs/apple/ios.md「New shell」): ChatGPT's × to close it.
+                    // As a sheet over the shell (docs/apple/ios.md「New shell」): ✕ at the leading corner, as every presented
+                    // page (#9653); Esc closes it too: a phone's full-screen cover has no swipe down.
                     if shell != nil || inSheet {
-                        ToolbarItem(placement: .topBarTrailing) {
-                            Button { model.shellSettings = false } label: { Label("Close", systemImage: Theme.Icon.close) }
-                                .foregroundStyle(Color.primary)
-                                .keyboardShortcut(.cancelAction) // Esc closes it too: a phone's full-screen cover has no swipe down
-                                .accessibilityIdentifier("settings-close")
-                        }
+                        SheetClose(id: "settings-close") { model.shellSettings = false }
                     }
                 }
                 .navigationTitle("Settings")
@@ -117,7 +113,7 @@ struct SettingsView: View {
             // (Channels; `-openChannel <id>` one of them).
             .onAppear(perform: openDebugPage)
             #endif
-            .confirmationDialog("After disconnecting, you'll need to scan the code to pair again.", isPresented: $confirmUnpair, titleVisibility: .visible) {
+            .accessibleConfirmationDialog("After disconnecting, you'll need to scan the code to pair again.", isPresented: $confirmUnpair, titleVisibility: .visible) {
                 Button("Disconnect", role: .destructive) { Task { await model.disconnectAll() } }
             }
             .sheet(isPresented: $showPair) { PairView() }
@@ -158,9 +154,9 @@ struct SettingsView: View {
                 }
                 #if os(iOS)
                 settingsLink(.knowledgeSelection, "Knowledge Selection", Theme.Icon.knowledge, id: "settings-knowledge-selection")
-                if MeetingAttendees.offered(model) {
-                    settingsLink(.meetings, "Meetings", Theme.Icon.meeting, id: "settings-meetings", value: MeetingAttendees.defaultRole(model).title)
-                }
+                // Every iPhone: the calendar reminder is the phone's (#8731 G2); the role shows where the hub offers one.
+                settingsLink(.meetings, "Meetings", Theme.Icon.meeting, id: "settings-meetings",
+                             value: MeetingAttendees.offered(model) ? MeetingAttendees.defaultRole(model).title : "")
                 #endif
                 settingsLink(.agents, "Agent", Theme.Icon.options, id: "settings-agents")
                 NavigationLink(value: MachineListRoute()) { MachinesSettingsRow() }
@@ -377,6 +373,10 @@ struct SettingsView: View {
             p.append(SettingsPage.about)
             if a == "export" { p.append(SettingsPage.devExport) }
         }
+        else if d.string(forKey: "openMeetingTapes") != nil { // About › Replay a Meeting Tape (sample | empty, #10589)
+            p.append(SettingsPage.about)
+            p.append(SettingsPage.meetingTapes)
+        }
         else if d.string(forKey: "openKnowledgeSelection") != nil { p.append(SettingsPage.knowledgeSelection) } // (rule | chat | doc: with that sheet)
         else if d.string(forKey: "openAppearance") == "layout" { p.append(SettingsPage.layout) } // Layout (#2530)
         else if d.string(forKey: "openAppearance") == "navigation" { p.append(SettingsPage.navigation) } // Navigation (#6332)
@@ -415,7 +415,7 @@ enum SettingsPage: Hashable {
     /// Settings › Live Screen (#6396, #6398): the live screen's route and its quality on mobile data.
     case liveScreen
     #endif
-    case persona, themeColor, style, colorScheme, language, assistant, claude, codex, devices, phoneData, mail, feishuBot, notifications, storage, translation, modelConfiguration
+    case persona, themeColor, style, colorScheme, language, assistant, claude, codex, agy, devices, phoneData, mail, feishuBot, notifications, storage, translation, modelConfiguration
     /// Settings › Connectors › This iPhone › iPhone Control: the guided setup (#8199).
     case iphoneSetup
     /// Settings › Connectors › the chat connector; `manager`: whose (Messages' Settings names the default's, whose
@@ -424,6 +424,8 @@ enum SettingsPage: Hashable {
     case models, agents, appearance, about, pairing, computers
     /// Settings › About › Export Diagnostics (Developing Persona, #9460).
     case devExport
+    /// Settings › About › Replay a Meeting Tape (Developing Persona, #10589).
+    case meetingTapes
     /// Settings › Session Triage (docs/assistant/agent-work.md「开关」).
     case triage
     /// Assistant Profile › Standing Authorizations (#7002): the go-aheads Persona answers for the owner, each revocable.
@@ -528,6 +530,12 @@ private struct SettingsDestinations: ViewModifier {
         case .appearance: AppearanceSettingsPage()
         case .about: SettingsAboutPage()
         case .devExport: DevExportPage()
+        case .meetingTapes:
+            #if os(iOS)
+            MeetingTapesPage()
+            #else
+            EmptyView()
+            #endif
         case .pairing: SettingsPairingPage()
         case .computers: MachinesView(settingsScope: true)
         case .persona: PersonaSettingsPage()
@@ -551,6 +559,7 @@ private struct SettingsDestinations: ViewModifier {
         case .assistant: AssistantProfileView()
         case .claude: ClaudeSettingsView()
         case .codex: ClaudeSettingsView(agent: .codex)
+        case .agy: ClaudeSettingsView(agent: .agy)
         case .devices: DevicesView()
         case .phoneData: PhoneDataView()
         case .iphoneSetup:
@@ -1035,6 +1044,9 @@ struct PairView: View {
     /// The code was refused as expired or used (401 invalid_token): say so, and offer to scan again.
     @State private var expired = false
     @State private var showOther = false
+    /// A scanned pairing link waiting for the user's Connect (#9929): a code read off a screen asks first, as a link
+    /// from outside the app does.
+    @State private var confirming: PairConfirmation?
 
     private var other: Bool { start == .other || showOther }
 
@@ -1078,7 +1090,7 @@ struct PairView: View {
                                 token = cfg.token
                                 passwordMode = false
                                 scanning = false
-                                Task { await connect() }
+                                confirming = PairConfirmation(cfg, paired: model.registry.hubs.map(\.config))
                             }
                         }
                         #if os(iOS) || os(visionOS)
@@ -1109,6 +1121,7 @@ struct PairView: View {
                 if let error { Section { Text(error).foregroundStyle(Theme.danger).font(Theme.Font.caption) } }
             }
             .themedPage()
+            .pairConfirmation($confirming) { _ in Task { await connect() } }
             #if DEBUG
             // `-showPairAccess YES`: Cloudflare Access opened (screenshots), its fields from `-seedCloudflareAccess id:secret`;
             // `-showPairAccess <pairing link>` also pairs with it at once (the Access error, MOCK_CF_ACCESS).
@@ -1236,7 +1249,7 @@ private struct PairSheetChrome: ViewModifier {
             .navigationTitle("Connect Hub")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                SheetClose { dismiss() }
                 ToolbarItem(placement: .confirmationAction) {
                     Button { Task { await connect() } } label: { if connecting { ProgressView() } else { Text("Connect [V N C Page a55741]") } }
                         .disabled(connecting || (!passwordMode && token.isEmpty) || url.isEmpty)
@@ -1483,7 +1496,7 @@ extension View {
     /// so the list adds no inset above and below it on top (77.7 pt rows instead of the 52.3 pt the other styles have).
     /// Apply it to the rows (a `Group` of them), not the `Section`: on the section it takes the header's padding too, and
     /// not on a row inside a `NavigationLink`'s label (it does not reach the list there). Other styles keep the list's insets.
-    func bareListRow() -> some View { listRowInsets(.vertical, AppStyle.current.usesBeautifulUI ? 0 : nil) }
+    func bareListRow() -> some View { listRowVerticalInsets(AppStyle.current.usesBeautifulUI ? 0 : nil) }
 
     /// A row of Settings' list that opens `value`: on the Mac it stays selected while that page is open beside the list
     /// (`MacSettingsRowSelection`, #2318). Nothing elsewhere.

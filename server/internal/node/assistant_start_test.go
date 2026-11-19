@@ -19,6 +19,20 @@ func fakeClaudeHome(t *testing.T, script string) {
 	if _, err := exec.LookPath("zsh"); err != nil {
 		t.Skip("no zsh")
 	}
+	fakeClaudeHomeFiles(t, script)
+}
+
+// fakeClaudeHomeBash uses the assistant's production bash fallback for a regression that must execute without zsh.
+func fakeClaudeHomeBash(t *testing.T, script string) {
+	t.Helper()
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Fatalf("no bash: %v", err)
+	}
+	fakeClaudeHomeFiles(t, script)
+}
+
+func fakeClaudeHomeFiles(t *testing.T, script string) {
+	t.Helper()
 	home := t.TempDir()
 	bin := filepath.Join(home, "bin")
 	if err := os.MkdirAll(bin, 0o700); err != nil {
@@ -28,6 +42,7 @@ func fakeClaudeHome(t *testing.T, script string) {
 		t.Fatal(err)
 	}
 	_ = os.WriteFile(filepath.Join(home, ".zshrc"), nil, 0o600)
+	_ = os.WriteFile(filepath.Join(home, ".bashrc"), nil, 0o600)
 	// The fake claude is meant to work, so mark its first-run setup finished: the launcher check's onboarding gate
 	// (claudeonboarding.go) otherwise stops before it ever runs.
 	if err := os.WriteFile(filepath.Join(home, ".claude.json"), []byte(`{"hasCompletedOnboarding":true}`), 0o600); err != nil {
@@ -36,11 +51,16 @@ func fakeClaudeHome(t *testing.T, script string) {
 	t.Setenv("HOME", home)
 	t.Setenv("ZDOTDIR", home)
 	t.Setenv("PATH", bin+":/usr/bin:/bin")
-	// The launcher assertions are about what the launcher declares, not what the developer's own shell exports.
-	for _, k := range []string{"CLAUDE_CODE_AUTO_COMPACT_WINDOW", "CLAUDE_CODE_MAX_CONTEXT_TOKENS", "ENABLE_TOOL_SEARCH"} {
+	// The launcher assertions are about what the launcher declares, not what the developer's own shell exports (a
+	// gateway of its own included: tool search follows it, #10365).
+	for _, k := range []string{"CLAUDE_CODE_AUTO_COMPACT_WINDOW", "CLAUDE_CODE_MAX_CONTEXT_TOKENS", "ENABLE_TOOL_SEARCH", "ANTHROPIC_BASE_URL"} {
 		t.Setenv(k, "")
 		os.Unsetenv(k)
 	}
+	// Nor the machine's managed Claude Code policy (claudeEndpoint reads its env first).
+	managed := claudeManagedSettingsFiles
+	claudeManagedSettingsFiles = func() []string { return nil }
+	t.Cleanup(func() { claudeManagedSettingsFiles = managed })
 }
 
 // A launcher that exits before reading the message (its node socket gone: "no persona node") lost it: the send says

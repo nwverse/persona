@@ -131,6 +131,57 @@ afterEach(() => {
 });
 
 describe("收件箱事件：详情", () => {
+  it("keeps an unknown reply's actual payload readonly without Send or Edit", () => {
+    const item: InboxItem = { ...reply, suggestion_attempts: [{ version: 2, status: "unknown", retryable: false,
+      text: "实际确认过的修改稿", at: "2026-11-18T13:00:00Z", conversation: reply.suggestion!.conversation }] };
+    act(() => root.render(<EventBody item={item} onSource={() => {}} />));
+    expect(buttons()).not.toContain("发送");
+    expect(buttons()).not.toContain("修改");
+    expect(host.querySelector("[data-suggestion-text]")?.textContent).toBe("实际确认过的修改稿");
+    expect(host.textContent).toContain("请先到原会话确认");
+  });
+  it.each(["sending", "sent"] as const)("shows actual %s words without a send/edit control in the Inbox", status => {
+    const item: InboxItem = { ...reply, suggestion_attempts: [{ version: 2, status, retryable: false,
+      text: "实际确认的修改稿", at: "2026-11-18T13:00:00Z", conversation: reply.suggestion!.conversation }] };
+    act(() => root.render(<EventBody item={item} onSource={() => {}} />));
+    expect(buttons()).not.toContain("发送");
+    expect(buttons()).not.toContain("修改");
+    expect(buttons()).not.toContain("重试");
+    expect(host.querySelector("[data-suggestion-text]")?.textContent).toBe("实际确认的修改稿");
+    expect(host.querySelector("time")?.dateTime).toBe("2026-11-18T13:00:00Z");
+  });
+  it("offers frozen-payload Retry only for confirmed retryable non-delivery", async () => {
+    const item: InboxItem = { ...reply, suggestion_attempts: [{ version: 2, status: "failed", retryable: true, retry_after: 5,
+      text: "实际确认的修改稿", at: "2026-11-18T13:00:00Z", conversation: reply.suggestion!.conversation }] };
+    calls.items = [item];
+    const { reloadInbox } = await import("../../lib/inbox");
+    await act(async () => { await reloadInbox(); });
+    calls.suggestion = async () => ({ ...item, suggestion: undefined });
+    act(() => root.render(<EventBody item={item} onSource={() => {}} />));
+    expect(buttons()).not.toContain("发送");
+    expect(buttons()).not.toContain("修改");
+    expect(host.textContent).toContain("5 秒后重试");
+    await press("重试");
+    const req = calls.list.find(x => x.path.endsWith("/suggestion"))?.json;
+    expect(req).toMatchObject({ version: 2, action: "confirm" });
+    expect((req as { text?: string }).text).toBeUndefined();
+    act(() => root.render(<EventBody item={{ ...item, suggestion_attempts: [{ ...item.suggestion_attempts![0], retryable: false }] }} onSource={() => {}} />));
+    expect(buttons()).not.toContain("重试");
+  });
+  it("removes Retry after its response and readback are lost, despite an older failed receipt", async () => {
+    const item: InboxItem = { ...reply, suggestion_attempts: [{ version: 2, status: "failed", retryable: true,
+      text: "实际确认的修改稿", at: "2026-11-18T13:00:00Z", conversation: reply.suggestion!.conversation }] };
+    calls.items = [item];
+    const { reloadInbox } = await import("../../lib/inbox");
+    await act(async () => { await reloadInbox(); });
+    calls.suggestion = async () => { throw new TypeError("response lost"); };
+    act(() => root.render(<EventBody item={item} onSource={() => {}} />));
+    await press("重试");
+    expect(buttons()).not.toContain("重试");
+    expect(buttons()).not.toContain("发送");
+    expect(host.textContent).toContain("请先到原会话确认");
+    expect(host.querySelector("[data-suggestion-text]")?.textContent).toBe("实际确认的修改稿");
+  });
   it("calls the section Timeline in English", () => {
     expect(enInboxEvent.chain).toBe("Timeline");
   });
@@ -314,6 +365,18 @@ describe("收件箱事件：详情", () => {
     act(() => root.render(<EventBody item={{ ...assistant, body: undefined, summary: "**Briefing · Mon** Today: one tutorial. **Classes** - **Tutorial** - Short quiz" }} onSource={() => {}} />));
     expect(host.querySelector("[data-event-text] strong")?.textContent).toBe("Briefing · Mon");
     expect(host.querySelector('[data-chain-id="c1"] [data-chain-detail]')?.textContent).toBe("Briefing · Mon Today: one tutorial. Classes Tut…");
+  });
+  it("gives an assistant row's received entry one arrow: it goes to the conversation, its text is above (#9930)", () => {
+    const assistant: InboxItem = {
+      ...plain(reply), id: "assistant:s4", source: "assistant", kind: "assistant_post", handling: undefined, suggestion: undefined, now: undefined, recap: undefined,
+      body: "Today: one tutorial.",
+      chain: [{ id: "c1", kind: "received", text: "1 new message", count: 1, link: { type: "source", url: "https://hub.example.com/persona/c-1" }, messages: [{ text: "Today: one tutorial." }] }],
+    };
+    act(() => root.render(<EventBody item={assistant} onSource={() => {}} />));
+    expect(host.querySelectorAll('[data-chain-id="c1"] button')).toHaveLength(1);
+    // another source's entry that goes somewhere keeps its messages, opened beside it
+    act(() => root.render(<EventBody item={{ ...assistant, source: "github" }} onSource={() => {}} />));
+    expect(host.querySelectorAll('[data-chain-id="c1"] button')).toHaveLength(2);
   });
   it("labels each kind's buttons", () => {
     act(() => root.render(<EventBody item={agentSuggestion} onSource={() => {}} />));
@@ -537,10 +600,13 @@ describe("收件箱事件：已处理", () => {
 });
 
 describe("收件箱事件：列表", () => {
+  // the section bar opens on 需要你 (#9053): these cases read every section, 全部
+  const showAll = () => act(() => host.querySelector<HTMLButtonElement>('[data-bar-choice="all"]')!.click());
   it("has 进行中 between 需要你 and 知悉即可, marks the rows, and draws a suggestion instead of the draft", async () => {
     calls.items = fixture.items;
     act(() => root.render(<InboxList />));
     await flush();
+    showAll();
     const titles = [...host.querySelectorAll("[data-section-title]")].map((s) => s.textContent);
     expect(titles).toEqual(["需要你", "进行中", "知悉即可", "已折叠", "已处理"]);
     const row = (id: string) => host.querySelector(`[data-item="${id}"]`)!;
@@ -561,6 +627,7 @@ describe("收件箱事件：列表", () => {
     calls.items = showcase.items;
     act(() => root.render(<InboxList />));
     await flush();
+    showAll();
     const mark = (id: string) => host.querySelector(`[data-item="${id}"] [data-event-mark="now"]`)!;
     expect(mark("sc-1").getAttribute("data-event-icon")).toBe("clock");
     expect(mark("sc-1").textContent).toContain("等张三确认新报价");
@@ -578,6 +645,7 @@ describe("收件箱事件：列表", () => {
     calls.items = fixture.items.map(legacy);
     act(() => root.render(<InboxList />));
     await flush();
+    showAll();
     const titles = [...host.querySelectorAll("[data-section-title]")].map((s) => s.textContent);
     expect(titles).toEqual(["需要你", "知悉即可", "已折叠", "已处理"]);
     expect(host.querySelector("[data-event-mark]")).toBeNull();

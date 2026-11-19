@@ -161,7 +161,7 @@ struct GitPRSheet: View {
             .themedPage()
             .refreshable { await pr.read(status, machine: machineID, cwd: cwd, deps: deps, force: true) }
             .navigationTitle(pr.answer?.pr.map { Text(verbatim: "#\($0.number)") } ?? Text("Pull Request"))
-            .navigationSubtitle(pr.answer?.pr.map { "\($0.head) → \($0.base)" } ?? (status.branch ?? ""))
+            .navigationSubtitleWhenSupported(pr.answer?.pr.map { "\($0.head) → \($0.base)" } ?? (status.branch ?? ""))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 if let p = pr.answer?.pr, let u = URL(string: p.url) {
@@ -171,12 +171,9 @@ struct GitPRSheet: View {
                             .accessibilityIdentifier("git.pr.github")
                     }
                 }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button { dismiss() } label: { Text("Done [Extension System Presentation c0b3fb]").lineLimit(1) }
-                        .disabled(pr.busy != nil)
-                }
+                SheetClose(disabled: pr.busy != nil) { dismiss() }
             }
-            .confirmationDialog(Text(asking.map(askTitle) ?? ""), isPresented: Binding(get: { asking != nil }, set: { if !$0 { asking = nil } }),
+            .accessibleConfirmationDialog(Text(asking.map(askTitle) ?? ""), isPresented: Binding(get: { asking != nil }, set: { if !$0 { asking = nil } }),
                                 titleVisibility: .visible, presenting: asking) { how in
                 Button { Task { await go(how) } } label: { Text(askButton(how)).lineLimit(1) }
                     .accessibilityIdentifier("git.pr.confirm")
@@ -460,12 +457,10 @@ struct GitPRCreateSheet: View {
             .listStyle(.insetGrouped)
             .themedPage()
             .navigationTitle(Text("New Pull Request"))
-            .navigationSubtitle(status.branch ?? "")
+            .navigationSubtitleWhenSupported(status.branch ?? "")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button { dismiss() } label: { Text("Cancel").lineLimit(1) }.disabled(pr.busy != nil)
-                }
+                SheetClose(disabled: pr.busy != nil) { dismiss() }
                 ToolbarItem(placement: .confirmationAction) {
                     if pr.busy == .create {
                         ProgressView()
@@ -476,7 +471,7 @@ struct GitPRCreateSheet: View {
                     }
                 }
             }
-            .confirmationDialog(Text("Open a Pull Request?"), isPresented: $asking, titleVisibility: .visible) {
+            .accessibleConfirmationDialog(Text("Open a Pull Request?"), isPresented: $asking, titleVisibility: .visible) {
                 Button { Task { await go() } } label: { Text("Open Pull Request").lineLimit(1) }
                     .accessibilityIdentifier("git.pr.create.confirm")
             } message: {

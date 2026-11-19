@@ -6,6 +6,7 @@ The repo hard-codes nobody's machines, accounts, domains, or preferences. Everyt
 | --- | --- | --- | --- |
 | Build / deploy config | `~/.config/persona/config.json` on the dev machine (point elsewhere with `PERSONA_CONFIG`), template `config.example.json` at the repo root | `scripts/*` (via `scripts/persona_config.py`), XcodeGen (via the generated `apple/Config.xcconfig`) | The App's bundle id and team, the App Store Connect account, TestFlight testers, which machine / address the hub is on, machines to deploy to, simulators |
 | hub runtime config | `~/.persona/hub.json` on the hub machine (0600, contains the token and database password; written by `personad hub setup`, or generated automatically the first time the hub starts; `hub pair`, `hub peer`, `hub manager-code` and `hub assistant-token` only talk to a running hub: they need this file and never create it) | `personad hub` | Listen address, public address, which machines to connect, push timings, whether the hub starts the built-in manager |
+| Link config | `~/.persona/link.json` on each computer with Persona Link (0600, contains its credentials; written by `persona-link pair`, `ssh`, `proxy` and the running link) | `persona-link` | Active and passive pairings, hub addresses, the optional SSH tunnel ([link.md](link.md), "SSH tunnel") and outbound proxy (`proxy`: a URL or `"off"`, [link.md](link.md), "Outbound proxy") |
 | Manager config | `~/.persona/managers/assistant/manager.json` for the built-in manager, `~/.persona/managers/<id>/manager.json` for one made in the app (0600) | the manager (`personad assistant`, `personad manager run`) | Whose assistant it is and what it should know, where it runs by default, the AI gateway and models, the Agents' triage, question delegation and launcher health, the Inbox and its AI twin, the knowledge base, how long hook cards wait; connectors, extensions written by hand, bots, mail sign-ins and the Gmail proxy, Lark and lark-cli, usage sources ("manager.json" below) |
 
 The configs live outside the repo: releases run in a clean worktree (`docs/operations/release.md`), where anything outside the repo would be missing; it also avoids committing them by accident.
@@ -94,7 +95,7 @@ open ports, or a Tailscale account; the hub tries ssh first and falls back to ta
    ```
 
    `ssh_host` is the host name the **hub machine** uses to SSH to this one (each side has its own `~/.ssh/config`, so it can differ from `ssh` in step 1); `id` should match step 1;
-   `name` is the name shown in the App; `icon` is `server` / `laptop` / `desktop`. `remote_bin` is the path of `personad` on that computer; when omitted the hub uses `~/.persona/bin/personad` (the canonical binary the deploy script installs); set it if installed elsewhere.
+   `name` is the name shown in the App; `icon` is `server` / `laptop` / `desktop`. `remote_bin` is the path of `personad` on that computer; when omitted the hub uses `~/.persona/bin/personad` (the canonical binary the deploy script installs); set it if installed elsewhere. It may be a wrapper script that sets the node's environment and runs personad; **Redeploy** over ssh does not replace a script, so update the personad it runs by hand ([node-update.md](node-update.md) "Usage").
    Whose assistant it is and what it should know (`assistant.owner`, `assistant.notes`) go into the built-in manager's `~/.persona/managers/assistant/manager.json` (make it, 0600, if it isn't there yet; see "manager.json" below). For direct public access add `public.tls_listen` and `public.advertise` and open the TLS port per the [network doc](network.md); keep `public_url` as a reachable private-network address.
 
 4. **Restart the hub so it reads the new config**: `./scripts/deploy/deploy.sh <hub machine id>` (or `systemctl --user restart personad` on the hub machine).
@@ -155,6 +156,7 @@ No `ssh_host`, and no SSH setup on the hub. The SSH setup in steps 1–6 above s
 | `app.carplay_voice` | Boolean, default `false`: enabling adds the CarPlay voice-conversation entitlement (`com.apple.developer.carplay-voice-based-conversation`) to signing, making Persona visible in the car. Apply to Apple first and enable it on the App ID after approval; do not enable before approval or signing fails. `scripts/persona_config.py xcconfig` generates `apple/PersonaOptIn.entitlements` and writes `PERSONA_APP_ENTITLEMENTS` (see `docs/apple/carplay.md`) |
 | `app.health_background_delivery` | Boolean, default `false`: enabling adds the HealthKit background delivery entitlement (`com.apple.developer.healthkit.background-delivery`) to signing and sets Info.plist `PersonaHealthBackgroundDelivery` (`PERSONA_HEALTH_BACKGROUND_DELIVERY`), so a workout report comes right after the workout is saved to Health, even while Persona is closed. Enable it only after the App ID's provisioning profile allows the entitlement, or signing fails or the export drops it; `scripts/release/entitlements.py check` reports a release without it. Off: reports come when Persona is next opened (see `docs/assistant/health.md`, "Automatic workout reports (iOS)") |
 | `app.homekit` | Boolean, default `false`: enabling adds the HomeKit entitlement (`com.apple.developer.homekit`) to the generated `apple/PersonaOptIn.entitlements` and writes `PERSONA_HOMEKIT = YES` (Info.plist `PersonaHomeKit`), which turns on the Home source and its tools (`docs/apple/phone-tools.md`, "iPhone system integrations"). Turn the HomeKit capability on for the App ID (and regenerate the provisioning profiles) first, or signing fails |
+| `app.siri_calls` | Boolean, default `false`: "Call Persona using Persona" through SiriKit (`docs/apple/siri.md` ("Calling Persona")). Enabling makes `persona_config.py env` export `PERSONA_SIRI_CALLS=YES`, so xcodegen merges `apple/siri-calls.yml` (the Intents extension `PersonaCallIntents`, bundle ID `<app.bundle_id>.callintents`; the app signed with `apple/PersonaSiriCalls.entitlements`, its entitlements plus Siri's `com.apple.developer.siri`, written by xcodegen and git-ignored; `NSSiriUsageDescription` added to the built Info.plist; Siri's example phrases `AppIntentVocabulary.plist` in en, zh-Hans and ja). No tracked file is rewritten, so a release worktree stays clean. `xcconfig` lists the entitlement in `apple/PersonaOptIn.entitlements` too; `scripts/release/asc_signing.py` asks for `SIRIKIT` on the App ID and the extension's App ID and "Persona Call Intents App Store" profile, and the export options name that profile. Prepare the account first (`docs/operations/release.md` ("Siri calls")): turned on before, the release preflight (`asc_signing.py --check`) stops the release. Off, the project, the signing preflight and the release are unchanged. The App Shortcut "Call Persona" needs none of this |
 | `app.meta_wearables` | Meta glasses (`docs/apple/meta-glasses.md`): when `enabled` is true, `persona_config.py env` exports `PERSONA_META_WEARABLES=YES`, and only then does xcodegen merge `apple/meta-wearables.yml` (Meta's DAT SDK and the Info.plist keys it needs) into the project; `app_id` and `client_token` are the app's ID and Client Token from the Wearables Developer Center, written to `PERSONA_META_APP_ID` and `PERSONA_META_CLIENT_TOKEN` in `Config.xcconfig`; they can be left empty while the glasses are in Developer Mode (`app_id` 0). Off by default: it needs Xcode 26.4 or later, and carries risk in external TestFlight / App Store review |
 | `app.tunnel_core` | Directory containing the in-App tunnel core (`libpersonatunnel.a`, `module.modulemap`, headers; [network.md](network.md) ("Connecting to hub through an in-app tunnel")). Only when set does it write `PERSONA_TUNNEL_INCLUDE` and `PERSONA_TUNNEL_LDFLAGS` into `Config.xcconfig`; only hardware builds link it. Missing files cause `xcconfig` to fail immediately. Omitted means no in-App tunnel |
 | `app_store.*` | For `release.sh` / `asc*.py` (`asc_cli.py` hands them to the App Store Connect CLI, `docs/operations/release.md` ("Releasing with asc")): the API key (`key_id`, `issuer_id`, `key_path`), the App record's numeric ID, internal testers, the TestFlight feedback email; `external` is external testing (group name, public link switch and tester limit (`public_link_limit`, 0 means unlimited), privacy policy URL, extra testers invited by email, Beta App Review contact and notes, `docs/operations/release.md`). Env vars such as `ASC_KEY_ID` can still override (key file path `ASC_KEY_PATH` or `ASC_PRIVATE_KEY_PATH`) |
@@ -282,6 +284,12 @@ The sections that are a manager's (whose assistant it is, `ai`, `agents`, `inbox
   aliases / functions in `~/.zshrc` and Persona-managed launchers keep their own settings. This directory is also added automatically to the session-search directories above. The node must also be this version; manual hub.json edits require a hub restart and take effect on reconnect.
 - `machines[].inbox_dir` (optional): this computer's **receive folder**, where files sent to it to keep land (from the phone with `dest=inbox`, and from another computer through `POST /api/v1/files/transfer`), e.g. `"~/Inbox"` (`~/` is that machine's home) or an absolute folder in the home.
   Omitted means `~/Downloads/Persona`. The node makes it when missing and refuses a folder the phone may not write to (outside the home, `~/.persona`, `~/Library`, key folders, links out of the home: 409 `read_only`), so a typo never creates a folder elsewhere ([file-transfer.md](../protocol/file-transfer.md)). Manual hub.json edits require a hub restart.
+- `machines[].extra_path` (optional): directories this computer's node puts in front of its PATH, for tools a service's PATH (launchd, systemd, an ssh session) does not have,
+  e.g. `["~/.cargo/bin", "/opt/tools/bin"]` (`~/` is that machine's home; other relative entries and `$VARIABLES` are ignored). The node also adds the shims directories of mise
+  (`$MISE_DATA_DIR`, else `$XDG_DATA_HOME/mise`, else `~/.local/share/mise`) and asdf (`$ASDF_DATA_DIR`, else `~/.asdf`) that exist, after the rest of its PATH, by itself: a repository whose `git-lfs` comes from mise
+  gets its worktrees without any setting (#10127). Both reach the herdr server the node starts too, after the system directories its login shell starts from
+  (`docs/integrations/engines.md` ("When herdr is not running")); a server already running keeps its PATH until it restarts. The node reads them itself, so no service file holds them
+  and rerunning `personad hub setup` or `node-launchd.sh install` keeps them. The node must also be this version; manual hub.json edits require a hub restart and take effect on reconnect.
 - `machines[].botmux` (optional): false means this computer's node neither lists botmux sessions nor runs botmux (no `botmux observe`, `botmux dashboard current`);
   omitted means the old behavior, listing sessions if botmux is installed (`docs/integrations/engines.md` ("botmux")). The node must also be this version; manual hub.json edits require a hub restart and take effect on reconnect.
   It is now only a default: "Also Show botmux Sessions" in machine details (the web in the page header, iOS under "Engine") is stored per machine in settings (`botmux/<machine id>`) and wins once set (#2575).
@@ -418,7 +426,7 @@ A manager's own sections of the configuration are in its `manager.json`, not in 
   The knowledge base belongs to the manager, which reads the whole section here (`ai` included: it is the default of its `kb.*` model purposes);
   an assistant run elsewhere (`assistant.external`) reads the `manager.json` on its own machine, and its `extra_dirs` are paths there (`docs/assistant/knowledge.md` ("Who owns what")).
 - `agents.triage`: triage after a round stops ([agent-work.md](../assistant/agent-work.md) ("Switches")). Switches are under **Settings › Session Triage** in the App (stored in the manager's settings, all off by default but `transient_retry`),
-  and only limits live here: `max_retries` (maximum consecutive automatic continuations after transient errors, default 5), `retry_base_seconds` (the first continuation's backoff, doubled for each next one, default 15), `max_wakes` (maximum wakes, default 6), `settle_seconds` (delay after stopping before triage, default 15);
+  and only limits live here: `max_retries` (maximum consecutive automatic continuations after transient errors, default 5), `retry_base_seconds` (the first continuation's backoff, doubled for each next one, default 15), `max_wakes` (maximum wakes, default 6), `settle_seconds` (delay after stopping before triage, default 15), `just_finished_hours` (how long a done turn nobody has seen stays Just finished in the Agents lists, default 3; `docs/protocol/agent-states.md` ("Just finished"));
   `enabled` / `auto_continue` / `wake` / `decide` / `tool_loop` / `closeout` / `closeout_ask` / `transient_retry` are merely initial values if never saved in the App (omitted means off, but `transient_retry` on). Triage is done by the manager (assistant process), which reads this section here; for hand edits see **Edits** above.
 - `agents.launcher_health`: launcher health checks and automatic repair ([launcher-health.md](../server/launcher-health.md)): `enabled` (off by default; true enables periodic checks and automatic repair), `interval_minutes` (default 30),
   `repair` (repair Agent: no `skill` means no repair Agent, only CLI upgrades; `machine` defaults to the assistant's computer, `cwd` to home, `launcher` to an available one, `permission` is the permission mode, default `bypassPermissions`).
@@ -564,6 +572,40 @@ configuration and credentials in the private profiles; do not copy existing hist
 activation, verify the installed binary's version, checksum and `personad manager capabilities --json`, the four service
 environment values, durable ownership and the actual derived directory. After activation, verify a reply and a harmless
 Persona tool call through the dedicated node, then switch between both assistants and inspect both histories.
+
+## A local external model adapter
+
+An advanced, optional node integration can reuse connections managed by a local program. Set
+`PERSONA_LAUNCHER_ADAPTER_CONFIG` only in that node service's startup environment to the absolute path of a private
+JSON configuration file. With no value, no adapter file or executable is searched for. This is local configuration,
+not hub state: the hub, manager configuration messages and clients cannot register executable commands.
+
+```json
+{
+  "version": 1,
+  "id": "example",
+  "command": ["/absolute/path/to/interpreter", "/absolute/path/to/adapter-entry", "integration"],
+  "native_program": "/absolute/path/to/claude"
+}
+```
+
+Use a stable `id`. `command` is an argument array, not a shell command; the first entry and `native_program` must be
+trusted absolute executable paths. A compiled adapter can use a one-element command array. Interpreter-based tools
+must name their interpreter explicitly rather than depend on a service finding it through an `env` shebang.
+Keep the configuration 0600 in a directory other users cannot modify; symlink configuration files and unsafe owners
+or write permissions are rejected. The command and native executable are validated on this computer, never supplied
+by a model inventory or request. Restart that node to load a changed registry; no installer or production service
+configuration is changed automatically.
+
+The first supported use is an explicit main-chat model pick on POSIX using the Claude Code CLI without a required
+agent sandbox. Unsupported execution methods and sandbox combinations fail before the agent starts, without
+changing the policy. This source cannot become a global default, profile/tier, background-task model or coding Agent
+launcher. Existing connections and their defaults are unchanged. If a saved pick names a disabled adapter, restore
+that local configuration or reset the main chat's pick; Persona does not choose another connection silently.
+
+The inventory is sanitized metadata. Connection credentials stay on the executing computer; a bootstrap may use a
+0600 temporary settings file in a 0700 directory, removed at process exit or forced stop. Full protocol, cache and
+lifecycle rules: `docs/integrations/launchers.md` ("External model adapters").
 
 ## DDNS (public.ddns)
 

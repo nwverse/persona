@@ -23,7 +23,16 @@ export interface BotFeatures {
   answer_new_card?: boolean;
 }
 
+export interface BotTopicChat {
+  chat_id: string;
+  name?: string;
+  home?: boolean;
+  require_owner_mention?: boolean;
+  added_at?: number;
+}
+
 export interface FeishuBotStatus {
+  topic_chats?: BotTopicChat[];
   enabled: boolean;
   app_id: string;
   /** The open platform's URL the hub resolved (feishu / lark / a custom one). */
@@ -43,6 +52,8 @@ export interface FeishuBotStatus {
   agents?: { title: string; machine_id: string; session_id: string }[] | null;
   /** Minutes an unanswered card waits before the one nudge under it, 0 off (#6084); a hub from before leaves it out (60). */
   nudge_after?: number;
+  source_report_delay_minutes?: number;
+  source_report_full_reply?: boolean;
   larkcli?: LarkCLIStatus;
 }
 
@@ -64,6 +75,7 @@ export interface LarkCLIStatus {
 
 /** The edit sent to PUT: only what is set changes. */
 export interface FeishuBotUpdate {
+  topic_chats?: BotTopicChat[];
   enabled?: boolean;
   app_id?: string;
   app_secret?: string;
@@ -71,6 +83,8 @@ export interface FeishuBotUpdate {
   /** The switches to change: the hub merges them over its own (a hub before 0.1.12 replaces them all, see `featureEdit`). */
   features?: Partial<BotFeatures>;
   nudge_after?: number;
+  source_report_delay_minutes?: number;
+  source_report_full_reply?: boolean;
   larkcli_profile?: string;
 }
 

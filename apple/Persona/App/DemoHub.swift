@@ -200,6 +200,8 @@ final class DemoHub {
             }), "step": 60]
         case ["sessions"]: return ["sessions": .array(sessions)]
         case ["usage", "windows"]: return Self.usageWindows()
+        case ["usage", "days"]: return Self.usageDays(min(max(Int(q["days"] ?? "") ?? 140, 1), 371))
+        case ["usage", "hours"]: return usageHours(min(max(Int(q["days"] ?? "") ?? 7, 1), 7))
         case ["interactions"]: return ["interactions": .array(interactions)]
         case ["interactions", "history"]: return ["interactions": .array([])]
         case ["auth", "tokens"]: return ["tokens": .array(tokens), "current": "dev_phone"]
@@ -256,7 +258,7 @@ final class DemoHub {
             case "dirs":
                 guard online(id) else { throw APIError(status: 503, message: "\(id): machine is offline") }
                 return data["dirs"] ?? .object([:])
-            case "claude-settings", "codex-settings": return ["settings": .array([])]
+            case "claude-settings", "codex-settings", "agy-settings": return ["settings": .array([])]
             case "claude-dirs": return claudeDirsState(id)
             case "claude-live-replies": return ["on": .bool(liveReplies[id] ?? true)]
             #if os(macOS)
@@ -884,6 +886,88 @@ final class DemoHub {
         ["in": .number(Double(t.input)), "cache_write": .number(Double(t.cacheWrite)), "cache_read": .number(Double(t.cacheRead)),
          "out": .number(Double(t.output)), "req": .number(Double(t.requests))]
     }
+
+    /// A made-up day of every computer's tokens for the token calendar (#9506), fixed by its date: quieter weekends, a
+    /// few days off, busier lately, cache reads most of it; `part` of it for today.
+    private static func usageDay(_ day: Date, part: Double = 1) -> UsageTokens {
+        let cal = Calendar.current
+        let n = UInt64(max(0, Int(day.timeIntervalSince1970 / 86400)))
+        var x = n &* 0x9E37_79B9_7F4A_7C15
+        x ^= x >> 29
+        x = x &* 0xBF58_476D_1CE4_E5B9
+        x ^= x >> 32
+        let h = Double(x % 10_000) / 10_000
+        guard h >= 0.08 else { return UsageTokens() }
+        let ago = Double(cal.dateComponents([.day], from: day, to: .now).day ?? 0)
+        let weekend = cal.isDateInWeekend(day) ? 0.3 : 1
+        let total = weekend * (0.45 + 0.55 * max(0, 1 - ago / 150)) * pow(h, 1.7) * 6e9 * part
+        return UsageTokens(input: Int64(total * 0.0006), cacheWrite: Int64(total * 0.031), cacheRead: Int64(total * 0.9642),
+                           output: Int64(total * 0.0042), requests: Int(total / 2.5e6))
+    }
+
+    /// GET /api/v1/usage/days: the last n days in the phone's zone, the last today so far.
+    private static func usageDays(_ n: Int) -> JSONValue {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: .now)
+        let part = Date.now.timeIntervalSince(today) / 86400
+        let days: [JSONValue] = (0..<n).reversed().compactMap { i in
+            guard let d = cal.date(byAdding: .day, value: -i, to: today) else { return nil }
+            var o = json(usageDay(d, part: i == 0 ? part : 1))
+            o["date"] = .string(TokenCalendarLayout.key(d, cal))
+            return .object(o)
+        }
+        return ["usage": ["zone": .string(TimeZone.current.identifier), "days": .array(days), "stored": true]]
+    }
+
+    /// GET /api/v1/usage/hours: the last n days by the hour (busy afternoons and evenings), each computer's share.
+    private func usageHours(_ n: Int) -> JSONValue {
+        let cal = Calendar.current
+        let start = cal.date(byAdding: .day, value: -(n - 1), to: cal.startOfDay(for: .now)) ?? .now
+        var hours: [JSONValue] = []
+        var total = UsageTokens()
+        var t = start
+        while t <= .now {
+            let hour = cal.component(.hour, from: t)
+            let shape = (8...23).contains(hour) ? max(0, sin(Double.pi * Double(hour - 8) / 16)) : 0.03
+            let f = shape * (0.6 + 0.8 * Double((hour * 37 + cal.component(.day, from: t) * 11) % 10) / 10) / 11
+            let w = Self.usageDay(cal.startOfDay(for: t))
+            let row = UsageTokens(input: Int64(Double(w.input) * f), cacheWrite: Int64(Double(w.cacheWrite) * f),
+                                  cacheRead: Int64(Double(w.cacheRead) * f), output: Int64(Double(w.output) * f),
+                                  requests: Int(Double(w.requests) * f))
+            total = total + row
+            var o = Self.json(row)
+            o["t"] = .number(t.timeIntervalSince1970)
+            o["date"] = .string(TokenCalendarLayout.key(t, cal))
+            o["hour"] = .number(Double(hour))
+            hours.append(.object(o))
+            t = t.addingTimeInterval(3600)
+        }
+        let weights = Self.usageMix.mapValues { $0.scale }
+        let all = weights.values.reduce(0, +)
+        let shares: [JSONValue] = machines.compactMap { m -> (Double, JSONValue)? in
+            guard let id = m["id"]?.string, let w = weights[id] else { return nil }
+            let f = w / all
+            var o = Self.json(UsageTokens(input: Int64(Double(total.input) * f), cacheWrite: Int64(Double(total.cacheWrite) * f),
+                                          cacheRead: Int64(Double(total.cacheRead) * f), output: Int64(Double(total.output) * f),
+                                          requests: Int(Double(total.requests) * f)))
+            o["id"] = .string(id)
+            o["name"] = m["name"] ?? .string(id)
+            return (w, .object(o))
+        }.sorted { $0.0 > $1.0 }.map { $0.1 }
+        // Each agent's share (#9984), largest first; "" is usage kept before the hub counted agents apart.
+        let agents: [JSONValue] = Self.usageAgentMix.map { agent, f in
+            var o = Self.json(UsageTokens(input: Int64(Double(total.input) * f), cacheWrite: Int64(Double(total.cacheWrite) * f),
+                                          cacheRead: Int64(Double(total.cacheRead) * f), output: Int64(Double(total.output) * f),
+                                          requests: Int(Double(total.requests) * f)))
+            o["agent"] = .string(agent)
+            return .object(o)
+        }
+        return ["usage": ["zone": .string(TimeZone.current.identifier), "hours": .array(hours), "machines": .array(shares),
+                          "agents": .array(agents), "total": .object(Self.json(total)), "stored": true]]
+    }
+
+    /// The agents' shares of the demo's usage, largest first.
+    private static let usageAgentMix: [(String, Double)] = [("claude", 0.62), ("codex", 0.21), ("opencode", 0.08), ("pi", 0.05), ("", 0.04)]
 
     /// GET /api/v1/machines/{id}/usage, like the manager's.
     private func usage(_ mid: String, range: String, model: String?, launcher: String?) -> JSONValue {

@@ -44,10 +44,7 @@ struct ReviewPage: View {
             .navigationTitle(Text("Review Changes"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button { dismiss() } label: { Text("Close").lineLimit(1) }
-                        .accessibilityIdentifier("review.close")
-                }
+                SheetClose(id: "review.close") { dismiss() }
                 ToolbarItem(placement: .principal) { title }
             }
             .safeAreaInset(edge: .bottom) { bottomBar }
@@ -57,7 +54,7 @@ struct ReviewPage: View {
             if change.git, review.review != nil { review.stale = true }
         }
         .sheet(isPresented: $finishing) { finishSheet }
-        .confirmationDialog(Text("Delete the review's \(review.drafts.count) comments?"), isPresented: $confirmDiscard, titleVisibility: .visible) {
+        .accessibleConfirmationDialog(Text("Delete the review's \(review.drafts.count) comments?"), isPresented: $confirmDiscard, titleVisibility: .visible) {
             Button(role: .destructive) {
                 review.drafts = []
                 finishing = false
@@ -139,7 +136,7 @@ struct ReviewPage: View {
             .navigationTitle(Text("Pick a Commit"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button { pickingCommit = false } label: { Text("Cancel").lineLimit(1) } }
+                SheetClose { pickingCommit = false }
             }
             .overlay { commitsState }
         }
@@ -439,7 +436,7 @@ struct ReviewPage: View {
             .navigationTitle(Text("Finish Review"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button { finishing = false } label: { Text("Cancel").lineLimit(1) } }
+                SheetClose { finishing = false }
             }
         }
         .presentationDetents([.medium, .large])

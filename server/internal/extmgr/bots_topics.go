@@ -38,16 +38,20 @@ type BotChat struct {
 	ChatID string `json:"chat_id"`
 	Name   string `json:"name,omitempty"` // a label the app may set; the command in the chat leaves it empty
 	// Home marks the home topic group (#6146): where a request from a group that is not opted in opens its topic. At
-	// most one chat has it; with none marked, the first one opted in is the home (homeChat).
-	Home bool      `json:"home,omitempty"`
-	At   time.Time `json:"at"`
+	// most one chat has it; with none marked, the first legacy enrollment is the home (homeChat).
+	Home                bool `json:"home,omitempty"`
+	RequireOwnerMention bool `json:"require_owner_mention,omitempty"`
+	// Strict enrollments never acquire an implicit home, even after their policy is reversed.
+	ExplicitHomeOnly bool      `json:"explicit_home_only,omitempty"`
+	At               time.Time `json:"at"`
 }
 
 type botChatView struct {
-	ChatID  string `json:"chat_id"`
-	Name    string `json:"name,omitempty"`
-	AddedAt int64  `json:"added_at"`
-	Home    bool   `json:"home,omitempty"` // the home topic group, marked or by being the first
+	ChatID              string `json:"chat_id"`
+	Name                string `json:"name,omitempty"`
+	AddedAt             int64  `json:"added_at"`
+	Home                bool   `json:"home,omitempty"` // the effective home topic group
+	RequireOwnerMention bool   `json:"require_owner_mention"`
 }
 
 // BotAISource is a message the hub took as the owner's "@bot /ai …" in a group chat that is not opted in (#6146).
@@ -78,15 +82,17 @@ func (s FeishuBotSettings) topicChat(chatID string) bool {
 	return chatID != "" && slices.ContainsFunc(s.TopicChats, func(c BotChat) bool { return c.ChatID == chatID })
 }
 
-// homeChat is the home topic group: the one marked home, else the first one opted in; "" while none is opted in.
+// homeChat uses an explicit home, else the first legacy enrollment. A strict enrollment alone never redirects other groups.
 func (s FeishuBotSettings) homeChat() string {
 	for _, c := range s.TopicChats {
 		if c.Home {
 			return c.ChatID
 		}
 	}
-	if len(s.TopicChats) > 0 {
-		return s.TopicChats[0].ChatID
+	for _, c := range s.TopicChats {
+		if !c.ExplicitHomeOnly {
+			return c.ChatID
+		}
 	}
 	return ""
 }
@@ -150,7 +156,7 @@ func (h *Manager) topicChatsPossible(ctx context.Context, appID *string) error {
 // setTopicChats replaces the owner's list (PUT /api/v1/bots/feishu): the chats that stay keep the time they were
 // added, new ones get now. keepHome: the request said nothing about the home group, so the one the list had stays
 // (when it is still in the list). A bot with no owner has no list to keep.
-func (h *Manager) setTopicChats(ctx context.Context, want []BotChat, keepHome bool) error {
+func (h *Manager) setTopicChats(ctx context.Context, want []BotChat, keepHome bool, mentionEdits map[string]bool) error {
 	b := &h.bots
 	b.mu.Lock()
 	h.loadBotsLocked(ctx)
@@ -167,11 +173,20 @@ func (h *Manager) setTopicChats(ctx context.Context, want []BotChat, keepHome bo
 	for _, c := range want {
 		c.ChatID, c.Name = strings.TrimSpace(c.ChatID), strings.TrimSpace(c.Name)
 		c.At = b.clock().UTC()
-		if i := slices.IndexFunc(before, func(o BotChat) bool { return o.ChatID == c.ChatID }); i >= 0 {
+		existing := slices.IndexFunc(before, func(o BotChat) bool { return o.ChatID == c.ChatID })
+		if i := existing; i >= 0 {
 			c.At = before[i].At
+			c.RequireOwnerMention = before[i].RequireOwnerMention
+			c.ExplicitHomeOnly = before[i].ExplicitHomeOnly
 			if keepHome {
 				c.Home = before[i].Home
 			}
+		}
+		if required, ok := mentionEdits[c.ChatID]; ok {
+			c.RequireOwnerMention = required
+		}
+		if existing < 0 {
+			c.ExplicitHomeOnly = c.RequireOwnerMention
 		}
 		next = append(next, c)
 	}
@@ -181,7 +196,11 @@ func (h *Manager) setTopicChats(ctx context.Context, want []BotChat, keepHome bo
 	}
 	b.set.TopicChats = next
 	if len(records) > 0 || !slices.EqualFunc(before, next, func(a, b BotChat) bool { return a == b }) {
-		h.saveBotSettingsLocked()
+		if err := h.saveBotSettingsLocked(); err != nil {
+			b.set.TopicChats = before
+			b.mu.Unlock()
+			return err
+		}
 	}
 	b.mu.Unlock()
 	h.auditBot(ctx, records...)
@@ -270,6 +289,13 @@ func (h *Manager) botGroupMessage(api *feishubot.Client, set FeishuBotSettings, 
 	msg := ev.Message
 	if set.Owner == nil || ev.Sender.SenderID.OpenID != set.Owner.OpenID || msg.ChatID == "" {
 		return // not paired, or not the owner: in a group anyone could write to the owner's Persona
+	}
+	// Apply the group's current policy before settings commands or any topic side effect.
+	if i := slices.IndexFunc(set.TopicChats, func(c BotChat) bool { return c.ChatID == msg.ChatID }); i >= 0 && set.TopicChats[i].RequireOwnerMention {
+		botID := h.botOpenID(api)
+		if botID == "" || !slices.ContainsFunc(msg.Mentions, func(m feishubot.Mention) bool { return m.ID.OpenID == botID }) {
+			return
+		}
 	}
 	if msg.MessageType == "text" || msg.MessageType == "post" {
 		content := feishubot.ParseContent(msg.MessageType, msg.Content, msg.Mentions)
@@ -364,12 +390,12 @@ func (h *Manager) botOpenID(api *feishubot.Client) string {
 // useAISourceReply counts a reply under the source (at most botSourceReplies) before it is made: false when it has had
 // them all (or is gone), and then nothing is sent. A reply that fails still counts: the bot does not keep writing under
 // a message in a group it is not in charge of.
-func (h *Manager) useAISourceReply(messageID string) bool {
+func (h *Manager) useAISourceReply(messageID string, fullReply bool) bool {
 	b := &h.bots
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	src := b.set.aiSource(messageID, b.clock().UTC())
-	if b.set.Owner == nil || src == nil || src.Replies >= botSourceReplies {
+	if b.set.Owner == nil || src == nil || src.Replies >= botSourceReplies || fullReply && !b.set.SourceReportFullReply {
 		return false
 	}
 	src.Replies++
@@ -397,19 +423,20 @@ func (h *Manager) takeAISource(chatID, messageID string) {
 }
 
 // errBotSourceReply: a reply under a message taken through /ai that the bot may not write.
-var errBotSourceReply = &rpc.Error{Code: assistantwire.CodeChatDenied, Message: "feishu: under a message taken through /ai the bot may write one short text reply, in that chat"}
+var errBotSourceReply = &rpc.Error{Code: assistantwire.CodeChatDenied, Message: "feishu: the bot may only reply to the original /ai message in its chat using the configured reply format"}
 
 // aiSourceReply says whether a feishu.text is a reply to a message the hub took as the owner's "/ai" in a group that is
 // not on the list, and so may go there: found is false when replyTo is no such message (the usual rules decide). For one
-// that is, the reply must name no chat but its message's, stay short, and it is never turned into a message of the chat
-// if the original is gone (the caller sends it with no_detour). This is all that is open in such a group: a send into
+// that is, the reply must name no chat but its message's, respect the owner's full answer preference, and never detour
+// into the group if the original is gone. This is all that is open in such a group: a send into
 // it, a card, a reply to any other message, or a reply with a chat of its own is refused as ever.
-func aiSourceReply(set FeishuBotSettings, chatID, replyTo, text string, now time.Time) (chat string, found bool, err error) {
+func aiSourceReply(set FeishuBotSettings, chatID, replyTo, text string, now time.Time, fullReply bool) (chat string, found bool, err error) {
 	src := set.aiSource(replyTo, now)
 	if src == nil || set.Owner == nil {
 		return "", false, nil
 	}
-	if chatID != "" && chatID != src.ChatID || utf8.RuneCountInString(text) > botSourceTextMax {
+	if chatID != "" && chatID != src.ChatID || !fullReply && utf8.RuneCountInString(text) > botSourceTextMax ||
+		fullReply && !set.SourceReportFullReply {
 		return "", true, errBotSourceReply
 	}
 	return src.ChatID, true, nil

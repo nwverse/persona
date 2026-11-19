@@ -5,7 +5,7 @@
 // Each change goes to the hub at once and the page shows what the hub answered; a failed one leaves it as it was.
 import { BindSteps, ChannelLink } from "./Channels";
 import { Disclosure } from "./ProviderFields";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { errorText } from "../../lib/api";
 import { connectorState, connectorSummary, signsInHere, connectorTone, isEnabled, larkcliOptions, listConnectors, setConnector, type ConnectorTone, type HubConnector } from "../../lib/connectors";
 import { t } from "../../i18n";
@@ -13,13 +13,15 @@ import { ago } from "../../lib/format";
 import { documentPage, visiblePoll } from "../../lib/visible-poll";
 import {
   botStateText, botStatus, botSummary, botTone, credentialsChanged, credentialsOf, credentialsUpdate, DEFAULT_FEATURES, DEFAULT_NUDGE_AFTER, livePairing, nudgeChoices, nudgeLabel, pairBot, pairingLeft,
-  featureEdit, testBot, unpairBot, updateBot, type BotCredentials, type BotFeatures, type FeishuBotStatus,
+  featureEdit, testBot, unpairBot, updateBot, type BotCredentials, type BotFeatures, type FeishuBotStatus, type BotTopicChat,
 } from "../../lib/feishu-bot";
 import { Button, copyText, cx, Dialog, IconButton, Spinner, toast } from "../../ui/atoms";
 import { BrandMark } from "../../ui/BrandMark";
 import { Icon, type IconName } from "../../ui/icons";
-import { Group, Pill, Row, Switch } from "./SettingsParts";
+import { Group, Pill, Row, Switch, settingsInputClass } from "./SettingsParts";
 import { SignInSteps } from "./HubConnector";
+
+const SOURCE_REPORT_DELAYS = [0, 1, 2, 5, 10, 15, 30, 60];
 
 const controlClass = "h-8 rounded-control bg-field px-2.5 text-[12.5px] text-ink shadow-inset-field outline-none focus:shadow-[inset_0_0_0_1px_var(--accent)]";
 const dotClass = { green: "bg-green", red: "bg-red", orange: "bg-orange" } as const;
@@ -160,6 +162,9 @@ function FeishuBotDialog({ bot, larkcli, onClose, onOpen }: { bot: ReturnType<ty
   const pairing = livePairing(status, now);
   const features = status?.features ?? DEFAULT_FEATURES;
   const nudgeAfter = status?.nudge_after ?? DEFAULT_NUDGE_AFTER;
+  const reportDelay = status?.source_report_delay_minutes;
+  const fullReply = status?.source_report_full_reply;
+  const fullReplyDetail = useId();
   // Read at answer time, not when the request (or the pairing poll) started: typing meanwhile must count.
   const changedRef = useRef(changed);
   changedRef.current = changed;
@@ -359,6 +364,8 @@ function FeishuBotDialog({ bot, larkcli, onClose, onOpen }: { bot: ReturnType<ty
             )}
           </Group>
 
+          {status.owner && <TopicGroups status={status} saving={saving} save={(topic_chats) => run(t("settings-feishubot.save_failed"), () => updateBot({ topic_chats }))} />}
+
           <Group title={t("settings-feishubot.features")} footer={t("settings-feishubot.features_footer")}>
             {FEATURES.filter((f) => (f.key !== "report_steps" && f.key !== "answer_new_card") || features[f.key] !== undefined).map((f) => {
               // "All cards" needs "cards"; "only conclusions" needs task progress, without which the hub sends no conclusions either,
@@ -400,6 +407,38 @@ function FeishuBotDialog({ bot, larkcli, onClose, onOpen }: { bot: ReturnType<ty
                 ))}
               </select>
             </div>
+            {fullReply !== undefined && (
+              <div className="flex items-start gap-3 px-4 py-2.5">
+                <Icon name="chat" size={15} className="mt-0.5 shrink-0 text-accent" />
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm text-ink">{t("settings-feishubot.source_report_full_title")}</div>
+                  <div id={fullReplyDetail} className="mt-0.5 text-xs leading-snug text-ink-3">{t("settings-feishubot.source_report_full_detail")}</div>
+                </div>
+                <Switch on={fullReply} disabled={saving} describedBy={fullReplyDetail} label={t("settings-feishubot.source_report_full_title")} onChange={(on) => void run(t("settings-feishubot.save_failed"), () => updateBot({ source_report_full_reply: on }))} />
+              </div>
+            )}
+            {reportDelay !== undefined && (
+              <div className="flex items-start gap-3 px-4 py-2.5">
+                <Icon name="clock" size={15} className="mt-0.5 shrink-0 text-accent" />
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm text-ink">{t("settings-feishubot.source_report_delay_title")}</div>
+                  <div className="mt-0.5 text-xs leading-snug text-ink-3">{t("settings-feishubot.source_report_delay_detail")}</div>
+                </div>
+                <select
+                  value={reportDelay}
+                  disabled={saving}
+                  aria-label={t("settings-feishubot.source_report_delay_title")}
+                  onChange={(e) => void run(t("settings-feishubot.save_failed"), () => updateBot({ source_report_delay_minutes: Number(e.target.value) }))}
+                  className={cx(controlClass, "min-h-11 shrink-0")}
+                >
+                  {[...new Set([...SOURCE_REPORT_DELAYS, reportDelay])].sort((a, b) => a - b).map((minutes) => (
+                    <option key={minutes} value={minutes}>
+                      {minutes === 0 ? t("settings-feishubot.source_report_delay_now") : t("settings-feishubot.source_report_delay_minutes", { minutes })}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
           </Group>
         </>
       )}
@@ -613,6 +652,54 @@ function LarkReadSection({ connector, status, waitsForApp, autoStart, reload, on
         </Row>
       )}
       <Row label={t("settings-feishubot.read_more")} hint={t("settings-feishubot.read_more_hint")} onClick={onOpen} />
+    </Group>
+  );
+}
+
+
+/** Group policies use the same acknowledged save as the other bot settings. */
+function TopicGroups({ status, saving, save }: { status: FeishuBotStatus; saving: boolean; save: (groups: BotTopicChat[]) => Promise<boolean> }) {
+  const groups = status.topic_chats ?? [];
+  const [adding, setAdding] = useState(false);
+  const [chatID, setChatID] = useState("");
+  const [name, setName] = useState("");
+  const [strict, setStrict] = useState(false);
+  const add = async () => {
+    if (await save([...groups, { chat_id: chatID.trim(), name: name.trim(), require_owner_mention: strict }])) {
+      setAdding(false);
+      setChatID("");
+      setName("");
+      setStrict(false);
+    }
+  };
+  return (
+    <Group title={t("settings-feishubot.topic_groups")} footer={t("settings-feishubot.topic_policy_footer")} anchor="topic-groups">
+      <Row label={t("settings-feishubot.topic_home")} hint={t("settings-feishubot.topic_home_hint")} wrapHint stackOnNarrow>
+        <select aria-label={t("settings-feishubot.topic_home")} className={settingsInputClass} disabled={saving || !groups.length} value={groups.find((g) => g.home)?.chat_id ?? ""}
+          onChange={(e) => void save(groups.map((g) => ({ ...g, home: g.chat_id === e.target.value })))}>
+          <option value="">{t(groups.some((g) => g.home) ? "settings-feishubot.topic_home_default" : "settings-feishubot.topic_home_none")}</option>
+          {groups.map((g) => <option key={g.chat_id} value={g.chat_id}>{g.name || g.chat_id}</option>)}
+        </select>
+      </Row>
+      {groups.map((g) => (
+        <Row key={g.chat_id} label={g.name || g.chat_id} hint={t("settings-feishubot.topic_owner_mention")} wrapHint>
+          <Switch on={g.require_owner_mention ?? false} disabled={saving} label={t("settings-feishubot.topic_mention_for", { name: g.name || g.chat_id })}
+            onChange={(required) => void save(groups.map((item) => item.chat_id === g.chat_id ? { ...item, require_owner_mention: required } : item))} />
+        </Row>
+      ))}
+      {adding ? (
+        <div className="space-y-3 px-4 py-3">
+          <label className="block text-label text-ink">{t("settings-feishubot.topic_group_id")}<input className={settingsInputClass} value={chatID} disabled={saving} onChange={(e) => setChatID(e.target.value)} /></label>
+          <label className="block text-label text-ink">{t("settings-feishubot.topic_group_name")}<input className={settingsInputClass} value={name} disabled={saving} onChange={(e) => setName(e.target.value)} /></label>
+          <Row label={t("settings-feishubot.topic_owner_mention")} wrapHint>
+            <Switch on={strict} disabled={saving} label={t("settings-feishubot.topic_owner_mention")} onChange={setStrict} />
+          </Row>
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button disabled={saving} onClick={() => setAdding(false)}>{t("common.cancel")}</Button>
+            <Button tone="accent" busy={saving} disabled={saving || !chatID.trim() || groups.some((g) => g.chat_id === chatID.trim())} onClick={() => void add()}>{t("settings-feishubot.topic_add")}</Button>
+          </div>
+        </div>
+      ) : <div className="flex justify-end px-4 py-2.5"><Button disabled={saving || groups.length >= 50} onClick={() => setAdding(true)}>{t("settings-feishubot.topic_add")}</Button></div>}
     </Group>
   );
 }

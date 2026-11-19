@@ -9,19 +9,18 @@ import { BASE } from "./base";
 import { mainConversationMachine, clearMemoryPages, discardFeedCache, feedCacheScope, readFeedCache } from "./feed-cache";
 import { useRef, useSyncExternalStore } from "react";
 import { AGENTS_PAGE_COUNTS_FEATURE, agentsChanged, refreshAgentPrefs, refreshAgentSessions, resetAgents, setAgentListMode, setPersonalPageCounts } from "./agents";
-import { onRuntimeChanges, runtimeAgents, runtimeIdentity, runtimeRemoval, runtimeSessions, SESSIONS_AGENTS_ONLY_FEATURE, SESSIONS_LOOKUP_FEATURE, SESSIONS_PAGE_COUNTS_FEATURE, setRuntimePageCounts } from "./runtime-list";
+import { onRuntimeChanges, runtimeAgents, runtimeIdentity, runtimeRemoval, runtimeSessions, SESSIONS_LOOKUP_FEATURE, SESSIONS_PAGE_COUNTS_FEATURE, setRuntimePageCounts, supportsPagedAgents } from "./runtime-list";
 import { sameValue } from "./stable-lines";
 import { SESSIONS_LIST_CHANGES_FEATURE, SESSIONS_LIST_FEATURE, type ListCounts } from "./session-list";
 import { SESSIONS_HIERARCHY_FEATURE } from "./child-sessions";
 import { SESSIONS_SIDE_FOLD_FEATURE, setSideFold } from "./side-fold";
 import { applySessionDelta, SESSIONS_DELTA_FEATURE, sessionRefreshed, sessionSnapshot } from "./sessions-delta";
-import { dueMarks, heldRows, liveMarks, markOver, newMark, nextDue, unansweredMarks, type SeenMark, type SeenMarks } from "./seen-outbox";
+import { dueMarks, heldRows, liveMarks, markOver, newMark, nextDue, seenCopy, unansweredMarks, unseen, type SeenMark, type SeenMarks } from "./seen-outbox";
 import { probeEdge } from "./edge-auth";
 import { api, ApiError, CLIENT_FEATURES, CLIENT_PONG_TIMEOUT, CLIENT_PLATFORM, CLIENT_VERSION, errorText, getToken, credentialOwner, sessionPath } from "./api";
 import { helloDeviceId } from "./device-id";
 import { currentLanguage } from "../i18n";
 import type { AgentMutes } from "./agent-groups";
-import { stateOf } from "./format";
 import { timeMs } from "./times";
 import { NO_PINS, pinsOf, type AgentPins } from "./pins";
 import type { AssistantInfo, Interaction, Item, Machine, MeshHub, Session } from "./types";
@@ -36,7 +35,7 @@ import { NO_LINK, RESTARTING_MS, type ConnLink } from "./connection";
 import { unreachable } from "./shell";
 import { setOfflineProbe } from "./feedback";
 import { readDirectionTree } from "./direction-names";
-import { unnamedTaskConversations } from "./background-supervisor";
+import { unlistedConversations } from "./conversation-origins";
 import { directionTreeAwaitsHello } from "./direction-tree";
 import { configureMessageFeedback, resetMessageFeedback } from "./message-send";
 import { afterEvent, afterHello, graceUntil, isResumed, NO_CURSOR, RESTART_FAST_MS, retryDelay, shownConn, wsQuery, type Drop, type EventCursor } from "./reconnect";
@@ -253,13 +252,15 @@ function listedOver(row: Session, listed: Session): Session {
  *  hints, never `sessions` / `sessions_delta`, so nothing else moves them: the Persona sidebar and All chats kept the
  *  state of the last /assistant read, and a conversation read mid-turn kept spinning after its turn had ended until a
  *  reload, a send or opening it. Its row in the conversations and the detail kept of it (which those lists lay over
- *  them) both take the change; no other row is made or kept. */
+ *  them) both take the change; no other row is made or kept from them. A conversation the held answer does not list
+ *  (one another client made) has the answer read again instead (askAboutUnlisted, #10190). */
 function followConversations(upsert: Session[]) {
   const a = state.assistant;
   if (!a || !upsert.length) return;
   const changed = new Map<string, Session>();
   for (const row of upsert) if (row.machine_id === a.machine_id) changed.set(row.session_id, row);
   if (!changed.size) return;
+  askAboutUnlisted([...changed.values()]);
   const ids = new Set(a.conversations.map((c) => c.session_id));
   let moved = false;
   const conversations = a.conversations.map((c) => {
@@ -851,7 +852,6 @@ function onMessage(msg: Record<string, unknown>) {
   switch (msg.type) {
     case "hello": {
       receiptOwner = msg.message_send_state === 1 ? credentialOwner() : undefined;
-      helloHooks.forEach((f) => f()); // e.g. a hub that came back may serve a new web build (lib/new-version.ts)
       setCompatibilityFeatures(Array.isArray(msg.features) ? msg.features as string[] : []);
       const mesh = (msg.mesh as { hubs?: MeshHub[] } | undefined)?.hubs;
       // a hub that folds side sessions into their parent's chat (#7944): set before the features, which redraw the lists
@@ -864,10 +864,15 @@ function onMessage(msg: Record<string, unknown>) {
         hubName: typeof msg.hub_name === "string" ? msg.hub_name : "",
         mesh: Array.isArray(mesh) ? mesh : [],
       });
+      // After the state has this hello's features: a hook reads them. The desktop's registration (lib/attention-signals.ts)
+      // took an empty list for a hub without desktop_unregister and closed this socket, so a desktop app with system
+      // notifications off never got a live update after loading. Also: a hub that came back may serve a new web build
+      // (lib/new-version.ts).
+      helloHooks.forEach((f) => f());
       back();
       const summaryMode = state.features.includes(SESSIONS_LOOKUP_FEATURE);
       const rootsMode = state.features.includes(SESSIONS_HIERARCHY_FEATURE);
-      const agentsMode = state.features.includes(SESSIONS_AGENTS_ONLY_FEATURE);
+      const agentsMode = supportsPagedAgents(state.features);
       const { loaded: agentsLoaded, loading: agentsLoading, error: agentsError } = runtimeAgents.getSnapshot();
       const usedAgentsList = agentsLoaded || agentsLoading || agentsError !== null;
       if (runtimeSessions.isSummary() !== summaryMode) listedFull.clear();
@@ -895,10 +900,13 @@ function onMessage(msg: Record<string, unknown>) {
       if (!isResumed(msg)) {
         void followDirections(); // the direction tree again: a `directions` may have been missed while away
         void refresh();
-        // at once, not in a hint's window: a reconnect may have missed any number of changes (docs/lessons/web.md, #6362)
-        if (agentsMode && usedAgentsList) void runtimeAgents.load().catch(() => {});
         void refreshAgentSessions();
         void refreshAgentPrefs();
+      }
+      // Overview and attention signals need counts even when the paged sidebar is closed. Read at once when a
+      // reconnect may have missed changes, without waiting for another hint (docs/lessons/web.md, #6362).
+      if (agentsMode && (!isResumed(msg) || !runtimeAgents.getSnapshot().loaded)) {
+        void runtimeAgents.load().catch(() => {});
       }
       directionTreeAwaitsHello(false); // after followDirections started its read: those waiting share it
       break;
@@ -920,7 +928,7 @@ function onMessage(msg: Record<string, unknown>) {
     case "sessions_list":
       // A hint is not a checkpoint. Even resumed connections must check the HTTP epoch.
       runtimeSessions.invalidate();
-      if (state.features.includes(SESSIONS_AGENTS_ONLY_FEATURE)) {
+      if (supportsPagedAgents(state.features)) {
         const agentsList = runtimeAgents.getSnapshot();
         if (agentsList.loaded || agentsList.loading || agentsList.error !== null) runtimeAgents.invalidate();
       }
@@ -947,7 +955,7 @@ function onMessage(msg: Record<string, unknown>) {
     case "session": {
       const s = msg.session as Session;
       sessionsChanged(s.machine_id);
-      upsertSession(s);
+      upsertSession(s, { undelivered: true }); // the hub's whole row
       break;
     }
     case "interaction": {
@@ -1057,7 +1065,7 @@ export function savePins(pins: AgentPins): Promise<void> {
   return save("pins", "/pins", pins, pinsSaves);
 }
 
-/** "Mark all as seen": every finished-unread one of these is seen now, in one update of the list (iOS AppModel.markSeen). The
+/** "Mark all as seen": every finished one of these nobody has seen (Unread, Just finished) is seen now, in one update of the list (iOS AppModel.markSeen). The
  * hub pushes the sessions back as seen; the list does not wait for it, and each waits in the seen outbox until it does. */
 export function markSeen(list: Session[]) {
   const keys = new Set<string>();
@@ -1077,7 +1085,7 @@ export function markSeen(list: Session[]) {
     const mark = newMark(s, Date.now(), now);
     if (!mark) continue;
     marks[id] = deliverSeen(s.machine_id, s.session_id, mark);
-    changed.push({ ...s, state: "idle", seen_at: now });
+    changed.push({ ...seenCopy(s), seen_at: now });
   }
   if (!changed.length) return;
   // one update of the list: the marks and the rows they hold seen together
@@ -1120,7 +1128,11 @@ export function dropSession(mid: string, sid: string) {
   set({ sessions: { ...state.sessions, [mid]: list.filter((x) => x.session_id !== sid) } });
 }
 
-export function upsertSession(s: Session) {
+/** `opts.undelivered`: `s.undelivered` is the list (the hub's whole row, which leaves it out once none is left, or a
+ *  change of the list itself: lib/undelivered.ts and its actions). Without it an Agent's row keeps the messages held for
+ *  it (#10661): a change made from an earlier copy of the row, or a node's row, which never carries them, must not drop
+ *  them. A Persona chat's row is merged as before (#10194). */
+export function upsertSession(s: Session, opts: { undelivered?: boolean } = {}) {
   if (s.deleted) { markConversationDeleted(s.machine_id, s.session_id); return; }
   if (!availableConversation(s)) return;
   const list = state.sessions[s.machine_id] ?? [];
@@ -1128,6 +1140,9 @@ export function upsertSession(s: Session) {
   const next = i < 0 ? [...list, s] : list.map((x, j) => {
     if (j !== i) return x;
     const merged = { ...x, ...s };
+    // A Persona chat's row leaves the kept messages out once none is left (#10194): not kept from the old row then.
+    if (s.assistant) merged.undelivered = s.undelivered;
+    else if (!x.assistant) merged.undelivered = opts.undelivered ? s.undelivered : x.undelivered; // an Agent's (#10661)
     merged.background_working = s.background_working;
     merged.background_waiting = s.background_waiting;
     // An optimistic action can start from getSession's summary fallback. A later complete info response must
@@ -1140,6 +1155,7 @@ export function upsertSession(s: Session) {
       delete merged.background_tasks_count;
       delete merged.workflow_progress;
       merged.background = s.background;
+      merged.background_ended = s.background_ended;
       merged.subagents = s.subagents;
       merged.workflows = s.workflows;
     } else {
@@ -1155,20 +1171,59 @@ export function upsertSession(s: Session) {
   set({ sessions: { ...state.sessions, [s.machine_id]: next }, ...syncAssistant(s.machine_id, [s]) });
 }
 
-/** The conversations the assistant was read again for (unnamedTaskConversations): once each, whatever it answered. */
-const askedForUnnamed = new Set<string>();
+/** What became of each conversation the assistant was read again for (unlistedConversations), by the page it was read
+ *  for (pageOf: another manager's page reads its own answer): the reads so far, at most UNLISTED_TRIES; whether one is
+ *  on its way; and whether a row of it came meanwhile (archived, renamed: a state newer than that read's), in which case
+ *  another read follows it. A read that failed, was not taken or did not list it leaves it to be asked about again at
+ *  its next row (review of #10199: the hub can list a new conversation a moment after its row comes). */
+const askedForUnlisted = new Map<string, { tries: number; reading: boolean; changed: boolean }>();
+const UNLISTED_TRIES = 3;
+
+/** `rows` (of the assistant's machine) bring conversations the held answer does not list (#10190): one another client
+ *  made, or a background supervisor the hub made since (#5082). The answer is read again for them, so the conversation
+ *  comes in with everything it gives one (its manager noted for its requests, its title, its details), not as a list row
+ *  laid in by this page. */
+function askAboutUnlisted(rows: readonly Session[]) {
+  const a = state.assistant;
+  if (!a) return;
+  const page = pageOf();
+  const key = (id: string) => `${page}\u0000${id}`;
+  for (const r of rows) {
+    const e = askedForUnlisted.get(key(r.session_id));
+    if (e?.reading) e.changed = true;
+  }
+  readUnlisted(unlistedConversations(a, rows).map(key).filter((k) => {
+    const e = askedForUnlisted.get(k);
+    return !e || (!e.reading && e.tries < UNLISTED_TRIES);
+  }));
+}
+
+function readUnlisted(keys: string[]) {
+  if (!keys.length) return;
+  for (const k of keys) {
+    const e = askedForUnlisted.get(k) ?? { tries: 0, reading: false, changed: false };
+    askedForUnlisted.set(k, { tries: e.tries + 1, reading: true, changed: false });
+  }
+  // Once listed, its rows are no longer unlisted ones: only a row that came while this read was on its way reads again.
+  const settle = () => {
+    const again: string[] = [];
+    for (const k of keys) {
+      const e = askedForUnlisted.get(k);
+      if (!e) continue; // signed out meanwhile (reset)
+      e.reading = false;
+      if (e.changed && e.tries < UNLISTED_TRIES) again.push(k);
+    }
+    readUnlisted(again);
+  };
+  void refreshAssistant().then(settle, settle);
+}
 
 // The assistant's conversations are sessions on its machine too: the change that keeps the copy in `assistant`
 // current, to go with the sessions' own (one update, not two).
 function syncAssistant(mid: string, list: Session[]): Partial<State> {
   const a = state.assistant;
   if (!a || a.machine_id !== mid) return {};
-  // a background supervisor the hub made since the assistant was read (#5082): read again, so it is the built-in one
-  const unnamed = unnamedTaskConversations(a, list).filter((id) => !askedForUnnamed.has(id));
-  if (unnamed.length) {
-    unnamed.forEach((id) => askedForUnnamed.add(id));
-    void refreshAssistant().catch(() => {});
-  }
+  askAboutUnlisted(list);
   let changed = false;
   const convs = a.conversations.map((c) => {
     const s = list.find((x) => x.session_id === c.session_id);
@@ -1481,12 +1536,14 @@ export function patchAssistant(patch: Partial<Omit<AssistantInfo, "conversations
   if (a) set({ assistant: { ...a, ...patch } });
 }
 
-export async function refreshAssistant() {
+/** Reads the page's assistant again; true when its answer is the one in place now (not one a later answer, or another
+ *  manager's page, made old meanwhile). */
+export async function refreshAssistant(): Promise<boolean> {
   const asked = assistantAsked.ask();
   const from = pageOf();
   try {
     const a = await asked.answer;
-    if (!asked.fresh() || from !== pageOf()) return;
+    if (!asked.fresh() || from !== pageOf()) return false;
     const assistant = { ...a, conversations: (a.conversations ?? []).filter(availableConversation) };
     const scope = feedCacheScope();
     const cached = readFeedCache(scope);
@@ -1498,6 +1555,7 @@ export async function refreshAssistant() {
     for (const c of assistant.conversations) noteConversation(c.session_id, owner);
     if (assistant.main) noteConversation(assistant.main, owner);
     set({ assistant, assistantError: null });
+    return true;
   } catch (err) {
     if (asked.fresh() && from === pageOf()) {
       set({ assistantError: errorText(err) });
@@ -1570,14 +1628,14 @@ function pageInFront(): boolean {
   return typeof document === "undefined" || document.visibilityState === "visible";
 }
 
-/** Marks every viewed chat that is Unread now. `always`: an opened chat, or the page coming back to the front, tells
+/** Marks every viewed chat that is Unread (or Just finished) now. `always`: an opened chat, or the page coming back to the front, tells
  *  the hub even when this page has it seen already (another device's view, an older seen the hub lost). */
 function seeViewed(always: boolean) {
   if (!viewed.size || !pageInFront()) return;
   for (const id of viewed.keys()) {
     const [mid, sid] = JSON.parse(id) as [string, string];
     const s = getSession(mid, sid);
-    if (always || (s && stateOf(s) === "unread" && !state.seen[id])) markSeenLocally(mid, sid);
+    if (always || (s && unseen(s) && !state.seen[id])) markSeenLocally(mid, sid);
   }
 }
 
@@ -1670,6 +1728,7 @@ export function reset() {
   // a refresh() still on its way belongs to the old login too
   refreshes.applied = ++refreshes.asked;
   sessionsPushed.clear();
+  askedForUnlisted.clear(); // the conversations asked about were the old login's
   resetAgents();
   rowHints.clear();
   taskRowsAsked.clear();

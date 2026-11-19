@@ -29,6 +29,11 @@ const AdminHeader = "X-Persona-Admin"
 // RoleHeader, never the client's.
 const DeviceNameHeader = "X-Persona-Device-Name"
 
+// PersonHeader is "1" on a relayed request from a person's own full device (a device token with its own id, not the
+// hub's token or a pairing code), set by the hub like RoleHeader, never the client's: what may change a message held
+// for an Agent while its computer is away (#10661), whose delivery carries that person's provenance.
+const PersonHeader = "X-Persona-Person"
+
 // HandoffApprover is the device the hub found may approve a hand-off card (proto.SecretHandoffTool): a full device
 // whose app shows the card (docs/extensions/secret-providers.md "Who may approve a hand-off"). It travels in
 // HTTPRequest, never in a header, so no client can set it, and an older hub never sends it: a manager approves a
@@ -77,6 +82,13 @@ type ToolCall struct {
 type SessionRef struct {
 	MachineID string `json:"machine_id"`
 	SessionID string `json:"session_id"`
+}
+
+// UserSpokeParams carries text only when the hub authenticated a person's own app.
+// Keep it out of SessionRef: session references are also used as map keys.
+type UserSpokeParams struct {
+	SessionRef
+	Text string `json:"text,omitempty"`
 }
 
 // ContextParams is assistant.context's params. MachineID is the asking node's machine: the hub sets it from the

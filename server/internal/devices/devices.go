@@ -94,6 +94,9 @@ type Options struct {
 	// TailcatKey is the identity file the computers reached over tailcat trust (tunnel.LoadOrCreateHubKey); "": this
 	// machine's data directory's (tunnel.HubKeyPath).
 	TailcatKey string
+	// HeldChanged: what is held for a machine's Agents changed (held.go): its rows are published again, with
+	// HeldMessages' read anew (the assistant's publishSessions). nil: nobody draws them.
+	HeldChanged func(machine string)
 }
 
 // Devices is every computer the manager carries.
@@ -102,6 +105,7 @@ type Devices struct {
 	logf func(format string, args ...any)
 
 	transfers transfers // computer to computer file transfers running or just over (transfer.go)
+	held      heldBook  // the owner's messages held for Agents whose computer is away (held.go)
 
 	mu    sync.Mutex
 	cfg   devicewire.Config
@@ -157,6 +161,7 @@ type Devices struct {
 	ring        chan struct{}
 
 	packages nodePackages // the node builds for the machines' platforms (packages.go)
+	switches linkSwitches // the switches of ssh computers to Persona Link (link_switch.go)
 
 	metrics metricsBook // the machines' monitoring (metrics.go)
 	usage   usageBook   // their token usage (metrics.go)
@@ -215,6 +220,7 @@ func (d *Devices) Run(ctx context.Context) error {
 	d.mu.Unlock()
 	d.loadWarm(ctx)
 	d.loadPathUIDs(ctx)
+	d.restoreRuntimeUsage(ctx, time.Now())
 	go d.reportLoop(mctx)
 	go d.probeServices(mctx)
 	go d.measureLoop(mctx)
@@ -229,7 +235,12 @@ func (d *Devices) Run(ctx context.Context) error {
 	go d.usageLoop(mctx)
 	d.workers.Add(1)
 	go func() { defer d.workers.Done(); d.runShareIngestion(mctx) }()
+	// The messages held while their computers were away (held.go).
+	d.workers.Add(1)
+	go func() { defer d.workers.Done(); d.heldLoop(mctx) }()
 	go d.usageGW.run(ctx) // the account-pool gateways (usagegateways.go)
+	// A switch to Persona Link a restart left (link_switch.go).
+	go d.resumeLinkSwitches(mctx)
 	// The hub's hand-over, or after ownListWait the manager's own list (ownlist.go) until it comes.
 	wait := time.NewTimer(d.ownWait)
 	select {
@@ -607,8 +618,8 @@ func (d *Devices) BusUp() {
 // maxForward bounds one node message passed on to the hub: the bus takes 64 MiB a line, the wrapper included, and a
 // line it cannot take would drop the whole connection. The node's own lines have the same limit, so this only cuts
 // the last bytes; what is big on purpose (downloads, uploads, node updates, a port's bytes) comes in pieces of 1 MiB
-// at most.
-const maxForward = 60 << 20
+// at most. A var so tests change it.
+var maxForward = 60 << 20
 
 var errTooLarge = &rpc.Error{Code: "too_large", Message: "the node's answer is too large to pass on"}
 
@@ -632,14 +643,35 @@ func (d *Devices) forward(machine, event string, params any) {
 }
 
 // Call is devices.call: a call to a machine's node, coded for the hub (no_device, machine_offline, node_closed;
-// the node's own coded errors as they are).
+// the node's own coded errors as they are; held for a session.send that may be, held.go).
 func (d *Devices) Call(ctx context.Context, p devicewire.NodeCall) (json.RawMessage, error) {
+	out, err := d.callNode(ctx, p)
+	if err != nil {
+		return nil, wireError(err)
+	}
+	return out, nil
+}
+
+// callNode is Call with its errors as they are: a held message's delivery tells what wrote nothing apart (held.go).
+func (d *Devices) callNode(ctx context.Context, p devicewire.NodeCall) (json.RawMessage, error) {
+	if reservedOwnerControl(p.Method) {
+		return nil, errReservedOwnerControl
+	}
+	if p.Method == proto.MethodSessionSendUnseen {
+		return nil, &rpc.Error{Code: "forbidden", Message: "session.send_unseen is reserved for held-message delivery"}
+	}
 	if strings.HasPrefix(p.Method, "session.codex.takeover.") {
 		return nil, &rpc.Error{Code: "user_confirmation_required", Message: i18n.Err("codex-takeover.user_only").Error()}
 	}
 	m := d.machineByID(p.MachineID)
 	if m == nil {
 		return nil, &rpc.Error{Code: devicewire.CodeNoDevice, Message: fmt.Sprintf("no machine %q", p.MachineID)}
+	}
+	held := d.heldCallOf(ctx, m, p) // the owner's message to an Agent, kept in order or held for its computer (held.go)
+	if held != nil {
+		if err := d.holdBehind(ctx, held); err != nil {
+			return nil, err
+		}
 	}
 	if p.TimeoutMS > 0 {
 		var cancel context.CancelFunc
@@ -659,6 +691,15 @@ func (d *Devices) Call(ctx context.Context, p devicewire.NodeCall) (json.RawMess
 		if params, err = ownerInputParams(p, params); err != nil {
 			return nil, err
 		}
+	} else if carriesOwnerInput(p.Method) {
+		var err error
+		params, err = rewriteOwnerInput(params, false)
+		if err != nil {
+			return nil, err
+		}
+		if p.Method == "session.interrupt" && trustedHumanInput(p) {
+			ctx = context.WithValue(ctx, ownerControlKey{}, p.Method)
+		}
 	}
 	if refusesHandoff(p.Method, params) {
 		return nil, errHandoffRefused
@@ -672,7 +713,7 @@ func (d *Devices) Call(ctx context.Context, p devicewire.NodeCall) (json.RawMess
 	params, receipt, preparation, prepareErr = d.prepareShareCall(ctx, p, params)
 	if prepareErr != nil {
 		d.observeCreationCall(p, nil, nil, preparation, prepareErr)
-		return nil, wireError(prepareErr)
+		return nil, prepareErr
 	}
 	if refusesHandoff(p.Method, params) { // and on what actually goes (prepareShareCall re-marshals it)
 		return nil, errHandoffRefused
@@ -681,13 +722,28 @@ func (d *Devices) Call(ctx context.Context, p devicewire.NodeCall) (json.RawMess
 	if p.Method == "sessions.list" {
 		snapshot = new(sessionSnapshot)
 	}
+	modeSID, modeFrom, modeTo, recordMode := m.modeSetFrom(p, params) // the record of mode changes (mode_changes.go)
 	var out json.RawMessage
 	err := m.callWithSnapshot(ctx, p.Method, params, &out, snapshot)
+	if try, ok := ctx.Value(heldDeliveryKey{}).(*heldTry); ok {
+		try.called, try.err = true, err // a held delivery is judged on this call alone (held.go)
+	}
+	if recordMode && err == nil {
+		m.recordModeSet(p.Actor, modeSID, modeFrom, modeTo, out)
+	}
 	d.observeCreationCall(p, params, out, preparation, err)
-	d.finishShareCall(ctx, p, receipt, out, err)
+	if err != nil && held != nil && held.hold && heldMayHold(err) {
+		// Nothing was written: held until the node is back. Its share receipt waits for that delivery.
+		if herr := d.hold(ctx, held); herr != nil {
+			return nil, herr
+		}
+	}
+	if heldSettles(ctx, err) {
+		d.finishShareCall(ctx, p, receipt, out, err)
+	}
 	m.noteOpened(p.Method, params, err)
 	if err != nil {
-		return nil, wireError(err)
+		return nil, err
 	}
 	if p.Method == "sessions.list" { // the hub had the node list them again (its agent filters): the manager's list
 		var list struct {
@@ -894,12 +950,25 @@ func (d *Devices) NodeAnnounced(id, capability string) bool {
 // CallNode is a call to a machine's node from the manager itself (the assistant's device.call): errors as the
 // hub's were (apierr.ErrOffline, rpc.ErrClosed, the node's *rpc.Error).
 func (d *Devices) CallNode(ctx context.Context, id, method string, params json.RawMessage) (json.RawMessage, error) {
+	if reservedOwnerControl(method) {
+		return nil, errReservedOwnerControl
+	}
 	m := d.machineByID(id)
 	if m == nil {
 		return nil, ErrNoMachine
 	}
 	if len(params) == 0 {
 		params = json.RawMessage(`{}`)
+	}
+	if carriesOwnerInput(method) {
+		var err error
+		params, err = rewriteOwnerInput(params, false)
+		if err != nil {
+			return nil, err
+		}
+		if method == "codex.answer" && devicewire.IsOwnerAnswer(ctx) {
+			ctx = context.WithValue(ctx, ownerControlKey{}, method)
+		}
 	}
 	var out json.RawMessage
 	if err := m.call(ctx, method, params, &out); err != nil {

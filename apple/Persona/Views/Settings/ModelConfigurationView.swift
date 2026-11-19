@@ -299,7 +299,7 @@ struct ModelPurposeEditorView: View {
             await page.loadIfNeeded(purposeID: purposeID)
         }
         .task(id: listProvider) { await loadList() }
-        .confirmationDialog("Reloading discards your unsaved edits.", isPresented: $confirmReload, titleVisibility: .visible) {
+        .accessibleConfirmationDialog("Reloading discards your unsaved edits.", isPresented: $confirmReload, titleVisibility: .visible) {
             Button("Reload [Lark Chat Pins View 7bdd5c]", role: .destructive) { Task { await page.load(purposeID: purposeID) } }
         }
     }
@@ -501,9 +501,7 @@ private struct ModelConfigurationSheet: ViewModifier {
                 }
                 .navigationDestination(for: ModelPurposeRoute.self) { ModelPurposeEditorView(purposeID: $0.id, owner: owner) }
                 .pageToolbar {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button("Close") { showing = false }.lineLimit(1)
-                    }
+                    SheetClose { showing = false }
                 }
             }
             #endif

@@ -18,13 +18,16 @@ import (
 
 // probeLauncherHealth runs launchers.check for launcher on machine; false when the machine could not be asked (no result).
 func (s *Service) probeLauncherHealth(ctx context.Context, machine, launcher string) (healthResult, bool) {
+	if proto.IsExternalLauncher(launcher) {
+		return healthResult{}, false // no automatic calls to an opt-in, main-chat-only source
+	}
 	ctx, cancel := context.WithTimeout(ctx, healthCheckTimeout)
 	defer cancel()
 	observed, _ := s.launcherHealth(ctx, machine, launcher)
 	params := map[string]any{"name": launcher}
 	if observed.Kind == errKindUsageLimit && observed.unusable() {
-		if model := usageLimitModel.FindStringSubmatch(observed.Error); model != nil {
-			params["model"] = strings.ToLower(model[1])
+		if models := observed.limitModels(); len(models) > 0 {
+			params["model"] = models[0] // one family per probe; a pass clears it and the next probe asks the next
 		}
 	}
 	var res proto.LauncherCheck
@@ -32,28 +35,55 @@ func (s *Service) probeLauncherHealth(ctx context.Context, machine, launcher str
 		s.logf("launcher health: check %s on %s: %v", launcher, machine, err)
 		return healthResult{}, false
 	}
-	return healthResult{ok: res.OK, agent: res.Agent, model: res.Model, millis: res.Millis, err: res.Error, source: healthSourceCheck, observedAt: &observed.CheckedAt}, true
+	return healthResult{ok: res.OK, agent: res.Agent, model: res.Model, millis: res.Millis, err: res.Error, source: healthSourceCheck, observed: &observed}, true
 }
 
 // healthLaunchers are the launchers to check on machine: those it can start (its ~/.zshrc's, the managed ones) and
 // the default one when every machine has it (plain claude: a default only some have never starts where it isn't,
-// launcher_fit.go); not a runtime's (they are not run with a prompt) nor an API provider's.
-func (s *Service) healthLaunchers(ctx context.Context, machine string) ([]string, error) {
+// launcher_fit.go); not an API provider's. A runtime's launcher only when the main chat or Agents run on it (#10369):
+// those are in whileFailing, checked only while their record on machine says they do not work, through the runtime's
+// own launchers.check as the on-demand probe does. So a failure is rechecked and a pass clears it, but no runtime is
+// asked to spend a request each interval, and the record a pass leaves stays while the machine lists the launcher.
+func (s *Service) healthLaunchers(ctx context.Context, machine string) (names []string, whileFailing map[string]bool, err error) {
 	list, err := s.machineLaunchers(ctx, machine)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	var out []string
+	var runtimes []string
 	for _, l := range list {
-		if l.Source == "" || machineSource(l.Source) || compat.Source(l.Source) == "persona" {
-			out = append(out, l.Name)
+		switch {
+		case startableLauncher(l):
+			names = append(names, l.Name)
+		case runtimeLauncher(l):
+			runtimes = append(runtimes, l.Name)
 		}
 	}
-	if d := s.startLauncher(ctx, ""); !slices.Contains(out, d) && s.launcherEverywhere(ctx, d) {
-		out = append(out, d)
+	d := s.startLauncher(ctx, "")
+	if !slices.Contains(names, d) && s.launcherEverywhere(ctx, d) {
+		names = append(names, d)
 	}
-	return out, nil
+	for _, name := range []string{s.launcherNow(ctx), d} {
+		if slices.Contains(runtimes, name) && !slices.Contains(names, name) {
+			names = append(names, name)
+			if whileFailing == nil {
+				whileFailing = map[string]bool{}
+			}
+			whileFailing[name] = true
+		}
+	}
+	return names, whileFailing, nil
 }
+
+// runtimeLauncher: l is a runtime's launcher (DSH, Paseo, agy…: its source is the runtime's id), which the node checks
+// through the runtime. Not the desktop apps' (their check runs no prompt and always fails) nor an external source's.
+func runtimeLauncher(l proto.Launcher) bool {
+	source := compat.Source(l.Source)
+	return runtimeSource(l.Source) && source != proto.SourceClaudeDesktop && source != codexAppSource &&
+		source != proto.ExternalLauncherSource && !proto.IsExternalLauncher(l.Name)
+}
+
+// codexAppSource is the source of codex-app, a new chat in the Codex App (node/codexapp_new.go).
+const codexAppSource = "codex_app"
 
 // startLauncher is the launcher a start with launcher runs: itself, else model settings › Agents', else claude.
 func (s *Service) startLauncher(ctx context.Context, launcher string) string {
@@ -121,7 +151,7 @@ func (s *Service) healthRound(ctx context.Context, wait bool) {
 // checkMachine checks machine d's launchers that are due (only: one by that name, at once); the records of launchers
 // it no longer has go.
 func (s *Service) checkMachine(ctx context.Context, d Device, cfg healthConfig, cameOnline bool, only string) []LauncherHealth {
-	names, err := s.healthLaunchers(ctx, d.ID)
+	names, whileFailing, err := s.healthLaunchers(ctx, d.ID)
 	if err != nil {
 		s.logf("launcher health: %s: launchers: %v", d.ID, err)
 		return nil
@@ -143,8 +173,11 @@ func (s *Service) checkMachine(ctx context.Context, d Device, cfg healthConfig, 
 		if only != "" && name != only {
 			continue
 		}
+		r, ok := s.launcherHealth(ctx, d.ID, name)
+		if whileFailing[name] && !(ok && r.unusable()) {
+			continue // a runtime's launcher that works, or was never seen failing here: nothing to recheck (#10369)
+		}
 		if only == "" {
-			r, ok := s.launcherHealth(ctx, d.ID, name)
 			since := time.Since(r.CheckedAt)
 			if reset, limited := r.limitReset(); limited {
 				// A check before the reset is refused too, and spends a request for it; the first round after it
@@ -215,13 +248,18 @@ func (s *Service) healthyMachine(ctx context.Context, launcher, except string, s
 
 // launcherOn: machine has launcher (a managed one is on every machine; a failed list says no).
 func (s *Service) launcherOn(ctx context.Context, machine, launcher string) bool {
+	if proto.IsExternalLauncher(launcher) {
+		return false // external targets are never automatic relocation candidates
+	}
 	if launcher == "claude" || slices.ContainsFunc(s.storedLaunchers(ctx), func(l storedLauncher) bool { return l.Name == launcher && l.Kind != "api" }) {
 		return true
 	}
 	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	list, err := s.machineLaunchers(cctx, machine)
-	return err == nil && slices.ContainsFunc(list, func(l proto.Launcher) bool { return l.Name == launcher })
+	return err == nil && slices.ContainsFunc(list, func(l proto.Launcher) bool {
+		return l.Name == launcher && l.Source != proto.ExternalLauncherSource && !proto.IsExternalLauncher(l.Name)
+	})
 }
 
 // rehome moves dir from one machine's home to another's (a path outside the home stays).
@@ -297,18 +335,16 @@ func (s *Service) runHealthRecheck(ctx context.Context, machine, launcher string
 
 // launcherUnusableNow is launcherUnusable after one on-the-spot probe of a failing record, for a start about to
 // move or be refused because of it: the record can lag behind a fix, so a pass clears it and the start stays on the
-// asked machine (#2018). Known usage-limit resets can be superseded by restored quota (#9386); fresh limit evidence
-// waits through the same throttle before probing. Unknown resets keep their periodic cadence. A terminal-shell
-// failure cannot be settled by the probe's login shell; only a real start clears it.
+// asked machine (#2018). A usage limit can be over before its reset, or with its reset unknown (#9386): it is probed
+// too, once its evidence is healthRecheckThrottle old, and the claim's throttle spaces the probes after that. A
+// terminal-shell failure cannot be settled by the probe's login shell; only a real start clears it.
 func (s *Service) launcherUnusableNow(ctx context.Context, machine, launcher string) (LauncherHealth, bool) {
 	r, bad := s.launcherUnusable(ctx, machine, launcher)
 	if !bad || r.Kind == errKindNotInTerminal {
 		return r, bad
 	}
-	if r.Kind == errKindUsageLimit {
-		if _, known := r.limitReset(); !known || time.Since(r.CheckedAt) < healthRecheckThrottle {
-			return r, bad
-		}
+	if r.Kind == errKindUsageLimit && time.Since(r.CheckedAt) < healthRecheckThrottle {
+		return r, bad
 	}
 	s.recheckLauncherNow(ctx, machine, launcher)
 	// The shared follow-up may have finished between the first read and the throttled claim. Decide from its

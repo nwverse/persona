@@ -320,7 +320,7 @@ struct KnowledgeView: View {
     /// conversation), and a swipe deletes it as the Meetings page's rows do (#4938), asked first.
     private func recordingRow(_ e: KBEntry, id: UUID) -> some View {
         NavigationLink {
-            if RecordingLibrary.shared.entry(id)?.isDay == true { RecordingDayView(id: id) } else { RecordingDetailView(id: id) }
+            if RecordingLibrary.shared.entry(id)?.isDay == true { RecordingDayView(id: id) } else { RecordingOpen(id: id) }
         } label: { KBRow(entry: e) }
             .accessibilityIdentifier("kb.recording")
             // Rename (#8873): a touch and hold, and VoiceOver's actions; not a day, named by its date.
@@ -330,7 +330,7 @@ struct KnowledgeView: View {
                 }
             }
             .accessibilityAction(named: Text("Rename")) { if RecordingLibrary.shared.entry(id)?.isDay == false { renamingRecording = id } }
-            .confirmationDialog("Delete This Recording?", isPresented: Binding(get: { deletingRecording == id }, set: { if !$0, deletingRecording == id { deletingRecording = nil } }),
+            .accessibleConfirmationDialog("Delete This Recording?", isPresented: Binding(get: { deletingRecording == id }, set: { if !$0, deletingRecording == id { deletingRecording = nil } }),
                                 titleVisibility: .visible) {
                 Button("Delete", role: .destructive) {
                     if let message = RecordingDeletion.run(id) { recordingFailure = message }
@@ -357,10 +357,10 @@ struct KnowledgeView: View {
             .contextMenu {
                 Button(role: .destructive) { deletingProject = e } label: { Label("Delete", systemImage: Theme.Icon.delete) }
             }
-            .confirmationDialog(String(localized: "Delete This Project?"),
+            .accessibleConfirmationDialog(String(localized: "Delete This Project?"),
                                 isPresented: Binding(get: { deletingProject?.id == e.id },
                                                      set: { if !$0, deletingProject?.id == e.id { deletingProject = nil } }),
-                                titleVisibility: .visible) {
+                                titleVisibility: .visible, hasCancel: true) {
                 Button(String(localized: "Delete"), role: .destructive) { Task { await deleteProject(e) } }
                 Button("Cancel", role: .cancel) {}
             } message: {
@@ -662,7 +662,11 @@ struct KBRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: Theme.Space.m) {
+            // A recording that stands for an imported meeting too (#8872): the app it came from in the corner.
             KBAvatar(entry: entry)
+                .overlay(alignment: .bottomTrailing) {
+                    if let imported = entry.imported { KBImportedBadge(imported: imported) }
+                }
             VStack(alignment: .leading, spacing: Theme.Space.xs) {
                 HStack(alignment: .firstTextBaseline, spacing: Theme.Space.sm) {
                     // Two lines: documents and meetings are told apart by the end of their titles.
@@ -686,6 +690,7 @@ struct KBRow: View {
         }
         .padding(.vertical, Theme.Space.xs)
         .accessibilityElement(children: .combine)
+        .accessibilityValue(entry.imported?.notesTitle ?? "")
     }
 
     private func badges(tags: Int) -> some View {
@@ -873,6 +878,14 @@ struct KnowledgeDetailView: View {
             if let d = detail?.detail {
                 if let query, let matches = detail?.matches { found(matches, query: query, chat: d.kind == KBKind.chats.rawValue ? d.id : nil) }
                 if let facts = ItemFacts(kind: d.kind, meta: d.meta), !facts.isEmpty { factsSection(facts) }
+                // A recording that stands for an imported meeting too (#8872): its notes in the app, opened in this one.
+                if let imported = d.importedMeeting {
+                    Section {
+                        KBImportedNotesButton(imported: imported) { url in
+                            if model.assistantMain ?? model.assistantCurrent != nil { link = LinkTarget(url: url) } else { openURL(url) }
+                        }
+                    }
+                }
                 if !Self.debugLower, let agents = detail?.agents, !agents.isEmpty {
                     Section {
                         ForEach(agents) { s in
@@ -1217,9 +1230,9 @@ struct KnowledgeDetailView: View {
                     Button(role: .destructive) { unlinking = removal } label: { Label("Remove Link", systemImage: Theme.Icon.clear) }
                 }
                 // On the row, so the question points at the link it is about (on the page it pointed at the header).
-                .confirmationDialog(removal.question, isPresented: Binding(get: { unlinking?.id == removal.id },
+                .accessibleConfirmationDialog(removal.question, isPresented: Binding(get: { unlinking?.id == removal.id },
                                                                            set: { if !$0, unlinking?.id == removal.id { unlinking = nil } }),
-                                    titleVisibility: .visible) {
+                                    titleVisibility: .visible, hasCancel: true) {
                     Button(String(localized: "Remove Link"), role: .destructive) { Task { await unlink(removal) } }
                     Button("Cancel", role: .cancel) {}
                 } message: {
@@ -1812,10 +1825,8 @@ struct KBTagEditor: View {
             .navigationTitle(entry.name)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { Task { await save() } }.disabled(saving)
-                }
+                SheetClose { dismiss() }
+                SheetConfirm(id: "kb-entry-save", name: String(localized: "Save"), busy: saving) { Task { await save() } }
             }
             .onAppear {
                 if capturedAPI == nil { capturedAPI = inheritedAPI ?? model.api?.currentAssistantSettings() }

@@ -624,15 +624,12 @@ struct AssistantTaskEditor: View {
         .sheetCancel(unsaved: !Self.same(opened, draft), when: creating) { dismiss() }
         .toolbar {
             if creating {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Add [Beautiful U I Bridge 7a8a11]") {
-                        Task { if await persist(leaving: false) != nil { dismiss() } }
-                    }
-                    .disabled(!isValid || running)
+                SheetConfirm(id: "schedule-add", disabled: !isValid || running) {
+                    Task { if await persist(leaving: false) != nil { dismiss() } }
                 }
             }
         }
-        .confirmationDialog("Delete “\(AssistantScheduleText.title(draft))”?", isPresented: $confirmDelete, titleVisibility: .visible) {
+        .accessibleConfirmationDialog("Delete “\(AssistantScheduleText.title(draft))”?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
                 guard let s = saved else { return }
                 deleted = true
@@ -1231,7 +1228,7 @@ struct AssistantMemoryView: View {
             }
         }
         .pageTitle(health ? String(localized: "Health Memory") : String(localized: "Memory [Assistant Profile View 7a6335]"))
-        .confirmationDialog("Delete This Memory?", isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
+        .accessibleConfirmationDialog("Delete This Memory?", isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
                             titleVisibility: .visible, presenting: pendingDelete) { e in
             Button("Delete", role: .destructive) { Task { await delete(e) } }
         } message: { e in
@@ -1378,10 +1375,7 @@ struct AssistantMemoryEditor: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .sheetCancel(unsaved: opened.map { $0 != text } ?? false) { dismiss() }
                 .toolbar {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button { Task { await save() } } label: { if saving { ProgressView() } else { Text("Save") } }
-                            .disabled(saving)
-                    }
+                    SheetConfirm(id: "memory-file-save", busy: saving) { Task { await save() } }
                 }
                 .onAppear { if opened == nil { opened = text } }
         }

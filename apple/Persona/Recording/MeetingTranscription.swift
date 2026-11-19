@@ -932,6 +932,9 @@ final class MeetingTranscription {
         set(id, m)
     }
 
+    /// A replayed meeting's state (`MeetingReplay`, #9417, #10589), as its socket would have left it.
+    func replace(_ id: UUID, _ m: Meeting) { set(id, m) }
+
     private func set(_ id: UUID, _ m: Meeting) {
         var m = m
         followAway(id, &m)

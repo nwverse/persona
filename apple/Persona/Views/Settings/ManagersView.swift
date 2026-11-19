@@ -176,12 +176,12 @@ struct ManagerDetailView: View {
                 .disabled(!ManagersText.validName(newName))
             Button("Cancel", role: .cancel) {}
         }
-        .confirmationDialog("Install Elsewhere?", isPresented: $confirmMove, titleVisibility: .visible) {
+        .accessibleConfirmationDialog("Install Elsewhere?", isPresented: $confirmMove, titleVisibility: .visible) {
             Button("Install Elsewhere", role: .destructive) { if let m { Task { await page.newCode(m) } } }
         } message: {
             Text("Installing elsewhere gives you a new install code. Once it's installed with that code, the assistant where it ran before stops working right away.")
         }
-        .confirmationDialog(deleteTitle(m), isPresented: $confirmDelete, titleVisibility: .visible) {
+        .accessibleConfirmationDialog(deleteTitle(m), isPresented: $confirmDelete, titleVisibility: .visible, hasCancel: true) {
             Button(m?.installing != nil ? String(localized: "Cancel Install") : String(localized: "Delete"), role: .destructive) {
                 guard let m else { return }
                 // Back to the list: this page has nothing left to show. Only if the path is still the one this page was on
@@ -378,7 +378,7 @@ private struct ManagerCodeSheet: View {
             .navigationTitle(page.shown.map { String(localized: "Install “\($0.name)”") } ?? "")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("Done [Extension System Presentation c0b3fb]") { dismiss() }.lineLimit(1) }
+                SheetClose { dismiss() }
             }
         }
         .presentationDetents([.large])

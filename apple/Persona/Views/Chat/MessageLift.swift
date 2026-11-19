@@ -625,6 +625,29 @@ extension View {
     /// The chat page under `MessageLiftLayer`: blurred a little while a message is lifted over it. The radius goes to
     /// zero rather than the modifier away, so the page keeps its identity (and its scroll position).
     func liftBlur(_ menu: MessageMenu?) -> some View { modifier(LiftBlur(menu: menu)) }
+
+    /// `liftBlur` for the menu a page's chat hands its `MessageLiftHost`, read here rather than in the page's body: the
+    /// chat hands it over as it appears and takes it back as it goes, which a tab switch does on the open iPhone Duo, and
+    /// the whole Persona page ran again both times (#10303).
+    func liftBlur(host: MessageLiftHost) -> some View { modifier(HostLiftBlur(host: host)) }
+}
+
+private struct HostLiftBlur: ViewModifier {
+    let host: MessageLiftHost
+
+    func body(content: Content) -> some View {
+        content.modifier(LiftBlur(menu: host.menu))
+    }
+}
+
+/// The lifted message of the chat on a page that floats a bar over it (`MessageLiftHost`), over the whole page: read
+/// here for the reason `liftBlur(host:)` is.
+struct MessageLiftHostLayer: View {
+    let host: MessageLiftHost
+
+    var body: some View {
+        if let menu = host.menu { MessageLiftLayer(menu: menu) }
+    }
 }
 
 private struct LiftBlur: ViewModifier {
@@ -785,7 +808,8 @@ private struct LiftedMessage: View {
         let count = MessageActionBar.count(id: lift.bar.id, isUser: lift.bar.isUser, menu: menu, pending: lift.bar.pending,
                                            deletes: lift.bar.delete != nil)
         let barWidth = min(MessageActionBar.width(count: count), bounds.width - 2 * Theme.Space.s)
-        let bar = CGSize(width: barWidth, height: MessageActionBar.height)
+        let selects = MessageActionBar.selects(id: lift.bar.id, menu: menu, pending: lift.bar.pending)
+        let bar = CGSize(width: barWidth, height: MessageActionBar.height(selects: selects))
         let p = LiftLayout.place(message: message, press: lift.press.y + pad.top + above, bar: bar, bounds: bounds,
                                  margin: Theme.Space.s, gap: Theme.Space.s, trailing: lift.bar.isUser,
                                  part: lift.part != nil ? above : nil, pressInSight: Theme.Size.tapTarget)

@@ -409,7 +409,7 @@ struct GitPane: View {
                     }
                 }
             }
-            .confirmationDialog(Text("Push to the Remote?"), isPresented: Binding(get: { askingPush != nil }, set: { if !$0 { askingPush = nil } }),
+            .accessibleConfirmationDialog(Text("Push to the Remote?"), isPresented: Binding(get: { askingPush != nil }, set: { if !$0 { askingPush = nil } }),
                                 titleVisibility: .visible, presenting: askingPush) { kind in
                 Button { Task { await push(kind) } } label: { Text("Push").lineLimit(1) }
                     .accessibilityIdentifier("git.push.confirm")
@@ -701,10 +701,10 @@ struct GitDiffSheet: View {
                 }
             }
             .navigationTitle(target.file.name)
-            .navigationSubtitle(target.file.folder.isEmpty ? String(localized: "Repository root") : target.file.folder)
+            .navigationSubtitleWhenSupported(target.file.folder.isEmpty ? String(localized: "Repository root") : target.file.folder)
             .navigationBarTitleDisplayMode(.inline)
             .pageToolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("Done [Extension System Presentation c0b3fb]") { dismiss() } }
+                SheetClose { dismiss() }
                 ToolbarItem(placement: .primaryAction) {
                     Menu {
                         Button { UIPasteboard.general.string = diff?.diff } label: { Label("Copy Diff", systemImage: Theme.Icon.copy) }
@@ -804,7 +804,7 @@ struct GitCommitSheet: View {
             .themedPage()
             .navigationTitle(commit.short)
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done [Extension System Presentation c0b3fb]") { dismiss() } } }
+            .toolbar { SheetClose { dismiss() } }
             .task { await load() }
             .onHubReconnect(group) { if error != nil { Task { await load() } } }
             #if os(macOS)

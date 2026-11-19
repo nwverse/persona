@@ -391,12 +391,45 @@ func (n *Node) liveClaudeOf(pid int) (claudeProc, bool) {
 	return claudeProc{}, false
 }
 
-// ownerDelivery is where sendOutside says how the owner's message went in, for session.send's answer.
+// ownerInputExact: params carry the owner mark exactly as the devices manager writes it, "owner_input": true, and no
+// other key that encoding/json would also read as it (OWNER_INPUT, Owner_Input…: its field match ignores case). The
+// devices manager strips every such key a caller sent (devices/owner_input.go); this keeps a node from honouring a
+// variant that reached it some other way (#9607).
+func ownerInputExact(params json.RawMessage) bool {
+	decoder := json.NewDecoder(bytes.NewReader(params))
+	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
+		return false
+	}
+	owner := false
+	for decoder.More() {
+		token, err := decoder.Token()
+		key, ok := token.(string)
+		var value json.RawMessage
+		if err != nil || !ok || decoder.Decode(&value) != nil {
+			return false
+		}
+		if strings.EqualFold(key, "owner_input") {
+			if owner || key != "owner_input" || string(value) != "true" {
+				return false
+			}
+			owner = true
+		}
+	}
+	if _, err := decoder.Token(); err != nil {
+		return false
+	}
+	_, err := decoder.Token()
+	return owner && err == io.EOF
+}
+
+// ownerDelivery is where the send says how the owner's message went in (a tmux pane, the plugin or the inbox), for
+// session.send's answer.
 type ownerDelivery struct{ as, reason string }
 
 type ownerDeliveryKey struct{}
 
-// withOwnerDelivery marks a send as the owner's own message (owner_input): sendOutside may hand it to the plugin.
+// withOwnerDelivery marks a send as the owner's own message (owner_input): an outside Claude's tmux pane takes it as
+// terminal input; without a pane, sendOutside may hand it to the plugin.
 func withOwnerDelivery(ctx context.Context) (context.Context, *ownerDelivery) {
 	d := new(ownerDelivery)
 	return context.WithValue(ctx, ownerDeliveryKey{}, d), d

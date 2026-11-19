@@ -120,8 +120,10 @@ func NewBusHub(o BusOptions) *BusHub {
 		id = assistantwire.AssistantID
 	}
 	b.client = &bus.Client{
-		// The manager's extensions stop waiting for a card when their caller does (extmgr's interactions.wait).
-		Cancels: map[string]bool{assistantwire.MethodApp: true},
+		// The manager's extensions stop waiting for a card when their caller does (extmgr's interactions.wait). A switch
+		// to Persona Link that gave up on the hub's begin (its time ran out) has the hub give it up too, so it changes
+		// nothing the manager no longer waits for (internal/devices link_switch.go).
+		Cancels: map[string]bool{assistantwire.MethodApp: true, devicewire.MethodLinkSwitchBegin: true},
 		Hub:     o.Hub, Token: o.Token, HTTPClient: o.HTTPClient, Logf: o.Logf, Backoff: o.Backoff,
 		StopWhenRevoked: o.StopWhenRevoked, StopWhenRejected: o.StopWhenRejected,
 		// The hub's own manager (its child, or the built-in one's service dialing the hub's local address) is on the
@@ -135,12 +137,18 @@ func NewBusHub(o BusOptions) *BusHub {
 					assistantwire.CapabilityMeetingAttendance, assistantwire.CapabilityMeetingConversation, assistantwire.CapabilityMeetingPhotos, assistantwire.CapabilityMeetingLiveView,
 					assistantwire.CapabilityMeetingHighlights, assistantwire.CapabilityMeetingNotes, assistantwire.CapabilityMeetingEcho, assistantwire.CapabilityMeetingTranscription,
 					assistantwire.CapabilityRecordingDay, assistantwire.CapabilityAssistantSearch, assistantwire.CapabilityHTTPBodyStream, assistantwire.CapabilityAssistantStartServiceTier,
-					assistantwire.CapabilityMCPWait, assistantwire.CapabilitySessionsSideFold, assistantwire.CapabilityRemoteImages, devicewire.SharingCapability}}
+					assistantwire.CapabilityMCPWait, assistantwire.CapabilitySessionsSideFold, assistantwire.CapabilityRemoteImages, assistantwire.CapabilityTodoView,
+					assistantwire.CapabilityTodoPlaces, assistantwire.CapabilityTodoAsks, assistantwire.CapabilityTodoTimeline, devicewire.SharingCapability}}
 		},
 		OnHello: b.onHello,
 		// A node's tool call that its caller stopped waiting for ends at the hub too (fleet_tools.go).
 		OnRequest: b.answer,
 		OnEvent: func(event string, params json.RawMessage) {
+			// Credential revocation goes to both managers and can write to their stores.
+			if event == bus.EventCredentialRevoked {
+				b.queueEvent(event, params)
+				return
+			}
 			if o.Devices != nil && o.Devices.Event(event, params) {
 				return // the computers' (devices.go), in the order they came
 			}
@@ -190,6 +198,11 @@ func (b *BusHub) Serve(ctx context.Context, svc *Service) error {
 
 // Connected: the connection to the hub is up now (the knowledge base closes while it is not, kb.go).
 func (b *BusHub) Connected() bool { return b.client.Peer() != nil }
+
+// CredentialRevoked checks the hub's credential status for a kept message's sender.
+func (b *BusHub) CredentialRevoked(ctx context.Context, id string) (bool, error) {
+	return bus.CredentialRevoked(ctx, b.client.Call, id)
+}
 
 // onHello keeps the hub's answer to manager.hello. A new connection: the hub shows nothing of the assistant until it
 // reports the whole of it again.
@@ -562,6 +575,9 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 		if err := decode(&p); err != nil {
 			return nil, err
 		}
+		if s.keepsBehind(ctx, p) { // older owner messages to it are kept: this one goes after them (undelivered.go)
+			return nil, &rpc.Error{Code: assistantwire.CodeUndeliveredAhead, Message: "older messages to this conversation wait to go in"}
+		}
 		ctx, note := withLauncherNote(ctx)
 		params, err := s.SendParams(ctx, p)
 		if err != nil {
@@ -572,6 +588,16 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 			return map[string]any{"params": params, "launcher_note": *note}, nil
 		}
 		return map[string]any{"params": params}, nil
+	case assistantwire.MethodKeepUndelivered:
+		var p assistantwire.KeepUndeliveredParams
+		if err := decode(&p); err != nil {
+			return nil, err
+		}
+		kept, err := s.KeepUndelivered(ctx, p)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"undelivered": kept}, nil
 	case assistantwire.MethodRename:
 		var p RenameParams
 		if err := decode(&p); err != nil {
@@ -615,6 +641,15 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 			return nil, err
 		}
 		return s.askHub(ctx, p.Interaction)
+	case assistantwire.MethodFleetAskPrepared:
+		var p struct {
+			Interaction proto.Interaction `json:"interaction"`
+			Replacement string            `json:"replacement"`
+		}
+		if err := decode(&p); err != nil {
+			return nil, err
+		}
+		return b.askPreparedHub(ctx, p.Interaction, p.Replacement)
 	}
 	if out, ok, err := s.kbRequest(ctx, method, params); ok { // the knowledge base's (kb_bus.go)
 		return out, err
@@ -686,6 +721,9 @@ func serveHTTP(ctx context.Context, s http.Handler, p assistantwire.HTTPRequest,
 	}
 	if p.ShareAuthority != nil {
 		ctx = devicewire.WithShareAuthority(ctx, *p.ShareAuthority)
+	}
+	if p.OwnerAnswer {
+		ctx = devicewire.WithOwnerAnswer(ctx)
 	}
 	if p.HandoffApprover != nil { // set by the hub only, never from a header (secret_handoff.go there)
 		ctx = assistantwire.WithHandoffApprover(ctx, *p.HandoffApprover)
@@ -790,12 +828,23 @@ func (b *BusHub) event(ctx context.Context, ev busEvent) error {
 	s := b.service()
 	decode := func(v any) error { return json.Unmarshal(ev.params, v) }
 	switch ev.name {
-	case assistantwire.EventUserSpoke:
-		var p SessionRef
+	case bus.EventCredentialRevoked:
+		var p bus.DeviceCredential
 		if err := decode(&p); err != nil {
 			return err
 		}
-		s.UserSpoke(ctx, p)
+		if p.ID != "" {
+			s.undeliveredCredentialRevoked(ctx, p.ID)
+			if b.opts.Devices != nil {
+				b.opts.Devices.Event(ev.name, ev.params)
+			}
+		}
+	case assistantwire.EventUserSpoke:
+		var p assistantwire.UserSpokeParams
+		if err := decode(&p); err != nil {
+			return err
+		}
+		s.userSpokeText(ctx, p.SessionRef, p.Text)
 	case assistantwire.EventUserStopped:
 		var p SessionRef
 		if err := decode(&p); err != nil {

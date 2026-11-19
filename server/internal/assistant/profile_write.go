@@ -7,6 +7,7 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/workspacenaming"
 	"net/http"
 	"slices"
 	"strconv"
@@ -23,6 +24,7 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var in struct {
 		Settings
+		WorkspaceRulesPatch    json.RawMessage `json:"workspace_rules"`
 		Permission             json.RawMessage `json:"default_permission_mode"`
 		Readonly               json.RawMessage `json:"readonly_mode"`
 		MinutesRetention       json.RawMessage `json:"minutes_days"`
@@ -60,6 +62,15 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, http.StatusBadRequest, errors.New("task_workspace_preference must be prefer-existing or prefer-new"))
 		return
 	}
+	if len(in.WorkspaceRulesPatch) > 0 {
+		if !s.explicitSettingsTarget(w, r) {
+			return
+		}
+		if _, err := workspacenaming.Patch(workspacenaming.Rules{}, in.WorkspaceRulesPatch); err != nil {
+			namingError(w, err)
+			return
+		}
+	}
 	if in.DispatchPolicy != nil && len(in.DispatchPolicy.Rules) > 0 {
 		if err := in.DispatchPolicy.validate(true, time.Now().UTC()); err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
@@ -94,6 +105,14 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if d := in.RecordingDays; d != nil && (*d < minRecordingDays || *d > maxRecordingDays) {
 		apierr.Write(w, http.StatusBadRequest, errors.New("recording_days must be 1–365"))
+		return
+	}
+	if m := in.IdleAutoCompactMinutes; m != nil && (*m < minIdleAutoCompactMinutes || *m > maxIdleAutoCompactMinutes) {
+		apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-profile.bad_idle_auto_compact_minutes"))
+		return
+	}
+	if n := in.IdleAutoCompactTokens; n != nil && (*n < minIdleAutoCompactTokens || *n > maxIdleAutoCompactTokens) {
+		apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-profile.bad_idle_auto_compact_tokens"))
 		return
 	}
 	if in.MinutesRetention != nil {
@@ -171,6 +190,13 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if _, err := s.updateSettings(ctx, func(v *Settings) error {
+		if len(in.WorkspaceRulesPatch) > 0 {
+			rules, err := workspacenaming.Patch(v.WorkspaceRules, in.WorkspaceRulesPatch)
+			if err != nil {
+				return err
+			}
+			v.WorkspaceRules = rules
+		}
 		*v = s.effective(ctx, *v) // saved as they are in effect, as the hub saved them
 		v.MachineID, v.Launcher = machine, launcher
 		if in.Launcher != "" {
@@ -195,6 +221,15 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if in.MainTasksQuiet != nil {
 			v.MainTasksQuiet = in.MainTasksQuiet
+		}
+		if in.IdleAutoCompact != nil {
+			v.IdleAutoCompact = in.IdleAutoCompact
+		}
+		if in.IdleAutoCompactMinutes != nil {
+			v.IdleAutoCompactMinutes = in.IdleAutoCompactMinutes
+		}
+		if in.IdleAutoCompactTokens != nil {
+			v.IdleAutoCompactTokens = in.IdleAutoCompactTokens
 		}
 		if in.StartRequestedTasks != nil {
 			v.StartRequestedTasks = in.StartRequestedTasks
@@ -251,8 +286,14 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		if in.InterjectBackground != nil {
 			v.InterjectBackground = in.InterjectBackground
 		}
+		if in.ClaudeInteractive != nil {
+			v.ClaudeInteractive = in.ClaudeInteractive
+		}
 		if in.AgentTasks != nil {
 			v.AgentTasks = in.AgentTasks
+		}
+		if in.CloseEndedTerminals != nil {
+			v.CloseEndedTerminals = in.CloseEndedTerminals
 		}
 		if in.AgentAutoNaming != nil {
 			v.AgentAutoNaming = in.AgentAutoNaming
@@ -312,6 +353,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 // can (its launcher has assistant: docs/integrations/runtimes.md "Assistant"); anything else would fail every message. One that can't
 // be probed now goes.
 func (s *Service) checkLauncher(ctx context.Context, machine, launcher string) error {
+	if proto.IsExternalLauncher(launcher) {
+		return i18n.Err("external-adapter.purpose_unsupported")
+	}
 	if launcher == "claude" {
 		return nil
 	}

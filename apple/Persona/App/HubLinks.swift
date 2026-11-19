@@ -79,6 +79,7 @@ final class HubLink: Identifiable {
         guard features.contains("messaging") else {
             messagingSources = []
             if MessagingSources.set(nil, for: hub) { await sourceChanged() }
+            live.followsMessaging = false
             return
         }
         guard let raw = try? await api.request("GET", "/api/v1/messaging"),
@@ -92,6 +93,8 @@ final class HubLink: Identifiable {
         }
         messagingSources = list.sources
         if MessagingSources.set(list.sources.first?.id, for: hub) { await sourceChanged() }
+        // The legacy `lark` event is dropped while a source is used (`AppModel.handle`): the hub need not send it (#9591).
+        live.followsMessaging = api.messagingSource != nil
     }
 
     /// The Feishu screens moved between the old API and a source (a first launch reads before the hello came): their
@@ -113,6 +116,7 @@ final class HubLink: Identifiable {
         let ext = f.contains("extensions")
         if !f.isEmpty, ext != Self.remembersExtensions(group) { UserDefaults.standard.set(ext, forKey: "hubExtensionsAPI." + group) }
         if !f.isEmpty { SideFold.remember(f.contains(SideFold.feature), group: group) }
+        if !f.isEmpty { TodosV1.shared.heard(TodoFeatures(f), from: group) }
     }
 }
 

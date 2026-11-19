@@ -158,7 +158,7 @@ struct ModelLaunchersView: View {
         }
         .sheet(item: $computersDemo) { l in ProviderWizard(existing: l, start: ProviderComputersDemo.state == "via" ? .connect : .models, showComputers: ProviderComputersDemo.state != "via") }
         #endif
-        .confirmationDialog("Delete Launcher “\(pendingDelete?.name ?? "")”?", isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
+        .accessibleConfirmationDialog("Delete Launcher “\(pendingDelete?.name ?? "")”?", isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
                             titleVisibility: .visible, presenting: pendingDelete) { l in
             Button("Delete", role: .destructive) { Task { await delete(l) } }
         } message: { _ in Text("The key stored on the hub is deleted too. This can't be undone.") }
@@ -521,6 +521,7 @@ struct ModelLauncherDetailView: View {
                 Section { ProgressView().frame(maxWidth: .infinity).padding(.vertical, Theme.Space.xl) }.listRowBackground(Color.clear)
             }
         }
+        .accessibilityIdentifier("launcher.detail")
         .detailTitle(name)
         .navigationBarTitleDisplayMode(.inline)
         .pageToolbar {
@@ -705,11 +706,11 @@ struct LauncherEditor: View {
             .navigationBarTitleDisplayMode(.inline)
             .sheetCancel(unsaved: opened.map { $0 != fields } ?? false) { dismiss() }
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { Task { usesPreset ? await savePreset() : await save() } }.lineLimit(1)
-                        .disabled(usesPreset ? !presets.canSave
-                                  : saving || name.isEmpty || baseURL.isEmpty || modelName.isEmpty || (isNew && apiKey.isEmpty)
-                                    || (scopeShown && scope.problem != nil))
+                SheetConfirm(id: "launcher-save",
+                             disabled: usesPreset ? !presets.canSave
+                                 : saving || name.isEmpty || baseURL.isEmpty || modelName.isEmpty || (isNew && apiKey.isEmpty)
+                                   || (scopeShown && scope.problem != nil)) {
+                    Task { usesPreset ? await savePreset() : await save() }
                 }
             }
             .task {
