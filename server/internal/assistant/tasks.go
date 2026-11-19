@@ -968,11 +968,11 @@ func (s *Service) taskRoutes() {
 			AskedAt string `json:"asked_at"`
 		}
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in); err != nil {
-			apierr.Write(w, http.StatusBadRequest, err)
+			writeTypedNothing(w, http.StatusBadRequest, "", err)
 			return
 		}
 		if strings.TrimSpace(in.Text) == "" || in.TodoID == "" {
-			apierr.Write(w, http.StatusBadRequest, errors.New("todo_id and text are required"))
+			writeTypedNothing(w, http.StatusBadRequest, "", errors.New("todo_id and text are required"))
 			return
 		}
 		var it FeedItem
@@ -982,8 +982,8 @@ func (s *Service) taskRoutes() {
 		} else {
 			it, err = s.routeToTask(r.Context(), r.PathValue("id"), in.TodoID, in.Text)
 		}
-		if err != nil {
-			apierr.Write(w, http.StatusConflict, err)
+		if err != nil { // 409 with delivered: send_in_doubt for words that may be with the Agent (todo_write_outcome.go)
+			writeRouteError(w, err)
 			return
 		}
 		apierr.WriteJSON(w, map[string]any{"item": it})
