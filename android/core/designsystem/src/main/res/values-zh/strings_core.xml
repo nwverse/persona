@@ -95,6 +95,7 @@
     <string name="designsystem_core_state_awaiting_reply">待你回复</string>
     <string name="designsystem_core_state_working">工作中</string>
     <string name="designsystem_core_state_background_waiting">后台等待中</string>
+    <string name="designsystem_core_state_just_finished">刚做完待看</string>
     <string name="designsystem_core_state_working_background">工作中（后台）</string>
     <string name="designsystem_core_state_waiting">待唤醒</string>
     <string name="designsystem_core_state_muted">已屏蔽</string>
@@ -399,6 +400,7 @@
     <string name="designsystem_core_knowledge_meetings">会议</string>
     <string name="designsystem_core_knowledge_events">日程</string>
     <string name="designsystem_core_knowledge_recordings">录音</string>
+    <string name="designsystem_core_knowledge_topics">主题</string>
     <string name="designsystem_core_mail_error">错误</string>
     <string name="designsystem_core_mail_outlook">Outlook · Microsoft 账号登录</string>
     <string name="designsystem_core_mail_gmail">Gmail · Google 账号登录</string>

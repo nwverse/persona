@@ -855,6 +855,9 @@ iPhone's side comes next.
   it comes, so a late picture replaces a burst of old ones and the rate control isn't misled by their delay. Every move
   applies that age drop first, whether or not an earlier jump is confirmed; the new jump replaces an unconfirmed one.
   When the transport carrying a channel fails, the node moves it to the channel's own relay (or another transport) by itself.
+  After such a move off a UDP flow, the phone's next `use` counts as a move even on the route the video is already on
+  ("Falling back" under "Video over UDP (#7873)"); otherwise a `use` on the route a channel is already on keeps what is
+  in flight there.
   A dropped backlog's reset stays owed until an offset stated by the phone confirms the jump; dequeuing or successfully
   writing the reset does not confirm delivery. When an unconfirmed jump changes transport, the new route sends its reset
   before data; if post-jump data was already handed to a writer, the node drops to a fresh message boundary and keyframe
@@ -867,7 +870,8 @@ iPhone's side comes next.
   does not re-check an earlier close; moving or losing a route alone does not owe the close again. A reset handed to a
   writer is outstanding until the phone confirms it, whatever the buffer holds and whether or not EOF has arrived. If no
   bytes were already in flight, its stall interval starts at handout. A route that keeps it unconfirmed for the stall
-  limit is closed, and the next route owes the reset again.
+  limit is closed, and the next route owes the reset again. The phone can so get one reset over two routes; it applies
+  only a reset ahead of its receiver, so the late copy leaves a message it has started since intact (#10005).
 - **Direct routes** (`screenlink.Direct`): while at least one session is live, the node listens on one TCP port bound
   to each of its candidate addresses (never the wildcard), and closes the listener with the last session. Candidates
   come from its own interfaces, with no Tailscale API or command: private IPv4 and unique-local IPv6 on Ethernet or
@@ -886,8 +890,9 @@ iPhone's side comes next.
 - **The phone's side** (`PersonaScreenKit`, pure and tested with `swift test`): `ScreenLinkMessage` frames the wire
   exactly as the node does (both check `spec/fixtures/screen-link`); `LinkReceiver` / `LinkSender` keep each channel's
   offsets (bytes once and in order, what the node hasn't acknowledged kept within a window); `VideoMessageAssembler`
-  hands the decoder whole video messages only and drops a partial one on `reset`; `LinkMeter` turns pongs into
-  `LinkStats`; `RouteEligibility` names the phone interface a candidate may be dialed on (a LAN address only from
+  hands the decoder whole video messages only and drops a partial one on a `reset` that moves the receiver (one at or
+  behind it, a late copy of an owed reset from a route the channel left, changes nothing, #10005); `LinkMeter` turns
+  pongs into `LinkStats`; `RouteEligibility` names the phone interface a candidate may be dialed on (a LAN address only from
   Wi-Fi or Ethernet on its subnet, a Tailscale address only through the phone's own Tailscale tunnel, never cellular,
   another VPN or a proxy); `PathPolicy` picks the route: by minimum round trip, a direct route winning a tie with the
   relay; at the stream's start at once, later only after 10 s healthy, a clear gain and 20 s since the last move; a lost
@@ -994,7 +999,14 @@ covers it.
   reset, so the keyframe decodes.
 - **Falling back**: when a flow is lost (silent, or its route gone), the video goes on over the flow's own TLS
   connection from what the phone acknowledged, or over its relay when the route went too. The node never moves RFB or
-  link messages onto a flow, and moving the video onto one takes the phone's `use` on it.
+  link messages onto a flow, and moving the video onto one takes the phone's `use` on it. The phone ignores the video's
+  bytes on other transports until it leaves the flow itself (below), so what the node sends after closing a flow by
+  itself (silence, stall, an error) is lost to the phone. The phone's next `use` therefore counts as a move even on the
+  route the node moved the video to (or any route the node moved it on to by itself since): the node sends again from
+  the offset the phone states, and a backlog older than 200 ms is dropped for a keyframe, as on any move (#10007). A
+  `use` on a route the phone already reads from leaves what is in flight there. Bytes already on their way on that
+  route when the phone leaves the flow still reach it after it stopped ignoring them, past its offset: that gap costs
+  the route, as before.
 - **The phone's side** (`PersonaScreenKit`, tested with `swift test` against the shared cases): `ScreenUDPWire` (packets,
   sealed with CryptoKit's AES-256-GCM, `ScreenUDPAESGCM`), `ReedSolomon`, `ScreenUDPReceiver` (blocks rebuilt from parity; a block still short asked for again
   once all of it was sent, a message gone quiet for max(6 ms, 2 × jitter) counting as sent; again after max(10 ms,

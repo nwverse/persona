@@ -126,6 +126,7 @@ private fun resourceOf(key: CoreText.Key): Int = when (key) {
     CoreText.Key.StateAwaitingReply -> R.string.designsystem_core_state_awaiting_reply
     CoreText.Key.StateWorking -> R.string.designsystem_core_state_working
     CoreText.Key.StateBackgroundWaiting -> R.string.designsystem_core_state_background_waiting
+    CoreText.Key.StateJustFinished -> R.string.designsystem_core_state_just_finished
     CoreText.Key.StateWorkingBackground -> R.string.designsystem_core_state_working_background
     CoreText.Key.StateWaiting -> R.string.designsystem_core_state_waiting
     CoreText.Key.StateMuted -> R.string.designsystem_core_state_muted
@@ -399,6 +400,7 @@ private fun resourceOf(key: CoreText.Key): Int = when (key) {
     CoreText.Key.KnowledgeMeetings -> R.string.designsystem_core_knowledge_meetings
     CoreText.Key.KnowledgeEvents -> R.string.designsystem_core_knowledge_events
     CoreText.Key.KnowledgeRecordings -> R.string.designsystem_core_knowledge_recordings
+    CoreText.Key.KnowledgeTopics -> R.string.designsystem_core_knowledge_topics
     CoreText.Key.MailError -> R.string.designsystem_core_mail_error
     CoreText.Key.MailOutlook -> R.string.designsystem_core_mail_outlook
     CoreText.Key.MailGmail -> R.string.designsystem_core_mail_gmail
