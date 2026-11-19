@@ -155,7 +155,15 @@ struct CallFollowUpTests {
         }
         print("MeetingReplayCallGate: precondition held")
         let gate = capture.callGate
-        defer { capture.callGate = gate; capture.error = nil }
+        var restored = false
+        defer {
+            if !restored { capture.callGate = gate; capture.error = nil }
+        }
+        let restoreGate = {
+            capture.callGate = gate
+            capture.error = nil
+            restored = true
+        }
         var tape = MeetingTape(title: "Replay call gate", startedAt: .now)
         tape.endedAfter = 30
         let audio = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appending(path: "Fixtures/meeting-tape/audio.m4a")
@@ -165,6 +173,7 @@ struct CallFollowUpTests {
         let refused = !startedOnCall && replay.audio == nil && capture.state == .idle && capture.recordingID == nil
         if startedOnCall {
             _ = capture.stop()
+            restoreGate()
             await Self.waitUntil { !replay.running }
             replay.clearEnded()
         }
@@ -181,6 +190,7 @@ struct CallFollowUpTests {
             _ = capture.stop()
             // stopWithoutMicrophone resets the replay's recorder synchronously; another suite may use it after the await.
             stopped = capture.state == .idle && capture.recordingID == nil
+            restoreGate()
             await Self.waitUntil { !replay.running }
         }
         let cleaned = stopped && !replay.running && replay.audio == nil && capture.recordingID != MeetingReplay.id
