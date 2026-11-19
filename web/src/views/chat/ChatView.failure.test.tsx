@@ -394,7 +394,11 @@ describe("a message that did not go, in an agent's chat (#1122)", () => {
     await act(async () => void (await captured.onSend!({ text: "你好", images: [] })));
     await flush();
     const words = [...host.querySelectorAll<HTMLElement>("[data-outbox] [data-user-bubble] *")].filter((el) => el.textContent === "你好").at(-1)!;
-    act(() => void words.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 20, clientY: 20 })));
+    // The message menu is a lazy chunk since #8714: wait for it, as MessagePick.test.tsx does.
+    await act(async () => {
+      words.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 20, clientY: 20 }));
+      await vi.dynamicImportSettled();
+    });
     const last = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].at(-1)!;
     expect(last.textContent?.trim()).toBe("删除");
     act(() => last.click());
@@ -1114,6 +1118,18 @@ describe("a message the assistant keeps after it could not go in", () => {
     await act(async () => void (await sent)); await flush();
     expect(host.querySelector("[data-outbox] [data-in-doubt]")?.getAttribute("data-in-doubt")).toBe("unknown");
     expect(host.textContent).toContain("Synthetic replayed message");
+  });
+  it.each([true, false])("shows a signed-out device's reason and only Delete (assistant: %s)", async (assistant) => {
+    const error = "Not sent: the device that sent it was signed out";
+    captured.session = {
+      machine_id: "hub", session_id: "c1", title: "Conversation", cwd: "/code", status: "idle", assistant,
+      undelivered: [{ ...kept, state: "failed", delete_only: true, error, computer: assistant ? undefined : "Synthetic laptop" }],
+    } as Session;
+    await letKeptChunkIn();
+    act(() => root.render(<ChatView mid="hub" sid="c1" assistant={assistant} />)); await flush();
+    const line = host.querySelector('[data-undelivered="k1"] [role="alert"]');
+    expect(line?.querySelector("span")?.textContent).toBe(error);
+    expect([...line!.querySelectorAll("button")].map((b) => b.textContent)).toEqual([t("chat-outboxbubbles.delete")]);
   });
 });
 
