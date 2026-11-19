@@ -155,6 +155,34 @@ func TestPortStreamClosesAfterItsBytes(t *testing.T) {
 	}
 }
 
+// The two notes queues share one budget: past maxNoteBytes in both together the node is connected again, though
+// neither queue alone holds that much (each had a budget of its own: twice as much per computer).
+func TestNotesShareOneBudget(t *testing.T) {
+	old := maxNoteBytes
+	maxNoteBytes = 64 << 10
+	t.Cleanup(func() { maxNoteBytes = old })
+	d := newTestDevices(t)
+	logs := &benchLog{}
+	quiet := d.logf
+	d.logf = func(format string, args ...any) {
+		logs.add(fmt.Sprintf(format, args...))
+		quiet(format, args...)
+	}
+	m := newMachine(d, MachineConfig{ID: "box", Name: "box", Kind: "ssh"})
+	_, managerOut := io.Pipe() // a node that reads nothing: each queue's first note waits in its write
+	peer := rpc.New("h", managerOut)
+	t.Cleanup(func() { managerOut.Close(); peer.Close(nil) })
+	m.mu.Lock()
+	m.peer = peer
+	m.mu.Unlock()
+	for i := range 4 { // about 37 KiB waiting in each queue, 74 KiB together
+		raw, _ := json.Marshal(map[string]any{"id": "p1", "i": i, "data": strings.Repeat("A", 12<<10)})
+		m.queueNote("terminal.input", raw)
+		m.queueNote("stream.data", raw)
+	}
+	eventually(t, 5*time.Second, "the notes dropped and the node connected again", func() bool { return logs.count("takes no events") > 0 })
+}
+
 // A note waiting to be written closes the connection only once nothing it writes has gone through for noteStall: on a
 // framed connection a note can wait for credit while everything else goes on.
 func TestNoteStallIsNoProgressAtAll(t *testing.T) {
