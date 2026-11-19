@@ -163,6 +163,10 @@ const (
 	LinkSwitchReasonConfigChanged   = "config_changed"   // its entry changed meanwhile
 	LinkSwitchReasonInterrupted     = "interrupted"      // the manager restarted during the switch
 	LinkSwitchReasonUnknown         = "unknown"
+
+	// LinkSwitchReasonUnsafePermissions: ~/.persona or its bin may be written by other users (others, or a group other
+	// than the user's own private group), who could swap the program the switch runs.
+	LinkSwitchReasonUnsafePermissions = "unsafe_permissions"
 )
 
 // MachineLink is a live persona-link: its build, the hub URL it went to and since when.
