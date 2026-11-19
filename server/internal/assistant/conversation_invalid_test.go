@@ -46,6 +46,23 @@ func TestSealedCompactionPublishesInvalidConversation(t *testing.T) {
 	}
 }
 
+func TestSealedCompactionOverridesSilentTurn(t *testing.T) {
+	for _, kind := range []string{proto.TurnErrorNoOutput, proto.TurnErrorStopped} {
+		t.Run(kind, func(t *testing.T) {
+			c := apiErrorTurn("sealed", sealedCompaction)
+			c.TurnErrorKind = kind
+			w, by, skip := triageRules(c, time.UTC, "en")
+			if skip || by != "rule" || w == nil || w.On != proto.WaitUser ||
+				len(w.Questions) != 0 || !strings.Contains(w.Line, "new conversation") {
+				t.Fatalf("sealed error lost to silent-turn handling: %+v, %q, %v", w, by, skip)
+			}
+			if turnErrorTransient(c) {
+				t.Fatal("sealed error with a silent-turn kind can retry")
+			}
+		})
+	}
+}
+
 func TestSealedCompactionCancelsQueuedContinue(t *testing.T) {
 	s, f := workService(t)
 	c := apiErrorTurn("sealed", sealedCompaction)

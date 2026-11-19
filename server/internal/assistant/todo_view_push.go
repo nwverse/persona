@@ -45,11 +45,12 @@ const (
 	todoViewWakeCap   = time.Hour
 )
 
-// todoClass is what a client files a to-do's row under: its phase, section and reason, its asks by id, its marks
-// (Inactive, Can wait, seen) and its steps' count. Comparable: two rows filed alike are ==.
+// todoClass is what a client files a to-do's row under: its phase, section and reason, its asks by id and the card
+// each is answered by (interaction: a card that lands after the run came to ask changes how its row answers it), its
+// marks (Inactive, Can wait, seen) and its steps' count. Comparable: two rows filed alike are ==.
 type todoClass struct {
 	phase, section, reason string
-	asks                   string // the ids, in order, one per line
+	asks                   string // the ids, each with its card's, in order, one per line
 	inactive               int64  // the Inactive mark's time in Unix nanoseconds; 0 without one
 	canWait, seen          bool
 	steps                  assistantwire.TodoStepCount
@@ -67,7 +68,7 @@ func todoClassOf(v assistantwire.TodoSummary) todoClass {
 	if len(v.Asks) > 0 {
 		ids := make([]string, len(v.Asks))
 		for i, a := range v.Asks {
-			ids[i] = a.ID
+			ids[i] = a.ID + " " + a.Interaction
 		}
 		c.asks = strings.Join(ids, "\n")
 	}

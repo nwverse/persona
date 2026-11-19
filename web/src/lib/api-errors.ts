@@ -76,6 +76,16 @@ export function parseAPIError(text?: string): APIErrorInfo | null {
   };
 }
 
+/** A retry banner carries the same error without Claude's final-answer prefix. Normalize only that new input shape;
+ * keep the observed text as the detail and leave final-answer parsing unchanged. */
+export function parseRetryAPIError(text?: string): APIErrorInfo | null {
+  const raw = (text ?? "").trim();
+  if (!raw) return null;
+  const normalized = raw.startsWith("API Error:") ? raw : raw === "API Error" ? "API Error:" : `API Error: ${raw}`;
+  const info = parseAPIError(normalized);
+  return info ? { ...info, raw } : null;
+}
+
 function explain(s: string, status?: number): [string, boolean | undefined] {
   if (unrecoverableError(s)) return [t("lib-api-errors.conversation_invalid"), false];
   if (fixCode(s) === "safeguards") return [t("lib-api-errors.safeguards"), false];

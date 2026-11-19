@@ -28,6 +28,10 @@ describe("unrecoverable conversations", () => {
     expect(interruption({ ...old, turn_error: "API Error: 503 encrypted connection failed" })?.canContinue).toBe(true);
   });
 
+  it.each(["no_output", "stopped"])("keeps sealed errors invalid even with the %s kind", (kind) => {
+    expect(interruption({ ...old, turn_error_kind: kind })).toMatchObject({ invalid: true, canContinue: false });
+  });
+
   it("keeps the invalid conversation's unfinished task visible when nothing replaces it", () => {
     expect(entries(todo).needsYou.map((item) => item.key)).toEqual(["task:task"]);
   });
