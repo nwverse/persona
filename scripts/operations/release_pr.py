@@ -30,11 +30,6 @@ class ReleaseError(ValueError):
     """A safe-to-report release identity or authorization failure."""
 
 
-def gh_json(*arguments, runner=subprocess.check_output):
-    data = runner(["gh", *arguments], text=True, timeout=120)
-    return json.loads(data)
-
-
 def validate_identity(repository, commit):
     if not REPOSITORY.fullmatch(repository) or not SHA.fullmatch(commit):
         raise ReleaseError("a public owner/repository and full merge commit are required")
@@ -252,20 +247,6 @@ def verify_artifacts(plan_path, repository, channel, commit, additional=()):
         if (not path.is_file() or path.is_symlink() or item.get("name") != path.name
                 or hashlib.sha256(path.read_bytes()).hexdigest() != item.get("sha256")):
             raise ReleaseError("a verified artifact is missing, renamed or differs from its receipt")
-    Path(plan_path).write_text(json.dumps(plan, indent=2) + "\n")
-    return plan
-
-
-def record_artifacts(plan_path, directory, expected=()):
-    plan = json.loads(Path(plan_path).read_text())
-    artifacts = []
-    for path in sorted(Path(directory).iterdir()):
-        if not path.is_file() or path.name.startswith(".") or path.resolve() == Path(plan_path).resolve():
-            continue
-        artifacts.append({"name": path.name, "path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
-    if {item["name"] for item in artifacts} != set(expected):
-        raise ReleaseError("release artifact set differs from the verified platform receipt")
-    plan["artifacts"] = artifacts
     Path(plan_path).write_text(json.dumps(plan, indent=2) + "\n")
     return plan
 

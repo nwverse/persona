@@ -166,32 +166,7 @@ jobs:
             cp "$name" "$OLDPWD/release/downloads/$name"
           done
           cd "$OLDPWD"
-          python3 - <<'PY'
-          import hashlib,json,shutil
-          from pathlib import Path
-          plan_path=Path('release/plan.json')
-          plan=json.loads(plan_path.read_text())
-          manifest=json.loads(Path('release/downloads/latest.json').read_text())
-          assert manifest['version']==plan['version']
-          assert manifest['commit']==plan['commit']
-          assert manifest['build']==plan['build']
-          assert manifest.get('channel','release')==plan['channel']
-          for group in ('files','links'):
-              for item in manifest[group].values():
-                  assert item['name'] in {p.name for p in Path('release/downloads').iterdir()}
-          for group in ('programs','nodes','helpers'):
-              for platforms in manifest.get(group,{}).values():
-                  for item in platforms.values():
-                      assert item['name'] in {p.name for p in Path('release/downloads').iterdir()}
-          android=Path('release/downloads/android.json')
-          if android.is_file():
-              index=json.loads(android.read_text())
-              assert index['version']==plan['version'] and index['source_sha']==plan['commit']
-              apk=Path('release/downloads',index['name'])
-              assert hashlib.sha256(apk.read_bytes()).hexdigest()==index['sha256']
-          plan['artifacts']=[{'name':p.name,'path':str(p.relative_to(Path.cwd())),'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in sorted(Path('release/downloads').iterdir())]
-          plan_path.write_text(json.dumps(plan,indent=2)+'\n')
-          PY
+          python3 scripts/operations/release_pr.py --repository "${{ github.repository }}" --channel "${{ needs.plan.outputs.channel }}" bind-cli-web --plan release/plan.json --downloads release/downloads
       - uses: actions/upload-artifact@v4
         with:
           name: release-pr-cli-web-${{ needs.plan.outputs.pr }}-${{ needs.plan.outputs.commit }}

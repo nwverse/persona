@@ -66,15 +66,17 @@ class ReleasePRTests(unittest.TestCase):
     def test_artifact_receipt_hashes_the_exact_files_and_rejects_a_missing_platform(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "latest.json").write_text('{"version":"0.9.1-beta.3"}')
-            (root / "Persona-test.apk").write_bytes(b"signed fixture")
+            artifacts = root / "artifacts"
+            artifacts.mkdir()
+            (artifacts / "latest.json").write_text('{"version":"0.9.1-beta.3"}')
+            (artifacts / "Persona-test.apk").write_bytes(b"signed fixture")
             plan = root / "release.json"
-            plan.write_text(json.dumps({"artifacts": []}))
-            data = release.record_artifacts(plan, root, ("latest.json", "Persona-test.apk"))
+            release.write_plan(plan, "nwverse/persona", "beta", "0.9.1-beta.3", COMMIT, 12, COMMIT, timestamp=1794790000)
+            data = release.verify_artifacts(plan, "nwverse/persona", "beta", COMMIT, (artifacts,))
             self.assertEqual(len(data["artifacts"]), 2)
             self.assertNotIn("release.json", {item["name"] for item in data["artifacts"]})
-            with self.assertRaises(release.ReleaseError):
-                release.record_artifacts(plan, root, ("latest.json", "missing.ipa"))
+            with self.assertRaises((release.ReleaseError, OSError)):
+                release.verify_artifacts(plan, "nwverse/persona", "beta", COMMIT, (root / "missing",))
 
 
     def test_merged_pr_and_actor_must_match_the_actual_merge_commit(self):
