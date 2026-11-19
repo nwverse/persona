@@ -160,6 +160,7 @@ func (h *Hub) relayHTTP(w http.ResponseWriter, r *http.Request, id string, send,
 	if p.Role == roleExtension && p.Extension != "" {
 		req.Header[assistantwire.ExtensionHeader] = []string{p.Extension}
 	}
+	req.ModeActor = modesActor(r.Context())
 	req.OwnerAnswer = devicewire.IsOwnerAnswer(r.Context())
 	req.HandoffApprover = handoffApproverOf(r.Context()) // only the resolve route's gate sets it (secret_handoff.go)
 	req.Human = humanStartOf(r.Context())                // only a new conversation's start sets it (assistant_link.go)
