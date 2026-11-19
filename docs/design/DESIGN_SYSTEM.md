@@ -793,6 +793,8 @@ The web Agent conversation header's **Session overview** list button toggles a p
 
 ### 3.4 Lists and rows
 
+- Web History (#10240) is an Agents destination for non-running sessions, grouped by local activity day. It shares folded sidebar state and visibility before filtering; day counts equal the displayed filtered rows, including only loaded content-search matches. The primary switch stays Assistant / Agents. Agents + owns New Agent, New terminal and Open terminals; History never starts on a remembered terminal inventory (details in `docs/web/web.md`).
+
 - **Native workspace pins** (#9300): the Agents workspace tree shows a host-pinned workspace with the existing pin mark,
   ordered before its unpinned siblings (newest pin first, then the existing stable order). Its repository moves ahead
   of unpinned repositories. Match the exact machine/source/workspace identity, never the folder or project name; empty
