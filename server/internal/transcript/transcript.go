@@ -203,6 +203,10 @@ type Meta struct {
 	// turn_duration / an interrupt), no turn started after it. Unlike !TurnOpen it is false when the lines say nothing
 	// (a tail read from mid-turn).
 	TurnClosed bool
+	// The closing record, even when it produces no visible item (e.g. Codex without a duration).
+	turnEndedAt time.Time
+	turnEndSeq  int
+	turnEndLine string
 	// TurnError / TurnErrorKind: the latest turn failed on the model service, as the agent's own record says it
 	// (Codex: task_complete's error, #2185; Claude Code: the reply it writes itself for a failed request,
 	// isApiErrorMessage, #1710); empty when it ended well or the model answered since. Kind is
@@ -497,6 +501,14 @@ func ParseLine(seq int, line []byte, meta *Meta) []proto.Item {
 	return items
 }
 
+func (m *Meta) endTurn(seq int, at time.Time) {
+	m.TurnOpen, m.TurnClosed = false, true
+	m.turnEndedAt, m.turnEndSeq, m.turnEndLine = at, seq, m.tree.uuid
+	if m.tree.sidechain || m.Sidechain {
+		m.turnEndedAt = time.Time{}
+	}
+}
+
 // lineJSON is encoding/json's way of decoding without its check of the whole input before it decodes (its legacy
 // error semantics): the decoder checks each byte as it reads it anyway, so input that is not JSON fails all the same,
 // read once instead of twice. A transcript line is mostly its message, and a message's content was read up to four
@@ -691,7 +703,7 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 		var text string
 		switch e.Subtype {
 		case "turn_duration":
-			meta.TurnOpen, meta.TurnClosed = false, true
+			meta.endTurn(seq, e.Timestamp)
 			meta.turnSucceeded = meta.turnWorked && meta.TurnError == ""
 			meta.turnWorked = false // the turn's work is done: Claude Code's own continuation after a limit opens with no prompt
 			ms, ok := recordedMilliseconds(e.DurationMS)

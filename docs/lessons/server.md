@@ -1,5 +1,13 @@
 # Lessons: hub / node and networking
 
+## Queue admission decides notification replay (#10394)
+
+A connected WebSocket is not evidence that its outbound queue accepted a notification. Record admission per device
+and retain the event in the existing reconnect ring when every eligible socket rejects it. If another socket for the
+same credential accepts it, do not retain a duplicate. Keep recipient-selection counts separate from queue admission
+and delivery. Exercise the real notification bus handler with a full queue, same-ID outbox retry and reconnect;
+keep push-route, capability and preference exclusions intact.
+
 ## Contribution identity must match both preview and commit (#10272)
 
 UI routes and switches identify a contribution by extension plus local ID. A global UI-ID conflict check can therefore
@@ -2430,6 +2438,13 @@ does not require inventing the digest it is meant to produce. Keep the producer'
 time when binding evidence to activation: later transport, REST and validation work must not
 renew its lifetime. Test embedded publisher modules in an isolated interpreter as well as
 ordinary imports; a transitive import can be available locally and missing remotely.
+
+An unset assistant settings row is not explicit empty authority (#2628): zero-value product
+settings do not settle that contract. Require an existing empty row's revision, and use a
+guaranteed-row read with a database timestamp to distinguish absence from a failed read. Do
+not create an empty row or a synthetic main. Require an explicit unassigned plan and deliberately
+empty flags, then prove empty Hub ownership twice. Zero owned machines needs no node dial, but
+any conversation, runtime row, partial assignment or revision change must still fail closed.
 
 
 ## Release status reporting is opt-in (#2671)
