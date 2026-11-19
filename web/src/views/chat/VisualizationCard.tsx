@@ -141,14 +141,14 @@ export default function VisualizationCard({ item, mid, sid }: { item: Item; mid:
   const dark = typeof document !== "undefined" && document.documentElement.classList.contains("dark");
   return (
     <div ref={box} className="card-ui w-full overflow-hidden rounded-card bg-surface shadow-card" data-visualization={wide ? "wide" : "regular"} data-visualization-state={failed ? "failed" : phase} style={{ maxWidth: wide ? WIDE_MAX : REGULAR_MAX }}>
-      <div className="flex min-w-0 items-center gap-2 border-b border-line py-1 pr-1.5 pl-4 text-[11.5px] text-ink-3">
+      <div className="flex min-w-0 items-center gap-2 border-b border-line py-1 pr-1.5 pl-4 text-submeta text-ink-3">
         <Icon name="chart" size={12} className="shrink-0" />
         <span className="min-w-0 flex-1 truncate">{label}</span>
         {phase === "loading" && <Spinner size={11} />}
       </div>
       {failed ? (
         <div className="flex flex-col items-start gap-2 px-4 py-3">
-          <p className="text-[13px] leading-relaxed break-words text-ink-2 select-text">
+          <p className="text-meta leading-relaxed break-words text-ink-2 select-text">
             {t("chat-visualization.failed")}
             {viz?.path ? <span className="text-ink-3"> {baseName(viz.path)}</span> : null}
           </p>
@@ -157,7 +157,7 @@ export default function VisualizationCard({ item, mid, sid }: { item: Item; mid:
           </Button>
         </div>
       ) : phase === "idle" || html === null ? (
-        <div className="flex items-center gap-2 px-4 py-6 text-[13px] text-ink-3">
+        <div className="flex items-center gap-2 px-4 py-6 text-meta text-ink-3">
           <Spinner size={13} />
           <span>{t("chat-visualization.loading")}</span>
         </div>
