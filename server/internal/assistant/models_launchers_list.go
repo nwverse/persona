@@ -249,11 +249,12 @@ func (s *Service) machineLaunchersFrom(ctx context.Context, machine string, res 
 		!slices.ContainsFunc(out, func(l proto.Launcher) bool { return l.Name == "claude" }) {
 		out = append(out, proto.Launcher{Name: "claude", Source: "builtin"})
 	}
+	agyAssistant := slices.ContainsFunc(res.Launchers, func(l proto.LauncherEnvelope) bool { return l.Agent == "agy" && l.Assistant })
 	for _, m := range managed {
 		if m.Kind == "api" {
 			continue
 		}
-		out = append(out, proto.Launcher{Name: m.Name, BaseURL: m.BaseURL, Model: m.Model, Source: "persona", Agent: m.Agent, Assistant: m.Agent == "agy",
+		out = append(out, proto.Launcher{Name: m.Name, BaseURL: m.BaseURL, Model: m.Model, Source: "persona", Agent: m.Agent, Assistant: m.Agent == "agy" && agyAssistant,
 			PromptOptional: m.Agent == "codex" && codexOptional, RunHere: m.Agent == "codex" && codexHere, Pi: m.PiAPI() != ""})
 	}
 	return out, res.HostRuntime
@@ -297,10 +298,12 @@ func (s *Service) assistantProviders(ctx context.Context, machine string, picker
 	p.MachineID = machine
 	stored := s.storedLaunchers(ctx)
 	current := slices.Clone(picker)
+	agyAssistant := picker == nil || slices.ContainsFunc(picker, func(l ConfiguredLauncher) bool { return cmp.Or(l.AgentType, l.Agent) == "agy" && l.Assistant })
 	for _, managed := range stored {
 		if !slices.ContainsFunc(current, func(l ConfiguredLauncher) bool { return l.Name == managed.Name }) {
 			current = append(current, ConfiguredLauncher{Launcher: proto.Launcher{
 				Name: managed.Name, BaseURL: managed.BaseURL, Model: managed.Model, Source: "persona", Agent: managed.Agent,
+				Assistant: managed.Agent == "agy" && agyAssistant,
 			}})
 		}
 	}
@@ -380,6 +383,13 @@ func (s *Service) launcherModelSet(ctx context.Context, machine, launcher string
 			set[x.Resolved] = true
 			aliases[x.ID] = x.Resolved
 		}
+		// a folded row's other spellings (oneRowPerModel) stand for the model it runs
+		for _, a := range x.Aliases {
+			set[a] = true
+			if a != cmp.Or(x.Resolved, x.ID) {
+				aliases[a] = cmp.Or(x.Resolved, x.ID)
+			}
+		}
 		if x.Default && defaultModel == "" {
 			defaultModel = x.ID
 			if x.Resolved != "" {
@@ -424,7 +434,7 @@ func (s *Service) launcherModelResolution(ctx context.Context, machine, launcher
 }
 
 // askLauncherModels is machine's node's /model list of launcher name (node/launcher_models.go), with the models of
-// the plugin gateway behind it.
+// the plugin gateway behind it, one row per model (oneRowPerModel).
 func (s *Service) askLauncherModels(ctx context.Context, machine, name string, refresh bool) (proto.LauncherModels, error) {
 	var res proto.LauncherModels
 	params := map[string]any{"refresh": refresh}
@@ -437,7 +447,7 @@ func (s *Service) askLauncherModels(ctx context.Context, machine, name string, r
 	if res.Models == nil {
 		res.Models = []proto.AgentModel{}
 	}
-	res = s.presetModels(ctx, machine, name, res)
+	res = s.oneRowPerModel(ctx, name, s.presetModels(ctx, machine, name, res))
 	for i, m := range res.Models {
 		id := m.ID
 		if m.Resolved != "" {

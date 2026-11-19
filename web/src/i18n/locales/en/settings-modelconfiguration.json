@@ -61,7 +61,8 @@
   "api_model_hint": "Choose a discovered model or enter any model ID. Your edits are not saved until you choose Save.",
   "api_models_loading": "Loading models…",
   "api_effort_hint": "These reasoning options are reported for this model. A current value not in the list is kept.",
-  "api_effort_unknown": "The connection did not report reasoning levels. These are protocol options; use Test connection to check your selection.",
+  "api_effort_unknown": "The connection did not report reasoning levels. These are the standard protocol options.",
+  "api_effort_unavailable": "The reported reasoning levels cannot be saved for this purpose. Use the default or choose another model.",
   "api_effort_off": "Off",
   "api_effort_inherit": "Follow default · {effort}",
   "api_test_unverified": "Unverified",
@@ -88,5 +89,8 @@
   "config_dir_legacy": "This computer's",
   "config_dir_hint": "“This computer's” starts new chats with the sign-in and settings claude uses there, a gateway in ~/.claude included. Chats already started keep theirs.",
   "supervise_description": "Follows up and reviews the tasks Persona hands out, so the main chat stays free to answer you. It can run on a cheaper or a stronger model than the main chat.",
-  "agents": "Agents"
+  "agents": "Agents",
+  "usage_one": "Last 7 days: {calls} call · {tokens} tokens",
+  "usage_other": "Last 7 days: {calls} calls · {tokens} tokens",
+  "usage_detail": "Last 7 days (UTC): {input} input, {output} output, {cache_write} cache write and {cache_read} cache read tokens; failed calls: {failures}. The tokens shown are input + output + cache writes; cache reads are left out."
 }

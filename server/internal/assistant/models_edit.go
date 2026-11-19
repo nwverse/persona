@@ -23,6 +23,8 @@ type modelPatch struct {
 	Runtime json.RawMessage `json:"runtime"`
 	// ConfigDir: the main chat's profile for new conversations (#4633), private (stored as none) or legacy.
 	ConfigDir json.RawMessage `json:"config_dir"`
+	// Candidates: an extension's purpose only (#10398): {mode, custom}, or null for the extension's own lists.
+	Candidates json.RawMessage `json:"candidates"`
 }
 
 func patchModel(b ModelBinding, in modelPatch) (ModelBinding, error) {
@@ -138,7 +140,7 @@ func (s *Service) modelLauncherCompatible(p ModelPurpose, l ConfiguredLauncher, 
 	if p.ID == purposeMeetingRoom && runtime {
 		return false // a room runs on Claude Code's CLI only
 	}
-	if p.CategoryID == "assistant" && runtime {
+	if p.CategoryID == "assistant" && (runtime || v.Kind == "launcher" && (v.Agent == "agy" || v.Agent == "omp")) {
 		if !l.Assistant {
 			return false
 		}
@@ -212,7 +214,7 @@ func (s *Service) validateModel(ctx context.Context, p ModelPurpose, b ModelBind
 			if provider.Status != "" {
 				return errors.New(provider.Status)
 			}
-			if !slices.ContainsFunc(provider.Models, func(m ModelChoice) bool { return m.ID == b.Model }) {
+			if !slices.ContainsFunc(provider.Models, func(m proto.ProviderModel) bool { return m.ID == b.Model }) {
 				return i18n.Err("assistant-models.err_extension_model")
 			}
 		}

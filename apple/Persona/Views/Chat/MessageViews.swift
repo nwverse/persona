@@ -117,7 +117,7 @@ extension View {
     func runFonts() -> some View { modifier(RunFonts()) }
 }
 
-#if os(iOS)
+#if os(iOS) || os(visionOS)
 /// Inline code's ink (#9477): `Theme.Reply.codeInk`, a step quieter than the words, where they are in the body's own
 /// ink. Words drawn in an ink of their own (a quote, a quieter heading, an agent's quiet words between its steps) keep it
 /// for their code too, and so does a written link: code in it is the link's. A copy link (`CodeCopyMarkdown`, what
@@ -190,7 +190,30 @@ struct MaxWidthLayout: Layout {
 
 extension EnvironmentValues {
     /// Opens a path mentioned in the conversation on the session's machine (set by ChatView).
-    @Entry var openFile: ((String) -> Void)? = nil
+    @Entry var openFile: FileOpener? = nil
+}
+
+/// `\.openFile`, one object for the chat's life (`ChatActions`). Handed down as a closure, SwiftUI reported it changed each
+/// time it looked: every message and work step that reads it ran its body again whenever SwiftUI looked at its inputs again,
+/// which the chat's list does for its rows as it leaves the window and comes back (three or four times on each switch
+/// between the open iPhone Duo's tabs, #10303).
+@MainActor final class FileOpener {
+    let open: (String) -> Void
+
+    init(_ open: @escaping (String) -> Void) {
+        self.open = open
+    }
+
+    func callAsFunction(_ path: String) { open(path) }
+}
+
+/// `\.loadImage`, one object for the chat's life, as `FileOpener`.
+@MainActor final class ImageLoader {
+    let load: @Sendable (String) async -> ImagePayload?
+
+    init(_ load: @escaping @Sendable (String) async -> ImagePayload?) {
+        self.load = load
+    }
 }
 
 extension EnvironmentValues {
@@ -199,7 +222,7 @@ extension EnvironmentValues {
     /// Puts an (edited) image into this chat's composer as an attachment for the next message (set by ChatView).
     @Entry var attachImage: ((UIImage) -> Void)? = nil
     /// Loads an image file on the session's machine (photos sent from the phone are saved there; set by ChatView).
-    @Entry var loadImage: (@Sendable (String) async -> ImagePayload?)? = nil
+    @Entry var loadImage: ImageLoader? = nil
     /// Fetches the whole text of an item the page cut (`Item.fullSize`), by item id (set by ChatView).
     @Entry var loadFullText: ((String) async throws -> String)? = nil
     /// Opens the full-screen image viewer from the chat page (set by ChatView). A viewer presented by the row it was
@@ -238,9 +261,11 @@ struct UserBubble: View, Equatable {
     /// The extension that opened the conversation with this message (#3758): 「来自 飞书 /agent」 under it. Set by the chat
     /// page on the conversation's first message only.
     var external: AutoConversationSource? = nil
+    /// Which extension that was, whose own icon that line draws when it can (#10358).
+    var opener: ConversationOpener? = nil
     /// Only the message itself: the chat page re-evaluates its body on every hub push, and without this every row on
     /// screen (and in the lazy list's buffer) ran its body again too (about 45 a push on a long Persona conversation).
-    nonisolated static func == (a: Self, b: Self) -> Bool { a.item == b.item && a.external == b.external }
+    nonisolated static func == (a: Self, b: Self) -> Bool { a.item == b.item && a.external == b.external && a.opener == b.opener }
     @Environment(\.openFile) private var openFile
     @Environment(\.loadImage) private var loadImage
     @Environment(\.chatPin) private var pin
@@ -258,7 +283,7 @@ struct UserBubble: View, Equatable {
         VStack(alignment: .trailing, spacing: Theme.Space.sm) {
             if quotes.isEmpty, !parsed.refs.isEmpty { ContextGroup(refs: parsed.refs, key: item.id) }
             if !images.isEmpty, let loadImage {
-                AttachedImages(paths: images, load: loadImage)
+                AttachedImages(paths: images, load: loadImage.load)
             }
             if !d.attached.isEmpty { AttachedFileCards(files: d.attached) }
             if !shown.isEmpty || !quotes.isEmpty {
@@ -271,13 +296,13 @@ struct UserBubble: View, Equatable {
                         }
                 }
             }
-            if let openFile { FileChips(paths: d.chips, open: openFile) }
+            if let openFile { FileChips(paths: d.chips, open: openFile.open) }
             // Came in from a channel (WeChat, the Feishu bot…): 「来自 微信」 under it; an extension opened the conversation
             // with it: 「来自 飞书 /agent」.
             if ChannelSource.possible(item.clientMsgID) {
                 ChannelSourceLine(clientMsgID: item.clientMsgID)
             } else if let external {
-                ExternalSourceLine(source: external)
+                ExternalSourceLine(source: external, opener: opener)
             }
             if d.cardSource != nil {
                 Text("From a card").font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
@@ -705,8 +730,8 @@ struct AssistantText: View, Equatable {
                 .messageLongPress(id: item.id, card: !boxed) { answer(d) }
             if let openFile {
                 // Documents as cards with their first page (#1543), the rest as chips.
-                FileChips(paths: d.chips, open: openFile)
-                DocumentCards(paths: d.files.filter(DocumentCards.isDocument), open: openFile)
+                FileChips(paths: d.chips, open: openFile.open)
+                DocumentCards(paths: d.files.filter(DocumentCards.isDocument), open: openFile.open)
             }
             PortChips(text: item.text ?? "")
         }

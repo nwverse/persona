@@ -953,7 +953,7 @@ function onMessage(msg: Record<string, unknown>) {
     case "session": {
       const s = msg.session as Session;
       sessionsChanged(s.machine_id);
-      upsertSession(s);
+      upsertSession(s, { undelivered: true }); // the hub's whole row
       break;
     }
     case "interaction": {
@@ -1126,7 +1126,11 @@ export function dropSession(mid: string, sid: string) {
   set({ sessions: { ...state.sessions, [mid]: list.filter((x) => x.session_id !== sid) } });
 }
 
-export function upsertSession(s: Session) {
+/** `opts.undelivered`: `s.undelivered` is the list (the hub's whole row, which leaves it out once none is left, or a
+ *  change of the list itself: lib/undelivered.ts and its actions). Without it an Agent's row keeps the messages held for
+ *  it (#10661): a change made from an earlier copy of the row, or a node's row, which never carries them, must not drop
+ *  them. A Persona chat's row is merged as before (#10194). */
+export function upsertSession(s: Session, opts: { undelivered?: boolean } = {}) {
   if (s.deleted) { markConversationDeleted(s.machine_id, s.session_id); return; }
   if (!availableConversation(s)) return;
   const list = state.sessions[s.machine_id] ?? [];
@@ -1136,6 +1140,7 @@ export function upsertSession(s: Session) {
     const merged = { ...x, ...s };
     // A Persona chat's row leaves the kept messages out once none is left (#10194): not kept from the old row then.
     if (s.assistant) merged.undelivered = s.undelivered;
+    else if (!x.assistant) merged.undelivered = opts.undelivered ? s.undelivered : x.undelivered; // an Agent's (#10661)
     merged.background_working = s.background_working;
     merged.background_waiting = s.background_waiting;
     // An optimistic action can start from getSession's summary fallback. A later complete info response must
@@ -1148,6 +1153,7 @@ export function upsertSession(s: Session) {
       delete merged.background_tasks_count;
       delete merged.workflow_progress;
       merged.background = s.background;
+      merged.background_ended = s.background_ended;
       merged.subagents = s.subagents;
       merged.workflows = s.workflows;
     } else {
