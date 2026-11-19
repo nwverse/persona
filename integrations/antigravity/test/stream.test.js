@@ -373,3 +373,115 @@ test('trailing thinking chunks arriving right before turn completion are not dro
   assert.equal(page.history, liveHistory)
   assert.equal(page.items.find((it) => it.id === thoughtItem.id)?.text, 'First half + second half.')
 })
+
+for (const partialTools of [false, true]) {
+  test(`partial export preserves the final reply (tools: ${partialTools})`, async (t) => {
+    const { node, directory, update, chunk, promptCount } = await fixture(t)
+    await node.peer.call('session.send', { session_id: SESSION, text: 'Inspect.' })
+    await promptCount(1)
+    await chunk('Checking first.')
+    update({ sessionUpdate: 'tool_call', toolCallId: 'read', name: 'read_file' })
+    update({ sessionUpdate: 'tool_call_update', toolCallId: 'read', status: 'completed', rawOutput: 'Found it.' })
+    await chunk('Final answer.')
+    const partial = [userStep(0, 'Inspect.')]
+    if (partialTools) partial.push(replyStep(1, 'Checking first.'),
+      { ...replyStep(2, 'Checking a file.'), tool_calls: [{ name: 'read_file', args: {} }] },
+      { step_index: 3, type: 'GENERIC', status: 'DONE', content: 'Found it.' })
+    transcripts(directory, partial, partial)
+    update({ end: true })
+    await until('turn settled', () => node.last('session.delta')?.text === '')
+    const page = await node.peer.call('session.items', { session_id: SESSION })
+    assert.equal(page.items.at(-1).text, 'Final answer.')
+    assert.ok(page.items.at(-1).seq > partial.at(-1).step_index + 1)
+    assert.ok(page.items.some((item) => item.text === 'Checking first.'))
+    const full = [...partial, replyStep(partial.at(-1).step_index + 1, 'Final answer.')]
+    transcripts(directory, full, full)
+    await until('final export replaces pending history', () => node.last('session.items') && !node.last('session.items').history.includes(':settled:'))
+    assert.equal((await node.peer.call('session.items', { session_id: SESSION })).items.at(-1).text, 'Final answer.')
+  })
+}
+
+test('pre-tool text is committed and partial user export keeps live history stable', async (t) => {
+  const { node, directory, update, chunk, promptCount } = await fixture(t)
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Inspect.' })
+  await promptCount(1)
+  const before = await node.peer.call('session.items', { session_id: SESSION })
+  await chunk('Checking first.')
+  update({ sessionUpdate: 'tool_call', toolCallId: 'read', name: 'read_file' })
+  await until('tool pushed', () => node.last('session.items')?.items.some((item) => item.kind === 'tool_use'))
+  const page = await node.peer.call('session.items', { session_id: SESSION })
+  assert.deepEqual(page.items.filter((item) => item.kind === 'text').map((item) => item.text), ['Inspect.', 'Checking first.'])
+  assert.equal(node.last('session.delta').text, '')
+  transcripts(directory, [userStep(0, 'Inspect.')], [userStep(0, 'Inspect.')])
+  const partial = await node.peer.call('session.items', { session_id: SESSION })
+  assert.equal(partial.history, before.history)
+  assert.deepEqual(partial.items, page.items)
+  update({ end: true })
+})
+
+test('queued sends acknowledge the queue and defer options until execution', async (t) => {
+  const { node, calls, update, promptCount } = await fixture(t)
+  await node.peer.call('session.send', { session_id: SESSION, text: 'First.' })
+  await promptCount(1)
+  const count = calls().length
+  const result = await node.peer.call('session.send', { session_id: SESSION, text: 'Second.', model: 'next-model', mode: 'plan' })
+  assert.equal(result.queued, true)
+  assert.equal(calls().slice(count).some((call) => call.method === 'session/set_model' || call.method === 'session/set_mode'), false)
+  update({ end: true })
+  await promptCount(2)
+  const nextCalls = calls().slice(count)
+  assert.ok(nextCalls.some((call) => call.method === 'session/set_model'))
+  assert.ok(nextCalls.some((call) => call.method === 'session/set_mode'))
+  update({ end: true })
+})
+
+test('plan-mode starts advertise readonly support', async (t) => {
+  const { node, directory, calls } = await fixture(t)
+  assert.equal(node.hello.caps.readonly, true)
+  const result = await node.peer.call('session.start', { cwd: directory, permission_mode: 'plan', readonly: true })
+  assert.equal(result.session.permission_mode, 'plan')
+  assert.ok(calls().some((call) => call.method === 'session/set_mode' && call.params.modeId === 'plan'))
+})
+
+
+for (const text of ['invalid-once', 'invalid-always']) {
+  test(`stale sessions get one clean resume retry: ${text}`, async (t) => {
+    const { node, calls, update, promptCount } = await fixture(t)
+    const before = calls().length
+    await node.peer.call('session.send', { session_id: SESSION, text })
+    await promptCount(2)
+    const recovery = calls().slice(before).filter((call) => ['session/prompt', 'session/resume'].includes(call.method))
+    assert.deepEqual(recovery.map((call) => call.method), ['session/prompt', 'session/resume', 'session/prompt'])
+    if (text === 'invalid-always') {
+      await until('retry failure published', () => node.last('runtime.sessions')?.sessions.find((s) => s.session_id === SESSION)?.turn_error === 'Invalid session')
+      assert.equal(calls().filter((call) => call.method === 'session/prompt').length, 2)
+    } else {
+      update({ end: true })
+      await until('retried turn ends', () => node.last('runtime.sessions')?.sessions.find((s) => s.session_id === SESSION)?.status !== 'working')
+    }
+  })
+}
+
+for (const secondReply of ['Second answer.', 'First answer.']) {
+  test(`a previous turn exported during its successor cannot replace ${secondReply}`, async (t) => {
+    const { node, directory, update, chunk, promptCount } = await fixture(t)
+    await node.peer.call('session.send', { session_id: SESSION, text: 'First.' })
+    await promptCount(1)
+    await chunk('First answer.')
+    await node.peer.call('session.send', { session_id: SESSION, text: 'Second.' })
+    update({ end: true })
+    await promptCount(2)
+    await chunk(secondReply)
+    const first = [userStep(0, 'First.'), replyStep(1, 'First answer.')]
+    transcripts(directory, first, first)
+    update({ end: true })
+    await until('second turn settled', () => node.last('session.delta')?.text === '')
+    const page = await node.peer.call('session.items', { session_id: SESSION })
+    assert.deepEqual(page.items.filter((item) => item.kind === 'text').map((item) => item.text),
+      ['First.', 'First answer.', 'Second.', secondReply])
+    const full = [...first, userStep(2, 'Second.'), replyStep(3, secondReply)]
+    transcripts(directory, full, full)
+    await until('second export replaces pending', () => node.last('session.items') && !node.last('session.items').history.includes(':settled:'))
+    assert.equal(node.last('session.items').items.at(-1).text, secondReply)
+  })
+}

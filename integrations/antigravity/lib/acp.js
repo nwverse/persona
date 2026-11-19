@@ -3,7 +3,7 @@ import { assistantSearchPaths } from './compat.js'
 import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { createInterface } from 'node:readline'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { request } from 'node:http'
@@ -213,10 +213,19 @@ export class AgyAcpClient extends EventEmitter {
 
   async call(method, params, timeoutMs = 60_000) {
     await this.ensureStarted()
-    return this._rawCall(method, params, timeoutMs)
+    try {
+      return await this._rawCall(method, params, timeoutMs)
+    } catch (error) {
+      if (params?.sessionId && /session[ _-]?not[ _-]?found|invalid[ _-]?session/i.test(`${error.code ?? ''} ${error.message} ${JSON.stringify(error.data ?? '')}`)) {
+        this.loadedSessions.delete(params.sessionId)
+        error.invalidSession = true
+      }
+      throw error
+    }
   }
 
   _onMessage(msg, child) {
+    if (child !== this.proc) return
     if (msg.id !== undefined && (msg.result !== undefined || msg.error !== undefined)) {
       const entry = this.pending.get(msg.id)
       if (!entry) return
@@ -287,11 +296,17 @@ export class AgyAcpClient extends EventEmitter {
   async nativeRequest(method, params) {
     await this.ensureStarted()
     const child = this.proc
-    const file = this.nativeLogs.get(child)?.file
-    const portOf = () => file && Number(/random port at (\d+) for HTTP(?:\r?\n|$)/m.exec(readFileSync(file, 'utf8'))?.[1])
+    const state = this.nativeLogs.get(child)
+    const portOf = () => {
+      if (!state?.port && state?.file) {
+        const port = Number(/random port at (\d+) for HTTP(?:\r?\n|$)/m.exec(readFileSync(state.file, 'utf8'))?.[1])
+        if (port > 0 && port <= 65535) state.port = port
+      }
+      return state?.port
+    }
     // Initialize alone leaves the native service unopened. Listing sessions opens it without resuming one.
     if (!portOf()) {
-      const state = this.nativeLogs.get(child)
+      if (!state) throw new Error('Antigravity did not expose its native conversation service')
       state.ready ??= this._rawCall('session/list', {}, 20_000).catch((error) => {
         delete state.ready
         throw error
@@ -338,7 +353,8 @@ export class AgyAcpClient extends EventEmitter {
     if (this.loadedSessions.has(sessionId) && (mcpServers.length === 0 || this.loadedSessions.get(sessionId))) {
       return
     }
-    const res = await this.call('session/resume', { sessionId, cwd: cwd || process.env.HOME || '/tmp', mcpServers }, 30_000)
+    const directory = cwd && existsSync(cwd) ? cwd : process.env.HOME || '/tmp'
+    const res = await this.call('session/resume', { sessionId, cwd: directory, mcpServers }, 30_000)
     this.loadedSessions.set(sessionId, mcpServers.length > 0)
     if (res?.models?.availableModels) this.availableModels = res.models.availableModels
     return res

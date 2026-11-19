@@ -235,3 +235,23 @@ test('an answered card still selects the matching agy option', async (t) => {
   await n.peer.call('session.interrupt', { session_id: pid })
   await until('the turn ends', () => status(pid) === 'done', SLOW)
 })
+
+test('interrupt cancels every queued follow-up without applying its options', async (t) => {
+  const { n, record, start, status } = await agyRuntime(t)
+  const pid = await start('hold')
+  await until('first prompt running', () => received(record).some((m) => m.method === 'session/prompt'), SLOW)
+  await n.peer.call('session.send', { session_id: pid, text: 'Queued one', model: 'queued-model' })
+  await n.peer.call('session.send', { session_id: pid, text: 'Queued two' })
+  assert.deepEqual(await n.peer.call('session.interrupt', { session_id: pid }), { ok: true, settled: true })
+  await until('queue no longer working', () => status(pid) !== 'working', SLOW)
+  assert.equal(received(record).filter((m) => m.method === 'session/prompt').length, 1)
+  assert.equal(received(record).some((m) => m.params?.modelId === 'queued-model'), false)
+})
+
+test('permission cards use the runtime, session, kind and tool call key', async (t) => {
+  const { n, start } = await agyRuntime(t)
+  const pid = await start('ask')
+  await until('permission card', () => n.asked.length > 0, SLOW)
+  const { interactionId } = await import('../../runtime-sdk/index.js')
+  assert.equal(n.asked[0].id, interactionId('agy', pid, 'permission', 'call-1'))
+})
