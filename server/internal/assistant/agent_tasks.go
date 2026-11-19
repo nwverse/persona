@@ -163,7 +163,10 @@ func (s *Service) assistantsConversation(ctx context.Context, machine string, c 
 	if s.isAssistantRow(c) || c.PaneID == "" && c.Cwd != "" && identity.IsAssistantDir(c.Cwd) {
 		return true
 	}
-	if cfg := s.settings(ctx); c.SessionID != "" && (c.SessionID == cfg.Main || c.SessionID == cfg.BackgroundSupervisor) {
+	// Each on the machine it was recorded on: a session ID is only unique on its own computer.
+	if cfg := s.settings(ctx); c.SessionID != "" &&
+		(c.SessionID == cfg.Main && s.sameMachine(machine, cfg.mainRouteMachine()) ||
+			c.SessionID == cfg.BackgroundSupervisor && s.sameMachine(machine, cfg.BackgroundSupervisorMachineID)) {
 		return true
 	}
 	return s.originNoted(ctx, machine, c.SessionID)

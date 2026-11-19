@@ -431,6 +431,24 @@ func TestAssistantConversationsListedAsAgentsAreNoTasks(t *testing.T) {
 		agentTasksOn(t, s)
 		noTask(t, s, f, "old00001", "/home/me/.persona/assistant-m-0a1b2c")
 	})
+	// A session ID is only unique on its own computer: an Agent on box that shares the main conversation's or the
+	// background supervisor's ID (recorded on server) is an Agent like any other.
+	t.Run("the same ID on another computer", func(t *testing.T) {
+		for _, id := range []string{"conv1", "bg000001"} {
+			s, f := newQuietService(t)
+			agentTasksOn(t, s)
+			setSettings(t, s, func(v *Settings) { v.BackgroundSupervisor, v.BackgroundSupervisorMachineID = "bg000001", "server" })
+			f.setSessions("box", proto.Session{SessionID: id, MachineID: "box", Cwd: "/code/app", Agent: "claude", Title: "agent-1",
+				Status: proto.StatusDone, State: proto.StateUnread, StartedByPersona: true, LastText: "done", UpdatedAt: time.Now()})
+			f.setItems(proto.Item{Seq: 1, Role: "user", Kind: proto.KindText, Text: "check the build"},
+				proto.Item{Seq: 2, Role: "assistant", Kind: proto.KindToolUse, ToolName: "Bash"},
+				proto.Item{Seq: 3, Role: "assistant", Kind: proto.KindText, Text: "done"})
+			s.taskTurnSettled(ctx, "box", id)
+			if todo := onlyTodo(s); len(todo.Agents) != 1 || todo.Agents[0].MachineID != "box" || todo.Agents[0].SessionID != id {
+				t.Fatalf("%s on box: todo = %+v", id, todo)
+			}
+		}
+	})
 	t.Run("an agent in a folder of the user's", func(t *testing.T) {
 		s, f := newQuietService(t)
 		agentTasksOn(t, s)
