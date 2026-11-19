@@ -31,9 +31,11 @@ const childLine = (html: string) => html.match(/<span data-children-line[^>]*>.*
 const badge = (html: string) => html.match(/text-attention tabular-nums[^"]*">(\d+)<\/span>/)?.[1];
 
 describe("a parent's sidebar row (#5120)", () => {
-  it("draws as before without children", () => {
+  it("keeps one agent mark and no state badge while idle without children", () => {
     const html = render(parent);
-    expect(mark(html)).toBe("idle");
+    expect(mark(html)).toBeUndefined();
+    expect(html).not.toContain("data-state-badge");
+    expect(html.match(/data-agent-mark=/g)).toHaveLength(1);
     expect(html).not.toContain("data-children-line");
     expect(badge(html)).toBeUndefined();
   });

@@ -109,8 +109,8 @@ describe("the sidebar's paged Agents by to-do", () => {
       ["Submit for review", "true"], ["Ship 1.3", "true"], ["没挂待办的", "false"],
     ]);
     const [review, ship, none] = sections();
-    expect(rowTexts(ship)).toEqual([expect.stringMatching(/^Widget tests/)]);
-    expect(rowTexts(review)).toEqual([expect.stringMatching(/^Release notes/), expect.stringMatching(/^Screenshots/)]);
+    expect(rowTexts(ship)).toEqual([expect.stringContaining("Widget tests")]);
+    expect(rowTexts(review)).toEqual([expect.stringContaining("Release notes"), expect.stringContaining("Screenshots")]);
     // folded, it reads nothing
     expect(rowTexts(none)).toEqual([]);
     const reads = paths(fetch);

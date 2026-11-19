@@ -2,7 +2,7 @@
 // "By to-do" (#6458): the to-dos and the group of agents on no to-do are one kind of row at the top level, each a sticky
 // group heading with its chevron, mark, title, count and state; the group's explanation is behind its ⓘ and is what it
 // says when open and empty; the rows that fold groups select no text. Agents opened by hand in a terminal are in the
-// same group, their rows ending with the Terminal source mark (#6591).
+// same group, with source details in each row's hover card (#6591, #9769).
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -98,10 +98,13 @@ describe("By to-do's rows (#6458)", () => {
     expect(row("recent").textContent).toMatch(/1 个 Agent未运行$/);
   });
 
-  it("puts the agents opened in a terminal in the same group, each row ending with the Terminal source mark (#6591)", () => {
+  it("puts the agents opened in a terminal in the same group, without repeating source marks (#6591, #9769)", () => {
     show(<TodoTreeView tree={buildTodoTree(sessions, machines, todos, { spaces: [], sessions: [] }, Date.now())} machines={machines} activeKey="" {...stable} />);
-    const marks = [...branch("todo:none").querySelectorAll("[data-tree-branch-list] [data-source]")].map((el) => [el.getAttribute("data-source"), el.getAttribute("aria-label")]);
-    expect(marks).toEqual([["feishu", "飞书群"], ["terminal", "终端"]]);
+    const group = branch("todo:none");
+    const rows = [...group.querySelectorAll<HTMLElement>("[data-tree-branch-list] a")];
+    expect(rows).toHaveLength(2);
+    for (const row of rows) expect(row.querySelectorAll("[data-agent-mark]")).toHaveLength(1);
+    expect(group.querySelector("[data-source]")).toBeNull();
   });
 
   it("folds the group by default, except when it holds an agent that needs you", () => {

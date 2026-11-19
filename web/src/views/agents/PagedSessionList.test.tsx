@@ -206,11 +206,12 @@ describe("paged grouping controls", () => {
     await act(async () => project.click());
     expect(project.getAttribute("aria-checked")).toBe("true");
     // the list is drawn by project at once, each under its folder's name. The counts it already has name the groups:
-    // what is read is the groups' sessions that need the user (one does) and a page for each open section
+    // what is read is the groups' sessions that need the user (one does), each open section's page, and its own machine counts
     expect([...host.querySelectorAll<HTMLElement>("[data-session-group]")].map((g) => g.dataset.sessionGroup)).toEqual(["/work/beta", "/work/alpha"]);
     expect(host.querySelector("[data-virtual-sessions]")).toBeNull();
     expect(vi.mocked(api).mock.calls.map(([path]) => path).sort()).toEqual([
-      "/sessions?counts=1&state=needs_you", "/sessions?project=%2Fwork%2Falpha&summary=1&limit=50", "/sessions?project=%2Fwork%2Fbeta&summary=1&limit=50",
+      "/sessions?counts=1&state=needs_you", "/sessions?project=%2Fwork%2Falpha&counts=1", "/sessions?project=%2Fwork%2Falpha&summary=1&limit=50",
+      "/sessions?project=%2Fwork%2Fbeta&counts=1", "/sessions?project=%2Fwork%2Fbeta&summary=1&limit=50",
     ]);
 
     const pick = host.querySelector<HTMLButtonElement>(`button[aria-label="${t("paged-agents.group_filter")}"]`)!;

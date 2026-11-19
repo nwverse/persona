@@ -117,7 +117,7 @@ async function show({ catalog = true, open = "" }: { catalog?: boolean; open?: s
   await act(async () => root.render(<PagedSessionList root={list} path="/sessions" identity={identity} compare={compare} event="sessions_list" catalog={catalog}
     label={(dimension, id) => dimension === "machine" ? NAMES[id] ?? id : id} isOpen={(r) => r.id === open}
     placeOf={(r) => ({ machine: r.machine, project: r.project, group: r.group })}
-    renderRow={(r, within, group) => <span data-row={r.id} data-within={within ?? ""} data-group={group?.name ?? ""}>{r.id}</span>} />));
+    renderRow={(r, within, group, machines) => <span data-row={r.id} data-within={within ?? ""} data-group={group?.name ?? ""} data-machines={machines?.join(",") ?? ""}>{r.id}</span>} />));
 }
 const settle = () => act(async () => { await vi.advanceTimersByTimeAsync(0); });
 async function browseBy(key: "recent" | "machine" | "project" | "group") {
@@ -305,6 +305,12 @@ describe("the list by project, on a hub with the catalog", () => {
     await browseBy("project");
     // name, how many need the user, count
     expect(sections().map(summary)).toEqual(["app 1 3", "notes 2", "tool 1", `${t("paged-agents.no_folder")} 1`]);
+    expect(sections().map((section) => section.querySelector("[data-sidebar-group-heading] [data-machine-chip]")?.textContent)).toEqual([
+      t("agents-groupedsessions.machine_count", { count: 2 }),
+      t("agents-groupedsessions.machine_count", { count: 2 }),
+      "Lab",
+      undefined, // "No folder" is a bucket, not a project place
+    ]);
     // one read names the projects and counts the ones that need the user
     expect(reads("catalog").map((path) => Object.fromEntries(params(path)))).toEqual([{ catalog: "1" }]);
 
@@ -417,7 +423,8 @@ describe("the list by space", () => {
   it("names each computer's space and its computer, and gathers the sessions in no space last", async () => {
     await show();
     await browseBy("group");
-    expect(sections().map((s) => heading(s).textContent)).toEqual(["Space w1 · MacBook", "Space w1 · Windows PC", "Space w2 · Windows PC", t("paged-agents.no_space")]);
+    expect(sections().map((s) => heading(s).textContent)).toEqual(["Space w1", "Space w1", "Space w2", t("paged-agents.no_space")]);
+    expect(sections().slice(0, 3).map((s) => s.querySelector("[data-sidebar-group-heading] [data-machine-chip]")?.textContent)).toEqual(["MacBook", "Windows PC", "Windows PC"]);
     // no second pill for the computer: a space already is one computer's
     expect(host.querySelector(`button[aria-label="${t("paged-agents.machine")}"]`)).toBeNull();
     expect(rowsIn(sections()[0])).toEqual(["a1", "a2"]);
@@ -435,6 +442,13 @@ describe("the list by space", () => {
     expect(sections().map((s) => heading(s).textContent)).toEqual(["w1", "w2"]);
     expect(host.querySelector(`button[aria-label="${t("paged-agents.machine")}"]`)).not.toBeNull();
     expect(rowsIn(sections()[0])).toEqual(["a1", "a2", "b1"]);
+    // Each group's own counts, not the fleet's four machines, decide its heading and what its rows may omit.
+    expect(sections().map((s) => s.querySelector("[data-sidebar-group-heading] [data-machine-chip]")?.textContent)).toEqual([
+      t("agents-groupedsessions.machine_count", { count: 2 }), "Windows PC",
+    ]);
+    expect([...sections()[0].querySelectorAll<HTMLElement>("[data-row]")].map((el) => el.dataset.machines)).toEqual(["mac,pc", "mac,pc", "mac,pc"]);
+    expect(sections()[1].querySelector<HTMLElement>("[data-row]")!.dataset.machines).toBe("pc");
+    expect(reads("counts").map((path) => params(path).get("group")).filter(Boolean).sort()).toEqual(["w1", "w2"]);
     expect(reads("page").map((path) => Object.fromEntries(params(path)))).toContainEqual({ group: "w1", summary: "1", limit: "50" });
   });
 });

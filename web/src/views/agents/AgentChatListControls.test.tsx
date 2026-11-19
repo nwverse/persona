@@ -318,10 +318,11 @@ describe("an associated tab name in the complete Agents list (#7595)", () => {
     await act(async () => idleToggle!.click());
 
     const plainRow = host.querySelector<HTMLElement>('a[href="/s/mac/plain"]')!;
-    expect(plainRow.textContent).toContain("demo › Workspace only");
+    expect(plainRow.textContent).toContain("demo");
+    expect(plainRow.textContent).not.toContain("Workspace only");
     expect(plainRow.textContent).not.toContain(t("sidebar.tab_named", { label: "Workspace only" }));
     const associatedRow = host.querySelector<HTMLElement>('a[href="/s/mac/associated"]')!;
-    expect(associatedRow.textContent).toContain(t("sidebar.tab_named", { label: "Release Review" }));
+    expect(associatedRow.textContent).not.toContain(t("sidebar.tab_named", { label: "Release Review" }));
     expect(associatedRow.textContent).not.toContain("demo › Release Review");
   });
 });
