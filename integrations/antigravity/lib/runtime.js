@@ -14,6 +14,7 @@ import {
   agyModeToPersona,
   cleanUserText,
   LABEL,
+  LIVE_TOOL_USE_ID,
   mapToolCall,
   mapToolInput,
   mapToolName,
@@ -59,6 +60,7 @@ export function createAgyRuntime(options = {}) {
   const archived = new Set() // agyId
   const lastPushedSeq = new Map() // personaId -> number
   const lastPushedHistory = new Map()
+  const dirtyLiveSeqs = new Map() // personaId -> Set<number> of already-pushed live seqs modified in place
   const watchedPolls = new Map()
   const rewinding = new Set()
   const nativeCuts = new Map()
@@ -319,10 +321,33 @@ export function createAgyRuntime(options = {}) {
       case 'agent_thought_chunk': {
         const chunk = upd.content?.text
         const turn = promptTurns.get(pid)
-        if (typeof chunk === 'string' && chunk && turn) {
-          turn.liveThinking += chunk
-          turn.liveRev++
-          if (!turn.thoughtTimer) {
+        if (typeof chunk === 'string' && chunk && turn && turn.nextStepIndex !== undefined) {
+          let changed = false
+          if (turn.activeThoughtStep) {
+            const before = turn.activeThoughtStep.thinking.trim()
+            turn.activeThoughtStep.thinking += chunk
+            if (turn.activeThoughtStep.thinking.trim() !== before) {
+              markDirtySeq(pid, turn.activeThoughtStep.step_index + 1)
+              changed = true
+            }
+          } else {
+            turn.pendingThought += chunk
+            if (turn.pendingThought.trim()) {
+              const step = {
+                step_index: turn.nextStepIndex++,
+                type: 'PLANNER_RESPONSE',
+                source: 'MODEL',
+                status: 'RUNNING',
+                created_at: turn.startedIso,
+                thinking: turn.pendingThought,
+              }
+              turn.liveSteps.push(step)
+              turn.activeThoughtStep = step
+              turn.pendingThought = ''
+              changed = true
+            }
+          }
+          if (changed && !turn.thoughtTimer) {
             turn.thoughtTimer = setTimeout(() => {
               turn.thoughtTimer = undefined
               if (promptTurns.get(pid) === turn) syncTranscriptAppend(rawId)
@@ -342,6 +367,10 @@ export function createAgyRuntime(options = {}) {
             if (turn.newMessage) turn.streamingText = ''
             turn.newMessage = false
             turn.streamingText += chunk
+            if (turn.streamingText.trim()) {
+              turn.activeThoughtStep = null
+              turn.pendingThought = ''
+            }
             rt.stream(pid, turn.streamingText)
           }
         }
@@ -349,34 +378,73 @@ export function createAgyRuntime(options = {}) {
       }
       case 'tool_call': {
         const turn = promptTurns.get(pid)
-        if (turn) {
+        if (turn && turn.nextStepIndex !== undefined) {
           turn.newMessage = true
-          const id = upd.toolCallId || `live-${turn.liveTools.length}`
+          turn.activeThoughtStep = null
+          turn.pendingThought = ''
+          const id = upd.toolCallId || `live-${turn.nextToolNum}`
           const rawName = upd._meta?.toolName || upd.name || upd.title || 'tool'
           const args = upd.rawInput || upd.input || {}
-          const existing = turn.liveTools.find((t) => t.id === id)
+          const existing = turn.liveToolsById.get(id)
           if (existing) {
-            existing.name = rawName
-            existing.args = args
+            existing.step.tool_calls = [{ [LIVE_TOOL_USE_ID]: existing.callId, name: rawName, args }]
+            markDirtySeq(pid, existing.step.step_index + 1)
           } else {
-            turn.liveTools.push({ id, name: rawName, args, done: false, output: '', isError: false })
+            const callId = `live_call_${turn.seq}_${turn.nextToolNum++}`
+            const step = {
+              step_index: turn.nextStepIndex++,
+              type: 'PLANNER_RESPONSE',
+              source: 'MODEL',
+              status: 'RUNNING',
+              created_at: turn.startedIso,
+              tool_calls: [{ [LIVE_TOOL_USE_ID]: callId, name: rawName, args }],
+            }
+            turn.liveSteps.push(step)
+            turn.liveToolsById.set(id, { callId, step, resultStep: null })
           }
-          turn.liveRev++
         }
         syncTranscriptAppend(rawId)
         break
       }
       case 'tool_call_update': {
         const turn = promptTurns.get(pid)
-        if (turn && upd.toolCallId) {
-          const existing = turn.liveTools.find((t) => t.id === upd.toolCallId)
+        if (turn && turn.nextStepIndex !== undefined && upd.toolCallId) {
+          const existing = turn.liveToolsById.get(upd.toolCallId)
+          if (existing && (upd.rawInput || upd.input)) {
+            const nextArgs = upd.rawInput || upd.input
+            const cur = existing.step.tool_calls?.[0]
+            const nextName = upd._meta?.toolName || upd.name || cur?.name || 'tool'
+            if (cur?.name !== nextName || JSON.stringify(cur?.args) !== JSON.stringify(nextArgs)) {
+              existing.step.tool_calls = [{ [LIVE_TOOL_USE_ID]: existing.callId, name: nextName, args: nextArgs }]
+              markDirtySeq(pid, existing.step.step_index + 1)
+            }
+          }
           if (existing && ['completed', 'failed'].includes(upd.status)) {
-            existing.done = true
-            existing.isError = upd.status === 'failed'
-            existing.output = Array.isArray(upd.content)
+            const isError = upd.status === 'failed'
+            const output = Array.isArray(upd.content)
               ? upd.content.map((b) => (b?.type === 'content' ? b.content?.text || '' : b?.text || '')).filter(Boolean).join('\n')
               : typeof upd.rawOutput === 'string' ? upd.rawOutput : ''
-            turn.liveRev++
+            existing.step.status = 'DONE'
+            if (existing.resultStep) {
+              existing.resultStep.status = isError ? 'ERROR' : 'DONE'
+              existing.resultStep.content = output
+              if (isError) existing.resultStep.error = output || 'Tool failed'
+              else delete existing.resultStep.error
+              markDirtySeq(pid, existing.resultStep.step_index + 1)
+            } else {
+              const resultStep = {
+                [LIVE_TOOL_USE_ID]: existing.callId,
+                step_index: turn.nextStepIndex++,
+                type: 'GENERIC',
+                source: 'MODEL',
+                status: isError ? 'ERROR' : 'DONE',
+                created_at: turn.startedIso,
+                content: output,
+                ...(isError ? { error: output || 'Tool failed' } : {}),
+              }
+              turn.liveSteps.push(resultStep)
+              existing.resultStep = resultStep
+            }
           }
         }
         syncTranscriptAppend(rawId)
@@ -595,52 +663,10 @@ export function createAgyRuntime(options = {}) {
     }
   }
 
-  function liveTurnSteps(turn) {
-    const out = []
-    let idx = turn.baseMaxIndex + 1
-    if (turn.userText) {
-      out.push({
-        step_index: idx++,
-        type: 'USER_INPUT',
-        source: 'USER_EXPLICIT',
-        status: 'DONE',
-        created_at: turn.startedIso,
-        content: turn.userText,
-        client_msg_id: turn.clientMsgId,
-      })
-    }
-    if (turn.liveThinking.trim()) {
-      out.push({
-        step_index: idx++,
-        type: 'PLANNER_RESPONSE',
-        source: 'MODEL',
-        status: 'RUNNING',
-        created_at: turn.startedIso,
-        thinking: turn.liveThinking,
-      })
-    }
-    for (const tc of turn.liveTools) {
-      out.push({
-        step_index: idx++,
-        type: 'PLANNER_RESPONSE',
-        source: 'MODEL',
-        status: tc.done ? 'DONE' : 'RUNNING',
-        created_at: turn.startedIso,
-        tool_calls: [{ name: tc.name, args: tc.args }],
-      })
-      if (tc.done) {
-        out.push({
-          step_index: idx++,
-          type: 'GENERIC',
-          source: 'MODEL',
-          status: tc.isError ? 'ERROR' : 'DONE',
-          created_at: turn.startedIso,
-          content: tc.output,
-          ...(tc.isError ? { error: tc.output || 'Tool failed' } : {}),
-        })
-      }
-    }
-    return out
+  function markDirtySeq(pid, seq) {
+    let set = dirtyLiveSeqs.get(pid)
+    if (!set) dirtyLiveSeqs.set(pid, (set = new Set()))
+    set.add(seq)
   }
 
   function transcriptOf(rawId, native = readConversationStates().get(rawId)) {
@@ -649,12 +675,15 @@ export function createAgyRuntime(options = {}) {
     const pid = toPersonaId(rawId)
     const turn = promptTurns.get(pid)
     if (turn && turn.exportedBaseMax !== undefined && curMax <= turn.exportedBaseMax) {
-      const extra = [...turn.priorPending, ...liveTurnSteps(turn)]
+      const extra = [...turn.priorPending, ...turn.liveSteps]
       if (extra.length > 0) {
         return {
           ...transcript,
           steps: [...transcript.steps, ...extra],
-          history: `${transcript.history}:live:${turn.seq}:${turn.liveRev}`,
+          // Live and settled unexported steps share one synthetic history epoch until native export flushes to disk,
+          // so thinking/tool progress and settling never trigger full-history rewrites.
+          history: `${transcript.history}:settled:${turn.historySeq ?? turn.seq}`,
+          synthetic: true,
         }
       }
     }
@@ -667,6 +696,7 @@ export function createAgyRuntime(options = {}) {
           ...transcript,
           steps: [...transcript.steps, ...pending.steps],
           history: `${transcript.history}:settled:${pending.seq}`,
+          synthetic: true,
         }
       }
     }
@@ -787,16 +817,24 @@ export function createAgyRuntime(options = {}) {
   function syncTranscriptAppend(rawId) {
     const pid = toPersonaId(rawId)
     const bDir = brainDirOf(rawId)
-    const { steps, history } = transcriptOf(rawId)
+    const { steps, history, synthetic } = transcriptOf(rawId)
     const toSeq = steps.reduce((max, step, index) => {
       const at = typeof step?.step_index === 'number' ? step.step_index : index
       return Math.max(max, at + 1)
     }, 0)
     const prevSeq = lastPushedSeq.get(pid) ?? 0
     const rewritten = lastPushedHistory.has(pid) && lastPushedHistory.get(pid) !== history
-    if (rewritten || toSeq > prevSeq) {
+    const dirty = synthetic ? dirtyLiveSeqs.get(pid) : undefined
+    if (!synthetic) dirtyLiveSeqs.delete(pid)
+    const hasDirty = Boolean(dirty && dirty.size > 0)
+    if (rewritten || toSeq > prevSeq || hasDirty) {
       const { items: allItems } = stepsToItems(steps, { brainDir: bDir, full: false, clientMsgIdFor: clientMsgIdFor(rawId) })
-      const deltaItems = rewritten ? allItems : allItems.filter((it) => it.seq > prevSeq)
+      const deltaItems = rewritten
+        ? allItems
+        : allItems.filter((it) => it.seq > prevSeq || Boolean(dirty?.has(it.seq)))
+      dirtyLiveSeqs.delete(pid)
+      if (!rewritten && toSeq <= prevSeq && deltaItems.length === 0) return
+      const update = !rewritten && deltaItems.some((it) => it.seq <= prevSeq)
       lastPushedSeq.set(pid, toSeq)
       lastPushedHistory.set(pid, history)
       rt.append(pid, {
@@ -804,8 +842,9 @@ export function createAgyRuntime(options = {}) {
         fromSeq: rewritten ? 0 : prevSeq,
         toSeq,
         history,
+        ...(update ? { update: true } : {}),
       })
-      rt.sessionsChanged()
+      if (rewritten || toSeq > prevSeq) rt.sessionsChanged()
     }
   }
 
@@ -1120,12 +1159,31 @@ export function createAgyRuntime(options = {}) {
     const priorPending = pending && !pendingReplaced(pending, base.steps, curMax) ? pending.steps : []
     const baseMax = maxStepIndex([...base.steps, ...priorPending])
     turn.priorPending = priorPending
+    turn.historySeq = priorPending.length > 0 ? pending.seq : turn.seq
     turn.exportedBaseMax = curMax
     turn.baseMaxIndex = baseMax
+    turn.nextStepIndex = baseMax + 1
     turn.startedIso = new Date().toISOString()
-    if (turn.clientMsgId && turn.userText) {
-      sentMsgIds.set(`${rawId}:${baseMax + 1}`, { text: turn.userText, clientMsgId: turn.clientMsgId })
-      while (sentMsgIds.size > 512) sentMsgIds.delete(sentMsgIds.keys().next().value)
+    turn.liveSteps = []
+    turn.activeThoughtStep = null
+    turn.pendingThought = ''
+    turn.liveToolsById = new Map()
+    turn.nextToolNum = 0
+    if (turn.userText) {
+      const idx = turn.nextStepIndex++
+      turn.liveSteps.push({
+        step_index: idx,
+        type: 'USER_INPUT',
+        source: 'USER_EXPLICIT',
+        status: 'DONE',
+        created_at: turn.startedIso,
+        content: turn.userText,
+        client_msg_id: turn.clientMsgId,
+      })
+      if (turn.clientMsgId) {
+        sentMsgIds.set(`${rawId}:${idx}`, { text: turn.userText, clientMsgId: turn.clientMsgId })
+        while (sentMsgIds.size > 512) sentMsgIds.delete(sentMsgIds.keys().next().value)
+      }
     }
     promptFailures.delete(rawId)
     promptTurns.set(pid, turn)
@@ -1187,16 +1245,20 @@ export function createAgyRuntime(options = {}) {
       const turnToken = Symbol('turn')
       const turn = {
         seq: nextTurnSeq++,
+        historySeq: undefined,
         userText: cleanUserText(params.text || ''),
         clientMsgId: typeof params.client_msg_id === 'string' && params.client_msg_id ? params.client_msg_id : undefined,
         streamingText: '',
-        liveThinking: '',
-        liveTools: [],
-        liveRev: 0,
+        liveSteps: [],
+        activeThoughtStep: null,
+        pendingThought: '',
+        liveToolsById: new Map(),
+        nextToolNum: 0,
         thoughtTimer: undefined,
         priorPending: [],
         exportedBaseMax: undefined,
         baseMaxIndex: undefined,
+        nextStepIndex: undefined,
         startedIso: '',
         failed: false,
         newMessage: false,
@@ -1245,7 +1307,7 @@ export function createAgyRuntime(options = {}) {
               const curMax = maxStepIndex(exported.steps)
               const exportedComplete = curMax > turn.exportedBaseMax && (!expectReply || exportedHasReply(exported.steps, turn.exportedBaseMax))
               if (curMax <= turn.exportedBaseMax) {
-                const settled = [...turn.priorPending, ...liveTurnSteps(turn)]
+                const settled = [...turn.priorPending, ...turn.liveSteps]
                 if (expectReply) {
                   settled.push({
                     step_index: (settled.length ? maxStepIndex(settled) : turn.baseMaxIndex) + 1,
@@ -1259,7 +1321,7 @@ export function createAgyRuntime(options = {}) {
                 if (settled.length > 0) {
                   unexportedTurns.set(rawId, {
                     baseMaxIndex: turn.exportedBaseMax,
-                    seq: turn.seq,
+                    seq: turn.historySeq ?? turn.seq,
                     steps: settled,
                     hasReply: expectReply,
                     expiresAt: Date.now() + exportSettleTimeoutMs,
@@ -1339,6 +1401,7 @@ export function createAgyRuntime(options = {}) {
       archived.add(rawId)
       clearExportPoll(rawId)
       unexportedTurns.delete(rawId)
+      dirtyLiveSeqs.delete(toPersonaId(rawId))
       await cancelTurn(rawId)
       await acp.closeSession(rawId)
       rt.sessionsChanged()
@@ -1389,6 +1452,7 @@ export function createAgyRuntime(options = {}) {
       const before = transcriptOf(rawId)
       clearExportPoll(rawId)
       unexportedTurns.delete(rawId)
+      dirtyLiveSeqs.delete(pid)
       for (const k of sentMsgIds.keys()) if (k.startsWith(`${rawId}:`)) sentMsgIds.delete(k)
       lastPushedHistory.set(pid, before.history)
       lastPushedSeq.set(pid, stepsToItems(before.steps).toSeq)
@@ -1506,6 +1570,7 @@ export function createAgyRuntime(options = {}) {
     activeTurns.clear()
     promptTurns.clear()
     unexportedTurns.clear()
+    dirtyLiveSeqs.clear()
     return acp.stop()
   }
 
