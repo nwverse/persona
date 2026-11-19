@@ -210,13 +210,17 @@ type Service struct {
 	reviewDismissals taskReviewDismissalBook // task_review_dismissals.go
 	repoRootsMu      sync.Mutex              // pr_number_ref.go: one write of the repository roots at a time
 	// ownerVerifiesAll: every deployed task asks the owner to verify, not only the big ones (ownerVerifies; tests).
-	ownerVerifiesAll bool
-	later            laterBook    // later.go: questions that can wait for a briefing
-	brief            briefBook    // briefing.go
-	reporters        reporterBook // reporters.go
-	sched            schedule     // schedule.go
-	tasks            tasksState   // tasks.go
-	questions        questions    // tools.go (ask_user)
+	ownerVerifiesAll         bool
+	later                    laterBook    // later.go: questions that can wait for a briefing
+	brief                    briefBook    // briefing.go
+	reporters                reporterBook // reporters.go
+	sched                    schedule     // schedule.go
+	delayedMu                sync.Mutex   // delayed_waits.go: one local writer to the durable wait backlog
+	delayedRecoveryMu        sync.Mutex   // one restore pass; tracks entries already armed by this incarnation
+	delayedReceiptsRecovered bool         // initial receipt-claim requeue has completed for this incarnation
+	delayedRestored          map[string]bool
+	tasks                    tasksState // tasks.go
+	questions                questions  // tools.go (ask_user)
 	// deadlineSweeping: a sweep of the decisions past their deadline is running (decision_deadline.go).
 	deadlineSweeping atomic.Bool
 	askTodos         askTodoBook  // ask_todo.go: the questions nobody answered, now to-dos
@@ -454,15 +458,35 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 			return err
 		}
 	}
-	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || method == DeviceSessionSend) {
+	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || method == DeviceSessionSend || method == DeviceSessionSendOnce) {
 		id, _ := p["session_id"].(string)
 		if err := s.putSupervisionInstructions(ctx, device, id, p); err != nil {
 			return err
 		}
-		if method == DeviceSessionSend {
-			cfg := s.settings(ctx)
-			if id != "" && id == cfg.Main && device == cfg.mainRouteMachine() {
-				p["is_main"] = true // internal sends must not restart main on ordinary-chat compaction settings
+		if method == DeviceAssistantSend || method == DeviceSessionSend || method == DeviceSessionSendOnce {
+			// Initial assistant.send starts do not pass through SendParams, and Inbox continuations use session.send.
+			// The hub forwards session.send_once to the same node entry, so attest it here before that forwarding too.
+			// Attest the explicit ordinary/unknown decision on every manager-owned node send.
+			newConversation := method == DeviceAssistantSend && id == ""
+			startOrigin := ""
+			if newConversation {
+				startOrigin, _ = p["origin"].(string)
+			} else {
+				delete(p, "origin") // an existing conversation trusts only the manager's origin book
+			}
+			origin, originKnown := s.managerOriginDecision(ctx, device, id, startOrigin, newConversation)
+			delete(p, "origin_known")
+			if originKnown {
+				p["origin_known"] = true
+			}
+			if origin != "" {
+				p["origin"] = origin
+			}
+			if method == DeviceSessionSend {
+				cfg := s.settings(ctx)
+				if id != "" && id == cfg.Main && device == cfg.mainRouteMachine() {
+					p["is_main"] = true // internal sends must not restart main on ordinary-chat compaction settings
+				}
 			}
 		}
 	}

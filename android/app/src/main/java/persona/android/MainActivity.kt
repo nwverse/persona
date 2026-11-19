@@ -67,6 +67,8 @@ class MainActivity : ComponentActivity() {
     @Inject lateinit var settingsServices: SettingsServices
     /** The hubs' channels, for the "From WeChat" marks on messages and conversations (docs/extensions/channels.md "Source markers"). */
     @Inject lateinit var channelDirectory: persona.core.contracts.api.ChannelDirectory
+    /** The installed extensions' icons, for the marks of conversations an extension opened (#10358). */
+    @Inject lateinit var openerIcons: persona.feature.assistant.OpenerIcons
     @Inject lateinit var connection: HubConnection
     @Inject lateinit var shell: AppServices
     @Inject lateinit var platformPairing: PlatformPairing
@@ -132,6 +134,7 @@ class MainActivity : ComponentActivity() {
                 LocalDeveloperTools provides launchAdapter?.tools,
                 persona.core.designsystem.LocalLanguageHost provides this@MainActivity,
                 persona.core.designsystem.LocalChannels provides channels,
+                persona.feature.assistant.LocalOpenerIcons provides openerIcons,
                 persona.core.designsystem.LocalLarkFeatures provides lark,
                 persona.core.designsystem.LocalHubFeatures provides features,
                 persona.core.designsystem.LocalManagerRoster provides managers,
@@ -293,6 +296,8 @@ class MainActivity : ComponentActivity() {
         const val EXTRA_SESSION = "session"
         const val EXTRA_CAPSULE_URL = "persona.capsule.url"
         val pendingCapsuleUrl = mutableStateOf<String?>(null)
+        /** A message link waiting for its hub group and replacement session; survives the shell's identity change. */
+        val pendingHubLink = mutableStateOf<String?>(null)
         /** A pairing link the activity was opened with, for the pairing screen to confirm. */
         val pendingPairLink = mutableStateOf<String?>(null)
     }

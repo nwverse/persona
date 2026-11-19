@@ -1126,11 +1126,16 @@ func (s *Service) sendParamsOwn(ctx context.Context, p SendParams) (map[string]a
 	}
 	// Keep the raw value until external admission checks it; ordinary conversations ignore it, even on an early return.
 	defer delete(params, "runtime")
-	delete(params, "origin") // only the manager's origin book may attest an Inbox conversation
-	if s.isInboxModelCall(ctx, p.MachineID, p.SessionID, "") {
+	delete(params, "origin") // only the manager's origin book may attest an existing conversation
+	delete(params, "origin_known")
+	origin, originKnown := s.managerOriginDecision(ctx, p.MachineID, p.SessionID, "", false)
+	if originKnown {
+		params["origin_known"] = true // an empty origin is an explicit ordinary decision, including on assistant.model
+	}
+	if origin != "" {
 		// A node reload does not restore the node's in-memory origin field. Re-attest it on every later send so the
 		// first resumed process is clamped to non-bypass default and its Lark gate cannot fall back to an ordinary conversation.
-		params["origin"] = OriginInbox
+		params["origin"] = origin
 	}
 	text, _ := params["text"].(string)
 	own := !contextTagRe.MatchString(text)
@@ -1274,8 +1279,14 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 				p["launcher"] = l
 			}
 			// And the model it runs, so no pick keeps it; one that is no model id (Claude's "<synthetic>") is not.
-			if _, asked := p["model"]; !asked && proto.ValidModelID(c.Model) {
-				p["model"] = c.Model
+			if _, asked := p["model"]; !asked {
+				model := c.Model // older nodes only report the transcript name
+				if c.RequestedModel != nil {
+					model = *c.RequestedModel
+				}
+				if proto.ValidModelID(model) {
+					p["model"] = model
+				}
 			}
 		}
 	}
@@ -1299,6 +1310,7 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 		case model != "" && !picked && !s.launcherHasModel(ctx, machine, l, model):
 			s.logf("[%s] %s: model %s is not in %s's list any more, using its default", machine, short(sid), model, l)
 			delete(p, "model")
+			leaveLauncherNote(ctx, i18n.T(lang, "assistant-start.model_missing", i18n.Args{"model": model, "launcher": l}))
 		}
 	}
 	pickedLauncher := l != ""
