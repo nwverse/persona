@@ -104,6 +104,9 @@ type assistantProc struct {
 	effort      string
 	model       modelExecution
 	fingerprint string
+	// turnRecovery belongs to the turn currently answering on this process. A newer request may cancel the
+	// conversation-map entry, but must not rewrite this older turn's retry budget before its result arrives.
+	turnRecovery *assistantTurnRecovery
 	// instructions is the digest of the CLAUDE.md / AGENTS.md in cwd when it started (instructionsDigest): the agent
 	// reads them only at start, so once the hub rewrites them (new prompts, assistant.prepare) the next idle message
 	// resumes the conversation in a fresh process (instructionsStale).
@@ -552,8 +555,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if guest != nil && agent != "claude" {
 		return "", errGuestAgent
 	}
+	asked := ""
 	if agent == "claude" {
-		asked := n.startProfile(executionOption(options).ConfigDir, guestKind, resume)
+		asked = n.startProfile(executionOption(options).ConfigDir, guestKind, resume)
 		execution.ConfigDir, err = n.assistantProfileSelection(ctx, id, launcher, asked, resume)
 		if err != nil {
 			return "", err
@@ -564,7 +568,6 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if proto.IsExternalLauncher(launcher) {
 		execution.StartupContext = ctx
 	}
-	timing.mark("preflight_done", true)
 	var p *assistantProc
 	if id == "" && guest != nil {
 		// Never the warm spare: it was started with the assistant's tools. Its process reads Guest from the state.
@@ -590,6 +593,14 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		st.Origin, st.Launcher, st.Cwd = origin, launcher, cwd
 		n.state.put(id, st)
 	}
+	// A reused warm process is already running: its profile needs no sign-in check (a spare is only adopted in the
+	// start's own profile). A cold start asks before anything is spawned.
+	if p == nil && agent == "claude" && !resume {
+		if err := n.assistantNewProfileAuth(ctx, launcher, asked, execution.ConfigDir); err != nil {
+			return "", err
+		}
+	}
+	timing.mark("preflight_done", true)
 	if cwd == "" {
 		cwd = n.storedCwd(st.Cwd)
 	}
@@ -815,10 +826,15 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	}
 	if p.agent == "codex" {
 		p.mu.Lock()
+		wasBusy := p.busy
 		p.busy = true
 		p.turnError = ""
 		p.turnErrorKind = ""
 		p.lastActive = time.Now()
+		p.model.NewModelChoice = execution.NewModelChoice
+		if recovery != nil || !wasBusy {
+			p.turnRecovery = recovery
+		}
 		p.mu.Unlock()
 		if err := p.cx.deliver(ctx, live, text, images, selected...); err != nil {
 			p.mu.Lock()
@@ -826,6 +842,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			p.mu.Unlock()
 			return "", fmt.Errorf("send to codex: %w", err)
 		}
+		n.commitModelChoice(id, execution)
 		commit()
 		awaitList(n.notifySessionsSoon())
 		return id, nil
@@ -885,12 +902,17 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			return id, nil
 		}
 		p.mu.Lock()
+		wasBusy := p.busy
 		p.busy = true
 		p.turnError = ""
 		p.turnErrorKind = ""
 		p.compacted = false // a new turn: compact again when it is idle and long
 		p.lastActive = time.Now()
 		p.partial.Reset()
+		p.model.NewModelChoice = execution.NewModelChoice
+		if recovery != nil || !wasBusy {
+			p.turnRecovery = recovery
+		}
 		p.mu.Unlock()
 		var timeout *assistantControlTimeoutError
 		retryControl := errors.As(controlErr, &timeout)
@@ -900,6 +922,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		}
 		if werr == nil {
 			werr = p.writeInput(in) // a new id each attempt: a process that died may have written the last one down
+			if werr == nil {
+				n.commitModelChoice(id, execution)
+			}
 			timing.mark("input_written", werr == nil)
 		}
 		switch {
