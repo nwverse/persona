@@ -115,7 +115,7 @@ func holdHub(t *testing.T, row proto.Session) (*Hub, *Machine, *holdManager) {
 		return nil, &rpc.Error{Code: devicewire.CodeHeld, Message: "Will send when Studio Mac is back", Data: data}
 	})
 	h.devices.mu.Lock()
-	h.devices.upOpen = true
+	h.devices.upOpen = map[string]bool{devicesOwner: true}
 	h.devices.mu.Unlock()
 	return h, m, k
 }
