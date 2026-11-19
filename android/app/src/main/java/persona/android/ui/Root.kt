@@ -809,7 +809,13 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                     },
                     // Regular window: Search opens over the whole window as the open iPhone Duo (#9171).
                     fullWindowSearch = regular,
-                    shadedPlace = if (regular && selected == AppTab.Persona) sidebarShadeKey(personaStack.firstOrNull() ?: AssistantRoute) else null,
+                    shadedPlace = visibleSidebarShade(
+                        regular = regular,
+                        selected = selected,
+                        personaRoot = personaStack.firstOrNull() ?: AssistantRoute,
+                        visible = visible,
+                        visibleSource = navigator.sourceTab(visible),
+                    ),
                     onFoldColumn = onFoldColumn)
             }
         }

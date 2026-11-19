@@ -111,6 +111,10 @@ const (
 	// the to-do's results and what changed since the owner looked (TodoItemDetail). The hub lists the todo_timeline
 	// feature only while every manager whose to-dos it merges names it; until then clients draw none of them.
 	CapabilityTodoTimeline = "todo_timeline"
+	// CapabilityTodoImages: the manager creates to-dos with images and serves their private bytes (#11084). The hub
+	// lists todo_images only while every manager whose to-dos it merges names it, so an older manager never receives an
+	// image create it would silently drop. Existing image metadata and byte reads remain available on capable managers.
+	CapabilityTodoImages = "todo_images"
 )
 
 // BodyStream is where MethodHTTPStreamed's body comes from: the relay the hub holds with ID (devicewire.RelayPath
@@ -314,8 +318,9 @@ var Routes = []string{
 	"DELETE /api/v1/task-trust",
 	// The todos (the assistant's todos.go, docs/assistant/todos.md).
 	"GET /api/v1/todos",
-	"GET /api/v1/todos/places", // the To-dos places and counts (todo_view_routes.go, #10226); the literal wins over {id}
-	"GET /api/v1/todos/{id}",   // one to-do as the list has it, with its view
+	"GET /api/v1/todos/places",              // the To-dos places and counts (todo_view_routes.go, #10226); the literal wins over {id}
+	"GET /api/v1/todos/{id}",                // one to-do as the list has it, with its view
+	"GET /api/v1/todos/{id}/images/{image}", // one attached picture's exact bytes (todo_images.go, #11084)
 	"GET /api/v1/todos/{id}/repositories",
 	"GET /api/v1/todos/{id}/workspace-rules",
 	"PUT /api/v1/todos/{id}/workspace-rules",

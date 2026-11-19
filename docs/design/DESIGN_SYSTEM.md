@@ -1311,6 +1311,17 @@ Explicit review-before-install is intentional even with Undo: uploaded instructi
 so selecting a file must not silently change behavior. Success refreshes the list and offers a bounded, unchanged-new-
 package-only Undo with retained recovery files; `docs/operations/hub-update.md` defines the state and discovery limits.
 
+**Web to-do images** (#11084): the existing New to-do `Dialog` takes JPEG/PNG images through the shared attachment
+picker and `AttachmentTray`; selection shows local thumbnails immediately, with an accessible Remove on each. Create is
+one single-flight busy action, with its failure inline in the dialog. Retry keeps every field, selected file and the
+operation ID; cancel releases the previews. The to-do detail uses the same tray and existing `ImageViewer` for zoom and
+download, not another gallery. Private image bytes are fetched with the to-do's credentials and manager, three at a
+time, with localized Retry on failure and object URLs released when replaced or closed. The no-image dialog and detail
+keep their previous layout and behavior. When `todo_images` is absent because any manager is too old to persist images,
+the picker is hidden and an image-less create is never sent. All controls use the existing 44 px touch expansion and en, zh-Hans and ja
+copy. The assistant manager owns persistence and handoff; the Web client does not invent a temporary upload or a local
+machine path.
+
 `EmptyStateView` (`apple/Persona/DesignSystem/Components.swift:385`): symbol, title, one-sentence message, optional prominent action. 92 uses. System `ContentUnavailableView` is used in about 22 other places and looks different (DS-15). Search results may use `ContentUnavailableView.search`. Web has no shared empty state outside admin; Android has `JEmptyState`. An offline current assistant (several assistants) takes the place of a merged list's empty state with its own: the assistant avatar faded with its offline mark, "<name> is offline" and when it last synced (web `OfflineState` in `web/src/views/ManagerParts.tsx`; Android `JAssistantOffline`, a `JEmptyState` whose `leading` slot holds `JManagerAvatar`; `docs/assistant/managers.md` "Clients").
 
 ### 3.10 Loading and error states
@@ -2139,6 +2150,7 @@ your permission" (section 5, "Notifications"); moving them to the card's words i
   space's tabs color each agent by its state. The web's top bar says no state (#5421, cindy's): the running status bar
   over the composer says it while the Agent works, the pending cards while it needs you, and its row in the sidebar always.
 - A row shows its most urgent state, in the order `AgentListOrder` ranks them.
+- A waiting to-do is named by what it waits on, never one "Waiting" for all (#11090, web): **Waiting on you** in Needs you's attention color only when it waits on the owner by the sidebar badge's predicate, every other wait and an unknown one ("Paused (nothing needed from you)") in a neutral tone; the words are in `docs/protocol/i18n.md` ("Agent states").
 - A failed run has no state of its own. It shows its state like any other run, and its row's line 2 says what failed, in red.
 - A Codex opened with no first message (`awaiting_first_message`) has no state of its own either. It is idle, never Needs You or unread, and sends no push.
   Its row's line 2 says "Waiting for its first message" (web `sidebar.codex_waiting` through `rowLine`, Apple `Session.listPreview`).

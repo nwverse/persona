@@ -69,7 +69,7 @@ jobs:
           Path(os.environ['PR_JSON']).write_text(json.dumps(pr))
           PY
           else
-            gh pr view "$PR_NUMBER" --repo "$REPOSITORY" --json state,isDraft,baseRefName,headRefOid,headRepository,author,title,mergeCommit > "$PR_JSON"
+            gh pr view "$PR_NUMBER" --repo "$REPOSITORY" --json number,title,state,isDraft,baseRefName,headRefOid,headRepository,author,mergeCommit > "$PR_JSON"
             gh api "repos/$REPOSITORY/pulls/$PR_NUMBER" --jq '{merge_commit_sha}' > "$PR_REST_JSON"
             python3 - <<'PY'
           import json,os
@@ -80,14 +80,14 @@ jobs:
           PY
           fi
           set -euo pipefail
-          if [[ "${{ github.event_name }}" = push ]] && ! python3 -c 'import json; raise SystemExit(0 if json.load(open(os.environ['PR_JSON'])) else 1)'; then
+          if [[ "${{ github.event_name }}" = push ]] && ! python3 -c 'import json,sys; raise SystemExit(0 if json.load(open(sys.argv[1])) else 1)' "$PR_JSON"; then
             printf 'number=0\n' >> "$GITHUB_OUTPUT"
             printf 'channel=release\n' >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          printf 'number=%s\n' "$(python3 -c 'import json; print(json.load(open(os.environ['PR_JSON']))["number"])')" >> "$GITHUB_OUTPUT"
+          printf 'number=%s\n' "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["number"])' "$PR_JSON")" >> "$GITHUB_OUTPUT"
           channel=release
-          if [[ "$(python3 -c 'import json; print(json.load(open(os.environ['PR_JSON']))["title"])')" == *-beta.* ]]; then channel=beta; fi
+          if [[ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["title"])' "$PR_JSON")" == *-beta.* ]]; then channel=beta; fi
           printf 'channel=%s\n' "$channel" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v4
         with:
@@ -136,7 +136,7 @@ jobs:
           mkdir -p release
           python3 scripts/operations/release_pr.py --repository "$REPOSITORY" --channel "$CHANNEL" plan \
             --version "$version" --commit "$GIT_COMMIT" --pr "$PR_NUMBER" --merge-commit "$MERGE_COMMIT" --build "$build" \
-            --source-commit "$(python3 -c 'import json; print(json.load(open(os.environ['PR_JSON']))["headRefOid"])')" --out release/plan.json
+            --source-commit "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["headRefOid"])' "$PR_JSON")" --out release/plan.json
           python3 scripts/operations/release_pr.py --repository "$REPOSITORY" --channel "$CHANNEL" check-plan --plan release/plan.json --commit "$GIT_COMMIT"
           {
             printf 'pr=%s\n' "$PR_NUMBER"
