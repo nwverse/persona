@@ -487,11 +487,6 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			// unguarded startup window; built-in Claude and Codex carry it in their process and session state.
 			return "", errors.New("inbox handling requires a built-in Claude or Codex launcher")
 		}
-		if policy != "" {
-			if err := n.runtimePolicyDropped(ctx, id); err != nil {
-				return "", err
-			}
-		}
 		if startTier != "" {
 			return "", serviceTierRefusal(ctx, "assistant_service_tier_unsupported")
 		}
@@ -509,7 +504,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			eff = execution.Effort
 		}
 		superviseRoundFrom(ctx).set(roundKept, roundWhyUnsupported) // a runtime keeps its own context (assistant_round.go)
-		return n.assistantSendRuntime(ctx, onRuntime, id, cwd, rl, text, images, mode, execution.Model, eff)
+		return n.assistantSendRuntime(ctx, onRuntime, id, cwd, rl, text, images, mode, execution.Model, eff, policy)
 	}
 	if len(options) == 0 || (execution.Fingerprint == "" && execution.Model == "") {
 		if launcher == "" || launcher == st.Launcher {

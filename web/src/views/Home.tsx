@@ -41,7 +41,7 @@ import { Icon } from "../ui/icons";
 import { MarkSeenDialog } from "./AgentMenus";
 import { answeredLookup, answeredSessions } from "./assistant/answered-lookup";
 import { resolve } from "./chat/Interactions";
-import { OverviewCards } from "./extensions/ExtensionSlots";
+import { OverviewArrangeButton, OverviewCards } from "./extensions/ExtensionSlots";
 import { TodoStageBar } from "./TodoStageBar";
 import { t } from "../i18n";
 import { markAllSeenLabel, STATE_LABEL, stateCount, stateName } from "../lib/state-labels";
@@ -116,12 +116,15 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
   // Back from a card opened here lands where the reader was, not at the top (#5133)
   const scroller = useRef<HTMLDivElement>(null);
   useScrollMemory(scroller, "/overview");
+  // the extensions' cards being arranged (#9745): their order, which are hidden, how wide
+  const [arranging, setArranging] = useState(false);
 
   return (
     <div className="flex h-full flex-col">
       <header className="flex h-14 shrink-0 items-center gap-2 border-b border-line px-3 sm:px-4 lg:border-transparent">
         <IconButton icon="sidebar" label={t("home.sidebar")} onClick={onToggleSidebar} className="lg:hidden" />
         <span className="flex-1" />
+        <OverviewArrangeButton on={arranging} onClick={() => setArranging((on) => !on)} />
         {!noMachines && (
           <Button tone="secondary" icon="plus" onClick={onNewAgent}>
             {t("home.new_agent")}
@@ -290,7 +293,7 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
           {/* the extensions' cards (docs/extensions/extensions.md "UI slots" overview_card), last: under everything about
               the owner's agents (what needs them, what is running, what just finished) and the computers, so no number
               of cards pushes those off the first screen (#11147; #11092 had them under Needs you and Stuck only) */}
-          <OverviewCards />
+          <OverviewCards editing={arranging} onDone={() => setArranging(false)} />
         </div>
       </div>
       <MarkSeenDialog list={confirmSeen} onClose={() => setConfirmSeen(null)} />

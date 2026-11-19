@@ -479,31 +479,34 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // the message is in, the hub has not said working yet (#3654): the live row covers that wait too
   const segs = useMemo(() => segments(tr.items), [tr.items]);
   const lastSeg = segs[segs.length - 1];
-  // the last message's send time: it stays on screen without a hover (#5285)
-  const latestTime = lastSeg?.answer?.ts ?? lastSeg?.user?.ts;
   const [awaitNow, setAwaitNow] = useState(() => Date.now());
-  const turnFailure = session?.failure_reason ? { since: session.state_since } : undefined;
+  const turnFailure = session?.failure_reason || session?.turn_error || lastSeg?.cut ? { since: session?.state_since } : undefined;
   // a message whose wait the hub took a stop for (#2450): it is no longer worked on, so Working… and Interrupt go at
   // once instead of after AWAIT_MS; a turn the hub reports later still shows through `state`
   const [stoppedTurn, setStoppedTurn] = useState<string>();
-  const awaitedTurn = awaitingTurn(lastSeg, state, awaitNow, turnFailure) ? lastSeg?.user?.id : undefined;
-  const awaiting = awaitedTurn !== undefined && awaitedTurn !== stoppedTurn;
+  const awaitedTurn = awaitingTurn(lastSeg, state, awaitNow, turnFailure, session?.state_since) ? lastSeg?.user?.id : undefined;
+  const awaiting = awaitedTurn !== undefined && awaitedTurn !== stoppedTurn && !tr.streamEnded;
   const awaitingNow = useRef<string | undefined>(undefined);
   awaitingNow.current = awaiting ? awaitedTurn : undefined;
-  const lastAnswered = Boolean(lastSeg?.steps.length || lastSeg?.answer);
+  const waitStart = awaitedTurn ? lastSeg?.user?.ts : undefined;
   useEffect(() => {
     // draw again when the wait runs out, so a message nobody picks up stops looking worked on; once something answers
     // it there is nothing to wait for (and no clock to reset on every streamed item)
-    if (lastAnswered) return;
-    const at = lastSeg?.user?.ts ? Date.parse(lastSeg.user.ts) : NaN;
+    const at = waitStart ? Date.parse(waitStart) : NaN;
     if (Number.isNaN(at)) return;
     setAwaitNow(Date.now());
     const left = at + AWAIT_MS - Date.now();
     if (left <= 0) return;
     const timer = window.setTimeout(() => setAwaitNow(Date.now()), left + 10);
     return () => clearTimeout(timer);
-  }, [lastSeg, state, lastAnswered]);
-  const working = state === "working" || Boolean(tr.streaming) || outgoing > 0 || awaiting;
+  }, [waitStart]);
+  const stopped = Boolean(stoppedTurn && stoppedTurn === lastSeg?.user?.id);
+  const canShowPreview = state !== "offline" && state !== "needs_you" && !stopped && !turnFailure;
+  const streaming = Boolean(tr.streaming) && !tr.streamEnded && (state === "working" || canShowPreview);
+  const working = state === "working" || streaming || outgoing > 0 || awaiting;
+  // The user's time stays in its row until the finished reply can show its own. An item that lands
+  // while the turn is still running otherwise removes a line above the live work and moves it up.
+  const latestTime = (!working && lastSeg?.answer?.ts) || lastSeg?.user?.ts;
   // still starting only until the conversation has anything in it: the flag the caller passes may outlive the start
   const starting = Boolean(launching) && !tr.items.length && !tr.streaming && state !== "working";
   // a new conversation with its first message on the way and no transcript yet (#1697): the lines the transcript opens
@@ -1351,11 +1354,9 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // any run's card inside it) instead of keeping the turn's "Working…" clock going: first a workflow (#3434), then
   // background subagents (#5030), commands that only wait (#6045), and finally a real background command or Monitor
   // (#7341). A message of yours on its way, streaming, or an answer being written is a turn again.
-  const streaming = Boolean(tr.streaming);
   const backgroundState = backgroundTurn(session, subagents, { streaming, outgoing: outgoing > 0, awaiting });
   const backgroundOnly = backgroundState !== null;
-  const lastLive = working && !backgroundOnly && !tr.loading;
-  const processing = !sendFeedback && Boolean(assistant || session?.assistant) && state === "working" && !backgroundOnly && (tr.loading || (opening && !tr.streaming));
+  const lastLive = working && !backgroundOnly && (!tr.loading || tr.items.length > 0);
   // the main conversation's readiness: the card for what is missing, and the send button saying it (4.4)
   const gate = useReadinessGate(isMain);
   blockedRef.current = gate.blocked;
@@ -1809,6 +1810,10 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // Close Plan in the pill's flyout hides it until the plan changes (cindy's PinnedPlanPanel)
   const [planClosed, closePlan] = usePlanClosed(`${mid}/${sid}`, plan);
   const lastLine = lines[lines.length - 1];
+  // After the end marker the last reply can still be waiting for its item. Its text stays visible
+  // without keeping the exchange working, even if the host already reported completion.
+  const wordsFor = (line: ChatLine) => (line.kind === "segment" || line.kind === "supervision") &&
+    ((line.live && streaming) || (line === lastLine && tr.streamEnded && canShowPreview)) ? tr.streaming || undefined : undefined;
   // "Retry" on the error banner and the failure note: sends "continue" alone, not what is in the box. Whether it went:
   // deliver can refuse without leaving a bubble (the setup gate, a row that cannot send, a refused launcher switch)
   const retry = useCallback(() => deliver({ text: t("chat-chatview.continue_text"), images: [] }, uuid()), [deliver]);
@@ -1930,11 +1935,12 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     const live = lines.flatMap((l) => l.kind === "supervision" ? l.lines : [l]).findLast((l) => l.kind === "segment" && l.live);
     return live?.kind === "segment" ? live.seg : undefined;
   }, [lines]);
+  const processing = !sendFeedback && Boolean(assistant || session?.assistant) && state === "working" && !backgroundOnly &&
+    !liveSeg && (tr.loading || (opening && !tr.streaming));
   const runStart = (liveSeg ? turnStart(liveSeg) : undefined) ?? stateSince;
   // what the turn is doing, for the bar's words (cindy's status): kept as it was while it says the same
-  const streamingNow = Boolean(tr.streaming);
   const lastStep = useRef<RunStep | undefined>(undefined);
-  const step = useMemo(() => sameStep(lastStep.current, runStep(liveSeg, streamingNow, subagents, callsAnswered)), [liveSeg, streamingNow, subagents, callsAnswered]);
+  const step = useMemo(() => sameStep(lastStep.current, runStep(liveSeg, streaming, subagents, callsAnswered)), [liveSeg, streaming, subagents, callsAnswered]);
   lastStep.current = step;
   // as cindy's: gone once every step is done or a later message of the user's started another turn
   const planPill = plan && planOut && !plan.superseded && !planClosed && !planProgress(plan.todos).allDone ? (
@@ -1960,7 +1966,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // A Persona chat on either route — the Persona tab's prop, or on the generic /s route the session's own assistant
   // flag — so the dock never repeats its foreground turn (#6230). Background work keeps the bar either way.
   const dockBarShown = !(assistant || session?.assistant) || backgroundOnly;
-  const running = session && dockBarShown ? <RunningStatusBar mid={mid} sid={sid} working={state === "working" || awaiting} done={done} startedAt={runStart} clock={barClock.current} plain={assistant} step={step} background={!backgroundState || backgroundState.kind === "workflow" ? background : null} wait={wait} subtasks={subtasks} command={command} /> : null;
+  const running = session && dockBarShown ? <RunningStatusBar mid={mid} sid={sid} working={state === "working" || awaiting || streaming} done={done} startedAt={runStart} clock={barClock.current} plain={assistant} step={step} background={!backgroundState || backgroundState.kind === "workflow" ? background : null} wait={wait} subtasks={subtasks} command={command} /> : null;
   // at the top of the composer's card, as cindy's pending queue (#5327); a phone on its side keeps it to one line beside
   // the run's status. The same element while nothing in it changes: the composer is memoized.
   const hasQueue = queued.length > 0;
@@ -2154,7 +2160,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
                         line={d.line}
                         mid={mid}
                         sid={sid}
-                        streaming={(d.line.kind === "segment" || d.line.kind === "supervision") && d.line.live ? tr.streaming || undefined : undefined}
+                        streaming={wordsFor(d.line)}
                         expandFold={tr.expandFold}
                         launcher={session?.launcher}
                         fix={d.line.id === lastLine?.id ? turnFix : undefined}
@@ -2179,7 +2185,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
                   // only a live line streams: the others keep their memo
                   mid={mid}
                   sid={sid}
-                  streaming={(row.line.kind === "segment" || row.line.kind === "supervision") && row.line.live ? tr.streaming || undefined : undefined}
+                  streaming={wordsFor(row.line)}
                   expandFold={tr.expandFold}
                   limit={row.line.kind === "apiError" && row.line.id === limitOn ? limitLine : undefined}
                   exhausted={row.line.kind === "apiError" && row.line.id === lastLine?.id ? exhausted : undefined}

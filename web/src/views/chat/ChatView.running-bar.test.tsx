@@ -73,25 +73,24 @@ describe("the Persona conversation says its foreground turn exactly once (#6230)
     expect(liveWorkLine()).not.toBeNull();
     expect(dockBar()).toBeNull();
 
-    // a transcript reload while the turn runs must not let the dock bar leak in (the previous gate used the live line's
-    // mount, which drops during loading)
+    // Reloading with cached history keeps the live work line in place and leaves the dock hidden.
     act(() => { transcript.loading = true; root.render(<ChatView mid="hub" sid="c1" assistant />); });
     await flush();
     expect(dockBar()).toBeNull();
-    expect(inStreamIndicator()).not.toBeNull();
-    expect(sendFeedback()?.getAttribute("data-message-feedback")).toBe("processing");
-    expect(host.querySelectorAll('[data-work-group="live"], [data-message-feedback]')).toHaveLength(1);
-    act(() => { transcript.loading = false; root.render(<ChatView mid="hub" sid="c1" assistant />); });
-    await flush();
-    expect(dockBar()).toBeNull();
     expect(liveWorkLine()).not.toBeNull();
+    expect(sendFeedback()).toBeNull();
+    expect(host.querySelectorAll('[data-work-group="live"], [data-message-feedback]')).toHaveLength(1);
 
-    // streaming the answer: still one place, never the dock bar
+    // The streamed answer remains visible while the reload is still pending.
     act(() => { transcript.streaming = "The answer so far"; root.render(<ChatView mid="hub" sid="c1" assistant />); });
     await flush();
     expect(dockBar()).toBeNull();
-    expect(inStreamIndicator()).not.toBeNull();
-    act(() => { transcript.streaming = ""; root.render(<ChatView mid="hub" sid="c1" assistant />); });
+    expect(sendFeedback()).toBeNull();
+    expect(host.querySelector('[data-answer="streaming"]')?.textContent).toContain("The answer so far");
+    act(() => { transcript.loading = false; transcript.streaming = ""; root.render(<ChatView mid="hub" sid="c1" assistant />); });
+    await flush();
+    expect(dockBar()).toBeNull();
+    expect(liveWorkLine()).not.toBeNull();
   });
 
   it("shows Processing feedback on a brand-new working Persona conversation before its first transcript item arrives", async () => {
@@ -172,14 +171,23 @@ describe("a Persona conversation on the generic session route says its foregroun
     expect(liveWorkLine()).not.toBeNull();
     expect(dockBar()).toBeNull();
 
-    // the same transcript reload that let the bar leak in before the phase-based gate must not bring it back here either
+    // The generic route still uses the cached work line during a reload.
     act(() => { transcript.loading = true; root.render(<ChatView mid="hub" sid="c1" />); });
     await flush();
     expect(dockBar()).toBeNull();
-    expect(inStreamIndicator()).not.toBeNull();
+    expect(liveWorkLine()).not.toBeNull();
+    expect(sendFeedback()).toBeNull();
+    expect(host.querySelectorAll('[data-work-group="live"], [data-message-feedback]')).toHaveLength(1);
+
+    // An empty transcript still needs an in-stream fallback while loading.
+    const cached = transcript.items;
+    act(() => { transcript.items = []; root.render(<ChatView mid="hub" sid="c1" />); });
+    await flush();
+    expect(dockBar()).toBeNull();
+    expect(liveWorkLine()).toBeNull();
     expect(sendFeedback()?.getAttribute("data-message-feedback")).toBe("processing");
     expect(host.querySelectorAll('[data-work-group="live"], [data-message-feedback]')).toHaveLength(1);
-    act(() => { transcript.loading = false; root.render(<ChatView mid="hub" sid="c1" />); });
+    act(() => { transcript.items = cached; transcript.loading = false; root.render(<ChatView mid="hub" sid="c1" />); });
     await flush();
     expect(dockBar()).toBeNull();
     expect(liveWorkLine()).not.toBeNull();
