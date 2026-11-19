@@ -32,6 +32,30 @@ describe("inbox avatars", () => {
     expect(src).not.toContain("/agent/v1/");
   });
 
+  // A connector's thread picture (#10923): its media ref through the connector's media route, the letter without one
+  // or when it does not load; the source badge stays.
+  const telegramItem = (avatar?: string) =>
+    ({ id: "telegram:dm1", source: "telegram", title: "Example user", sender: "Example user", account_name: "Telegram",
+       connector: { thread: "u1", label: "DM", ...(avatar ? { avatar } : {}) } }) as unknown as InboxItem;
+  const face = () => [...host.querySelectorAll("img")].find((img) => img.getAttribute("src")?.includes("/media?ref="));
+
+  it("draws a connector row's picture from its media ref", () => {
+    act(() => root.render(<ItemAvatar it={telegramItem("a.u1.501")} />));
+    const src = face()?.getAttribute("src") ?? "";
+    expect(src).toContain("/api/v1/connectors/telegram/media?ref=a.u1.501");
+    expect(host.querySelector("[title='Telegram']")).not.toBeNull();
+  });
+
+  it("keeps a connector row's letter without a picture, and when it does not load", () => {
+    act(() => root.render(<ItemAvatar it={telegramItem()} />));
+    expect(face()).toBeUndefined();
+    expect(host.textContent).toContain("E");
+    act(() => root.render(<ItemAvatar it={telegramItem("a.u1.gone")} />));
+    act(() => face()!.dispatchEvent(new Event("error")));
+    expect(face()).toBeUndefined();
+    expect(host.textContent).toContain("E");
+  });
+
   it("shows the letter when the picture does not load, and tries a new one", () => {
     act(() => root.render(<Monogram name="Review group" src="/api/v1/lark/media/gone" />));
     const img = host.querySelector("img");

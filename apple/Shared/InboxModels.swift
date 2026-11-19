@@ -160,9 +160,12 @@ nonisolated struct InboxItem: Codable, Identifiable, Hashable, Sendable {
         /// Where a reply goes and who sees it (「评论到 example-org/example-repo#12（仓库可见的人都能看到）」).
         var replyTo: String?
         var canReply: Bool?
+        /// The thread's picture, one of the connector's media refs (`ConnectorMedia.url(source, ref:)`): the other person
+        /// of a private chat, a group's own. Apart from the item's `avatar` (Feishu's URL); nil draws the initial.
+        var avatar: String?
 
         enum CodingKeys: String, CodingKey {
-            case thread, label, url
+            case thread, label, url, avatar
             case openURL = "open_url", replyTo = "reply_to", canReply = "can_reply"
         }
 

@@ -21,6 +21,9 @@ type InboxConnector struct {
 	OpenURL  string `json:"open_url,omitempty"` // a link the system opens (sms:…), not the app
 	ReplyTo  string `json:"reply_to,omitempty"` // where a reply goes and who sees it
 	CanReply bool   `json:"can_reply,omitempty"`
+	// Avatar is the thread's picture, one of the connector's media refs (InboxThing.Avatar): the apps fetch it from
+	// GET /api/v1/connectors/{source}/media, the initial without one. Apart from the item's own Avatar (Feishu's URL).
+	Avatar string `json:"avatar,omitempty"`
 	// RuleTier is the connector's tier for triage without a model.
 	RuleTier string `json:"rule_tier,omitempty"`
 	// Tags are what the thread is about (its repository, chat, sender…): what it can be muted by.
@@ -121,6 +124,15 @@ func (b *inboxBook) applyConnector(id, name string, things []connector.InboxThin
 				b.noteTriaged(open)
 				changed = append(changed, open)
 			}
+			// The thread's picture is the conversation's now, not a move's: a new one (or a connector that began to send
+			// one) shows on the open item at once. An older thing says nothing of it, as of the rest.
+			if av := thingAvatar(t); open.Connector != nil && open.Connector.Avatar != av && (t.At.IsZero() || !t.At.Before(open.UpdatedAt)) {
+				b.roundWrite(open)
+				open.Connector.Avatar = av
+				if !containsItem(changed, open) {
+					changed = append(changed, open)
+				}
+			}
 			// Read elsewhere counts only for the item's newest move: an older thing read (a connector restarted after it
 			// moved the item to a later step it was not notified of) says nothing of whether that step was seen.
 			if t.Read && !open.Read && (t.At.IsZero() || !t.At.Before(open.UpdatedAt)) {
@@ -211,13 +223,23 @@ func fillConnectorItem(it *InboxItem, t connector.InboxThing) {
 	if rule == "" && t.Extra != nil && connector.Tier(t.Extra.RuleTier).Known() {
 		rule = connector.Tier(t.Extra.RuleTier) // its fallback (capability fallback): the model still sorts it first
 	}
-	it.Connector = &InboxConnector{Thread: t.Thread, Label: t.Label, URL: t.URL, OpenURL: t.OpenURL, ReplyTo: t.ReplyTo, CanReply: t.CanReply, RuleTier: string(rule), Tags: t.Tags}
+	it.Connector = &InboxConnector{Thread: t.Thread, Label: t.Label, URL: t.URL, OpenURL: t.OpenURL, ReplyTo: t.ReplyTo, CanReply: t.CanReply,
+		Avatar: thingAvatar(t), RuleTier: string(rule), Tags: t.Tags}
 	if where := whereOf(t.Tags); where != "" {
 		it.Where = where
 	}
 	if t.Tier != "" {
 		setRuleTier(it, t)
 	}
+}
+
+// thingAvatar is the thing's picture ref the item keeps: none past connector.AvatarMost (a ref names a picture, it
+// does not carry one).
+func thingAvatar(t connector.InboxThing) string {
+	if len(t.Avatar) > connector.AvatarMost {
+		return ""
+	}
+	return t.Avatar
 }
 
 // setRuleTier gives an item the tier its connector's rules decided: triage leaves it alone (it is triaged at this

@@ -28,6 +28,7 @@ type (
 )
 
 const (
+	AvatarMost          = connectorwire.AvatarMost
 	DoneRead            = connectorwire.DoneRead
 	DoneReplied         = connectorwire.DoneReplied
 	GroupMessagesAround = connectorwire.GroupMessagesAround

@@ -4020,6 +4020,11 @@ export interface ConnectorInboxThing {
   /** Where a reply goes and who sees it. */
   reply_to?: string;
   can_reply?: boolean;
+  /**
+   * The thread's picture as one of the connector's media refs (thread.media, as a ThreadChat's avatar): the other
+   * person of a private chat, a group's own. The Inbox row draws it; without one, the initial.
+   */
+  avatar?: string;
   /** ConnectorTier, or empty for the model. */
   tier?: string;
   why?: string;
