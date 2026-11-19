@@ -182,6 +182,9 @@ func (p *Peer) switchOutput(last message) {
 	lw.start()
 	p.out.Store(lw)
 	close(p.lanesUp)
+	if p.OnLanes != nil {
+		p.OnLanes()
+	}
 }
 
 // framedInput is the reader for what follows the other side's last line: the bytes lr read past it, then the rest.

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/netshape"
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -236,4 +237,43 @@ func TestLanesOffAfterConnectionsBreakOnFrames(t *testing.T) {
 		defer m.mu.Unlock()
 		return m.peer != nil && m.online && !m.peer.Framed() && logs.count("not asked until") > 0
 	})
+}
+
+// An answer to rpc.lanes after the wait for it still switches the connection, and the log says so.
+func TestLanesLateAnswerIsLogged(t *testing.T) {
+	old := lanesWait
+	lanesWait = 5 * time.Millisecond
+	t.Cleanup(func() { lanesWait = old })
+	d := newTestDevices(t)
+	logs := &benchLog{}
+	d.logf = func(f string, a ...any) { logs.add(fmt.Sprintf(f, a...)) }
+	m := newMachine(d, MachineConfig{ID: "box", Name: "box", Kind: "ssh"})
+	m.dialNode = func(context.Context) (net.Conn, error) {
+		link := netshape.Config{Delay: 30 * time.Millisecond} // the answer comes after lanesWait
+		managerSide, nodeSide := netshape.Pipe(link, link)
+		p := rpc.New("n", nodeSide)
+		p.EnableLanes(nodeproto.ControlLane, nodeproto.BulkLane)
+		p.OnRequest = func(_ context.Context, method string, _ json.RawMessage) (any, error) {
+			switch method {
+			case "node.info":
+				return proto.NodeInfo{Hostname: "box", OS: "linux", Arch: "amd64", Home: "/home/me", Version: "test", Protocol: nodeproto.Version,
+					ProtocolMin: nodeproto.MinManagerVersion, Capabilities: append(slices.Clone(nodeproto.Required), nodeproto.NodeLanes)}, nil
+			case "sessions.list":
+				return map[string]any{"sessions": []proto.Session{}}, nil
+			}
+			return map[string]any{"ok": true}, nil
+		}
+		go func() { _ = p.Serve(context.Background(), nodeSide); nodeSide.Close() }()
+		t.Cleanup(func() { managerSide.Close(); nodeSide.Close() })
+		return managerSide, nil
+	}
+	d.addEntry(m)
+	runMachine(t, m)
+	eventually(t, 10*time.Second, "the late switch logged", func() bool { return logs.count("on after all") > 0 })
+	m.mu.Lock()
+	framed := m.peer != nil && m.peer.Framed()
+	m.mu.Unlock()
+	if !framed || logs.count("lines unless the node's answer still comes") == 0 {
+		t.Fatalf("framed=%t:\n%s", framed, strings.Join(logs.since(0), "\n"))
+	}
 }

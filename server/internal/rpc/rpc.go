@@ -159,6 +159,9 @@ type Peer struct {
 	// encoded (before LineFilter) once all of it is written. Set both before Serve or any call.
 	LineFilter  func([]byte) []byte
 	LineWritten func([]byte)
+	// OnLanes, when set, is told once this side's output is framed (lanes.go), whenever that is: an answer to
+	// UpgradeLanes after its caller stopped waiting still switches. Set it before Serve.
+	OnLanes func()
 
 	// Lanes (lanes.go): the table EnableLanes set (nil: this peer never frames), the frame writer once either direction
 	// is framed (mu), set as out once this side's output is, this side's rpc.lanes call until its answer is read (mu),

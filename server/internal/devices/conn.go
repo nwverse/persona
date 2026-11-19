@@ -307,6 +307,13 @@ func (m *Machine) establishViaOnce(ctx context.Context, p *nodePath, via string,
 		}
 		m.onEvent(event, params)
 	}
+	// The node's answer to rpc.lanes can come after the wait for it ran out: the switch happens then, said here.
+	var lanesLate atomic.Int32 // 1: the wait ran out; 2: said
+	peer.OnLanes = func() {
+		if lanesLate.CompareAndSwap(1, 2) {
+			m.d.logf("[%s] lanes over %s: on after all (the node's answer came after the wait)", m.cfg.ID, via)
+		}
+	}
 	go func() { c.served <- peer.Serve(cctx, l.r) }()
 
 	ictx, icancel := context.WithTimeout(cctx, wait)
@@ -320,10 +327,18 @@ func (m *Machine) establishViaOnce(ctx context.Context, p *nodePath, via string,
 	} else if err == nil && nodeHas(c.info, nodeproto.NodeLanes) {
 		// Before anything else goes out, so nothing large is on its way while the two sides switch, and within a wait of
 		// its own: the handshake is done. A refusal leaves lines, the connection working as with an older node; an
-		// answer later than the wait still switches both sides when it comes ("connected" says which it is then).
+		// answer later than the wait still switches both sides when it comes (OnLanes above says so).
 		lctx, lcancel := context.WithTimeout(ictx, lanesWait)
 		if lerr := peer.UpgradeLanes(lctx); lerr != nil {
-			m.d.logf("[%s] lanes over %s: %v (staying with lines)", m.cfg.ID, via, lerr)
+			if lctx.Err() != nil {
+				lanesLate.Store(1)
+				m.d.logf("[%s] lanes over %s: %v (lines unless the node's answer still comes)", m.cfg.ID, via, lerr)
+				if peer.Framed() && lanesLate.CompareAndSwap(1, 2) {
+					m.d.logf("[%s] lanes over %s: on after all (the node's answer came after the wait)", m.cfg.ID, via)
+				}
+			} else {
+				m.d.logf("[%s] lanes over %s: %v (staying with lines)", m.cfg.ID, via, lerr)
+			}
 		}
 		lcancel()
 	}
