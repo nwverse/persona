@@ -263,8 +263,9 @@ func currentDelivery(t Todo) *TodoDelivery {
 			d.Gate, d.Unblock = cmp.Or(r.Reason, r.Note), unblockUser
 		case acceptanceStands(t) && !r.At.Before(d.At):
 			d.Gate, d.Unblock = "", ""
-		case d.Unblock == unblockUser && !r.At.Before(d.At) && (r.Verdict == reviewNeedsUser || r.Verdict == reviewParked):
-			// An ended wait supersedes the older owner gate. A subsequent judgment can supply a fresh one.
+		case d.Unblock == unblockUser && !r.At.Before(d.At) &&
+			(r.Verdict == reviewNeedsUser || r.Verdict == reviewParked || r.Verdict == reviewRework):
+			// Rework or an ended wait supersedes the earlier owner gate until a new judgment supplies one.
 			d.Gate, d.Unblock = "", unblockAgent
 		}
 	}

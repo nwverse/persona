@@ -56,6 +56,37 @@ func TestDeliveryApprovalFollowsPark(t *testing.T) {
 	}
 }
 
+func TestDeliveryApprovalFollowsRework(t *testing.T) {
+	s, f, task := newSupervisedService(t)
+	ctx := context.Background()
+	waitsForReview(t, s, f, task.ID, "The revised checks are ready for review.")
+	const oldGate = "Approve the revised checks"
+	s.setTaskDelivery(ctx, task.ID, TodoDelivery{State: deliveryPR, Gate: oldGate, Unblock: unblockUser, At: time.Now().Add(-time.Hour)})
+	checkDeliveryApproval(t, s, task.ID, deliveryPR, oldGate, unblockUser)
+
+	reviewTask(t, s, task.ID, map[string]any{"verdict": reviewRework, "note": "Add coverage for delayed replies"})
+	cur := todoNow(s, task.ID)
+	if cur.Supervision.State != reviewRework || listedAsk(t, s, task.ID) != nil {
+		t.Fatalf("expected rework with no owner decision: %+v", cur.Supervision)
+	}
+	checkDeliveryApproval(t, s, task.ID, deliveryPR, "", unblockAgent)
+	if summary := deliverySummary(cur); strings.Contains(summary, oldGate) {
+		t.Errorf("task summary still shows the previous gate: %q", summary)
+	}
+
+	// A later round can still record a new hold and ask the owner a concrete question.
+	const newGate = "Approve the rollout"
+	s.setTaskDelivery(ctx, task.ID, TodoDelivery{State: deliveryPR, Gate: newGate, Unblock: unblockUser, At: time.Now()})
+	checkDeliveryApproval(t, s, task.ID, deliveryPR, newGate, unblockUser)
+	decision := rolloutDecision()
+	reviewTask(t, s, task.ID, decision)
+	checkDeliveryApproval(t, s, task.ID, deliveryPR, decision["reason"].(string), unblockUser)
+	ask := listedAsk(t, s, task.ID)
+	if options, _ := ask["options"].([]any); ask["outcome"] != outcomeDecide || len(options) != 2 {
+		t.Fatalf("expected both owner options after rework: %v", ask)
+	}
+}
+
 func TestDeliveryApprovalFollowsDecisionAndAcceptance(t *testing.T) {
 	s, f, task := newSupervisedService(t)
 	ctx := context.Background()
