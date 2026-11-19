@@ -61,30 +61,31 @@ try {
     await field.fill("");
     await options.first().waitFor({ state: "hidden" });
     // Observe DOM commits from the input event. Locator polling would inflate cold timings.
-    const sample = page.evaluate(() => new Promise(resolve => {
-      document.addEventListener("input", () => {
-        const start = performance.now();
-        let local;
-        let sawLoading = false;
-        const observer = new MutationObserver(check);
-        function check() {
-          const rows = [...document.querySelectorAll('[role="option"]')];
-          sawLoading ||= [...document.querySelectorAll('[role="status"]')].some(el => el.textContent.includes("Loading skills"));
-          if (rows.length && local === undefined) local = Math.round(performance.now() - start);
-          if (rows.some(r => r.textContent.includes("document-review"))) {
-            observer.disconnect();
-            resolve({ sawLoading, firstOptionMs: local, firstSkillMs: Math.round(performance.now() - start),
-              skills: rows.filter(r => /document-review|accessibility-audit|diagram-notes|release-summary|chapter-/.test(r.textContent)).length });
+    await page.evaluate(() => {
+      window.pickerMeasurement = new Promise(resolve => {
+        document.addEventListener("input", () => {
+          const start = performance.now();
+          let local;
+          let sawLoading = false;
+          const observer = new MutationObserver(check);
+          function check() {
+            const rows = [...document.querySelectorAll('[role="option"]')];
+            sawLoading ||= [...document.querySelectorAll('[role="status"]')].some(el => el.textContent.includes("Loading skills"));
+            if (rows.length && local === undefined) local = Math.round(performance.now() - start);
+            if (rows.some(r => r.textContent.includes("document-review"))) {
+              observer.disconnect();
+              resolve({ sawLoading, firstOptionMs: local, firstSkillMs: Math.round(performance.now() - start),
+                skills: rows.filter(r => /document-review|accessibility-audit|diagram-notes|release-summary|chapter-/.test(r.textContent)).length });
+            }
           }
-        }
-        observer.observe(document.body, { subtree: true, childList: true, characterData: true });
-        check();
-      }, { capture: true, once: true });
-    }));
+          observer.observe(document.body, { subtree: true, childList: true, characterData: true });
+          check();
+        }, { capture: true, once: true });
+      });
+    });
     const refreshed = page.waitForResponse(r => /\/skills(\?|$)/.test(r.url()) && r.status() === 200);
     await field.fill(token);
-    const result = await sample;
-    await refreshed;
+    const [result] = await Promise.all([page.evaluate(() => window.pickerMeasurement), refreshed]);
     report.timings.push({ label, ...result });
     console.log(label, result);
     if (after) {
@@ -97,6 +98,7 @@ try {
   await measure("Assistant warm @", "@");
   await measure("Assistant warm /", "/");
   await page.goto(origin + agent);
+  await page.getByText(/Started in .*project/).waitFor();
   await measure("Switch to Agent @", "@");
   if (after) {
     await field.fill("@chapter-55");
@@ -179,11 +181,12 @@ try {
     state = "ready";
     const target = "/s/studio/e3333333-0000-4000-8000-000000000003";
     await page.evaluate(path => { history.pushState({}, "", path); dispatchEvent(new PopStateEvent("popstate")); }, target);
+    await page.getByText(/Started in .*writing/).waitFor();
     await field.fill("@writing-document");
     await options.filter({ hasText: "writing-document-review" }).first().waitFor();
     release.resolve();
     await settled.promise;
-    await field.fill("@document");
+    await field.fill("@document-review");
     assert.equal(await options.count(), 2);
     assert.ok((await options.allInnerTexts()).every(text => text.includes("writing-document-review")));
     await field.press("Escape");

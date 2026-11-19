@@ -3,7 +3,7 @@ import { EASE } from "../../ui/atoms";
 
 const CARD_WIDTH = 280;
 const EDGE = 8;
-type Place = { side: "inside" | "left" | "right"; top: number; height: number };
+type Place = { side: "inside" | "left" | "right"; top: number; height: number; clippedTitle: boolean };
 export type PickerButton = ComponentProps<"button">;
 
 /** Presentation only. Callers own their selection, IME, and what confirming a row does. */
@@ -24,7 +24,7 @@ export function PickerMenu<T>({ items, current, label, itemKey, group, renderRow
   const active = useRef<HTMLButtonElement>(null);
   const glide = useRef<HTMLSpanElement>(null);
   const card = useRef<HTMLDivElement>(null);
-  const [place, setPlace] = useState<Place>({ side: "inside", top: 0, height: 0 });
+  const [place, setPlace] = useState<Place>({ side: "inside", top: 0, height: 0, clippedTitle: false });
   const [, measure] = useReducer((n: number) => n + 1, 0);
   const width = wide ? 480 : 320;
   const activeKey = items[current] && itemKey(items[current]);
@@ -80,7 +80,10 @@ export function PickerMenu<T>({ items, current, label, itemKey, group, renderRow
     const height = Math.round(Math.max(1, Math.min(400, p.offsetHeight - ceiling)));
     const rowTop = (list.current?.offsetTop ?? 0) + (row?.offsetTop ?? 0) - (list.current?.scrollTop ?? 0);
     const top = Math.round(Math.max(ceiling, Math.min(rowTop, p.offsetHeight - Math.min(card.current?.scrollHeight ?? 0, height))));
-    setPlace(old => old.side === side && old.top === top && old.height === height ? old : { side, top, height });
+    const label = row?.querySelector<HTMLElement>("[data-picker-title]");
+    const clippedTitle = !!label && label.scrollWidth > label.clientWidth;
+    setPlace(old => old.side === side && old.top === top && old.height === height && old.clippedTitle === clippedTitle
+      ? old : { side, top, height, clippedTitle });
   });
 
   return (
@@ -112,7 +115,7 @@ export function PickerMenu<T>({ items, current, label, itemKey, group, renderRow
         {empty}
         {detail && place.side === "inside" && (
           <div id={detailId} data-picker-detail data-slash-card={mode === "slash" || undefined} className="mt-1 max-h-[min(8rem,18dvh,calc(var(--picker-room,400px)*0.34))] shrink-0 overflow-y-auto overscroll-contain border-t border-line px-2.5 pt-2 pb-1 text-meta leading-normal [overflow-wrap:anywhere]">
-            <div className="font-medium text-ink">{title}</div>
+            {place.clippedTitle && <div className="font-medium text-ink">{title}</div>}
             {detail}
           </div>
         )}
