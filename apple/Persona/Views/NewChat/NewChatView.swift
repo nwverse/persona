@@ -145,6 +145,12 @@ struct NewChatView: View {
 
     /// The launcher runs Codex: it starts with its first message (Codex makes the thread then) and the start waits for it.
     private var codex: Bool { launchers.first(where: { $0.name == runLauncher })?.isCodex == true }
+    /// The launcher runs omp (docs/integrations/omp.md): no modes, effort, ultracode or model (`StartModes`), and its
+    /// first message goes with the start, which the node types into omp's command; sent afterwards, a message to an omp
+    /// whose extension has not connected yet is refused, and the first message would be lost.
+    private var omp: Bool { runEntry?.isOmp == true }
+    /// The first message goes with the start, as text only: a Codex's or an omp's.
+    private var inlineFirst: Bool { codex || omp }
 
     /// A Codex this computer opens only with its first message (an older computer); a newer one opens it waiting for
     /// one, sent later here or typed in its terminal (docs/integrations/codex.md「Starting without a first message」).
@@ -168,6 +174,7 @@ struct NewChatView: View {
 
     /// The `model` the start sends: the pick (from the list or typed), or an ID typed while the list couldn't be read.
     private var sentModel: String? {
+        if omp { return nil } // omp's own config picks its model; the node refuses a start that names one
         if let c = modelChoice { return c.sent }
         return typesWithoutList && ModelID.isValid(pickedModel) ? pickedModel : nil
     }
@@ -246,7 +253,7 @@ struct NewChatView: View {
 
     /// What the attachments hold the start back for (a Codex launcher, uploads still going); nil: nothing.
     private var attachmentsHold: String? {
-        FirstMessage.hold(codex: codex, attached: !attachments.isEmpty, uploading: attachments.uploading)
+        FirstMessage.hold(codex: codex, omp: omp, attached: !attachments.isEmpty, uploading: attachments.uploading)
     }
 
     /// Why Start Chat is greyed out, the first thing missing in `ready`'s order; nil when it is ready (or still loading).
@@ -488,13 +495,13 @@ struct NewChatView: View {
                         .focused($promptFocused)
                         .accessibilityIdentifier("newChat.prompt")
                         .id(Self.promptRow)
-                    // A Codex launcher takes no attachments: no menu, only those picked before to take out (#2321).
-                    NewAgentAttachmentRows(attachments: attachments, adds: !codex, photos: { showPhotos = true },
+                    // A Codex or omp launcher takes no attachments: no menu, only those picked before to take out (#2321).
+                    NewAgentAttachmentRows(attachments: attachments, adds: !inlineFirst, photos: { showPhotos = true },
                                            camera: CameraPicker.isAvailable ? { showCamera = true } : nil,
                                            files: { showFiles = true })
                 } header: { Text("First Message") } footer: {
                     VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                        if codex && !attachments.isEmpty {
+                        if inlineFirst && !attachments.isEmpty {
                             Text(FirstMessage.codexRefusal).accessibilityIdentifier("newChat.codexNote")
                         }
                         if let note = attachments.note {
@@ -1057,11 +1064,13 @@ struct NewChatView: View {
             let name = tabName.trimmingCharacters(in: .whitespacesAndNewlines)
             // The first message: a todo's context block (when a todo is handed over), then what was typed.
             let outgoing = contextBlock.map { p.isEmpty ? $0 : "\($0)\n\n\(p)" } ?? p
-            if codex {
+            if inlineFirst {
                 // Codex picks its thread's id once it has the first message: it goes with the start, which answers
                 // with that thread (one session, already working on it). With none, the start answers with Codex
-                // waiting for it (Session.awaitingFirstMessage).
-                // A Codex of Paseo's that lists its modes (#8261) takes the mode and effort picked for it; any other keeps its own.
+                // waiting for it (Session.awaitingFirstMessage). omp gets it in its command, and the start answers with
+                // its session once the node has it (docs/integrations/omp.md).
+                // A Codex of Paseo's that lists its modes (#8261) takes the mode and effort picked for it; any other keeps
+                // its own, and omp takes none (`StartModes`).
                 let s = try await api.start(.init(machineID: ref.id, cwd: dir, launcher: launcher, prompt: contextBlock == nil ? prompt : outgoing,
                                                   workspaceID: targetPreset?.workspaceID, host: targetPreset?.host,
                                                   permissionMode: listsModes ? StartModes.sent(providerMode, for: runEntry) : nil,

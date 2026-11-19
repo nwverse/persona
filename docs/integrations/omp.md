@@ -7,8 +7,7 @@ rename, start a new omp with a first message, answer its `ask_user` questions an
 
 Verified with omp 18.18.x and herdr 0.9.5. Everything here needs a herdr engine.
 
-Being added in steps (issue #4148). Not here yet: resuming a stopped omp session from the phone, and starting omp from the iOS New
-Agent sheet with its first message.
+Added in steps (issue #4148).
 
 ## Scope
 
@@ -123,6 +122,19 @@ extension listed it and then left with the omp is resumed the same way: a runtim
 
 The hub puts the refusals into the reader's language (`rpc-errors.omp_resume_unknown`, `rpc-errors.omp_stopped`).
 
+## Starting from the apps
+
+Only the launcher named `omp` starts omp (the node lists it with agent `omp`), and the start sets nothing omp's own config
+decides:
+
+- **iOS and iPadOS New Agent.** With an omp launcher picked (`Launcher.isOmp`), Permissions & Thinking is not shown (no permission
+  mode, thinking effort or ultracode), no model is sent, and the first message goes with the start, as a Codex's does: the node
+  types it into omp's command and answers with omp's session. A message sent after the start would reach an omp whose extension
+  has not connected yet and be refused, so the first message is never sent that way. omp takes no attachments: there is no add
+  menu, and a photo or file picked before holds Start Chat back ("omp takes no attachments") until it is removed.
+- **Pushes.** An omp card's push is titled with omp's name: the extension names its cards `omp`, and the hub uses a runtime
+  card's own label (`server/internal/hub/push_payload.go`).
+
 ## Differences from pi
 
 - **No pi-web and no companion process.** omp has no web client; its sessions live in its own process.
@@ -163,3 +175,8 @@ entries (calls outside the conversation), orchestration tokens included, under t
   start's images and `client_msg_id`, the refusals, a resume that never comes up and herdr's restore command; `server/internal/node/omp_guards_test.go`
   covers a live pane's file, a start for a runtime's session, the fallback row moving to its session, and the calls a stopped
   session refuses.
+- iOS: `apple/PersonaTests/OmpNewAgentTests.swift` covers telling an omp launcher, no modes or efforts and no attachments;
+  against `MOCK_OMP=1 PORT=<dedicated port> python3 scripts/mock/mock_hub.py` (which lists an `omp` launcher and refuses an omp
+  start that is async or sets those options, as the node does), `PersonaUITests/NewAgentAttachmentsTests/testOmpStartsWithItsFirstMessageAndNoOptions`
+  picks omp in New Agent and checks the start's body.
+- Hub: `TestRuntimePushTitle` (`server/internal/hub/runtime_test.go`) covers an omp card's push title.
