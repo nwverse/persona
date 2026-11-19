@@ -2439,6 +2439,13 @@ time when binding evidence to activation: later transport, REST and validation w
 renew its lifetime. Test embedded publisher modules in an isolated interpreter as well as
 ordinary imports; a transitive import can be available locally and missing remotely.
 
+An unset assistant settings row is not explicit empty authority (#2628): zero-value product
+settings do not settle that contract. Require an existing empty row's revision, and use a
+guaranteed-row read with a database timestamp to distinguish absence from a failed read. Do
+not create an empty row or a synthetic main. Require an explicit unassigned plan and deliberately
+empty flags, then prove empty Hub ownership twice. Zero owned machines needs no node dial, but
+any conversation, runtime row, partial assignment or revision change must still fail closed.
+
 
 ## Release status reporting is opt-in (#2671)
 

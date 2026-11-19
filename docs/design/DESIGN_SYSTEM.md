@@ -2398,6 +2398,43 @@ done, not applicable, or deviated (with the reason). It is short on purpose. The
 - `HardwareShortcutHost` keeps the same parent and content call site in every window and provides its controller and `onKeyEvent` listener only in a large window. On entering a large window the shell host uses public focus state to request its own focus only when that window has none; Settings disables host auto-focus so dialog content keeps its field focus, and an already-large resize makes no focus request. Its listeners run after focused children, never in the preview phase. Shared text inputs, including `LargeWindowComposer`'s small field outside IME composition, handle only Ctrl+/ in their own preview phase because editors consume it before a parent listener; all other keys follow the ordinary path, so a focused terminal or IME keeps Escape, Tab, Shift+Tab, Ctrl+C, arrows and Ctrl+/. `JSheet`, `JDialog`, `FullTextReader`, `MessageSharePage` and `ChatSearchScreen` register their existing dismiss callbacks with stable tokens; Escape invokes only the last registration and consumes its key-up and repeats. With no registration it is a consumed no-op, never App exit, navigation pop or Agent interruption. `ExpandedComposer` and `JPointerMenu` retain their own Escape handling.
 - Ctrl+/ opens `KeyboardShortcutsSheet` as the top dialog. It lists only implemented send, newline, dismiss, help and existing terminal keys, with `en`, `zh-Hans` and `ja` resources and a single-line Close button. Its content scrolls at large text sizes. Opening it does not clear a draft, change a selected conversation or stop terminal work; closing the dialog returns to the previous window and its focused content. Compact windows add no help entry or new key handling.
 
+## Configuration forms (web, #9877)
+
+A module's settings described as a configuration Document (`docs/web/web.md`, "Configuration forms") are drawn by one
+generic form, never a page of their own: the document's title as a group heading (`text-[12px]` `ink-3`) with its
+description under it, then each group as a settings `Group` (its title above, its description as the footer). A field
+is a row: the title in the row's label type, its description in the hint type, the control, any error adjacent under it,
+any notice (orange for a warning, `ink-3` for info), the disabled reason or "Read only", and the module's details as a
+two-column definition list in `text-[11.5px]` (`ink-3` terms, `ink-2` values, the page's existing `grid-cols-[auto_1fr]`).
+Every field ends in one footer row: the default value, the scalar count where a text field has a maximum, the polite save
+state (**Saving…** with a spinner, then a green **Saved**) and the quiet **Reset** / **Cancel** / **Save** actions that
+apply, so the actions never sit between the control and its explanation and a short default keeps them on one line.
+The footer reserves the small-button height when no action is shown, and longer content can still wrap.
+- Controls, all existing: a toggle is the `Switch` at the row's end; a select is the `Segmented` control at the end
+  (`segmented`), a native select in the settings field style at the end (`dropdown`) or `ChoiceRows` under the text
+  (`list`, the default); a multiselect is a list of `role="checkbox"` rows with `CheckMark`; text is the field style's
+  input or textarea, a number a narrower input with a decimal keyboard. Text and numbers are drafts, and a multiselect's
+  checks are the same kind of pending edit, until **Save**; a multiselect whose maximum is one is drawn as a single choice
+  (`role="radio"` rows with round marks and arrow keys), with exactly one Tab stop — the chosen option, or the first when
+  none is chosen (no radio is marked chosen) — and choosing another option replaces the old one in one click (the wire
+  value stays an array), while a larger maximum keeps ordinary checks and can pass through a temporary count. **Reset**
+  appears where the value differs from the default.
+- Whole-form lines (a version it can't write, a conflict or an uncertain write with **Reload**, a refresh that failed with
+  **Try again**) are one card above the groups.
+- An unknown kind or invalid definition keeps its title, description and details, with an orange line instead of a
+  control. A known field whose saved value is missing or unreadable shows an empty input or unselected choices, including
+  an On/Off choice for an unreadable switch. The hint is part of the control's accessible description. Choosing or
+  entering a valid value repairs the field, and **Reset** returns the default.
+Why one form: the user asked for settings that modules inject with one portable contract and shared styles, so a new
+module adds data, not a page, and the same states (pending, saved, failed, conflict, read only) look the same everywhere.
+
+**Labs** (`docs/web/web.md`, "Labs") is a sidebar group of its own without a title, with the existing `sparkles` glyph (a
+dedicated one would not fit the first screen's budget); its page is an introduction card with a note under it that each
+item states its own scope, then one configuration form per module. Where a feature also has its own options menu
+(Terminal settings), it shows the current value read-only with a button that opens the same Labs page in a `Dialog` over
+the page (never navigating away, so nothing open behind it, such as a chat's unsent draft, is unmounted) instead of a
+second switch, so there is one place to change it.
+
 ## A chosen page that is not there now (#9071)
 
 A setting that names something which can come and go (the web's **Open on**, Settings › General › Start page: a page of
