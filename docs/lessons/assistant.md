@@ -641,10 +641,12 @@ The manager waits 90 s for a relayed message (`drainRelays`) and kept it queued 
 written it after the first of two session-list rebuilds inside the send and was still building the second when the
 time ran out, so every later drain wrote it again: one conversation read the same message 32 times in an hour, and the
 messages queued behind it waited. A send in doubt is not a failure. Relays now carry one `once_id` per message
-(`relayMsgID`), which the node sends once (`sentLog`); a try in doubt first looks for the message's line in the
-conversation's latest turns (`relayArrived`: context blocks left out, no line older than the try, the sending
-conversation as its source), and one not found then is looked for again before the next try (`relayLanded`), which
-covers a line that lands late and a node restarted in between; and the send pushes the session list in the background, waiting for it only briefly
+(`relayMsgID`), which the node sends once while it remembers the id (`sentLog`). Save the attempt with the queued
+message before sending (#10690). Look for its line in the latest turns (`relayArrived`) using its text, time and
+sending conversation. A context-only relay also carries its `once_id` in its message-source metadata, so it can be
+found even if the transcript reader removes its original context. A failed read or
+a late transcript write can hide the line, so check again on a bounded schedule before retrying. The send pushes
+the session list in the background, waiting for it only briefly
 (`notifySessionsSoon`, `listPushWait`). The id is deliberately not a `client_msg_id`: a line tied to one reads as the
 owner's own message everywhere (its source label, task briefs, user-input counts, extensions). The web had the same
 blind spot for the owner's own sends: a send answered 502 `delivered: "unknown"` stayed a failed bubble unless the hub
@@ -759,6 +761,16 @@ as delivered instead of moving to the replacement. A check that a resource is fr
 mark the conversation as being replaced under that same lock (`relayBook.replacing`), have every drain and every direct
 delivery respect the mark (the direct ones queue), and clear it only where what waited has moved or the replacement
 failed, draining it again then (`TestNothingGoesIntoABackgroundSupervisorBeingReplaced`).
+
+## A queued supervision digest is not a snapshot of work that still needs review (#10424)
+
+An interruption and an unjudged turn can wait behind a busy supervisor while that task recovers and is accepted.
+Replaying only the rendered text then starts obsolete work or retries a refusal forever. Persist the structured signals
+with the relay, recheck the loaded task ledger immediately before delivery, and render only the surviving entries.
+A failed ledger read or checkpoint is unknown: keep the original queue. Move a changed conversation destination and
+remove its source entries in the same saved relay state. Do not change an uncertain send's text or destination: its
+old once-only identity may already have reached the node. Test both an entirely obsolete digest and a mixed one,
+including a real database reload into a new service; the in-memory signal map alone does not survive restart.
 
 ## Manual compaction is not a main-only policy (#10064)
 

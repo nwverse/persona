@@ -2197,9 +2197,11 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
               </div>
             ) })), ...placed.rest.map((e) => ({ at: e.at, el: <OutboxBubbles key={`outbox:${e.id}`} mid={mid} sid={sid} entries={[e]} canRetry={!refusedNoRow} /> })),
               ...keptUndelivered.map((m) => ({ at: Date.parse(m.at) || 0, el: (
-                <Suspense key={`undelivered:${m.id}`} fallback={<UserBubble msg={keptBubble(m)} mid={mid} sid={sid} sendState="failed" />}>
-                  <UndeliveredBubble mid={mid} sid={sid} m={m} />
-                </Suspense>
+                <PageBoundary key={`undelivered:${m.id}`} page="undelivered">
+                  <Suspense fallback={<UserBubble msg={keptBubble(m)} mid={mid} sid={sid} sendState="failed" />}>
+                    <UndeliveredBubble mid={mid} sid={sid} m={m} />
+                  </Suspense>
+                </PageBoundary>
               ) }))]
               .sort((a, b) => a.at - b.at)
               .map((x) => x.el)}
