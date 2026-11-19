@@ -9,6 +9,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.Protocol
@@ -21,6 +22,33 @@ import org.junit.Test
 import java.io.File
 
 class ChatComposerServiceTest {
+    @Test fun heldReceiptDoesNotReportDeliveryOrStartAnotherSession() = runBlocking {
+        val scope = HubScope("test-hub", "generation")
+        val session = SessionKey("machine", "session")
+        var accepted = 0
+        var advertised: String? = null
+        var held: persona.core.contracts.HeldAgentMessage? = null
+        val transport = object : MessageTransport {
+            override val readyToSend = MutableStateFlow(true)
+            override val supportsClientOps = true
+            override suspend fun send(request: MessageRequest): MessageTransportResult = error("Composer owns sending")
+            override suspend fun onAccepted(session: SessionKey, reply: JsonObject?) { accepted++ }
+        }
+        val service = HttpChatComposerService(scope, transport, request = { _, _, headers ->
+            advertised = headers["X-Persona-Features"]
+            Response.Builder().request(Request.Builder().url("https://example.com/").build())
+                .protocol(Protocol.HTTP_1_1).code(202).message("Accepted").body(
+                    """{"delivered":"later","undelivered":{"id":"op","text":"Hello","computer":"Laptop","state":"waiting"}}""".toResponseBody()
+                ).build()
+        }, onHeld = { target, message -> assertEquals(session, target); held = message })
+        val result = service.send(MessageRequest(scope, session, "Hello", "op"))
+        assertEquals("Manager custody is not Agent delivery", 0, accepted)
+        assertEquals(MessageTransportResult.Held, result)
+        assertEquals("Laptop", held?.computer)
+        assertEquals(DeliveryState.Held, service.deliveries.value["op"]?.state)
+        assertTrue(advertised.orEmpty().split(',').contains("agent_message_hold"))
+    }
+
     @Test fun uploadsKnownLengthAndRetriesOnlyWithMatchingRefusalEvidence() = runBlocking {
         val scope = HubScope("test-hub", "generation")
         val session = SessionKey("machine", "session")
