@@ -145,6 +145,8 @@ func (s *Service) workGuard(v *workView, e db.SessionWork, ownCard bool) (proto.
 	switch {
 	case !ok:
 		return c, "gone"
+	case proto.UnrecoverableTurnErrorCode(c.TurnError) != "" || c.TurnErrorKind == proto.TurnErrorUnrecoverable:
+		return c, "conversation invalid"
 	case c.ReadOnlyReason != "":
 		return c, "read-only"
 	case c.Status == proto.StatusWorking || !sameTurn(c, e.TurnAt):

@@ -378,6 +378,23 @@ nonisolated struct LauncherImportResult: Decodable, Hashable, Sendable {
     var updated: [String]?
 }
 
+/// One Agent preset from the model profile in use (`tiers` of GET /api/v1/machines/{id}/launchers): a named way to fill
+/// New Agent's launcher, model and thinking effort for this start. The tier itself is not a session-start field.
+nonisolated struct AgentPreset: Decodable, Hashable, Sendable, Identifiable {
+    var name: String
+    var launcher: String
+    var model: String? = nil
+    var effort: String? = nil
+    var description: String? = nil
+    var id: String { name }
+}
+
+/// The model profile whose Agent presets a computer offers.
+nonisolated struct AgentPresetProfile: Decodable, Hashable, Sendable {
+    var id: String
+    var name: String
+}
+
 /// What a machine's launcher picker runs with no pick (`default` of GET /api/v1/machines/{id}/launchers): Model Settings'
 /// effective value for the use.
 nonisolated struct LauncherDefault: Codable, Hashable, Sendable {
