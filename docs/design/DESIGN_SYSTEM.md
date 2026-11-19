@@ -2434,6 +2434,11 @@ item states its own scope, then one configuration form per module. Where a featu
 the page (never navigating away, so nothing open behind it, such as a chat's unsent draft, is unmounted) instead of a
 second switch, so there is one place to change it.
 
+An experiment can supply a permanent note under its introduction or beside a field, using the existing info and warning
+hint styles. A choice with consequences can request confirmation for a specific change. Use the shared Dialog, with the
+affected scope, impact, timing and an action-specific button. All dismissal paths preserve the edit. On success the
+field’s polite save status can explain when the choice takes effect. Show this receipt once, in the field footer.
+
 ## A chosen page that is not there now (#9071)
 
 A setting that names something which can come and go (the web's **Open on**, Settings › General › Start page: a page of

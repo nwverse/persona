@@ -2088,6 +2088,24 @@ own scope (the terminal one is this browser only), then draws each module's sour
 inject their source in `Labs.tsx`; the page and the form know nothing else of them. Only real features: never a demo
 entry.
 
+A registration pairs the source with optional Web `guidance`. Supply the experiment's localized `notes` and any
+`fields[id].notes` as ordered lists of `{ kind: "info" | "warning", text }`. Keep each note in one place and omit empty
+translations. The source still owns its scope, defaults, availability, current notices and rollback instructions.
+
+A field may also register `rules`. For example, a rule with `when: { action: "change", from: "classic", to: "preview" }`
+can ask before switching layouts while a switch back saves directly. Use typed field values. For reset rules the target
+is the current default and the update still removes the override. A matching rule may supply either or both of these:
+
+- `confirm` supplies localized plain text for `title`, `body`, `scope`, `impact`, `activation` and `confirmLabel`.
+  Drafts are validated on Save or single-line Enter. Closing the question keeps the draft. Confirmation submits the
+  original revision once. A change of resource, permissions, rules or pending input invalidates the question.
+- `afterSave` supplies the complete inline receipt, for example “Saved. New sessions will use this layout.”
+  Describe what the source can verify and when the preference takes effect. Omit it to use the usual Saved status.
+
+Keep selectors disjoint. Overlapping matches or missing confirmation text block the affected action. An invalid
+selector disables its field. The writer still enforces authorization and revision checks for every client. Guidance
+belongs to the Web module registration and adds nothing to the portable configuration document or update.
+
 **Terminal renderer** (the first module; `web/src/lib/labs-terminal.ts` over `web/src/lib/labs.ts`). Single pane terminals
 (`views/session/terminal/feed.ts`) draw with xterm's DOM renderer (Standard, the default) or WebGL (`@xterm/addon-webgl`,
 its own chunk, loaded only when chosen). Full view always uses the DOM renderer and is not affected. It is kept by this
