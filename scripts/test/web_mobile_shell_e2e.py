@@ -568,6 +568,110 @@ def palette_back(browser, base, token):
     ctx.close()
 
 
+def composer_back(browser, base, token, shots):
+    """Back on a phone closes the composer's overlays first (#11442): the full editor, the + panel and the model panel
+    each come off with one Back and the chat stays; one closed by its own control leaves no Back that does nothing.
+    /model with the Send button opens the model panel instead of sending. In New Agent's sheet a pick closes only the
+    panel and the next Back closes the sheet; Configure models leaves no dead entry under Settings."""
+    claude = TAB1 + "/5b1170b5-0000-4000-8000-000000000001"
+    other = "/t/server/w2/" + quote("w2:t1", safe="") + "/5b1170b5-0000-4000-8000-000000000004"
+    ctx, page = phone(browser)
+    sign_in(page, base, token)
+
+    def visit(path):  # an in-app navigation (a link's), one history entry
+        page.evaluate("p => { history.pushState(null, '', p); dispatchEvent(new PopStateEvent('popstate')); }", path)
+
+    def marked():
+        return page.evaluate("() => Boolean(history.state && history.state.personaOverlay)")
+
+    box = page.locator("main textarea[data-composer-input]")
+    visit(other)
+    expect(box).to_be_visible(timeout=20000)
+    visit(claude)
+    expect(page.locator("main button[data-model-pill]").first).to_be_visible(timeout=20000)
+    chat = page.url
+
+    def back_closes(what, overlay):
+        expect(overlay).to_be_visible()
+        page.go_back()
+        expect(overlay).to_have_count(0)
+        assert page.url == chat, f"{what}: Back left the chat for {page.url}"
+        assert not marked(), f"{what}: an overlay entry is left"
+        ok(f"Back closes {what} and stays in the chat")
+
+    box.fill("\n".join(f"line {i}" for i in range(9)))
+    page.locator("[data-testid=composer-expand]").tap()
+    back_closes("the full editor", page.locator("[data-testid=composer-expanded]"))
+    assert box.input_value().startswith("line 0"), "the draft went with the full editor"
+    box.fill("")
+    page.locator("main [data-composer-plus]").first.tap()
+    back_closes("the + panel", page.locator("[data-composer-panel=plus]"))
+    page.locator("main button[data-model-pill]").first.tap()
+    back_closes("the model panel", page.locator("[data-model-panel]"))
+
+    box.fill("/model")
+    page.locator("main [data-testid=composer-send]").tap()
+    expect(page.locator("[data-model-panel]")).to_be_visible()
+    assert box.input_value() == "", "/model stayed in the box"
+    ok("/model with the Send button opens the model panel instead of sending")
+    if shots:
+        page.wait_for_timeout(300)
+        page.screenshot(path=os.path.join(shots, "composer-model-command.png"))
+    back_closes("the model panel opened by /model", page.locator("[data-model-panel]"))
+
+    # closed from the page (a tap outside it), its entry comes off: the next Back leaves the chat
+    page.locator("main [data-composer-plus]").first.tap()
+    expect(page.locator("[data-composer-panel=plus]")).to_be_visible()
+    page.touchscreen.tap(195, 200)
+    expect(page.locator("[data-composer-panel=plus]")).to_have_count(0)
+    page.wait_for_timeout(500)
+    assert page.url == chat, page.url
+    assert not marked(), "the + panel's entry stayed after it closed"
+    page.go_back()
+    expect(page).to_have_url(base + other)
+    ok("the + panel closed by a tap outside leaves no entry: the next Back goes to the chat before")
+
+    # New Agent's sheet: the panel's entry is on the sheet's
+    visit("/agents")
+    agents = page.url
+
+    def sheet():
+        page.locator("main").get_by_role("button", name="新建 Agent").first.tap()
+        page.get_by_role("menuitem", name="新建 Agent").first.tap()
+        d = page.get_by_role("dialog", name="新建 Agent", exact=True)
+        expect(d).to_be_visible()
+        pill = d.locator('[data-testid="new-agent-model"] [data-model-pill]')
+        expect(pill).to_have_attribute("data-model-pill", "ready")
+        pill.tap()
+        expect(page.locator("[data-model-panel]")).to_be_visible()
+        return d
+
+    d = sheet()
+    page.locator('[data-model-panel] [data-panel-row="model:claude\\a sonnet"]').tap(position={"x": 48, "y": 12})
+    expect(page.locator("[data-model-panel]")).to_have_count(0)
+    page.wait_for_timeout(500)
+    expect(d).to_be_visible()
+    depth = page.evaluate("() => history.state && history.state.personaOverlayDepth")
+    assert depth == 1, f"after a pick the history has {depth} overlay entries, not the sheet's alone"
+    page.go_back()
+    expect(d).to_have_count(0)
+    assert page.url == agents, page.url
+    page.wait_for_timeout(500)
+    assert not marked(), "the sheet's entry stayed"
+    ok("in New Agent's sheet a pick closes only the model panel; the next Back closes the sheet")
+
+    sheet()
+    page.locator("[data-model-panel]").get_by_role("button", name="配置模型").tap()
+    page.wait_for_url(lambda u: "/settings" in u)
+    page.go_back()
+    expect(page).to_have_url(agents)
+    page.wait_for_timeout(500)
+    assert not marked(), "a dead overlay entry under Settings"
+    expect(page.get_by_role("dialog", name="新建 Agent", exact=True)).to_have_count(0)
+    ok("Configure models from New Agent's panel: Back from Settings lands on the page, no dead entry")
+    ctx.close()
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("base")
@@ -589,6 +693,7 @@ def main():
         lazy_pages(browser, base, a.token)
         offline(browser, base, a.token, a.shots)
         palette_back(browser, base, a.token)
+        composer_back(browser, base, a.token, a.shots)
         browser.close()
     print("PASS web mobile shell e2e")
 
