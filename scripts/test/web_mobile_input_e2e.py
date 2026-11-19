@@ -222,6 +222,94 @@ def lark_keyboard(browser, base, shots):
         ok(f"{w}: the Feishu chat keeps its newest message in view with the keyboard up and a five-line draft; scrolled up, it stays")
 
 
+# What a finger finds on an attachment tile: at its middle, at its top-right corner and 7 px above it (past the ✕'s reach
+# into the 6 px gap over a row of tiles), and how far the ✕ answers along the lines through its middle.
+TILE_HITS = """(tile) => {
+  const x = tile.querySelector('[aria-label^="移除"], [data-remove]'), edit = tile.querySelector('button:has(img)');
+  const at = (px, py) => { const e = document.elementFromPoint(px, py); return !e ? '-' : x.contains(e) ? 'remove' : edit?.contains(e) ? 'edit' : e.tagName.toLowerCase(); };
+  const r = tile.getBoundingClientRect(), b = x.getBoundingClientRect(), cx = b.left + b.width / 2, cy = b.top + b.height / 2;
+  const run = (dx, dy) => { let n = 0; while (n < 60 && at(cx + dx * (n + 1), cy + dy * (n + 1)) === 'remove') n++; return n; };
+  return { centre: at(r.left + r.width / 2, r.top + r.height / 2), corner: at(r.right - 3, r.top + 3), above: at(cx, r.top - 7),
+    w: run(-1, 0) + run(1, 0) + 1, h: run(0, -1) + run(0, 1) + 1, mid: [r.left + r.width / 2, r.top + r.height / 2] };
+}"""
+
+
+def tile_hits(browser, base, shots):
+    """An attachment's ✕ (#11442): a tap on a picture's middle opens the editor, not remove; the ✕ answers out of its
+    corner but not over what sits above the tray (the composer, the New Agent sheet); a file's ✕ answers down its column
+    and the file row scrolls no further for it."""
+    import struct
+    import zlib
+
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+
+    def png(rgb):
+        """A 64 px square of one colour."""
+        raw = b"".join(b"\0" + bytes(rgb) * 64 for _ in range(64))
+        data = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 64, 64, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
+        return {"name": "picture.png", "mimeType": "image/png", "buffer": data}
+
+    def text(name):
+        return {"name": name, "mimeType": "text/plain", "buffer": b"hello\n"}
+
+    ctx, page = phone(browser, 390, 844)
+    open_pane(page, base, cards=False)
+    page.locator("main input[type=file]").first.set_input_files([png((220, 60, 60))])
+    pic = page.locator("main [data-chat-dock] .group\\/att:has(img)")
+    expect(pic).to_have_count(1)
+    page.wait_for_timeout(400)  # its pop-in
+    h = pic.evaluate(TILE_HITS)
+    if h["centre"] != "edit" or h["corner"] != "remove":
+        fail(f"a picture's middle should open it and its corner remove it: {h}")
+    if h["above"] == "remove":
+        fail(f"the picture's ✕ answers 7 px above the tray, over what sits there: {h}")
+    if h["w"] < 36 or h["h"] < 32:
+        fail(f"the picture's ✕ answers only {h['w']}×{h['h']} px")
+    page.touchscreen.tap(*h["mid"])
+    editor = page.get_by_role("dialog", name="编辑图片")
+    expect(editor).to_be_visible()
+    expect(pic).to_have_count(1)
+    ok(f"a tap on a picture's middle opens the editor; its ✕ answers {h['w']}×{h['h']} px out of the corner, not above the tray")
+    editor.get_by_role("button", name="取消").click()
+    expect(editor).to_have_count(0)
+    page.wait_for_timeout(500)
+
+    # files: two overflow the row at 390, which must scroll no further for the ✕
+    page.locator("main input[type=file]").first.set_input_files([text("a.txt"), text("b.txt")])
+    tiles = page.locator("[data-testid=composer-files] > span")
+    expect(tiles).to_have_count(2)
+    page.wait_for_timeout(400)
+    f = tiles.first.evaluate(TILE_HITS)
+    if f["corner"] != "remove" or f["centre"] == "remove":
+        fail(f"a file's ✕ should answer at its corner and leave its middle: {f}")
+    if f["w"] < 28 or f["h"] < 44:
+        fail(f"a file's ✕ answers only {f['w']}×{f['h']} px")
+    row = page.locator("[data-testid=composer-files]").evaluate("""(e) => { const t = [...e.children].map((c) => c.getBoundingClientRect());
+      return [e.scrollWidth, t[t.length - 1].right - t[0].left]; }""")
+    if row[0] > row[1] + 0.5:
+        fail(f"the file row scrolls {row[0]} px for {row[1]:.0f} px of tiles")
+    if shots:
+        card = page.locator(COMPOSER).evaluate("(e) => { const r = e.closest('.rounded-\\\\[14px\\\\]').getBoundingClientRect(); return [r.top, r.height]; }")
+        page.screenshot(path=os.path.join(shots, "390-attachments.png"), clip={"x": 0, "y": max(0, card[0] - 20), "width": 390, "height": card[1] + 40})
+    ok(f"a file's ✕ answers {f['w']}×{f['h']} px down its column; the row scrolls {row[0]} px, its tiles' width")
+
+    # the New Agent sheet: no editor, the middle still is not remove, nor is the sheet above the tray
+    page.evaluate("import('/src/lib/new-agent.ts').then((m) => m.openNewAgent())")
+    sheet = page.get_by_role("dialog", name="新建 Agent", exact=True)
+    expect(sheet).to_be_visible()
+    sheet.locator("input[type=file]").first.set_input_files([png((60, 90, 220))])
+    pic = sheet.locator(".group\\/att:has(img)")
+    expect(pic).to_have_count(1)
+    pic.scroll_into_view_if_needed()
+    page.wait_for_timeout(400)
+    n = pic.evaluate(TILE_HITS)
+    if n["centre"] == "remove" or n["corner"] != "remove" or n["above"] == "remove":
+        fail(f"New Agent: the picture's ✕ should answer at its corner only: {n}")
+    ok(f"New Agent: the picture's ✕ answers {n['w']}×{n['h']} px at its corner, not its middle or above the tray")
+    ctx.close()
+
+
 def run(base, shots, hub=None):
     with sync_playwright() as p:
         browser = p.chromium.launch(channel="chrome")
@@ -450,6 +538,7 @@ def run(base, shots, hub=None):
         ctx.close()
         card_field_keyboard(browser, base, hub, shots)
         lark_keyboard(browser, base, shots)
+        tile_hits(browser, base, shots)
         browser.close()
     if ERRORS:
         fail(f"uncaught page errors: {ERRORS[:3]}")
