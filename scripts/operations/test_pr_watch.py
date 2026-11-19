@@ -3040,6 +3040,60 @@ class WatcherTests(unittest.TestCase):
                 for worker in watcher.workers:
                     worker.join(timeout=5)
                     self.assertFalse(worker.is_alive())
+                self.addCleanup(watcher.review_executor.shutdown, wait=True, cancel_futures=True)
+                self.assertEqual(watcher.review_executor._max_workers, 16)
+
+    def test_reviewer_concurrency_is_bounded_and_refills_ready_work(self):
+        self.config["reviewer"]["concurrency"] = 16
+        watcher = pr_watch.Watcher(self.config, verbose=False)
+        watcher.start_workers()
+        self.addCleanup(watcher.stopping.set)
+        self.addCleanup(watcher.review_executor.shutdown, wait=True, cancel_futures=True)
+        for _ in watcher.workers:
+            watcher.tasks.put((2, -1, ("", 0)))
+        for worker in watcher.workers:
+            worker.join(timeout=5)
+        active = 0
+        peak = 0
+        completed = []
+        lock = threading.Lock()
+        gate = threading.Event()
+        release = threading.Event()
+
+        def review(repo, current, worktree, config):
+            nonlocal active, peak
+            with lock:
+                active += 1
+                peak = max(peak, active)
+                if active == 16:
+                    gate.set()
+            release.wait(timeout=5)
+            with lock:
+                active -= 1
+                completed.append(current["number"])
+            return []
+
+        with patch.object(pr_watch, "semantic_review", side_effect=review):
+            futures = [watcher.review_executor.submit(
+                pr_watch.semantic_review, "example/one", {"number": number}, ".", self.config["reviewer"])
+                for number in range(18)]
+            self.assertTrue(gate.wait(timeout=5), "the first sixteen reviewers were not filled")
+            release.set()
+            for future in futures:
+                future.result(timeout=5)
+        self.assertEqual(peak, 16)
+        self.assertEqual(len(completed), 18)
+        for count in (0, 21):
+            self.config["reviewer"]["concurrency"] = count
+            with self.assertRaisesRegex(pr_watch_common.WatchError, "reviewer concurrency"):
+                pr_watch.Watcher(self.config, verbose=False).start_workers()
+
+    def test_discovery_rate_limit_retains_the_resident_service(self):
+        watcher = pr_watch.Watcher(self.config, verbose=False)
+        with patch.object(pr_watch, "gh_json", side_effect=pr_watch_common.WatchError("API rate limit already exceeded")):
+            watcher.discover()
+        self.assertIsNone(watcher.fatal)
+        self.assertFalse(watcher.stopping.is_set())
 
     def test_worker_count_is_bounded(self):
         for count in (-1, 0, 21):
