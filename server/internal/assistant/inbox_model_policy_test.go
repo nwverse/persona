@@ -316,6 +316,53 @@ func TestInboxAttestationStoreErrorStaysUnknown(t *testing.T) {
 	}
 }
 
+// A missing origin-book entry is not an ordinary attestation: the asynchronous backfill may not have reached a legacy
+// Inbox conversation yet. A positive ordinary record remains sufficient once the backfill has actually classified it.
+func TestInboxAttestationMissingOriginStaysUnknown(t *testing.T) {
+	h := agentHub(t)
+	const session = "legacy-before-origin-backfill"
+	h.f.setSessions("server", proto.Session{SessionID: session, Assistant: true, Status: proto.StatusWorking, Cwd: "/work"})
+	params, err := h.SendParams(t.Context(), SendParams{MachineID: "server", SessionID: session,
+		Params: map[string]any{"text": "Continue", "origin": OriginUser, "origin_known": true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, set := params["origin"]; set {
+		t.Fatalf("missing origin record produced an origin attestation: %v", params)
+	}
+	if _, set := params["origin_known"]; set {
+		t.Fatalf("missing origin record was attested ordinary before backfill: %v", params)
+	}
+	h.originSet(t.Context(), "server", session, OriginUser, "", "")
+	params, err = h.SendParams(t.Context(), SendParams{MachineID: "server", SessionID: session, Params: map[string]any{"text": "Continue"}})
+	if err != nil || params["origin_known"] != true {
+		t.Fatalf("a positive ordinary origin record was not attested: %v %v", params, err)
+	}
+}
+
+// The hub forwards session.send_once to session.send. Attestation must therefore be attached at the manager's device
+// call boundary, including on CI/view-action paths that do not pass through SendParams.
+func TestInboxSendOnceReattestsManagerOrigin(t *testing.T) {
+	h := agentHub(t)
+	const session = "inbox-send-once"
+	h.f.setSessions("server", proto.Session{SessionID: session, Assistant: true, Status: proto.StatusWorking, Cwd: "/work"})
+	h.originSet(t.Context(), "server", session, OriginInbox, "lark:real-item:1", "")
+	if err := h.call(t.Context(), "server", DeviceSessionSendOnce, map[string]any{
+		"session_id": session, "text": "Continue", "client_msg_id": "send-once-1", "origin": OriginUser, "origin_known": false,
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	h.f.mu.Lock()
+	defer h.f.mu.Unlock()
+	if len(h.f.sentOnce) != 1 {
+		t.Fatalf("session.send_once calls=%d, want 1", len(h.f.sentOnce))
+	}
+	params := h.f.sentOnce[0]
+	if params["origin"] != OriginInbox || params["origin_known"] != true {
+		t.Fatalf("forwarded send_once origin=%v known=%v, want explicit Inbox attestation", params["origin"], params["origin_known"])
+	}
+}
+
 // Owner-confirmed reply execution is separate from the model-call guard even while the handling conversation is Inbox.
 func TestInboxOwnerConfirmedReplyRuns(t *testing.T) {
 	h, lark, it := handledHub(t)

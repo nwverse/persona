@@ -454,13 +454,14 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 			return err
 		}
 	}
-	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || method == DeviceSessionSend) {
+	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || method == DeviceSessionSend || method == DeviceSessionSendOnce) {
 		id, _ := p["session_id"].(string)
 		if err := s.putSupervisionInstructions(ctx, device, id, p); err != nil {
 			return err
 		}
-		if method == DeviceAssistantSend || method == DeviceSessionSend {
+		if method == DeviceAssistantSend || method == DeviceSessionSend || method == DeviceSessionSendOnce {
 			// Initial assistant.send starts do not pass through SendParams, and Inbox continuations use session.send.
+			// The hub forwards session.send_once to the same node entry, so attest it here before that forwarding too.
 			// Attest the explicit ordinary/unknown decision on every manager-owned node send.
 			newConversation := method == DeviceAssistantSend && id == ""
 			startOrigin := ""

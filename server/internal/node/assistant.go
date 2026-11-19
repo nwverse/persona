@@ -694,7 +694,8 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	}
 	if p != nil && (!p.alive() || p.launcher != launcher || p.fingerprint != n.executionFingerprint(launcher, execution) || p.needsRestartFor(want) || n.tuiEffortStale(p, execution) || p.instructionsStale() || otherTools || n.toolSearchStale(p)) {
 		p.mu.Lock()
-		originChanged := p.origin != origin || p.model.Origin != origin
+		originChanged := assistantOriginToolPolicy(p.origin) != assistantOriginToolPolicy(origin) ||
+			assistantOriginToolPolicy(p.model.Origin) != assistantOriginToolPolicy(origin)
 		active := p.busy || len(p.tasks) > 0
 		if proto.IsExternalLauncher(p.launcher) || proto.IsExternalLauncher(launcher) {
 			active = p.workingLocked() // compactions and accepted/unacknowledged queued input also belong to this process

@@ -44,9 +44,9 @@ type modelExecution struct {
 	// It changes the execution fingerprint so a role change resumes in a fresh process.
 	SupervisionInstructions string `json:",omitempty"`
 	SupervisionResolved     bool   `json:"-"`
-	// Origin is the conversation's manager-recorded source. It is authorization metadata, not a model choice, but it
-	// changes Claude's built-in tool list. Include it in the fingerprint so re-attestation never keeps a process with
-	// the previous origin's tools; OriginKnown itself only gates resumes and does not select tools.
+	// Origin is the conversation's manager-recorded source. It is authorization metadata, not a model choice, but its
+	// Inbox/ordinary class changes Claude's built-in tool list. The fingerprint uses that class so a real policy change
+	// gets a new process while ordinary aliases (for example user and empty) do not restart an identical tool policy.
 	Origin string `json:",omitempty"`
 	// OriginKnown distinguishes a manager's explicit ordinary (empty-origin) decision from a pre-upgrade record whose
 	// origin is unknown. It is likewise authorization metadata and never changes the execution fingerprint.
@@ -94,9 +94,19 @@ func (m modelExecution) checkModel() error {
 	return nil
 }
 
+// assistantOriginToolPolicy is the only origin distinction that changes a process's built-in tools. Other origin values
+// remain useful audit metadata, but user, channel, spawned and an explicitly ordinary empty origin all run the same tools.
+func assistantOriginToolPolicy(origin string) string {
+	if origin == originInbox {
+		return originInbox
+	}
+	return ""
+}
+
 // executionFingerprint also detects a managed provider changed before the next turn (any of its fields, the #2455 ones
 // included): another process, resumed on the same conversation.
 func (n *Node) executionFingerprint(launcher string, m modelExecution) string {
+	m.Origin = assistantOriginToolPolicy(m.Origin)
 	raw, _ := json.Marshal(m)
 	if l, ok := n.managedCatalog(launcher); ok { // as named: the same before and after a withheld one's pull (its Rev)
 		v, _ := json.Marshal(l)

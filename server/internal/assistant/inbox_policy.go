@@ -62,8 +62,16 @@ func (s *Service) managerOriginDecision(ctx context.Context, machine, session, s
 		return "", false
 	}
 	o := b.m[session]
-	if o != nil && o.Origin == OriginInbox && (o.MachineID == "" || s.sameMachine(machine, o.MachineID)) {
-		return OriginInbox, true
+	if o == nil {
+		// Backfill is asynchronous. A missing record is not positive evidence of an ordinary conversation: a legacy
+		// Inbox handling chat can reach this path before its first backfill completes.
+		return "", false
+	}
+	if o.Origin == OriginInbox {
+		if o.MachineID == "" || s.sameMachine(machine, o.MachineID) {
+			return OriginInbox, true
+		}
+		return "", false
 	}
 	return "", true
 }

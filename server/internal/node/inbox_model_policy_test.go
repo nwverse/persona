@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -531,6 +532,42 @@ func TestOriginReattestationRestartsClaudeToolPolicy(t *testing.T) {
 	}
 }
 
+func TestOrdinaryOriginAliasesKeepClaudeProcess(t *testing.T) {
+	for _, busy := range []bool{false, true} {
+		t.Run(fmt.Sprintf("busy=%v", busy), func(t *testing.T) {
+			f := cliTest(t)
+			cwd := t.TempDir()
+			id, err := f.n.assistantSend(context.Background(), "", cwd, "claude", "Investigate", nil, "default", "",
+				modelExecution{Origin: "user", OriginKnown: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.idle(t, id)
+			first := f.proc(id)
+			argvBefore := f.file("cli-argv")
+			first.mu.Lock()
+			first.busy = busy
+			first.mu.Unlock()
+			_, err = f.n.assistantSend(context.Background(), id, cwd, "claude", "Continue", nil, "default", "",
+				modelExecution{OriginKnown: true, OriginDecisionRequired: true})
+			first.mu.Lock()
+			first.busy = false
+			first.mu.Unlock()
+			if err != nil {
+				t.Fatalf("ordinary origin alias changed the tool-policy boundary: %v", err)
+			}
+			f.idle(t, id)
+			if f.proc(id) != first || f.file("cli-argv") != argvBefore {
+				t.Fatal("ordinary user to empty origin restarted an identical tool policy")
+			}
+			st, _ := f.n.state.get(id)
+			if st.Origin != "" || !st.OriginKnown {
+				t.Fatalf("ordinary re-attestation was not persisted: %+v", st)
+			}
+		})
+	}
+}
+
 func TestInboxReattestationRefusesBusyOrdinaryProcess(t *testing.T) {
 	f := cliTest(t)
 	cwd := t.TempDir()
@@ -601,6 +638,12 @@ func TestInboxDoesNotAdoptOrdinaryToolSpare(t *testing.T) {
 	}
 	if n.spare != matching {
 		t.Fatal("the guarded matching spare was consumed")
+	}
+	ordinaryAlias := &assistantProc{id: "ordinary-alias-spare", agent: "claude", launcher: "claude", cwd: n.home, born: time.Now(),
+		fingerprint: n.executionFingerprint("claude", modelExecution{})}
+	n.spare = ordinaryAlias
+	if got := n.adoptSpareFor(n.home, "claude", "default", modelExecution{Origin: "user"}); got != ordinaryAlias {
+		t.Fatal("an ordinary origin alias rejected a spare with the same built-in tool policy")
 	}
 }
 
