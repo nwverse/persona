@@ -566,6 +566,11 @@ section[data-segment] { contain-intrinsic-block-size: auto var(--seg-est, 0px); 
     &::before { content: ""; position: absolute; top: min(0px, calc(50% - 22px)); bottom: min(0px, calc(50% - 22px)); left: min(0px, calc(50% - 22px)); right: min(0px, calc(50% - 22px)); }
   }
 }
+/* An extension's graph on a page (UI version 10, #9727): the canvas is 70% of the page's visible height, at least 320
+   and at most 900 px (docs/extensions/extensions.md "Drawing, on every app"); in a card, a still preview fitted into
+   200 px (graph-preview, views/extensions/ViewBody10.tsx). */
+@utility graph-canvas { height: clamp(320px, 70dvh, 900px); }
+@utility graph-preview { height: 200px; }
 /* iOS zooms the page into any focused field under 16px: on touch screens none is. Unlayered on purpose, so it wins
    over the text-[13px] utilities. */
 @media (pointer: coarse) {
