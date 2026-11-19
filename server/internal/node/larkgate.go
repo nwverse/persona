@@ -85,6 +85,10 @@ func (n *Node) larkGate(ctx context.Context, in hookInput, ix proto.Interaction)
 // "deny" may carry the user's own words. Claude reaches it through the Bash PreToolUse hook (larkGate), Codex through
 // the app-server's command approvals (assistant_codex_approve.go).
 func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix proto.Interaction) (string, string, error) {
+	// Cwd on the eventual card may be normalized to the conversation's display
+	// directory. Keep the actual execution directory separately for the
+	// manager's exact-call continuation fingerprint.
+	ix.ExecutionCwd = cwd
 	cfg := n.assistantLark(ctx)
 	if slices.ContainsFunc(cfg.Gates, func(g proto.CommandGate) bool { return g.Auth != nil }) {
 		n.gates() // the proxy goes by this Node's config from now on (a resident node's next connection)
@@ -355,6 +359,7 @@ func (n *Node) confirmLark(ctx context.Context, session string, ix proto.Interac
 	if ix.ID == "" { // a gated tool's card has none yet: the ledger names the card by it
 		ix.ID = "ix_" + randHex(6)
 	}
+	ix.Detachable = n.state != nil && n.isAssistantSession(session)
 	res, ok, err := n.ask(ctx, ix)
 	if err != nil {
 		return "", "", card, err
@@ -374,7 +379,11 @@ func (n *Node) confirmLark(ctx context.Context, session string, ix proto.Interac
 			n.rememberLarkAlways(session, larkPattern(c))
 		}
 	}
-	card = proto.LarkLetThrough{Kind: proto.LarkThroughCard, InteractionID: ix.ID, AnsweredBy: res.AnsweredBy}
+	approvalID := ix.ID
+	if res.ApprovalID != "" {
+		approvalID = res.ApprovalID
+	}
+	card = proto.LarkLetThrough{Kind: proto.LarkThroughCard, InteractionID: approvalID, AnsweredBy: res.AnsweredBy}
 	if res.Remembered { // the manager answered from an "Always allow" it kept: no card was answered for this one
 		card = proto.LarkLetThrough{Kind: proto.LarkThroughAlways}
 	}
