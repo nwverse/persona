@@ -472,6 +472,16 @@ five minutes, and the picker's refresh requests a fresh catalog through optional
 default. New sessions and availability checks explicitly apply that model through ACP, since ACP may ignore the
 settings file when choosing its initial model. An explicit caller model takes precedence, and resumed sessions retain
 their native selection. An unavailable catalog returns the native error instead of advertising a built-in model list.
+One `agy acp` process can keep the model list it had when the account's plan lapsed or the CLI signed out (#10368), so
+a session's model list replaces the catalog only when its ACP process started after the latest successful discovery
+began. When ACP rejects a model as unknown and a fresh discovery lists it, the companion replaces the ACP process and
+runs the start, model change or availability check once more. Every runtime call, turn and native read that uses ACP
+holds a lease for its whole run, and the process is replaced only when no lease other than the caller's, ACP request
+or permission card is open. That last check and the replacement run without an await between them, and calls that
+arrive during a replacement wait for the old process to exit and start on the new one. A replacement that rejects the
+same model is not replaced again while the catalog stays the same. A successful discovery after one that found the CLI
+signed out replaces the ACP process the same way: at once when nothing uses it, otherwise before the next start, send,
+model change or check that finds it idle.
 
 Idle sessions can switch model, thinking level and permission mode through ACP. Native configuration updates determine
 the displayed model and effort. Each accepted field is published even if another field fails, and failures reach the caller.

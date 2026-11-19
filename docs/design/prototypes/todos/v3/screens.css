@@ -188,14 +188,10 @@
 /* ---------- the list ---------- */
 [data-variant="V3"] .v3-bar { margin-top: 8px; }
 /* the pinned slot (All and the grouping icon) stands apart from the chips: a 4-pt gap and a hairline */
-[data-variant="V3"] .v3-bar .k-sbar-trail { position: relative; gap: 0; padding: 0 0 0 4px; }
-[data-variant="V3"] .v3-bar .k-sbar-trail::before { content: ""; position: absolute; left: -2px; top: 12px; bottom: 12px; width: .5px; background: var(--separator); }
 /* chips: padding 6 and the count 4 from its label (E2 asks 8; at 6 Needs you 3 · In progress 5 · To do 2 · All fit
    whole on a 402 iPhone, a named deviation) */
-[data-variant="V3"] .v3-bar .k-sbar-chip { padding: 0 6px; gap: 4px; }
 /* the grouping icon: 24 wide, a 44-pt target */
-[data-variant="V3"] .v3-sbar-g { position: relative; width: 24px; height: 44px; display: grid; place-items: center; flex: none; color: var(--ink-2); cursor: pointer; }
-[data-variant="V3"] .v3-sbar-g::after { content: ""; position: absolute; top: 0; bottom: 0; left: -10px; right: -10px; }
+[data-variant="V3"] .v3-sbar-g { cursor: pointer; }
 [data-variant="V3"] .v3-list { padding-bottom: 120px; }
 /* the bottom scroll edge (iOS 26): rows passing under the home indicator, and under the floating New To-Do pill, blur
    and fade into the page instead of being sliced by them */
@@ -385,9 +381,8 @@
 [data-variant="V3"].k-web .v3-cr { height: 24px; font-size: var(--fs-caption); }
 [data-variant="V3"].k-web .v3-paper { padding-left: 24px; padding-right: 24px; }
 [data-variant="V3"].k-web .v3-spine { padding-left: 24px; padding-right: 24px; }
-[data-variant="V3"].k-web .v3-sbar-g { width: 28px; height: 24px; }
 /* the web bar marks its choice as every other bar of the variant does (E2: accent 12 %, accent ink) */
-[data-variant="V3"].k-web .k-sbar-chip.is-on { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); box-shadow: none; }
+[data-variant="V3"].k-web .k-sbar-chip.is-on .k-sbar-pill { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); box-shadow: none; }
 [data-variant="V3"].k-web .k-sbar-chip.is-on .k-sbar-n { color: var(--accent); }
 
 /* ---------- Android: the place summary fits the pane ---------- */
@@ -406,4 +401,3 @@
 .kf-reduce [data-variant="V3"] .v3-anim-body-left .v3-bin,
 .kf-reduce [data-variant="V3"] .v3-anim-body-right .v3-bin,
 .kf-reduce [data-variant="V3"] .v3-anim-drawer .k-drawer { animation: v3-fade .2s ease both; }
-[data-variant="V3"] .v3-bar .k-sbar-chip { min-width: 44px; justify-content: center; }
