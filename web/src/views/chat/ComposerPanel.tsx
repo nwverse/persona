@@ -16,6 +16,7 @@ import type { Machine, Session } from "../../lib/types";
 import type { Workspace, WorkspaceList } from "../../lib/workspace-board";
 import { useStore } from "../../lib/store";
 import { hasFinePointer } from "../../lib/viewport";
+import { useComposition } from "../../lib/ime";
 import { cx, EASE } from "../../ui/atoms";
 import { Icon, type IconName } from "../../ui/icons";
 import { t } from "../../i18n";
@@ -261,21 +262,23 @@ export function ComposerPanel({
     el?.scrollIntoView({ block: "nearest" });
   }, [current, entries]);
 
-  // from the +: a click anywhere else closes it (the + itself toggles it)
+  // from the +: a press anywhere else closes it (the + itself toggles it). pointerdown, so a touch closes it too: it covers
+  // the composer, and a phone's tap sends no mousedown when the page handles the touch
   const root = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (from !== "plus") return;
-    const down = (e: MouseEvent) => {
+    const down = (e: Event) => {
       const target = e.target as Element | null;
       if (root.current?.contains(target) || target?.closest?.("[data-composer-plus]")) return;
       onClose(false);
     };
-    document.addEventListener("mousedown", down);
-    return () => document.removeEventListener("mousedown", down);
+    document.addEventListener("pointerdown", down);
+    return () => document.removeEventListener("pointerdown", down);
   }, [from, onClose]);
 
   // the search box takes the keys at once; not on a touch screen alone, where the focus would raise the keyboard over the rows
   const searchBox = useRef<HTMLInputElement>(null);
+  const ime = useComposition();
   useEffect(() => {
     if (from === "plus" && hasFinePointer()) searchBox.current?.focus({ preventScroll: true });
   }, [from]);
@@ -343,8 +346,10 @@ export function ComposerPanel({
             aria-label={searchLabel}
             placeholder={searchLabel}
             onChange={(e) => setSearch(e.target.value)}
+            {...ime.handlers}
+            onBlur={ime.onBlur}
             onKeyDown={(e) => {
-              if (e.nativeEvent.isComposing || e.keyCode === 229) {
+              if (ime.busy(e.nativeEvent)) {
                 // the IME's own Escape (cancelling a candidate) must not reach ChatView's interrupt on the window
                 if (e.key === "Escape") e.stopPropagation();
                 return;

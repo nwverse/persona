@@ -621,6 +621,11 @@ on-demand model panel, not the everyday Assistant home (#6887).
   screen). Markdown rendered with `askImages` (Inbox connector and Lark threads) keeps a run its size with Load image
   over it; a hub without `remote_images` keeps every picture behind a click (#8162's gate), loaded from its host with
   no Referer.
+  Android (#9476) uses a 240 dp single and a 480 dp maximum column in Glass, Brief and Board. Inline pictures use the
+  measured text line height, including at large system text sizes. A tap opens that reply’s pictures in the existing
+  viewer, including inline and overflow pictures. Each third-party thumbnail and previously unopened gallery page
+  asks before loading. Mail keeps its Show images action. A pairing that has yet to advertise `remote_images` waits
+  for a tap and uses a separate HTTPS reader. WebView link preloading skips picture-bearing replies.
 - No shared bubble component exists. Messages, Tasks and Lark rebuild it with different paddings and gutters (DS-20).
 - Web: user bubble 14 px radius; replies unboxed. Android: 20 dp in Glass, max width 86%.
 - Web reply bar (#5314, `ReplyBar`; the owner's requested alignment with cindy's `MessageActionBar`, 2026-11-12): only

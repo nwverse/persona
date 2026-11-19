@@ -15,7 +15,7 @@ final class HubLink: Identifiable {
     /// What the hub listed in its hello beyond the first protocol (`terminal_stream`, `file_upload`…).
     private(set) var features: Set<String> = []
     /// The credential whose authenticated hello supplied these capabilities; nil before the first hello.
-    @ObservationIgnored private(set) var surfaceCapabilitiesConfig: ServerConfig?
+    private(set) var surfaceCapabilitiesConfig: ServerConfig?
     /// The group's last Fleet state (hub/liveactivity.go): merged with the other groups' for the Live Activity.
     var fleet: FleetState?
     /// The hub's `desktops` list: Mac apps connected and computers where Persona Link reports you at them (the banner over
@@ -106,7 +106,7 @@ final class HubLink: Identifiable {
 
     func received(_ hello: HubHello) {
         self.hello = hello
-        surfaceCapabilitiesConfig = config
+        if surfaceCapabilitiesConfig != config { surfaceCapabilitiesConfig = config }
         let f = Set(hello.features)
         let changed = f != features
         if changed { features = f }
