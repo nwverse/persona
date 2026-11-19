@@ -701,7 +701,8 @@ moment is cut off, as when a node restarts.
     through a `persona-link` found there. Then it waits up to 2 minutes for the computer to answer over SSH again.
 - **If the hub refuses to undo it** (it cannot tie the request to this switch), the manager stops asking and leaves Persona
   Link on the computer. If the hub has undone the switch but the computer is another manager's by now, or has been
-  removed, it answers `rolled_back_gone`, and the manager cleans up as for any confirmed rollback.
+  removed, it answers `rolled_back_gone`. The manager then removes what this switch installed, as for any confirmed
+  rollback, but does not wait for the computer over SSH, since the computer is no longer its own.
 - **If any step cannot be confirmed**, the result says the switch could not be undone for sure, rather than that it was.
 
 The reason the switch failed is shown in plain words either way.
