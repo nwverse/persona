@@ -303,6 +303,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 	}
 	if len(entries) == 0 {
 		s.agentDecisionRepliesTold(ctx, holds)
+		s.handoffResultsTold(ctx, holds)
 		s.turnsTold(ctx, holds) // said the same within the window: told
 		b.mu.Lock()
 		if b.last.Equal(now) {
@@ -320,6 +321,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		s.parkedDueTold(ctx, kept) // told for good: not again after a restart (parked.go)
 		s.parkDecidedTold(ctx, kept)
 		s.agentDecisionRepliesTold(ctx, kept)
+		s.handoffResultsTold(ctx, kept)
 		s.turnsTold(ctx, holds) // and how a turn ended: kept went, the rest of them was said the same within the window
 	}()
 	background := to != here.Main && to == here.BackgroundSupervisor // the leader's message, told that the tasks are not its own (supervise_background.go)
@@ -529,9 +531,17 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 			return prompts.SuperviseEntry{}, false // resolved, closed, or replaced while the signal waited
 		}
 	case sigReview:
-		if st != reviewPending {
+		if st != reviewPending || v.handoffResult() != nil {
 			return prompts.SuperviseEntry{}, false
 		}
+	case sigHandoffResult:
+		h := v.handoffResult()
+		if h == nil || h.ID != g.Key {
+			return prompts.SuperviseEntry{}, false
+		}
+		// Render through the existing review entry, with this receipt as the evidence.
+		return prompts.SuperviseEntry{ID: t.ID, Title: t.Title, Kind: sigReview, Detail: handoffResultDetail(h),
+			DoneWhen: v.DoneWhen, Round: v.Round, Link: todoLink(web, t.ID), Quiet: t.Quiet}, true
 	case sigNeedsYou:
 		if !s.taskWaits(ctx, t) {
 			return prompts.SuperviseEntry{}, false // answered meanwhile
@@ -573,6 +583,9 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 			return prompts.SuperviseEntry{}, false // told by another message meanwhile (a later decision's)
 		}
 	case sigOrphaned:
+		if p := v.parking(); p != nil && p.Handoff != nil {
+			return prompts.SuperviseEntry{}, false // an acknowledged handoff already explains the stop
+		}
 		if o, ok := s.orphanOf(t.ID); !ok || o.key != g.Key {
 			return prompts.SuperviseEntry{}, false // an agent is back at it, or it is another stretch by now
 		}

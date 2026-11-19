@@ -11,10 +11,11 @@ export type ReviewState = "" | "pending_review" | "rework" | "needs_user" | "par
 export interface Parked {
   reason: string;
   until: string;
-  waiting_on: "owner_priority" | "someone_else" | "external_event" | "date";
+  waiting_on: "owner_priority" | "someone_else" | "external_event" | "date" | "todo_handoff";
   count: number;
   /** Source-backed account recorded by task_review, not a provider receipt fetched by the hub. */
   evidence?: ParkEvidence;
+  handoff?: { todo_id: string; title: string; check: string };
 }
 
 export interface ParkContact {

@@ -1,10 +1,10 @@
-Send a message to an agent as the user would type it; queued while it works. Only send what the user asked for. A stopped agent takes no plain message. Only a recorded non-user stop (idle, task completion, restart) permits resume; user and unknown stops need the user's Resume. If the next work needs its context (investigation followed by a fix, rework, the user asked for this agent), send with resume and resume_why: the same session and permission mode, your text first, the reason shown to the user. It must be supervised (give task unless it is on an open task of yours). A nearly full one is compacted first. Unrelated work or one off track: agent_start anew (agent_read the old). Unsure: ask_user. A failed resume says why. A user's branch that never ran is started by its first message. Only /exit or /quit stops a running agent (tab kept); finished tasks' agents stop automatically. /exit to another conversation's task is refused (the user can close it, or agent_archive with close).
+Send what the user asked for to an Agent. A busy Agent may queue it. A stopped Agent needs resume and resume_why if this work needs its context. Only a recorded idle, task completion or restart stop permits that. For user and unknown stops use the user's Resume. It must be supervised (give task unless on an open task of yours). A nearly full Agent is compacted first. For unrelated work use agent_start. Unsure: ask_user. A branch that never ran starts on its first message. Only /exit or /quit stops a running Agent and keeps the tab. The owner's controls close another conversation's Agent.
 
-A dialog holding its terminal refuses the send (dialog_open) with its first line and whether Enter alone closes it; then send with dismiss_notice true. Confirmations, permissions and pickers are never closed for you: tell the user or use interaction_answer.
+For dialog_open, retry with dismiss_notice only when Enter alone closes the notice. For permissions and pickers, tell the user or use interaction_answer.
 
-To hand new work to a running agent (one the user opened, a long-lived one that passes work on), give task from the main conversation: once sent, the agent is your supervised task as agent_supervise makes one (a todo with the text as notes, done_when, a card; 督办 messages, task_review). Put the criteria in the text too: the agent reads only the text. An agent on one of your tasks takes more under the same title (done_when updated); another title, the user's own todo or another conversation's task is refused, with nothing sent. A failed send makes no task. Leave task out or null for a reply, nudge or decision; a task with only blank fields counts as left out.
+From the main conversation, give task to supervise new work, including done_when in text. More on your existing task keeps its title and updates its criteria. A different title, the user's own to-do or another conversation's task is refused. A failed send creates no task. Omit task for a reply, nudge or decision.
 
-Optional `wait_seconds` observes this launch or input for at most 50 seconds after dispatch. The receipt is retained, followed by an `Inline observation` JSON record: `completed` with `reply`, `question` with `interaction_id`, or `timeout`, `cancelled`, `unavailable`, `interrupted` or `failed`. The record includes the input and session references when known. It never answers a question, accepts a task or resends input. Older nodes without input echo support may time out instead of returning an unrelated reply. Continue to follow the normal supervision and `task_review` requirements.
+Use handoff to ask an existing Agent to check a candidate for a different, stopped to-do you supervise. The node's acknowledgement starts the wait. Optional wait_seconds adds this input's completion, question or observation status to the send receipt. It never resends, accepts a task or answers a question. Follow task_review as usual.
 
 ```json
 {
@@ -14,7 +14,7 @@ Optional `wait_seconds` observes this launch or input for at most 50 seconds aft
     "wait_seconds": {
       "type": "integer",
       "minimum": 0,
-      "description": "Optional inline observation after dispatch, capped at 50 seconds; omit or 0 for the current receipt. Returns this input's completed reply or pending question reference. Timeout never resends or cancels work; normal supervision and task_review still apply."
+      "description": "Observe this input for up to 50 seconds after dispatch; omit or 0 for only the send receipt."
     },
     "machine": {
       "type": "string"
@@ -41,7 +41,19 @@ Optional `wait_seconds` observes this launch or input for at most 50 seconds aft
       "type": "array",
       "maxItems": 8,
       "items": { "type": "string" },
-      "description": "pictures and files the user gave you for it, by their absolute paths on your computer: a picture they sent (the path Claude Code gives it), a file the app put in their message. They are copied to the agent's computer and listed at the end of its message, and the text's mentions of them name the copies. Only those the user gave you in this conversation are accepted"
+      "description": "Absolute paths of files the user attached in this conversation. Copies are sent to the Agent’s computer."
+    },
+    "handoff": {
+      "type": "object",
+      "required": ["todo_id", "receiving_todo_id", "head", "check", "until"],
+      "additionalProperties": false,
+      "properties": {
+        "todo_id": { "type": "string", "description": "Originating to-do" },
+        "receiving_todo_id": { "type": "string", "description": "The target Agent’s to-do" },
+        "head": { "type": "string", "description": "Full commit ID to verify" },
+        "check": { "type": "string", "description": "What to verify" },
+        "until": { "type": "string", "description": "Duration (e.g. 2h) or RFC 3339 deadline" }
+      }
     },
     "task": {
       "type": ["object", "null"],

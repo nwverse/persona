@@ -840,6 +840,23 @@ Something the owner raises in the main conversation and wants an answer to is a 
 - **Contact and provenance**: show a last request only when its contact is complete, `status: "sent"`, its URL is a non-root HTTP(S) source without credentials, and `sent_at` is no later than now (`sentWaitContact` in `web/src/lib/task-wait.ts`; display projection `taskWait` in `web/src/lib/task-wait-info.ts`). Review evidence also requires `ready: true` and a PR/MR object URL. `recorded_by` identifies the recording conversation, not the contact or sender. Evidence is the supervisor's source-backed account; the hub does not fetch or independently verify that source. A legacy park with no evidence has unknown contact, source and wake; an implicit PR wait keeps its known PR link but has unknown contact, wake and start time. Do not invent missing values. Only waits that can record a sent request say when none is recorded (`person_reply`, `merge_review`, a legacy park, an implicit PR wait); `external_event` and `date` evidence never carries a contact, so their display shows the target, source, wake and fallback time with no request line (#10527). A target that describes a prompt to the owner is shown as written: it is not read as a sent request, a pending owner decision or consent. Park evidence has no field linking it to an owner decision; a task with a pending one (`needs_user`, an ask to decide, or an Agent asking the owner) is already filed under Waiting on you, ahead of Parked (`web/src/lib/todo-triage.ts`).
 - **Due and reminder draft**: a passed `until` or a valid last contact older than 24 hours (`person_reply`) or 72 hours (`merge_review`) reads as due for follow-up. Only the last-contact threshold enables the editable reminder draft; Copy copies it locally and Open channel follows the recorded contact. Successful copy dismisses the editor; failed copying or an edit made while clipboard permission is pending keeps the draft. No external message is sent, no event is watched, no park is automatically ended, and no round is incremented. A minute clock refreshes displayed age/due text only. At `until`, `parked_due` is for the supervisor and the task remains parked until the supervisor acts.
 
+### Confirmed handoffs between active to-dos
+
+The supervisor of a stopped to-do can ask an Agent on another open supervised to-do to check a candidate. Use
+`agent_send` with `handoff` naming both to-dos, the full candidate commit, the requested check and a deadline. This
+uses the existing Agent session. A node acknowledgement, including acceptance into its queue, records the wait on
+the originating to-do. A refused send or one with an unknown outcome leaves its state unchanged.
+
+The originating to-do shows the receiving task, requested check and deadline in Waiting. The receiving Agent gets a
+receipt ID in the message. It uses `report_to_supervisor` with `handoff_receipt`, the head it checked and its evidence.
+A receipt from the bound Agent must match the active handoff ID, originating to-do, commit and check. Only that
+originating to-do returns to its supervisor for review. The result and the return to review are stored together.
+The supervision sweep recovers a result that has yet to be delivered after a restart.
+
+A failed check, a cancelled receiving to-do or a missed deadline returns the originating to-do to its supervisor
+with the reason. A receiving Agent stopping by itself leaves the wait in place. New work and later reviews of the
+originating to-do end the old wait. Owner decisions and acceptance keep their existing handling.
+
 ## Decision deadlines
 
 (#3127, `assistant/decision_deadline.go`.) A decision that waits for the owner can carry a recommended default and a deadline, so work does not stop just because nobody answered. Without a deadline nothing changes.
