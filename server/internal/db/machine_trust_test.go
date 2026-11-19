@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -142,39 +143,44 @@ func TestMachineLinkInUse(t *testing.T) {
 	}
 }
 
-// How far a switch got, by its audit rows: that operation's begun and succeeded steps on that computer only. The
-// audit is not cleared between tests: the computers are this test's, the operations this run's.
-func TestLinkSwitchSteps(t *testing.T) {
+// A switch's audit rows: the computer's latest, and one operation's history, oldest first; another action's rows and
+// another computer's are not in them. The audit is not cleared between tests: the computers are this run's.
+func TestLinkSwitchRows(t *testing.T) {
 	d := open(t)
 	ctx := context.Background()
 	run := fmt.Sprintf("%x", time.Now().UnixNano())
-	op := func(s string) string { return "ls_" + s + run }
+	laptop, desk := "rows-laptop-"+run, "rows-desk-"+run
+	if latest, err := d.LinkSwitchLatest(ctx, laptop); err != nil || latest != nil {
+		t.Fatalf("never switched: %+v %v", latest, err)
+	}
 	for _, a := range []struct{ machine, action, detail string }{
-		{"begun-laptop", "link_switch", `{"operation":"` + op("a") + `","step":"begun","by":"device"}`},
-		{"begun-laptop", "link_switch", `{"operation":"` + op("b") + `","step":"begin_failed"}`},
-		{"begun-desk", "link_switch", `{"operation":"` + op("c") + `","step":"begun"}`},
-		{"begun-desk", "link_switch", `{"operation":"` + op("c") + `","step":"succeeded"}`},
-		{"begun-laptop", "code", `{"operation":"` + op("d") + `","step":"begun"}`},
-		{"begun-laptop", "link_switch", `{"operation":"` + op("e") + `","step":"succeeded"}`},
+		{laptop, "link_switch", `{"operation":"ls_a","step":"begin","by":"device"}`},
+		{laptop, "link_switch", `{"operation":"ls_a","step":"begun","pair_hash":"h-a"}`},
+		{desk, "link_switch", `{"operation":"ls_a","step":"begin"}`},
+		{laptop, "code", `{"operation":"ls_a","step":"rolled_back"}`},
+		{laptop, "link_switch", `{"operation":"ls_a","step":"succeeded"}`},
+		{laptop, "link_switch", `{"operation":"ls_b","step":"begin"}`},
 	} {
 		if err := d.AddMachineAudit(ctx, a.machine, a.action, "manager:assistant", json.RawMessage(a.detail)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	for _, c := range []struct {
-		machine, operation string
-		begun, succeeded   bool
-	}{
-		{"begun-laptop", op("a"), true, false}, {"begun-laptop", op("b"), false, false}, {"begun-laptop", op("c"), false, false},
-		{"begun-desk", op("c"), true, true}, {"begun-laptop", op("d"), false, false}, {"begun-laptop", op("e"), false, true},
-		{"begun-laptop", op("none"), false, false},
-	} {
-		begun, succeeded, err := d.LinkSwitchSteps(ctx, c.machine, c.operation)
-		if err != nil || begun != c.begun || succeeded != c.succeeded {
-			t.Errorf("%s %s: begun %v succeeded %v %v, want %v %v", c.machine, c.operation, begun, succeeded, err, c.begun, c.succeeded)
-		}
+	latest, err := d.LinkSwitchLatest(ctx, laptop)
+	if err != nil || latest == nil || latest.Operation != "ls_b" || latest.Step != "begin" || latest.Actor != "manager:assistant" || latest.At.IsZero() {
+		t.Fatalf("latest %+v %v", latest, err)
 	}
-	if _, _, err := d.LinkSwitchSteps(ctx, "begun-laptop", ""); err == nil {
+	history, err := d.LinkSwitchHistory(ctx, laptop, "ls_a")
+	var steps []string
+	for _, r := range history {
+		steps = append(steps, r.Step+":"+r.PairHash)
+	}
+	if err != nil || strings.Join(steps, " ") != "begin: begun:h-a succeeded:" {
+		t.Fatalf("history %v %v", steps, err)
+	}
+	if history, err := d.LinkSwitchHistory(ctx, laptop, "ls_none"); err != nil || len(history) != 0 {
+		t.Fatalf("an operation that never began: %+v %v", history, err)
+	}
+	if _, err := d.LinkSwitchHistory(ctx, laptop, ""); err == nil {
 		t.Fatal("no operation accepted")
 	}
 }

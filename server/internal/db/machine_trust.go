@@ -99,16 +99,52 @@ func (d *DB) MachineLinkInUse(ctx context.Context, machine string) (bool, error)
 	return inUse, err
 }
 
-// LinkSwitchSteps is how far the machine's switch to Persona Link with this operation id got, by its audit rows
-// (action link_switch), which outlive a hub's restart: begun, its begin took effect; succeeded, its manager said it
-// succeeded.
-func (d *DB) LinkSwitchSteps(ctx context.Context, machine, operation string) (begun, succeeded bool, err error) {
-	if machine == "" || operation == "" {
-		return false, false, errors.New("machine and operation are required")
+// LinkSwitchRow is one row of a computer's audit about switching it to Persona Link (action link_switch): the
+// manager's operation id, its step (begin, begun, succeeded, rolled_back, begin_failed), the hash of the switch's
+// pairing code once it has one (not a secret), who wrote it (manager:<id>) and when.
+type LinkSwitchRow struct {
+	Operation string
+	Step      string
+	PairHash  string
+	Actor     string
+	At        time.Time
+}
+
+const linkSwitchRows = `SELECT COALESCE(detail->>'operation', ''), COALESCE(detail->>'step', ''), COALESCE(detail->>'pair_hash', ''),
+	actor, at FROM machine_audit WHERE machine_id = $1 AND action = 'link_switch'`
+
+func scanLinkSwitchRow(r pgx.CollectableRow) (LinkSwitchRow, error) {
+	var l LinkSwitchRow
+	err := r.Scan(&l.Operation, &l.Step, &l.PairHash, &l.Actor, &l.At)
+	return l, err
+}
+
+// LinkSwitchLatest is the machine's latest link_switch row (nil: it never switched): the switch that counts now.
+func (d *DB) LinkSwitchLatest(ctx context.Context, machine string) (*LinkSwitchRow, error) {
+	if machine == "" {
+		return nil, errors.New("machine is required")
 	}
-	err = d.pool.QueryRow(ctx, `SELECT COALESCE(bool_or(detail->>'step' = 'begun'), false), COALESCE(bool_or(detail->>'step' = 'succeeded'), false)
-		FROM machine_audit WHERE machine_id = $1 AND action = 'link_switch' AND detail->>'operation' = $2`, machine, operation).Scan(&begun, &succeeded)
-	return begun, succeeded, err
+	rows, err := d.pool.Query(ctx, linkSwitchRows+` ORDER BY id DESC LIMIT 1`, machine)
+	if err != nil {
+		return nil, err
+	}
+	list, err := pgx.CollectRows(rows, scanLinkSwitchRow)
+	if err != nil || len(list) == 0 {
+		return nil, err
+	}
+	return &list[0], nil
+}
+
+// LinkSwitchHistory is operation's link_switch rows of the machine, oldest first (none: it never began there).
+func (d *DB) LinkSwitchHistory(ctx context.Context, machine, operation string) ([]LinkSwitchRow, error) {
+	if machine == "" || operation == "" {
+		return nil, errors.New("machine and operation are required")
+	}
+	rows, err := d.pool.Query(ctx, linkSwitchRows+` AND detail->>'operation' = $2 ORDER BY id`, machine, operation)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, scanLinkSwitchRow)
 }
 
 // MachineAudit is one row of a computer's audit.
