@@ -9,6 +9,10 @@
 
 - A terminal review covers its criteria, not every later scope (#6880). Explicitly replacing criteria on an open, previously accepted or cancelled task must invalidate its terminal supervision state; otherwise unfinished or unjudged follow-up work is silently suppressed. Keep review history and unchanged criteria's evidence. Metadata-only changes and ordinary follow-up conversation do not invalidate the review, and existing stale records still need a real supervisor review rather than an automatic migration.
 
+- A nearby empty turn is not proof that a PR event reached an Agent (#10050). Match the actual input and source association: an owner may have explicitly asked for no reply. Record external delivery provenance before sending, keep transport distinct from acknowledgement, and persist the bounded retry before making it. A feed write failing after the node accepts delivery does not undo that receipt: retain the event and wait for its actual turn, not a false redelivery failure. Pin redelivery and completion to the recorded recipient, including recovery while a peer works; another Agent's newer row is not this event's turn. Trim paged items to the current turn before interpreting a stop. A still-unhandled source must survive both duplicate completions and a manager reload, independently of ordinary Inbox signals; ordinary owner input must never spend its retry.
+
+- External-event escalations must keep their source and recipient identity (#10050). Render the failed source against that recorded recipient, not whichever Agent now has the newest reply. Its escalation also needs a task-bounded, per-source fingerprint: a process-local sent cache and short semantic window replay failures after a restart, and a successor Agent or ordinary Inbox message must not change that identity. Reuse delivery reservation rollback and keep unsent sources pending for revalidation, rather than merging them into rendered relay queues whose enqueue result does not prove persistence. Recover every eligible recorded recipient independently, with per-recipient look/backoff and serialized task reads; the first unreadable transcript must not monopolize recovery. An owner wait may discard a rendered signal, not its persisted source: restore it on the next sweep and deduplicate actual delivery durably instead of trusting a sent marker written before validation.
+
 - Process lifetime is not model-health evidence (#8480). Keep an observed completed answer and its original timestamp independently of the live session row. Otherwise releasing an idle process drops the only recovery evidence while an older failed probe remains, reviving an already repaired authentication error. Capture completed-turn evidence without requiring a client poll, scope it to the model binding, retire superseded probes and let newer failures win. Failed persistence must remain retryable.
 - A retry that puts a failed send back for the next digest must first ask whether the next try can succeed (#8518).
   The task leader path picked "resume and escalate" from the listed status (`StatusOffline`), but a stopped, read-only
@@ -754,6 +758,14 @@ as delivered instead of moving to the replacement. A check that a resource is fr
 mark the conversation as being replaced under that same lock (`relayBook.replacing`), have every drain and every direct
 delivery respect the mark (the direct ones queue), and clear it only where what waited has moved or the replacement
 failed, draining it again then (`TestNothingGoesIntoABackgroundSupervisorBeingReplaced`).
+
+## Manual compaction is not a main-only policy (#10064)
+
+The manual HTTP and node paths already accept side conversations, but all three client menus hid the action behind
+the main-chat check. Android also read and displayed only the main chat's progress. When extending a conversation
+action, trace its eligibility, request target and progress source together; progress must reset when the selected
+conversation changes. Keep automatic main-chat policy and the main-only clear/new actions separate. Menu regressions
+must exercise a real non-main selection and fail when the old guard is restored.
 
 ## A check that passes must have sent what the chat sends (#10365)
 

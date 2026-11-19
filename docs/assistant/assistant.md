@@ -937,7 +937,11 @@ before the next message, Claude Code thinks the window is exceeded and auto-comp
 
 ### Manual compaction (2026-11-04, #1727)
 
-User selects "Compact context" in main-chat menu: `POST /api/v1/assistant/conversations/{id}/compact` → node `assistant.compact` (`node/assistant_compact.go`).
+User selects "Compact context" in any open Assistant conversation's menu, including direction and other persistent side
+conversations: `POST /api/v1/assistant/conversations/{id}/compact` → node `assistant.compact` (`node/assistant_compact.go`).
+Web, iOS and Android offer it when the hub advertises `assistant_compact`; progress belongs to the conversation on
+screen. "Clear context" and "New main chat" remain main-only. This manual action does not change automatic compaction
+windows or any main-only automatic policy.
 
 - Same path as idle compaction: write `/compact` into an existing process, or start with `--resume` (chat's previous launcher / model); Codex uses `thread/compact/start`; runtime chats unsupported.
   A Codex Agent on an app-server takes the same call when sent `/compact` alone (#10188, [codex.md](../integrations/codex.md) "Sessions on the daemon (app-server route)").
