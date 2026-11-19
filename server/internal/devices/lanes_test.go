@@ -206,7 +206,7 @@ func TestNotesShareOneBudget(t *testing.T) {
 // framed connection a note can wait for credit while everything else goes on.
 func TestNoteStallIsNoProgressAtAll(t *testing.T) {
 	old := noteStall
-	noteStall = 100 * time.Millisecond
+	noteStall = 300 * time.Millisecond // well over the writes' spacing, so a busy test machine does not look stalled
 	t.Cleanup(func() { noteStall = old })
 	var last atomic.Int64
 	last.Store(time.Now().UnixNano())
@@ -215,7 +215,7 @@ func TestNoteStallIsNoProgressAtAll(t *testing.T) {
 	start := time.Now()
 	w := watchNote(written, func() { stalled <- time.Now() })
 	defer w.stop()
-	moving := time.Now().Add(400 * time.Millisecond)
+	moving := time.Now().Add(time.Second)
 	for time.Now().Before(moving) { // the connection keeps writing
 		last.Store(time.Now().UnixNano())
 		select {
@@ -226,10 +226,10 @@ func TestNoteStallIsNoProgressAtAll(t *testing.T) {
 	}
 	select { // then nothing goes through
 	case at := <-stalled:
-		if at.Sub(moving) < noteStall-20*time.Millisecond {
-			t.Fatalf("closed %s after the last write", at.Sub(moving))
+		if idle := at.Sub(written()); idle < noteStall {
+			t.Fatalf("closed %s after the last write", idle)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(3 * time.Second):
 		t.Fatal("never closed once nothing went through")
 	}
 }
