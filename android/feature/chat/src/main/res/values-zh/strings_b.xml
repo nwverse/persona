@@ -93,6 +93,7 @@
     <string name="chat_composer_attachment_gone">附件读不了了（文件没了或没权限）。移除后重新选一次</string>
     <string name="chat_composer_upload_failed">上传失败，请重试；输入已保留</string>
     <string name="chat_composer_add">添加附件和快捷指令</string>
+    <string name="chat_composer_hide_keyboard">收起键盘</string>
     <string name="chat_composer_dictate">听写</string>
     <string name="chat_composer_interrupt_requested">已请求中断，排队消息仍会保留</string>
     <string name="chat_composer_interrupt_unknown">中断结果待确认，请查看终端后再操作</string>
@@ -248,10 +249,8 @@
     <string name="chat_menu_select">选择</string>
     <string name="chat_menu_quote">引用</string>
     <string name="chat_menu_share">分享</string>
-    <string name="chat_menu_hand_to_persona">交给 Persona</string>
     <string name="chat_menu_context">作为上下文</string>
     <string name="chat_menu_edit">编辑</string>
-    <string name="chat_menu_handoff_ask">看看这条消息，告诉我该怎么处理。</string>
     <string name="chat_menu_context_title">%1$s · 消息</string>
     <string name="chat_draft_read_failed">草稿没读出来。打的字先留在这一页</string>
     <string name="chat_draft_save_failed">草稿没保存上。打的字还在这一页，先别退出 App</string>
