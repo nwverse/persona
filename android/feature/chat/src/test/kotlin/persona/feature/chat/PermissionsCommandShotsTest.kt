@@ -132,7 +132,7 @@ class PermissionsCommandShotsTest {
     private fun described(text: String) = rule.onAllNodesWithContentDescription(text, substring = true).fetchSemanticsNodes().isNotEmpty()
 
     private val restart = "Restarts the session to apply it once this turn ends"
-    private val pendingNote = "The session restarts in Allow everything once this turn ends"
+    private val pendingNote = "The session restarts in Full access once this turn ends"
 
     private fun slash(dark: Boolean) {
         show(agent("auto"), dark, draft = "/")
@@ -151,18 +151,18 @@ class PermissionsCommandShotsTest {
         focusBox()
         rule.onNodeWithText("/permissions").performClick()
         rule.waitForIdle()
-        // the five modes, the current one checked, Allow Everything offered with its restart note; nothing sent
-        for (w in listOf("Ask first", "Auto-edit", "Plan only", "Auto", "Allow everything")) assertTrue("menu: $w", has(w))
+        // the five modes, the current one checked, Full access offered with its restart note; nothing sent
+        for (w in listOf("Default permissions", "Auto accept edits", "Plan mode", "Auto-review", "Full access")) assertTrue("menu: $w", has(w))
         assertTrue(has(restart))
         assertFalse(has("only when starting a new one"))
         assertTrue(sent.isEmpty() && actions.asked.isEmpty())
         save("menu", dark, withPopup())
-        rule.onNode(hasText("Allow everything") and hasAnyAncestor(isPopup())).performClick()
+        rule.onNode(hasText("Full access") and hasAnyAncestor(isPopup())).performClick()
         rule.waitForIdle()
-        assertTrue(has("Allow everything?") && has(restart))
+        assertTrue(has("Full access?") && has(restart))
         assertTrue("nothing sent before the answer", actions.asked.isEmpty())
         save("confirm", dark, rule.onNode(isDialog()).captureToImage().asAndroidBitmap())
-        rule.onNode(hasText("Allow everything") and hasAnyAncestor(isDialog())).performClick()
+        rule.onNode(hasText("Full access") and hasAnyAncestor(isDialog())).performClick()
         rule.waitForIdle()
         assertEquals(listOf(ChatAction.Modes(permissionMode = SessionModes.BYPASS)), actions.asked)
     }
@@ -171,14 +171,14 @@ class PermissionsCommandShotsTest {
         show(agent("acceptEdits", pending = true), dark)
         focusBox()
         // the button keeps the mode it runs in, and says the restart waits
-        assertTrue(described("Permission mode: Auto-edit"))
+        assertTrue(described("Permission mode: Auto accept edits"))
         assertTrue(described(pendingNote))
         rule.onNodeWithTag("chat-mode").performClick()
         rule.waitForIdle()
         assertTrue(rule.onAllNodesWithText(pendingNote, useUnmergedTree = true).fetchSemanticsNodes().size >= 2) // header line and the row
         save("pending", dark, withPopup())
         // Picking the checked mode sends it without a confirmation so the node calls off the queued restart (#7996 review).
-        rule.onNode(hasText("Auto-edit files") and hasAnyAncestor(isPopup())).performClick()
+        rule.onNode(hasText("Auto accept edits") and hasAnyAncestor(isPopup())).performClick()
         rule.waitForIdle()
         assertEquals(listOf(ChatAction.Modes(permissionMode = "acceptEdits")), actions.asked)
     }

@@ -172,6 +172,7 @@ final class AppModel {
         }
         countBadges()
         saveSnapshot()
+        resolveProvisionalChat()
     }
 
     /// The lists are folded again when a hub's hello says it folds side sessions now, or no longer.
@@ -323,6 +324,8 @@ final class AppModel {
     var sideLanding: SideLanding?
     /// Cancels deferred list resets even after a newer targeted open has already been consumed.
     @ObservationIgnored private(set) var agentsNavigationRevision = 0
+    /// An external link without a group can open the first hub before any hub has listed its sessions.
+    @ObservationIgnored private var provisionalChat: (key: SessionKey, latestAnswer: Bool, revision: Int)?
     /// An explicit Agents-tab selection returns to its list; targeted opens do not change this request.
     var agentsListReveal = 0
     /// Bumped each time the Inbox is entered at its root (the sidebar, a widget, a quick action, its tab on visionOS),
@@ -551,6 +554,9 @@ final class AppModel {
     /// What each machine's New Agent list says is left out there, with why (`unavailable`, #8109: the Persona-managed
     /// providers whose own-service rule skips it), loaded with `launcherCache`; empty from an older hub.
     @ObservationIgnored private(set) var launcherUnavailable: [MachineRef: [UnavailableLauncher]] = [:]
+    /// The active model profile's Agent presets offered on each machine, loaded with `launcherCache`.
+    @ObservationIgnored private(set) var launcherTiers: [MachineRef: [AgentPreset]] = [:]
+    @ObservationIgnored private(set) var launcherTierProfile: [MachineRef: AgentPresetProfile] = [:]
     /// The main chat's own picker (`?purpose=assistant`, #5033): its eligible launchers, the effective Main chat
     /// default, and what can't run there with why. Separate from `launcherCache`, which serves the agent.new purpose.
     nonisolated struct AssistantLauncherScope: Hashable {
@@ -1657,11 +1663,37 @@ final class AppModel {
         }
     }
 
+    /// Keep an unqualified external open provisional until a hub supplies its row (#9167).
+    func openExternal(machineID: String, sessionID: String, group: String?, latestAnswer: Bool = false) {
+        let key = resolve(machineID: machineID, sessionID: sessionID, group: group)
+        open(key, latestAnswer: latestAnswer)
+        if group.flatMap(link) == nil, latest(key) == nil, openChat == key {
+            provisionalChat = (key, latestAnswer, agentsNavigationRevision)
+        }
+    }
+
+    private func resolveProvisionalChat() {
+        guard let pending = provisionalChat else { return }
+        guard pending.revision == agentsNavigationRevision, selectedTab == .chats else {
+            provisionalChat = nil
+            return
+        }
+        let key = resolve(machineID: pending.key.machineID, sessionID: pending.key.sessionID, group: nil)
+        guard latest(key) != nil else { return }
+        if key == pending.key { provisionalChat = nil; return }
+        // ChatsView consumes openChat when it pushes, before the view reports itself visible.
+        guard openChat == pending.key || visibleSession == pending.key else { return }
+        provisionalChat = nil
+        if latestAnswerFor == pending.key { latestAnswerFor = nil }
+        open(key, latestAnswer: pending.latestAnswer)
+    }
+
     /// Routes a notification / deep link to the right tab; `latestAnswer` lands on the start of the agent's last answer.
     /// A child whose parent row is already in hand opens that parent, with the child's card revealed. Anything else
     /// opens immediately. A child whose row is not loaded yet is looked up in the background (`refreshSessionDetail`),
     /// and moves to the parent only when that parent row exists.
     func open(_ key: SessionKey, latestAnswer: Bool = false, reveal: String? = nil) {
+        provisionalChat = nil
         // A side session lives in its parent's chat (#7944): its parent opens with the side shown over it, not with a
         // child's card revealed (`openChat` turns it into the parent and `sideLanding`).
         if reveal == nil, sideFold.home[key] == nil, let home = localChildHome(key), home.key != key {
@@ -2223,11 +2255,16 @@ final class AppModel {
         shown.append((owner, key))
         visibleSession = key
         NotificationActions.clearDelivered(key) // what it said is on screen now (#3449)
+        resolveProvisionalChat()
     }
 
     func hide(by owner: UUID) {
+        let previous = visibleSession
         shown.removeAll { $0.owner == owner }
         visibleSession = shown.last?.key
+        if let pending = provisionalChat, previous == pending.key, visibleSession != previous, openChat != pending.key {
+            provisionalChat = nil
+        }
     }
 
     /// Asks for everything after what the chat holds without holes (`covered`), or the last exchanges if nothing. Built
@@ -2439,6 +2476,7 @@ final class AppModel {
                 InboxStore.shared.reload()
                 TodoStore.shared.reload()
                 TasksStore.shared.reconnected()
+                SavedPromptStore.shared.reload()
             }
         }
         if plan.refetch { AgentSync.shared.schedule() }
@@ -2885,6 +2923,9 @@ final class AppModel {
             if isHub { InboxStore.shared.reload() }
         case .todos:
             if isHub { TodoStore.shared.reload() }
+        case .savedPrompts(let manager):
+            // another device changed the list: only the shown assistant's is read again (#9436)
+            if isHub, SavedPromptStore.concerns(eventManager: manager, shownManager: api?.shownManager) { SavedPromptStore.shared.reload() }
         case .personas:
             // The new tier's package is downloaded whole before the face changes (PersonaStore.load). The list changed
             // just now: a refresh already under way may have asked before, so it is read again after that one (#2405).
@@ -3053,6 +3094,7 @@ final class AppModel {
         case .agents: "agents"
         case .inbox: "inbox"
         case .todos: "todos"
+        case .savedPrompts: "assistant_saved_prompts"
         case .personas: "personas"
         case .look: "look"
         case .managers: "managers"
@@ -3726,6 +3768,33 @@ final class AppModel {
         }
     }
 
+    /// Speed requests in flight, shared by every rendering of a chat's native menu. The menu closes on a pick, so this
+    /// cannot live in the view: reopening must show why the choices wait and must not issue the request twice.
+    private(set) var serviceTierChanges: Set<SessionKey> = []
+
+    /// Codex speed is different from an optimistic mode edit: only the hub's acknowledged session value moves the
+    /// selection. A refusal or an unconfirmed request keeps that value and is always said, including a timeout.
+    @discardableResult
+    func setServiceTier(_ key: SessionKey, tier: String) async -> Bool {
+        guard !serviceTierChanges.contains(key), allowSend(key), let api = api(key.group) else { return false }
+        serviceTierChanges.insert(key)
+        defer { serviceTierChanges.remove(key) }
+        do {
+            try await api.setServiceTier(key, tier: tier)
+            Haptics.success()
+            return true
+        } catch {
+            if !error.isCancellation {
+                let reason = error.isTimeout
+                    ? String(localized: "The hub didn't respond. Try again later.")
+                    : error.localizedDescription
+                toast = Toast(String(localized: "Couldn't change Speed: \(reason)"), style: .error)
+                Haptics.error()
+            }
+            return false
+        }
+    }
+
     // MARK: Claude Code's ultracode switch (#1307, docs/apple/ios.md "Claude Code ultracode")
 
     /// What this device asked of a session's ultracode switch (`Ultracode.Ask`), until the session moved past it.
@@ -3964,6 +4033,8 @@ final class AppModel {
         launcherCache = [:]
         launcherDefaults = [:]
         launcherUnavailable = [:]
+        launcherTiers = [:]
+        launcherTierProfile = [:]
         assistantLauncherCache = [:]
         assistantStarterCache.clear()
         // Model Settings changes are launcher changes too: wake the open main-chat composer to re-read the default.
@@ -3985,6 +4056,8 @@ final class AppModel {
         launcherCache[machine] = r.launchers
         launcherDefaults[machine] = r.default
         launcherUnavailable[machine] = r.unavailable ?? []
+        launcherTiers[machine] = r.tiers ?? []
+        launcherTierProfile[machine] = r.tiersProfile
         return r.launchers
     }
 
@@ -4347,6 +4420,8 @@ final class AppModel {
         InboxStore.shared.reload()
         TodoStore.shared.forget()
         TodoStore.shared.reload()
+        SavedPromptStore.shared.forget()
+        SavedPromptStore.shared.reload()
         followScope()
         // The avatar is the new hub's from now, before its list is read below: a card tapped meanwhile goes to it.
         personas.switchHub(api)
@@ -4382,6 +4457,9 @@ final class AppModel {
         if switched {
             if let a = assistantCurrent, let s = session(a), s.assistant, !s.isHealth, !assistantShows(s.manager) { assistantCurrent = assistantMain }
             assistantSwitches += 1
+            // the "/" list offers the new assistant's saved prompts, never the one before's (#9436)
+            SavedPromptStore.shared.forget()
+            SavedPromptStore.shared.reload()
         }
         let newChat = assistantNewChat
         Task {

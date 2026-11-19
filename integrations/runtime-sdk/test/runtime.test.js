@@ -145,6 +145,40 @@ test('content rewritten under another history goes out even where its seq did no
   assert.equal(n.all('session.items').length, 3)
 })
 
+test('in-place item updates under the same history go out without advancing seq and coalesce by id', async (t) => {
+  const n = await startFakeNode(t)
+  const rt = createRuntime(minimal({ items: async () => ({ items: [], history: 'h1', to_seq: 5 }) }), { runtime: 'toy', socketPath: n.path, retryMs: 20 })
+  t.after(() => rt.stop())
+  rt.start()
+  await n.ready
+  await n.peer.call('session.watch', { session_id: 's1', since_seq: 0 })
+  // Two rapid in-place updates within the append window coalesce into the latest copy of that item id.
+  rt.append('s1', { items: [{ id: '5#0', seq: 5, kind: 'thinking', text: 'Step 1' }], fromSeq: 5, toSeq: 5, history: 'h1', update: true })
+  rt.append('s1', { items: [{ id: '5#0', seq: 5, kind: 'thinking', text: 'Step 1 + 2' }], fromSeq: 5, toSeq: 5, history: 'h1', update: true })
+  await until('coalesced in-place update pushed', () => n.all('session.items').length === 1)
+  assert.deepEqual(n.all('session.items')[0], {
+    session_id: 's1',
+    items: [{ id: '5#0', seq: 5, kind: 'thinking', text: 'Step 1 + 2' }],
+    from_seq: 5,
+    to_seq: 5,
+    history: 'h1',
+  })
+  // Without update: true, a same-seq append is still ignored as already pushed.
+  rt.append('s1', { items: [{ id: '5#0', seq: 5, kind: 'thinking', text: 'ignored' }], fromSeq: 5, toSeq: 5, history: 'h1' })
+  await new Promise((r) => setTimeout(r, 120))
+  assert.equal(n.all('session.items').length, 1)
+  // A follow-up in-place update after flush still goes out under the same history and seq.
+  rt.append('s1', { items: [{ id: '5#0', seq: 5, kind: 'thinking', text: 'Step 1 + 2 + 3' }], fromSeq: 5, toSeq: 5, history: 'h1', update: true })
+  await until('second in-place update pushed', () => n.all('session.items').length === 2)
+  assert.deepEqual(n.all('session.items')[1], {
+    session_id: 's1',
+    items: [{ id: '5#0', seq: 5, kind: 'thinking', text: 'Step 1 + 2 + 3' }],
+    from_seq: 5,
+    to_seq: 5,
+    history: 'h1',
+  })
+})
+
 test('a capped watch catch-up says there is more after its last batch', async (t) => {
   const n = await startFakeNode(t)
   const { page } = await import('../index.js')
@@ -988,4 +1022,50 @@ test('send_and_interrupt_say_queued_and_settled_as_the_driver_does', async (t) =
   assert.deepEqual(await n.peer.call('session.interrupt', { session_id: 's1' }), { ok: true }, 'a stop not confirmed says nothing more')
   settle = true
   assert.deepEqual(await n.peer.call('session.interrupt', { session_id: 's1' }), { ok: true, settled: true })
+})
+
+test('supervision_policy is advertised only when both assistant and supervisionPolicy are enabled (#11173)', async (t) => {
+  const full = await startFakeNode(t)
+  const capable = createRuntime(
+    minimal({ start: async () => ({ session: { session_id: 's1', status: 'idle' } }), send: async () => {} }),
+    { runtime: 'agy-like', socketPath: full.path, retryMs: 20, assistant: true, supervisionPolicy: true },
+  )
+  t.after(() => capable.stop())
+  capable.start()
+  await full.ready
+  assert.equal(full.hello.caps.assistant, true)
+  assert.equal(full.hello.caps.supervision_policy, true)
+
+  const legacy = await startFakeNode(t)
+  const plainAsst = createRuntime(
+    minimal({ start: async () => ({ session: { session_id: 's1', status: 'idle' } }), send: async () => {} }),
+    { runtime: 'dsh-like', socketPath: legacy.path, retryMs: 20, assistant: true },
+  )
+  t.after(() => plainAsst.stop())
+  plainAsst.start()
+  await legacy.ready
+  assert.equal(legacy.hello.caps.assistant, true)
+  assert.equal(legacy.hello.caps.supervision_policy, undefined, 'absent unless explicitly opted in')
+
+  const noAsst = await startFakeNode(t)
+  const nonAsst = createRuntime(
+    minimal({ start: async () => ({ session: { session_id: 's1', status: 'idle' } }), send: async () => {} }),
+    { runtime: 'plain', socketPath: noAsst.path, retryMs: 20, assistant: false, supervisionPolicy: true },
+  )
+  t.after(() => nonAsst.stop())
+  nonAsst.start()
+  await noAsst.ready
+  assert.equal(noAsst.hello.caps.assistant, false)
+  assert.equal(noAsst.hello.caps.supervision_policy, undefined, 'never advertised without assistant')
+
+  const noSend = await startFakeNode(t)
+  const incomplete = createRuntime(
+    minimal({ start: async () => ({ session: { session_id: 's1', status: 'idle' } }) }),
+    { runtime: 'half-asst', socketPath: noSend.path, retryMs: 20, assistant: true, supervisionPolicy: true },
+  )
+  t.after(() => incomplete.stop())
+  incomplete.start()
+  await noSend.ready
+  assert.equal(noSend.hello.caps.assistant, false)
+  assert.equal(noSend.hello.caps.supervision_policy, undefined, 'never advertised when start/send are incomplete')
 })

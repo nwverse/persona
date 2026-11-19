@@ -5696,6 +5696,9 @@ struct Composer: View, Equatable {
     /// the card in every style but BeautifulUI's (its prompt bar is already one): the field, and under it Add, the model
     /// and its modes, send / stop, as Codex's and ChatGPT's desktop apps (#2113).
     private var usesShellComposer: Bool { shellChat || shell != nil || ChatComposerKind.card }
+    /// The current assistant's saved prompts for the "/" lists (#9436); observed through the store, which changes only when
+    /// the list does, never while typing.
+    private var savedPrompts: SavedPromptStore { .shared }
     let key: SessionKey
     var status: SessionStatus
     var placeholder: String?
@@ -5884,9 +5887,11 @@ struct Composer: View, Equatable {
     }
 
     private var promptCommands: [PromptCommand] {
-        // The main conversation adds `/clear` (#5100). The quick messages, /loop, /permissions and extension prompts stay.
+        // The main conversation adds `/clear` (#5100). The quick messages, /loop, /permissions, saved prompts (#9436) and extension prompts stay.
         var commands = PromptItems.commands(clear: canClear && !offersMainClear && !status.isActive && !clearing, loop: canLoop,
-                                            permissions: canPickPermissions) + declarations.prompts.map {
+                                            permissions: canPickPermissions)
+            + savedPrompts.prompts.map { PromptCommand("/" + $0.name, detail: SlashMenuRow.savedDetail, insert: $0.text, id: "saved:\($0.id)") }
+            + declarations.prompts.map {
             PromptCommand(String(localized: "/extension/\($0.title)", comment: "Menu name of a prompt an extension adds"), detail: $0.ownerName, insert: $0.text)
         }
         if offersMainClear, !commands.contains(where: { $0.name == MainClearCommand.word }) {
@@ -5932,13 +5937,17 @@ struct Composer: View, Equatable {
         let agentList = !shellChat && !assistant && plain
         // The prompt bar has its own "/" menu; this list is the shell's and the plain input line's.
         let mainList = offersMainClear && plain
+        let saved = plain ? savedPrompts.prompts : []
         if assistant, !mainList {
-            guard !shellChat, plain, canPickPermissions, text != slashPicked else { return [] }
-            return SlashMenuRow.matching(text, in: [.permissions])
+            var base = (!shellChat && plain && canPickPermissions) ? [SlashMenuRow.permissions] : []
+            base += saved.map(SlashMenuRow.saved)
+            guard !base.isEmpty, text.hasPrefix("/"), text != slashPicked else { return [] }
+            return SlashMenuRow.matching(text, in: base)
         }
         return SlashMenuRow.slashRows(draft: text, picked: slashPicked, showsList: agentList || mainList,
                                        model: model.session(key)?.takesModelCommand == true, permissions: canPickPermissions,
-                                       loop: canLoop, agentClear: canClear && !status.isActive && !clearing, mainClear: offersMainClear)
+                                       loop: canLoop, agentClear: canClear && !status.isActive && !clearing, mainClear: offersMainClear,
+                                       saved: saved)
     }
 
     /// A "/" row picked: its text in the box to send or edit, as on the web; an agent's /clear asks first, as the + menu's.
@@ -6218,7 +6227,8 @@ struct Composer: View, Equatable {
                     #endif
                 } modes: {
                     SessionModesMenu(key: key, session: model.session(key), picksModel: canPickModel, setsModes: setsModes,
-                                     setsEffortOnly: setsEffortOnly, otherModel: canPickModel ? { typingModel = true } : nil,
+                                     setsEffortOnly: setsEffortOnly, mainConversation: isMainAssistantChat,
+                                     otherModel: canPickModel ? { typingModel = true } : nil,
                                      assistantPick: assistantModelPickAvailable ? { showAssistantModel = true } : nil,
                                      assistantModelName: assistantEffectiveName, pick: pickMode)
                 }
@@ -6345,10 +6355,10 @@ struct Composer: View, Equatable {
             if comments.wrappedValue.isEmpty { comments.wrappedValue = MessageComment.samples }
         }
         #endif
-        .task { // `-openSlashMenu YES`: "/" in the box and its list open, for screenshots; `-openSlashMenu /per`: that draft
-            guard let value = UserDefaults.standard.string(forKey: "openSlashMenu") else { return }
+        .task { // `-openSlashMenu YES`: "/" in the box and its list open, for screenshots; `-openSlashMenu /re`: that draft
+            guard let draft = UserDefaults.standard.string(forKey: "openSlashMenu") else { return }
             try? await Task.sleep(for: .seconds(4))
-            text = value.hasPrefix("/") ? value : "/"
+            text = draft.hasPrefix("/") ? draft : "/"
         }
         .task { // `-openPermissionModes YES`: the mode list `/permissions` opens (#6513), for screenshots
             guard UserDefaults.standard.bool(forKey: "openPermissionModes") else { return }
@@ -6758,7 +6768,18 @@ struct SlashMenuRow: Identifiable, Equatable {
     var word: String
     var detail: String
     var text: String
-    var id: String { word }
+    /// A saved prompt's id (#9436): its row may share a word with a command of the chat's, and stays a row of its own.
+    var savedID: String? = nil
+    var id: String { savedID.map { "saved:\($0)" } ?? word }
+
+    /// A saved prompt as a row (docs/apple/ios.md "Saved prompts"): its name after "/", **Saved** as where it comes from,
+    /// and its text, which picking it types into the box.
+    static func saved(_ p: SavedPrompt) -> SlashMenuRow {
+        SlashMenuRow(word: "/" + p.name, detail: savedDetail, text: p.text, savedID: p.id)
+    }
+
+    /// A saved prompt's row says where it comes from (#9436), in both "/" lists.
+    static let savedDetail = String(localized: "Saved [Slash Menu 9436a1]", comment: "Slash list: where a row comes from, the user's saved prompts")
 
     /// What a quick message sends, shown at the row's end; a command is its own text.
     var preview: String? { text.hasPrefix("/") ? nil : text }
@@ -6791,11 +6812,14 @@ struct SlashMenuRow: Identifiable, Equatable {
 
     /// The composer's "/" list. The main conversation adds `/clear` to the rows it already had (#5100);
     /// an agent's own `/clear` stays where `rows` put it. The prompt bar does not use this list (`showsList` false).
+    /// `saved`: the current assistant's saved prompts (#9436), after the chat's own commands, in their list's order; a chat
+    /// with no commands of its own (`showsList` false) still lists them, as the web does.
     static func slashRows(draft: String, picked: String?, showsList: Bool, model: Bool, permissions: Bool = false, loop: Bool,
-                          agentClear: Bool, mainClear: Bool) -> [SlashMenuRow] {
-        guard showsList, draft.hasPrefix("/"), draft != picked else { return [] }
-        var listed = rows(model: model, permissions: permissions, loop: loop, clear: agentClear && !mainClear)
-        if mainClear, !listed.contains(where: { $0.word == Self.clear.word }) { listed.append(.clear) }
+                          agentClear: Bool, mainClear: Bool, saved: [SavedPrompt] = []) -> [SlashMenuRow] {
+        guard showsList || !saved.isEmpty, draft.hasPrefix("/"), draft != picked else { return [] }
+        var listed = showsList ? rows(model: model, permissions: permissions, loop: loop, clear: agentClear && !mainClear) : []
+        if showsList, mainClear, !listed.contains(where: { $0.word == Self.clear.word }) { listed.append(.clear) }
+        listed += saved.map(Self.saved)
         return matching(draft, in: listed)
     }
 

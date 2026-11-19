@@ -5,6 +5,7 @@ package persona.feature.knowledge
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import persona.core.contracts.HubScope
+import persona.core.contracts.GroupKeys
 import persona.core.contracts.Session
 import persona.core.contracts.SessionKey
 import persona.core.contracts.api.*
@@ -53,8 +54,9 @@ internal class KnowledgeViewModel(
     connection: KnowledgeConnection,
     private val dispatcher: CoroutineDispatcher = Dispatchers.Default,
     edits: StateFlow<Int> = KnowledgeEdits.revision,
+    initialKind: KnowledgeKind = KnowledgeKind.Projects,
 ) : ViewModel() {
-    private val filter = MutableStateFlow(KnowledgeFilter())
+    private val filter = MutableStateFlow(KnowledgeFilter(kind = initialKind))
     /** Names of the entries lists have shown, per pairing: search hits carry little more than an id. */
     private val names = mutableMapOf<String, KnowledgeEntry>()
     private var namesScope: HubScope? = null
@@ -70,7 +72,11 @@ internal class KnowledgeViewModel(
             emit(initial.copy(loading = true, entries = shown?.entries.orEmpty(), tags = shown?.tags.orEmpty(), groups = shown?.groups.orEmpty()))
             try {
                 if (selection.query.isBlank()) {
-                    val result = repository.list(selection.kind, selection.tag)
+                    val result = if (selection.kind == KnowledgeKind.Meetings) coroutineScope {
+                        val meetings = async(start = CoroutineStart.UNDISPATCHED) { repository.list(KnowledgeKind.Meetings, selection.tag) }
+                        val recordings = async(start = CoroutineStart.UNDISPATCHED) { repository.list(KnowledgeKind.Recordings, selection.tag) }
+                        mergeMeetingLists(meetings.await(), recordings.await())
+                    } else repository.list(selection.kind, selection.tag)
                     val entries = withContext(dispatcher) { result.items.filter { it.inScope() }.distinctBy { it.key } }
                     remember(repository.scope, entries)
                     emit(initial.copy(entries = entries, tags = result.tags.orEmpty().distinct(), loaded = true))
@@ -102,7 +108,11 @@ internal class KnowledgeViewModel(
         namesScope == scope && names.keys.any { it.startsWith("${kind.wire}/") }
     }
 
-    fun kind(kind: KnowledgeKind) { filter.update { it.copy(kind = kind, tag = null) } }
+    fun kind(kind: KnowledgeKind) {
+        // Recordings live under Meetings; keep old callers and restored selections opening that one home.
+        val listed = if (kind == KnowledgeKind.Recordings) KnowledgeKind.Meetings else kind
+        filter.update { it.copy(kind = listed, tag = null) }
+    }
     fun tag(tag: String?) { filter.update { it.copy(tag = tag) } }
     fun query(query: String) { filter.update { it.copy(query = query) } }
     fun refresh() { filter.update { it.copy(revision = it.revision + 1) } }
@@ -123,6 +133,16 @@ internal data class KnowledgeSending(val busy: Boolean = false, @StringRes val m
 /** A recording's minutes being made or turned into to-dos (#2738): [busy] while the write and its read-back are on their way; [message] why one didn't go. */
 internal data class KnowledgeMinutesWork(val busy: Boolean = false, val message: UiText? = null)
 
+/** A meeting hand-off: [made] is the hub's answer shown before read-back. */
+internal data class KnowledgeMeetingHandoffWork(
+    val busy: Boolean = false,
+    val error: UiText? = null,
+    val made: MeetingHandoff? = null,
+)
+
+/** The sheet lives in the ViewModel so Activity recreation cannot lose Retry or replay an earlier success. */
+internal data class KnowledgeMeetingHandoffSheet(val again: MeetingHandoff?)
+
 /** The tag editor's save: [saved] counts the saves that went through, so the sheet closes on each; [error] says why one did not. */
 internal data class KnowledgeTagging(val busy: Boolean = false, val error: UiText? = null, val saved: Int = 0)
 
@@ -141,6 +161,8 @@ internal class KnowledgeDetailViewModel(
     val owner: String? = null,
     private val conversations: AssistantConversations? = null,
     private val messages: MessageSender? = null,
+    internal val sessions: SessionsRepository? = null,
+    internal val namespace: String? = null,
     private val hierarchy: () -> Boolean = { false },
 ) : ViewModel() {
     // The hub this page was opened on: its pin names nothing on another one.
@@ -155,6 +177,10 @@ internal class KnowledgeDetailViewModel(
     val tagging = _tagging.asStateFlow()
     private val _minutes = MutableStateFlow(KnowledgeMinutesWork())
     val minutesWork = _minutes.asStateFlow()
+    private val _meetingHandoff = MutableStateFlow(KnowledgeMeetingHandoffWork())
+    val meetingHandoffWork = _meetingHandoff.asStateFlow()
+    private val _meetingSheet = MutableStateFlow<KnowledgeMeetingHandoffSheet?>(null)
+    val meetingHandoffSheet = _meetingSheet.asStateFlow()
     private val opened = Channel<KnowledgeHandoff>(Channel.BUFFERED)
     /** Each question handed over, and where it went. */
     val handoffs = opened.receiveAsFlow()
@@ -183,6 +209,8 @@ internal class KnowledgeDetailViewModel(
                 _sending.value = KnowledgeSending()
                 _tagging.value = KnowledgeTagging()
                 _minutes.value = KnowledgeMinutesWork()
+                _meetingHandoff.value = KnowledgeMeetingHandoffWork()
+                _meetingSheet.value = null
                 while (opened.tryReceive().isSuccess) { }
             }
         }
@@ -298,6 +326,40 @@ internal class KnowledgeDetailViewModel(
     }
 
     fun dismissMinutesMessage() { _minutes.update { it.copy(message = null) } }
+
+    /** Hands the meeting to [target], showing the kept answer at once and reading the detail again behind it. */
+    fun handOff(target: Session, text: String, transcript: Boolean) {
+        if (_meetingHandoff.value.busy) return
+        val repository = connection.current.value ?: return
+        if (kind != KnowledgeKind.Recordings || page.value.scope != repository.scope) return
+        _meetingHandoff.update { it.copy(busy = true, error = null) }
+        viewModelScope.launch {
+            try {
+                checkCurrent(repository)
+                val request = MeetingHandoffRequest(GroupKeys.raw(target.machineId), target.sessionId,
+                    target.displayTitle, text.trim(), transcript)
+                val result = withContext(pins) { repository.handOff(id, request) }.inMeetingGroup(namespace)
+                checkCurrent(repository)
+                _meetingHandoff.update { it.copy(busy = false, error = null, made = result) }
+                if (result.state == "sent") _meetingSheet.value = null
+                refresh()
+            } catch (cancelled: CancellationException) {
+                _meetingHandoff.update { it.copy(busy = false) }
+                throw cancelled
+            } catch (error: Exception) {
+                _meetingHandoff.update { it.copy(busy = false, error = meetingHandoffCallError(error)) }
+            }
+        }
+    }
+
+    fun showMeetingHandoff(again: MeetingHandoff?) { _meetingSheet.value = KnowledgeMeetingHandoffSheet(again) }
+
+    fun dismissMeetingHandoff() {
+        _meetingSheet.value = null
+        dismissMeetingHandoffError()
+    }
+
+    fun dismissMeetingHandoffError() { _meetingHandoff.update { it.copy(error = null) } }
 
     private fun checkCurrent(repository: KnowledgeRepository) {
         if (connection.current.value !== repository) throw CancellationException("Pairing changed")

@@ -1,11 +1,11 @@
 """native/app-core/scripts/build-apple.sh: the shared XCFramework cache and the simulator-only build (#10713).
 
-Runs the real script in disposable checkouts with fake cargo, rustup, rustc, xcrun and xcodebuild on PATH, so it
-needs no Rust toolchain or Xcode and runs on Linux too.
+Runs the real script in disposable checkouts with fake cargo, rustup, rustc, xcrun, xcodebuild and uname on PATH, so
+it needs no Rust toolchain or Xcode and runs on Linux too. The fake uname makes every host an Apple silicon Mac: the
+script refuses any other machine name, and Linux on arm64 says aarch64 where a Mac says arm64.
 """
 import os
 from pathlib import Path
-import platform
 import shutil
 import subprocess
 import tempfile
@@ -13,11 +13,29 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / 'native/app-core/scripts/build-apple.sh'
-SIM_TARGET = {'arm64': 'aarch64-apple-ios-sim', 'aarch64': 'aarch64-apple-ios-sim', 'x86_64': 'x86_64-apple-ios'}.get(
-    platform.machine())
+SIM_TARGET = 'aarch64-apple-ios-sim'
+SHASUM = shutil.which('shasum')
 HOST = 'aarch64-apple-darwin'
 
+
+def bashes():
+    """Every bash on the machine, once each: macOS's 3.2 drops a NUL in a command substitution silently, 4.4 and later
+    warn about it on stderr."""
+    found = {}
+    for path in (shutil.which('bash'), '/bin/bash', '/usr/bin/bash', '/opt/homebrew/bin/bash', '/usr/local/bin/bash'):
+        if path and os.access(path, os.X_OK):
+            found.setdefault(os.path.realpath(path), path)
+    return list(found.values())
+
+
 FAKES = {
+    # A Mac: Darwin on FAKE_ARCH (default arm64).
+    'uname': '''#!/bin/sh
+case "$1" in
+  -m) echo "${FAKE_ARCH:-arm64}" ;;
+  *) echo Darwin ;;
+esac
+''',
     # Records each build and leaves a static library named after its target where the script looks for it.
     'cargo': '''#!/bin/sh
 target=
@@ -65,7 +83,7 @@ echo "$output" >> "$FAKE_LOG/xcframework"
 }
 
 
-@unittest.skipUnless(SIM_TARGET and shutil.which('shasum'), 'needs shasum and an arm64 or x86_64 machine')
+@unittest.skipUnless(SHASUM, 'needs shasum')
 class AppleCoreBuildTests(unittest.TestCase):
     def setUp(self):
         self.temp = Path(tempfile.mkdtemp(prefix='persona-core-apple-test-'))
@@ -79,7 +97,7 @@ class AppleCoreBuildTests(unittest.TestCase):
             (bin_dir / name).write_text(body)
             (bin_dir / name).chmod(0o755)
         self.env = {
-            'PATH': '%s:/usr/bin:/bin' % bin_dir,
+            'PATH': '%s:%s:/usr/bin:/bin' % (bin_dir, os.path.dirname(SHASUM)),
             'HOME': str(self.temp / 'home'),
             'TMPDIR': str(self.temp),
             'FAKE_LOG': str(self.logs),
@@ -103,8 +121,8 @@ class AppleCoreBuildTests(unittest.TestCase):
         (root / 'apple/Packages/PersonaCore').mkdir(parents=True)
         return root
 
-    def run_script(self, root, *args, **env):
-        result = subprocess.run(['bash', str(root / 'native/app-core/scripts/build-apple.sh'), *args],
+    def run_script(self, root, *args, bash='bash', **env):
+        result = subprocess.run([bash, str(root / 'native/app-core/scripts/build-apple.sh'), *args],
                                 env={**self.env, **env}, capture_output=True, text=True, timeout=120)
         return result
 
@@ -211,6 +229,96 @@ class AppleCoreBuildTests(unittest.TestCase):
         self.build(first, '--simulator', RUSTFLAGS='-C opt-level=1')
         self.assertEqual(self.built(), [SIM_TARGET] * 3)
         self.assertEqual(len(self.entries()), 3)
+
+    def test_the_simulator_slice_follows_the_macs_architecture(self):
+        first = self.checkout('first')
+        self.build(first, '--simulator', FAKE_ARCH='x86_64')
+        self.assertEqual(self.built(), ['x86_64-apple-ios'])
+        self.build(first, '--simulator')
+        self.assertEqual(self.built(), [SIM_TARGET])
+        self.assertEqual(len(self.entries()), 2, 'the architecture is part of the key')
+        result = self.run_script(first, '--simulator', FAKE_ARCH='aarch64')
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('unsupported Mac architecture aarch64', result.stderr)
+
+    def test_paths_are_part_of_the_key(self):
+        first, second = self.checkout('first'), self.checkout('second')
+        (first / 'native/app-core/crates/persona-core/src/a.rs').write_text('// same\n')
+        (second / 'native/app-core/crates/persona-core/src/b.rs').write_text('// same\n')
+        self.build(first, '--simulator')
+        self.build(second, '--simulator')
+        self.assertEqual(self.built(), [SIM_TARGET, SIM_TARGET])
+        self.assertEqual(len(self.entries()), 2)
+
+    def test_every_bash_builds_without_a_word_on_stderr_and_to_the_same_key(self):
+        # The key's stream separates each path from its content with a NUL; captured in a command substitution, bash
+        # 4.4+ warned "ignored null byte" on every run and dropped it.
+        keys = set()
+        for n, bash in enumerate(bashes()):
+            with self.subTest(bash=bash):
+                root = self.checkout('bash%d' % n)
+                for _ in range(2):  # built (or from the cache), then current
+                    result = self.run_script(root, '--simulator', bash=bash)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(result.stderr, '')
+                self.assertIn('XCFramework is current', result.stdout)
+                keys.add(self.framework(root)[1][0])
+        self.assertEqual(len(keys), 1, keys)
+
+    def test_a_cache_that_cannot_be_created_costs_only_the_cache(self):
+        # A file where the cache's folder would go stops even root.
+        first = self.checkout('first')
+        blocker = self.temp / 'a-file'
+        blocker.write_text('')
+        result = self.run_script(first, '--simulator', PERSONA_APP_CORE_CACHE=str(blocker / 'cache'))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.built(), [SIM_TARGET])
+        self.assertIn('XCFramework (simulator) ready', result.stdout)
+        self.assertEqual(len(result.stderr.splitlines()), 1, result.stderr)
+        self.assertIn('could not write the shared cache', result.stderr)
+        self.assertEqual(self.framework(first)[0], [SIM_TARGET])
+        self.assertEqual(sorted(p.name for p in (first / 'apple/Packages/PersonaCore/build').iterdir()),
+                         ['Inputs.stamp', 'PersonaCoreC.xcframework'])
+
+    @unittest.skipIf(hasattr(os, 'geteuid') and os.geteuid() == 0, 'root reads and writes past the permissions')
+    def test_a_read_only_cache_is_read_and_never_stops_a_build(self):
+        first, second, third = self.checkout('first'), self.checkout('second'), self.checkout('third')
+        self.build(first, '--simulator')
+        self.built()
+        entry = self.cache / self.entries()[0]
+        locked = [self.cache, entry, entry / 'simulator']
+        for path in locked:
+            path.chmod(0o555)
+        self.addCleanup(lambda: [path.chmod(0o755) for path in locked])
+        # Read: copied as before, with nothing to say about the touch that failed.
+        result = self.run_script(second, '--simulator')
+        self.assertEqual((result.returncode, result.stderr), (0, ''))
+        self.assertIn('from the shared cache', result.stdout)
+        self.assertEqual(self.built(), [])
+        # Write: every slice is built and kept in the worktree, with one line about the cache.
+        result = self.run_script(third)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(len(result.stderr.splitlines()), 1, result.stderr)
+        self.assertIn('could not write the shared cache', result.stderr)
+        self.assertEqual(self.framework(third)[1][1], 'all')
+        self.assertEqual(self.entries(), [entry.name])
+
+    @unittest.skipIf(hasattr(os, 'geteuid') and os.geteuid() == 0, 'root reads past the permissions')
+    def test_an_entry_that_cannot_be_read_is_built_again(self):
+        first, second = self.checkout('first'), self.checkout('second')
+        self.build(first, '--simulator')
+        self.built()
+        library = self.cache / self.entries()[0] / 'simulator/PersonaCoreC.xcframework' / SIM_TARGET / 'libpersona_core.a'
+        library.chmod(0)
+        self.addCleanup(library.chmod, 0o644)
+        result = self.run_script(second, '--simulator')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.built(), [SIM_TARGET])
+        self.assertEqual(len(result.stderr.splitlines()), 1, result.stderr)
+        self.assertIn('could not copy', result.stderr)
+        self.assertEqual(self.framework(second)[0], [SIM_TARGET])
+        self.assertEqual(sorted(p.name for p in (second / 'apple/Packages/PersonaCore/build').iterdir()),
+                         ['Inputs.stamp', 'PersonaCoreC.xcframework'])
 
     def test_the_cache_can_be_turned_off(self):
         first, second = self.checkout('first'), self.checkout('second')

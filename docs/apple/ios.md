@@ -418,7 +418,7 @@ Chat page:
   same web ordering; command and description per row, quick-message original text right; further typing filters command prefixes/descriptions. Tap fills input, does not send
   (/clear uses existing confirmation); an exact inserted command such as /context does not reopen the list until draft changes. Beyond 5½ rows scroll internally.
   Assistant chats have none, like web, except the main chat keeps those rows and adds `/clear` when the hub has `assistant_main_clear` (#5100); that `/clear` does not ask first. In `Composer` VStack, not overlay, because the composer's own hosting controller makes out-of-bounds overlays untappable (#518).
-  + Shortcuts unchanged; `-openSlashMenu YES` screenshots, `PersonaUITests/SlashMenuTests` both layouts.
+  + Shortcuts unchanged; `-openSlashMenu YES` screenshots (`-openSlashMenu /re` opens it on that draft), `PersonaUITests/SlashMenuTests` both layouts.
 - **Typing @ offers files, folders, workspaces and sessions** (#2319, workspaces #2599; matches web `ComposerPanel` / `lib/mentions.ts`): in `ShellComposerBar` (Agent and assistant chats, and the shell's
   new conversation, `StarterComposer`), an `@word` before the caret, at the start or after whitespace (an e-mail address opens nothing) and not while the keyboard still
   has marked text (Pinyin; `TypedText.composingFocused`), shows `ComposerMentionMenu` above the input where `SlashMenu` sits: the files this chat's tools read or wrote
@@ -474,7 +474,7 @@ Chat page:
   - @: recently accessed tool files (12, `@relative/path`, understood by Claude Code and Codex), then recent 8 sessions, selected as
     `<persona-context>` before message, quote capsule above input. Only loaded-step files; folded work never expanded in long chats yields none.
   - /: `SlashCommand.all`, quick words /继续 (continue), /提交 (commit), /汇报 (report), fills request text for explicit Send (formerly menu sent immediately);
-    /compact and /context unchanged; /clear when supported, confirmation first.
+    /compact and /context unchanged; /clear when supported, confirmation first. The user's saved prompts follow the chat's own commands ("Saved prompts (#9436)").
   - /loop (#2601, web #1600): Claude Agents only, not Codex, internal Codex fork or assistant (`LoopCommand.offered`), in / and + Shortcuts;
     prefixes existing input with `/loop ` (existing text becomes task, cursor after command to enter interval), never sends directly (other + shortcuts still send on tap). A `/loop` draft shows shared `LoopDraftNote`
     explaining "Repeat every 10 minutes: Check CI" / "Repeat at Claude's chosen pace: …", gray usage when task absent;
@@ -1326,6 +1326,14 @@ and what this device asked are `AppModel.setUltracode` / `dismissUltracodeLost`,
 - **Tests**: `UltracodeTests` (FakeHub: decoding with older hubs, the requests, where it shows, graying, the ask, the quota) and `UltracodeUITests`
   against the mock hub with `MOCK_ULTRACODE=1` (`TEST_RUNNER_PERSONA_ULTRACODE_HUB`, screenshots with `TEST_RUNNER_PERSONA_SHOTS`).
 
+## Agent presets in New Agent and plan cards (#2225)
+
+`AgentPreset` / `AgentPresetProfile` decode `tiers` and `tiers_profile` from New Agent's `GET /api/v1/machines/{mid}/launchers`; `AppModel` caches them beside the launchers, default and unavailable lists and clears them with those caches. An older hub, no active profile, or no tier this computer can run leaves **Preset** out and keeps the ordinary defaults and start body unchanged. The body never carries `tier`: a preset is only a way to fill launcher, model and effort.
+
+When tiers exist, New Agent's Preset NavigationLink opens `AgentPresetPicker`, naming the active profile and showing each tier's name, description and launcher/model/effort. A launcher with blocked health has its reason on a disabled row, so it cannot be picked. Picking another row fills the three fields through the existing `restoredModel` path; manual launcher/model/effort edits unmark it, reselecting restores its defaults, and machine changes or recent-setup fills clear the pick. Explicitly choosing the list's default model through a preset remains an explicit `model` in `POST /api/v1/sessions` (`LauncherModelChoice.presetDefault`), rather than collapsing to Model Settings' default.
+
+A preset with a model or effort waits for its own launcher's model-list request: Start is disabled and guarded, with **Loading the preset's model options…**, until that request settles. This prevents the previous launcher's list from dropping or replacing the preset's values. Once the list is available (or its absence/failure is known), the form names a locked or unlisted model and an unsupported effort that the start cannot send, using the launcher's or model's own settings for the omitted field; the existing list error and locked-model explanation remain visible too. Plan tasks decode and encode their optional `tier`. Their model chip gives an explicit model precedence, then shows `launcher · Preset <tier>` or `Preset <tier>`, then the existing launcher/Default Model label.
+
 ## Launcher health in New Agent (#1643)
 
 `Launcher.health` (`apple/Shared/Models.swift`) is the hub's record for the computer the list is for (`docs/server/launcher-health.md` "In the App"); a record it can't read is dropped, never the launcher. Since #4437 the hub leaves out a launcher whose latest check failed, so the list the app reads carries `blocked` only for `not_in_terminal` and for the configured default; the rest are gone until a check passes.
@@ -2127,7 +2135,7 @@ and the count are unchanged (`ActionTrayContent.grouped`); with one group the tr
 - **Progress rows (§3.2).** The status word is the right-hand column in its tone (red for interrupted and failed, `cautionText` for a usage limit, the Needs You tone), a second line carries the reason (usage limit: "You've hit your usage limit. · Resets 15:20", from `Session.usageLimitWhen`; interrupted: the error's reason; starting: "Starting the agent"; needing you: what it asks; working: its step; finished: its last words), and a › ends every row that opens something. Marks: a `caution` clock for a usage limit, ⓘ for interrupted, a hollow circle with a `caution` dot for starting. The usage limit's reading is `Shared/UsageLimit.swift` (the web's `lib/usage-limit.ts`: `turn_error_resets_at`, `turn_error_resumes`, `work.resets_at`, a 10-minute grace after the reset); `AssistantEntries.todoStatus` is unchanged (the shared fixture does not know the grace).
 - **Decision rows (P1, P4).** `BriefAcceptRow` has no "Actions" menu: when its buttons do not fit one line the secondary ones (Open, Complete Directly, Later, Don't handle) wrap in their own row and the main one has the line below to itself. Later and Don't handle show only on the tray's decision rows (`decision:` arg of `BriefAcceptRow`, an owner decision or a `needs_user` review): Later hides the round for this app session (`TasksStore.laterDecisions`, keyed `decision:<manager>:<id>:<round>` like the web's `decisionLaterKey`); Don't handle is `POST /todos/{id}/decision-dismiss` with the hub's own `decision_review.review_at` string (never a `Date`: sub-second digits matter) and the manager header, a six-second Undo toast (`decision-undo-dismiss` with the receipt), and a 409 reloads the to-dos. `AssistantEntries.split` leaves a hidden decision out (`decisionHidden`) unless a live Agent question gives the task its status. The words are one pair on every surface: "Later" / "Don't handle".
 - **Plan card (§3.1).** Start is full width, Edit and Don't Start under it when the three do not fit one line; a task's brief (`PlanTask.brief`, decode-only, never sent back) shows folded under its "why" (`PlanBriefView`: who asked, a summary line, Show All).
-- **Receipts (§3.3).** Gone since #8237: the chat draws no receipt, review or report (`ChatLines.drawnFeed`); the hand-off card says a failed start or an interrupted turn in place (`DispatchHandoffCard.interruption`), Retry, Remove and Continue are on the Needs You rows (`AssistantActionBar.actions`, `TasksStore.retry`), and finished tasks are In Progress's Just Finished group (`docs/assistant/unified-entry.md` "Receipts").
+- **Receipts (§3.3).** Gone since #8237: the chat draws no receipt, review or report (`ChatLines.drawnFeed`); the hand-off card says a failed start or an interrupted turn in place (`DispatchHandoffCard.interruption`), Retry, Remove and Continue are on the Needs You rows (`AssistantActionBar.actions`, `TasksStore.retry`), and finished tasks are the Finished entry's rows (#10922; In Progress's Just Finished group until then; `docs/assistant/unified-entry.md` "Receipts").
 - **Hand-off cards (D6).** See `docs/assistant/unified-entry.md` ("What a dispatch opens").
 - Removed (P7): the unused `TaskCard`, `TaskNowLine`, `TaskLine`, `TaskSentList`, `TaskProgressLine`, `TaskOpenButton`.
 
@@ -2719,6 +2727,36 @@ group's. With one installed manager, or a hub without a roster, nothing below sh
 - **Tests**: `InboxManagersTests`, `ManagerPushTests`, `ManagerGroupsTests.aComputerIsOfflineWithItsManager` and
   `.aPushIsThePagesOwnUnlessAnotherManagerSentIt`,
   `ExtensionOperationsTests.anotherManagersOperationIsKeptApart`, `MacAttentionTests.aManagerSwitchedOffHereRingsNoBanner`.
+
+## Saved prompts (#9436)
+
+The user's own `/` prompts (web #7329, `docs/web/web.md` "Saved prompts (#7329)"): the instructions they send again and
+again, kept on the hub as the current assistant's settings, so the phone, the iPad and the web have one list. iOS uses the
+web's routes (`docs/protocol/protocol.md`, `/api/v1/assistant/saved-prompts`) and adds no hub change.
+
+- **One list** (`Persona/App/SavedPromptStore.swift`, types, API and rules in `Shared/SavedPrompts.swift`): read on hello,
+  on `assistant_saved_prompts` when it is the shown assistant's (no `manager`: the default one; `SavedPromptStore.concerns`),
+  and after the current assistant or hub changes, which first forgets the list before so another assistant's prompts are
+  never offered. Until a read answers the `/` lists have none; an assistant from before them (404) has none and its page
+  says so; a failed read keeps a list already read.
+- **The `/` lists**: the plain composer's (`SlashMenuRow.slashRows`, also in chats that have no commands of their own) and
+  BeautifulUI's prompt bar (`promptCommands`) list them after the chat's own commands and before extensions' quick
+  prompts, as `/name` with **Saved**; picking one types its text into the box and never sends it. A saved `/commit`
+  beside the chat's own is a row of its own (ids `saved:<id>`). Persona chats, which have no agent commands, list the saved prompts (the main chat after its `/clear`).
+- **Assistant Profile › In Chats › Saved Prompts** (`Views/Settings/SavedPromptsView.swift`; both styles): each prompt's
+  `/name` and its text's first two lines, New Prompt, and per row (context menu, swipe, VoiceOver actions) Edit, Move Up /
+  Move Down (`PUT …/order`) and Delete, confirmed. Delete and a move show at once and come back with the reason when the
+  hub refuses; a list changed on another device meanwhile (409) is read again with a word. A change that answers after
+  the current assistant or hub changed leaves the new list alone, and a move that answers after a delete made meanwhile
+  does not bring the deleted prompt back.
+- **The editor** (`SavedPromptEditor`): Name after a fixed `/` and Text. It says the hub's rules before asking it
+  (`SavedPromptRules`: a taken name at once, the others once something is typed or Save was tapped); a count shows past
+  80% of 8,000 characters; the hub's own refusal shows in the sheet and keeps what was typed.
+- Save as Prompt… on a message's menu, and Android, follow in their own issues.
+- DEBUG: `-tab settings -openAssistantPage prompts|prompt|newPrompt` (`promptsEntry`: the profile scrolled to In Chats).
+  Tests: `PersonaTests/SavedPromptsTests.swift`; UI suite `SavedPromptsUITests` against the mock with
+  `MOCK_SAVED_PROMPTS=1` (`TEST_RUNNER_PERSONA_MOCK_HUB`; skips without it) swipes a row, checks Delete asks first and
+  Cancel sends nothing, light and dark; `TEST_RUNNER_PERSONA_SHOTS=<dir>` keeps `saved-prompts-<light|dark>-<swipe|confirm>.png`.
 
 ## The pages show the current assistant
 
