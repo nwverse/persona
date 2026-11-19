@@ -58,7 +58,7 @@ abstract class BuildAndroidCore : Exec() {
     @get:OutputDirectory abstract val symbolsDirectory: DirectoryProperty
     @get:OutputDirectory abstract val reportsDirectory: DirectoryProperty
     @get:Input abstract val cargoFeatures: Property<String>
-    /** release for Release packages; android-dev (no LTO, parallel codegen; Cargo.toml) for debug builds. */
+    /** release for Release packages; android-dev (cargo's dev profile with line tables; Cargo.toml) for debug builds. */
     @get:Input abstract val cargoProfile: Property<String>
     @get:Input abstract val abis: ListProperty<String>
     // Cargo's incremental state for this checkout: an absolute path, so never part of the cache key (#10712).
@@ -136,7 +136,7 @@ val buildAndroidReleaseCore by tasks.registering(BuildAndroidCore::class) {
 val buildAndroidCore by tasks.registering(BuildAndroidCore::class) {
     description = "Builds stripped and symbol-retaining debug Rust libraries (arm64-v8a and x86_64, or -Ppersona.abis) with the pinned NDK."
     cargoFeatures.set("")
-    // Debug APKs never ship and production code does not call the core yet: skip release's fat LTO (#10712).
+    // Debug APKs never ship and production code does not call the core yet: no optimisation or fat LTO (#10712).
     cargoProfile.set("android-dev")
     abis.set(debugAbis)
     cargoTargetDirectory.set(coreWorkspace.file("target/android").asFile.absolutePath)
