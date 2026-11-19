@@ -22,6 +22,13 @@ type TodoPRStatus struct {
 	Checks             string     `json:"checks"`
 	Conflicts          bool       `json:"conflicts"`
 	CheckedAt          time.Time  `json:"checked_at"`
+
+	submittedReview prSubmittedReview // consumed by the park in the same pass, separate from the stage's review summary
+}
+
+type prSubmittedReview struct {
+	ID          int64     `json:"id"`
+	SubmittedAt time.Time `json:"submitted_at"`
 }
 
 type prStatusForge interface {
@@ -69,6 +76,7 @@ func (g githubForge) PRStatus(ctx context.Context, repo string, number int) (Tod
 		return TodoPRStatus{}, fmt.Errorf("PR has no head commit")
 	}
 	type review struct {
+		ID          int64     `json:"id"`
 		State       string    `json:"state"`
 		CommitID    string    `json:"commit_id"`
 		SubmittedAt time.Time `json:"submitted_at"`
@@ -83,6 +91,15 @@ func (g githubForge) PRStatus(ctx context.Context, repo string, number int) (Tod
 	}
 	latest := map[string]review{}
 	for _, r := range reviews {
+		// A submitted review is an event even if it did not change the review verdict. Use provider time and head.
+		switch r.State {
+		case "APPROVED", "CHANGES_REQUESTED", "COMMENTED":
+			if r.ID > 0 && r.User.Login != "" && r.CommitID == pr.Head.SHA && !r.SubmittedAt.IsZero() &&
+				(r.SubmittedAt.After(out.submittedReview.SubmittedAt) ||
+					r.SubmittedAt.Equal(out.submittedReview.SubmittedAt) && r.ID > out.submittedReview.ID) {
+				out.submittedReview = prSubmittedReview{ID: r.ID, SubmittedAt: r.SubmittedAt.UTC()}
+			}
+		}
 		switch r.State {
 		case "APPROVED", "CHANGES_REQUESTED", "DISMISSED":
 			latest[r.User.Login] = r
@@ -196,7 +213,9 @@ func polledPRs(t Todo) []string {
 			}
 			break
 		}
-		if u := externalParkPRURL(r); u != "" && !slices.Contains(out, u) {
+		if u := externalParkPRURL(r); u != "" && !slices.ContainsFunc(out, func(known string) bool {
+			return ciPRURL.MatchString(known) && triageNormalizePRURL(known) == u
+		}) {
 			out = append(out, u)
 		}
 	}
@@ -241,16 +260,23 @@ func (s *Service) sweepPRStatuses(ctx context.Context, now time.Time) {
 		if t.DoneAt != nil || t.Cancelled() {
 			continue
 		}
+		held := t.Supervision.parking()
+		source := externalParkPRURL(held)
 		for _, url := range polledPRs(t) {
 			m := ciPRURL.FindStringSubmatch(url)
 			if m == nil {
 				continue
 			}
-			old := prFacts(t, url)
-			if r := t.Supervision.parking(); externalParkPRURL(r) == url {
-				old = r.ExternalPR // Only this captured wait's source receipt throttles its first observation.
+			var checkedAt time.Time
+			bound := source != "" && source == triageNormalizePRURL(url)
+			if bound {
+				if held.ExternalPR != nil {
+					checkedAt = held.ExternalPR.CheckedAt
+				}
+			} else if old := prFacts(t, url); old != nil {
+				checkedAt = old.CheckedAt
 			}
-			if old != nil && now.Sub(old.CheckedAt) < deployRecheck {
+			if !checkedAt.IsZero() && now.Sub(checkedAt) < deployRecheck {
 				continue
 			}
 			if ctx.Err() != nil {
@@ -281,8 +307,7 @@ func (s *Service) sweepPRStatuses(ctx context.Context, now time.Time) {
 			}
 			observedAt := now.UTC()
 			// The pass may have started before this captured wait. Its source request cannot predate that wait.
-			if held := t.Supervision.parking(); held != nil && held.Evidence != nil &&
-				(parkWaitsOnPR(held, url) || externalParkPRURL(held) == url) && observedAt.Before(held.At) {
+			if held != nil && held.Evidence != nil && (parkWaitsOnPR(held, url) || bound) && observedAt.Before(held.At) {
 				observedAt = held.At
 			}
 			status.URL, status.CheckedAt = url, observedAt
@@ -296,7 +321,7 @@ func (s *Service) sweepPRStatuses(ctx context.Context, now time.Time) {
 func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus) error {
 	// The wait belongs to the snapshot taken before the forge request, not a park created while it was in flight.
 	held := t.Supervision.parking()
-	if externalParkPRURL(held) == status.URL && status.URL != "" {
+	if source := externalParkPRURL(held); source != "" && source == triageNormalizePRURL(status.URL) {
 		if err := s.applyExternalParkPRStatus(ctx, t, status); err != nil {
 			return err
 		}

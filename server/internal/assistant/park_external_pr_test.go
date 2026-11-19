@@ -11,14 +11,19 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/prompts"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 const externalPRSource = "https://github.com/example/app/pull/12"
 
 func externalPRParkArgs(source string) map[string]any {
+	evidence := testParkEvidence("external_event", "the upstream change", source, "The PR becomes terminal")
+	evidence["pr_event"] = "terminal"
 	return map[string]any{"verdict": "parked", "reason": "Waiting for the recorded external object",
 		"waiting_on": parkExternalEvent, "until": "2d",
-		"evidence": testParkEvidence("external_event", "the upstream change", source, "The PR becomes terminal; reassess the dependency")}
+		"evidence": evidence}
 }
 
 type externalPRForge struct {
@@ -76,9 +81,17 @@ func TestExternalPRParkWakesFromItsBoundObject(t *testing.T) {
 				now := time.Now()
 				s.sweepPRStatuses(ctx, now)
 				got := todoNow(s, task.ID)
+				if association == "no association" && !slices.Equal(forge.calls, []string{"example/app#12"}) {
+					t.Fatalf("evidence-only PR was not polled exactly once: reads=%v", forge.calls)
+				}
+				if association != "no association" {
+					if facts := prFacts(got, externalPRSource); facts == nil || facts.State != state {
+						t.Fatalf("stage PR facts did not record %s: %+v", state, facts)
+					}
+				}
 				if got.Supervision.State != reviewPending || !pendingReviewSignal(s, task.ID) {
-					t.Fatalf("explicit external object did not wake: state=%q queued=%v reads=%v",
-						got.Supervision.State, pendingKinds(s, task.ID), forge.calls)
+					t.Fatalf("bound PR was read as %s but the park did not wake: state=%q queued=%v reads=%v",
+						state, got.Supervision.State, pendingKinds(s, task.ID), forge.calls)
 				}
 				receipt := externalPRReceipt(t, got)
 				if receipt["url"] != externalPRSource || receipt["state"] != state || receipt["checked_at"] == nil {
@@ -89,7 +102,7 @@ func TestExternalPRParkWakesFromItsBoundObject(t *testing.T) {
 					!got.Supervision.Reviews[0].At.Equal(before.Supervision.Reviews[0].At) {
 					t.Fatal("observation completed the task, rewrote its park history, or fabricated a task PR association")
 				}
-				if association == "earlier" && !slices.Contains(forge.calls, "example/app#99") {
+				if association == "earlier" && !slices.Equal(forge.calls, []string{"example/app#99", "example/app#12"}) {
 					t.Fatal("the independent open PR was displaced by the bound external source")
 				}
 				s.sweepPRStatuses(ctx, now.Add(deployRecheck))
@@ -105,12 +118,17 @@ func TestExternalPRParkIgnoresNonObjectSources(t *testing.T) {
 	for _, source := range []string{
 		"https://example.org/releases/next", "https://github.com/example/app/issues/12",
 		"https://github.com/example/app/pull/12/files", "https://github.com.example.org/example/app/pull/12",
-		"https://git.example.org/example/app/-/merge_requests/12",
+		"https://git.example.org/example/app/-/merge_requests/12", "https://github.com/example/app/pull/12345678901234567890123",
 	} {
 		t.Run(source, func(t *testing.T) {
 			s, _, task := newSupervisedService(t)
 			holdDigest(s)
-			if _, err := reviewErr(s, task.ID, externalPRParkArgs(source)); err != nil {
+			args := externalPRParkArgs(source)
+			if _, err := reviewErr(s, task.ID, args); err == nil || !strings.Contains(err.Error(), "evidence.pr_event") {
+				t.Fatalf("invalid PR binding: %v", err)
+			}
+			delete(args["evidence"].(map[string]any), "pr_event")
+			if _, err := reviewErr(s, task.ID, args); err != nil {
 				t.Fatal(err)
 			}
 			forge := &externalPRForge{terminal: "merged"}
@@ -123,8 +141,99 @@ func TestExternalPRParkIgnoresNonObjectSources(t *testing.T) {
 	}
 }
 
+func TestExternalPRParkContextLinkKeepsTimedRecheck(t *testing.T) {
+	s, _, task := newSupervisedService(t)
+	holdDigest(s)
+	args := externalPRParkArgs(externalPRSource)
+	evidence := args["evidence"].(map[string]any)
+	evidence["wake"] = "Deployment verification returns"
+	delete(evidence, "pr_event")
+	if _, err := reviewErr(s, task.ID, args); err != nil {
+		t.Fatal(err)
+	}
+	forge := &externalPRForge{terminal: "merged"}
+	s.deploy.forge = forge
+	s.sweepPRStatuses(context.Background(), time.Now())
+	got := todoNow(s, task.ID)
+	if len(forge.calls) != 0 || got.Supervision.State != reviewParked || externalPRReceipt(t, got) != nil {
+		t.Fatalf("PR used as context started a watch: state=%s reads=%v", got.Supervision.State, forge.calls)
+	}
+	if _, due := parkedDueSignal(got, got.Supervision.parking().Until); !due {
+		t.Fatal("context-only park lost its timed recheck")
+	}
+}
+
+func TestExternalPRParkWakesOnANewSubmittedReview(t *testing.T) {
+	for _, tc := range []struct {
+		name, event, state, head string
+		at                       time.Duration
+		wake                     bool
+	}{
+		{"formal comment", "terminal_or_review", "COMMENTED", "current", time.Minute, true},
+		{"approval", "terminal_or_review", "APPROVED", "current", time.Minute, true},
+		{"request changes", "terminal_or_review", "CHANGES_REQUESTED", "current", time.Minute, true},
+		{"terminal only", "terminal", "APPROVED", "current", time.Minute, false},
+		{"prior review", "terminal_or_review", "APPROVED", "current", -time.Minute, false},
+		{"same second", "terminal_or_review", "APPROVED", "current", 0, false},
+		{"future provider time", "terminal_or_review", "APPROVED", "current", 3 * time.Minute, false},
+		{"another head", "terminal_or_review", "APPROVED", "old", time.Minute, false},
+		{"pending review", "terminal_or_review", "PENDING", "current", time.Minute, false},
+		{"dismissed review", "terminal_or_review", "DISMISSED", "current", time.Minute, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _, task := newSupervisedService(t)
+			holdDigest(s)
+			args := externalPRParkArgs(externalPRSource)
+			args["evidence"].(map[string]any)["pr_event"] = tc.event
+			if _, err := reviewErr(s, task.ID, args); err != nil {
+				t.Fatal(err)
+			}
+			ctx := context.Background()
+			parkAt := todoNow(s, task.ID).Supervision.parking().At
+			first := parkAt.Add(tc.at).UTC().Format(time.RFC3339)
+			remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/repos/example/app/pulls/12":
+					fmt.Fprint(w, `{"state":"open","head":{"sha":"current"}}`)
+				case "/repos/example/app/pulls/12/reviews":
+					fmt.Fprintf(w, `[{"id":42,"user":{"login":"reviewer"},"state":%q,"commit_id":%q,"submitted_at":%q}]`, tc.state, tc.head, first)
+				case "/repos/example/app/commits/current/status", "/repos/example/app/commits/current/check-runs":
+					fmt.Fprint(w, `{"total_count":0}`)
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer remote.Close()
+			s.deploy.forge = githubForge{base: remote.URL, client: remote.Client()}
+			s.sweepPRStatuses(ctx, parkAt.Add(2*time.Minute))
+			got := todoNow(s, task.ID)
+			if (got.Supervision.State == reviewPending) != tc.wake || pendingReviewSignal(s, task.ID) != tc.wake {
+				t.Fatalf("review wake = %s, pending signals = %v, want wake = %v", got.Supervision.State, pendingKinds(s, task.ID), tc.wake)
+			}
+			receipt := externalPRReceipt(t, got)
+			if receipt["url"] != externalPRSource || receipt["state"] != "open" || got.PRURL != "" {
+				t.Fatalf("review observation lost its source or invented a stage PR: %v, %q", receipt, got.PRURL)
+			}
+			if tc.wake {
+				review, _ := receipt["review"].(map[string]any)
+				if review["id"] != float64(42) || review["submitted_at"] != first {
+					t.Fatalf("provider review identity missing: %v", receipt)
+				}
+				signals := watchSignals(got, nil, parkAt.Add(2*time.Minute))
+				if len(signals) != 1 {
+					t.Fatalf("expected one review signal: %v", signals)
+				}
+				entry, ok := s.digestEntry(ctx, signals[0], "")
+				if !ok || !strings.Contains(entry.Detail, externalPRSource+"#pullrequestreview-42") {
+					t.Fatalf("review signal lost its source: %+v", entry)
+				}
+			}
+		})
+	}
+}
+
 func TestExternalPRParkRechecksCapturedWait(t *testing.T) {
-	for _, change := range []string{"repark", "replace", "complete", "cancel"} {
+	for _, change := range []string{"repark", "replace", "change event", "complete", "cancel"} {
 		t.Run(change, func(t *testing.T) {
 			s, _, task := newSupervisedService(t)
 			holdDigest(s)
@@ -148,7 +257,11 @@ func TestExternalPRParkRechecksCapturedWait(t *testing.T) {
 					if change == "replace" {
 						source = "https://github.com/example/app/pull/98"
 					}
-					if _, err := reviewErr(s, task.ID, externalPRParkArgs(source)); err != nil {
+					next := externalPRParkArgs(source)
+					if change == "change event" {
+						next["evidence"].(map[string]any)["pr_event"] = "terminal_or_review"
+					}
+					if _, err := reviewErr(s, task.ID, next); err != nil {
 						t.Error(err)
 					}
 				}
@@ -187,6 +300,10 @@ func TestExternalPRParkRejectsOlderReceiptAndKeepsPollInterval(t *testing.T) {
 	}
 	if err := s.applyPRStatus(context.Background(), cur,
 		TodoPRStatus{URL: externalPRSource, State: "merged", CheckedAt: now.Add(-time.Second)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.applyPRStatus(context.Background(), cur,
+		TodoPRStatus{URL: externalPRSource, State: "merged", CheckedAt: now}); err != nil {
 		t.Fatal(err)
 	}
 	s.sweepPRStatuses(context.Background(), now.Add(time.Minute))
@@ -229,7 +346,7 @@ func TestExternalPRParkReceiptAndReviewRecoverTogether(t *testing.T) {
 		externalPRReceipt(t, got)["state"] != "merged" {
 		t.Fatal("reconstruction did not retry and commit the same external source")
 	}
-	third, _ := restartedOn(t, store)
+	third, hub := restartedOn(t, store)
 	holdDigest(third)
 	if err := third.ensureTodosLoaded(ctx); err != nil {
 		t.Fatal(err)
@@ -239,7 +356,45 @@ func TestExternalPRParkReceiptAndReviewRecoverTogether(t *testing.T) {
 		t.Fatal("receipt and review did not survive another reconstruction")
 	}
 	signals := watchSignals(loaded, nil, now.Add(2*time.Minute))
-	if len(signals) != 1 || signals[0].Kind != sigReview {
+	if len(signals) != 1 || signals[0].Kind != sigReview || signals[0].Key != reviewKey(got.Supervision) {
 		t.Fatalf("lost in-memory wake was not recoverable from the persisted review: %v", signals)
+	}
+	hub.mu.Lock()
+	hub.known["conv2"] = true
+	hub.mu.Unlock()
+	hub.setSessions("server",
+		proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+		proto.Session{SessionID: "conv2", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
+	if _, _, err := third.updateSupervision(ctx, task.ID, func(v *Supervision) bool {
+		v.Supervisor = "conv2"
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	third.signal(signals[0])
+	sendPendingPRConflicts(third)
+	hub.mu.Lock()
+	message := sentText(hub.sends)
+	hub.mu.Unlock()
+	if hub.sentTo("conv2") != 1 || hub.sentTo("conv1") != 0 ||
+		!strings.Contains(message, "The bound PR is merged: "+externalPRSource) {
+		t.Fatalf("recovered wake did not reach the current supervisor with the receipt: %q", message)
+	}
+
+	fourth, _ := restartedOn(t, store)
+	if err := fourth.ensureTodosLoaded(ctx); err != nil {
+		t.Fatal(err)
+	}
+	loaded = todoNow(fourth, task.ID)
+	entry, ok := fourth.digestEntry(ctx, signals[0], "")
+	if !ok {
+		t.Fatal("the source wake lost its identity")
+	}
+	if entries, _, _, err := fourth.reserveSupervision(ctx,
+		[]prompts.SuperviseEntry{entry}, signals, now.Add(time.Hour)); len(entries) != 0 || err != nil {
+		t.Fatalf("a delivered park wake was offered again after restart: %v, %v", entries, err)
+	}
+	if key := reviewKey(loaded.Supervision); key != signals[0].Key {
+		t.Fatalf("supervisor change replaced the source wake identity: %q", key)
 	}
 }

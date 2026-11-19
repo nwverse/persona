@@ -817,21 +817,19 @@ Something the owner raises in the main conversation and wants an answer to is a 
 
 ## Parked tasks
 
-**External PR objects (#9775).** An `external_event` park whose `evidence.url` is exactly a GitHub PR page is
-observed by the existing PR-status pass, even without an independent current/earlier task-PR association.
-The bound object adds at most one source to the existing bounded PR sample; it does not fabricate an association
-or displace another open PR. The source pass is scheduled every minute, with the existing ten-minute per-PR
-attempt/fact throttle and bounded pass time, not a fixed one-minute delivery guarantee. A fresh merge/close
-observation saves `external_pr` on that same parked review and transitions to `pending_review` atomically;
-the existing current-supervisor signal asks for reassessment. Another unrelated open PR does not represent this
-external object. Merge-review readiness and multi-PR gates remain separate and unchanged.
+**External PR events (#9775).** On an `external_event` park, set `evidence.pr_event` to `terminal` when merge or
+closure ends the wait, or to `terminal_or_review` when a new submitted review also ends it. Set `evidence.url`
+to that GitHub PR. A PR link used as context for another dependency keeps its timed recheck. Existing records
+without `pr_event` can opt in when the supervisor confirms the condition and records a new park.
 
-This source wake is not proof that a subsequent deployment or any other dependency succeeded, and does not
-accept/complete the task or claim direct Agent delivery. Only the recorded PR URL is observed, not prose,
-person/date waits, generic release/check URLs, GitLab MRs, or a related but different PR. The current open task,
-captured park, bound object and receipt time are rechecked after the source read. Replacement, re-parking,
-completion/cancellation and older responses cannot end a newer wait. Failed ledger writes remain retryable,
-including after reconstruction; a committed pending-review wake is recovered by the ordinary supervision watch.
+The existing minute PR pass can add this exact source to its bounded sample even for a task with no stage PR.
+It uses the ten-minute attempt/fact throttle. Terminal state can be confirmed on the first fresh read.
+A review must name the current head and have a provider ID and submission time after the current park.
+Approvals, requests for changes and comments submitted as reviews are read from the existing bounded review page.
+The manager rechecks the task, captured park and latest observation before committing `external_pr` and
+`pending_review` together. The review signal goes to the current supervisor, who still checks the task criteria.
+Failed writes can be retried. The watch recovers a committed wake after a restart, with one delivery per park.
+The existing ready `merge_review` path still gates terminal wakes on the task's sampled PRs.
 
 (#3804, `assistant/parked.go`, `assistant/park_evidence.go`.) Parking is for an evidenced external wait, not a way to defer work or ask the owner a question. A new park must say what is awaited and include source-backed evidence.
 

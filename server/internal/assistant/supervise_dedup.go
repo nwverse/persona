@@ -25,6 +25,12 @@ type superviseFingerprint struct {
 }
 
 func digestFingerprint(e prompts.SuperviseEntry, g superviseSignal) (string, string) {
+	if g.externalPRReview() {
+		// Keep the latest source wake per task, independent of its Agent's answer or a manager restart.
+		key, _ := json.Marshal([]string{g.Todo, g.Kind, "external_pr"})
+		sum := sha256.Sum256([]byte(g.Key))
+		return string(key), hex.EncodeToString(sum[:])
+	}
 	if g.Kind == sigPRConflict || g.Kind == sigDraftPR {
 		// Keep every task/PR/head independently, including a head that returns after another one.
 		key, _ := json.Marshal([]string{g.Todo, g.Kind, g.Key})
@@ -137,7 +143,7 @@ func (s *Service) reserveSupervisionDelivery(ctx context.Context, entries []prom
 			pending = append(pending, id)
 		}
 		fingerprint := superviseFingerprint{Hash: hash, At: now.UTC(), Permanent: signals[i].Kind == sigPRConflict || signals[i].Kind == sigDraftPR}
-		if signals[i].Kind == sigAllStopped {
+		if signals[i].Kind == sigAllStopped || signals[i].externalPRReview() {
 			fingerprint.Todo = signals[i].Todo
 		}
 		if g := signals[i]; g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled" {

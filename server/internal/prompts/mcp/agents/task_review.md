@@ -119,6 +119,11 @@ A non-main conversation reviewing another supervisor's task may only accept/canc
         "target": {"type": "string", "maxLength": 200, "description": "the named person/reviewer or external object"},
         "wake": {"type": "string", "maxLength": 600, "description": "the observable change that ends this wait"},
         "url": {"type": "string", "maxLength": 2000, "description": "required for merge_review (ready PR/MR link) and external_event (observable object URL); omit for person_reply and date"},
+        "pr_event": {
+          "type": "string",
+          "enum": ["terminal", "terminal_or_review"],
+          "description": "optional for external_event only, with the exact GitHub PR in url. Use terminal when merge or closure ends the wait, and terminal_or_review when a new submitted review also ends it. Omit if the PR link is context for a deployment, check, or another dependency"
+        },
         "contact": {
           "type": "object",
           "required": ["channel", "url", "sender", "sent_at", "request", "status"],

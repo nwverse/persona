@@ -241,7 +241,7 @@ func (s *Service) signal(g superviseSignal) {
 		g.At = time.Now()
 	}
 	b := &s.supervise
-	if turnSignalKind(g.Kind) && s.turnSignalled(g) {
+	if turnSignalKind(g) && s.turnSignalled(g) {
 		// How its turn ended was told already, by this manager or by the one before a restart (task_turns.go).
 		b.mu.Lock()
 		b.init()
@@ -396,7 +396,12 @@ func watchSignals(t Todo, agents []proto.Session, now time.Time, groups ...super
 }
 
 // reviewKey names one review a task waits for: when it began to wait.
-func reviewKey(v *Supervision) string { return "review@" + v.UpdatedAt.UTC().Format(time.RFC3339Nano) }
+func reviewKey(v *Supervision) string {
+	if r := v.externalPRWake(); r != nil {
+		return externalPRReviewPrefix + r.At.UTC().Format(time.RFC3339Nano)
+	}
+	return "review@" + v.UpdatedAt.UTC().Format(time.RFC3339Nano)
+}
 
 // stallAfter is how long without progress counts as stuck for a task that should take expect minutes.
 func stallAfter(expect int) time.Duration {

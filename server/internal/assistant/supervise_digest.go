@@ -532,6 +532,13 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 		if st != reviewPending {
 			return prompts.SuperviseEntry{}, false
 		}
+		if g.externalPRReview() {
+			r := v.externalPRWake()
+			if r == nil || g.Key != reviewKey(v) {
+				return prompts.SuperviseEntry{}, false
+			}
+			g.Detail = strings.TrimSpace(g.Detail + " " + r.ExternalPR.detail())
+		}
 	case sigNeedsYou:
 		if !s.taskWaits(ctx, t) {
 			return prompts.SuperviseEntry{}, false // answered meanwhile

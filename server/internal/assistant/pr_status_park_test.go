@@ -52,8 +52,7 @@ func TestPRStatusRecordedWaitUsesEvidence(t *testing.T) {
 		{"close without prose link", "closed", "merge_review", source, "Waiting for the named review", true},
 		{"different source despite prose", "merged", "merge_review", "https://github.com/example/other/pull/12", "Waiting for " + source, false},
 		{"person despite prose", "merged", "person_reply", "", "Waiting for a reply about " + source, false},
-		{"explicit external PR object", "merged", "external_event", source, "Waiting for this object's state to change", true},
-		{"different external object despite prose", "merged", "external_event", "https://example.org/releases/next", "Waiting for deployment after " + source, false},
+		{"external event despite prose", "merged", "external_event", source, "Waiting for deployment after " + source, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, _, task := newSupervisedService(t)

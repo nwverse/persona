@@ -21,6 +21,7 @@ type ParkEvidence struct {
 	Wake       string                        `json:"wake"`
 	Contact    *ParkContact                  `json:"contact,omitempty"`
 	Ready      bool                          `json:"ready,omitempty"`
+	PREvent    string                        `json:"pr_event,omitempty"`
 	RecordedBy string                        `json:"recorded_by,omitempty"`
 	Reply      *connectorwire.LarkReplyWatch `json:"reply,omitempty"`
 }
@@ -121,6 +122,9 @@ func readParkEvidence(input *ParkEvidence, waitingOn, until string, now time.Tim
 	}
 	if e.Reply != nil && (e.Kind != "person_reply" || !parkReplyBinding(e)) {
 		missing = append(missing, "evidence.reply (person_reply only: larkcli source, brand, app_id, account_open_id, person_open_id, chat_id, thread_id and request_message_id matching the sent topic link)")
+	}
+	if e.PREvent != "" && (e.Kind != "external_event" || !externalPREvent(e.PREvent) || githubParkPRURL(e.URL) == "") {
+		missing = append(missing, "evidence.pr_event (external_event with a GitHub PR URL: terminal or terminal_or_review)")
 	}
 	return e, missing
 }
