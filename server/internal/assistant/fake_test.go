@@ -33,11 +33,13 @@ import (
 // that was cleaned up), a model (a Messages API the hello's "ai" points at, fakeModel), and what the assistant pushed
 // and reported. settings are the assistant's own a test service starts with (newTestService…).
 type fakeHub struct {
-	mu            sync.Mutex
-	inboxHook     func(ctx context.Context) // runs first in InboxChanged, no lock held (#4924)
-	readHooks     receiptHooks              // around session.items reads and on receipt broadcasts, no lock held
-	itemReads     int                       // session.items reads since the hooks were set
-	onDevicesList func()                    // runs once, then clears, before the next devices.list; no lock held
+	mu                 sync.Mutex
+	revokedDevices     map[string]bool
+	credentialCheckErr error
+	inboxHook          func(ctx context.Context) // runs first in InboxChanged, no lock held (#4924)
+	readHooks          receiptHooks              // around session.items reads and on receipt broadcasts, no lock held
+	itemReads          int                       // session.items reads since the hooks were set
+	onDevicesList      func()                    // runs once, then clears, before the next devices.list; no lock held
 	// beforeSend runs once, then clears, when session.send is called, before it is answered (what happens on the
 	// agent's computer while the send is out); afterList, by machine, once after that machine's next sessions.list made
 	// with a listHooked context was answered. No lock held. sendHangs: session.send is never answered while the link
@@ -810,6 +812,12 @@ func (f *fakeHub) Broadcast(_ context.Context, b Broadcast) {
 	}
 }
 
+func (f *fakeHub) CredentialRevoked(_ context.Context, id string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.revokedDevices[id], f.credentialCheckErr
+}
+
 func (f *fakeHub) InboxChanged(ctx context.Context, c assistantwire.InboxChanged) {
 	f.mu.Lock()
 	hook := f.inboxHook
@@ -993,6 +1001,9 @@ func (noPlans) FeedItem(context.Context, string) (*db.FeedRow, error) {
 	return nil, errors.New("no assistant_feed here")
 }
 func (noPlans) MarkFeedSent(context.Context, string, string, time.Time, json.RawMessage) ([]db.FeedRow, error) {
+	return nil, errors.New("no assistant_feed here")
+}
+func (noPlans) FeedByRef(context.Context, string, []string, int) ([]db.FeedRow, error) {
 	return nil, errors.New("no assistant_feed here")
 }
 

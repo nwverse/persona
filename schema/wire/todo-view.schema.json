@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "todo-view.schema.json",
   "title": "To-do view",
-  "description": "What the manager works out for each to-do and for the To-dos list (#10226, docs/design/proposals/todos-redesign.md 3.3, 3.6, 3.7, 6.1, 6.3): the row's view and its asks, the places and the counts, and a to-do's conversation grouped into rounds with its results and what changed since the owner looked, and the answer to one of a to-do's own asks with its reply (#10465). The hub only adds counts up and merges places; the cases are in spec/fixtures/todo-view, spec/fixtures/todo-counts, spec/fixtures/todo-rounds and spec/fixtures/todo-asks.",
+  "description": "What the manager works out for each to-do and for the To-dos list (#10226, docs/design/proposals/todos-redesign.md 3.3, 3.6, 3.7, 6.1, 6.3): the row's view and its asks, the places and the counts, a to-do's conversation grouped into rounds with its results and what changed since the owner looked, the answer to one of a to-do's own asks with its reply, and the todo a decision's push carries (#10465). The hub only adds counts up and merges places; the cases are in spec/fixtures/todo-view, spec/fixtures/todo-counts, spec/fixtures/todo-rounds, spec/fixtures/todo-asks and spec/fixtures/todo-push.",
   "x-out": {
     "ts": "web/src/lib/todo-view-wire.ts",
     "swift": "apple/Packages/PersonaWire/Sources/PersonaWire/TodoViewWire.swift",
@@ -545,6 +545,44 @@
         }
       }
     },
+    "TodoDecidePush": {
+      "description": "The top-level `todo` of a decision's push (category TODO_DECIDE, or TODO_DECIDE_OPEN, which no app gives actions; docs/assistant/todos.md \"Waiting for the owner\") and of its WebSocket notify: what its Take Recommendation needs, and from a manager that says how the push may answer it (#10465) the ask, the lock-screen rule and the options. A push from an older manager carries the first four only and keeps TODO_DECIDE. The cases are in spec/fixtures/todo-push.",
+      "type": "object",
+      "required": ["id", "asked_at", "recommend"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The to-do."
+        },
+        "asked_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "The round the decision waits in, as POST /api/v1/todos/{id}/accept takes it: an answer to an earlier round takes nothing."
+        },
+        "recommend": {
+          "type": "string",
+          "description": "The label of the recommended option, which Take Recommendation takes."
+        },
+        "manager": {
+          "type": "string",
+          "description": "The manager whose to-do it is, which every answer names in X-Persona-Manager."
+        },
+        "ask": {
+          "type": "string",
+          "description": "The decision's ask in the to-do's view (OwnerAsk.id), which an answer from the notification names; absent from an older manager."
+        },
+        "lockscreen": {
+          "$ref": "#/$defs/OwnerAskLockscreen",
+          "description": "What the notification may offer: answer, the category stays TODO_DECIDE and the options may be its actions; open_only, the category is TODO_DECIDE_OPEN, with no action, and a tap opens the app. Absent from an older manager: Take Recommendation only, as before."
+        },
+        "options": {
+          "type": "array",
+          "maxItems": 4,
+          "items": {"type": "string"},
+          "description": "The decision's option labels, whole, the recommended first; only with lockscreen answer, and with aps.mutable-content so the app's notification service extension can offer them. The hub drops both rather than cut the alert under 500 characters when the push would not fit otherwise, never the category, lockscreen or ask."
+        }
+      }
+    },
     "TodoAskOutcome": {
       "description": "What came of an answer to one of a to-do's asks (TodoAskAnswered): answered, the answer was taken (an option, a fixed answer, the owner's words, a failed start started again, a conclusion acknowledged), though the ask may still wait (explain_first leaves it waiting while the supervisor explains), so a client draws the reply's todo rather than dropping the ask; declined, Don't handle was kept, with a receipt that undoes it; later, nothing was written and the ask still waits (the client keeps Later for its app session); undone, a Don't handle was undone and the ask waits again. Open: a newer hub may send other values.",
       "type": "string",
@@ -604,6 +642,33 @@
         },
         "todo": {
           "description": "The to-do's row with its view, as GET /api/v1/todos/{id} answers it under todo (for a step's ask, the to-do whose row lists it), read after the answer: it says whether the ask still waits, whatever the outcome; absent when it could not be read."
+        }
+      }
+    },
+    "TodoItemDetail": {
+      "description": "What GET /api/v1/todos/{id} answers beside `todo` (the list's hand-typed row, which clients read as their own row type) from a manager that names todo_timeline (#10465): the paper's Conversation block, Results and Since you looked (proposal 3.5 rows 3, 9 and 10), so the paper needs no second read. All four are absent from an older manager, and when the manager could not read the to-do's history (the row still answers); recap and results also when there is none.",
+      "type": "object",
+      "properties": {
+        "rounds": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/TodoRound"},
+          "x-go-pointer": true,
+          "description": "The rounds the paper shows, oldest first: the latest two that are not Background ones, the latest Background ones making up the rest (spec/fixtures/todo-rounds/README.md R7); empty when the to-do has none. GET /api/v1/todos/{id}/timeline has every round."
+        },
+        "rounds_total": {
+          "type": "integer",
+          "minimum": 0,
+          "x-go-pointer": true,
+          "description": "How many rounds the to-do's conversation has in all, the ones rounds leaves out included."
+        },
+        "recap": {
+          "$ref": "#/$defs/TodoRecap",
+          "description": "What changed since the owner last looked; absent when they never did, or nothing but their own acts came since."
+        },
+        "results": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/TodoResult"},
+          "description": "What the to-do's work produced, newest first, at most 3; absent when nothing was."
         }
       }
     }

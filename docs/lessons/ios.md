@@ -1363,6 +1363,9 @@ Use an invalidation revision as the task key and handle the flag after completio
 - Removing conditionally inserted tappable views (`if moving { replacement header }`) during a held touch loses that touch:
   no `Button` action, and the identical underlying button never receives it because touch began on the removed view. Shell settling mid-tap does this,
   losing nearly every other rapid tap in slower BeautifulUI animations (2026-11-02,`testQuickTapsEndOnTheLast`). Wait for finger release before removing (`ShellPager.lingering`).
+- A spring's animation completion is not the destination top bar's first complete layout. On a cold Assistant the strip had already reported `settled`,
+  yet its bar was still about 30 pt out of place; removing the stand-in then lost the next switch tap or delivered it to New Chat (#10227).
+  Leave the stationary stand-in in charge for two main-queue turns so the transparent destination bar can commit its resting layout, and invalidate that handoff when a new slide starts.
 - Both shell pages remain built; hidden-page `onAppear` still runs. Launching on Agents "appeared" assistant chat, subscribing, marking seen,
   and running DEBUG switches despite no user view (2026-11-02, a test lane logged repeated `appeared()` and duplicate sends). Side-effectful appearance is not visibility:
   do not build unselected pages (`ShellState.assistantBuilt`) or use `.onTabVisibility`. Do not run one-shot DEBUG actions on `onAppear` either.
