@@ -16,14 +16,15 @@ import (
 // fakeForge is GitHub as a deploy check sees it: one PR (merged or not, its merge commit) and which hub commits
 // contain it.
 type fakeForge struct {
-	mu        sync.Mutex
-	merged    bool
-	sha       string
-	contains  map[string]bool // by hub commit; a commit not in it is not in the repository
-	err       error
-	issueOnly bool
-	issueErr  error
-	calls     int
+	mu           sync.Mutex
+	merged       bool
+	sha          string
+	contains     map[string]bool // by hub commit; a commit not in it is not in the repository
+	err          error
+	issueOnly    bool
+	issueErr     error
+	calls        int
+	compareCalls int
 }
 
 func (f *fakeForge) IsPR(context.Context, string, int) (bool, error) {
@@ -45,6 +46,7 @@ func (f *fakeForge) PRMerge(_ context.Context, repo string, number int) (bool, s
 func (f *fakeForge) Contains(_ context.Context, repo, base, head string) (bool, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.compareCalls++
 	if base != f.sha {
 		return false, false, errors.New("unexpected base")
 	}
@@ -174,6 +176,37 @@ func TestMergedNotDeployedIsHeldUntilTheHubHasIt(t *testing.T) {
 	s.reports.mu.Unlock()
 	if watch != nil {
 		t.Fatalf("still watched: %+v", watch)
+	}
+}
+
+func TestDeployWatchKeepsConfirmedMergeAcrossBuildsDuringForgeOutage(t *testing.T) {
+	s, _, _, hub, forge := deployService(t)
+	ctx := t.Context()
+	now := time.Now()
+	const pr = "https://github.com/o/r/pull/9"
+	putTodo(s, Todo{ID: "todo_merge", Title: "Confirm delivery", Origin: "conv1", CreatedAt: now})
+	s.setTaskStage(ctx, "todo_merge", "review", pr)
+	s.sweepDeploys(now)
+	if got := todoNow(s, "todo_merge"); got.Delivery == nil || got.Delivery.State != deliveryMerged {
+		t.Fatalf("initial confirmed merge: %+v", got.Delivery)
+	}
+
+	forge.err = errors.New("the forge is offline")
+	for i, sha := range []string{newHub, strings.Repeat("e", 40)} {
+		hub.deploy(sha)
+		writeDeployed(t, s, sha, oldHub+" unrelated change (#5)")
+		s.sweepDeploys(now.Add(time.Duration(i+1) * time.Minute))
+		got := todoNow(s, "todo_merge")
+		if got.Delivery == nil || got.Delivery.State != deliveryMerged || !strings.Contains(got.Delivery.Gate, "还没有这个 PR") {
+			t.Fatalf("build %s lost its upstream merge evidence: %+v", sha, got.Delivery)
+		}
+	}
+	got := todoNow(s, "todo_merge")
+	if stage, live := s.gateDeployStage(ctx, got, "deploy", pr, "", "", ""); stage != "merge" || live {
+		t.Fatalf("repeat deployment claim during outage: stage %s, live %v", stage, live)
+	}
+	if d := s.gateDelivery(ctx, got, TodoDelivery{State: deliveryLive}, "https://github.com/o/r/pull/10"); d.State != deliveryPR {
+		t.Fatalf("another PR inherited merge evidence: %+v", d)
 	}
 }
 
