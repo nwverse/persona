@@ -160,6 +160,9 @@ type SendParams struct {
 	// the manager's own sends (channels, the inbox, meetings) never set it, and an older hub never sends it. A hand-off's
 	// Always rule spares the card only for a turn of such messages (assistant secret_handoff.go).
 	Human bool `json:"human,omitempty"`
+	// VerbatimText is internal-only: an approval clarification keeps the owner's
+	// exact question instead of expanding workspace mentions or main-chat handoff.
+	VerbatimText bool `json:"-"`
 	// ReplyInput is a direct app send authenticated by the hub's legacy owner credential. It only qualifies for
 	// missing-reply recovery. Internal sends and other roles cannot set it, and it does not authorize a hand-off.
 	ReplyInput bool `json:"reply_input,omitempty"`

@@ -682,11 +682,13 @@ func (d *Devices) callNode(ctx context.Context, p devicewire.NodeCall) (json.Raw
 	if len(params) == 0 {
 		params = json.RawMessage(`{}`)
 	}
-	if p.Method == "session.send" {
+	if p.Method == "session.send" || p.Method == "session.send_once" {
 		var err error
-		params, err = d.prepareSessionSkills(params)
-		if err != nil {
-			return nil, err
+		if p.Method == "session.send" {
+			params, err = d.prepareSessionSkills(params)
+			if err != nil {
+				return nil, err
+			}
 		}
 		if params, err = ownerInputParams(p, params); err != nil {
 			return nil, err

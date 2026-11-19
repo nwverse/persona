@@ -311,4 +311,28 @@ class ModelsTest {
         assertNull(old.command); assertNull(old.description); assertNull(old.warning); assertNull(old.risk)
         assertNull(old.deadline); assertNull(old.deadlineAction); assertNull(old.deadlineAt)
     }
+
+    @Test fun clarificationCapabilityAndCurrentDeadlineRoundTripWithoutChangingOldHubDefaults() {
+        val updated = JsonCodec.decodeFromString<Interaction>(
+            """{"id":"ix_clarified","machine_id":"computer","session_id":"chat","kind":"permission",""" +
+                """"expires_at":"2026-11-20T03:00:00Z","can_clarify":true}""",
+        )
+        assertEquals(java.time.Instant.parse("2026-11-20T03:00:00Z"), parseTime(updated.expiresAt))
+        val wire = JsonCodec.encodeToString(updated)
+        assertTrue(wire, wire.contains(""""can_clarify":true"""))
+        assertTrue(wire, wire.contains(""""expires_at":"2026-11-20T03:00:00Z""""))
+        assertEquals(updated, JsonCodec.decodeFromString<Interaction>(wire))
+
+        val oldHub = JsonCodec.decodeFromString<Interaction>(
+            """{"id":"ix_old","kind":"permission","expires_at":"2026-11-19T03:00:00Z"}""",
+        )
+        val oldWire = JsonCodec.encodeToString(oldHub)
+        assertFalse(oldWire, oldWire.contains("can_clarify"))
+        assertEquals(oldHub, JsonCodec.decodeFromString<Interaction>(oldWire))
+        // A malformed additive flag drops only itself, retaining the legacy card and its fail-closed default.
+        val malformed = JsonCodec.decodeFromString<Interaction>(
+            """{"id":"ix_malformed","kind":"permission","can_clarify":"yes"}""",
+        )
+        assertFalse(JsonCodec.encodeToString(malformed).contains("can_clarify"))
+    }
 }
