@@ -16,6 +16,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // The main conversation in charge of any agent (#5112, docs/assistant/unified-entry.md"Supervision"): stopping and redirecting one
@@ -99,11 +100,14 @@ func (s *Service) toolAgentInterrupt(ctx context.Context, machine, self string, 
 		var res struct {
 			Settled bool `json:"settled"`
 		}
-		if err := s.call(ctx, am.ID, "session.interrupt", map[string]any{"session_id": c.SessionID}, &res); err != nil {
+		err := s.call(ctx, am.ID, "session.interrupt", map[string]any{"session_id": c.SessionID}, &res)
+		var re *rpc.Error
+		over := errors.As(err, &re) && re.Code == proto.CodeTurnOverBackground // its turn ended while the phone was asked
+		if err != nil && !over {
 			return "", fmt.Errorf("stop: %w", err)
 		}
 		s.logf("agent_interrupt %s on %s (from %s)", short(c.SessionID), am.ID, short(self))
-		stopped = res.Settled || s.interruptLanded(ctx, am.ID, c.SessionID)
+		stopped = over || res.Settled || s.interruptLanded(ctx, am.ID, c.SessionID)
 	}
 	if then == "" {
 		if !working {
