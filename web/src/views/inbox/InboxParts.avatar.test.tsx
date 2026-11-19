@@ -5,6 +5,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { InboxItem } from "../../lib/inbox";
+import { avatarSrc } from "../../lib/connectors";
 import { ItemAvatar, Monogram } from "./InboxParts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -32,25 +33,33 @@ describe("inbox avatars", () => {
     expect(src).not.toContain("/agent/v1/");
   });
 
-  // A connector's thread picture (#10923): its media ref through the connector's media route, the letter without one
-  // or when it does not load; the source badge stays.
-  const telegramItem = (avatar?: string) =>
+  // A connector's thread picture (#10923): the avatars route's path the hub listed, asked at a size it draws; the letter
+  // without one or when it does not load; the source badge stays.
+  const telegramItem = (avatar_url?: string) =>
     ({ id: "telegram:dm1", source: "telegram", title: "Example user", sender: "Example user", account_name: "Telegram",
-       connector: { thread: "u1", label: "DM", ...(avatar ? { avatar } : {}) } }) as unknown as InboxItem;
-  const face = () => [...host.querySelectorAll("img")].find((img) => img.getAttribute("src")?.includes("/media?ref="));
+       connector: { thread: "u1", label: "DM", ...(avatar_url ? { avatar_url } : {}) } }) as unknown as InboxItem;
+  const face = () => [...host.querySelectorAll("img")].find((img) => img.getAttribute("src")?.includes("/api/v1/avatars/"));
 
-  it("draws a connector row's picture from its media ref", () => {
-    act(() => root.render(<ItemAvatar it={telegramItem("a.u1.501")} />));
+  it("draws a connector row's picture from the avatars route", () => {
+    act(() => root.render(<ItemAvatar it={telegramItem("/api/v1/avatars/telegram/YS51MS41MDE")} />));
     const src = face()?.getAttribute("src") ?? "";
-    expect(src).toContain("/api/v1/connectors/telegram/media?ref=a.u1.501");
+    expect(src).toMatch(/^\/api\/v1\/avatars\/telegram\/YS51MS41MDE\?size=(64|128)/);
     expect(host.querySelector("[title='Telegram']")).not.toBeNull();
+  });
+
+  it("asks for the smallest size the route draws that covers the pixels drawn", () => {
+    expect(avatarSrc("/api/v1/avatars/t/x", 40, 1)).toBe("/api/v1/avatars/t/x?size=64");
+    expect(avatarSrc("/api/v1/avatars/t/x", 40, 2)).toBe("/api/v1/avatars/t/x?size=128");
+    expect(avatarSrc("/api/v1/avatars/t/x", 36, 3)).toBe("/api/v1/avatars/t/x?size=128");
+    expect(avatarSrc("/api/v1/avatars/t/x", 400, 3)).toBe("/api/v1/avatars/t/x?size=512");
+    expect(avatarSrc(undefined, 40)).toBeUndefined();
   });
 
   it("keeps a connector row's letter without a picture, and when it does not load", () => {
     act(() => root.render(<ItemAvatar it={telegramItem()} />));
     expect(face()).toBeUndefined();
     expect(host.textContent).toContain("E");
-    act(() => root.render(<ItemAvatar it={telegramItem("a.u1.gone")} />));
+    act(() => root.render(<ItemAvatar it={telegramItem("/api/v1/avatars/telegram/YS51Lmdvbmu")} />));
     act(() => face()!.dispatchEvent(new Event("error")));
     expect(face()).toBeUndefined();
     expect(host.textContent).toContain("E");

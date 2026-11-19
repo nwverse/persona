@@ -9,6 +9,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/extwire"
 )
 
 // inboxConnector is a connector with an inbox, on made-up data.
@@ -397,8 +398,9 @@ func TestRenamedConnectorRenamesItsItems(t *testing.T) {
 	}
 }
 
-// A thing's picture (#10923) is the item's connector block's, listed apart from Feishu's avatar: a new picture shows on
-// the open item without a move, an older thing never puts an earlier one back, and a ref past AvatarMost is none.
+// A thing's picture (#10923) is kept on the item's connector block and listed as the avatars route's path, apart from
+// Feishu's avatar and never as the source's value: a new picture shows on the open item without a move, an older thing
+// never puts an earlier one back, and a value that names none (too long, http://) is none.
 func TestConnectorThingsPictureIsTheOpenItems(t *testing.T) {
 	h := newInboxHub(t)
 	now := time.Now()
@@ -445,10 +447,16 @@ func TestConnectorThingsPictureIsTheOpenItems(t *testing.T) {
 	if got, _ := avatar(); got != "a.u1.502" {
 		t.Fatalf("an older thing put back %q", got)
 	}
-	// A ref is a name, not a picture: one past AvatarMost is none, and the row draws the initial.
-	apply(pictured("a", "a."+strings.Repeat("x", connector.AvatarMost), moved))
+	// A ref is a name, not a picture: one past AvatarValueMost is none, and the row draws the initial; so is an address
+	// the hub does not fetch.
+	apply(pictured("a", "a."+strings.Repeat("x", extwire.AvatarValueMost), moved))
 	if got, _ := avatar(); got != "" {
 		t.Fatalf("an over-long ref kept: %d bytes", len(got))
+	}
+	apply(pictured("a", "https://avatars.example.com/u/1?v=4", moved))
+	apply(pictured("a", "http://avatars.example.com/u/1", moved))
+	if got, _ := avatar(); got != "" {
+		t.Fatalf("an http address kept: %q", got)
 	}
 	// A connector that sends none (older ones) leaves the block without one: listed with no "avatar" key.
 	apply(pictured("b", "a.c2.900", now))
@@ -465,14 +473,19 @@ func TestConnectorThingsPictureIsTheOpenItems(t *testing.T) {
 	var wire struct {
 		Avatar    *string `json:"avatar"`
 		Connector struct {
-			Avatar string `json:"avatar"`
+			Avatar    *string `json:"avatar"`
+			AvatarURL string  `json:"avatar_url"`
 		} `json:"connector"`
 	}
 	if err := json.Unmarshal(b, &wire); err != nil {
 		t.Fatal(err)
 	}
-	if wire.Connector.Avatar != "a.c2.900" || wire.Avatar != nil {
+	if wire.Connector.AvatarURL != "/api/v1/avatars/example/YS5jMi45MDA" || wire.Connector.Avatar != nil || wire.Avatar != nil {
 		t.Fatalf("listed %s", b)
+	}
+	// Kept as the source named it: the route's path is made when listed.
+	if got, _ := avatar(); got != "a.c2.900" {
+		t.Fatalf("kept %q", got)
 	}
 	if ch := apply(pictured("c", "", now.Add(time.Minute))); len(ch) != 1 {
 		t.Fatalf("changed %d", len(ch))

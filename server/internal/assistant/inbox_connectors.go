@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/extwire"
 )
 
 // The inbox items of connectors (GitHub…): their things become items with one generic block the apps draw without
@@ -21,9 +22,12 @@ type InboxConnector struct {
 	OpenURL  string `json:"open_url,omitempty"` // a link the system opens (sms:…), not the app
 	ReplyTo  string `json:"reply_to,omitempty"` // where a reply goes and who sees it
 	CanReply bool   `json:"can_reply,omitempty"`
-	// Avatar is the thread's picture, one of the connector's media refs (InboxThing.Avatar): the apps fetch it from
-	// GET /api/v1/connectors/{source}/media, the initial without one. Apart from the item's own Avatar (Feishu's URL).
-	Avatar string `json:"avatar,omitempty"`
+	// Avatar is the thread's picture as its connector names it (InboxThing.Avatar: a media ref or an https address),
+	// kept, not listed. AvatarURL is what the apps load it from instead, listed only: the avatars route's path
+	// (extwire.AvatarURL, docs/protocol/protocol.md "Avatars"); without one they draw the initial. Both apart from the
+	// item's own Avatar (Feishu's URL).
+	Avatar    string `json:"avatar,omitempty"`
+	AvatarURL string `json:"avatar_url,omitempty"`
 	// RuleTier is the connector's tier for triage without a model.
 	RuleTier string `json:"rule_tier,omitempty"`
 	// Tags are what the thread is about (its repository, chat, sender…): what it can be muted by.
@@ -233,10 +237,10 @@ func fillConnectorItem(it *InboxItem, t connector.InboxThing) {
 	}
 }
 
-// thingAvatar is the thing's picture ref the item keeps: none past connector.AvatarMost (a ref names a picture, it
-// does not carry one).
+// thingAvatar is the thing's picture the item keeps: none for a value that names none (extwire.AvatarUsable: empty,
+// past extwire.AvatarValueMost, an http:// address).
 func thingAvatar(t connector.InboxThing) string {
-	if len(t.Avatar) > connector.AvatarMost {
+	if !extwire.AvatarUsable(t.Avatar) {
 		return ""
 	}
 	return t.Avatar

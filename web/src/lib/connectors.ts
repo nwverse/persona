@@ -568,6 +568,18 @@ export function replyInThread(id: string, body: { thread: string; action: string
   return api(`/connectors/${enc(id)}/thread/reply`, { method: "POST", json: body, headers: itemHeaders(manager) });
 }
 
+/** The sizes the avatars route draws (docs/protocol/protocol.md "Avatars"). */
+const AVATAR_EDGES = [64, 128, 256, 512];
+
+/** An `avatar_url` asked at the smallest size the route draws that covers `px` CSS pixels on this screen, so the
+ *  browser keeps one copy of a picture per size (the route answers `immutable`). */
+export function avatarSrc(url: string | undefined, px: number, dpr = globalThis.devicePixelRatio || 1): string | undefined {
+  if (!url) return undefined;
+  const need = px * dpr;
+  const edge = AVATAR_EDGES.find((e) => e >= need) ?? AVATAR_EDGES[AVATAR_EDGES.length - 1];
+  return `${url}${url.includes("?") ? "&" : "?"}size=${edge}`;
+}
+
 /** A media ref's URL under /api/ (an <img> adds the token with withToken). */
 export function mediaURL(id: string, ref: string): string {
   return `/api/v1/connectors/${enc(id)}/media?ref=${encodeURIComponent(ref)}`;

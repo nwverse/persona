@@ -211,9 +211,10 @@ export interface InboxConnector {
   /** Where a reply goes and who sees it. */
   reply_to?: string;
   can_reply?: boolean;
-  /** The thread's picture, one of the connector's media refs (mediaURL(source, avatar)): the other person of a
-   *  private chat, a group's own. Apart from the item's `avatar` (Feishu's). Without one, the initial. */
-  avatar?: string;
+  /** The thread's picture as the hub's avatars route serves it (avatarSrc, docs/protocol/protocol.md "Avatars"): the
+   *  other person of a private chat, a group's own. Apart from the item's `avatar` (Feishu's). Without one (an older
+   *  hub, a connector that sends none), the initial. */
+  avatar_url?: string;
   rule_tier?: string;
 }
 

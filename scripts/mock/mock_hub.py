@@ -12939,11 +12939,28 @@ def tg_sticker(n=180):
 TG_AVATAR_COLORS = {"u1": (88, 160, 230), "u7": (230, 140, 90), "u8": (150, 110, 210), "c2": (90, 190, 150)}
 
 
+def tg_avatar(peer, n=96):
+    """A made-up picture of peer (no one's photo): a diagonal of its color into a lighter one, with soft discs, one for a
+    person and three for a group (c…), so a row's picture is plainly not its initial."""
+    base = TG_AVATAR_COLORS[peer]
+    light = tuple(min(255, c + 70) for c in base)
+    discs = [(0.36, 0.38, 0.22), (0.66, 0.40, 0.18), (0.50, 0.68, 0.20)] if peer.startswith("c") else [(0.5, 0.42, 0.2), (0.5, 0.95, 0.38)]
+    def px(x, y):
+        fx, fy = x / max(n - 1, 1), y / max(n - 1, 1)
+        f = (fx + fy) / 2
+        c = [int(base[i] + (light[i] - base[i]) * f) for i in range(3)]
+        for cx, cy, r in discs:
+            if (fx - cx) ** 2 + (fy - cy) ** 2 < r * r:
+                c = [int(v + (255 - v) * 0.55) for v in c]
+        return (*c, 255)
+    return tg_rgba(n, n, px)
+
+
 def tg_media(ref):
     """The bytes a made-up media ref names (refs as the connector makes them: a.<peer>.<photo>, m.<chat>.<id>.f|t)."""
     parts = ref.split(".")
     if parts[0] == "a" and len(parts) == 3 and parts[1] in TG_AVATAR_COLORS:
-        return png(96, 96, TG_AVATAR_COLORS[parts[1]])
+        return tg_avatar(parts[1])
     if ref == "m.u1.333.f":
         return tg_photo(400, 300, (110, 170, 235), (210, 230, 250))
     if ref == "m.u1.335.f":
@@ -13014,6 +13031,38 @@ def tg_thread(thread, before, limit):
     if len(msgs) > limit:
         out["before"] = page[0]["id"]
     return out
+
+
+def avatar_path(source, value):
+    """The avatars route's path for a value, as the hub lists it (extwire.AvatarURL)."""
+    return "/api/v1/avatars/%s/%s" % (source, base64.urlsafe_b64encode(value.encode()).rstrip(b"=").decode())
+
+
+def avatars_area(h, p):
+    """GET /api/v1/avatars/{source}/{value}?size= (#10923, docs/protocol/protocol.md "Avatars"): the made-up pictures the
+    mock's lists name, drawn at the size asked (64, 128, 256 or 512); True when it answered."""
+    if not p.startswith("/api/v1/avatars/"):
+        return False
+    source, _, seg = p[len("/api/v1/avatars/"):].partition("/")
+    try:
+        value = base64.urlsafe_b64decode(seg + "=" * (-len(seg) % 4)).decode()
+    except Exception:
+        return h.send_json({"error": "not an avatar", "code": "bad_url"}, 404) or True
+    try:
+        asked = int(parse_qs(urlparse(h.path).query).get("size", ["128"])[0])
+    except ValueError:
+        asked = 128
+    size = next((e for e in (64, 128, 256, 512) if e >= asked), 512)
+    parts = value.split(".")
+    if source != "telegram" or not TELEGRAM_MODE or parts[0] != "a" or len(parts) != 3 or parts[1] not in TG_AVATAR_COLORS:
+        return h.send_json({"error": "no such picture", "code": "fetch_failed"}, 502) or True
+    data = tg_avatar(parts[1], size)
+    h.send_response(200)
+    h.send_header("Content-Type", "image/png"); h.send_header("Content-Length", str(len(data)))
+    h.send_header("X-Content-Type-Options", "nosniff")
+    h.send_header("Cache-Control", "private, max-age=31536000, immutable")
+    h.end_headers(); h.wfile.write(data)
+    return True
 
 
 def telegram_area(h, method, p, raw):
@@ -13122,13 +13171,13 @@ if os.environ.get("MOCK_TELEGRAM_INBOX"):
          "started_at": ago(minutes=12), "updated_at": ago(minutes=12), "tier": "action",
          "summary": "示例用户问你周末的活动还去不去", "reason": "等你回复", "read": False,
          "context": "示例用户（Telegram 私聊）\n昨天 20:15 我：好的，到时候见\n今天 09:40 示例用户：周末的示例活动还去吗？",
-         "connector": {"thread": "u1", "label": "私聊", "open_url": "tg://resolve?domain=example"}},
+         "connector": {"thread": "u1", "label": "私聊", "open_url": "tg://resolve?domain=example", "avatar_url": avatar_path("telegram", "a.u1.501")}},
         {"id": "telegram:mention2", "source": "telegram", "kind": "mention", "account": "telegram", "account_name": "Telegram",
          "title": "示例群", "sender": "另一个示例用户", "preview": "@example 这个示例方案你怎么看？", "count": 1,
          "started_at": ago(minutes=40), "updated_at": ago(minutes=40), "tier": "action",
          "summary": "群里有人问你对示例方案的看法", "reason": "@你", "read": False,
          "context": "示例群（Telegram 群）\n今天 09:12 另一个示例用户：@example 这个示例方案你怎么看？",
-         "connector": {"thread": "c2", "label": "@你", "open_url": "https://t.me/c/2/12"}},
+         "connector": {"thread": "c2", "label": "@你", "open_url": "https://t.me/c/2/12", "avatar_url": avatar_path("telegram", "a.c2.900")}},
     ]
 
 
@@ -26948,6 +26997,7 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/v1/mail/messages": return self.send_json({"messages": [], "has_more": False})
         if p == "/api/v1/lark/unread-count": return self.send_json({"count": 4})
         if telegram_area(self, "GET", p, b""): return
+        if avatars_area(self, p): return
         if larkcli_thread_area(self, "GET", p): return
         if plugin_connector_area(self, "GET", p, b""): return
         if triage_route(self, "GET", p, b""): return
