@@ -61,7 +61,7 @@ import { agentCommands } from "../../lib/composer-commands";
 import { CLEAR_MAIN_FEATURE, clearMainContext, isClearCommand, mainCommands } from "../../lib/main-clear";
 import { PendingCards } from "./Interactions";
 import { focusedCard, focusedFirst } from "../../lib/card-focus";
-import { lostWith } from "../../lib/dock-focus";
+import { COMPOSER_INPUT, lostWith } from "../../lib/dock-focus";
 import { FailureNote, showsFailureNote } from "./FailureNote";
 import { CloseoutCard } from "./CloseoutCard";
 import { shownCloseout } from "../../lib/closeout";
@@ -549,13 +549,17 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // waits for its row, because the node would start an Agent for an id nobody has. A lookup that found nothing leaves
   // `session` a stand-in (useRuntimeSession), which is no row either. Retries are refused along with sends.
   const noRow = !session || detail.missing;
+  // A runtime's list row can be here before its full detail: without `capabilities.send` yet it says nothing about sending, so
+  // the box keeps taking words and Send waits until the detail answers (#11237), as it does with no row at all
+  const hydrating = Boolean(session?.source_kind && session.capabilities?.send === undefined && !detail.ready && !detail.legacy && !detail.missing);
   // the hub could not say what this chat is (an older hub without the cached row, or a session it no longer has): the
   // notice above the chat says so, and an opening line under it would claim the chat started
   const noDetails = Boolean(detail.error) && (detail.missing || !session);
   const gone = detail.missing && !isMain;
-  const refusedNoRow = noRow && !isMain;
+  const refusedNoRow = (noRow && !isMain) || hydrating;
   const unknownGate = useRef({ isMain, gone: detail.missing });
   unknownGate.current = { isMain, gone: detail.missing };
+  // A gone chat is read again a few times by itself (runtime-session.ts), and the notice above it keeps a Retry for after
   const noRowBlock = useMemo(() => (refusedNoRow ? { label: t(gone ? "chat-chatview.session_gone" : "chat-chatview.connecting") } : undefined), [refusedNoRow, gone]);
   // A Persona conversation without a title yet is "New chat", as All chats and the sidebar call it, not its folder's name (#1697)
   const named = session ?? archivedHere;
@@ -1841,7 +1845,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // the banner's buttons go with it: the keyboard goes back to the composer, not on a touch screen alone (that would raise
   // the keyboard). Called on a press, by when the composer's box (declared below) is there.
   const backToComposer = () => {
-    if (fine) composerBox.current?.querySelector("textarea")?.focus({ preventScroll: true });
+    if (fine) composerBox.current?.querySelector<HTMLTextAreaElement>(COMPOSER_INPUT)?.focus({ preventScroll: true });
   };
   // gone at once; a retry that did not go brings it back, as nothing else on the page could retry then
   const retryError = () => {
@@ -1907,8 +1911,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     shown.current = view;
     if (!fine) return;
     const frame = requestAnimationFrame(() => {
-      const box = view === "term" ? termLayer.current : composerBox.current;
-      box?.querySelector("textarea")?.focus({ preventScroll: true });
+      const field = view === "term" ? termLayer.current?.querySelector("textarea") : composerBox.current?.querySelector<HTMLTextAreaElement>(COMPOSER_INPUT);
+      field?.focus({ preventScroll: true });
     });
     return () => cancelAnimationFrame(frame);
   }, [view, fine]);
@@ -1918,10 +1922,11 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const onDockFocus = (e: React.FocusEvent) => {
     dockFocus.current = composerBox.current?.contains(e.target) ? null : e.target;
   };
+  // Checked after each render only while a control above the composer holds the focus (nothing to do otherwise)
   useEffect(() => {
-    if (!lostWith(dockFocus.current, document.activeElement, document.body)) return;
+    if (!dockFocus.current || !lostWith(dockFocus.current, document.activeElement, document.body)) return;
     dockFocus.current = null;
-    if (fine) composerBox.current?.querySelector("textarea")?.focus({ preventScroll: true });
+    if (fine) composerBox.current?.querySelector<HTMLTextAreaElement>(COMPOSER_INPUT)?.focus({ preventScroll: true });
   });
   // the run's time counts from the turn's start, as its "Working…" does (not from the session's last state change)
   const stateSince = session?.state_since;
@@ -2043,7 +2048,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       narrow={compactDock}
       short={short}
       keyboard={keyboard}
-      onDismissKeyboard={() => composerBox.current?.querySelector("textarea")?.blur()}
+      onDismissKeyboard={() => composerBox.current?.querySelector<HTMLTextAreaElement>(COMPOSER_INPUT)?.blur()}
     />
   );
 
@@ -2326,7 +2331,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
           working={state === "working" || awaiting}
           needsYou={state === "needs_you"}
           onSend={send}
-          disabled={Boolean(offlineLine) || (!noRow && !sessionCan(session, "send"))}
+          disabled={Boolean(offlineLine) || (!noRow && !hydrating && !sessionCan(session, "send"))}
           onEditLastMessage={onEditLastMessage}
           editingLast={editProp}
           loadingDraft={editingLast}
@@ -2338,6 +2343,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
           suggestionRisky={session?.suggestion_risky}
           mention={mention}
           autoFocus
+          carryDraft={Boolean(assistant)}
           onFocusChange={setTyping}
           blocked={gate.blocked ?? noRowBlock}
           leading={leading}

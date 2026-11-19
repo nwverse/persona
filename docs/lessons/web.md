@@ -1114,6 +1114,7 @@ Six parallel lanes (chat rendering, message actions, Agents list / Machines, Ter
 ## Composer Enter yields to the IME first (2026-11-05, #2733)
 
 - **Every composer `onKeyDown` handling Enter / Esc must start with `if (composing(e.nativeEvent)) return;`** (`lib/send-history.ts`, checks `isComposing || keyCode === 229`). Browsers still deliver Enter used to confirm Japanese conversion or commit English through Pinyin. Without a composition check, incomplete text creates to-dos, saves titles, or adds list items. Esc likewise cancels composition and closes the whole row. Test in jsdom with `new KeyboardEvent("keydown", { key: "Enter", isComposing: true })` (`views/ime-enter.test.tsx`).
+- **macOS Safari and WKWebView fire `compositionend` just before the committing Enter's `keydown`**, which then has `isComposing` false (#11237). A field whose Enter sends or picks a row tracks the composition itself: `useComposition` (`lib/ime.ts`) spreads `onCompositionStart` / `onCompositionEnd` on the field and `busy(e.nativeEvent)` also treats a key within `COMPOSITION_TAIL_MS` of the end as the input method's. Native capture listeners use `imeKey` with their own state. Menus that a typed `/` or `@` opens wait for the composition to end, and the chat composer is not collapsed to measure its height mid-composition. Test by dispatching `compositionstart` / `compositionend` and then a plain `keydown` Enter.
 
 ## Pushes are best-effort; pages need their own fallback (2026-11-05, #3139)
 
