@@ -121,6 +121,8 @@ internal suspend fun createChatWiring(
         worktrees = { connection.route.value?.let { route -> persona.core.hub.HttpAgentCreationService(data.scope.path, route.endpoint.url,
             connection.token, connection.http.client, isCurrent = { current() && connection.route.value == route }) } },
         usage = { persona.core.hub.HttpMachineManagement(connection).usageWindows() },
+        // Recent targets of Forward live in the pairing's own preferences, erased with it (#3901).
+        forwardMemory = PreferencesForwardMemory(data.listPreferences),
         tasks = persona.core.domain.tasks.TasksStore(persona.core.hub.HttpTasksApi(connection), group, data.coroutineScope,
             repositories.snapshots.todoCache(), quickResults = quickResults))
 }
