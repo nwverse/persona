@@ -1,9 +1,10 @@
-import { useContext, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { Suspense, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ComponentType } from "react";
 import { createPortal } from "react-dom";
 import { t } from "../i18n";
 import type { AgentState } from "../lib/types";
 import { Icon, type IconName } from "./icons";
 import { StatusMark } from "./StatusMark";
+import type { ToastLiftProps } from "./toast-lift";
 import { collapseMounted } from "../lib/disclosure";
 import { foldAllSeq, FoldMissed, type FoldRegion } from "../lib/fold-all";
 import { FeedbackGate, offlineNow } from "../lib/feedback";
@@ -1245,99 +1246,15 @@ export function toast(text: string, tone: Toast["tone"] = "info", action?: Toast
   toastsChanged();
 }
 
-const TOAST_EDGE = 20; // bottom-5: the toasts' room under them, above the frame's edge or what they keep clear of
-const TOAST_GAP = 8; // gap-2
+const keyboardUp = () => keyboardFrame(window.innerHeight, window.visualViewport) !== undefined;
 
-/** How far the toasts sit above the bottom of the visible frame on a narrow screen (`--toast-lift`): clear of what
- *  reaches into their place there, the chat's dock, or the footer of the sheet on top (the page under a modal is
- *  covered, so only its own footer counts). Null: nothing there, the home indicator's inset applies; with the keyboard
- *  up there is none. Also returns what it measured, for the caller to watch. */
-function toastLift(box: HTMLElement, rows: Iterable<HTMLElement>): { lift: string | null; watched: HTMLElement[] } {
-  const frame = box.getBoundingClientRect();
-  let stack = -TOAST_GAP;
-  for (const row of rows) stack += row.offsetHeight + TOAST_GAP;
-  stack = Math.max(0, stack);
-  const reach = frame.bottom - TOAST_EDGE - stack; // the stack's top with nothing to keep clear of
-  const modals = [...document.querySelectorAll<HTMLElement>('[role="dialog"][aria-modal="true"]')].filter((m) => m.getClientRects().length);
-  const top = modals[modals.length - 1];
-  const watched = [...(top ?? document).querySelectorAll<HTMLElement>(top ? "[data-dialog-footer]" : "[data-chat-dock]")];
-  let edge = Infinity;
-  for (const el of watched) {
-    const r = el.getBoundingClientRect();
-    if (r.height && r.bottom > reach && r.top < frame.bottom) edge = Math.min(edge, r.top);
-  }
-  if (edge === Infinity) return { lift: keyboardFrame(window.innerHeight, window.visualViewport) ? "0px" : null, watched };
-  // never pushed out of the top of the frame: a dock as tall as what the keyboard leaves gets them over its top part
-  const lift = Math.max(0, Math.min(frame.bottom - edge, frame.height - TOAST_EDGE - stack - TOAST_GAP));
-  return { lift: `${Math.round(lift)}px`, watched };
-}
-
-/** Keeps `--toast-lift` on `box` up to date while `on` (a toast shows on a narrow screen), and only then: what it
- *  keeps clear of may grow (the composer's lines), come or go (a sheet, a chat), or move with the keyboard. Writes the
- *  style itself, at most once a frame, with no React state; a change to the list is measured at once. */
-function useToastLift(box: React.RefObject<HTMLDivElement | null>, rows: React.RefObject<Map<number, HTMLDivElement>>, on: boolean) {
-  const measure = useRef<(() => void) | null>(null);
-  useLayoutEffect(() => {
-    const el = box.current;
-    if (!on || !el) return;
-    let frame = 0;
-    let seen: HTMLElement[] = [];
-    const later = () => {
-      if (!frame) frame = requestAnimationFrame(now);
-    };
-    const resize = typeof ResizeObserver === "function" ? new ResizeObserver(later) : null;
-    const now = () => {
-      cancelAnimationFrame(frame);
-      frame = 0;
-      const { lift, watched } = toastLift(el, rows.current.values());
-      if ((lift ?? "") !== el.style.getPropertyValue("--toast-lift")) {
-        if (lift === null) el.style.removeProperty("--toast-lift");
-        else el.style.setProperty("--toast-lift", lift);
-      }
-      if (resize && (watched.length !== seen.length || watched.some((w, i) => w !== seen[i]))) {
-        resize.disconnect();
-        // its border box: the lift written into its padding does not come back as a resize to measure again
-        resize.observe(el, { box: "border-box" });
-        watched.forEach((w) => resize.observe(w));
-        seen = watched;
-      }
-    };
-    // a chat or a sheet coming or going; a modal closing (it drops aria-modal at once, and leaves after its exit)
-    const changes = new MutationObserver(later);
-    changes.observe(document.body, { childList: true, subtree: true, attributeFilter: ["aria-modal"] });
-    const vv = window.visualViewport;
-    vv?.addEventListener("resize", later);
-    vv?.addEventListener("scroll", later);
-    window.addEventListener("resize", later);
-    // a sheet sliding up is measured where it ends
-    document.addEventListener("transitionend", later, true);
-    document.addEventListener("animationend", later, true);
-    measure.current = now;
-    return () => {
-      measure.current = null;
-      cancelAnimationFrame(frame);
-      resize?.disconnect();
-      changes.disconnect();
-      vv?.removeEventListener("resize", later);
-      vv?.removeEventListener("scroll", later);
-      window.removeEventListener("resize", later);
-      document.removeEventListener("transitionend", later, true);
-      document.removeEventListener("animationend", later, true);
-      el.style.removeProperty("--toast-lift");
-    };
-  }, [box, rows, on]);
-  // every render, ahead of Toasts' glides: a new toast shows clear of the composer from its first frame, and the glides
-  // see where it went
-  useLayoutEffect(() => {
-    measure.current?.();
-  });
-}
-
-export function Toasts() {
+/** The toasts. `lift` places them on a narrow screen (ui/toast-lift.tsx): phone-only, so the app hands it in from a
+ *  chunk of its own, loaded once the screen is narrow; until it is in, they sit at the bottom of the page, then move. */
+export function Toasts({ lift: Lift }: { lift?: ComponentType<ToastLiftProps> }) {
   const [, force] = useState(0);
   const box = useRef<HTMLDivElement>(null);
   const rows = useRef(new Map<number, HTMLDivElement>());
-  useToastLift(box, rows, useMedia(NARROW_QUERY) && toasts.length > 0);
+  const lifting = useMedia(NARROW_QUERY) && toasts.length > 0 && Lift !== undefined;
   // where each row was on screen just before the list changed, and the glides and exits that are running
   const before = useRef(new Map<number, number>());
   const glides = useRef(new Map<number, Animation>());
@@ -1389,12 +1306,8 @@ export function Toasts() {
   useEffect(() => pauseToasts(paused), [paused]);
   useEffect(() => () => pauseToasts(false), []);
   return createPortal(
-    // Narrow: in the visible frame (above the keyboard), lifted over what sits at its bottom (useToastLift).
-    <div
-      ref={box}
-      aria-live="polite"
-      className="pointer-events-none fixed inset-x-0 bottom-5 z-[70] flex flex-col items-center gap-2 px-4 max-lg:top-(--kb-top) max-lg:bottom-auto max-lg:h-(--kb-h) max-lg:justify-end max-lg:pb-[calc(var(--toast-lift,env(safe-area-inset-bottom))+20px)]"
-    >
+    // narrow: `lift` places it in the visible frame (above the keyboard), over what sits at the frame's bottom
+    <div ref={box} aria-live="polite" className="pointer-events-none fixed inset-x-0 bottom-5 z-[70] flex flex-col items-center gap-2 px-4">
       {toasts.map((item) => (
         <div
           key={item.id}
@@ -1415,11 +1328,11 @@ export function Toasts() {
           {item.tone === "error" && <Icon name="warning" size={13} stroke={2.2} className="shrink-0 text-red" />}
           {item.tone === "ok" && <Icon name="check" size={13} stroke={2.6} className="text-green" />}
           <span className="min-w-0">{item.text}</span>
-          {/* On a touch screen the button reaches 8 px past its word on either side (padding its margins give back,
-              so the word stays put) and 44 px high, and the close button moves over so their targets meet there
-              instead of the close button's covering the gap: a tap just past the word still runs it. */}
+          {/* On a touch screen the button's target (touch-hit) reaches at least 8 px past its word on either side and
+              44 px high, and the close button moves over so their targets meet there instead of the close button's
+              covering the gap: a tap just past the word still runs it. */}
           {item.action && (
-            <button type="button" className="touch-hit ml-1 shrink-0 whitespace-nowrap font-semibold text-accent hover:underline [@media(pointer:coarse)]:-mr-2 [@media(pointer:coarse)]:-ml-1 [@media(pointer:coarse)]:px-2"
+            <button type="button" className="touch-hit ml-1 shrink-0 whitespace-nowrap font-semibold text-accent hover:underline [@media(pointer:coarse)]:before:inset-x-[min(--spacing(-2),calc(50%-22px))]"
               onClick={() => { item.action?.run(); dropToast(item.id); }}>
               {item.action.label}
             </button>
@@ -1435,6 +1348,12 @@ export function Toasts() {
           </button>
         </div>
       ))}
+      {/* after the rows: their refs are set before it measures them */}
+      {lifting && Lift && (
+        <Suspense fallback={null}>
+          <Lift box={box} rows={rows} keyboardUp={keyboardUp} />
+        </Suspense>
+      )}
     </div>,
     document.body,
   );

@@ -8,6 +8,7 @@ import { PerAssistant } from "./views/PerAssistant";
 import { lazyDialog, OverlayBoundary, useOpened } from "./views/LazyOverlay";
 import { navigationCrumb } from "./lib/error-reports";
 import { lazyPage, preloadPages } from "./lib/lazy-page";
+import type { ToastLiftProps } from "./ui/toast-lift";
 import { drawerA11y, focusBack, useDrawerDrag } from "./lib/drawer";
 import { acceptHubs, here, rememberHub, takeHubs } from "./lib/hubs";
 import { holdImportLink, takeImportLink } from "./lib/import-link";
@@ -89,6 +90,17 @@ const TodosView = lazyPage(() => import("./views/Todos").then((m) => m.TodosView
 const NotFound = lazyPage(() => import("./views/NotFound").then((m) => m.NotFound));
 // Keep the shortcut palette warm. The new-agent dialog loads only when opened.
 const Palette = lazyPage(() => import("./views/Palette").then((m) => m.Palette), { idle: true });
+// Where the toasts sit on a narrow screen (ui/toast-lift.tsx): off the first screen and out of the idle tier, which a
+// wide screen loads too; Shell loads it once the screen is narrow. A load that fails leaves the toasts at the bottom of
+// the page until the next toast tries again.
+const ToastLift = lazyPage(() => import("./ui/toast-lift").then((m) => m.ToastLift));
+function PhoneToasts(props: ToastLiftProps) {
+  return (
+    <OverlayBoundary open onClose={() => {}}>
+      <ToastLift {...props} />
+    </OverlayBoundary>
+  );
+}
 const NewAgent = lazyPage(() => import("./views/NewAgent").then((m) => m.NewAgent));
 const StartingAgent = lazyPage(() => import("./views/StartingAgent").then((m) => m.StartingAgent));
 const ShortcutHelpDialog = lazyDialog(() => import("./views/ShortcutHelp").then((m) => m.ShortcutHelp));
@@ -199,7 +211,7 @@ export function App() {
           </Suspense>
         </PageBoundary>
       )}
-      <Toasts />
+      <Toasts lift={PhoneToasts} />
     </>
   );
 }
@@ -382,6 +394,10 @@ function Shell() {
 
   // ── the sidebar: a column on a wide screen, a drawer over the page on a narrow one (#1996) ──
   const narrow = useMedia(NARROW);
+  // the toasts' placement, in before the first toast in practice
+  useEffect(() => {
+    if (narrow) void ToastLift.preload().catch(() => {});
+  }, [narrow]);
   const [drawer, setDrawer] = useState(false);
   const toggle = useCallback(() => setDrawer((d) => !d), []);
   const close = useCallback(() => setDrawer(false), []);
