@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"runtime"
 	"strings"
@@ -495,5 +496,36 @@ func TestLanesFilterAsTheLineGoesOut(t *testing.T) {
 		if bytes.Contains(w, []byte("a secret")) {
 			t.Fatal("a value handed over while its line waited went out")
 		}
+	}
+}
+
+// The read-ahead is looked at once a read, not once a line: thousands of small lines a read cost about what they cost
+// read one by one (it was quadratic: 0.3 MB/s where lines read 2.5).
+func TestFrameReaderReadAheadOnceARead(t *testing.T) {
+	var wire []byte
+	const lines = 20000
+	for i := range lines {
+		p := []byte(fmt.Sprintf(`{"event":"session.activity","params":{"n":%d,"s":"abcdefghijklmnopqrstuvwxyz0123456789"}}`, i))
+		var h [frameHeader]byte
+		putHead(h[:], frameHead{kind: frameData, lane: LaneEvents, fin: true, size: len(p), seq: uint64(i + 1)})
+		wire = append(append(wire, h[:]...), p...)
+	}
+	read := func(ahead bool) (int, time.Duration) {
+		fr := newFrameReader(bytes.NewReader(wire), 64<<20)
+		fr.middle = func() {}
+		start := time.Now()
+		n := 0
+		for fr.Scan() {
+			if ahead {
+				_ = fr.aheadActivity()
+			}
+			n++
+		}
+		return n, time.Since(start)
+	}
+	_, plain := read(false)
+	n, took := read(true)
+	if n != lines || took > 5*plain+50*time.Millisecond {
+		t.Fatalf("%d lines in %s with the read-ahead looked at for each, %s without", n, took, plain)
 	}
 }

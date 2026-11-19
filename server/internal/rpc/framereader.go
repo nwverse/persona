@@ -8,7 +8,6 @@ import (
 	"encoding/json/jsontext"
 	"fmt"
 	"io"
-	"slices"
 	"time"
 )
 
@@ -32,6 +31,7 @@ type frameReader struct {
 	held       int                  // their bytes
 	reads      int                  // reads made so far
 	middleLine uint64               // the first frame of the line whose middle counted last (holding)
+	marks      []int                // where in buf frames read and not yet taken show an answer ahead (aheadActivity)
 	token      []byte
 	owned      bool
 	ack        func(seq uint64, at uint32)       // ask for an acknowledgement of every frame read through seq, read at at
@@ -165,6 +165,9 @@ type partLine struct {
 // order message's fields put them. The deadline answer that does not count (deadlineMessage) is never told apart here:
 // it is one short frame (no code, its message alone), so a line of several frames is not one.
 func replyEnvelope(first []byte) bool {
+	if e := envelopeOf(first); e != envUnknown {
+		return e == envResult || e == envError
+	}
 	dec := jsontext.NewDecoder(bytes.NewReader(first))
 	if t, err := dec.ReadToken(); err != nil || t.Kind() != '{' {
 		return false
@@ -234,7 +237,7 @@ func (s *frameReader) fill() {
 		if n > 0 {
 			s.reads++
 			s.readAt = clockMS(time.Now())
-			s.noteMiddle(carried)
+			s.scan(carried)
 			return
 		}
 		loop++
@@ -256,14 +259,84 @@ type aheadLine struct {
 	reply bool   // its first frame opens an answer (replyEnvelope)
 }
 
+// envelope is what a line is, as its first bytes say.
+type envelope uint8
+
+const (
+	envUnknown envelope = iota
+	envEvent
+	envRequest
+	envResult
+	envError
+)
+
+var (
+	envEventHead, envIDHead                 = []byte(`{"event":`), []byte(`{"id":"`)
+	envMethodKey, envResultKey, envErrorKey = []byte(`,"method":`), []byte(`,"result":`), []byte(`,"error":`)
+)
+
+// envelopeOf reads what a line is from its first bytes as message's encoder writes them, with no decoding: an event
+// begins {"event":, a request, a result and an error {"id":"…", then "method", "result" or "error". Anything else
+// (another encoder's spacing, an id with escapes, bytes cut before the second key) is envUnknown, for a decoder to say.
+func envelopeOf(b []byte) envelope {
+	if bytes.HasPrefix(b, envEventHead) {
+		return envEvent
+	}
+	if !bytes.HasPrefix(b, envIDHead) {
+		return envUnknown
+	}
+	rest := b[len(envIDHead):]
+	i := bytes.IndexByte(rest, '"')
+	if i < 0 || bytes.IndexByte(rest[:i], '\\') >= 0 {
+		return envUnknown
+	}
+	switch rest = rest[i+1:]; {
+	case bytes.HasPrefix(rest, envMethodKey):
+		return envRequest
+	case bytes.HasPrefix(rest, envResultKey):
+		return envResult
+	case bytes.HasPrefix(rest, envErrorKey):
+		return envError
+	}
+	return envUnknown
+}
+
+// wholeLineActivity: a whole line read ahead shows activity: an answer but not a deadline, or a line that does not
+// decode (bufferedActivity's rule). Events and requests are told by their envelope; only an error, or a line not of
+// this package's writing, is decoded.
+func wholeLineActivity(b []byte) bool {
+	switch envelopeOf(b) {
+	case envEvent, envRequest:
+		return false
+	case envResult:
+		return true
+	}
+	var m message
+	return json.Unmarshal(b, &m) != nil || replyMessage(m) && !deadlineMessage(m)
+}
+
+// startsAnswer: the first piece of a line opens an answer with a result (bufferedActivity's rule for a line not
+// whole yet: an error may still be a deadline).
+func startsAnswer(b []byte) bool {
+	switch envelopeOf(b) {
+	case envResult:
+		return true
+	case envUnknown:
+		return bufferedActivity(b)
+	}
+	return false
+}
+
 // ahead walks the frames read and not yet taken (s.buf[s.start:s.end]), the last perhaps in part, calling f, when set,
-// for each data frame with the part of its payload there and its line as known so far (false from f stops the walk);
-// it returns those lines. A piece of a line is never taken for a line of its own: the line of a piece that comes after
-// its first one is the one begun before.
-func (s *frameReader) ahead(f func(h frameHead, payload []byte, l *aheadLine) bool) []aheadLine {
+// for each data frame with where it begins in buf, the part of its payload there and its line as known so far; it
+// returns those lines. A piece of a line is never taken for a line of its own: the line of a piece that comes after
+// its first one is the one begun before. Lines are few (one long line a lane, short ones end in their frame), so a
+// slice searched from the end does.
+func (s *frameReader) ahead(f func(at int, h frameHead, payload []byte, l *aheadLine)) []aheadLine {
 	var lines []aheadLine
-	b := s.buf[s.start:s.end]
-	for lead := true; len(b) >= frameHeader; lead = false {
+	at := s.start
+	for lead := true; s.end-at >= frameHeader; lead = false {
+		b := s.buf[at:s.end]
 		h, err := parseHead(b)
 		if err != nil {
 			break
@@ -271,12 +344,21 @@ func (s *frameReader) ahead(f func(h frameHead, payload []byte, l *aheadLine) bo
 		have := min(len(b)-frameHeader, h.size)
 		if h.kind == frameData {
 			key := frameKey(h)
-			i := slices.IndexFunc(lines, func(l aheadLine) bool { return l.key == key && !l.ended })
+			i, seen := -1, false
+			for j := len(lines) - 1; j >= 0; j-- {
+				if lines[j].key == key {
+					seen = true
+					if !lines[j].ended {
+						i = j
+					}
+					break
+				}
+			}
 			if i < 0 {
 				l := aheadLine{key: key, start: h.seq, first: true, lead: lead, reply: replyEnvelope(b[frameHeader : frameHeader+have])}
 				// A slot whose line ended among these frames carries a new one; otherwise it goes on with the line in
 				// progress there.
-				if part, ok := s.partial[key]; ok && !slices.ContainsFunc(lines, func(l aheadLine) bool { return l.key == key }) {
+				if part, ok := s.partial[key]; ok && !seen {
 					l.start, l.first, l.size, l.reply = part.first, false, part.n, part.reply
 				}
 				lines = append(lines, l)
@@ -285,58 +367,65 @@ func (s *frameReader) ahead(f func(h frameHead, payload []byte, l *aheadLine) bo
 			l := &lines[i]
 			l.size += have
 			l.ended = have == h.size && h.fin
-			if f != nil && !f(h, b[frameHeader:frameHeader+have], l) {
-				break
+			if f != nil {
+				f(at, h, b[frameHeader:frameHeader+have], l)
 			}
 		}
 		if have < h.size {
 			break
 		}
-		b = b[frameHeader+h.size:]
+		at += frameHeader + h.size
 	}
 	return lines
 }
 
-// aheadActivity is bufferedActivity for frames: among the frames already read after the current line, a whole line
-// that is a reply but not a deadline (or that does not decode), or the first piece of a line whose envelope names a
-// result and no method or event; for a line in several frames that is all its first frame says (a deadline is never
-// that long), and its later pieces say nothing of their own.
-func (s *frameReader) aheadActivity() bool {
-	for _, p := range s.partial {
-		if p.reply && p.read == s.reads {
-			return true // an answer begun in this read, taken in already: with lines its start would be ahead
-		}
-	}
-	found := false
-	s.ahead(func(h frameHead, payload []byte, l *aheadLine) bool {
+// scan looks at what was read and not yet taken once a read came in, once: the frames that show an answer ahead of the
+// lines before them (marks, for aheadActivity), and whether this read (carried: it went on with a frame begun before
+// it) went on with a line begun before it, did not finish it, and found it past pingFrameMiddleBytes: lineReader's
+// middle, read for read, whatever frames the line came in.
+func (s *frameReader) scan(carried bool) {
+	s.marks = s.marks[:0]
+	lines := s.ahead(func(at int, h frameHead, payload []byte, l *aheadLine) {
+		var mark bool
 		switch {
 		case !l.first || l.size != len(payload): // a later piece: the line counts once whole, by its first frame
-			found = l.ended && l.reply
+			mark = l.ended && l.reply
 		case l.ended: // a whole line in one frame
-			var m message
-			found = json.Unmarshal(payload, &m) != nil || replyMessage(m) && !deadlineMessage(m)
+			mark = wholeLineActivity(payload)
 		default: // the first piece of a longer line
-			found = bufferedActivity(payload)
+			mark = startsAnswer(payload)
 		}
-		return !found
+		if mark {
+			s.marks = append(s.marks, at)
+		}
 	})
-	return found
-}
-
-// noteMiddle tells middle about the read just made (carried: it went on with a frame begun before it) when it went on
-// with a line begun before it, did not finish it, and that line has grown past pingFrameMiddleBytes: lineReader's
-// rule, read for read, whatever frames the line came in.
-func (s *frameReader) noteMiddle(carried bool) {
 	if s.middle == nil {
 		return
 	}
-	for _, l := range s.ahead(nil) {
+	for _, l := range lines {
 		if (!l.first || l.lead && carried) && !l.ended && l.size > pingFrameMiddleBytes {
 			s.middleLine = l.start
 			s.middle()
 			return
 		}
 	}
+}
+
+// aheadActivity is bufferedActivity for frames: among the frames already read after the current line, a whole line
+// that is a reply but not a deadline (or that does not decode), or the first piece of a line whose envelope names a
+// result and no method or event; for a line in several frames that is all its first frame says (a deadline is never
+// that long), and its later pieces say nothing of their own. What scan found when the read came in, less what was
+// taken since.
+func (s *frameReader) aheadActivity() bool {
+	for _, p := range s.partial {
+		if p.reply && p.read == s.reads {
+			return true // an answer begun in this read, taken in already: with lines its start would be ahead
+		}
+	}
+	for len(s.marks) > 0 && s.marks[0] < s.start {
+		s.marks = s.marks[1:]
+	}
+	return len(s.marks) > 0
 }
 
 // holding: the line whose middle counted last is still arriving, so that activity stands (Serve). That line only: one
