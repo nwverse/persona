@@ -12,7 +12,7 @@ import { stripBase } from "./base";
 import { hasSlots } from "./extension-slots";
 import { feedCacheScope } from "./feed-cache";
 import { NAV_PAGES } from "./persona-nav";
-import { adoptOverview, getOverviewPrefs, noteOverviewKept, onOverviewSaved, overviewChosen, overviewKept, type CardEntry, type SectionEntry } from "./overview-cards";
+import { adoptOverview, getOverviewPrefs, isSection, keepSections, noteOverviewKept, noteSectionsLocal, onOverviewSaved, overviewChosen, overviewKept, readOverview, sectionsLocal, type CardEntry, type SectionEntry } from "./overview-cards";
 import { adoptSidebarPrefs, chosen, getSidebarPrefs, onSidebarPrefsSaved } from "./sidebar-pages";
 import { isResumed } from "./reconnect";
 import { navigate, type Route } from "./router";
@@ -147,7 +147,9 @@ onSidebarPrefsSaved((pages) => {
 // before the field answers a change of only them with its own 400 (OLD_MANAGER), or takes the PUT and leaves them out
 // of its answer: the arrangement then stays in this browser (Overview's editor says so) until the next hello asks
 // again. One from before the sections (#9745's) refuses an arrangement that names one in its own words (NO_SECTIONS):
-// the editor says so too, and as its record has the cards, the change is kept as one the hub did not take. Any other failure
+// the cards then go on their own at once and from then on, so they follow on every device as before, while the sections
+// stay in this browser (noted per hub and sign-in, laid over the cards the hub sends, and the editor says so) until a
+// hello finds the manager takes them and sends them. Any other failure
 // (403, 5xx, the network, another 400) keeps the change and sends it again at the next hello. One change is on its way at a
 // time: one made meanwhile goes once that one is answered, the newest as this browser has it then, so the hub takes them in
 // the order they were made and the last answer says whether the newest reached it. Pushes heard meanwhile, and until the
@@ -165,18 +167,23 @@ let helloOverview = 0; // bumped by each hello that did not resume: the hub's pu
 // an arrangement is compared card by card (and section by section).
 const overviewKey = (v: unknown) =>
   JSON.stringify((Array.isArray(v) ? (v as Partial<CardEntry & SectionEntry>[]) : []).map((c) => [c?.extension, c?.id, c?.hidden ?? false, c?.span ?? "", c?.section]));
-function sendOverview(probe = false) {
+// `probe`: a hello's, sent even where the hub did not keep it, and with the sections; `ask`: only whether the manager
+// takes the sections now, the cards being the hub's already.
+function sendOverview(probe = false, ask = false) {
   if (synced === false || (overviewKept() === false && !probe)) return; // this browser only
   if (sendingOverview) return void (againOverview = true);
   sendingOverview = true;
   editsOverview++;
   const hello = helloOverview;
-  api<{ overview?: unknown }>("/navigation", { method: "PUT", json: { overview: getOverviewPrefs() } })
+  const cardsOnly = !probe && sectionsLocal();
+  const list = getOverviewPrefs();
+  api<{ overview?: unknown }>("/navigation", { method: "PUT", json: { overview: cardsOnly ? list.filter((e) => !isSection(e)) : list } })
     .then(
       (r) => {
         noteStartPageSynced();
         unsentOverview = false;
         noteOverviewKept(Array.isArray(r.overview));
+        if (!cardsOnly) noteSectionsLocal(false);
         // its push is still to come, unless it went out before a hello that did not resume
         if (Array.isArray(r.overview) && hello === helloOverview) answeredOverview.push(overviewKey(r.overview));
       },
@@ -184,8 +191,13 @@ function sendOverview(probe = false) {
         noteStartPageSynced(e);
         const words = e instanceof ApiError && e.status === 400 ? String(e.body?.error) : "";
         const old = OLD_MANAGER.includes(words);
-        if (old || words === NO_SECTIONS) noteOverviewKept(false);
-        unsentOverview = !old && synced !== false;
+        const refused = words === NO_SECTIONS;
+        if (old) noteOverviewKept(false);
+        if (refused) {
+          noteSectionsLocal(true);
+          if (!ask) againOverview = true; // the cards on their own, now
+        }
+        unsentOverview = !old && !refused && synced !== false;
       },
     )
     .finally(() => {
@@ -221,14 +233,22 @@ function settleOverview() {
   const heard = heardOverview;
   heardOverview = [];
   answeredOverview = [];
-  if (!unsentOverview && last >= 0 && last < heard.length - 1) adoptOverview(heard[heard.length - 1]);
+  if (!unsentOverview && last >= 0 && last < heard.length - 1) takeOverview(heard[heard.length - 1]);
+}
+
+/** Takes the hub's arrangement as this browser's: under the sections while they are this browser's alone. One naming a
+ *  section says the manager keeps them now. */
+function takeOverview(v: unknown) {
+  const list = readOverview(v);
+  if (list.some(isSection)) noteSectionsLocal(false);
+  adoptOverview(sectionsLocal() ? keepSections(getOverviewPrefs(), list) : list);
 }
 
 /** The hub's arrangement, read or pushed: taken at once, or settled with the change on its way or its push to come. A
  *  change the hub did not take stays over it until the next hello sends it again. */
 function hubOverview(v: unknown[]) {
   noteOverviewKept(true);
-  if (!sendingOverview && !answeredOverview.length && !unsentOverview) return adoptOverview(v);
+  if (!sendingOverview && !answeredOverview.length && !unsentOverview) return takeOverview(v);
   heardOverview.push(v);
   if (!sendingOverview) settleOverview();
 }
@@ -256,8 +276,10 @@ onHubEvent("hello", (msg) => {
       // its answer); else handed over, or asked again where it was refused. A read a later hello or another sign-in
       // overtook is left to that one.
       if (hello !== helloOverview || scope !== feedCacheScope()) return;
-      if (Array.isArray(r.overview) && !unsentOverview && edits === editsOverview) hubOverview(r.overview);
-      else if (overviewChosen() || unsentOverview || overviewKept() === false) sendOverview(true);
+      if (Array.isArray(r.overview) && !unsentOverview && edits === editsOverview) {
+        hubOverview(r.overview);
+        if (sectionsLocal()) sendOverview(true, true); // an updated manager is handed the sections
+      } else if (overviewChosen() || unsentOverview || overviewKept() === false) sendOverview(true);
     },
     noteStartPageSynced, // the copies here stay
   );

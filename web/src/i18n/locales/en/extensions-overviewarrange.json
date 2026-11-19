@@ -16,5 +16,6 @@
   "line": "{hint} {where}",
   "undo_stale": "Not undone: Overview was changed since.",
   "always_shown": "Always shown: it holds what needs you",
-  "section_hidden": "Hidden"
+  "section_hidden": "Hidden",
+  "sections_local": "Cards follow on all your devices; the sections' order is saved in this browser only, as this hub can't keep it yet."
 }

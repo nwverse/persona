@@ -27,7 +27,7 @@ import { t } from "../../i18n";
 import { feedCacheScope, scopedKey } from "../../lib/feed-cache";
 import { loadPages } from "../../lib/lazy-page";
 import { stateName } from "../../lib/state-labels";
-import { adoptOverview, getOverviewPrefs, noteOverviewKept, onOverviewSaved, SECTIONS, type OverviewEntry, type SectionId } from "../../lib/overview-cards";
+import { adoptOverview, getOverviewPrefs, noteOverviewKept, noteSectionsLocal, onOverviewSaved, SECTIONS, type OverviewEntry, type SectionId } from "../../lib/overview-cards";
 import { Toasts } from "../../ui/atoms";
 import { OverviewBody, type OverviewSections } from "../OverviewBody";
 import { OverviewArrangeButton } from "./ExtensionSlots";
@@ -292,6 +292,10 @@ describe("arranging them", () => {
     act(() => noteOverviewKept(false));
     expect(head()).toContain(t("settings.start_page_footer_local"));
     act(() => noteOverviewKept(true));
+    act(() => noteSectionsLocal(true)); // a default manager of #9745: the cards follow, the sections stay here
+    expect(head()).toContain(t("extensions-overviewarrange.sections_local"));
+    act(() => noteSectionsLocal(false));
+    expect(head()).toContain(t("settings.start_page_footer_synced"));
     hub.synced = false; // a hub without the route
     draw(true);
     expect(head()).toContain(t("settings.start_page_footer_local"));

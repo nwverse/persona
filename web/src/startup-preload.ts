@@ -435,15 +435,16 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // controls, the drag and the edits) is a chunk of its own (views/extensions/OverviewArrange.tsx, lib/overview-edit.ts).
 // Main was itself 16 B over its budget (ja 482,542 B against 482,526 B), so, as in #9847, the budget is this ja size,
 // with no room.
-// #10905: Overview's own sections arranged with the extensions' cards add 285 B in ja, measured in one environment
-// against #9778's branch at a72213c14f (ja 483,262 B to 483,547 B; en 480,152 B to 480,438 B, zh-Hans 481,005 B to
-// 481,295 B): the sections' ids and their place in the arrangement, Needs you and Stuck never hidden
+// #10905: Overview's own sections arranged with the extensions' cards add 338 B in ja, measured in one environment
+// against #9778's branch at a72213c14f (ja 483,262 B to 483,600 B; en 480,152 B to 480,491 B, zh-Hans 481,005 B to
+// 481,348 B): the sections' ids and their place in the arrangement, Needs you and Stuck never hidden
 // (lib/overview-cards.ts), Overview's cards and sections drawn in that order (views/OverviewBody.tsx, Home's sections
-// handed to it), the Arrange button always there, and a default manager of #9745 refusing a section known
-// (lib/start-page.ts). The sections' bars and their names while arranging, and what a change writes, are the editor's
-// chunk (views/extensions/OverviewArrange.tsx, lib/overview-edit.ts). That branch has no room, so the budget is this
-// ja size.
-export const FIRST_SCREEN_BUDGET = 483_547;
+// handed to it), the Arrange button always there, and where a default manager of #9745 refuses the sections, the cards
+// sent on their own and the sections kept here under the hub's cards (keepSections and its note per sign-in,
+// lib/overview-cards.ts; lib/start-page.ts). The sections' bars and their names while arranging, and what a change
+// writes, are the editor's chunk (views/extensions/OverviewArrange.tsx, lib/overview-edit.ts). That branch has no room,
+// so the budget is this ja size.
+export const FIRST_SCREEN_BUDGET = 483_600;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;

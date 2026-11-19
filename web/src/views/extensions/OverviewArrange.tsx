@@ -8,7 +8,7 @@
 import { useEffect, useRef } from "react";
 import { t } from "../../i18n";
 import type { UIPlace } from "../../lib/extension-ui";
-import { ALWAYS_SHOWN, cardKey, getOverviewPrefs, overviewRevision, saveOverview, sectionKey, useOverviewKept, useOverviewPrefs, type ArrangedItem, type CardSpan, type OverviewEntry, type SectionId } from "../../lib/overview-cards";
+import { ALWAYS_SHOWN, cardKey, getOverviewPrefs, overviewRevision, saveOverview, sectionKey, useOverviewKept, useOverviewPrefs, useSectionsLocal, type ArrangedItem, type CardSpan, type OverviewEntry, type SectionId } from "../../lib/overview-cards";
 import { changeEntry, dropEntry, entriesOf, moveEntry, written } from "../../lib/overview-edit";
 import { useStartPageSynced } from "../../lib/start-page";
 import { stateName } from "../../lib/state-labels";
@@ -44,6 +44,7 @@ function EditHead({ onDone }: { onDone: () => void }) {
   const route = useStartPageSynced();
   const field = useOverviewKept();
   const synced = route !== false && field !== false;
+  const sectionsHere = useSectionsLocal();
   // Undo puts back the arrangement from before only while Overview is still as Reset left it: one changed since (here,
   // in another tab, or on another device), even one reset again, is newer and stays
   const reset = () => {
@@ -57,7 +58,7 @@ function EditHead({ onDone }: { onDone: () => void }) {
       <div className="min-w-48 flex-1">
         <h2 className="text-meta font-medium text-ink">{t("extensions-overviewarrange.title")}</h2>
         <p className="mt-0.5 text-label leading-[1.5] text-ink-2">
-          {t("extensions-overviewarrange.line", { hint: t("extensions-overviewarrange.hint"), where: synced ? t("settings.start_page_footer_synced") : t("settings.start_page_footer_local") })}
+          {t("extensions-overviewarrange.line", { hint: t("extensions-overviewarrange.hint"), where: !synced ? t("settings.start_page_footer_local") : sectionsHere ? t("extensions-overviewarrange.sections_local") : t("settings.start_page_footer_synced") })}
         </p>
       </div>
       <div className="ml-auto flex items-center gap-2">

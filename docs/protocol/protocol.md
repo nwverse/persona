@@ -5207,8 +5207,9 @@ every device of theirs follows it.
   sends the arrangement on its own and, on either, keeps it in the browser, says so where the cards are arranged
   (`docs/web/web.md` "Overview's extension cards") and asks again at the next hello. Any other failure is not taken for that.
   A default manager from before the sections (#9745's) answers a list that names one 400 with its own words
-  (`overview: "" / "" is not an extension's card`): the web keeps that arrangement in the browser, says so, and sends it again
-  at the next hello rather than taking the manager's record over it. iOS and Android do not read the record yet.
+  (`overview: "" / "" is not an extension's card`): the web then sends the list's cards on their own, at once and with each
+  change, keeps the sections' order in the browser (laid over the cards the hub sends by `keepSections`' rule), says so, and
+  asks again with the sections at each hello until the manager takes them. iOS and Android do not read the record yet.
 
 ## Tags in messages (parsed by clients)
 

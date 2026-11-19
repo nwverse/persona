@@ -16,5 +16,6 @@
   "line": "{hint}{where}",
   "undo_stale": "没有撤销：总览在这之后又改过了。",
   "always_shown": "始终显示：这里是需要你处理的事",
-  "section_hidden": "已隐藏"
+  "section_hidden": "已隐藏",
+  "sections_local": "卡片会同步到你的所有设备；分区的顺序只存在这个浏览器里：这个 Hub 还不能保存它。"
 }

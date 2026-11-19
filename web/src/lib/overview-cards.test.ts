@@ -3,7 +3,7 @@
 // among them, where they are by default unless named; the edits (move, drop, hide, widen) and what an arrangement
 // writes (lib/overview-edit.ts).
 import { describe, expect, it } from "vitest";
-import { arrangeOverview, entryKey, halvesPaired, overviewRuns, readOverview, SECTIONS, type ArrangedCard, type OverviewEntry } from "./overview-cards";
+import { arrangeOverview, entryKey, halvesPaired, keepSections, overviewRuns, readOverview, SECTIONS, type ArrangedCard, type OverviewEntry } from "./overview-cards";
 import { changeEntry, dropEntry, entriesOf, moveEntry, OVERVIEW_MOST, written } from "./overview-edit";
 
 const card = (extension: string, id: string) => ({ extension, id, title: id });
@@ -223,5 +223,24 @@ describe("Overview's own sections (#10905)", () => {
       expect(moveEntry(list, "section:needs_you", -1).map(entryKey).slice(3, 5)).toEqual(["section:needs_you", "example-today/agenda"]);
       expect(dropEntry(list, "section:in_progress", "example-gateway/today").map(entryKey)[0]).toBe("section:in_progress");
     });
+  });
+});
+
+// The web's copy of the default manager's rule, for the cards a manager of #9745 sends while the sections are this
+// browser's alone: server/internal/assistant/navigation_test.go TestKeepSections's cases, each the same.
+describe("keepSections", () => {
+  const c = (i: string): OverviewEntry => ({ extension: "example", id: i });
+  const show = (l: readonly OverviewEntry[]) => l.map((e) => ("section" in e ? e.section : e.id)).join(" ");
+  it("lays a list of only cards over the stored sections as the manager does", () => {
+    const cases: [OverviewEntry[], OverviewEntry[], string][] = [
+      [[], [c("a")], "a"],
+      [[c("a"), c("b")], [c("b"), c("a")], "b a"],
+      [[section("s"), c("a"), section("t"), c("b")], [c("b"), c("a"), c("c")], "s b t a c"],
+      [[section("s"), section("t")], [c("a")], "a s t"],
+      [[c("a"), section("s"), c("b")], [c("c")], "c s"],
+      [[section("s")], [], ""],
+      [[section("s"), c("a")], [section("t"), c("a")], "t a"],
+    ];
+    for (const [stored, list, want] of cases) expect(show(keepSections(stored, list))).toBe(want);
   });
 });

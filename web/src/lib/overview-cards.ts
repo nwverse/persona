@@ -85,6 +85,27 @@ export function arrangeOverview<T extends { extension: string; id: string }>(car
   return out;
 }
 
+/** What a list of only cards from the hub leaves of `stored` while the sections are this browser's alone (a default
+ *  manager from before them, #9745's, keeps cards only): the manager's own rule (server/internal/assistant/navigation.go
+ *  keepSections). The sections stay where they are and the cards take the stored cards' places in `list`'s order, one
+ *  `stored` did not have going after the last of them (none: first); an empty list (Reset) is taken as it is, as is one
+ *  naming a section or one that would hold more than the hub's most. */
+export function keepSections(stored: readonly OverviewEntry[], list: OverviewEntry[]): OverviewEntry[] {
+  if (!list.length || list.some(isSection) || !stored.some(isSection)) return list;
+  const out: OverviewEntry[] = [];
+  let next = 0;
+  let after = 0;
+  for (const e of stored) {
+    if (isSection(e)) out.push(e);
+    else if (next < list.length) {
+      out.push(list[next++]);
+      after = out.length;
+    }
+  }
+  out.splice(after, 0, ...list.slice(next));
+  return out.length > 256 ? list : out;
+}
+
 /** A row of cards that come one after another, or a section: how Overview lays the arrangement out. */
 export type OverviewRun<T> = { key: string; cards: ArrangedCard<T>[] } | ArrangedSection;
 
@@ -183,9 +204,45 @@ export function noteOverviewKept(on: boolean) {
   }
 }
 
+// Whether the hub's default manager refused the sections (#9745's, lib/start-page.ts): they are then this browser's
+// alone, noted per hub and sign-in beside the copy (signing out removes both) and laid over the cards the hub sends
+// (keepSections), until a hello finds the manager takes them. `local` is the note as read under its sign-in, kept in
+// this page where storage is blocked.
+const LOCAL = "overview.sectionsLocal";
+let local: { scope: string | null; on: boolean } | undefined;
+export function sectionsLocal() {
+  const now = feedCacheScope();
+  if (local?.scope !== now) {
+    let on = false;
+    try {
+      on = localStorage.getItem(scopedKey(now, LOCAL) ?? "") === "1";
+    } catch {
+      // storage blocked: not noted
+    }
+    local = { scope: now, on };
+  }
+  return local.on;
+}
+export function noteSectionsLocal(on: boolean) {
+  if (sectionsLocal() === on) return;
+  local!.on = on;
+  const key = scopedKey(local!.scope, LOCAL);
+  try {
+    if (key && on) localStorage.setItem(key, "1");
+    else if (key) localStorage.removeItem(key);
+  } catch {
+    // storage blocked: this page only
+  }
+  changed();
+}
+
 if (typeof window !== "undefined") {
   // another tab changed it
   window.addEventListener("storage", (e) => {
+    if (e.key === null || e.key.endsWith(`:${LOCAL}`)) {
+      local = undefined;
+      changed();
+    }
     if (e.key === null || e.key.endsWith(`:${KEY}`)) {
       prefs = null;
       revision++;
@@ -201,3 +258,4 @@ const subscribe = (l: () => void) => {
 
 export const useOverviewPrefs = () => useSyncExternalStore(subscribe, getOverviewPrefs, getOverviewPrefs);
 export const useOverviewKept = () => useSyncExternalStore(subscribe, overviewKept, overviewKept);
+export const useSectionsLocal = () => useSyncExternalStore(subscribe, sectionsLocal, sectionsLocal);
