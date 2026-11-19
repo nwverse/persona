@@ -147,6 +147,10 @@ class HubSessionsRepository(
                             }
                             if (mode == Mode.Legacy) mutableListStatus.update { it.copy(total = mutableSessions.value.size) }
                         }
+                        is SessionRowEvent -> {
+                            val row = event.session
+                            updateHeld(row.key) { row.undelivered.orEmpty() }
+                        }
                         is RevsEvent -> {
                             revision++
                             // Only a legacy read merges them later; HTTP rows of the other modes come with their revs.
@@ -554,6 +558,42 @@ class HubSessionsRepository(
             (mutableMachines.value.map { it.id } + mutableSessions.value.map { it.machineId })
                 .distinct().associateWith { machine -> mutableSessions.value.filter { it.machineId == machine } },
         )
+    }
+
+    /** Patch only the held queue of an existing row, leaving filtered-list membership to the list protocol. */
+    private fun updateHeld(key: SessionKey, transform: (List<HeldAgentMessage>) -> List<HeldAgentMessage>) {
+        fun patch(rows: List<Session>) = rows.map { row ->
+            if (row.key != key) row else row.copy(undelivered = transform(row.undelivered.orEmpty()).ifEmpty { null })
+        }
+        sessionChanges[key.machineId] = ++revision
+        mutableSessions.value = patch(mutableSessions.value)
+        mutableAdoptedSessions.value = patch(mutableAdoptedSessions.value)
+        verifiedLists.update { known ->
+            val sameMachine = known.sessions[key.machineId] ?: return@update known
+            known.copy(sessions = known.sessions + (key.machineId to patch(sameMachine)))
+        }
+    }
+
+    suspend fun showHeld(key: SessionKey, message: HeldAgentMessage) {
+        restored.await()
+        lock.withLock {
+            updateHeld(key) { list -> if (list.any { it.id == message.id }) list else list + message }
+            persistLater()
+        }
+    }
+
+    suspend fun heldActionCompleted(key: SessionKey, id: String, retry: Boolean) {
+        if (retry) {
+            // Only the manager knows whether Retry will send, check for an earlier delivery, or need another decision.
+            // A new socket row can already have arrived while the action was in flight.
+            invalidations.trySend("")
+            return
+        }
+        restored.await()
+        lock.withLock {
+            updateHeld(key) { it.filterNot { m -> m.id == id } }
+            persistLater()
+        }
     }
 
     override suspend fun adopt(session: Session) {

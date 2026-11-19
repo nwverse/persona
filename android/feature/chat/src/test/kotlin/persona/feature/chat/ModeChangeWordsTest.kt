@@ -77,6 +77,7 @@ class ModeChangeWordsTest {
         failed = "Couldn't restart in “Full access”",
         dropped = "Called off, won't restart in “Full access”",
         reasons = linkedMapOf(
+            "cancelled" to "Called off, won't restart in “Full access”: the session stays in its current mode",
             "replaced" to "Called off, won't restart in “Full access”: another switch took its place",
             "process_exited" to "Called off, won't restart in “Full access”: the process it was picked for has exited",
             "process_replaced" to "Called off, won't restart in “Full access”: the session runs in another process now",
@@ -100,6 +101,7 @@ class ModeChangeWordsTest {
         failed = "没能重启到「完全访问」",
         dropped = "已取消，不会重启到「完全访问」",
         reasons = linkedMapOf(
+            "cancelled" to "已取消，不会重启到「完全访问」：会话保持当前模式",
             "replaced" to "已取消，不会重启到「完全访问」：被另一次切换取代",
             "process_exited" to "已取消，不会重启到「完全访问」：原进程已经退出",
             "process_replaced" to "已取消，不会重启到「完全访问」：会话换了进程",
@@ -123,6 +125,7 @@ class ModeChangeWordsTest {
         failed = "「フルアクセス」で再起動できませんでした",
         dropped = "取り消しました。「フルアクセス」では再起動しません",
         reasons = linkedMapOf(
+            "cancelled" to "取り消しました。「フルアクセス」では再起動しません：セッションは現在のモードのままです",
             "replaced" to "取り消しました。「フルアクセス」では再起動しません：別の切り替えに置き換えられました",
             "process_exited" to "取り消しました。「フルアクセス」では再起動しません：元のプロセスが終了しました",
             "process_replaced" to "取り消しました。「フルアクセス」では再起動しません：セッションが別のプロセスに変わりました",
