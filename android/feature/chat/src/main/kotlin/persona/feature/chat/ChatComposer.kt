@@ -49,6 +49,9 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
+/** The upload boundary of an ordinary composer attachment; tests can complete it without native image decoding. */
+typealias ComposerAttachmentUpload = suspend (ChatComposerService, SessionKey, ComposerAttachment, suspend (Long) -> Unit) -> String
+
 /** How long an upload waits for the hub connection to be ready again before it fails (a setting, not measured). */
 internal const val UPLOAD_READY_WAIT_MILLIS = 15_000L
 
@@ -105,8 +108,12 @@ fun ChatComposer(
      * gets how much room the composer has ([ModelPillWidth], the web's container rules). Null: none.
      */
     modelPill: (@Composable (ModelPillWidth) -> Unit)? = null,
+    upload: ComposerAttachmentUpload? = null,
 ) {
     val context = LocalContext.current
+    val performUpload: ComposerAttachmentUpload = upload ?: { uploadService, uploadSession, attachment, onStaged ->
+        uploadAttachment(context, uploadService, uploadSession, attachment, destination = uploadDestination, onStaged = onStaged)
+    }
     val compactShell = useShellSurface && PersonaTheme.style == AppStyle.Glass
     val adaptiveProbePage = "chat:${session.path}"
     val resources = LocalResources.current
@@ -271,7 +278,7 @@ fun ChatComposer(
 
     state.attachments.forEach { attachment ->
         key(attachment.id) {
-            LaunchedEffect(attachment.id, attachment.error, service, uploadDestination) {
+            LaunchedEffect(attachment.id, attachment.error, service, uploadDestination, upload) {
                 if (attachment.uploadState == DraftUploadState.Invalid) return@LaunchedEffect
                 // Once the computer has it, a revoked local picker grant cannot make the attachment unsendable.
                 if (attachment.path != null) return@LaunchedEffect
@@ -289,7 +296,7 @@ fun ChatComposer(
                         state.attachments = state.attachments.map {
                             if (it.id == attachment.id) it.copy(uploadState = DraftUploadState.Uploading) else it
                         }
-                        uploadAttachment(context, service, session, attachment, destination = uploadDestination) { size ->
+                        performUpload(service, session, attachment) { size ->
                             state.attachments = state.attachments.map {
                                 if (it.id == attachment.id) it.copy(size = size) else it
                             }
