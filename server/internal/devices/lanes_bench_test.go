@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -418,8 +419,12 @@ func TestLaneBenchShort(t *testing.T) {
 // manager as fast as the link takes them, while the manager sends a forwarded port's bytes to the node (24 KiB
 // stream.data through its notes queue, three outstanding). The acknowledgements of the manager's frames then wait behind
 // the node's events on the way back: judged by the round trip, the window shrank to a fraction of the link (fix-1 of
-// #10660's review). One line per queue and mode: what reached the node after warmUp and over the whole run, the
-// longest a note took from its queue to the node, and the connections the notes' stall check closed.
+// #10660's review). Then the node's events stop, as if a burst of them ended, and for 25 s the manager's interactive
+// calls and pings show how soon they wait as on a quiet link again (its second review). One line per queue and mode:
+// what reached the node after warmUp and over the whole run, the longest a note took from its queue to the node; then,
+// p50/p95/max ms, interactive calls while the node's queue drains, in the first second after, the 3 s after that and
+// the last 10 s, the port's notes after it drained and in the last 10 s, the heartbeat rounds after it drained; and
+// the connections the notes' stall check closed.
 func TestLaneBenchBothWays(t *testing.T) {
 	if os.Getenv("PERSONA_LANE_BENCH") != "1" {
 		t.Skip("the lane experiment takes minutes: PERSONA_LANE_BENCH=1 runs it")
@@ -427,7 +432,7 @@ func TestLaneBenchBothWays(t *testing.T) {
 	for _, queue := range []int{64 << 10, 256 << 10} {
 		for _, lanes := range []bool{false, true} {
 			t.Run(fmt.Sprintf("queue=%dKiB/%s", queue>>10, onOff(lanes)), func(t *testing.T) {
-				line := runBothWays(t, netshape.Config{Rate: 30_000, Delay: 200 * time.Millisecond, Queue: queue}, lanes, 60*time.Second, 20*time.Second)
+				line := runBothWays(t, netshape.Config{Rate: 30_000, Delay: 200 * time.Millisecond, Queue: queue}, lanes, 60*time.Second, 20*time.Second, 25*time.Second)
 				t.Log(line)
 				if out := os.Getenv("PERSONA_LANE_BENCH_OUT"); out != "" {
 					f, err := os.OpenFile(out, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
@@ -444,7 +449,7 @@ func TestLaneBenchBothWays(t *testing.T) {
 	}
 }
 
-func runBothWays(t *testing.T, link netshape.Config, lanes bool, run, warmUp time.Duration) string {
+func runBothWays(t *testing.T, link netshape.Config, lanes bool, run, warmUp, quietFor time.Duration) string {
 	t.Helper()
 	d := newTestDevices(t)
 	logs := &benchLog{}
@@ -458,7 +463,8 @@ func runBothWays(t *testing.T, link netshape.Config, lanes bool, run, warmUp tim
 		at       time.Time
 	}
 	arrivals := make(chan arrival, 1024)
-	stop := make(chan struct{})
+	stop, flood := make(chan struct{}), make(chan struct{})
+	var lastLoad atomic.Int64 // when the node's latest event went to the link
 	var mu sync.Mutex
 	var conns []net.Conn
 	m := newMachine(d, MachineConfig{ID: "busy", Name: "Busy", Kind: "ssh"})
@@ -496,11 +502,14 @@ func runBothWays(t *testing.T, link netshape.Config, lanes bool, run, warmUp tim
 				select {
 				case <-stop:
 					return
+				case <-flood:
+					return
 				default:
 				}
 				if p.Notify("bench.load", load) != nil {
 					return
 				}
+				lastLoad.Store(time.Now().UnixNano())
 			}
 		}()
 		mu.Lock()
@@ -548,8 +557,89 @@ func runBothWays(t *testing.T, link netshape.Config, lanes bool, run, warmUp tim
 		case <-time.After(time.Until(start.Add(run))):
 		}
 	}
-	return fmt.Sprintf("lanebench both mode=%s rate=%.0f rtt=%s queue=%d notes=%d delivered=%.0fB/s whole_run=%.0fB/s worst_note=%dms stall_closes=%d reconnects=%d",
+	line := fmt.Sprintf("lanebench both mode=%s rate=%.0f rtt=%s queue=%d notes=%d delivered=%.0fB/s whole_run=%.0fB/s worst_note=%dms",
 		onOff(lanes), link.Rate, 2*link.Delay, link.Queue, arrived, float64(delivered)/(run-warmUp).Seconds(), float64(all)/run.Seconds(),
-		worst.Milliseconds(), logs.count("took nothing for"),
+		worst.Milliseconds())
+
+	// The other way stops: the node's events end and its queue on the way back drains, at the link's rate, while the
+	// port's bytes go on. Interactive calls (four a second) and the heartbeat (every 2.5 s) show how soon what the
+	// manager sends waits as on a quiet link again: a window still sized for acknowledgements that waited behind those
+	// events once put that much ahead of them (#10660's second review).
+	close(flood)
+	quietStart := time.Now()
+	type call struct{ at, took time.Duration }
+	var callMu sync.Mutex
+	var calls []call
+	var callers sync.WaitGroup
+	var notes []call // the port's notes: when queued, and how long to the node
+	r := &laneBenchResult{}
+	var pings []call // each heartbeat round: when, and how long it took
+	measured := make(chan struct{})
+	go func() {
+		defer close(measured)
+		for time.Since(quietStart) < quietFor {
+			select {
+			case <-time.After(2500 * time.Millisecond):
+			case <-t.Context().Done():
+				return
+			}
+			at, begun := time.Since(quietStart), time.Now()
+			r.measure(context.Background(), d, m, logs)
+			callMu.Lock()
+			pings = append(pings, call{at, time.Since(begun)})
+			callMu.Unlock()
+		}
+	}()
+	tick := time.NewTicker(250 * time.Millisecond)
+	defer tick.Stop()
+	for time.Since(quietStart) < quietFor {
+		for sent-arrived < 3 {
+			raw, _ := json.Marshal(map[string]any{"id": "p1", "i": sent, "data": data})
+			queued[sent] = time.Now()
+			m.queueNote("stream.data", raw)
+			sent++
+		}
+		select {
+		case a := <-arrivals:
+			arrived++
+			notes = append(notes, call{queued[a.i].Sub(quietStart), a.at.Sub(queued[a.i])})
+		case <-tick.C:
+			callers.Add(1)
+			go func(at time.Duration) {
+				defer callers.Done()
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				start := time.Now()
+				_ = m.call(ctx, "session.info", map[string]any{"session_id": "bench"}, nil)
+				callMu.Lock()
+				calls = append(calls, call{at, time.Since(start)})
+				callMu.Unlock()
+			}(time.Since(quietStart))
+		case <-time.After(time.Until(quietStart.Add(quietFor))):
+		}
+	}
+	callers.Wait()
+	<-measured
+	// The node's last event went to the link when it ended; what was queued then on the way back drains at its rate.
+	drained := time.Unix(0, lastLoad.Load()).Sub(quietStart) + time.Duration(float64(link.Queue)/link.Rate*float64(time.Second))
+	window := func(calls []call, from, to time.Duration) string {
+		var took []time.Duration
+		for _, c := range calls {
+			if c.at >= from && c.at < to {
+				took = append(took, c.took)
+			}
+		}
+		slices.Sort(took)
+		if len(took) == 0 {
+			return "0/0/0"
+		}
+		return fmt.Sprintf("%d/%d/%d", percentile(took, 50).Milliseconds(), percentile(took, 95).Milliseconds(), took[len(took)-1].Milliseconds())
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return line + fmt.Sprintf(" drained=%.1fs calls_draining=%s calls_first_s=%s calls_next_3s=%s calls_late=%s notes_after=%s notes_late=%s pings=%d answered=%d excused=%d misses=%d pings_after=%s stall_closes=%d reconnects=%d",
+		drained.Seconds(), window(calls, 0, drained), window(calls, drained, drained+time.Second), window(calls, drained+time.Second, drained+4*time.Second),
+		window(calls, quietFor-10*time.Second, quietFor), window(notes, drained, drained+4*time.Second), window(notes, quietFor-10*time.Second, quietFor),
+		r.pings, r.answered, r.excused, r.misses, window(pings, drained, quietFor), logs.count("took nothing for"),
 		max(logs.count("] connected over ")-1, 0))
 }

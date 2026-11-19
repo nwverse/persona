@@ -10,8 +10,8 @@ import "time"
 // the transport's buffers, behind other frames). However long the acknowledgement itself waits on the way back, behind
 // what the other side sends, it does not count: a busy other direction does not close this one's window. Below
 // queueTarget the window grows, quickly while the queue is short; above it the window shrinks once a round trip. It
-// never falls below what the other side reads in a round trip with the queueing left out, nor grows much past it
-// (acked). On a link of 30 KB/s the window settles near what the link carries in a round trip, so a pong or an answer
+// never falls below what the other side reads in a round trip with the queueing left out, nor grows much past it,
+// and while frames queue on the way it holds no more than the latest round trip needs (acked). On a link of 30 KB/s the window settles near what the link carries in a round trip, so a pong or an answer
 // written behind those frames waits about queueTarget; on a fast link it grows to what keeps the link busy, up to
 // windowMax.
 //
@@ -178,8 +178,9 @@ func (w *creditWindow) acked(seq uint64, recv uint32, now time.Time) {
 		span = time.Duration(recv-from) * time.Millisecond
 	}
 	w.lastRecv, w.lastRecvSet = recv, true
+	latest := max(rtt-queued, 0) + span
 	copy(w.paths[1:], w.paths[:rateSlots-1])
-	w.paths[0] = pathSample{d: max(rtt-queued, 0) + span, at: now}
+	w.paths[0] = pathSample{d: latest, at: now}
 	need, limit := 0, windowMax
 	if w.rate > 0 {
 		var path time.Duration
@@ -212,6 +213,13 @@ func (w *creditWindow) acked(seq uint64, recv uint32, now time.Time) {
 		w.limited = false
 	}
 	w.cwnd = max(w.cwnd, need)
+	// A queue on the way past queueTarget is a window larger than the link carries in the time bytes wait now. When
+	// the other side's queue drains, the acknowledgements it held come quicker than the frames were read, and a window
+	// still sized for the old wait would go into the queue on the way, ahead of pings, until that wait ages out of
+	// need: the latest sample's wait bounds it then.
+	if queued > queueTarget && w.rate > 0 {
+		w.cwnd = max(min(w.cwnd, int(w.rate*(latest+2*queueTarget).Seconds())), windowMin)
+	}
 }
 
 // noteRate measures the rate the other side reads at, between this sample and the last one far enough before it by

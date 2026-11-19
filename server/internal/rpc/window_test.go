@@ -206,9 +206,9 @@ func TestCreditWindowAcrossABusyWayBack(t *testing.T) {
 			sent = append(sent, sentFrame{seq: seq, bytes: n, at: start})
 		}
 		read := start.Add(200 * time.Millisecond) // one way, then each frame in its turn at the link's rate
-		now = start.Add(back)
 		for _, f := range sent {
 			read = read.Add(time.Duration(f.bytes) * time.Second / rate)
+			now = read.Add(back)
 			w.acked(f.seq, clockMS(read), now)
 		}
 	}
@@ -223,13 +223,19 @@ func TestCreditWindowAcrossABusyWayBack(t *testing.T) {
 	}
 }
 
-// simBusyWayBack runs w for d against a link of rate bytes a second and oneWay delay each way whose other direction is
-// kept busy (frames of backFrame bytes, up to queue bytes waiting, more or less from one frame to the next): an
-// acknowledgement goes out when the other side's frame being written ends, naming the newest frame read by then, and
-// waits behind what is queued; with backFrame 0 each frame is acknowledged as it is read. The window always has bulk
-// to send. It returns what the other side read after warmUp, a second, and the longest a frame waited to go on the
-// link after warmUp.
-func simBusyWayBack(w *creditWindow, rate float64, oneWay time.Duration, backFrame, queue int, d, warmUp time.Duration) (float64, time.Duration) {
+// wayBack is what the other side sends while a simulated window sends bulk (simWayBack).
+type wayBack struct {
+	frame int           // its frames' size; 0: nothing, and each frame is acknowledged as it is read
+	queue int           // the most it keeps waiting
+	stop  time.Duration // when it stops sending (0: never), its queue draining then; until then it keeps queue waiting
+}
+
+// simWayBack runs w for d against a link of rate bytes a second and oneWay delay each way whose other direction
+// carries back: an acknowledgement goes out when the other side's frame being written ends, naming the newest frame
+// read by then, and waits behind what is queued, which drains and fills again (no faster than a frame a frame) unless
+// back.stop is set. The window always has bulk to send. It returns what the other side read after warmUp, a second,
+// and the longest a frame written after warmUp waited to go on the link.
+func simWayBack(w *creditWindow, rate float64, oneWay time.Duration, back wayBack, d, warmUp time.Duration) (float64, time.Duration) {
 	type inFlight struct {
 		seq  uint64
 		read time.Time // the other side reads it
@@ -241,8 +247,8 @@ func simBusyWayBack(w *creditWindow, rate float64, oneWay time.Duration, backFra
 		at    time.Time // it arrives
 	}
 	perByte := float64(time.Second) / rate
-	frameTime := time.Duration(float64(backFrame) * perByte)
-	backQueue := time.Duration(float64(queue) * perByte)
+	frameTime := time.Duration(float64(back.frame) * perByte)
+	backQueue := time.Duration(float64(back.queue) * perByte)
 	start := time.Unix(1_000_000, 0)
 	free := start // when the link is free to start the next frame
 	var frames []inFlight
@@ -259,15 +265,21 @@ func simBusyWayBack(w *creditWindow, rate float64, oneWay time.Duration, backFra
 			f := frames[0]
 			frames = frames[1:]
 			// Acknowledged when the other side's frame being written ends, behind the queue.
-			leave, waits := f.read, backQueue
+			leave, waits := f.read, time.Duration(0)
 			if frameTime > 0 {
 				n := f.read.Sub(start)/frameTime + 1
 				leave = start.Add(n * frameTime)
-				// The queue drains and fills again, no faster than one of the other side's frames a frame.
 				half := (backQueue + frameTime - 1) / frameTime
-				if k := n % (2*half + 1); k <= half {
+				switch k := n % (2*half + 1); {
+				case back.stop > 0 && leave.Before(start.Add(back.stop)):
+					waits = backQueue
+				case back.stop > 0:
+					if waits = backQueue - leave.Sub(start.Add(back.stop)); waits <= 0 { // drained: nothing to wait for
+						leave, waits = f.read, 0
+					}
+				case k <= half:
 					waits = max(backQueue-k*frameTime, 0)
-				} else {
+				default:
 					waits = min((k-half)*frameTime, backQueue)
 				}
 			}
@@ -313,13 +325,37 @@ func maxTime(a, b time.Time) time.Time {
 // TestCreditWindowKeepsTheLinkBusyWhenTheWayBackIsFull: a port's bytes go one way while the other side's events keep
 // the way back busy, so acknowledgements wait behind them, each covering whatever was read while the other side wrote
 // a frame (#10660's review: the window, judged by round trips, let through 5.5 KB/s of a 30 KB/s link). Frames still
-// keep the link busy.
+// keep the link busy, with that queue full and with it draining and filling again.
 func TestCreditWindowKeepsTheLinkBusyWhenTheWayBackIsFull(t *testing.T) {
 	const rate = 30_000
 	for _, queue := range []int{0, 64 << 10, 256 << 10} {
 		w := newCreditWindow()
-		if got, _ := simBusyWayBack(&w, rate, 200*time.Millisecond, 32<<10, queue, 2*time.Minute, 30*time.Second); got < rate*97/100 {
+		if got, _ := simWayBack(&w, rate, 200*time.Millisecond, wayBack{frame: 32 << 10, queue: queue, stop: time.Hour}, time.Minute, 30*time.Second); got < rate*97/100 {
 			t.Errorf("%d KiB queued on the way back: %.0f B/s of a %d B/s link", queue>>10, got, rate)
+		}
+		w = newCreditWindow()
+		if got, _ := simWayBack(&w, rate, 200*time.Millisecond, wayBack{frame: 32 << 10, queue: queue}, 2*time.Minute, 30*time.Second); got < rate*95/100 {
+			t.Errorf("%d KiB draining and filling on the way back: %.0f B/s of a %d B/s link", queue>>10, got, rate)
+		}
+	}
+}
+
+// TestCreditWindowWhenTheWayBackDrains: when the other side stops sending, the acknowledgements its queue held come
+// quicker than the frames were read; a window still sized for the old wait put up to that queue's worth on the way, ahead
+// of pings, for up to 10 s (#10660's second review: 10 s at 256 KiB). Frames wait about as long as acknowledgements
+// bunched behind the other side's frames did, and once its queue is gone, as on a plain link.
+func TestCreditWindowWhenTheWayBackDrains(t *testing.T) {
+	const rate = 30_000
+	for _, queue := range []int{64 << 10, 256 << 10} {
+		back := wayBack{frame: 32 << 10, queue: queue, stop: time.Minute}
+		w := newCreditWindow()
+		if _, worst := simWayBack(&w, rate, 200*time.Millisecond, back, 90*time.Second, back.stop); worst > 2*time.Second {
+			t.Errorf("%d KiB draining on the way back: a frame waited %s to go out", queue>>10, worst)
+		}
+		drained := back.stop + time.Duration(float64(queue)/rate*float64(time.Second))
+		w = newCreditWindow()
+		if _, worst := simWayBack(&w, rate, 200*time.Millisecond, back, 90*time.Second, drained+2*time.Second); worst > 700*time.Millisecond {
+			t.Errorf("%d KiB drained on the way back: a frame waited %s to go out 2 s later", queue>>10, worst)
 		}
 	}
 }
@@ -332,7 +368,7 @@ func TestCreditWindowOnAPlainLink(t *testing.T) {
 		worst time.Duration
 	}{{30_000, 600 * time.Millisecond}, {1_000_000, 200 * time.Millisecond}} {
 		w := newCreditWindow()
-		got, worst := simBusyWayBack(&w, c.rate, 200*time.Millisecond, 0, 0, 2*time.Minute, 30*time.Second)
+		got, worst := simWayBack(&w, c.rate, 200*time.Millisecond, wayBack{}, 2*time.Minute, 30*time.Second)
 		if got < c.rate*95/100 {
 			t.Errorf("%.0f B/s link: %.0f B/s", c.rate, got)
 		}

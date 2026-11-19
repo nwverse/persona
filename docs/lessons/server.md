@@ -1955,6 +1955,11 @@ framing the connection on lanes (protocol.md "Lanes") changes the queue instead.
   little past it, since on a long round trip a queue shows only a round trip later. Pacing bulk at the measured rate
   was tried and left out: a rate measured from the handshake's small frames is a few hundred bytes a second, and a
   pace held to it stopped a port's bytes until the notes' stall check closed the connection.
+- **A floor needs a way down.** The window's floor (the longest wait of 10 s) outlived the wait it was set for: when
+  the other side's queue drained, its acknowledgements came quicker than the frames were read and the floor kept the
+  window large, so up to that queue's worth (8.7 s at 256 KiB) sat on the way ahead of pings. A queue on the way now
+  holds the window to the latest wait. And a budget shared by two queues must be paid back by both: dropping them
+  took only the new note off the count, which then stayed full and dropped every note after it.
 - **Two queues reorder.** Port bytes went to the bulk queue and the stream's close to the other one, so the close
   overtook the last bytes and the tail of a download was lost. What must arrive in order shares one writer.
 - **A stall is no progress, not a long wait.** The notes' watchdog judged how long one write took; a write waiting for
