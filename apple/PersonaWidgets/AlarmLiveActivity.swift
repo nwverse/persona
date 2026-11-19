@@ -10,6 +10,7 @@ import WidgetKit
 /// the Dynamic Island with Pause and Stop; a paused one shows the time left with Resume and Stop; a ringing one its label
 /// with Stop. The countdown is the system's (`Text(timerInterval:)`), so it needs no updates. The tint is the one the app
 /// gave the alarm (`AlarmAttributes.tintColor`): the extension builds neither the app's Theme nor its style.
+@available(iOS 26.0, *)
 struct AlarmLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: AlarmAttributes<PersonaAlarmData>.self) { context in
@@ -30,7 +31,7 @@ struct AlarmLiveActivity: Widget {
                     AlarmTime(mode: state.mode)
                         .font(.title3.weight(.semibold))
                         .foregroundStyle(attributes.tintColor)
-                        .frame(minWidth: IslandMetrics.recordingExpandedTimerWidth, alignment: .trailing)
+                        .frame(minWidth: IslandMetrics.alarmExpandedTimerWidth, alignment: .trailing)
                         .padding(.trailing, IslandMetrics.edge)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
@@ -38,21 +39,27 @@ struct AlarmLiveActivity: Widget {
                         AlarmTitle(attributes: attributes).font(.headline).lineLimit(1)
                             .padding(.horizontal, IslandMetrics.gap)
                         AlarmButtons(state: state, attributes: attributes, onDark: true)
-                            .padding(.horizontal, IslandMetrics.recordingIslandButtonsInset)
+                            .padding(.horizontal, IslandMetrics.alarmIslandButtonsInset)
                     }
                     .environment(\.locale, LanguageStore.drawingLocale)
                 }
             } compactLeading: {
-                AlarmMark(mode: state.mode, tint: attributes.tintColor)
-                    .font(.system(size: IslandMetrics.timerNumber, weight: .semibold))
-                    .padding(.leading, IslandMetrics.edge)
+                IslandWidth { _ in
+                    AlarmMark(mode: state.mode, tint: attributes.tintColor)
+                        .font(.system(size: IslandMetrics.timerNumber, weight: .semibold))
+                        .padding(.leading, IslandMetrics.edge)
+                }
             } compactTrailing: {
-                AlarmTime(mode: state.mode)
-                    .font(.system(size: IslandMetrics.timerNumber, weight: .semibold))
-                    .foregroundStyle(attributes.tintColor)
-                    // `Text(timerInterval:)` takes all the width it is offered.
-                    .frame(width: IslandMetrics.recordingTimerWidth, alignment: .trailing)
-                    .padding(.trailing, IslandMetrics.edge)
+                IslandWidth { limited in
+                    if !limited {
+                        AlarmTime(mode: state.mode)
+                            .font(.system(size: IslandMetrics.timerNumber, weight: .semibold))
+                            .foregroundStyle(attributes.tintColor)
+                            // `Text(timerInterval:)` takes all the width it is offered.
+                            .frame(width: IslandMetrics.alarmTimerWidth, alignment: .trailing)
+                            .padding(.trailing, IslandMetrics.edge)
+                    }
+                }
             } minimal: {
                 AlarmMark(mode: state.mode, tint: attributes.tintColor)
                     .font(.system(size: IslandMetrics.timerNumber, weight: .semibold))
@@ -64,6 +71,7 @@ struct AlarmLiveActivity: Widget {
 }
 
 /// The alarm's name: the label it was set with, else the alert's title (Alarm / Timer).
+@available(iOS 26.0, *)
 struct AlarmTitle: View {
     var attributes: AlarmAttributes<PersonaAlarmData>
 
@@ -77,6 +85,7 @@ struct AlarmTitle: View {
 }
 
 /// What the alarm is doing: a timer's countdown, paused, or ringing.
+@available(iOS 26.0, *)
 struct AlarmMark: View {
     var mode: AlarmPresentationState.Mode
     var tint: Color
@@ -98,6 +107,7 @@ struct AlarmMark: View {
 }
 
 /// The time: left on a running timer (counting down by itself), left on a paused one, or the time an alarm rings at.
+@available(iOS 26.0, *)
 struct AlarmTime: View {
     var mode: AlarmPresentationState.Mode
 
@@ -107,12 +117,15 @@ struct AlarmTime: View {
             Text(timerInterval: AlarmActivityTime.countdown(start: countdown.startDate, fire: countdown.fireDate), countsDown: true)
                 .monospacedDigit()
                 .multilineTextAlignment(.trailing)
+                .lineLimit(1)
         case .paused(let paused):
             Text(verbatim: AlarmActivityTime.paused(total: paused.totalCountdownDuration, elapsed: paused.previouslyElapsedDuration))
                 .monospacedDigit()
+                .lineLimit(1)
         case .alert(let alert):
             Text(verbatim: String(format: "%02d:%02d", alert.time.hour, alert.time.minute))
                 .monospacedDigit()
+                .lineLimit(1)
         @unknown default:
             EmptyView()
         }
@@ -120,6 +133,7 @@ struct AlarmTime: View {
 }
 
 /// Pause or Resume (a timer that has them), and Stop.
+@available(iOS 26.0, *)
 struct AlarmButtons: View {
     var state: AlarmPresentationState
     var attributes: AlarmAttributes<PersonaAlarmData>
@@ -160,6 +174,7 @@ struct AlarmButtons: View {
 
 /// The Lock Screen: mark, name, what it is doing, the time; under them the buttons. The watch's Smart Stack (`.small`)
 /// gets a glance: mark, name, time, no buttons.
+@available(iOS 26.0, *)
 struct AlarmLockScreen: View {
     var state: AlarmPresentationState
     var attributes: AlarmAttributes<PersonaAlarmData>
@@ -194,7 +209,7 @@ struct AlarmLockScreen: View {
                     .font(.title2.weight(.semibold))
                     .foregroundStyle(attributes.tintColor)
                     // It takes all the width it is offered: fixed, the name keeps the rest of the row.
-                    .frame(width: IslandMetrics.recordingLockTimerWidth, alignment: .trailing)
+                    .frame(width: IslandMetrics.alarmLockTimerWidth, alignment: .trailing)
             }
             AlarmButtons(state: state, attributes: attributes)
         }

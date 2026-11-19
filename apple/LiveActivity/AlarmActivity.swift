@@ -11,6 +11,7 @@ import AlarmKit
 
 #if os(iOS) && canImport(AlarmKit)
 /// What Persona keeps with an alarm it sets (AlarmKit's metadata): its label, which AlarmKit does not hand back otherwise.
+@available(iOS 26.0, *)
 nonisolated struct PersonaAlarmData: AlarmMetadata {
     var label: String?
 }
@@ -27,7 +28,7 @@ struct PauseAlarmIntent: LiveActivityIntent {
     nonisolated init(alarmID: UUID) { self.alarmID = alarmID.uuidString }
 
     nonisolated func perform() async throws -> some IntentResult {
-        if let id = UUID(uuidString: alarmID) { try AlarmManager.shared.pause(id: id) }
+        if #available(iOS 26.0, *), let id = UUID(uuidString: alarmID) { try AlarmManager.shared.pause(id: id) }
         return .result()
     }
 }
@@ -44,7 +45,7 @@ struct ResumeAlarmIntent: LiveActivityIntent {
     nonisolated init(alarmID: UUID) { self.alarmID = alarmID.uuidString }
 
     nonisolated func perform() async throws -> some IntentResult {
-        if let id = UUID(uuidString: alarmID) { try AlarmManager.shared.resume(id: id) }
+        if #available(iOS 26.0, *), let id = UUID(uuidString: alarmID) { try AlarmManager.shared.resume(id: id) }
         return .result()
     }
 }
@@ -61,7 +62,7 @@ struct StopAlarmIntent: LiveActivityIntent {
     nonisolated init(alarmID: UUID) { self.alarmID = alarmID.uuidString }
 
     nonisolated func perform() async throws -> some IntentResult {
-        if let id = UUID(uuidString: alarmID) { try AlarmManager.shared.stop(id: id) }
+        if #available(iOS 26.0, *), let id = UUID(uuidString: alarmID) { try AlarmManager.shared.stop(id: id) }
         return .result()
     }
 }
@@ -72,7 +73,7 @@ struct StopAlarmIntent: LiveActivityIntent {
 nonisolated enum AlarmActivityTime {
     /// A paused timer's time left, as the Clock app writes it: 4:59, or 1:04:59 from an hour.
     static func paused(total: TimeInterval, elapsed: TimeInterval) -> String {
-        let left = max(0, (total - elapsed).rounded(.up))
+        let left = max(0, (total - elapsed).rounded(.down))
         let pattern: Duration.TimeFormatStyle.Pattern = left >= 3600 ? .hourMinuteSecond : .minuteSecond
         return Duration.seconds(left).formatted(.time(pattern: pattern))
     }

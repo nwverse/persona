@@ -189,7 +189,7 @@ Code: `CalendarTool`, `RemindersTool`, `ContactsTool` (changes), `MapsTool`, `Al
 - **Foreground**: messages, calls, Maps, Shortcuts and Spotify / YouTube need Persona on screen (`Foreground.require`): iOS only opens another app, or
   shows a sheet, for the app in front. In the background they fail and ask the user to open Persona.
 - **The hub waits for the user** on every tool with a card and on `phone_messages_compose` (`phoneConfirmedTools`, 30 minutes).
-- **Alarms** need `NSAlarmKitUsageDescription` and iOS 26 (the deployment target). A timer's countdown is drawn on the Lock Screen and in the
+- **Alarms** need `NSAlarmKitUsageDescription` and iOS 26+ (absent on iOS 18). A timer's countdown is drawn on the Lock Screen and in the
   Dynamic Island by `AlarmLiveActivity` in the widget extension (`docs/apple/live-activity.md`, "Alarms and timers (AlarmKit)"); the alert rings as the Clock app's.
 - **Apple Music** needs `NSAppleMusicUsageDescription` and the MusicKit app service on the App ID (developer account); without the service catalog
   requests fail and the tool reports it.

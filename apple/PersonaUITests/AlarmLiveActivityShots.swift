@@ -4,10 +4,14 @@ import XCTest
 /// `-showAlarmSample` starts a 25-minute "Focus" timer as phone_timer_start does; the test answers AlarmKit's question,
 /// then photographs the Dynamic Island (compact and expanded) and the Lock Screen. Not a pass / fail test beyond the
 /// activity showing up: look at the attachments (`xcresulttool export attachments`). `PERSONA_ALARM_SAMPLE=timer|paused`.
-/// On the simulator, whose AlarmKit refuses without asking, the app draws the same activity through ActivityKit
-/// (`AlarmsTool.showSample`): the drawing is the one a real timer gets; that it rings needs a device.
+/// On the simulator, which cannot ring a timer and whose AlarmKit prompt varies by runtime, the app draws the same
+/// activity through ActivityKit (`AlarmsTool.showSample`) with the tool's own attributes: the drawing is the one a
+/// real timer gets; that it rings needs a device.
 final class AlarmLiveActivityShots: XCTestCase {
     @MainActor func testShots() throws {
+        guard #available(iOS 26.0, *) else {
+            throw XCTSkip("AlarmKit requires iOS 26")
+        }
         guard let sample = ProcessInfo.processInfo.environment["PERSONA_ALARM_SAMPLE"] else {
             throw XCTSkip("set PERSONA_ALARM_SAMPLE=timer|paused")
         }
@@ -15,10 +19,14 @@ final class AlarmLiveActivityShots: XCTestCase {
         app.launchArguments = ["-showAlarmSample", sample, "-tab", "settings"]
         app.launchPinned()
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-        // First run only: AlarmKit asks whether Persona may set alarms and timers.
+        #if !targetEnvironment(simulator)
+        // First run only on a device: AlarmKit asks whether Persona may set alarms and timers.
         let allow = springboard.buttons.matching(NSPredicate(format: "label IN %@", ["Allow", "允许", "許可"])).firstMatch
         if allow.waitForExistence(timeout: 8) { allow.tap() }
         sleep(sample == "paused" ? 6 : 3)
+        #else
+        sleep(3)
+        #endif
 
         XCUIDevice.shared.press(.home)
         sleep(2)

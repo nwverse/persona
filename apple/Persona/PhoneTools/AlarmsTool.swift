@@ -230,6 +230,12 @@ enum AlarmsTool {
             set { UserDefaults.standard.set(newValue, forKey: key) }
         }
     }
+
+    #if DEBUG && os(iOS) && canImport(AlarmKit)
+    /// The ActivityKit activity `drawSample` started, so `TerminationActivities` ends only the sample on SIGTERM and
+    /// never a real AlarmKit timer.
+    fileprivate(set) static var sampleActivityID: String?
+    #endif
 }
 
 // MARK: - AlarmKit
@@ -322,21 +328,26 @@ extension AlarmsTool {
     }
 
     #if DEBUG
-    /// `-showAlarmSample`: asks for AlarmKit, cancels the alarms Persona set before, starts a 25-minute "Focus" timer as
-    /// the tool does and, for `paused`, pauses it 3 s later. Where AlarmKit refuses without asking (the iOS simulator), it
-    /// starts the same activity through ActivityKit instead, with the attributes the tool gives a timer, so
-    /// `AlarmLiveActivity` draws it for screenshots: a picture of the countdown, not an alarm that rings.
+    /// `-showAlarmSample`: on a device, asks for AlarmKit, cancels the alarms Persona set before, starts a 25-minute
+    /// "Focus" timer as the tool does and, for `paused`, pauses it 3 s later. On the simulator (which cannot ring a
+    /// timer and whose AlarmKit prompt varies by runtime), draws the same activity directly through ActivityKit with
+    /// the tool's own `attributes(label:timer:)`, so screenshots never depend on a system prompt.
     static func showSample(paused: Bool) {
         Task {
+            #if targetEnvironment(simulator)
+            await drawSample(paused: paused)
+            #else
             guard await AlarmsAccess.request() == .granted else { return await drawSample(paused: paused) }
             for alarm in (try? AlarmManager.shared.alarms) ?? [] { try? AlarmManager.shared.cancel(id: alarm.id) }
             guard let alarm = try? await scheduleTimer(seconds: 1500, label: "Focus"), paused else { return }
             try? await Task.sleep(for: .seconds(3))
             try? AlarmManager.shared.pause(id: alarm.id)
+            #endif
         }
     }
 
     private static func drawSample(paused: Bool) async {
+        sampleActivityID = nil
         for activity in Activity<AlarmAttributes<PersonaAlarmData>>.activities {
             await activity.end(nil, dismissalPolicy: .immediate)
         }
@@ -345,23 +356,9 @@ extension AlarmsTool {
             ? .paused(.init(totalCountdownDuration: 1500, previouslyElapsedDuration: 301))
             : .countdown(.init(totalCountdownDuration: 1500, previouslyElapsedDuration: 0, startDate: now, fireDate: now.addingTimeInterval(1500)))
         let state = AlarmPresentationState(alarmID: UUID(), mode: mode)
-        _ = try? Activity.request(attributes: previewAttributes(paused: paused), content: .init(state: state, staleDate: nil))
-    }
-
-    /// The tool's timer attributes cut to what one state draws, its accent as one fixed colour: a request ActivityKit
-    /// takes from an app is at most 4 KB, and each dynamic `Theme.accent` encodes to about 5.7 KB (all of the tool's come to
-    /// about 23 KB; AlarmKit, not the app, starts the real ones).
-    private static func previewAttributes(paused: Bool) -> AlarmAttributes<PersonaAlarmData> {
-        let accent = Color(Theme.accent.resolve(in: EnvironmentValues()))
-        let label = LocalizedStringResource(stringLiteral: "Focus")
-        func button(_ key: String, _ symbol: String) -> AlarmButton {
-            AlarmButton(text: LocalizedStringResource(stringLiteral: key), textColor: accent, systemImageName: symbol)
+        if let activity = try? Activity.request(attributes: attributes(label: "Focus", timer: true), content: .init(state: state, staleDate: nil)) {
+            sampleActivityID = activity.id
         }
-        let alert = AlarmPresentation.Alert(title: label, stopButton: button(String(localized: "Stop [Persona Alarm]"), Theme.Icon.interrupt))
-        let presentation = paused
-            ? AlarmPresentation(alert: alert, paused: .init(title: label, resumeButton: button(String(localized: "Resume [Persona Alarm]"), Theme.Icon.run)))
-            : AlarmPresentation(alert: alert, countdown: .init(title: label, pauseButton: button(String(localized: "Pause [Persona Alarm]"), Theme.Icon.pause)))
-        return AlarmAttributes(presentation: presentation, metadata: PersonaAlarmData(label: "Focus"), tintColor: accent)
     }
     #endif
 
@@ -376,24 +373,26 @@ extension AlarmsTool {
         return id
     }
 
-    private static func attributes(label: String, timer: Bool) -> AlarmAttributes<PersonaAlarmData> {
-        let stop = AlarmButton(text: LocalizedStringResource(stringLiteral: String(localized: "Stop [Persona Alarm]")),
-                               textColor: Theme.accent, systemImageName: Theme.Icon.interrupt)
-        let alert = AlarmPresentation.Alert(title: LocalizedStringResource(stringLiteral: label), stopButton: stop)
+    /// AlarmKit attributes with `Theme.accent` resolved once: a dynamic `Theme.accent` encodes to ~5.7 KB each (~23 KB
+    /// across the buttons and tint), exceeding ActivityKit's 4 KB limit. Resolving once keeps real timers and the DEBUG
+    /// sample on the exact same payload.
+    static func attributes(label: String, timer: Bool) -> AlarmAttributes<PersonaAlarmData> {
+        let accent = Color(Theme.accent.resolve(in: EnvironmentValues()))
+        let title = LocalizedStringResource(stringLiteral: label)
+        func button(_ text: String, _ symbol: String) -> AlarmButton {
+            AlarmButton(text: LocalizedStringResource(stringLiteral: text), textColor: accent, systemImageName: symbol)
+        }
+        let alert = AlarmPresentation.Alert(title: title, stopButton: button(String(localized: "Stop [Persona Alarm]"), Theme.Icon.interrupt))
         let presentation: AlarmPresentation
         if timer {
-            let pause = AlarmButton(text: LocalizedStringResource(stringLiteral: String(localized: "Pause [Persona Alarm]")),
-                                    textColor: Theme.accent, systemImageName: Theme.Icon.pause)
-            let resume = AlarmButton(text: LocalizedStringResource(stringLiteral: String(localized: "Resume [Persona Alarm]")),
-                                     textColor: Theme.accent, systemImageName: Theme.Icon.run)
             presentation = AlarmPresentation(
                 alert: alert,
-                countdown: AlarmPresentation.Countdown(title: LocalizedStringResource(stringLiteral: label), pauseButton: pause),
-                paused: AlarmPresentation.Paused(title: LocalizedStringResource(stringLiteral: label), resumeButton: resume))
+                countdown: AlarmPresentation.Countdown(title: title, pauseButton: button(String(localized: "Pause [Persona Alarm]"), Theme.Icon.pause)),
+                paused: AlarmPresentation.Paused(title: title, resumeButton: button(String(localized: "Resume [Persona Alarm]"), Theme.Icon.run)))
         } else {
             presentation = AlarmPresentation(alert: alert)
         }
-        return AlarmAttributes(presentation: presentation, metadata: PersonaAlarmData(label: label), tintColor: Theme.accent)
+        return AlarmAttributes(presentation: presentation, metadata: PersonaAlarmData(label: label), tintColor: accent)
     }
 
     private static func localeWeekday(_ day: String) -> Locale.Weekday? {

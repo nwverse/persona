@@ -28,7 +28,9 @@ struct LiveActivityBundle: WidgetBundle {
         CompatibleFleetLiveActivity()
         RecordingLiveActivity()
         #if canImport(AlarmKit)
-        AlarmLiveActivity()
+        if #available(iOS 26.0, *) {
+            AlarmLiveActivity()
+        }
         #endif
     }
 }
