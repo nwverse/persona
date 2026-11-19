@@ -426,11 +426,14 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // sections), all in the first screen's static closure; the canvas itself is a chunk of its own (ViewBody10.tsx).
 // Main had 1,583 B of room; the budget stays.
 // #10922: the Assistant tray's Finished entry (lib/assistant-entries.ts `finished` with lib/todo-triage.ts `finishedAt`,
-// its entry and tray in views/assistant/Tasks.tsx, a new row's Just finished mark, and two strings), less the Just
-// finished group In progress no longer draws, adds 173 B in ja, measured in one environment against main cac08236d (ja
-// 482,991 B to 483,164 B; en 479,890 B to 480,070 B, zh-Hans 480,745 B to 480,922 B). Main was already 308 B over the
-// budget there (#10925 takes bytes back off the first screen); the budget stays.
-export const FIRST_SCREEN_BUDGET = 482_683;
+// its entry in views/assistant/Tasks.tsx, a new row's Just finished mark and the entry's word), less the Just finished
+// group In progress no longer draws, adds 10 B in ja, measured in one environment against main f4d81af87 (ja 482,476 B
+// to 482,486 B; en 479,357 B to 479,353 B, zh-Hans 480,203 B to 480,213 B). Its rows, seeing a task on opening it and
+// the tray's empty line come with the tray's first opening, in the chunk of the Parked rows (FinishedTaskRows.tsx through
+// ParkedTaskRow.tsx: no lazy entry of their own), which also took lib/todo-seen.ts off the first screen; on it they
+// cost 228 B. Main had 50 B of room; the budget stays.
+// Keep the stricter existing limit while combining these changes.
+export const FIRST_SCREEN_BUDGET = 482_526;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;

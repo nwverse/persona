@@ -112,8 +112,8 @@ who can unhold it, and the to-do falls under rules 10 and 11.
   "等部署：线上 hub（<commit>）还没包含合并提交 <commit>", who unholds it: other). No "Please verify". A watch looks
   again every minute the hub's commit has changed (GitHub is asked only then); once the deploy lands the task moves
   to `live` and only then is verified.
-- The check cannot tell (GitHub or the hub's health unreachable, rate limit): held the same way ("等确认部署"), asked
-  again every 10 minutes. A failed check never says deployed.
+- The check cannot tell (GitHub or the hub's health unreachable, rate limit): held until it can be checked again.
+  The task stays at the PR unless the upstream merge was confirmed. A failed check never establishes deployment.
 - Nothing to check against: work that is not a GitHub PR, a PR in a repository the hub is not built from (the hub's
   commit is not in it), or a hub that does not say its commit (a local or Docker build). The agent's word stands,
   logged as unverified.
@@ -180,6 +180,7 @@ no merge commit, and GitHub's compare does not know a local commit. So the file 
 `# pr: <N> <sha>`: its head when the deployed commit contains it, else its newest own commit when the PR branch only merged
 its base since. The hub counts the PR as deployed (stage Deploy, then verified as above) only when the file also lists that
 commit, so the commit is in the deployed history.
+Supervision reports this as a local deployment. Only the upstream PR response establishes whether it merged.
 
 `scripts/deploy/deployed_commits.py --out <dir>` writes the file for a commit (`--commit`, default `HEAD`). It lists the
 history, and the open PRs it runs, read with the GitHub CLI when that is signed in; `--pr <N>[=<sha>]` names more,

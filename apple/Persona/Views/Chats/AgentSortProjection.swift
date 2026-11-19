@@ -433,12 +433,6 @@ nonisolated final class AgentSortShadow: @unchecked Sendable {
             report(.init(rule: "grouping-scope", input: input, presentation: presentation))
             return
         }
-        guard settings.searchScope == .all, !settings.searchAsCode,
-              settings.harness.isEmpty, settings.project.isEmpty, settings.model.isEmpty,
-              !settings.pinnedOnly else {
-            report(.init(rule: "search-scope", input: input, presentation: presentation))
-            return
-        }
         guard [AgentFilter.all, .needsYou, .unread, .working, .backgroundWaiting].contains(settings.filter) else {
             report(.init(rule: "quick-filter-scope", input: input, presentation: presentation))
             return
@@ -480,15 +474,16 @@ nonisolated final class AgentSortShadow: @unchecked Sendable {
 }
 
 nonisolated private enum AgentSortCoreInput {
-    static func prepareSessions(_ input: AgentListProjection.Input) -> [Session] {
+    static func prepareSessions(_ input: AgentListProjection.Input) -> [(root: Session, descendants: [Session])] {
         // The production projection is the reference: fold a raw window exactly once, and leave already folded feeds
-        // unchanged. Parent/child relationships are not discarded just to make the core consume the rows.
+        // unchanged. Descendants supply independent search evidence; only roots become list rows and counts.
         let runs: ((Session) -> Bool)? = input.settings.grouping == "recent" || input.settings.grouping == "app" ? nil
             : { $0.state.isLive || input.settings.pinned($0.key) }
         let forest = CodexTasks.build(AgentListProjection.preparedSessions(input),
                                       ownRows: input.settings.filter == .all ? [] : input.settings.kept, runs: runs)
-        let visible = forest.roots
-        return visible
+        return forest.roots.map { root in
+            (root: root, descendants: forest.flattened(under: root.key).map(\.session))
+        }
     }
 
     static func encode(_ input: AgentListProjection.Input,
@@ -496,7 +491,7 @@ nonisolated private enum AgentSortCoreInput {
                        presentation: AgentSortPresentation = .init(),
                        now: Date? = nil, projection: AgentListProjection? = nil) throws -> String {
         let nativeProjection = projection ?? AgentListProjection.build(input, now: now)
-        let sessions = try prepareSessions(input).map { session -> [String: Any] in
+        func encoded(_ session: Session) throws -> [String: Any] {
             var object = try JSONSerialization.jsonObject(with: JSON.encoder.encode(session)) as? [String: Any] ?? [:]
             object["state"] = ChildSessions.foldedState(session).rawValue
             object["agent_label"] = session.agentLabel
@@ -518,6 +513,12 @@ nonisolated private enum AgentSortCoreInput {
             } else {
                 object["children"] = NSNull()
             }
+            return object
+        }
+        let sessions = try prepareSessions(input).map { prepared in
+            var object = try encoded(prepared.root)
+            let descendants = try prepared.descendants.map(encoded)
+            if !descendants.isEmpty { object["search_subtasks"] = descendants }
             return object
         }
         let settings = settings ?? input.settings
@@ -542,6 +543,7 @@ nonisolated private enum AgentSortCoreInput {
                 }),
                 "grouping": settings.grouping, "quick": settings.filter.rawValue, "sort": settings.sort,
                 "query": settings.query, "machine_filter": settings.machine, "search_scope": settings.searchScope.rawValue,
+                "search_as_code": settings.searchAsCode,
                 "machine_title_filter": settings.machine,
                 "harness_filter": settings.harness, "project_filter": settings.project, "model_filter": settings.model,
                 "pinned_only": settings.pinnedOnly, "hub_filter": settings.hub, "multi_hub": settings.multiHub,
