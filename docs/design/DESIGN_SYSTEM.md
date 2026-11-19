@@ -2902,8 +2902,9 @@ to press; impromptu talks are meetings too (principles 1 and 4).
 - **One row for one meeting** (#8872): a meeting both imported from a connected app and recorded in Persona is the
   recording's row (its minutes, transcript and map are Persona's), once the hub has matched them (after the minutes
   step; until then both rows show). Its avatar carries the app it came from in the corner, drawn as the Inbox marks a
-  connector's item (the app's own mark on white, a gray link without one: `KBImportedBadge`, the web's `RowTile`), and
-  VoiceOver reads the notes' name as the row's value. The recording's page, on Knowledge's page and on the meeting's own
+  connector's item (the app's own mark on white, a gray link without one: `KBImportedBadge`, the web's `RowTile`, Android's
+  `KnowledgeImportedAvatar`), and VoiceOver / TalkBack reads the notes' name as the row's value. The recording's page, on
+  Knowledge's page and on the meeting's own
   after the meeting, has one row more under the facts: **Lark Meeting Notes** (another app's, **Original Meeting Notes**),
   which opens them in this app (`KBImportedNotesButton`, `kb-imported-notes`). Two recordings of one meeting both stay,
   the imported row goes; a recording naming a meeting the list doesn't have stays as it is (principle 4: one meeting,
