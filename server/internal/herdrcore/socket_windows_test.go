@@ -17,11 +17,11 @@ func TestSocketPathIsPipe(t *testing.T) {
 	t.Setenv("USERNAME", "alice")
 	t.Setenv("HC_SESSION", "")
 	t.Setenv("HC_SOCKET", `C:\Users\alice\.local\state\herdr-core\default\default.sock`) // a unix path: not used here
-	if got, want := SocketPath(), `\\.\pipe\herdr-core-alice-default`; got != want {
+	if got, want := SocketPath(), `\\.\pipe\herdr-core-alice-default.sock`; got != want {
 		t.Errorf("SocketPath() = %q, want %q", got, want)
 	}
 	t.Setenv("HC_SESSION", "iso")
-	if got, want := SocketPath(), `\\.\pipe\herdr-core-alice-iso`; got != want {
+	if got, want := SocketPath(), `\\.\pipe\herdr-core-alice-iso.sock`; got != want {
 		t.Errorf("HC_SESSION: SocketPath() = %q, want %q", got, want)
 	}
 	t.Setenv("HC_SOCKET", `\\.\pipe\mine`)

@@ -505,9 +505,6 @@
     <string name="agents_source_feishu_open">在飞书里打开这个话题</string>
     <string name="agents_filter_feishu">飞书群</string>
     <string name="agents_filter_terminal">终端</string>
-    <string name="agents_botmux">botmux</string>
-    <string name="agents_botmux_hide">隐藏 botmux 会话</string>
-    <string name="agents_botmux_show">显示 botmux 会话</string>
     <string name="agents_menu_sort">排序：%1$s</string>
     <string name="agents_sort_state">状态优先</string>
     <string name="agents_sort_updated">最近更新</string>

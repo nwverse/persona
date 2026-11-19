@@ -313,7 +313,7 @@ func (n *Node) watchTakenOver(h *runtimeConn, id string) {
 	if w == nil || w.parent == nil || w.ctx.Err() != nil || n.runtimes.watchedOn(h, id) {
 		return
 	}
-	attempt := n.runtimes.watch(h, id, 0, w.parent)
+	attempt := n.runtimes.watch(h, id, 0, "", w.parent)
 	if err := n.runtimeWatch(h, id, attempt.since); err != nil {
 		n.runtimes.watchFailed(h, id, attempt.token)
 	}

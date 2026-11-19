@@ -32,13 +32,14 @@ class HttpInboxAssistantTransport private constructor(
     private val mediaOrigin: () -> HttpUrl,
     private val publicImages: PublicImageReader,
     private val isCurrent: () -> Boolean,
+    override val replyImages: HubReplyImages? = null,
 ) : InboxAssistantTransport, LarkThreadTransport, LarkThreadReplyTransport {
     constructor(
         scope: String, connection: OkHttpHubConnection, publicImages: PublicImageReader = PublicImageReader.shared,
         isCurrent: () -> Boolean = { true },
     ) : this(
         scope, { path, method, body, buffered -> connection.request(path, method, body, buffered = buffered) },
-        { connection.activeRoute().endpoint.baseUrl() }, publicImages, isCurrent,
+        { connection.activeRoute().endpoint.baseUrl() }, publicImages, isCurrent, HubReplyImages(connection, isCurrent),
     )
 
     /** Fixed origins are only available to tests in this module. */

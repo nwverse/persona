@@ -133,7 +133,7 @@ they are not listed. No relational table or connector acknowledgement protocol i
 | --- | --- | --- |
 | Lark | Unhandled new messages in one chat (starting at the first new message; later ones merge into it) | `lark:<feedId>:<first message position>` |
 | Lark Docs | One document notification-center card (latest mentions / comments / replies to me in one document) | `doc:<notification id>:<update time in milliseconds>` |
-| Mail | Unread mail in a thread, or mail already read when it arrived, filed at once (#8298) (same subject after stripping Re: / Fwd: / 回复： [reply] / [list name] means the same thread; when nothing is left after stripping, mail is split further by sender address: one person's subject-less mail is one item, different people's are separate items, #4852) | `mail:<account>:<thread>:<first mail uid>` |
+| Mail | Unread mail in a thread within one account and folder, or mail already read when it arrived, filed at once (#8298) (same subject after stripping Re: / Fwd: / 回复： [reply] / [list name] means the same thread; when nothing is left after stripping, mail is split further by sender address: one person's subject-less mail is one item, different people's are separate items, #4852) | `mail:<mailbox key>:<thread>:<first mail uid>` |
 | Subscription | New items of one row: a thread's for `group_by: thread` (an item without a thread is its own), the whole subscription's for `group_by: source` (#5671), like a Lark chat (titled by the subscription, no tag); its count goes up by the items each pull brings | `<subscription>:<hash of the row's thread and first last>`, thread `sub:<subscription>:<thread, uid or all>` ([subscriptions.md](../extensions/subscriptions.md) "Destinations") |
 
 - Subject-less mail used to be one item per account (sender, preview and "sent to me" taken from the latest); since #4852 it is split by sender, so a subject-less back-and-forth among several people also becomes several items.
@@ -151,20 +151,23 @@ they are not listed. No relational table or connector acknowledgement protocol i
   Private chat → `dm`, bot / AI private chat → `bot`, group mentions of me / everyone → `mention`, unmuted group → `group`; unread older than 7 days is excluded.
   Only other people's messages count; your own messages never make a chat Needs you.
 - Messages sent by the app bound to `lark-cli` (the `appId` reported by `lark-cli auth status --json`) are marked seen and omitted to prevent Persona's own bot replies from looping back into the Inbox. If that app id is unavailable, the connector keeps the existing behavior; messages from other apps remain eligible.
-- Mail: unread messages in each account's latest 40 Inbox messages, within 7 days. The list API reads only the first 2 KB of body (HTML mail often contains nothing but `<style>`),
+- Mail: the latest 40 messages in each eligible folder per account, within 7 days (#8297). This includes INBOX, selectable archive and custom folders such as GitHub or Apple.
+  Sent, drafts, junk, trash, non-selectable folders and aggregate views (All Mail, Flagged, Important) are excluded.
+  Rows for custom folders show the folder's name. Matching subjects in separate folders get separate rows, and body reads, replies and attachments use the row's account, folder and UID.
+  The list API reads only the first 2 KB of body (HTML mail often contains nothing but `<style>`),
   so new mails fetch the full body again (IMAP `BODY.PEEK`, without marking read) for preview and AI context (`BodyOf` tracks which mail was read).
 - Mail already read when a round first sees it (read in another client, or marked read by a forwarding rule, in the
   minutes between two rounds) gets an item too, so no mail the inbox saw is missing from Done (#8298, `mailReadOnArrival`
   in `inbox_mail.go`): one item per thread, read and filed as `read` the moment it is created, with its rule tier
   ("Rule-based", no model is asked). It is never unread and never in Needs you, so it raises no push or badge; like any
-  changed item it goes out in `inbox.changed`. Only mail newer than the account's **baseline** counts: on an account's
-  first round (and the first round after this was added) the baseline is the page's newest UID, so turning an account
-  on does not file the window's read mail all at once; a page whose newest UID is under the baseline (the mailbox was
-  renumbered) starts a new one the same way. Baselines are stored by account id in the setting `inbox_mail_baselines`.
+  changed item it goes out in `inbox.changed`. Each folder's first successful page sets its **baseline** to the newest UID (zero for an empty page).
+  Later read mail above that UID is filed. A change between known UIDVALIDITY values starts a new generation in that folder and invalidates its previous UID targets.
+  Earlier hubs without UIDVALIDITY use the lower-page fallback. The setting `inbox_mail_baselines` and the item ID retain the account key for legacy INBOX data.
+  Other mailbox keys append `:m:` and the unpadded base64url of the exact folder name. After a known renumbering, new item IDs also include the generation.
   Mail in a thread that already has an open item stays that item's, as before. The mail listing carries no
   `Delivered-To` / `X-Forwarded-To`, so forwarded mail is still not counted as direct (its rule tier is noise).
 - Mail that leaves that page (archived or deleted in the mail client, or pushed off by newer mail) follows the same rules (#5993,
-  `inbox_mail_off_page.go`): after a round applies an account's page, its open, unread mail items with no mail on the page are
+  `inbox_mail_off_page.go`): after a round applies a folder's page, its open, unread mail items with no mail on that page are
   settled. One whose newest mail is past the 7 days is handled like a mail past the window on the page; for the others the manager asks
   the hub once a round which of their mails are still in the mailbox, read or not (`inbox.mail_flags`, one read-only IMAP `UID FETCH
   (FLAGS)`, at most 200 UIDs per account, the longest unasked first). Every mail read or gone means read elsewhere ("Lifecycle"); one still
@@ -782,7 +785,7 @@ To-dos do not store a separate tree. Code: `assistant/inbox_parent.go`.
   done page of a build from before it still runs if a hub goes back to that build (`docs/operations/hub-restart.md`); it can be dropped once no such build can run.
   The start read (`InboxItems`) has no `ORDER BY` (the manager keys the items by id) and hands each row to the manager straight from the driver's buffer,
   where it is decoded; the rows are never collected as bytes first. A read that fails midway takes nothing in, as before.
-- Read elsewhere (Lark / another mail client; for mail also gone from INBOX or past the window, on the page or off it, #5993): mark `read`; non-Needs you items become done (`done_by=read`). Needs you remains open, but unread count becomes zero and me / everyone mention flags clear (no longer unread mentions). Rule-tiered items are retiered using current rules after reading; no longer Needs you means done.
+- Read elsewhere (Lark / another mail client; for mail also gone from its folder or past the window, on the page or off it, #5993): mark `read`; non-Needs you items become done (`done_by=read`). Needs you remains open, but unread count becomes zero and me / everyone mention flags clear (no longer unread mentions). Rule-tiered items are retiered using current rules after reading; no longer Needs you means done.
   Already-read open items with remaining unread count or stale rule tiers (read before a rule change) are reconciled next round (#798).
 - A reply by me in Lark (latest chat message is mine, newer than the item) handles it (`done_by=replied`).
 - Lark collection reads messages without holding a lock. If an item is marked done during the read (manually or in bulk), newly read messages create another item rather than merge into the done one (previously swallowed and invisible, #1105).

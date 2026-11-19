@@ -578,6 +578,17 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-ultracode.node_outdated")}
 		}
 	}
+	if devicewire.IsSessionStart(method) && !nodeHas(info, nodeproto.SessionStartSpeed) {
+		raw, _ := json.Marshal(params)
+		var fields struct {
+			Speed string `json:"speed"`
+		}
+		_ = json.Unmarshal(raw, &fields)
+		if proto.FasterSpeed(strings.TrimSpace(fields.Speed)) {
+			// An older node would drop the explicit, billable choice and start at the launcher's own speed.
+			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_session_start_speed")}
+		}
+	}
 	if devicewire.IsSessionStart(method) && !nodeHas(info, nodeproto.StartGoal) {
 		raw, _ := json.Marshal(params)
 		var fields struct {
@@ -912,6 +923,9 @@ func (m *Machine) onEvent(event string, params json.RawMessage) {
 			devicewire.ShareCreationLog(m.d.logf, p.SessionID, "manager_persist", "store_unavailable")
 		}
 		return // the manager's alone
+	case proto.EventModeSet:
+		m.onModeSet(params)
+		return // the manager keeps the record; no app broadcast
 	case proto.EventModeRestart: // what became of a queued restart into a mode (mode_changes.go)
 		m.onModeRestart(params)
 		return // the manager's alone
