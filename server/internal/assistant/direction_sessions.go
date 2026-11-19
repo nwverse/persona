@@ -128,12 +128,12 @@ func (s *Service) serveDirectionFiling(w http.ResponseWriter, r *http.Request) {
 	key := [2]string{machine, sid}
 	if target == nil {
 		out, err := s.fileDirectionSession(ctx, key, nil, nil)
-		s.answerDirectionFiling(w, out, err)
+		s.answerDirectionFiling(w, r, out, err)
 		return
 	}
 	records, err := s.directionSessionRecords(ctx)
 	if err != nil {
-		apierr.Write(w, http.StatusServiceUnavailable, errDirectionUnavailable)
+		directionFilingRefusal(w, r, http.StatusServiceUnavailable, "direction_unavailable", errDirectionUnavailable)
 		return
 	}
 	entry, filed := s.directionEntries(records)[key]
@@ -149,31 +149,32 @@ func (s *Service) serveDirectionFiling(w http.ResponseWriter, r *http.Request) {
 			row, listed = c, true
 		}
 	}
+	needsRow := !filed || *target != ""
 	switch {
 	case listed && identity.IsAssistantDir(row.Cwd) && !identity.IsAssistantDirOf(row.Cwd, s.id):
 		directionFilingRefusal(w, r, http.StatusNotFound, "session_not_found", errDirectionSessionNotFound)
 		return
 	case listed:
-	case !filed && errors.Is(listErr, ErrNoDevice):
+	case needsRow && errors.Is(listErr, ErrNoDevice):
 		directionFilingRefusal(w, r, http.StatusNotFound, "machine_not_found", errDirectionMachineNotFound)
 		return
-	case !filed && listErr != nil:
+	case needsRow && listErr != nil:
 		apierr.Call(w, listErr)
 		return
-	case !filed || *target != "":
+	case needsRow:
 		directionFilingRefusal(w, r, http.StatusNotFound, "session_not_found", errDirectionSessionNotFound)
 		return
-	default: // in the book but not listed now: kept as it was filed
+	default: // in the book, not listed now, set on its own: kept as it was filed
 		row.Title, row.ParentSessionID = entry.Title, entry.Parent
 	}
 	if err := s.ensureTodosLoaded(ctx); err != nil {
-		apierr.Write(w, http.StatusServiceUnavailable, errDirectionUnavailable)
+		directionFilingRefusal(w, r, http.StatusServiceUnavailable, "direction_unavailable", errDirectionUnavailable)
 		return
 	}
 	cfg := s.settings(ctx)
 	rules, err := s.directionRulesNow(ctx, cfg)
 	if err != nil {
-		apierr.Write(w, http.StatusServiceUnavailable, errDirectionUnavailable)
+		directionFilingRefusal(w, r, http.StatusServiceUnavailable, "direction_unavailable", errDirectionUnavailable)
 		return
 	}
 	switch {
@@ -196,7 +197,7 @@ func (s *Service) serveDirectionFiling(w http.ResponseWriter, r *http.Request) {
 			_, known, ok := s.directionSnapshot(ctx, *target)
 			switch {
 			case !ok:
-				apierr.Write(w, http.StatusServiceUnavailable, errDirectionUnavailable)
+				directionFilingRefusal(w, r, http.StatusServiceUnavailable, "direction_unavailable", errDirectionUnavailable)
 			case known:
 				directionFilingRefusal(w, r, http.StatusConflict, "direction_ended", errDirectionEnded)
 			default:
@@ -218,12 +219,12 @@ func (s *Service) serveDirectionFiling(w http.ResponseWriter, r *http.Request) {
 		directionFilingRefusal(w, r, http.StatusConflict, "direction_full", errDirectionFull)
 		return
 	}
-	s.answerDirectionFiling(w, out, err)
+	s.answerDirectionFiling(w, r, out, err)
 }
 
-func (s *Service) answerDirectionFiling(w http.ResponseWriter, out directionFilingResult, err error) {
+func (s *Service) answerDirectionFiling(w http.ResponseWriter, r *http.Request, out directionFilingResult, err error) {
 	if err != nil {
-		apierr.Write(w, http.StatusServiceUnavailable, errDirectionUnavailable)
+		directionFilingRefusal(w, r, http.StatusServiceUnavailable, "direction_unavailable", errDirectionUnavailable)
 		return
 	}
 	if out.Changed {

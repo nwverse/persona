@@ -86,14 +86,14 @@ type directionCandidate struct {
 func (s *Service) serveDirectionRead(w http.ResponseWriter, r *http.Request) {
 	ctx, id := r.Context(), r.PathValue("id")
 	if err := s.ensureTodosLoaded(ctx); err != nil {
-		apierr.Write(w, http.StatusServiceUnavailable, errDirectionUnavailable)
+		directionFilingRefusal(w, r, http.StatusServiceUnavailable, "direction_unavailable", errDirectionUnavailable)
 		return
 	}
 	cfg := s.settings(ctx)
 	current := id != "" && id != cfg.Main && slices.Contains(cfg.Leaders, id)
 	record, known, ok := s.directionSnapshot(ctx, id)
 	if !ok {
-		apierr.Write(w, http.StatusServiceUnavailable, errDirectionUnavailable)
+		directionFilingRefusal(w, r, http.StatusServiceUnavailable, "direction_unavailable", errDirectionUnavailable)
 		return
 	}
 	if !current && !known {
@@ -102,7 +102,7 @@ func (s *Service) serveDirectionRead(w http.ResponseWriter, r *http.Request) {
 	}
 	titles, titlesOK := s.conversationTitles()
 	if !titlesOK {
-		apierr.Write(w, http.StatusServiceUnavailable, errDirectionUnavailable)
+		directionFilingRefusal(w, r, http.StatusServiceUnavailable, "direction_unavailable", errDirectionUnavailable)
 		return
 	}
 	projects, projectsOK := s.projectNames(ctx)

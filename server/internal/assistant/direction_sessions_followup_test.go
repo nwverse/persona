@@ -115,10 +115,6 @@ func TestDirectionStandingComputerOfflineWithTheFleet(t *testing.T) {
 	}) {
 		t.Fatalf("precondition: the fleet answers the disconnected computer from its last list: %v %+v", err, list)
 	}
-	ft.s.NodeDetached("laptop")
-	if !directionTreeArmed(ft.s) {
-		t.Fatal("a disconnect of a filed session's computer did not schedule a tree rebuild")
-	}
 	got := directionFindSession(t, directionMustRead(t, ft.s, "", "conv_lead_a").Sessions, "agent-laptop")
 	if got.State != "computer_offline" {
 		t.Fatalf("filed Agent on a disconnected computer: state %q, want computer_offline", got.State)
@@ -126,6 +122,10 @@ func TestDirectionStandingComputerOfflineWithTheFleet(t *testing.T) {
 	tree, raw := directionFilingTreeGet(t, ft.s)
 	if strings.Contains(raw, "agent-laptop") {
 		t.Fatalf("the tree still lists the Agent of a disconnected computer: %+v", tree[0])
+	}
+	ft.s.NodeDetached("laptop")
+	if !directionTreeArmed(ft.s) {
+		t.Fatal("a disconnect of a filed session's computer did not schedule a tree rebuild")
 	}
 	ft.s.directionTreeSync(ctx)
 	if got := directionHubEvents(ft.f, "directions"); got != told+1 {
@@ -665,5 +665,40 @@ func TestDirectionFilingRefusesOtherDevicesWithItsOwnSentence(t *testing.T) {
 	}
 	if len(sentences) != 3 {
 		t.Fatalf("the refusal is not localized in en, zh-Hans and ja: %v", sentences)
+	}
+}
+
+// The read's own refusals keep their codes (point 12): an unknown direction, and a cursor that names none of its ended
+// tasks. The write's body is a direction's id, "" or null, nothing else.
+func TestDirectionReadAndWriteRefusalCodes(t *testing.T) {
+	e := directionFilingEnv(t, nil)
+	now := time.Now().UTC()
+	e.task("Ended under A", func(todo *Todo) {
+		todo.Supervision = &Supervision{Supervisor: "conv_lead_a"}
+		todo.DoneAt = &now
+	})
+	for path, want := range map[string]struct {
+		status int
+		code   string
+	}{
+		"/api/v1/assistant/directions/direction-missing":               {http.StatusNotFound, "direction_not_found"},
+		"/api/v1/assistant/directions/conv_lead_a?before=todo_missing": {http.StatusConflict, "ended_task_not_found"},
+	} {
+		code, _, raw := directionReadGet(t, e.s, "", path)
+		var body struct {
+			Code  string `json:"code"`
+			Error string `json:"error"`
+		}
+		_ = json.Unmarshal([]byte(raw), &body)
+		if code != want.status || body.Code != want.code || body.Error == "" {
+			t.Errorf("%s: %d %s, want %d %s", path, code, raw, want.status, want.code)
+		}
+	}
+	before := directionBookSnapshot(t, e.s)
+	if out := directionFilingPutBody(e.s, roleFull, "", "server", "chat-a", `{"direction":7}`); out.Status != http.StatusBadRequest || out.Code != "bad_request" {
+		t.Fatalf("a direction that is not a string: %d %s", out.Status, out.Raw)
+	}
+	if got := directionBookSnapshot(t, e.s); got != before {
+		t.Fatalf("a bad body changed the book: %s", got)
 	}
 }
