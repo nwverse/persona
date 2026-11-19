@@ -140,7 +140,7 @@ def next_build(current_build):
     return max(candidate, now)
 
 
-def write_plan(path, repository, channel, version, commit, pr_number, merge_commit, build=None, source_commit="", timestamp=None):
+def write_plan(path, repository, channel, version, commit, pr_number, merge_commit, build=None, source_commit=""):
     validate_identity(repository, commit)
     if source_commit and not SHA.fullmatch(source_commit):
         raise ReleaseError("release PR source head must be a full commit")
