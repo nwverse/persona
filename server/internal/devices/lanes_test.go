@@ -181,6 +181,25 @@ func TestNotesShareOneBudget(t *testing.T) {
 		m.queueNote("stream.data", raw)
 	}
 	eventually(t, 5*time.Second, "the notes dropped and the node connected again", func() bool { return logs.count("takes no events") > 0 })
+	// What was dropped left the budget, which holds what is still queued, and the notes after it are queued again,
+	// not dropped one by one.
+	queued := func() bool {
+		var n int64
+		for _, q := range []*nodeNotes{&m.notes, &m.bulkNotes} {
+			q.mu.Lock()
+			n += int64(q.bytes)
+			q.mu.Unlock()
+		}
+		return m.noteBytes.Load() == n
+	}
+	eventually(t, 5*time.Second, "the budget what is queued", queued)
+	for i := range 4 {
+		m.queueNote("terminal.input", json.RawMessage(fmt.Sprintf(`{"id":"t1","i":%d}`, i)))
+	}
+	eventually(t, 5*time.Second, "the budget what is queued", queued)
+	if n := logs.count("takes no events"); n != 1 {
+		t.Fatalf("the node connected again %d times, want once", n)
+	}
 }
 
 // A note waiting to be written closes the connection only once nothing it writes has gone through for noteStall: on a

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -44,7 +45,7 @@ func (m *Machine) queueNote(event string, params json.RawMessage) {
 		n = &m.bulkNotes
 	}
 	if m.noteBytes.Add(int64(len(params))) > int64(maxNoteBytes) {
-		dropped := m.notes.drop() + m.bulkNotes.drop()
+		dropped := m.notes.drop(&m.noteBytes) + m.bulkNotes.drop(&m.noteBytes)
 		m.noteBytes.Add(-int64(len(params)))
 		m.d.logf("[%s] its node takes no events (%d waiting): connecting it again", m.cfg.ID, dropped)
 		m.reconnect()
@@ -91,11 +92,13 @@ func (m *Machine) writeNotes(n *nodeNotes) {
 	}
 }
 
-// drop lets everything queued on n go, and says how much that was.
-func (n *nodeNotes) drop() int {
+// drop lets everything queued on n go, takes its bytes off budget (the machine's noteBytes), and says how many
+// notes that was.
+func (n *nodeNotes) drop(budget *atomic.Int64) int {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	dropped := len(n.q)
+	budget.Add(-int64(n.bytes))
 	n.q = nil
 	n.bytes = 0
 	return dropped
