@@ -792,7 +792,7 @@ Retain allow/deny assertions for data directories, private tmp, and proxy. Negat
 
 - Three-page-shell right-swipe regressions must end at the same height as the message row, not drag from a top row to window center. Header changes can make that path exceed 45°, testing vertical scrolling instead. Use a horizontal in-row path, then verify the target page; such failures do not prove missing paging capability.
 
-- New `proto.Features` capabilities also require updating shared hello/manifest wire samples (`go test ./internal/hub -run '^TestWireSamples$' -update`). Check the diff contains only intended flags; capability-handler-only tests miss protocol-snapshot failures.
+- A new or removed feature flag no longer changes the shared hello and health wire samples: they carry a fixed list (`wireFeatures` in `server/internal/hub/wire_samples_test.go`, #11022), and `TestHelloAndHealthCarryTheHubsFeatures` checks the real one. Other new hello or health fields still need `go test ./internal/hub -run '^TestWireSamples$' -update`; check the diff contains only the intended fields.
 
 - SwiftUI Form Toggle accessibility frames can span the row. Taps at row fractions 0.88 or 0.95 can still miss on different devices (no POST). Select internal `toggle.switches.firstMatch`, wait for enabled/hittable, tap center, and assert values after service response. After adding system-message fixtures, locate quoted messages by ID, not the last array item, so mock 500s are not blamed on live sync.
 - Collapsed shell status rows retain the previous toast for transition; XCUITest nodes can still `exists` while video shows nothing. To wait until later long presses are unobstructed, assert not `hittable`, not destroyed.
