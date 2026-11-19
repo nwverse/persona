@@ -149,7 +149,8 @@ private fun PersonaRootContent(
                     LaunchedEffect(openNavigation.value, active) {
                         openNavigation.value?.invoke(router)?.let { route ->
                             if (route.key == SettingsPageRoute(SettingsPage.Diagnostics)) diagnostics = true
-                            if (route.key == PairingRoute || route.key is SettingsPageRoute) openNavigation.value = null
+                            val retainImport = ProviderImportRequests.retainProviderNavigationDuringPairing(route.key)
+                            if (route.key == PairingRoute || route.key is SettingsPageRoute && !retainImport) openNavigation.value = null
                         }
                     }
                     // Keep the pairing state in memory while diagnostics is open.
@@ -808,7 +809,13 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                     },
                     // Regular window: Search opens over the whole window as the open iPhone Duo (#9171).
                     fullWindowSearch = regular,
-                    shadedPlace = if (regular && selected == AppTab.Persona) sidebarShadeKey(personaStack.firstOrNull() ?: AssistantRoute) else null,
+                    shadedPlace = visibleSidebarShade(
+                        regular = regular,
+                        selected = selected,
+                        personaRoot = personaStack.firstOrNull() ?: AssistantRoute,
+                        visible = visible,
+                        visibleSource = navigator.sourceTab(visible),
+                    ),
                     onFoldColumn = onFoldColumn)
             }
         }
@@ -960,7 +967,9 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
             }
             entry<InteractionRoute> { ShellChat(it.chat, session, navigator, shell.feedback, it.requestId, navigator::sessionClosed,
                 ::openWithCard, navigator::groupGone, chatTerminal(it.chat)) }
-            inboxEntries(navigator, session.inbox, connectors = services.connectors.takeUnless { services.demo }, onOpenCard = { card ->
+            inboxEntries(navigator, session.inbox, pictureMarkdown = { text, source, modifier ->
+                persona.feature.chat.ExternalReplyMarkdown(text, source, modifier)
+            }, connectors = services.connectors.takeUnless { services.demo }, onOpenCard = { card ->
                 openWithCard(ResolvedRoute(AppTab.Agents, AgentsRoute, card = card))
             })
             entry<InboxItemRoute> { InboxLink(it, session.inbox, navigator, ::replace) }

@@ -1672,10 +1672,20 @@ nonisolated struct UndeliveredMessage: Codable, Hashable, Sendable, Identifiable
     var nextAt: Date? = nil
     var error: String? = nil
     var deleteOnly: Bool? = nil
+    /// An Agent message held by its computer's manager. Its error is the complete status line.
+    var computer: String? = nil
+
+    static let agentHoldFeature = "agent_message_hold"
+    var heldForComputer: Bool { computer?.isEmpty == false }
+    var heldStatus: String? {
+        guard heldForComputer else { return nil }
+        if let error, !error.isEmpty { return error }
+        return gaveUp ? String(localized: "Delivery status unknown") : String(localized: "Waiting to send")
+    }
 
     /// The hub's names (`proto.UndeliveredMessage`): one enum, #10775 (`delete_only`) and #10440 (`next_at`) each added one.
     private enum CodingKeys: String, CodingKey {
-        case id, text, images, at, state, attempts, error
+        case id, text, images, at, state, attempts, error, computer
         case nextAt = "next_at", deleteOnly = "delete_only"
     }
 
