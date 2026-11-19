@@ -26249,6 +26249,7 @@ class H(BaseHTTPRequestHandler):
             transcription_socket(self, audio[1].lower())
             return
         if self.token_refused(): return
+        if DOMAINS.http(self, "GET", p): return  # the domains' routes first (scripts/mock/mock_domains.py)
         if CASE and case_route(self, "GET", p, q, b""): return
         if preview_route and preview_route(self, "GET", p, q): return
         if p == "/mock/ln":
@@ -26573,7 +26574,6 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/devices/retire":
             PUSH_RETIRED[0] = q.get("on", ["1"])[0] == "1"
             return self.send_json({"retired": PUSH_RETIRED[0]})
-        if p == "/mock/desktops": return self.send_json(desktops_state())
         if p == "/mock/hello": return self.send_json(HELLO)
         if p == "/mock/phone":
             with FAULT_LOCK:
@@ -26617,6 +26617,7 @@ class H(BaseHTTPRequestHandler):
             ARCHIVE_CLOSE["mode"] = q.get("close", [""])[0]
             return self.send_json({"close": ARCHIVE_CLOSE["mode"], "archived": [x["session_id"] for x in ARCHIVED_AGENTS]})
         if p == "/mock/reset":  # MachinePagesTests: each test starts from the same machines
+            DOMAINS.reset()
             BOTMUX_ON.clear()
             TAB_NAMES.clear()  # TerminalsRenameUITests: the tabs' own names again
             machine_alerts.reset()  # cleaned caches and launcher checks (#8037)
@@ -27449,6 +27450,7 @@ class H(BaseHTTPRequestHandler):
             return self.upload()
         self.last_body = self.body()
         p = urlparse(self.path).path
+        if DOMAINS.http(self, self.command, p, self.last_body): return  # the domains' routes first
         if CASE and case_route(self, self.command, p, parse_qs(urlparse(self.path).query), self.last_body): return
         if preview_route and preview_route(self, self.command, p, parse_qs(urlparse(self.path).query)): return
         if custom_models_route(self, self.command, p, parse_qs(urlparse(self.path).query), self.last_body): return
@@ -29413,6 +29415,7 @@ class H(BaseHTTPRequestHandler):
             ws_token = (parse_qs(urlparse(self.path).query).get("token") or [""])[0]
         # A legacy fixture socket has no credential and keeps the mock's full-role default.
         client["role"] = PAIR_DEVICE_ROLES.get(ws_token, "full")
+        domain_socket = DOMAINS.socket(self.connection, send, client, asked)
         if MOCK_PAIR_TOKEN: print("mock: ws open host=%s token=%s" % (self.headers.get("Host"), ws_token[:9]), flush=True)
         if MOCK_PAIR_TOKEN and ws_token == MOCK_PAIR_TOKEN:
             def cut_after_grace():  # the hub cancels the pairing token's sockets once its grace is over
@@ -29501,6 +29504,8 @@ class H(BaseHTTPRequestHandler):
                 if op != 1: continue
                 msg = json.loads(payload or b"{}")
                 LOG.write("  WS %s\n" % msg.get("type")); LOG.flush()
+                if DOMAINS.ws_message(domain_socket, msg):
+                    continue
                 if msg.get("type") == "client_hello":
                     declared, requested = msg.get("features", []), msg.get("heartbeat")
                     if not isinstance(declared, list) or not all(isinstance(f, str) for f in declared):
@@ -29536,9 +29541,6 @@ class H(BaseHTTPRequestHandler):
                 if msg.get("type") == "register_phone":
                     with FAULT_LOCK:
                         PHONES[self.connection] = {"send": send, "registration": msg}
-                    continue
-                if msg.get("type") in ("register_desktop", "unregister_desktop"):
-                    desktop_registration(self.connection, msg)
                     continue
                 if msg.get("type") == "tool_result":
                     with FAULT_LOCK:
@@ -29712,7 +29714,7 @@ class H(BaseHTTPRequestHandler):
             CLIENTS.pop(self.connection, None)
             PHONES.pop(self.connection, None)
             FS_WATCHES.pop(self.connection, None)
-        desktop_registration(self.connection, None)
+        DOMAINS.ws_closed(domain_socket)
         LIVE[:] = [x for x in LIVE if x[0] is not send]
         self.close_connection = True
 
@@ -32424,44 +32426,6 @@ MOCK_HELP.append("MOCK_OUTSIDE_DIALOG=1  A Claude Code session in a plain termin
                  "can answer (#5890): a message to it answers {ok, waits_on_computer}")
 
 
-# Desktop client registration (hub/desktops.go): `register_desktop` on an app's socket, withdrawn by `unregister_desktop`
-# (a hub with the feature desktop_unregister) or by the socket closing. GET /mock/desktops says who is registered now and
-# what happened in order, for the desktop shell's smoke (desktop/scripts/e2e-main.mjs).
-DESKTOPS = {}  # socket -> device_name
-DESKTOP_LOG = []  # {"event": "register" | "unregister" | "close", "device_name"}
-DESKTOP_LOCK = threading.Lock()
-
-
-def desktop_registration(connection, msg):
-    """A socket's register_desktop / unregister_desktop message, or its close (msg None)."""
-    if msg is not None and CLIENTS.get(connection, {}).get("role") != "full":
-        return  # hub/desktops.go: an answer-only watch never becomes desktop presence.
-    with DESKTOP_LOCK:
-        if msg is not None and msg.get("type") == "register_desktop":
-            name = msg.get("device_name") if isinstance(msg.get("device_name"), str) else ""
-            DESKTOPS[connection] = name
-            DESKTOP_LOG.append({"event": "register", "device_name": name})
-        elif connection in DESKTOPS:  # a withdrawal only of a socket that registered
-            DESKTOP_LOG.append({"event": "unregister" if msg is not None else "close", "device_name": DESKTOPS.pop(connection)})
-
-
-def desktops_state():
-    with DESKTOP_LOCK:
-        return {"registered": sorted(DESKTOPS.values()), "log": list(DESKTOP_LOG)}
-
-
-_features_without_desktops = features
-
-
-def features():
-    return _features_without_desktops() + (["desktops", "desktop_unregister"] if os.environ.get("MOCK_DESKTOPS") == "1" else [])
-
-
-MOCK_HELP.append("MOCK_DESKTOPS=1  features list desktops and desktop_unregister, so a desktop client withdraws its registration with "
-                 "unregister_desktop instead of closing its socket (an older hub). Either way GET /mock/desktops says who is registered "
-                 "and the register / unregister / close events in order")
-
-
 _features_without_agent_archives = features
 
 
@@ -32616,6 +32580,20 @@ def mock_turn_usage(mode):
 
 if MOCK_TURN_USAGE in ("1", "multi", "unpriced"):
     mock_turn_usage(MOCK_TURN_USAGE)
+
+
+# ---------- the mock's domains (scripts/mock/mock_domains.py, docs/operations/testing.md "Mock hub domains") ----------
+# Each module in mock_domains.DOMAINS registers its routes, WebSocket messages, features, help lines and /mock/reset
+# hooks, and H consults them before its own; a new domain is a module and a line in that list, with no change here.
+# They load after every switch above, so a domain can read and extend those fixtures.
+import mock_domains  # noqa: E402
+DOMAINS = mock_domains.load(globals())
+MOCK_HELP.extend(DOMAINS.help_lines)
+_features_without_domains = features
+
+
+def features():
+    return DOMAINS.features(_features_without_domains())
 
 
 # MOCK_TODO_VIEW=1|old|late, MOCK_TODO_MANAGERS=2 (#10465, scripts/mock/todo_view_mock.py): the To-dos view, counts and
