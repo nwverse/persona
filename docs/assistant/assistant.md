@@ -1385,6 +1385,9 @@ operation then read as accepted and the bubble waited for the transcript and wen
   the Retry and the look), and the look always goes from the first try in doubt: `tried_at` is never moved later, so a
   line that try wrote before the node forgot its id is still found by its words. If the Retry's own try ends in doubt,
   it is again only looked for and then left to the owner.
+- **Device signed out** (#10708). The hub gives the manager the sending device's credential ID when it keeps a
+  message. Signing out that device fails its kept messages. Their rows say why and offer Delete. Messages kept
+  before the hub recorded the sending credential have no device to match.
 - **Between conversations.** `conversation_send` to a conversation that cannot take the message now no longer fails:
   the message goes into its relay queue and is tried again under the same `once_id`. A conversation that failed to
   take a relayed message is tried again after `relayRetryGap` (30 s), not on every session list.
@@ -1455,8 +1458,9 @@ manager that connects the computer holds it and sends it once the computer is ba
 - **Known gap** (#10702): a runtime Agent's row leaves the list when its node shuts down cleanly, or after the manager
   restarts while its computer is away; its held messages then have no row to show on until it is listed again. They
   are still sent.
-- **Limits**: a held message is sent with the provenance it was taken with, even if that device was signed out
-  meanwhile (#10708); the owner sees it on every device and can delete it. Held messages stay with the manager that
+- **Device signed out** (#10708). Signing out the sending device fails its held messages. The rows say why and
+  offer Delete. The manager checks with the hub before delivering a held message, including after reconnecting.
+- **Limits**: Held messages stay with the manager that
   held them: moving the computer to another manager (or one
   computer absorbed into another) while some are held leaves them unsent there. A message the computer refused does
   not hold back the later ones, so a Retry of it arrives after them. Two messages to one Agent sent at the same moment

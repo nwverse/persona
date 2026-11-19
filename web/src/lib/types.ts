@@ -1069,6 +1069,8 @@ export interface UndeliveredMessage {
   attempts?: number;
   next_at?: string;
   error?: string;
+  /** A failed message that can only be deleted. */
+  delete_only?: boolean;
   /** Held for an Agent while its computer was away (#10661): that computer's name. `error` is then the whole line to
    *  show under the bubble, and Retry / Delete go to the session's held routes (lib/undelivered-actions.ts). */
   computer?: string;

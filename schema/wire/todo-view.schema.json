@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "todo-view.schema.json",
   "title": "To-do view",
-  "description": "What the manager works out for each to-do and for the To-dos list (#10226, docs/design/proposals/todos-redesign.md 3.3, 3.6, 3.7, 6.1, 6.3): the row's view and its asks, the places and the counts, and a to-do's conversation grouped into rounds with its results and what changed since the owner looked, and the answer to one of a to-do's own asks with its reply (#10465). The hub only adds counts up and merges places; the cases are in spec/fixtures/todo-view, spec/fixtures/todo-counts, spec/fixtures/todo-rounds and spec/fixtures/todo-asks.",
+  "description": "What the manager works out for each to-do and for the To-dos list (#10226, docs/design/proposals/todos-redesign.md 3.3, 3.6, 3.7, 6.1, 6.3): the row's view and its asks, the places and the counts, a to-do's conversation grouped into rounds with its results and what changed since the owner looked, the answer to one of a to-do's own asks with its reply, and the todo a decision's push carries (#10465). The hub only adds counts up and merges places; the cases are in spec/fixtures/todo-view, spec/fixtures/todo-counts, spec/fixtures/todo-rounds, spec/fixtures/todo-asks and spec/fixtures/todo-push.",
   "x-out": {
     "ts": "web/src/lib/todo-view-wire.ts",
     "swift": "apple/Packages/PersonaWire/Sources/PersonaWire/TodoViewWire.swift",
@@ -542,6 +542,44 @@
           "propertyNames": {"$ref": "#/$defs/TodoEntryType"},
           "additionalProperties": {"type": "integer", "minimum": 1},
           "description": "How many entries of each type came since then, each of a run line's turns counted; only the types that have any. The owner's own acts are left out, and so is what a round folds under one of them (the hub's relay of their answer, the run their message started)."
+        }
+      }
+    },
+    "TodoDecidePush": {
+      "description": "The top-level `todo` of a decision's push (category TODO_DECIDE, or TODO_DECIDE_OPEN, which no app gives actions; docs/assistant/todos.md \"Waiting for the owner\") and of its WebSocket notify: what its Take Recommendation needs, and from a manager that says how the push may answer it (#10465) the ask, the lock-screen rule and the options. A push from an older manager carries the first four only and keeps TODO_DECIDE. The cases are in spec/fixtures/todo-push.",
+      "type": "object",
+      "required": ["id", "asked_at", "recommend"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The to-do."
+        },
+        "asked_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "The round the decision waits in, as POST /api/v1/todos/{id}/accept takes it: an answer to an earlier round takes nothing."
+        },
+        "recommend": {
+          "type": "string",
+          "description": "The label of the recommended option, which Take Recommendation takes."
+        },
+        "manager": {
+          "type": "string",
+          "description": "The manager whose to-do it is, which every answer names in X-Persona-Manager."
+        },
+        "ask": {
+          "type": "string",
+          "description": "The decision's ask in the to-do's view (OwnerAsk.id), which an answer from the notification names; absent from an older manager."
+        },
+        "lockscreen": {
+          "$ref": "#/$defs/OwnerAskLockscreen",
+          "description": "What the notification may offer: answer, the category stays TODO_DECIDE and the options may be its actions; open_only, the category is TODO_DECIDE_OPEN, with no action, and a tap opens the app. Absent from an older manager: Take Recommendation only, as before."
+        },
+        "options": {
+          "type": "array",
+          "maxItems": 4,
+          "items": {"type": "string"},
+          "description": "The decision's option labels, whole, the recommended first; only with lockscreen answer, and with aps.mutable-content so the app's notification service extension can offer them. The hub drops both rather than cut the alert under 500 characters when the push would not fit otherwise, never the category, lockscreen or ask."
         }
       }
     },

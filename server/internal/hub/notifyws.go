@@ -128,10 +128,11 @@ func replyKey(sessionID, text, given string) string {
 }
 
 // notifyDecide pushes a to-do whose conclusion waits for the owner's decision and recommends an option (#2056) to the
-// devices that take "needs you" pushes: category TODO_DECIDE, whose OK takes the recommendation (decidePayloadIn). On
-// the WebSocket it is an "assistant" notify carrying the same `todo`: a client that does not know it shows a plain
-// notification. Nothing finished: the extensions hear no agent.finished. One collapse id a to-do: a later round's push
-// takes the place of the earlier one, whose OK could only answer "already handled".
+// devices that take "needs you" pushes: category TODO_DECIDE, whose OK takes the recommendation, or TODO_DECIDE_OPEN,
+// with no action, when the manager says open_only (decidePayloadIn). On the WebSocket it is an "assistant" notify
+// carrying the same `todo`: a client that does not know it shows a plain notification. Nothing finished: the
+// extensions hear no agent.finished. One collapse id a to-do: a later round's push takes the place of the earlier one,
+// whose OK could only answer "already handled".
 func (h *Hub) notifyDecide(owner, machineID, machine, sessionID, title, text string, todo assistantwire.NotifyTodo) {
 	build := func(i18n.Lang) map[string]any {
 		return decidePayloadIn(owner, machineID, machine, sessionID, title, text, todo)

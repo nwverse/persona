@@ -65,8 +65,9 @@ def domain_cases(domain):
 
 
 def todo_views():
-    """(definition, sample) of every view todo-view expects, every counts and places todo-counts expects, and every
-    timeline, result and recap todo-rounds expects, and every answer and reply todo-asks holds."""
+    """(definition, sample) of every view todo-view expects, every counts and places todo-counts expects, every
+    timeline, result and recap todo-rounds expects, every answer and reply todo-asks holds, and every decision
+    push's todo todo-push expects."""
     for where, c in domain_cases("todo-view"):
         yield "TodoSummary", f"{where}.expected.view", c["expected"]["view"]
     for where, c in domain_cases("todo-counts"):
@@ -79,6 +80,8 @@ def todo_views():
             yield "TodoResult", f"{where}.expected.results[{i}]", r
         if "recap" in e:
             yield "TodoRecap", f"{where}.expected.recap", e["recap"]
+    for where, c in domain_cases("todo-push"):
+        yield "TodoDecidePush", f"{where}.expected.todo", c["expected"]["todo"]
     for where, c in domain_cases("todo-asks"):
         yield "TodoAskAnswer", f"{where}.input.answer", c["input"]["answer"]
         if "answered" in c["expected"]:
