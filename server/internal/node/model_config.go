@@ -69,6 +69,29 @@ type modelExecution struct {
 	InPane string `json:"-"`
 }
 
+// supervisionDeliveryKey marks a send that is the manager's own supervision message (message_source "supervision").
+type supervisionDeliveryKey struct{}
+
+// withSupervisionDelivery marks ctx for a send from message source src when that is a supervision message.
+func withSupervisionDelivery(ctx context.Context, src *proto.MessageSource) context.Context {
+	if src != nil && src.Kind == proto.SourceSupervision {
+		return context.WithValue(ctx, supervisionDeliveryKey{}, true)
+	}
+	return ctx
+}
+
+// runtimePolicyDropped decides what a runtime conversation does with a supervision policy it cannot carry: a runtime has no
+// separate policy channel. The manager's own supervision message is refused, since delivered without its policy it would
+// leave a supervisor unsupervised; anything else (a person's message the hub could not tell was for a runtime
+// conversation) goes through without the policy rather than shutting that conversation's owner out.
+func (n *Node) runtimePolicyDropped(ctx context.Context, id string) error {
+	if ctx.Value(supervisionDeliveryKey{}) == true {
+		return supervisionRuntimeRefusal(ctx)
+	}
+	n.logf("assistant %s: runs on a runtime, which has no channel for supervision policy: sending the message without it", short(id))
+	return nil
+}
+
 func supervisionRuntimeRefusal(ctx context.Context) error {
 	return refusal(assistantwire.CodeSupervisionRuntime, i18n.T(i18n.From(ctx), "rpc-errors.assistant_supervision_runtime"), nil)
 }
