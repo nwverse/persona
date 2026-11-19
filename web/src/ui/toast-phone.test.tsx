@@ -6,6 +6,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toast, Toasts } from "./atoms";
+import { ToastLift } from "./toast-lift";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -42,6 +43,7 @@ function pointer(el: Element, type: "pointerover" | "pointerout", pointerType: s
 
 let clock = Date.now();
 
+
 beforeEach(() => {
   vi.useFakeTimers();
   // a minute on per test: the same line within a few seconds is folded into the last (FeedbackGate)
@@ -68,7 +70,8 @@ beforeEach(() => {
   host = document.createElement("div");
   document.body.appendChild(host);
   root = createRoot(host);
-  act(() => root.render(<Toasts />));
+  // the placement as the app hands it in once its chunk is in (App.tsx)
+  act(() => root.render(<Toasts lift={ToastLift} />));
 });
 
 afterEach(() => {
@@ -111,8 +114,9 @@ describe("toasts on a narrow screen", () => {
     show("没发出去", "error");
     // the frame's bottom (768) less the dock's top (560)
     expect(lift()).toBe("208px");
-    const cls = box().className;
-    for (const c of ["max-lg:top-(--kb-top)", "max-lg:h-(--kb-h)", "max-lg:bottom-auto", "max-lg:justify-end", "max-lg:pb-[calc(var(--toast-lift,env(safe-area-inset-bottom))+20px)]"]) expect(cls).toContain(c);
+    const { top, bottom, height, justifyContent, paddingBottom } = box().style;
+    expect([top, bottom, height, justifyContent]).toEqual(["var(--kb-top)", "auto", "var(--kb-h)", "flex-end"]);
+    expect(paddingBottom).toBe("calc(var(--toast-lift, env(safe-area-inset-bottom)) + 20px)");
   });
 
   it("follow the keyboard: in the frame it leaves, still clear of the dock above it", () => {
@@ -193,6 +197,7 @@ describe("toasts on a narrow screen", () => {
     expect(rows()).toHaveLength(0);
     expect(off).toHaveBeenCalledWith("resize", expect.any(Function));
     expect(lift()).toBe("");
+    expect([box().style.top, box().style.paddingBottom]).toEqual(["", ""]); // back at bottom-5 for the next one
   });
 });
 
@@ -202,19 +207,20 @@ describe("toasts on a wide screen", () => {
     add("<div data-chat-dock></div>", { "[data-chat-dock]": [560, 768] });
     show("没发出去", "error");
     expect(box().className).toContain("fixed inset-x-0 bottom-5");
-    expect(lift()).toBe("");
+    expect(box().getAttribute("style")).toBeNull();
   });
 });
 
 describe("a toast's button on a touch screen", () => {
-  it("reaches 8 px past its word without moving it, and the close button makes room only beside one", () => {
+  it("reaches at least 8 px past its word, and the close button makes room only beside one", () => {
     show("已归档", "ok", { label: "撤销", run() {} });
     show("已复制", "ok");
     const [withAction, plain] = rows();
     const [undo, close] = withAction.querySelectorAll("button");
-    // the padding (px-2) is given back by the margins: ml-1 less 8 px on the left, 8 px on the right
-    for (const c of ["touch-hit", "ml-1", "[@media(pointer:coarse)]:-ml-1", "[@media(pointer:coarse)]:-mr-2", "[@media(pointer:coarse)]:px-2"]) expect(undo.className.split(" ")).toContain(c);
-    expect(undo.className).not.toMatch(/(^|\s)(py-|min-h-|h-)/); // no taller toast
+    // touch-hit's square, widened to 8 px either side of a word wider than 28 px; the button itself as before
+    for (const c of ["touch-hit", "ml-1", "[@media(pointer:coarse)]:before:inset-x-[min(--spacing(-2),calc(50%-22px))]"]) expect(undo.className.split(" ")).toContain(c);
+    // no taller or wider toast: its only spacing is the ml-1 it always had
+    expect(undo.className.split(" ").filter((c) => /(^|:)-?(p[xytblr]?|m[xytblr]?|min-h|h)-/.test(c))).toEqual(["ml-1"]);
     expect(close.className).toContain("[@media(pointer:coarse)]:ml-3");
     expect(plain.querySelector("button")!.className).not.toContain("ml-3");
   });
