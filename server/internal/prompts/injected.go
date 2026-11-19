@@ -109,6 +109,10 @@ func ParseInjected(text string) *proto.Injected {
 		state := noticeStates[m[2]]
 		return &proto.Injected{Kind: proto.InjectedTaskNotice, State: state, Title: m[1], Machine: m[3],
 			Line: "任务「" + m[1] + "」" + noticeLines[state]}
+	case head == "<persona-limit-continue />" && strings.TrimSpace(rest) != "":
+		return &proto.Injected{Kind: proto.InjectedFollowup, State: "limit_continue", Line: "用量额度重置了，Persona 让它接着做"}
+	case strings.HasPrefix(head, "<persona-limit-continue"):
+		return nil
 	case strings.HasPrefix(head, limitContinueHead):
 		// Only hubs that write it mark it: it is not in the shared fixtures the apps' own recognition runs.
 		return &proto.Injected{Kind: proto.InjectedFollowup, State: "limit_continue", Line: "用量额度重置了，Persona 让它接着做"}

@@ -1,19 +1,4 @@
 {
-  "agents": {
-    "count": 10,
-    "files": [
-      "agents/answer.md",
-      "agents/auth_relayed.md",
-      "agents/delegate.md",
-      "agents/delegate_input.md",
-      "agents/limit_continue.md",
-      "agents/peer_message.md",
-      "agents/readonly_task.md",
-      "agents/reanswer.md",
-      "agents/report_line_input.md",
-      "agents/triage_input.md"
-    ]
-  },
   "assistant": {
     "count": 56,
     "files": [
