@@ -225,6 +225,46 @@ The trade-off: binaries and stack traces then name source files by module path
 (`github.com/nwverse/persona/server/...`) instead of the local directory, so a debugger (Delve, an IDE) needs a
 source path mapping to open them. Release builds already use `-trimpath` (`docs/operations/release.md`).
 
+## Heavy build slots
+
+Many worktrees share one machine, and xcodebuild, Gradle or a large `go test` started together slow each other down
+until tests time out. `scripts/heavy_slot.py` gives each kind of heavy build a few machine-wide slots, so they queue
+instead (#10714):
+
+```sh
+python3 scripts/heavy_slot.py run --kind xcode|gradle|go|web -- <command> [<argument>...]
+python3 scripts/heavy_slot.py status    # every kind's slots and who holds them
+```
+
+- **Who takes one**: `scripts/app/sim.sh` for its xcodebuild (`xcode`), `scripts/app/android.sh` for every Gradle build
+  (`gradle`), and `scripts/check-fast.sh` for each `go test` / `go build` (`go`) and vitest (`web`) step. check-fast
+  takes the slot outside the step's timeout, so time in the queue is not a hung check; a wait past the slot timeout is
+  a TIMEOUT that says the check never ran.
+- **A slot** is an exclusive `fcntl.flock` on a lock file in a per-user cache directory
+  (`~/Library/Caches/persona/slots` on macOS, else `$XDG_CACHE_HOME/persona/slots` or `~/.cache/persona/slots`;
+  `PERSONA_HEAVY_SLOT_DIR` moves it). The helper holds the lock and runs the command as its child. The lock is not
+  inherited, so a daemon the build leaves running (Gradle's, Xcode's build service) never keeps a slot, and a helper
+  that dies, even by SIGKILL, frees its own.
+- **How many**: the core count divided by 7 for `xcode` and `gradle` and by 4 for `go` and `web`, at least 1 (14 cores:
+  2, 2, 3, 3). `PERSONA_HEAVY_SLOTS_<KIND>=<n>` sets one kind's count (`PERSONA_HEAVY_SLOTS_GO=1`; `0` is no limit).
+- **Waiting**: one line on stderr when it starts to wait and one when it gets a slot. After `PERSONA_HEAVY_SLOT_TIMEOUT`
+  seconds (default 2700, 45 minutes) it gives up with one line and exit 124, without running the command.
+- **Nested calls never wait**: the command's environment names the slot it holds (`PERSONA_HEAVY_SLOT_HELD`). A call
+  of the same kind inside it runs at once; one of another kind takes a free slot or runs without one. Nothing waits
+  for a slot while it holds one, so slots cannot deadlock.
+- **Signals and exit status**: TERM, HUP, INT, QUIT, USR1 and USR2 sent to the helper reach the command, a signal the
+  caller ignores stays ignored, and the helper exits with the command's status (dying by the same signal when it did).
+- **Off**: `PERSONA_HEAVY_SLOTS=0` makes the helper exec the command, which then runs exactly as without it: the same
+  process, stdio, environment and exit status. On Windows, which has no `fcntl`, it says so in one line and runs the
+  command without a slot.
+
+CI does not set `PERSONA_HEAVY_SLOTS=0`. No hosted lane (`.github/workflows/`, `scripts/ci/`) and none of the PR
+watcher's checks run a script that takes a slot: they run their commands directly, so they never queue behind local
+builds. A runner has one job, where a slot would only make that job's own steps wait for each other, so a lane that
+starts to run one of these scripts sets `PERSONA_HEAVY_SLOTS=0`; `scripts/test/test_heavy_slot.py` fails until it does.
+The `xcode-slot` runner that `scripts/release/release.sh` and `sim.sh`'s Rust core build use when it is installed
+(`PERSONA_XCODE_RUNNER`, `docs/operations/release.md`) is a separate lock.
+
 ## Fast local checks (`scripts/check-fast.sh`, #2849)
 
 Runs only relevant second-scale checks based on git changes, with independent checks in parallel; useful before committing:
@@ -269,7 +309,7 @@ Path mapping:
 | `deploy/docker/**`, `docs/operations/docker.md`, root `Dockerfile` | `scripts/test/test_docker_entrypoint.py` (also checks root `Dockerfile`’s `EXPOSE`) |
 | Other paths | No code checks; list unmapped paths individually |
 
-Any changes always run `scripts/privacy_check.py` first: local-only, no network, a few seconds. Every check has a timeout (npm ci 600 s, vitest 300 s, one go test group 300 s, others 120 s; override with `CHECK_FAST_TIMEOUT_NPM_CI` / `CHECK_FAST_TIMEOUT_WEB_TEST` / `CHECK_FAST_TIMEOUT_GO_TEST` / `CHECK_FAST_TIMEOUT_OTHER`). Success/failure/timeout each prints a result and duration; the final summary lists passed/skipped (with reasons)/failed/timed-out checks and log directory. Exit: 0 if all pass or none needed; 1 for failure; 124 for timeout without failures (timeouts aren't passes; run full checks to confirm). Ctrl-C, SIGTERM and SIGHUP, sent to the script or to its whole process group (a closed terminal or tmux pane), stop every running check (and its child processes) before exiting with 130, 143 or 129, and keep the log directory. Missing toolchains skip relevant checks with reasons by default; under `--all`, missing core tools (node ≥ 22, go, python3) fail; bun is always optional. Requires GNU `timeout` (coreutils on macOS).
+Any changes always run `scripts/privacy_check.py` first: local-only, no network, a few seconds. Every check has a timeout (npm ci 600 s, vitest 300 s, one go test group 300 s, others 120 s; override with `CHECK_FAST_TIMEOUT_NPM_CI` / `CHECK_FAST_TIMEOUT_WEB_TEST` / `CHECK_FAST_TIMEOUT_GO_TEST` / `CHECK_FAST_TIMEOUT_OTHER`). The go and vitest steps first wait for a heavy build slot, outside their timeout ("Heavy build slots" above). Success/failure/timeout each prints a result and duration; the final summary lists passed/skipped (with reasons)/failed/timed-out checks and log directory. Exit: 0 if all pass or none needed; 1 for failure; 124 for timeout without failures (timeouts aren't passes; run full checks to confirm). Ctrl-C, SIGTERM and SIGHUP, sent to the script or to its whole process group (a closed terminal or tmux pane), stop every running check (and its child processes) before exiting with 130, 143 or 129, and keep the log directory. Missing toolchains skip relevant checks with reasons by default; under `--all`, missing core tools (node ≥ 22, go, python3) fail; bun is always optional. Requires GNU `timeout` (coreutils on macOS).
 
 **Web tests a change reaches** (#10619). In diff mode the web check runs `npx vitest related --run` from the changed files, so a change to one view runs the tests whose imports reach it (about 56 for `web/src/views/chat/ChatView.tsx`) instead of all ~1,360 test files. `python3 scripts/ci/paths.py --web-plan` makes the plan from one scan of `web/src` and every web test, done at run time, nothing listed by hand:
 

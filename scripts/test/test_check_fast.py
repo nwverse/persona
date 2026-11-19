@@ -19,6 +19,11 @@ import tempfile
 import time
 import unittest
 
+try:
+    import fcntl
+except ImportError:  # Windows
+    fcntl = None
+
 ROOT = Path(__file__).resolve().parents[2]
 PASSING = "import unittest\n\nclass T(unittest.TestCase):\n    def test_ok(self):\n        pass\n"
 FAILING = "import unittest\n\nclass T(unittest.TestCase):\n    def test_broken(self):\n        self.fail('broken on purpose')\n"
@@ -812,6 +817,59 @@ class CheckFastServerInputsTests(unittest.TestCase):
         self.assertEqual(3, len(tests), calls)  # the package and the two guard calls
         for _, goflags, _ in tests:
             self.assertEqual("-mod=readonly -trimpath", goflags)
+
+    def test_go_and_vitest_run_in_a_heavy_slot_outside_their_timeout(self):
+        # Parallel worktrees queue for go and vitest instead of thrashing (#10714): check-fast runs them through
+        # scripts/heavy_slot.py, around the GNU timeout so a wait in the queue is not counted as a hung step. Each
+        # call records the slot marker (kind:pid of the helper holding the slot) and its parent's parent: the
+        # timeout's parent, which must be that helper.
+        shutil.copy(ROOT / "scripts/heavy_slot.py", self.repo / "scripts/heavy_slot.py")
+        self.git("add", "-A")
+        self.git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "helper")
+        self.git("tag", "-f", "base")
+        record = ('#!/bin/sh\nprintf "%s|%s|%s|%s\\n" "${PWD##*/}" "${PERSONA_HEAVY_SLOT_HELD:-}" '
+                  '"$(ps -o ppid= -p "$PPID" | tr -d " ")" "$*" >> "$FAKE_GO_LOG"\n')
+        for tool in ("go", "npm"):
+            (self.go_log.parent / tool).write_text(record)
+        slots = Path(tempfile.mkdtemp(prefix="check-fast-slots-"))
+        self.addCleanup(shutil.rmtree, slots)
+        self.env = {key: value for key, value in self.env.items() if not key.startswith("PERSONA_HEAVY_SLOT")}
+        self.env["PERSONA_HEAVY_SLOT_DIR"] = str(slots)
+        self.write("server/internal/foo/x.go", "package foo\n")
+        self.write("web/src/x.ts", "export {}\n")
+        self.check_fast()
+        calls = [line.split("|", 3) for line in self.go_log.read_text().splitlines()]
+        in_slot = {(where, args.split()[0]) for where, marker, grandparent, args in calls
+                   if re.fullmatch(r"(go|web):\d+", marker) and marker.split(":")[1] == grandparent}
+        self.assertEqual({("server", "test"), ("web", "test")}, in_slot, calls)
+        self.assertEqual(3, sum(1 for where, marker, _, _ in calls if where == "server" and marker.startswith("go:")))
+        # npm ci, the node_modules check and the typecheck take no slot.
+        self.assertEqual({"ci", "run check:deps", "run typecheck"},
+                         {args for where, marker, _, args in calls if where == "web" and not marker}, calls)
+        self.assertTrue((slots / "go.0.lock").exists() and (slots / "web.0.lock").exists())
+
+    @unittest.skipIf(fcntl is None, "heavy build slots need fcntl (not on Windows)")
+    def test_a_wait_for_a_slot_past_its_timeout_is_a_timeout_that_says_so(self):
+        # The only go slot is taken (by this test) and no wait is allowed: each go check is a TIMEOUT whose detail says
+        # it never ran, so nobody reads it as a hung test.
+        shutil.copy(ROOT / "scripts/heavy_slot.py", self.repo / "scripts/heavy_slot.py")
+        self.git("add", "-A")
+        self.git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "helper")
+        self.git("tag", "-f", "base")
+        slots = Path(tempfile.mkdtemp(prefix="check-fast-slots-"))
+        self.addCleanup(shutil.rmtree, slots)
+        held = os.open(slots / "go.0.lock", os.O_RDWR | os.O_CREAT, 0o600)
+        self.addCleanup(os.close, held)
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        env = {key: value for key, value in self.env.items() if not key.startswith("PERSONA_HEAVY_SLOT")}
+        env.update(PERSONA_HEAVY_SLOT_DIR=str(slots), PERSONA_HEAVY_SLOTS_GO="1", PERSONA_HEAVY_SLOT_TIMEOUT="0")
+        self.write("server/internal/foo/x.go", "package foo\n")
+        run = subprocess.run(["bash", "scripts/test/check-fast.sh", "--base", "base"], cwd=self.repo, env=env,
+                             capture_output=True, text=True, timeout=300)
+        out = run.stdout + run.stderr
+        self.assertEqual(124, run.returncode, out)
+        self.assertIn("go test ./internal/foo/... (no go slot came free; it did not run)", out)
+        self.assertFalse(any(call.startswith("server|test") for call in self.go_calls()), self.go_calls())
 
 
 # A privacy-scan stub that never finishes on its own: it records its own pid, its parent's (the GNU timeout that runs
