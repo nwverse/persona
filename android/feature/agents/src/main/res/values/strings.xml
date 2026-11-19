@@ -319,6 +319,11 @@
     <string name="agents_new_prefill_offline">“%1$s” is offline, so another one is picked; switch back once it connects</string>
     <string name="agents_new_reload">Reload options</string>
     <string name="agents_new_agent_type">Agent type</string>
+    <string name="agents_new_presets">Agent presets</string>
+    <string name="agents_new_preset_loading">Wait for this preset’s model list before starting.</string>
+    <string name="agents_new_preset_left_out">This preset won’t be applied in full:</string>
+    <string name="agents_new_preset_left_out_model">Model “%1$s” can’t be used here; the launcher’s model will run.</string>
+    <string name="agents_new_preset_left_out_effort">Thinking effort “%1$s” can’t be used here; the launcher’s or model’s own effort will run.</string>
     <!-- The agent type of Paseo's providers other than Claude Code and Codex, each listed by its own name under it (#8143). -->
     <string name="agents_new_type_other">Other agents</string>
     <string name="agents_new_launcher_this_time">Launcher (this time only)</string>

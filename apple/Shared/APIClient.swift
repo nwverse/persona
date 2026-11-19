@@ -629,6 +629,13 @@ nonisolated struct APIClient: Sendable {
         var launchers: [Launcher]
         var `default`: LauncherDefault?
         var unavailable: [UnavailableLauncher]?
+        /// New Agent's presets from the model profile in use; nil from an older hub or when none apply here.
+        var tiers: [AgentPreset]? = nil
+        var tiersProfile: AgentPresetProfile? = nil
+        enum CodingKeys: String, CodingKey {
+            case launchers, `default`, unavailable, tiers
+            case tiersProfile = "tiers_profile"
+        }
     }
 
     /// The body of PUT /api/v1/assistant/conversations/{id}/model (#5033): the pick kept for one conversation.
