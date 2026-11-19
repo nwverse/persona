@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"slices"
 	"strings"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 // The To-dos view on the wire (#10226, docs/assistant/todo-status-sop.md "The hub's view"): every row of
@@ -113,8 +113,8 @@ type todoItem struct {
 
 func (s *Service) todoViewRoutes() {
 	// GET /api/v1/todos/{id}: one to-do as GET /api/v1/todos lists it, its view included, and what the paper shows of
-	// its history (todoItemDetail) → {"todo": row, "rounds", "rounds_total", "recap"?, "results"?}; an unknown id 404
-	// todo_not_found.
+	// its history (todoItemDetail; an extension's token as todoTimelineOf reads it) → {"todo": row, "rounds",
+	// "rounds_total", "recap"?, "results"?}; an unknown id 404 todo_not_found.
 	s.handle("GET /api/v1/todos/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if err := s.ensureTodosLoaded(r.Context()); err != nil {
@@ -125,7 +125,7 @@ func (s *Service) todoViewRoutes() {
 		_, known := s.todos.todos[id]
 		s.todos.mu.RUnlock()
 		if !known { // before the whole list's pass, which only a known id needs
-			apierr.WriteCode(w, http.StatusNotFound, "todo_not_found", errors.New("todo not found"))
+			apierr.WriteCode(w, http.StatusNotFound, "todo_not_found", i18n.Err("assistant-todos.not_found"))
 			return
 		}
 		list, p, err := s.todosViewed(r.Context(), false)
@@ -142,11 +142,12 @@ func (s *Service) todoViewRoutes() {
 					return
 				}
 				// Its runs' sessions as its view read them: the timeline asks no computer again.
-				apierr.WriteJSON(w, todoItem{Todo: raw, TodoItemDetail: s.todoItemDetail(r.Context(), id, raw, p.facts[i].Sessions)})
+				ext := r.Header.Get(RoleHeader) == roleExtension
+				apierr.WriteJSON(w, todoItem{Todo: raw, TodoItemDetail: s.todoItemDetail(r.Context(), t.Todo, raw, p.facts[i].Sessions, ext)})
 				return
 			}
 		}
-		apierr.WriteCode(w, http.StatusNotFound, "todo_not_found", errors.New("todo not found")) // deleted meanwhile
+		apierr.WriteCode(w, http.StatusNotFound, "todo_not_found", i18n.Err("assistant-todos.not_found")) // deleted meanwhile
 	})
 	// GET /api/v1/todos/places: the To-dos sidebar's places with the list's counts (assistantwire.TodoPlaces).
 	s.handle("GET /api/v1/todos/places", func(w http.ResponseWriter, r *http.Request) {

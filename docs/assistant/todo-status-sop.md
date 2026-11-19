@@ -443,3 +443,9 @@ while every manager names it (`docs/protocol/protocol.md`, their rows). There is
 to-do open reads it again on `{"type":"todos"}` (decisions, supervision and scope changes send one) or on an
 `assistant_feed` whose item's `ref` is the to-do, and since each item read works the whole list's view out, it reads
 only while the paper is on screen and coalesces them.
+
+A to-do with more than 1000 such feed items serves the rounds that began within its newest 1000: its decisions, brief
+log and ledger reviews are cut at the same time, and the rounds that began earlier are left out, so every round served
+is whole and keeps its id as newer items come. An extension's token reads it without the answered cards, whose records
+hold what the owner typed into a card and do not say whose card it was, and not at all for a to-do opened from the
+health space or with a run there (`docs/extensions/extensions.md` "Never shown to extensions").

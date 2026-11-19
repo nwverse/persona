@@ -451,8 +451,8 @@ func TestTodoItemRelayedToItsManager(t *testing.T) {
 		resp, body := todoViewGet(t, h, srv, path, nil)
 		calls := archiveHTTPCalls(t, b)
 		last := calls[len(calls)-1]
-		if want, _, _ := strings.Cut(path, "?"); last.Method != http.MethodGet || last.Path != want {
-			t.Fatalf("m-0c0c0c got %+v for %s", last, path)
+		if want, query, _ := strings.Cut(path, "?"); last.Method != http.MethodGet || last.Path != want || last.Query != query {
+			t.Fatalf("m-0c0c0c got %+v for %s", last, path) // the page asked for (before, limit) reaches the manager
 		}
 		if strings.Contains(path, "/timeline") && (resp.StatusCode != http.StatusNotFound || !strings.Contains(string(body), "Not Found")) {
 			t.Fatalf("an older manager's timeline: %d %s", resp.StatusCode, body)
@@ -468,6 +468,8 @@ func TestTodoItemRelayedToItsManager(t *testing.T) {
 // A hub from before #10465 has no GET /api/v1/todos/{id}/timeline: it answers 404 to any method there itself, which
 // clients take as "not there", while the to-do still goes to its manager. Built as such a hub is, without the route.
 func TestTodoTimelineOnAnOlderHub(t *testing.T) {
+	// The hub reads the route list when it is built; the hub's tests run one at a time (none calls t.Parallel), so
+	// swapping the list for this one hub reaches no other.
 	routes := assistantwire.Routes
 	t.Cleanup(func() { assistantwire.Routes = routes })
 	assistantwire.Routes = slices.DeleteFunc(slices.Clone(routes), func(p string) bool { return p == "GET /api/v1/todos/{id}/timeline" })

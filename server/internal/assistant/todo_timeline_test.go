@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"testing"
@@ -157,7 +158,7 @@ func TestTodoTimelinePageLimits(t *testing.T) {
 // The item route: the row as the list has it, with the rounds the paper shows (the latest two that are not Background
 // ones), how many there are, the results and what changed since the owner looked, the same as the timeline route has
 // them; the same state read twice is the same bytes.
-func TestTodoItemCarriesItsRounds(t *testing.T) {
+func TestTodoTimelineOnTheItem(t *testing.T) {
 	todoStores(t, func(t *testing.T, e *todoEnv, database *db.DB) {
 		id, want := todoHistory(t, e, database)
 		e.must("PUT", "/api/v1/todos/"+id+"/seen", "") // before the instructions: the run's turn is news
@@ -197,7 +198,7 @@ func TestTodoItemCarriesItsRounds(t *testing.T) {
 
 // A to-do with no history yet answers rounds [] and rounds_total 0, which a client tells apart from an older manager
 // that sends neither; no recap and no results.
-func TestTodoItemWithNoHistory(t *testing.T) {
+func TestTodoTimelineOnAnItemWithNoHistory(t *testing.T) {
 	e := newTodoEnv(t, nil)
 	id := e.create("Water the roses").ID
 	var item map[string]json.RawMessage
@@ -234,4 +235,90 @@ func TestTodoTimelineWithoutItsStores(t *testing.T) {
 	if w := e.do("GET", "/api/v1/todos/"+id+"/timeline", ""); w.Code != http.StatusServiceUnavailable {
 		t.Errorf("the timeline: %d %s", w.Code, w.Body)
 	}
+}
+
+// An extension's token (todos.read) reads a to-do's history without the answered cards, whose records hold what the
+// owner typed into a card's fields, and nothing of a to-do one of whose runs works in the health space: its timeline
+// answers 404 as for a to-do that is not there, its item the row alone (docs/extensions/extensions.md "Never shown to
+// extensions"). A device reads both whole.
+func TestTodoTimelineToAnExtension(t *testing.T) {
+	todoStores(t, func(t *testing.T, e *todoEnv, database *db.DB) {
+		ctx := context.Background()
+		e.sessions("server", proto.Session{SessionID: "s1", Title: "Passport renewal", Status: proto.StatusIdle, State: proto.StateIdle},
+			proto.Session{SessionID: "h1", Title: "Sleep log", Status: proto.StatusIdle, State: proto.StateIdle, Space: SpaceHealth})
+		id, health := e.create("Renew the passport").ID, e.create("Log the week's sleep").ID
+		e.must("PUT", "/api/v1/todos/"+id+"/agents/server/s1", "")
+		e.must("PUT", "/api/v1/todos/"+health+"/agents/server/h1", "")
+		const typed = "1980-01-01"
+		for _, ref := range []string{id, health} {
+			at := time.Now().UTC().Add(time.Minute)
+			if _, err := e.s.appendFeedAt(ctx, "conv1", feedRouted, ref, map[string]string{"text": "fill in the form"}, at); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := e.s.appendFeedAt(ctx, "conv1", feedAnswered, ref, answeredBody{Question: "Your details", Answer: "Accepted",
+				Items: []answeredItem{{Question: "Your details", Answer: "Accepted\nDate of birth: " + typed}}}, at.Add(time.Minute)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, path := range []string{"/api/v1/todos/" + id + "/timeline", "/api/v1/todos/" + id, "/api/v1/todos/" + health + "/timeline"} {
+			if w := e.must("GET", path, ""); !strings.Contains(w.Body.String(), typed) {
+				t.Errorf("a device does not read the answer at %s: %s", path, w.Body)
+			}
+		}
+		for _, path := range []string{"/api/v1/todos/" + id + "/timeline", "/api/v1/todos/" + id} {
+			w := e.doAs(roleExtension, "GET", path, "")
+			if body := w.Body.String(); w.Code != http.StatusOK || strings.Contains(body, typed) || !strings.Contains(body, "fill in the form") {
+				t.Errorf("an extension at %s: %d %s", path, w.Code, body)
+			}
+		}
+		w := e.doAs(roleExtension, "GET", "/api/v1/todos/"+health+"/timeline", "")
+		var refused struct{ Code string }
+		if _ = json.Unmarshal(w.Body.Bytes(), &refused); w.Code != http.StatusNotFound || refused.Code != "todo_not_found" {
+			t.Errorf("a health to-do's timeline to an extension: %d %s", w.Code, w.Body)
+		}
+		var item map[string]json.RawMessage
+		w = e.doAs(roleExtension, "GET", "/api/v1/todos/"+health, "")
+		if err := json.Unmarshal(w.Body.Bytes(), &item); err != nil || item["todo"] == nil || item["rounds"] != nil || item["rounds_total"] != nil {
+			t.Errorf("a health to-do's item to an extension: %d %s", w.Code, w.Body)
+		}
+	})
+}
+
+// A to-do past the feed items one read takes (todoTimelineFeedCap, the newest) serves the rounds that began within
+// them, each whole: not its start, nor the round of a decision older than the oldest item kept; rounds_total counts
+// from there, and the page before the first round served is empty with nothing more.
+func TestTodoTimelinePastItsFeedCap(t *testing.T) {
+	todoStores(t, func(t *testing.T, e *todoEnv, database *db.DB) {
+		ctx := context.Background()
+		e.sessions("server", proto.Session{SessionID: "s1", Title: "Letters", Status: proto.StatusIdle, State: proto.StateIdle})
+		id := e.create("Answer the letters").ID
+		e.must("PUT", "/api/v1/todos/"+id+"/agents/server/s1", "") // its start round: the run linked
+		if database != nil {
+			e.must("POST", "/api/v1/todos/"+id+"/decisions", `{"question":"Which first?","choice":"The oldest"}`)
+		}
+		t0 := time.Now().UTC().Add(time.Minute)
+		var ids []string
+		for i := range todoTimelineFeedCap + 1 {
+			it, err := e.s.appendFeedAt(ctx, "conv1", feedRouted, id, map[string]string{"text": fmt.Sprint("letter ", i)},
+				t0.Add(time.Duration(i)*time.Second))
+			if err != nil {
+				t.Fatal(err)
+			}
+			ids = append(ids, "r:feed:"+it.ID)
+		}
+		var item struct{ assistantwire.TodoItemDetail }
+		body := e.must("GET", "/api/v1/todos/"+id, "").Body.Bytes()
+		if err := json.Unmarshal(body, &item); err != nil || item.RoundsTotal == nil || *item.RoundsTotal != todoTimelineFeedCap {
+			t.Fatalf("rounds_total: %v %s", err, body)
+		}
+		var tl assistantwire.TodoTimeline
+		_ = json.Unmarshal(e.must("GET", "/api/v1/todos/"+id+"/timeline?limit=5&before="+url.QueryEscape(ids[3]), "").Body.Bytes(), &tl)
+		if got := roundIDs(tl.Rounds); !slices.Equal(got, ids[1:3]) || tl.More {
+			t.Errorf("the oldest page: %v (more %v), want %v", got, tl.More, ids[1:3])
+		}
+		_ = json.Unmarshal(e.must("GET", "/api/v1/todos/"+id+"/timeline?before="+url.QueryEscape(ids[1]), "").Body.Bytes(), &tl)
+		if len(tl.Rounds) != 0 || tl.More {
+			t.Errorf("before the first round served: %v (more %v)", roundIDs(tl.Rounds), tl.More)
+		}
+	})
 }

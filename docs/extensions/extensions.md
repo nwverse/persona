@@ -442,7 +442,7 @@ To call the hub's HTTP API, an extension lists the scopes it uses in `permission
 | `machines.read` | See your computers | `GET /api/v1/machines`, `/machines/{id}/metrics`, `/machines/{mid}/stat` |
 | `notify` | Send notifications to your devices | `POST /api/v1/notify` (see "Sending notifications") |
 | `assistant.ask` | Start chats with Persona and read chat activity | `GET /api/v1/assistant`, `POST /api/v1/assistant/conversations`, `GET …/conversations/{id}/feed` |
-| `todos.read` | See to-dos | `GET /api/v1/todos`, `GET /api/v1/todos/{id}`, `GET /api/v1/todos/places`, `GET /api/v1/todos/{id}/decisions`, `GET /api/v1/todos/{id}/repositories` |
+| `todos.read` | See to-dos | `GET /api/v1/todos`, `GET /api/v1/todos/{id}`, `GET /api/v1/todos/places`, `GET /api/v1/todos/{id}/decisions`, `GET /api/v1/todos/{id}/repositories`, `GET /api/v1/todos/{id}/timeline`. From a manager naming `todo_timeline`, the to-do's conversation too: the timeline, and on `GET /api/v1/todos/{id}` its latest rounds, recap and results (what the owner told its runs and their turn summaries), less what "Never shown to extensions" leaves out |
 | `leaders.read` | See leader conversations (directions) and what they report | `GET /api/v1/assistant/leaders`; the events `leader.changed` and `leader.report` (see "Leader events") |
 | `assistant.dispatch_policy` | Read and change the assistant dispatch policy | `GET` / `PUT /api/v1/assistant/dispatch-policy`; a policy written by an extension must expire within one hour (see "Dispatch policy") |
 | `assistant.start_defaults` | Read the Agent presets and set the defaults task Agents start with | `GET /api/v1/assistant/worker-presets`, `GET` / `PUT /api/v1/assistant/start-defaults`; a policy written by an extension must expire within one hour ([assistant.md](../assistant/assistant.md) "Start defaults"). Not covered by the legacy `hub_api` full access: it can raise what task Agents spend (a preset, effort `max`, ultracode), so an extension gets it only by naming it, as `agents.permission_mode` |
@@ -802,6 +802,11 @@ Whatever scopes it was granted, an extension's token never sees:
   the health space (by its directory or its conversation's space), and a card without a directory whose conversation cannot be found
   are left out of `GET /api/v1/interactions` and `/interactions/history`.
 - **Values typed into a card's fields** (`resolution.values` in the history).
+- **A to-do's answered cards, and the conversation of a to-do in the health space** (`GET /api/v1/todos/{id}/timeline` and the
+  rounds on `GET /api/v1/todos/{id}`, `docs/assistant/todo-status-sop.md` "The to-do's timeline"): the timeline leaves out
+  every answered card, since its record holds what was typed into the card and does not say whose card it was. A to-do opened
+  from the health space, or one of whose runs works there, has no conversation: its timeline answers 404 as for a to-do that
+  does not exist, and its item carries the row alone.
 
 The apps' and devices' credentials are not affected.
 
