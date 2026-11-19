@@ -242,6 +242,9 @@ internal fun MachineManagement.inGroup(names: GroupNames): MachineManagement {
         override suspend fun codexSettings(machineId: String) = source.codexSettings(names.rawMachine(machineId))
         override suspend fun setCodexSetting(machineId: String, key: String, value: JsonElement) =
             source.setCodexSetting(names.rawMachine(machineId), key, value)
+        override suspend fun agySettings(machineId: String) = source.agySettings(names.rawMachine(machineId))
+        override suspend fun setAgySetting(machineId: String, key: String, value: JsonElement) =
+            source.setAgySetting(names.rawMachine(machineId), key, value)
         override suspend fun claudeDirs(machineId: String) = source.claudeDirs(names.rawMachine(machineId))
         override suspend fun setBlockedClaudeDirs(machineId: String, blocked: List<String>) =
             source.setBlockedClaudeDirs(names.rawMachine(machineId), blocked)
@@ -348,10 +351,12 @@ internal fun AssistantConversations.inGroup(names: GroupNames, scope: CoroutineS
             AssistantSnapshot(snapshot.mainSession?.let(names::key), snapshot.conversations.map(names::session), snapshot.manager, snapshot.managerId,
                 snapshot.leaders, snapshot.directionNames,
                 directionTree = snapshot.directionTree?.mapMachines(names::machineId),
-                backgroundSupervisor = snapshot.backgroundSupervisor)
+                backgroundSupervisor = snapshot.backgroundSupervisor, recentTaskChats = snapshot.recentTaskChats)
         }
         override val pinned = source.pinned.mapIn(scope) { keys -> keys.mapTo(LinkedHashSet(), names::key) }
         override suspend fun refresh() = source.refresh()
+        override suspend fun updateRecentTaskChats(value: Boolean?) = source.updateRecentTaskChats(value)
+        override suspend fun recentTaskChatsUpdater() = source.recentTaskChatsUpdater()
         override suspend fun startConversation() = names.key(source.startConversation())
         override suspend fun startConversation(launcher: String) = names.key(source.startConversation(launcher))
         override suspend fun startConversation(pick: persona.core.contracts.ModelPick) = names.key(source.startConversation(pick))

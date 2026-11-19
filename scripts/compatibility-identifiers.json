@@ -55,6 +55,22 @@
       "path_tokens": [],
       "external_refs": []
     },
+    "android/core/data/src/test/kotlin/persona/core/data/PortDiscoveryMockServer.kt": {
+      "reason": "Exact discovery-request regression fixture retaining both protocol generations.",
+      "tokens": [
+        "jarvis-ports"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
+    "android/core/data/src/test/kotlin/persona/core/data/PortDiscoveryMockServerTest.kt": {
+      "reason": "Exact discovery-request regression fixture retaining both protocol generations.",
+      "tokens": [
+        "jarvis-ports"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
     "android/core/contracts/src/test/kotlin/persona/core/contracts/ProtocolCompatibilityTest.kt": {
       "reason": "Baseline regression fixture or exact compatibility assertion for a persisted contract.",
       "tokens": [
@@ -320,6 +336,14 @@
       "path_tokens": [],
       "external_refs": []
     },
+    "desktop/test/page-routes.test.ts": {
+      "reason": "Baseline regression fixture or exact compatibility assertion for a persisted contract.",
+      "tokens": [
+        "jarvis"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
     "docs/assistant/assistant.md": {
       "reason": "Published compatibility documentation naming exact historical MCP tool and settings aliases.",
       "tokens": [
@@ -372,6 +396,14 @@
         "jarvis",
         "jarvis_default",
         "jarvis_manager"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
+    "docs/operations/link.md": {
+      "reason": "Published upgrade, storage identity or compatibility documentation retained for existing installations.",
+      "tokens": [
+        ".jarvis"
       ],
       "path_tokens": [],
       "external_refs": []

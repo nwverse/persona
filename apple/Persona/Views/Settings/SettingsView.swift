@@ -113,7 +113,7 @@ struct SettingsView: View {
             // (Channels; `-openChannel <id>` one of them).
             .onAppear(perform: openDebugPage)
             #endif
-            .confirmationDialog("After disconnecting, you'll need to scan the code to pair again.", isPresented: $confirmUnpair, titleVisibility: .visible) {
+            .accessibleConfirmationDialog("After disconnecting, you'll need to scan the code to pair again.", isPresented: $confirmUnpair, titleVisibility: .visible) {
                 Button("Disconnect", role: .destructive) { Task { await model.disconnectAll() } }
             }
             .sheet(isPresented: $showPair) { PairView() }
@@ -373,6 +373,10 @@ struct SettingsView: View {
             p.append(SettingsPage.about)
             if a == "export" { p.append(SettingsPage.devExport) }
         }
+        else if d.string(forKey: "openMeetingTapes") != nil { // About › Replay a Meeting Tape (sample | empty, #10589)
+            p.append(SettingsPage.about)
+            p.append(SettingsPage.meetingTapes)
+        }
         else if d.string(forKey: "openKnowledgeSelection") != nil { p.append(SettingsPage.knowledgeSelection) } // (rule | chat | doc: with that sheet)
         else if d.string(forKey: "openAppearance") == "layout" { p.append(SettingsPage.layout) } // Layout (#2530)
         else if d.string(forKey: "openAppearance") == "navigation" { p.append(SettingsPage.navigation) } // Navigation (#6332)
@@ -411,7 +415,7 @@ enum SettingsPage: Hashable {
     /// Settings › Live Screen (#6396, #6398): the live screen's route and its quality on mobile data.
     case liveScreen
     #endif
-    case persona, themeColor, style, colorScheme, language, assistant, claude, codex, devices, phoneData, mail, feishuBot, notifications, storage, translation, modelConfiguration
+    case persona, themeColor, style, colorScheme, language, assistant, claude, codex, agy, devices, phoneData, mail, feishuBot, notifications, storage, translation, modelConfiguration
     /// Settings › Connectors › This iPhone › iPhone Control: the guided setup (#8199).
     case iphoneSetup
     /// Settings › Connectors › the chat connector; `manager`: whose (Messages' Settings names the default's, whose
@@ -420,6 +424,8 @@ enum SettingsPage: Hashable {
     case models, agents, appearance, about, pairing, computers
     /// Settings › About › Export Diagnostics (Developing Persona, #9460).
     case devExport
+    /// Settings › About › Replay a Meeting Tape (Developing Persona, #10589).
+    case meetingTapes
     /// Settings › Session Triage (docs/assistant/agent-work.md「开关」).
     case triage
     /// Assistant Profile › Standing Authorizations (#7002): the go-aheads Persona answers for the owner, each revocable.
@@ -524,6 +530,12 @@ private struct SettingsDestinations: ViewModifier {
         case .appearance: AppearanceSettingsPage()
         case .about: SettingsAboutPage()
         case .devExport: DevExportPage()
+        case .meetingTapes:
+            #if os(iOS)
+            MeetingTapesPage()
+            #else
+            EmptyView()
+            #endif
         case .pairing: SettingsPairingPage()
         case .computers: MachinesView(settingsScope: true)
         case .persona: PersonaSettingsPage()
@@ -547,6 +559,7 @@ private struct SettingsDestinations: ViewModifier {
         case .assistant: AssistantProfileView()
         case .claude: ClaudeSettingsView()
         case .codex: ClaudeSettingsView(agent: .codex)
+        case .agy: ClaudeSettingsView(agent: .agy)
         case .devices: DevicesView()
         case .phoneData: PhoneDataView()
         case .iphoneSetup:

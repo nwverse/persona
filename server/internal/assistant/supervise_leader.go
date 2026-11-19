@@ -63,6 +63,40 @@ func (s *Service) defaultPlanSupervisor(ctx context.Context, conversation, paren
 	return main, main != "" && main != conversation
 }
 
+// planTaskSupervisor resolves the reviewer before a plan starts. A runtime-backed conversation can dispatch work,
+// but the main conversation's supervision route must take over when the intended reviewer cannot receive policy.
+func (s *Service) planTaskSupervisor(ctx context.Context, conversation string, task PlanTask) (string, error) {
+	if task.Parent != "" {
+		return conversation, nil
+	}
+	supervisor := conversation
+	if s.supervises(ctx, conversation) {
+		if s.isLeader(ctx, task.Supervisor) {
+			supervisor = task.Supervisor
+		}
+	} else {
+		supervisor, _ = s.defaultPlanSupervisor(ctx, conversation, "")
+	}
+	cfg := s.settings(ctx)
+	machine := cfg.MachineID
+	if supervisor == cfg.Main {
+		machine = cfg.mainRouteMachine()
+	}
+	if !s.runtimeConversation(ctx, machine, supervisor) {
+		return supervisor, nil
+	}
+	if cfg.Main == "" {
+		return "", planInvalid{i18n.Err("assistant-conversations.supervision_reviewer_required")}
+	}
+	if supervisor != cfg.Main && !s.runtimeConversation(ctx, cfg.mainRouteMachine(), cfg.Main) {
+		return cfg.Main, nil
+	}
+	if background := s.ownSupervisor(cfg); background != cfg.Main && !s.runtimeConversation(ctx, cfg.MachineID, background) {
+		return cfg.Main, nil
+	}
+	return "", planInvalid{i18n.Err("assistant-conversations.supervision_reviewer_required")}
+}
+
 // digestTo is the conversation signal g goes to, with cfg the settings in effect: the one it names (To), else its task's
 // supervisor when that is a leader or another side conversation, unless the main conversation handles it (its needs_user,
 // a start to remedy, a task waiting for the user); else, for a task whose ledger names the main conversation, the
@@ -243,7 +277,16 @@ func (s *Service) stopCancelledAgent(ctx context.Context, id, machine, session s
 		return
 	}
 	machine = c.MachineID
-	if c.Status != proto.StatusOffline {
+	closed := false
+	if !agentCloseBusy(c) && s.closeEndedTerminals(ctx) {
+		// A cancelled task ends its idle Agent's session: with the owner's close-on-end setting its terminal goes
+		// too (#10355); a busy one is only stopped below and keeps its terminal.
+		var err error
+		if closed, err = s.closeEndedTerminal(ctx, machine, session, proto.StopUser); err != nil {
+			s.logf("task %s cancelled: close agent %s/%s: %v", id, machine, short(session), err)
+		}
+	}
+	if c.Status != proto.StatusOffline && !closed {
 		cctx, cancel := context.WithTimeout(ctx, agentArchiveCloseTimeout)
 		err := s.call(cctx, machine, deviceSessionStop, map[string]any{"session_id": session}, nil)
 		if re := (*rpc.Error)(nil); errors.As(err, &re) && re.Code == "no_terminal" {
@@ -289,14 +332,19 @@ func (s *Service) endSessionCards(machine, session string) {
 	s.fleet.mu.Lock()
 	var ids []string
 	for id, p := range s.fleet.interactions {
-		if p.ix.SessionID == session && s.sameMachine(p.ix.MachineID, machine) && !p.claimed {
-			p.claimed = true
+		if p.ix.SessionID == session && s.sameMachine(p.ix.MachineID, machine) && (p.prepared != nil || !p.claimed) {
+			if p.prepared == nil {
+				p.claimed = true
+			}
 			ids = append(ids, id)
 		}
 	}
 	s.fleet.mu.Unlock()
 	s.feishuDetach(ids)
 	for _, id := range ids {
+		if s.endPreparedByID(id, "cancelled", "The conversation that owned this approval ended; nothing changed.") {
+			continue
+		}
 		s.recordEnd(id, "cancelled", nil)
 		s.finishInteraction(id)
 	}
