@@ -606,10 +606,25 @@
   },
   {
     "name": "machines_list",
-    "description": "List the user's computers and their observed connection state, system information, resource availability, working agents, failing launchers and node version status. Use this before choosing where to start work. Resource samples older than 30 seconds are not current. Null values have an accompanying reason; do not infer missing facts or rank computers from incomplete data.",
+    "description": "List computers' connection, system, resources, agents, launcher failures and node builds. Samples over 30 seconds old are stale. Nulls have reasons; do not infer or rank.",
     "input_schema": {
       "type": "object",
       "properties": {}
+    }
+  },
+  {
+    "name": "machine_redeploy",
+    "description": "Redeploy by ID or exact name; return the confirmed outcome.",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "machine"
+      ],
+      "properties": {
+        "machine": {
+          "type": "string"
+        }
+      }
     }
   },
   {
@@ -924,15 +939,24 @@
         },
         "tier": {
           "type": "string",
-          "description": "Agent preset from the snapshot's 模型档位 line; choose by purpose; resolved before approval and shown on the card; explicit launcher/model/effort overrides"
+          "description": "Agent preset from the snapshot's 模型档位 line; choose by purpose; resolved before approval and shown on the card; explicit launcher/model/effort/speed overrides"
+        },
+        "speed": {
+          "type": "string",
+          "enum": [
+            "standard",
+            "fast",
+            "ultrafast"
+          ],
+          "description": "new-start speed; explicit choice overrides the tier. standard/omitted: launcher default. Codex: fast, ultrafast; Claude Code: fast only"
         },
         "effort": {
           "type": "string",
-          "description": "Explicit effort override; omit to use the tier or purpose default."
+          "description": "Explicit effort; omit for tier/purpose default."
         },
         "model": {
           "type": "string",
-          "description": "Explicit model override: a model id the agent takes (an alias such as opus, or a gateway's own id; letters, digits and . _ - / : @ [ ] only, or a leading ~ as in ~vendor/model-latest). Omit to use the tier or purpose default."
+          "description": "Explicit model id or alias the agent takes; omit for the tier or purpose default."
         }
       }
     }
@@ -2399,7 +2423,7 @@
               },
               "model": {
                 "type": "string",
-                "description": "model id the agent takes (an alias such as opus, a gateway's own id, or a provider/model such as ag-chat/cursor/grok-4.7 for pi; letters, digits and . _ - / : @ [ ] only, or a leading ~ as in ~vendor/model-latest); empty: the launcher's default"
+                "description": "model id or alias the agent takes; empty: the launcher's default"
               },
               "permission": {
                 "type": "string",
@@ -2509,11 +2533,20 @@
               },
               "tier": {
                 "type": "string",
-                "description": "Agent preset from the snapshot's 模型档位 line; choose by purpose; resolved at task start with its profile; explicit launcher/model/effort overrides"
+                "description": "Agent preset from the snapshot's 模型档位 line; choose by purpose; resolved at task start with its profile; explicit launcher/model/effort/speed overrides"
+              },
+              "speed": {
+                "type": "string",
+                "enum": [
+                  "standard",
+                  "fast",
+                  "ultrafast"
+                ],
+                "description": "new-start speed; explicit choice overrides the tier. standard/omitted: launcher default. Codex: fast, ultrafast; Claude Code: fast only"
               },
               "effort": {
                 "type": "string",
-                "description": "Explicit effort override; omit to use the tier or purpose default."
+                "description": "Explicit effort; omit for tier/purpose default."
               }
             }
           }

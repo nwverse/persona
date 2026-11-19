@@ -406,6 +406,39 @@ class OutboxMessageSenderTest {
         sender.close()
     }
 
+    @Test fun keptMessageLeavesTheLocalOutboxForTheSessionRow() = runTest {
+        val store = MemoryOutboxStore()
+        val transport = FakeTransport(online = true)
+        transport.answers += MessageTransportResult.Kept
+        val sender = OutboxMessageSender(scope, store, transport, backgroundScope)
+        sender.send(session, "keep this for the assistant", "kept")
+        runCurrent()
+
+        assertEquals(1, transport.requests.size)
+        assertTrue("the authoritative session row draws a kept message instead",
+            sender.outbox.value.none { it.clientMessageId == "kept" })
+        assertEquals("kept", sender.sendReceipts.value.single().state)
+        assertFalse(sender.sendReceipts.value.single().processing)
+        advanceTimeBy(60_000)
+        runCurrent()
+        assertEquals("kept is not delivered and must not be sent again", 1, transport.requests.size)
+        assertTrue(sender.outbox.value.none { it.clientMessageId == "kept" })
+        sender.close()
+    }
+
+    @Test fun keptComposerRetryLeavesTheSendingOutboxForTheSessionRow() = runTest {
+        val store = MemoryOutboxStore()
+        store.enqueue(OutboxEntry("kept-retry", session, "keep this", state = OutboxState.Refused, createdAt = 100))
+        val sender = OutboxMessageSender(scope, store, FakeTransport(online = false), backgroundScope)
+        sender.recordComposerDelivery("kept-retry", ComposerDelivery(DeliveryState.Sending), "retry-op", null)
+        assertEquals(OutboxState.Sending, store.state("kept-retry"))
+
+        sender.recordComposerDelivery("kept-retry", ComposerDelivery(DeliveryState.Sending), "retry-op", MessageTransportResult.Kept)
+        assertEquals(OutboxState.Kept, store.state("kept-retry"))
+        assertTrue(sender.outbox.value.none { it.clientMessageId == "kept-retry" })
+        sender.close()
+    }
+
     @Test fun catchUpChecksAllUncertainStatesBeforeSendingAndUsesTheSameOperationId() = runTest {
         val store = MemoryOutboxStore()
         listOf(OutboxState.Sending, OutboxState.Unknown, OutboxState.Verifying).forEachIndexed { index, state ->

@@ -106,6 +106,21 @@ class HttpChatActions internal constructor(
         }
     }
 
+    override suspend fun retryUndelivered(session: Session, messageId: String) {
+        require(session.sessionId.isNotBlank() && messageId.isNotBlank())
+        val body = buildJsonObject { }.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+        request(api("assistant", "conversations", session.sessionId, "undelivered", messageId, "retry"), "POST", body).use {
+            if (!it.isSuccessful) throw HubFailure.from(it)
+        }
+    }
+
+    override suspend fun deleteUndelivered(session: Session, messageId: String) {
+        require(session.sessionId.isNotBlank() && messageId.isNotBlank())
+        request(api("assistant", "conversations", session.sessionId, "undelivered", messageId), "DELETE", null).use {
+            if (!it.isSuccessful) throw HubFailure.from(it)
+        }
+    }
+
     override suspend fun fork(session: Session, atItemId: String): String {
         val body = buildJsonObject { put("at_item_id", atItemId) }
         return request(api("sessions", session.machineId, session.sessionId, "fork"), "POST",

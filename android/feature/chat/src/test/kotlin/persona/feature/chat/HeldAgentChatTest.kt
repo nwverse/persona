@@ -18,8 +18,17 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.io.File
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.update
+import okhttp3.Protocol
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.*
+import org.junit.After
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -29,6 +38,8 @@ import persona.core.contracts.*
 import persona.core.contracts.api.*
 import persona.core.designsystem.AppStyle
 import persona.core.designsystem.PersonaTheme
+import persona.core.hub.HttpHeldAgentActions
+import persona.core.hub.HeldAgentRetryReceipts
 
 /** The production chat against a second phone's session updates. Only the manager may replace or remove a held row. */
 @RunWith(AndroidJUnit4::class)
@@ -47,14 +58,18 @@ class HeldAgentChatTest {
     private val view = MutableStateFlow(ChatSnapshot(loading = false))
     private val attempts = mutableListOf<Pair<String, String>>()
     private var answer: CompletableDeferred<Unit>? = null
+    private val pairingScope = MainScope()
+    @After fun closePairing() = pairingScope.cancel()
     private val actions = object : HeldAgentActions {
         override val features = MutableStateFlow(setOf(AgentMessageHoldFeature))
-        override suspend fun retry(id: String) { attempts += "retry" to id; answer?.await() }
+        override fun canRetry(row: HeldAgentMessage) = flowOf(true)
+        override suspend fun retry(row: HeldAgentMessage) { attempts += "retry" to row.id; answer?.await() }
         override suspend fun cancel(id: String) { attempts += "cancel" to id; answer?.await() }
     }
+    private var sessionActions: (SessionKey) -> HeldAgentActions? = { session -> actions.takeIf { session == key } }
     private val chats = object : ChatRepository, ChatLocalStorage {
         override val localStorage = MutableStateFlow<ChatStorageSnapshot?>(null)
-        override fun heldMessages(session: SessionKey) = actions.takeIf { session == key }
+        override fun heldMessages(session: SessionKey) = sessionActions(session)
         override suspend fun imageFile(session: SessionKey, item: Item, width: Int, height: Int): File = error("no image bytes")
         override fun observe(session: SessionKey) = view
         override suspend fun loadOlder(session: SessionKey) = Unit
@@ -82,13 +97,14 @@ class HeldAgentChatTest {
     private var appStyle by mutableStateOf(AppStyle.Glass)
     private var dark by mutableStateOf(false)
     private var history by mutableStateOf(false)
+    private var chatOpen by mutableStateOf(true)
 
     private fun push(vararg rows: HeldAgentMessage) { list.value = list.value.map { it.copy(undelivered = rows.toList()) } }
     private fun show() {
         rule.setContent {
             PersonaTheme(darkTheme = dark, reduceMotion = true, style = appStyle) {
                 Box(Modifier.fillMaxSize().background(PersonaTheme.palette.background).testTag("shot")) {
-                    ChatScreen(key, chats, sender, interactions, sessions, onBack = {}, historyReadOnly = history)
+                    if (chatOpen) ChatScreen(key, chats, sender, interactions, sessions, onBack = {}, historyReadOnly = history)
                 }
             }
         }
@@ -224,6 +240,60 @@ class HeldAgentChatTest {
         rule.runOnIdle { push() }
         rule.onNodeWithTag("held-${uncertain.id}").assertDoesNotExist()
         assertTrue(sends.isEmpty())
+    }
+
+    @Test fun aCachedCheckOnlyRowCannotAuthorizeResendAfterReopeningChat() = cachedCheckOnlyRow(large = false)
+
+    @Test @Config(fontScale = 2f)
+    fun aCachedCheckOnlyRowKeepsDeleteAvailableAtMaximumFontScale() = cachedCheckOnlyRow(large = true)
+
+    private fun cachedCheckOnlyRow(large: Boolean) {
+        val effects = mutableListOf<String>()
+        val stored = MutableStateFlow(emptySet<String>())
+        val receipts = HeldAgentRetryReceipts(stored) { stored.update(it) }
+        sessionActions = { session ->
+            HttpHeldAgentActions(session, actions.features, receipts, pairingScope, { path, method, _ ->
+                assertEquals("/api/v1/sessions/studio/release/held/held-uncertain/retry", path)
+                assertEquals("POST", method)
+                // The manager completed its check. Another POST now sends even if the first row is still on screen.
+                effects += if (effects.isEmpty()) "checked" else "sent"
+                Response.Builder().request(Request.Builder().url("https://example.com/").build())
+                    .protocol(Protocol.HTTP_1_1).code(200).message("OK").body("{}".toResponseBody()).build()
+            }, { _, _ -> })
+        }
+        fun publish(status: String, rev: Int) {
+            list.value = listOf(JsonCodec.decodeFromString<Session>(
+                """{"machine_id":"studio","session_id":"release","title":"Release notes","rev":$rev,
+                    "undelivered":[{"id":"held-uncertain","text":"Review the screenshots.","images":2,
+                    "at":"2026-06-06T12:00:00Z","state":"failed","error":"$status","computer":"Studio Mac"}]}"""))
+        }
+        publish(uncertain.error!!, 1)
+        show()
+        action(uncertain, "Retry").performClick()
+        rule.runOnIdle { assertEquals(listOf("checked"), effects); chatOpen = false }
+        rule.onNodeWithTag("held-${uncertain.id}").assertDoesNotExist()
+        rule.runOnIdle { publish(uncertain.error!!, 2); chatOpen = true }
+        val retry = action(uncertain, "Retry")
+        if (SemanticsProperties.Disabled !in retry.fetchSemanticsNode().config) retry.performClick()
+        rule.runOnIdle { assertEquals("The same check-only row must never authorize a send", listOf("checked"), effects) }
+        retry.assertIsNotEnabled()
+        action(uncertain, "Delete").assertIsEnabled()
+        val out = File(System.getProperty("persona.shots") ?: "build/held-agent-shots").also { it.mkdirs() }
+        for (style in AppStyle.entries) for (night in listOf(false, true)) {
+            rule.runOnIdle { appStyle = style; dark = night }
+            rule.onNodeWithText(uncertain.error!!).assertIsDisplayed()
+            retry.assertIsNotEnabled()
+            action(uncertain, "Delete").assertIsEnabled().assertIsDisplayed()
+            val name = "checked-${style.name.lowercase()}-${if (night) "dark" else "light"}${if (large) "-large" else ""}.png"
+            File(out, name).outputStream().use {
+                assertTrue(rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, it))
+            }
+        }
+        val unconfirmed = "Couldn't confirm it arrived. Retry to send it anyway, or delete it."
+        rule.runOnIdle { publish(unconfirmed, 3) }
+        rule.onNodeWithText(unconfirmed).assertIsDisplayed()
+        retry.assertIsEnabled().performClick()
+        rule.runOnIdle { assertEquals(listOf("checked", "sent"), effects) }
     }
 
     @Test fun oldHubReadOnlySourceStoppedAgentAndHistoryKeepTheirOwnControls() {

@@ -184,6 +184,17 @@ describe("what the pill says", () => {
     expect(currentModelRow(claudeList.models, "CLAUDE-HAIKU-5-5")?.id).toBe("haiku");
     expect(currentModelRow(claudeList.models, "nothing")).toBeUndefined();
   });
+
+  it("prefers an exact row, then folds a gateway's routed echo or 1M spelling", () => {
+    expect(currentModelRow(claudeList.models, "claude-opus-5-5")?.id).toBe("opus");
+    const carbon = [{ id: "gemini-4-carbon", name: "Gemini 4 Carbon" }];
+    expect(currentModelRow(carbon, "passthrough/route-gemini-4-carbon/gemini-4-carbon")?.id).toBe("gemini-4-carbon");
+    const oneM = [{ id: "gemini-4-carbon[1m]", name: "Gemini 4 Carbon" }];
+    expect(currentModelRow(oneM, "gemini-4-carbon")?.id).toBe("gemini-4-carbon[1m]");
+    // The default entry only stands in when no other row names the model, an exact hit of its own included.
+    expect(currentModelRow(claudeList.models, "default")?.id).toBe("default");
+    expect(currentModelRow([claudeList.models[0], ...carbon], "gemini-4-carbon")?.id).toBe("gemini-4-carbon");
+  });
 });
 
 // ── the lists kept for the page's life ──
