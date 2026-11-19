@@ -868,6 +868,7 @@ func TestAssistantCodexTurnError(t *testing.T) {
 	p.id = testThread
 	c.threadID = testThread
 	n.procs[testThread] = p
+	n.state.put(testThread, sessionState{Launcher: "codex", Cwd: cwd, OriginKnown: true})
 
 	turn := func(id string) {
 		f.push(map[string]any{"method": "turn/started", "params": map[string]any{"threadId": testThread, "turn": map[string]any{"id": id, "status": "inProgress"}}})
