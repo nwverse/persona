@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-import { act, createElement } from "react";
+import { act, createElement, useRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { enterSends, hasFinePointer, keyboardFrame, keyboardVars, useFinePointer } from "./viewport";
+import { enterSends, hasFinePointer, keyboardFrame, keyboardVars, useFinePointer, useKeyboardFrame } from "./viewport";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -38,6 +38,49 @@ describe("keyboardVars", () => {
 
   it("leaves them to the stylesheet without a keyboard", () => {
     expect(keyboardVars(undefined)).toBeNull();
+  });
+});
+
+describe("useKeyboardFrame", () => {
+  afterEach(() => {
+    delete (window as { visualViewport?: unknown }).visualViewport;
+  });
+
+  it("marks the root with data-kb while the keyboard is up, and clears it when it goes or the shell unmounts", () => {
+    // iOS: only the visual viewport shrinks (jsdom has none, and its innerHeight is 768)
+    const vv = Object.assign(new EventTarget(), { height: window.innerHeight, offsetTop: 0, scale: 1 });
+    Object.defineProperty(window, "visualViewport", { configurable: true, value: vv });
+    const keyboard = (height: number) => act(() => {
+      vv.height = height;
+      vv.dispatchEvent(new Event("resize"));
+    });
+    const html = document.documentElement;
+    function Shell() {
+      const ref = useRef<HTMLDivElement>(null);
+      useKeyboardFrame(ref);
+      return createElement("div", { ref });
+    }
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root!.render(createElement(Shell)));
+    expect(html.hasAttribute("data-kb")).toBe(false);
+
+    keyboard(400);
+    expect(html.hasAttribute("data-kb")).toBe(true);
+    expect(html.style.getPropertyValue("--kb-h")).toBe("400px");
+    keyboard(380); // still sliding
+    expect(html.hasAttribute("data-kb")).toBe(true);
+
+    keyboard(window.innerHeight);
+    expect(html.hasAttribute("data-kb")).toBe(false);
+    expect(html.style.getPropertyValue("--kb-h")).toBe("");
+
+    keyboard(400);
+    act(() => root!.unmount());
+    root = undefined;
+    expect(html.hasAttribute("data-kb")).toBe(false);
+    expect(html.style.getPropertyValue("--kb-h")).toBe("");
   });
 });
 
