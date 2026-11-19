@@ -413,3 +413,143 @@ func TestLaneBenchShort(t *testing.T) {
 		t.Errorf("interactive p95 %s with a chunk in flight, want under 2s", p95)
 	}
 }
+
+// TestLaneBenchBothWays is the experiment with the other way busy too: the node keeps sending 96 KiB events to the
+// manager as fast as the link takes them, while the manager sends a forwarded port's bytes to the node (24 KiB
+// stream.data through its notes queue, three outstanding). The acknowledgements of the manager's frames then wait behind
+// the node's events on the way back: judged by the round trip, the window shrank to a fraction of the link (fix-1 of
+// #10660's review). One line per queue and mode: what reached the node after warmUp and over the whole run, the
+// longest a note took from its queue to the node, and the connections the notes' stall check closed.
+func TestLaneBenchBothWays(t *testing.T) {
+	if os.Getenv("PERSONA_LANE_BENCH") != "1" {
+		t.Skip("the lane experiment takes minutes: PERSONA_LANE_BENCH=1 runs it")
+	}
+	for _, queue := range []int{64 << 10, 256 << 10} {
+		for _, lanes := range []bool{false, true} {
+			t.Run(fmt.Sprintf("queue=%dKiB/%s", queue>>10, onOff(lanes)), func(t *testing.T) {
+				line := runBothWays(t, netshape.Config{Rate: 30_000, Delay: 200 * time.Millisecond, Queue: queue}, lanes, 60*time.Second, 20*time.Second)
+				t.Log(line)
+				if out := os.Getenv("PERSONA_LANE_BENCH_OUT"); out != "" {
+					f, err := os.OpenFile(out, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer f.Close()
+					if _, err := fmt.Fprintln(f, line); err != nil {
+						t.Fatal(err)
+					}
+				}
+			})
+		}
+	}
+}
+
+func runBothWays(t *testing.T, link netshape.Config, lanes bool, run, warmUp time.Duration) string {
+	t.Helper()
+	d := newTestDevices(t)
+	logs := &benchLog{}
+	quiet := d.logf
+	d.logf = func(format string, args ...any) {
+		logs.add(fmt.Sprintf(format, args...))
+		quiet(format, args...)
+	}
+	type arrival struct {
+		i, bytes int
+		at       time.Time
+	}
+	arrivals := make(chan arrival, 1024)
+	stop := make(chan struct{})
+	var mu sync.Mutex
+	var conns []net.Conn
+	m := newMachine(d, MachineConfig{ID: "busy", Name: "Busy", Kind: "ssh"})
+	m.dialNode = func(context.Context) (net.Conn, error) {
+		managerSide, nodeSide := netshape.Pipe(link, link)
+		p := rpc.New("n", nodeSide)
+		caps := slices.Clone(nodeproto.Required)
+		if lanes {
+			p.EnableLanes(nodeproto.ControlLane, nodeproto.BulkLane)
+			caps = append(caps, nodeproto.NodeLanes)
+		}
+		p.OnRequest = func(_ context.Context, method string, _ json.RawMessage) (any, error) {
+			switch method {
+			case "node.info":
+				return proto.NodeInfo{Hostname: "busy", OS: "linux", Arch: "amd64", Home: "/home/me", Version: "test", ClaudeVersion: "test",
+					Protocol: nodeproto.Version, ProtocolMin: nodeproto.MinManagerVersion, Capabilities: caps}, nil
+			case "sessions.list":
+				return map[string]any{"sessions": []proto.Session{}}, nil
+			}
+			return map[string]any{}, nil
+		}
+		p.OnEvent = func(event string, params json.RawMessage) {
+			if event == "stream.data" {
+				var note struct {
+					I int `json:"i"`
+				}
+				_ = json.Unmarshal(params, &note)
+				arrivals <- arrival{i: note.I, bytes: len(params), at: time.Now()}
+			}
+		}
+		go func() { _ = p.Serve(context.Background(), nodeSide); nodeSide.Close() }()
+		go func() { // the other way: the node's events, as fast as the link takes them
+			load := json.RawMessage(`{"pad":"` + strings.Repeat("e", 96<<10) + `"}`)
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				if p.Notify("bench.load", load) != nil {
+					return
+				}
+			}
+		}()
+		mu.Lock()
+		conns = append(conns, managerSide, nodeSide)
+		mu.Unlock()
+		return managerSide, nil
+	}
+	t.Cleanup(func() {
+		close(stop)
+		mu.Lock()
+		defer mu.Unlock()
+		for _, c := range conns {
+			c.Close()
+		}
+	})
+	d.addEntry(m)
+	runMachine(t, m)
+	eventually(t, time.Minute, "busy connected", func() bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return m.peer != nil && m.online && m.sessionsListed
+	})
+
+	data := strings.Repeat("A", 24<<10)
+	queued := map[int]time.Time{}
+	var worst time.Duration
+	all, delivered, sent, arrived := 0, 0, 0, 0
+	start := time.Now()
+	measureFrom := start.Add(warmUp)
+	for time.Since(start) < run {
+		for sent-arrived < 3 { // three outstanding, as a port's window keeps a few chunks out
+			raw, _ := json.Marshal(map[string]any{"id": "p1", "i": sent, "data": data})
+			queued[sent] = time.Now()
+			m.queueNote("stream.data", raw)
+			sent++
+		}
+		select {
+		case a := <-arrivals:
+			arrived++
+			worst = max(worst, a.at.Sub(queued[a.i]))
+			all += a.bytes
+			if a.at.After(measureFrom) {
+				delivered += a.bytes
+			}
+		case <-time.After(time.Until(start.Add(run))):
+		}
+	}
+	return fmt.Sprintf("lanebench both mode=%s rate=%.0f rtt=%s queue=%d notes=%d delivered=%.0fB/s whole_run=%.0fB/s worst_note=%dms stall_closes=%d reconnects=%d",
+		onOff(lanes), link.Rate, 2*link.Delay, link.Queue, arrived, float64(delivered)/(run-warmUp).Seconds(), float64(all)/run.Seconds(),
+		worst.Milliseconds(), logs.count("took nothing for"),
+		max(logs.count("] connected over ")-1, 0))
+}

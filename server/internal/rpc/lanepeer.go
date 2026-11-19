@@ -147,6 +147,7 @@ func (p *Peer) frameWriter() *laneWriter {
 	defer p.mu.Unlock()
 	if p.lw == nil {
 		p.lw = newLaneWriter(p.w, p.closed, p.Close, p.LineFilter)
+		p.lw.wrote = &p.lastWrite
 	}
 	return p.lw
 }

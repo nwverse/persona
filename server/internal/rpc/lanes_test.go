@@ -230,13 +230,13 @@ func testCreditWindow(t *testing.T, lane Lane) {
 	lw.mu.Lock()
 	sent := lw.seq
 	lw.mu.Unlock()
-	if err := lw.acked(sent); err != nil {
+	if err := lw.acked(sent, clockMS(time.Now())); err != nil {
 		t.Fatal(err)
 	}
 	if m := stalled(); m <= n {
 		t.Fatalf("an acknowledgement let nothing more go (%d, then %d)", n, m)
 	}
-	if err := lw.acked(sent + 1000); !errors.Is(err, errFrame) {
+	if err := lw.acked(sent+1000, clockMS(time.Now())); !errors.Is(err, ErrFrame) {
 		t.Fatalf("an acknowledgement of frames never sent: %v", err)
 	}
 }
@@ -636,8 +636,8 @@ func TestLanesPingActivityInTheMiddleOfALine(t *testing.T) {
 		t.Fatal(err)
 	}
 	// An acknowledgement of nothing is read only once the reader took in the frame before it.
-	var ack [frameHeader]byte
-	putHead(ack[:], frameHead{kind: frameAck})
+	var ack [frameHeader + ackPayload]byte
+	putHead(ack[:], frameHead{kind: frameAck, size: ackPayload})
 	if _, err := pw.Write(ack[:]); err != nil {
 		t.Fatal(err)
 	}

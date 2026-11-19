@@ -20,16 +20,21 @@ package rpc
 // switches its output under its writer's lock, right after the line that announces it, and its input in the read
 // loop, right after the line that announces the other side's switch, so no byte in flight is read the wrong way.
 //
-// A frame is a 16-byte header and up to framePayloadMax bytes of a line (without its newline):
+// A frame is a 16-byte header and its payload: up to framePayloadMax bytes of a line (without its newline), or an
+// acknowledgement's 4 bytes:
 //
 //	[0]     kind: 'D' a piece of a line, 'A' an acknowledgement
 //	[1]     lane (D), 0 (A)
 //	[2]     flags: 1 the line's last piece (D), 0 (A); the other bits 0
 //	[3]     0
 //	[4:6]   slot: which of the lane's lines in progress the piece belongs to (D), 0 (A)
-//	[6:8]   payload length, big endian (D), 0 (A)
+//	[6:8]   payload length, big endian (D), 4 (A)
 //	[8:16]  D: the frame's sequence number in this direction, 1 for the first, big endian; A: the last sequence
 //	        number the sender has read, every frame before it included
+//
+// An acknowledgement's payload is the time its sender read that last frame, by its own clock (clockMS, big endian):
+// with the time the frame was written, by the other's, it gives a delay that counts only this direction, whatever
+// waits ahead of the acknowledgement on its own way back (creditWindow).
 //
 // Sequence numbers and the cumulative acknowledgement are what a resumed connection (#10663) is built on: it keeps the
 // frames not yet acknowledged and sends them again after a reconnect. Version 1 uses them for the window only.
@@ -39,6 +44,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 )
 
 // Lane is one of the classes a framed connection sends in strict priority.
@@ -165,10 +171,18 @@ const (
 )
 
 const (
-	frameData byte = 'D'
-	frameAck  byte = 'A'
-	flagFin   byte = 1
+	frameData  byte = 'D'
+	frameAck   byte = 'A'
+	flagFin    byte = 1
+	ackPayload      = 4
 )
+
+// clockStart and clockMS are this process's clock for acknowledgements: milliseconds since it started, wrapping
+// after 49 days, from the monotonic clock (a stepped wall clock would read as a jump in delay). Only differences of
+// two readings of the same clock, or of such differences, mean anything.
+var clockStart = time.Now()
+
+func clockMS(t time.Time) uint32 { return uint32(t.Sub(clockStart) / time.Millisecond) }
 
 // frameHead is a frame's header.
 type frameHead struct {
@@ -191,7 +205,9 @@ func putHead(b []byte, h frameHead) {
 	binary.BigEndian.PutUint64(b[8:16], h.seq)
 }
 
-var errFrame = errors.New("rpc: malformed frame")
+// ErrFrame is what a framed connection ends with when the other side's bytes are not frames this version writes (its
+// read, errors.Is): the two ends disagree about where frames are, or something between them changed the bytes.
+var ErrFrame = errors.New("rpc: malformed frame")
 
 // parseHead reads and checks a header: anything this version does not write is an error, so a connection whose two
 // ends disagree about where frames are fails at once instead of reading garbage as lines.
@@ -202,14 +218,14 @@ func parseHead(b []byte) (frameHead, error) {
 	switch h.kind {
 	case frameData:
 		if h.lane >= laneCount || b[2]&^flagFin != 0 || b[3] != 0 || h.size > framePayloadMax {
-			return h, fmt.Errorf("%w: data header % x", errFrame, b[:8])
+			return h, fmt.Errorf("%w: data header % x", ErrFrame, b[:8])
 		}
 	case frameAck:
-		if b[1]|b[2]|b[3]|b[4]|b[5]|b[6]|b[7] != 0 {
-			return h, fmt.Errorf("%w: ack header % x", errFrame, b[:8])
+		if b[1]|b[2]|b[3]|b[4]|b[5] != 0 || h.size != ackPayload {
+			return h, fmt.Errorf("%w: ack header % x", ErrFrame, b[:8])
 		}
 	default:
-		return h, fmt.Errorf("%w: kind 0x%02x", errFrame, h.kind)
+		return h, fmt.Errorf("%w: kind 0x%02x", ErrFrame, h.kind)
 	}
 	return h, nil
 }

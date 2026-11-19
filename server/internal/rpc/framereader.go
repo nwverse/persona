@@ -3,11 +3,13 @@ package rpc
 import (
 	"bufio"
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"encoding/json/jsontext"
 	"fmt"
 	"io"
 	"slices"
+	"time"
 )
 
 // frameReader reads a framed connection's lines (lanes.go) for Serve, as a lineReader reads plain ones: Scan, Bytes,
@@ -23,14 +25,17 @@ type frameReader struct {
 	err        error
 	seq        uint64               // the last data frame read
 	creditRead bool                 // a frame with credit was read since the last ack asked for
+	creditSeq  uint64               // the last of them
+	creditAt   uint32               // when it was read (clockMS)
+	readAt     uint32               // when the latest read came in (clockMS)
 	partial    map[uint32]*partLine // lines in progress, by lane<<16 | slot
 	held       int                  // their bytes
 	reads      int                  // reads made so far
 	middleLine uint64               // the first frame of the line whose middle counted last (holding)
 	token      []byte
 	owned      bool
-	ack        func(seq uint64)       // ask for an acknowledgement of every frame read through seq
-	acked      func(seq uint64) error // the other side read every frame this side sent through seq
+	ack        func(seq uint64, at uint32)       // ask for an acknowledgement of every frame read through seq, read at at
+	acked      func(seq uint64, at uint32) error // the other side read every frame this side sent through seq, the last at at
 	// middle, when set, is told of each read that went on with a line begun before it, did not finish it and has
 	// already grown past pingFrameMiddleBytes, as lineReader.middle is (PingActivity).
 	middle func()
@@ -104,14 +109,14 @@ func (s *frameReader) frame(h frameHead, payload []byte) ([]byte, bool, error) {
 		if s.acked == nil {
 			return nil, false, nil
 		}
-		return nil, false, s.acked(h.seq)
+		return nil, false, s.acked(h.seq, binary.BigEndian.Uint32(payload))
 	}
 	if h.seq != s.seq+1 {
-		return nil, false, fmt.Errorf("%w: frame %d after %d", errFrame, h.seq, s.seq)
+		return nil, false, fmt.Errorf("%w: frame %d after %d", ErrFrame, h.seq, s.seq)
 	}
 	s.seq = h.seq
 	if creditLane(h.lane) {
-		s.creditRead = true
+		s.creditRead, s.creditSeq, s.creditAt = true, h.seq, s.readAt
 	}
 	key := frameKey(h)
 	part, going := s.partial[key]
@@ -125,7 +130,7 @@ func (s *frameReader) frame(h frameHead, payload []byte) ([]byte, bool, error) {
 			return payload, true, nil // in the read buffer: valid until the next Scan, as a short line's is
 		}
 		if len(s.partial) >= maxPartialLines {
-			return nil, false, fmt.Errorf("%w: more than %d lines in progress", errFrame, maxPartialLines)
+			return nil, false, fmt.Errorf("%w: more than %d lines in progress", ErrFrame, maxPartialLines)
 		}
 		part = &partLine{first: h.seq, read: s.reads, reply: replyEnvelope(payload)}
 		s.partial[key] = part
@@ -206,7 +211,8 @@ func (p *partLine) join(tail []byte) []byte {
 func (s *frameReader) fill() {
 	carried := s.end > s.start // a frame begun in an earlier read: this one goes on with it
 	if s.creditRead && s.ack != nil {
-		s.ack(s.seq)
+		// Through the last frame with credit, not every frame read: its time is what the other side measures by.
+		s.ack(s.creditSeq, s.creditAt)
 		s.creditRead = false
 	}
 	if s.start > 0 && (s.start == s.end || len(s.buf)-s.end < frameMax) {
@@ -227,6 +233,7 @@ func (s *frameReader) fill() {
 		}
 		if n > 0 {
 			s.reads++
+			s.readAt = clockMS(time.Now())
 			s.noteMiddle(carried)
 			return
 		}

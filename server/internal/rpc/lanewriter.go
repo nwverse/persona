@@ -2,11 +2,13 @@ package rpc
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"math/bits"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -19,6 +21,7 @@ type laneWriter struct {
 	closed <-chan struct{} // the peer's
 	fail   func(error)     // closes the peer: a write failed, or the other side broke the protocol
 	filter func([]byte) []byte
+	wrote  *atomic.Int64 // when a write last went through (Peer.LastWrite); nil: not kept
 
 	mu      sync.Mutex
 	wake    chan struct{} // 1: lines queued, credit or an acknowledgement due
@@ -27,6 +30,7 @@ type laneWriter struct {
 	lanes   [laneCount]laneQueue
 	seq     uint64 // the last data frame numbered
 	ackDue  uint64 // the reader has read every frame through this one, and wants it acknowledged
+	ackAt   uint32 // when it read it (clockMS)
 	ackSent uint64
 	win     creditWindow
 	totals  [laneCount]laneTotals
@@ -117,24 +121,24 @@ func (q *laneQueue) drop(l *outLine) {
 	}
 }
 
-// ack asks for an acknowledgement of every frame read through seq.
-func (lw *laneWriter) ack(seq uint64) {
+// ack asks for an acknowledgement of every frame read through seq, read at at (clockMS).
+func (lw *laneWriter) ack(seq uint64, at uint32) {
 	lw.mu.Lock()
 	if seq > lw.ackDue {
-		lw.ackDue = seq
+		lw.ackDue, lw.ackAt = seq, at
 		lw.poke()
 	}
 	lw.mu.Unlock()
 }
 
-// acked takes the other side's acknowledgement of every frame through seq.
-func (lw *laneWriter) acked(seq uint64) error {
+// acked takes the other side's acknowledgement of every frame through seq, the last read at at by its clock.
+func (lw *laneWriter) acked(seq uint64, at uint32) error {
 	lw.mu.Lock()
 	defer lw.mu.Unlock()
 	if seq > lw.seq {
-		return fmt.Errorf("%w: acknowledges frame %d, %d sent", errFrame, seq, lw.seq)
+		return fmt.Errorf("%w: acknowledges frame %d, %d sent", ErrFrame, seq, lw.seq)
 	}
-	lw.win.acked(seq, time.Now())
+	lw.win.acked(seq, at, time.Now())
 	if len(lw.lanes[LaneInteractive].lines)+len(lw.lanes[LaneBulk].lines) > 0 { // what may wait for credit
 		lw.poke()
 	}
@@ -169,6 +173,9 @@ func (lw *laneWriter) run() {
 		n, err := lw.w.Write(batch)
 		if err == nil && n != len(batch) {
 			err = io.ErrShortWrite
+		}
+		if err == nil && lw.wrote != nil {
+			lw.wrote.Store(time.Now().UnixNano())
 		}
 		lw.mu.Lock()
 		lw.busy = false
@@ -208,8 +215,9 @@ func (lw *laneWriter) stop(err error) {
 // (the first always does). finished is the lines whose last frame it holds.
 func (lw *laneWriter) fillLocked(batch []byte, finished []*outLine, now time.Time) ([]byte, []*outLine) {
 	if lw.ackDue > lw.ackSent {
-		var h [frameHeader]byte
-		putHead(h[:], frameHead{kind: frameAck, seq: lw.ackDue})
+		var h [frameHeader + ackPayload]byte
+		putHead(h[:], frameHead{kind: frameAck, size: ackPayload, seq: lw.ackDue})
+		binary.BigEndian.PutUint32(h[frameHeader:], lw.ackAt)
 		batch = append(batch, h[:]...)
 		lw.ackSent = lw.ackDue
 	}
@@ -327,7 +335,7 @@ type LaneStats struct {
 	Window   int           // bytes of the lanes with credit (interactive, bulk) that may be in flight
 	InFlight int           // those sent and not acknowledged
 	RTT      time.Duration // the latest round trip of such a frame
-	BaseRTT  time.Duration // the smallest lately
+	Queued   time.Duration // how long the latest such frame spent queued on its way
 }
 
 // LaneCounters is one lane's: what waits now, the frames sent, and the longest a line waited for its first frame (one
@@ -341,7 +349,7 @@ type LaneCounters struct {
 
 // String is the counters on one line, for a log, each field per lane in priority order (control/interactive/events/
 // bulk): "lanes=on queued=0/1/0/3 bytes=0B/1KiB/0B/96KiB maxwait=1ms/40ms/2ms/1.2s sent=12/340/88/51 window=64KiB
-// inflight=32KiB rtt=410ms base=380ms"; "lanes=off" for a connection of lines.
+// inflight=32KiB rtt=410ms queued=30ms"; "lanes=off" for a connection of lines.
 func (s LaneStats) String() string {
 	if !s.Framed {
 		return "lanes=off"
@@ -353,9 +361,9 @@ func (s LaneStats) String() string {
 		wait[i] = c.MaxWait.Round(time.Millisecond).String()
 		sent[i] = fmt.Sprint(c.SentFrames)
 	}
-	return fmt.Sprintf("lanes=on queued=%s bytes=%s maxwait=%s sent=%s window=%s inflight=%s rtt=%s base=%s",
+	return fmt.Sprintf("lanes=on queued=%s bytes=%s maxwait=%s sent=%s window=%s inflight=%s rtt=%s queued=%s",
 		strings.Join(queued[:], "/"), strings.Join(size[:], "/"), strings.Join(wait[:], "/"), strings.Join(sent[:], "/"),
-		sizeText(int64(s.Window)), sizeText(int64(s.InFlight)), s.RTT.Round(time.Millisecond), s.BaseRTT.Round(time.Millisecond))
+		sizeText(int64(s.Window)), sizeText(int64(s.InFlight)), s.RTT.Round(time.Millisecond), s.Queued.Round(time.Millisecond))
 }
 
 func sizeText(n int64) string {
@@ -380,11 +388,7 @@ func (lw *laneWriter) stats() LaneStats {
 	now := time.Now()
 	lw.mu.Lock()
 	defer lw.mu.Unlock()
-	base := lw.win.base[1].min() // full frames' when there are any
-	if base == 0 {
-		base = lw.win.base[0].min()
-	}
-	s := LaneStats{Framed: true, Window: lw.win.cwnd, InFlight: lw.win.inFlight, RTT: lw.win.rtt, BaseRTT: base}
+	s := LaneStats{Framed: true, Window: lw.win.cwnd, InFlight: lw.win.inFlight, RTT: lw.win.rtt, Queued: lw.win.queued}
 	for i := range lw.lanes {
 		c := &s.Lanes[i]
 		c.SentFrames, c.MaxWait = lw.totals[i].frames, lw.totals[i].maxWait

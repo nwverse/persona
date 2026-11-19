@@ -13,7 +13,8 @@ import (
 // the order they came, so a computer slow to take them holds up only its own. One whose write stalls noteStall, or
 // that lets maxNoteBytes pile up, is connected again (what ran on the connection ends, as with any dropped one). A
 // forwarded port's streams queue apart from the rest (portNote): on a framed connection their bytes wait for credit,
-// and terminal input behind them would wait with them.
+// and terminal input behind them would wait with them. A stall is no progress at all: on a framed connection a note
+// can wait for credit while the connection writes everything else.
 var (
 	noteStall    = 30 * time.Second
 	maxNoteBytes = 32 << 20
@@ -81,11 +82,58 @@ func (m *Machine) writeNotes(n *nodeNotes) {
 		if p == nil {
 			continue
 		}
-		stalled := time.AfterFunc(noteStall, func() {
+		watch := watchNote(p.LastWrite, func() {
 			m.d.logf("[%s] its node took nothing for %s: connecting it again", m.cfg.ID, noteStall)
 			p.Close(errors.New("the node stopped taking events"))
 		})
 		_ = p.Notify(e.event, e.params)
-		stalled.Stop()
+		watch.stop()
 	}
+}
+
+// drop lets everything queued on n go, and says how much that was.
+func (n *nodeNotes) drop() int {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	dropped := len(n.q)
+	n.q = nil
+	n.bytes = 0
+	return dropped
+}
+
+// noteWatch closes a connection (stalled) once nothing it writes has gone through for noteStall (written: its last
+// write) while a note waits to be written.
+type noteWatch struct {
+	mu   sync.Mutex
+	t    *time.Timer
+	done bool
+}
+
+func watchNote(written func() time.Time, stalled func()) *noteWatch {
+	w := &noteWatch{}
+	var check func()
+	check = func() {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		if w.done {
+			return
+		}
+		if idle := time.Since(written()); idle < noteStall {
+			w.t = time.AfterFunc(noteStall-idle, check) // it moves: look again when it would have stalled
+			return
+		}
+		w.done = true
+		go stalled()
+	}
+	w.mu.Lock()
+	w.t = time.AfterFunc(noteStall, check)
+	w.mu.Unlock()
+	return w
+}
+
+func (w *noteWatch) stop() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.done = true
+	w.t.Stop()
 }

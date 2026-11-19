@@ -130,6 +130,7 @@ type Peer struct {
 	wsem         chan struct{}
 	nextID       atomic.Int64
 	pingActivity atomic.Int64 // unix nanoseconds; the latest input that can explain a late pong (PingActivity)
+	lastWrite    atomic.Int64 // unix nanoseconds; the latest write that went through (LastWrite)
 	writeWaiters atomic.Int64
 	mu           sync.Mutex
 	pending      map[string]chan message
@@ -211,6 +212,16 @@ func New(prefix string, w io.Writer) *Peer {
 // line that cannot be decoded still counts, as nothing shows it is not a reply.
 func (p *Peer) PingActivity() time.Time {
 	ns := p.pingActivity.Load()
+	if ns == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, ns)
+}
+
+// LastWrite is when this peer last wrote to its transport and the write went through: a line, or framed, a batch of
+// frames. Zero before the first. A writer held up for good (a peer that stopped reading) shows as no progress.
+func (p *Peer) LastWrite() time.Time {
+	ns := p.lastWrite.Load()
 	if ns == 0 {
 		return time.Time{}
 	}
@@ -566,6 +577,9 @@ func (p *Peer) writeLine(b []byte) error {
 	n, err := p.w.Write(line)
 	if err == nil && n != len(line) {
 		err = io.ErrShortWrite // a writer that breaks io.Writer's rule must not pass for one that wrote the line
+	}
+	if err == nil {
+		p.lastWrite.Store(time.Now().UnixNano())
 	}
 	if err == nil && p.LineWritten != nil {
 		p.LineWritten(b)

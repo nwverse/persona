@@ -3,6 +3,7 @@ package rpc
 import (
 	"bufio"
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"io"
 	"strings"
@@ -45,7 +46,7 @@ func TestFrameHeadRoundTrip(t *testing.T) {
 	for _, h := range []frameHead{
 		{kind: frameData, lane: LaneBulk, fin: true, slot: 15, size: framePayloadMax, seq: 1<<63 + 5},
 		{kind: frameData, lane: LaneControl, size: 0, seq: 1},
-		{kind: frameAck, seq: 42},
+		{kind: frameAck, size: ackPayload, seq: 42},
 	} {
 		var b [frameHeader]byte
 		putHead(b[:], h)
@@ -73,8 +74,8 @@ func TestFrameHeadRejectsWhatV1NeverWrites(t *testing.T) {
 	} {
 		b := good()
 		mutate(b)
-		if _, err := parseHead(b); !errors.Is(err, errFrame) {
-			t.Errorf("%s: %v, want errFrame", name, err)
+		if _, err := parseHead(b); !errors.Is(err, ErrFrame) {
+			t.Errorf("%s: %v, want ErrFrame", name, err)
 		}
 	}
 }
@@ -169,12 +170,12 @@ func TestFrameReaderBrokenInput(t *testing.T) {
 	t.Run("sequence gap", func(t *testing.T) {
 		a, seq := frames(0, LaneEvents, framePayloadMax, line)
 		b, _ := frames(seq+1, LaneEvents, framePayloadMax, line)
-		if _, err := readLines(t, bytes.NewReader(append(a, b...))); !errors.Is(err, errFrame) {
+		if _, err := readLines(t, bytes.NewReader(append(a, b...))); !errors.Is(err, ErrFrame) {
 			t.Fatalf("%v", err)
 		}
 	})
 	t.Run("a JSON line where a frame belongs", func(t *testing.T) {
-		if _, err := readLines(t, strings.NewReader("{\"event\":\"x\",\"params\":{}}\n")); !errors.Is(err, errFrame) {
+		if _, err := readLines(t, strings.NewReader("{\"event\":\"x\",\"params\":{}}\n")); !errors.Is(err, ErrFrame) {
 			t.Fatalf("%v", err)
 		}
 	})
@@ -194,7 +195,7 @@ func TestFrameReaderBrokenInput(t *testing.T) {
 			putHead(h[:], frameHead{kind: frameData, lane: Lane(i % int(laneCount)), slot: uint16(i), size: 1, seq: uint64(i + 1)})
 			wire = append(append(wire, h[:]...), 'x')
 		}
-		if _, err := readLines(t, bytes.NewReader(wire)); !errors.Is(err, errFrame) {
+		if _, err := readLines(t, bytes.NewReader(wire)); !errors.Is(err, ErrFrame) {
 			t.Fatalf("%v", err)
 		}
 	})
@@ -208,12 +209,14 @@ func TestFrameReaderAcks(t *testing.T) {
 	wire, seq := frames(0, LaneInteractive, framePayloadMax, []byte("a"))
 	more, seq2 := frames(seq, LaneBulk, 10, make([]byte, 25))
 	wire = append(wire, more...)
-	var h [frameHeader]byte
-	putHead(h[:], frameHead{kind: frameAck, seq: 7})
+	var h [frameHeader + ackPayload]byte
+	putHead(h[:], frameHead{kind: frameAck, size: ackPayload, seq: 7})
+	binary.BigEndian.PutUint32(h[frameHeader:], 1234)
 	wire = append(wire, h[:]...)
 	fr := newFrameReader(bytes.NewReader(wire), 1<<20)
-	fr.ack = func(seq uint64) { asked = append(asked, seq) }
-	fr.acked = func(seq uint64) error { acked = append(acked, seq); return nil }
+	fr.ack = func(seq uint64, _ uint32) { asked = append(asked, seq) }
+	var ackedAt uint32
+	fr.acked = func(seq uint64, at uint32) error { acked, ackedAt = append(acked, seq), at; return nil }
 	n := 0
 	for fr.Scan() {
 		n++
@@ -221,8 +224,8 @@ func TestFrameReaderAcks(t *testing.T) {
 	if n != 2 || fr.Err() != nil {
 		t.Fatalf("%d lines, %v", n, fr.Err())
 	}
-	if len(acked) != 1 || acked[0] != 7 {
-		t.Fatalf("acknowledgements read: %v", acked)
+	if len(acked) != 1 || acked[0] != 7 || ackedAt != 1234 {
+		t.Fatalf("acknowledgements read: %v at %d", acked, ackedAt)
 	}
 	if len(asked) != 1 || asked[0] != seq2 {
 		t.Fatalf("acknowledgements asked for: %v, want [%d]", asked, seq2)

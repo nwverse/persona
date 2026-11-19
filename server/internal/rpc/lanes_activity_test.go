@@ -263,7 +263,7 @@ func TestFrameReaderAsksAcksForCreditOnly(t *testing.T) {
 		wire, _ := frames(0, lane, framePayloadMax, []byte(`{"event":"x"}`))
 		fr := newFrameReader(bytes.NewReader(wire), 1<<20)
 		asked := false
-		fr.ack = func(uint64) { asked = true }
+		fr.ack = func(uint64, uint32) { asked = true }
 		for fr.Scan() {
 		}
 		if asked != wants {

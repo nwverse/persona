@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -148,5 +149,37 @@ func TestPortStreamClosesAfterItsBytes(t *testing.T) {
 				t.Fatalf("the close came before the stream's last bytes: %v", stream)
 			}
 		})
+	}
+}
+
+// A note waiting to be written closes the connection only once nothing it writes has gone through for noteStall: on a
+// framed connection a note can wait for credit while everything else goes on.
+func TestNoteStallIsNoProgressAtAll(t *testing.T) {
+	old := noteStall
+	noteStall = 100 * time.Millisecond
+	t.Cleanup(func() { noteStall = old })
+	var last atomic.Int64
+	last.Store(time.Now().UnixNano())
+	written := func() time.Time { return time.Unix(0, last.Load()) }
+	stalled := make(chan time.Time, 1)
+	start := time.Now()
+	w := watchNote(written, func() { stalled <- time.Now() })
+	defer w.stop()
+	moving := time.Now().Add(400 * time.Millisecond)
+	for time.Now().Before(moving) { // the connection keeps writing
+		last.Store(time.Now().UnixNano())
+		select {
+		case at := <-stalled:
+			t.Fatalf("closed after %s while writes went through", at.Sub(start))
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+	select { // then nothing goes through
+	case at := <-stalled:
+		if at.Sub(moving) < noteStall-20*time.Millisecond {
+			t.Fatalf("closed %s after the last write", at.Sub(moving))
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("never closed once nothing went through")
 	}
 }
