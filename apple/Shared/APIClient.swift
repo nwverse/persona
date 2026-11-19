@@ -337,7 +337,8 @@ nonisolated struct APIClient: Sendable {
 
     func request(_ method: String, _ path: String, query: [String: String] = [:], repeated: [URLQueryItem] = [], body: (any Encodable)? = nil,
                  timeout: TimeInterval = 30, opID: UUID? = nil, extraHeaders: [String: String] = [:]) async throws -> Data {
-        func send() async throws -> Data {
+        // Keep the non-Sendable Encodable body in this request's task instead of sending it to a concurrent local function.
+        nonisolated(nonsending) func send() async throws -> Data {
             try await sendRequest(method, path, query: query, repeated: repeated, body: body, timeout: timeout, opID: opID, extraHeaders: extraHeaders)
         }
         do {
