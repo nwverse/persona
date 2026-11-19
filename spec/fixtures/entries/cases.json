@@ -3254,7 +3254,13 @@
       "expected": {
         "needs_you": [],
         "running": [],
-        "shelved": []
+        "shelved": [],
+        "finished": [
+          "task:t-invalid"
+        ],
+        "finished_new": [
+          "task:t-invalid"
+        ]
       }
     }
   ]
