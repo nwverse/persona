@@ -1653,20 +1653,9 @@ A computer's dev server opened from a chat (a forwarded port, `docs/web/preview.
 
 Tool execution is one summary line, never opens by itself, shows the latest text segment while running and the result when done, and expands by hand. Opened by hand, a step (and the summary itself) changes in place: the tapped row stays under the finger, what opens fades in, what closes goes at once, and the list holds still while the turn goes on (new steps, the answer, the next turn, the footer under the list changing) until the user scrolls, taps ↓ or sends (`toggleInPlace`, `ChatFollow.toggledRow`, #3005). iOS complies: `isOpen` ignores `live` (`apple/Persona/Views/Chat/ChatLines.swift:293`) and tool rows use `autoExpand: false`. The "latest segment only" half was not confirmed from code reading and needs a screenshot test.
 
-**The opened summary** (web, #5155; the owner asked on 2026-11-12 that it follow cindy's `WorkGroupBlock` and
-`createCompletedWorkGroup`). A summary that holds intermediate narration opens to cindy's timeline: the narration in
-order, and each run of work between two pieces of it an inner summary of its own, "Worked for 12s" from the words
-before it to the words after it, the live one "Working…" with its clock. Without intermediate narration it holds its
-rows directly. If tools follow the latest progress message, the expanded Web timeline also shows that message at its
-original position; the collapsed view still shows it in the latest-text slot. The work headers explain their clocks:
-the outer clock covers the whole exchange; inner clocks start at the preceding message or start of work and end at
-the next message, the last activity in a finished run, or now in a live run. Inner summaries open together with the outer one and then keep their own open / closed state, so
-opening a summary shows every tool call. On the web a long finished summary fills in as it opens: the first 60 steps
-(its inner summaries' included) come with the tap and the rest follow in batches of 60 while the page is idle, so the
-tap is answered at once and every call is still drawn a moment later, none left out or behind a "Show more"; rows
-already drawn stay put. A live summary, a search hit inside one and a jump to a call in one ("Jump to the step that
-started it", a subagent's or a child session's link) draw all of it at once, so the row asked for is there to land on
-(`docs/web/web.md`, "A long summary opens a screenful at a time"). A thought with words is one row in the tool rows' chrome (16 px status slot
+**The opened summary** (web, #10247) is a flat sequence of narration and action groups, sharing one rail and indentation. The outer summary keeps the whole-exchange clock and collapsed default. Action headers name at most three kinds in first-seen order, with the first kind's icon; read/edit/search/command kinds have localized counts, and other kinds retain their existing labels. Earlier live groups start collapsed, the current one opens within the trace the reader manually opened, and a superseded run closes; all groups can be opened and closed by hand. Newly loaded completed groups start open; remembered disclosure choices remain available. Latest narration stays only in its text slot until superseded, and the final reply appears once. Rows lead with the file, query and target, or command; command descriptions remain in tooltips and expanded detail. Reliable per-call durations appear only from 30 seconds; the total exchange clock stays on the outer summary and run bar. The current run previews edit diffs using the existing diff renderer. The flatter layout replaces repeated time headings and nested rails so the inspected work is scannable, while preserving the top-level progressive disclosure required by super rule 2.
+
+A long finished summary draws its first 60 steps with the tap and adds idle batches of 60. Live summaries, search hits and jumps draw all requested steps immediately. Search, jump-to-step and folded history continue to open the groups holding their target (`docs/web/web.md`, "A long summary opens a screenful at a time"). A thought with words is one row in the tool rows' chrome (16 px status slot
 with the sparkle, italic `thinking-ink` words on one line, the 18 px chevron slot), opening in place only when it does
 not fit or has a line break, its opened words selectable; a thought without words is no step, so it neither makes a
 summary of its own nor splits a run of rows. The live "Thinking" line with dots and a clock ends

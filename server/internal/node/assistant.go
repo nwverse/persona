@@ -464,7 +464,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			return "", errors.New("inbox handling requires a built-in Claude or Codex launcher")
 		}
 		if policy != "" {
-			return "", supervisionRuntimeRefusal(ctx)
+			if err := n.runtimePolicyDropped(ctx, id); err != nil {
+				return "", err
+			}
 		}
 		if startTier != "" {
 			return "", serviceTierRefusal(ctx, "assistant_service_tier_unsupported")
