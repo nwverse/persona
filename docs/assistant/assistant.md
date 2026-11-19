@@ -1946,6 +1946,13 @@ Assistant MCP tools (`assistant/conversations.go`, descriptions `prompts/mcp/ass
   - **Queue while running**: if target is running, already queued, or the owner is talking in it, persist in hub settings `assistant.relay` (survives restart), displayed above the input like typed queues
     (session `queued`). After its turn ends (no longer working) and the owner's hold is over, hub sends one at a time, by rank ("Messages from the system wait for the owner"). Don't write into running processes: Codex merges through `turn/steer`, not queueing.
     They come after the user's own queued messages, and `queued_relayed` counts them: the apps only show and copy them.
+  - **A queued send in doubt (#10690).** The manager saves the attempt time before sending. If the answer is lost or
+    the manager stops, it checks the most recent three turns for the relay before sending again. It makes up to
+    three checks, each with a 15-second timeout, and waits 10 seconds between checks. A match removes the relay
+    from the queue. If the last check fails or still finds no match, the manager retries with the same `once_id`.
+    An uncertain supervision digest stays queued if rechecking its tasks would change the text or destination.
+    The node keeps that id for ten minutes or until it restarts. When there is no owner to ask, a possible duplicate
+    is preferable to silently losing the relay.
 - **The user's own queue** (#4342): a message the user sends while a chat works goes to its headless Claude at once and waits in Claude Code's
   queue until the next step takes it in. The transcript notes that wait without the words, so the node gives each message an id and follows
   Claude Code's `command_lifecycle` for it (`server/internal/node/assistant_queue.go`); the waiting ones are the session's `queued`. The queue
