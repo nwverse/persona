@@ -49,6 +49,9 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
+/** The upload boundary of an ordinary composer attachment; tests can complete it without native image decoding. */
+typealias ComposerAttachmentUpload = suspend (ChatComposerService, SessionKey, ComposerAttachment, suspend (Long) -> Unit) -> String
+
 /** How long an upload waits for the hub connection to be ready again before it fails (a setting, not measured). */
 internal const val UPLOAD_READY_WAIT_MILLIS = 15_000L
 
@@ -105,9 +108,14 @@ fun ChatComposer(
      * gets how much room the composer has ([ModelPillWidth], the web's container rules). Null: none.
      */
     modelPill: (@Composable (ModelPillWidth) -> Unit)? = null,
+    upload: ComposerAttachmentUpload? = null,
     wrapPlaceholder: Boolean = false,
+    dictate: DictationControl? = rememberComposerDictation(session, state, visible && enabled, onNotice),
 ) {
     val context = LocalContext.current
+    val performUpload: ComposerAttachmentUpload = upload ?: { uploadService, uploadSession, attachment, onStaged ->
+        uploadAttachment(context, uploadService, uploadSession, attachment, destination = uploadDestination, onStaged = onStaged)
+    }
     val compactShell = useShellSurface && PersonaTheme.style == AppStyle.Glass
     val adaptiveProbePage = "chat:${session.path}"
     val resources = LocalResources.current
@@ -131,8 +139,10 @@ fun ChatComposer(
     var editOpening by remember { mutableStateOf(false) }
     // The draft full screen (#5688): offered once the field has grown to its line limit and scrolls.
     var expandedEditor by rememberSaveable { mutableStateOf(false) }
-    LaunchedEffect(menu, confirmClear, cameraDenied, editing, expandedEditor) {
-        onOverlay(menu || confirmClear || cameraDenied || editing != null || expandedEditor)
+    val composerCovered = menu || confirmClear || cameraDenied || editing != null || expandedEditor
+    LaunchedEffect(composerCovered, dictate) {
+        if (composerCovered) dictate?.stopListening()
+        onOverlay(composerCovered)
     }
     DisposableEffect(Unit) { onDispose { onOverlay(false) } }
     var cameraUri by rememberSaveable { mutableStateOf<String?>(null) }
@@ -272,7 +282,7 @@ fun ChatComposer(
 
     state.attachments.forEach { attachment ->
         key(attachment.id) {
-            LaunchedEffect(attachment.id, attachment.error, service, uploadDestination) {
+            LaunchedEffect(attachment.id, attachment.error, service, uploadDestination, upload) {
                 if (attachment.uploadState == DraftUploadState.Invalid) return@LaunchedEffect
                 // Once the computer has it, a revoked local picker grant cannot make the attachment unsendable.
                 if (attachment.path != null) return@LaunchedEffect
@@ -290,7 +300,7 @@ fun ChatComposer(
                         state.attachments = state.attachments.map {
                             if (it.id == attachment.id) it.copy(uploadState = DraftUploadState.Uploading) else it
                         }
-                        uploadAttachment(context, service, session, attachment, destination = uploadDestination) { size ->
+                        performUpload(service, session, attachment) { size ->
                             state.attachments = state.attachments.map {
                                 if (it.id == attachment.id) it.copy(size = size) else it
                             }
@@ -318,15 +328,12 @@ fun ChatComposer(
         key(edit) { ImageEditor(edit.source, onCancel = { if (editing === edit) editing = null }, onDone = { finishEdit(edit, it, done) },
             start = edit.prior?.state ?: ImageEditState(), onEdited = { done = it }) }
     }
-    // Voice input: what the phone's recognizer heard goes at the end of the draft, to edit before sending.
-    val dictation = rememberDictation(onHeard = { state.appendDictation(it) }, onError = onNotice)
     if (!visible) return
     if (AdaptiveProbe.enabled) {
         AdaptiveComposerProbe(adaptiveProbePage, state.value, state.attachments.map { it.id to it.uploadState.name }, state.draftLoaded)
     }
     LaunchedEffect(state.focusRequest) { if (state.focusRequest > 0) focusRequester.requestFocus() }
     // A read-only session (enabled = false) offers nothing to type with: no +, no mic, no "/" list, no send.
-    val dictate = dictation?.takeIf { enabled }
     // The main conversation's /clear (#5100): offered while it works too (the hub stops the turn), and it never asks first.
     val mainClear = LocalMainChatClear.current?.takeIf { enabled }
     // Both the "/" list and the + sheet offer only what an Assistant conversation runs, never an Agent's quick messages.
@@ -400,6 +407,7 @@ fun ChatComposer(
     }
     // /clear sent alone in the main conversation clears it instead of going to Persona (web `isClearCommand`).
     fun send() {
+        if (dictate?.active == true) return
         val clear = mainClear
         if (clear != null && isMainClearCommand(state.value.text, state.attachments.size, extraContent)) clearMain(clear) else onSend()
     }
@@ -422,7 +430,7 @@ fun ChatComposer(
     val offersExpand = enabled && (composerOffersExpand(lineCount, growLines) ||
         compactShell && (state.focused || '\n' in state.value.text))
     LaunchedEffect(enabled) { if (!enabled) expandedEditor = false }
-    val canSend = enabled && state.ready && !sending
+    val canSend = enabled && state.ready && !sending && dictate?.active != true
     val homeAssistant = LocalHomeChrome.current?.let { it.items.firstOrNull()?.key == it.selected } == true
     val fullToolbar = !homeAssistant || state.focused || hasContent
     // Expand once on focus, not when the first character arrives. ComposerFrame keeps the field in the same row across
@@ -471,7 +479,7 @@ fun ChatComposer(
             // The mic stays (iOS ShellComposerBar): more can be dictated after what is typed. Send beside it once there is
             // something to send, else a stop while the agent works; nothing else while the box is empty. On Glass the button
             // changing grows and shrinks as iOS's does (ComposerActionSlot, #4210 T3).
-            dictate?.let { JIconButton(PhIcons.Microphone, stringResource(R.string.chat_composer_dictate), it, enabled = !sending) }
+            dictate?.let { DictationMic(it, stringResource(R.string.chat_composer_dictate), enabled = !sending) }
             if (blockedLabel != null && enabled) BlockedSendButton(blockedLabel, onBlocked)
             else ComposerActionSlot(
                 when {
@@ -497,6 +505,7 @@ fun ChatComposer(
             )
         },
         accessory = {
+            dictate?.let { DictationStatus(it) }
             if (state.oldVersion) Text(stringResource(R.string.chat_composer_old_version), style = PersonaTheme.type.caption,
                 color = PersonaTheme.palette.cautionText)
             if (PersonaTheme.style == AppStyle.Glass && enabled && !sending && service != null && state.focused && clipboardImages.offered)

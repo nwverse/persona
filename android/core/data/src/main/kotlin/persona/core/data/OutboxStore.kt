@@ -17,6 +17,8 @@ enum class OutboxState(val wire: String, val delivery: DeliveryState) {
     NeedsConfirmation("needsReview", DeliveryState.NeedsConfirmation),
     Cancelled("cancelled", DeliveryState.Rejected),
     Shown("shown", DeliveryState.Sent),
+    /** The assistant owns delivery now: hidden locally, never published as delivered or retried by this outbox. */
+    Kept("kept", DeliveryState.Rejected),
 }
 
 data class OutboxEntry(

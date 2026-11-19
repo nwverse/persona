@@ -278,6 +278,9 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	}
 	params := map[string]any{"cwd": cwd, "launcher": p.Launcher, "text": p.Text, "images": p.Images, "permission_mode": p.PermissionMode,
 		"effort": p.Effort, "is_main": main}
+	if p.Public {
+		params["public"] = true
+	}
 	if p.Origin != "" {
 		params["origin"] = p.Origin // the node enforces the origin from the process's first tool call, before start answers
 	}

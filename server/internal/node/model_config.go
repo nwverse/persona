@@ -16,8 +16,12 @@ import (
 type modelExecution struct {
 	Model  string
 	Effort string
-	// ServiceTier is a one-shot native speed request for a new Codex conversation. It is consumed before the first turn,
-	// never kept as process state or included in the execution fingerprint.
+	// Speed is a one-shot Agent start choice, resolved only against the actual terminal dispatch. FastMode is the
+	// Claude Code form. Neither is kept as process state or included in the execution fingerprint.
+	Speed    string `json:"-"`
+	FastMode bool   `json:"-"`
+	// ServiceTier is a one-shot native speed request for a new Codex conversation or Agent start. It is consumed before
+	// the first turn, never kept as process state or included in the execution fingerprint.
 	ServiceTier string `json:"-"`
 	UseEffort   bool
 	Fingerprint string
@@ -54,6 +58,9 @@ type modelExecution struct {
 	// OriginDecisionRequired marks the RPC and autonomous-resume entries that must fail closed on a legacy unknown
 	// origin. Trusted in-process model plumbing may carry an existing execution without setting this per-entry gate.
 	OriginDecisionRequired bool `json:"-"`
+	// Public: this message answers in someone else's chat. Per message, never persisted or included in the execution
+	// fingerprint; assistantSend leaves the owner's live snapshot out of this input.
+	Public bool `json:"-"`
 	// Interject: a message this one carries, sent while the conversation answers, moves its foreground work to the
 	// background (assistant_interject.go). Per message, never part of the fingerprint.
 	Interject bool `json:"-"`
