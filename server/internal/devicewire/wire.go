@@ -212,6 +212,9 @@ type Config struct {
 	// PendingUnknown: the hub could not read which machines wait (its database did not answer); until a handover
 	// without it, the manager treats every machine as not confirmed yet.
 	PendingUnknown bool `json:"pending_unknown,omitempty"`
+	// LinkSwitch: this hub answers devices.link_switch.* (link_switch.go) and takes Persona Link now (its TLS port or
+	// an https public_url); an older hub, or one no Persona Link can reach, leaves it out and no switch is offered.
+	LinkSwitch bool `json:"link_switch,omitempty"`
 }
 
 // LinkEndpoint is one address Persona Link may use (internal/link.Endpoint).
@@ -400,6 +403,8 @@ type PairConnector struct {
 var Routes = []string{
 	"GET /api/v1/sessions/{mid}/{sid}/skills",
 	"GET /api/v1/sessions/{mid}/{sid}/mode-changes",
+	// The answer to a start's startup question, from a full device (#10365, internal/devices start_continue.go).
+	"POST /api/v1/sessions/{mid}/{sid}/start/continue",
 	"GET /api/v1/machines/{mid}/codex/{sid}/takeover",
 	"POST /api/v1/machines/{mid}/codex/{sid}/takeover",
 	"POST /api/v1/machines/{mid}/reconnect",
@@ -412,6 +417,9 @@ var Routes = []string{
 	"GET /api/v1/machines/{mid}/health/reports",
 	"DELETE /api/v1/machines/{mid}/health/reports/{name}",
 	"POST /api/v1/machines/{mid}/deploy",
+	// Switching an ssh computer to Persona Link (#10662, internal/devices link_switch.go); the admin page's twin is
+	// the hub's POST /api/v1/admin/machines/{mid}/link-switch, relayed to the same handler.
+	"POST /api/v1/machines/{mid}/link-switch",
 	// A computer's diagnosis and cache cleanup (#8037, internal/devices diagnosis.go).
 	"GET /api/v1/machines/{mid}/diagnosis",
 	"POST /api/v1/machines/{mid}/cleanup",
