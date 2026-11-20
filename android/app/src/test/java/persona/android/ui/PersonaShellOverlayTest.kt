@@ -155,14 +155,20 @@ class PersonaShellOverlayTest {
         frames()
         close().assertDoesNotExist()
         sidebar()
-        awaitText(agent.displayTitle)
-        rule.onNodeWithText(agent.displayTitle, useUnmergedTree = true).performClick()
+        fun pickAgent(title: String) {
+            val rowTitle = hasText(title) and hasAnyAncestor(hasScrollAction())
+            rule.waitUntil(5_000) {
+                frames()
+                rule.onAllNodes(rowTitle, useUnmergedTree = true).fetchSemanticsNodes().size == 1
+            }
+            rule.onNode(rowTitle, useUnmergedTree = true).performClick()
+        }
+        pickAgent(agent.displayTitle)
         frames()
         close().assertDoesNotExist()
         awaitText("The trip outline is ready.")
         sidebar()
-        awaitText(otherAgent.displayTitle)
-        rule.onNodeWithText(otherAgent.displayTitle, useUnmergedTree = true).performClick()
+        pickAgent(otherAgent.displayTitle)
         awaitText("The packing list is ready.")
         close().assertDoesNotExist()
         sidebar()
