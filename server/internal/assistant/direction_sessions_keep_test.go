@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -260,7 +261,8 @@ func directionKeepHas(keep, want []SessionRef) bool {
 }
 
 // A closed Agent idle past archive_closed_days on no open to-do is not archived by itself while it is filed under a
-// current direction; once its direction ends it is again. The owner's own Archive still archives it.
+// current direction; once its direction ends it is again. One whose entry was taken out, and one set on its own, are
+// archived as ever. The owner's own Archive still archives the filed one.
 func TestAutoArchiveLeavesASessionFiledUnderACurrentDirection(t *testing.T) {
 	ft := directionFilingFleetEnv(t, newFleetMem())
 	ctx := context.Background()
@@ -270,8 +272,12 @@ func TestAutoArchiveLeavesASessionFiledUnderACurrentDirection(t *testing.T) {
 	ft.f.mu.Lock()
 	ft.f.sessions["box"] = nil // the fake hub reaches box's node
 	ft.f.mu.Unlock()
-	directionFleetComputer(t, ft, "box", directionClosedAgent("agent-filed"), directionClosedAgent("agent-free"))
+	directionFleetComputer(t, ft, "box", directionClosedAgent("agent-filed"), directionClosedAgent("agent-free"),
+		directionClosedAgent("agent-out"), directionClosedAgent("agent-own"))
 	directionFilingMustPut(t, ft.s, "box", "agent-filed", "conv_lead_a")
+	directionFilingMustPut(t, ft.s, "box", "agent-out", "conv_lead_a")
+	directionFilingMustRemove(t, ft.s, "box", "agent-out") // its entry stays a week, marked, for its Undo
+	directionFilingMustPut(t, ft.s, "box", "agent-own", "")
 	candidates := func(now time.Time) []string {
 		var out []string
 		for _, k := range ft.s.autoArchiveCandidates(ctx, now) {
@@ -280,11 +286,12 @@ func TestAutoArchiveLeavesASessionFiledUnderACurrentDirection(t *testing.T) {
 		slices.Sort(out)
 		return out
 	}
-	if got := candidates(time.Now()); !slices.Equal(got, []string{"agent-free"}) {
+	if got := candidates(time.Now()); !slices.Equal(got, []string{"agent-free", "agent-out", "agent-own"}) {
 		t.Fatalf("candidates while filed: %v", got)
 	}
-	if n := ft.s.archiveClosedSessions(ctx, time.Now()); n != 1 || !archivedIDs(t, ft.s)["agent-free"] || archivedIDs(t, ft.s)["agent-filed"] {
-		t.Fatalf("the pass archived %d: %v", n, archivedIDs(t, ft.s))
+	if n, got := ft.s.archiveClosedSessions(ctx, time.Now()), archivedIDs(t, ft.s); n != 3 || got["agent-filed"] ||
+		!got["agent-free"] || !got["agent-out"] || !got["agent-own"] {
+		t.Fatalf("the pass archived %d: %v", n, got)
 	}
 
 	// The owner's own Archive is unchanged: it archives the filed session, and restores it.
@@ -307,6 +314,59 @@ func TestAutoArchiveLeavesASessionFiledUnderACurrentDirection(t *testing.T) {
 	}
 	if got := candidates(later); !slices.Equal(got, []string{"agent-filed"}) {
 		t.Fatalf("candidates once its direction ended: %v", got)
+	}
+}
+
+// directionArchiveHookStore is the fleet's store with a hook run once, after the first save of the archive records: what
+// lands while a pass archives, after it took its candidates and before it writes the next one.
+type directionArchiveHookStore struct {
+	*fleetMem
+	mu        sync.Mutex
+	onArchive func()
+}
+
+func (st *directionArchiveHookStore) PutSetting(ctx context.Context, key string, v any) error {
+	if err := st.fleetMem.PutSetting(ctx, key, v); err != nil || key != agentArchivesKey {
+		return err
+	}
+	st.mu.Lock()
+	hook := st.onArchive
+	st.onArchive = nil
+	st.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	return nil
+}
+
+// A filing that lands while a pass archives keeps its session: two closed Agents are candidates, both are filed under a
+// current direction once the pass has written its first archive, and the second is looked at again before its write
+// and left.
+func TestAutoArchiveLooksAgainBeforeEachWrite(t *testing.T) {
+	mem := newFleetMem()
+	st := &directionArchiveHookStore{fleetMem: mem}
+	ft := directionFilingFleetEnvOn(t, st, mem)
+	ctx := context.Background()
+	if err := ft.s.ensureTodosLoaded(ctx); err != nil {
+		t.Fatal(err)
+	}
+	ft.f.mu.Lock()
+	ft.f.sessions["box"] = nil
+	ft.f.mu.Unlock()
+	directionFleetComputer(t, ft, "box", directionClosedAgent("agent-x"), directionClosedAgent("agent-y"))
+	if got := ft.s.autoArchiveCandidates(ctx, time.Now()); len(got) != 2 {
+		t.Fatalf("precondition: both are candidates: %v", got)
+	}
+	at := time.Now().UTC()
+	st.onArchive = func() { // the owner files both, as the book has it once that write is saved
+		directionKeepBook(t, ft.s, map[string]directionFiling{
+			runtimeListID("box", "agent-x"): {Direction: "conv_lead_a", By: titleByUser, At: at, Title: "Agent agent-x"},
+			runtimeListID("box", "agent-y"): {Direction: "conv_lead_a", By: titleByUser, At: at, Title: "Agent agent-y"},
+		})
+	}
+	n, got := ft.s.archiveClosedSessions(ctx, time.Now()), archivedIDs(t, ft.s)
+	if n != 1 || len(got) != 1 {
+		t.Fatalf("the pass archived %d (%v): the one filed before its write should stay", n, got)
 	}
 }
 

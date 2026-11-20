@@ -198,7 +198,8 @@ it reads the extra fields without saving. After such a write, a copy of the sett
 (`assistant.direction_sessions`), taken before the rollback, is the only way to get the entries taken out and the
 `was` of each entry back. A manager from before #11515 also leaves the sessions placed under directions out of the
 profile's `keep`: a quiet one leaves its computer's list again and its automatic archive goes on, while the book stays
-as it was, so rolling forward keeps them listed again.
+as it was. Rolling forward lists again the ones that only dropped out of a computer's list; one the older manager's
+automatic archive took stays archived until the owner restores it, as nothing restores an archive by itself.
 
 ### Launcher default models (#4663)
 
