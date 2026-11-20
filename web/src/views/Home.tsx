@@ -1,5 +1,5 @@
 // Overview: what needs you, what is running, what just finished — Beautiful UI's Task Rows — and the computers.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, Suspense } from "react";
 import { SESSIONS_HIERARCHY_FEATURE } from "../lib/child-sessions";
 import { homeKey } from "../lib/folded-rows";
 import { ago, backgroundWaiting, interactionCanAnswer, sessionCan, sessionPreview, shortDuration, sourceSubtitle, sessionTitle, stateOf, tabLabel } from "../lib/format";
@@ -27,6 +27,7 @@ import { getSession, useStore, withTaskRows } from "../lib/store";
 import { retryAgentList } from "../lib/sessions";
 import { discardOutbox, outboxEntry, queueToSession, retryOutboxEntry } from "../lib/outbox";
 import { homeTasks, type HomeTask } from "../lib/home-tasks";
+import { lazyPage } from "../lib/lazy-page";
 import { sessionLauncher } from "../lib/model-switch";
 import { effortTitle } from "../lib/session-actions";
 import { modelList, pillView, useModelLists } from "../lib/session-models";
@@ -44,9 +45,12 @@ import { answeredLookup, answeredSessions } from "./assistant/answered-lookup";
 import { resolve } from "./chat/Interactions";
 import { OverviewArrangeButton } from "./extensions/ExtensionSlots";
 import { OverviewBody, type OverviewSections } from "./OverviewBody";
+import { OverviewSummaryBoundary } from "./OverviewSummaryBoundary";
 import { TodoStageBar } from "./TodoStageBar";
 import { t } from "../i18n";
 import { markAllSeenLabel, STATE_LABEL, stateCount, stateName } from "../lib/state-labels";
+
+const OverviewMachineSection = lazyPage(() => import("./OverviewMachineSection").then((m) => m.OverviewMachineSection));
 
 function greeting() {
   const h = new Date().getHours();
@@ -123,6 +127,33 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
 
   // Overview's own sections, above the cards by default (#11147), each what it draws (nothing while it has no rows): the user may move them,
   // and hide the ones whose rows don't need them (#10905, views/OverviewBody.tsx)
+  const computerRows = loaded && machines.length > 0 && (
+    <Group title={t("home.computers")} count={machines.length} right={<a href={href({ name: "machines" })} onClick={(e) => onLinkClick(e, { name: "machines" })} className="text-[12px] text-ink-3 hover:text-ink-2">{t("home.monitor")}</a>}>
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 @min-[60rem]:grid-cols-3 @min-[84rem]:grid-cols-4 @min-[110rem]:grid-cols-5">
+        {machines.map((m) => {
+          const count = agentCounts && (agentCounts.get(m.id) ?? 0);
+          const line = m.online ? [count !== undefined && t("home.machine_agents", { count }), m.system?.name].filter(Boolean).join(" · ") || t("home.online") : offlineLine(m);
+          const hub = hubLabel(m, machines);
+          const detail = { name: "machine" as const, mid: m.id };
+          return (
+            <a key={m.id} href={href(detail)} onClick={(e) => onLinkClick(e, detail)} className="flex items-center gap-3 rounded-card bg-surface px-3 py-2.5 shadow-card transition-colors hover:bg-hover">
+              <span className={cx("flex size-8 shrink-0 items-center justify-center rounded-[8px]", m.online ? "bg-field text-ink-2" : "bg-inset text-ink-3")}>
+                <Icon name="machine" size={15} />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <span className="truncate text-[13px] font-medium text-ink">{m.name}</span>
+                  {hub && <span className="shrink-0 truncate text-[11.5px] text-ink-3">{hub}</span>}
+                </span>
+                <span className="block truncate text-[11.5px] text-ink-3" title={!m.online && m.error && offlineLine(m) !== m.error ? m.error : undefined} data-machine-line>{line}</span>
+              </span>
+              <span className={cx("size-2 shrink-0 rounded-full", m.online ? "bg-green" : "bg-line-strong")} title={m.online ? t("home.online") : t("home.offline")} />
+            </a>
+          );
+        })}
+      </div>
+    </Group>
+  );
   const sections: OverviewSections = {
     // the headline counts agents, this counts cards: say so when one agent has several cards waiting
     needs_you: loaded && (interactions.length > 0 || held.length > 0) && (
@@ -217,31 +248,11 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
       </Group>
     ),
     computers: loaded && machines.length > 0 && (
-      <Group title={t("home.computers")} count={machines.length} right={<a href={href({ name: "machines" })} onClick={(e) => onLinkClick(e, { name: "machines" })} className="text-[12px] text-ink-3 hover:text-ink-2">{t("home.monitor")}</a>}>
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 @min-[60rem]:grid-cols-3 @min-[84rem]:grid-cols-4 @min-[110rem]:grid-cols-5">
-          {machines.map((m) => {
-            const count = agentCounts && (agentCounts.get(m.id) ?? 0);
-            const line = m.online ? [count !== undefined && t("home.machine_agents", { count }), m.system?.name].filter(Boolean).join(" · ") || t("home.online") : offlineLine(m);
-            const hub = hubLabel(m, machines);
-            const detail = { name: "machine" as const, mid: m.id };
-            return (
-              <a key={m.id} href={href(detail)} onClick={(e) => onLinkClick(e, detail)} className="flex items-center gap-3 rounded-card bg-surface px-3 py-2.5 shadow-card transition-colors hover:bg-hover">
-                <span className={cx("flex size-8 shrink-0 items-center justify-center rounded-[8px]", m.online ? "bg-field text-ink-2" : "bg-inset text-ink-3")}>
-                  <Icon name="machine" size={15} />
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="flex min-w-0 items-center gap-1.5">
-                    <span className="truncate text-[13px] font-medium text-ink">{m.name}</span>
-                    {hub && <span className="shrink-0 truncate text-[11.5px] text-ink-3">{hub}</span>}
-                  </span>
-                  <span className="block truncate text-[11.5px] text-ink-3" title={!m.online && m.error && offlineLine(m) !== m.error ? m.error : undefined} data-machine-line>{line}</span>
-                </span>
-                <span className={cx("size-2 shrink-0 rounded-full", m.online ? "bg-green" : "bg-line-strong")} title={m.online ? t("home.online") : t("home.offline")} />
-              </a>
-            );
-          })}
-        </div>
-      </Group>
+      <OverviewSummaryBoundary fallback={computerRows}>
+        <Suspense fallback={computerRows}>
+          <OverviewMachineSection Section={Group} machines={machines} agentCounts={agentCounts} offlineText={offlineLine} />
+        </Suspense>
+      </OverviewSummaryBoundary>
     ),
   };
   // with nothing to do, after Unread's place whether it is drawn or not: all is quiet, or how to add a computer

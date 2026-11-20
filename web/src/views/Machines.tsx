@@ -12,8 +12,8 @@ import { hubLabel, routeText } from "../lib/mesh";
 import { machineDeployment } from "../lib/machine-deploy";
 import { classifyConnection } from "../lib/node-health";
 import { href, navigate, onLinkClick, type Route } from "../lib/router";
-import { currentRoster, managerOrder, multiManager, offlineManagerOf, useRoster } from "../lib/managers";
-import { defaultManager, withManager } from "../lib/manager-choice";
+import { offlineManagerOf, useRoster } from "../lib/managers";
+import { useMachineMetrics } from "../lib/machine-metrics";
 import { onHubEvent, useStore } from "../lib/store";
 import { useFullAgentSessions } from "../lib/sessions";
 import { documentPage, visiblePoll } from "../lib/visible-poll";
@@ -44,8 +44,7 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   // Hubs without machines_add get the plain how-to instead of the in-app flow.
   const [helping, setHelping] = useState(false);
   const [answering, setAnswering] = useState("");
-  const [metrics, setMetrics] = useState<MachineMetrics[] | null>(null);
-  const [error, setError] = useState("");
+  const { metrics, error } = useMachineMetrics();
   // Each computer's agents. A hub that pages its Agents list pushes no sessions, so the store holds none of them: they
   // are read as the Agents list reads them (each parent once, folded; the assistant's conversations are no agents),
   // and until that read is in, a card says so rather than "No agents running".
@@ -72,37 +71,6 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     const mm = metrics?.find((x) => x.machine_id === m.id);
     return concernOf(m, machineAlerts({ machine: m, metrics: mm, launchers: issues.get(m.id) ?? 0, managerOffline: !!offlineManagerOf(roster, m) }), agents.get(m.id)?.[2] ?? 0);
   }), [machines, metrics, issues, roster, agents]);
-
-  useEffect(() => {
-    let dead = false;
-    const previous = new Map<string, MachineMetrics[]>();
-    const load = async () => {
-      const roster = currentRoster();
-      const ids = multiManager(roster) ? managerOrder(roster).filter((m) => m.online).map((m) => m.id) : [defaultManager()];
-      const results = await Promise.allSettled(ids.map((id) => api<{ machines: MachineMetrics[] }>(withManager("/metrics", id))));
-      if (dead) return;
-      const failed = results.find((r) => r.status === "rejected");
-      if (failed && results.every((r) => r.status === "rejected")) {
-        setError(errorText(failed.reason));
-        return;
-      }
-      const merged = new Map<string, MachineMetrics>();
-      results.forEach((r, i) => {
-        if (r.status === "fulfilled") previous.set(ids[i], r.value.machines ?? []);
-        for (const m of previous.get(ids[i]) ?? []) {
-          if (!merged.has(m.machine_id)) merged.set(m.machine_id, m);
-        }
-      });
-      setMetrics([...merged.values()]);
-      setError("");
-    };
-    // Right away and every 10 s while the tab is shown; a hidden tab asks nothing and loads again when shown.
-    const stop = visiblePoll(() => void load(), 10_000, documentPage);
-    return () => {
-      dead = true;
-      stop();
-    };
-  }, []);
 
   // Stable callbacks, so the memoized cards keep their props when the page renders again.
   const reconnect = useCallback(async (id: string): Promise<void> => {
