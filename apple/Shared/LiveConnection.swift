@@ -524,6 +524,10 @@ final class LiveConnection {
     @ObservationIgnored var makeLocalForTests: (() -> LocalSocket)?
     #endif
     @ObservationIgnored private var generation = 0
+    /// Requests made while the foreground connection chooses its way wait for that same attempt. They do not wait
+    /// for the WebSocket hello: once the route is installed, HTTP can use it independently.
+    @ObservationIgnored private var routeTask: Task<Void, Never>?
+    @ObservationIgnored private var routeWaiters: [UUID: CheckedContinuation<ServerConfig?, Error>] = [:]
     @ObservationIgnored private var backoff: TimeInterval = 1
     /// The hub said `hub_restarting` on this socket: its close is a restart whatever the close code.
     @ObservationIgnored private var restartNotice = false
@@ -574,6 +578,7 @@ final class LiveConnection {
     func disconnect() {
         personaContracts = false
         generation += 1
+        cancelRoute()
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
         local?.close()
@@ -619,10 +624,46 @@ final class LiveConnection {
         ping(task, generation)
     }
 
+    /// The config selected by an attempt already in progress, or the current config when routing has finished.
+    /// A closed or superseded attempt cancels its requests instead of sending directly while the tunnel is absent.
+    func waitForRoute() async throws -> ServerConfig? {
+        try Task.checkCancellation()
+        guard routeTask != nil else { return config }
+        let id = UUID()
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            return try await withCheckedThrowingContinuation { continuation in
+                routeWaiters[id] = continuation
+            }
+        } onCancel: { [weak self] in
+            Task { @MainActor in
+                self?.routeWaiters.removeValue(forKey: id)?.resume(throwing: CancellationError())
+            }
+        }
+    }
+
+    private func finishRoute(_ result: Result<ServerConfig?, Error>) {
+        let waiting = routeWaiters
+        routeWaiters.removeAll()
+        for continuation in waiting.values { continuation.resume(with: result) }
+    }
+
+    private func cancelRoute() {
+        routeTask?.cancel()
+        routeTask = nil
+        finishRoute(.failure(CancellationError()))
+    }
+
+    #if DEBUG
+    /// Deterministic ordering in route-recovery tests; no polling is added to the connection itself.
+    var waitingForRouteForTests: Int { routeWaiters.count }
+    #endif
+
     private func open() {
         guard let config, !suspended else { return }
         personaContracts = false
         generation += 1
+        cancelRoute()
         let gen = generation
         task?.cancel(with: .goingAway, reason: nil)
         local?.close()
@@ -635,14 +676,17 @@ final class LiveConnection {
         state = .connecting
         stalled = false
         nextTry = nil
-        Task { @MainActor [weak self] in
+        routeTask = Task { @MainActor [weak self] in
+            guard !Task.isCancelled else { return }
             let picked = await route()
-            guard let self, gen == self.generation, !self.suspended else { return }
+            guard let self, gen == self.generation, !self.suspended, !Task.isCancelled else { return }
             if let picked, picked != self.config {
                 self.config = picked
                 self.onRoute?(picked)
             }
+            self.routeTask = nil
             self.openSocket(self.config ?? config, gen)
+            self.finishRoute(.success(self.config))
         }
     }
 

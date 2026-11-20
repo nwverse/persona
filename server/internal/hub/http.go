@@ -549,6 +549,10 @@ func (h *Hub) proxy(method string, params func(*http.Request) any) http.HandlerF
 func (h *Hub) sessionItems(w http.ResponseWriter, r *http.Request, m *Machine) {
 	q := r.URL.Query()
 	params := map[string]any{"session_id": r.PathValue("sid")}
+	strict := q.Get("strict") == "1"
+	if strict {
+		params["strict_read"] = true
+	}
 	userInputs := q.Get("user_inputs") == "1"
 	if userInputs {
 		params["user_inputs"] = true // only a count/position projection, never message bodies
@@ -589,14 +593,19 @@ func (h *Hub) sessionItems(w http.ResponseWriter, r *http.Request, m *Machine) {
 		return
 	}
 	var res struct {
-		Items     []proto.Item `json:"items"`
-		HasMore   bool         `json:"has_more"`
-		MoreAfter bool         `json:"more_after,omitempty"`
-		More      bool         `json:"more,omitempty"` // a fold's lines go on after these
+		Items      []proto.Item `json:"items"`
+		HasMore    bool         `json:"has_more"`
+		MoreAfter  bool         `json:"more_after,omitempty"`
+		More       bool         `json:"more,omitempty"` // a fold's lines go on after these
+		StrictRead bool         `json:"strict_read,omitempty"`
 		itemSpan
 	}
 	if err := m.call(ctx, "session.items", params, &res); err != nil {
 		callErr(w, err)
+		return
+	}
+	if strict && !res.StrictRead {
+		writeErrCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.Err("chatexport.node_version"))
 		return
 	}
 	res.Items = cardCompatItems(h.requestLang(r), h.requestWants(r, featureCardRing), h.requestWants(r, featureMarkdownCloseout), localizedItems(h.requestLang(r), h.withInjected(res.Items)))
@@ -611,15 +620,32 @@ func (h *Hub) sessionItems(w http.ResponseWriter, r *http.Request, m *Machine) {
 func (h *Hub) sessionItemFull(w http.ResponseWriter, r *http.Request, m *Machine) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	var it proto.Item
-	if err := m.call(ctx, "session.item", map[string]any{"session_id": r.PathValue("sid"), "item_id": r.PathValue("iid")}, &it); err != nil {
+	params := map[string]any{"session_id": r.PathValue("sid"), "item_id": r.PathValue("iid")}
+	strict := r.URL.Query().Get("strict") == "1"
+	if strict {
+		params["strict_read"] = true
+	}
+	var full struct {
+		proto.Item
+		StrictRead      bool `json:"strict_read,omitempty"`
+		SourceTextBytes *int `json:"source_text_bytes,omitempty"`
+	}
+	if err := m.call(ctx, "session.item", params, &full); err != nil {
 		callErr(w, err)
 		return
 	}
-	// The whole item for the channels that follow the conversation, or show its view (the manager's, fleet_follow.go).
-	h.asstOf(h.sessionOwner(m.cfg.ID, r.PathValue("sid"))).notify(assistantwire.EventSessionItems, assistantwire.SessionItems{MachineID: m.cfg.ID, SessionID: r.PathValue("sid"),
-		Items: []proto.Item{it}})
-	writeItemsJSON(w, cardCompatItems(h.requestLang(r), h.requestWants(r, featureCardRing), h.requestWants(r, featureMarkdownCloseout), localizedItems(h.requestLang(r), h.withInjected([]proto.Item{it})))[0])
+	if strict && !full.StrictRead {
+		writeErrCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.Err("chatexport.node_version"))
+		return
+	}
+	it := full.Item
+	if !strict {
+		// A client opened an item whole. Let the channels following its view see it too (fleet_follow.go).
+		h.asstOf(h.sessionOwner(m.cfg.ID, r.PathValue("sid"))).notify(assistantwire.EventSessionItems, assistantwire.SessionItems{MachineID: m.cfg.ID, SessionID: r.PathValue("sid"),
+			Items: []proto.Item{it}})
+	}
+	full.Item = cardCompatItems(h.requestLang(r), h.requestWants(r, featureCardRing), h.requestWants(r, featureMarkdownCloseout), localizedItems(h.requestLang(r), h.withInjected([]proto.Item{it})))[0]
+	writeItemsJSON(w, full)
 }
 
 // sessionImage serves one item's image as raw bytes. An item's image never changes, so the app may cache it forever.

@@ -400,7 +400,9 @@ def wait_transcript(path, marker, schema, pane, unit, timeout, accepted_stall=Fa
                     raise
         agents = command("agent", "list", timeout=20).get("agents", [])
         agent = next((item for item in agents if item.get("pane_id") == pane), None)
-        if agent and agent.get("agent_status") == "blocked" and not accepted_stall:
+        if agent and agent.get("agent_status") == "blocked" and accepted_stall:
+            accepted_stall = False
+        elif agent and agent.get("agent_status") == "blocked":
             raise RuntimeError("interactive reviewer requested an unexpected interaction")
         if not scope_running(unit):
             if path.is_file():
