@@ -162,11 +162,9 @@ func (s *Service) handBackAgentDecision(ctx context.Context, id string, a accept
 	s.signalAgentDecisionReply(id, a)
 }
 
-// keepPriorDecisionReply records a resolved round for supervision without posting an owner ask.
+// keepPriorDecisionReply records a resolved round without posting an owner ask, under the caller's action lock.
 func (s *Service) keepPriorDecisionReply(ctx context.Context, t Todo, decision reviewDecision, reply *decisionAgentReply, asked time.Time) (string, error) {
 	id := t.ID
-	s.reviewDismissals.actions.acquire(id)
-	defer s.reviewDismissals.actions.release(id)
 	cur, ok := s.todoNow(id)
 	r := triageLatestReview(cur.Supervision)
 	if !ok || cur.DoneAt != nil || r == nil || !r.At.Equal(asked) || acceptAskStale(&acceptAsk{AskedAt: asked}, cur) {

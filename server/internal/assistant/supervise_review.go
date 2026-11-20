@@ -181,6 +181,16 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	if mayRaiseDecision && scheduledCheckOf(ctx) == "" {
 		priorReply = s.priorDecisionReply(ctx, t, cmp.Or(strings.TrimSpace(a.QuestionQuote), decision.Reason))
 	}
+	if priorReply != nil {
+		// Fence any older card answer or default while we hand the already-answered question back.
+		s.reviewDismissals.actions.acquire(t.ID)
+		defer s.reviewDismissals.actions.release(t.ID)
+		cur, ok := s.todoNow(t.ID)
+		if !ok || cur.DoneAt != nil || !cur.UpdatedAt.Equal(t.UpdatedAt) ||
+			s.activeTodoOf(priorReply.MachineID, priorReply.SessionID) != t.ID {
+			return "", fmt.Errorf("the task changed while checking the Agent conversation: review it again")
+		}
+	}
 	over, refused, parks := false, false, 0
 	var waiting *OwnerWait // accepted while the work stopped on the owner's decision: refused, nothing written (#1277)
 	judgedDone := false    // it was waiting for review: the judge had found it done
