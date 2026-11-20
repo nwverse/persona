@@ -1,4 +1,11 @@
 {
+  "forward_error": "（读不到转发的内容：{error}）",
+  "forward_image": "[image] [图片]",
+  "unknown_sender": "某人",
+  "bot_sender": "机器人",
+  "forward_line": "{time} {sender}：{text}",
+  "forward_clipped": "（后面的太长，略）",
+  "forward_empty": "（转发里没有能读的消息）",
   "paired": "已配对",
   "paired_body": "以后在这里说的话会交给 Persona。\n\n",
   "not_sent": "没能发出去：{error}",

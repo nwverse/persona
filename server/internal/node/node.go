@@ -191,6 +191,7 @@ type Node struct {
 	firstWait sync.WaitGroup             // first messages being checked (firstprompt.go)
 	engLists  sync.WaitGroup             // new engines' session lists being built in the background (useEngine)
 	lostFirst lostPrompts                // session id -> why its first message did not go in (firstprompt.go)
+	workSent  workSent                   // Cursor / agy pane -> when a message last went in (worksent.go)
 	events    *herdrEvents               // herdr's event stream (herdrevents.go)
 	hostSig   map[string]*watcherSignals // change signals of the registered watcher hosts, by host kind (herdrevents.go)
 	cdirs     *claudeDirs                // Claude Code config directories in use (claudedirs.go)
@@ -222,6 +223,9 @@ type Node struct {
 	fileOps    fileOperations // copy / zip progress polled by the phone and web (fileoperation.go)
 	sysOnce    sync.Once      // system: read once (metrics.go)
 	sys        proto.System
+
+	// startsBegun: when the latest start of a session that starts does not hold began (transcript_files.go).
+	startsBegun startsBegun
 
 	// share: what the node keeps of launcher switches outside the state records, shared by a resident node's Nodes
 	// (switch_share.go, attach.go); nil until the first use when attach set none (switches).
@@ -747,6 +751,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return n.handleUpdate(ctx, method, params)
 	}
 	switch method {
+	case nodeproto.SourceSend:
+		method = "session.send"
+		ctx = withSourceDelivery(ctx, params)
 	case nodeproto.OwnerInterrupt:
 		method = "session.interrupt"
 		ctx, _ = withOwnerDelivery(ctx)
@@ -758,6 +765,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		ctx = promptLanguageContext(ctx, params)
 	}
 	switch method {
+	case "sessions.history": // sessions active in a time window, inactive ones too (sessions_history.go)
+		return n.sessionsHistory(ctx, params)
 	case "workspace.naming.resolve":
 		return n.resolveWorkspaceNaming(ctx, params)
 	case "session.share_projection":
@@ -824,7 +833,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		ResumeSessionID         string        `json:"resume_session_id"`
 		ResumeAutomatic         bool          `json:"resume_automatic"`
 		Host                    string        `json:"host"` // session.start: the enabled host to open in ("" the default host, #2576)
+		TaskID                  string        `json:"task_id"`
 		WorkspaceID             string        `json:"workspace_id"`
+		WorkspaceLabel          string        `json:"workspace_label"`
 		NameHint                string        `json:"name_hint"` // session.start: what a start whose first message goes after it is named after (claudedesktop_new.go)
 		Text                    string        `json:"text"`
 		SkillOwner              string        `json:"skill_owner"` // manager-owned identity for explicit skill selections
@@ -870,6 +881,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		TaskInstructions string                        `json:"task_instructions"`
 		Goal             string                        `json:"goal"` // session.start: a /goal typed after the first message is in (startgoal.go)
 		DismissLost      bool                          `json:"dismiss_lost"`
+		TaskExecution    bool                          `json:"task_execution"`
 		ResumeOnly       bool                          `json:"resume_only"`
 		OnlyRunning      bool                          `json:"only_running"` // assistant.compact: refuse not_running rather than start the process
 		IsMain           bool                          `json:"is_main"`
@@ -1382,6 +1394,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			// An omp resume instead carries the images in ompResumeParams, so they never arrive twice.
 			p.Prompt = strings.TrimSpace(p.Prompt) + "\n\n<attached_images>\n" + strings.Join(paths, "\n") + "\n</attached_images>"
 		}
+		ctx, taskSpace := withTaskSpace(ctx, p.TaskID, p.WorkspaceID, p.WorkspaceLabel)
 		// Optional tool waits correlate the first input through the existing echo ledger.
 		// Capture the resume boundary before launching, so an identical historical input cannot match.
 		var echoOpts sendOpts
@@ -1515,45 +1528,47 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		if work.runtime != nil {
 			rp.Model = work.runtimeModel // the runtime's configured default, never a caller override
 			s, instead, err := n.runtimeStartOn(ctx, work.runtime, rp)
-			res, err := n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation)
+			res, err := n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation, taskSpace)
 			return withInstead(res, err, instead)
 		}
 		if method == "session.start" && p.ResumeSessionID == "" {
 			if s, err, ok := n.startInDesktopApp(ctx, rp, p.NameHint); ok { // a new session in Claude's desktop app (claudedesktop_new.go)
-				return n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation)
+				return n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation, taskSpace)
 			}
 			if s, err, ok := n.startInCodexApp(ctx, rp, p.NameHint); ok { // a new chat in the Codex App (codexapp_new.go)
-				return n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation)
+				return n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation, taskSpace)
 			}
 			// A runtime's launcher; on a host whose engine runs only its own launchers, any name it offers (#8140).
 			if s, instead, err, ok := n.runtimeStart(withStartHost(ctx, p.Host), rp); ok {
-				res, err := n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation)
+				res, err := n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation, taskSpace)
 				return withInstead(res, err, instead)
 			}
 		}
 		if err := n.checkStartHost(p.Host); err != nil {
 			return nil, err
 		}
-		ctx := withStartHost(ctx, p.Host)
+		ctx = withStartHost(ctx, p.Host)
 		if _, ok := engineRuntimes[n.startKind(ctx)]; ok { // the start's host is a runtime (Paseo): it is its (runtimecontrol.go)
 			s, instead, err := n.startOnEngineRuntime(ctx, rp)
-			res, err := n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation)
+			res, err := n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation, taskSpace)
 			return withInstead(res, err, instead)
 		}
 		// Only Claude Code has a session id before it starts; another agent picks its own (start_agent.go).
 		asyncAgent := n.startAgentType(p.Launcher, p.AgentType)
 		if p.Async && p.ResumeSessionID == "" && (p.AgentType == "" || p.AgentType == "claude") &&
 			asyncAgent != traexAgent && asyncAgent != ompAgent && asyncAgent != agyAgent {
-			s, err := n.startAsyncIn(p.Host, p.SessionID, p.Cwd, p.Launcher, p.Prompt, p.WorkspaceID, p.PermissionMode, p.Effort, tab, modelExecution{InPane: p.InPane, PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Ultracode: p.Ultracode, SecretTicket: p.SecretTicket, Goal: goal, Speed: p.Speed, TaskInstructions: p.TaskInstructions, TaskAttachments: p.TaskAttachments})
-			return n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation)
+			s, err := n.startAsyncIn(p.Host, p.SessionID, p.Cwd, p.Launcher, p.Prompt, p.WorkspaceID, p.PermissionMode, p.Effort, tab, modelExecution{InPane: p.InPane, PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Ultracode: p.Ultracode, SecretTicket: p.SecretTicket, Goal: goal, Speed: p.Speed, TaskInstructions: p.TaskInstructions, TaskAttachments: p.TaskAttachments, taskSpace: taskSpace})
+			return n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation, taskSpace)
 		}
 		r := resumed{cwd: p.Cwd, launcher: p.Launcher, mode: p.PermissionMode, effort: p.Effort, tab: tab,
-			execution: modelExecution{InPane: p.InPane, PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Ultracode: p.Ultracode, SecretTicket: p.SecretTicket, Goal: goal, Speed: p.Speed, TaskInstructions: p.TaskInstructions, TaskAttachments: p.TaskAttachments}}
+			taskID: p.TaskID, workspaceID: p.WorkspaceID, workspaceLabel: p.WorkspaceLabel,
+			execution: modelExecution{InPane: p.InPane, PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Ultracode: p.Ultracode, SecretTicket: p.SecretTicket, Goal: goal, Speed: p.Speed, TaskInstructions: p.TaskInstructions, TaskAttachments: p.TaskAttachments, taskSpace: taskSpace}}
 		if p.ResumeSessionID != "" {
 			// A message carrying out a launcher switch quits the agent and starts it again in its terminal
 			// (launcher_switch.go): the Resume waits for it, then finds the agent running, or resumes it as it is.
 			defer n.resumeTurn(ctx, p.ResumeSessionID)() // and a switch to the other engine does not resume it beside this
 			r = n.fillResume(p.ResumeSessionID, r)       // what it ran with, for what the start leaves out (retire.go)
+			ctx, taskSpace = withTaskSpace(ctx, r.taskID, r.workspaceID, r.workspaceLabel)
 			// The user's Resume (the only way a stopped agent runs again, #4754): in the shell it left when that is
 			// still there (stopped.go).
 			ctx = n.inKeptTerminal(ctx, p.ResumeSessionID, r.cwd)
@@ -1570,11 +1585,11 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		if method == "session.start" && p.ResumeSessionID == "" && p.InPane == "" && validID(mark.token) {
 			ctx = context.WithValue(ctx, taskTerminalStartKey{}, &mark)
 		}
-		s, err := n.start(ctx, r.cwd, r.launcher, p.Prompt, p.ResumeSessionID, p.WorkspaceID, r.mode, r.effort, r.tab, newID, p.AgentType, r.execution)
+		s, err := n.start(ctx, r.cwd, r.launcher, p.Prompt, p.ResumeSessionID, r.workspaceID, r.mode, r.effort, r.tab, newID, p.AgentType, r.execution)
 		if err == nil && p.ResumeSessionID != "" {
 			n.forkStarted(p.ResumeSessionID)
 		}
-		result, err := n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation)
+		result, err := n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation, taskSpace)
 		if err == nil && s != nil && mark.pane != "" {
 			if target := n.taskTerminalReceipt(ctx, s, mark); target != nil {
 				result.(map[string]any)["task_terminal"] = target
@@ -1584,6 +1599,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	case "session.fork": // "Branch to new chat" (fork.go)
 		id, err := n.fork(ctx, p.SessionID, p.AtItemID)
 		return map[string]any{"session_id": id}, err
+	case "assistant.directory":
+		return n.taskDirectory(p.Path)
 	case "assistant.execution":
 		return n.assistantExecution(ctx, p.SessionID), nil
 	case "assistant.send", assistantwire.DeviceAssistantAnswerAgain:
@@ -1639,7 +1656,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		sctx = withClientMsgID(sctx, opts.ClientMsgID) // a runtime's message goes under it (assistant_runtime.go)
 		sctx = withSupervisionDelivery(sctx, p.MessageSource)
 		send := func() (string, error) {
-			return n.assistantSend(sctx, p.SessionID, p.Cwd, p.Launcher, p.Text, p.Images, p.PermissionMode, p.Effort, (modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, ServiceTier: p.ServiceTier, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: n.externalRuntime(p.SessionID, p.Launcher, p.Runtime), External: p.External, IsMain: p.IsMain, MainCompactWindow: p.MainCompact, FollowsSetting: p.FollowsSetting, ConfigDir: p.ConfigDir, Origin: p.Origin, OriginKnown: p.OriginKnown, OriginDecisionRequired: true, Public: p.Public, Interject: p.Interject, Interactive: p.Interactive}).withSupervision(p.SupervisionInstructions))
+			return n.assistantSend(sctx, p.SessionID, p.Cwd, p.Launcher, p.Text, p.Images, p.PermissionMode, p.Effort, (modelExecution{Strict: p.TaskExecution, PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, ServiceTier: p.ServiceTier, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: n.externalRuntime(p.SessionID, p.Launcher, p.Runtime), External: p.External, IsMain: p.IsMain, MainCompactWindow: p.MainCompact, FollowsSetting: p.FollowsSetting, ConfigDir: p.ConfigDir, Origin: p.Origin, OriginKnown: p.OriginKnown, OriginDecisionRequired: true, Public: p.Public, Interject: p.Interject, Interactive: p.Interactive}).withSupervision(p.SupervisionInstructions))
 		}
 		if p.NewSessionID == "" && p.SessionID == "" && opts.ClientMsgID != "" {
 			// A new conversation's first message with its client_msg_id (one a person's own app opened, the manager's
@@ -1693,10 +1710,19 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	case "assistant.guest_delete": // a meeting's room, at its transcript's cut (assistant_guest.go)
 		return n.assistantGuestDelete(params)
 	case "session.modes":
-		if err := n.setModelAndModes(ctx, p.SessionID, p.Model, p.PermissionMode, p.Effort); err != nil { // model: model_switch.go
+		var options struct {
+			QueueEffort bool `json:"queue_effort"`
+		}
+		_ = json.Unmarshal(params, &options)
+		pending, err := n.setModelAndModes(ctx, p.SessionID, p.Model, p.PermissionMode, p.Effort, options.QueueEffort)
+		if err != nil {
 			return nil, err
 		}
-		return n.modesAnswer(p.SessionID, p.PermissionMode), nil
+		answer := n.modesAnswer(p.SessionID, p.PermissionMode)
+		if pending {
+			answer["pending_effort"] = p.Effort
+		}
+		return answer, nil
 	case "assistant.compact": // the user compacting an assistant conversation, or the hub a meeting's room (assistant_compact.go)
 		return ok(n.assistantCompact(ctx, p.SessionID, p.OnlyRunning))
 	case "assistant.handoff": // what a new main conversation is told about the old one
@@ -1724,6 +1750,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		if cause := n.stopCause(p.SessionID); strings.HasPrefix(opts.ClientMsgID, "model-retry:") && cause != "" && !cause.AllowsSupervisorResume() {
 			return nil, n.stoppedRefusal(p.SessionID)
 		}
+		ctx, sendSpace := withTaskSpace(ctx, opts.TaskID, opts.WorkspaceID, opts.WorkspaceLabel)
 		var retry *echoRecord
 		var previous *sendRecord
 		if method == proto.MethodSessionSendUnseen {
@@ -1787,6 +1814,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 				res["relay_reason"] = owner.reason
 			}
 		}
+		withTaskSpaceReply(res, sendSpace)
 		return res, nil
 	case "session.echoes": // what the hub kept of earlier sends (echo.go), after this node started
 		var a struct {
@@ -1989,7 +2017,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			}
 			return n.worktreeCreateAutomatic(withAgentWorktree(worktreeComposerContext(ctx, params), in.ForAgent), in.Kind, in.WorkspaceID, in.Cwd, in.ParentWorkspaceID)
 		}
-		return n.worktreeCreate(withAgentWorktree(worktreeComposerContext(ctx, params), in.ForAgent), in.Kind, in.WorkspaceID, in.Cwd, in.Branch, in.Path, in.ParentWorkspaceID)
+		return n.worktreeCreate(withAgentWorktree(worktreeComposerContext(ctx, params), in.ForAgent), in.Kind, in.WorkspaceID, in.Cwd, in.Branch, in.Path, in.ParentWorkspaceID, in.OpenWorkspace)
 	case methodWorktreeSource, methodWorktreePreset, methodWorktreeDelete:
 		var in worktreeSourceParams
 		if err := json.Unmarshal(params, &in); err != nil {
@@ -2037,7 +2065,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		_ = json.Unmarshal(params, &a)
 		f, err := n.file(p.SessionID)
 		if err != nil {
-			return nil, readErr(err)
+			return nil, n.readErr(p.SessionID, err)
 		}
 		n.refresh(p.SessionID, f)
 		it, err := f.Full(a.ItemID)
@@ -2065,7 +2093,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		_ = json.Unmarshal(params, &a)
 		f, err := n.file(p.SessionID)
 		if err != nil {
-			return nil, readErr(err)
+			return nil, n.readErr(p.SessionID, err)
 		}
 		n.refresh(p.SessionID, f)
 		it, err := f.Full(a.ItemID)
@@ -2077,13 +2105,19 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	case "session.items":
 		f, err := n.file(p.SessionID)
 		if err != nil {
-			if n.startingSession(p.SessionID) { // nothing written yet: an empty chat, not an error
+			if n.startingSession(p.SessionID) { // nothing written yet: an empty chat; else not_found with its reason
 				if p.UserInputs {
 					return proto.UserInputIndex{Inputs: []proto.UserInputPosition{}}, nil
 				}
 				return map[string]any{"items": []proto.Item{}, "has_more": false}, nil
 			}
-			return nil, readErr(err)
+			if session, _, _ := strings.Cut(p.SessionID, subagentSep); p.BeforeSeq > 0 && !p.UserInputs && n.knownSession(session) {
+				// An older page of a session the node knows (or of its subagent): the end of its history, as before
+				// #11388. Only the latest page says why there is none; released apps ask an older page again on an
+				// error (#11450).
+				return map[string]any{"items": []proto.Item{}, "has_more": false}, nil
+			}
+			return nil, n.readErr(p.SessionID, err)
 		}
 		if err := n.refresh(p.SessionID, f); err != nil && p.UserInputs {
 			return nil, err
@@ -2467,6 +2501,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return nil, err
 		}
 		return map[string]any{"sent": true}, nil
+	case "workspace.close":
+		return n.closeTaskSpace(ctx, p.TaskID, p.WorkspaceID)
 	case "session.close":
 		var closeParams struct {
 			Force bool `json:"force"`
@@ -2547,6 +2583,7 @@ func (n *Node) sessionInfo(ctx context.Context, id string) (map[string]any, erro
 		"context_tokens": m.ContextTokens, "output_tokens": m.OutputTokens, "compactions": m.Compactions,
 		"turns": m.Turns, "started_at": m.StartedAt, "last_activity": m.LastActivity,
 		"stop_cause": st.StopCause,
+		"task_id":    st.TaskID, "task_workspace_id": st.WorkspaceID, "workspace_label": st.WorkspaceLabel,
 	}, nil
 }
 

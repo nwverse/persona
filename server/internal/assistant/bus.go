@@ -136,7 +136,7 @@ func NewBusHub(o BusOptions) *BusHub {
 					assistantwire.CapabilityAgentSessionArchiveClose, assistantwire.CapabilityAgentNaming, assistantwire.CapabilityAgentAutoname, assistantwire.CapabilityMachinesOwn,
 					assistantwire.CapabilityMeetingAttendance, assistantwire.CapabilityMeetingConversation, assistantwire.CapabilityMeetingPhotos, assistantwire.CapabilityMeetingLiveView,
 					assistantwire.CapabilityMeetingHighlights, assistantwire.CapabilityMeetingNotes, assistantwire.CapabilityMeetingEcho, assistantwire.CapabilityMeetingTranscription,
-					assistantwire.CapabilityRecordingDay, assistantwire.CapabilityAssistantSearch, assistantwire.CapabilityHTTPBodyStream, assistantwire.CapabilityAssistantStartServiceTier,
+					assistantwire.CapabilityRecordingDay, assistantwire.CapabilityAssistantSearch, assistantwire.CapabilityDirectionSessions, assistantwire.CapabilityHTTPBodyStream, assistantwire.CapabilityAssistantStartServiceTier,
 					assistantwire.CapabilityMCPWait, assistantwire.CapabilitySessionsSideFold, assistantwire.CapabilityRemoteImages, assistantwire.CapabilityTodoView,
 					assistantwire.CapabilityTodoPlaces, assistantwire.CapabilityTodoAsks, assistantwire.CapabilityTodoTimeline, assistantwire.CapabilityTodoImages, devicewire.SharingCapability}}
 		},
@@ -579,11 +579,22 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 			return nil, &rpc.Error{Code: assistantwire.CodeUndeliveredAhead, Message: "older messages to this conversation wait to go in"}
 		}
 		ctx, note := withLauncherNote(ctx)
+		// The owner's message, which the hub sends and reports: its parameters may move a direction's notes block
+		// (direction_notes.go), settled by the hub's notice, or now when they are refused and nothing is sent. A
+		// message they were already given for is the hub's retry, which it may answer from its record without a
+		// notice: it moves nothing.
+		msg, _ := p.Params["client_msg_id"].(string)
+		var carry *notesCarry
+		if !s.notesOwnerSeen(p.SessionID, msg) {
+			ctx, carry = withNotesCarry(ctx)
+		}
 		params, err := s.SendParams(ctx, p)
 		if err != nil {
+			s.notesSendOutcome(ctx, carry, false)
 			s.appSendRefused(p.MachineID, p.SessionID, err) // the hub sends nothing: no ConversationSent (north_star.go)
 			return nil, err
 		}
+		s.notesOwnerSent(ctx, carry, msg)
 		if *note != "" {
 			return map[string]any{"params": params, "launcher_note": *note}, nil
 		}

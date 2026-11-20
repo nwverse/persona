@@ -405,7 +405,8 @@ describe("tap areas", () => {
 
   it("covers an attachment's remove button", () => {
     const html = renderToStaticMarkup(<AttachmentTray attachments={[{ id: "a", name: "a.png", url: "blob:a" }]} onRemove={() => {}} />);
-    expect(hit(html, "移除 a.png")).toBe(true);
+    // grown out of the tile's corner, not centred on it: the picture's middle stays the picture's (ui/AttachmentTray.test.tsx)
+    expect(html).toMatch(/<button[^>]*aria-label="移除 a.png"[^>]*class="touch-hit-corner /);
     // its tile does not clip the area
     expect(html).not.toMatch(/group\/att relative overflow-hidden/);
   });

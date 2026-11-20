@@ -9,10 +9,11 @@ import { attentionReason, externalLink, failureReason, isStoppedAgent, resumeCom
 import { conversationPage } from "../../lib/conversation-page";
 import { navigate, type SessionView } from "../../lib/router";
 import { canShowTerminal, composerSlot, otherView, terminalJump, terminalWaits, useSessionView, viewOnlyRow } from "../../lib/session-view";
+import { invalidateOverviewPanel } from "../../lib/use-shortcuts";
 import { resumeInTerminal, terminalResume } from "../../lib/agent-resume";
 import { openLink } from "../../lib/links";
 import { getPanel, openPanel, togglePanel, usePanel } from "../../lib/panel";
-import { isWorkflowsCommand, latestWorkflowRun, openBackgroundPanel, provideBackgroundChat, WORKFLOWS_COMMAND } from "../../lib/background-panel";
+import { backgroundPanelOf, isWorkflowsCommand, latestWorkflowRun, openBackgroundPanel, provideBackgroundChat, WORKFLOWS_COMMAND } from "../../lib/background-panel";
 import { machineWithHub } from "../../lib/mesh";
 import { sidebarRail, sidebarShown, useLayout } from "../../lib/layout";
 import { hasModes, isMuted, listedModesOf, toggleMute } from "../../lib/session-actions";
@@ -63,7 +64,7 @@ import { PendingCards } from "./Interactions";
 import { focusedCard, focusedFirst } from "../../lib/card-focus";
 import { COMPOSER_INPUT, lostWith } from "../../lib/dock-focus";
 import { FailureNote, showsFailureNote } from "./FailureNote";
-import { CloseoutCard } from "./CloseoutCard";
+import { LazyCloseoutCard } from "./closeout-chunks";
 import { shownCloseout } from "../../lib/closeout";
 import { AWAIT_MS, awaitingTurn, DOCK_MAX, turnStart } from "./dock";
 import { HEADER_SLOT, HEADER_SLOT_END, HEADER_SLOT_START } from "./header";
@@ -188,6 +189,11 @@ function asOwnCard(ix: Interaction): Interaction {
   }
   return c;
 }
+/** In this chat's own waiting cards (not the Assistant tray's): one of them, and its text fields (styles.css lets the
+ *  dock grow for those while the keyboard is up). */
+const OWN_CARD = "[data-chat-cards] [data-pending-card]";
+const inOwnCard = (el: EventTarget | null) => el instanceof Element && Boolean(el.closest(OWN_CARD));
+const isCardField = (el: EventTarget | null) => el instanceof Element && el.matches(`${OWN_CARD} :is(input, textarea)`);
 /** How many earlier pages a link to a child loads looking for the exchange its card is in. */
 const CHILD_LINK_PAGES = 10;
 // no child sessions: no cards, and the exchanges are not walked for where they would go
@@ -1926,13 +1932,22 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // A card answered above the composer takes the focused button with it: the keyboard goes back to the composer (#5154).
   // Not on a touch screen alone (that would raise the keyboard), nor when something else took the focus.
   const dockFocus = useRef<Element | null>(null);
+  // A card's own field being typed into (#11442): a page made short by Android's keyboard must not fold that card away,
+  // until the focus leaves the card (its send arrow or options take it on the tap: folded then, the tap is lost)
+  const [cardField, setCardField] = useState(false);
   const onDockFocus = (e: React.FocusEvent) => {
     dockFocus.current = composerBox.current?.contains(e.target) ? null : e.target;
+    if (isCardField(e.target)) setCardField(true);
+    else if (!inOwnCard(e.target)) setCardField(false);
+  };
+  const onDockBlur = (e: React.FocusEvent) => {
+    if (!inOwnCard(e.relatedTarget)) setCardField(false);
   };
   // Checked after each render only while a control above the composer holds the focus (nothing to do otherwise)
   useEffect(() => {
     if (!dockFocus.current || !lostWith(dockFocus.current, document.activeElement, document.body)) return;
     dockFocus.current = null;
+    setCardField(false);
     if (fine) composerBox.current?.querySelector<HTMLTextAreaElement>(COMPOSER_INPUT)?.focus({ preventScroll: true });
   });
   // the run's time counts from the turn's start, as its "Working…" does (not from the session's last state change)
@@ -1941,6 +1956,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     const live = lines.flatMap((l) => l.kind === "supervision" ? l.lines : [l]).findLast((l) => l.kind === "segment" && l.live);
     return live?.kind === "segment" ? live.seg : undefined;
   }, [lines]);
+  const processing = !sendFeedback && Boolean(assistant || session?.assistant) && state === "working" && !backgroundOnly &&
+    !liveSeg && (tr.loading || (opening && !tr.streaming));
   const runStart = (liveSeg ? turnStart(liveSeg) : undefined) ?? stateSince;
   // what the turn is doing, for the bar's words (cindy's status): kept as it was while it says the same
   const lastStep = useRef<RunStep | undefined>(undefined);
@@ -2052,7 +2069,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       delegated={teamShown || sideShown ? delegated.filter((d) => !elsewhere(d.ix)) : delegated}
       offerNext={inPage && !assistant ? { mid, sid } : undefined}
       narrow={compactDock}
-      short={short}
+      short={short && !cardField}
       keyboard={keyboard}
       onDismissKeyboard={() => composerBox.current?.querySelector<HTMLTextAreaElement>(COMPOSER_INPUT)?.blur()}
     />
@@ -2061,9 +2078,17 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const overviewId = useId();
   const [overviewOpen, setOverviewOpen] = useState(false);
   const showOverview = !assistant && !embedded && Boolean(session);
+  useEffect(() => {
+    if (!showOverview || !overviewOpen) return;
+    // The origin owns both the visible dependent detail and the one Cmd+B remembers. Its closure, including leaving
+    // this conversation, invalidates both; while it stays open, Cmd+B can close and restore the detail as usual.
+    return () => invalidateOverviewPanel(mid, sid);
+  }, [showOverview, overviewOpen, mid, sid]);
   const overview = useMemo(() => showOverview
     ? { id: overviewId, open: overviewOpen, toggle: () => setOverviewOpen((open) => !open) }
     : undefined, [overviewId, overviewOpen, showOverview]);
+  // Its background detail takes the side panel's space, rather than squeezing the mounted overview and losing its place.
+  const overviewDetail = panelDrawn && backgroundPanelOf(panel, mid, sid)?.from === "overview";
 
   const page = (
     <div className="@container/session flex h-full min-w-0 flex-col">
@@ -2103,7 +2128,11 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
       <ViewLayer bare={!switchable} on={view === "chat"} from="start">
       {/* what a stopped agent said of its own work, above the transcript and not part of it (#3612) */}
-      {closeoutShown && session && <CloseoutCard key={`${mid}/${sid}`} session={session} segment={closeoutSegment} expandFold={tr.expandFold} />}
+      {closeoutShown && session && (
+        <Suspense fallback={null}>
+          <LazyCloseoutCard key={`${mid}/${sid}`} session={session} segment={closeoutSegment} expandFold={tr.expandFold} />
+        </Suspense>
+      )}
       <div className="relative min-h-0 flex-1">
         {(tr.notLive || refreshFailed) && <NotLivePill error={refreshFailed} onReload={() => { tr.reload(); onRefresh?.(); }} lower={Boolean(picked && !search.open)} />}
         <div ref={scrollRef} onScroll={onScroll} data-chat-scroll className="relative h-full overflow-y-auto [overflow-anchor:none]">
@@ -2219,9 +2248,9 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
               ) }))]
               .sort((a, b) => a.at - b.at)
               .map((x) => x.el)}
-            {(shownPending.some((p) => p.waits) || (sendFeedback !== undefined ? Boolean(sendFeedback) : shownPending.length > 0 || outbox.some((e) => e.state === "sending") || (starting && outgoing > 0) || (opening && !tr.streaming && state === "working"))) && (
-              <div className="flex items-center gap-2.5" data-message-feedback={sendFeedback || (opening && state === "working" ? "processing" : "sending")}>
-                {sendFeedback === "unknown" ? <span role="status" className="text-ink-3">{t("lib-outbox.delivery_unknown")}</span> : <Loading label={shownPending.some((p) => p.waits) ? t("ultracode.send_waits") : sendFeedback === "processing" || (opening && state === "working") ? t("chat-segmentview.processing") : starting ? t("chat-chatview.preparing") : online ? t("chat-segmentview.sending") : t("chat-chatview.waiting_for_hub")} />}
+            {(shownPending.some((p) => p.waits) || processing || (sendFeedback !== undefined ? Boolean(sendFeedback) : shownPending.length > 0 || outbox.some((e) => e.state === "sending") || (starting && outgoing > 0))) && (
+              <div className="flex items-center gap-2.5" data-message-feedback={sendFeedback || (processing ? "processing" : "sending")}>
+                {sendFeedback === "unknown" ? <span role="status" className="text-ink-3">{t("lib-outbox.delivery_unknown")}</span> : <Loading label={shownPending.some((p) => p.waits) ? t("ultracode.send_waits") : sendFeedback === "processing" || processing ? t("chat-segmentview.processing") : starting ? t("chat-chatview.preparing") : online ? t("chat-segmentview.sending") : t("chat-chatview.waiting_for_hub")} />}
               </div>
             )}
             {voiceState && <VoiceTail owner={voiceOwner} persona={persona.name} />}
@@ -2248,6 +2277,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         style={{ "--dock-max": DOCK_MAX } as React.CSSProperties}
         onInput={pendingRecap ? dismissRecap : undefined}
         onFocus={onDockFocus}
+        onBlur={onDockBlur}
       >
         {/* everything over the composer: it shrinks and scrolls before the composer does (the composer grew, and its
             cards, task questions and notes stood taller than the dock, drawn up over the chat or pushing it to nothing);
@@ -2388,7 +2418,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         <PageBoundary page={`overview:${mid}/${sid}`}>
           <Suspense fallback={<div className="p-3"><Loading /></div>}>
             <SessionOverview id={overviewId} session={session} machineName={machineName} items={tr.items} tasks={tasks}
-              children={kids.rows} onJumpToCall={jump} />
+              children={kids.rows} onJumpToCall={jump} hidden={overviewDetail} />
           </Suspense>
         </PageBoundary>
       )}

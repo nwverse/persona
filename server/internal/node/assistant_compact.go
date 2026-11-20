@@ -25,7 +25,7 @@ const assistantCompactTimeout = 10 * time.Minute
 // assistantCompact starts compacting conversation id, resuming its process when it is not running; with onlyRunning
 // (the hub compacting a meeting's room, #8253) it refuses not_running instead: a process that exited since the hub saw it
 // running is never started only to be compacted.
-func (n *Node) assistantCompact(ctx context.Context, id string, onlyRunning bool) error {
+func (n *Node) assistantCompact(ctx context.Context, id string, onlyRunning bool) (compactErr error) {
 	if id == "" || !validID(id) {
 		return errors.New("invalid session id")
 	}
@@ -38,6 +38,13 @@ func (n *Node) assistantCompact(ctx context.Context, id string, onlyRunning bool
 		defer finish()
 	}
 	defer n.assistantLife.lock(id)() // not while a send or a restore has this conversation's process (model_restore.go)
+	// As in assistantSend, a start after pruning the only, refused turn counts as starting only while it can still come up.
+	drop := func() {}
+	defer func() {
+		if compactErr != nil {
+			drop()
+		}
+	}()
 	n.mu.Lock()
 	p := n.procs[id]
 	n.mu.Unlock()
@@ -130,7 +137,9 @@ func (n *Node) assistantCompact(ctx context.Context, id string, onlyRunning bool
 		// A trailing refused turn is no context the compaction would summarize: it is cut, and a session left with no
 		// file by that starts under the id rather than resuming nothing.
 		if agentKind == "claude" {
-			n.healClaudeRefusalTranscript(id)
+			if pruned, clean := n.healClaudeRefusalTranscript(id); pruned && !clean {
+				drop = n.startsBegun.begin(id, n.startWait()) // started again right below: an empty chat meanwhile
+			}
 		}
 		if p, err = n.spawnAssistant(id, cwd, launcher, n.transcriptPath(id) != "", false, execution); err != nil {
 			return err

@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -821,7 +822,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			if startResultUnknown(err) {
 				// The node may already have the session and a running agent although the answer never came back:
 				// do not report failure (the model would start it again, duplicating the run).
-				return s.startedWithoutAnswer(ctx, self, am, picked, a.Cwd, a.Prompt, params["tab_name"], note, expectID, knownIDs), nil
+				return s.startedWithoutAnswer(ctx, self, am, picked, fit.snapshot, a.Cwd, a.Prompt, params["tab_name"], note, expectID, knownIDs), nil
 			}
 			return "", err
 		}
@@ -833,7 +834,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			return s.waitAgentReply(ctx, receipt, inputID, wait, fixedWaitTarget(am.ID, res.Session.SessionID))
 		}
 		s.inboxAgentStarted(ctx, self, am.ID, res.Session.SessionID, a.Prompt) // an inbox event's conversation: its chain
-		if told, ok := s.quietAgentTask(ctx, self, am, a.Cwd, a.Prompt, params["tab_name"], res.Session.SessionID); ok {
+		if told, ok := s.quietAgentTask(ctx, self, am, a.Cwd, a.Prompt, params["tab_name"], res.Session.SessionID, cmp.Or(res.Session.Agent, fit.snapshot)); ok {
 			return finish(fmt.Sprintf("Started on %s in %s: session %s, a task of this conversation (its card is in the conversation; "+
 				"%s).%s", am.Name, a.Cwd, res.Session.SessionID, told, note)), nil
 		}
@@ -949,9 +950,9 @@ var liveSendWait = 90 * time.Second
 // text: check the Agents list first and never start a second copy. A failed pre-start list disables only the
 // heuristic, not an exact expectID match. expectID is the session id the hub asked this start to use
 // (session_adopt.go).
-func (s *Service) startedWithoutAnswer(ctx context.Context, conversation string, m Device, launcher, cwd, prompt string, tab any, note, expectID string, knownIDs map[string]bool) string {
+func (s *Service) startedWithoutAnswer(ctx context.Context, conversation string, m Device, launcher, launcherKind, cwd, prompt string, tab any, note, expectID string, knownIDs map[string]bool) string {
 	if sess, ok := s.adoptStartedSession(ctx, m, launcher, cwd, expectID, knownIDs); ok {
-		if told, ok := s.quietAgentTask(ctx, conversation, m, cwd, prompt, tab, sess.SessionID); ok {
+		if told, ok := s.quietAgentTask(ctx, conversation, m, cwd, prompt, tab, sess.SessionID, cmp.Or(sess.Agent, launcherKind)); ok {
 			return fmt.Sprintf("Started on %s in %s: session %s (the start took longer than the wait; the session was "+
 				"confirmed from the machine's own list), a task of this conversation (its card is in the conversation; "+
 				"%s).%s",
@@ -1324,6 +1325,9 @@ func (s *Service) findAgent(ctx context.Context, machine, id string) (Device, pr
 		}
 		list, _ := s.sessions(ctx, m.ID)
 		for _, c := range list {
+			if c.HiddenByDirectory() {
+				continue
+			}
 			if c.SessionID == id || strings.HasPrefix(c.SessionID, id) {
 				if found != nil {
 					return Device{}, proto.Session{}, fmt.Errorf("session_id %s is ambiguous; use the full id and machine", id)
@@ -1387,7 +1391,7 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 		}
 		list, muted, _ := s.sessionsMuted(ctx, m.ID)
 		for _, c := range list {
-			if c.Assistant || c.FoldedUnder() != "" {
+			if c.Assistant || c.HiddenByDirectory() || c.FoldedUnder() != "" {
 				continue
 			}
 			c.State = c.FoldedState()

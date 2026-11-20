@@ -143,6 +143,7 @@ assistant.ask        GET /api/v1/assistant/capabilities
 assistant.ask        GET /api/v1/assistant/conversations/{id}/feed
 -                    GET /api/v1/assistant/directions/offers
 -                    GET /api/v1/assistant/directions/tree
+-                    GET /api/v1/assistant/directions/{id}
 assistant.dispatch_policy GET /api/v1/assistant/dispatch-policy
 -                    GET /api/v1/assistant/feishu/notices
 -                    GET /api/v1/assistant/followups
@@ -240,6 +241,7 @@ kb.read              GET /api/v1/kb/{kind}/{id}
 machines.read        GET /api/v1/machines
 machines.read        GET /api/v1/machines/{id}/metrics
 machines.read        GET /api/v1/machines/{id}/usage
+-                    GET /api/v1/machines/{mid}/agent-dirs/hidden
 -                    GET /api/v1/machines/{mid}/agy-settings
 -                    GET /api/v1/machines/{mid}/botmux
 -                    GET /api/v1/machines/{mid}/browser
@@ -675,6 +677,7 @@ assistant.dispatch_policy PUT /api/v1/assistant/dispatch-policy
 -                    PUT /api/v1/assistant/routines
 -                    PUT /api/v1/assistant/saved-prompts/order
 -                    PUT /api/v1/assistant/saved-prompts/{id}
+-                    PUT /api/v1/assistant/sessions/{mid}/{sid}/direction
 assistant.start_defaults PUT /api/v1/assistant/start-defaults
 -                    PUT /api/v1/assistant/tasks/{id}
 -                    PUT /api/v1/assistant/urgent-call
@@ -702,6 +705,7 @@ kb.write             PUT /api/v1/kb/{kind}/{id}
 -                    PUT /api/v1/launchers/{name}
 -                    PUT /api/v1/looks/current
 -                    PUT /api/v1/machines/{id}/name
+-                    PUT /api/v1/machines/{mid}/agent-dirs/hidden
 -                    PUT /api/v1/machines/{mid}/agy-settings
 -                    PUT /api/v1/machines/{mid}/botmux
 -                    PUT /api/v1/machines/{mid}/browser

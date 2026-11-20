@@ -41,10 +41,14 @@ type sessionState struct {
 	Model                   string          `json:"model,omitempty"`
 	ModelFingerprint        string          `json:"model_fingerprint,omitempty"`
 	ModelEffort             string          `json:"model_effort,omitempty"`
-	Origin                  string          `json:"origin,omitempty"`       // manager-recorded conversation source, for model-call authorization
-	OriginKnown             bool            `json:"origin_known,omitempty"` // manager explicitly decided origin; false on pre-upgrade records
+	TaskExecution           bool            `json:"task_execution,omitempty"` // the last Assistant input used strict scheduled execution
+	Origin                  string          `json:"origin,omitempty"`         // manager-recorded conversation source, for model-call authorization
+	OriginKnown             bool            `json:"origin_known,omitempty"`   // manager explicitly decided origin; false on pre-upgrade records
 	ConfigDir               string          `json:"config_dir,omitempty"`
 	Cwd                     string          `json:"cwd"`
+	TaskID                  string          `json:"task_id,omitempty"`
+	WorkspaceID             string          `json:"workspace_id,omitempty"`
+	WorkspaceLabel          string          `json:"workspace_label,omitempty"`
 	IsMain                  bool            `json:"is_main,omitempty"`
 	SupervisionInstructions string          `json:"supervision_instructions,omitempty"`
 	StartedAt               time.Time       `json:"started_at"`
