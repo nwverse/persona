@@ -60,7 +60,7 @@ internal fun SidebarRootsRuntime(
     merged: Boolean = false,
     hostContent: @Composable (hostId: String, stack: MutableList<NavKey>, hostShown: Boolean) -> Unit,
 ) {
-    LaunchedEffect(regular) {
+    LaunchedEffect(regular, merged) {
         if (regular || !merged) window.onWidth(regular, hosts, assistantStack, pageRoots, showHost, assignPersona)
     }
     // A navigate or restore pushes onto the host list without activate. Trim before the next frame

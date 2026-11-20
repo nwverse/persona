@@ -42,6 +42,15 @@ class MergedSidebarNavigationTest {
         assertEquals(listOf(AgentsRoute, request, terminal), agents)
     }
 
+    @Test fun anExternalTerminalFromTheAgentsListKeepsOneAnchor() {
+        val terminal = TerminalRoute("computer", "pane:example")
+        agents[1] = terminal
+        keepMergedAgentTarget(agents, terminal)
+        assertEquals(listOf(AgentsRoute, terminal), agents)
+        navigator.back()
+        assertEquals(listOf(AgentsRoute), agents)
+    }
+
     @Test fun compactMergedPlaceReplacesTheRootAndSeparateRetainsItsPush() {
         val hosts = SidebarRootHosts(assistant)
         val roots = SidebarPageRoots()

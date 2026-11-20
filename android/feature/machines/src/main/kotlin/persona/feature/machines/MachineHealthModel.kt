@@ -205,5 +205,5 @@ internal suspend fun pollSubscriptionUsage(management: MachineManagement, update
     }
 }
 
-private const val USAGE_POLL_MILLIS = 60_000L
+internal const val USAGE_POLL_MILLIS = 60_000L
 private const val BROWSER_POLL_MILLIS = 2_000L

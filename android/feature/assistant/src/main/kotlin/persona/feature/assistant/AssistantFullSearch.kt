@@ -141,7 +141,7 @@ internal fun AssistantFullSearch(
     onOpenAgent: (SessionKey) -> Unit = {},
 ) {
     var query by rememberSaveable { mutableStateOf(initialQuery) }
-    var agentScope by rememberSaveable { mutableStateOf(agents != null && agentsFirst) }
+    var agentScope by remember(agentsFirst) { mutableStateOf(agentsFirst) }
     val searchingAgents = agents != null && agentScope
     val search = rememberAssistantSearch(query, searchOn && !searchingAgents, management, hubKey)
     val answer = search.current(query).takeUnless { searchingAgents }

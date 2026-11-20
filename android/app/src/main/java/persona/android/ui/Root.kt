@@ -434,7 +434,12 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
             return AppTab.Persona
         }
         val tab = route.open(stacks)
-        if (tab == AppTab.Agents && currentMerged.value) keepMergedAgentTarget(agentsStack, route.key)
+        if (tab == AppTab.Agents && currentMerged.value) {
+            when (route.key) {
+                is ChatRoute, is InteractionRoute, is TerminalRoute -> dismissSidebar()
+            }
+            keepMergedAgentTarget(agentsStack, route.key)
+        }
         if (route.key == InboxRoute) inboxLandings.getValue(tab).enter()
         return tab
     }

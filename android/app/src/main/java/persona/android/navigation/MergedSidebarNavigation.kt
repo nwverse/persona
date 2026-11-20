@@ -38,6 +38,6 @@ internal fun keepMergedAgentTarget(stack: MutableList<NavKey>, requested: NavKey
     val visible = stack.lastOrNull() ?: return
     when (requested) {
         is ChatRoute, is InteractionRoute -> replaceBackStack(stack, listOf(AgentsRoute, visible))
-        is TerminalRoute -> replaceBackStack(stack, listOf(AgentsRoute) + stack.takeLast(2))
+        is TerminalRoute -> replaceBackStack(stack, listOf(AgentsRoute) + stack.takeLast(2).filterNot { it == AgentsRoute })
     }
 }

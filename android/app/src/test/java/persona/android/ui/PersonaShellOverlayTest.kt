@@ -496,6 +496,21 @@ class PersonaShellOverlayTest {
         }
     }
 
+    @Test fun aDirectAgentOpenDismissesTheMergedOverlayOnTheSameTab() {
+        val navigation = mutableStateOf<((Router) -> ResolvedRoute?)?>({ ResolvedRoute(AppTab.Agents, route) })
+        shell(sidebarLayout = SidebarLayout.Merged, openNavigation = navigation) {
+            awaitText("The trip outline is ready.")
+            sidebar()
+            close().assertExists()
+            rule.runOnIdle {
+                navigation.value = { ResolvedRoute(AppTab.Agents,
+                    ChatRoute(otherAgent.machineId, otherAgent.sessionId, ConversationKind.Agent)) }
+            }
+            awaitText("The packing list is ready.")
+            close().assertDoesNotExist()
+        }
+    }
+
     @Config(qualifiers = "en-w1000dp-h800dp-mdpi")
     @Test fun separateIsDefaultAndAppearanceSwitchKeepsTheOpenChatAndSettings() {
         shell(sidebarLayout = SidebarLayout.Separate) { scenario ->

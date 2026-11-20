@@ -10,6 +10,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.delay
 import persona.core.contracts.api.MachineManagement
 import persona.core.contracts.api.UsageAccount
 import persona.core.designsystem.*
@@ -34,7 +35,14 @@ fun rememberSidebarUsage(management: MachineManagement?, active: Boolean): State
 
 @Composable
 fun SidebarUsageStrip(accounts: List<UsageAccount>, onOpenMachines: () -> Unit) {
-    val top = remember(accounts) { orderedAccounts(liveAccounts(accounts, Instant.now())).take(2) }
+    if (accounts.isEmpty()) return
+    val now by produceState(Instant.now()) {
+        while (true) {
+            value = Instant.now()
+            delay(USAGE_POLL_MILLIS)
+        }
+    }
+    val top = remember(accounts, now) { orderedAccounts(liveAccounts(accounts, now)).take(2) }
     if (top.isEmpty()) return
     Row(
         Modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onOpenMachines)
