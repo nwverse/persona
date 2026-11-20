@@ -28,6 +28,8 @@ type ownSetting struct {
 	Setting
 	get func(ctx context.Context) (string, error)
 	set func(ctx context.Context, v json.RawMessage) (*ownChange, error)
+	// cardTitle localizes a dynamic setting's title (direction.<id>.prompt); static keys use settingTitles instead.
+	cardTitle func(l i18n.Lang) string
 	// change is a setting's other actions (a list's add and remove: tasks.trust), in place of set.
 	change func(ctx context.Context, action string, v json.RawMessage) (*ownChange, error)
 }
@@ -336,7 +338,10 @@ func (s *Service) toolPersonaSettings(ctx context.Context, call ToolCall, args j
 	if a.Key == standingAuthorizationsKey && a.Action == "set" && (call.SessionID == "" || call.SessionID != s.settings(ctx).Main || call.MachineID != s.settings(ctx).MachineID) {
 		return proto.TextResult("only the main conversation may change standing authorizations", true)
 	}
-	own := s.ownSettings()
+	if _, ok := directionPromptSettingID(a.Key); ok && a.Action == "set" && (call.SessionID == "" || call.SessionID != s.settings(ctx).Main) {
+		return proto.TextResult("only the main conversation may change direction prompts", true)
+	}
+	own := append(s.ownSettings(), s.directionOwnSettings(ctx)...)
 	if a.Action == "" || a.Action == "list" {
 		text, err := s.listSettings(ctx, own)
 		if err != nil {
@@ -352,6 +357,9 @@ func (s *Service) toolPersonaSettings(ctx context.Context, call ToolCall, args j
 			}
 			return proto.TextResult(text, false)
 		}
+	}
+	if _, ok := directionPromptSettingID(a.Key); ok {
+		return proto.TextResult(errNoDirection.Error(), true)
 	}
 	return s.appTool(ctx, AppSettings, call, args) // the hub's
 }
@@ -408,7 +416,9 @@ func (s *Service) ownSettingAction(ctx context.Context, call ToolCall, o ownSett
 	}
 	l := s.lang(ctx)
 	title := o.Title
-	if k, ok := settingTitles[o.Key]; ok {
+	if o.cardTitle != nil {
+		title = o.cardTitle(l)
+	} else if k, ok := settingTitles[o.Key]; ok {
 		title = i18n.T(l, "assistant-settings_tool."+k)
 	}
 	shown, _ := json.Marshal(map[string]string{"setting": title, "action": action})

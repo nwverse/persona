@@ -1233,6 +1233,16 @@ A direction carries **notes** the owner writes for it: its rules, the readings t
 4,000 characters, `""` clears them; `GET /api/v1/assistant/leaders` lists `notes` and `notes_at`). They are the owner's
 content, not memory: memory stays one for every conversation (#9440), and a direction's lessons go into its notes.
 
+The assistant uses the same record through `persona_settings`: `list` exposes each current direction as
+`direction.<id>.prompt` with its name, and `get` returns the complete notes to any assistant conversation. Only the main
+conversation may `set` one. A string replaces the whole notes; `{"old":"one exact unique fragment","new":"replacement"}`
+changes one fragment without resending the rest (an empty `new` deletes it). An empty, missing or repeated `old` and a
+malformed object are explicit errors before any card or write; unchanged text needs no card. A change uses
+the existing phone permission card with the direction's name and before → after text, and only the owner's approval
+applies it. The proposal captures `notes_at`; approval calls `setDirectionNotes` against that baseline, so an app or tool
+edit made meanwhile refuses the stale proposal instead of overwriting the newer notes. No second storage or assistant
+HTTP route exists: the app route and the tool share persistence, sanitation, conflict checks and the delivery below.
+
 - **The leader** gets them in its own system prompt: they are appended, with the name and goal of the kb project the
   direction is filed under, to its role policy (`supervision_instructions`, which the node passes as
   `--append-system-prompt` or a Codex thread's developer instructions; template `assistant/direction_notes`). The node
