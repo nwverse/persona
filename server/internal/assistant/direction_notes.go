@@ -328,8 +328,9 @@ func withNotesCarry(ctx context.Context) (context.Context, *notesCarry) {
 const notesInFlightMost = 8
 
 // notesOwnerWait is how long the owner's message waits for the hub's notice: longer than the hub waits for any send to
-// go in (its sendWait). One whose notice has not come by then gets none (the hub stopped while sending it, or answered
-// a retry from its record without sending), and is dropped as if its outcome were never learned.
+// go in (its sendWait). One whose notice has not come by then gets none (the hub did not send it after all, as for a
+// retry it answers from its record, or it stopped while sending it), and is dropped as if its outcome were never
+// learned.
 const notesOwnerWait = 10 * time.Minute
 
 // flight is conversation id's flight, made if it has none; b.mu is held.

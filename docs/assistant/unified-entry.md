@@ -1135,8 +1135,9 @@ content, not memory: memory stays one for every conversation (#9440), and a dire
   in effect, as a send to a leader at work does.
 - **An outcome never learned keeps the block**: the moves in flight are in memory only. After a manager restart
   between a send and its outcome, the new block stays, as it does for an owner's message whose notice never comes (the
-  hub stopped while sending it, or answered a retry from its record without sending it; after 10 minutes, longer than
-  the hub waits for any send, it no longer waits for one, so the hub's next notice settles the message it is about),
+  hub did not send it after all, as for a retry it answers from its record, or it stopped while sending it; after 10
+  minutes, longer than the hub waits for any send, it no longer waits for one, so the hub's next notice settles the
+  message it is about),
   and for the oldest move or owner's message beyond eight in flight for one conversation. When the node had in fact
   refused that send, the lead's process still runs the block before it: until the lead is idle, every send that finds
   it at work carries the new block and the node refuses it, and the first send that finds it idle gives the process
