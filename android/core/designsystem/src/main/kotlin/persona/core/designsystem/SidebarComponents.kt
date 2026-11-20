@@ -1,6 +1,7 @@
 package persona.core.designsystem
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.shape.CircleShape
@@ -10,6 +11,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.text.AnnotatedString
 import persona.core.designsystem.icons.PhIcons
 
@@ -26,11 +28,32 @@ fun JSidebarNewChat(text: String, onClick: () -> Unit, modifier: Modifier = Modi
     }
 }
 
-/** The merged sidebar's paired Search and Settings controls. */
+/** Keep the primary label whole when the paired controls need their own row. */
 @Composable
-fun JSidebarFooterControls(content: @Composable RowScope.() -> Unit) {
-    Row(Modifier.clip(CircleShape).background(PersonaTheme.palette.surfaceOpaque),
-        verticalAlignment = Alignment.CenterVertically, content = content)
+fun JSidebarFooterActions(
+    newChatLabel: String,
+    onNewChat: () -> Unit,
+    modifier: Modifier = Modifier,
+    controls: @Composable RowScope.() -> Unit,
+) {
+    Layout(content = {
+        JSidebarNewChat(newChatLabel, onNewChat, Modifier.fillMaxWidth())
+        Row(Modifier.clip(CircleShape).background(PersonaTheme.palette.surfaceOpaque),
+            verticalAlignment = Alignment.CenterVertically, content = controls)
+    }, modifier = modifier.fillMaxWidth()) { children, constraints ->
+        val width = constraints.maxWidth
+        val gap = Tokens.Space.s.roundToPx()
+        val childConstraints = constraints.copy(minWidth = 0, minHeight = 0)
+        val paired = children[1].measure(childConstraints)
+        val available = (width - paired.width - gap).coerceAtLeast(0)
+        val stacked = children[0].maxIntrinsicWidth(paired.height) > available
+        val primary = children[0].measure(childConstraints.copy(maxWidth = if (stacked) width else available))
+        val height = if (stacked) primary.height + gap + paired.height else maxOf(primary.height, paired.height)
+        layout(width, height) {
+            primary.placeRelative(0, if (stacked) 0 else (height - primary.height) / 2)
+            paired.placeRelative(width - paired.width, if (stacked) primary.height + gap else (height - paired.height) / 2)
+        }
+    }
 }
 
 internal fun sidebarHistoryRowSpins(status: Status, working: Boolean): Boolean =

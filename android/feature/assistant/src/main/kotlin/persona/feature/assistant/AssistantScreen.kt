@@ -1715,31 +1715,30 @@ internal fun AssistantDrawer(
         }
         val footer: @Composable () -> Unit = {
             merged?.usage?.invoke()
-            Row(
-                Modifier.then(if (drawer) Modifier.padding(horizontal = Tokens.Space.l) else Modifier)
-                    .padding(vertical = if (drawer) Tokens.Space.m else Tokens.Space.s),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                JSidebarNewChat(stringResource(R.string.assistant_new_conversation), onNew,
-                    if (drawer && merged == null) Modifier else Modifier.weight(1f))
-                if (drawer && merged == null) Spacer(Modifier.weight(1f))
-                val settings: @Composable () -> Unit = {
-                    Box {
-                        JIconButton(PhIcons.Gear, stringResource(R.string.assistant_open_settings), onSettings,
-                            raised = drawer && merged == null)
-                        when {
-                            settingsBadge != null -> JTag(settingsBadge, Modifier.align(Alignment.TopEnd))
-                            settingsCount > 0 -> JBadge(settingsCount, Modifier.align(Alignment.TopEnd))
-                            settingsDot -> JStatusDot(Status.NeedsYou, Modifier.align(Alignment.TopEnd), breathes = false)
-                        }
+            val footerPadding = Modifier.then(if (drawer) Modifier.padding(horizontal = Tokens.Space.l) else Modifier)
+                .padding(vertical = if (drawer) Tokens.Space.m else Tokens.Space.s)
+            val newChatLabel = stringResource(R.string.assistant_new_conversation)
+            val settings: @Composable () -> Unit = {
+                Box {
+                    JIconButton(PhIcons.Gear, stringResource(R.string.assistant_open_settings), onSettings,
+                        raised = drawer && merged == null)
+                    when {
+                        settingsBadge != null -> JTag(settingsBadge, Modifier.align(Alignment.TopEnd))
+                        settingsCount > 0 -> JBadge(settingsCount, Modifier.align(Alignment.TopEnd))
+                        settingsDot -> JStatusDot(Status.NeedsYou, Modifier.align(Alignment.TopEnd), breathes = false)
                     }
                 }
-                if (merged == null) settings() else {
-                    Spacer(Modifier.width(Tokens.Space.s))
-                    JSidebarFooterControls {
-                        JIconButton(PhIcons.MagnifyingGlass, stringResource(R.string.assistant_sidebar_search), onFullSearch, raised = false)
-                        settings()
-                    }
+            }
+            if (merged != null) {
+                JSidebarFooterActions(newChatLabel, onNew, footerPadding) {
+                    JIconButton(PhIcons.MagnifyingGlass, stringResource(R.string.assistant_sidebar_search), onFullSearch, raised = false)
+                    settings()
+                }
+            } else {
+                Row(footerPadding, verticalAlignment = Alignment.CenterVertically) {
+                    JSidebarNewChat(newChatLabel, onNew, if (drawer) Modifier else Modifier.weight(1f))
+                    if (drawer) Spacer(Modifier.weight(1f))
+                    settings()
                 }
             }
         }

@@ -1009,6 +1009,7 @@ Android's `JMenu` takes a choice list in groups: an action can open a group with
   sidebar row's height and `Space.s` above. The Agents list supplies its rows, filters, grouping and actions, with one
   selected row for the visible root. The fixed Needs You jump uses the shell count. The two fullest subscription
   accounts share their data with Computers. One New chat control and the Search and Settings capsule sit below them.
+  `JSidebarFooterActions` stacks the capsule under New chat when the full label needs the row's width.
   Search opens over the whole window in Chats or Agents. The Android guide lists the pages its capabilities expose.
 - One selected row in the Sidebar layout's column (#11032; `SidebarRootsUITests.testOneRowIsSelectedAndItFollowsTheRoot`):
   the whole column (Main Chat, the Pages rows, Persona Chats, the Agents list with Pinned) has at most one selected row, and
