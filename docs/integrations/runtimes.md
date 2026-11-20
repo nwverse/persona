@@ -477,6 +477,10 @@ input clears the previous reply preview, including input with no visible text. T
 until the assistant writes response text. This keeps user-authored questions out of awaiting-reply detection while
 preserving genuine assistant questions. User messages and tool records remain available in the conversation items.
 
+CLI companion sessions and herdr panes show images from exported tool results. Conversation pages carry only image
+references; Persona loads the bytes when an image is shown. It accepts PNG, JPEG, GIF and WebP up to 1,152 KiB from
+the result's inline data or local file. The Desktop companion still omits these images.
+
 Native model errors can be omitted from the JSONL export even when ACP reports a completed prompt. When an idle
 summary has unexported steps, the companion reads at most the final eight native steps with `GetCascadeTrajectorySteps`.
 The result is cached against the summary and exported branch. Discovery opens the native service through read-only

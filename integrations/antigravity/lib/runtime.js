@@ -9,6 +9,7 @@ import { pathToFileURL } from 'node:url'
 import { createRuntime, installCurrent, interactionId, page, RpcError, snippet, summaryOf, verifyPackage } from '../../runtime-sdk/index.js'
 import { isAssistantDir } from '../../runtime-sdk/lib/identity.js'
 import { AgyAcpClient } from './acp.js'
+import { readMediaImage } from './media.js'
 import { discoverModels, mapModels, SIGNIN_TIMEOUT } from './models.js'
 import { nativeErrorStep } from './errors.js'
 import { isPolicyDir, POLICY_DIR_NAME, policyDirOf, readPolicy, removePolicy, splitPolicy, SUPERVISION_ERROR_CODE, syncPolicy } from './policy.js'
@@ -40,6 +41,7 @@ const SIGNED_OUT = /\b(?:sign(?:ed)?|log(?:ged)?)[ -]?in\b/i
 // The hub localizes this exact runtime notice (transcript.RuntimeAgyAutoRefusalNotice).
 const AUTO_REFUSAL_NOTICE = 'agy 拒绝了 Auto 模式，已改由 Persona 自动批准权限请求'
 const MODE_NOTICE_STEP = 'PERSONA_MODE_NOTICE'
+const CONVERSATION_ID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i
 
 export function createAgyRuntime(options = {}) {
   const home = options.home || homedir()
@@ -301,6 +303,7 @@ export function createAgyRuntime(options = {}) {
       items,
       cursor,
       item,
+      image,
       send,
       interrupt,
       start,
@@ -639,8 +642,8 @@ export function createAgyRuntime(options = {}) {
   }
 
   function historyOf(rawId) {
-    // Refresh cached items emitted before native failures used the shared API-error format, MCP tool normalization, or tool-media omission.
-    return `agy:${rawId}:full:api-errors:content-v2:step-ids-v2:mcp-tools:no-tool-media`
+    // Refresh cached transcripts that did not include lazy tool images.
+    return `agy:${rawId}:full:api-errors:content-v2:step-ids-v2:mcp-tools:lazy-tool-media`
   }
 
   function cutMatches(cut, transcript) {
@@ -931,7 +934,7 @@ export function createAgyRuntime(options = {}) {
     if (!synthetic) dirtyLiveSeqs.delete(pid)
     const hasDirty = Boolean(dirty && dirty.size > 0)
     if (rewritten || toSeq > prevSeq || hasDirty) {
-      const { items: allItems } = stepsToItems(steps, { brainDir: bDir, full: false, clientMsgIdFor: clientMsgIdFor(rawId) })
+      const { items: allItems } = stepsToItems(steps, { brainDir: bDir, full: false, includeMedia: true, clientMsgIdFor: clientMsgIdFor(rawId) })
       const deltaItems = rewritten
         ? allItems
         : allItems.filter((it) => it.seq > prevSeq || Boolean(dirty?.has(it.seq)))
@@ -955,9 +958,10 @@ export function createAgyRuntime(options = {}) {
     clearInterval(watchedPolls.get(pid))
     watchedPolls.delete(pid)
     if (!watching || options?.transcript) return
+    const rawId = ownedId(pid)
     const timer = setInterval(() => {
       // Tracked ACP turns already poll their export. Native terminal turns need the same committed-content feed.
-      if (!hasLiveWork(pid)) syncTranscriptAppend(toAgyId(pid))
+      if (!hasLiveWork(pid)) syncTranscriptAppend(rawId)
     }, 400)
     timer.unref?.()
     watchedPolls.set(pid, timer)
@@ -971,14 +975,14 @@ export function createAgyRuntime(options = {}) {
     if (existsSync(brainRoot)) {
       try {
         for (const name of readdirSync(brainRoot)) {
-          if (/^[0-9a-fA-F-]{36}$/.test(name)) seenIds.add(name)
+          if (CONVERSATION_ID.test(name)) seenIds.add(name)
         }
       } catch {}
     }
 
     const candidates = []
     for (const rawId of seenIds) {
-      if (archived.has(rawId)) continue
+      if (!CONVERSATION_ID.test(rawId) || archived.has(rawId)) continue
       const meta = convs[rawId]
       const summary = meta?.summary
       const native = withoutStaleWorking(rawId, states.get(rawId))
@@ -1068,9 +1072,10 @@ export function createAgyRuntime(options = {}) {
   // runtime's. The node asks every runtime about a session nobody listed and gives it to the first that answers, so an
   // empty page here would take a new Claude Code session (no transcript yet) for an Antigravity one.
   function ownedId(sessionId) {
-    const id = String(sessionId ?? '').trim()
-    if (!id.startsWith(PREFIX)) throw new RpcError(`Antigravity has no session ${id}`, 'not_found')
-    return toAgyId(id)
+    const id = typeof sessionId === 'string' ? sessionId.trim() : ''
+    const rawId = toAgyId(id)
+    if (!id.startsWith(PREFIX) || !CONVERSATION_ID.test(rawId)) throw new RpcError('Antigravity session not found', 'not_found')
+    return rawId
   }
 
   async function items(params) {
@@ -1079,7 +1084,7 @@ export function createAgyRuntime(options = {}) {
     await readNativeError(rawId)
     const bDir = brainDirOf(rawId)
     const { steps, history } = withModeNotice(rawId, transcriptOf(rawId))
-    const { items: allItems, toSeq } = stepsToItems(steps, { brainDir: bDir, full: false, clientMsgIdFor: clientMsgIdFor(rawId) })
+    const { items: allItems, toSeq } = stepsToItems(steps, { brainDir: bDir, full: false, includeMedia: true, clientMsgIdFor: clientMsgIdFor(rawId) })
     return page(allItems, params, { history, toSeq })
   }
 
@@ -1098,10 +1103,22 @@ export function createAgyRuntime(options = {}) {
     await readNativeError(rawId)
     const bDir = brainDirOf(rawId)
     const { steps } = withModeNotice(rawId, transcriptOf(rawId))
-    const { items: fullItems } = stepsToItems(steps, { brainDir: bDir, full: true, clientMsgIdFor: clientMsgIdFor(rawId) })
+    const { items: fullItems } = stepsToItems(steps, { brainDir: bDir, full: true, includeMedia: true, clientMsgIdFor: clientMsgIdFor(rawId) })
     const found = fullItems.find((it) => it.id === params.item_id)
     if (!found) throw new Error(`item ${params.item_id} not found`)
     return found
+  }
+
+  async function image(params) {
+    const rawId = ownedId(params.session_id)
+    if (typeof params.item_id === 'string') {
+      await reconcileNativeCut(rawId)
+      const { steps } = withModeNotice(rawId, transcriptOf(rawId))
+      const { media } = stepsToItems(steps, { includeMedia: true, mediaItemId: params.item_id })
+      const found = media && await readMediaImage(media, brainDirOf(rawId))
+      if (found) return found
+    }
+    throw new RpcError('Antigravity image not found', 'not_found')
   }
 
   function mcpServersFor(pid, isAsst) {
