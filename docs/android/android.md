@@ -1210,6 +1210,8 @@ Confirm the connection on the pairing page, handle permissions and the checklist
 "$ADB" exec-out screencap -p > /tmp/persona-android-dark.png
 ```
 
+The first user message in an Assistant chat opened by Lark `/agent` or another extension shows the same source mark and name as the drawer once its history reaches the beginning. A channel message keeps its own source. To capture both chat pages on a dedicated emulator, set `MOCK_AUTO_CONVERSATIONS=1 MOCK_EXTERNAL=1` when running `android.sh shots`. The captures are named `external-lark` and `external-extension` for each appearance.
+
 Wait until the page is ready before taking screenshots. For batch screenshots use `./scripts/app/android.sh shots`; debug direct-entry arguments are below. None connect to a production hub. For scrolling performance see "Interface style performance".
 
 ## Process-start pairing restore
