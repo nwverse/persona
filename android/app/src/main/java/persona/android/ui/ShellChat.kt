@@ -143,9 +143,12 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
                     onOpenTodo = { todoId -> navigator.navigate(persona.core.navigation.TodoDetailRoute(todoId)) },
                     // A model error the hub named on Persona's turn: Fix It opens what the home's readiness card would (MainReadiness.kt).
                     onFixModel = { action, launcher, manager ->
-                        navigator.navigate(if (action == persona.core.designsystem.ReadinessActionId.EditProvider)
-                            launcher?.takeIf(String::isNotBlank)?.let { persona.core.navigation.ModelProviderRoute(it) } ?: SettingsPageRoute(SettingsPage.Providers)
-                        else persona.core.navigation.ModelPurposeRoute("assistant", manager))
+                        navigator.navigate(when (action) {
+                            persona.core.designsystem.ReadinessActionId.EditProvider ->
+                                launcher?.takeIf(String::isNotBlank)?.let { persona.core.navigation.ModelProviderRoute(it) } ?: SettingsPageRoute(SettingsPage.Providers)
+                            persona.core.designsystem.ReadinessActionId.PickModel -> SettingsPageRoute(SettingsPage.ModelConfig)
+                            else -> persona.core.navigation.ModelPurposeRoute("assistant", manager)
+                        })
                     },
                     // A briefing's recommended setup opens the page its mechanism is turned on at, and changes nothing (#5085).
                     onOpenSetup = { page, manager ->

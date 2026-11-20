@@ -29,6 +29,8 @@ import persona.core.navigation.SettingsPage
 import persona.core.navigation.ChatRoute
 import persona.core.navigation.Navigator
 import persona.core.navigation.TerminalRoute
+import persona.core.navigation.ModelProviderRoute
+import persona.core.navigation.ModelPurposeRoute
 
 @EntryPoint
 @InstallIn(SingletonComponent::class)
@@ -242,6 +244,14 @@ fun ChatDestination(
                 onOpenSide = if (historyReadOnly) null else ({ navigator.navigate(ChatRoute(it.machineId, it.sessionId,
                     persona.core.navigation.ConversationKind.Agent, side = true)) }),
                 onOpenAssistant = { navigator.navigate(conversationRoute(it, assistant = true)) },
+                onFixModel = { action, launcher, manager ->
+                    navigator.navigate(when (action) {
+                        persona.core.designsystem.ReadinessActionId.EditProvider ->
+                            launcher?.takeIf(String::isNotBlank)?.let { ModelProviderRoute(it) } ?: SettingsPageRoute(SettingsPage.Providers)
+                        persona.core.designsystem.ReadinessActionId.PickModel -> SettingsPageRoute(SettingsPage.ModelConfig)
+                        else -> ModelPurposeRoute("assistant", manager)
+                    })
+                },
                 onConnectionDetails = { navigator.navigate(SettingsPageRoute(SettingsPage.Diagnostics)) },
                 files = wiring?.files, ports = wiring?.ports,
                 tasks = wiring?.tasks?.takeIf { style == ChatRenderStyle.Assistant && !historyReadOnly },
