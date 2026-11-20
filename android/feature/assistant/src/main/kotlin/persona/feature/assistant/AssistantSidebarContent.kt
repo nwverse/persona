@@ -1,6 +1,7 @@
 package persona.feature.assistant
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
@@ -28,10 +29,24 @@ object AssistantSidebarShade {
     const val Todos = "todos"
     const val Knowledge = "knowledge"
     const val Machines = "machines"
+    const val Schedule = "schedule"
+    const val Health = "health"
     const val None = "none"
 
     fun agent(key: SessionKey) = "agent:${key.path}"
 }
+
+/** The Agents list supplies the scroll viewport and places the footer below its Needs You jump. */
+class MergedSidebarContent(
+    val list: @Composable (LazyListScope.() -> Unit, @Composable () -> Unit, () -> Unit) -> Unit,
+    val usage: @Composable () -> Unit,
+    val agents: List<Session>,
+    val agentMachines: Map<String, String>,
+    val pinnedAgents: Set<String>,
+    val onSearchAgent: (SessionKey) -> Unit,
+    val agentsInFront: Boolean,
+    val showKnowledge: Boolean,
+)
 
 /** The real shared history remains available even while a secondary page hides the Assistant root. */
 @Composable
@@ -73,6 +88,8 @@ fun AssistantSidebarContent(
     shadedPlace: String? = null,
     /** When the sidebar is a column beside the page, folds the column from its own header; null in a drawer or overlay. */
     onFoldColumn: (() -> Unit)? = null,
+    merged: MergedSidebarContent? = null,
+    onSchedule: (() -> Unit)? = null,
 ) {
     val choice by AssistantManagerChoice.current.collectAsStateWithLifecycle()
     val received = snapshot.takeIf { it.managerId == choice.shown }
@@ -87,6 +104,11 @@ fun AssistantSidebarContent(
     val words = conversationWords()
     var query by rememberSaveable(choice.hubId, choice.shown) { mutableStateOf("") }
     var fullSearchOpen by rememberSaveable(choice.hubId, choice.shown) { mutableStateOf(false) }
+    var searchAgentsFirst by rememberSaveable(choice.hubId, choice.shown) { mutableStateOf(false) }
+    fun openSearch(agentsFirst: Boolean) {
+        searchAgentsFirst = agentsFirst
+        fullSearchOpen = true
+    }
     LaunchedEffect(fullWindowSearch) {
         if (fullWindowSearch) query = "" else fullSearchOpen = false
     }
@@ -145,19 +167,24 @@ fun AssistantSidebarContent(
     Column(Modifier.fillMaxHeight()) {
         failure?.let { JNotice(it, status = Status.NeedsYou) }
         Box(Modifier.weight(1f)) {
-            AssistantDrawer(query, { query = it }, groups, active = active, hasMain = received.mainSession != null,
+            val visibleGroups = if (merged == null) groups else groups.copy(
+                main = groups.main ?: openChats.firstOrNull { it.key == received.mainSession },
+                others = groups.others.filterNot { chat -> groups.recent.any { it.key == chat.key } },
+            )
+            AssistantDrawer(query, { query = it }, visibleGroups, active = active, hasMain = received.mainSession != null,
                 onEnd = management?.takeUnless { demo }?.let { target -> { session: Session -> ending = session to target } },
                 onMain = { received.mainSession?.let(onOpen) ?: onAction(AssistantSidebarAction.MainConversation) },
                 onOpen = onOpen,
                 onInfo = { topic -> when (topic) {
                     AssistantInfo.Knowledge -> onKnowledge()
-                    AssistantInfo.Schedule -> onAction(AssistantSidebarAction.ScheduledTasks)
+                    AssistantInfo.Schedule -> if (onSchedule != null) onSchedule() else onAction(AssistantSidebarAction.ScheduledTasks)
                     AssistantInfo.Session -> onAction(AssistantSidebarAction.SessionInfo)
                     AssistantInfo.Launcher, AssistantInfo.Settings -> onAction(AssistantSidebarAction.Launcher)
                 } },
                 onNew = { onAction(AssistantSidebarAction.NewConversation) },
                 // The health space (docs/assistant/health.md): the Assistant page opens its newest chat or its new-chat page.
-                onHealth = if (demo) null else ({ onAction(AssistantSidebarAction.Health) }),
+                onHealth = if (demo || (merged != null && repository !is persona.core.contracts.api.AssistantConversations)) null
+                    else ({ onAction(AssistantSidebarAction.Health) }),
                 onSettings = onSettings,
                 onInbox = onInbox, inboxCount = inboxCount,
                 onCopy = { copy(it.sessionId, resources.getString(R.string.assistant_copied_session_id)) },
@@ -190,9 +217,12 @@ fun AssistantSidebarContent(
                 pages = pages, onPage = onPage, onOpenTodo = onOpenTodo, onOpenAgent = onOpenAgent, switcher = switcher,
                 found = foundChats, searchPartial = searchPartial,
                 fullWindowSearch = fullWindowSearch,
-                onFullSearch = { if (fullWindowSearch) fullSearchOpen = true },
+                onFullSearch = { if (fullWindowSearch) openSearch(merged?.agentsInFront == true) },
                 shadedPlace = shadedPlace,
-                onFoldColumn = onFoldColumn)
+                onFoldColumn = onFoldColumn,
+                merged = merged,
+                showSchedule = merged == null || (management != null && !demo),
+                onAgentSearch = { openSearch(true) })
         }
     }
     if (fullSearchOpen && fullWindowSearch) {
@@ -212,6 +242,14 @@ fun AssistantSidebarContent(
                 onOpen(key)
             },
             onDismiss = { fullSearchOpen = false },
+            agents = merged?.agents,
+            agentMachines = merged?.agentMachines.orEmpty(),
+            pinnedAgents = merged?.pinnedAgents.orEmpty(),
+            agentsFirst = searchAgentsFirst,
+            onOpenAgent = { key ->
+                fullSearchOpen = false
+                merged?.onSearchAgent?.invoke(key)
+            },
         )
     }
     ConversationHistoryDialogs(history, received.conversations, operationScope, onOpen = onOpen,

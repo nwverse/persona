@@ -227,6 +227,7 @@
     <string name="chat_link_unsupported_text">このリンクはPersonaで開けません。</string>
     <string name="chat_link_ok">OK</string>
     <string name="chat_link_open">開く</string>
+    <string name="chat_link_open_in_app">Persona で開く</string>
     <string name="chat_link_no_app">このリンクを開けるアプリがありません</string>
     <string name="chat_links_mail_title">メールを作成しますか？</string>
     <string name="chat_links_mail_text">メールアプリを開いてメールを作成します。</string>

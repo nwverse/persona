@@ -242,6 +242,10 @@ description is schema text, so its four outputs are regenerated. *Conflict:* `In
 #4512), `assistantwire/inbox.go` 3 (#9782d, #6539d, #4512), the rest none. *Gate:* none. *Rollback:* revert. *Done:*
 `scripts/gen/extension_schema.py --check` and the docs tests pass.
 
+*Landed (#11832):* every correction above, none skipped (no open PR rewrites those lines), plus the same claims in the
+`HomeInbox` comment, `docs/apple/ios.md` ("Counts"), `docs/assistant/managers.md` ("Badges") and the web side-fold
+replay's comment.
+
 **3. The Agents definition, pinned.** *Change:* every `spec/fixtures/needs-you` case gets `expected.badge_rows`, plus
 six cases: a child's card under its parent, a side folded under its parent, a quiet task's card, a directory-hidden card
 (counted nowhere), a delegating card (counts today; D11), an elicitation-only card (its session waits). The iOS and
@@ -256,11 +260,20 @@ or 9) adds a view-path case that asserts the fixture value instead. Android fail
 `:core:domain:test --tests '*AgentsNeedsYouFixtureTest*'` (`--max-workers=4`) and iOS AgentsNeedsYouFixtureTests pass,
 each marked case at today's value, iOS on the implementer's own simulator.
 
+*Landed (#11823):* `badge_rows` on every case and the six cases; iOS's replays (with `HomeWidgetTests`) now drop
+directory-hidden cards and fold sides as the app does, and the one mark is Android's on
+`a_directory_hidden_card_counts_nowhere` (D1); iOS needs none.
+
 **4. The surface table and the agreement report** (section 3.5). *Change:* spec/fixtures/counts (README, surfaces.json),
 the guard, the report switch in the existing replays, the lane differ, and entries in `scripts/ci/paths.py` and
 `scripts/ci/check_fast_map.py`. *Conflict:* new files; `spec/README.md` has 1 open PR (#5969d), `paths.py` and
 `check_fast_map.py` 0. *Gate:* none. *Rollback:* delete. *Done:* the guard passes and fails on each seeded violation
 (unit tests); the baseline count of `differs` rows is in the README.
+
+*Landed (#11900):* 32 rows, 26 of them `differs` (the baseline, in the README); the guard
+(`scripts/test/test_counts_surfaces.py`), `PERSONA_COUNTS_REPORT` in both needs-you replays, the differ
+(`scripts/test/counts_agreement.py`: iOS agrees on every case, Android on all but its D1 mark) and check-fast's rule.
+`scripts/ci/paths.py` needed no entry: CI's lanes already select every file (`spec/**`, and `**` for scripts).
 
 **5. The pure manager package.** *Change:* move needsYou, liveCounts and cardStands out of `assistant/fleet_live.go` and
 linkAttention's predicate out of `assistant/fleet_attention.go`; add `agents_needs_you`, replaying the needs-you

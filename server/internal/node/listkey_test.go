@@ -45,6 +45,9 @@ func listKeyFmt(list []proto.Session) string {
 		if s.PendingEffort != nil {
 			fmt.Fprintf(&b, "pending-effort:%q/%v\n", *s.PendingEffort, s.EffortChangeFailed)
 		}
+		if s.OffLauncher {
+			b.WriteString("off-launcher\n")
+		}
 		fmt.Fprintf(&b, "source:%s/%s/%s/%s/%v/%v/%s/%s\n", s.SourceKind, s.SourceThreadID, s.SourceInstanceID, s.ReadOnlyReason, capsFmt(s.Capabilities), s.Attached, s.CodexRoute, s.CodexRouteNote)
 		for _, t := range s.Background {
 			b.WriteString(t.ID + ",")
@@ -238,6 +241,7 @@ func listKeyVariants() (proto.Session, map[string]proto.Session) {
 		"effort":                  func(s *proto.Session) { s.Effort = "low" },
 		"model":                   func(s *proto.Session) { s.Model = "claude-opus-5" },        // #6334
 		"permission_mode":         func(s *proto.Session) { s.PermissionMode = "plan" },        // #6334
+		"off_launcher":            func(s *proto.Session) { s.OffLauncher = true },             // #11792
 		"effort_alone":            func(s *proto.Session) { s.Efforts, s.Effort = nil, "max" }, // #6334
 		"efforts":                 func(s *proto.Session) { s.Efforts = []string{"low", "medium", "high"} },
 		"efforts_none":            func(s *proto.Session) { s.Efforts = nil },

@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+import { initI18n } from "../i18n";
 import { onDraftEvent, type DraftEvent } from "../lib/drafts";
 import { type UsageAccount } from "../lib/usage-windows";
 import { UsageBars } from "./UsageBars";
@@ -12,6 +13,15 @@ import { unconnectedUsageProviders } from "./UsageUnconnected";
 const NOW = new Date(2026, 10, 5, 10, 0, 0).getTime();
 const H = 3600_000;
 const iso = (ms: number) => new Date(NOW + ms).toISOString();
+const balanceAccount = (id: string, amount: string, o: Partial<UsageAccount> = {}): UsageAccount => ({
+  id,
+  provider: "deepseek",
+  name: "DeepSeek",
+  sampled_at: iso(-12_000),
+  windows: [],
+  balance: { amount, currency: "CNY" },
+  ...o,
+});
 const account = (id: string, used5: number, used7: number, o: Partial<UsageAccount> = {}): UsageAccount => ({
   id,
   provider: "codex",
@@ -65,6 +75,49 @@ describe("the sidebar's usage strip", () => {
     const kept = account("a", 10, 20, { stale_at: iso(-60_000) });
     expect(renderToStaticMarkup(<UsageBars accounts={[kept]} now={NOW} />)).toContain("数据已过期");
     expect(renderToStaticMarkup(<UsageBars accounts={[{ ...kept, stale_at: iso(60_000) }]} now={NOW} />)).not.toContain("数据已过期");
+  });
+});
+
+describe("a prepaid balance in the sidebar (#11825)", () => {
+  it("shows the amount and currency beside the two fullest window accounts", () => {
+    const html = renderToStaticMarkup(<UsageBars accounts={[balanceAccount("ds", "12.34"), account("a", 10, 20), account("b", 85, 30), account("c", 50, 60)]} now={NOW} />);
+    expect(html).toContain("CNY 12.34");
+    expect(html.match(/role="progressbar"/g)).toHaveLength(2); // the balance takes no bar
+    expect(html).toContain("账号 b");
+    expect(html).toContain("账号 c");
+    expect(html).not.toContain("账号 a");
+  });
+  it("shows a genuine zero as an amount, not as no data", () => {
+    const html = renderToStaticMarkup(<UsageBars accounts={[balanceAccount("ds", "0.00")]} now={NOW} />);
+    expect(html).toContain("CNY 0.00");
+    expect(html).toMatch(/text-orange[^>]*>CNY 0\.00/);
+    expect(html).not.toContain("余额无法读取");
+  });
+  it("shows a failed read as no amount and keeps healthy window accounts", () => {
+    const failed = balanceAccount("ds", "12.34", { balance: undefined, problem: "unreachable", stale: true });
+    const html = renderToStaticMarkup(<UsageBars accounts={[failed, account("a", 10, 20)]} now={NOW} />);
+    expect(html).toContain(">—<");
+    expect(html).toContain("账号 a");
+    expect(html.match(/role="progressbar"/g)).toHaveLength(1);
+    expect(html).toContain("opacity-60");
+    // the words behind it are the popover's (it is not first-screen code)
+    expect(renderToStaticMarkup(<UsagePopover accounts={[failed]} now={NOW} />)).toContain("余额无法读取");
+  });
+  it("shows the amount, the sample age and both kinds of account in the popover", () => {
+    const html = renderToStaticMarkup(<UsagePopover accounts={[balanceAccount("ds", "12.34"), account("a", 70, 10)]} now={NOW} />);
+    expect(html).toContain("预付余额");
+    expect(html).toContain("CNY 12.34");
+    expect(html).toContain("5h");
+    expect(html).toContain("70%");
+    expect(html.match(/role="progressbar"/g)).toHaveLength(2); // only the window account's bars
+  });
+  it("says in the popover why a balance is unavailable or is the last one", () => {
+    const never = balanceAccount("ds", "12.34", { balance: undefined, problem: "unreachable" });
+    expect(renderToStaticMarkup(<UsagePopover accounts={[never]} now={NOW} />)).toContain("暂时连不上 DeepSeek");
+    const kept = balanceAccount("ds", "12.34", { problem: "unreachable" });
+    expect(renderToStaticMarkup(<UsagePopover accounts={[kept]} now={NOW} />)).toContain("上次的余额");
+    const refused = balanceAccount("ds", "12.34", { problem: "rejected" });
+    expect(renderToStaticMarkup(<UsagePopover accounts={[refused]} now={NOW} />)).toContain("Key");
   });
 });
 
@@ -141,6 +194,20 @@ describe("where the numbers came from (#2595)", () => {
     const html = renderToStaticMarkup(<UsageBars accounts={mixed().slice(0, 1)} now={NOW} />);
     expect(html).toContain("来源：MacBook · Relay");
   });
+  it.each([
+    ["en", "No quota data connected"],
+    ["zh-Hans", "未接额度数据"],
+    ["ja", "利用量データ未連携"],
+  ])("keeps the launcher row and names its missing quota data in %s", async (lang, label) => {
+    await initI18n(lang);
+    try {
+      const html = renderToStaticMarkup(<UsageBars accounts={[]} unconnected={[{ id: "claude", title: "Claude Code", agent: "claude" }]} now={NOW} />);
+      expect(html).toContain("Claude Code");
+      expect(html).toContain(label);
+    } finally {
+      await initI18n("zh-Hans");
+    }
+  });
   it("lists active providers without usage data and hands setup off to the assistant on click", () => {
     const live = [account("c", 40, 75, { provider: "codex", name: "Codex Pro", local: true })];
     const unconnected = unconnectedUsageProviders(
@@ -160,7 +227,7 @@ describe("where the numbers came from (#2595)", () => {
     expect(strip).toContain("Codex Pro");
     expect(strip).toContain("Claude Code");
     expect(strip).toContain("Antigravity");
-    expect(strip).toContain("未接入");
+    expect(strip).toContain("未接额度数据");
 
     const host = document.createElement("div");
     document.body.appendChild(host);

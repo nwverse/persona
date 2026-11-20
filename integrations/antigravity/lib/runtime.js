@@ -29,9 +29,10 @@ import {
   personaModeToAgy,
   PREFIX,
   readTranscript,
+  rememberObservedWake,
   RUNTIME,
   stepsToItems,
-  transcriptStatus,
+  transcriptState,
   toAgyId,
   toPersonaId,
   workspacePathOf,
@@ -39,7 +40,7 @@ import {
 
 // agy acp's answer to a model it does not offer, and agy models' answer while the CLI is signed out (#10368).
 const UNKNOWN_MODEL = /\bunknown model\b|\bmodel_not_found\b/i
-const SIGNED_OUT = /\b(?:signed out|logged out|not signed in|not logged in|(?:log|sign)[ -]?in required|please (?:sign|log)[ -]?in|invalid_grant|re-?authenticat\w*|refresh[ _-]token (?:expired|revoked|invalid)|(?:expired|revoked|invalid) refresh[ _-]token)\b/i
+const SIGNED_OUT = /\b(?:signed out|logged out|not signed in|not logged in|(?:log|sign)[ -]?in required|please (?:sign|log)[ -]?in|invalid_grant|re-?authenticat\w*|refresh[ _-]token\b.*\b(?:expired|revoked|invalid)|(?:expired|revoked|invalid) refresh[ _-]token|revoked\b.*\b(?:log[ -]?in|credentials?))\b/i
 // The hub localizes this exact runtime notice (transcript.RuntimeAgyAutoRefusalNotice).
 const AUTO_REFUSAL_NOTICE = 'agy 拒绝了 Auto 模式，已改由 Persona 自动批准权限请求'
 const MODE_NOTICE_STEP = 'PERSONA_MODE_NOTICE'
@@ -60,8 +61,9 @@ export function createAgyRuntime(options = {}) {
   const autonomousIdleMs = options.autonomousIdleMs ?? 30_000
   const transient401RetryDelayMs = options.transient401RetryDelayMs ?? 1500
 
-  const activeTurns = new Map() // personaId -> { streamingText, startedAt }
+  const activeTurns = new Map()
   const promptTurns = new Map() // the prompt executing, before any queued successor
+  const queuedTurns = new Map()
   const autonomousTurns = new Map()
   const missedWakes = new Map()
   const unexportedTurns = new Map() // agyId -> { baseMaxIndex, seq, steps, hasReply, base } settled turns awaiting native transcript export
@@ -400,6 +402,8 @@ export function createAgyRuntime(options = {}) {
       item,
       image,
       send,
+      editQueue,
+      sendNow,
       interrupt,
       start,
       rename,
@@ -668,7 +672,7 @@ export function createAgyRuntime(options = {}) {
     if (fallback) {
       try { await fallback } catch { /* a failed fallback leaves the session asking */ }
     }
-    if (cancelling.has(rawId) || archived.has(rawId)) return { outcome: { outcome: 'cancelled' } }
+    if (turn?.cancelled || cancelling.has(rawId) || archived.has(rawId)) return { outcome: { outcome: 'cancelled' } }
     if (shouldBypassPermission(rawId) && allowAlwaysOpt) {
       return { outcome: { outcome: 'selected', optionId: allowAlwaysOpt.optionId } }
     }
@@ -742,7 +746,7 @@ export function createAgyRuntime(options = {}) {
   }
 
   function historyOf(rawId) {
-    return `agy:${rawId}:full:api-errors:content-v2:step-ids-v2:mcp-tools:lazy-media:checkpoints`
+    return `agy:${rawId}:full:api-errors:content-v2:step-ids-v2:mcp-tools:lazy-media:checkpoints:wakes`
   }
 
   function cutMatches(cut, transcript) {
@@ -1000,9 +1004,27 @@ export function createAgyRuntime(options = {}) {
     return check
   }
 
+  // A failed summary read leaves the same empty map as missing summaries, so say so once per change (#12003).
+  let summaryReadFailure = { reason: '', count: 0 }
+  function noteSummaryRead(error) {
+    const previous = summaryReadFailure
+    if (!error) {
+      if (previous.count) log(`agy native summary reads recovered after ${previous.count} failure(s)`)
+      summaryReadFailure = { reason: '', count: 0 }
+      return
+    }
+    // SQLite's result-code text ("database is locked"), never a path or row content.
+    const reason = String(error.errstr || error.code || 'read error')
+    if (reason !== previous.reason) log(`agy native summaries unreadable: ${reason}`)
+    summaryReadFailure = { reason, count: previous.count + 1 }
+  }
+
   function readConversationStates() {
     const path = join(agyDir, 'conversation_summaries.db')
-    if (!existsSync(path)) return new Map()
+    if (!existsSync(path)) {
+      noteSummaryRead()
+      return new Map()
+    }
     let db
     try {
       db = new DatabaseSync(path, { readOnly: true })
@@ -1012,7 +1034,7 @@ export function createAgyRuntime(options = {}) {
                title, workspace_uris, last_modified_time
         FROM conversation_summaries
       `).all()
-      return new Map(rows.map((row) => {
+      const states = new Map(rows.map((row) => {
         let workspaceUris = []
         try {
           const parsed = JSON.parse(row.workspace_uris)
@@ -1020,8 +1042,11 @@ export function createAgyRuntime(options = {}) {
         } catch {}
         return [row.conversation_id, { ...row, WorkspaceURIs: workspaceUris }]
       }))
-    } catch {
+      noteSummaryRead()
+      return states
+    } catch (error) {
       // A missing or unavailable native summary cannot establish that a text reply ended the turn.
+      noteSummaryRead(error)
       return new Map()
     } finally {
       db?.close()
@@ -1078,6 +1103,7 @@ export function createAgyRuntime(options = {}) {
   async function listSessions() {
     const { convs, cwdByConv } = readCacheMetadata()
     const states = readConversationStates()
+    const statesFailed = summaryReadFailure.count > 0
     const brainRoot = join(agyDir, 'brain')
     const seenIds = new Set([...Object.keys(convs), ...states.keys(), ...createdAt.keys()])
     if (existsSync(brainRoot)) {
@@ -1132,17 +1158,24 @@ export function createAgyRuntime(options = {}) {
       updatedAt: (c) => c.mtimeMs,
     })
 
-    return chosen.map(({ rawId, pid, summary, native, cwd, mtimeMs, running, hasTranscript }) => {
+    const unknown = new Map() // reason -> sessions listed as unknown for it
+    const rows = chosen.map(({ rawId, pid, summary, native, cwd, mtimeMs, running, hasTranscript }) => {
       const nativeTranscript = transcriptOf(rawId, native || null)
       const transcript = withModeNotice(rawId, nativeTranscript)
       const { steps, history } = transcript
       const parsed = stepsToItems(steps, { brainDir: brainDirOf(rawId), full: false, clientMsgIdFor: clientMsgIdFor(rawId) })
       if (!lastPushedSeq.has(pid)) lastPushedSeq.set(pid, parsed.toSeq)
       if (!lastPushedHistory.has(pid)) lastPushedHistory.set(pid, history)
-      let status = running ? 'working' : transcriptStatus(nativeTranscript.steps, native)
+      const state = running ? { status: 'working' } : transcriptState(nativeTranscript.steps, native)
+      let status = state.status
       if (!hasTranscript && !running) {
         if (completedTurns.has(pid)) status = 'done'
         else if (createdAt.has(rawId)) status = 'idle'
+      }
+      if (status === 'unknown') {
+        // Without the summaries, a summary-dependent reason would hide the failed read.
+        const reason = statesFailed ? 'read_failed' : state.reason
+        unknown.set(reason, (unknown.get(reason) || 0) + 1)
       }
       const title =
         sessionTitles.get(rawId) ||
@@ -1172,8 +1205,21 @@ export function createAgyRuntime(options = {}) {
       const effMode = effectiveModeOf(rawId)
       if (effMode && effMode !== 'default') row.permission_mode = effMode
       if (modeInfo?.effort) row.effort = modeInfo.effort
+      const queued = queuedTurns.get(pid)
+      if (queued?.length) row.queued = queued.map((entry) => entry.queueText)
       return row
     })
+    reportUnknown(unknown)
+    return rows
+  }
+
+  // Why listed sessions are unknown, as reason counts, logged when they change (#12003).
+  let unknownReport = ''
+  function reportUnknown(unknown) {
+    const report = [...unknown].sort(([a], [b]) => a.localeCompare(b)).map(([reason, count]) => `${reason} ${count}`).join(', ')
+    if (report === unknownReport) return
+    log(`agy unknown status: ${report || 'none'}`)
+    unknownReport = report
   }
 
   // The agy id of one of this runtime's sessions. Every id it hands out carries PREFIX; anything else is another
@@ -1460,7 +1506,7 @@ export function createAgyRuntime(options = {}) {
       // A process that rejected the model gets replaced and the session opened again on the new one (#10368).
       const rawId = await busyCall(acp, () => retryStaleModels(acp, () => openSession(acp, params, cwd)))
       const pid = toPersonaId(rawId)
-      const hasInput = Boolean(params.prompt || params.images?.length)
+      const hasInput = Boolean(params.prompt || params.images?.some((img) => img?.data))
 
       const session = {
         session_id: pid,
@@ -1535,8 +1581,10 @@ export function createAgyRuntime(options = {}) {
       turn.historySeq = turn.seq
       const { base, steps, ...pending } = unexportedTurns.get(rawId) ?? {}
       turn.wakeCursor = { after: turn.exportedBaseMax, skip: 0, pending: turn.priorPending.length ? pending : undefined }
+      turn.liveSteps.push({ step_index: turn.nextStepIndex++, type: 'PERSONA_AUTONOMOUS_WAKE', created_at: turn.startedIso })
       autonomousTurns.set(pid, turn)
       if (!lastPushedSeq.has(pid)) lastPushedSeq.set(pid, 0)
+      syncTranscriptAppend(rawId)
       staleWorkingAt.delete(rawId)
       promptFailures.delete(rawId)
       rt.sessionsChanged(0)
@@ -1574,7 +1622,30 @@ export function createAgyRuntime(options = {}) {
           turn.observedMissed = cursor
           return false
         })
-        if ((wake >= 0 || (!skip && !pending && !cursor.observed)) && autonomousExported(turn, steps.slice(Math.max(first, wake + 1)))) {
+        let resumed = wake >= 0 ? Math.max(first, wake + 1) : -1
+        if (wake < 0 && !skip && !cursor.observed) {
+          if (!pending) resumed = first
+          else if (pending.hasReply && turn.streamingText.trim()) {
+            // The whole foreground turn and a text-only wake can land in one markerless export.
+            // Match the delivered answer in its own input ordinal before considering the next reply.
+            let inputs = 0
+            for (let i = 0; i < steps.length - 1; i++) {
+              const step = steps[i]
+              if (explicitInput(step)) inputs++
+              if (i >= first && inputs === pending.inputCount && step.type === 'PLANNER_RESPONSE' && step.status === 'DONE' &&
+                  !step.tool_calls?.length && step.content?.trim() === pending.replyText.trim()) {
+                resumed = i + 1
+                break
+              }
+            }
+            if (resumed >= 0 && steps.slice(resumed).some(explicitInput)) resumed = -1
+          }
+        }
+        if (resumed >= 0 && autonomousExported(turn, steps.slice(resumed))) {
+          if (wake < 0) {
+            rememberObservedWake(brainDirOf(rawId), steps, resumed)
+            if (pending && pending.seq === unexportedTurns.get(rawId)?.seq) unexportedTurns.delete(rawId)
+          }
           missedWakes.delete(rawId)
           retireAutonomousTurn(rawId)
           return
@@ -1706,7 +1777,7 @@ export function createAgyRuntime(options = {}) {
         if (input) inputs++
         if (step.step_index <= retry.base || inputs < retry.inputCount) continue
         const at = Date.parse(step.created_at)
-        if (!atOrAfter(at, retry.startedAt) || at > retry.endedAt) break
+        if (!Number.isNaN(at) && (!atOrAfter(at, retry.startedAt) || at > retry.endedAt)) break
         if (input) {
           if (comparableInput(cleanUserText(step.content)) !== retry.text) break
           if (firstInput) {
@@ -1783,11 +1854,68 @@ export function createAgyRuntime(options = {}) {
     } catch (err) {
       if (hasPolicy) throw new RpcError(`Failed to read supervision policy: ${err.message}`, SUPERVISION_ERROR_CODE)
     }
-    let nextPolicy = hasPolicy ? requestedPolicy : prevPolicy
+    const nextPolicy = hasPolicy ? requestedPolicy : prevPolicy
     if (hasPolicy && nextPolicy !== prevPolicy && (hasLiveWork(pid) || nativeWorking(readConversationStates().get(rawId)))) {
       throw new RpcError('Wait for the current turn to finish before changing supervision policy', 'busy')
     }
 
+    retireAutonomousTurn(rawId)
+    const entry = {
+      params, cwd, isAsst, hasPolicy, prevPolicy, nextPolicy,
+      queueText: params.text || '',
+      images: Array.isArray(params.images) ? params.images.filter((img) => img?.data)
+        .map((img) => ({ mime: img.media_type || img.mime || 'image/png', data: img.data })) : [],
+    }
+    if (activeTurns.has(pid)) {
+      let queue = queuedTurns.get(pid)
+      if (!queue) queuedTurns.set(pid, (queue = []))
+      queue.push(entry)
+      rt.sessionsChanged(0)
+      return { queued: true }
+    }
+
+    const ready = new Promise((resolve, reject) => Object.assign(entry, { resolve, reject }))
+    const runner = {}
+    activeTurns.set(pid, runner)
+    runner.promise = runQueue(rawId, pid, runner, entry)
+    rt.sessionsChanged(0)
+    return ready
+  }
+
+  async function runQueue(rawId, pid, runner, first) {
+    let entry = first
+    try {
+      while (entry) {
+        try {
+          await runTurn(rawId, pid, runner, entry)
+        } catch (err) {
+          entry.reject?.(err)
+          log(`agy prompt error (${pid}): ${err.message}`)
+        }
+        if (stopped || archived.has(rawId)) break
+        const queue = queuedTurns.get(pid)
+        entry = queue?.shift()
+        if (entry) {
+          if (queue.length === 0) queuedTurns.delete(pid)
+          rt.sessionsChanged(0)
+        }
+      }
+    } finally {
+      if (activeTurns.get(pid) === runner) {
+        activeTurns.delete(pid)
+        cancelling.delete(rawId)
+        if (runner.hadTurn) completedTurns.add(pid)
+        syncTranscriptAppend(rawId)
+        rt.sessionsChanged(0)
+        if (runner.exportPoll) scheduleExportPoll(rawId, ...runner.exportPoll)
+      }
+      if (want) void maybeExit()
+    }
+  }
+
+  async function runTurn(rawId, pid, runner, entry) {
+    const { params, images, cwd, isAsst, hasPolicy, prevPolicy, resolve: readyResolve, reject: readyReject } = entry
+    let { nextPolicy } = entry
     const blocks = []
     let fullText = params.text || ''
     if (typeof params.context === 'string' && params.context.trim()) {
@@ -1801,31 +1929,20 @@ export function createAgyRuntime(options = {}) {
     if (fullText) {
       blocks.push({ type: 'text', text: fullText })
     }
-    if (Array.isArray(params.images)) {
-      let refused = 0
-      for (const img of params.images) {
-        if (img?.data) {
-          // A picture the model service cannot decode would stay in the history and fail every later request.
-          if (!inspectImage(Buffer.from(img.data, 'base64')).ok) {
-            refused++
-            continue
-          }
-          blocks.push({
-            type: 'image',
-            data: img.data,
-            mimeType: img.media_type || img.mime || 'image/png',
-          })
-        }
+    let refused = 0
+    for (const img of images) {
+      // A picture the model service cannot decode would stay in the history and fail every later request.
+      if (!inspectImage(Buffer.from(img.data, 'base64')).ok) {
+        refused++
+        continue
       }
-      if (refused) {
-        blocks.push({ type: 'text', text: `[${refused} attached picture${refused > 1 ? 's were' : ' was'} incomplete or damaged ` +
-          'and not sent; tell the user and go on without it]' })
-      }
+      blocks.push({ type: 'image', data: img.data, mimeType: img.mime })
+    }
+    if (refused) {
+      blocks.push({ type: 'text', text: `[${refused} attached picture${refused > 1 ? 's were' : ' was'} incomplete or damaged ` +
+        'and not sent; tell the user and go on without it]' })
     }
 
-    const prevTurn = activeTurns.get(pid)
-    retireAutonomousTurn(rawId)
-    const turnToken = Symbol('turn')
     const turn = {
       seq: nextTurnSeq++,
       historySeq: undefined,
@@ -1847,21 +1964,16 @@ export function createAgyRuntime(options = {}) {
       newMessage: false,
       startedAt: Date.now(),
       pollTimer: undefined,
-      previous: prevTurn,
       cancelled: false,
-      token: turnToken,
     }
+    runner.turn = turn
+    runner.exportPoll = undefined
     let prepared = false
-    let readyResolve, readyReject
-    const ready = prevTurn ? undefined : new Promise((resolve, reject) => { readyResolve = resolve; readyReject = reject })
-    const prevPromise = prevTurn?.promise || Promise.resolve()
     const acp = acpFor(rawId, isAsst)
-    const promise = prevPromise
-      .catch(() => {})
-      .then(() => busyCall(acp, async () => {
-        turn.previous = undefined
+    try {
+      await busyCall(acp, async () => {
         if (stopped || turn.cancelled || archived.has(rawId)) { readyResolve?.(); return }
-        if (prevTurn && !hasPolicy) {
+        if (!readyResolve && !hasPolicy) {
           try { nextPolicy = readPolicy(policyRoot, rawId) } catch {}
         }
         const cancelled = () => turn.cancelled || stopped || archived.has(rawId)
@@ -1921,116 +2033,140 @@ export function createAgyRuntime(options = {}) {
             if (!err.invalidSession || attempt > 0 || retried401 || cancelled()) throw err
           }
         }
-      }))
-      .catch((err) => {
-        readyReject?.(err)
-        if (!prepared && hasPolicy && nextPolicy !== prevPolicy) {
-          try { syncPolicy(policyRoot, rawId, prevPolicy) } catch {}
-        }
-        turn.failed = true
-        turn.inactive = err.promptInactive === true
-        if (turn.inactive) acp.stalledSequence = acp.sequence
-        if ((prepared || prevTurn) && !stopped && !turn.cancelled && !cancelling.has(rawId)) {
-          promptFailures.set(rawId, { input: inputKey(rawId), fields: {
-            turn_error: err.message, turn_error_after_work: promptWork(turn, []),
-          } })
-        }
-        log(`agy prompt error (${pid}): ${err.message}`)
       })
-      .finally(() => {
-        try {
-          clearTimeout(turn.thoughtTimer)
-          turn.thoughtTimer = undefined
-          clearInterval(turn.pollTimer)
-          // The turn is over: a card still waiting has nothing to answer for any more.
-          const wasCancelled = turn.cancelled || cancelling.has(rawId)
-          if (promptTurns.get(pid) === turn) cancelling.delete(rawId)
-          if ((wasCancelled || turn.inactive) && turn.exportedBaseMax !== undefined) {
-            const count = readConversationStates().get(rawId)?.step_count
-            staleWorkingAt.set(rawId, Number.isInteger(count) ? count : -1)
-          }
-          withdrawPermissionAsks(rawId, 'the turn ended')
-          const expectReply = Boolean(turn.streamingText.trim())
-          let awaitExport = false
-          if (!stopped && !turn.failed && !wasCancelled && !archived.has(rawId) && turn.exportedBaseMax !== undefined) {
-            const exported = exportedTranscriptOf(rawId)
-            const curMax = maxStepIndex(exported.steps)
-            const exportedComplete = curMax > turn.exportedBaseMax && (!expectReply || exportedHasReply(exported.steps, turn.exportedBaseMax, turn.streamingText, turn.inputCount))
-            if (!exportedComplete) {
-              const settled = [...turn.priorPending, ...turn.liveSteps]
-              if (expectReply) {
-                settled.push({
-                  step_index: Math.max(curMax, settled.length ? maxStepIndex(settled) : turn.baseMaxIndex) + 1,
-                  type: 'PLANNER_RESPONSE',
-                  source: 'MODEL',
-                  status: 'DONE',
-                  created_at: new Date().toISOString(),
-                  content: turn.streamingText.trim(),
-                })
-              }
-              if (settled.length > 0) {
-                unexportedTurns.set(rawId, {
-                  base: turn.base,
-                  baseMaxIndex: turn.exportedBaseMax,
-                  seq: turn.historySeq ?? turn.seq,
-                  steps: settled,
-                  hasReply: expectReply,
-                  replyText: turn.streamingText,
-                  inputCount: turn.inputCount,
-                  expiresAt: Date.now() + exportSettleTimeoutMs,
-                })
-                awaitExport = true
-              }
-            } else {
-              unexportedTurns.delete(rawId)
-            }
-          }
-          if (promptTurns.get(pid) === turn) {
-            promptTurns.delete(pid)
-            rt.streamEnd(pid)
-          }
-          if (activeTurns.get(pid)?.token === turnToken) {
-            activeTurns.delete(pid)
-            cancelling.delete(rawId)
-            if (prepared || prevTurn) completedTurns.add(pid)
-            syncTranscriptAppend(rawId)
-            rt.sessionsChanged(0)
-            if (awaitExport && turn.exportedBaseMax !== undefined) {
-              scheduleExportPoll(rawId, turn.exportedBaseMax, expectReply)
-            }
-          }
-        } finally {
-          if (!stopped && !turn.inactive && turn.exportedBaseMax !== undefined) {
-            setImmediate(() => { if (!stopped && !activeTurns.has(pid)) void readNativeError(rawId) })
-          }
-          if (want) void maybeExit()
+    } catch (err) {
+      readyReject?.(err)
+      if (!prepared && hasPolicy && nextPolicy !== prevPolicy) {
+        try { syncPolicy(policyRoot, rawId, prevPolicy) } catch {}
+      }
+      turn.failed = true
+      turn.inactive = err.promptInactive === true
+      if (turn.inactive) acp.stalledSequence = acp.sequence
+      if ((prepared || !readyResolve) && !stopped && !turn.cancelled && !cancelling.has(rawId)) {
+        promptFailures.set(rawId, { input: inputKey(rawId), fields: {
+          turn_error: err.message, turn_error_after_work: promptWork(turn, []),
+        } })
+      }
+      log(`agy prompt error (${pid}): ${err.message}`)
+    } finally {
+      try {
+        clearTimeout(turn.thoughtTimer)
+        turn.thoughtTimer = undefined
+        clearInterval(turn.pollTimer)
+        // The turn is over: a card still waiting has nothing to answer for any more.
+        const wasCancelled = turn.cancelled || cancelling.has(rawId)
+        if (promptTurns.get(pid) === turn || activeTurns.get(pid)?.turn === turn) cancelling.delete(rawId)
+        if ((wasCancelled || turn.inactive) && turn.exportedBaseMax !== undefined) {
+          const count = readConversationStates().get(rawId)?.step_count
+          staleWorkingAt.set(rawId, Number.isInteger(count) ? count : -1)
         }
-      })
-    turn.promise = promise
-    activeTurns.set(pid, turn)
+        withdrawPermissionAsks(rawId, 'the turn ended')
+        const expectReply = Boolean(turn.streamingText.trim())
+        let awaitExport = false
+        if (!stopped && !turn.failed && !wasCancelled && !archived.has(rawId) && turn.exportedBaseMax !== undefined) {
+          const exported = exportedTranscriptOf(rawId)
+          const curMax = maxStepIndex(exported.steps)
+          const exportedComplete = curMax > turn.exportedBaseMax && (!expectReply || exportedHasReply(exported.steps, turn.exportedBaseMax, turn.streamingText, turn.inputCount))
+          if (!exportedComplete) {
+            const settled = [...turn.priorPending, ...turn.liveSteps]
+            if (expectReply) {
+              settled.push({
+                step_index: Math.max(curMax, settled.length ? maxStepIndex(settled) : turn.baseMaxIndex) + 1,
+                type: 'PLANNER_RESPONSE',
+                source: 'MODEL',
+                status: 'DONE',
+                created_at: new Date().toISOString(),
+                content: turn.streamingText.trim(),
+              })
+            }
+            if (settled.length > 0) {
+              unexportedTurns.set(rawId, {
+                base: turn.base,
+                baseMaxIndex: turn.exportedBaseMax,
+                seq: turn.historySeq ?? turn.seq,
+                steps: settled,
+                hasReply: expectReply,
+                replyText: turn.streamingText,
+                inputCount: turn.inputCount,
+                expiresAt: Date.now() + exportSettleTimeoutMs,
+              })
+              awaitExport = true
+            }
+          } else {
+            unexportedTurns.delete(rawId)
+          }
+        }
+        if (promptTurns.get(pid) === turn) {
+          promptTurns.delete(pid)
+          rt.streamEnd(pid)
+        }
+        if (prepared || !readyResolve) runner.hadTurn = true
+        if (awaitExport) {
+          runner.exportPoll = [turn.exportedBaseMax, expectReply]
+        }
+      } finally {
+        if (!stopped && !turn.inactive && turn.exportedBaseMax !== undefined) {
+          setImmediate(() => { if (!stopped && !activeTurns.has(pid)) void readNativeError(rawId) })
+        }
+      }
+    }
+  }
+
+  function getQueue(pid) {
+    const queue = queuedTurns.get(pid)
+    if (!queue?.length) throw new RpcError('Nothing is queued for the conversation', 'nothing_queued')
+    return queue
+  }
+
+  function editQueue({ session_id, keep }) {
+    const pid = toPersonaId(ownedId(session_id))
+    const queued = getQueue(pid)
+    const indexes = keep ?? []
+    if (!Array.isArray(indexes) || new Set(indexes).size !== indexes.length ||
+        indexes.some((index) => !Number.isInteger(index) || index < 0 || index >= queued.length)) {
+      throw new RpcError('The queue changed meanwhile: look again', 'queue_changed')
+    }
+    const queue = queued.map((entry) => entry.queueText)
+    const images = queued.map((entry) => entry.images.length ? entry.images : null)
+    if (indexes.length) queuedTurns.set(pid, indexes.map((index) => queued[index]))
+    else queuedTurns.delete(pid)
     rt.sessionsChanged(0)
-    return prevTurn ? { queued: true } : ready
+    return { queue, ...(images.some(Boolean) ? { images } : {}) }
+  }
+
+  async function sendNow({ session_id }) {
+    const rawId = ownedId(session_id)
+    const pid = toPersonaId(rawId)
+    getQueue(pid)
+    const running = activeTurns.get(pid)?.turn
+    if (running) await cancelPrompt(rawId, running)
+    rt.sessionsChanged(0)
+  }
+
+  async function cancelPrompt(rawId, running) {
+    if (running) {
+      cancelling.add(rawId)
+      running.cancelled = true
+      running.retry?.abort()
+    }
+    withdrawPermissionAsks(rawId, 'interrupted')
+    const acp = isAssistant(rawId) ? assistantAcps.get(rawId) : sharedAcp
+    await acp?.cancel(rawId)
   }
 
   /** Ask agy to end the session's running turn (session/cancel) and take its permission cards off the phone. */
-  function cancelTurn(rawId) {
+  async function cancelTurn(rawId) {
     const pid = toPersonaId(rawId)
     const autonomous = autonomousTurns.has(pid) && retireAutonomousTurn(rawId, readConversationStates().get(rawId))
     if (autonomous) cancelling.add(rawId)
-    const acp = isAssistant(rawId) ? assistantAcps.get(rawId) : sharedAcp
-    const tail = activeTurns.get(pid)
-    if (tail) cancelling.add(rawId)
-    for (let turn = tail; turn; turn = turn.previous) {
-      turn.cancelled = true
-      turn.retry?.abort()
-    }
-    withdrawPermissionAsks(rawId, 'interrupted')
-    return (async () => {
-      await acp?.cancel(rawId)
-      return tail
-    })().finally(() => {
+    const runner = activeTurns.get(pid)
+    if (queuedTurns.delete(pid)) rt.sessionsChanged(0)
+    try {
+      await cancelPrompt(rawId, runner?.turn)
+      return runner
+    } finally {
       if (autonomous && !activeTurns.has(pid)) cancelling.delete(rawId)
-    })
+    }
   }
 
   /**
@@ -2347,16 +2483,15 @@ export function createAgyRuntime(options = {}) {
     for (const pid of autonomousTurns.keys()) retireAutonomousTurn(toAgyId(pid))
     missedWakes.clear()
     // A turn's transcript poll would otherwise keep running; acp.stop() fails the prompts themselves.
-    for (const tail of activeTurns.values()) {
-      for (let turn = tail; turn; turn = turn.previous) {
-        clearInterval(turn.pollTimer)
-        clearTimeout(turn.thoughtTimer)
-        turn.retry?.abort()
-      }
+    for (const { turn } of activeTurns.values()) {
+      clearInterval(turn?.pollTimer)
+      clearTimeout(turn?.thoughtTimer)
+      turn?.retry?.abort()
     }
     for (const timer of exportPolls.values()) clearInterval(timer)
     exportPolls.clear()
     activeTurns.clear()
+    queuedTurns.clear()
     promptTurns.clear()
     unexportedTurns.clear()
     promptRetries.clear()

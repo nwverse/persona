@@ -3552,6 +3552,10 @@ type ConnectorTool struct {
 	// with tool search when needed (#7317). A connector does not need to send it; the manager sets it on every list
 	// whatever a connector sent.
 	DeferLoading bool `json:"defer_loading,omitempty"`
+	// Set by Persona itself on the tool list of an assistant conversation with the work guide on: the tool is found on
+	// demand through the guide (#11078). A connector does not need to send it; the manager sets it on every list
+	// whatever a connector sent.
+	WorkGuideTool bool `json:"work_guide_tool,omitempty"`
 }
 
 // ConnectorTools: tools.list and actions.list.
@@ -4557,6 +4561,10 @@ type ChannelMessage struct {
 	Forward string `json:"forward,omitempty"`
 	// The chat app's id of the message it answers.
 	ReplyTo string `json:"reply_to,omitempty"`
+	// The chat app's thread the message is in, as an opaque key. For a channel with capabilities.threads, each thread
+	// has a conversation of its own: its first message starts a new one (the channel's target stays as it is), later
+	// ones continue it. Without it, or without threads, the message goes to the channel's target.
+	Thread string `json:"thread,omitempty"`
 	// What it had that the channel cannot bring, for people (a voice message, a sticker).
 	Unsupported []string `json:"unsupported,omitempty"`
 }

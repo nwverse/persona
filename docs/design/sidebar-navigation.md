@@ -202,12 +202,13 @@ switch the detail without a push when a sidebar item is chosen; only drilling do
 - **Drill-downs**: what a page opens inside itself (an Inbox item, a machine's details, a recording, a conversation an item
   links to) is pushed on the root, with Back, as before.
 - **The top-leading button follows how the page was reached, not what it is (#8603)**: a root has the button that opens the
-  sidebar (the main conversation's, `Theme.Icon.sidebar`; the persona's face in a phone's drawer; the system's Show Sidebar
-  under side bars), never a ‹; a drill-down has ‹, which goes back one page. The same Agent's chat is a root when picked in
+  sidebar (the main conversation's, `Theme.Icon.sidebar`; the persona's face in a phone's drawer; under side bars the side
+  column's first item, where a sub-page has Back, #11636), never a ‹; a drill-down has ‹, which goes back one page. The same Agent's chat is a root when picked in
   the sidebar and a drill-down when opened from a waiting Agent on the main conversation or in Inbox. A place's root draws
   that button itself (`ListButtonItem`): the system's toggle was not drawn again after a drill-down on it was popped (the
   open Duo upright, Inbox → an Agent's chat → Back), which left the root with no way back to the sidebar. The system's
-  toggle is removed on the roots' column, except under the Duo's side bars, where it is their Show Sidebar; so a sub-page
+  toggle is removed on the roots' column, under the Duo's side bars too (#11636: it was missing on an Agent's chat, whose
+  bar has no title row to draw it in, and on a place after a pop); so a sub-page
   has Back alone and, with the column laid over the page (the open Duo upright), the sidebar is reached from a root.
 - **Each root keeps its drill-down** while the user is elsewhere (`SidebarPageRoots`, a pure value with unit tests,
   `PersonaTests/SidebarPageRootsTests`); picking the root in front goes back to it (the tab-bar rule); another conversation

@@ -1,8 +1,21 @@
+import { use } from "react";
 import { shownCloseout } from "../../lib/closeout";
 import { lazyPage } from "../../lib/lazy-page";
 import { getState, subscribe, type State } from "../../lib/store";
 
-export const LazyCloseoutCard = lazyPage(() => import("./CloseoutCard").then((m) => m.CloseoutCard));
+let reportReader: typeof import("../../lib/closeout-text").stripCloseout | undefined;
+export const LazyCloseoutCard = lazyPage(() => import("./CloseoutCard").then((module) => {
+  reportReader = module.stripCloseout;
+  return module.CloseoutCard;
+}));
+
+/** The card and its duplicate-text reader arrive together. Only the reply shown by that card waits for its chunk. */
+export function useCloseoutReader(shown: boolean) {
+  if (!shown) return undefined;
+  if (!reportReader) use(LazyCloseoutCard.preload());
+  return reportReader;
+}
+
 export const CloseoutEvidence = lazyPage(() => import("./CloseoutEvidence").then((m) => m.CloseoutEvidence));
 
 type Chunk = "idle" | "loading" | "failed" | "retrying";
