@@ -558,9 +558,7 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 		}
 	}
 	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceSessionSend || method == DeviceSessionSendOnce) && p["is_main"] == true {
-		p["idle_compaction"] = assistantwire.IdleCompaction{
-			Enabled: s.idleAutoCompact(ctx), IdleMinutes: s.idleAutoCompactMinutes(ctx), ContextTokens: s.idleAutoCompactTokens(ctx),
-		}
+		p["idle_compaction"] = s.idleCompactionPolicy(ctx)
 	}
 	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || method == DeviceSessionSend || method == DeviceSessionSendOnce) {
 		// The window the main conversation is held to (main_compact_window.go), as sendModel puts it: a start, a relay,

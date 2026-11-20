@@ -392,6 +392,7 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
   listed only `claude`. Let zsh tokenize aliases (`${(@Q)${(z)value}}`), not Go quote parsing. Aliases defined by a script in `zsh -c` don't expand within that
   script (it is parsed all at once); tests must use `zsh -ic` like node and write definitions to temporary `$ZDOTDIR/.zshrc`. With `alias claude=…` in `~/.zshrc`,
   a probe definition like `claude() { … }` expands the alias first, breaking the whole script. Define stubs as `function claude { … }`.
+- Stock-Orca Codex defaults must distinguish a configured no-op alias from plain PATH Codex even though both have `["codex"]` argv. Keep alias provenance beside the launcher argv cache; removing the plain entry breaks bundled and alias discovery (#1984).
 - Tests running launchers or probes use a minimal environment (`HOME`, `ZDOTDIR`, `PATH`); never print all output in failure messages: probe output contains the complete process environment, and dev machines
   contain real keys.
 - Anything run through `zsh -ic` / `bash -ic` shares stdout with the rc files (#6310): Ubuntu's `/etc/bash.bashrc` prints a two-line sudo hint until the user has run sudo once,
