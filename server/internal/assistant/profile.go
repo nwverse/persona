@@ -463,8 +463,9 @@ func (s *Service) launcherNow(ctx context.Context) string {
 }
 
 // profile is what the hub's features need of the settings (Snapshot.Profile); tasks are the scheduled tasks and todos
-// the open todos' agents as reported (either nil: unreadable, and Keep is left out, so the nodes keep what they list).
-// nil when the settings could not be read.
+// the open todos' agents as reported (either nil: unreadable, and Keep is left out, so the nodes keep what they list;
+// Keep is left out too when what places the directions' sessions cannot be read, directionKeep). nil when the
+// settings could not be read.
 func (s *Service) profile(ctx context.Context, tasks []TaskView, todos *TodoReport) *Profile {
 	saved, ok := s.savedSettings(ctx)
 	if !ok {
@@ -473,7 +474,11 @@ func (s *Service) profile(ctx context.Context, tasks []TaskView, todos *TodoRepo
 	v := s.effective(ctx, saved)
 	p := &Profile{MachineID: v.MachineID, Main: v.Main, MainMachineID: v.MainMachineID, Launcher: v.Launcher, Timezone: v.Timezone}
 	if tasks != nil && todos != nil {
-		p.Keep = keptSessions(v, tasks, todos.Links, s.leadSessions(ctx, v))
+		if placed, err := s.directionKeep(ctx, v); err != nil {
+			s.logf("assistant: keep: %v", err)
+		} else {
+			p.Keep = keptSessions(v, tasks, todos.Links, s.leadSessions(ctx, v), placed)
+		}
 	}
 	return p
 }
@@ -484,9 +489,10 @@ func (s *Service) profile(ctx context.Context, tasks []TaskView, todos *TodoRepo
 // the main one, quiet for two days, was gone), a weekly task's conversation drops out in between, with the app's link
 // to it and the check that its last run still goes, an open task whose agent finished and exited shows "Starting
 // Agent" for ever: its todo names a session the list no longer has (#4510), and a direction the owner leaves alone for
-// a week loses its Pinned row and its tasks' supervision messages go to the main chat (#11392). Keeping a row listed
-// does not keep its transcript file.
-func keptSessions(v Settings, tasks []TaskView, links []TodoLink, leads []SessionRef) []SessionRef {
+// a week loses its Pinned row and its tasks' supervision messages go to the main chat (#11392). Last come the sessions
+// placed under the current directions (placed, directionKeep), or a quiet one reads not_listed in its direction and can
+// no longer be moved (#11515). Keeping a row listed does not keep its transcript file.
+func keptSessions(v Settings, tasks []TaskView, links []TodoLink, leads, placed []SessionRef) []SessionRef {
 	out := []SessionRef{}
 	add := func(machine, id string) {
 		if machine != "" && id != "" && !slices.Contains(out, SessionRef{MachineID: machine, SessionID: id}) {
@@ -507,6 +513,9 @@ func keptSessions(v Settings, tasks []TaskView, links []TodoLink, leads []Sessio
 	add(v.BackgroundSupervisorMachineID, v.BackgroundSupervisor)
 	for _, l := range leads {
 		add(l.MachineID, l.SessionID)
+	}
+	for _, p := range placed {
+		add(p.MachineID, p.SessionID)
 	}
 	return out
 }

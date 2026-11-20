@@ -313,8 +313,8 @@
     <string name="settings_src_provider_preset_note">アドレス、接続方法、モデルは拡張機能「%1$s」が提供します。追加後は手動で入力したものと同じように編集できます。</string>
     <string name="settings_src_provider_extension_default">拡張機能のデフォルト</string>
     <string name="settings_src_provider_model_note">用途ごとの選択は「モデル設定」でまとめて管理します。個別に指定しない場合はここのデフォルトを使います。</string>
-    <string name="settings_src_provider_api_note">ハブがモデルに直接リクエストします。仕分け、翻訳、ナレッジ処理などの用途で選べます。</string>
-    <string name="settings_src_provider_launcher_note">お使いのコンピューターでClaude Codeを起動します。チャットやエージェントなどの用途で選べます。</string>
+    <string name="settings_src_provider_api_note">返信の下書き、仕分け、翻訳、ナレッジの整理には、ハブがこの API を直接呼び出します。Agent は起動しません。</string>
+    <string name="settings_src_provider_launcher_note">チャットや Agent では、お使いのコンピューターで Claude Code を起動します。「直接API」のプロバイダーが使えない場合は、ハブがこのランチャーの Messages API のアドレス、キー、既定モデルを使い、Agent を起動せずに返信の下書きや仕分けを行えます。</string>
     <string name="settings_src_provider_base_url_hint">選んだプロトコルに対応するアドレスを入力します。</string>
     <string name="settings_src_provider_small_model">小型モデル（任意）</string>
     <string name="settings_src_provider_same_as_above">デフォルトは上と同じ</string>
