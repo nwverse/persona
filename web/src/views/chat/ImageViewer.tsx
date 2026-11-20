@@ -11,7 +11,7 @@ import { sendDraft, type DraftImage } from "../../lib/drafts";
 import type { EditedImage } from "../../lib/image-edit";
 import { clampView, doubleTapView, fingers, fitRect, IDENTITY, isZoomed, panView, wheelFactor, zoomAt, type Point, type Rect, type Size, type View } from "../../lib/image-zoom";
 import type { Item } from "../../lib/types";
-import { cx, EASE, toast } from "../../ui/atoms";
+import { cx, EASE, Spinner, toast } from "../../ui/atoms";
 import { Icon, type IconName } from "../../ui/icons";
 import { NARROW, useMedia } from "../../ui/media-query";
 import { useModalFocus } from "../../ui/overlay";
@@ -106,10 +106,13 @@ export function ImageViewer({
     setNatural(null);
     setView(IDENTITY);
   }
-  // one the browser already has (cached, a data: address) is complete before its load event: sized before it is drawn
+  // one the browser already has (cached, a data: address) is complete before its load event: sized before it is drawn.
+  // Any other is still coming: a spinner says so until its size is known, from the first frame (never for one complete).
+  const [coming, setComing] = useState<string | null>(null);
   useLayoutEffect(() => {
     const el = picture.current;
     if (el?.complete && el.naturalWidth) setNatural({ width: el.naturalWidth, height: el.naturalHeight });
+    else setComing(cur.id);
   }, [cur.id]);
   // room: the content box the picture fits in, where it starts (the padding) and the whole area a zoomed one may fill
   const [room, setRoom] = useState<{ width: number; height: number; left: number; top: number; outerWidth: number; outerHeight: number } | null>(null);
@@ -380,7 +383,7 @@ export function ImageViewer({
             title={zoomed ? t("chat-imageviewer.zoomed_hint") : t("chat-imageviewer.zoom_hint")}
             className={cx("select-none rounded-[8px] object-contain", fit ? "absolute max-w-none" : "max-h-full max-w-full", !zoomed && "shadow-overlay", zoomed ? (dragging ? "cursor-grabbing" : "cursor-grab") : "cursor-zoom-in")}
             // fitted at rest; zoomed with translate / scale (not transform, which the pop-in animation owns). Hidden until
-            // its size is known, so it is never drawn at its own size first: it pops in fitted.
+            // its size is known (the spinner below meanwhile), so it is never drawn at its own size first: it pops in fitted.
             style={{
               ...(natural ? { animation: `pop-in 220ms ${EASE} both` } : { visibility: "hidden" }),
               ...(fit
@@ -388,6 +391,12 @@ export function ImageViewer({
                 : {}),
             }}
           />
+        )}
+        {coming === cur.id && !natural && !failed[cur.id] && (
+          <div role="status" className="pointer-events-none absolute inset-0 flex items-center justify-center">
+            <Spinner size={20} />
+            <span className="sr-only">{t("common.loading")}</span>
+          </div>
         )}
         {many && !zoomed && (
           <>
