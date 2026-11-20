@@ -27,7 +27,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("github.event.pull_request.head.repo.full_name == github.repository", text)
         self.assertIn("github.event.pull_request.user.login == 'chyroc'", text)
         self.assertIn("github.event.pull_request.merge_commit_sha", text)
-        self.assertEqual(self.pr["permissions"], {"contents": "read"})
+        self.assertEqual(self.pr["permissions"], {"contents": "read", "checks": "write"})
 
     def test_all_platforms_feed_the_one_verified_plan(self):
         jobs = self.pr["jobs"]
@@ -54,6 +54,27 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn('release-pr-plan-${{ steps.source.outputs.number }}', str(jobs["plan"]))
         self.assertNotIn('release-pr-plan-${{ steps.plan.outputs.pr }}-${{ steps.plan.outputs.commit }}', str(jobs["plan"]))
         self.assertNotIn('release-pr-plan-${{ needs.plan.outputs.pr }}-${{ needs.plan.outputs.commit }}', str(jobs))
+
+    def test_exact_merge_result_check_and_failure_propagation(self):
+        jobs = self.pr["jobs"]
+        self.assertEqual(jobs["plan"]["outputs"]["check_run_id"], "${{ steps.merge-check.outputs.id }}")
+        plan_script = str(jobs["plan"]["steps"])
+        self.assertIn("release_merge_check.py", plan_script)
+        self.assertIn('test "$COMMIT" = "${{ github.event.pull_request.merge_commit_sha || github.sha }}"', plan_script)
+        verify_script = str(jobs["verify"]["steps"])
+        self.assertEqual(jobs["verify"]["steps"][0]["env"], {
+            "CLI_WEB": "${{ needs.cli-web.result }}",
+            "ANDROID": "${{ needs.android.result }}",
+            "APPLE": "${{ needs.apple.result }}",
+            "WINDOWS": "${{ needs.windows.result }}",
+        })
+        self.assertIn('test "$result" = success', verify_script)
+        self.assertIn("--conclusion success", verify_script)
+        self.assertTrue(any(step.get("if") == "failure()" and "--conclusion failure" in step["run"]
+                            for step in jobs["verify"]["steps"]))
+        verified_upload = next(step for step in jobs["verify"]["steps"]
+                               if step.get("uses") == "actions/upload-artifact@v4")
+        self.assertEqual(verified_upload["if"], "success()")
 
     def test_windows_requires_native_execution_and_authenticode(self):
         text = PR.read_text()

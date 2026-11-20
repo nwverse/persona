@@ -495,7 +495,12 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // Where the toasts sit on a phone is a chunk of its own (ui/toast-lift.tsx) a narrow screen loads after the shell.
 // Main had 221 B of room, so the budget is this ja size plus those 221 B.
 // Preserve the backend workspace branch ceiling.
-export const FIRST_SCREEN_BUDGET = 482_526;
+// #11511: phone fixes add 272 B in ja, measured in one environment against main bb39eb7e10 (ja 482,369 B to 482,641 B;
+// en 479,515 B to 479,787 B, zh-Hans 480,246 B to 480,518 B): Conversation tasks in ⋯ on a phone and the chat's pills'
+// touch targets, with the Loading earlier row drawn over the top padding (views/chat/ChatView.tsx), and the Agents
+// page's scroll kept on Back with its title row's and By to-do rows' touch boxes (views/Sidebar.tsx,
+// views/SidebarTree.tsx). Main had 157 B of room, so the budget is this ja size plus those 157 B.
+export const FIRST_SCREEN_BUDGET = 482_798;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
