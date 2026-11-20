@@ -53,6 +53,14 @@
       "sf": "clock.fill",
       "phosphor": "clock"
     },
+    "backgroundTasks": {
+      "sf": "list.clipboard",
+      "phosphor": "list-checks"
+    },
+    "backgroundMonitor": {
+      "sf": "waveform.path.ecg",
+      "phosphor": "monitor"
+    },
     "byApp": {
       "sf": "macwindow",
       "phosphor": "app-window"

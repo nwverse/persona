@@ -753,6 +753,10 @@ extension Theme {
         static let findText = "text.magnifyingglass"
         /// A command watched in the background, each line it prints an event (Claude Code's Monitor, its task notes).
         static let monitor = "waveform.path.ecg"
+        /// Running and recently completed background tasks in Agent chat.
+        static let backgroundTasks = taskPlan
+        /// A background command that watches an ongoing signal.
+        static let backgroundMonitor = monitor
         /// A subagent the agent started (the Agent / Task tool, a session's subagents); one at work.
         static let subagent = "person.2"
         static let subagentWorking = "person.2.badge.gearshape"
