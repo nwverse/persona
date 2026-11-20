@@ -1165,6 +1165,10 @@ content, not memory: memory stays one for every conversation (#9440), and a dire
   behind later requests, and events wait in the manager's own queue), that notice settles the move as not taken
   while the retry tied to it still carries the moved block; if the node takes the retry, the lead runs that block and
   the rest of its turn is refused until it is idle. Telling the attempts apart needs the hub to name the attempt.
+  On a new connection, until the hub's first notice that names a message, a notice without an id still settles the
+  oldest message waiting: when a manager that just restarted gets the notice of a message sent without an id before
+  the restart first, it settles a message sent with an id since. The hub says nothing else about naming its messages,
+  and holding a hub that never names them to the rule would leave each of its messages waiting the whole 10 minutes.
   A manager's own `session.send_once` or `assistant.answer_again` retry that the hub's once-guard answers from its
   record counts as taken.
 - **Two editors** (#11392): a save may say which `notes_at` it started from, as `GET /api/v1/assistant/leaders`
