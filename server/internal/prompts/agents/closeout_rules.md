@@ -1,4 +1,7 @@
-{{if and .Language (ne .Language "zh-Hans") (ne .Language "简体中文")}}{{if eq .Language "日本語"}}記入ルール：
+{{if hasPrefix .Form "### Persona "}}{{if eq .Language "日本語"}}コードブロックや引用を使わず、見出し、最初の3つの必須項目、各行の「- 」を見本どおりに書き、最後の行を --- にしてください。
+{{else if and .Language (ne .Language "zh-Hans") (ne .Language "简体中文")}}Copy the heading and first three required fields, start each field with “- ”, and end the report with --- on its own line. Use ordinary Markdown without a code fence or a quotation.
+{{else}}照抄标题和前三个必填字段，每个字段以“- ”开头，末尾单独一行写 ---。直接使用 Markdown，不加代码围栏或引用。
+{{end}}{{end}}{{if and .Language (ne .Language "zh-Hans") (ne .Language "简体中文")}}{{if eq .Language "日本語"}}記入ルール：
 - status：このターンの作業を完了して届けたらdone、停止したが未完了ならnot_done、誰かや何かを待つ必要があるならblockedとし、waitingに誰・何を待つか書きます。
 - merged / deployed：事実だけを書きます。この変更がマージ済み・本番で稼働中の場合だけyes、そうでなければno、該当しなければn/aです。後で照合されるため、誤ったyesはnoより悪い結果になります。
 - did：変更したことを平易な一文で一行ずつ、最大三行。変更がなければ省略します。

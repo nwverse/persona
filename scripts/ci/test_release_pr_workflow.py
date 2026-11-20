@@ -27,13 +27,13 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("github.event.pull_request.head.repo.full_name == github.repository", text)
         self.assertIn("github.event.pull_request.user.login == 'chyroc'", text)
         self.assertIn("github.event.pull_request.merge_commit_sha", text)
-        self.assertEqual(self.pr["permissions"], {"contents": "read"})
+        self.assertEqual(self.pr["permissions"], {"contents": "read", "checks": "write"})
 
     def test_all_platforms_feed_the_one_verified_plan(self):
         jobs = self.pr["jobs"]
         self.assertEqual(jobs["verify"]["needs"], ["plan", "cli-web", "android", "apple", "windows"])
         self.assertEqual(jobs["apple"]["needs"], ["plan", "cli-web", "android"])
-        self.assertEqual(jobs["windows"]["needs"], ["plan", "cli-web", "android", "apple"])
+        self.assertEqual(jobs["windows"]["needs"], ["plan", "cli-web", "android"])
         self.assertEqual(jobs["android"]["environment"], "persona-release")
         self.assertEqual(jobs["apple"]["environment"], "persona-release")
         self.assertEqual(jobs["windows"]["environment"], "persona-release")
@@ -55,6 +55,67 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn('release-pr-plan-${{ steps.plan.outputs.pr }}-${{ steps.plan.outputs.commit }}', str(jobs["plan"]))
         self.assertNotIn('release-pr-plan-${{ needs.plan.outputs.pr }}-${{ needs.plan.outputs.commit }}', str(jobs))
 
+    def test_exact_merge_result_check_and_failure_propagation(self):
+        jobs = self.pr["jobs"]
+        self.assertEqual(jobs["plan"]["outputs"]["check_run_id"], "${{ steps.merge-check.outputs.id }}")
+        plan_script = str(jobs["plan"]["steps"])
+        self.assertIn("release_merge_check.py", plan_script)
+        self.assertIn('test "$COMMIT" = "${{ github.event.pull_request.merge_commit_sha || github.sha }}"', plan_script)
+        verify_script = str(jobs["verify"]["steps"])
+        self.assertEqual(jobs["verify"]["steps"][0]["env"], {
+            "CLI_WEB": "${{ needs.cli-web.result }}",
+            "ANDROID": "${{ needs.android.result }}",
+            "APPLE": "${{ needs.apple.result }}",
+            "WINDOWS": "${{ needs.windows.result }}",
+        })
+        self.assertIn('test "$result" = success', verify_script)
+        self.assertIn("--conclusion success", verify_script)
+        # GitHub skips the whole aggregate after a failed or skipped dependency by default. That would also skip
+        # its failure-conclusion step and leave the exact merge-result check in_progress forever.
+        self.assertEqual(jobs["verify"]["if"],
+                         "always() && needs.plan.outputs.pr != '0' && needs.plan.outputs.version != ''")
+        self.assertTrue(any(step.get("if") == "failure()" and "--conclusion failure" in step["run"]
+                            for step in jobs["verify"]["steps"]))
+        verified_upload = next(step for step in jobs["verify"]["steps"]
+                               if step.get("uses") == "actions/upload-artifact@v4")
+        self.assertEqual(verified_upload["if"], "success()")
+
+    def test_cli_web_collection_uses_the_rendered_installer_and_stops_on_missing_outputs(self):
+        step = next(step for step in self.pr["jobs"]["cli-web"]["steps"]
+                    if step.get("name") == "Bind the verified downloads to the release plan")
+        script = re.sub(r"\$\{\{.*?\}\}", "fixture", step["run"])
+        required = ("install.sh", "bin/personad-linux-amd64.gz", "bin/VERSION",
+                    "bin/SHA256SUMS", "bin/latest.json")
+        for missing in (None, *required):
+            with self.subTest(missing=missing), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                build = root / "build-publish"
+                (build / "bin").mkdir(parents=True)
+                for name in required:
+                    if name != missing:
+                        (build / name).write_text("rendered installer" if name == "install.sh" else name)
+                # A stale file in bin must never replace the rendered build-root installer.
+                (build / "bin/install.sh").write_text("stale installer")
+                commands = root / "commands"
+                commands.mkdir()
+                python = commands / "python3"
+                python.write_text('#!/bin/sh\nprintf called > bind-called\nexit "${BIND_EXIT:-0}"\n')
+                python.chmod(0o755)
+                env = dict(os.environ, PATH=str(commands) + os.pathsep + os.environ["PATH"])
+                result = subprocess.run(["bash", "-c", script], cwd=root, env=env,
+                                        capture_output=True, text=True, timeout=20)
+                if missing:
+                    self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertFalse((root / "bind-called").exists())
+                    continue
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual((root / "release/downloads/install.sh").read_text(), "rendered installer")
+                self.assertTrue((root / "bind-called").exists())
+                failed = subprocess.run(["bash", "-c", script], cwd=root, env=dict(env, BIND_EXIT="37"),
+                                        capture_output=True, text=True, timeout=20)
+                self.assertEqual(failed.returncode, 37)
+                self.assertIn("unverified artifacts are diagnostic only", failed.stderr)
+
     def test_windows_requires_native_execution_and_authenticode(self):
         text = PR.read_text()
         for program in ("persona-link", "personad", "persona-node"):
@@ -63,6 +124,12 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("Get-AuthenticodeSignature", text)
         self.assertIn("beta.yml", text)
         self.assertIn("latest.yml", text)
+        # Native Windows checks must still run when Apple signing fails. Apple is a separate dependency of the
+        # final aggregate, not an input to the Windows executables or desktop package.
+        windows = self.pr["jobs"]["windows"]
+        self.assertNotIn("apple", windows["needs"])
+        self.assertNotIn("release-pr-apple", str(windows))
+        self.assertEqual(self.pr["jobs"]["verify"]["needs"], ["plan", "cli-web", "android", "apple", "windows"])
 
     def test_pr_metadata_survives_the_clean_source_checkout(self):
         text = PR.read_text()

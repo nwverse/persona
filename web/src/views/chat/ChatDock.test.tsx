@@ -8,7 +8,7 @@ import { Header, spaceAgentsItem } from "./ChatView";
 import { HEADER_SLOT, HEADER_SLOT_END, HEADER_SLOT_START } from "./header";
 import { Composer } from "./Composer";
 import { PendingCards, permissionFrom } from "./Interactions";
-import { restoreQueued } from "./QueueStrip";
+import { restoreQueued } from "./queue-restore";
 import { getComposerFiles, removeFile } from "../../lib/composer-files";
 import { QueuePanel } from "./QueuePanel";
 import { onDraftEvent, type DraftEvent } from "../../lib/drafts";

@@ -84,10 +84,14 @@ func (n *Node) runtimeStartOn(ctx context.Context, h *runtimeConn, p runtimeStar
 	defer cancel()
 	params := map[string]any{"cwd": p.Cwd, "prompt": p.Prompt}
 	for k, v := range map[string]string{"launcher": p.Launcher, "model": p.Model, "permission_mode": p.PermissionMode,
-		"effort": p.Effort, "workspace_id": p.WorkspaceID, "resume": p.Resume, "session_id": p.SessionID, "agent_type": p.AgentType} {
+		"effort": p.Effort, "workspace_id": p.WorkspaceID, "resume": p.Resume, "session_id": p.SessionID, "agent_type": p.AgentType,
+		"client_msg_id": p.ClientMsgID} {
 		if v != "" {
 			params[k] = v
 		}
+	}
+	if len(p.Images) > 0 {
+		params["images"] = p.Images
 	}
 	if p.Shell {
 		params["shell_launcher"] = true
@@ -98,6 +102,18 @@ func (n *Node) runtimeStartOn(ctx context.Context, h *runtimeConn, p runtimeStar
 	var res struct {
 		Session json.RawMessage     `json:"session"`
 		Instead *proto.StartInstead `json:"instead"`
+	}
+	if b := backendLaunchFrom(ctx); b != nil {
+		h.mu.Lock()
+		supported := h.hello.Caps.BackendWorkspaceRoot
+		h.mu.Unlock()
+		if !supported {
+			return nil, nil, refusal("backend_workspace_unsupported", "This runtime cannot start in a prepared task directory.", nil)
+		}
+		params["backend_workspace_root"] = true
+		if err := b.beforeDispatch(p.SessionID); err != nil {
+			return nil, nil, err
+		}
 	}
 	if err := h.peer.Call(ctx, "session.start", params, &res); err != nil {
 		return nil, nil, err

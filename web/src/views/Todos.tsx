@@ -27,7 +27,7 @@ import { useScrollMemory } from "../lib/scroll-memory";
 import { useAgentSessions, useFullAgentSessions } from "../lib/sessions";
 import { useScoped } from "../lib/current-assistant";
 import { lazyPage } from "../lib/lazy-page";
-import { dropTodo, refresh, refreshTodos, useStore, withTaskRows } from "../lib/store";
+import { dropTodo, refresh, refreshTodos, useStore } from "../lib/store";
 import {
   addTodoDecision,
   createTodo,
@@ -52,6 +52,7 @@ import {
   todoDueDay,
   todoDueText,
   shownStatus,
+  strikesThrough,
   todoStatus,
   unlinkAgentFromTodo,
   unlinkSpaceFromTodo,
@@ -80,7 +81,7 @@ import { formatDate, t } from "../i18n";
 import { groupTodosByProject, treeStateLabel, type TodoProjectGroup, type TreeState } from "../lib/todo-tree";
 import { directionTitle, groupsByDirection, useDirectionTree, type Direction } from "../lib/direction-tree";
 import { DirectionCountsText } from "./DirectionMarks";
-import { FOLDED_SECTIONS, TRIAGE_SECTIONS, checksAsOpen, countsAsOpen, lastActivity, openMergePRs, supersededFailedStarts, triage, triageTodos, type TriageGroup, type TriageResult, type TriageSection } from "../lib/todo-triage";
+import { FOLDED_SECTIONS, TRIAGE_SECTIONS, checksAsOpen, countsAsOpen, lastActivity, openMergePRs, supersededFailedStarts, triage, triageTodos, type OwnerNeed, type TriageGroup, type TriageResult, type TriageSection } from "../lib/todo-triage";
 import { orderWaitGroups } from "../lib/task-wait";
 import { viewDrawOn } from "../features/todos/model/view-gates";
 import { drawnFromView, openAsDrawn } from "../features/todos/model/view-triage";
@@ -98,13 +99,13 @@ import {
 } from "../lib/todo-list-filter";
 import type { MenuItem } from "../ui/menu-model";
 import { useRestoredTodos } from "../lib/todo-restore";
+import { useOwnerNeeds, useTodoLookup, useTodoMinute } from "../lib/todo-owner-needs";
 import { autoReviewLine, checklist, latestReview, parkedLine, progressLine, type CheckMark, type Supervision } from "../lib/supervision";
 import { resultExtras } from "../lib/brief";
 import { prLink } from "./TodoStageBar";
 import { projectChoices, projectNames, useTodoProjects } from "../lib/todo-projects";
 import { useFolded } from "../lib/use-folded";
 import { stateName } from "../lib/state-labels";
-import { answeredLookup } from "./assistant/answered-lookup";
 import { Empty, Segmented, Tag } from "./assistant/parts";
 import { OfflineState, useShownOffline } from "./ManagerParts";
 import { TodoCalendar, type CalendarSlot } from "./TodoCalendar";
@@ -200,11 +201,11 @@ export function TodosView({
   const offline = useShownOffline();
   const machines = useStore((s) => s.machines);
   const interactions = useStore((s) => s.interactions);
-  const allSessions = useAgentSessions();
-  const answered = useStore((s) => s.answered);
-  // a card answered here stops its agent's "Needs you" at once, not at the hub's next push (#4186)
-  const taskRows = useStore((s) => s.taskRows);
-  const lookup = useMemo(() => answeredLookup(withTaskRows(makeSessionLookup(allSessions), taskRows), interactions, answered), [allSessions, taskRows, interactions, answered]);
+  // its to-dos' Agents as the sidebar's badge reads them (lib/todo-owner-needs.ts): an open task's Agent outside the list's
+  // window too, and a card answered here stops its agent's "Needs you" at once, not at the hub's next push (#4186)
+  const lookup = useTodoLookup();
+  // the to-dos the sidebar's badge counts, each with why (#11838): their rows carry its mark, from the badge's own hook
+  const needs = useOwnerNeeds();
 
   const [activeId, setActiveId] = useState<string | undefined>(selectedId);
   const [search, setSearch] = useState("");
@@ -260,12 +261,9 @@ export function TodosView({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per link that is gone
   }, [linkGone]);
 
-  // a minute's tick moves to-dos across the 24 h and 48 h lines (and today's end) while nothing else changes
-  const [tick, setTick] = useState(() => Date.now());
-  useEffect(() => {
-    const id = window.setInterval(() => setTick(Date.now()), 60_000);
-    return () => window.clearInterval(id);
-  }, []);
+  // a minute's tick moves to-dos across the 24 h and 48 h lines (and today's end) while nothing else changes: the
+  // badge's clock, so the sections and the badge's marks move together
+  const tick = useTodoMinute();
   const [restored, restoreTodo] = useRestoredTodos();
   // whether a failed start was superseded by finished work (#3713) is decided on every to-do: a search or a filter that
   // leaves the finished one out must not put it back in Needs you
@@ -278,7 +276,7 @@ export function TodosView({
   );
   // A sessions push builds a new lookup: what it leaves in the same order stays the same list (and the same groups,
   // the same row views below), so the rows and sections it did not touch skip their render.
-  const views = useSteady(useMemo(() => todoRowViews(todos, lookup, interactions, sectionOf), [todos, lookup, interactions, sectionOf]), steadyViews);
+  const views = useSteady(useMemo(() => todoRowViews(todos, lookup, interactions, sectionOf, needs), [todos, lookup, interactions, sectionOf, needs]), steadyViews);
 
   // The filter by due date and the order inside each section (#3740): this browser's, in both groupings
   const [listFilter, setListFilter] = useState<TodoListFilter>(() => {
@@ -1193,6 +1191,7 @@ const TodoProjectSection = memo(function TodoProjectSection({
         <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 opacity-60 transition-transform" style={{ transform: folded ? "rotate(-90deg)" : "none" }} />
         <Icon name="folder" size={12} stroke={2} className="shrink-0 text-ink-3" />
         <span className="min-w-0 flex-1 truncate font-semibold">{group.name}</span>
+        {folded && <OwnerMarkCount count={views.filter((v) => v.owner).length} />}
         <span className="shrink-0 text-[11px] text-ink-3 tabular-nums">{group.todos.length}</span>
         {!(group.area && group.state === "done") && (
           <span className={cx("shrink-0 text-[11px] font-semibold whitespace-nowrap", TREE_TONE[group.state])}>{treeStateLabel(group.state)}</span>
@@ -1310,6 +1309,7 @@ const TodoDirectionSection = memo(function TodoDirectionSection({
         <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 opacity-60 transition-transform" style={{ transform: folded ? "rotate(-90deg)" : "none" }} />
         <Icon name={direction.secretary ? "person" : "target"} size={12} stroke={2} className="shrink-0 text-ink-3" />
         <span className="min-w-0 flex-1 truncate font-semibold">{title}</span>
+        {folded && <OwnerMarkCount count={ownerCount(todos, views)} />}
         <DirectionCountsText direction={direction} />
       </button>
       {!folded && (
@@ -1380,6 +1380,7 @@ const TodoTriageSection = memo(function TodoTriageSection({
       <button type="button" aria-expanded={!folded} onClick={toggle} className="flex h-8 w-full min-w-0 items-center gap-1.5 rounded-control px-2 text-left text-[12px] hover:bg-hover">
         <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 text-ink-3 opacity-60 transition-transform" style={{ transform: folded ? "rotate(-90deg)" : "none" }} />
         <span className={cx("min-w-0 flex-1 truncate font-semibold whitespace-nowrap", SECTION_TONE[section])}>{sectionTitle(section)}</span>
+        {folded && <OwnerMarkCount count={ownerCount(groups.flatMap((g) => g.members), views)} />}
         <span className="shrink-0 text-[11px] text-ink-3 tabular-nums">{count}</span>
       </button>
       {!folded && section === "shelved" && <p className="px-2.5 pb-1 text-[11.5px] text-ink-3">{t("todos.shelved_hint")}</p>}
@@ -1444,11 +1445,44 @@ function TodoTriageRow({
         >
           <Icon name="chevron" size={10} stroke={2.4} className="transition-transform" style={{ transform: open ? "none" : "rotate(-90deg)" }} />
           {t("todos.related", { count: others.length })}
+          {!open && <OwnerMarkCount count={ownerCount(others, views)} />}
         </button>
       )}
       {open && <div className="ml-6 flex flex-col gap-1 border-l border-line pl-2">{others.map(item)}</div>}
     </div>
   );
+}
+
+// ── The badge's mark (#11838) ────────────────────────────────
+
+/** On a row the sidebar's To-dos badge counts (lib/todo-owner-needs.ts): the badge's look (its accent tint,
+ *  SidebarParts BADGE_CLASS.accent) and its words, why it counts in the tooltip and said after them. */
+function OwnerMark({ need }: { need: OwnerNeed }) {
+  const why = t(`todos.owner_why_${need}`);
+  return (
+    <span data-testid="todo-owner-mark" data-need={need} title={t("todos.owner_mark_title", { why })} className="inline-flex shrink-0">
+      <Tag tone="accent">
+        {t("todos.owner_mark")}
+        <span className="sr-only">{t("todos.owner_mark_said", { why })}</span>
+      </Tag>
+    </span>
+  );
+}
+
+/** On a folded heading (a status section, a folder, a pinned direction, "N related"): how many to-dos under it the badge
+ *  counts, so none of them is out of sight (DESIGN_SYSTEM 3.4 "Sessions that need the user"). Nothing at none. */
+function OwnerMarkCount({ count }: { count: number }) {
+  if (!count) return null;
+  return (
+    <span data-testid="todo-owner-count" data-count={count} className="inline-flex shrink-0">
+      <Tag tone="accent">{t("todos.owner_mark_count", { count })}</Tag>
+    </span>
+  );
+}
+
+/** How many of these the badge counts (their views' `owner`). */
+function ownerCount(todos: readonly Todo[], views: ReadonlyMap<string, TodoRowView>): number {
+  return todos.reduce((n, td) => n + (views.get(td.id)?.owner ? 1 : 0), 0);
 }
 
 // ── Todo List Item ───────────────────────────────────────────
@@ -1476,6 +1510,8 @@ export type TodoRowView = {
   section?: TriageSection;
   /** What it waits on while its status is Waiting (#11090, lib/todo-wait-reason.ts waitOf): its label says so. */
   wait?: WaitReason;
+  /** Why the sidebar's To-dos badge counts it (#11838, lib/todo-owner-needs.ts), unset when it does not: its mark. */
+  owner?: OwnerNeed;
 };
 
 const DOT_STATE: Record<TodoStatus, AgentState> = {
@@ -1546,9 +1582,9 @@ function agentRowView(todo: Todo, lookup: SessionLookup, interactions: Interacti
   return view;
 }
 
-/** Every todo's row view by id, with its status section. */
-function todoRowViews(todos: Todo[], lookup: SessionLookup, interactions: Interaction[], sections: ReadonlyMap<string, TriageSection>): ReadonlyMap<string, TodoRowView> {
-  return new Map(todos.map((td) => [td.id, { ...todoRowView(td, lookup, interactions), section: sections.get(td.id) }]));
+/** Every todo's row view by id, with its status section and why the sidebar's badge counts it (`needs`, its own set). */
+function todoRowViews(todos: Todo[], lookup: SessionLookup, interactions: Interaction[], sections: ReadonlyMap<string, TriageSection>, needs: ReadonlyMap<string, OwnerNeed>): ReadonlyMap<string, TodoRowView> {
+  return new Map(todos.map((td) => [td.id, { ...todoRowView(td, lookup, interactions), section: sections.get(td.id), owner: needs.get(td.id) }]));
 }
 
 const TONE_CLASS = TODO_TONE_CLASS;
@@ -1638,14 +1674,15 @@ const TodoListItem = memo(function TodoListItem({
       {/* Body */}
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline justify-between gap-2">
-          {view.ultracode || todo.kind === "concern" ? (
+          {view.ultracode || todo.kind === "concern" || view.owner ? (
             <span className="flex min-w-0 items-center gap-1">
-              <span className={cx("truncate text-[13.5px] font-semibold text-ink", !view.ultracode && !open && "line-through text-ink-3 font-normal")} data-testid="todo-title">{todo.title}</span>
+              <span className={cx("truncate text-[13.5px] font-semibold text-ink", !view.ultracode && !open && "text-ink-3 font-normal", !view.ultracode && strikesThrough(todo, open) && "line-through")} data-testid="todo-title">{todo.title}</span>
               {view.ultracode && <UltraMark size={11} />}
               {todo.kind === "concern" && <Tag><span data-testid="todo-concern">{t("todos.concern")}</span></Tag>}
+              {view.owner && <OwnerMark need={view.owner} />}
             </span>
           ) : (
-            <span className={cx("truncate text-[13.5px] font-semibold text-ink", !open && "line-through text-ink-3 font-normal")} data-testid="todo-title">
+            <span className={cx("truncate text-[13.5px] font-semibold text-ink", !open && "text-ink-3 font-normal", strikesThrough(todo, open) && "line-through")} data-testid="todo-title">
               {todo.title}
             </span>
           )}
@@ -2407,7 +2444,7 @@ function TodoDetail({
 
       {/* Code task stages from the hub. Its PR link is not drawn again here: the repository links below are the one
           place a task's issues and PRs are shown (legacy ones included). */}
-      <TodoStageBar stage={todo.stage} stageKind={todo.stage_kind} className="mt-4" />
+      <TodoStageBar stage={todo.stage} stageKind={todo.stage_kind} done={todo.stage_done} className="mt-4" />
 
       {todo.origin && <TaskCompletionCheck todo={todo} />}
 

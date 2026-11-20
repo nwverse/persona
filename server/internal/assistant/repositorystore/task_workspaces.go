@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/nwverse/persona/server/internal/db"
@@ -178,6 +179,9 @@ func (d *Store) MutateTaskWorkspace(ctx context.Context, todo, op string, versio
 		case "acquire":
 			if done || r.State != "ready" || r.Cleanup != nil || !workspacenaming.ValidOperationID(use) {
 				return workspaceProblem("not_ready", op)
+			}
+			if strings.HasPrefix(use, "launch_") && slices.ContainsFunc(r.Uses, func(other string) bool { return strings.HasPrefix(other, "launch_") && other != use }) {
+				return workspaceProblem("worktree_in_use", op)
 			}
 			if !slices.Contains(r.Uses, use) {
 				r.Uses = append(r.Uses, use)

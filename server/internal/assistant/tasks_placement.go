@@ -14,6 +14,7 @@ import (
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/taskworkspace"
 )
 
 const (
@@ -24,6 +25,9 @@ const (
 // Missing policies on older saved plans are fixed too: inferred intent cannot
 // authorize moving work (and its local directory) to a different computer.
 func (t *PlanTask) normalizeMachinePolicy() error {
+	if t.backendWorkspace() {
+		t.MachinePolicy = machineFixed
+	}
 	if t.MachinePolicy == "" {
 		t.MachinePolicy = machineFixed
 	}
@@ -308,6 +312,13 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if err := s.admitTaskWorkspace(ctx, t); err != nil {
 		return "", "", err
 	}
+	if t.backendWorkspace() {
+		defer func() {
+			if err != nil && !startResultUnknown(err) {
+				s.releaseUnusedBackendStart(ctx, t)
+			}
+		}()
+	}
 	if t.rememberKind { // "start these directly": the machine and repository that run, now that admission fixed them
 		t.rememberKind = false
 		s.trustKinds(ctx, []PlanTask{*t})
@@ -318,6 +329,13 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		s.grantScheduleKind(ctx, id, *t)
 	}
 	prompt := t.Prompt
+	if t.backendWorkspace() {
+		rows, err := json.Marshal(t.WorkspaceResolved.Repositories)
+		if err != nil {
+			return "", "", err
+		}
+		prompt += "\n\n" + prompts.RenderWorkspaceRepositories(string(rows), answerLanguage(s.hello(ctx).Locale))
+	}
 	var rules []string
 	if strings.TrimSpace(t.Context) != "" {
 		prompt += "\n\n" + t.Context
@@ -348,7 +366,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	rules = append(rules, prompts.RenderTaskFiles(answerLanguage(s.hello(ctx).Locale)))
 	// One structured closeout carries delivery too when both switches are on.
 	delivery := !t.Readonly && s.doneNeedsDelivery(ctx)
-	brief := s.closeoutBrief(ctx, delivery)
+	brief := s.closeoutBrief(ctx, m.ID, delivery)
 	if delivery { // what done means: live and checked (delivery.go)
 		rules = append(rules, prompts.RenderTaskDelivery(brief != ""))
 	}
@@ -357,7 +375,20 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	}
 	// The project background, and the decisions of the todo and its continuation ancestors (a task started again may
 	// have some), follow the assignment; they remain user context, never framework policy.
-	background := s.projectHandoffContext(ctx, m.ID, t.Cwd, s.taskSupervisorOf(t))
+	supervisor := s.taskSupervisorOf(t)
+	background := s.projectHandoffContextForTodo(ctx, m.ID, t.Cwd, supervisor, s.todoForPlanContext(t))
+	var repoPaths []string
+	if t.backendWorkspace() {
+		for _, repo := range t.WorkspaceResolved.Repositories {
+			if repo.AbsolutePath == t.Cwd {
+				continue
+			}
+			repoPaths = append(repoPaths, repo.AbsolutePath)
+			if info := s.projectHandoffContext(ctx, m.ID, repo.AbsolutePath, supervisor); info != "" {
+				background = strings.TrimSpace(background + "\n\n" + repo.AbsolutePath + "\n" + info)
+			}
+		}
+	}
 	if decisions := s.todoHandoffDecisionsContext(ctx, t.TodoID); decisions != "" {
 		background = strings.TrimSpace(background + "\n\n" + decisions)
 	}
@@ -372,7 +403,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 			prompt += "\n\n" + framework // old nodes must receive every required rule
 		}
 	}
-	prompt, err = s.withStandingAuthorizations(ctx, m.ID, t.Cwd, prompt)
+	prompt, err = s.withStandingAuthorizations(ctx, m.ID, t.Cwd, prompt, repoPaths...)
 	if err != nil {
 		return "", "", err
 	}
@@ -460,8 +491,14 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if err := s.checkRequestStart(ctx, *t); err != nil {
 		return "", "", err
 	}
+	start := func() error {
+		if !t.backendWorkspace() {
+			return s.call(ctx, m.ID, DeviceSessionStart, params, &res)
+		}
+		return s.startBackendTask(ctx, t, params, &res)
+	}
 	sentAt := time.Now()
-	err = s.call(ctx, m.ID, DeviceSessionStart, params, &res)
+	err = start()
 	// Extras the agent it landed on cannot have (ultracode #3596, a start goal: start_defaults.go) are each dropped
 	// once, in whatever order the node refuses them; both refusals come before anything starts.
 	var skipped string
@@ -479,7 +516,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 			if err := s.checkRequestStart(ctx, *t); err != nil {
 				return "", "", err
 			}
-			err = s.call(ctx, m.ID, DeviceSessionStart, params, &res)
+			err = start()
 			continue
 		}
 		if reason, no := s.ultracodeRefusal(ctx, err, params); no {
@@ -492,14 +529,14 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 			if err := s.checkRequestStart(ctx, *t); err != nil {
 				return "", "", err
 			}
-			err = s.call(ctx, m.ID, DeviceSessionStart, params, &res)
+			err = start()
 			continue
 		}
 		break
 	}
 	if err != nil {
 		s.recordStartFailure(ctx, m.ID, s.startLauncher(ctx, picked), err)
-		if startResultUnknown(err) {
+		if !t.backendWorkspace() && startResultUnknown(err) {
 			if t.RequestGate != "" {
 				if expectID != "" {
 					lookup, cancel := context.WithTimeout(context.WithoutCancel(ctx), agentStartListTimeout)
@@ -538,6 +575,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 			}
 		}
 		return "", "", err
+	}
+	if t.backendWorkspace() && res.Session.Cwd != t.Cwd {
+		return "", "", taskworkspace.Failure("result_mismatch", "start", t.WorkspaceResolved.OperationID, "", t.Cwd)
 	}
 	if res.Session.SessionID == "" || res.Session.MachineID != "" && res.Session.MachineID != m.ID {
 		return "", "", &rpc.Error{Code: "identity_conflict", Message: i18n.T(s.lang(ctx), "assistant-tasks.start_identity_conflict")}
