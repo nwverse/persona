@@ -2,10 +2,13 @@ package node
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 func (s *stateFile) stopped(id string, cause proto.StopCause) {
@@ -93,12 +96,35 @@ func (n *Node) supervisorResumeAllowed(id, mode, launcher string) error {
 	return nil
 }
 
+// startFailedForSure: a start's error leaves nothing that may still come up: not possibly delivered, not stalled or
+// waiting on its shell, no tab kept for it (withKeptTab), not cut off by its caller's deadline.
+func startFailedForSure(err error) bool {
+	if maybeDelivered(err) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return false
+	}
+	switch rpcCode(err) {
+	case proto.CodeAgentStartStalled, proto.CodeShellWaiting:
+		return false
+	}
+	var re *rpc.Error
+	if errors.As(err, &re) && len(re.Data) > 0 {
+		var d struct {
+			Pane      string `json:"pane"`
+			KeptUntil string `json:"kept_until"`
+		}
+		if json.Unmarshal(re.Data, &d) == nil && (d.Pane != "" || d.KeptUntil != "") {
+			return false
+		}
+	}
+	return true
+}
+
 // noteResumeFailed records the assistant's resume of session id that ended in err with the Agent not running as
 // resume_failed: stopped by Persona's own step, which the assistant may try again, never unknown (#11441). Nothing
 // when the resume went (err nil) or the Agent runs after all.
 func (n *Node) noteResumeFailed(id string, err error) {
-	if err == nil {
-		return
+	if err == nil || !startFailedForSure(err) {
+		return // an uncertain start may still bring it up: a second resume must not start it twice (unknown, #8214)
 	}
 	if _, live := n.agent(id); live {
 		return

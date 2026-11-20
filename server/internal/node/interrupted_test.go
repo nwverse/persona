@@ -1,6 +1,7 @@
 package node
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -122,8 +123,19 @@ func TestNoteResumeFailed(t *testing.T) {
 	n, _ := testNode(t)
 	n.state.Sessions["gone"] = sessionState{Pane: "p"}
 	n.state.Sessions["fine"] = sessionState{Pane: "p"}
+	n.state.Sessions["maybe"] = sessionState{Pane: "p"}
+	n.state.Sessions["kept"] = sessionState{Pane: "p"}
+	n.state.Sessions["late"] = sessionState{Pane: "p"}
 	n.noteResumeFailed("gone", errors.New("Codex did not come up"))
 	n.noteResumeFailed("fine", nil)
+	n.noteResumeFailed("maybe", unconfirmedStart(errors.New("no answer from the pane")))
+	n.noteResumeFailed("kept", withKeptTab(refusal(proto.CodeAgentStartStalled, "stalled", nil), "w1:p1", time.Now()))
+	n.noteResumeFailed("late", context.DeadlineExceeded)
+	for _, id := range []string{"maybe", "kept", "late"} { // uncertain: it may still come up, so no second resume
+		if got := n.stopCause(id); got != proto.StopUnknown {
+			t.Fatalf("%s: %q", id, got)
+		}
+	}
 	if got := n.stopCause("gone"); got != proto.StopResumeFailed {
 		t.Fatalf("gone: %q", got)
 	}
