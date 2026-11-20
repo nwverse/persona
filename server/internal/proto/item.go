@@ -166,6 +166,20 @@ func WithoutImageData(items []Item) []Item {
 	return out
 }
 
+// PositionalItemID identifies the fallback IDs assigned to JSONL records that lack a runtime ID.
+func PositionalItemID(id string) bool {
+	suffix, ok := strings.CutPrefix(id, "line")
+	if !ok {
+		return false
+	}
+	line, block, ok := strings.Cut(suffix, "#")
+	return ok && decimalItemPart(line) && decimalItemPart(block)
+}
+
+func decimalItemPart(s string) bool {
+	return s != "" && !strings.ContainsFunc(s, func(r rune) bool { return r < '0' || r > '9' })
+}
+
 // Item is one content block of a Claude Code transcript.
 type Item struct {
 	ID        string          `json:"id"`
@@ -190,6 +204,9 @@ type Item struct {
 	// FullSize: Text was cut for pages and pushes (it ends in a "truncated, open for the full text" line, in Chinese); the whole of it, this many
 	// bytes, comes from GET /api/v1/sessions/{mid}/{sid}/items/{item id}/full.
 	FullSize int `json:"full_size,omitempty"`
+	// SourceFingerprint identifies the original text record behind a positional item ID. Unlike the line
+	// number, it does not match different content that reuses that position after a rewrite.
+	SourceFingerprint string `json:"source_fingerprint,omitempty"`
 	// Wake marks a background task's notice that started new work after the agent had finished its turn
 	// (not one absorbed mid-turn): the exchange before it is over and its last words are an answer.
 	Wake bool `json:"wake,omitempty"`

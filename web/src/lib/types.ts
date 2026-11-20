@@ -700,6 +700,8 @@ export interface Item {
   /** The runtime's own outcome, when the node recorded one (docs/protocol/protocol.md "Tool outcomes"). */
   outcome?: { status?: string; exit_code?: number };
   full_size?: number;
+  /** Opaque identity of the source record when an item ID names only a position. */
+  source_fingerprint?: string;
   queued?: boolean;
   wake?: boolean;
   narration?: boolean;

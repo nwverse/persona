@@ -2177,6 +2177,18 @@ follows these; the To-dos page is the reference (`web/src/views/Todos.tsx`, chec
 - A menu is as tall as the window allows and shows whole when the window can hold it, over its button if need be; only one taller than the window is cut, opening beside its button on a wide screen. A fade at a cut edge says there is more (`Menu`, `data-menu-more`), as the team panel's list does, and a row the keys move to past the cut scrolls into view.
 - A choice kept in the browser (appearance, theme color, text size, language) reaches every open tab: the others follow through the `storage` event. A language needs a reload, as in the tab that chose it, and that reload never lands on a draft or an open dialog or menu: it waits for a calm moment, as a new build's does, with a toast that offers it meanwhile.
 
+### 4.14 Starred messages (web, #7524)
+
+People who want to keep a useful message choose **Star** in the existing message menu. A small accent star at the
+message edge shows that it was saved without moving the row. While the save or removal is pending, the same position
+shows a spinner. Failed actions keep the prior state. **Unstar** removes the snapshot and offers the shared Undo toast.
+
+**Starred** is a secondary page under **Pages**. Its badge counts every saved snapshot for the selected assistant.
+The page uses the existing search field, neutral cards, Markdown, and action buttons, with the sidebar button on small
+screens. One card contains a title, speaker, timestamp, saved text, and **Open original**, **Copy**, and **Unstar**
+actions. Long saved text folds in the card. The original uses the existing transcript jump. The saved text stays usable
+when the original cannot be opened.
+
 ## 5. Content
 
 ### 5.1 Voice and tone
