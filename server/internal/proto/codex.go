@@ -53,7 +53,9 @@ type SessionCapabilities struct {
 	// an older node's row and encodes it again keeps it absent.
 	Modes *bool `json:"modes,omitempty"`
 	// Model explicitly permits changing the model through session.modes. Absent preserves older clients' heuristics.
-	Model *bool `json:"model,omitempty"`
+	Model        *bool `json:"model,omitempty"`
+	QueueEdit    *bool `json:"queue_edit,omitempty"`
+	QueueSendNow *bool `json:"queue_send_now,omitempty"`
 	// Rewind permits returning to before a user message. RewindCode additionally permits restoring files.
 	// Absent preserves older clients' Claude terminal behavior.
 	Rewind     *bool `json:"rewind,omitempty"`
