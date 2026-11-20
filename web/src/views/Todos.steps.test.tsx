@@ -108,8 +108,9 @@ describe("a to-do split into steps on the To-dos page (#11858)", () => {
     await render();
     const accepted = line("accepted-goal")!;
     expect(accepted.startsWith(t("lib-todos.review_done"))).toBe(true);
-    // the rest of its line is as before (#3156), with its steps after its status word
+    // its steps after its status word; its steps were handed out, so nothing says it was not
     expect(accepted).toContain(`${t("lib-todos.review_done")}·Steps 2/2`);
+    expect(accepted).not.toContain(t("todos.not_handed"));
     expect(accepted).not.toContain(t("todos.steps_next_unplanned"));
     expect(accepted).not.toContain("2/2 steps done");
     await act(async () => root.unmount());

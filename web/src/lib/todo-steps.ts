@@ -30,14 +30,17 @@ export function todoSteps(todo: Todo): TodoStepCount | undefined {
  *  - no Agent of its own (`not_started`): "Steps 3/9" in place of "Not started", nothing in place of "Not handed to an
  *    agent yet"; once every step is closed, "9/9 steps done" and "Next step not arranged yet";
  *  - otherwise its status stays, "Steps 3/9" after its Agent count; so does an accepted one at rest (acceptedAtRest):
- *    its supervisor settled it, so it keeps reading Accepted and nothing claims its next step is unplanned.
+ *    its supervisor settled it, so it keeps reading Accepted, nothing claims its next step is unplanned, and nothing
+ *    says it was not handed over.
  * Undefined when it has no steps the hub counted: the line is as before.
  */
 export function stepsWords(todo: Todo, status: TodoStatus): StepsWords | undefined {
   const steps = todoSteps(todo);
   if (!steps) return undefined;
   const count = t("todos.steps_count", { done: steps.done, total: steps.total });
-  if (status !== "not_started" || acceptedAtRest(todo, status)) return { after: count };
+  // accepted at rest: Accepted stays, its steps after it, and nothing about handing it over (its steps were handed out)
+  if (acceptedAtRest(todo, status)) return { after: count, tail: "" };
+  if (status !== "not_started") return { after: count };
   if (steps.done >= steps.total) return { label: t("todos.steps_all_done", { done: steps.done, total: steps.total }), tail: t("todos.steps_next_unplanned") };
   return { label: count, tail: "" };
 }

@@ -36,8 +36,8 @@ describe("a to-do's steps on its status line (#11858)", () => {
 
   it("keeps Accepted on a to-do its supervisor accepted, at rest, the steps after it", () => {
     const supervision = { state: "accepted", reviews: [{ at, verdict: "accepted" as const }] } as unknown as Todo["supervision"];
-    expect(stepsWords(goal({ view: view({ done: 3, total: 3 }), supervision }), "not_started")).toEqual({ after: "Steps 3/3" });
-    expect(stepsWords(goal({ view: view({ done: 1, total: 3 }), supervision }), "not_started")).toEqual({ after: "Steps 1/3" });
+    expect(stepsWords(goal({ view: view({ done: 3, total: 3 }), supervision }), "not_started")).toEqual({ after: "Steps 3/3", tail: "" });
+    expect(stepsWords(goal({ view: view({ done: 1, total: 3 }), supervision }), "not_started")).toEqual({ after: "Steps 1/3", tail: "" });
   });
 
   it("keeps the status of a to-do its own Agent is on, the steps after its Agent count", () => {
