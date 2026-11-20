@@ -283,7 +283,7 @@ The Glass style relies on Liquid Glass and has no shadow. The vendored Beautiful
 | `state` / `standard` | snappy 0.25 s (`:613`) | a state change snaps |
 | `layout` | smooth 0.3 s (`:614`) | a layout change glides |
 | `expand` | smooth 0.4 s (`:620`) | |
-| `reveal` / `conceal` | easeOut 0.28 s / easeIn 0.2 s (`:635`) | `reveal`: what opens in the chat fades in over all its space (`.unfolding`); `conceal`: a menu or an inbox event fading away. What closes in the chat goes at once, its space with it (#3005). `concealTime` and `concealCurve` also fade in a To-dos row the hub re-filed, as a keyframe where it now is (iOS, hubs with `todo_view`, from #10465's switch-on) |
+| `reveal` / `conceal` | easeOut 0.28 s / easeIn 0.2 s (`:635`) | `reveal`: what opens in the chat fades in over all its space (`.unfolding`); `conceal`: a menu or an inbox event fading away. What closes in the chat goes at once, its space with it (#3005). `conceal` also fades in a To-dos row the hub re-filed, where it now is (iOS, hubs with `todo_view`, from #10465's switch-on) |
 | `drawer(velocity:)` | interpolating spring 0.32 s, no bounce (`:650`) | drawer and pager |
 | `springBack` | spring 0.3 s, bounce 0.25 (`:770`) | a finger-dragged message going back to its place (iOS `MessageMenu.swift:470`, `withAnimation(Theme.Motion.springBack)`; Android `swipeToReply`, every style). That call does not read Reduce Motion, on iPhone or iPad, so the spring still runs |
 | `alertHandoff` | a 1 s wait (`Duration`) | an alert that follows another (the file browser's queued "already exists" questions) waits before asking: UIKit drops a presentation made while another is closing, and SwiftUI took up to about 0.8 s to close one answered elsewhere (#6113) |
@@ -886,8 +886,8 @@ The web Agent conversation header's **Session overview** list button toggles a p
     each row says, since a new line can wrap and a door come and go, and a row's new height moves every row under it
     (`Hold`, as the Agents list holds its lines); a row gone meanwhile stays until then. A row that comes to need the
     owner lands at once, alone. When the rest lands, the rows that changed group are drawn in their places at once and
-    fade in (`Theme.Motion.concealTime`, `concealCurve`; at once with Reduce Motion), so nothing slides across the
-    list. The numbers change at once, without animation.
+    fade in (`Theme.Motion.conceal`; at once with Reduce Motion), so nothing slides across the list. The numbers change
+    at once, without animation.
   - **One number**: the drawer's and sidebar's To-dos row, the folded Pages heading, the bar's Needs you and the Needs you
     header show the same N, from one source; with several assistants it is counted from the current assistant's rows,
     the ones the list shows (`docs/apple/ios.md` "To-dos (V1, #10465)").

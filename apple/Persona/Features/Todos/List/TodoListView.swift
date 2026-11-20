@@ -66,6 +66,7 @@ struct TodoListView: View {
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentInsets.top } action: { _, top in sight.covered = top }
             .onScrollPhaseChange { old, phase in
                 model.hold.set(.scrolling, phase != .idle)
+                if phase != .idle { model.settleArrivals() } // nothing fades in under a finger
                 // Where a scroll came to rest; not the idle a page is made in, before its rows are drawn.
                 if phase == .idle, old != .idle, let top = sight.top(in: model.groups) {
                     workspace.rested(workspace.place, at: top, shown: shownHere)

@@ -2089,10 +2089,13 @@ built in stages behind the hub's `todo_view`; this section grows with it.
   row says, since a new line can wrap or a door come and go and a row's new height moves every row under it; a row
   gone from the store keeps its cell until then. A row that comes to need the owner lands at once, alone, onto the
   list as drawn; the numbers (`countsSource`) are never held. When the rest lands, the rows that changed group are
-  drawn in place at once and fade in (a keyframe over `Theme.Motion.concealTime`), so nothing slides across the list.
-  A row in another group is a new view, which starts with the row's `arrivals` as they already are and would play
-  nothing: the landing stamps the row, and the view takes the fade as it appears (`TodosListModel.Row.takeArrival`),
-  once, and only within half a second, so a row first scrolled into sight later appears as it is. The page's minute
+  drawn in place at once and fade in (`Theme.Motion.conceal`), so nothing slides across the list. A row in another
+  group or fold is a new view there (another section's `ForEach`), so a trigger it observes cannot start the fade (it
+  starts with the value as it already is, and the view it leaves sees the change first), and an `onAppear` that
+  starts one comes a frame after the row was drawn whole. The landing marks the row instead (`Row.entering`), which the
+  new view reads from its first frame, drawn hidden, and clears inside the animation as it appears. A mark not taken
+  (a row that landed out of sight) is cleared at the next landing and when a scroll starts, so nothing fades in under
+  a finger; with Reduce Motion nothing is marked. The page's minute
   (`tick`, also as the page comes back to the front) says the times again. Rows open today's to-do page until the to-do's own page arrives. On iOS 26 the section bar is pinned over the
   list; iOS 18 has no scroll edge effect to draw behind it, so there the bar is the list's first row, as the Inbox's.
   `TodoWorkspace` (one for the app, `TodoWorkspace.shared`, outside the pages' trees) keeps the place and where each
