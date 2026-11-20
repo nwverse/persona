@@ -39,7 +39,7 @@ try {
   for (const [name, lang, width, height, textSize] of cases) {
     const theme = name.endsWith("dark") ? "dark" : "light";
     const ctx = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: 1, colorScheme: theme, reducedMotion: "reduce", hasTouch: width < 640, timezoneId: "UTC" });
-    const [message, common] = await Promise.all([labels(lang, "settings-modelconfiguration"), labels(lang, "common")]);
+    const [message, common, modelId] = await Promise.all([labels(lang, "settings-modelconfiguration"), labels(lang, "common"), labels(lang, "lib-model-id")]);
     const [nameOfUse, nameOfParent, reason] = copy[lang];
     const parent = { id: "kb", name: nameOfParent, group: "", kind: "api", category_id: "kb", fields: ["provider", "model"], provider_ids: providers.map((p) => p.id),
       effective: { provider: providers[0].id, model: providers[0].model }, override: {}, revision: 1 };
@@ -131,7 +131,11 @@ try {
       const editMs = Math.round((await page.evaluate(() => performance.now())) - began);
       assert.deepEqual(await first.locator("option").evaluateAll((options) => options.map((o) => o.value)), ["", "launcher.atlas", "launcher.ink"]);
       await first.selectOption("launcher.atlas");
-      await row(message.candidate_model, 1).fill("quill-small");
+      const firstModel = row(message.candidate_model, 1);
+      await firstModel.fill("quill small");
+      await dialog.getByText(modelId.space, { exact: true }).waitFor();
+      assert.equal(await button(common.save).isDisabled(), true);
+      await firstModel.fill("quill-small");
       await button(message.candidate_add).click();
       await row(message.candidate_provider, 2).selectOption("launcher.ink");
       await button(message.candidate_up.replace("{index}", "2")).click();

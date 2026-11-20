@@ -1,6 +1,7 @@
 import { t } from "../i18n";
 import type { ModelProvider, ModelPurpose } from "./model-config";
-import { cleanModelId, typedModelProblem } from "./model-id";
+import { cleanModelId } from "./model-id";
+import { typedModelProblem } from "./model-id-input";
 
 export type CandidateMode = "extension" | "off" | "custom";
 export interface CandidateView {
