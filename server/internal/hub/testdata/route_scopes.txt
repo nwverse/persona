@@ -165,6 +165,7 @@ assistant.ask        GET /api/v1/assistant/reporters
 -                    GET /api/v1/assistant/skills
 -                    GET /api/v1/assistant/standing-authorizations
 -                    GET /api/v1/assistant/starred
+-                    GET /api/v1/assistant/starred/import
 assistant.start_defaults GET /api/v1/assistant/start-defaults
 -                    GET /api/v1/assistant/tasks
 -                    GET /api/v1/assistant/tasks/cron
@@ -448,6 +449,8 @@ assistant.ask        POST /api/v1/assistant/conversations/{id}/stop
 -                    POST /api/v1/assistant/rule-suggestions/{id}/not-now
 -                    POST /api/v1/assistant/saved-prompts
 -                    POST /api/v1/assistant/starred
+-                    POST /api/v1/assistant/starred/import
+-                    POST /api/v1/assistant/starred/import/preview
 -                    POST /api/v1/assistant/tasks
 -                    POST /api/v1/assistant/tasks/{id}/fresh
 -                    POST /api/v1/assistant/tasks/{id}/run
