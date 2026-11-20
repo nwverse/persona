@@ -367,30 +367,35 @@ func (l *directionLook) parentOf(c directionCandidate) func(sid string) string {
 	}
 }
 
+func (l *directionLook) computerState(machine string) directionComputer {
+	if c, ok := l.computer[machine]; ok {
+		return c
+	}
+	c := l.s.computerState(machine)
+	l.computer[machine] = c
+	return c
+}
+
 // computerState is how machine stands, from the devices: connected or not is the computer's own connection (online or
 // reachable, the readiness check's rule), never whether its list could be read, since the manager answers a computer
 // that left from what it last listed. While the devices still show a computer as before (its reconnect grace, a warm
 // start, a resident's reload) it counts as connected with its last list, as everywhere else in the fleet, and the tree
 // is built again when that ends (wake). Without the manager's own fleet (a hub answers the lists) its list decides
 // (standing).
-func (l *directionLook) computerState(machine string) directionComputer {
-	if c, ok := l.computer[machine]; ok {
-		return c
-	}
+func (s *Service) computerState(machine string) directionComputer {
 	c := directionComputer{listed: true}
-	if l.s.fleetOn() {
-		d, ok := l.s.devs.Summary(machine)
+	if s.fleetOn() {
+		d, ok := s.devs.Summary(machine)
 		switch {
 		case !ok:
 			c.state = standingComputerRemoved
 		case !d.Online && !d.Reachable:
 			c.state = standingComputerOffline
 		}
-		if shown, ok := l.s.devs.Shown(machine); ok {
+		if shown, ok := s.devs.Shown(machine); ok {
 			c.listed, c.until = shown.Listed, shown.Until
 		}
 	}
-	l.computer[machine] = c
 	return c
 }
 
