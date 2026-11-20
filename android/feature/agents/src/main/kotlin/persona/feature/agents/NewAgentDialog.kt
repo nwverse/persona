@@ -29,6 +29,7 @@ import persona.core.designsystem.*
 import persona.core.designsystem.dense
 import persona.feature.chat.UltracodeQuotaLines
 import persona.feature.chat.rememberUltracodeQuota
+import persona.core.designsystem.icons.PhIcon
 import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcons
 import persona.core.domain.models.AgentModelPanel
@@ -381,15 +382,15 @@ private fun LazyListScope.newAgentItems(
         val choices = listOf("" to R.string.agents_mode_follow) + permissionModes.filter { (id, _) -> id.isNotEmpty() && id != "default" && id in listed }
         if (choices.size > 1) {
             val bypass = state.providerMode == "bypassPermissions"
-            ChoiceMenu(stringResource(R.string.agents_new_permission_mode), state.providerMode.takeIf { it in listed }.orEmpty(), choices, editable, model::providerMode)
+            ChoiceMenu(stringResource(R.string.agents_new_permission_mode), state.providerMode.takeIf { it in listed }.orEmpty(), choices, editable, PersonaIcons::permissionMode, model::providerMode)
             Text(stringResource(if (bypass) R.string.agents_new_bypass_warning else R.string.agents_new_provider_mode_hint),
                 color = if (bypass) PersonaTheme.palette.cautionText else PersonaTheme.palette.ink2, style = PersonaTheme.type.caption)
         }
         val efforts = state.providerEfforts
-        if (efforts.isNotEmpty()) ChoiceMenu(stringResource(R.string.agents_new_effort), state.providerEffort, effortChoices(efforts), editable, model::providerEffort)
+        if (efforts.isNotEmpty()) ChoiceMenu(stringResource(R.string.agents_new_effort), state.providerEffort, effortChoices(efforts), editable, onSelect = model::providerEffort)
     } }
     if (state.claudeModes) item("claude-options") {
-        ChoiceMenu(stringResource(R.string.agents_new_permission_mode), state.selection.mode, permissionModes, editable) { model.selection(state.selection.copy(mode = it)) }
+        ChoiceMenu(stringResource(R.string.agents_new_permission_mode), state.selection.mode, permissionModes, editable, PersonaIcons::permissionMode) { model.selection(state.selection.copy(mode = it)) }
         if (state.selection.mode == "bypassPermissions") Text(stringResource(R.string.agents_new_bypass_warning), color = PersonaTheme.palette.cautionText, style = PersonaTheme.type.caption)
         // Only the levels the model that will run takes; none: it has no effort setting.
         val efforts = state.modelEfforts
@@ -492,9 +493,11 @@ internal val effortLevels = listOf("" to R.string.agents_mode_follow, "low" to R
     "high" to R.string.agents_effort_high, "xhigh" to R.string.agents_effort_xhigh, "max" to R.string.agents_effort_max)
 
 @Composable
-private fun ChoiceMenu(title: String, value: String, options: List<Pair<String, Int>>, enabled: Boolean, onSelect: (String) -> Unit) {
+private fun ChoiceMenu(title: String, value: String, options: List<Pair<String, Int>>, enabled: Boolean, icon: ((String) -> PhIcon)? = null, onSelect: (String) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     JRow(title, value = options.firstOrNull { it.first == value }?.second?.let { stringResource(it) } ?: value, enabled = enabled, onClick = { expanded = true })
-    if (expanded) JActionSheet(options.map { (id, label) -> JAction(stringResource(label), checked = id == value, onClick = { onSelect(id) }) },
-        { expanded = false }, title = title)
+    if (expanded) JActionSheet(options.map { (id, label) ->
+        val mark = if (id.isEmpty()) null else icon?.invoke(id)
+        JAction(stringResource(label), icon = mark, checked = id == value, onClick = { onSelect(id) })
+    }, { expanded = false }, title = title)
 }

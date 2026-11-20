@@ -1,5 +1,6 @@
 package persona.feature.assistant
 
+import androidx.compose.ui.res.stringResource
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import androidx.activity.ComponentActivity
@@ -330,7 +331,7 @@ class NoHomePageShotsTest {
                 Text(answer, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink)
             }
             ChatComposer(key, rememberChatComposerState(), working = false, sending = false, canClear = false, service = null,
-                onSend = {}, onCommand = {}, onNotice = {}, placeholder = "Ask Persona…")
+                onSend = {}, onCommand = {}, onNotice = {}, placeholder = stringResource(R.string.assistant_composer_placeholder, LocalPersonaName.current))
         }
     }
 }

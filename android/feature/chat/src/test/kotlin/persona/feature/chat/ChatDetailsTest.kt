@@ -54,8 +54,7 @@ import persona.core.designsystem.PersonaTheme
 import java.time.Instant
 
 /**
- * The smaller details of an Agent's chat that follow iOS (docs/plans/android-ios-alignment/chats.md, C9): the composer
- * names the agent, "Claude is getting ready…" under a message whose turn has not begun, the newest recap open as the last
+ * The smaller details of an Agent's chat that follow iOS (docs/plans/android-ios-alignment/chats.md, C9): the ordinary Agent composer, "Claude is getting ready…" under a message whose turn has not begun, the newest recap open as the last
  * line until tapped or typing starts (Glass), and the plan pill's sheet (Glass).
  */
 @RunWith(AndroidJUnit4::class)
@@ -72,16 +71,10 @@ class ChatDetailsTest {
             starting = starting, startError = startError, agentLabelHint = hint, sourceKind = sourceKind)
     private fun outbox(state: DeliveryState) = OutboxMessage("m-$state", key, "再加一个重启的测试", state)
 
-    @Test fun theComposerNamesTheAgent() {
-        assertEquals("给 Claude 发消息", agentPlaceholder(res, session()))
-        assertEquals("给 Claude 发消息", agentPlaceholder(res, null))
-        assertEquals("给 Codex 发消息", agentPlaceholder(res, session(agent = "codex")))
-        assertEquals("给 Codex 发消息", agentPlaceholder(res, session(sourceKind = "codex_app_server")))
-        assertEquals("给 TRAEX 发消息", agentPlaceholder(res, session(agent = "traex")))
-        // A runtime's agent by the hub's name for it, else its own.
-        assertEquals("给 DSH 发消息", agentPlaceholder(res, session(agent = "dsh", hint = "DSH")))
-        assertEquals("给 pi 发消息", agentPlaceholder(res, session(agent = "pi")))
-        assertEquals("给 opencode 发消息", agentPlaceholder(res, session(agent = "opencode", hint = " ")))
+    @Test fun idleAgentsShareTheSameComposerPrompt() {
+        val sessions = listOf(null, session(), session(agent = "codex"), session(sourceKind = "codex_app_server"),
+            session(agent = "traex"), session(agent = "dsh", hint = "DSH"), session(agent = "pi"), session(agent = "opencode", hint = " "))
+        for (agent in sessions) assertEquals("今天我们做点什么呢~", agentPlaceholder(res, agent))
     }
 
     @Test fun gettingReadyWhileYourMessageWaitsForItsTurn() {
@@ -239,10 +232,10 @@ class ChatDetailsTest {
         }
     }
 
-    @Test fun thePageSaysWhoGetsReadyAndWhoYouWriteTo() {
+    @Test fun thePageNamesTheGettingReadyAgentAlongsideTheSharedPrompt() {
         page(AppStyle.Brief, listOf(user(1, "修好导入重试"), reply(2, "修好了。")), session(agent = "codex"), listOf(outbox(DeliveryState.Sent)))
         val shown = waitFor("getting ready") { "Codex 正在准备…" in it }
-        assertTrue(shown.toString(), "给 Codex 发消息" in shown)
+        assertTrue(shown.toString(), "今天我们做点什么呢~" in shown)
     }
 
     @Config(qualifiers = "en-w400dp-h700dp")

@@ -162,7 +162,7 @@ import Testing
 
         let all = try Self.session(Self.grokRow + #","permission_mode":"bypassPermissions""#)
         #expect(SessionModes.current(all) == "bypassPermissions")
-        #expect(SessionModes.headerLook(session: all) == .init(symbol: Theme.Icon.allowEverything, tone: .allowsAll))
+        #expect(SessionModes.headerLook(session: all) == .init(symbol: Theme.Icon.error, tone: .allowsAll))
         #expect(SessionModes.modeHeading(session: all) == String(localized: "Permission Mode: \(String(localized: "Allow Everything"))"))
         // Leaving it does not ask: it can be turned on again from here.
         #expect(SessionModes.confirmation(all, to: "default") == nil)

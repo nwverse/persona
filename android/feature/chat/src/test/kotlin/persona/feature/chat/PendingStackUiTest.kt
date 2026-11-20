@@ -230,7 +230,7 @@ class PendingStackUiTest {
     }
 
     private fun top(tag: String) = rule.onNodeWithTag(tag).getUnclippedBoundsInRoot().top
-    private val composerWords = "Ask Persona…"
+    private val composerWords = "What can Persona do for you today?"
 
     /** iOS's footer order: the task question, the entries, then the conversation's own cards, then the composer. */
     @Test fun personasTaskQuestionIsAboveItsEntriesAndItsOwnCardsAloneAreBelowThem() {

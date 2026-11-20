@@ -1126,8 +1126,11 @@ private fun ChatPage(
                                     useShellSurface = compactGlassAgent, covered = pageCovered,
                                     enabled = canSend, wrapPlaceholder = offlineHint != null, placeholder = when {
                                         !canSend -> READ_ONLY.text()
-                                        // "Ask Persona…", as the assistant's blank page and iOS say (#4339 C18).
-                                        !agentChat -> stringResource(R.string.chat_placeholder_ask, persona.core.designsystem.LocalPersonaName.current)
+                                        !agentChat -> {
+                                            // A conversation opened from a link can belong to another assistant.
+                                            val roster = if (GroupKeys.namespaceOf(key.machineId) == LocalManagerGroup.current) LocalManagerRoster.current else null
+                                            stringResource(R.string.chat_placeholder_ask, roster.assistantDisplayName(linkManager ?: managerChoice.shown, personaName))
+                                        }
                                         else -> offlineHint ?: agentPlaceholder(res, session)
                                     },
                                     // Permission mode and effort for Claude's sessions, Persona's included; the model for Claude in a pane;

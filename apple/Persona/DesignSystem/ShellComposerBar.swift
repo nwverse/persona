@@ -350,10 +350,10 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
             .readingContent() // what is typed grows past the interface's cap, as in Messages
             .font(Theme.Font.body)
             .overlay(alignment: .leading) {
-                // The placeholder is interface text: capped with it, one line, shrunk before it is cut ("Ask Per…").
+                // The hint uses the interface font. A longer localized question can wrap inside the empty field.
                 if text.isEmpty {
                     Text(placeholder).font(Theme.Font.body).foregroundStyle(.tertiary)
-                        .lineLimit(1).minimumScaleFactor(0.5).allowsHitTesting(false).accessibilityHidden(true)
+                        .lineLimit(2).minimumScaleFactor(0.5).allowsHitTesting(false).accessibilityHidden(true)
                 }
             }
             .lineLimit(expanded ? 1...maximumLines : 1...1)

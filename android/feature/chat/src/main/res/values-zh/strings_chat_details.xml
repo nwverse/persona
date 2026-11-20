@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Smaller details of an Agent's chat in iOS's words (docs/plans/android-ios-alignment/chats.md, C9). -->
 <resources>
-    <string name="chat_placeholder_agent">给 %1$s 发消息</string>
+    <string name="chat_placeholder_agent">今天我们做点什么呢~</string>
     <string name="chat_getting_ready">%1$s 正在准备…</string>
     <string name="chat_recap_open_spoken">离开期间回顾：%1$s。点按关闭</string>
     <string name="chat_plan_sheet_title">计划</string>

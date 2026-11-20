@@ -1,5 +1,6 @@
 package persona.feature.assistant
 
+import androidx.compose.ui.res.stringResource
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import androidx.compose.foundation.background
@@ -63,7 +64,7 @@ class StarterLauncherShotsTest {
                     Column(Modifier.testTag("shot").width(400.dp).height(360.dp).background(PersonaTheme.palette.background)) {
                         Spacer(Modifier.weight(1f))
                         ChatComposer(SessionKey("box", "pending"), rememberChatComposerState(), working = false, sending = false,
-                            canClear = false, service = null, onSend = {}, onCommand = {}, onNotice = {}, placeholder = "问 Persona…",
+                            canClear = false, service = null, onSend = {}, onCommand = {}, onNotice = {}, placeholder = stringResource(R.string.assistant_composer_placeholder, LocalPersonaName.current),
                             accessory = { StarterLauncherChip(picked, "ccc", launchers, failed = false, enabled = true) { picked = it } })
                     }
                 }

@@ -18,10 +18,10 @@ nonisolated enum SessionModes {
 
     static let permissionModes: [Option] = [
         Option(id: "default", title: String(localized: "Ask First"), detail: String(localized: "Asks you before editing files or running commands"), symbol: Theme.Icon.askFirst),
-        Option(id: "acceptEdits", title: String(localized: "Auto-Edit"), detail: String(localized: "Edits files without asking, still asks before commands"), symbol: Theme.Icon.editFile),
-        Option(id: "plan", title: String(localized: "Plan Only"), detail: String(localized: "Reads code and writes a plan, acts only once you approve"), symbol: Theme.Icon.plan),
+        Option(id: "acceptEdits", title: String(localized: "Auto-Edit"), detail: String(localized: "Edits files without asking, still asks before commands"), symbol: Theme.Icon.agents),
+        Option(id: "plan", title: String(localized: "Plan Only"), detail: String(localized: "Reads code and writes a plan, acts only once you approve"), symbol: Theme.Icon.listView),
         Option(id: "auto", title: String(localized: "Auto [Plan Card Permission]", comment: "Permission mode: the agent judges the risk itself"), detail: String(localized: "Judges the risk itself and does safe things right away"), symbol: Theme.Icon.autoMode),
-        Option(id: "bypassPermissions", title: String(localized: "Allow Everything"), detail: String(localized: "Never asks. Only available when starting"), symbol: Theme.Icon.allowEverything),
+        Option(id: "bypassPermissions", title: String(localized: "Allow Everything"), detail: String(localized: "Never asks. Only available when starting"), symbol: Theme.Icon.error),
     ]
 
     /// "auto" is the model's own default level (node/modes.go). Replies are recorded at the level they actually ran at,
@@ -155,7 +155,7 @@ nonisolated enum SessionModes {
         case ModeID.bypass:
             Option(id: id, title: String(localized: "Allow Everything"),
                    detail: String(localized: "Approves everything without asking; can be switched back in the chat"),
-                   symbol: Theme.Icon.allowEverything)
+                   symbol: Theme.Icon.error)
         default:
             mode(id) ?? Option(id: id, title: id, detail: "", symbol: Theme.Icon.help)
         }
@@ -789,7 +789,7 @@ struct BypassWarning: View {
                 Text("Edits files and runs commands without asking")
             } icon: {
                 // A menu draws its images in the accent unless they carry their own colors.
-                ThemedIcon(Theme.Icon.allowEverything).symbolRenderingMode(.palette).foregroundStyle(Theme.danger)
+                ThemedIcon(Theme.Icon.error).symbolRenderingMode(.palette).foregroundStyle(Theme.danger)
             }
         }
         .tint(Theme.danger)

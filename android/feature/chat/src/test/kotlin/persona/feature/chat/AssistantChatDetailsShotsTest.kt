@@ -10,6 +10,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -26,6 +28,8 @@ import org.robolectric.annotation.GraphicsMode
 import persona.core.contracts.*
 import persona.core.contracts.api.*
 import persona.core.designsystem.*
+import persona.core.designsystem.icons.PhIcons
+import persona.core.domain.answer.AnswerDraft
 import persona.core.domain.tasks.TasksStore
 import java.io.File
 
@@ -33,7 +37,7 @@ import java.io.File
  * Persona's conversation as iOS shows it (#4339 C18), on the real chat page: In progress folds the shelved tasks into one
  * "Shelved N" line that opens the board (Glass; Brief and Board keep the tray as it was), answering the last card offers
  * the next one another chat waits on you with, and a message waiting for its turn says "Persona is getting ready…" under
- * an "Ask Persona…" composer. PNGs in `build/assistant-chat-details-shots/`, light and dark.
+ * the named Persona composer. PNGs in `build/assistant-chat-details-shots/`, light and dark.
  */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -120,6 +124,91 @@ class AssistantChatDetailsShotsTest {
         File(output, "$name.png").outputStream().use { image.compress(Bitmap.CompressFormat.PNG, 100, it) }
     }
 
+    private fun assertEntireLabel(text: String) {
+        val label = rule.onNodeWithText(text, useUnmergedTree = true)
+        label.assertIsDisplayed()
+        val layouts = mutableListOf<TextLayoutResult>()
+        label.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+        val layout = layouts.single()
+        val last = layout.lineCount - 1
+        assertFalse("The full label should be readable: $text", layout.isLineEllipsized(last))
+        assertEquals(text.length, layout.getLineEnd(last, visibleEnd = true))
+    }
+
+    @Test fun idleAgentAndNamedPersonaUseTheirOwnPrompts() = idlePrompts("")
+
+    @Test @Config(fontScale = 2f)
+    fun idlePromptsAtLargestText() = idlePrompts("-large")
+
+    private fun idlePrompts(size: String) {
+        val fixture = Fixture()
+        val agent = Session(main.machineId, "docs", title = "Release notes", agent = "claude", status = "idle",
+            state = "idle", permissionMode = "acceptEdits")
+        fixture.sessionRows.value = listOf(fixture.sessionRows.value.first().copy(status = "idle", manager = "work"), agent)
+        fixture.requests.value = emptyList()
+        val roster = ManagerRoster(listOf(HubManager(id = "assistant", name = "Home", online = true), HubManager(id = "work", name = "Aster", online = true)), defaultId = "assistant")
+        var persona by mutableStateOf(false)
+        var dark by mutableStateOf(false)
+        rule.mainClock.autoAdvance = false
+        rule.setContent {
+            val configuration = Configuration(LocalConfiguration.current).apply {
+                uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or
+                    if (dark) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO
+            }
+            val home = if (persona) HomeChrome(items = listOf(NavItem("assistant", "Assistant", PhIcons.House)),
+                selected = "assistant", onSelect = {}, leading = {}) else null
+            CompositionLocalProvider(LocalConfiguration provides configuration, LocalPersonaName provides "Persona", LocalManagerRoster provides roster,
+                LocalHomeChrome provides home) {
+                PersonaTheme(darkTheme = dark, reduceMotion = true, style = AppStyle.Glass) {
+                    Box(Modifier.fillMaxSize().background(PersonaTheme.palette.background).testTag("assistant-chat-shot")) {
+                        ChatScreen(if (persona) main else agent.key, fixture.chats, fixture.sender, fixture.interactions,
+                            fixture.sessions, {}, renderStyle = if (persona) ChatRenderStyle.Assistant else ChatRenderStyle.Agent)
+                    }
+                }
+            }
+        }
+        for (night in listOf(false, true)) for (assistant in listOf(false, true)) {
+            rule.runOnIdle { dark = night; persona = assistant }
+            settle()
+            val expected = if (assistant) "What can Aster do for you today?" else "What shall we work on today?"
+            rule.waitUntil(10_000) {
+                settle()
+                rule.onAllNodesWithText("What is left on the release?", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+            }
+            assertEntireLabel(expected)
+            shot("composer-${if (assistant) "persona" else "agent"}-${if (night) "dark" else "light"}$size")
+        }
+    }
+
+    @Test fun planApprovalShowsItsRecordedModeOrTheAvailableActions() = planOptions("")
+
+    @Test @Config(fontScale = 2f)
+    fun planApprovalAtLargestText() = planOptions("-large")
+
+    private fun planOptions(size: String) {
+        val legacy = Interaction("release-plan", machineId = "workstation", sessionId = "notes", kind = "plan",
+            plan = "1. Review the release notes.\n2. Check the links.")
+        val machine = Machine("workstation", name = "Studio")
+        var recorded by mutableStateOf(false)
+        var dark by mutableStateOf(false)
+        rule.setContent {
+            PersonaTheme(darkTheme = dark, reduceMotion = true, style = AppStyle.Glass) {
+                Column(Modifier.fillMaxWidth().background(PersonaTheme.palette.background).testTag("assistant-chat-shot")) {
+                    val plan = if (recorded) legacy.copy(planThen = "auto") else legacy
+                    InteractionForm(plan, machine, AnswerDraft(), {}, busy = false, uncertain = false, full = false,
+                        onAnswer = { _, _, _ -> }, onTerminal = null, onExpand = {})
+                }
+            }
+        }
+        for (night in listOf(false, true)) for (hasMode in listOf(false, true)) {
+            rule.runOnIdle { dark = night; recorded = hasMode }
+            rule.onNodeWithText(if (hasMode) "Auto-review" else "Approve and auto-run", useUnmergedTree = true).assertIsDisplayed()
+            if (hasMode) rule.onNodeWithText("Approve and auto-run", useUnmergedTree = true).assertDoesNotExist()
+            else assertEntireLabel("Approve edits")
+            shot("plan-${if (hasMode) "recorded" else "choices"}-${if (night) "dark" else "light"}$size")
+        }
+    }
+
     @Test fun shelvedNextAndGettingReadyAsOnIos() {
         var style by mutableStateOf(AppStyle.Glass)
         var dark by mutableStateOf(false)
@@ -150,7 +239,7 @@ class AssistantChatDetailsShotsTest {
             fixture = Fixture(); style = s; dark = d; round++
             settle()
             rule.waitUntil(10_000) { rule.onAllNodesWithTag("assistant-tray-bar").fetchSemanticsNodes().isNotEmpty() }
-            rule.onNodeWithText("Ask Persona…").assertExists()
+            rule.onNodeWithText("What can Persona do for you today?").assertExists()
 
             // In progress: the running task, and on Glass the two shelved ones as one quiet line.
             rule.onNodeWithTag("assistant-entry-running").performClick(); settle()

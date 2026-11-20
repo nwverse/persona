@@ -16,13 +16,25 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcon
+import persona.core.designsystem.icons.PhIcons
 
 // A permission mode's tone (#3957, iOS `Theme.ModeTone` from #3719, docs/design/DESIGN_SYSTEM.md): how much a
 // mode lets an agent do without asking. None is an agent state's color: amber would read as Working, blue as Needs you.
 
 /** Ask First (the quiet gray), Plan Only (teal), Auto-Edit and Auto (purple), Allow Everything (danger); Unknown: not reported yet. */
 enum class ModeTone { Asks, Plans, Acts, AllowsAll, Unknown }
+
+/** Symbol for a provider's permission mode. A launcher-managed or unknown mode uses the plain shield. */
+fun PersonaIcons.permissionMode(id: String?): PhIcon = when (id) {
+    "default" -> PhIcons.HandPalm
+    "acceptEdits" -> PhIcons.Code
+    "plan" -> PhIcons.List
+    "auto" -> ai
+    "bypassPermissions" -> error
+    else -> PhIcons.Shield
+}
 
 /** [JModeButton]'s values; Plan Only's teal is iOS `Theme.ModeTone.plans`. */
 object ModeToneTokens {

@@ -111,7 +111,7 @@ extension Theme {
         /// bypassPermissions: nothing is asked.
         static let allowEverything = "exclamationmark.shield"
         /// The auto permission mode: the agent judges the risk itself.
-        static let autoMode = "wand.and.sparkles"
+        static let autoMode = ai
         static let permissions = "lock.shield"
         /// The two little arrows after a value that opens a menu of choices.
         static let choices = "chevron.up.chevron.down"

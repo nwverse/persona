@@ -1,9 +1,24 @@
+import Foundation
 import Testing
 @testable import Persona
 
 /// The shell composer's model button (#1091): the short model names and "model · effort".
 @MainActor
 struct ComposerModesTitleTests {
+    @Test func idlePromptsUseTheNamedPersonaInEachLanguage() throws {
+        for (language, agent, persona) in [
+            ("en", "What shall we work on today?", "What can Aster do for you today?"),
+            ("zh-Hans", "今天我们做点什么呢~", "今天想让 Aster 帮你做点什么呢~"),
+            ("ja", "今日は何をしましょうか〜", "今日はAsterに何をお願いしましょうか〜")
+        ] {
+            let url = try #require(Bundle.main.url(forResource: language, withExtension: "lproj"))
+            let bundle = try #require(Bundle(url: url))
+            #expect(bundle.localizedString(forKey: "What shall we work on today?", value: nil, table: nil) == agent)
+            let format = bundle.localizedString(forKey: "What can %@ do for you today?", value: nil, table: nil)
+            #expect(String(format: format, "Aster") == persona)
+        }
+    }
+
     @Test func shortModelNames() {
         #expect(SessionModes.modelName("claude-opus-5-5") == "Opus 5.5")
         #expect(SessionModes.modelName("claude-sonnet-4-5-20250929") == "Sonnet 4.5")

@@ -37,7 +37,10 @@ class HeaderModeTest {
         assertEquals(ModeTone.Acts, SessionModes.headerTone("auto"))
         assertEquals(ModeTone.AllowsAll, SessionModes.headerTone("bypassPermissions"))
         assertEquals(PhIcons.HandPalm, SessionModes.headerIcon("default"))
-        assertEquals(PhIcons.ShieldWarning, SessionModes.headerIcon("bypassPermissions"))
+        assertEquals(PhIcons.Code, SessionModes.headerIcon("acceptEdits"))
+        assertEquals(PhIcons.List, SessionModes.headerIcon("plan"))
+        assertEquals(PhIcons.Sparkle, SessionModes.headerIcon("auto"))
+        assertEquals(PhIcons.Warning, SessionModes.headerIcon("bypassPermissions"))
         // not reported yet, or a mode this app does not know: the plain symbol, never Ask First
         for (id in listOf(null, "", "dontAsk")) {
             assertEquals(ModeTone.Unknown, SessionModes.headerTone(id))
@@ -103,9 +106,12 @@ class HeaderModeTest {
         assertTrue(SessionModes.showsInHeader(own))
         assertEquals(ModeTone.Unknown, SessionModes.headerTone(own))
         assertEquals(PhIcons.Shield, SessionModes.headerIcon(own))
+        assertEquals(PhIcons.Shield, SessionModes.optionIcon(own, "default"))
+        assertEquals(PhIcons.Warning, SessionModes.optionIcon(own, "bypassPermissions"))
+        assertEquals(PhIcons.HandPalm, SessionModes.optionIcon(claude("default"), "default"))
         val all = grok("bypassPermissions")
         assertEquals(ModeTone.AllowsAll, SessionModes.headerTone(all))
-        assertEquals(PhIcons.ShieldWarning, SessionModes.headerIcon(all))
+        assertEquals(PhIcons.Warning, SessionModes.headerIcon(all))
         // Into Allow Everything asks first; out of it does not, since it can be turned on again; the current one asks nothing.
         assertEquals(SessionModes.Confirmation.AllowEverything, SessionModes.confirmation(own, "bypassPermissions"))
         assertNull(SessionModes.confirmation(all, "default"))

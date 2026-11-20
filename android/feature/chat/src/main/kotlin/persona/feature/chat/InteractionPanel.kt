@@ -286,18 +286,22 @@ internal fun InteractionForm(
                 if (recordedApproval != null) {
                     val (mode, action) = recordedApproval
                     val modeLabel = SessionModes.modeLabel(mode, LocalResources.current) ?: mode
-                    Text(modeLabel, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
+                    Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs), verticalAlignment = Alignment.CenterVertically) {
+                        JIcon(PersonaIcons.permissionMode(mode), null, size = Tokens.Space.m, tint = PersonaTheme.palette.ink2)
+                        Text(modeLabel, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
+                    }
                     DecisionButtons(
                         primary = JAction(stringResource(R.string.chat_tray_approve), enabled = enabled(action)) { act(action) },
                         secondary = JAction(stringResource(R.string.chat_plan_reject), enabled = enabled(AnswerAction.Reject)) { act(AnswerAction.Reject) },
                     )
                 } else {
                     DecisionButtons(
-                        primary = JAction(stringResource(R.string.chat_plan_approve_edits), enabled = enabled(AnswerAction.ApproveEdits)) { act(AnswerAction.ApproveEdits) },
+                        showActionIcons = true,
+                        primary = JAction(stringResource(R.string.chat_plan_approve_edits), icon = PersonaIcons.permissionMode("acceptEdits"), enabled = enabled(AnswerAction.ApproveEdits)) { act(AnswerAction.ApproveEdits) },
                         secondary = JAction(stringResource(R.string.chat_plan_reject), enabled = enabled(AnswerAction.Reject)) { act(AnswerAction.Reject) },
                         // Web's three ways to approve (Interactions.tsx MODES): "Confirm each step" keeps Claude asking before each edit.
-                        more = listOf(JAction(stringResource(R.string.chat_plan_approve_all), enabled = enabled(AnswerAction.ApproveAll)) { act(AnswerAction.ApproveAll) },
-                            JAction(stringResource(R.string.chat_plan_approve_stepwise), enabled = enabled(AnswerAction.ApproveStepwise)) { act(AnswerAction.ApproveStepwise) }),
+                        more = listOf(JAction(stringResource(R.string.chat_plan_approve_all), icon = PersonaIcons.permissionMode(SessionModes.BYPASS), enabled = enabled(AnswerAction.ApproveAll)) { act(AnswerAction.ApproveAll) },
+                            JAction(stringResource(R.string.chat_plan_approve_stepwise), icon = PersonaIcons.permissionMode("default"), enabled = enabled(AnswerAction.ApproveStepwise)) { act(AnswerAction.ApproveStepwise) }),
                     )
                 }
                 if (recordedApproval == null || recordedApproval.first == SessionModes.BYPASS) {

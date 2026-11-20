@@ -775,7 +775,9 @@ struct AssistantScopeTests {
         model.applySessions(Dictionary(grouping: chats, by: \.machineRef))
         model.selectAssistantManager("m-1")
         #expect(model.assistantShownName == "工作")
-        #expect(model.assistantShownName(in: SessionKey(machineID: "NAS", sessionID: "c-away")) == "家里")
+        let away = SessionKey(machineID: "NAS", sessionID: "c-away")
+        #expect(model.assistantShownName(in: away) == "家里")
+        #expect(ComposerPrompt.persona(in: away, model: model) == ComposerPrompt.persona("家里"))
         #expect(model.assistantShownName(in: SessionKey(machineID: "server", sessionID: "c-home")) == "助手")
         #expect(model.assistantShownName(in: SessionKey(machineID: "MacBook", sessionID: "unlisted")) == "工作", "not listed: the page it shows on")
     }

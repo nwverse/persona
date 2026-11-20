@@ -94,7 +94,7 @@ final class LongPendingCardTests: XCTestCase {
             }
             // The card ends above the composer.
             let field = app.descendants(matching: .any)
-                .matching(NSPredicate(format: "placeholderValue BEGINSWITH %@ OR placeholderValue BEGINSWITH %@", "给", "补充说明")).firstMatch
+                .matching(NSPredicate(format: "placeholderValue == %@ OR placeholderValue BEGINSWITH %@", "今天我们做点什么呢~", "补充说明")).firstMatch
             if field.exists { XCTAssertLessThanOrEqual(cards.frame.maxY, field.frame.minY + 1, "the card ends above the composer (\(name), \(look))") }
             // Its height holds still (no cap moving every frame, #1580).
             let heights = (0..<4).map { _ -> CGFloat in usleep(200_000); return cards.frame.height }

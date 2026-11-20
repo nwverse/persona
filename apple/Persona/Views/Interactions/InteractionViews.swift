@@ -1078,7 +1078,7 @@ struct PlanForm: View {
                     .themedButton(prominent: true)
             }
         } else if let mode = interaction.recordedPlanThen {
-            Text(PlanTaskRow.permissionLabel(mode))
+            Label(PlanTaskRow.permissionLabel(mode), systemImage: SessionModes.headerLook(mode).symbol)
                 .font(Theme.Font.secondary)
                 .foregroundStyle(.secondary)
             Button {
@@ -1096,17 +1096,30 @@ struct PlanForm: View {
             Button {
                 Task { await model.resolve(interaction, Resolution(approve: true, mode: "bypassPermissions")) }
             } label: {
-                Label("Approve & Auto-Run", systemImage: Theme.Icon.run).lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth: .infinity)
+                Label("Approve & Auto-Run", systemImage: SessionModes.headerLook(SessionModes.ModeID.bypass).symbol).lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth: .infinity)
             }
             .themedButton(prominent: true)
             .controlSize(.large)
-            HStack {
-                Button {
-                    Task { await model.resolve(interaction, Resolution(approve: true, mode: "acceptEdits")) }
-                } label: { Text("Auto-Accept Edits").lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth: .infinity) }
-                Button { withAnimation { rejecting = true } } label: { Text("Send Back [Notification Actions a20f13]").lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth: .infinity) }
+            ViewThatFits(in: .horizontal) {
+                HStack { secondaryChoices(wide: false) }
+                VStack(spacing: Theme.Space.s) { secondaryChoices(wide: true) }
             }
+            .frame(maxWidth: .infinity)
             .themedButton()
+        }
+    }
+
+    /// Give the edit action its whole label beside Send Back, or a full row when the two cannot fit.
+    @ViewBuilder private func secondaryChoices(wide: Bool) -> some View {
+        Button {
+            Task { await model.resolve(interaction, Resolution(approve: true, mode: "acceptEdits")) }
+        } label: {
+            Label("Auto-Accept Edits", systemImage: SessionModes.headerLook("acceptEdits").symbol)
+                .fixedSize(horizontal: !wide, vertical: true).frame(maxWidth: wide ? .infinity : nil)
+        }
+        Button { withAnimation { rejecting = true } } label: {
+            Text("Send Back [Notification Actions a20f13]")
+                .fixedSize(horizontal: !wide, vertical: true).frame(maxWidth: wide ? .infinity : nil)
         }
     }
 }
@@ -2238,13 +2251,13 @@ struct BUIPlanForm: View {
     @Binding var showFull: Bool
 
     private static let choices = [
-        ApprovalQuestion.Choice(String(localized: "Approve & Auto-Run"), detail: String(localized: "No more confirmations after this")),
-        ApprovalQuestion.Choice(String(localized: "Approve, Auto-Accept Edits"), detail: String(localized: "File edits go through; other actions still ask")),
+        ApprovalQuestion.Choice(String(localized: "Approve & Auto-Run"), detail: String(localized: "No more confirmations after this"), symbol: SessionModes.headerLook(SessionModes.ModeID.bypass).symbol),
+        ApprovalQuestion.Choice(String(localized: "Approve, Auto-Accept Edits"), detail: String(localized: "File edits go through; other actions still ask"), symbol: SessionModes.headerLook("acceptEdits").symbol),
     ]
 
     var body: some View {
         let choices = interaction.recordedPlanThen.map { mode in
-            [ApprovalQuestion.Choice(String(localized: "Approve [Interaction Views 905819]"), detail: PlanTaskRow.permissionLabel(mode))]
+            [ApprovalQuestion.Choice(String(localized: "Approve [Interaction Views 905819]"), detail: PlanTaskRow.permissionLabel(mode), symbol: SessionModes.headerLook(mode).symbol)]
         } ?? Self.choices
         ApprovalCard(questions: [ApprovalQuestion(String(localized: "Go ahead with this plan?"), choices: choices,
                                                   customPlaceholder: String(localized: "Send back with what to change…"))],

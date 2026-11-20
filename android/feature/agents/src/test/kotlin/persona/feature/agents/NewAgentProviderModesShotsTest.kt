@@ -91,6 +91,18 @@ class NewAgentProviderModesShotsTest {
                     val name = "new-agent-modes-${s.name.lowercase()}-${if (d) "dark" else "light"}${if (bypass) "-allow-everything" else ""}.png"
                     out.resolve(name).outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
                 }
+                if (bypass) {
+                    rule.onNodeWithText(res.getString(R.string.agents_new_permission_mode)).performClick()
+                    val picker = isDialog()
+                    val full = res.getString(R.string.agents_mode_bypass)
+                    rule.onNode(hasText(follow) and hasAnyAncestor(picker)).assertIsDisplayed()
+                    rule.onNode(hasText(full) and hasAnyAncestor(picker)).assertIsDisplayed()
+                    val image = rule.onNode(picker).captureToImage().asAndroidBitmap()
+                    val name = "new-agent-picker-${s.name.lowercase()}-${if (d) "dark" else "light"}.png"
+                    out.resolve(name).outputStream().use { image.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+                    rule.onNode(hasText(follow) and hasAnyAncestor(picker)).performClick()
+                    rule.runOnIdle { assertEquals("", model.state.value.providerMode) }
+                }
             }
             assertFalse(model.state.value.claudeModes)
         } finally { model.viewModelScope.cancel() }

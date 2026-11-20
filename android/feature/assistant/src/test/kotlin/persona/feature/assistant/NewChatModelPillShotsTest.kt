@@ -1,5 +1,6 @@
 package persona.feature.assistant
 
+import androidx.compose.ui.res.stringResource
 import android.graphics.Bitmap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -80,7 +81,7 @@ class NewChatModelPillShotsTest {
                     Column(Modifier.testTag("shot").fillMaxWidth().height(360.dp).background(PersonaTheme.palette.background)) {
                         Spacer(Modifier.weight(1f))
                         ChatComposer(SessionKey("box", "pending"), rememberChatComposerState(), working = false, sending = false,
-                            canClear = false, service = null, onSend = {}, onCommand = {}, onNotice = {}, placeholder = "Ask Persona…",
+                            canClear = false, service = null, onSend = {}, onCommand = {}, onNotice = {}, placeholder = stringResource(R.string.assistant_composer_placeholder, LocalPersonaName.current),
                             //main: accessory = { StarterLauncherChip(pick?.launcher, "claude", listOf(AgentLauncher("claude"), AgentLauncher("team")), failed = false, enabled = true) { pick = it?.let { l -> persona.core.contracts.ModelPick(l) } } })
                             modelPill = { width -> persona.feature.chat.PersonaModelPill(null, "box", management, width, pick, { pick = it }, {}) }) // branch-only
                     }

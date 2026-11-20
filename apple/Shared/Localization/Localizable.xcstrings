@@ -201281,6 +201281,28 @@
       },
       "extractionState" : "manual"
     },
+    "What can %@ do for you today?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "What can %1$@ do for you today?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "今日は%1$@に何をお願いしましょうか〜"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "今天想让 %1$@ 帮你做点什么呢~"
+          }
+        }
+      }
+    },
     "What changed" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -201418,6 +201440,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "What shall we work on today?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "What shall we work on today?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "今日は何をしましょうか〜"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "今天我们做点什么呢~"
+          }
+        }
+      }
     },
     "What should Claude do? (Optional)" : {
       "localizations" : {

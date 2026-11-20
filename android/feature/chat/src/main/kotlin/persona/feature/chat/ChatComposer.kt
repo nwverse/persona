@@ -74,7 +74,7 @@ fun ChatComposer(
     /** Persona's conversation, including a new one: its own command list, never an Agent session's quick commands. */
     assistantChat: Boolean = false,
     enabled: Boolean = true,
-    placeholder: String = stringResource(R.string.chat_composer_placeholder),
+    placeholder: String? = null,
     leading: (@Composable RowScope.() -> Unit)? = null,
     accessory: (@Composable ColumnScope.() -> Unit)? = null,
     modeHint: String? = null,
@@ -457,7 +457,8 @@ fun ChatComposer(
     // Expand once on focus, not when the first character arrives. ComposerFrame keeps the field in the same row across
     // this change, so moving the controls cannot dispose the field and cancel the tap or the IME.
     val expanded = state.focused || hasContent
-    val composerPlaceholder = if (homeAssistant) stringResource(R.string.chat_composer_ask_persona, LocalPersonaName.current) else placeholder
+    val composerPlaceholder = placeholder ?: if (homeAssistant) stringResource(R.string.chat_placeholder_ask, LocalPersonaName.current)
+        else stringResource(R.string.chat_composer_placeholder)
 
     // The composer's own width, for how much of the model pill fits (the web measures its composer card the same way).
     val density = androidx.compose.ui.platform.LocalDensity.current
@@ -573,7 +574,7 @@ fun ChatComposer(
             decorationBox = { field ->
                 Box {
                     if (state.value.text.isEmpty()) Text(if (working && enabled && !homeAssistant) stringResource(R.string.chat_composer_placeholder_working) else composerPlaceholder,
-                        style = PersonaTheme.type.body, color = PersonaTheme.palette.ink3, maxLines = if (wrapPlaceholder) growLines else if (compactShell) 1 else 2,
+                        style = PersonaTheme.type.body, color = PersonaTheme.palette.ink3, maxLines = if (wrapPlaceholder || density.fontScale >= 1.3f) growLines else if (compactShell) 1 else 2,
                         overflow = TextOverflow.Ellipsis)
                     field()
                 }

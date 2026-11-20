@@ -1,5 +1,14 @@
 import SwiftUI
 
+/// The idle prompts shared by the shell, the compact composer and the expanded editor.
+nonisolated enum ComposerPrompt {
+    static var agent: String { String(localized: "What shall we work on today?") }
+    static func persona(_ name: String) -> String { String(localized: "What can \(name) do for you today?") }
+    @MainActor static func persona(in key: SessionKey, model: AppModel) -> String {
+        persona(model.assistantShownName(in: key))
+    }
+}
+
 /// The composer's input line, shared by an agent's chat (`Composer`) and a new assistant conversation
 /// (`StarterComposer`) so the two look alike: [+] with the caller's menu, the field (a glass capsule, at least 44 pt),
 /// then send (faded while there is nothing to send) or, while the agent works and nothing is typed, a red stop.

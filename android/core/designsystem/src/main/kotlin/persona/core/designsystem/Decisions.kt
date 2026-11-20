@@ -403,6 +403,7 @@ fun DecisionOption(
     multiSelect: Boolean = false,
     position: Pair<Int, Int>? = null,
     fullText: Boolean = false,
+    leadingIcon: PhIcon? = null,
 ) {
     val palette = PersonaTheme.palette
     val type = PersonaTheme.type
@@ -430,6 +431,10 @@ fun DecisionOption(
             .stableAlpha(if (enabled) 1f else 0.45f).padding(horizontal = 16.dp.dense, vertical = 10.dp.dense),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        leadingIcon?.let {
+            JIcon(it, null, size = Tokens.Space.m, tint = ink)
+            Spacer(Modifier.width(Tokens.Space.s))
+        }
         Column(Modifier.weight(1f)) {
             Text(label, style = type.label, color = ink, maxLines = if (fullText) Int.MAX_VALUE else 2, overflow = TextOverflow.Ellipsis)
             detail?.let { Text(it, style = type.caption.copy(fontWeight = FontWeight.Normal), color = palette.ink2, maxLines = if (fullText) Int.MAX_VALUE else 3, overflow = TextOverflow.Ellipsis) }
@@ -543,20 +548,29 @@ private val QuietButtonPadding = 8.dp
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun DecisionButtons(primary: JAction, modifier: Modifier = Modifier, secondary: JAction? = null, more: List<JAction> = emptyList(), busy: Boolean = false) {
+fun DecisionButtons(primary: JAction, modifier: Modifier = Modifier, secondary: JAction? = null, more: List<JAction> = emptyList(),
+    busy: Boolean = false, showActionIcons: Boolean = false) {
     val haptics = rememberHaptics()
     @Suppress("NAME_SHADOWING") val primary = haptics.tapped(primary)
     @Suppress("NAME_SHADOWING") val secondary = secondary?.let { haptics.tapped(it) }
     @Suppress("NAME_SHADOWING") val more = more.map { haptics.tapped(it) }
     val wide = if (PersonaTheme.style == AppStyle.Board) 1.5f else 1f
-    Column(modifier.fillMaxWidth()) {
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp.dense)) {
-            secondary?.let { JButton(it.label, it.onClick, Modifier.weight(1f), kind = if (it.destructive) JButtonKind.Destructive else JButtonKind.Secondary, enabled = it.enabled && !busy) }
-            JButton(primary.label, primary.onClick, Modifier.weight(wide), kind = if (primary.destructive) JButtonKind.Destructive else JButtonKind.Primary, enabled = primary.enabled, loading = busy)
+    val answers: @Composable RowScope.() -> Unit = {
+        secondary?.let {
+            JButton(it.label, it.onClick, Modifier.weight(1f), kind = if (it.destructive) JButtonKind.Destructive else JButtonKind.Secondary,
+                icon = if (showActionIcons) it.icon else null, enabled = it.enabled && !busy)
         }
+        JButton(primary.label, primary.onClick, Modifier.weight(wide), kind = if (primary.destructive) JButtonKind.Destructive else JButtonKind.Primary,
+            icon = if (showActionIcons) primary.icon else null, enabled = primary.enabled, loading = busy)
+    }
+    Column(modifier.fillMaxWidth()) {
+        // At larger text sizes the illustrated permission choices need a full row for the mode name.
+        if (showActionIcons && LocalDensity.current.fontScale >= 1.3f) {
+            FlowRow(Modifier.fillMaxWidth(), maxItemsInEachRow = 1, verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) { answers() }
+        } else Row(horizontalArrangement = Arrangement.spacedBy(10.dp.dense), content = answers)
         // Several secondary choices (a plan's "Approve and run automatically" and "Confirm each step") wrap to a second line instead of squeezing.
         if (more.isNotEmpty()) FlowRow(Modifier.fillMaxWidth().padding(top = 4.dp.dense), horizontalArrangement = Arrangement.Center) {
-            more.forEach { JTextButton(it.label, it.onClick, enabled = it.enabled && !busy) }
+            more.forEach { JTextButton(it.label, it.onClick, enabled = it.enabled && !busy, icon = if (showActionIcons) it.icon else null) }
         }
     }
 }

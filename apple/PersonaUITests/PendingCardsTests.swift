@@ -189,7 +189,7 @@ final class PendingCardsTests: XCTestCase {
             let head = (titles.map { $0.frame.maxY } + [back.frame.maxY]).max() ?? 0
             XCTAssertGreaterThanOrEqual(cards.frame.minY - head, 72, "the card leaves the conversation \(cards.frame.minY - head) pt (\(look))")
             // The composer under the card and usable.
-            let field = app.descendants(matching: .any).matching(NSPredicate(format: "placeholderValue BEGINSWITH %@ OR placeholderValue BEGINSWITH %@", "给", "补充说明")).firstMatch
+            let field = app.descendants(matching: .any).matching(NSPredicate(format: "placeholderValue == %@ OR placeholderValue BEGINSWITH %@", "今天我们做点什么呢~", "补充说明")).firstMatch
             XCTAssertTrue(field.exists && field.isHittable, "the composer (\(look))")
             XCTAssertLessThanOrEqual(cards.frame.maxY, field.frame.minY + 1, "the card ends above the composer (\(look))")
             // Still while the page is: its height does not move from one moment to the next (#1580's cap changed every frame).
@@ -220,8 +220,8 @@ final class PendingCardsTests: XCTestCase {
         XCTAssertTrue(app.buttons["work-head"].firstMatch.waitForExistence(timeout: 15), "the chat")
         sleep(2)
         shot("question")
-        // The composer: 「给 … 发消息」, or 「补充说明（会排队发送）」 while the agent works.
-        let field = app.descendants(matching: .any).matching(NSPredicate(format: "placeholderValue BEGINSWITH %@ OR placeholderValue BEGINSWITH %@", "给", "补充说明")).firstMatch
+        // The composer: 「今天我们做点什么呢~」, or 「补充说明（会排队发送）」 while the agent works.
+        let field = app.descendants(matching: .any).matching(NSPredicate(format: "placeholderValue == %@ OR placeholderValue BEGINSWITH %@", "今天我们做点什么呢~", "补充说明")).firstMatch
         XCTAssertTrue(field.exists, "the composer")
         let heightBefore = app.scrollViews["pending-cards"].frame.height
         field.tap()

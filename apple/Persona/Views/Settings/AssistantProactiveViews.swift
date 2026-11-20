@@ -421,7 +421,7 @@ struct AssistantTaskRow: View {
                 .monospacedDigit()
                 .lineLimit(1)
                 if let with = AssistantScheduleText.runsWith(t) {
-                    Label(with.text, systemImage: with.danger ? Theme.Icon.allowEverything : Theme.Icon.effort)
+                    Label(with.text, systemImage: with.danger ? Theme.Icon.error : Theme.Icon.effort)
                         .labelStyle(AssistantCompactLabel())
                         .font(Theme.Font.label)
                         .foregroundStyle(with.danger ? Theme.danger : Color.secondary)

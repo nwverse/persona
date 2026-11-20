@@ -16,6 +16,7 @@ import persona.core.contracts.SessionKey
 import persona.core.contracts.api.ScheduledTask
 import persona.core.contracts.parseTime
 import persona.core.designsystem.*
+import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcons
 import persona.feature.assistant.R
 import kotlinx.coroutines.launch
@@ -286,7 +287,7 @@ internal fun TaskEditorPage(
     if (choosingMode) JActionSheet(
         title = stringResource(R.string.assistant_proactive_permission_mode), onDismiss = { choosingMode = false },
         actions = TaskPermissionModes.map { mode ->
-            JAction(stringResource(permissionModeTitle(mode)), if (mode == BypassMode) PhIcons.ShieldWarning else null,
+            JAction(stringResource(permissionModeTitle(mode)), mode.takeIf(String::isNotEmpty)?.let(PersonaIcons::permissionMode),
                 destructive = mode == BypassMode, checked = draft.permissionMode == mode) {
                 if (mode == BypassMode && draft.permissionMode != mode) askBypass = true else edit(draft.copy(permissionMode = mode))
             }
@@ -337,7 +338,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.runsWithSection(
         val bypass = draft.permissionMode == BypassMode
         JGroupItem(GroupPosition.of(rows - 1, rows)) {
             JRow(stringResource(R.string.assistant_proactive_permission_mode), subtitle = stringResource(permissionModeDetail(draft.permissionMode)),
-                leadingIcon = if (bypass) PhIcons.ShieldWarning else PhIcons.ShieldCheck, value = stringResource(permissionModeTitle(draft.permissionMode)),
+                leadingIcon = if (draft.permissionMode.isEmpty()) PhIcons.ShieldCheck else PersonaIcons.permissionMode(draft.permissionMode), value = stringResource(permissionModeTitle(draft.permissionMode)),
                 destructive = bypass, onClick = onChooseMode, enabled = !busy)
         }
         SectionNote(when {

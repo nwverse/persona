@@ -6,6 +6,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.runtime.*
 import androidx.compose.ui.res.stringResource
 import persona.core.designsystem.*
+import persona.core.designsystem.icons.PersonaIcons
 import persona.feature.assistant.R
 
 /** The manager's future-session default, distinct from the current main conversation's mode. */
@@ -33,8 +34,8 @@ internal fun AssistantDefaultPermission(mode: String, enabled: Boolean, supporte
         LazyColumn {
             itemsIndexed(options, key = { _, it -> it.first }) { index, option ->
                 JGroupItem(GroupPosition.of(index, options.size)) {
-                    JRow(stringResource(option.second), leading = { JRadio(mode == option.first, null) },
-                        chevron = false, onClick = { choosing = false; onPick(option.first) })
+                    JRow(stringResource(option.second), leadingIcon = PersonaIcons.permissionMode(option.first), trailing = { JRadio(mode == option.first, null) },
+                        titleLines = 2, chevron = false, onClick = { choosing = false; onPick(option.first) })
                 }
             }
         }

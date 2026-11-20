@@ -107,7 +107,7 @@ struct RecentSetupRow: View {
         if let m = card.modelText { parts.append(Text(m)) }
         if let mode = card.modeText {
             if card.bypass {
-                let warning = Text("\(Theme.Icon.image(Theme.Icon.allowEverything)) \(mode)")
+                let warning = Text("\(Theme.Icon.image(Theme.Icon.error)) \(mode)")
                 parts.append(card.online ? warning.foregroundStyle(Theme.cautionText) : warning)
             } else {
                 parts.append(Text(mode))

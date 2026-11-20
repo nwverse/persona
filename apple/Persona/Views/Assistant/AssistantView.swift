@@ -1373,7 +1373,7 @@ struct StarterComposer: View {
     var disabled: Bool
     /// The shell's composer (docs/apple/ios.md「New shell」): the launcher, mode and effort are in its gauge menu.
     var shell: ShellModes? = nil
-    /// The field's hint; nil: Ask <Persona's name>… (Health has its own).
+    /// The field's hint. Health supplies its own; otherwise use the named Persona prompt.
     var placeholder: String? = nil
     /// Where picked files land on the assistant's machine: "health" for Health's reports/ (docs/assistant/health.md「Checkup reports」).
     var uploadDest: String? = nil
@@ -1617,7 +1617,7 @@ struct StarterComposer: View {
                 }
             }
             if let shell {
-                ShellComposerBar(placeholder: placeholder ?? String(localized: "Ask \(model.assistantShownName)"), text: textBinding, selection: $selection, focused: $focused,
+                ShellComposerBar(placeholder: placeholder ?? ComposerPrompt.persona(model.assistantShownName), text: textBinding, selection: $selection, focused: $focused,
                                  canSend: canSend, hasAttachments: !images.isEmpty || !videos.items.isEmpty || !files.items.isEmpty || !quotes.isEmpty,
                                  modesTitle: StarterModesMenu.title(modes: shell, launchers: starterModels.launchers, mainDefault: starterModels.mainDefault, model: model),
                                  quotes: quotesBinding, history: "assistant.new", gate: gate, openAttach: attachOpener,
@@ -1649,7 +1649,7 @@ struct StarterComposer: View {
                     await starterModels.loadLists(machine, manager: starterManager, revision: model.assistantLauncherRequestRevision)
                 }
             } else {
-                ComposerRow(placeholder: placeholder ?? String(localized: "Ask \(model.assistantShownName)…"), text: textBinding, selection: $selection, focused: $focused, canSend: canSend,
+                ComposerRow(placeholder: placeholder ?? ComposerPrompt.persona(model.assistantShownName), text: textBinding, selection: $selection, focused: $focused, canSend: canSend,
                             send: submit, history: "assistant.new", gate: gate) {
                     attachments
                 }
@@ -1710,7 +1710,7 @@ struct BeautifulStarterComposer: View {
     @Environment(AppModel.self) private var model
     var disabled: Bool
     @Binding var launcher: String?
-    /// The field's hint; nil: Ask <Persona's name>… (Health has its own).
+    /// The field's hint. Health supplies its own; otherwise use the named Persona prompt.
     var placeholder: String? = nil
     /// Where picked files land on the assistant's machine: "health" for Health's reports/ (docs/assistant/health.md「Checkup reports」).
     var uploadDest: String? = nil
@@ -1786,7 +1786,7 @@ struct BeautifulStarterComposer: View {
             #else
             if !images.isEmpty { ComposerImages.editable(draft.held) } // a tap marks it up, as in a conversation
             #endif
-            PromptComposer(placeholder: placeholder ?? String(localized: "Ask \(model.assistantShownName)…"), text: textBinding, selection: $selection, focused: $focused,
+            PromptComposer(placeholder: placeholder ?? ComposerPrompt.persona(model.assistantShownName), text: textBinding, selection: $selection, focused: $focused,
                            hasAttachments: !images.isEmpty || !videos.items.isEmpty || !files.items.isEmpty || !quotes.isEmpty, disabled: disabled,
                            attach: PromptItems.attachments(camera: false),
                            mentions: { PromptItems.sessions(model.sessionsNow, except: nil) },

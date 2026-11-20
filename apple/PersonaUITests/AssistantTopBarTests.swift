@@ -154,7 +154,7 @@ final class AssistantTopBarTests: XCTestCase {
         let new = app.buttons["新对话"].firstMatch
         XCTAssertTrue(new.exists && new.isHittable, "no 新对话 on the right:\n\(app.debugDescription)")
         new.tapCenter()
-        // The conversation's own composer says Ask Persona… too: the page changed when its messages are gone and New Chat
+        // The two pages share the same composer prompt: the page changed when its messages are gone and New Chat
         // (nothing to start anew from) is off.
         XCTAssertTrue(app.staticTexts["今天有什么需要我处理的？"].waitForNonExistence(timeout: 5) && !new.isEnabled,
                       "新对话 did not open the new-conversation page:\n\(app.debugDescription)")

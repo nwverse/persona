@@ -18,6 +18,7 @@ import persona.core.contracts.api.AgentModel
 import persona.core.contracts.api.ChatAction
 import persona.core.contracts.api.modelName
 import persona.core.designsystem.*
+import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcon
 import persona.core.designsystem.icons.PhIcons
 import persona.core.domain.models.AgentModelPanel
@@ -183,7 +184,10 @@ internal object SessionModes {
      * under the plain permissions shield, never the raised hand.
      */
     fun headerTone(session: Session): ModeTone = headerTone(current(session).takeUnless { ownApproval(session) })
-    fun headerIcon(session: Session): PhIcon = headerIcon(current(session).takeUnless { ownApproval(session) })
+    fun headerIcon(session: Session): PhIcon = optionIcon(session, current(session))
+
+    fun optionIcon(session: Session, id: String?): PhIcon =
+        headerIcon(id.takeUnless { it == "default" && session.listedModes != null })
 
     /**
      * The header's tone for a mode (iOS `headerLook`): a mode not reported yet, or one this app does not know, is
@@ -198,15 +202,7 @@ internal object SessionModes {
         else -> ModeTone.Unknown
     }
 
-    /** The mode's symbol (iOS `Theme.Icon`: hand.raised, pencil.line, list.bullet.clipboard, wand.and.sparkles, exclamationmark.shield, lock.shield). */
-    fun headerIcon(id: String?): PhIcon = when (id) {
-        "default" -> PhIcons.HandPalm
-        "acceptEdits" -> PhIcons.PencilSimple
-        "plan" -> PhIcons.ListChecks
-        "auto" -> PhIcons.Sparkle
-        BYPASS -> PhIcons.ShieldWarning
-        else -> PhIcons.Shield
-    }
+    fun headerIcon(id: String?): PhIcon = PersonaIcons.permissionMode(id)
 
     /**
      * The header shows an agent's mode when there is one to see or to change (iOS `showsInHeader`): Claude Code's, before
@@ -437,10 +433,12 @@ internal fun ChatModeBar(
                             open = false
                             if (SessionModes.appliesPick(session, option.id)) SessionModes.confirmation(session, option.id)?.let { asked = it to option.id }
                                 ?: state.run(session, ChatAction.Modes(permissionMode = option.id))
-                        }, detail = option.detail(resources), selected = current, enabled = editable)
+                        }, detail = option.detail(resources), selected = current, enabled = editable,
+                            leadingIcon = SessionModes.optionIcon(session, option.id))
                     }
                     SessionModes.bypassUnavailable(session)?.let { option ->
-                        DecisionOption(option.title(resources), {}, detail = option.detail(resources), selected = false, enabled = false)
+                        DecisionOption(option.title(resources), {}, detail = option.detail(resources), selected = false, enabled = false,
+                            leadingIcon = SessionModes.optionIcon(session, option.id))
                     }
                 }
                 // Claude Code's efforts (a Codex thread's own levels); for an agent whose models are listed below, those the
@@ -577,12 +575,13 @@ internal fun HeaderModeButton(
             Modifier.testTag("chat-mode"), changing = changing)
         val options = SessionModes.switchable(session)
         val actions = options.mapIndexed { i, option ->
-            JAction(option.title(resources), checked = option.id == mode, enabled = editable, subtitle = option.detail(resources).ifEmpty { null },
+            JAction(option.title(resources), icon = SessionModes.optionIcon(session, option.id), destructive = option.id == SessionModes.BYPASS,
+                checked = option.id == mode, enabled = editable, subtitle = option.detail(resources).ifEmpty { null },
                 section = if (i == 0) words else null) {
                 if (SessionModes.appliesPick(session, option.id)) SessionModes.confirmation(session, option.id)?.let { asked = it to option.id } ?: change(option.id)
             }
         } + listOfNotNull(SessionModes.bypassUnavailable(session)?.let { option ->
-            JAction(option.title(resources), enabled = false, subtitle = option.detail(resources)) {}
+            JAction(option.title(resources), icon = SessionModes.optionIcon(session, option.id), enabled = false, subtitle = option.detail(resources)) {}
         })
         // Why nothing can be picked: not running (or a runtime that can't), or the hub out of reach; else a restart that waits.
         val note = if (!editable) stringResource(if (!switchable) R.string.chat_modes_locked else R.string.chat_modes_offline) else pending

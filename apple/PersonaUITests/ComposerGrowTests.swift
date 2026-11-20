@@ -22,7 +22,7 @@ final class ComposerGrowTests: XCTestCase {
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "no keyboard")
         sleep(1)
         // Drafts are kept across runs: start empty.
-        if let v = field.value as? String, !v.isEmpty, v != "问 Persona", !v.hasPrefix("问 ") {
+        if let v = field.value as? String, !v.isEmpty, v != field.placeholderValue {
             field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: v.count + 2))
         }
         field.typeText("一行")

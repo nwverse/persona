@@ -2,5 +2,5 @@
 <!-- Persona's conversation, as iOS shows it (#4339 C18). -->
 <resources>
     <string name="chat_tray_shelved">Shelved</string>
-    <string name="chat_placeholder_ask">Ask %1$s…</string>
+    <string name="chat_placeholder_ask">What can %1$s do for you today?</string>
 </resources>

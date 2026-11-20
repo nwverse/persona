@@ -13,10 +13,10 @@ struct HeaderModeTests {
 
     @Test func eachModeHasItsMenuSymbolAndATone() {
         #expect(SessionModes.headerLook("default") == .init(symbol: Theme.Icon.askFirst, tone: .asks))
-        #expect(SessionModes.headerLook("acceptEdits") == .init(symbol: Theme.Icon.editFile, tone: .acts))
-        #expect(SessionModes.headerLook("plan") == .init(symbol: Theme.Icon.plan, tone: .plans))
-        #expect(SessionModes.headerLook("auto") == .init(symbol: Theme.Icon.autoMode, tone: .acts))
-        #expect(SessionModes.headerLook("bypassPermissions") == .init(symbol: Theme.Icon.allowEverything, tone: .allowsAll))
+        #expect(SessionModes.headerLook("acceptEdits") == .init(symbol: Theme.Icon.agents, tone: .acts))
+        #expect(SessionModes.headerLook("plan") == .init(symbol: Theme.Icon.listView, tone: .plans))
+        #expect(SessionModes.headerLook("auto") == .init(symbol: Theme.Icon.ai, tone: .acts))
+        #expect(SessionModes.headerLook("bypassPermissions") == .init(symbol: Theme.Icon.error, tone: .allowsAll))
         // The header and the mode menus draw a mode with the same symbol.
         for o in SessionModes.permissionModes {
             #expect(SessionModes.headerLook(o.id).symbol == o.symbol, "\(o.id)")

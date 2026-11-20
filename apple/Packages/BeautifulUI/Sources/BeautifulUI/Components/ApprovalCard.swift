@@ -14,13 +14,16 @@ public struct ApprovalQuestion: Identifiable, Sendable {
         public var label: String
         public var detail: String?
         public var tag: String?
+        /// The host’s optional mode symbol. The label and detail carry its accessible meaning.
+        public var symbol: String?
         /// Off, the choice shows dimmed and can't be picked (a host that takes only some answers right now).
         public var isEnabled: Bool
 
-        public init(_ label: String, detail: String? = nil, tag: String? = nil, isEnabled: Bool = true) {
+        public init(_ label: String, detail: String? = nil, tag: String? = nil, isEnabled: Bool = true, symbol: String? = nil) {
             self.label = label
             self.detail = detail
             self.tag = tag
+            self.symbol = symbol
             self.isEnabled = isEnabled
         }
     }
@@ -324,6 +327,10 @@ public struct ApprovalCard<Context: View>: View {
                                 .padding(.top, choice.detail == nil ? 0 : 1)
                             VStack(alignment: .leading, spacing: 3) {
                                 HStack(spacing: 6) {
+                                    if let symbol = choice.symbol {
+                                        Image(systemName: symbol).imageScale(.small).foregroundStyle(theme.colors.ink2)
+                                            .accessibilityHidden(true)
+                                    }
                                     Text(choice.label)
                                         .buiFont(BUITextStyle(size: 13, lineHeight: 1))
                                         .foregroundStyle(!choice.isEnabled ? theme.colors.ink3 : on ? theme.colors.ink : theme.colors.ink2)

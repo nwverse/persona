@@ -52,6 +52,20 @@ class PermissionModeNamesTest {
         ),
     )
 
+    @Test fun ordinaryComposerPromptsMatchTheWebInEveryLanguage() {
+        val root = File(checkNotNull(System.getProperty("persona.repo.root")))
+        for ((language, directory) in languages) {
+            val reference = JsonCodec.parseToJsonElement(
+                File(root, "web/src/i18n/locales/$language/chat-chatview.json").readText(),
+            ).jsonObject
+            val strings = readStrings(root, directory)
+            assertEquals(language, reference.getValue("agent_placeholder").jsonPrimitive.content, strings["chat_placeholder_agent"])
+            val persona = reference.getValue("ask_placeholder").jsonPrimitive.content.replace("{name}", "%1\$s")
+            assertEquals(language, persona, strings["chat_placeholder_ask"])
+            assertEquals(language, persona, strings["assistant_composer_placeholder"])
+        }
+    }
+
     @Test fun stringsMatchSharedTable() {
         val root = File(checkNotNull(System.getProperty("persona.repo.root")))
         val fixture = JsonCodec.parseToJsonElement(
@@ -91,7 +105,7 @@ class PermissionModeNamesTest {
     private fun readStrings(root: File, directory: String): Map<String, String> {
         val result = mutableMapOf<String, String>()
         val resources = mapOf(
-            "feature/chat" to listOf("strings_a.xml", "strings_b.xml"),
+            "feature/chat" to listOf("strings_a.xml", "strings_b.xml", "strings_assistant_chat.xml", "strings_chat_details.xml"),
             "feature/agents" to listOf("strings.xml"),
             "feature/assistant" to listOf("strings.xml", "strings_proactive_tasks.xml"),
         )

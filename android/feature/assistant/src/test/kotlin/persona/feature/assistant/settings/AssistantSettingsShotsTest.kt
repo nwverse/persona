@@ -15,9 +15,12 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.isPopup
@@ -27,6 +30,10 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onLast
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -86,6 +93,42 @@ class AssistantSettingsShotsTest {
 
     @Config(sdk = [35], qualifiers = "en-w400dp-h2600dp-xhdpi")
     @Test fun nextSuggestionsLargeFont() = nextSuggestionLargeFont()
+
+    @Config(sdk = [35], qualifiers = "en-w400dp-h900dp-xhdpi")
+    @Test fun defaultPermissionPicker() = permissionPicker("")
+
+    @Config(sdk = [35], qualifiers = "en-w400dp-h900dp-xhdpi", fontScale = 2f)
+    @Test fun defaultPermissionPickerAtLargeText() = permissionPicker("-large")
+
+    private fun permissionPicker(size: String) {
+        var dark by mutableStateOf(false)
+        var selected by mutableStateOf("default")
+        var title = ""
+        val picks = mutableListOf<String>()
+        rule.setContent {
+            title = stringResource(R.string.assistant_settings_permission)
+            PersonaTheme(darkTheme = dark, reduceMotion = true, style = AppStyle.Glass) {
+                AssistantDefaultPermission(selected, enabled = true, supported = true) { picks += it; selected = it }
+            }
+        }
+        for (night in listOf(false, true)) {
+            rule.runOnIdle { dark = night }
+            rule.onNode(hasText(title) and hasClickAction()).performClick()
+            for (name in listOf("Default permissions", "Auto accept edits", "Plan mode", "Auto-review", "Full access")) {
+                val label = rule.onNode(hasText(name) and hasAnyAncestor(isDialog()), useUnmergedTree = true)
+                label.assertIsDisplayed()
+                val layout = mutableListOf<TextLayoutResult>()
+                label.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layout) }
+                val text = layout.single()
+                val last = text.lineCount - 1
+                assertTrue(name, !text.isLineEllipsized(last) && text.getLineEnd(last, visibleEnd = true) == name.length)
+            }
+            save("settings-permission-picker-${if (night) "dark" else "light"}$size.png",
+                rule.onNode(isDialog()).captureToImage().asAndroidBitmap())
+            rule.onAllNodesWithText("Plan mode").onLast().performClick()
+        }
+        assertTrue(picks == listOf("plan", "plan"))
+    }
 
     private class FakeManagement(memoryTitle: String, memoryBody: String) : AssistantManagement {
         private val updated = Instant.now().minusSeconds(3_600).toString()

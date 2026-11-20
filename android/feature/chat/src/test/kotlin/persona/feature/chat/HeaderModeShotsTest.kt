@@ -90,7 +90,8 @@ class HeaderModeShotsTest {
     }
 
     private fun save(name: String, style: AppStyle, dark: Boolean, bitmap: Bitmap = rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap()) {
-        File(out(), "chat-mode-$name-${style.name.lowercase()}-${if (dark) "dark" else "light"}.png").outputStream()
+        val size = if (org.robolectric.RuntimeEnvironment.getApplication().resources.configuration.fontScale >= 2f) "-large" else ""
+        File(out(), "chat-mode-$name-${style.name.lowercase()}-${if (dark) "dark" else "light"}$size.png").outputStream()
             .use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
     }
 
@@ -203,6 +204,8 @@ class HeaderModeShotsTest {
     @Test fun modesBriefDark() = shot("modes", AppStyle.Brief, true)
     @Test fun modesBoard() = shot("modes", AppStyle.Board, false)
     @Test fun modesBoardDark() = shot("modes", AppStyle.Board, true)
+    @Test @Config(fontScale = 2f) fun menuGlassLargest() = shot("menu", AppStyle.Glass, false)
+    @Test @Config(fontScale = 2f) fun menuGlassLargestDark() = shot("menu", AppStyle.Glass, true)
     @Test fun menuGlass() = shot("menu", AppStyle.Glass, false)
     @Test fun menuGlassDark() = shot("menu", AppStyle.Glass, true)
     @Test fun menuBrief() = shot("menu", AppStyle.Brief, false)

@@ -29,7 +29,7 @@ final class RecapInFlowTests: XCTestCase {
     }
 
     @MainActor private func composer(_ app: XCUIApplication) -> XCUIElement {
-        let placeholder = NSPredicate(format: "placeholderValue BEGINSWITH %@", "给 ")
+        let placeholder = NSPredicate(format: "placeholderValue == %@", "今天我们做点什么呢~")
         let view = app.textViews.matching(placeholder).firstMatch
         return view.exists ? view : app.textFields.matching(placeholder).firstMatch
     }
