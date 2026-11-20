@@ -247,7 +247,41 @@ func (n *Node) inferLauncher(id string) string {
 	if !ok {
 		return ""
 	}
-	return matchLauncher(n.cachedLaunchers(), env.BaseURL, env.Model)
+	if name := matchLauncher(n.cachedLaunchers(), env.BaseURL, env.Model); name != "" {
+		return name
+	}
+	return matchLauncher(n.managedInferLaunchers(), env.BaseURL, env.Model)
+}
+
+// managedInferLaunchers returns the cached Claude managed-launcher projection so a terminal session started manually
+// with `personad launch <name>` can infer its managed launcher when the endpoint/model match is unambiguous.
+func (n *Node) managedInferLaunchers() []proto.Launcher {
+	if n == nil {
+		return nil
+	}
+	n.managed.mu.Lock()
+	if n.managed.infer == nil && len(n.managed.byID) > 0 {
+		n.managed.infer = buildManagedInferLaunchers(n.managed.byID)
+	}
+	out := n.managed.infer
+	n.managed.mu.Unlock()
+	return out
+}
+
+func buildManagedInferLaunchers(byID map[string]proto.ManagedLauncher) []proto.Launcher {
+	if len(byID) == 0 {
+		return nil
+	}
+	out := make([]proto.Launcher, 0, len(byID))
+	for _, l := range byID {
+		if a := l.AgentType(); a != "" && a != "claude" {
+			continue
+		}
+		pm, _ := providerModel(l, l.Model)
+		out = append(out, proto.Launcher{Name: l.Name, BaseURL: managedBaseURL(l), Model: sdkModel(l.Model, pm)})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }
 
 // matchLauncher picks the launcher that exports this base URL and model. Several launchers can share one endpoint
@@ -264,7 +298,7 @@ func matchLauncher(list []proto.Launcher, baseURL, model string) string {
 			continue
 		}
 		byURL = append(byURL, l.Name)
-		if model != "" && l.Model == model {
+		if model != "" && (l.Model == model || l.Model != "" && proto.TrimModelWindow(l.Model) == proto.TrimModelWindow(model)) {
 			byBoth = append(byBoth, l.Name)
 		}
 	}

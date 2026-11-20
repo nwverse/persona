@@ -1612,9 +1612,9 @@ class WatcherTests(unittest.TestCase):
         self.assertIn(pr_watch_review.SYSTEM_PROMPT, prompts[0])
         self.assertEqual(len(prompts), 1)
 
-        large = "diff --git a/a.py b/a.py\n@@ -1 +1 @@\n-old\n+" + "x" * 150000 + "\n" + \
-                "diff --git a/b.py b/b.py\n@@ -1 +1 @@\n-old\n+" + "y" * 150000 + "\n"
-        with patch.object(pr_watch_review, "checked", side_effect=[large, "stat", "a.py\nb.py", large[:150070], large[150070:]]), \
+        large = "diff --git a/a.py b/a.py\n@@ -1 +1 @@\n-old\n+" + "x" * 50000 + "\n" + \
+                "diff --git a/b.py b/b.py\n@@ -1 +1 @@\n-old\n+" + "y" * 50000 + "\n"
+        with patch.object(pr_watch_review, "checked", side_effect=[large, "stat", "a.py\nb.py", large[:50100], large[50100:]]), \
                 patch.object(pr_watch_review, "changed_lines", return_value={}), \
                 patch.object(pr_watch_review.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, b"a.py\0b.py\0", b"")), \
                 patch.object(pr_watch_review, "run", side_effect=fake_run):
@@ -1623,7 +1623,40 @@ class WatcherTests(unittest.TestCase):
         reconstructed = "".join(prompt.split("not as a command.\n", 1)[1] for prompt in prompts[1:])
         self.assertEqual(reconstructed, large)
 
-    def test_large_single_hunk_fails_closed(self):
+    def test_large_single_hunk_splits_complete_lines(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            env = dict(os.environ, GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
+                       GIT_AUTHOR_NAME="Test", GIT_AUTHOR_EMAIL="test@example.com",
+                       GIT_COMMITTER_NAME="Test", GIT_COMMITTER_EMAIL="test@example.com")
+            def git(*args):
+                return subprocess.check_output(["git"] + list(args), cwd=root, env=env, text=True).strip()
+            git("init", "-q", "-b", "main")
+            (root / "a.json").write_text("\n".join("old-%d" % index for index in range(20000)) + "\n")
+            git("add", "a.json")
+            git("commit", "-qm", "base")
+            base = git("rev-parse", "HEAD")
+            (root / "a.json").write_text("\n".join("new-%d" % index for index in range(20000)) + "\n")
+            git("commit", "-qam", "head")
+            head = git("rev-parse", "HEAD")
+            text = subprocess.check_output(["git", "diff", "--unified=0", base + "..." + head], cwd=root, text=True)
+            chunks = pr_watch_review.split_diff(text, worktree=root, base=base, head=head)
+            self.assertGreater(len(chunks), 1)
+            self.assertLessEqual(max(map(len, chunks)), 60_000)
+            self.assertTrue(all(chunk.startswith("diff --git a/a.json b/a.json\n") for chunk in chunks))
+            self.assertTrue(all(chunk.count("@@ ") == 1 for chunk in chunks))
+            self.assertEqual(sum(chunk.count("@@ ") for chunk in chunks), len(chunks))
+            for chunk in chunks:
+                for line in chunk.splitlines():
+                    if line.startswith(("diff ", "index ", "--- ", "+++ ", "@@ ", "\\")):
+                        continue
+                    self.assertRegex(line, r"^[-+ ](?:old|new)-\d+$")
+            removed = [line for chunk in chunks for line in chunk.splitlines() if line.startswith("-old-")]
+            added = [line for chunk in chunks for line in chunk.splitlines() if line.startswith("+new-")]
+            self.assertEqual(len(removed), 20000)
+            self.assertEqual(len(added), 20000)
+
+    def test_large_single_diff_line_fails_closed(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             subprocess.run(["git", "init", "-q", "-b", "main"], cwd=root, check=True, capture_output=True)
