@@ -116,10 +116,10 @@ func TestRegistrySnapshotKeepsProcessState(t *testing.T) {
 }
 
 // A token of every scope leaves out scopes whose authority the owner must approve by name (agents.permission_mode,
-// assistant.start_defaults, dispatch.guard and market.refresh_own); the install screen still lists each of them.
+// assistant.start_defaults, dispatch.defaults, dispatch.guard and market.refresh_own); the install screen still lists each of them.
 func TestEveryScopeLeavesOutThePermissionMode(t *testing.T) {
 	every := EveryScope()
-	excluded := []string{ScopeAgentsPermissionMode, ScopeAssistantStartDefaults, ScopeDispatchGuard, ScopeMarketRefreshOwn}
+	excluded := []string{ScopeAgentsPermissionMode, ScopeAssistantStartDefaults, ScopeDispatchDefaults, ScopeDispatchGuard, ScopeMarketRefreshOwn}
 	for _, named := range excluded {
 		if slices.Contains(every, named) || !slices.Contains(HubScopes, named) || InEveryScope(named) {
 			t.Fatalf("every scope has %s: %v", named, every)
@@ -138,9 +138,10 @@ func TestEveryScopeLeavesOutThePermissionMode(t *testing.T) {
 func TestFullHubGrantLeavesOutThePermissionMode(t *testing.T) {
 	r := NewRegistry(t.TempDir(), nil, nil, 1)
 	for id, grant := range map[string]Permissions{
-		"legacy":  {HubAPI: true},
-		"named":   {Hub: []string{ScopeAgentsPermissionMode}},
-		"refresh": {Hub: []string{ScopeMarketRefreshOwn}},
+		"legacy":     {HubAPI: true},
+		"named":      {Hub: []string{ScopeAgentsPermissionMode}},
+		"refresh":    {Hub: []string{ScopeMarketRefreshOwn}},
+		"candidates": {Hub: []string{ScopeDispatchDefaults}},
 	} {
 		m := &Manifest{ID: id, Version: "1.0.0", Permissions: grant,
 			Contributes: map[string]json.RawMessage{"events": json.RawMessage(`[{"id":"example","subscribe":["agent.finished"]}]`)}}
@@ -157,6 +158,9 @@ func TestFullHubGrantLeavesOutThePermissionMode(t *testing.T) {
 	}
 	if r.HubScopeAllowed("legacy", ScopeMarketRefreshOwn) || !r.HubScopeAllowed("refresh", ScopeMarketRefreshOwn) {
 		t.Fatal("the full-hub grant and own-market refresh")
+	}
+	if r.HubScopeAllowed("legacy", ScopeDispatchDefaults) || !r.HubScopeAllowed("candidates", ScopeDispatchDefaults) {
+		t.Fatal("reading dispatch candidates requires a named grant")
 	}
 	if ids := r.EventSubscribers("agent.finished", ScopeAgentsPermissionMode); !reflect.DeepEqual(ids, []string{"named"}) {
 		t.Fatalf("permission mode subscribers: %v", ids)

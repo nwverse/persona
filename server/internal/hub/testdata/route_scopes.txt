@@ -146,6 +146,7 @@ assistant.ask        GET /api/v1/assistant/conversations/{id}/feed
 -                    GET /api/v1/assistant/directions/{id}
 dispatch.guard       GET /api/v1/assistant/dispatch-guard
 assistant.dispatch_policy GET /api/v1/assistant/dispatch-policy
+dispatch.defaults    GET /api/v1/assistant/dispatch/candidates
 -                    GET /api/v1/assistant/feishu/notices
 -                    GET /api/v1/assistant/followups
 leaders.read         GET /api/v1/assistant/leaders

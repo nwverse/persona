@@ -32,6 +32,8 @@ const (
 	// ScopeDispatchGuard: reading and writing the explicit-target dispatch guard and narrowing the affected
 	// conversations' tool lists (GET/PUT /api/v1/assistant/dispatch-guard). Granted by name only.
 	ScopeDispatchGuard = "dispatch.guard"
+	// ScopeDispatchDefaults: reading the candidate Agent presets for one computer. Granted by name only.
+	ScopeDispatchDefaults = "dispatch.defaults"
 	// ScopeAgentsPermissionMode: changing the permission mode of a conversation the extension opened itself, and of no
 	// other (the hub checks who opened it: hub/extension_modes.go).
 	ScopeAgentsPermissionMode = "agents.permission_mode"

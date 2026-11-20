@@ -115,6 +115,7 @@ func TestAnExtensionsTokenActsOnlyAsItsManager(t *testing.T) {
 		{"names A: a merged list", "GET", "/api/v1/inbox", "", namesA},
 		{"names A: a paged list", "GET", "/api/v1/inbox/done", "", namesA},
 		{"names A by query: a manager route", "GET", "/api/v1/assistant?manager=assistant", "", nil},
+		{"names A: dispatch candidates", "GET", "/api/v1/assistant/dispatch/candidates?machine=ma", "", namesA},
 		{"names A: a naming preview", "POST", "/api/v1/assistant/workspace-naming/preview", `{"machine_id":"mb","layout":"root"}`, namesA},
 		{"names A by query: a naming preview", "POST", "/api/v1/assistant/workspace-naming/preview?manager=assistant", `{"machine_id":"mb","layout":"root"}`, nil},
 		{"names A: an inbox reply", "POST", "/api/v1/inbox/item-1/reply", `{"text":"x"}`, namesA},
@@ -155,6 +156,7 @@ func TestAnExtensionsTokenActsOnlyAsItsManager(t *testing.T) {
 	// Its own: B's manager, by name or not, B's machine, a notification on B's session.
 	for _, c := range []struct{ method, path, body string }{
 		{"GET", "/api/v1/assistant?manager=m-0b0b0b", ""},
+		{"GET", "/api/v1/assistant/dispatch/candidates?machine=mb", ""},
 		{"GET", "/api/v1/assistant", ""},
 		{"POST", "/api/v1/assistant/workspace-naming/preview", `{"machine_id":"mb","layout":"root"}`},
 		{"POST", "/api/v1/assistant/workspace-naming/preview?manager=m-0b0b0b", `{"machine_id":"mb","layout":"root"}`},
@@ -372,6 +374,7 @@ func TestEveryExtensionRouteIsBounded(t *testing.T) {
 		"POST /api/v1/assistant/conversations/{id}/stop":   "path",
 		"GET /api/v1/assistant/reporters":                  "manager",
 		"GET /api/v1/assistant/leaders":                    "manager",
+		"GET /api/v1/assistant/dispatch/candidates":        "manager",
 		"GET /api/v1/assistant/dispatch-policy":            "manager",
 		"PUT /api/v1/assistant/dispatch-policy":            "manager",
 		"GET /api/v1/assistant/dispatch-guard":             "manager",
