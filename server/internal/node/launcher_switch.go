@@ -126,10 +126,13 @@ func (n *Node) launcherModes(ctx context.Context, id, launcher, from, model, mod
 		return true, err
 	}
 	ps := proto.PendingSwitch{Launcher: launcher, Model: strings.TrimSpace(model), Effort: effort}
+	// An agent whose claude Persona did not start with its command (herdr's bare resume, offlauncher.go) does not run
+	// on its own launcher: picking that one is a switch back to it, not a cancel.
+	off := n.offLauncher(id)
 	// The checks run a login shell, ask the hub for a provider's secrets, read the launcher's models: not while holding
 	// up the session's messages.
 	checked := false
-	if own, _ := n.engineOwnLauncher(id, n.liveEngine(id)); launcher != own {
+	if own, _ := n.engineOwnLauncher(id, n.liveEngine(id)); launcher != own || off {
 		// A launcher of the other engine (Claude Code ↔ Codex) is a switch to it (engine_switch.go, #5054).
 		to, err := n.switchEngine(ctx, id, launcher)
 		if err != nil {
@@ -155,11 +158,11 @@ func (n *Node) launcherModes(ctx context.Context, id, launcher, from, model, mod
 	// meanwhile; this one waits for it, and is then taken against the launcher the agent runs on by then.
 	unlock := n.typing.lock(id)
 	own, _ := n.engineOwnLauncher(id, n.liveEngine(id))
-	if from != "" && from != own || launcher != own && !checked {
+	if from != "" && from != own || (launcher != own || off) && !checked {
 		unlock()
 		return true, refusal(proto.CodeSwitchStale, fmt.Sprintf("the session runs on launcher %s now, not %s", own, cmp.Or(from, launcher)), nil)
 	}
-	if launcher == own {
+	if launcher == own && !off {
 		if n.pendingSwitch(id) != nil {
 			n.putPendingSwitch(id, nil)
 			n.logf("session %s: launcher switch cancelled", id)
@@ -929,7 +932,7 @@ func (n *Node) resumeTurn(ctx context.Context, id string) (done func()) {
 // is dropped and refuses the message instead (switchNowRefusal).
 func (n *Node) applySwitch(ctx context.Context, id, pane string, ps proto.PendingSwitch, now bool) (string, bool, error) {
 	own, _ := n.ownLauncher(id)
-	if ps.Launcher == own || time.Since(ps.At) > switchMaxAge {
+	if ps.Launcher == own && !n.offLauncher(id) || time.Since(ps.At) > switchMaxAge { // off its own: a switch back (offlauncher.go)
 		n.logf("session %s: switch to launcher %s picked %s dropped: on it already, or picked too long ago", id, ps.Launcher, ps.At.Format(time.RFC3339))
 		n.putPendingSwitch(id, nil)
 		return pane, false, nil

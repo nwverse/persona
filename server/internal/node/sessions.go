@@ -452,6 +452,7 @@ func (n *Node) decorateState(s *proto.Session, managesModel bool) (sessionState,
 	if ok {
 		s.StartedByPersona = true
 		s.Launcher = st.Launcher
+		s.OffLauncher = n.offLauncher(s.SessionID) // its claude not started by Persona's command (offlauncher.go)
 		if st.TaskExecution {
 			classifyTaskTurnFailure(s)
 		}

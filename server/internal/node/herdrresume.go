@@ -27,7 +27,7 @@ import (
 // across later session reports with another id (checked against v0.9.5), so a Claude that moved to a new session
 // (/clear) is reported again from its SessionStart hook. herdr before 0.9.2 answers the report ok and drops
 // resume_argv: on such a server nothing is reported, the node says once why, and a new server (an upgrade) is told
-// (#11792).
+// (#11792). An Agent such a restart resumed bare is listed off its launcher (offlauncher.go).
 
 // resumeSource is the reporter Persona sends resume_argv as (a custom source: herdr's own integration keeps its own).
 const resumeSource = "custom:persona"
