@@ -3,7 +3,6 @@ package assistant
 import (
 	"cmp"
 	"context"
-	"errors"
 	"maps"
 	"slices"
 	"strings"
@@ -327,14 +326,17 @@ func (s *Service) tierModel(ctx context.Context, tier string) (ModelTier, error)
 		return ModelTier{}, err
 	}
 	if p == nil && active != "" {
-		return ModelTier{}, errors.New("the model profile in use (" + active + ") no longer exists: switch to another with model_profile_switch, or leave tier out")
+		return ModelTier{}, i18n.ErrEnglish("assistant-model_profiles.err_active_profile_missing", i18n.Args{"profile": i18n.Verbatim(active)})
 	}
 	if p == nil {
-		return ModelTier{}, errors.New("no model profile is in use: switch to one with model_profile_switch, or leave tier out")
+		return ModelTier{}, i18n.ErrEnglish("assistant-model_profiles.err_no_active_profile")
 	}
 	t, ok := p.Tiers[tier]
 	if !ok {
-		return ModelTier{}, errors.New("the model profile in use (" + cmp.Or(p.Name, p.ID) + ") has no tier " + strings.TrimSpace(tier) + "; its tiers: " + strings.Join(slices.Sorted(maps.Keys(p.Tiers)), ", "))
+		return ModelTier{}, i18n.ErrEnglish("assistant-model_profiles.err_tier_not_found", i18n.Args{
+			"profile": i18n.Verbatim(cmp.Or(p.Name, p.ID)), "tier": i18n.Verbatim(strings.TrimSpace(tier)),
+			"tiers": i18n.Verbatim(strings.Join(slices.Sorted(maps.Keys(p.Tiers)), ", ")),
+		})
 	}
 	if proto.IsExternalLauncher(t.Launcher) {
 		return ModelTier{}, i18n.Err("external-adapter.purpose_unsupported")

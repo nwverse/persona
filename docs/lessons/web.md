@@ -1361,6 +1361,10 @@ A workspace row has separate disclosure, selection and action controls. When mer
 
 The first screen also counts startup translations. Keep generic request-owner and uncertain-creation errors in the existing worktree catalog; load the advanced composer catalog with the composer. A pair of eager error labels should not make every advanced-field description part of the first screen.
 
+## Split a sidebar summary from a lazy message index (#12038)
+
+A compact index shared by the sidebar and every message can put the message menu's identity map and per-message subscriptions on the first screen even when its writes are lazy. Give the sidebar a small count/access store and let the lazy message controls own the full index. Do not remove read-only markers or duplicate request logic to save bytes. Measure the production bundle: merely moving translation keys or splitting type files may add bytes instead of reducing them.
+
 ## Archive refusals must roll back optimistic removal (#4277)
 
 A connected delta hub keeps its pushed session rows during REST refresh. Refresh cannot restore a row the page
