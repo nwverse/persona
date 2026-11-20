@@ -420,6 +420,15 @@ For sessions it starts, the node restores persisted ownership and launcher metad
 The original assistant or health directory identifies the conversation after rediscovery and reconnects. Runtime
 status, model, permissions and capabilities continue to describe the running session.
 
+For shell calls to `personad tool --cli`, a runtime can use `rt.assistantPid(sessionId, pid)` from the runtime SDK.
+Report a dedicated local worker for each assistant conversation and pass `0` when that worker is dropped. Never report
+the main runtime process or a worker shared with ordinary Agent sessions. The node checks the session's ownership and
+assistant status, and verifies the worker is a strict process descendant of the connected runtime. It derives the
+caller's session from the worker's process tree, not from the CLI request. Antigravity runs each active assistant chat
+in its own ACP process, separate from the Agents' shared process. An idle assistant worker exits after five minutes
+without work; the next send or mode change resumes the chat in a fresh worker. A forked assistant chat gets its own
+worker when first used. An active turn or unanswered permission keeps the worker alive.
+
 A runtime that declares `caps.assistant` must:
 
 1. For **assistant chats** (started with `assistant: true`, or whose directory is the assistant directory), always send permissions and questions to the phone first (when there's a hub), regardless of whether the local UI is open.
@@ -486,7 +495,11 @@ summary has unexported steps, the companion reads at most the final eight native
 The result is cached against the summary and exported branch. Discovery opens the native service through read-only
 session listing. An omitted terminal error uses the shared assistant-text `API Error:` representation for the existing error card
 and populates the session's `turn_error`
-fields, including a subscription reset timestamp supplied in native quota metadata. New input and rewinds invalidate
+fields, including a subscription reset timestamp supplied in native quota metadata. When Antigravity gives only its
+generic `Agent execution terminated due to error.`, the text is the native short error with the `ErrorInfo` reason
+(`INVALID_ARGUMENT (code 400): … (INVALID_MEDIA)`). A 4xx other than 401, 408 and 429 is a request the service refuses
+as it is (a picture in the history it cannot decode, an invalid argument): a Continue sends it again, so it is published
+as `turn_error_kind: "user"` (#11742). New input and rewinds invalidate
 that result. Rejected ACP prompts also publish their failure through the session's error state.
 The history token includes the error format so connected clients refresh items cached before this representation.
 

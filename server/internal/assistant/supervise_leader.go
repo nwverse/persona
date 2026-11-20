@@ -20,8 +20,9 @@ import (
 // conversation supervises (supervise.go). The user can make side conversations leaders (assistant.leaders, off while
 // the list is empty), one per repository or long-running project: a task a leader hands out with task_plan has the
 // leader as its supervisor, so its supervision messages go to the leader, which reviews it with task_review. What still
-// needs the main conversation goes there: a leader's needs_user (escalated, with the user's decision card as ever), a
-// failed start (the start remedies are the main conversation's) and anything about a task waiting for the user.
+// needs the main conversation goes there: a leader's needs_user (escalated, with the user's decision card as ever) and
+// anything about a task waiting for the user. A failed start goes to its current leader too, which has the same start
+// remedies as the main conversation for its own task; a successful retry's started signal still goes to the main one.
 //
 // Depth is bounded: an agent handed out as a task's agent (a worker) hands out no Persona tasks itself (task_plan,
 // agent_start); it uses its own in-session subagents. Leaders and the main conversation are not limited.
@@ -100,21 +101,24 @@ func (s *Service) planTaskSupervisor(ctx context.Context, conversation string, t
 
 // digestTo is the conversation signal g goes to, with cfg the settings in effect: the one it names (To), else its task's
 // supervisor when that is a leader or another side conversation, unless the main conversation handles it (its needs_user,
-// a start to remedy, a task waiting for the user); else, for a task whose ledger names the main conversation, the
-// background supervisor, or the main conversation while there is none (ownSupervisor, supervise_background.go).
+// a task waiting for the user, or a failed start with no current leader); else, for a task whose ledger names the main
+// conversation, the background supervisor, or the main conversation while there is none (ownSupervisor,
+// supervise_background.go). A successful retry remains one of the main conversation's started signals.
 func (s *Service) digestTo(cfg Settings, g superviseSignal) string {
 	own := s.ownSupervisor(cfg)
 	if g.To != "" {
 		switch {
-		case g.Kind == sigDecide && g.To == cfg.Main:
-			return own // a task leader's decision for the conversation above it, whose task is one no leader conversation supervises
+		case (g.Kind == sigDecide || g.Kind == sigCheck) && g.To == cfg.Main:
+			// A task leader's decision, or the owner's answer to a check's decision on its worker, for the conversation
+			// above it, whose task is one no leader conversation supervises.
+			return own
 		case g.To == cfg.BackgroundSupervisor && g.To != own:
 			return cfg.Main // named the background supervisor, which was switched off or moved meanwhile
 		}
 		return g.To
 	}
 	switch g.Kind {
-	case sigEscalated, sigFailed, sigStarted, sigLeaderStuck:
+	case sigEscalated, sigStarted, sigLeaderStuck:
 		return cfg.Main
 	}
 	t, ok := s.todoNow(g.Todo)
@@ -127,9 +131,18 @@ func (s *Service) digestTo(cfg Settings, g superviseSignal) string {
 	// go to the background supervisor while there is one. A task leader's agent never reaches this: leaderRoute takes
 	// its workers' signals first.
 	if lead == "" || lead == cfg.Main {
+		if g.Kind == sigFailed {
+			return cfg.Main
+		}
 		return own
 	}
 	if t.Supervision.state(t) == reviewNeedsUser && g.Kind != sigAllStopped {
+		return cfg.Main
+	}
+	if g.Kind == sigFailed {
+		if lead != cfg.Main && slices.Contains(cfg.Leaders, lead) {
+			return lead
+		}
 		return cfg.Main
 	}
 	return lead
@@ -144,6 +157,9 @@ func (s *Service) digestTarget(ctx context.Context, cfg Settings, g superviseSig
 	to := s.digestTo(cfg, g)
 	if to == "" || to == cfg.Main || to == cfg.BackgroundSupervisor || !s.runtimeWithoutSupervisionPolicy(ctx, cfg.MachineID, to) {
 		return to
+	}
+	if g.Kind == sigFailed {
+		return cfg.Main // the background supervisor has no start remedies; keep the legacy fallback for a failed start
 	}
 	own := s.ownSupervisor(cfg)
 	s.logf("supervise: %s runs on a runtime that cannot take supervision policy: its signal goes to %s", short(to), short(own))

@@ -115,6 +115,8 @@ type Service struct {
 	// trustSrc is Options.Trust.
 	trustSrc MachineTrust
 	logf     func(format string, args ...any)
+	// runWorkerOutcome overrides asynchronous outcome startup in tests; nil uses a goroutine.
+	runWorkerOutcome func(func())
 	// runRetry is how long after a failed run the retry goes (0: runRetryDelay; tests shorten it).
 	runRetry time.Duration
 	// turnPoll is how often a run's watcher reads its turn (0: turnPollInterval; tests shorten it).
@@ -131,6 +133,9 @@ type Service struct {
 	// superviseTimes are how supervision messages gather and space out (zero fields: the package's; tests shorten
 	// them, supervise_signals.go superviseTimings).
 	superviseTimes superviseTimings
+	// todoAskAfter is how long a linked to-do goes without progress before its recurring check asks the owner (0:
+	// scheduleAskAfter's floor; tests shorten it, schedule_todo_evidence.go).
+	todoAskAfter time.Duration
 	// retryNow is the clock a due retry checks the task's time against (retryStillDue; nil: time.Now, tests set it).
 	retryNow func() time.Time
 
