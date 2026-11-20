@@ -14,7 +14,7 @@ import {
   type ModelProfiles as Profiles,
 } from "../../lib/model-profiles";
 import { namedLauncher, namesFromProviders, providerIdNote, providerTitle } from "../../lib/provider-names";
-import { effortTitle } from "../../lib/session-actions";
+import { effortTitle, modeTitle } from "../../lib/session-actions";
 import { onHubEvent } from "../../lib/store";
 import { t } from "../../i18n";
 import { Button, Dialog, Loading, toast } from "../../ui/atoms";
@@ -313,7 +313,7 @@ function ModelProfilesForOwner({
                       <span className="min-w-0 [overflow-wrap:anywhere] text-ink-3">
                         {providerTitle(l)}
                         {id && <> <span className="font-mono text-submeta">{id}</span></>}
-                        {[x.model, x.effort, speed].filter(Boolean).map((v) => ` · ${v}`).join("")}
+                        {[x.model, x.effort, x.permission_mode && modeTitle(x.permission_mode), speed].filter(Boolean).map((v) => ` · ${v}`).join("")}
                       </span>
                     </div>
                     {x.description && <p className="mt-0.5 text-ink-2">{x.description}</p>}
@@ -333,6 +333,7 @@ function ModelProfilesForOwner({
                   b.provider ? (providerName(b.provider, providers) ?? b.provider) : t("settings-modelprofiles.purpose_follow_default"),
                   b.model,
                   b.effort && effortTitle(b.effort),
+                  b.permission_mode && modeTitle(b.permission_mode),
                 ].filter(Boolean).join(" · ");
                 return (
                   <li key={id} className="flex items-baseline justify-between gap-2 rounded-control bg-field px-3 py-2 text-label">

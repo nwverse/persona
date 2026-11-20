@@ -112,6 +112,7 @@ func (s *Service) taskExecution(ctx context.Context, t Task, validate bool, bind
 		}
 	}
 	ex.Launcher, ex.Model, ex.Effort = strings.TrimPrefix(b.Provider, "launcher."), b.Model, b.Effort
+	ex.PermissionMode = cmp.Or(t.PermissionMode, b.PermissionMode, s.settings(ctx).DefaultPermissionMode, "bypassPermissions")
 	ex.BindingFingerprint, ex.Fingerprint = s.taskExecutionFingerprints(ctx, machine, b)
 	if !validate {
 		ex.Agent = s.launcherAgent(withUnhidden(ctx, ex.Launcher), machine, ex.Launcher)

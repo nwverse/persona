@@ -9,6 +9,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/transcript"
 )
 
 func (s *stateFile) stopped(id string, cause proto.StopCause) {
@@ -78,6 +79,39 @@ func (n *Node) saveStopCause(ctx context.Context, id string, cause proto.StopCau
 func (n *Node) stopCause(id string) proto.StopCause {
 	st, _ := n.state.get(id)
 	return st.StopCause
+}
+
+// noteGatewayStop records only a recognized gateway failure on an exited terminal Agent. An explicit stop, a
+// consumed recovery attempt, or a concurrent close must never be reauthorized by an older transcript error.
+func (n *Node) noteGatewayStop(s *proto.Session) {
+	kind, _ := transcript.GatewayErrorKind(s.TurnError, s.UpdatedAt)
+	if s.TurnErrorKind != "" && s.TurnErrorKind != kind {
+		return // Structured authentication/model failures are never gateway recovery permission.
+	}
+	var cause proto.StopCause
+	switch kind {
+	case proto.TurnErrorUsageLimit:
+		cause = proto.StopUsageLimit
+	case proto.TurnErrorTransient:
+		cause = proto.StopTransientError
+	default:
+		return
+	}
+	release, ok := n.recovery.tryLock(s.SessionID)
+	if !ok {
+		return
+	}
+	defer release()
+	if _, live := n.agent(s.SessionID); live {
+		return
+	}
+	n.state.update(s.SessionID, func(st *sessionState) bool {
+		if st.StopCause != proto.StopUnknown || s.UpdatedAt.IsZero() || s.UpdatedAt.UnixNano() <= st.StopCauseAt {
+			return false
+		}
+		st.StopCause, st.StopCauseAt = cause, max(time.Now().UnixNano(), st.StopCauseAt+1)
+		return true
+	})
 }
 
 // Called again under the session's recovery lock: a cached assistant row must not

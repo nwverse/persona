@@ -626,10 +626,12 @@ Use a fixed domain to find the hub after reconnecting changes its IPv6 prefix (`
 
 - `provider`:
   - `cloudflare`: updates AAAA / A records, requires `zone_id` and `token_file`; `ttl` is 1 (automatic, default) or 30–86400.
+  - `alidns`: updates AAAA / A records on Alibaba Cloud DNS (`alidns.aliyuncs.com`), requires `domain` (the registered DNS zone, for example `example.com`) and `token_file` (`<access_key_id>:<access_key_secret>`); `ttl` is optional (1–86400; omitting it keeps an existing record's TTL or uses Alibaba Cloud DNS's default).
   - `webhook`: POSTs `{"record","ipv6","ipv4"}` to `webhook_url`; with `token_file`, sends it as `Authorization: Bearer`.
-  - Alibaba Cloud DNS and DNSPod are not implemented yet.
+  - DNSPod is not implemented yet.
 - `record`: full domain name.
-- `token_file`: a file containing only the token, must be a regular file with 0600 permissions. The token does not go into hub.json.
+- `domain`: registered DNS zone for `alidns` (use the same value as `record` for the zone apex `@`).
+- `token_file`: a file containing only the provider credential (`<token>` for `cloudflare` / `webhook`, `<access_key_id>:<access_key_secret>` for `alidns`), must be a regular file with 0600 permissions. Credentials do not go into hub.json.
 - **Which addresses are published**:
   - IPv6 follows the same rules as the candidate list: only stable local global IPv6 addresses; an already published address is kept as long as it remains stable.
   - IPv4 is published only if a public IPv4 was explicitly entered in `public.advertise`: a locally visible IPv4 does not prove public inbound reachability.

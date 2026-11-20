@@ -148,5 +148,7 @@
   "err_candidates_not_callable": "{provider} は直接呼び出せないため候補にできません。直接 API のプロバイダーか、アドレスとキーのあるプロバイダーを選んでください",
   "candidate_not_offered": "設定済みのモデルプロバイダーはこのモデルを提供していません",
   "candidate_not_direct": "プロバイダー {provider} は直接呼び出せません",
-  "candidate_provider_gone": "プロバイダー {provider} は削除されたか、直接呼び出せません"
+  "candidate_provider_gone": "プロバイダー {provider} は削除されたか、直接呼び出せません",
+  "err_permission_mode_launcher_only": "権限モードはランチャー型のモデル用途でのみ設定できます",
+  "err_permission_mode_unsupported": "このランチャーは選択した権限モードに対応していません"
 }

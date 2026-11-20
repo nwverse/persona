@@ -177,15 +177,24 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		takesModes := true
 		if _, ok := s.machineByName(ctx, t.Machine); ok {
 			own := t.launchPick()
-			fit, err := s.fitPlanTaskSpeed(ctx, t)
+			fit, configuredMode, err := s.fitPlanTask(ctx, t)
 			if err != nil {
 				return "", fmt.Errorf("task %d: %w", i+1, err)
 			}
-			if fit.allowAll() {
+			switch {
+			case t.Readonly:
+				if fit.allowAll() {
+					t.Permission = "bypassPermissions"
+				}
+			case configuredMode != "" && fit.supportsPermissionMode(configuredMode):
+				if t.Permission == "" {
+					t.Permission = configuredMode
+				}
+			case fit.allowAll():
 				t.Permission = "bypassPermissions"
 			}
 			// traex, omp…: no mode, no effort (launcher_modes.go). One the call names is refused now, rather than by
-			// the computer once the task starts; one a tier filled in is dropped. pi, cursor, agy: dropped either way.
+			// the computer once the task starts; one a tier filled in is dropped. pi, cursor: dropped either way.
 			if takesModes = startTakesModes(fit.agent); !takesModes {
 				if err := startModesRefused(t.Launcher, fit.agent, asked, own.effort); err != nil {
 					return "", fmt.Errorf("task %d: %w", i+1, err)

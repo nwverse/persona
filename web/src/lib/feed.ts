@@ -117,6 +117,10 @@ export interface BriefRow {
   /** accept: a conclusion's verdict (left out for a deployed task); decide waits for the user's decision, and Accept takes `recommend`. */
   outcome?: TodoAsk["outcome"];
   recommend?: string;
+  /** waiting, later: the chat the card or the question came from (#2320), which Open opens in the app (#12055); a hub from
+   *  before leaves them out, and Open is then the row's `link`. */
+  machine_id?: string;
+  session_id?: string;
 }
 
 /** What a `BriefRow` field says when it is text: the value if it is a string, nothing otherwise. The rows come off the
@@ -133,7 +137,7 @@ export function briefRow(raw: unknown): BriefRow | undefined {
   const id = text(r.id);
   if (!id) return undefined;
   const row: BriefRow = { id, title: text(r.title) ?? "", waited_s: typeof r.waited_s === "number" && Number.isFinite(r.waited_s) ? r.waited_s : 0 };
-  for (const key of ["detail", "from", "link", "asked_at", "verdict", "recommend"] as const) {
+  for (const key of ["detail", "from", "link", "asked_at", "verdict", "recommend", "machine_id", "session_id"] as const) {
     const v = text(r[key]);
     if (v) row[key] = v;
   }
