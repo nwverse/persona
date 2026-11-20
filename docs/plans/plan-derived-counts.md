@@ -87,10 +87,10 @@ Paths in the server rows are under `server/internal`. Every row was checked at e
 
 ### 3.1 One definition per count, computed once in the manager
 
-- **A new pure package**, server/internal/assistant/attention (name: D15), shaped like `assistant/todo/projection`: it
-  imports only proto and assistantwire, so its tests skip the 58 s compile of the assistant package's test binary. Each
-  count is one function over the inputs fleetInputsInto already builds; the Live Activity, Persona Link and the roster's
-  Inbox count call it.
+- **A new pure package**, server/internal/assistant/attention (name and home: D15), shaped like
+  `assistant/todo/projection`: it imports only proto and assistantwire, so its tests skip the 58 s compile of the
+  assistant package's test binary. Each count is one function over the inputs fleetInputsInto already builds; the Live
+  Activity, Persona Link and the roster's Inbox count call it.
 - **Each count has an id and a one-line definition** in a new doc, docs/protocol/counts.md (principle 3). An id starts
   with the rule of the client it replaces, so no number changes before its decision.
 - **The pilot is the Agents count.** `agents_needs_you` is `spec/fixtures/needs-you`'s badge rule, as
@@ -100,8 +100,13 @@ Paths in the server rows are under `server/internal`. Every row was checked at e
   `docs/protocol/agent-states.md`: a background-only wait is not counted as working, and Just finished changes no count.
 - **Later ids come one at a time, each after its decision:** `inbox_unread`, `inbox_action`, `todos_needs_you` (from the
   same Counts() call `GET /api/v1/todos` uses, pinned by `spec/fixtures/todo-counts` and `spec/fixtures/todo-view`),
-  `persona_cards`, and the Live Activity's and Link's numbers. `assistant_needs` (the composer's Needs you) keeps the
-  name `schema/wire/todo-view.schema.json` reserves.
+  `persona_cards`, and the Live Activity's and Link's numbers.
+- **The composer's Needs you is not a CountsView id.** It stays the `assistant_needs` payload that
+  `docs/design/proposals/todos-redesign.md` (7.3, Attention) and `docs/design/DECISIONS.md` (11-19) define:
+  `{todos: N, elsewhere: M, groups}`. That payload carries the per-to-do count unit, gates the rolling upgrade (a client
+  counts each to-do once only where it is present), and is what the watch, widgets and Live Activity read for it there.
+  CountsView's `{n, keys, held, more}` cannot carry its parts, and `schema/wire/todo-view.schema.json` reserves its
+  type, so one number keeps one carrier. If both are built, the manager package computes them from the same snapshot.
 
 ### 3.2 One small generated view per manager, relayed as is
 
@@ -111,11 +116,15 @@ CountsView {                       // per manager; schema/wire, generated for Go
   as_of: int,                      // ms; only to say how old a kept view is
   counts: { <id>: { n: int,
                     keys: [{id, cards[]}],   // counted rows, agent:<machine>/<session> or card:<id>, at most 200
-                    held: [{id, why}],       // listed but not counted: muted, quiet, delegating (D6, D11)
-                    more: int } },
-  surfaces: { <surface>: <id> }    // which count each surface draws (D5): a remap is a server change
+                    held: [{id, why}],       // rows today's list keeps but the count leaves out: muted, quiet
+                    more: int } }
 }
 ```
+
+The first schema is only what today's rules already say. `held` lists the rows that `AgentsNeedsYou.rows` keeps and the
+badge leaves out; whether a header draws them is D6, and a delegating card becomes a `why` only if D11 holds it. A
+`surfaces: {<surface>: <id>}` map (which count each surface draws, so a remap is a server change) is an optional field
+added after D5; until then each client names the id it draws.
 
 - **Manager to hub.** The manager names the capability `counts_view` and tells a one-way `counts.view` event, built in
   liveLoop's round after tellLive from the same fleetInputs, so `agents_needs_you`, FleetState and Link's summary come
@@ -123,12 +132,22 @@ CountsView {                       // per manager; schema/wire, generated for Go
   and sent after the round's list changes, so a badge is never ahead of its list.
 - **The hub stays a relay.** It keeps each manager's latest view as raw JSON on the bus connection, beside
   `inboxNeedsYou` in `hub/bus.go`; it checks only that the view is an object with `epoch` and `rev` of at most 16 KB,
-  and never decodes the counts. It puts the view on the roster entry (`GET /api/v1/managers`) and pushes
-  `{type:"counts", manager, view}` through toWanting to apps that name the client feature `counts_view`, with
-  `view: null` when the manager's connection ends. `counts` is listed in hubMessageTypes, so no manager can broadcast
-  it. The hub feature `counts_view` comes from a function appended in features(), as todoViewFeatures does. There is no
-  new hub route and no hub arithmetic: clients add up the managers in a surface's scope. Managers' sessions and cards
-  are disjoint; a test checks that a key two managers list (mesh, a migration) counts once.
+  and never decodes the counts. It puts the view on the roster entry (`GET /api/v1/managers`), with `counts_view: true`
+  on the entry of a connected manager that named the capability, and pushes `{type:"counts", manager, view}` to apps
+  that name the client feature `counts_view`, with `view: null` when the manager's connection ends (section 3.3 item 5
+  says what a client does with it). `counts` is listed in hubMessageTypes, so no manager can broadcast it. The hub
+  feature `counts_view` comes from a function appended in features(), as todoViewFeatures does. There is no new hub
+  route and no hub arithmetic: clients add up the managers in a surface's scope. Managers' sessions and cards are
+  disjoint; a test checks that a key two managers list (mesh, a migration) counts once.
+- **Only full-role apps get views.** A view lists every waiting session and card of a manager, so it reaches only what
+  may read them all. toWanting checks no role, and `wants()` honours `?features=` for every role, so hub/counts_view.go,
+  at connect and on each change, sends only to clients with `role == roleFull` that want the feature, not through
+  toWanting alone, as broadcasts skip scoped clients for everything but `sessions` (`hub/http.go`). Scoped device tokens
+  get no push; the scoped writer's allowlist (`hub/scoped_tokens.go` scopedSocketEvent) would also drop a `counts`
+  frame, a second line, not the rule. Extension tokens open only the routes `extwire.RouteScopes` lists, which has
+  neither the roster nor `/api/v1/ws`, and scoped device tokens are refused the roster for the same reason. Answer-only
+  devices (the watch) open neither (`answerReads`); whether they may is D12. Persona Link and peer credentials open only
+  their link (`allowed` in `hub/devicetokens.go`).
 - **Generation stays a pure addition (#9117).** Only CountsView is generated, because no client wrote it by hand.
   FleetState (an ActivityKit ContentState), link.Attention, sessionlist.Counts and InboxItem stay hand-written.
   CountsView does not `$ref` todo-view, since `scripts/gen/extension_schema.py` loads each schema alone.
@@ -144,11 +163,14 @@ CountsView {                       // per manager; schema/wire, generated for Go
 3. **List-local counts:** filters, search and folds intersect `keys`. Their unfiltered value equals their label's count,
    or is a `differs` row (section 3.5).
 4. **Drawing:** hidden at 0, `99+`, the favicon's `9+`, tone, dot or number.
-5. **Cold start:** the last view per hub is persisted (Apple StateCache, Android DataStore, web storage) and drawn on
-   the first frame, marked stale. A disconnected manager's last view stays, drawn stale (`docs/assistant/north-star.md`
-   "Unknown, never zero"). With a view, no client recounts from a partial paged list.
-6. **The frozen fallback:** today's rule, moved unchanged into one file per client, used for a surface only while some
-   manager in its scope sends no view (D10), so one number never mixes two rules.
+5. **Cold start and gaps:** the last view per hub is persisted (Apple StateCache, Android DataStore, web storage) and
+   drawn on the first frame, marked stale. `view: null` and a disconnected manager mean unknown, not old: the last view
+   stays, drawn stale (`docs/assistant/north-star.md` "Unknown, never zero"; D13), so a manager restart or redeploy
+   never switches the rule. With a view, no client recounts from a partial paged list.
+6. **The frozen fallback:** today's rule, moved unchanged into one file per client. It is used only on an explicit
+   absence: the hub's hello lists no `counts_view` feature (an old or rolled-back hub), or a connected manager's roster
+   entry has no `counts_view: true` (an old or rolled-back manager), or a manager has never sent a view this client
+   kept. A surface uses it while any manager in its scope is absent (D10), so one number never mixes two rules.
 
 ### 3.4 Old clients and old hubs
 
@@ -157,7 +179,8 @@ CountsView {                       // per manager; schema/wire, generated for Go
 | Old app, new hub | It never names the feature and ignores the unknown roster field. FleetState, link.Attention and `inbox_needs_you` keep their values |
 | New app, old hub, or a manager without the capability | No view for that manager: the fallback, as today |
 | New manager, old hub | The hub drops the unknown event, as it would `inbox.needs_you` |
-| Manager or hub rolled back | The view disappears or turns `null`: the fallback within one message |
+| Manager restarts or is redeployed | `view: null`, then a view with a new epoch; meanwhile its last view is drawn stale and no rule changes (D13) |
+| Manager or hub rolled back | The hub's hello lists no `counts_view`, or the reconnected manager's roster entry has no `counts_view: true`: the fallback from that message on |
 | Several paired hubs | Each hub on its own; the app adds them up |
 
 New WebSocket types and features also need their rows in `docs/protocol/protocol.md` (`scripts/test/test_doc_wire.py`),
@@ -179,28 +202,34 @@ and only those, since 51 open PRs touch it; the contract lives in docs/protocol/
 
 ## 4. Steps
 
-Steps 2 to 7b need no decision and change no number. Each step re-checks open PRs on its files before it is pushed; the
-four automated "continue #8584 verification repair" PRs (#10564, #10593, #10599, #10920) touch many count files.
+Steps 2 to 7b change no number. Steps 2 to 4 wait on no decision; step 5 waits on D15 (the package's name and home), and
+6 to 7b build on it. They leave out what a decision would settle: step 2 leaves `DESIGN_SYSTEM.md` 3.8 to D6, and step
+6 ships no `surfaces` map (D5) and no delegating `held` reason (D11). Steps 8 on wait on named decisions, whether or not
+they change a number: a client that draws views builds in D10's mixing rule and D13's handling of a missing view. Each
+step re-checks open PRs on its files before it is pushed; the four automated "continue #8584 verification repair" PRs
+(#10564, #10593, #10599, #10920) touch many count files.
 
 **1. This plan.** *Change:* this document, one CLAUDE.md index entry, comments on #10613 and #5974 (proposing that the
 fixtures of steps 3 and 4 carry #5974's planned count fixture; the definitions stay #5974's). *Conflict:* CLAUDE.md is
 in 10 open PRs; one entry in one cell. *Gate:* docs tests, privacy scan. *Rollback:* revert. *Done:* merged; steps 2 to
-7b can start.
+4 can start, and 5 to 7b once D15 is taken.
 
-**2. Comments and docs that claim the wrong number.** *Change:* correct the claims in section 1, plus the needs-you
-README's sentence that Android's section counts cards (it counts rows, `agentNeedsYouRows`) and the side-fold README,
-which names `assistant/fleet_fold_test.go` while the test is in `assistant/fleet_side_fold_test.go`. TodoCounts'
+**2. Comments and docs that claim the wrong number.** *Change:* correct section 1's claims about what the code counts,
+except `DESIGN_SYSTEM.md` 3.8 against the needs-you fixture's split, since choosing between them is D6. Also correct the
+needs-you README's sentence that Android's section counts cards (it counts rows, `agentNeedsYouRows`) and the side-fold
+README, which names `assistant/fleet_fold_test.go` while the test is in `assistant/fleet_side_fold_test.go`. TodoCounts'
 description is schema text, so its four outputs are regenerated. *Conflict:* `InboxStore.swift` has 2 open PRs (#7495,
-#4512), `assistantwire/inbox.go` 3 (#9782d, #6539d, #4512), the rest none. *Gate:* none. *Rollback:* revert.
-*Done:* `scripts/gen/extension_schema.py --check` and the docs tests pass.
+#4512), `assistantwire/inbox.go` 3 (#9782d, #6539d, #4512), the rest none. *Gate:* none. *Rollback:* revert. *Done:*
+`scripts/gen/extension_schema.py --check` and the docs tests pass.
 
 **3. The Agents definition, pinned.** *Change:* every `spec/fixtures/needs-you` case gets `expected.badge_rows`, plus
 six cases: a child's card under its parent, a side folded under its parent, a quiet task's card, a directory-hidden card
-(counted nowhere), a delegating card (counts), an elicitation-only card (its session waits). The iOS and Android replays
-assert `badge_rows`; a client failing a case is fixed only where the written rule already says so, else the case goes to
-D1. *Conflict:* the fixture and both replays have 0 open PRs; a fix in `AgentsNeedsYouRows.swift` meets the four repair
-PRs. *Gate:* none. *Rollback:* revert. *Done:* Android `:core:domain:test --tests '*AgentsNeedsYouFixtureTest*'`
-(`--max-workers=4`) and iOS AgentsNeedsYouFixtureTests pass, iOS on the implementer's own simulator.
+(counted nowhere), a delegating card (counts today; D11), an elicitation-only card (its session waits). The iOS and
+Android replays assert `badge_rows`; a client failing a case is fixed only where the written rule already says so, else
+the case goes to D1. *Conflict:* the fixture and both replays have 0 open PRs; a fix in `AgentsNeedsYouRows.swift` meets
+the four repair PRs. *Gate:* none. *Rollback:* revert. *Done:* Android `:core:domain:test --tests
+'*AgentsNeedsYouFixtureTest*'` (`--max-workers=4`) and iOS AgentsNeedsYouFixtureTests pass, iOS on the implementer's own
+simulator.
 
 **4. The surface table and the agreement report** (section 3.5). *Change:* spec/fixtures/counts (README, surfaces.json),
 the guard, the report switch in the existing replays, the lane differ, and entries in `scripts/ci/paths.py` and
@@ -211,21 +240,23 @@ the guard, the report switch in the existing replays, the lane differ, and entri
 **5. The pure manager package.** *Change:* move needsYou, liveCounts and cardStands out of `assistant/fleet_live.go` and
 linkAttention's predicate out of `assistant/fleet_attention.go`; add `agents_needs_you`, replaying the needs-you
 fixture. fleetInputsInto and foldSidesIn stay. *Conflict:* the four repair PRs' `fleet_live.go` hunks are in
-fleetInputsInto (lines 170 and 180); the moved functions start at line 254. `fleet_attention.go` has 0. *Gate:* none.
-*Rollback:* revert. *Done:* TestLinkAttentionFollowsTheSharedFixtures, TestLiveActivityKeepsItsOwnCount,
-TestFleetCountsCodexRootsOnly, TestFleetCountsASideUnderItsParent and TestSnapshotNeedsYouIsTheState pass unchanged;
-FleetState and Link bytes are identical on the fixtures; the package's tests run on their own (`go test -p 4`,
-`GOFLAGS=-trimpath`); no added allocations in a benchmark; the known internal/assistant failures on main are unchanged.
+fleetInputsInto (lines 170 and 180); the moved functions start at line 254. `fleet_attention.go` has 0. *Gate:* D15 (the
+package's name and home). *Rollback:* revert. *Done:* TestLinkAttentionFollowsTheSharedFixtures,
+TestLiveActivityKeepsItsOwnCount, TestFleetCountsCodexRootsOnly, TestFleetCountsASideUnderItsParent and
+TestSnapshotNeedsYouIsTheState pass unchanged; FleetState and Link bytes are identical on the fixtures; the package's
+tests run on their own (`go test -p 4`, `GOFLAGS=-trimpath`); no added allocations in a benchmark; the known
+internal/assistant failures on main are unchanged.
 
 **6. The schema and generated types.** *Change:* schema/wire/counts.schema.json (`x-out` ts, swift, go, kotlin;
 `x-guard` arkts, rust), its four outputs, `.gitattributes` rows and a `schema/wire/README.md` row; samples from step 5's
-Go output. *Conflict:* schema/wire, the generator and `scripts/test/test_wire_schema.py` have 0 open PRs. *Gate:* none.
-*Rollback:* revert; nothing reads the types. *Done:* `--check` and test_wire_schema.py pass; round trips pass in Go,
-Kotlin, Swift (`swift test` in PersonaWire) and the web.
+Go output. The schema has no `surfaces` map (D5) and no delegating `held` reason (D11); each is an optional field added
+after its decision. *Conflict:* schema/wire, the generator and `scripts/test/test_wire_schema.py` have 0 open PRs.
+*Gate:* step 5. *Rollback:* revert; nothing reads the types. *Done:* `--check` and test_wire_schema.py pass; round trips
+pass in Go, Kotlin, Swift (`swift test` in PersonaWire) and the web.
 
 **7a. The manager tells the view.** *Change:* the capability constant in a new assistantwire/counts.go (avoiding
 `assistantwire/bus.go`, 9 open PRs), named in the hello's capability list in `assistant/bus.go` (10 open PRs; one
-identifier on one line); the tell from liveLoop. *Gate:* none. *Rollback:* revert. *Done:* on one round,
+identifier on one line); the tell from liveLoop. *Gate:* steps 5 and 6. *Rollback:* revert. *Done:* on one round,
 `agents_needs_you.n` equals the fixture rule over the same inputs; a quiet fleet tells nothing; a hub built from
 `origin/main` drops the event; the round benchmark stays within 5% of step 5's.
 
@@ -233,23 +264,28 @@ identifier on one line); the tell from liveLoop. *Gate:* none. *Rollback:* rever
 #6924d); one line each in bus_broadcast.go (3) and features() in extensions_link.go (5); the kept views go out in the
 connect sequence in `hub/http.go` (7) and after a client hello in `hub/clientmeta.go` (0). Rows in protocol.md,
 docs/protocol/counts.md with its CLAUDE.md entry, and a mock domain module under scripts/mock registered with one line
-in `scripts/mock/mock_domains.py`'s DOMAINS (0), so `mock_hub.py` (24) is untouched. *Gate:* none. *Rollback:* revert;
-clients see no feature. *Done:* hub tests: kept raw, sent only to apps that want it, `null` on disconnect, oversized
-views refused, connect order hello, machines, counts, then session lists; TestBroadcastTypes, `test_doc_wire.py` and the
-hub's architecture guard pass, apart from `TestHubAnswersOnlyItsOwnRoutes`, which already fails on main (#9485) and is
-compared with `origin/main`.
+in `scripts/mock/mock_domains.py`'s DOMAINS (0), so `mock_hub.py` (24) is untouched. *Gate:* step 7a (the capability
+name). *Rollback:* revert; clients see no feature. *Done:* hub tests: kept raw; sent only to full-role apps that want
+it, with a scoped client that asks `?features=counts_view` queued no `counts` frame (checked before the scoped writer's
+allowlist, so the role check is tested on its own) and the roster refusing scoped, answer and extension tokens;
+`counts_view: true` only on a connected manager that named it; `null` on disconnect; oversized views refused; connect
+order hello, machines, counts, then session lists; TestBroadcastTypes, `test_doc_wire.py` and the hub's architecture
+guard pass, apart from `TestHubAnswersOnlyItsOwnRoutes`, which already fails on main (#9485) and is compared with
+`origin/main`.
 
 **8. Android reads `agents_needs_you`** (a pure replacement: the Android badge is the fixture rule). *Change:*
 ShellCounts and the switcher's agents part read the view, with the overlay and the frozen fallback; HubManagers.kt
 decodes the generated type. *Conflict:* `ShellCounts.kt` and `HubManagers.kt` 0; `Root.kt` (#11660d, #5969d) is not
-touched. *Gate:* steps 3 to 7b. *Rollback:* revert, or turn off the hub feature. *Done:* ShellCountsTest and the
-surfaces replay pass; `scripts/app/android.sh shots` in three styles, light and dark, shows unchanged numbers.
+touched. *Gate:* steps 3 to 7b, D10 (mixed support) and D13 (a missing view). *Rollback:* revert, or turn off the hub
+feature. *Done:* ShellCountsTest and the surfaces replay pass; `scripts/app/android.sh shots` in three styles, light and
+dark, shows unchanged numbers.
 
-**9. iOS reads `agents_needs_you`.** *Change:* the tab badge, the switcher's agents part and the Home Agents widget's
-number read the view. **Visible** only on hubs with bounded lists, where sessions that wait with no card now count when
-not loaded: the written rule, fixed, with a self-check. *Conflict:* `AppModel.swift` 4 (#11456d, #11282, #7517,
-#2051), `AssistantScope.swift` the four repair PRs, `HomeWidgetWriter.swift` and `AppIconBadge.swift` 0. *Gate:* steps
-3 to 7b. *Rollback:* revert. *Done:* AgentsNeedsYouFixtureTests, AppIconBadgeTests, AssistantBadgesTests and
+**9. iOS reads `agents_needs_you`.** *Change:* the tab badge and the switcher's agents part read the view, and the Home
+Agents widget's number once D2 has set its scope (until then it keeps today's count). **Visible** only on hubs with
+bounded lists, where sessions that wait with no card now count when not loaded: the written rule, applied once D1
+confirms it, with a self-check. *Conflict:* `AppModel.swift` 4 (#11456d, #11282, #7517, #2051), `AssistantScope.swift`
+the four repair PRs, `HomeWidgetWriter.swift` and `AppIconBadge.swift` 0. *Gate:* steps 3 to 7b, D1, D10 and D13; D2
+for the widget. *Rollback:* revert. *Done:* AgentsNeedsYouFixtureTests, AppIconBadgeTests, AssistantBadgesTests and
 HomeWidgetTests pass; the PR names the `docs/apple/performance.md` rules followed (P1, P4, P6) with countBadges timings
 before and after from an optimized build, light and dark screenshots, and the Xcode used.
 
@@ -257,10 +293,10 @@ before and after from an optimized build, light and dark screenshots, and the Xc
 on no session join; quiet agents leave on bounded hubs. *Change:* useCounts and useScopedCounts keep their signatures,
 so views do not change; separately, in a bug issue of its own, the Dock resets to 0 on sign-out and hub change.
 *Conflict:* `sessions.ts` and `current-assistant.ts` meet the repair PRs; `manager-attention.ts` has #10920, #10396d;
-`attention-signals.ts` #8290, #1995d; `SidebarParts.tsx` (12) is untouched. *Gate:* D1, D2. *Rollback:* revert, or turn
-off the hub feature. *Done:* vitest through check-fast; `npm run build` after merging `origin/main`
-(FIRST_SCREEN_BUDGET); light and dark screenshots; the desktop e2e reads the Dock equal to the web's number, and 0 after
-sign-out.
+`attention-signals.ts` #8290, #1995d; `SidebarParts.tsx` (12) is untouched. *Gate:* steps 3 to 7b, D1, D2, D10 and D13.
+*Rollback:* revert, or turn off the hub feature. *Done:* vitest through check-fast; `npm run build` after merging
+`origin/main` (FIRST_SCREEN_BUDGET); light and dark screenshots; the desktop e2e reads the Dock equal to the web's
+number, and 0 after sign-out.
 
 **11. Persona Link and the Live Activity on the same definition** (server only, **visible**). *Change:* Link's and
 FleetState's `needsYou` become `agents_needs_you`, with Persona conversations with a standing card as a named part (D4);
@@ -299,6 +335,10 @@ every `differs` row is gone or links a decision.
 
 ## 6. Open decisions for maintainers
 
+D1, D6 to D9, D11 and D16 decide what a count includes, questions #5974 and the To-dos proposals already hold; they are
+listed here to name each step's gate. D2 to D5, D10 and D12 to D15 are this plan's own: which count each surface draws,
+its scope, and how views travel and are drawn.
+
 - **D1** The one Agents rule (#5974). Recommended: `spec/fixtures/needs-you`'s badge on every surface named for it,
   which changes the web's number, then Link's and the Live Activity's.
 - **D2** Scope of the numbers seen outside one assistant's pages (tab title, favicon, Dock, app icon, Live Activity,
@@ -307,8 +347,8 @@ every `differs` row is gone or links a decision.
 - **D3** Persona Link's muted agents: counted (today), listed but not counted (recommended), or hidden.
 - **D4** The Live Activity's headline: `agents_needs_you` plus Persona conversations with a standing card, as named
   parts, and whether cards on no session appear (recommended: yes to both).
-- **D5** The `surfaces` map on the wire, so a decided remap needs no client release (recommended), or ids pinned per
-  client.
+- **D5** The `surfaces` map on the wire (an optional field after step 6), so a decided remap needs no client release
+  (recommended), or ids pinned per client.
 - **D6** The Agents section header and filter against the badge: `DESIGN_SYSTEM.md` 3.8 says they are equal, the fixture
   pins a split. Either the header counts the badge's rows with muted and quiet agents under one uncounted line (`held`),
   or the doc is amended to the split.
@@ -317,18 +357,20 @@ every `differs` row is gone or links a decision.
 - **D8** The To-dos badge: N in blue (`docs/design/proposals/todos-redesign.md` 3.7), the SOP's open count in neutral
   (owner-at-a-glance U7), or `ownerBadge` (#11085).
 - **D9** The Persona tab and the app icon: cards on Persona conversations and quiet tasks' agents (iOS), Android's rule,
-  or the composer's Needs you (`assistant_needs`, owner-at-a-glance G3); and with it whether the icon stays the sum of
-  the tabs (`DESIGN_SYSTEM.md` 3.8).
-- **D10** Mixed support on one hub: draw the view for a surface only when every manager in its scope sends one
-  (recommended), or per manager, which mixes two rules in one number.
-- **D11** Delegating and supervisor-held cards: counted (iOS and Android badges, Link), or held until first dispatched
-  to the owner, as north-star counts interruptions.
+  or the composer's Needs you (owner-at-a-glance G3), read from todos-redesign's `assistant_needs` payload, not a
+  CountsView id (section 3.1); and with it whether the icon stays the sum of the tabs (`DESIGN_SYSTEM.md` 3.8).
+- **D10** Mixed support on one hub: draw the view for a surface only while no manager in its scope is absent (section
+  3.3 item 6; recommended), or per manager, which mixes two rules in one number.
+- **D11** Delegating and supervisor-held cards: counted (iOS and Android badges, Link), or held (a `held` reason) until
+  first dispatched to the owner, as north-star counts interruptions.
 - **D12** Numbers outside the running app: alert pushes carry each manager's icon value and the iOS Notification Service
   Extension adds them up per hub (recommended: a plain `aps.badge` from one hub overwrites the others' share on a
   multi-hub device), plain `aps.badge`, or set by the app only (today). Also: whether Android sets a notification
-  number, and whether answer-only devices (the watch) may read the views; `answerReads` in `hub/devicetokens.go` does
-  not list the roster.
-- **D13** A disconnected manager's view: kept and drawn stale (recommended), or dropped from totals.
+  number, and whether answer-only devices (the watch) may read the views; `answerReads` in `hub/devicetokens.go` lists
+  neither the roster nor `/api/v1/ws`.
+- **D13** A disconnected manager, and `view: null`: its last view kept and drawn stale until it reconnects, so a
+  restart or redeploy never switches rules (recommended), or dropped from totals. Either way only an explicit absence
+  (section 3.3 item 6) brings the fallback.
 - **D14** The fallback window before step 13: the oldest hub version that must send views, and how long `count_skew`
   stays at 0.
 - **D15** The package's name and home (assistant/attention recommended), and whether archguard pins its imports.
@@ -339,6 +381,8 @@ every `differs` row is gone or links a decision.
 
 - **Deciding what a count includes** (#5974, U7, todos-redesign 3.7, #11085, #10787, #9731): each lands once, in the
   manager package.
+- **The composer's Needs you and its carrier:** `assistant_needs` stays todos-redesign's payload, gate and readers
+  (section 3.1).
 - **How badges look:** tones and the marks vocabulary (#4538, #4547, #4653).
 - **List-local counts and totals:** chips, section and group headers, the Machines page, "N pending", "N more", the
   sessionlist counts and catalog that filter lists (#994), feed and metric totals (Today, brief,
