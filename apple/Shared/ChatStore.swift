@@ -453,7 +453,11 @@ final class ChatStore {
     @ObservationIgnored private var liveEnds: String?
     var screenStatus: SessionStatus = .unknown
     var screenUpdatedAt: Date?
-    var error: String?
+    var error: String? {
+        didSet { if oldValue != error { historyNotFound = false } }
+    }
+    /// The latest history read answered 404/not_found: its error replaces the first-page loading placeholder.
+    var historyNotFound = false
     var isLoadingOlder = false
     /// This client's latest send survives replacement of its pending bubble by transcript echo.
     var sendFeedback: ChatSendFeedback?
@@ -607,6 +611,7 @@ final class ChatStore {
         hasMore = false
         loadedOnce = false
         backlogBuilt = false
+        historyNotFound = false
         scheduleRebuild()
     }
 
@@ -624,7 +629,10 @@ final class ChatStore {
 
     private func mergeNative(_ new: [Item], backlog: Bool = false, hasMore: Bool? = nil) {
         let new = new.publicRefusals()
-        if backlog || !new.isEmpty { error = nil } // data arrived: a stale "machine is offline" no longer applies
+        if backlog || !new.isEmpty { // data arrived: a stale "machine is offline" no longer applies
+            error = nil
+            historyNotFound = false
+        }
         // A replayed disk cache can hold an id twice. Keep the newest copy before indexing, but only after collecting
         // promotion evidence; ids is already a Set, so a count mismatch finds this without scanning every ordinary merge.
         func newestCopies(_ list: [Item]) -> [Item] {
@@ -1076,6 +1084,7 @@ final class ChatStore {
         opened = [:]
         newestFrom = latest.first.map { ($0.seq, $0.part) }
         self.hasMore = hasMore
+        historyNotFound = false
         if let h = span.history { history = h }
         mergeNative(latest)
         mergeNative(keep)

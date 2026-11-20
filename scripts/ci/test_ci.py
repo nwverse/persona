@@ -517,6 +517,15 @@ class AppleWorkflowTests(unittest.TestCase):
                                'iOS bounded HTML security tests (separate batch)'):
             self.assertIn(required_batch, script)
 
+    def test_resolved_variant_is_staged_only_in_the_disposable_source(self):
+        root = Path(__file__).resolve().parents[2]
+        script = (root / 'scripts/ci/apple.sh').read_text()
+        for required in ('scripts/ci/apple_resolved.py',
+                         '--tracked "$CI_ROOT/apple/Packages/PersonaSSH/Package.resolved"',
+                         '--staged "$SOURCE/apple/Packages/PersonaSSH/Package.resolved"',
+                         '--meta "$PERSONA_META_WEARABLES"'):
+            self.assertIn(required, script)
+
 
 class PostgresCleanupTests(unittest.TestCase):
     def test_server_fixture_removes_its_volume_on_success_and_failure(self):
