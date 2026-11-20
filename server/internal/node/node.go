@@ -1433,15 +1433,21 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			return nil, err
 		}
 		p.Speed = speed
-		if method == "session.start" && strings.TrimSpace(p.Prompt) != "" && len(p.Images) > 0 &&
+		var runtimeImages []proto.Image
+		if method == "session.start" && len(p.Images) > 0 &&
 			(p.ResumeSessionID == "" || p.AgentType != ompAgent && launcherAgentType(p.Launcher) != ompAgent) {
-			paths, err := n.saveImages(p.Images)
-			if err != nil {
-				return nil, err
+			startCtx := withStartHost(ctx, p.Host)
+			runtime, _ := n.startRuntimeIn(startCtx, p.Launcher)
+			if p.ResumeSessionID == "" && runtime != nil && runtime.id() == agyAgent && !n.usesAgyPane(startCtx, p.Launcher, p.AgentType) {
+				runtimeImages = p.Images
+			} else {
+				paths, err := n.saveImages(p.Images)
+				if err != nil {
+					return nil, err
+				}
+				// Terminal starts use the same attachment block as session.send.
+				p.Prompt = strings.TrimSpace(strings.TrimSpace(p.Prompt) + "\n\n<attached_images>\n" + strings.Join(paths, "\n") + "\n</attached_images>")
 			}
-			// The first prompt uses the same attachment block as session.send; firstPrompt adds keepImagePaths for Claude.
-			// An omp resume instead carries the images in ompResumeParams, so they never arrive twice.
-			p.Prompt = strings.TrimSpace(p.Prompt) + "\n\n<attached_images>\n" + strings.Join(paths, "\n") + "\n</attached_images>"
 		}
 		ctx, taskSpace := withTaskSpace(ctx, p.TaskID, p.WorkspaceID, p.WorkspaceLabel)
 		// Optional tool waits correlate the first input through the existing echo ledger.
@@ -1459,7 +1465,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 				session, _ := out["session"].(*proto.Session)
 				if resultErr == nil && session != nil {
 					r := echoRecord{SessionID: session.SessionID, ClientMsgID: echoOpts.ClientMsgID,
-						Text: p.Prompt, SentAt: sentAt, AfterSeq: after.seq, In: after.in}
+						Text: p.Prompt, Images: len(runtimeImages), SentAt: sentAt, AfterSeq: after.seq, In: after.in}
 					if n.echoes.expect(r) {
 						n.notifyEcho(r)
 					}
@@ -1565,7 +1571,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			tab = *p.TabName
 		}
 		rp := runtimeStartParams{Cwd: p.Cwd, Prompt: taskFallback(taskFallback(p.Prompt, p.TaskInstructions), p.TaskAttachments), Launcher: p.Launcher, Model: p.Model, PermissionMode: p.PermissionMode,
-			Effort: p.Effort, WorkspaceID: p.WorkspaceID, Resume: p.ResumeSessionID, AgentType: p.AgentType}
+			Effort: p.Effort, WorkspaceID: p.WorkspaceID, Resume: p.ResumeSessionID, AgentType: p.AgentType, ClientMsgID: p.ClientMsgID, Images: runtimeImages}
 		if p.ResumeSessionID == "" && runtimeIDRe.MatchString(p.SessionID) {
 			// The id the hub named for a new session goes to a runtime too (Paseo gives its session that id, #8130), so
 			// a start whose answer never comes back is found by it there as in a terminal (the start below).

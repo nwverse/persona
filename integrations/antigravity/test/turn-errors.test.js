@@ -16,7 +16,7 @@ const FAKE = fileURLToPath(new URL('./fake-acp-rewind.mjs', import.meta.url))
 const AT = '2026-01-02T12:00:00Z'
 const RESET = '2026-01-03T18:00:00Z'
 const MESSAGE = 'Individual quota reached. Resets in 30h.'
-const TRANSIENT_401 = 'UNAUTHENTICATED (code 401): Request is missing required authentication credential'
+const TRANSIENT_401 = 'UNAUTHENTICATED (code 401): Request is missing required authentication credential. Expected OAuth 2 access token, login cookie or other valid authentication credential. See https://developers.google.com/identity/sign-in/web/devconsole-project.'
 const input = { step_index: 0, type: 'USER_INPUT', source: 'USER_EXPLICIT', status: 'DONE', created_at: AT, content: 'Check the result.' }
 const error = {
   type: 'CORTEX_STEP_TYPE_ERROR_MESSAGE', metadata: { createdAt: AT },
@@ -135,8 +135,26 @@ for (const exported of [false, true]) {
   })
 }
 
+test('a plan-mode 401 retries despite a previous reply flushing and whole-second export timestamps', async (t) => {
+  const prior = { prompt: 'Earlier request.', reply: 'Earlier reply.' }
+  const { node, calls, items, row, idle } = await fixture(t, { initialCount: 1, promptPlan: [
+    { reply: prior.reply },
+    { error: TRANSIENT_401, export: true, planMode: true, wholeSeconds: true, flushReply: prior },
+    { reply: 'Finished.', export: true, planMode: true, wholeSeconds: true },
+  ] })
+  await node.peer.call('session.send', { session_id: SESSION, text: prior.prompt })
+  await until('previous turn settles without native export', () => row()?.last_text === prior.reply && idle())
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Continue.', client_msg_id: 'plan-retry' })
+  await until('plan retry settles', () => row()?.last_text === 'Finished.' && idle())
+  assert.equal(calls().filter((call) => call.method === 'session/prompt').length, 3)
+  const page = await items()
+  assert.deepEqual(page.items.map((item) => item.text), [input.content, prior.prompt, prior.reply, '/plan Continue.', 'Finished.'])
+  assert.equal(page.items[3].client_msg_id, 'plan-retry')
+})
+
 for (const [reason, plan, attempts, retryDelay] of [
   ['revoked login', [{ error: `${TRANSIENT_401}; invalid_grant` }], 1],
+  ['explicit sign-in request', [{ error: `${TRANSIENT_401} Please sign in.` }], 1],
   ['assistant text', [{ error: TRANSIENT_401, reply: 'Partial answer' }], 1],
   ['tool work', [{ error: TRANSIENT_401, tool: true }], 1],
   ['tool work received during the delay', [{ error: TRANSIENT_401, lateTool: 30 }], 1, 250],
