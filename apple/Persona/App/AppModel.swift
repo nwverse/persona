@@ -3140,19 +3140,14 @@ final class AppModel {
             // another device changed the list: only the shown assistant's is read again (#9436)
             if isHub, SavedPromptStore.concerns(eventManager: manager, shownManager: api?.shownManager) { SavedPromptStore.shared.reload() }
         case .personas:
-            // The new tier's package is downloaded whole before the face changes (PersonaStore.load). The list changed
+            // The new tier's package is downloaded whole before the face changes. The list changed
             // just now: a refresh already under way may have asked before, so it is read again after that one (#2405).
-            if isHub { Task { await personas.reload(api) } }
+            if isHub, let from = api { personas.packagesChanged(on: from) }
         case .look(let id, let effective):
             // Another device chose an avatar, or the hub went back to the default. Like every hub-level setting, the
             // avatar is the current hub's: another group's choice is its own (docs/protocol/multi-hub.md). The hub it
             // came from goes with it: when another group's became current before it is handled, it changes nothing.
-            if isHub, let from = api {
-                Task {
-                    guard api?.config.url == from.config.url else { return }
-                    await personas.follow(id, effective: effective, api: from)
-                }
-            }
+            if isHub { personas.receive(id, effective: effective, api: api) }
         case .managers:
             // Settings › Managers reads the roster again (ManagersView watches this).
             if isHub { managersRevision += 1 }
@@ -4731,11 +4726,13 @@ final class AppModel {
         SavedPromptStore.shared.reload()
         followScope()
         // The avatar is the new hub's from now, before its list is read below: a card tapped meanwhile goes to it.
-        personas.switchHub(api)
+        let avatarHub = api
+        personas.switchHub(avatarHub)
+        let avatarRequest = avatarHub.flatMap { personas.mark(for: $0) }
         let newChat = assistantNewChat
         Task {
             await refreshAssistant()
-            await personas.refresh(api)
+            if let avatarRequest { await personas.refresh(avatarHub, since: avatarRequest) }
             selectAssistantMain(after: newChat)
         }
         applyPersonaPalette()

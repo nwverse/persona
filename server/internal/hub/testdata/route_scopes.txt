@@ -340,6 +340,8 @@ agents.read          GET /api/v1/sessions/{mid}/{sid}/screen
 todos.read           GET /api/v1/todos
 todos.read           GET /api/v1/todos/places
 todos.read           GET /api/v1/todos/{id}
+-                    GET /api/v1/todos/{id}/backend-workspace
+-                    GET /api/v1/todos/{id}/backend-workspace/operations/{operation_id}
 todos.read           GET /api/v1/todos/{id}/decisions
 -                    GET /api/v1/todos/{id}/images/{image}
 todos.read           GET /api/v1/todos/{id}/repositories
@@ -633,6 +635,9 @@ todos.write          POST /api/v1/todos
 -                    POST /api/v1/todos/retitle
 -                    POST /api/v1/todos/{id}/accept
 -                    POST /api/v1/todos/{id}/asks/{ask}/answer
+-                    POST /api/v1/todos/{id}/backend-workspace/cancel
+-                    POST /api/v1/todos/{id}/backend-workspace/cleanup
+-                    POST /api/v1/todos/{id}/backend-workspace/prepare
 -                    POST /api/v1/todos/{id}/decision-dismiss
 -                    POST /api/v1/todos/{id}/decision-undo-dismiss
 todos.write          POST /api/v1/todos/{id}/decisions

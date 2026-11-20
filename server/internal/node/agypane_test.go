@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -79,6 +80,70 @@ func agyTestItems(t *testing.T, n *Node, id string, params map[string]any) ([]pr
 	t.Helper()
 	page := agyTestCall(t, n, "session.items", id, params).(map[string]any)
 	return page["items"].([]proto.Item), page
+}
+
+func TestAgyPaneSessionList(t *testing.T) {
+	n, herdr, home := herdrNode(t)
+	const (
+		acpRow     = "agy-" + agyTestID
+		otherRow   = "agy-" + agyOtherTestID
+		desktopRow = "desktop-agy-" + agyTestID
+		secondPane = "w1:p2"
+		secondRow  = "agy-w1-p2"
+		model      = "gemini-test"
+	)
+	n.runtimes = newRuntimeRegistry()
+	runtime := n.runtimes.add(nil)
+	runtime.ready, runtime.hello.Runtime = true, agyAgent
+	n.runtimes.setSessions(runtime, []proto.Session{
+		{SessionID: acpRow, Agent: agyAgent, Cwd: home, Status: proto.StatusIdle, Title: "ACP conversation", Model: model},
+		{SessionID: otherRow, Agent: agyAgent, Cwd: home, Status: proto.StatusIdle, Model: "other-model"},
+		{SessionID: desktopRow, Agent: agyAgent, Cwd: home, Status: proto.StatusOffline},
+	})
+	for _, tc := range []struct {
+		name, status, conversation string
+		ambiguous                  bool
+		wantACP                    bool
+	}{
+		{name: "live", status: proto.StatusIdle, conversation: agyTestID},
+		{name: "unresolved", status: proto.StatusIdle, wantACP: true},
+		{name: "ambiguous", status: proto.StatusIdle, conversation: agyTestID, ambiguous: true, wantACP: true},
+		{name: "offline", status: proto.StatusOffline, conversation: agyTestID, wantACP: true},
+		{name: "interrupted", status: proto.StatusInterrupted, conversation: agyTestID, wantACP: true},
+		{name: "closed", wantACP: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			want := map[string]string{otherRow: "other-model", desktopRow: ""}
+			var agents []any
+			if tc.status != "" {
+				pane := agyTestAgent(agyTestPane, home, tc.conversation)
+				pane["agent_status"] = tc.status
+				agents = append(agents, pane)
+				want[agyTestRow] = ""
+			}
+			if tc.ambiguous {
+				agents = append(agents, agyTestAgent(secondPane, home, tc.conversation))
+				want[secondRow] = ""
+			}
+			if tc.wantACP {
+				want[acpRow] = model
+			} else {
+				want[agyTestRow] = model
+			}
+			herdr.reply("session.snapshot", snapshot(nil, nil, agents, nil))
+			rows := listSessions(t, n)
+			got := make(map[string]string, len(rows))
+			for _, row := range rows {
+				got[row.SessionID] = row.Model
+				if row.SessionID == agyTestRow && (row.PaneID != agyTestPane || row.Host != host.Herdr || row.Status != tc.status || row.Title != "agy") {
+					t.Errorf("pane metadata changed: %+v", row)
+				}
+			}
+			if len(rows) != len(want) || !maps.Equal(got, want) {
+				t.Errorf("got %d rows with models %v, want %v", len(rows), got, want)
+			}
+		})
+	}
 }
 
 func TestAgyPanePagesAndFullItems(t *testing.T) {
