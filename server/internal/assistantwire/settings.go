@@ -66,8 +66,8 @@ const CodeDeliveryUnknown = "delivery_unknown"
 // The node's methods the assistant calls for its directory, its conversations and its settings
 // (docs/protocol/protocol.md "hub ↔ node"), passed through by the hub's device.call like the others.
 const (
-	// DeviceAssistantPrepare: {dir, claude_md, connectors, clis, plugin_skills} → {cwd, plugin_skills_need}.
 	DeviceAssistantDirectory = "assistant.directory" // {path} -> {cwd}; validates an existing directory without writes
+	// DeviceAssistantPrepare: {dir, claude_md, work_guide_md?, connectors, clis, plugin_skills} → {cwd, plugin_skills_need}.
 	DeviceAssistantPrepare   = "assistant.prepare"
 	DeviceAssistantExecution = "assistant.execution" // {session_id} → proto.AssistantExecution
 	// DeviceAssistantGuestPrepare: {dir, claude_md} → {cwd}: a guest conversation's directory (assistant/guest.go), only

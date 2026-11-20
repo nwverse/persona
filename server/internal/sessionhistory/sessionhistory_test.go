@@ -20,7 +20,7 @@ func TestParse(t *testing.T) {
 	if err != nil || !q.Until.Equal(base) || q.Limit != DefaultLimit || q.Since.Month() != time.August {
 		t.Fatalf("defaults: %+v %v", q, err)
 	}
-	if q, _ := Parse("2026-08-21T00:00:00Z", "2026-09-01T00:00:00.5+08:00", "", 9999, base); q.Limit != MaxLimit || q.Until.Day() != 31 {
+	if q, _ := Parse("2026-08-21T00:00:00Z", "2026-09-01T00:00:00.5+08:00", "", 9999, base); q.Limit != MaxLimit || q.Until.UTC().Day() != 31 {
 		t.Fatalf("limit clamped, until parsed: %+v", q)
 	}
 	for _, c := range [][3]string{{"", "", ""}, {"yesterday", "", ""}, {"2026-08-21T00:00:00Z", "soon", ""}, {"2026-08-21T00:00:00Z", "", "%%%"}} {
@@ -191,5 +191,36 @@ func TestRuntimeRow(t *testing.T) {
 	r, _, _ = RuntimeRow([]byte(`{"session_id":"a","started_at":"2026-10-01T00:00:00Z"}`))
 	if !r.At().Equal(r.StartedAt) {
 		t.Errorf("started_at is the last fallback")
+	}
+}
+
+// A source whose rows read so far were all left out (Reached past its last item, or no item at all) stops the merged
+// page at how far it read: another source's older rows wait, and an empty page still carries the cursor on.
+func TestMergeStopsWhereAPartWithMoreReached(t *testing.T) {
+	reached := item("a", 4, "x").Key
+	a := Part[string]{More: true, Reached: &reached}
+	b := Part[string]{Items: []Item[string]{item("b", 2, "1"), item("b", 6, "2")}}
+	items, next := Merge([]Part[string]{a, b}, 10)
+	if len(items) != 1 || items[0].V != "b/1" || next == nil || *next != items[0].Key {
+		t.Fatalf("stopped at a's reach: got %v next %v", items, next)
+	}
+	items, next = Merge([]Part[string]{a}, 10)
+	if len(items) != 0 || next == nil || *next != reached {
+		t.Fatalf("an empty page goes on from where a reached: %v %v", items, next)
+	}
+}
+
+// Collect keeps how far a source read when every row past its last item was left out, over its bounded pages.
+func TestCollectReachesPastRowsLeftOut(t *testing.T) {
+	calls := 0
+	fetch := func(_ context.Context, q Query) (Page[string], error) {
+		calls++
+		k := item("a", calls, "x").Key
+		return Page[string]{NextCursor: fmt.Sprint(calls), Reached: &k}, nil
+	}
+	q, _ := Parse("2026-08-21T00:00:00Z", "", "", 10, base)
+	part, _, err := Collect(context.Background(), fetch, q, nil, 10)
+	if err != nil || !part.More || len(part.Items) != 0 || part.Reached == nil || *part.Reached != item("a", collectPages, "x").Key {
+		t.Fatalf("more %v items %d reached %v err %v", part.More, len(part.Items), part.Reached, err)
 	}
 }

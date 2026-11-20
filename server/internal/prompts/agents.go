@@ -274,6 +274,10 @@ func RenderTaskFiles(language string) string {
 	return render("agents/task_files", struct{ Language string }{language})
 }
 
+func RenderWorkspaceRepositories(rows, language string) string {
+	return render("agents/workspace_repositories", struct{ Rows, Language string }{rows, language})
+}
+
 // TaskHandoff describes the scoped entries the assignment's actual launcher can use.
 type TaskHandoff struct {
 	Language   string // the caller's reply language; empty keeps the existing default

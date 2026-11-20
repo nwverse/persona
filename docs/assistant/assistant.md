@@ -233,7 +233,7 @@ This is hub's same Postgres, with unchanged keys / tables and no data migration;
 Scheduled-task and finished-task Agent-closing loops belong to the assistant (`Service.Run`, beginning only after first hub connection and handshake).
 
 **Assistant settings** (settings `assistant`, exclusively read / written by the assistant since 2026-11-04, `assistant/profile.go`): chat machine, launcher, user timezone (phone `PUT /api/v1/assistant`; `timezone_picked` when a client says the user picked it by hand, which devices then leave alone, #1855), About Me, main chat, replaced old main chats, `main_tasks_quiet`, `agent_tasks` (off by default, `docs/assistant/unified-entry.md` "Agent tasks"), `inbox_signals` (off by default: new Inbox messages on a supervised task reach its supervisor, `docs/assistant/unified-entry.md` "Supervision (#3124)"), `main_supervises_own_tasks` (off by default: the background supervisor, whose conversation id is kept here as `background_supervisor`, follows up the tasks no leader supervises instead of the main chat, `docs/assistant/unified-entry.md` "Background supervisor"), `background_supervisor_keeps_context` (off by default: each of the background supervisor's rounds starts from its first turn with only that round's facts and tools; on, it is one long conversation as before #7315; `persona_settings` only for now, `docs/assistant/unified-entry.md` "Each round starts clean").
-`assistant.owner` / `notes` / `machine` / `launcher` in the manager's `manager.json` supply the defaults (laid over the hub's handshake answer); JSON matches the old hub-written form without migration. Reads are cached for 5 seconds (only it writes; `manager.updated` triggers immediate reread).
+`assistant.owner` / `notes` / `machine` / `launcher` in the manager's `manager.json` supply the defaults (laid over the hub's handshake answer); JSON matches the old hub-written form without migration. `assistant.supervision_batch_minutes` is an administrator pin instead: when present, including explicit `0`, it overrides the saved supervision interval; when omitted, the saved setting is unchanged. Reads are cached for 5 seconds (only it writes; `manager.updated` triggers immediate reread).
 `GET/PUT /api/v1/assistant` also reads and saves `default_permission_mode` in this manager’s settings. Reads identify the answering manager with `manager`. New non-guest conversations without an explicit `permission_mode` inherit it, including new main chats, scheduled new conversations and side chats. An explicit session mode, including `default`, wins. Existing conversations retain their own mode; changing the manager default never edits their settings or history. An unset preference preserves earlier behavior.
 
 The same endpoint exposes `readonly_mode` (`sandbox` by default, or the opt-in `prompt`), also available in Web Settings
@@ -251,7 +251,7 @@ Every snapshot includes `profile`, the subset hub needs. hub retains the latest 
 
 - Identify phone messages to main chat (`isMainOn`), machine for model configuration's "Main chat" purpose, default launcher (`launcher`: assistant setting, else `manager.json`'s `assistant.launcher`, else claude), AI twin default machine, machine selection for `/api/v1/skills`, launcher tests and usage, and `assistant.lark` only for the assistant machine.
 - User timezone (`userLocation`, `hub/usertz.go`): all hub time reads use it.
-- `keep`: sessions nodes must list regardless of inactivity (main chat, replaced old main chats, scheduled-task chats, Agents linked to unfinished to-dos, #4510; the background supervisor; current directions' lead conversations, on the computer their direction record names, else the assistant's, #11392). A listed row does not keep its transcript file. Since 2026-11-04 the assistant process connects computers ([machines.md](../server/machines.md) ("Who connects to computers")):
+- `keep`: sessions nodes must list regardless of inactivity (main chat, replaced old main chats, scheduled-task chats, Agents linked to unfinished to-dos, #4510; the background supervisor; current directions' lead conversations, on the computer their direction record names, else the assistant's, #11392; the sessions placed under current directions, #11515: per direction the owner's live filings, newest filing first, then the conversations its lead conversation opened, newest first, at most 50, on the computer each names; [unified-entry.md](unified-entry.md) ("The direction tree")). The part placed under directions is sorted by computer and session, so an unchanged list is not sent again. A listed row does not keep its transcript file. `keep` is left out (`null`: the nodes keep the list they were last given) when the scheduled tasks, the to-dos, the direction filing book, the recorded conversation openers, the conversation deletion record or the direction records cannot be read. `keep` does not change the age window of Codex Agent threads (a node lists them from rollouts written in the last 14 days; a kept one only gets past its agent filter, `server/internal/node/codex_registry.go`) or how other runtimes list their sessions. Since 2026-11-04 the assistant process connects computers ([machines.md](../server/machines.md) ("Who connects to computers")):
   on snapshot reporting, its device layer (`internal/devices` `SetKeep`) sends `node.configure keep_sessions` once to changed machines, all machines on the first snapshot; also supplied on node connection (`configureNode`). hub only retains this copy.
 - **The first second or two after hub restart, before the assistant reports**: hub uses its persisted copy (`loadAssistantProfile`, before plugins and connectors start). Startup plugins need user timezone;
   an in-memory-only copy means they get hub timezone during these seconds and keep it until their own restart.
@@ -1334,6 +1334,15 @@ Each dispatched linked run starts with its to-do ID. When its watched turn settl
 on its `ScheduleRun` in `assistant.runs`: `progress`, `no_progress`, `unknown` or `inactive`, with the to-do ID,
 consecutive assessable no-progress count and the run's explanation. Skipped or unstarted attempts are `not_run`;
 a newer completed run makes a late older unassessed result `superseded`. A still-running, unassessed run is `pending`.
+
+The explanation is the run's own reply (#11553): the last reply after the prompt that carries the run's key, up to the
+next message that opened a turn. A run in its source conversation shares that conversation with its other work:
+supervision messages, the owner's words, and other schedules' runs. There the explanation is never just the latest turn's
+reply. Two linked runs due in the same minute in one supervising conversation each keep their own reply, although both
+watchers see the conversation settle only after the second answer. When the run's turn is not its own (its prompt was
+queued into another turn, or another message was queued into its turn), or its prompt is not on the page, the
+explanation is the hub's evidence line ("no new Agent reply, criterion change or progress report"). A run in a
+conversation of its own falls back to that conversation's latest turn.
 
 The baseline is the previous assessment, or a before-dispatch snapshot on the first run. Observable progress is
 any changed nonempty last Agent answer on a current unreleased, undismissed task Agent, a state change of an
@@ -2462,11 +2471,12 @@ users, and named the host, container and harness when they were known (web usabi
 
 ### Hiding ambient Agent sessions
 
-For people using Agents with noisy workspace trees, `agents.hidden_dirs` is a reversible per-computer
-visibility preference, shared across runtimes: the parallel list to `agents.blocked_claude_dirs`, with the same
-pattern syntax and get / add / remove, but nothing stops being collected. Rules are kept with each computer in the
-devices layer, live in advanced Agent settings and default to empty.
-The manager retains all sessions but excludes matched ambient sessions from Assistant observations and
-reminders. Open supervised task agents remain visible, preserving the supervisor's completion and approval
+For people using Agents with noisy workspace trees, `agents.hidden_dirs` holds reversible per-computer Agent
+folder rules, shared across runtimes: the parallel list to `agents.blocked_claude_dirs`, with the same pattern syntax
+and get / add / remove. Each rule blocks (the default for a new rule: that computer stops collecting the sessions, so
+nothing of them reaches Persona, #10053) or hides (nothing stops being collected). Rules are kept with each computer
+in the devices layer, live in advanced Agent settings and default to empty.
+For a hide rule, and for a block rule on a node that does not block yet, the manager retains all sessions but
+excludes matched ambient sessions from Assistant observations and reminders. Open supervised task agents remain visible, preserving the supervisor's completion and approval
 flow; after supervision ends, the rule applies again. See `docs/protocol/protocol.md` ("Agent directory visibility")
 for matching, persistence, app inspection and the confirmed `persona_settings` contract.

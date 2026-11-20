@@ -172,6 +172,7 @@ class OkHttpHubConnection(
     @Volatile private var network = initialNetwork
     @Volatile private var foreground = true
     @Volatile private var socket: WebSocket? = null
+    private var socketDrop: (() -> Unit)? = null
     @Volatile private var mailbox: Channel<Signal>? = null
     /** Completed by [onWake] to cut a retry backoff short: the user is looking at hub content right now. */
     @Volatile private var retryWait: CompletableDeferred<Unit>? = null
@@ -707,6 +708,7 @@ class OkHttpHubConnection(
                 }
             },
         )
+        socketDrop = ::recordDrop
         socket = ws
         mailbox = messages
         _weakNetwork.value = false
@@ -1231,6 +1233,10 @@ class OkHttpHubConnection(
         synchronized(lock) {
             if (closed) return
             closed = true
+            // Record this socket's terminal event before its callback dispatcher is stopped. Otherwise the first drop
+            // can be delivered after a later diagnostics sink is installed, attributing an old socket to a new owner.
+            socketDrop?.invoke()
+            socketDrop = null
             runner?.cancel()
             socket?.cancel()
             socket = null
