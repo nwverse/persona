@@ -187,8 +187,9 @@ extension AppModel {
     }
 
     func canKeepOutboxEffort(_ key: SessionKey, effort: String) -> Bool {
-        existingChat(key)?.pending.contains {
-            $0.onlyHere && $0.mayHaveArrived != true && $0.requiredEffort.map { $0 != effort } == true
+        existingChat(key)?.pending.contains { message in
+            guard message.onlyHere, message.mayHaveArrived != true, let required = message.requiredEffort else { return false }
+            return message.state == .failed || required != effort
         } == true
     }
 
@@ -209,9 +210,14 @@ extension AppModel {
         var changed = false
         for i in store.pending.indices {
             let message = store.pending[i]
-            let retryable = includeFailed && message.state == .failed && message.requiredEffort != nil && message.mayHaveArrived != true
-            guard message.state == .waiting || retryable, message.mayHaveArrived != true,
-                  message.requiredEffort != effort else { continue }
+            guard message.mayHaveArrived != true else { continue }
+            if includeFailed && message.state == .failed && message.requiredEffort != nil {
+                store.pending[i].state = .waiting
+                store.pending[i].failure = nil
+                store.pending[i].stalledSince = nil
+            } else {
+                guard message.state == .waiting, message.requiredEffort != effort else { continue }
+            }
             store.pending[i].requiredEffort = effort
             changed = true
         }
