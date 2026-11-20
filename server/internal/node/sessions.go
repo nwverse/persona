@@ -436,7 +436,7 @@ func (n *Node) decorateIn(s *proto.Session, pass *codexListPass) {
 		s.Launcher = n.inferLauncher(s.SessionID)
 	}
 	n.normalizeSessionRowModel(s) // a gateway's routed echo back to the launcher's declared id
-	if s.Title == "" {
+	if s.Title == "" && s.HerdrTabName() == "" {
 		s.Title = filepath.Base(s.Cwd)
 	}
 	s.BypassAvailable = n.hooks.canBypass(s.SessionID) // modes.go claudeCanBypass

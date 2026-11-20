@@ -278,7 +278,8 @@ func (h *Hub) emitToExtensions(owner, event string, params any) {
 func (h *Hub) extensionRoutesRelayed(api *http.ServeMux) {
 	for _, pattern := range extwire.Routes {
 		relay := func(w http.ResponseWriter, r *http.Request) { h.relayToManager(w, r, false) }
-		if pattern == "/api/v1/agents/" { // messages to the personal Agents (terminal_controls.go)
+		if strings.HasPrefix(pattern, "/api/v1/agents/") || strings.Contains(pattern, " /api/v1/agents/") {
+			// Messages to the personal Agents (terminal_controls.go), on both broad and concrete relay patterns.
 			relay = h.withoutTerminalControls(relay)
 		}
 		api.HandleFunc(pattern, relay)

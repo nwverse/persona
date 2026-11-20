@@ -2158,7 +2158,7 @@ Clients report their errors and crashes only while `features` has `error_reports
 | GET | `/api/v1/devices/push` | `{direct,devices:[{device_id,name,kind,updated_at,push}],web:[{device_id,browser?,service?,current,updated_at,last_ok_at?,failed_at?,status?,error?}]}`: whether the hub has its own APNs key, every device it pushes to with its way, and every browser with Web Push ("Web Push (browsers)" below; `personad hub doctor`; not for a watch) |
 | POST | `/api/v1/devices/{id}/live-activity` | Live Activity tokens: `{"push_to_start_token"}`, `{"activity_id","push_token"}` (rotates; sent repeatedly), `{"activity_id","ended":true}` (`docs/apple/live-activity.md`); returns `{"ok":true}` after saving. A failed save returns 503 `internal` with a localized unavailable message so the client can retry. A device whose push registration was retired gets 409 `push_registration_required` instead, until it registers again. The write observes request cancellation and has a 5-second timeout (or the earlier request deadline) |
 | GET | `/api/v1/fleet` | `{"fleet": FleetState}`: the current Live Activity content (pulled when the App returns to the foreground); `stats` has all the numbers and each machine's load |
-| GET | `/api/v1/usage/windows` | `{"accounts": [{id, provider, name, plan?, windows: [{label, window_minutes, used_percent, resets_at?, model?}], sampled_at, stale?, local?, sources?, problem?}], "checked_at"}`: Codex / Claude subscription quota windows read by each computer's node from local files, plus those the manager reads from account-pool gateways (`local`: seen on a computer, `sources`: gateway names, `problem`: `unreachable` / `error`, `model`: a single-model window); the manager merges the same account and sorts by the fullest window, the hub forwards, and 503 `assistant_offline` when the manager is absent; no data is `[]` (`docs/server/usage-windows.md`, #2432, #2595) |
+| GET | `/api/v1/usage/windows` | `{"accounts": [{id, provider, name, plan?, windows: [{label, window_minutes, used_percent, resets_at?, model?}], sampled_at, stale?, local?, sources?, problem?}], "checked_at"}`: Codex / Claude subscription quota windows from computer nodes and account-pool gateways (`local`: seen on a computer, `sources`: gateway names, `problem`: `unreachable` / `error`, `model`: a single-model window); the manager groups the rows as described in `docs/server/usage-windows.md` and sorts by the fullest window. The hub forwards the response or returns 503 `assistant_offline` when the manager is absent. No data is `[]` (#2432, #2595) |
 | GET | `/api/v1/metrics` | `{"machines": [{machine_id, online, system, latest: MetricSample \| none, points: [MetricPoint], usage?: {today: {in, cache_write, cache_read, out, req}, per_minute, recent: [60 per-minute totals, oldest first]}}], "step": 60}`: current values and trends on each card of the App's **Machines** page, for every machine in configured order; `points` is the last hour, one per minute; `latest` is only present if a sample arrived within 30 seconds (`docs/server/machines.md`) |
 | GET | `/api/v1/machines/{id}/metrics?range=1h\|6h\|24h` | `{"metrics": {as above, one machine}, "range", "step"}`: the machine detail charts, step 10 / 60 / 240 seconds (about 360 points); unknown machine 404, bad range 400 |
 | GET | `/api/v1/machines/{id}/usage?range=1h\|24h\|7d[&model=…][&launcher=…]` | `{"usage": {machine_id, online, range, step, points: [{t, in, cache_write, cache_read, out, req, gap?}], total, models: [{name, …sums}], launchers: [{name, …sums}], launchers_known, stored}}`: a machine's token usage (`docs/server/machines.md` ("Token usage")); steps 60 / 600 / 3600 seconds, a point is the step's sums; `model` / `launcher` filter (`launcher=-` is the unknown launcher); `models` are under the launcher filter and `launchers` under the model filter, largest first; `launchers_known` false for an older node; default range 24h, bad range 400, unknown machine 404 |
@@ -3804,7 +3804,7 @@ trade-offs in `docs/plans/plan-orca-support.md` ("herdr-core host")).
   If herdr isn't installed, a pinned version is installed first (waits up to 15 seconds; if not done, returns an "Installing herdr …" error, finishes installing in the background and then starts itself; `docs/integrations/engines.md` ("When herdr is not installed")).
 - `herdr.server.status` (hub → node, no params, returns `{running, known, installing, install_error}`): `installing` means the node is installing herdr,
   `install_error` is why the last install failed (empty string if it never failed); `GET /api/v1/machines/{mid}/herdr` passes them through as is (omitted when absent).
-- `usage.windows` (hub → node, no params, returns `{enabled, collected_at, accounts: [UsageAccount]}`, #2432): subscription quota windows the node gets from reading this machine's Codex rollouts and the files Claude's status line writes.
+- `usage.windows` (manager → node, no params, returns `{enabled, collected_at, accounts: [UsageNodeAccount]}`, #2432): subscription quota windows from Codex app-server, Codex rollouts, and Claude status line files. Each item has the established usage account fields and optional Codex `account_key` and `source_key` digests. These keys are for the manager's grouping and are absent from the client API.
   It only reads local files and never touches credentials. When `usage_windows` in `node.configure` (hub.json `machines[].usage_windows`) is false it returns `{enabled: false, accounts: []}`. Old nodes don't have this method; the hub treats them as having no data (`docs/server/usage-windows.md`).
 - Operations without a pane (new, resume session, rename) go to the set's default host (the node's `defaultHost` / `defaultKind`; classic herdr for
   herdr + Herdr App); per-pane operations (read screen, send, keys, close) are routed by the host kind of the pane id, and each host's panes are limited
@@ -5793,22 +5793,42 @@ in-flight command remains unknown until its execution can be established; it is 
 
 ## Agents display settings
 
-The default manager keeps the paired hub's `agents.show_botmux` boolean in its
+The default manager keeps the paired hub's `agents.show_botmux` and
+`agents.use_herdr_tab_name` booleans in its
 existing settings store, following the Agents triage route's ownership and role
 checks. These are authenticated routes relayed by the hub; clients do not select
 another manager for this shared preference.
 
 | Method | Path | Response / request |
 | --- | --- | --- |
-| GET | `/api/v1/agents/display-settings` | `{show_botmux: true, configured: false}` when unset; otherwise the saved boolean and `configured: true`. Authenticated answer-only devices may read. |
-| PUT | `/api/v1/agents/display-settings` | Full access only (403 otherwise). Requires `{show_botmux: boolean}`. Optional `only_if_unset: true` uses an atomic insert without updating an existing key. Both forms return the current saved value with `configured: true`, including when another writer won. |
+| GET | `/api/v1/agents/display-settings` | Defaults to `{show_botmux: true, configured: false, use_herdr_tab_name: false}`. `configured` reports whether `show_botmux` was saved. Authenticated answer-only devices may read. |
+| PUT | `/api/v1/agents/display-settings` | Full access only (403 otherwise). Send one of `{show_botmux: boolean}` or `{use_herdr_tab_name: boolean}`. For `show_botmux`, optional `only_if_unset: true` uses an atomic insert without updating an existing key. Returns the current settings, including when another writer won. |
 
 Invalid or missing booleans return 400; unavailable storage or failed reads/writes
 return 503, never a default presented as a successful save. The conditional
-migration and an explicit update serialize at the unique settings key across
+migration and an explicit botmux update serialize at the unique settings key across
 processes. Clients remove legacy local preferences only after a configured value
-is confirmed. Refresh on reconnect and the next Agents list refresh. This is a
-display preference only: Web paged lists use `exclude_pane_source=feishu`, complete
+is confirmed. Refresh on reconnect and the next Agents list refresh. For botmux,
+Web paged lists use `exclude_pane_source=feishu`, complete
 lists exclude botmux hosts before grouping/counting. Inventory and `seeBotmux`
 to-do attribution are unchanged. The per-computer inventory switch is independent
 ([engines.md](../integrations/engines.md), “Botmux display preference”).
+
+For an Agent with a named herdr or Herdr App tab, Web and Feishu use `slot_name`
+as the primary name when `use_herdr_tab_name` is true. They also use it when
+`title` is empty or is only a shell prompt such as `user@host:~/work`.
+Inventory refreshes carry the current tab label. The unified Web Rename dialog
+posts `tab_name` and, for a supported CLI, the same `title` to the existing
+session rename route. Other managers read the same preference through the
+hub's `app.call` method `agents.display.get`, which relays the default
+manager's display settings.
+
+Named assistant dispatches send `title` with `tab_name` in `session.start`.
+The synchronous terminal reply uses the actual tab label when available,
+including a suffix added for uniqueness. The manager persists the initial
+Persona title for subsequent inventory reads.
+
+With tab naming enabled, automatic naming calls the node's
+`session.rename_tab_if_current` with `session_id`, `tab_id`,
+`expected_tab_name` and `tab_name`. The node checks the live slot and its current
+host label before changing it and replies with `{ok: true}` on success.

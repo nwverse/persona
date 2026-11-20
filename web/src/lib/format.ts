@@ -210,8 +210,30 @@ export function externalLink(s?: Pick<Session, "external_url">): string | undefi
   }
 }
 
-export function sessionTitle(s: Pick<Session, "title" | "cwd">): string {
-  return s.title?.trim() || baseName(s.cwd) || t("lib-format.untitled_session");
+type SessionNameFields = Pick<Session, "title" | "cwd" | "assistant" | "slot_name" | "slot_id" | "tab_id" | "space_kind" | "host">;
+
+export function herdrTabName(s: SessionNameFields): string {
+  const kind = s.space_kind || s.host;
+  if (s.assistant || !(s.slot_id || s.tab_id) || (kind && kind !== "herdr" && kind !== "herdr-core")) return "";
+  return s.slot_name?.trim() || "";
+}
+
+// Keep the terminal prompt recognizer in sync with server/internal/proto/session_name.go.
+const SHELL_PROMPT_TITLE = /^[A-Za-z0-9_][A-Za-z0-9_.-]*@[A-Za-z0-9_][A-Za-z0-9_.-]*:(?:[ \t]+[^\r\n]+|[~/][^\r\n]*)$/;
+
+export function sessionDisplayTab(s: SessionNameFields, preferTab = false): string {
+  const title = s.title?.trim() || "";
+  return preferTab || !title || SHELL_PROMPT_TITLE.test(title) ? herdrTabName(s) : "";
+}
+
+export function sessionTitle(s: SessionNameFields, preferTab = false): string {
+  return sessionDisplayTab(s, preferTab) || s.title?.trim() || baseName(s.cwd) || t("lib-format.untitled_session");
+}
+
+export function sessionTitleDetail(s: SessionNameFields, preferTab: boolean): string {
+  const tab = preferTab ? herdrTabName(s) : "";
+  const title = s.title?.trim() || "";
+  return tab && tab !== title ? title : "";
 }
 
 // A path from a Windows computer: a drive letter or a UNC share. Only there is a backslash a separator; in any other

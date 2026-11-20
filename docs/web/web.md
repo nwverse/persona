@@ -2243,7 +2243,7 @@ It renders escaped plain text (no HTML, links, images or cards), keeps work deta
 ## Subscription usage (bottom of the sidebar, #2432)
 
 At the very bottom of the sidebar (below the Agents list): one thin bar for each of the two fullest subscription accounts, turning the warning color at ≥ 80%. Clicking opens a popover with one row per window per account (length, % used, bar, reset countdown, pace hint),
-with the sample time to the right of the title. **With no data the whole block is not drawn.** Data comes from `GET /api/v1/usage/windows` (each computer's node reads local files, the manager merges the same account, the hub forwards),
+with the sample time to the right of the title. **With no data the whole block is not drawn.** Data comes from `GET /api/v1/usage/windows` (the manager groups samples from each computer's node and the hub forwards them),
 refreshed once a minute, with no requests while the page is in the background. The pace and countdown algorithms, and how Claude's usage is hooked up, are in [usage-windows.md](../server/usage-windows.md).
 Accounts come from files read on the computers and from the account-pool gateways the hub queries (#2595): in the popover, the line under each account's title gives the plan and the source ("MacBook · Relay": the computers that read it by name, then the gateways; with only one source it names that one).
 Single-model windows put the model name next to the length (not used for sorting); when a gateway can't be read it says "these are its last numbers". The sidebar bar's tooltip also gives the source. Gateways are configured under "Usage sources" in the admin interface (`docs/operations/admin.md`).
@@ -3124,3 +3124,14 @@ filters disappear and a stale selection resolves to All without changing the
 shared display preference. Saving uses the acknowledged server value with local
 pending feedback and recoverable errors. The per-computer switch still controls
 inventory, and hidden rows remain usable for to-do attribution and dispatch.
+
+### herdr tab names in Agents
+
+**Use the herdr tab name as the session name** in Settings › Agents defaults
+to off and syncs across devices on the paired hub. When enabled, the sidebar,
+chat header and session search show the tab name first. A different CLI title
+appears in the hover text or the search result's secondary line. A name edited
+in herdr appears at the next inventory refresh. The **Rename** dialog offers
+one **Name** field, which updates the tab and the CLI title where supported.
+Even with the setting off, an empty or shell-prompt title falls back to the
+herdr tab name. Sessions without a named herdr tab use their session title.
