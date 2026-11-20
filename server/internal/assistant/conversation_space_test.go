@@ -425,9 +425,12 @@ func (c *backfillTimers) fire() {
 	}
 }
 
-// keeps says which of ids the profile has the assistant's computer list however quiet.
+// keeps says which of ids the profile has the assistant's computer list however quiet, once the backfill's read of the
+// to-dos a profile sets off (spaceBackfillScanSoon) is done.
 func keeps(t *testing.T, s *Service, ids ...string) map[string]bool {
 	t.Helper()
+	s.profile(context.Background(), []TaskView{}, &TodoReport{})
+	waitFor(t, "the backfill's read of the to-dos", s.spaceBackfillScanIdle)
 	p := s.profile(context.Background(), []TaskView{}, &TodoReport{})
 	if p == nil {
 		t.Fatal("no profile")
@@ -573,6 +576,7 @@ func TestSpaceBackfillBatches(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.s.superviseTodo(ctx, led.ID, "laptop/lead1", nil, 0)
+	waitFor(t, "the backfill's read of the to-dos", e.s.spaceBackfillScanIdle)
 	e.doAs(roleExtension, "GET", "/api/v1/todos", "") // in memory, the verdicts that could not tell them take them up
 	kept := e.s.spaceBackfillKept()
 	if len(kept) != spaceBackfillBatch || slices.Contains(kept, "conv_noted") {

@@ -139,6 +139,9 @@ func (s *Service) conversationSpacesListed(machine string, list []proto.Session)
 	var rows []db.ConversationSpace
 	var already []string // noted before: one the backfill keeps listed is done with
 	backfill := s.spaceFill.active.Load()
+	if backfill {
+		s.spaceBackfillListed(list) // listed: never given up, whether or not its note is written now
+	}
 	b := &s.convSpaces
 	b.mu.Lock()
 	for _, c := range list {

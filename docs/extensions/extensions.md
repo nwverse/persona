@@ -829,13 +829,15 @@ Whatever scopes it was granted, an extension's token never sees:
   only from what is live, so a chat its computer no longer lists (a quiet chat is listed for a week, and only the 100
   newest) or has not listed since a restart is told by its noted space. A chat a to-do names (open or done: its
   origin, its supervisor, a chat its history was written in) that was quiet since before a manager noted spaces is
-  listed again by the computers the assistant ran on (the assistant's profile `keep`), 50 at a time, until it is noted;
-  one still not listed after 3 minutes with the assistant's computer on is given up for a week (its transcript is
-  gone). It fails closed: a conversation no computer lists, never noted and with no deletion record, a history
-  whose conversations cannot be read, or a run whose link keeps no directory and whose session cannot be read, counts
-  too. The one rule decides every way a to-do leaves its manager: such a to-do is not on `GET /api/v1/todos`, every
-  route of it answers 404 `todo_not_found` as for a to-do that does not exist (its item, timeline, decisions and
-  repositories, and every write: `PATCH`, its runs, spaces, decisions and repositories), and `todo.changed` and
+  listed again by the computers the assistant ran on (the assistant's profile `keep`), 50 at a time, until it is noted.
+  One a computer listed is kept until its note is written. One none listed after 3 minutes with every one of those
+  computers on (or removed from the hub) is given up for a week (its transcript is gone); while one of them is off,
+  it waits for that computer and is listed again once all are on. It fails closed: a conversation no computer lists,
+  never noted and with no deletion record, a history whose conversations cannot be read, or a run whose link keeps no
+  directory and whose session cannot be read, counts too. The one rule decides every way a to-do leaves its manager:
+  such a to-do is not on `GET /api/v1/todos`, every route of it answers 404 `todo_not_found` as for a to-do that does
+  not exist (its item, timeline, decisions and repositories, and every write: `PATCH`, its runs, spaces, decisions and
+  repositories), and `todo.changed` and
   `todo.decision` are not sent of it; one that only cannot be told yet waits rather than being dropped, and is sent once
   it can be told (judged again after 30 seconds, then less often, up to every 10 minutes; at most 512 wait; a manager
   restart in between drops what waits). Nor can a token take onto a to-do of its own a run of the space, one of such a
