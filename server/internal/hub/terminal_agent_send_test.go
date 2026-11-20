@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -232,6 +233,59 @@ func TestTerminalAgentSendRejectsOtherActorsOrTargetsBeforeClaim(t *testing.T) {
 				if rr.Code != tc.want || len(store.ops) != 0 {
 					t.Fatalf("code=%d receipts=%d", rr.Code, len(store.ops))
 				}
+			}
+		})
+	}
+}
+
+type terminalSendLog func(string)
+
+func (f terminalSendLog) Write(p []byte) (int, error) {
+	f(string(p))
+	return len(p), nil
+}
+
+func TestTerminalAgentSendRejectsTargetChangedAfterAdmission(t *testing.T) {
+	for _, scenario := range []string{"becomes Persona", "row removed"} {
+		t.Run(scenario, func(t *testing.T) {
+			store := &clientOpsStore{ops: map[string]db.ClientOp{}}
+			h := &Hub{store: store, byID: map[string]*Machine{}}
+			m := newMachine(h, MachineConfig{ID: "computer"})
+			m.sessions = []proto.Session{{MachineID: "computer", SessionID: "agent", Agent: "claude"}}
+			h.byID["computer"] = m
+			var changed bool
+			h.logger = log.New(terminalSendLog(func(line string) {
+				if strings.Contains(line, "phase=hub_received ") && !changed {
+					// The outer Agent guard, durable claim and request body
+					// checks ran. Execution has not chosen its routing row.
+					m.mu.Lock()
+					if scenario == "row removed" {
+						m.sessions = nil
+					} else {
+						m.sessions[0].Assistant = true
+					}
+					m.mu.Unlock()
+					changed = true
+				}
+				if strings.Contains(line, "phase=dispatch_started ") {
+					t.Error("message reached delivery after its Agent identity changed")
+				}
+			}), "", 0)
+			const id = "f11a0b01-0000-4000-8000-000000000002"
+			ctx := context.WithValue(context.Background(), principalKey{}, principal{ID: "paired", Role: roleFull})
+			req := httptest.NewRequest("POST", "/api/v1/sessions/computer/agent/agent-messages",
+				strings.NewReader(`{"text":"synthetic text","hold_when_away":true}`)).WithContext(ctx)
+			req.SetPathValue("mid", "computer")
+			req.SetPathValue("sid", "agent")
+			req.Header.Set("X-Persona-Op-Id", id)
+			req.Header.Set("X-Persona-Features", featureAgentMessageHold)
+			rr := httptest.NewRecorder()
+			h.withTerminalAgentTarget(h.withClientOp("message", h.withMachine(h.sendMessage)))(rr, req)
+			op, err := store.ClientOp(ctx, id)
+			if !changed || rr.Code != 404 || !strings.Contains(rr.Body.String(), `"delivered":"none"`) ||
+				!strings.Contains(rr.Body.String(), "agent_target_required") || err != nil || op == nil {
+				t.Fatalf("wanted a refusal after admission and before routing: changed=%t status=%d body=%s op=%v (%v)",
+					changed, rr.Code, rr.Body, op, err)
 			}
 		})
 	}

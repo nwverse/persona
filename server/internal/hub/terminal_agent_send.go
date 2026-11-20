@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 type terminalAgentSendKey struct{}
@@ -30,7 +31,7 @@ func (h *Hub) withTerminalAgentTarget(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		m := h.localMachine(r.PathValue("mid"))
-		if !h.terminalAgentTarget(m, r.PathValue("sid")) {
+		if _, ok := h.terminalAgentTarget(m, r.PathValue("sid")); !ok {
 			h.refuseTerminalAgent(w, r)
 			return
 		}
@@ -38,12 +39,12 @@ func (h *Hub) withTerminalAgentTarget(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func (h *Hub) terminalAgentTarget(m *Machine, id string) bool {
+func (h *Hub) terminalAgentTarget(m *Machine, id string) (proto.Session, bool) {
 	if m == nil || id == "" || m.conversationDeleted(id) || h.isMainOn(m.cfg.ID, id) {
-		return false
+		return proto.Session{}, false
 	}
 	row, known := m.session(id)
-	return known && !row.Archived && !row.Assistant && !m.isAssistant(row)
+	return row, known && !row.Archived && !row.Assistant && !m.isAssistant(row)
 }
 
 func (h *Hub) refuseTerminalAgent(w http.ResponseWriter, r *http.Request) {
