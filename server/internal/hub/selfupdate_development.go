@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
@@ -77,11 +78,17 @@ func hasOtherLocalManagers(home string) (bool, error) {
 		if entry.Name() == assistantwire.AssistantID {
 			continue
 		}
+		// Match webdev.py's managers/*/manager.json inventory: ignore stray
+		// non-directory files (e.g. .DS_Store) while still checking directories
+		// and symlinks that may resolve to a manager directory.
+		if !entry.IsDir() && entry.Type()&os.ModeSymlink == 0 {
+			continue
+		}
 		_, err := os.Lstat(filepath.Join(managersDir, entry.Name(), "manager.json"))
 		if err == nil {
 			return true, nil
 		}
-		if !errors.Is(err, os.ErrNotExist) {
+		if !errors.Is(err, os.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR) {
 			return true, err
 		}
 	}

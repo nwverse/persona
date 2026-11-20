@@ -889,8 +889,19 @@ func TestDevelopmentRequiresExternalHooksForExtrasAndOtherLocalManagers(t *testi
 		if err := os.WriteFile(filepath.Join(asstDir, "manager.json"), []byte(`{}`), 0o600); err != nil {
 			t.Fatal(err)
 		}
+		// Stray regular files (e.g. .DS_Store or README) and symlinks to files
+		// under managers/ must not be mistaken for another local manager.
+		if err := os.WriteFile(filepath.Join(h.cfg.dir, "managers", ".DS_Store"), []byte("junk"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(h.cfg.dir, "managers", "README.txt"), []byte("note"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(filepath.Join(h.cfg.dir, "managers", "README.txt"), filepath.Join(h.cfg.dir, "managers", "readme-link")); err != nil {
+			t.Fatal(err)
+		}
 		if !u.developmentAvailable() {
-			t.Fatal("built-in assistant manager.json blocked built-in quiesce")
+			t.Fatal("built-in assistant manager.json or stray files under managers/ blocked built-in quiesce")
 		}
 
 		// Adding another local manager with no owned machines refuses built-in mode.
