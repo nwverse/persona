@@ -113,7 +113,7 @@ def parse_result(text, anchors):
     return findings
 
 
-def split_diff(text, limit=180_000, worktree=None, base=None, head=None):
+def split_diff(text, limit=60_000, worktree=None, base=None, head=None):
     """Partition using Git's file names, never diff-looking added content."""
     if not text:
         return [""]
@@ -163,10 +163,8 @@ def split_diff(text, limit=180_000, worktree=None, base=None, head=None):
                     # lines it contains. Split only between complete content
                     # lines, retaining the original hunk header for context.
                     hunk_lines = hunk.splitlines(keepends=True)
-                    if len(hunk_lines) < 2 or any(
-                            not line.startswith(("+", "-", " ", "\\"))
-                            for line in hunk_lines[1:]):
-                        raise WatchError("malformed text diff hunk; review this file manually")
+                    if len(hunk_lines) < 2:
+                        raise WatchError("one diff hunk has no complete content line; review this file manually")
                     if any(len(line) + len(header) + len(hunk_lines[0]) > limit
                            for line in hunk_lines[1:]):
                         raise WatchError("one diff line exceeds the semantic-review chunk bound; review this file manually")

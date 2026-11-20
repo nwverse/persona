@@ -1612,9 +1612,9 @@ class WatcherTests(unittest.TestCase):
         self.assertIn(pr_watch_review.SYSTEM_PROMPT, prompts[0])
         self.assertEqual(len(prompts), 1)
 
-        large = "diff --git a/a.py b/a.py\n@@ -1 +1 @@\n-old\n+" + "x" * 150000 + "\n" + \
-                "diff --git a/b.py b/b.py\n@@ -1 +1 @@\n-old\n+" + "y" * 150000 + "\n"
-        with patch.object(pr_watch_review, "checked", side_effect=[large, "stat", "a.py\nb.py", large[:150070], large[150070:]]), \
+        large = "diff --git a/a.py b/a.py\n@@ -1 +1 @@\n-old\n+" + "x" * 50000 + "\n" + \
+                "diff --git a/b.py b/b.py\n@@ -1 +1 @@\n-old\n+" + "y" * 50000 + "\n"
+        with patch.object(pr_watch_review, "checked", side_effect=[large, "stat", "a.py\nb.py", large[:50100], large[50100:]]), \
                 patch.object(pr_watch_review, "changed_lines", return_value={}), \
                 patch.object(pr_watch_review.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, b"a.py\0b.py\0", b"")), \
                 patch.object(pr_watch_review, "run", side_effect=fake_run):
@@ -1642,7 +1642,7 @@ class WatcherTests(unittest.TestCase):
             text = subprocess.check_output(["git", "diff", "--unified=0", base + "..." + head], cwd=root, text=True)
             chunks = pr_watch_review.split_diff(text, worktree=root, base=base, head=head)
             self.assertGreater(len(chunks), 1)
-            self.assertLessEqual(max(map(len, chunks)), 180_000)
+            self.assertLessEqual(max(map(len, chunks)), 60_000)
             self.assertTrue(all(chunk.startswith("diff --git a/a.json b/a.json\n") for chunk in chunks))
             self.assertTrue(all(chunk.count("@@ ") == 1 for chunk in chunks))
             self.assertEqual(sum(chunk.count("@@ ") for chunk in chunks), len(chunks))
