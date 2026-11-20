@@ -3,6 +3,7 @@ package hub
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -131,11 +132,15 @@ func TestExtensionsAreNotToldWhatTheyAreNotShown(t *testing.T) {
 // The regression check of #10941, a forged session: an extension's token resumed any id it named, and a computer with
 // no transcript of it started a new conversation under that id in the folder the extension chose, which the manager
 // took for the health chat the id names (its to-dos, feed and held outcome lines shown). On a computer whose node does
-// not check such a resume (no resume_outside_health: reachHub's says nothing of itself), it resumes only a
-// conversation its computer lists outside the space, as a scoped token does; nothing of the other two reaches the
-// computer.
+// not check such a resume (no resume_outside_health), it resumes only a conversation its computer lists outside the
+// space, as a scoped token does; nothing of the other two reaches the computer.
 func TestAnExtensionResumesOnlyAListedChatOutsideTheHealthSpace(t *testing.T) {
 	h, url, _, b := reachHub(t)
+	// A node from before resume_outside_health: an id the hub does not list never reaches it. (With no word of the node
+	// at all the hub answers that id 503, retryable: TestAnExtensionsResumeBeforeTheComputersListIsRetryable.)
+	b.report(t, devicewire.State{Machine: proto.Machine{ID: "mb", Name: "mb"},
+		Info: proto.NodeInfo{Version: "test", Protocol: nodeproto.Version, Capabilities: []string{nodeproto.Sessions}}})
+	eventually(t, 5*time.Second, "mb's node", func() bool { return h.localMachine("mb").nodeReported() })
 	h.takeFleetSessions(assistantwire.FleetSessions{MachineID: "mb", Sessions: []proto.Session{
 		{MachineID: "mb", SessionID: "b1", Title: "B-SESSION", Cwd: "/work/project"},
 		{MachineID: "mb", SessionID: "bh", Title: "HEALTH-SESSION", Cwd: "/home/me/.persona/health", Assistant: true, Space: "health"},
@@ -293,7 +298,9 @@ func TestAnExtensionResumesAnUnlistedChatOnlyThroughItsComputersCheck(t *testing
 // Minor 2 of the last #10941 review: right after a hub start no list of a computer's sessions is in yet, and an
 // extension's resume of a chat that list will have was told 404 not_found, retryable false, which reads as deleted.
 // On a node without the check it is told 503 sessions_not_listed, retryable, until the list comes; then a chat the list
-// does not have is 404 again. A node with the check is asked at once: it knows its own chats.
+// does not have is 404 again. While the hub has no word of the node at all (a devices manager that restarted without
+// its warm file reports a zero node until the node connects again) it cannot tell an older node from a newer one,
+// so a chat the list does not have stays 503 too. A node with the check is asked at once: it knows its own chats.
 func TestAnExtensionsResumeBeforeTheComputersListIsRetryable(t *testing.T) {
 	answer := func(string) (any, error) {
 		return map[string]any{"session": map[string]any{"session_id": "started"}}, nil
@@ -316,14 +323,59 @@ func TestAnExtensionsResumeBeforeTheComputersListIsRetryable(t *testing.T) {
 		if code, body := extDo(t, url, http.MethodPost, "/api/v1/sessions", resume, nil); code != http.StatusOK {
 			t.Fatalf("node %v, once listed: %d %s", caps, code, body)
 		}
-		if code, body := extDo(t, url, http.MethodPost, "/api/v1/sessions", strings.Replace(resume, `"b1"`, `"b2"`, 1), nil); code != http.StatusNotFound ||
-			!strings.Contains(body, `"retryable":false`) {
+		code, body = extDo(t, url, http.MethodPost, "/api/v1/sessions", strings.Replace(resume, `"b1"`, `"b2"`, 1), nil)
+		switch {
+		case caps == nil && (code != http.StatusServiceUnavailable || !strings.Contains(body, `"code":"sessions_not_listed"`) || !strings.Contains(body, `"retryable":true`)):
+			t.Fatalf("no word of the node, a chat the list does not have: %d %s", code, body)
+		case caps != nil && (code != http.StatusNotFound || !strings.Contains(body, `"retryable":false`)):
 			t.Fatalf("node %v, a chat the list does not have: %d %s", caps, code, body)
+		}
+		if n := len(sessionStarts(b, "b2")); n != 0 {
+			t.Fatalf("node %v, a chat the list does not have: reached the computer %d times", caps, n)
 		}
 	}
 	_, url, b := extensionResumeHub(t, []string{nodeproto.Sessions, nodeproto.ResumeOutsideHealth}, answer)
 	if code, body := extDo(t, url, http.MethodPost, "/api/v1/sessions", resume, nil); code != http.StatusOK || len(sessionStarts(b, "b1")) != 1 {
 		t.Fatalf("a node with the check, no list yet: %d %s, %v", code, body, sessionStarts(b, "b1"))
+	}
+}
+
+// The gate attack on #10941's resume rule, its finding 2: the hub decided an extension's resume before the request's
+// other checks, so a listed health chat was answered 404 there while an id it does not list went on to them, and a
+// request one of them refuses (here an agent type that is no type) told the two apart. The resume is decided last
+// now: such a request gets the same answer whichever conversation it names, and none reaches the computer.
+func TestAnExtensionsResumeIsDecidedAfterTheRequestsOtherChecks(t *testing.T) {
+	h, url, b := extensionResumeHub(t, []string{nodeproto.Sessions, nodeproto.ResumeOutsideHealth}, func(string) (any, error) {
+		return nil, &rpc.Error{Code: proto.CodeResumeUnknown, Message: "这台电脑上没有这个对话的记录，无法在这里接着它。这次没有启动。"} // i18n-ignore: the node's words
+	})
+	h.takeFleetSessions(assistantwire.FleetSessions{MachineID: "mb", Sessions: []proto.Session{
+		{MachineID: "mb", SessionID: "b1", Title: "B-SESSION", Cwd: "/work/project", Status: proto.StatusOffline},
+		{MachineID: "mb", SessionID: "bh", Title: "HEALTH-SESSION", Cwd: "/home/me/.persona/health", Assistant: true, Space: "health"},
+	}})
+	eventually(t, 5*time.Second, "mb's sessions", func() bool { _, ok := h.localMachine("mb").session("bh"); return ok })
+	const unlisted = "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b"
+	answers := map[string]string{}
+	for _, id := range []string{"bh", unlisted, "b1"} {
+		code, body := extDo(t, url, http.MethodPost, "/api/v1/sessions",
+			`{"machine_id":"mb","launcher":"claude","agent_type":"no such type!","cwd":"/work/project","resume_session_id":"`+id+`","prompt":"go on"}`, nil)
+		answers[id] = fmt.Sprintf("%d %s", code, body)
+		if code != http.StatusBadRequest {
+			t.Errorf("a resume of %s with an agent type that is no type: %s", id, answers[id])
+		}
+		if n := len(sessionStarts(b, id)); n != 0 {
+			t.Errorf("a resume of %s with an agent type that is no type reached the computer %d times", id, n)
+		}
+	}
+	if answers["bh"] != answers[unlisted] || answers["bh"] != answers["b1"] {
+		t.Fatalf("the answers tell the conversations apart: %v", answers)
+	}
+	// Well formed, the health chat and the id the computer refuses still get the same 404.
+	codeHealth, bodyHealth := extDo(t, url, http.MethodPost, "/api/v1/sessions",
+		`{"machine_id":"mb","launcher":"claude","cwd":"/work/project","resume_session_id":"bh","prompt":"go on"}`, nil)
+	codeUnlisted, bodyUnlisted := extDo(t, url, http.MethodPost, "/api/v1/sessions",
+		`{"machine_id":"mb","launcher":"claude","cwd":"/work/project","resume_session_id":"`+unlisted+`","prompt":"go on"}`, nil)
+	if codeHealth != http.StatusNotFound || codeHealth != codeUnlisted || bodyHealth != bodyUnlisted {
+		t.Fatalf("well formed: the health chat %d %s, the unlisted id %d %s", codeHealth, bodyHealth, codeUnlisted, bodyUnlisted)
 	}
 }
 

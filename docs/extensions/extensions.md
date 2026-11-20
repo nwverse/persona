@@ -877,21 +877,29 @@ may resume, on its own manager's computers (#10941):
 - **A chat its computer no longer lists.** A computer lists a quiet Claude Code chat only for a week, among its 80
   newest and once its transcript holds 2 KB, so on a busy computer one drops out within two days. The hub passes such
   a resume on, marked `resume_outside_health`, to a computer whose Persona Link announces that check. The computer
-  resumes the chat only when it has it (a transcript or rollout, an omp session file, a start, a running Agent or its
-  record of it) and every folder it knows it by is outside the health space and the Agent folders set to Block: where
-  it started, where it last was, and where its record says. Anything else answers the same 404: a chat or run of the
-  space (one whose shell left it since included), an id the computer has nothing of, a transcript whose start cannot
-  be read (a first prompt with a large inline image). The answer does not tell a health chat from no chat.
+  resumes the chat only when something no resume rewrites says where it started (its transcript or rollout, its omp
+  session file, or for an engine's Agent its record, below) and every folder it knows it by is outside the health
+  space and the Agent folders set to Block: where it started, where it last was, and where its record, a start of it
+  or its running Agent says. Anything else answers the same 404: a chat or run of the space (one whose shell left it
+  since included), an id the computer has nothing of, a transcript whose start cannot be read (a first prompt with a
+  large inline image), and a terminal chat whose transcript is gone (Claude Code removes one after about 30 quiet
+  days). Its record alone is not enough, since every resume writes it anew with the folder the resume names; resumed,
+  such a chat would start empty under its old id anyway, so start a new one instead.
+- **The answer does not tell a health chat from no chat.** The hub decides the resume after every check that holds
+  for any id (the computer's trust, the agent type, the manager's start settings), so a request refused for another
+  reason is answered the same whichever chat it names. Only the time differs: an id the hub does not list is asked of
+  the computer.
 - **On a computer whose engine is Paseo or Cindy**, an Agent the engine runs under the id Persona named it by has no
   transcript under that id, so the record is what the computer has of it. Persona Link keeps one of every Agent it
-  starts through the engine, with its folder; Paseo lists an archived Agent only among its 80 newest archived in the
-  last 7 days, and a resume of one past that goes on through Paseo as the owner's does. An Agent started in the
-  engine's own app, or by a Persona Link from before that record, has none: once it is not listed, only the owner
-  resumes it. While the engine is not connected (closed, or Paseo's bridge restarting), a resume the computer does not
+  starts through the engine, with its folder and the engine that started it (the hub keeps both, so a restart of the
+  computer does not lose them); Paseo lists an archived Agent only among its 80 newest archived in the last 7 days,
+  and a resume of one past that goes on through Paseo as the owner's does. An Agent started in the engine's own app,
+  or by a Persona Link from before that record, has none: once it is not listed, only the owner resumes it. While the engine is not connected (closed, or Paseo's bridge restarting), a resume the computer does not
   know answers `409 engine_missing`, as the owner's does, whatever the id; try again once the engine is back.
 - **On a computer whose Persona Link is older** (it does not announce `resume_outside_health`), only a chat it lists:
-  one it does not list answers 404, and `503 sessions_not_listed` (`retryable: true`, `Retry-After`) while the hub has
-  had no list of that computer's chats since it started; try again then.
+  one it does not list answers 404, and `503 sessions_not_listed` (`retryable: true`, `Retry-After`) while the hub
+  cannot tell yet: it has had no list of that computer's chats since it started, or no word of its Persona Link (a
+  devices manager that restarted without its saved state has none until the computer connects again); try again then.
 
 A resume never starts a new chat under the id it names: a computer that has nothing of the id refuses it with
 `resume_unknown`, worded in the reader's language. A scoped device token resumes only a chat its computer lists

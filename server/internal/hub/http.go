@@ -895,15 +895,6 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// An extension's token resumes a conversation its computer lists outside the health space, or one it does not
-	// list that the computer checks (extensionResume, #10941).
-	checkedResume := false
-	if pr.Role == roleExtension && p.ResumeSessionID != "" {
-		var ok bool
-		if checkedResume, ok = h.extensionResume(w, p.MachineID, p.ResumeSessionID); !ok {
-			return
-		}
-	}
 	m := h.localMachine(p.MachineID)
 	if m == nil {
 		writeErr(w, http.StatusNotFound, i18n.Err("devices-api.unknown_machine"))
@@ -1015,6 +1006,16 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 			delete(params, "effort")
 		}
 		setWorkLauncherConfig(m, p.Launcher, params)
+	}
+	// An extension's token resumes a conversation its computer lists outside the health space, or one it does not
+	// list that the computer checks (extensionResume, #10941). Decided last, once every check that holds for any id
+	// has passed: a request one of them refuses is answered the same whichever conversation it names.
+	checkedResume := false
+	if pr.Role == roleExtension && p.ResumeSessionID != "" {
+		var ok bool
+		if checkedResume, ok = h.extensionResume(w, m, p.ResumeSessionID); !ok {
+			return
+		}
 	}
 	if checkedResume {
 		params["resume_outside_health"] = true // nodeproto.ResumeOutsideHealth: set after the manager's fill, never the caller's

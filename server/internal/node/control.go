@@ -477,18 +477,24 @@ func (n *Node) resumeKnown(ctx context.Context, id string) bool {
 	return ok
 }
 
-// resumeOutsideHealth: this computer has conversation id, and every directory it knows it by is outside the health
-// space and the Agent folders kept out of Persona: where its transcript or rollout started and where it last was (the
-// assistant's own health project too), its node record's (an engine runtime's start keeps one too:
-// recordEngineStart), a start's of it, its running agent's, its omp session file's. The hub asks it
-// (session.start's resume_outside_health) for a resume an extension's token names that its computer does not list
-// (#10941): a quiet chat leaves the list after a week, or sooner on a busy computer, and a stopped Agent takes no
-// message, so a resume is the only way back to one the extension started. One it has nothing of, or nothing that
-// says where it ran (a transcript whose head names no directory), is refused like one of the space: either would let
+// resumeOutsideHealth: this computer knows where conversation id started, and every directory it knows it by is
+// outside the health space and the Agent folders kept out of Persona. The hub asks it (session.start's
+// resume_outside_health) for a resume an extension's token names that its computer does not list (#10941): a quiet chat
+// leaves the list after a week, or sooner on a busy computer, and a stopped Agent takes no message, so a resume is the
+// only way back to one the extension started.
+//
+// Where it started is read only from what no resume rewrites: its transcript's or rollout's head (where it started and
+// last was, the assistant's own health project too), its omp session file (where `omp --resume` opens it, one Persona
+// did not start too), or the record of an engine runtime's start (EngineRuntime: the node has no transcript under the
+// id Persona named such an Agent by). Its terminal record, a start of it and its running agent only add directories to
+// refuse on: a resume writes a terminal record anew with the folder the resume names, and the apps name a run's latest
+// folder, so once a health run's transcript is gone its record alone could say outside (#12097). One it has nothing of,
+// nothing else of, or a transcript whose head names no directory, is refused like one of the space: either would let
 // the extension start a conversation the manager takes for another, or run one of the space outside it.
 func (n *Node) resumeOutsideHealth(ctx context.Context, id string) bool {
 	id = n.resolveAlias(id)
 	var dirs []string
+	started := false
 	if p := n.transcriptPath(id); p != "" {
 		st, err := os.Stat(p)
 		if err != nil {
@@ -499,6 +505,7 @@ func (n *Node) resumeOutsideHealth(ctx context.Context, id string) bool {
 			return false
 		}
 		dirs = append(dirs, m.start, m.cwd, n.assistantDirOfProject(filepath.Base(filepath.Dir(p))))
+		started = true
 	}
 	if r := n.starts.get(id); r != nil {
 		dirs = append(dirs, r.session.Cwd)
@@ -506,8 +513,9 @@ func (n *Node) resumeOutsideHealth(ctx context.Context, id string) bool {
 	if a, ok := n.agent(id); ok {
 		dirs = append(dirs, a.Cwd, a.ForegroundCwd)
 	}
-	if s, ok := n.ompResumeSession(id); ok { // where `omp --resume` opens it (ompresume.go), one Persona did not start too
+	if s, ok := n.ompResumeSession(id); ok && s.Cwd != "" {
 		dirs = append(dirs, s.Cwd)
+		started = true
 	}
 	if n.state != nil {
 		if n.state.loaded(ctx) != nil {
@@ -515,19 +523,15 @@ func (n *Node) resumeOutsideHealth(ctx context.Context, id string) bool {
 		}
 		if st, ok := n.state.get(id); ok {
 			dirs = append(dirs, st.Cwd)
+			started = started || st.EngineRuntime != "" && st.Cwd != ""
 		}
 	}
-	known := false
 	for _, d := range dirs {
-		if d == "" {
-			continue
-		}
-		if identity.InHealthSpace(d) || n.cwdBlocked(d) {
+		if d != "" && (identity.InHealthSpace(d) || n.cwdBlocked(d)) {
 			return false
 		}
-		known = true
 	}
-	return known
+	return started
 }
 
 // retypeStart types a start's line again into pane once its shell is at rest (settleShell), after leaving the

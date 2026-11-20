@@ -364,8 +364,8 @@ func TestEngineRuntimeAnExtensionsResumeOfAnUnlistedAgent(t *testing.T) {
 		if _, err := nodeCall(t, n, "session.start", map[string]any{"cwd": cwd, "launcher": "paseo-claude", "session_id": id, "prompt": "go"}); err != nil {
 			t.Fatal(err)
 		}
-		if st, ok := n.state.get(id); !ok || st.Cwd != cwd || st.Launcher != "paseo-claude" {
-			t.Errorf("the record of %s started through Paseo: launcher %q, directory %q, %v", id, st.Launcher, st.Cwd, ok)
+		if st, ok := n.state.get(id); !ok || st.Cwd != cwd || st.Launcher != "paseo-claude" || st.EngineRuntime != proto.EnginePaseo {
+			t.Errorf("the record of %s started through Paseo: launcher %q, directory %q, engine runtime %q, %v", id, st.Launcher, st.Cwd, st.EngineRuntime, ok)
 		}
 	}
 	// Archived a while ago: Paseo lists neither any more.
@@ -566,5 +566,36 @@ func TestRuntimeAssistantLauncherSaysWhatItRunsTheAssistantFor(t *testing.T) {
 	for _, bad := range []string{"bad name!", "grok-chat"} {
 		_ = host.peer.Notify("runtime.launchers", map[string]any{"launchers": []map[string]any{{"name": "grok-chat", "agent": "grok", "assistant_for": bad}}})
 		waitFor(t, "the new launchers "+bad, func() bool { l := got()["grok-chat"]; return l.Assistant && l.AssistantFor == "" })
+	}
+}
+
+// The record an engine runtime's start keeps says whose start its directory is (EngineRuntime), and only while it is:
+// a launcher switch carried out elsewhere moves the directory and carries the switch's (none for a terminal), a start
+// that writes the record anew has none, and putting back the record a failed switch wrote over puts back its own. An
+// extension's resume of an unlisted Agent passes on such a record alone (resumeOutsideHealth, #10941), so a directory
+// a resume or a switch wrote must never keep it. It goes to the hub's copy under engine_runtime (db.NodeSession).
+func TestEngineRuntimeRecordFollowsItsDirectory(t *testing.T) {
+	s := newState()
+	agent := sessionState{Launcher: "paseo-claude", Cwd: "/work/errands", EngineRuntime: proto.EnginePaseo}
+	s.put("a", agent)
+	s.adoptSwitch("a", sessionState{Launcher: "claude", Cwd: "/work/elsewhere"})
+	if st, _ := s.get("a"); st.Cwd != "/work/elsewhere" || st.EngineRuntime != "" {
+		t.Fatalf("after a switch carried out elsewhere: %+v", st)
+	}
+	s.put("b", agent)
+	s.put("b", sessionState{Launcher: "claude", Cwd: "/work/elsewhere"}) // a terminal start writes the record anew
+	if st, _ := s.get("b"); st.EngineRuntime != "" {
+		t.Fatalf("after a terminal start: %+v", st)
+	}
+	s.restoreLaunch("b", agent, true, "")
+	if st, _ := s.get("b"); st.Cwd != agent.Cwd || st.EngineRuntime != proto.EnginePaseo {
+		t.Fatalf("after putting the record back: %+v", st)
+	}
+	raw, err := json.Marshal(agent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"engine_runtime":"paseo"`) {
+		t.Fatalf("the record as the hub keeps it: %s", raw)
 	}
 }
