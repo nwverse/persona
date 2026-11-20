@@ -335,7 +335,8 @@ export class AgyAcpClient extends EventEmitter {
           if (child !== this.proc) return reject(new Error('Antigravity process changed during the conversation operation'))
           let value
           try { value = JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch (error) { return reject(error) }
-          if (res.statusCode !== 200) return reject(new Error(value.message || `Antigravity conversation service returned ${res.statusCode}`))
+          if (res.statusCode !== 200) return reject(Object.assign(
+            new Error(value.message || `Antigravity conversation service returned ${res.statusCode}`), { code: value.code }))
           resolve(value)
         })
       })

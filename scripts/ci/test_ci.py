@@ -1,3 +1,4 @@
+import ast
 import json
 import os
 from pathlib import Path
@@ -67,10 +68,18 @@ class PathTests(unittest.TestCase):
 
     def test_desktop_inputs_select_the_desktop_lane(self):
         for filename in ["desktop/src/main.ts", "web/src/main.tsx", "scripts/mock/mock_hub.py", "scripts/mock/mock_domains.py",
-                         "scripts/mock/desktops_mock.py", "scripts/mock/test_desktops_mock.py", "scripts/mock/stream_trace.py", "spec/desktop-bridge.d.ts",
+                         "scripts/mock/desktops_mock.py", "scripts/mock/github_mock.py", "scripts/mock/kb_selection_mock.py",
+                         "scripts/mock/mail_mock.py", "scripts/mock/test_desktops_mock.py", "scripts/mock/stream_trace.py", "spec/desktop-bridge.d.ts",
                          "server/cmd/password-wasm/main.go", "server/internal/passwordpake/pake.go", "server/go.mod", "server/go.sum"]:
             self.assertTrue(paths.select([filename])["desktop"], filename)
         self.assertFalse(paths.select(["server/internal/hub/hub.go"])["desktop"])
+        # The synthetic hub loads every module of mock_domains.DOMAINS as it starts, so each one is a lane input too.
+        registry = ast.parse((Path(paths.ROOT) / "scripts/mock/mock_domains.py").read_text())
+        domains = next(ast.literal_eval(node.value) for node in registry.body if isinstance(node, ast.Assign)
+                       and [getattr(t, "id", None) for t in node.targets] == ["DOMAINS"])
+        self.assertIn("desktops_mock", domains)
+        for name in domains:
+            self.assertTrue(paths.select(["scripts/mock/%s.py" % name])["desktop"], name)
 
     def test_sdk_ts_sources_also_select_the_server_lane(self):
         # The trusted Deno adapter and the extension page tests bundle sdk/ts/src (#4221); the rest of sdk/ts is not.

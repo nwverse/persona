@@ -2747,18 +2747,19 @@ web's routes (`docs/protocol/protocol.md`, `/api/v1/assistant/saved-prompts`) an
   beside the chat's own is a row of its own (ids `saved:<id>`). Persona chats, which have no agent commands, list the saved prompts (the main chat after its `/clear`).
 - **Assistant Profile › In Chats › Saved Prompts** (`Views/Settings/SavedPromptsView.swift`; both styles): each prompt's
   `/name` and its text's first two lines, New Prompt, and per row (context menu, swipe, VoiceOver actions) Edit, Move Up /
-  Move Down (`PUT …/order`) and Delete, confirmed. Delete and a move show at once and come back with the reason when the
+  Move Down (`PUT …/order`) and Delete, confirmed through `accessibleConfirmationDialog` (an alert at the largest text sizes). Delete and a move show at once and come back with the reason when the
   hub refuses; a list changed on another device meanwhile (409) is read again with a word. A change that answers after
   the current assistant or hub changed leaves the new list alone, and a move that answers after a delete made meanwhile
   does not bring the deleted prompt back.
-- **The editor** (`SavedPromptEditor`): Name after a fixed `/` and Text. It says the hub's rules before asking it
+- **The editor** (`SavedPromptEditor`): Name after a fixed `/` and Text; `sheetCancel`'s ✕ leaves, `SheetConfirm`'s ✓ saves (a spinner while it runs; #11183). It says the hub's rules before asking it
   (`SavedPromptRules`: a taken name at once, the others once something is typed or Save was tapped); a count shows past
   80% of 8,000 characters; the hub's own refusal shows in the sheet and keeps what was typed.
 - Save as Prompt… on a message's menu, and Android, follow in their own issues.
 - DEBUG: `-tab settings -openAssistantPage prompts|prompt|newPrompt` (`promptsEntry`: the profile scrolled to In Chats).
   Tests: `PersonaTests/SavedPromptsTests.swift`; UI suite `SavedPromptsUITests` against the mock with
   `MOCK_SAVED_PROMPTS=1` (`TEST_RUNNER_PERSONA_MOCK_HUB`; skips without it) swipes a row, checks Delete asks first and
-  Cancel sends nothing, light and dark; `TEST_RUNNER_PERSONA_SHOTS=<dir>` keeps `saved-prompts-<light|dark>-<swipe|confirm>.png`.
+  Cancel sends nothing, and opens the editor, checks its ✕ and ✓ and that the ✕ saves nothing, light and dark;
+  `TEST_RUNNER_PERSONA_SHOTS=<dir>` keeps `saved-prompts-<light|dark>-<swipe|confirm|editor>.png`.
 
 ## The pages show the current assistant
 
@@ -3006,6 +3007,10 @@ Claude Code, Codex and Session Triage. Applying runtime settings to all online c
 computers in the current Hub. Connectors, extensions, markets, channels and knowledge selection use a captured assistant
 request context; switching assistants returns Settings to the list, and a late response cannot replace the new scope.
 An explicitly manager-bound detail link still opens that assistant's copy without changing the app's pick.
+
+An extension purpose with candidate support shows the lists it requested, their most recent use, and each model's provider
+or reason for being unavailable. Choose the extension’s lists, the purpose model alone, or an ordered list of directly
+callable providers and model IDs. Leave an ID empty to follow that provider’s default. Saving uses the current revision. When the revision changes elsewhere, the editor keeps the draft until you confirm a reload.
 
 The rest of the first group follows the same rule. Skills, Auto-Start Tasks (`TaskTrustModel`), Outlook sign-in on Add Mail
 Account, an extension form's launcher picker, each page's Subscriptions entry (`SettingsPage.subscriptions(state:manager:)`)
