@@ -563,6 +563,10 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 		if st == reviewParked {
 			return prompts.SuperviseEntry{}, false // parked meanwhile: it waits on purpose (parked.go)
 		}
+	case sigCheck:
+		if g.Report == checkNoProgressReport && st == reviewParked {
+			return prompts.SuperviseEntry{}, false // parked meanwhile: it waits on purpose (parked.go)
+		}
 	case sigParkedDue:
 		if r := v.parking(); st != reviewParked || r == nil || parkKey(r) != g.Key {
 			return prompts.SuperviseEntry{}, false // its agent works again, or it was reviewed again, meanwhile
@@ -661,6 +665,12 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 	if g.Kind == sigOwnerCannot { // the owner's answer is the signal, not a reason in brackets
 		e.Detail, e.Response = "", g.Detail
 	}
+	if g.Kind == sigCheck {
+		e.Report = g.Report
+		if g.Report == checkDecidedReport { // the option the owner took, and the decision as it was asked
+			e.Detail, e.Response, e.Decision = "", g.Detail, g.Decision
+		}
+	}
 	if g.Kind == sigFailed {
 		s.remedyEntry(ctx, t, &e) // its kept tab, and the turn that hears of it (start_remedy.go)
 	}
@@ -736,6 +746,10 @@ func sortEntries(list []prompts.SuperviseEntry) []prompts.SuperviseEntry {
 	rank := map[string]int{sigNeedsYou: 0, sigAsk: 0, sigEscalated: 0, sigDecide: 0, sigOwnerCannot: 0, sigUndecidable: 1, sigRecheck: 1, sigParkedDue: 2, sigParkDecided: 2, sigIdle: 2, sigUnjudged: 2, sigAllStopped: 2, sigFailed: 3, sigStarted: 3, sigInterrupted: 4, sigOrphaned: 4, sigReview: 5, sigStalled: 6, sigNoProgress: 6, sigLeaderStuck: 6, sigOverdue: 6, sigInbox: 6, sigReport: 7}
 	at := func(e prompts.SuperviseEntry) int {
 		switch {
+		case e.Kind == sigCheck && e.Report == checkDecidedReport: // the owner's answer
+			return rank[sigOwnerCannot]
+		case e.Kind == sigCheck:
+			return rank[sigStalled]
 		case e.Kind != sigReport:
 		case e.Report == upReportQuestion || e.Report == upReportBlocked: // waits on a decision too
 			return 1
