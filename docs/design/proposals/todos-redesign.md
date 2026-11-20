@@ -604,6 +604,7 @@ here.
 | Notes | 说明 | the owner's words on the to-do | shipped |
 | What you asked · Done when | 你的要求 · 完成标准 | the brief and its criteria | new |
 | Steps · Keep Steps · Suggested | 步骤 · 保留步骤 · 建议 | pieces of a to-do | new, context-keyed: "Steps" reads 步数 (health) today |
+| Suggested (⋯ › Sort By) | 推荐顺序 | the list's default order inside each section: the hub's | new, context-keyed apart from suggested steps (建议) |
 | Results | 成果 | what the work produced, with its outcome | new |
 | Conversation | 对话 | the to-do's timeline | new, context-keyed: "Conversation" reads 处理对话 elsewhere |
 | Work details | 工作细节 | how code work is done (Agents audience) | new |
@@ -1086,9 +1087,9 @@ joins `managerMessageTypes` (`server/internal/hub/bus_broadcast.go`), or `TestBr
 | Need | Shape | Gate | Target |
 | --- | --- | --- | --- |
 | Rows | `GET /api/v1/todos[?place=]` → rows with `view` + list `counts`; heavy fields left out of done rows (`chain=last` style) | `todo_view` (per item: a row with `view` is drawn from it; one without falls back) | C1, C2 |
-| Item | `GET /api/v1/todos/{id}` → row + brief, steps, results, runs (title, role, state, capabilities), the latest 2 rounds, recap | `todo_view` | C2 |
+| Item | `GET /api/v1/todos/{id}` → row + brief, steps, results, runs (title, role, state, capabilities), the latest 2 rounds, recap | `todo_view`; the rounds, recap and results with `todo_timeline` (#10465: they come from the timeline's stores, so the timeline's gate) | C2 |
 | Places | `GET /api/v1/todos/places` → `[{id, kind, title, needs_you}]` + counts; push `{"type":"todo_places","rev"}` | `todo_places` | C1 |
-| Timeline | `GET /api/v1/todos/{id}/timeline?before=&limit=` → rounds grouped by the hub; push `todo_timeline {todo, entries}` only to clients that have the to-do open. Manager pushes reach every app connection today and the only subscription is per session, so a per-to-do subscription is new hub work | `todo_timeline` (stage 2: derived over today's stores; stage 3: `todo_activity`) | C13 |
+| Timeline | `GET /api/v1/todos/{id}/timeline?before=&limit=` → rounds grouped by the hub; push `todo_timeline {todo, entries}` only to clients that have the to-do open, in stage 3 (#10465: stage 2 has no push of its own; clients read again on `{"type":"todos"}` and on an `assistant_feed` whose item is about the to-do). Manager pushes reach every app connection today and the only subscription is per session, so a per-to-do subscription is new hub work | `todo_timeline` (stage 2: derived over today's stores; stage 3: `todo_activity`) | C13 |
 | Messages | `POST /api/v1/todos/{id}/messages {client_op_id, text, to: steward or run:<id>, mode: queue or now, answers?: ask_id}` → `202 {message_id, state: processing}`; push `todo_message {message_id, state: delivered, queued, failed or unknown, to}` | `todo_messages` (without it: today's origin route where allowed, else the main chat with the route chip) | C8, C14 |
 | Send Now support | a session capability `send_now`, set by the node; the client heuristics retire | per session | — |
 | Asks | `POST /api/v1/todos/{id}/asks/{ask}/answer {option, response, text or outcome: later, decline or undo}` with the op id in `X-Persona-Op-Id`, as every to-do write (Writes); a stale round → 409; `/accept` and the other answer routes kept for clients without it | `todo_asks` (the route alone) | C7, C15 |

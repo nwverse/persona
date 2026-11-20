@@ -4,6 +4,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { basename, join } from 'node:path'
 import { appToolName, clipInput, light, snippet } from '../../runtime-sdk/index.js'
+import { isImageReference, localMediaPath } from './media.js'
 
 export const RUNTIME = 'agy'
 export const LABEL = 'Antigravity'
@@ -11,6 +12,8 @@ export const PREFIX = 'agy-'
 
 // Kept off native JSON: an appended replacement branch is a new logical step even when its timestamp repeats.
 const STEP_IDENTITY = Symbol('persona.agy.stepIdentity')
+// Kept off native JSON: live ACP tool calls and results pair explicitly even when parallel calls complete out of order.
+export const LIVE_TOOL_USE_ID = Symbol('persona.agy.liveToolUseId')
 
 function stepIdentity(step, branch = '') {
   const birth = typeof step.created_at === 'string' ? step.created_at : ''
@@ -56,6 +59,16 @@ export function cleanUserText(raw) {
     body = body.replace(SNAPSHOT_RE, '').replace(SNAPSHOT_END_RE, '')
   } while (body !== prev)
   return body.trim()
+}
+
+function attachedImagePaths(text) {
+  const paths = new Set()
+  for (const [, body] of text.matchAll(/<attached_images>([\s\S]*?)<\/attached_images>/g)) {
+    for (const path of body.split('\n')) {
+      if (path.trim()) paths.add(localMediaPath(path.trim()))
+    }
+  }
+  return paths
 }
 
 const PERSONA_MCP_TOOL_RE = new RegExp(`^mcp_(?:${MCP_SERVER_NAMES.join('|')})(?:_[0-9a-fA-F]{8,16})?_([a-z][a-z0-9_]*)$`)
@@ -149,7 +162,7 @@ export function cleanGenericOutput(content) {
 /**
  * Parse a transcript.jsonl file (or array of parsed step objects) into Persona items.
  * @param {object[]} steps
- * @param {{ brainDir?: string, full?: boolean }} [opts]
+ * @param {{ brainDir?: string, full?: boolean, includeMedia?: boolean, mediaItemId?: string, clientMsgIdFor?: (index: number, text: string, ordinal: number) => string | undefined }} [opts]
  */
 export function stepsToItems(steps, opts = {}) {
   const items = []
@@ -158,16 +171,24 @@ export function stepsToItems(steps, opts = {}) {
   let lastText = ''
   let turnError
   let afterWork = false
+  let media
+  let userOrdinal = 0
 
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i]
     if (!step || typeof step !== 'object') continue
     const idx = typeof step.step_index === 'number' ? step.step_index : i
+    // Synthetic notices can move the projected sequence without moving the native record's files or message binding.
+    const nativeIdx = typeof step.native_step_index === 'number' ? step.native_step_index : idx
     const seq = idx + 1
     if (seq > maxSeq) maxSeq = seq
     const ts = step.created_at || new Date().toISOString()
     const identity = step[STEP_IDENTITY] ?? stepIdentity(step)
     const line = identity ? `${seq}@${identity}` : String(seq)
+
+    // A call's result follows its planner step. One that never came (interrupted, dropped) must not stay queued to
+    // take the next result, which would shift every later result onto the wrong call.
+    if (step.type === 'PLANNER_RESPONSE' || step.type === 'USER_INPUT' || step.type === 'ERROR_MESSAGE') pendingCalls.length = 0
 
     switch (step.type) {
       case 'USER_INPUT': {
@@ -177,12 +198,29 @@ export function stepsToItems(steps, opts = {}) {
         turnError = undefined
         afterWork = false
         const text = cleanUserText(step.content)
-        if (!text) break
-        const msgId = (typeof step.client_msg_id === 'string' && step.client_msg_id) || opts.clientMsgIdFor?.(idx, text)
-        const item = { id: `${line}#0`, seq, role: 'user', kind: 'text', text, ts, ...(msgId ? { client_msg_id: msgId } : {}) }
-        items.push(opts.full ? item : light(item))
+        userOrdinal++
+        const msgId = (typeof step.client_msg_id === 'string' && step.client_msg_id) || opts.clientMsgIdFor?.(nativeIdx, text, userOrdinal)
+        const user = { seq, role: 'user', ts, ...(msgId ? { client_msg_id: msgId } : {}) }
+        if (text) {
+          const item = { id: `${line}#0`, kind: 'text', text, ...user }
+          items.push(opts.full ? item : light(item))
+        }
+        if (opts.includeMedia === true && Array.isArray(step.media)) {
+          const attached = attachedImagePaths(text)
+          for (const [index, entry] of step.media.entries()) {
+            if (!isImageReference(entry)) continue
+            const path = entry.uri && localMediaPath(entry.uri)
+            if (path && attached.has(path)) continue
+            const id = `${line}#media${index}`
+            items.push({ id, kind: 'image', ...user, image: { mime: entry.mime_type, data: '', lazy: true } })
+            if (opts.mediaItemId === id) media = entry
+          }
+        }
         break
       }
+      case 'CHECKPOINT':
+        items.push({ id: `${line}#0`, seq, role: 'system', kind: 'notice', text: '上下文已压缩', ts })
+        break
       case 'PLANNER_RESPONSE': {
         turnError = undefined
         let sub = 0
@@ -202,9 +240,10 @@ export function stepsToItems(steps, opts = {}) {
         for (let k = 0; k < calls.length; k++) {
           const tc = calls[k]
           if (!tc || typeof tc !== 'object') continue
-          const callId = `call_${line}_${k}`
+          const explicitCallId = typeof tc[LIVE_TOOL_USE_ID] === 'string' && tc[LIVE_TOOL_USE_ID] ? tc[LIVE_TOOL_USE_ID] : ''
+          const callId = explicitCallId || `call_${line}_${k}`
           const { toolName, toolInput } = mapToolCall(tc.name || 'tool', tc.args)
-          pendingCalls.push({ callId, idx })
+          if (!explicitCallId) pendingCalls.push({ callId, idx })
           const item = {
             id: `${line}#${sub++}`,
             seq,
@@ -221,11 +260,12 @@ export function stepsToItems(steps, opts = {}) {
       }
       case 'GENERIC': {
         afterWork = true
-        const paired = pendingCalls.shift()
-        const callId = paired ? paired.callId : `call_${line}_0`
+        const explicitCallId = typeof step[LIVE_TOOL_USE_ID] === 'string' && step[LIVE_TOOL_USE_ID] ? step[LIVE_TOOL_USE_ID] : ''
+        const paired = explicitCallId ? undefined : pendingCalls.shift()
+        const callId = explicitCallId || (paired ? paired.callId : `call_${line}_0`)
         let rawOut = step.error || step.content || ''
         if (opts.full && opts.brainDir && Array.isArray(step.truncated_fields) && step.truncated_fields.includes('content')) {
-          const outFile = join(opts.brainDir, '.system_generated', 'steps', String(idx), 'output.txt')
+          const outFile = join(opts.brainDir, '.system_generated', 'steps', String(nativeIdx), 'output.txt')
           if (existsSync(outFile)) {
             try {
               rawOut = readFileSync(outFile, 'utf8')
@@ -245,21 +285,20 @@ export function stepsToItems(steps, opts = {}) {
           ts,
         }
         items.push(opts.full ? resItem : light(resItem))
-        if (Array.isArray(step.media)) {
-          step.media.forEach((m, mi) => {
-            if (m && typeof m.mime_type === 'string' && m.mime_type.startsWith('image/')) {
-              items.push({
-                id: `${line}#img${mi}`,
-                seq,
-                role: 'user',
-                kind: 'image',
-                mime: m.mime_type,
-                lazy: true,
-                ts,
-              })
-            }
-          })
+        if (opts.includeMedia === true && Array.isArray(step.media)) {
+          for (const [index, entry] of step.media.entries()) {
+            if (!isImageReference(entry)) continue
+            const id = `${line}#media${index}`
+            items.push({ id, seq, role: 'assistant', kind: 'image', tool_use_id: callId, ts,
+              image: { mime: entry.mime_type, data: '', lazy: true } })
+            if (opts.mediaItemId === id) media = entry
+          }
         }
+        break
+      }
+      case 'PERSONA_MODE_NOTICE': {
+        const item = { id: `${line}#0`, seq, role: 'system', kind: 'notice', text: String(step.content || ''), ts }
+        items.push(opts.full ? item : light(item))
         break
       }
       case 'ERROR_MESSAGE': {
@@ -275,15 +314,29 @@ export function stepsToItems(steps, opts = {}) {
     }
   }
 
-  return { items, toSeq: maxSeq, lastText, turnError }
+  return { items, toSeq: maxSeq, lastText, turnError, ...(media ? { media } : {}) }
 }
 
 const transcriptCache = new Map()
 const transcriptRevisions = new Map()
-const MAX_CACHED_TRANSCRIPTS = 16
+const MAX_CACHED_TRANSCRIPTS = 128
 const MAX_TRANSCRIPT_REVISIONS = 256
 const MAX_TRANSCRIPT_CACHE_BYTES = 64 * 1024 * 1024
 let transcriptCacheBytes = 0
+
+export function forkReplyPosition(itemId, steps) {
+  const legacy = !itemId.includes('@')
+  const item = stepsToItems(steps).items.find((entry) => entry.role === 'assistant' && entry.kind === 'text' &&
+    (entry.id === itemId || (legacy && entry.id.replace(/@[^#]+/, '') === itemId)))
+  return item ? steps.findIndex((entry, index) => entry?.type === 'PLANNER_RESPONSE' && (entry.step_index ?? index) + 1 === item.seq) : -1
+}
+
+export function forkStepIndex(index, trajectory) {
+  if (trajectory[index]?.type !== 'CORTEX_STEP_TYPE_PLANNER_RESPONSE') return undefined
+  const nextInput = trajectory.findIndex((entry, position) => position > index && entry?.type === 'CORTEX_STEP_TYPE_USER_INPUT' &&
+    (!entry.metadata?.source || entry.metadata.source === 'CORTEX_STEP_SOURCE_USER_EXPLICIT'))
+  return (nextInput < 0 ? trajectory.length : nextInput) - 1
+}
 
 export function readTranscriptSteps(brainDir, full = false) {
   return readTranscript(brainDir, full).steps
@@ -293,7 +346,8 @@ export function readTranscript(brainDir, full = false) {
   const file = join(brainDir, '.system_generated', 'logs', full ? 'transcript_full.jsonl' : 'transcript.jsonl')
   const fallback = full ? join(brainDir, '.system_generated', 'logs', 'transcript.jsonl') : null
   const target = existsSync(file) ? file : fallback && existsSync(fallback) ? fallback : null
-  if (!target) return { steps: [], branch: '' }
+  if (!target) return { steps: [], branch: '', revision: '', compact: false }
+  const compact = Boolean(full && target !== file)
   try {
     const info = statSync(target, { bigint: true })
     const version = [info.dev, info.ino, info.size, info.mtimeNs, info.ctimeNs].join(':')
@@ -325,20 +379,32 @@ export function readTranscript(brainDir, full = false) {
         const step = JSON.parse(trimmed)
         const previous = out.at(-1)
         const index = step?.step_index
+        let at = out.length
         if (Number.isInteger(index) && Number.isInteger(previous?.step_index) && index <= previous.step_index) {
-          // Native exports append replacement steps after a rewind. A status update keeps the step's identity.
-          if (index < previous.step_index || step.type !== previous.type || step.created_at !== previous.created_at) {
-            branch = createHash('sha256').update(branch).update('\n').update(trimmed).digest('hex').slice(0, 20)
-            revision = ''
-          } else if (JSON.stringify(previous) !== JSON.stringify(step)) {
-            // A planner step can gain its completed response while keeping its index and branch.
-            revision = createHash('sha256').update(JSON.stringify(step)).digest('hex').slice(0, 20)
+          // A step whose index nothing retained has is a late arrival, not a rewind: parallel tool calls are exported
+          // as they finish, so a call that fails at once lands before its sibling's result. It takes its place in
+          // step order, keeps the branch (every item identity) and marks the content as changed.
+          const floor = out.findLastIndex((s) => s.step_index <= index)
+          const late = index < previous.step_index && out[floor]?.step_index !== index
+          if (late) {
+            at = floor + 1
+            revision = createHash('sha256').update(trimmed).digest('hex').slice(0, 20)
+          } else {
+            // Native exports append replacement steps after a rewind. A status update keeps the step's identity.
+            if (index < previous.step_index || step.type !== previous.type || step.created_at !== previous.created_at) {
+              branch = createHash('sha256').update(branch).update('\n').update(trimmed).digest('hex').slice(0, 20)
+              revision = ''
+            } else if (JSON.stringify(previous) !== JSON.stringify(step)) {
+              // A planner step can gain its completed response while keeping its index and branch.
+              revision = createHash('sha256').update(JSON.stringify(step)).digest('hex').slice(0, 20)
+            }
+            while (out.length && out.at(-1).step_index >= index) out.pop()
+            at = out.length
           }
-          while (out.length && out.at(-1).step_index >= index) out.pop()
         }
         // Compute once with the parsed record, rather than rehashing every step on each session-list pass.
         if (step && typeof step === 'object') Object.defineProperty(step, STEP_IDENTITY, { value: stepIdentity(step, branch) })
-        out.push(step)
+        out.splice(at, 0, step)
       } catch {}
     }
     const nativeRevision = revision
@@ -352,7 +418,7 @@ export function readTranscript(brainDir, full = false) {
     // Keep small revision records independently of the parsed-body LRU, including fresh native rewrites.
     transcriptRevisions.set(target, { length: raw.length, hash, branch, nativeRevision, revision })
     while (transcriptRevisions.size > MAX_TRANSCRIPT_REVISIONS) transcriptRevisions.delete(transcriptRevisions.keys().next().value)
-    const transcript = { steps: out, branch, revision }
+    const transcript = { steps: out, branch, revision, compact }
     const size = Number(info.size)
     if (settled && size <= MAX_TRANSCRIPT_CACHE_BYTES) {
       while (transcriptCache.size >= MAX_CACHED_TRANSCRIPTS || transcriptCacheBytes + size > MAX_TRANSCRIPT_CACHE_BYTES) {
@@ -365,7 +431,7 @@ export function readTranscript(brainDir, full = false) {
     }
     return transcript
   } catch {
-    return full ? readTranscript(brainDir, false) : { steps: [], branch: '' }
+    return full ? { ...readTranscript(brainDir, false), compact: true } : { steps: [], branch: '', revision: '', compact: false }
   }
 }
 
@@ -387,17 +453,21 @@ export function transcriptStatus(steps, summary) {
   return 'unknown'
 }
 
-export function workspacePathOf(summary, fallbackCwd = '') {
+export function workspacePathOf(summary, fallbackCwd = '', skip = null) {
   if (Array.isArray(summary?.WorkspaceURIs) && summary.WorkspaceURIs.length > 0) {
-    const u = String(summary.WorkspaceURIs[0])
-    if (u.startsWith('file://')) {
-      try {
-        return decodeURIComponent(new URL(u).pathname)
-      } catch {
-        return u.slice('file://'.length)
+    for (const raw of summary.WorkspaceURIs) {
+      const u = String(raw)
+      let p = u
+      if (u.startsWith('file://')) {
+        try {
+          p = decodeURIComponent(new URL(u).pathname)
+        } catch {
+          p = u.slice('file://'.length)
+        }
       }
+      if (skip && skip(p)) continue
+      return p
     }
-    return u
   }
   return fallbackCwd
 }

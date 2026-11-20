@@ -142,6 +142,7 @@ openPairSheet
 openPane
 openPeople
 openPeopleQuery
+openPermissionModes
 openPersona
 openPlugin
 openPluginMarket
@@ -212,6 +213,7 @@ seedSSHTunnel
 showAddComputer
 showAgentInfo
 showAgentSortShadow
+showAlarmSample
 showAnswerPartLines
 showAnswerWhole
 showAsUnread
@@ -429,6 +431,7 @@ showTestNotification
 showTestNotificationIn
 showToasts
 showTodoHandoff
+showTodosV1
 showTokenPick
 showToolDetails
 showUnfoldLab

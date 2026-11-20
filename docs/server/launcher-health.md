@@ -50,6 +50,12 @@ runtime errors. Shell launchers, managed launchers and older runtimes keep their
   The main chat's conversations count as well (they run the computer's launcher under the same sign-in). Each turn a background task wakes meets the same limit again; it is recorded once.
 - Stored in the settings key `launchers.health` (Postgres), one entry per computer × launcher: success / failure, error text (redacted, truncated), error category,
   check time, consecutive failure count, repair log, state. It survives hub restarts.
+- **Clean error text** (`internal/textfmt`): the check's output and a start's error arrive with the terminal's colour codes and prompt records (iTerm2 shell integration,
+  zsh's `PROMPT_SP`) and with the shell's own startup noise (a gitstatus restart line, `Console output during zsh initialization`). The node strips the escapes before anything
+  reads the text, then redacts and summarizes it to its error line, so a URL or IP that an escape wrapped is still redacted and the category is read off the error, not off a banner
+  (`[oh-my-zsh] Would you like to update?` in front of a 401 stays `auth`, not `cli_outdated`). The manager cleans what it is given too, and `GET /api/v1/launchers/health`,
+  `agents_list`, the launcher lists and the apps' Test strip the escapes from records an older node or hub persisted, so a banner never reaches a reader. The web's
+  `lib/ansi.ts` does the same on the client.
 
 ## Usage-limit record rules
 
@@ -175,7 +181,7 @@ Every new Agent is now held to what its target computer can start before anythin
   for anything else it answers "not supported". It does not accept arbitrary commands. Old nodes lack this method, which counts as "cannot upgrade".
 - **Repair Agent**: when `agents.launcher_health.repair` in `manager.json` sets `skill`, it starts an Agent with a healthy launcher on `machine` (default: the computer the assistant runs on) in `cwd` (default home).
   The first message (`server/internal/prompts/agents/launcher_repair.md`) says which launchers on which computer are broken, the raw error and category, which skill to use for the repair, and to self-test with `claude -p` afterwards.
-  It hangs off a **quiet to-do** (`Quiet`, no source chat): the hub sends no pushes for it, but it is visible on the Agents page and in to-dos. When it stops (neither working nor waiting for you) or after 45 minutes,
+  It hangs off a **quiet to-do** (`Quiet`, no source chat): the hub sends no pushes for it, but it is visible on the Agents page and in to-dos. The link keeps the kind reported by the repair Agent's own start answer, or stays empty if the answer omits it. When it stops (neither working nor waiting for you) or after 45 minutes,
   the manager retests this round's launchers: pass means `ok`, fail means `blocked` (the reason includes the repair Agent's last message). Without `skill`, upgrading the CLI is the only repair; everything else goes straight to `blocked`.
   The skill name and the computer used for repair are configuration; the code names no specific tool or gateway.
 

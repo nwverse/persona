@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"log"
 	"maps"
 	"path/filepath"
 	"sort"
@@ -104,9 +105,19 @@ func (n *Node) launchers(ctx context.Context) ([]proto.Launcher, error) {
 	// and the next ask within the minute gets the list from the cache.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
 	defer cancel()
-	out, err := loginShell(ctx, launcherScript).Output()
-	if err != nil && len(out) == 0 {
-		return nil, fmt.Errorf("list launchers: %w", err)
+	// Within those 20 s for good (#10952): something the rc file leaves running in the background (or the script's
+	// children when the cap kills the shell) holds the output's pipe open, and Output() alone waited for it, past the
+	// hub's 30 s on every ask while this lock held each one behind it. The shell's output so far is the list.
+	cmd := loginShell(ctx, launcherScript)
+	killGroupOnCancel(cmd)
+	began := time.Now()
+	out, err := cmd.Output()
+	if !strings.Contains(string(out), launcherBegin) {
+		// The shell ended before the script ran (the 20 s cap on a slow rc file, an rc file that exits): what it printed
+		// is the rc files' own, and says nothing of the launchers. Parsed, it was plain claude alone, which replaced the
+		// last list for a minute: every other launcher unknown, and the hub moved their conversations to claude (#11580).
+		return lastLaunchers(fmt.Errorf("list launchers: the login shell ended before listing them after %v: %v",
+			time.Since(began).Round(time.Millisecond), err))
 	}
 	list, codex, settings, scripts := mergeLaunchers(string(out))
 	launcherCache.Lock()
@@ -114,6 +125,19 @@ func (n *Node) launchers(ctx context.Context) ([]proto.Launcher, error) {
 	launcherCache.scripts = scripts
 	launcherCache.Unlock()
 	return list, nil
+}
+
+// lastLaunchers answers a failed read of the login shell (launchers): the last list, kept for another minute so the
+// next try is not on every ask while a slow shell stays slow; the error only when there has been no list yet.
+func lastLaunchers(failed error) ([]proto.Launcher, error) {
+	launcherCache.Lock()
+	defer launcherCache.Unlock()
+	if launcherCache.list == nil {
+		return nil, failed
+	}
+	log.Printf("node: %v; keeping the last %d launchers", failed, len(launcherCache.list))
+	launcherCache.at = time.Now()
+	return launcherCache.list, nil
 }
 
 // mergeLaunchers is launcherScript's output as the launcher list: the helper's, then the aliases it does not name,
@@ -223,7 +247,41 @@ func (n *Node) inferLauncher(id string) string {
 	if !ok {
 		return ""
 	}
-	return matchLauncher(n.cachedLaunchers(), env.BaseURL, env.Model)
+	if name := matchLauncher(n.cachedLaunchers(), env.BaseURL, env.Model); name != "" {
+		return name
+	}
+	return matchLauncher(n.managedInferLaunchers(), env.BaseURL, env.Model)
+}
+
+// managedInferLaunchers returns the cached Claude managed-launcher projection so a terminal session started manually
+// with `personad launch <name>` can infer its managed launcher when the endpoint/model match is unambiguous.
+func (n *Node) managedInferLaunchers() []proto.Launcher {
+	if n == nil {
+		return nil
+	}
+	n.managed.mu.Lock()
+	if n.managed.infer == nil && len(n.managed.byID) > 0 {
+		n.managed.infer = buildManagedInferLaunchers(n.managed.byID)
+	}
+	out := n.managed.infer
+	n.managed.mu.Unlock()
+	return out
+}
+
+func buildManagedInferLaunchers(byID map[string]proto.ManagedLauncher) []proto.Launcher {
+	if len(byID) == 0 {
+		return nil
+	}
+	out := make([]proto.Launcher, 0, len(byID))
+	for _, l := range byID {
+		if a := l.AgentType(); a != "" && a != "claude" {
+			continue
+		}
+		pm, _ := providerModel(l, l.Model)
+		out = append(out, proto.Launcher{Name: l.Name, BaseURL: managedBaseURL(l), Model: sdkModel(l.Model, pm)})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }
 
 // matchLauncher picks the launcher that exports this base URL and model. Several launchers can share one endpoint
@@ -240,7 +298,7 @@ func matchLauncher(list []proto.Launcher, baseURL, model string) string {
 			continue
 		}
 		byURL = append(byURL, l.Name)
-		if model != "" && l.Model == model {
+		if model != "" && (l.Model == model || l.Model != "" && proto.TrimModelWindow(l.Model) == proto.TrimModelWindow(model)) {
 			byBoth = append(byBoth, l.Name)
 		}
 	}

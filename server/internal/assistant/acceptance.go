@@ -23,6 +23,9 @@ import (
 const acceptanceKey = "assistant.acceptance"
 
 type acceptAsk struct {
+	// prepared is the complete conclusion behind an in-flight claim. Saves keep it instead of the empty claim,
+	// while this process still excludes the claim from retries and duplicate initial posts.
+	prepared  *acceptAsk
 	MessageID string   `json:"message_id"`         // the first card ("" while none went out, see NoCard)
 	Messages  []string `json:"messages,omitempty"` // every card asking it (the first and the reminders)
 	// Earlier are the cards of the task's rounds before this one (#4853): dead, so a press or a reply on one is answered
@@ -80,6 +83,10 @@ type acceptAsk struct {
 	Response      string           `json:"response,omitempty"`
 	// Chosen: the option the owner chose when it was not the recommended one.
 	Chosen string `json:"chosen,omitempty"`
+	// Check: the recurring schedule whose progress check raised this decision (schedule_todo.go, #11587). The option
+	// the owner takes is about the supervisor's approach, so it goes to the task's supervisor, not its Agent
+	// (checkDecided).
+	Check string `json:"check,omitempty"`
 	// ForBriefing: a decision that can wait (#4930, decision_wait.go), raised without a push and without a card, while
 	// it waits for a briefing to bring it to the owner; cleared once one did, or once it was pushed after all, at
 	// PushedAt: its card is due from then (retryAcceptance).
@@ -170,7 +177,17 @@ func (s *Service) saveAcceptErrLocked(ctx context.Context) error {
 		return nil
 	}
 	if st := s.store(); st != nil {
-		return st.PutSetting(ctx, acceptanceKey, s.accept.asks)
+		asks := make(map[string]*acceptAsk, len(s.accept.asks))
+		for id, a := range s.accept.asks {
+			if a != nil && a.prepared != nil {
+				prepared := *a.prepared
+				prepared.Earlier = a.Earlier // an earlier round's in-flight retry may have added its card meanwhile
+				asks[id] = &prepared
+			} else {
+				asks[id] = a
+			}
+		}
+		return st.PutSetting(ctx, acceptanceKey, asks)
 	}
 	return nil
 }
