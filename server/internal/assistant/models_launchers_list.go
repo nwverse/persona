@@ -144,13 +144,19 @@ func (s *Service) launcherViewsFrom(ctx context.Context, zshrc []zshrcLaunchers,
 				if l.Source != "" {
 					src = l.Source
 				}
-				v = &LauncherView{Name: l.Name, Source: src, Agent: l.Agent, BaseURL: l.BaseURL, Model: l.Model, Hidden: slices.Contains(hidden, l.Name), PermissionModes: l.PermissionModes}
+				v = &LauncherView{Name: l.Name, Source: src, Agent: l.Agent, BaseURL: l.BaseURL, Model: l.Model, Hidden: slices.Contains(hidden, l.Name), PermissionModes: l.PermissionModes, builtinCompanion: l.BuiltinCompanion, modelRunMachines: []string{}}
 				byName[l.Name] = v
 				names = append(names, l.Name)
 			} else if l.PermissionModes != 0 {
 				v.PermissionModes |= l.PermissionModes
 			}
 			v.Machines = append(v.Machines, m.MachineID)
+			if l.BuiltinCompanion {
+				v.builtinCompanion = true
+			}
+			if modelRunSourceSupported(l.Source, viewAgent(LauncherView{Name: l.Name, Agent: l.Agent}), l.BuiltinCompanion) && !slices.Contains(v.modelRunMachines, m.MachineID) {
+				v.modelRunMachines = append(v.modelRunMachines, m.MachineID)
+			}
 			if rc := cmp.Or(m.Sync.RCFile, defaultRCFile); v.Source == "zshrc" && !slices.Contains(v.RCFiles, rc) {
 				v.RCFiles = append(v.RCFiles, rc)
 			}
