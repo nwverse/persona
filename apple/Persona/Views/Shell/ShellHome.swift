@@ -84,9 +84,12 @@ struct ShellHome: View {
                         }
                         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { room.error = $0 }
                     }
-                    ReadinessHomeCard(route: $route)
-                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { room.card = $0 }
-                        .onDisappear { room.card = 0 }
+                    VStack(spacing: Theme.Space.m) {
+                        PushHealthNotice(group: model.hub?.group ?? "")
+                        ReadinessHomeCard(route: $route)
+                    }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { room.card = $0 }
+                    .onDisappear { room.card = 0 }
                 }
                 if pending == nil, !mentionOpen, !cleared {
                     ShellNeedsYou(maxHeight: room.needs(withError: shownError != nil, top: AssistantTopBar.room(railEdge)), openInbox: openInbox).shellScaled()

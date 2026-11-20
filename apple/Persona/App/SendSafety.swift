@@ -173,7 +173,15 @@ extension AppModel {
     func sendPending(_ key: SessionKey, _ msg: PendingMessage, clearDraft: String? = nil) async -> SendOutcome {
         noteFailure(key, msg.id, nil)
         // Restored outbox entries wait for metadata; opaque IDs do not identify a writable source.
-        guard let session = session(key) else { return .waiting }
+        guard let session = latest(key) else { return .waiting }
+        if let effort = effortRequests[key] ?? session.pendingEffort {
+            holdForEffort(key, msg.id, effort: effort)
+            return .effortWaiting
+        }
+        if let effort = msg.requiredEffort, session.effort != effort {
+            noteFailure(key, msg.id, String(localized: "Thinking effort could not be confirmed. Choose it again before resending."))
+            return .failed
+        }
         guard session.canSend else {
             noteFailure(key, msg.id, session.sourceSubtitle ?? String(localized: "This session is view-only"))
             return .failed
@@ -197,14 +205,14 @@ extension AppModel {
             // the outbox's clock; once the drop's grace is over the outbox takes it (flushOutbox).
             let launcher = assistantLaunchers[key], model = assistantModels[key]
             #if os(iOS)
-            let holds = !session.assistant && canManageHeld(key.group)
+            let holds = !session.assistant && msg.requiredEffort == nil && canManageHeld(key.group)
             #else
             let holds = false
             #endif
             let reply = try await OpRetry.untilDelivered(keepTrying: { socket?.takesWrites == true }) {
                 try await api.sendReply(key, text: msg.text, images: msg.images, launcher: launcher, model: model,
                                         clientMsgID: msg.id.uuidString, clearDraft: clearDraft, via: msg.via, opID: msg.id,
-                                        holdsAgentMessages: holds)
+                                        holdsAgentMessages: holds, waitForEffort: session.agent == "claude")
             }
             if reply.kept {
                 // The manager kept it. Its row now carries its status to every device.
@@ -218,6 +226,15 @@ extension AppModel {
                 toast = Toast(String(localized: "Sent. The Agent will read it after the question on the computer is answered."))
             }
             return .sent
+        } catch let e as APIError where e.code == "effort_change_pending" {
+            // The node refused before typing. The operation receipt keeps the refusal under this ID.
+            markRefused(key, msg.id)
+            guard let effort = e.fields["effort"] else {
+                noteFailure(key, msg.id, e.shown ?? e.localizedDescription)
+                return .failed
+            }
+            holdForEffort(key, msg.id, effort: effort)
+            return .effortWaiting
         } catch let e as APIError where e.code == "input_draft" {
             Haptics.attention()
             markRefused(key, msg.id)
@@ -352,7 +369,12 @@ extension AppModel {
         }
     }
 
-    private func noteFailure(_ key: SessionKey, _ id: UUID, _ reason: String?) {
+    private func holdForEffort(_ key: SessionKey, _ id: UUID, effort: String) {
+        guard let i = chat(key).pending.firstIndex(where: { $0.id == id }) else { return }
+        chat(key).pending[i].requiredEffort = effort
+    }
+
+    func noteFailure(_ key: SessionKey, _ id: UUID, _ reason: String?) {
         guard let i = chat(key).pending.firstIndex(where: { $0.id == id }) else { return }
         chat(key).pending[i].failure = reason
     }

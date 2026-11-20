@@ -103,8 +103,8 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
   const [loading, setLoading] = useState(!initial);
   const [firstRead, setFirstRead] = useState(false);
   const [error, setError] = useState("");
-  // The latest page's read said its computer can't find this history (#11450): no older page is read, which would
-  // answer an empty one, end paging and take the error away.
+  // The latest page's read is unanswered or said its computer can't find this history (#11450): no older page is read,
+  // which would answer an empty one, end paging and take the error away.
   const historyMissing = useRef(false);
   const [hasMore, setHasMore] = useState(initial?.hasMore ?? false);
   const hasMoreRef = useRef(hasMore);
@@ -210,6 +210,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
     setLoading(!cached);
     setFirstRead(false);
     setError("");
+    historyMissing.current = false;
     updateHasMore(cached?.hasMore ?? false);
     setStreamEnded(false);
     deltas.current.flush("");
@@ -242,6 +243,10 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       setError(error);
       setLoading(false);
       setFirstRead(true);
+    };
+    const recovered = () => {
+      historyMissing.current = false;
+      setError("");
     };
     // The newest page may start after everything the cached one holds, with turns missing between them: showing both
     // would hide that hole, so the page takes over and older history loads on scroll.
@@ -434,7 +439,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       const replay = e.has_more !== undefined && authoritative;
       if (e.has_more !== undefined) {
         latestMore = e.has_more;
-        setError("");
+        recovered();
         // The first replay can stand in for a failed read. Later replays describe only the newest two turns.
         const skips = !replay && skipsCached(batch);
         if (!replay) updateHasMore(latestMore);
@@ -495,6 +500,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       if (replacing.current || changed) endLive();
       replacing.current = false;
       authoritative = true;
+      recovered();
       replacementReplay = undefined;
       pendingItems = [];
       pendingHistory = "";
@@ -516,11 +522,10 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       const before = history.current;
       const version = ++pageRequest;
       ready = false;
+      historyMissing.current = true;
       if (!itemsRef.current.length && !liveRaw.current) setLoading(true);
       clearTimeout(refused);
       refused = undefined;
-      setError("");
-      historyMissing.current = false;
       try {
         const p = await api<ItemsPage>(`${sessionPath(mid, sid)}/items?${PAGE}`, { signal: ctl.signal });
         if (dead || version !== pageRequest) return;
@@ -532,6 +537,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       } catch (e) {
         if (dead || version !== pageRequest) return;
         if (e instanceof ApiError && e.code === "conversation_deleted") { markConversationDeleted(mid, sid); return; }
+        if (opts.starting) recovered();
         // A subscribe may already have supplied the page while the HTTP read was pending.
         if (replacing.current && replacementReplay) {
           commitPage(replacementReplay);
@@ -588,7 +594,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
     setLoadingEarlier(true);
     read.promise = (async () => {
       const { signal } = read.controller;
-      const current = () => earlierInFlight.current === read && !signal.aborted;
+      const current = () => earlierInFlight.current === read && !signal.aborted && !historyMissing.current;
       try {
         if (delay > 0) await waitForEarlierRetry(delay, signal);
         if (!current() || !hasMoreRef.current) return;

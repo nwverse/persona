@@ -480,7 +480,15 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // lib/start-page.ts). The sections' bars and their names while arranging, and what a change writes, are the editor's
 // chunk (views/extensions/OverviewArrange.tsx, lib/overview-edit.ts).
 // This branch keeps the existing 482,526 B limit with the same measurement.
-export const FIRST_SCREEN_BUDGET = 482_526;
+// #11442: phone fixes add 739 B in ja, measured in one environment against main 989b48a766 (ja 482,305 B to 483,044 B;
+// en 479,417 B to 480,159 B, zh-Hans 480,166 B to 480,922 B): toasts held only by a mouse pointer and a sheet's focused
+// field kept in view above the keyboard (ui/atoms.tsx), Back closing the search palette and the composer's overlays
+// (lib/back-close.ts), the header on a gone tab's and an ambiguous link's page (App.tsx), a waiting card's field kept
+// unfolded and in sight with Android's keyboard (lib/viewport.ts, views/chat/ChatView.tsx), and the classes behind the
+// keyboard-aware palette and dock, the attachment ✕'s corner reach and Overview's task-card overlay (styles.css).
+// Where the toasts sit on a phone is a chunk of its own (ui/toast-lift.tsx) a narrow screen loads after the shell.
+// Main had 221 B of room, so the budget is this ja size plus those 221 B.
+export const FIRST_SCREEN_BUDGET = 483_265;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;

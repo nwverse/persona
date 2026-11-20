@@ -97,7 +97,8 @@ export function TodoStageBar({ stage, stageKind, prURL, className = "" }: { stag
           target="_blank"
           rel="noreferrer noopener"
           aria-label={pr.label}
-          className="inline-flex items-center gap-1 self-start whitespace-nowrap text-[12px] font-medium text-accent-ink hover:underline"
+          // above the overview card's overlay on a touch screen (Home's TaskCard opens the task from anywhere else on it)
+          className="inline-flex items-center gap-1 self-start whitespace-nowrap text-[12px] font-medium text-accent-ink hover:underline pointer-coarse:relative pointer-coarse:z-10"
         >
           <Icon name="external" size={11} />
           {pr.text}
