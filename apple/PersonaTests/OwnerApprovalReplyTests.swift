@@ -86,3 +86,93 @@ struct OwnerApprovalReplyTests {
         #expect(model.pendingInteractions.count == 1)
     }
 }
+
+/// The settings view model reads the same hub state as the other clients and accepts a write only after the PUT and a
+/// fresh GET both confirm it. A stale or partial answer rolls the optimistic value back.
+@MainActor
+struct OwnerApprovalSettingsModelTests {
+    private let path = "/api/v1/assistant"
+    private let off = #"{"machine_id":"m","launcher":"","cwd":"/tmp","conversations":[],"manager":"mgr","owner_reply_approval":false,"persistent_owner_action_cards":false,"owner_reply_approval_phrases":["发","同意"]}"#
+    private let on = #"{"machine_id":"m","launcher":"","cwd":"/tmp","conversations":[],"manager":"mgr","owner_reply_approval":true,"persistent_owner_action_cards":false,"owner_reply_approval_phrases":["发","同意"]}"#
+    private let custom = #"{"machine_id":"m","launcher":"","cwd":"/tmp","conversations":[],"manager":"mgr","owner_reply_approval":false,"persistent_owner_action_cards":false,"owner_reply_approval_phrases":["发","Agree"]}"#
+
+    private final class Saved {
+        var states: [APIClient.AssistantState] = []
+    }
+
+    private func make(_ hub: FakeHub, _ saved: Saved) -> OwnerApprovalSettingsModel {
+        OwnerApprovalSettingsModel(deps: .init(api: { hub.client }, saved: { saved.states.append($0) }))
+    }
+
+    @Test func loadShowsCurrentValuesAndAnOlderHubHidesTheForm() async {
+        let hub = FakeHub()
+        hub.on("GET", path, json: off)
+        let saved = Saved()
+        let page = make(hub, saved)
+        await page.load()
+        #expect(page.loading == false && page.failure == nil)
+        #expect(page.config?.ownerReplyApproval == false && page.config?.persistentOwnerActionCards == false)
+        #expect(page.phraseText == "发\n同意" && saved.states.count == 1)
+
+        hub.on("GET", path, json: #"{"machine_id":"m","launcher":"","cwd":"/tmp","conversations":[]}"#)
+        await page.load()
+        #expect(page.config == nil && saved.states.count == 1)
+    }
+
+    @Test func switchSaveChecksTheAnswerAndAFreshReadBack() async throws {
+        let hub = FakeHub()
+        hub.on("GET", path, json: off)
+        let saved = Saved()
+        let page = make(hub, saved)
+        await page.load()
+        hub.on("GET", path, json: on)
+        hub.on("PUT", path, json: on)
+        await page.saveSwitch(.reply, on: true)
+
+        #expect(page.config?.ownerReplyApproval == true && page.failure == nil && page.saving == false)
+        #expect(saved.states.count == 2)
+        #expect(hub.sent("GET", path).count == 2)
+        let requests = hub.sent("PUT", path)
+        #expect(requests.count == 1)
+        let request = try #require(requests.first)
+        let body = try #require(JSONSerialization.jsonObject(with: request.body ?? Data()) as? [String: Any])
+        #expect(Set(body.keys) == ["owner_reply_approval"])
+        #expect(body["owner_reply_approval"] as? Bool == true)
+    }
+
+    @Test func aStaleSwitchAnswerRollsBackAndIsNotPublishedAsSaved() async {
+        let hub = FakeHub()
+        hub.on("GET", path, json: off)
+        hub.on("PUT", path, json: off)
+        let saved = Saved()
+        let page = make(hub, saved)
+        await page.load()
+        await page.saveSwitch(.reply, on: true)
+
+        #expect(page.config?.ownerReplyApproval == false && page.failure != nil && page.saving == false)
+        #expect(saved.states.count == 1)
+        #expect(hub.sent("GET", path).count == 1, "a stale PUT never becomes a confirmed local opt-in")
+    }
+
+    @Test func phraseSaveTrimsWholeLinesAndChecksTheReadBack() async throws {
+        let hub = FakeHub()
+        hub.on("GET", path, json: off)
+        let saved = Saved()
+        let page = make(hub, saved)
+        await page.load()
+        page.phraseText = " 发 \n\n Agree \n"
+        hub.on("GET", path, json: custom)
+        hub.on("PUT", path, json: custom)
+        await page.savePhrases()
+
+        #expect(page.phraseText == "发\nAgree" && page.phrases == ["发", "Agree"])
+        #expect(page.config?.ownerReplyApprovalPhrases == ["发", "Agree"] && page.failure == nil)
+        #expect(saved.states.count == 2 && hub.sent("GET", path).count == 2)
+        let requests = hub.sent("PUT", path)
+        #expect(requests.count == 1)
+        let request = try #require(requests.first)
+        let body = try #require(JSONSerialization.jsonObject(with: request.body ?? Data()) as? [String: Any])
+        #expect(Set(body.keys) == ["owner_reply_approval_phrases"])
+        #expect(body["owner_reply_approval_phrases"] as? [String] == ["发", "Agree"])
+    }
+}

@@ -1,67 +1,38 @@
 import SwiftUI
 
-/// Settings › Assistant › Exact Approval Replies. Every write is checked against both the PUT response and a fresh GET;
-/// a stale or partial answer restores the previous switch instead of presenting a local opt-in as saved.
-struct OwnerApprovalSettingsView: View {
-    @Environment(AppModel.self) private var model
-    @State private var config: APIClient.AssistantState?
-    @State private var phraseText = ""
-    @State private var loading = true
-    @State private var saving = false
-    @State private var failure: String?
+/// Settings › Assistant › Exact Approval Replies. The view model owns hub access so tests can exercise every write
+/// against a FakeHub. Every write is checked against both the PUT response and a fresh GET; a stale or partial answer
+/// restores the previous switch instead of presenting a local opt-in as saved.
+@MainActor @Observable final class OwnerApprovalSettingsModel {
+    struct Deps {
+        var api: () -> APIClient?
+        var saved: (APIClient.AssistantState) -> Void
 
-    private enum Switch { case reply, persistent }
+        static var live: Deps {
+            let model = AppModel.shared
+            return Deps(api: { model.api }, saved: { model.assistantSettingsSaved($0) })
+        }
+    }
 
-    private var phrases: [String] {
+    enum Switch { case reply, persistent }
+
+    private(set) var config: APIClient.AssistantState?
+    var phraseText = ""
+    private(set) var loading = true
+    private(set) var saving = false
+    private(set) var failure: String?
+    @ObservationIgnored private let deps: Deps
+
+    init(deps: Deps = .live) { self.deps = deps }
+
+    var phrases: [String] {
         phraseText.components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
     }
 
-    var body: some View {
-        List {
-            if let approval = config?.ownerReplyApproval,
-               let persistent = config?.persistentOwnerActionCards,
-               let confirmed = config?.ownerReplyApprovalPhrases {
-                Section {
-                    Toggle(String(localized: "Approve a Batch with an Exact Reply"), isOn: Binding(
-                        get: { config?.ownerReplyApproval ?? approval },
-                        set: { on in Task { await saveSwitch(.reply, on: on) } }
-                    ))
-                    .accessibilityIdentifier("owner-reply-approval")
-                    Toggle(String(localized: "Keep Unanswered Proposals Until Answered"), isOn: Binding(
-                        get: { config?.persistentOwnerActionCards ?? persistent },
-                        set: { on in Task { await saveSwitch(.persistent, on: on) } }
-                    ))
-                    .accessibilityIdentifier("persistent-owner-action-cards")
-                } footer: {
-                    Text("Off by default. An exact reply approves only the displayed original text, recipients and actions, once. Edits need fresh approval; this never creates an Always rule.")
-                }
-                Section {
-                    TextEditor(text: $phraseText)
-                        .scaledFrame(minHeight: Theme.Size.box110)
-                        .disabled(saving)
-                        .accessibilityIdentifier("owner-approval-phrases")
-                    Button(String(localized: "Save Phrases")) { Task { await savePhrases() } }
-                        .disabled(saving || phrases == confirmed)
-                } header: {
-                    Text("Approval Phrases")
-                } footer: {
-                    Text("One exact phrase per line. The whole reply must match. An empty list disables reply approval; ordinary Allow and Deny still work.")
-                }
-            }
-            if let failure {
-                Section { Text(failure).foregroundStyle(.red) }
-            }
-        }
-        .navigationTitle(String(localized: "Exact Approval Replies"))
-        .disabled(saving)
-        .task { await load() }
-        .refreshable { await load() }
-    }
-
-    private func load() async {
-        guard let api = model.api else { loading = false; return }
+    func load() async {
+        guard let api = deps.api() else { loading = false; return }
         loading = true
         failure = nil
         do {
@@ -73,15 +44,15 @@ struct OwnerApprovalSettingsView: View {
             }
             config = st
             phraseText = st.ownerReplyApprovalPhrases?.joined(separator: "\n") ?? ""
-            model.assistantSettingsSaved(st)
+            deps.saved(st)
         } catch {
             failure = error.localizedDescription
         }
         loading = false
     }
 
-    private func saveSwitch(_ field: Switch, on: Bool) async {
-        guard !saving, let api = model.api, let before = config else { return }
+    func saveSwitch(_ field: Switch, on: Bool) async {
+        guard !saving, let api = deps.api(), let before = config else { return }
         saving = true
         failure = nil
         var optimistic = before
@@ -102,7 +73,7 @@ struct OwnerApprovalSettingsView: View {
             try verify(persisted, field: field, on: on, manager: before.manager)
             config = persisted
             phraseText = persisted.ownerReplyApprovalPhrases?.joined(separator: "\n") ?? phraseText
-            model.assistantSettingsSaved(persisted)
+            deps.saved(persisted)
         } catch {
             config = before
             failure = error.localizedDescription
@@ -120,8 +91,8 @@ struct OwnerApprovalSettingsView: View {
         }
     }
 
-    private func savePhrases() async {
-        guard !saving, let api = model.api, let before = config else { return }
+    func savePhrases() async {
+        guard !saving, let api = deps.api(), let before = config else { return }
         saving = true
         failure = nil
         let wanted = phrases
@@ -138,11 +109,58 @@ struct OwnerApprovalSettingsView: View {
             }
             config = persisted
             phraseText = wanted.joined(separator: "\n")
-            model.assistantSettingsSaved(persisted)
+            deps.saved(persisted)
         } catch {
             config = before
             failure = error.localizedDescription
         }
         saving = false
+    }
+}
+
+struct OwnerApprovalSettingsView: View {
+    @State private var page = OwnerApprovalSettingsModel()
+
+    var body: some View {
+        @Bindable var page = page
+        List {
+            if let approval = page.config?.ownerReplyApproval,
+               let persistent = page.config?.persistentOwnerActionCards,
+               let confirmed = page.config?.ownerReplyApprovalPhrases {
+                Section {
+                    Toggle(String(localized: "Approve a Batch with an Exact Reply"), isOn: Binding(
+                        get: { page.config?.ownerReplyApproval ?? approval },
+                        set: { on in Task { await page.saveSwitch(.reply, on: on) } }
+                    ))
+                    .accessibilityIdentifier("owner-reply-approval")
+                    Toggle(String(localized: "Keep Unanswered Proposals Until Answered"), isOn: Binding(
+                        get: { page.config?.persistentOwnerActionCards ?? persistent },
+                        set: { on in Task { await page.saveSwitch(.persistent, on: on) } }
+                    ))
+                    .accessibilityIdentifier("persistent-owner-action-cards")
+                } footer: {
+                    Text("Off by default. An exact reply approves only the displayed original text, recipients and actions, once. Edits need fresh approval; this never creates an Always rule.")
+                }
+                Section {
+                    TextEditor(text: $page.phraseText)
+                        .scaledFrame(minHeight: Theme.Size.box110)
+                        .disabled(page.saving)
+                        .accessibilityIdentifier("owner-approval-phrases")
+                    Button(String(localized: "Save Phrases")) { Task { await page.savePhrases() } }
+                        .disabled(page.saving || page.phrases == confirmed)
+                } header: {
+                    Text("Approval Phrases")
+                } footer: {
+                    Text("One exact phrase per line. The whole reply must match. An empty list disables reply approval; ordinary Allow and Deny still work.")
+                }
+            }
+            if let failure = page.failure {
+                Section { Text(failure).foregroundStyle(.red) }
+            }
+        }
+        .navigationTitle(String(localized: "Exact Approval Replies"))
+        .disabled(page.saving)
+        .task { await page.load() }
+        .refreshable { await page.load() }
     }
 }

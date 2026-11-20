@@ -1191,11 +1191,15 @@ struct PermissionForm: View {
         }
         .controlSize(.large)
         if let phrase = interaction.ownerApprovalPhrase {
-            Button(ownerApprovalReplyLabel(phrase)) {
+            Button {
                 Task { await model.resolve(interaction, Resolution(allow: true, ownerApprovalPhrase: phrase)) }
+            } label: {
+                Text(ownerApprovalReplyLabel(phrase))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .frame(maxWidth: .infinity)
             }
             .themedButton()
-            .frame(maxWidth: .infinity)
             .accessibilityIdentifier("owner-approval-exact-reply")
         }
         if interaction.offersAlways {
