@@ -35,7 +35,7 @@ The prototype is the UI and interaction standard; compare screen by screen durin
   | Auto-start | Read-only: research, read code to answer a question | `task_plan` queues dispatch with `permission: bypassPermissions` for Claude and a Paseo provider whose approval is Auto Accept (#8141), `plan` for Codex, and no mode for traex and omp (#7559); pi, cursor and agy have no read-only mode, so `task_plan` refuses the task (#8316). The first prompt carries the read-only constraint. The plan card collapses to "Started N tasks" |
   | Plan first | Change code, start multiple Agents, first start in this project | Show a plan card in the chat, with editable labels for each item; start only after "Start" |
 
-- Tasks you explicitly request in the chat (a direct instruction, "have an Agent do it," "go ahead and start," #2559) also start directly. Persona sets `user_requested: true` for that `task_plan` item, and the card shows progress only.
+- Tasks you explicitly request in the chat (a direct instruction, "have an Agent do it," "go ahead and start," #2559) also start directly. Persona sets `user_requested: true` for that `task_plan` item, and the card shows progress only. A writable task that a direction's lead plans with `task_plan` after a hand-over of your quoted words was sent to it waits for your Start until you next write in that lead conversation; other ways a lead starts work (`agent_start`, its own tools) are not covered ("Across a relay": **Start in a lead after a hand-over**).
   Inferred tasks you did not request still wait for Start. If any item in a plan needs to wait, the whole plan waits. "Start tasks I request in chat directly" under Settings › Assistant (`assistant.start_requested_tasks`, on by default) can disable this.
 - The plan card offers "Start These Directly," remembered per "computer × repository (or directory) × read-only / file changes." Similar tasks no longer ask. Stored in settings `tasks.trust`; entries can be viewed and deleted in Settings.
   An entry covers its directory and every directory under it (#8095, `assistant/task_trust_scope.go`). Directories are compared as the computer
@@ -657,7 +657,8 @@ record per piece of work, made when the work is handed out and never rewritten (
 | `goal` | the model | The work in one sentence (the task's title when a writable task gives none) |
 | `done_when`, `out_of_bounds` | the model | What done means and what the Agent must not do |
 | `expect_minutes` | the model, optional override | About how long it should take; omitted uses the hub's automatic estimate |
-| `estimate_source` | the hub | `system_default` for the initial 60-minute default, `override` for an explicit value; a dispatch records this on the brief's log |
+| `estimate_source` | the hub | `learned` for a comparable history estimate, `system_default` for the 60-minute default, or `override` for an explicit value. A dispatch records the source on the brief's log |
+| `estimate_evidence` | the hub | The automatic estimate's minutes, number of samples and chosen cohort. It accompanies a new plan and its recorded dispatch |
 | `reconstructed`, `handover` | the hub | A brief made later for a task from before briefs ("Backfill" below) |
 
 **Who asked.** The hub reads the conversation that made the tool call (its last three turns) and goes by the latest
@@ -732,12 +733,35 @@ before the hand-over was sent again or moved does not), the oldest delivered one
 that waits untried is never named.
 A reply that is refused or dropped leaves its hand-over `delivered` for the next one. In a lead's queue a hand-over goes
 after the outcomes to report and before the rest (`docs/assistant/assistant.md`, "Messages from the system wait for the
-owner"). Nothing reads the hand-overs yet but the log: no route, event or client shows them.
+owner"). Besides the log, only the start rule below reads the hand-overs (a hand-over past its 14 days marks no lead): no
+route, event or client shows them.
+
+**Start in a lead after a hand-over** (#11699, `server/internal/assistant/relay_lead_hold.go`). Once a hand-over of the
+owner's quoted words is sent into a direction's lead conversation, `task_plan` there ignores `user_requested`, whatever
+opened the turn: a writable task it plans waits for the owner's Start. The main conversation picks which lead gets the
+owner's words and can pick the wrong one, and a writable task would then start in the wrong repository before the owner
+sees it.
+
+- **From when:** the lead's wait is saved with the relay state (`handed` in `assistant.relay`) before the send leaves,
+  so a try that ends in doubt, or a manager restart during the send, has it before the turn the message opened plans
+  anything. It is taken back only when the try was definitely not taken and the lead had no wait before. A hand-over
+  still queued and never tried, or past its 14 days, sets none.
+- **Until when:** the owner's next message to that conversation, when it is submitted (before it is delivered, and from
+  any device or extension that posts as the owner). It has no expiry, and it holds after the conversation stops being a
+  lead.
+- **What it covers:** `task_plan`'s `user_requested` only. Read-only tasks and kinds the owner trusts (`tasks.trust`)
+  start as before, and the verified words still go into the brief's `request`, so the card shows them. Still starting
+  work with no card: `agent_start`, `agent_send` with `resume`, the lead's own tools on its computer, and passing the
+  words on to a conversation that is not a lead.
+- **Nothing else changes:** an unquoted message to a lead, an answer, a conversation that is not a lead and the main
+  conversation behave as before. A previous version drops `handed` on its next save; plans in that lead then start as
+  before.
 
 **Required.** `task_plan` refuses a writable task (`readonly` false) without `done_when` (at least one criterion),
 and a read-only task without `goal`; the refusal names what is missing and nothing is planned. `expect_minutes` is an
-optional override, not a number the dispatching model must invent. With no override the hub assigns 60 minutes and
-records `system_default`; a positive override records `override`. The plan's task carries the brief (`tasks[i].brief`)
+optional override. The hub uses the median of recent accepted comparable rounds when it has enough examples.
+It records `learned` for that estimate, `system_default` when it uses 60 minutes, and `override` for an explicit value.
+The tool reports the estimate and its evidence. The plan's task carries the brief (`tasks[i].brief`)
 from the moment the plan is made, so the card can show the owner's words, the criteria and the time, and "Start"
 confirms them. The brief is kept when the task starts, dated from the start. Only `task_plan` dispatches create this
 automatic estimate: manually started terminal/herdr Agents, manual `agent_start`, adopted Agents and direct
@@ -746,6 +770,22 @@ and no calibration history. A continuation or reuse through `task_plan` is a new
 brief began as manual or legacy work. The web draws `tasks[i].brief` on the plan card and the to-do's `brief` and `lineage`
 on its page (the criteria stay in the page's one list, the ledger's; a finished task adds the dropped ones and
 `also_done` under it) (`docs/web/web.md`, "Pages": **A task's brief**); the iOS and Android plan cards and task pages do not yet.
+
+**How the estimate learns.** Persona groups work by its existing task kind, read-only mode, role and tier. It looks
+at the newest 256 accepted samples of that kind in the past 90 days, within one manager. It uses the most specific
+group with at least five samples, trying the same machine and repository, then the same machine, then the broader
+kind. The median uses up to the newest 32 values in that group and rounds up to the minute, capped at one day.
+When there are too few samples, the evidence says how many were available. Unavailable history also uses the default.
+
+A new dispatch from `task_plan` records the cohort once, including plans the owner starts from their card.
+Direct owner starts keep their existing brief behavior. An Agent must link successfully in the recorded cohort. The first recorded
+completion supplies wall-clock minutes from the dispatch. That duration becomes a sample only when the supervisor
+or its judge accepts the round. Reopening a to-do removes its prior round from learning. A manual re-close cannot
+reuse that acceptance. Canceled, unstarted, placement-changed and older rounds without a recorded cohort supply no samples. Health-space plans use the default and keep their work out of calibration.
+The next comparable plan checks up to 32 recent rounds whose review was accepted while the sample write was
+interrupted, and recovers them from the durable admission, completion and acceptance. It skips expired and
+reopened work. Estimates and their evidence are fixed on the plan. A continuation of an automatic brief inherits its current
+estimate unless given an override. The learned minutes run the same one-shot review clock.
 
 **Lineage.** A task that takes over from another gives `continues` (that task's to-do id) and `continues_why` in
 `task_plan`: a retry on another computer, a rework round, a new Agent after the first failed, a part split off. It
@@ -1193,6 +1233,18 @@ A direction carries **notes** the owner writes for it: its rules, the readings t
 4,000 characters, `""` clears them; `GET /api/v1/assistant/leaders` lists `notes` and `notes_at`). They are the owner's
 content, not memory: memory stays one for every conversation (#9440), and a direction's lessons go into its notes.
 
+The assistant uses the same record through `persona_settings`: `list` exposes each current direction as
+`direction.<id>.prompt` with its name, and `get` returns the complete notes to any assistant conversation. Only the main
+conversation may `set` one. A string replaces the whole notes; `{"old":"one exact unique fragment","new":"replacement"}`
+changes one fragment without resending the rest (an empty `new` deletes it). An empty, missing or repeated `old` and a
+malformed object are explicit errors before any card or write; unchanged text needs no card. A change uses
+the existing phone permission card with the direction's name and before → after text, and only the owner's approval
+applies it. The proposal captures `notes_at`; approval calls `setCurrentDirectionNotes` against that baseline while
+holding the settings change lock and, for the membership/conflict check and write, the direction lock. A newer app or
+tool edit, or a direction end that commits first, refuses the stale proposal instead of overwriting newer state or
+reporting a change no current lead can receive. No second storage or assistant
+HTTP route exists: the app route and the tool share persistence, sanitation, conflict checks and the delivery below.
+
 - **The leader** gets them in its own system prompt: they are appended, with the name and goal of the kb project the
   direction is filed under, to its role policy (`supervision_instructions`, which the node passes as
   `--append-system-prompt` or a Codex thread's developer instructions; template `assistant/direction_notes`). The node
@@ -1348,7 +1400,7 @@ Table `task_plans`: `id`, `conversation`, `tasks` (JSON: each item's `title`, `n
 `state` (`open` / `started` / `dismissed`), `created_at`, `updated_at`. A task also carries its brief's fields (`goal`, `out_of_bounds`,
 `continues`, `continues_why`, `started_why`, and the hub's `brief`): "Briefs" above.
 
-- MCP tool `task_plan` (assistant only): accepts a task list. Start directly if every item is read-only, `user_requested` (with `assistant.start_requested_tasks` enabled), covered by a `tasks.trust` entry (its directory or one above it), or, in a round the hub started for a scheduled task, covered by that scheduled task's own start grant ("A scheduled task's own start grant" below); otherwise save an `open` plan and emit chat activity.
+- MCP tool `task_plan` (assistant only): accepts a task list. Start directly if every item is read-only, `user_requested` (with `assistant.start_requested_tasks` enabled; not in a direction's lead that a hand-over of the owner's quoted words was sent into, until the owner next writes there), covered by a `tasks.trust` entry (its directory or one above it), or, in a round the hub started for a scheduled task, covered by that scheduled task's own start grant ("A scheduled task's own start grant" below); otherwise save an `open` plan and emit chat activity.
   Return the plan ID and each task's state (text). Automatic dispatch is reported as queued, not as proof of an Agent start. `machine_policy` defaults to `fixed` (including old saved plans); only explicit `flexible` tasks may move off an unhealthy machine. The policy survives storage, card edits and retry. Fixed tasks fail on their own target and can retry there after health recovery.
 - `POST /api/v1/task-plans/{id}/start`: may include user-edited fields. Create a to-do per task (`origin`, `plan_id`), then start its Agent (`startSession` with `todo_id`). An owner API client can set `close_tab_on_accept: true` on a new task in `tasks` (see `docs/assistant/todos.md` "Close a task's tab after acceptance").
   With `remember: true`, record this kind (`machine|<repository or folder>|read-or-edit`, "Start These Directly" above) in `tasks.trust`.
@@ -1393,7 +1445,9 @@ writable task it hands out used to wait on its card however much the owner wante
 - **`user_requested` in a round**: a round the hub started has no message of the owner's, so `task_plan` ignores
   `user_requested` in a turn a scheduled task started, with or without a grant: while the hub has a round under way in
   that conversation, or when its latest turn began with a scheduled prompt (after a hub restart too). An owner who
-  writes into that turn gets the card.
+  writes into that turn gets the card. A direction's lead that a hand-over of the owner's quoted words was sent into
+  ignores it the same way until the owner next writes there ("Across a relay": **Start in a lead after a hand-over**); the check
+  sits next to this one in `task_plan`.
 - **Everything else keeps the card**: other scheduled tasks' rounds, every turn the hub did not start for that
   schedule, kinds outside the grant.
 - **Lifetime**: no expiry. It holds while the schedule's prompt, target (the computer and conversation its runs go

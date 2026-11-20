@@ -392,6 +392,7 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
   listed only `claude`. Let zsh tokenize aliases (`${(@Q)${(z)value}}`), not Go quote parsing. Aliases defined by a script in `zsh -c` don't expand within that
   script (it is parsed all at once); tests must use `zsh -ic` like node and write definitions to temporary `$ZDOTDIR/.zshrc`. With `alias claude=…` in `~/.zshrc`,
   a probe definition like `claude() { … }` expands the alias first, breaking the whole script. Define stubs as `function claude { … }`.
+- Stock-Orca Codex defaults must distinguish a configured no-op alias from plain PATH Codex even though both have `["codex"]` argv. Keep alias provenance beside the launcher argv cache; removing the plain entry breaks bundled and alias discovery (#1984).
 - Tests running launchers or probes use a minimal environment (`HOME`, `ZDOTDIR`, `PATH`); never print all output in failure messages: probe output contains the complete process environment, and dev machines
   contain real keys.
 - Anything run through `zsh -ic` / `bash -ic` shares stdout with the rc files (#6310): Ubuntu's `/etc/bash.bashrc` prints a two-line sudo hint until the user has run sudo once,
@@ -1237,6 +1238,16 @@ no retained step has is a late arrival: insert it in step order, keep the branch
 revision so watchers re-read. A planner step, a prompt or an error closes the calls before it. `integrations/antigravity/lib/map.js`
 and `server/internal/node/agytranscript.go` must stay in step. Test with a real export's shape (the swapped lines,
 an interrupted call, a system message between results) and compare each result with its own call, not only the counts.
+
+## A send is not a history rewrite, even for steps the export has not caught up with (#12014)
+
+The Antigravity companion shows a prompt's steps from ACP before agy exports them, and gave them their own history
+token. Every send switched to it and the export switched back, so every client took each send as a rewrite: the web
+read a fresh two-turn page, the main chat's earlier messages vanished for a moment, and every task card of the day
+stacked above the new message until the rest came back. Projected steps that only grow are appends. Change the token
+only when one of them is dropped (the export replaces them, an interrupt), and record the next token before showing
+them, so a restarted companion cannot report the token clients hold them under. Test the push a send produces (same
+history, `from_seq` at the previous end, no earlier turn sent again) and a restart while a reply awaits its export.
 
 ## An installed CLI is not an explicit runtime override (#9181)
 

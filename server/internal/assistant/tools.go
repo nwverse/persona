@@ -49,7 +49,7 @@ func (s *Service) Tools(ctx context.Context) []proto.Tool {
 	if s.urgentOn(ctx) {
 		tools = append(tools, toolsNamed([]string{"urgent_call"})...)
 	}
-	return append(tools, s.knowledgeFolderTools(ctx)...)
+	return localizedMCPTools(append(tools, s.knowledgeFolderTools(ctx)...), s.toolLanguage(ctx))
 }
 
 // toolsNamed are the MCP tools of these names, as prompts/mcp has them.
@@ -230,8 +230,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			return "", fmt.Errorf("title and body are required")
 		}
 		// An empty level is passed through, not normalised to P1: with ln mode on the hub decides by conversation
-		// (the main conversation's ordinary notices still interrupt, fleet_link.go lnNotifyPushLevel); with it off the
-		// hub derives P1 for a NotifyPush anyway (hub/lnmode.go levelFor), so delivery there is unchanged.
+		// (the main conversation's ordinary notices still interrupt, fleet_link.go pushGradingNotifyLevel); with it off the
+		// hub derives P1 for a NotifyPush anyway (hub/push_grading.go levelFor), so delivery there is unchanged.
 		switch a.PushLevel {
 		case "", assistantwire.LevelP0, assistantwire.LevelP1:
 		default:
@@ -612,7 +612,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		own := startPick{launcher: strings.TrimSpace(a.Launcher), effort: strings.TrimSpace(a.Effort), speed: strings.TrimSpace(a.Speed)} // before the tier
 		// The tier is resolved first (an unknown one asks and starts nothing), then Model Settings' Agents laid over it as
 		// the start lays it: what runs is said on the card (a hand-off from the health space asks) and in the answer.
-		tier, runs := strings.TrimSpace(a.Tier), ""
+		tier := strings.TrimSpace(a.Tier)
 		if tier != "" {
 			t, err := s.tierModel(ctx, tier)
 			if err != nil {
@@ -621,27 +621,18 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			model := a.Model
 			if !layTier(t, &a.Launcher, &a.Model, &a.Effort) {
 				tier = "" // a launcher of its own: the tier gives it nothing
-			} else {
-				if a.Speed == "" && (model == "" || model == t.Model) {
-					a.Speed = t.Speed
-				}
-				picks := map[string]any{"launcher": a.Launcher, "model": a.Model, "effort": a.Effort, "speed": a.Speed}
-				if s.applyModel(ctx, "agent.new", picks) == nil { // one that can't run is the start's to say
-					l, _ := picks["launcher"].(string)
-					m, _ := picks["model"].(string)
-					e, _ := picks["effort"].(string)
-					v, _ := picks["speed"].(string)
-					runs = ModelTier{Launcher: l, Model: m, Effort: e, Speed: v}.runs()
-				}
+			} else if a.Speed == "" && (model == "" || model == t.Model) {
+				a.Speed = t.Speed
 			}
 		}
+		own.ompModelDefault = a.Launcher == "omp" && a.Model == ""
 		// What it runs on this computer, before the user is asked (#2640, launcher_fit.go): a launcher named here that
 		// the computer lacks starts nothing; a default it lacks gives way to one it has, and the card and answer say so.
 		run := map[string]any{"launcher": a.Launcher, "model": a.Model, "effort": a.Effort, "speed": a.Speed}
 		if err := s.applyModel(ctx, "agent.new", run); err != nil {
 			return "", err
 		}
-		swapped, fit, err := s.fitLauncher(ctx, am, own, run)
+		swapped, fit, err := s.fitNewLauncher(ctx, am, own, run)
 		if err != nil {
 			return "", fmt.Errorf("%w; no agent was started", err)
 		}
@@ -654,7 +645,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			a.Model, _ = run["model"].(string)
 			a.Effort, _ = run["effort"].(string)
 			a.Speed, _ = run["speed"].(string)
-			tier, runs = "", "" // the tier's launcher is not what runs
+			tier = "" // the tier's launcher is not what runs
 		}
 		// traex, omp…: no effort (launcher_modes.go). One this call names is refused before the user is asked, rather
 		// than by the computer after they said yes; one a tier filled in is dropped. pi, cursor, agy: dropped either way.
@@ -672,13 +663,16 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		}
 		branch := strings.TrimSpace(a.Worktree.Branch)
 		where := am.Name + " · " + a.Cwd
+		var runs string
 		if branch != "" {
 			where += i18n.T(s.lang(ctx), "assistant-tools.new_worktree", i18n.Args{"branch": branch})
 		}
 		switch { // the user sees what it will run on before saying yes
 		case swapped != "":
 			where += " · " + swapped
-		case runs != "":
+		case tier != "":
+			selected := pickOf(run)
+			runs = ModelTier{Launcher: selected.launcher, Model: selected.model, Effort: selected.effort, Speed: selected.speed}.runs()
 			where += i18n.T(s.lang(ctx), "assistant-tools.with_tier", i18n.Args{"tier": tier, "runs": runs})
 		case a.Model != "":
 			where += i18n.T(s.lang(ctx), "assistant-tools.with_model", i18n.Args{"model": a.Model})
@@ -724,6 +718,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			if _, fit, err = s.fitLauncher(ctx, am, own, params); err != nil {
 				return "", fmt.Errorf("%w; no agent was started", err)
 			}
+		}
+		if err := s.applyOmpStartDefaults(sctx, am, own, fit, params); err != nil {
+			return "", err
 		}
 		params["prompt"] = s.withCloseoutBrief(sctx, am.ID, prompt, false)
 		if err := checkStartSpeed(params, fit, ""); err != nil {

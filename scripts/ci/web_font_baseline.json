@@ -299,7 +299,6 @@
  "web/src/views/settings/LookSettings.tsx": 5,
  "web/src/views/settings/ManagersSettings.tsx": 11,
  "web/src/views/settings/ModelConfiguration.tsx": 19,
- "web/src/views/settings/ModelProfiles.tsx": 10,
  "web/src/views/settings/NotificationSettings.tsx": 3,
  "web/src/views/settings/OwnerMark.tsx": 1,
  "web/src/views/settings/ProviderFields.tsx": 9,

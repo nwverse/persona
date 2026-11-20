@@ -130,6 +130,8 @@ type assistantProc struct {
 	compacted     bool // compactIdle ran in this process: it is let go when idle again
 	manual        bool // an explicit /compact (manual or idle-aware delivery): its end is reported
 	requested     bool // its first request was logged
+	// release: the main conversation's release policy as the reaper last read it from its record (assistant_reap.go).
+	release assistantRelease
 	// tui: started as interactive Claude Code through `personad assistant-tui` (assistant_tui.go). tuiNote: why it
 	// runs claude -p although interactive was asked for (the bridge fell back, or a recent fallback holds new starts
 	// off); "" when it runs as asked.

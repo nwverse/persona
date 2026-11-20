@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"path"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -96,7 +97,8 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 	}
 	analysisCommand := normalizeLarkCommand(command, cwd, cfg.Gates)
 	v := classifyLark(command, cfg.Gates, cwd, n.larkCLIRisk(cfg))
-	if n.assistantOrigin(session) == originInbox && inboxLarkOutbound(cfg, v, analysisCommand) {
+	origin, launchCwd := n.assistantOriginCwd(session)
+	if origin == originInbox && inboxLarkOutbound(cfg, v, analysisCommand) {
 		return "deny", inboxLarkRefusal, nil
 	}
 	if v.deny != "" {
@@ -170,6 +172,14 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 			}
 			decision, reason, _, err := n.confirmLark(ctx, session, ix, nil, health, title)
 			return decision, reason, err
+		}
+		// Plain Python resolves imports through its working directory. Keep this exception in the assistant's trusted
+		// launch directory; after a cd, the same source text gets the ordinary permission flow. The pipeline helper
+		// also rejects an interpreter named by an arbitrary path, file writes, process execution and extra commands.
+		if origin == originInbox && safe && len(v.calls) == 1 && launchCwd != "" &&
+			realPath(filepath.Clean(cwd)) == realPath(filepath.Clean(launchCwd)) &&
+			larkDecision(cfg, v.calls[0]) == "allow" && larkReadFormattingPipeline(command, cfg.Gates) {
+			return "allow", "读操作", nil
 		}
 		return "", "", nil
 	}

@@ -39,6 +39,8 @@ nonisolated struct Machine: Codable, Identifiable, Hashable, Sendable {
     /// The set of engine hosts the computer runs (docs/integrations/engines.md "Host sets"); nil from a hub before sets.
     /// `[]` is no terminal engine: `engine` still says herdr then, for older clients.
     var engineHosts: [String]? = nil
+    /// The host for a start without an explicit workspace host when the machine has a host set.
+    var engineDefault: String? = nil
     /// Operating it through Cua Driver; nil while the hub's plugin cua is off or it is not a Mac.
     var computer: MachineComputer? = nil
     /// Its ego lite for the assistant; nil while the hub's plugin ego is off or it is not a Mac.
@@ -70,7 +72,7 @@ nonisolated struct Machine: Codable, Identifiable, Hashable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case id, name, kind, icon, online, error, hostname, os, arch, home, system, engine, engines, computer, browser, iphone, clipboard, route, trust, manager
-        case engineHosts = "engine_hosts"
+        case engineHosts = "engine_hosts", engineDefault = "engine_default"
         case errorCode = "error_code"
         case sshHost = "ssh_host", herdrVersion = "herdr_version", claudeVersion = "claude_version", lastSeen = "last_seen"
         case nodeMismatch = "node_mismatch", nodeVersion = "node_version", deploying, deployError = "deploy_error"
@@ -117,6 +119,7 @@ extension Machine {
         engine = try c.decodeIfPresent(MachineEngine.self, forKey: .engine) ?? .herdr
         engines = try c.decodeIfPresent([DetectedEngine].self, forKey: .engines) ?? []
         engineHosts = try? c.decodeIfPresent([String].self, forKey: .engineHosts)
+        engineDefault = try? c.decodeIfPresent(String.self, forKey: .engineDefault)
         computer = try? c.decodeIfPresent(MachineComputer.self, forKey: .computer)
         browser = try? c.decodeIfPresent(MachineBrowser.self, forKey: .browser)
         iphone = try? c.decodeIfPresent(MachineIPhone.self, forKey: .iphone)
@@ -610,6 +613,22 @@ extension Machine {
     var engineName: String {
         engineHosts?.isEmpty == true ? MachineEngine.noEngine.name : engines.first { $0.id == engine.rawValue }?.name ?? engine.name
     }
+
+    /// The host a new session uses without a workspace. Older hubs report only the legacy engine.
+    nonisolated var defaultStartHost: String? {
+        guard engineHosts?.isEmpty != true else { return nil }
+        if let engineDefault, !engineDefault.isEmpty { return engineDefault }
+        return engine == .herdrBoth ? MachineEngine.herdr.rawValue : engine.rawValue
+    }
+
+    /// An explicit workspace host wins over the machine default, provided the machine enables it.
+    nonisolated func startsInHerdr(host: String?) -> Bool {
+        let herdr = MachineEngine.herdr.rawValue
+        let legacyHerdr = engine == .herdr || engine == .herdrBoth
+        guard engineHosts?.contains(herdr) ?? legacyHerdr else { return false }
+        if let host, !host.isEmpty { return host == herdr }
+        return defaultStartHost == herdr
+    }
 }
 
 nonisolated struct Launcher: Codable, Identifiable, Hashable, Sendable {
@@ -657,10 +676,23 @@ nonisolated struct Launcher: Codable, Identifiable, Hashable, Sendable {
     static let codexAppSource = "codex_app"
     /// A Codex start sends its first message with it and waits for the thread Codex makes.
     var isCodex: Bool { agent == "codex" }
+    /// A CLI launcher discovered on the computer, including the source-less responses of older hubs.
+    private var isMachineLauncher: Bool {
+        source == nil || source == "" || source == "zshrc" || source == "path" || source == "builtin"
+    }
+    /// The node starts Oh My Pi only under its own launcher name.
+    var startsOmp: Bool {
+        guard name == "omp", isMachineLauncher else { return false }
+        guard let kind = runtimeAgent, !kind.isEmpty else { return true }
+        return kind == "omp"
+    }
     /// The hub's configured kind wins when present; an empty or missing value falls back to the node's agent.
     var runtimeAgent: String? { agentType?.isEmpty == false ? agentType : agent }
     /// Starting it needs a first message: a Codex on a computer that cannot open it without one.
     var needsFirstMessage: Bool { isCodex && promptOptional != true }
+    /// It runs omp (docs/integrations/omp.md): omp's own config.yml picks its model and thinking level, so a start on it
+    /// takes no permission mode, effort, ultracode or model, and its first message goes with the start.
+    var isOmp: Bool { runtimeAgent == "omp" }
 
     enum CodingKeys: String, CodingKey {
         case name, model, agent, assistant, health, source
@@ -721,8 +753,7 @@ extension Launcher {
         // Older hubs can ignore purpose=assistant. A runtime's provider is not a shell command, and managed Codex
         // launchers cannot start the assistant's app-server. Keep the shell fallback for hubs without capabilities.
         let managed = source == "persona" || source == LegacyNames.product
-        let machine = source == nil || source == "" || source == "zshrc" || source == "path" || source == "builtin"
-        guard machine || managed, !(managed && agent == "codex") else { return false }
+        guard isMachineLauncher || managed, !(managed && agent == "codex") else { return false }
         return agent == nil || agent == "" || agent == "claude" || agent == "codex"
     }
 }
@@ -771,14 +802,22 @@ nonisolated struct LauncherModels: Codable, Hashable, Sendable {
     /// Model Settings' list (#943): the machine whose CLI answered.
     var machine: String? = nil
 
+    /// The node confirms this launcher and host can honor a model for this start. Absent on older nodes.
+    var supportsStartModel: Bool? = nil
+
+    enum CodingKeys: String, CodingKey {
+        case agent, models, locked, machine
+        case supportsStartModel = "supports_start_model"
+    }
+
     /// The agent takes a model ID typed by hand (#1644): Claude Code's `--model` / `/model` and Codex's `--model` take any
     /// string, and so does a work agent started in herdr (`pi`, the Cursor CLI, the Antigravity CLI: `workagent.go`).
-    /// The hub remembers typed IDs for these. Other agents' lists are empty (no model row).
+    /// New Agent separately supports a typed ID for a native Oh My Pi start.
     static func takesTypedModel(agent: String) -> Bool {
         agent == "claude" || agent == "codex" || agent == "pi" || agent == "cursor" || agent == "agy"
     }
 
-    /// A typed ID can reach the agent: one of those two, and the launcher does not pass its own --model.
+    /// The shared model settings can take a typed ID and the launcher does not pass its own --model.
     var takesTypedModel: Bool { locked == nil && Self.takesTypedModel(agent: agent) }
 }
 
@@ -2642,10 +2681,13 @@ nonisolated struct Item: Codable, Identifiable, Hashable, Sendable {
     var codexHeartbeatQuiet: Bool? = nil
     /// What the model requests this item stands for used (#5426). Older hubs omit it.
     var usage: [TokenUsage]? = nil
+    /// Raw record identity for a text item with a positional ID, stable before clipping. Older nodes omit it.
+    var sourceFingerprint: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case id, seq, ts, role, kind, text, image, queued, from, wake, fold, task, compact, injected, source, outcome, usage
         case modelRefusal = "model_refusal", narration, codexHeartbeatQuiet = "codex_heartbeat_quiet"
+        case sourceFingerprint = "source_fingerprint"
         case toolUseID = "tool_use_id", toolName = "tool_name", toolInput = "tool_input", isError = "is_error", fullSize = "full_size",
              clientMsgID = "client_msg_id", supervisionUser = "supervision_user"
     }
