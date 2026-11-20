@@ -73,6 +73,10 @@ type UsageAccount struct {
 	// manager keeps it to tell a replaced key from the one the last amount was read with, so another account's amount
 	// is never shown as this credential's last known balance. Hub-internal: never sent out.
 	BalanceCredential string `json:"-"`
+	// BalanceSkipped is true when the poll's overall deadline ended before this launcher got a full attempt (#11825).
+	// The usage manager keeps whatever state it already had instead of marking the launcher unreachable or removing it.
+	// Hub-internal: never sent out.
+	BalanceSkipped bool `json:"-"`
 	// CodexAccountKey is the node's digest of the upstream account ID, used only by the usage manager.
 	CodexAccountKey string `json:"-"`
 	// Origin distinguishes unidentified sources. On a machine it uses the machine ID and source digest or legacy

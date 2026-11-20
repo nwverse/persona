@@ -2,12 +2,16 @@ package assistant
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -313,5 +317,185 @@ func TestBalanceClientFollowsTheLaunchersRoute(t *testing.T) {
 	via := s.balanceClient(storedLauncher{ViaMachine: "m1"})
 	if v, ok := via.Transport.(viaNode); !ok || v.machine != "m1" || v.s != s {
 		t.Fatalf("via machine: %#v", via.Transport)
+	}
+}
+
+// Rotating what a secret reference (such as op://…) resolves to changes BalanceCredential even though the stored
+// sealed reference bytes stay the same, so a subsequent failed read cannot keep showing the previous key's balance
+// (#11825). Keys that fail to open still fall back to a sealed-material digest distinct from resolved keys.
+func TestLauncherBalancesCredentialChangesWhenReferenceRotates(t *testing.T) {
+	ctx := context.Background()
+	s, mux := launcherTestService(t)
+	const (
+		ref  = "exv://Example/deepseek/key"
+		key1 = "sk-deepseek-rotated-old-0001"
+		key2 = "sk-deepseek-rotated-new-0002"
+	)
+	vault := &fakeLauncherSecrets{values: map[string]string{ref: key1}}
+	s.refs = vault
+	if code, raw := launcherCall(t, mux, "POST", "/api/v1/launchers",
+		`{"name":"deepseek","base_url":"https://api.deepseek.com/anthropic","model":"deepseek-v4-pro","api_key_reference":"`+ref+`"}`); code != 200 {
+		t.Fatal(code, raw)
+	}
+	storedBefore := s.storedLaunchers(ctx)
+	if len(storedBefore) != 1 || storedBefore[0].KeySealed == "" {
+		t.Fatalf("stored: %+v", storedBefore)
+	}
+	sealedBefore := storedBefore[0].KeySealed
+
+	interceptProbe(t, func(r *http.Request) (*http.Response, error) {
+		switch r.Header.Get("Authorization") {
+		case "Bearer " + key1:
+			return probeResponse(r, http.StatusOK, `{"balance_infos":[{"currency":"CNY","total_balance":"12.34"}]}`), nil
+		case "Bearer " + key2:
+			return probeResponse(r, http.StatusUnauthorized, `{"error":{"message":"bad key"}}`), nil
+		default:
+			return probeResponse(r, http.StatusInternalServerError, `{}`), nil
+		}
+	})
+
+	first, known := s.LauncherBalances(ctx)
+	if !known || len(first) != 1 || first[0].Balance == nil || first[0].Balance.Amount != "12.34" || first[0].Problem != "" {
+		t.Fatalf("first read: known=%v %+v", known, first)
+	}
+	want1 := sha256.Sum256([]byte(key1))
+	if first[0].BalanceCredential != hex.EncodeToString(want1[:]) {
+		t.Fatalf("first credential=%q want=%q", first[0].BalanceCredential, hex.EncodeToString(want1[:]))
+	}
+
+	// Rotate the secret behind the same sealed reference without touching the stored launcher.
+	vault.mu.Lock()
+	vault.values[ref] = key2
+	vault.mu.Unlock()
+	if storedAfter := s.storedLaunchers(ctx); len(storedAfter) != 1 || storedAfter[0].KeySealed != sealedBefore {
+		t.Fatalf("sealed reference should be unchanged: %+v", storedAfter)
+	}
+
+	second, known := s.LauncherBalances(ctx)
+	if !known || len(second) != 1 || second[0].Balance != nil || second[0].Problem != "rejected" {
+		t.Fatalf("rotated read: known=%v %+v", known, second)
+	}
+	want2 := sha256.Sum256([]byte(key2))
+	if second[0].BalanceCredential != hex.EncodeToString(want2[:]) {
+		t.Fatalf("rotated credential=%q want=%q", second[0].BalanceCredential, hex.EncodeToString(want2[:]))
+	}
+	if second[0].BalanceCredential == first[0].BalanceCredential {
+		t.Fatalf("rotating a reference must change BalanceCredential: %q", second[0].BalanceCredential)
+	}
+	if strings.Contains(second[0].BalanceCredential, key1) || strings.Contains(second[0].BalanceCredential, key2) {
+		t.Fatalf("BalanceCredential must never carry a key: %q", second[0].BalanceCredential)
+	}
+
+	// If the reference later fails to resolve, the fallback sealed digest is still distinct from resolved keys.
+	vault.mu.Lock()
+	delete(vault.values, ref)
+	vault.mu.Unlock()
+	broken, known := s.LauncherBalances(ctx)
+	if !known || len(broken) != 1 || broken[0].Balance != nil || broken[0].Problem != "failed" {
+		t.Fatalf("broken reference read: known=%v %+v", known, broken)
+	}
+	if broken[0].BalanceCredential != sealedCredential(sealedBefore) || broken[0].BalanceCredential == second[0].BalanceCredential {
+		t.Fatalf("broken fallback credential=%q want=%q", broken[0].BalanceCredential, sealedCredential(sealedBefore))
+	}
+}
+
+// Multiple slow launchers must not consume the whole poll budget sequentially and starve a later healthy launcher
+// (#11825): deduplicated balance reads run concurrently with a bounded worker count.
+func TestLauncherBalancesReadsConcurrentlySoSlowLaunchersDoNotStarveHealthyOnes(t *testing.T) {
+	oldTimeout := balanceTimeout
+	balanceTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { balanceTimeout = oldTimeout })
+
+	s, mux := launcherTestService(t)
+	for _, tc := range []struct{ name, key string }{
+		{"slow-1", "sk-deepseek-slow-0001"},
+		{"slow-2", "sk-deepseek-slow-0002"},
+		{"healthy", "sk-deepseek-healthy-0003"},
+	} {
+		if code, raw := launcherCall(t, mux, "POST", "/api/v1/launchers",
+			`{"name":"`+tc.name+`","base_url":"https://api.deepseek.com/anthropic","model":"deepseek-v4-pro","api_key":"`+tc.key+`"}`); code != 200 {
+			t.Fatal(code, raw)
+		}
+	}
+
+	var healthyAttempts atomic.Int32
+	interceptProbe(t, func(r *http.Request) (*http.Response, error) {
+		if r.Header.Get("Authorization") == "Bearer sk-deepseek-healthy-0003" {
+			healthyAttempts.Add(1)
+			return probeResponse(r, http.StatusOK, `{"balance_infos":[{"currency":"CNY","total_balance":"42.00"}]}`), nil
+		}
+		<-r.Context().Done()
+		return nil, r.Context().Err()
+	})
+
+	// Overall budget is shorter than 2 * balanceTimeout, so two slow reads in sequence would exhaust it before
+	// healthy was ever attempted.
+	ctx, cancel := context.WithTimeout(context.Background(), 350*time.Millisecond)
+	defer cancel()
+	accounts, known := s.LauncherBalances(ctx)
+	if !known || len(accounts) != 3 {
+		t.Fatalf("known=%v accounts=%+v", known, accounts)
+	}
+	if healthyAttempts.Load() != 1 {
+		t.Fatalf("healthy launcher was not attempted: %d", healthyAttempts.Load())
+	}
+	if accounts[0].Name != "slow-1" || accounts[0].Problem != "unreachable" || accounts[0].Balance != nil || accounts[0].BalanceSkipped {
+		t.Fatalf("slow-1: %+v", accounts[0])
+	}
+	if accounts[1].Name != "slow-2" || accounts[1].Problem != "unreachable" || accounts[1].Balance != nil || accounts[1].BalanceSkipped {
+		t.Fatalf("slow-2: %+v", accounts[1])
+	}
+	if accounts[2].Name != "healthy" || accounts[2].Problem != "" || accounts[2].BalanceSkipped ||
+		accounts[2].Balance == nil || accounts[2].Balance.Amount != "42.00" || accounts[2].Balance.Currency != "CNY" {
+		t.Fatalf("healthy: %+v", accounts[2])
+	}
+}
+
+// When the overall poll context expires before every launcher gets a full attempt, neither in-flight nor queued
+// launchers are misreported as unreachable (#11825).
+func TestLauncherBalancesDoesNotTurnContextExhaustionIntoUnreachable(t *testing.T) {
+	oldTimeout, oldWorkers := balanceTimeout, balanceReadWorkers
+	balanceTimeout = 2 * time.Second
+	balanceReadWorkers = 2
+	t.Cleanup(func() {
+		balanceTimeout = oldTimeout
+		balanceReadWorkers = oldWorkers
+	})
+
+	s, mux := launcherTestService(t)
+	for _, tc := range []struct{ name, key string }{
+		{"slow-1", "sk-deepseek-exhaust-0001"},
+		{"slow-2", "sk-deepseek-exhaust-0002"},
+		{"queued-3", "sk-deepseek-exhaust-0003"},
+	} {
+		if code, raw := launcherCall(t, mux, "POST", "/api/v1/launchers",
+			`{"name":"`+tc.name+`","base_url":"https://api.deepseek.com/anthropic","model":"deepseek-v4-pro","api_key":"`+tc.key+`"}`); code != 200 {
+			t.Fatal(code, raw)
+		}
+	}
+
+	var queuedAttempts atomic.Int32
+	interceptProbe(t, func(r *http.Request) (*http.Response, error) {
+		if r.Header.Get("Authorization") == "Bearer sk-deepseek-exhaust-0003" {
+			queuedAttempts.Add(1)
+			return probeResponse(r, http.StatusOK, `{"balance_infos":[{"currency":"CNY","total_balance":"9.99"}]}`), nil
+		}
+		<-r.Context().Done()
+		return nil, r.Context().Err()
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	defer cancel()
+	accounts, known := s.LauncherBalances(ctx)
+	if !known || len(accounts) != 3 {
+		t.Fatalf("known=%v accounts=%+v", known, accounts)
+	}
+	if queuedAttempts.Load() != 0 {
+		t.Fatalf("queued-3 should not have been attempted after context expiry: %d", queuedAttempts.Load())
+	}
+	for _, a := range accounts {
+		if !a.BalanceSkipped || a.Problem != "" || a.Balance != nil {
+			t.Fatalf("context exhaustion must mark skipped, never unreachable: %+v", a)
+		}
 	}
 }

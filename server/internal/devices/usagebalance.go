@@ -20,7 +20,7 @@ import (
 const (
 	usageBalancePoll      = 5 * time.Minute  // how often the launchers are asked
 	usageBalanceTick      = 15 * time.Second // how often the loop checks whether they are due
-	usageBalanceFetchMost = 20 * time.Second // one whole read, launchers one after another
+	usageBalanceFetchMost = 20 * time.Second // one whole read across all launchers
 )
 
 // balanceState is what is known of one launcher.
@@ -113,6 +113,11 @@ func (b *usageBalances) applyLocked(samples []proto.UsageAccount, now time.Time)
 			continue
 		}
 		seen[a.Ref] = true
+		if a.BalanceSkipped {
+			// The poll's overall deadline ended before this launcher got a full attempt: keep whatever state it had
+			// without marking it unreachable or treating it as removed.
+			continue
+		}
 		st := b.state[a.Ref]
 		if st == nil {
 			st = &balanceState{}

@@ -236,3 +236,47 @@ func TestBalancePollerKeepsTheAmountForTheSameCredential(t *testing.T) {
 		t.Fatalf("same credential keeps the amount: %+v", got)
 	}
 }
+
+// A launcher skipped because the poll's overall context expired keeps its previous state without being marked
+// unreachable or removed, and a never-read skipped launcher is not turned into a bogus failed row (#11825).
+func TestBalancePollerKeepsPreviousStateWhenSampleIsSkipped(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().Truncate(time.Second)
+	step := 0
+	var b usageBalances
+	b.init(func(context.Context) ([]proto.UsageAccount, bool) {
+		if step == 0 {
+			return []proto.UsageAccount{
+				balance("ds-a", "12.34", time.Time{}),
+				balance("ds-b", "5.00", time.Time{}),
+			}, true
+		}
+		return []proto.UsageAccount{
+			balance("ds-a", "11.00", time.Time{}),
+			{Provider: "deepseek", Name: "ds-b", Ref: "balance:ds-b", BalanceSkipped: true},
+			{Provider: "deepseek", Name: "ds-c", Ref: "balance:ds-c", BalanceSkipped: true},
+		}, true
+	}, nil, nil)
+
+	b.pollDue(ctx, now)
+	first := b.accounts(now)
+	if len(first) != 2 || first[1].Balance == nil || first[1].Balance.Amount != "5.00" {
+		t.Fatalf("first read: %+v", first)
+	}
+	bSampled := first[1].SampledAt
+
+	step = 1
+	later := now.Add(usageBalancePoll)
+	b.pollDue(ctx, later)
+	got := b.accounts(later)
+	if len(got) != 2 {
+		t.Fatalf("skipped never-read launcher must not fabricate a row, and existing one must stay: %+v", got)
+	}
+	if got[0].Name != "ds-a" || got[0].Balance == nil || got[0].Balance.Amount != "11.00" || got[0].Problem != "" {
+		t.Fatalf("healthy launcher should still update: %+v", got[0])
+	}
+	if got[1].Name != "ds-b" || got[1].Balance == nil || got[1].Balance.Amount != "5.00" ||
+		got[1].Problem != "" || got[1].Stale || !got[1].SampledAt.Equal(bSampled) {
+		t.Fatalf("skipped launcher must keep its previous state unchanged: %+v", got[1])
+	}
+}

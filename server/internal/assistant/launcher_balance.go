@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/net/http/httpproxy"
@@ -29,8 +30,13 @@ const (
 	deepseekBalancePath = "/user/balance"
 	// balanceBodyMost bounds one answer; the documented shape is a few hundred bytes.
 	balanceBodyMost = 64 << 10
-	// balanceTimeout bounds one launcher's balance read.
+)
+
+var (
+	// balanceTimeout bounds one launcher's balance read (a var for the tests).
 	balanceTimeout = 10 * time.Second
+	// balanceReadWorkers bounds concurrent balance HTTP reads in one poll (a var for the tests).
+	balanceReadWorkers = 4
 )
 
 // deepseekBalanceBody is the documented answer: the amount is a decimal string ("12.34"), never a float, so it is
@@ -61,8 +67,18 @@ func (s *Service) LauncherBalances(ctx context.Context) (accounts []proto.UsageA
 		// this, launchers that rely on a per-computer key would be omitted and the caller would drop their samples.
 		return nil, false
 	}
+	if ctx.Err() != nil {
+		return nil, false
+	}
+	type balanceReadJob struct {
+		index  int
+		base   *url.URL
+		key    string
+		client *http.Client
+	}
 	seen := map[[sha256.Size]byte]bool{}   // openable keys, by the key itself
 	broken := map[[sha256.Size]byte]bool{} // sealed material that could not be opened, already reported
+	var jobs []balanceReadJob
 	for _, l := range stored {
 		base, ok := officialDeepSeekURL(l.BaseURL)
 		if !ok {
@@ -79,11 +95,15 @@ func (s *Service) LauncherBalances(ctx context.Context) (accounts []proto.UsageA
 		sample := proto.UsageAccount{Provider: "deepseek", Name: name, Ref: "balance:" + l.Name}
 		// The first key that opens wins: a corrupt or unresolvable key on the first computer must not hide a usable
 		// one on the next.
-		key, credential := "", ""
+		key := ""
 		for _, c := range candidates {
-			if k, err := s.openLauncherKey(ctx, c.sealed, l.Name, c.machine); err == nil {
-				key, credential = k, sealedCredential(c.sealed)
+			k, err := s.openLauncherKey(ctx, c.sealed, l.Name, c.machine)
+			if err == nil && k != "" {
+				key = k
 				break
+			}
+			if ctx.Err() != nil {
+				return nil, false
 			}
 		}
 		if key == "" {
@@ -113,27 +133,58 @@ func (s *Service) LauncherBalances(ctx context.Context) (accounts []proto.UsageA
 			continue
 		}
 		// Two launchers with one key are one account: one balance row, under the first launcher's name.
+		// Derive BalanceCredential from the resolved key so rotating an op:// (or other) secret reference changes the
+		// credential identity even though the sealed reference bytes stay constant.
 		digest := sha256.Sum256([]byte(key))
 		if seen[digest] {
 			continue
 		}
 		seen[digest] = true
-		sample.BalanceCredential = credential
-		sample.Balance, sample.Problem = readDeepSeekBalance(ctx, base, key, s.balanceClient(l))
+		sample.BalanceCredential = hex.EncodeToString(digest[:])
 		accounts = append(accounts, sample)
+		jobs = append(jobs, balanceReadJob{index: len(accounts) - 1, base: base, key: key, client: s.balanceClient(l)})
+	}
+	if len(jobs) > 0 {
+		workers := min(max(balanceReadWorkers, 1), len(jobs))
+		work := make(chan balanceReadJob, len(jobs))
+		for _, job := range jobs {
+			work <- job
+		}
+		close(work)
+		var wg sync.WaitGroup
+		wg.Add(workers)
+		for range workers {
+			go func() {
+				defer wg.Done()
+				for job := range work {
+					if ctx.Err() != nil {
+						accounts[job.index].BalanceSkipped = true
+						continue
+					}
+					bal, problem, skipped := readDeepSeekBalance(ctx, job.base, job.key, job.client)
+					if skipped {
+						accounts[job.index].BalanceSkipped = true
+						continue
+					}
+					accounts[job.index].Balance, accounts[job.index].Problem = bal, problem
+				}
+			}()
+		}
+		wg.Wait()
 	}
 	return accounts, true
 }
 
-// sealedCredential is the non-secret digest a balance sample carries: the sealed material it was read with. It changes
-// when the launcher's key is replaced or another computer's key is chosen, and never carries the material itself.
+// sealedCredential is the non-secret fallback digest carried only when a launcher's keys could not be opened. Openable
+// keys carry the hex SHA-256 digest of the resolved key instead, so a rotated secret reference changes the credential
+// identity even when the sealed reference bytes do not change.
 func sealedCredential(sealed ...string) string {
 	h := sha256.New()
 	for _, s := range sealed {
 		h.Write([]byte(s))
 		h.Write([]byte{0})
 	}
-	return hex.EncodeToString(h.Sum(nil))
+	return "sealed:" + hex.EncodeToString(h.Sum(nil))
 }
 
 // launcherKeyCandidate is one sealed key the manager may read for a launcher: its own, or one a computer holds.
@@ -216,12 +267,14 @@ func balanceProxy(proxy *url.URL, noProxy string) func(*http.Request) (*url.URL,
 }
 
 // readDeepSeekBalance asks the provider once; balance nil with a problem code says why (see proto.UsageAccount.Problem).
-func readDeepSeekBalance(ctx context.Context, base *url.URL, key string, client *http.Client) (*proto.UsageBalance, string) {
+// skipped is true when the caller's context ended before the read finished, so context exhaustion is not misreported as
+// a per-launcher unreachable result.
+func readDeepSeekBalance(ctx context.Context, base *url.URL, key string, client *http.Client) (*proto.UsageBalance, string, bool) {
 	u := *base
 	u.Path, u.RawPath = deepseekBalancePath, ""
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
-		return nil, "failed"
+		return nil, "failed", false
 	}
 	// The documented balance route takes the key as a Bearer token. The launcher added from the preset also launches
 	// with x-api-key, so both are sent: only the official origin ever sees them.
@@ -231,28 +284,34 @@ func readDeepSeekBalance(ctx context.Context, base *url.URL, key string, client 
 	// Redirects are not followed: a redirect would take the launcher's key to another address.
 	res, err := client.Do(req)
 	if err != nil {
-		return nil, "unreachable"
+		if ctx.Err() != nil {
+			return nil, "", true
+		}
+		return nil, "unreachable", false
 	}
 	defer res.Body.Close()
 	switch res.StatusCode {
 	case http.StatusUnauthorized, http.StatusForbidden:
-		return nil, "rejected"
+		return nil, "rejected", false
 	case http.StatusOK:
 	default:
-		return nil, "failed"
+		return nil, "failed", false
 	}
 	var body deepseekBalanceBody
 	if err := json.NewDecoder(io.LimitReader(res.Body, balanceBodyMost)).Decode(&body); err != nil {
-		return nil, "failed"
+		if ctx.Err() != nil {
+			return nil, "", true
+		}
+		return nil, "failed", false
 	}
 	for _, info := range body.BalanceInfos {
 		amount := strings.TrimSpace(info.TotalBalance)
 		currency := strings.ToUpper(strings.TrimSpace(info.Currency))
 		if validBalanceAmount(amount) && validCurrencyCode(currency) {
-			return &proto.UsageBalance{Amount: amount, Currency: currency}, ""
+			return &proto.UsageBalance{Amount: amount, Currency: currency}, "", false
 		}
 	}
-	return nil, "failed" // an answer without a usable amount is not a zero
+	return nil, "failed", false // an answer without a usable amount is not a zero
 }
 
 // validBalanceAmount keeps the provider's decimal string as it is: digits, at most one point, at most six places,
