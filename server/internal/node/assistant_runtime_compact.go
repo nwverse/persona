@@ -2,10 +2,12 @@ package node
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 type runtimeCompaction struct {
@@ -21,32 +23,72 @@ func (n *Node) assistantCompactRuntime(ctx context.Context, id string, onlyRunni
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	defer n.typing.lock(id)()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	callCtx, cancel := context.WithTimeout(ctx, runtimeCallTimeout)
+	defer cancel()
 	host, label, _ := n.runtimes.belongs(id)
 	if host == nil && !onlyRunning {
-		return errRuntimeAway(label)
+		var err error
+		host, err = n.runtimeFor(callCtx, "session.send", id)
+		if err != nil {
+			return err
+		}
+		if err := callCtx.Err(); err != nil {
+			return err
+		}
+		if host == nil {
+			if label == "" {
+				label, _, _ = strings.Cut(id, "-")
+			}
+			return errRuntimeAway(label)
+		}
 	}
 	compaction, err := n.runtimes.beginCompaction(ctx, host, id, onlyRunning)
 	if err != nil {
 		return err
 	}
 	n.publishSessionsSoon()
-	callCtx, cancel := context.WithTimeout(ctx, runtimeCallTimeout)
-	defer cancel()
 	params := map[string]any{"session_id": id, "text": "/compact", "assistant": true}
-	if err := host.peer.Call(callCtx, "session.send", params, nil); err != nil {
+	var reply struct {
+		Queued bool `json:"queued"`
+	}
+	if err := host.peer.Call(callCtx, "session.send", params, &reply); err != nil {
 		n.finishRuntimeCompaction(id, compaction, err.Error())
 		return err
 	}
 	n.contextCompacted(id)
+	if reply.Queued {
+		const message = "Compaction was queued, so its completion could not be tracked."
+		n.finishRuntimeCompaction(id, compaction, message)
+		return &rpc.Error{Code: "compaction_queued", Message: message}
+	}
 	go n.awaitRuntimeCompaction(id, compaction, i18n.From(ctx))
 	return nil
+}
+
+func (b *runtimeRegistry) compacting(id string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.compactingLocked(id)
+}
+
+func (b *runtimeRegistry) compactingLocked(id string) bool {
+	current := b.compactions[id]
+	return current != nil && current.state.State == proto.CompactionRunning
+}
+
+func runtimeCompactingRefusal(ctx context.Context) error {
+	return refusal("compacting", i18n.T(i18n.From(ctx), "assistant-start.compacting"), nil)
 }
 
 func (b *runtimeRegistry) beginCompaction(ctx context.Context, host *runtimeConn, id string, onlyRunning bool) (*runtimeCompaction, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if current := b.compactions[id]; current != nil && current.state.State == proto.CompactionRunning {
-		return nil, refusal("compacting", i18n.T(i18n.From(ctx), "assistant-start.compacting"), nil)
+	if b.compactingLocked(id) {
+		return nil, runtimeCompactingRefusal(ctx)
 	}
 	var row proto.Session
 	if host != nil {

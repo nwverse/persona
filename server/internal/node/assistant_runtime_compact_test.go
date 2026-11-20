@@ -6,6 +6,8 @@ import (
 	"errors"
 	"path/filepath"
 	"reflect"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,7 +19,12 @@ const runtimeCompactTestID = "agy-11111111-2222-3333-4444-555555555555"
 
 func runtimeCompactFixture(t *testing.T) (*Node, *fakeRuntime, func(string, int64, string)) {
 	t.Helper()
-	n, _ := runtimeNode(t)
+	n, hub := runtimeNode(t)
+	hub.mu.Lock()
+	hub.answer = func(method string, _ json.RawMessage) (any, error, bool) {
+		return map[string]string{"text": "- Example snapshot"}, nil, method == "assistant.context"
+	}
+	hub.mu.Unlock()
 	hello := assistantRuntimeHello()
 	hello["runtime"], hello["name"], hello["launcher"] = "agy", "Antigravity", "agy"
 	host := dialRuntime(t, n, hello)
@@ -116,6 +123,122 @@ func TestAssistantRuntimeCompactionRefusals(t *testing.T) {
 	}
 	if got := listed(t, n)[id].Compaction; got == nil || got.State != proto.CompactionFailed || got.FinishedAt == nil {
 		t.Fatalf("failed compaction: %+v", got)
+	}
+}
+
+func TestAssistantRuntimeCompactionSerializesSends(t *testing.T) {
+	n, host, push := runtimeCompactFixture(t)
+	id := runtimeCompactTestID
+	sendStarted, releaseSend := make(chan struct{}), make(chan struct{})
+	release := sync.OnceFunc(func() { close(releaseSend) })
+	defer release()
+	host.mu.Lock()
+	host.answer = func(method string, raw json.RawMessage) (any, error) {
+		if method == "session.send" && strings.Contains(string(raw), `"text":"First message"`) {
+			close(sendStarted)
+			<-releaseSend
+		}
+		return nil, nil
+	}
+	host.mu.Unlock()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	send := func(text string) error {
+		_, err := nodeCall(t, n, "assistant.send", map[string]any{"session_id": id, "text": text})
+		return err
+	}
+	sendResult, compactResult := make(chan error, 1), make(chan error, 1)
+	go func() { sendResult <- send("First message") }()
+	select {
+	case <-sendStarted:
+	case err := <-sendResult:
+		t.Fatalf("send ended before reaching the runtime: %v", err)
+	case <-ctx.Done():
+		t.Fatal("send did not reach the runtime")
+	}
+	go func() { compactResult <- n.assistantCompact(ctx, id, false) }()
+	select {
+	case err := <-compactResult:
+		t.Fatalf("compaction overtook an unacknowledged send: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	release()
+	if err := <-sendResult; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-compactResult; refusalCode(err) != "busy" {
+		t.Fatalf("compaction after send, before a runtime list update: %v", err)
+	}
+	if got := host.got("session.send"); len(got) != 1 || !strings.Contains(string(got[0]), "Example snapshot") {
+		t.Fatalf("first runtime send: %s", got)
+	}
+	push(proto.StatusDone, 2, "")
+	if err := n.assistantCompact(ctx, id, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := send("While compacting"); refusalCode(err) != "compacting" {
+		t.Fatalf("send during compaction: %v", err)
+	}
+	if _, err := nodeCall(t, n, "session.interrupt", map[string]any{"session_id": id}); err != nil {
+		t.Fatalf("interrupt during compaction: %v", err)
+	}
+	if got := host.got("session.interrupt"); len(got) != 1 {
+		t.Fatalf("runtime interrupts: %s", got)
+	}
+	push(proto.StatusDone, 3, "")
+	waitFor(t, "compaction settled", func() bool {
+		got := listed(t, n)[id].Compaction
+		return got != nil && got.State == proto.CompactionDone
+	})
+	if err := send("After compaction"); err != nil {
+		t.Fatal(err)
+	}
+	if got := host.got("session.send"); len(got) != 3 || !strings.Contains(string(got[2]), "Example snapshot") {
+		t.Fatalf("the next turn must resend the snapshot: %s", got)
+	}
+}
+
+func TestAssistantRuntimeCompactionQueued(t *testing.T) {
+	n, host, push := runtimeCompactFixture(t)
+	id := runtimeCompactTestID
+	_, commit := n.turnContext(id, contextAnswer{Text: "- Example snapshot"})
+	commit()
+	host.mu.Lock()
+	host.answer = func(string, json.RawMessage) (any, error) {
+		return map[string]bool{"queued": true}, nil
+	}
+	host.mu.Unlock()
+	err := n.assistantCompact(t.Context(), id, false)
+	if refusalCode(err) != "compaction_queued" {
+		t.Fatalf("queued compaction: %v", err)
+	}
+	push(proto.StatusDone, 2, "")
+	if got := listed(t, n)[id].Compaction; got == nil || got.State != proto.CompactionFailed || got.Error != err.Error() {
+		t.Fatalf("the queued command was not tracked as failed: %+v", got)
+	}
+	if block, _ := n.turnContext(id, contextAnswer{Text: "- Example snapshot"}); block == "" {
+		t.Fatal("the queued command might run, so the snapshot must be sent again")
+	}
+}
+
+func TestAssistantRuntimeCompactionClaimsUnlistedSession(t *testing.T) {
+	n, _ := runtimeNode(t)
+	hello := assistantRuntimeHello()
+	hello["runtime"], hello["name"], hello["launcher"] = "agy", "Antigravity", "agy"
+	host := dialRuntime(t, n, hello)
+	id := runtimeCompactTestID
+	n.state.put(id, sessionState{Cwd: filepath.Join(n.home, ".persona", "assistant"), Launcher: "agy"})
+	if err := n.assistantCompact(t.Context(), id, true); refusalCode(err) != "not_running" {
+		t.Fatalf("only running: %v", err)
+	}
+	if len(host.got("session.items")) != 0 || len(host.got("session.send")) != 0 {
+		t.Fatal("only-running compaction called the runtime")
+	}
+	if err := n.assistantCompact(t.Context(), id, false); err != nil {
+		t.Fatal(err)
+	}
+	if len(host.got("session.items")) != 1 || len(host.got("session.send")) != 1 {
+		t.Fatal("compaction did not claim and send to the unlisted session")
 	}
 }
 
