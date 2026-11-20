@@ -7,7 +7,7 @@ import { lazy, memo, Suspense, useCallback, useEffect, useId, useLayoutEffect, u
 import { api, ApiError, errorText, fullItem, pastHub, sessionPath } from "../../lib/api";
 import { attentionReason, externalLink, failureReason, isStoppedAgent, resumeCommand, sessionCan, sessionCanRename, sessionDeletable, sessionMenuActions, sourceSubtitle, sessionTitle, shortPath, stateOf, tabLabel, uuid } from "../../lib/format";
 import { conversationPage } from "../../lib/conversation-page";
-import { navigate, type SessionView } from "../../lib/router";
+import { navigate, type Route, type SessionView } from "../../lib/router";
 import { canShowTerminal, composerSlot, otherView, terminalJump, terminalWaits, useSessionView, viewOnlyRow } from "../../lib/session-view";
 import { resumeInTerminal, terminalResume } from "../../lib/agent-resume";
 import { openLink } from "../../lib/links";
@@ -124,7 +124,7 @@ import { PageBoundary } from "../PageBoundary";
 import { ViewLayer } from "../session/ViewLayer";
 import { conversationTitle } from "../assistant/conversations";
 import { useDirectionName } from "../../lib/direction-names";
-import { chatPlaceIn, dropChatPlace, firstLineInView, handoffFrom, type ChatPlace, type HandoffFrom } from "../../lib/handoff";
+import { chatPlaceIn, dropChatPlace, firstLineInView, handoffFrom, leaveChat, type ChatPlace, type HandoffFrom } from "../../lib/handoff";
 import { externalOpening, openerOf } from "../../lib/conversation-origins";
 import { usePersona } from "../assistant/Persona";
 import { voiceCalls, useVoiceCall, useVoiceState } from "../../lib/voice/calls";
@@ -270,9 +270,12 @@ async function rewindTo(mid: string, sid: string, draftKey: string, items: Item[
 /** In a side panel (TaskPanel, AgentPanel; #3333, iOS #3255; opened while Agents open in the side panel, #5424): the
  *  chat's one-line header is the panel's only one. It closes the panel (× at its end), may stand for the task (its title,
  *  with `sub` in the title's tooltip), carries the panel's own rows at the top of ⋯ and, beside the title, what the panel
- *  puts there (a task's ⌄ to switch between its agents); the same space's other agents are left out. */
+ *  puts there (a task's ⌄ to switch between its agents); the same space's other agents are left out. With `page`, a chat
+ *  bubble before × opens the Agent shown as its own page (`/s/…`, as from the Agents list) and the panel closes. */
 export interface PanelChrome {
   onClose: () => void;
+  /** The page of the Agent the panel shows: the header's "Open Agent page" button. */
+  page?: Route;
   title?: string;
   sub?: string;
   items?: MenuItem[];
@@ -2662,6 +2665,13 @@ export const Header = memo(function Header({
     onTerminal?.();
     chrome?.onClose();
   };
+  // the panel's Agent as its own page, the page it has in the Agents list; leaveChat keeps the conversation's place for
+  // Back, as the "Full page" way of opening Agents does (lib/agent-open.ts). The panel closes, its chat being that page now.
+  const openAgentPage = () => {
+    if (!chrome?.page) return;
+    leaveChat(chrome.page, true, getPanel() ?? undefined);
+    chrome.onClose();
+  };
   const showFiles = Boolean(session && !assistant && session.cwd);
   const flipView = () => view && onView?.(otherView(view));
   const openFiles = () => session && togglePanel({ kind: "files", mid: session.machine_id, sid: session.session_id, cwd: session.cwd });
@@ -2903,6 +2913,7 @@ export const Header = memo(function Header({
       {!assistant && session && (session.agent === "codex" || session.source_kind === "codex_history" || session.source_kind === "codex_app_server") &&
         <Suspense fallback={null}><TakeoverAction key={`${session.machine_id}:${session.session_id}`} session={session} /></Suspense>}
       {Boolean(topCenter) && more("end")}
+      {chrome?.page && <IconButton icon="chat" label={t("chat-chatview.open_agent_page")} onClick={openAgentPage} />}
       {chrome && <IconButton icon="x" label={t("sidepanel.close")} onClick={chrome.onClose} />}
       </div>
       {menu.anchor && <Menu anchor={menu.anchor} onClose={menu.close} align={topCenter && mediaMatches(NARROW) ? "right" : "left"} items={items} />}

@@ -515,11 +515,14 @@ page one setting away (#5424):
     Open in new window and Remove task…; the task's starting or failed state while no Agent is up), an Agent `AgentPanel`.
     The chat stays beside it on a wide window; a phone-sized one has the panel over the chat, and Back closes it. Both are
     a lazy chunk (`views/SidePanel.tsx`). Leaving a Persona chat keeps its panel for when you come back (`lib/panel-memory.ts`).
+    The header's chat bubble before × (**Open Agent page**, `PanelChrome.page`) opens the Agent the panel shows (the one ⌄
+    picked) as its own page, the page the Agents list opens, and closes the panel; a task with no Agent up has no bubble.
+    That page has the way back below, and returning opens the panel again.
   - **Full page**: a task opens its most pressing Agent's page (`mostUrgentAgent`), or the to-do's page while no Agent is
     on it; an Agent that belongs to no task opens its own page, with the way back below.
   - `/s/…` and `/todos?id=…` links in a reply open in the side panel on a wide window while it is chosen, else as those
     pages (a phone-sized window has no room beside the chat).
-- **The way back** (Full page). The Agent's page shows cindy's "Came from <conversation> · click to return" strip above the chat; ✕ puts it away. Clicking it, or Back, returns to the conversation where its chat was left: the conversation's history entry keeps the first line in view and its offset (`web/src/lib/handoff.ts`), and the chat opens there once instead of at its end.
+- **The way back** (Full page, and a side panel's Open Agent page). The Agent's page shows cindy's "Came from <conversation> · click to return" strip above the chat; ✕ puts it away. Clicking it, or Back, returns to the conversation where its chat was left: the conversation's history entry keeps the first line in view and its offset (`web/src/lib/handoff.ts`), and the chat opens there once instead of at its end. Left from a task's or an Agent's side panel, the entry also keeps that panel (`sidePanel`), which Back opens again. An Agent's page opened any other way (the Agents list, a link) has no strip.
 - Code: `web/src/views/assistant/Handoff.tsx`, `web/src/lib/handoff.ts`, `web/src/lib/agent-open.ts`, `web/src/views/assistant/TaskPanel.tsx`, `web/src/views/chat/HandoffBack.tsx`. Tests: `Handoff.test.tsx`, `lib/handoff.test.ts`, `TaskPanel.test.tsx`, `AgentOpenSetting.test.tsx`, `HandoffBack.test.tsx`, `AssistantActionBar.test.tsx`; browser: `web/e2e/handoff-cards.py` (both settings). iOS and Android draw the same cards in the chat (#5110).
 
 ### Task board
