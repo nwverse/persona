@@ -1,7 +1,8 @@
 import { daemonBinary, mcpServers } from './compat.js'
 import { contextWrapped, wirePackageName } from '../../runtime-sdk/lib/compat.js'
 // Antigravity (agy) runtime for Persona (docs/integrations/runtimes.md).
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
+import { constants, existsSync, lstatSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -45,6 +46,8 @@ const SIGNED_OUT = /\b(?:signed out|logged out|not signed in|not logged in|(?:lo
 const AUTO_REFUSAL_NOTICE = 'agy 拒绝了 Auto 模式，已改由 Persona 自动批准权限请求'
 const MODE_NOTICE_STEP = 'PERSONA_MODE_NOTICE'
 const CONVERSATION_ID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i
+const HISTORY_EPOCH = '.persona-history-epoch' // in a brain directory: the token a restarted companion starts from
+const newToken = () => randomBytes(4).toString('hex')
 
 export function createAgyRuntime(options = {}) {
   const home = options.home || homedir()
@@ -82,6 +85,7 @@ export function createAgyRuntime(options = {}) {
   const archived = new Set() // agyId
   const lastPushedSeq = new Map() // personaId -> number
   const lastPushedHistory = new Map()
+  const projections = new Map() // agyId -> { token, file, next, shown } (projectedHistory)
   const dirtyLiveSeqs = new Map() // personaId -> Set<number> of already-pushed live seqs modified in place
   const watchedPolls = new Map()
   const rewinding = new Set()
@@ -749,6 +753,44 @@ export function createAgyRuntime(options = {}) {
     return `agy:${rawId}:full:api-errors:content-v2:step-ids-v2:mcp-tools:lazy-media:checkpoints:wakes`
   }
 
+  // Steps shown from ACP before the native export (a prompt's live and settled steps, a wake) have IDs the export
+  // does not reuse. The history stays while they only grow, so a send is an append; it changes once any of them is
+  // dropped (export, interrupt). The next token is on disk first, so a restart never reports the old one; an
+  // unreadable epoch starts fresh (#12014).
+  function projectedHistory(rawId, history, steps) {
+    let p = projections.get(rawId)
+    if (!p) {
+      let file = ''
+      let unreadable = false
+      try { file = readFileSync(join(brainDirOf(rawId), HISTORY_EPOCH), 'utf8').trim() } catch (err) { unreadable = err?.code !== 'ENOENT' }
+      const valid = /^[\da-f]{8}$/.test(file)
+      projections.set(rawId, (p = { token: valid || (!file && !unreadable) ? file : newToken(), file: valid ? file : '', shown: new Set() }))
+    }
+    const shown = new Set(steps)
+    if ([...p.shown].some((step) => !shown.has(step))) {
+      p.token = p.next ?? newToken()
+      p.next = undefined
+    }
+    if (shown.size && p.next === undefined && p.token === p.file) {
+      const next = newToken()
+      if (writeEpoch(brainDirOf(rawId), next)) p.file = p.next = next
+      else p.token = next // never on disk: no restart reports it
+    }
+    p.shown = shown
+    return p.token ? `${history}:projected:${p.token}` : history
+  }
+
+  function writeEpoch(dir, token) {
+    try {
+      if (!lstatSync(dir).isDirectory()) return false
+      const flag = constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW
+      writeFileSync(join(dir, HISTORY_EPOCH), `${token}\n`, { flag, mode: 0o600 })
+      return true
+    } catch {
+      return false
+    }
+  }
+
   function cutMatches(cut, transcript) {
     return cut?.branch === transcript.branch && cut.next === JSON.stringify(transcript.steps.find((step) => step.step_index >= cut.limit))
   }
@@ -870,11 +912,11 @@ export function createAgyRuntime(options = {}) {
     const pid = toPersonaId(rawId)
     const turn = liveTurnOf(pid)
     if (turn?.liveSteps.length) {
+      const projected = [...turn.priorPending, ...turn.liveSteps]
       return {
         ...transcript,
-        steps: [...turn.base.steps, ...turn.priorPending, ...turn.liveSteps],
-        // Live and settled prompt steps share a history epoch until native export flushes to disk.
-        history: `${turn.base.history}:settled:${turn.historySeq ?? turn.seq}`,
+        steps: [...turn.base.steps, ...projected],
+        history: projectedHistory(rawId, turn.base.history, projected),
         synthetic: true,
       }
     }
@@ -886,16 +928,17 @@ export function createAgyRuntime(options = {}) {
         return {
           ...transcript,
           steps: [...pending.base.steps, ...pending.steps],
-          history: `${pending.base.history}:settled:${pending.seq}`,
+          history: projectedHistory(rawId, pending.base.history, pending.steps),
           synthetic: true,
         }
       }
     }
+    const history = projectedHistory(rawId, transcript.history, [])
     const tail = nativeTails.get(rawId)
     if (tail?.key === tailKey(transcript, native) && tail.error) {
-      return { ...transcript, steps: [...transcript.steps, tail.error] }
+      return { ...transcript, history, steps: [...transcript.steps, tail.error] }
     }
-    return transcript
+    return { ...transcript, history }
   }
 
   // Keep the refusal notice at its original position when later native steps arrive. Their projected indices move
