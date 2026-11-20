@@ -1,4 +1,5 @@
 {
+  "handoff_wait": "等「{task}」回传「{check}」的结果",
   "decision_review_changed": "这条决定已更新或已处理，请刷新后再试。",
   "decision_review_fields": "请求缺少有效的审核时间或撤销凭据。",
   "ask_stale": "这个问题已经答过或已更新，请刷新后再回答。",

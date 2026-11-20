@@ -176,7 +176,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				}
 				m.turnErr.set(&s)
 				s.Activity, s.ActivityAt = m.activityOf()
-				setContext(&s, m)
+				n.setSessionContext(&s, m)
 				s.ModelFallback = m.modelFallback
 				s.WokeByTask = m.wake
 				if s.Status == proto.StatusWorking || s.Status == proto.StatusBlocked {
@@ -436,6 +436,7 @@ func (n *Node) decorateIn(s *proto.Session, pass *codexListPass) {
 		s.Launcher = n.inferLauncher(s.SessionID)
 	}
 	n.normalizeSessionRowModel(s) // keep the echoed model for display, clearing stand-in markers ("<synthetic>")
+	n.applyLauncherContextWindow(s)
 	if s.Title == "" && s.HerdrTabName() == "" {
 		s.Title = filepath.Base(s.Cwd)
 	}
