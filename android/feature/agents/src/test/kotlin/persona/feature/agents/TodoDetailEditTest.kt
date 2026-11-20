@@ -14,6 +14,7 @@ import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextReplacement
@@ -45,6 +46,12 @@ class TodoDetailEditTest {
         var gate: CompletableDeferred<Unit>? = null
         var fail = false
         val patches = mutableListOf<Pair<String?, String?>>()
+        val accepted = mutableListOf<Pair<String, String>>()
+        override suspend fun acceptTask(todoId: String, askedAt: String) {
+            accepted += todoId to askedAt
+            todo = todo.copy(ask = null)
+        }
+
         override suspend fun todos() = listOf(todo)
         override suspend fun patchTodo(id: String, title: String?, notes: String?, done: Boolean?): Todo {
             patches += title to notes
@@ -55,7 +62,14 @@ class TodoDetailEditTest {
         override suspend fun feed(conversation: String, since: String?) = FeedResponse(emptyList(), emptyMap())
         override suspend fun startPlan(id: String, remember: Boolean): TaskPlan = error("unused")
         override suspend fun dismissPlan(id: String): TaskPlan = error("unused")
-        override suspend fun retryTask(todoId: String): Todo = error("unused")
+        val retries = mutableListOf<String>()
+        val deletions = mutableListOf<String>()
+        override suspend fun retryTask(todoId: String): Todo {
+            retries += todoId
+            todo = todo.copy(startError = null, doneAt = null)
+            return todo
+        }
+        override suspend fun deleteTodo(id: String) { deletions += id }
         override suspend fun removeTask(todoId: String) = Unit
         override suspend fun route(conversation: String, todoId: String, text: String): FeedItem = error("unused")
         override suspend fun today(conversation: String): FeedItem = error("unused")
@@ -73,19 +87,64 @@ class TodoDetailEditTest {
 
     private val errors = mutableListOf<String>()
 
-    private fun open(api: Api) {
+    private fun showDetail(api: Api, onBack: () -> Unit = {}) {
         val store = TasksStore(api, Connection(), CoroutineScope(Dispatchers.Unconfined))
         store.reloadTodos()
         rule.setContent {
             PersonaTheme(reduceMotion = true) {
                 val todos by store.todos.collectAsState()
-                TodoDetailScreen("t1", todos, emptyList(), emptyList(), store, onBack = {}, onOpenSession = {}, onHandOff = {},
+                TodoDetailScreen("t1", todos, emptyList(), emptyList(), store, onBack = onBack, onOpenSession = {}, onHandOff = {},
                     onError = { errors += it })
             }
         }
         rule.waitForIdle()
+    }
+
+    private fun open(api: Api) {
+        showDetail(api)
         rule.onNodeWithContentDescription("Edit").performClick()
         rule.waitForIdle()
+    }
+
+    @Test fun reviewingACompletedConclusionOnTheTodoAcknowledgesTheExactRound() {
+        val ask = TodoAsk(outcome = "cannot", verdict = "The original folder is missing.", askedAt = "2026-11-01T09:00:00Z")
+        val api = Api(Todo("t1", title = "Review the draft", origin = "main", doneAt = ask.askedAt, ask = ask))
+        showDetail(api)
+        rule.onNodeWithText(ask.verdict).assertExists()
+        rule.onNodeWithTag("assistant-accept-t1").performClick()
+        rule.waitForIdle()
+        assertEquals(listOf("t1" to ask.askedAt), api.accepted)
+        rule.onNodeWithText(ask.verdict).assertDoesNotExist()
+    }
+
+    @Test fun failedDispatchKeepsItsReasonAndRetryOnTheTodoPage() {
+        val api = Api(Todo("t1", title = "Review the draft", origin = "main", startError = "The folder is missing"))
+        showDetail(api)
+        rule.onNodeWithText("The folder is missing").assertExists()
+        rule.onNodeWithText("Retry").performClick()
+        rule.waitForIdle()
+
+        assertEquals(listOf("t1"), api.retries)
+        assertTrue(api.deletions.isEmpty())
+        assertEquals(null, api.todo.startError)
+        rule.onNodeWithText("The folder is missing").assertDoesNotExist()
+    }
+
+    @Test fun removingAFailedDispatchRequiresConfirmationAndReturnsOnlyAfterDeletion() {
+        val api = Api(Todo("t1", title = "Review the draft", origin = "main", startError = "The folder is missing"))
+        var wentBack = 0
+        showDetail(api) { wentBack++ }
+        rule.onNodeWithText("Remove task").performClick()
+        rule.onNodeWithText("Cancel").performClick()
+        rule.waitForIdle()
+        assertTrue(api.deletions.isEmpty())
+        assertEquals(0, wentBack)
+        rule.onNodeWithText("Remove task").performClick()
+        rule.onNodeWithText("Delete").performClick()
+        rule.waitForIdle()
+        assertEquals(listOf("t1"), api.deletions)
+        assertTrue(api.retries.isEmpty())
+        assertEquals(1, wentBack)
     }
 
     private fun fields() = rule.onAllNodes(hasSetTextAction())

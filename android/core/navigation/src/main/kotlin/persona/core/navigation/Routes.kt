@@ -18,6 +18,10 @@ sealed interface RouteSource {
     @Serializable @SerialName("persona.core.navigation.RouteSource.InboxItem") data class InboxItem(val itemId: String) : RouteSource
     @Serializable @SerialName("persona.core.navigation.RouteSource.LarkConversation") data class LarkConversation(val chatId: String) : RouteSource
     @Serializable @SerialName("persona.core.navigation.RouteSource.Interaction") data class Interaction(val machineId: String, val requestId: String) : RouteSource
+    /** The conversation that pushed a task's Agent above itself. Machine ids include the paired hub namespace. */
+    @Serializable @SerialName("persona.core.navigation.RouteSource.Handoff")
+    data class Handoff(val machineId: String, val sessionId: String, val title: String, val manager: String? = null,
+        val kind: ConversationKind = ConversationKind.Assistant, val embedded: Boolean = false) : RouteSource
 }
 
 @Serializable @SerialName("persona.core.navigation.ChatRoute") data class ChatRoute(

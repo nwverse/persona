@@ -198,8 +198,9 @@ fun ChatDestination(
     val metadata by services.sessions().sessions.collectAsStateWithLifecycle()
     val routingState = wiring?.connection?.state?.collectAsStateWithLifecycle()?.value
     val features = wiring?.connection?.lastHello?.features.orEmpty()
-    val home = rememberChildSessionHome(requested, metadata, wiring?.actions, features,
+    val resolved = rememberChildSessionHome(requested, metadata, wiring?.actions, features,
         routingState == ConnectionState.Online, side = route.side)
+    val home = if (route.source is persona.core.navigation.RouteSource.Handoff) ChildSessionHome(requested, rows = resolved.rows) else resolved
     // A link to a side session (#7944) opens its parent, then the side's own chat over it, once.
     val landedSide = remember(home, metadata, features) { home.shownSide(metadata, features)?.takeUnless { historyReadOnly } }
     var sideShown by androidx.compose.runtime.saveable.rememberSaveable(route.machineId, route.sessionId) { mutableStateOf(false) }
@@ -212,7 +213,9 @@ fun ChatDestination(
     val session = home.key
     val shownMetadata = metadata + home.rows
     val managerChoice by AssistantManagerChoice.current.collectAsStateWithLifecycle()
-    val managerId = shownMetadata.firstOrNull { it.key == session }?.manager ?: managerChoice.shown
+    val sourceRow = shownMetadata.firstOrNull { it.key == session && managerChoice.owns(it.manager) }
+        ?: shownMetadata.firstOrNull { it.key == session }
+    val managerId = sourceRow?.manager ?: managerChoice.shown
     val assistantManagement = remember(wiring?.assistantManagement, managerId) {
         wiring?.assistantManagement?.forManager(managerId)
     }
@@ -242,6 +245,12 @@ fun ChatDestination(
                 lookupRows = home.rows,
                 worktrees = wiring?.worktrees.takeUnless { historyReadOnly },
                 onOpenSession = { navigator.navigate(ChatRoute(it.machineId, it.sessionId)) },
+                onOpenHandoff = { target -> navigator.navigate(taskHandoffRoute(target, session,
+                    sourceRow?.displayTitle ?: assistantSnapshot.takeIf { it.managerId == managerId }
+                        ?.conversations?.firstOrNull { it.key == session }?.displayTitle, managerId,
+                    assistant = style == ChatRenderStyle.Assistant, embedded = embedded)) },
+                handoffFrom = route.source as? persona.core.navigation.RouteSource.Handoff,
+                onOpenTodo = { navigator.navigate(persona.core.navigation.TodoDetailRoute(it)) },
                 onOpenSide = if (historyReadOnly) null else ({ navigator.navigate(ChatRoute(it.machineId, it.sessionId,
                     persona.core.navigation.ConversationKind.Agent, side = true)) }),
                 onOpenAssistant = { navigator.navigate(conversationRoute(it, assistant = true)) },

@@ -35173,6 +35173,29 @@
       },
       "extractionState" : "manual"
     },
+    "Came from %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Came from %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ から開きました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "来自%@"
+          }
+        }
+      }
+    },
     "Call This Conversation" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -49070,6 +49093,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Hide conversation link" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hide conversation link"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会話へのリンクを閉じる"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "隐藏对话链接"
+          }
+        }
+      }
     },
     "Conversation" : {
       "extractionState" : "manual",
@@ -142015,6 +142061,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Return to conversation" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Return to conversation"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "元の会話に戻る"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "返回原对话"
+          }
+        }
+      }
     },
     "Retry" : {
       "comment" : "BeautifulUI looks this up in the app's catalog (#5574)",

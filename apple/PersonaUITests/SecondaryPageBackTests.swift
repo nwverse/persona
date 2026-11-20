@@ -107,7 +107,7 @@ final class SecondaryPageBackTests: XCTestCase {
     /// With the page's own header (bars across the top): the starting page's ‹ is its header's, one, and leads back.
     @MainActor func testTheStartingPageHasOneBack() throws {
         launch(sideBars: false)
-        guard wide else { throw XCTSkip("pushed beside the sidebar in regular width only; a phone's sheet: TaskPageBackTests") }
+        guard wide else { throw XCTSkip("the sidebar stays beside the page at regular width") }
         link("todo_dispatch_starting").tap()
         XCTAssertTrue(startingPage.waitForExistence(timeout: 10), app.debugDescription)
         let back = oneBack("the starting task's page")
@@ -135,7 +135,7 @@ final class SecondaryPageBackTests: XCTestCase {
     /// The same on a task's page before its Agent is up (regular width, where it is pushed).
     @MainActor func testUnderSideBarsASwipeFromTheMiddleOfAStartingTaskGoesBack() throws {
         launch(sideBars: true)
-        guard wide else { throw XCTSkip("pushed beside the sidebar in regular width only; a phone's sheet closes from its edge") }
+        guard wide else { throw XCTSkip("side bars need regular width") }
         link("todo_dispatch_starting").tap()
         let starting = startingPage
         XCTAssertTrue(starting.waitForExistence(timeout: 10), app.debugDescription)
@@ -264,7 +264,7 @@ final class SecondaryPageBackTests: XCTestCase {
 
     /// The task's page while its Agent starts: its message, which the conversation's card does not have (the card says
     /// its Agent is starting too).
-    @MainActor private var startingPage: XCUIElement { app.staticTexts["开好以后这里就是它的对话。"].firstMatch }
+    @MainActor private var startingPage: XCUIElement { app.textFields["todo-detail.title"].firstMatch }
 
     @MainActor private var wide: Bool { app.windows.firstMatch.frame.width >= 600 }
 

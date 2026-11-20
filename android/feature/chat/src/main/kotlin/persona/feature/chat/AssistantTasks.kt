@@ -80,6 +80,7 @@ import persona.core.designsystem.unfolding
 import persona.core.domain.sort.WorkflowSummary
 import persona.core.designsystem.icons.PhIcon
 import persona.core.designsystem.icons.PhIcons
+import persona.core.domain.tasks.handoffAgent
 import persona.core.domain.tasks.AssistantExtra
 import persona.core.domain.tasks.AssistantLines
 import persona.core.domain.tasks.orphanedLine
@@ -130,6 +131,9 @@ internal class AssistantTaskHost(
     val manager: String? = null,
     /** Opens the settings page a briefing's recommended mechanism is turned on at; null: its rows have no button. */
     val onOpenSetup: ((persona.core.contracts.BriefSetupPage) -> Unit)? = null,
+    /** A task hand-off keeps the originating conversation as the Agent page’s return destination. */
+    val onHandoff: (SessionKey) -> Unit = onOpen,
+    val onOpenTodo: ((String) -> Unit)? = null,
 ) {
     /** Each session's first card ([firstBySession]). */
     val cards: Map<SessionKey, persona.core.contracts.Interaction> by lazy { pending.firstBySession() }
@@ -175,9 +179,32 @@ private fun since(iso: String?, now: Instant = Instant.now()): String? {
     }
 }
 
-/** A tap on a task anywhere in the conversation: its detail rises over it (iOS TaskDetailSheet), even before it has an agent. */
+/** Open the task's most pressing Agent, or its to-do while no Agent has started. */
 internal fun openTask(host: AssistantTaskHost, todo: Todo) {
-    host.sheet.value = TaskSheet.Task(todo.id)
+    val sessions = host.tasks.agentsOf(todo, host.sessions).associateBy { it.key }
+    val agent = todo.handoffAgent(sessions::get)
+    if (agent != null) {
+        host.sheet.value = null
+        host.onHandoff(agent)
+    } else {
+        openTaskDetail(host, todo.id)
+    }
+}
+
+/** Briefings can outlive their to-do in the live list, so keep the exact to-do ID for its empty page. */
+internal fun openTask(host: AssistantTaskHost, id: String) {
+    val todo = host.tasks.todos.value.firstOrNull { it.id == id }
+    if (todo == null) openTaskDetail(host, id) else openTask(host, todo)
+}
+
+internal fun openTaskDetail(host: AssistantTaskHost, id: String) {
+    val open = host.onOpenTodo
+    if (open != null) {
+        host.sheet.value = null
+        open(id)
+    } else {
+        host.sheet.value = TaskSheet.Task(id)
+    }
 }
 
 /** One of the host's lines in the conversation. */

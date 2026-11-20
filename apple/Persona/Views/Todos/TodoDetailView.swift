@@ -6,6 +6,7 @@ struct TodoDetailView: View {
     @Environment(\.tabIsActive) private var inFront
     @Environment(\.dismiss) private var dismiss
     var todoID: String
+    var fromTask = false
     /// Not `openAgent`: a stored property's name stays in the Release binary, and that is a DEBUG launch switch (#8306).
     var onOpenAgent: ((SessionKey) -> Void)? = nil
 
@@ -18,6 +19,7 @@ struct TodoDetailView: View {
     @State private var dictation = Dictation()
     @State private var showHandoff = false
     @State private var showDeleteConfirm = false
+    @State private var removingTask: TodoItem?
     @State private var showReleased = false
     /// The title the field was last filled with: only a change from it is the user's edit. A title changed elsewhere
     /// while the field had focus is not taken into it, and must not be written back over (#3330).
@@ -105,7 +107,9 @@ struct TodoDetailView: View {
         } message: {
             Text("Delete this to-do? Its linked agent sessions won't be deleted.")
         }
-        .onChange(of: currentTodo) { _, todo in
+        .confirmTaskRemoval($removingTask)
+        .onChange(of: currentTodo) { old, todo in
+            if fromTask, old != nil, todo == nil { dismiss() }
             // Another todo (the Mac list picked it), or an edit made elsewhere: take the stored text, but never over a
             // field the user is typing in.
             if let todo {
@@ -185,9 +189,22 @@ struct TodoDetailView: View {
         let releasedAgents = todo.agents.filter { $0.releasedAt != nil }
 
         return ScrollViewReader { proxy in List {
+            if fromTask, let reason = TasksStore.shared.startFailure(todo) ?? todo.activeAgents.compactMap(\.startError).first(where: { !$0.isEmpty }) {
+                Section {
+                    Text(StartFailureWords.detailLine(reason))
+                    Button("Retry") { Task { _ = await TasksStore.shared.retry(todo) } }
+                        .disabled(TasksStore.shared.busyRetries.contains(todo.id))
+                        .accessibilityIdentifier("task-handoff.retry")
+                    Button("Remove [Task Sheets 6135d4]", role: .destructive) {
+                        TasksStore.shared.askRemove(todo, pending: $removingTask)
+                    }
+                    .accessibilityIdentifier("task-handoff.remove")
+                }
+            }
             Section {
                 VStack(alignment: .leading, spacing: Theme.Space.s) {
                     TextField(String(localized: "To-do title"), text: $text.title)
+                        .accessibilityIdentifier("todo-detail.title")
                         .font(Theme.Font.title)
                         .focused($titleFocused)
                         .onSubmit { commitTitle() }

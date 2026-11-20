@@ -19,6 +19,7 @@ import persona.core.designsystem.*
 import persona.core.designsystem.icons.PersonaIcons
 import persona.core.domain.tasks.AssistantExtra
 import persona.core.domain.tasks.AssistantTaskCards
+import persona.core.domain.tasks.TasksStore
 import persona.core.domain.tasks.decisionOptions
 import persona.core.domain.tasks.todoRuleCard
 
@@ -30,7 +31,14 @@ internal fun TaskOwnerDecision(todo: Todo, host: AssistantTaskHost) {
         TaskDecisionCard(todo, host)
         return
     }
-    val busy by host.tasks.busy.collectAsStateWithLifecycle()
+    TaskConclusion(todo, host.tasks, host.onError)
+}
+
+/** A previously completed task can still need its owner's acknowledgement of this exact round. */
+@Composable
+fun TaskConclusion(todo: Todo, tasks: TasksStore, onError: (Throwable) -> Unit) {
+    val ask = todo.ask?.takeIf { it.outcome != "decide" } ?: return
+    val busy by tasks.busy.collectAsStateWithLifecycle()
     val resources = LocalResources.current
     JCard(Modifier.fillMaxWidth()) {
         Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
@@ -38,9 +46,9 @@ internal fun TaskOwnerDecision(todo: Todo, host: AssistantTaskHost) {
             ask.recommend?.takeIf(String::isNotBlank)?.let { recommendation ->
                 Text(stringResource(R.string.chat_tray_recommended, recommendation), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
             }
-            if (ask.askedAt.isNotBlank() && (ask.outcome != "decide" || !ask.recommend.isNullOrBlank())) {
+            if (ask.askedAt.isNotBlank()) {
                 JButton(stringResource(R.string.chat_tray_accept), {
-                    host.tasks.acceptTask(todo, host.onError) { host.onError(IllegalStateException(resources.getString(R.string.chat_tray_accept_changed))) }
+                    tasks.acceptTask(todo, onError) { onError(IllegalStateException(resources.getString(R.string.chat_tray_accept_changed))) }
                 }, Modifier.testTag("assistant-accept-${todo.id}"), loading = "accept:${todo.id}" in busy)
             }
         }

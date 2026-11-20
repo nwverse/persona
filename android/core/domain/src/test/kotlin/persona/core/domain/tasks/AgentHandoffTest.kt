@@ -4,6 +4,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 import persona.core.contracts.PlanTask
+import persona.core.contracts.Session
+import persona.core.contracts.SessionChildren
 import persona.core.contracts.TaskPlan
 import persona.core.contracts.Todo
 import persona.core.contracts.TodoAgent
@@ -15,6 +17,38 @@ class AgentHandoffTest {
         TodoAgent("computer", id, linkedAt = linkedAt, title = title, startError = error)
     private fun todo(id: String = "task", title: String = "Example task", agents: List<TodoAgent> = emptyList(), doneAt: String? = null, startError: String? = null) =
         Todo(id, title, origin = "main", createdAt = at, doneAt = doneAt, startError = startError, agents = agents)
+
+    @Test fun aTaskRowOpensItsMostPressingReachableAgent() {
+        val offline = agent("shared")
+        val working = offline.copy(machineId = "studio")
+        val unread = agent("unread")
+        val limited = agent("limit")
+        val interrupted = agent("interrupted")
+        val folded = agent("folded")
+        val sessions = listOf(
+            Session(machineId = "studio", sessionId = "shared", state = "working"),
+            Session(machineId = "computer", sessionId = "unread", state = "unread"),
+            Session(machineId = "computer", sessionId = "limit", state = "idle", turnError = "wait", turnErrorKind = "usage_limit"),
+            Session(machineId = "computer", sessionId = "interrupted", state = "idle", turnError = "stopped"),
+            Session(machineId = "computer", sessionId = "folded", state = "idle", children = SessionChildren(needsYou = 1)),
+        ).associateBy { it.key }
+        val priority = listOf(offline, working, unread, limited, interrupted, folded)
+        for (i in priority.indices) {
+            assertEquals(priority[i].key, todo(agents = priority.take(i + 1)).handoffAgent(sessions::get))
+        }
+    }
+
+    @Test fun tiesKeepTheHubOrderAndInvalidBindingsCannotWin() {
+        val first = agent("first")
+        val other = agent("other")
+        val unavailable = listOf(
+            agent("released").copy(releasedAt = at), agent("dismissed").copy(dismissedAt = at),
+            agent("failed", error = "cannot start"), agent(""), agent("missing-computer").copy(machineId = ""),
+        )
+        assertNull(todo(agents = unavailable).handoffAgent { null })
+        assertEquals(first.key, todo(agents = unavailable + listOf(first, other)).handoffAgent { null })
+        assertEquals(other.key, todo(agents = listOf(other, first)).handoffAgent { null })
+    }
 
     @Test fun aTaskWithAnAgentIsOneNewCard() {
         val cards = taskHandoffs(todo(agents = listOf(agent("agent", "Example Agent"))), null, HandoffWake.Created, emptyMap())

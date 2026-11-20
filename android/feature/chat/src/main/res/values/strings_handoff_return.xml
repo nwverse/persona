@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="chat_handoff_from">Came from %1$s · Tap to return</string>
+    <string name="chat_handoff_hide_return">Hide the way back</string>
+</resources>

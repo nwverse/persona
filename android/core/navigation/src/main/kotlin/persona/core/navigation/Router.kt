@@ -82,6 +82,7 @@ class Router(
             is RouteSource.InboxItem -> source.itemId.isNotBlank()
             is RouteSource.LarkConversation -> source.chatId.isNotBlank()
             is RouteSource.Interaction -> source.machineId.isNotBlank() && source.requestId.isNotBlank()
+            is RouteSource.Handoff -> source.machineId.isNotBlank() && source.sessionId.isNotBlank() && kind == ConversationKind.Agent
         }
         return chat.copy(kind = kind).takeIf { validSource }
     }
@@ -231,7 +232,8 @@ fun ResolvedRoute.restore(stacks: Map<AppTab, MutableList<NavKey>>, newTodo: New
         // Preserve the existing NavKey and its UI state when only provenance changed.
         val previous = stack[existing]
         if (previous == ConnectionSettingsRoute ||
-            previous is ChatRoute && key is ChatRoute && previous.kind != key.kind ||
+            previous is ChatRoute && key is ChatRoute &&
+                (previous.kind != key.kind || previous.source is RouteSource.Handoff && previous.source != key.source) ||
             // A notification about one request of a conversation already open: that page shows this request first.
             key is InteractionRoute && previous != key) {
             stack[existing] = key

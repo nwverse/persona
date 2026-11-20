@@ -95,8 +95,8 @@ internal fun AgentHandoffCard(handoff: AgentHandoff, host: AssistantTaskHost, mo
         {
             val mid = handoff.machineId
             val sid = handoff.sessionId
-            if (!mid.isNullOrBlank() && !sid.isNullOrBlank()) host.onOpen(SessionKey(mid, sid))
-            else handoff.todoId?.let { host.sheet.value = TaskSheet.Task(it) }
+            if (!mid.isNullOrBlank() && !sid.isNullOrBlank()) host.onHandoff(SessionKey(mid, sid))
+            else handoff.todoId?.let { openTaskDetail(host, it) }
         }
     }
     val title = session?.title?.trim()?.takeIf { it.isNotEmpty() }

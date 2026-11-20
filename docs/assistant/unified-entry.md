@@ -489,6 +489,10 @@ lines, and in the user's own color and alignment they read as something the user
   layout too it is pushed on the page's path, not made a root: the sidebar's choice stays on the conversation (#9971). On Mac the
   task's own detail hosts the Agent chat, carrying that `SessionKey` into its initial selection (validated
   against that task's active sessions); while no Agent is available, the detail shows its starting/failure state.
+  On iPhone, iPad and Android, a card for one Agent opens that Agent. A task on the dock, in Needs you or In progress,
+  or in a task line opens its most pressing current Agent. A task with no usable Agent opens the to-do; a failed start
+  shows the reason and offers Retry and Remove there. On the Agent page, tap **Came from** to return to the conversation
+  at the message you left. Closing the strip keeps the Agent open. Back returns to the same reading position too.
   The card is one accessibility element and button (`dispatch.task.<todo id>`); the badge never wraps.
   Open plans keep Start / Edit / Don't Start. No new hub field or setting is needed. A dispatch has no full task
   card instruction list, so Persona's routed hand-offs remain separate folded feed lines instead of being hidden.

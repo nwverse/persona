@@ -23,6 +23,9 @@ data class ChatChromeBindings(
     /** Worktree status and removal for Close Agent / Delete Chat (#4532), by the group's own machine ids; null: none offered. */
     val worktrees: (() -> persona.core.contracts.api.AgentCreationService?)? = null,
     val onOpenSession: ((SessionKey) -> Unit)? = null,
+    /** A task's Agent pushes over this conversation. Other session links use [onOpenSession]. */
+    val onOpenHandoff: ((SessionKey) -> Unit)? = null,
+    val handoffFrom: persona.core.navigation.RouteSource.Handoff? = null,
     /**
      * Opens a side session's own chat over this one (#7944, `ChatRoute.side`): from the header's Side sessions, and
      * when a link to a side landed on its parent. Null: sides are not offered.
@@ -81,6 +84,12 @@ internal fun ChatChromeBindings.forkOpener(style: ChatRenderStyle): ((SessionKey
 /** The page of [key]'s conversation; [assistant] opens it as an assistant conversation whatever the session list says yet. */
 fun conversationRoute(key: SessionKey, assistant: Boolean = false) = persona.core.navigation.ChatRoute(
     key.machineId, key.sessionId, kind = if (assistant) persona.core.navigation.ConversationKind.Assistant else null)
+
+/** The source and target keep their hub-qualified machine ids even when another pairing has the same raw session. */
+fun taskHandoffRoute(target: SessionKey, source: SessionKey, title: String?, manager: String?, assistant: Boolean, embedded: Boolean = false) =
+    persona.core.navigation.ChatRoute(target.machineId, target.sessionId, persona.core.navigation.ConversationKind.Agent,
+        persona.core.navigation.RouteSource.Handoff(source.machineId, source.sessionId, title.orEmpty(), manager,
+            if (assistant) persona.core.navigation.ConversationKind.Assistant else persona.core.navigation.ConversationKind.Agent, embedded))
 
 @EntryPoint
 @InstallIn(SingletonComponent::class)

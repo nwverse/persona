@@ -68,6 +68,31 @@ nonisolated enum DispatchedTasks {
         return nil
     }
 
+    enum Destination: Hashable, Sendable {
+        case agent(SessionKey)
+        case todo(String)
+    }
+
+    /// A per-Agent card keeps its exact target. A task-level link uses the same urgency order as To-dos,
+    /// considering only sessions that actually exist for this task in the selected pairing.
+    static func destination(_ id: String, todo: TodoItem?, selected: SessionKey?, group: String,
+                            sessions: [SessionKey: Session]) -> Destination {
+        guard var todo, todo.id == id else { return .todo(id) }
+        func key(_ agent: TodoItem.Agent) -> SessionKey {
+            SessionKey(group: group, machineID: agent.machineID, sessionID: agent.sessionID)
+        }
+        todo.agents = todo.activeAgents.filter {
+            !$0.machineID.isEmpty && !$0.sessionID.isEmpty && ($0.startError ?? "").isEmpty && sessions[key($0)] != nil
+        }
+        if let selected {
+            return todo.agents.contains { key($0) == selected } ? .agent(selected) : .todo(id)
+        }
+        let urgent = TodosLogic.mostUrgentAgent(todo) { machine, session in
+            sessions[SessionKey(group: group, machineID: machine, sessionID: session)]
+        }
+        return urgent.map { .agent(key($0.agent)) } ?? .todo(id)
+    }
+
     /// nil means this is not a dispatch (keep its normal card); [] means a task already named by its plan.
     static func entries(for item: FeedItem, plans: [String: TaskPlan], titleOf: (String) -> String?, fallback: String) -> [Entry]? {
         switch item.kind {

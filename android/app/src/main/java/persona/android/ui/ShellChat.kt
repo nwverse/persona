@@ -59,8 +59,10 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
     val routingConnection = wiring?.connection ?: session.connection
     val routingState by routingConnection.state.collectAsStateWithLifecycle()
     val routingFeatures = routingConnection.lastHello?.features.orEmpty()
-    val home = rememberChildSessionHome(SessionKey(route.machineId, route.sessionId), sessions, actions,
-        routingFeatures, routingState == ConnectionState.Online, side = route.side)
+    val requested = SessionKey(route.machineId, route.sessionId)
+    val resolved = rememberChildSessionHome(requested, sessions, actions, routingFeatures,
+        routingState == ConnectionState.Online, side = route.side)
+    val home = if (route.source is RouteSource.Handoff) ChildSessionHome(requested, rows = resolved.rows) else resolved
     // A link to a side session (#7944: a notification, Needs you, a search hit) opens its parent, then the side over it,
     // once: Back from the side comes to the parent.
     val landedSide = remember(home, sessions, routingFeatures) { home.shownSide(sessions, routingFeatures) }
@@ -73,8 +75,9 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
         navigator.navigate(requestId?.let { InteractionRoute(chat, it) } ?: chat)
     }
     val key = home.key
-    val metadata = (sessions + home.rows).firstOrNull { it.key == key }
     val managerChoice by AssistantManagerChoice.current.collectAsStateWithLifecycle()
+    val rows = sessions + home.rows
+    val metadata = rows.firstOrNull { it.key == key && managerChoice.owns(it.manager) } ?: rows.firstOrNull { it.key == key }
     val managerId = metadata?.manager ?: managerChoice.shown
     val assistantManagement = remember(wiring?.assistantManagement, managerId) {
         wiring?.assistantManagement?.forManager(managerId)
@@ -130,6 +133,10 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
                     mainConversation = assistantSnapshot.mainSession?.sessionId,
                     leaderConversations = assistantSnapshot.leaders.toSet(),
                     onOpenSession = { navigator.navigate(ChatRoute(it.machineId, it.sessionId)) },
+                    onOpenHandoff = { target -> navigator.navigate(persona.feature.chat.taskHandoffRoute(target,
+                        key, metadata?.displayTitle ?: assistantSnapshot.takeIf { it.managerId == managerId }
+                            ?.conversations?.firstOrNull { it.key == key }?.displayTitle, managerId, assistant)) },
+                    handoffFrom = route.source as? RouteSource.Handoff,
                     onOpenSide = { navigator.navigate(ChatRoute(it.machineId, it.sessionId, ConversationKind.Agent, side = true)) },
                     onFollowSession = { onGroupGone(route, route.copy(machineId = it.machineId, sessionId = it.sessionId)) },
                     waiting = waiting,

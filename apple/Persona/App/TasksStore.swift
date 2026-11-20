@@ -58,7 +58,7 @@ final class TasksStore {
     @ObservationIgnored private let showToast: (Toast) -> Void
     @ObservationIgnored private let todoStore: TodoStore
     @ObservationIgnored private let viewStore: AssistantViewsStore
-    @ObservationIgnored private var generation: UInt = 0
+    private(set) var generation: UInt = 0
     @ObservationIgnored private var loading: [String: Task<Void, Never>] = [:]
     /// Conversation id → the day its Today card was asked for (once a day).
     @ObservationIgnored private var todayAsked: [String: String] = [:]
@@ -82,6 +82,8 @@ final class TasksStore {
         detailTask = nil
         detailAgent = nil
         fullAgent = nil
+        openAfterBoard = nil
+        openAgentAfterBoard = nil
         showBoard = false
         busyPlans = []
         busyMessages = []
@@ -106,17 +108,31 @@ final class TasksStore {
         fullAgent = key
     }
 
-    /// A dispatch link opens only its task. On iPhone its Agent is pushed on the Assistant stack; elsewhere, or
-    /// before an Agent is available, the task's own detail hosts the chat/starting state. Never open In Progress.
-    func openDispatchedTask(_ id: String, agent: SessionKey?, pushAgent: Bool) {
-        if pushAgent, let agent {
-            expand(agent)
-        } else {
-            fullAgent = nil
+    /// The presenter consumes this selection in its own navigation context. A card can name one of
+    /// several Agents sharing a task; an ordinary row starts with no explicit selection.
+    func openDispatchedTask(_ id: String, agent: SessionKey?) {
+        fullAgent = nil
+        detailAgent = nil
+        detailTask = id
+        detailTaskAgent = agent
+    }
+
+    func takeHandoff(group: String, lookup: (SessionKey) -> Session?) -> DispatchedTasks.Destination? {
+        if let id = detailTask {
+            let picked = detailTaskAgent
+            detailTask = nil
             detailAgent = nil
-            detailTask = id
-            detailTaskAgent = agent
+            let todo = todos[id]
+            var sessions: [SessionKey: Session] = [:]
+            for agent in todo?.activeAgents ?? [] {
+                let key = SessionKey(group: group, machineID: agent.machineID, sessionID: agent.sessionID)
+                if let session = lookup(key), session.key == key { sessions[key] = session }
+            }
+            return DispatchedTasks.destination(id, todo: todo, selected: picked, group: group, sessions: sessions)
         }
+        guard let key = detailAgent else { return nil }
+        detailAgent = nil
+        return key.group == group && lookup(key)?.key == key ? .agent(key) : nil
     }
 
     // MARK: Loading

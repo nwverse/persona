@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="chat_handoff_from">%1$sから移動しました · タップして戻る</string>
+    <string name="chat_handoff_hide_return">戻るヒントを閉じる</string>
+</resources>

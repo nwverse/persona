@@ -44,6 +44,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.launch
+import persona.core.domain.tasks.taskUrgency
 import persona.core.domain.tasks.moveTo
 import persona.core.domain.tasks.TodoListFilter
 import persona.core.domain.tasks.TodoListSort
@@ -85,14 +86,6 @@ fun mostUrgentAgent(todo: Todo, sessionLookup: (SessionKey) -> Session?): TodoMo
     val active = todo.currentAgents
     if (active.isEmpty()) return null
 
-    fun score(st: AgentState, isFailed: Boolean): Int = when {
-        isFailed -> 1
-        st == AgentState.NeedsYou -> 4
-        st == AgentState.Unread -> 3
-        st == AgentState.Working -> 2
-        else -> 0
-    }
-
     var best: TodoMostUrgent? = null
     var bestScore = -1
 
@@ -100,7 +93,7 @@ fun mostUrgentAgent(todo: Todo, sessionLookup: (SessionKey) -> Session?): TodoMo
         val isFailed = !a.startError.isNullOrBlank()
         val s = sessionLookup(a.key)
         val st = if (isFailed) AgentState.Offline else (s?.agentState ?: AgentState.Offline)
-        val sc = score(st, isFailed)
+        val sc = s.taskUrgency(isFailed)
         if (sc > bestScore || best == null) {
             bestScore = sc
             best = TodoMostUrgent(a, s, st, isFailed)

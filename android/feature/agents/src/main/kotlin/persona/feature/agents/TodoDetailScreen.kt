@@ -3,6 +3,10 @@ package persona.feature.agents
 import persona.core.domain.tasks.acceptedAtRest
 
 import persona.core.domain.tasks.hold
+import persona.core.domain.tasks.handoffAgent
+import persona.core.domain.tasks.startFailure
+import persona.feature.chat.FailedTaskStart
+import persona.feature.chat.TaskConclusion
 import persona.feature.chat.ReviewChecklist
 import persona.core.designsystem.text
 import androidx.compose.foundation.background
@@ -123,6 +127,12 @@ fun TodoDetailScreen(
         catch (_: Exception) { } // Opening is silently seen only if the hub accepts it.
     }
     val state = todo.state(sessionLookup)
+    val failedStart = if (tasks != null && (todo.origin != null || todo.planId != null) &&
+        todo.handoffAgent(sessionLookup) == null) {
+        startFailure(todo, tasks.plans.collectAsState().value)
+            ?: todo.currentAgents.firstOrNull { it.dismissedAt == null && !it.startError.isNullOrBlank() }?.startError
+    } else null
+    var recoveryError by remember(todo.id) { mutableStateOf<String?>(null) }
 
     if (confirmDelete) {
         JDialog(
@@ -136,7 +146,9 @@ fun TodoDetailScreen(
                         tasks?.deleteTodo(todo.id)
                         onBack()
                     } catch (e: Exception) {
-                        onError(res.getString(R.string.agents_todo_delete_error, e.message.orEmpty()))
+                        if (e is CancellationException) throw e
+                        val message = res.getString(R.string.agents_todo_delete_error, e.message.orEmpty())
+                        if (failedStart != null) recoveryError = message else onError(message)
                     }
                 }
             },
@@ -219,6 +231,21 @@ fun TodoDetailScreen(
             ),
             verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)
         ) {
+            if (failedStart != null && tasks != null) {
+                item(key = "failed-start") {
+                    val busy by tasks.busy.collectAsState()
+                    FailedTaskStart(failedStart, TasksStore.retryKey(todo.id) in busy, onRetry = {
+                        recoveryError = null
+                        tasks.retryTask(todo) { recoveryError = operationFeedback(it).text.resolve(res) }
+                    }, onRemove = { recoveryError = null; confirmDelete = true })
+                    recoveryError?.let { JNotice(it, status = Status.NeedsYou) }
+                }
+            }
+            if (tasks != null && todo.ask?.let { it.outcome != "decide" } == true) {
+                item(key = "owner-conclusion") {
+                    TaskConclusion(todo, tasks) { onError(operationFeedback(it).text.resolve(res)) }
+                }
+            }
             // To-do title and notes card
             item(key = "title-notes") {
                 JCard(Modifier.fillMaxWidth()) {

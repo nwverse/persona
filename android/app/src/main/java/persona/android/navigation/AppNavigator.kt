@@ -35,6 +35,7 @@ internal class AppNavigator(
     private val leavePlaceRoot: () -> Boolean = { false },
     /** The Inbox was navigated to (a link to it in a chat or from the hub) on this tab: its list opens as on entry (#9053). */
     private val onInboxEntered: (AppTab) -> Unit = {},
+    private val onReturnToEmbeddedHandoff: (RouteSource.Handoff) -> Unit = {},
 ) : Navigator {
     /**
      * Pages [navigate] pushed onto another tab's stack, and the tab each was opened from: back from such a page returns
@@ -94,6 +95,13 @@ internal class AppNavigator(
     /** A list pick replaces its detail only after routing confirms it belongs to that tab. */
     fun navigate(key: NavKey, replacingDetailIn: AppTab?) {
         val from = selectedTab()
+        // A hand-off is a push over the conversation containing the task, even when that Agent is
+        // already open elsewhere. Both the strip and system Back can then pop this exact entry.
+        if (key is ChatRoute && key.source is RouteSource.Handoff) {
+            val stack = stacks.getValue(from)
+            if (stack.lastOrNull() != key) stack.add(key)
+            return
+        }
         // The route's type only, never its arguments (machine, session, item ids).
         ErrorBreadcrumbs.shared.navigation(key::class.simpleName ?: "route")
         val shown = stacks.mapValues { it.value.lastOrNull() }
@@ -144,7 +152,7 @@ internal class AppNavigator(
         val chat = when (route) { is ChatRoute -> route; is InteractionRoute -> route.chat; else -> null }
         val existingTab = chat?.let { target ->
             stacks.entries.firstOrNull { (_, stack) ->
-                stack.any { page -> page.chat()?.let { sameConversation(it, target) } == true }
+                stack.any { page -> page.chat()?.let { it.source !is RouteSource.Handoff && sameConversation(it, target) } == true }
             }?.key
         }
         noteOpened(route)
@@ -253,6 +261,7 @@ internal class AppNavigator(
         val visible = stacks.getValue(selectedTab()).lastOrNull()
         stacks.forEach { (tab, stack) ->
             stack.filterIsInstance<ChatRoute>().forEach chatEntry@ { chat ->
+                if (chat.source is RouteSource.Handoff) return@chatEntry
                 val owner = chatTab(chat) ?: return@chatEntry
                 if (owner == AppTab.Persona && inboxSource(chat) == null && openAssistant(chat, visible == chat)) {
                     stack.removeAll { it == chat }
@@ -290,6 +299,11 @@ internal class AppNavigator(
         }
         val page = stack.removeAt(stack.lastIndex)
         val origin = openedFrom.remove(page)
+        val handoff = page.chat()?.source as? RouteSource.Handoff
+        if (handoff != null) {
+            if (handoff.embedded && stack.lastOrNull() == AssistantRoute) onReturnToEmbeddedHandoff(handoff)
+            return
+        }
         val source = inboxSource(page)
         if (source != null && (from == AppTab.Agents || origin == AppTab.Agents)) {
             val persona = stacks.getValue(AppTab.Persona)
@@ -314,6 +328,7 @@ internal class AppNavigator(
 
     private fun inboxSource(page: NavKey): RouteSource.InboxItem? {
         val chat = page.chat() ?: return null
+        if (chat.source is RouteSource.Handoff) return null
         val session = SessionKey(chat.machineId, chat.sessionId)
         inboxSources[session]?.let { return it }
         if (session in inboxSourceSuppressions || hasExplicitInboxReturns) return null
@@ -423,6 +438,7 @@ private fun sameConversation(left: ChatRoute, right: ChatRoute): Boolean =
 
 /** Only an identical conversation/request keeps its old key; a new interaction request keeps replacement semantics. */
 private fun sameKindlessTarget(existing: NavKey, reopened: NavKey): Boolean = when {
+    existing.chat()?.source is RouteSource.Handoff -> false
     existing is ChatRoute && reopened is ChatRoute -> sameConversation(existing, reopened)
     existing is InteractionRoute && reopened is InteractionRoute ->
         sameConversation(existing.chat, reopened.chat) && existing.requestId == reopened.requestId

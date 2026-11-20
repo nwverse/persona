@@ -74,6 +74,55 @@ class TaskRouteTest {
     private fun store(vararg todos: Todo) =
         TasksStore(Api(todos.toList()), Connection(), CoroutineScope(Dispatchers.Unconfined)).also { it.reloadTodos() }
 
+    @Test fun openingATaskChoosesTheAgentWaitingForAnAnswerOnItsOwnComputer() {
+        val first = TodoAgent("desk", "shared")
+        val waiting = TodoAgent("studio", "shared")
+        val failed = TodoAgent("other", "refused", startError = "The folder is missing")
+        val todo = login.copy(agents = listOf(failed, first, waiting))
+        val sessions = listOf(
+            Session(machineId = first.machineId, sessionId = first.sessionId, state = "working"),
+            Session(machineId = waiting.machineId, sessionId = waiting.sessionId, state = "needs_you"),
+        )
+        val opened = mutableListOf<SessionKey>()
+        val host = AssistantTaskHost(store(todo), "main", sessions, { it }, opened::add, { throw it }, {})
+
+        openTask(host, todo)
+
+        assertEquals(listOf(waiting.key), opened)
+        assertNull(host.sheet.value)
+    }
+
+    @Test fun unstartedTasksOpenTheTodoAndNeverAReleasedOrRefusedAgent() {
+        val todo = login.copy(agents = listOf(
+            TodoAgent("box", "old", releasedAt = "2026-11-12T11:00:00Z"),
+            TodoAgent("box", "dismissed", dismissedAt = "2026-11-12T11:00:00Z"),
+            TodoAgent("box", "failed", startError = "Missing folder"),
+            TodoAgent("box", ""),
+        ))
+        val opened = mutableListOf<String>()
+        val host = AssistantTaskHost(store(todo), "main", emptyList(), { it },
+            { error("An unstarted Agent has no page") }, { throw it }, {}, onOpenTodo = opened::add)
+
+        openTask(host, todo)
+        openTask(host, "removed-task")
+
+        assertEquals(listOf(todo.id, "removed-task"), opened)
+        assertNull(host.sheet.value)
+    }
+
+    @Test fun anOfflineBindingOpensByBothIdsAndTiedAgentsKeepTheirOriginalOrder() {
+        val first = TodoAgent("studio", "shared")
+        val todo = login.copy(agents = listOf(first, TodoAgent("laptop", "shared")))
+        val opened = mutableListOf<SessionKey>()
+        val host = AssistantTaskHost(store(todo), "main", emptyList(), { it },
+            { error("Expected a hand-off with an origin") }, { throw it }, {}, onHandoff = opened::add)
+
+        openTask(host, todo)
+
+        assertEquals(listOf(first.key), opened)
+        assertNull(host.sheet.value)
+    }
+
     @Test fun theAtListOffersTheConversationsOpenTasksNewestFirst() {
         val all = listOf(login, photos, shipped, refused, elsewhere)
         val offered = mentionTasks(all, "main") { TaskState.of(it, emptyList()) }

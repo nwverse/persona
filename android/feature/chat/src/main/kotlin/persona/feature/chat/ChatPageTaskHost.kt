@@ -66,6 +66,8 @@ internal fun rememberChatPageTaskHost(
             onOpen = { k -> chrome.onOpenSession?.invoke(GroupKeys.key(k, namespace)) }, onError = { onNotice(operationFeedback(it).text.resolve(res)) },
             say = { text -> scope.launch { runCatching { sender.send(key, text, UUID.randomUUID().toString()) } } },
             sheet = taskSheet, machines = machines.filter { GroupKeys.namespaceOf(it.id) == namespace }.map { it.copy(id = GroupKeys.raw(it.id)) },
+            onHandoff = { k -> (chrome.onOpenHandoff ?: chrome.onOpenSession)?.invoke(GroupKeys.key(k, namespace)) },
+            onOpenTodo = chrome.onOpenTodo,
             pending = taskCards.filter { GroupKeys.namespaceOf(it.machineId) == namespace }.map { it.copy(machineId = GroupKeys.raw(it.machineId)) },
             manager = session?.manager,
             backgroundRecords = assistantPresentation.background, onOpenBackground = { backgroundOpenState.value = true },

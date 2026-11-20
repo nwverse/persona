@@ -1,11 +1,7 @@
 import XCTest
 
-/// A task's page opened from its row in In Progress has one way back (#2625; its receipt's View until #8237). Beside the sidebar (regular width) it is
-/// pushed: under iPhone Duo's side bars its buttons are the system's, in the side column, and the page hid the system's
-/// bar with its Back in it; with its own header it has that header's ‹ alone, no system bar over it. On a phone it is a
-/// sheet with its header's ✕ alone. `-sideBars YES` lays the chat out as under the Duo's side bars on any simulator.
-/// Against scripts/mock/mock_hub.py with MOCK_TASKS=1 (PERSONA_MOCK_HUB): the widget fix, working, its row in the main
-/// chat's In Progress. PERSONA_SHOTS keeps the screens.
+/// A task opened from In Progress pushes its Agent on the conversation stack at every width.
+/// The conversation link and the system's Back can each return to the source.
 final class TaskPageBackTests: XCTestCase {
     private var hub = ""
 
@@ -28,18 +24,18 @@ final class TaskPageBackTests: XCTestCase {
         try pushed([], name: "header")
     }
 
-    /// A phone's sheet: its header's ✕ alone, no system bar.
-    @MainActor func testOnAPhoneTheSheetHasOneClose() throws {
+    @MainActor func testOnAPhoneTheAgentHasOneBack() throws {
         let app = launch([])
-        guard app.windows.firstMatch.frame.width < 700 else { throw XCTSkip("a sheet in compact width only") }
+        guard app.windows.firstMatch.frame.width < 700 else { throw XCTSkip("compact width") }
         openView(app)
-        let close = app.buttons.matching(NSPredicate(format: "label IN %@", ["关闭", "Close"]))
-        XCTAssertTrue(close.firstMatch.waitForExistence(timeout: 10), "no ✕ on the sheet:\n\(app.debugDescription)")
-        XCTAssertEqual(close.count, 1, "one ✕ on the sheet")
-        XCTAssertEqual(backs(app).count, 0, "no system bar's back over the sheet's header")
-        shot(app, "task-sheet-phone")
-        close.firstMatch.tap()
-        XCTAssertTrue(chat(app).waitForExistence(timeout: 10), "✕ did not lead back to the main chat")
+        let back = backs(app)
+        XCTAssertTrue(back.firstMatch.waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertEqual(back.count, 1)
+        XCTAssertFalse(app.buttons["关闭"].exists)
+        XCTAssertTrue(app.buttons["task-handoff.return"].exists)
+        shot(app, "task-page-phone")
+        back.firstMatch.tap()
+        XCTAssertTrue(chat(app).waitForExistence(timeout: 10))
     }
 
     // MARK: -

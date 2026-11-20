@@ -16,6 +16,7 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.focus.FocusManager
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
@@ -28,6 +29,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.CompletableDeferred
@@ -48,6 +50,9 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import persona.core.chatlist.ChatAnchorStore
+import persona.core.chatlist.ChatReadingKey
+import persona.core.chatlist.ChatReadingPosition
 import persona.core.contracts.api.ChatRepository
 import persona.core.contracts.api.ChatSnapshot
 import persona.core.contracts.FeedItem
@@ -72,6 +77,8 @@ import persona.core.contracts.api.TasksApi
 import persona.core.designsystem.AppStyle
 import persona.core.designsystem.PersonaTheme
 import persona.core.domain.tasks.TasksStore
+import persona.core.navigation.ChatRoute
+import persona.core.navigation.RouteSource
 import java.io.File
 import java.io.IOException
 
@@ -163,6 +170,83 @@ class TaskRouteShotsTest {
         val image = rule.onNodeWithTag("task-route-shot").captureToImage().asAndroidBitmap()
         val output = File("build/task-route-shots").also { it.mkdirs() }
         File(output, "$name.png").outputStream().use { image.compress(Bitmap.CompressFormat.PNG, 100, it) }
+    }
+
+    @Config(application = QuestionTestApplication::class)
+    @Test fun needsYouOpensAnUnassignedAgentsPageAndItsDismissibleWayBack() {
+        val tasks = TasksStore(api, connection, scope).also { it.reloadTodos(); it.loadTodayIfMain(main.sessionId) }
+        val title = "Website release"
+        val orphan = Interaction("unassigned", crash.machineId, crash.sessionId, sessionTitle = crash.title,
+            kind = "question", createdAt = "2026-11-12T09:45:00Z")
+        interactions.pending.value = listOf(orphan)
+        val origin = sessions.sessions.value.first { it.key == main }.copy(title = title, manager = "release")
+        sessions.sessions.value = sessions.sessions.value.map { row -> when (row.key) {
+            main -> origin
+            crash.key -> row.copy(manager = origin.manager, state = "needs_you", status = "blocked")
+            else -> row
+        } }
+        val agentChat = object : ChatRepository by chats {
+            override fun observe(session: SessionKey) = if (session != crash.key) chats.observe(session) else flowOf(ChatSnapshot(loading = false, items = listOf(
+                Item("report", 1, role = "user", kind = "text", text = "Check the startup crash.", ts = "2026-11-12T09:41:00Z"),
+                Item("logs", 2, role = "assistant", kind = "text", text = "I found two crash reports.", ts = "2026-11-12T09:42:00Z"),
+            )))
+        }
+        var opened by mutableStateOf<ChatRoute?>(null)
+        val reading = ChatReadingKey("fixture", main.path)
+        var saved: ChatReadingPosition? = null
+        val anchors = object : ChatAnchorStore {
+            override fun read(key: ChatReadingKey) = saved.takeIf { key == reading }
+            override fun write(key: ChatReadingKey, position: ChatReadingPosition) {
+                if (key == reading) saved = position
+            }
+        }
+        var style by mutableStateOf(AppStyle.Glass)
+        var dark by mutableStateOf(false)
+        var scale by mutableStateOf(1f)
+        rule.setContent {
+            val density = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(density.density, scale)) {
+                PersonaTheme(style = style, darkTheme = dark, reduceMotion = true) {
+                    Box(Modifier.testTag("task-route-shot").width(360.dp).height(700.dp)) {
+                        val target = opened
+                        if (target == null) ChatScreen(main, chats, sender, interactions, sessions, {},
+                            chrome = ChatChromeBindings(tasks = tasks, onOpenHandoff = {
+                                assertFalse("the source anchor must be fixed before leaving", requireNotNull(saved).followsEnd)
+                                opened = taskHandoffRoute(it, main, origin.displayTitle, origin.manager, assistant = true, embedded = true)
+                            }, onOpenSession = { error("A regular session link loses the return route") }),
+                            readingKey = reading, anchorStore = anchors, renderStyle = ChatRenderStyle.Assistant,
+                            embedded = true, showTopBar = false)
+                        else ChatScreen(SessionKey(target.machineId, target.sessionId), agentChat, sender, interactions, sessions,
+                            onBack = { opened = null }, chrome = ChatChromeBindings(handoffFrom = target.source as? RouteSource.Handoff))
+                    }
+                }
+            }
+        }
+        settle()
+        rule.onNodeWithTag("assistant-entry-needs").performClick()
+        settle()
+        rule.waitUntil(10_000) { rule.onAllNodesWithTag("assistant-decision-unassigned").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithTag("assistant-decision-unassigned").performClick()
+        settle()
+        assertEquals(crash.key, opened?.let { SessionKey(it.machineId, it.sessionId) })
+        rule.onNodeWithText("I found two crash reports.").assertIsDisplayed()
+        val label = "Came from $title · Tap to return"
+        for (theme in AppStyle.entries) for (night in listOf(false, true)) {
+            rule.runOnIdle { style = theme; dark = night }
+            settle()
+            rule.onNodeWithText(label).assertIsDisplayed()
+            shot("handoff-return-${theme.name.lowercase()}-${if (night) "dark" else "light"}")
+        }
+        rule.runOnIdle { scale = 2f; style = AppStyle.Glass }
+        settle()
+        rule.onNodeWithText(label).assertIsDisplayed()
+        rule.onNodeWithContentDescription("Hide the way back").assertIsDisplayed()
+        shot("handoff-return-large-dark")
+        rule.onNodeWithContentDescription("Hide the way back").performClick()
+        rule.onNodeWithText(label).assertDoesNotExist()
+        settle()
+        shot("handoff-return-dismissed-large-dark")
+        assertEquals(crash.key, opened?.let { SessionKey(it.machineId, it.sessionId) })
     }
 
     @Test fun aDisconnectedRoutedSendKeepsTheDraftAndRouteForRetry() {

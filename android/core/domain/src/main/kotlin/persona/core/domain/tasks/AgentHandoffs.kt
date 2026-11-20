@@ -1,5 +1,8 @@
 package persona.core.domain.tasks
 
+import persona.core.contracts.AgentState
+import persona.core.contracts.Session
+import persona.core.contracts.SessionKey
 import persona.core.contracts.TaskPlan
 import persona.core.contracts.Todo
 import persona.core.contracts.TodoAgent
@@ -7,6 +10,23 @@ import persona.core.contracts.TodoAgent
 // One card per Agent a dispatch started or a task took over (#5110, the web's taskHandoffs in views/assistant/Handoff.tsx).
 // The first Agents of a task, linked within two minutes of each other, share that hand-off; one linked later has its
 // own card where that happened. While a task has no Agent yet, one card stands for the task.
+
+/** A task row and the Agent page it opens use the same urgency order. Ties keep the Hub's order. */
+fun Session?.taskUrgency(failedStart: Boolean = false): Int = when {
+    failedStart -> 1
+    this?.foldedState == AgentState.NeedsYou -> 6
+    this?.isUsageLimited() == true -> 4
+    this?.interrupted == true -> 5
+    this?.foldedState == AgentState.Unread -> 3
+    this?.foldedState == AgentState.Working -> 2
+    else -> 0
+}
+
+/** A durable binding can open an offline Agent, even when the session list has not loaded it. */
+fun Todo.handoffAgent(lookup: (SessionKey) -> Session?): SessionKey? =
+    currentAgents.asSequence()
+        .filter { it.dismissedAt == null && it.startError.isNullOrBlank() && it.machineId.isNotBlank() && it.sessionId.isNotBlank() }
+        .maxByOrNull { lookup(it.key).taskUrgency() }?.key
 
 /** How the Agent came to the task: started for it, already running, or closed and resumed by the hand-off. */
 enum class HandoffWake { Created, Active, Resumed }

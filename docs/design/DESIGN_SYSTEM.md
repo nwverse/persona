@@ -782,7 +782,7 @@ Two departures from cindy, both from Persona's rules:
 
 Set to Full page, the Agent's page opened from a card shows cindy's way-back strip above the chat (`views/chat/HandoffBack.tsx`): a 40 px `rounded-xl` bordered row at the chat column's width, ↰ (`cornerUpLeft`) and "Came from <conversation> · click to return", with ✕ to put it away. Returning goes back in the history, and the chat opens where it was left (`lib/handoff.ts`).
 
-No new token. The two icons are added to `ui/icons.tsx` in the existing stroke grammar. iOS and Android draw these cards in the chat, one per Agent, and a card with an Agent opens that Agent's page (#5110).
+No new token. The two icons are added to `ui/icons.tsx` in the existing stroke grammar. On iPhone, iPad and Android, each card opens the Agent it names. Task rows open the most pressing current Agent, or the to-do while it has none. The full Agent page shows the conversation name in a dismissible **Came from** strip. The strip and Back return to the same message, even if new messages arrived (#5110).
 
 **Changed-files card** (web, #5157, `web/src/views/chat/TurnChanges.tsx`; cindy's `TurnChangesCard`, at the owner's request, 2026-11-12), Agents only (super rules 0 and 4): the last thing in a finished Agent exchange that edited files.
 - **Frame:** a `rounded-xl` `bg-surface` section with a 1 px `--line` border and 4 px above and below.

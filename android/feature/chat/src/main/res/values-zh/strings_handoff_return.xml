@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="chat_handoff_from">来自「%1$s」· 点按返回</string>
+    <string name="chat_handoff_hide_return">隐藏返回提示</string>
+</resources>

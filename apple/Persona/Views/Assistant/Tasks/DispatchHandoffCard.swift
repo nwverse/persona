@@ -85,7 +85,7 @@ struct DispatchHandoffCard: View {
             }
             return .agent(at: at, state: state, limit: limit)
         }
-        if let failure = failure(todo) { return .failed(StartFailureWords.cardLine(failure)) }
+        if let failure = failure(todo) { return .failed(StartFailureWords.cardLine(failure, canOpen: entry.todoID != nil)) }
         if todo?.doneAt != nil { return .closedEarly }
         if todo == nil, entry.todoID != nil, !store.todos.isEmpty { return .gone }
         return .starting
@@ -148,7 +148,7 @@ struct DispatchHandoffCardBody: View, Equatable {
         .frame(maxWidth: .infinity, alignment: .leading)
         .card(padding: Theme.Space.m)
         if let id = entry.todoID {
-            let ident = (disambiguate && entry.sessionID != nil) ? "dispatch.task.\(id).\(entry.sessionID!)" : "dispatch.task.\(id)"
+            let ident = disambiguate ? "dispatch.task.\(id).\(entry.id)" : "dispatch.task.\(id)"
             Button { open(id) } label: { card.contentShape(.rect) }
                 .buttonStyle(.plain)
                 .accessibilityElement(children: .combine)
@@ -238,16 +238,12 @@ struct DispatchHandoffCardBody: View, Equatable {
 
     private func open(_ id: String) {
         Haptics.tap()
-        let agent: SessionKey? = {
-            if let mid = entry.machineID, let sid = entry.sessionID, !mid.isEmpty, !sid.isEmpty {
-                return SessionKey(group: AppModel.shared.hub?.group ?? "", machineID: mid, sessionID: sid)
-            }
-            return store.todos[id].flatMap { store.leadSession($0)?.key }
-        }()
-        #if os(iOS)
-        store.openDispatchedTask(id, agent: agent, pushAgent: true)
-        #else
-        store.openDispatchedTask(id, agent: agent, pushAgent: false)
-        #endif
+        let agent: SessionKey?
+        if let mid = entry.machineID, let sid = entry.sessionID, !mid.isEmpty, !sid.isEmpty {
+            agent = SessionKey(group: AppModel.shared.hub?.group ?? "", machineID: mid, sessionID: sid)
+        } else {
+            agent = nil
+        }
+        store.openDispatchedTask(id, agent: agent)
     }
 }

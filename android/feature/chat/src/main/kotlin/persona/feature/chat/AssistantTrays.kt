@@ -366,7 +366,7 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
                                         entry.status == TriageStatus.Failed || entry.status == TriageStatus.Interrupted ->
                                             TrayOutcomeRow(entry, host, enabled, taskBusy)
                                         else -> TrayDecisionRow(todo.title, todo.ask?.verdict ?: gate ?: row?.text.orEmpty(), R.string.chat_tray_review,
-                                            "assistant-review-${row?.id ?: "todo:${todo.id}"}", enabled, onOpen = { openTask(host, todo) }) { openTask(host, todo) }
+                                            "assistant-review-${row?.id ?: "todo:${todo.id}"}", enabled, onOpen = { openTask(host, todo) }) { openTaskDetail(host, todo.id) }
                                     }
                                 }
                                 val groupDrafts = drafts.takeIf { group.conversation == host.conversation }.orEmpty()
@@ -437,7 +437,7 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
                                         val agent = entry.session
                                         val detail = trayBackgroundLine(entry.activity) ?: stringResource(R.string.chat_tray_agent_detail, host.machineName(agent.machineId),
                                             agent.activity?.takeIf(String::isNotBlank) ?: agent.lastText.orEmpty())
-                                        JRow(onClick = { host.onOpen(agent.key) }, modifier = Modifier.testTag("assistant-agent-${agent.sessionId}"), trailing = {
+                                        JRow(onClick = { host.onHandoff(agent.key) }, modifier = Modifier.testTag("assistant-agent-${agent.sessionId}"), trailing = {
                                             Text(stringResource(if (entry.waiting) R.string.chat_tray_waiting else R.string.chat_tray_working),
                                                 style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3, maxLines = 1)
                                         }) {

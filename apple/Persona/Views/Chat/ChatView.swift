@@ -26,6 +26,12 @@ struct ChatView: View {
     /// The session on screen; the sibling strip can switch it to another agent in the same space.
     @State private var key: SessionKey
     var style: ChatStyle = .dev
+    #if os(iOS)
+    @Environment(\.taskHandoffActions) private var taskHandoff
+    @State private var handoffLanding: TaskHandoffReading?
+    @State private var handoffRestore: Task<Void, Never>?
+    @State private var handoffVisit: UInt = 0
+    #endif
     @State private var position = ScrollPosition(edge: .top) // .top is the newest end of the flipped list
     /// Where the chat stands with its newest end: ↓, following and holding back all come from it (#1046). Changed
     /// through `setFollow` only.
@@ -171,7 +177,14 @@ struct ChatView: View {
     /// The line being landed on, measured while landing (only that one row watches its frame).
     @State private var landing: String?
 
-    private var readKey: String { "chat.read.\(shownKey.machineID)/\(shownKey.sessionID)" }
+    private var readKey: String {
+        #if os(iOS)
+        if style == .assistant, let pair = model.registry.primary(shownKey.group) {
+            return TaskHandoffPairing(pair).readingKey(shownKey, manager: feedManager)
+        }
+        #endif
+        return "chat.read.\(shownKey.machineID)/\(shownKey.sessionID)"
+    }
     @State private var renaming: Session?
     @State private var closing: Session?
     @State private var deleting: Session?
@@ -241,16 +254,16 @@ struct ChatView: View {
     @State private var offeredNext: SessionKey?
 
     /// `sidePage`: the page is a side session's own (`SideSessionPage`), which shows that side; any other Agents page given
-    /// a folded side (a Needs You card, a link, a restored chat) opens its parent with the side shown over it (#7944).
-    init(key: SessionKey, style: ChatStyle = .dev, itemManager: String? = nil, sidePage: Bool = false) {
+    /// a folded side opens its parent with the side shown over it (#7944). A dispatch opens the named Agent directly.
+    init(key: SessionKey, style: ChatStyle = .dev, itemManager: String? = nil, sidePage: Bool = false, exactAgent: Bool = false) {
         // Built again for the same path (a tree swap): the agent its header switched to, not the one it opened with.
         #if os(iOS)
-        var start = style == .dev ? AppModel.shared.chatSwitched[key] ?? key : key
+        var start = style == .dev && !exactAgent ? AppModel.shared.chatSwitched[key] ?? key : key
         #else
         var start = key
         #endif
         var landing: SessionKey?
-        if style == .dev, !sidePage, let parent = AppModel.shared.sideParent(of: start) {
+        if style == .dev, !sidePage, !exactAgent, let parent = AppModel.shared.sideParent(of: start) {
             landing = start
             start = parent
         }
@@ -746,8 +759,10 @@ struct ChatView: View {
             }
         }
         #endif
-        // A task's own detail also has a presenter on Mac: assigning detailTask must not be a dead link. iPhone
-        // dispatch links push a live Agent directly; this is the starting/no-Agent fallback and the normal task detail.
+        #if os(iOS)
+        .onChange(of: TasksStore.shared.detailTask) { _, _ in openTaskHandoff() }
+        .onChange(of: TasksStore.shared.detailAgent) { _, _ in openTaskHandoff() }
+        #else
         .detailPresentation(isPresented: Binding(get: { style == .assistant && (TasksStore.shared.detailTask != nil || TasksStore.shared.detailAgent != nil) },
                                                  set: { if !$0 { TasksStore.shared.detailTask = nil; TasksStore.shared.detailAgent = nil } })) {
             Group {
@@ -760,6 +775,7 @@ struct ChatView: View {
             .macSheet()
             #endif
         }
+        #endif
     }
 
     private var chatActivity: some View {
@@ -1007,6 +1023,14 @@ struct ChatView: View {
             #if os(iOS)
             fullPage.document = { fullPageDocument() }
             fullPage.setShown(true)
+            scratch.handoffSourceVisible = true
+            if style == .assistant { handoffVisit &+= 1 }
+            openTaskHandoff()
+            if let reading = taskHandoff?.takeReading(key) {
+                handoffLanding = reading
+                entry = .line(reading.line)
+                landEntry(currentLines())
+            }
             #endif
         }, disappear: {
             rememberReadPosition()
@@ -1014,6 +1038,9 @@ struct ChatView: View {
             model.unsubscribe(key, by: owner)
             model.hide(by: owner)
             #if os(iOS)
+            scratch.handoffSourceVisible = false
+            handoffRestore?.cancel()
+            handoffRestore = nil
             fullPage.setShown(false)
             fullPage.document = nil // it holds this view, whose state holds the page
             #endif
@@ -1702,6 +1729,13 @@ struct ChatView: View {
         guard let id else { return }
         entry = nil
         setFollow { $0.land() }
+        #if os(iOS)
+        if let reading = handoffLanding, reading.line == id {
+            handoffLanding = nil
+            restoreHandoff(reading)
+            return
+        }
+        #endif
         if target == .latestAnswer, let i = lines.lastIndex(where: \.isInput) {
             landUnderInput(lines[i].id)
             return
@@ -1939,6 +1973,64 @@ struct ChatView: View {
             await mendBlankLanding(on: input)
         }
     }
+
+    #if os(iOS)
+    private func openTaskHandoff() {
+        guard style == .assistant, scratch.handoffSourceVisible, model.assistantCurrent == key, let taskHandoff,
+              let target = TasksStore.shared.takeHandoff(group: key.group, lookup: model.latest) else { return }
+        let route = TaskHandoffRoute(destination: target, origin: key, title: title,
+                                     pairing: model.registry.primary(key.group).map(TaskHandoffPairing.init),
+                                     manager: model.assistantManagerID, generation: TasksStore.shared.generation)
+        taskHandoff.open(route, handoffReading())
+    }
+
+    private func handoffReading() -> TaskHandoffReading? {
+        guard let list = pin.list else { return nil }
+        let visible = Set(scratch.drawnLines)
+        // The list is flipped: a row's maxY in the stack is its top on screen. These frames change on
+        // layout, not every time the user scrolls. Prefer the first visible message under the header.
+        let bottom = list.contentOffset.y + list.bounds.height
+        let lines = currentLines().filter { visible.contains($0.id) }
+        func reading(_ line: ChatLine) -> TaskHandoffReading? {
+            guard let frame = scratch.handoffRows[line.id],
+                  bottom - frame.minY > headerRoom, bottom - frame.maxY < scratch.listFrame.height else { return nil }
+            return TaskHandoffReading(line: line.id, offset: bottom - frame.maxY)
+        }
+        for line in lines {
+            switch line.content {
+            case .day, .quick, .feed: continue
+            default: if let place = reading(line) { return place }
+            }
+        }
+        return lines.lazy.compactMap(reading).first
+    }
+
+    private func restoreHandoff(_ reading: TaskHandoffReading) {
+        let group = key.group, generation = TasksStore.shared.generation
+        handoffRestore?.cancel()
+        handoffRestore = Task { @MainActor in
+            // Going back can recreate the lazy stack. Realize the target only when it is outside the viewport,
+            // then correct against its actual measured frame as new content and the navigation bar settle.
+            if !scratch.drawnLines.contains(reading.line) {
+                position.scrollTo(id: reading.line, anchor: .bottomLeading)
+            }
+            for _ in 0..<12 {
+                try? await Task.sleep(for: .milliseconds(50))
+                guard !Task.isCancelled, !scratch.userDragging, model.assistantCurrent == key,
+                      model.hub?.group == group, TasksStore.shared.generation == generation else { return }
+                guard let list = pin.list, let frame = scratch.handoffRows[reading.line] else { continue }
+                let y = frame.maxY + reading.offset - list.bounds.height
+                let low = -list.adjustedContentInset.top
+                let high = max(low, list.contentSize.height - list.bounds.height + list.adjustedContentInset.bottom)
+                let wanted = min(high, max(low, y))
+                if abs(list.contentOffset.y - wanted) > 0.75 {
+                    list.setContentOffset(CGPoint(x: list.contentOffset.x, y: wanted), animated: false)
+                }
+            }
+            landed()
+        }
+    }
+    #endif
 
     /// Remembers the top line on screen when leaving (nothing when at the newest: open at the newest again).
     private func rememberReadPosition() {
@@ -3112,10 +3204,20 @@ struct ChatView: View {
         scrollToEnd()
     }
 
+    private nonisolated struct RowPlacement: Equatable, Sendable {
+        var frame: CGRect
+        var visit: UInt
+    }
+
     /// The list's rows, newest first: apart from `chatScroll`, which as one expression Swift 6.2 could not type-check in time.
     private func chatRows(store: ChatStore, lines: [ChatLine], pending: [PendingMessage]) -> some View {
         let rows = store.rows
         let newestID = lines.last?.id
+        #if os(iOS)
+        let visit = style == .assistant ? handoffVisit : 0
+        #else
+        let visit: UInt = 0
+        #endif
         return LazyVStack(alignment: .leading, spacing: Theme.Space.l) {
             // Newest first (the list is drawn upside down): the end sentinel, live text, unsent messages, lines (a failed
             // message among them, before the first line written after it).
@@ -3202,9 +3304,19 @@ struct ChatView: View {
                     .flippedBack()
                     .debugLineY(line.id, scratch)
                     // In the list's content, which scrolling does not change: reported only when the stack places it.
-                    .onGeometryChange(for: CGFloat.self, of: { $0.frame(in: .named(ChatPin.space)).minY }) { y in
-                        if line.id == newestID { newestPlaced(line.id, at: y) }
+                    // A covered Assistant row drops its cached frame. Returning can reuse the same layout:
+                    // report it once for the new visit even when the row has not moved.
+                    .onGeometryChange(for: RowPlacement.self, of: {
+                        RowPlacement(frame: $0.frame(in: .named(ChatPin.space)), visit: visit)
+                    }) { placement in
+                        if line.id == newestID { newestPlaced(line.id, at: placement.frame.minY) }
+                        #if os(iOS)
+                        if style == .assistant { scratch.handoffRows[line.id] = placement.frame }
+                        #endif
                     }
+                    #if os(iOS)
+                    .onDisappear { scratch.handoffRows.removeValue(forKey: line.id) }
+                    #endif
                     .landingFrame(line.id == landing, scratch)
                     .id(line.id)
                     .zIndex(menu.selected != nil && line.holds(menu.selected) ? 1 : 0)
@@ -8711,6 +8823,10 @@ final class ChatScratch {
     /// the header keeps the header under the finger.
     var workHeadY: [String: CGFloat] = [:]
     var listFrame: CGRect = .zero
+    #if os(iOS)
+    var handoffSourceVisible = false
+    var handoffRows: [String: CGRect] = [:]
+    #endif
     /// The bottom on screen of the line being landed on (`ChatView.landing`).
     var landingMaxY: CGFloat?
     /// The list's horizontal offset at rest (-16: the side margins are content margins). Vertical jumps keep it:

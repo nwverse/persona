@@ -2,10 +2,10 @@ import XCTest
 
 /// The main conversation's agents opened by hand (#1113), in the action bar's trays (#3393): In Progress lists the
 /// tasks going on, an agent linked to a hand-made to-do once as that to-do's row (/orders); its All opens the board, and
-/// a tap on the row opens the agent's page in the task's sheet. Against
+/// a tap on the row opens the Agent's own page. Against
 /// scripts/mock/mock_hub.py with MOCK_TASKS=1 MOCK_TASKS_NO_ASKS=1 and MOCK_TASKS_DOCK unset (PERSONA_MOCK_HUB;
 /// PERSONA_DOCK_MODE names the screenshots). With PERSONA_SHOTS set it writes the
-/// dock, the board and the agent's sheet there (PERSONA_DOCK_APPEARANCE names the simulator's appearance in the file).
+/// dock, the board and the Agent's page there (PERSONA_DOCK_APPEARANCE names the simulator's appearance in the file).
 final class TaskDockAgentTests: XCTestCase {
     private var hub: String!
 
@@ -63,22 +63,15 @@ final class TaskDockAgentTests: XCTestCase {
         XCTAssertTrue(orders.firstMatch.label.contains("工作中"), orders.firstMatch.label)
         try shot(app, "dock-scrolled")
 
-        // A tap opens the agent's page in the task's sheet.
+        // The row pushes the actual Agent, with Back to this exact conversation.
         orders.firstMatch.tap()
         XCTAssertTrue(app.buttons.matching(identifier: "chat.title").firstMatch.waitForExistence(timeout: 5), app.debugDescription)
-        sleep(2)
-        try shot(app, "sheet")
-
-        // Full Screen: the sheet goes down and the agent's page is pushed onto the assistant page; back comes to the
-        // conversation with the dock, the sheet does not rise again.
-        let expand = app.buttons["task-detail.fullscreen"]
-        XCTAssertTrue(expand.waitForExistence(timeout: 5), app.debugDescription)
-        XCTAssertEqual(expand.label, "全屏查看")
-        expand.tap()
-        XCTAssertTrue(app.buttons["关闭"].waitForNonExistence(timeout: 5), "the sheet stayed up")
-        XCTAssertFalse(expand.exists, "the full page still has the sheet's 全屏查看")
-        sleep(2)
+        let origin = app.buttons["task-handoff.return"]
+        XCTAssertTrue(origin.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertFalse(app.buttons["task-detail.fullscreen"].exists)
         try shot(app, "fullscreen")
+        app.buttons["task-handoff.dismiss"].tap()
+        XCTAssertFalse(origin.exists)
         XCTAssertFalse(progress.isHittable, "the action bar shows through the full page:\n\(app.debugDescription)")
         let edge = app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5)) // the system's back swipe
         edge.press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.5)))

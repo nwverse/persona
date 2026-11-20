@@ -178,11 +178,11 @@ private fun BriefPast(brief: BriefBody, host: AssistantTaskHost) {
             })
             BriefMarkLine(PhIcons.XCircle, Status.NeedsYou, row.id, row.title,
                 briefMetadata(listOfNotNull(label, briefTime(row.at), row.why?.takeIf(String::isNotBlank))),
-                if (row.kind == "task") ({ host.sheet.value = TaskSheet.Task(row.id) }) else null, danger = true)
+                if (row.kind == "task") ({ openTask(host, row.id) }) else null, danger = true)
         }
         brief.done.forEach { row: BriefDone ->
             BriefMarkLine(PhIcons.CheckCircle, Status.Unread, row.id, row.title, briefTime(row.at), open = {
-                host.sheet.value = TaskSheet.Task(row.id)
+                openTask(host, row.id)
             })
         }
         BriefMore(brief.pastMore)
@@ -245,7 +245,7 @@ private fun BriefAcceptRow(row: BriefRow, host: AssistantTaskHost) {
                 }, Modifier.testTag("brief-finish-${row.id}"), enabled = askedAt.isNotBlank() && !sending,
                     kind = JButtonKind.Secondary, size = JButtonSize.Small, loading = sending)
             }
-            BriefOpen("brief-open-${row.id}") { host.sheet.value = TaskSheet.Task(row.id) }
+            BriefOpen("brief-open-${row.id}") { openTask(host, row.id) }
         }
     }
 }
@@ -349,7 +349,7 @@ private fun BriefProgress(brief: BriefBody, host: AssistantTaskHost) {
                     Text(row.title, style = PersonaTheme.type.bodyStrong, color = PersonaTheme.palette.ink)
                     BriefStage(row)
                 }
-                BriefOpen("brief-open-${row.id}") { host.sheet.value = TaskSheet.Task(row.id) }
+                BriefOpen("brief-open-${row.id}") { openTask(host, row.id) }
             }
         }
         BriefMore(brief.progressMore)

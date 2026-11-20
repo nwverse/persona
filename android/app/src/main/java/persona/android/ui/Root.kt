@@ -253,9 +253,8 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     }
     var selected by rememberSaveable { mutableStateOf(initialRoute?.tab ?: if (session.demo != null) AppTab.Persona else saved.tab) }
     var machine by rememberSaveable { mutableStateOf(saved.machine) }
-    val assistantStack = rememberNavBackStack(AssistantRoute,
-        *listOfNotNull(saved.chats[AppTab.Persona]?.takeIf { !embeddedAssistant }).toTypedArray())
-    val agentsStack = rememberNavBackStack(AgentsRoute, *listOfNotNull(saved.chats[AppTab.Agents]).toTypedArray())
+    val assistantStack = rememberNavBackStack(AssistantRoute, *saved.chatStack(AppTab.Persona, embeddedAssistant).toTypedArray())
+    val agentsStack = rememberNavBackStack(AgentsRoute, *saved.chatStack(AppTab.Agents).toTypedArray())
     // Each regular-width root keeps its own stack. Persona points at whichever one is in front.
     val hosts = remember { SidebarRootHosts(assistantStack) }
     val stacks = remember {
@@ -367,7 +366,11 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
         else -> sessions.firstOrNull { it.key == key }?.let { if (it.assistant) ConversationKind.Assistant else ConversationKind.Agent }
     }
     val currentKind by rememberUpdatedState<(SessionKey) -> ConversationKind?>(::kind)
-    var assistantRequest by remember { mutableStateOf<SessionKey?>(null) }
+    var assistantRequest by remember {
+        val from = saved.chats[AppTab.Persona]?.source as? RouteSource.Handoff
+        mutableStateOf(from?.takeIf { embeddedAssistant && it.embedded && initialRoute == null }
+            ?.let { SessionKey(it.machineId, it.sessionId) })
+    }
     var assistantPending by remember { mutableStateOf<SessionKey?>(null) }
     fun assistantTarget(key: NavKey): SessionKey? = assistantHomeTarget(key, embeddedAssistant, currentKind)
     /** Show an assistant conversation in the Persona home rather than as a second chat page above it. */
@@ -394,11 +397,18 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     val heldAgentChat = remember { kotlinx.coroutines.flow.MutableStateFlow<SessionKey?>(null) }
     val finishedAgentChat = remember { kotlinx.coroutines.flow.MutableStateFlow<SessionKey?>(null) }
     val agentPreferences = remember(session) { session.preferences.snapshots }
+    val latestAssistant by rememberUpdatedState(currentAssistant)
     val navigator = remember { AppNavigator(stacks, { selected }, { selected = it }, chatTab = { route ->
         currentKind(SessionKey(route.machineId, route.sessionId))?.let { if (it == ConversationKind.Assistant) AppTab.Persona else AppTab.Agents }
     }, openAssistant = { chat, select -> openAssistant(chat, select) }, inboxReturns = saved.inboxReturns,
         openPlace = { openPlace(it) }, leavePlaceRoot = { leavePlaceRoot() },
-        onInboxEntered = { tab -> inboxLandings.getValue(tab).enter() }) }
+        onInboxEntered = { tab -> inboxLandings.getValue(tab).enter() },
+        onReturnToEmbeddedHandoff = { from ->
+            from.managerToReturn(latestAssistant)?.let { manager ->
+                persona.core.contracts.api.AssistantManagerChoice.pick(manager)
+            }
+            assistantPending = SessionKey(from.machineId, from.sessionId)
+        }) }
     fun openResolved(route: ResolvedRoute): AppTab {
         // The restored ledger can hold the source even when the visible key does not. Check it before this direct open
         // updates the ledger: a sourced assistant stays a secondary page instead of replacing the embedded home.

@@ -62,6 +62,7 @@ import persona.core.designsystem.text
 import persona.core.domain.answer.askLine
 import persona.core.domain.answer.askingLine
 import persona.core.domain.answer.waitingCard
+import persona.core.domain.tasks.TasksStore
 import persona.core.domain.tasks.TaskNow
 import persona.core.domain.tasks.TaskState
 import persona.core.domain.tasks.isRemovable
@@ -209,16 +210,24 @@ private fun ColumnScope.TaskDetail(
     val failure = todo.startFailure
     when {
         shown != null -> AgentSummary(shown, host, routeTo = todo.id, onDismiss = onDismiss)
-        failure != null -> JEmptyState(stringResource(R.string.chat_task_detail_failed), failure.trim(), icon = PhIcons.WarningCircle, action = {
-            Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                JButton(stringResource(R.string.chat_tasks_retry), { host.tasks.retryTask(todo, host.onError) }, kind = JButtonKind.Secondary,
-                    size = JButtonSize.Medium, icon = PhIcons.ArrowClockwise, loading = persona.core.domain.tasks.TasksStore.retryKey(todo.id) in busy)
-                JButton(stringResource(R.string.chat_task_detail_remove), onRemove,
-                    kind = JButtonKind.Destructive, size = JButtonSize.Medium, icon = PhIcons.Trash)
-            }
-        })
+        failure != null -> FailedTaskStart(failure, TasksStore.retryKey(todo.id) in busy,
+            onRetry = { host.tasks.retryTask(todo, host.onError) }, onRemove = onRemove)
         else -> JEmptyState(stringResource(R.string.chat_task_detail_starting), stringResource(R.string.chat_task_detail_starting_body), icon = PhIcons.GearSix)
     }
+}
+
+/** The same failure and explicit retry and remove controls on the task and to-do pages. */
+@Composable
+fun FailedTaskStart(reason: String, retrying: Boolean, onRetry: () -> Unit, onRemove: () -> Unit) {
+    JEmptyState(stringResource(R.string.chat_task_detail_failed), reason.trim(), icon = PhIcons.WarningCircle, action = {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s),
+            verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+            JButton(stringResource(R.string.chat_tasks_retry), onRetry, kind = JButtonKind.Secondary,
+                size = JButtonSize.Medium, icon = PhIcons.ArrowClockwise, loading = retrying)
+            JButton(stringResource(R.string.chat_task_detail_remove), onRemove,
+                kind = JButtonKind.Destructive, size = JButtonSize.Medium, icon = PhIcons.Trash)
+        }
+    })
 }
 
 /** A task the hub no longer lists (iOS TaskDetailSheet's empty state): the sheet's whole content, or the page's body. */
@@ -342,7 +351,7 @@ private fun TaskBoardSheet(host: AssistantTaskHost, onDismiss: () -> Unit) {
                     val lead = host.tasks.lead(todo, host.sessions)
                     val asks = if (state == TaskState.NeedsYou) todo.waitingCard(lead, host.cards)?.askLine()?.text() else null
                     JRow(todo.title, subtitle = boardSubtitle(todo, state, host, lead, asks).ifBlank { state.label.text() }, leading = { TaskMark(state) },
-                        onClick = { host.sheet.value = TaskSheet.Task(todo.id) },
+                        onClick = { openTask(host, todo) },
                         onLongClick = if (state.isRemovable) ({ removing = todo }) else null)
                 }
             }
@@ -350,7 +359,7 @@ private fun TaskBoardSheet(host: AssistantTaskHost, onDismiss: () -> Unit) {
                 JGroupItem(GroupPosition.of(tasks.size + index, count)) {
                     JRow(s.displayTitle, subtitle = agentSubtitle(s, host).ifBlank { stringResource(R.string.chat_task_detail_own_agent) },
                         leading = { JStatusDot(s.agentState.designStatus) },
-                        onClick = { host.sheet.value = TaskSheet.Agent(s.key) })
+                        onClick = { host.sheet.value = null; host.onHandoff(s.key) })
                 }
             }
         }

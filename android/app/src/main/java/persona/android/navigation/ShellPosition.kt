@@ -24,6 +24,20 @@ internal data class ShellPosition(
     val agentsListShown: Boolean = true,
 )
 
+/** The cold-start position keeps only the last chat on each tab. A hand-off also names its source. */
+internal fun ShellPosition.chatStack(tab: AppTab, embeddedAssistant: Boolean = false): List<ChatRoute> {
+    val chat = chats[tab] ?: return emptyList()
+    val from = chat.source as? persona.core.navigation.RouteSource.Handoff
+        ?: return if (embeddedAssistant) emptyList() else listOf(chat)
+    return if (embeddedAssistant && from.embedded) listOf(chat)
+    else listOf(ChatRoute(from.machineId, from.sessionId, from.kind), chat)
+}
+
+/** A switch made while the Agent was open may have hidden its originating assistant. Never switch another pairing. */
+internal fun persona.core.navigation.RouteSource.Handoff.managerToReturn(current: persona.core.contracts.api.CurrentAssistant): String? =
+    manager?.takeIf { owner -> embedded && persona.core.contracts.GroupKeys.namespaceOf(machineId) == current.group &&
+        owner != current.id && current.roster?.installed?.any { it.id == owner && !it.hidden } == true }
+
 /** Navigation is discarded with the pairing; retired writers cannot recreate it after cleanup. */
 internal class ShellPositionStore(context: Context, scope: String) {
     private val file = File(context.noBackupFilesDir, "hub-data/$scope/shell-position.json")

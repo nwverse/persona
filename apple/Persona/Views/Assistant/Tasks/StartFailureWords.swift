@@ -44,8 +44,16 @@ nonisolated enum StartFailureWords {
     }
 
     /// The hand-off card's line: "Didn't start: <why>", or that the details say why.
-    static func cardLine(_ raw: String) -> String {
-        plain(raw).map { String(localized: "Didn't start: \($0) [Tasks Store 38bbb7]") } ?? details
+    static func cardLine(_ raw: String, canOpen: Bool = true) -> String {
+        if let reason = plain(raw) { return failure(reason) }
+        return canOpen ? details : String(localized: "Didn't Start")
+    }
+
+    /// On the to-do itself, keep the hub's error when it has no plain-language equivalent.
+    static func detailLine(_ raw: String) -> String { failure(plain(raw) ?? raw) }
+
+    private static func failure(_ reason: String) -> String {
+        String(localized: "Didn't start: \(reason) [Tasks Store 38bbb7]")
     }
 
     /// The Needs You row's second line (its status word already says it did not start): why, or that the details say.

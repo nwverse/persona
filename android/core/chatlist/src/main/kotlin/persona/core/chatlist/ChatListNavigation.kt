@@ -8,6 +8,14 @@ fun ChatListState.readingPosition(): ChatReadingPosition {
     return position
 }
 
+/** Keep the currently visible message for Back, including from a chat that was following new messages. */
+fun ChatListState.saveHandoffPosition(): Boolean {
+    if (!restored || readingPosition().rowId == null) return false
+    holdPosition()
+    persist()
+    return true
+}
+
 /** The owner freezes its transcript alongside this position. */
 fun ChatListState.holdPosition() {
     epoch++

@@ -51,6 +51,22 @@ struct AssistantView: View {
     private var drawerPage: Bool { false }
     private var navPath: Binding<NavigationPath> { $path }
     #endif
+    #if os(iOS)
+    /// Kept on this window's conversation stack, including when the split host rebuilds its root.
+    @State private var taskReading: (route: TaskHandoffRoute, depth: Int, reading: TaskHandoffReading)?
+
+    private var taskHandoff: TaskHandoffActions {
+        TaskHandoffActions(open: { route, reading in
+            guard route.belongs(to: model), atRoot else { return }
+            taskReading = reading.map { (route, navPath.wrappedValue.count, $0) }
+            navPath.wrappedValue.append(route)
+        }, takeReading: { key in
+            guard let saved = taskReading, saved.depth == navPath.wrappedValue.count else { return nil }
+            taskReading = nil
+            return saved.route.origin == key && saved.route.belongs(to: model) ? saved.reading : nil
+        })
+    }
+    #endif
     /// The last shell request shown (`ShellState.request`'s serial).
     @State private var handledRequest = 0
     /// The sidebar's place in front and the paths of the places left (docs/design/sidebar-navigation.md).
@@ -277,6 +293,7 @@ struct AssistantView: View {
                 ChatView(key: key, style: .assistant, itemManager: model.assistantItemManagers[key])
                     .id(key)
                     #if os(iOS)
+                    .environment(\.taskHandoffActions, taskHandoff)
                     .environment(\.messageLiftHost, liftHost)
                     #endif
                     // The iPad draws the shell's composer too (`ChatComposerKind.padCard`): the assistant's, as on the iPhone.
@@ -310,6 +327,9 @@ struct AssistantView: View {
     /// The root with its top bar, the lift layer and the pages it pushes: split from `stack` for Xcode 26.0 (#5333).
     private var dressedRoot: some View {
         AnyView(rootPage)
+        #if os(iOS)
+        .navigationDestination(for: TaskHandoffRoute.self) { TaskHandoffPage(route: $0) }
+        #endif
         .navigationDestination(isPresented: $showProfile) { AssistantProfileView() }
         .navigationDestination(isPresented: $showKnowledge) { KnowledgeView() }
         .navigationDestination(isPresented: $showRecordings) {
@@ -684,6 +704,7 @@ struct AssistantView: View {
     private func forgetPlaces() {
         places.forget()
         #if os(iOS)
+        taskReading = nil
         if embedded, let unified { unified.forget(path: navPath, keepingAsked: true) }
         #endif
         backToRoot()
@@ -769,13 +790,9 @@ struct AssistantView: View {
         showHealth = false
         showRecordings = false
         #if os(iOS)
-        // A task pushed beside the sidebar (regular width, `detailPresentation`) is a page of this stack too: going
-        // back to the root, or to another conversation, takes it away (else the next chat would push it again). A
-        // phone's task sheet stays as it was.
-        if widthClass == .regular {
-            TasksStore.shared.detailTask = nil
-            TasksStore.shared.detailAgent = nil
-        }
+        // A selection still waiting for the previous conversation must not open on the new root.
+        TasksStore.shared.detailTask = nil
+        TasksStore.shared.detailAgent = nil
         #endif
     }
 

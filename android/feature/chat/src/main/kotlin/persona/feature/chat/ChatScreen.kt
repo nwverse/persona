@@ -711,7 +711,15 @@ private fun ChatPage(
         }
     }
     // the cards still to answer: one just answered here no longer says what it asked
-    val taskState = rememberChatPageTaskHost(key, chrome, tasks, taskKeys, taskTodos, taskAgentSessions, sessionList,
+    val taskChrome = remember(tasks, chrome, chatList, timeline, currentItems) {
+        chrome.onOpenHandoff?.takeIf { tasks != null }?.let { open ->
+            chrome.copy(onOpenHandoff = { target ->
+                if (chatList.saveHandoffPosition()) { timeline.freeze(currentItems()); timelineVersion++ }
+                open(target)
+            })
+        } ?: chrome
+    }
+    val taskState = rememberChatPageTaskHost(key, taskChrome, tasks, taskKeys, taskTodos, taskAgentSessions, sessionList,
         machines, allRequests, taps, assistantPresentation, session, scope, res, sender, { notice = it })
     val taskHost = taskState.host
     var backgroundOpen by taskState.backgroundOpen
@@ -962,6 +970,7 @@ private fun ChatPage(
                                         onOpen = headerFold::open)
                                 })
                             else header()
+                            chrome.handoffFrom?.let { HandoffReturnBar(it, onBack) }
 
                             ChatTasks(projection.tasks, lines, chatList,
                                 onFreeze = { timeline.freeze(currentItems()); timelineVersion++ },
@@ -1050,12 +1059,10 @@ private fun ChatPage(
                                         onApprove = ::approveTray, onReview = { interaction ->
                                             assistantTrays.expanded = null
                                             val raw = GroupKeys.rawKey(interaction.sessionKey)
-                                            // As iOS's rows do: the conversation's own card is right below the entries, so the row closes
-                                            // the tray onto it; a task's row opens that task, an Agent's its own (detailTask, detailAgent),
-                                            // where Open chat brings its page and its cards. Never into the stack: that is the conversation's.
+                                            // The conversation's own question stays here. Other rows open their task's Agent or the named Agent.
                                             if (interaction.sessionKey == key) requestFolds.open(interaction.id)
                                             else taskTodos.firstOrNull { todo -> todo.activeAgents.any { it.key == raw } }
-                                                ?.let { todo -> openTask(host, todo) } ?: run { host.sheet.value = TaskSheet.Agent(raw) }
+                                                ?.let { todo -> openTask(host, todo) } ?: host.onHandoff(raw)
                                         }, onSend = ::sendTray, onSchedule = { pageTrays.traySchedule.value = it }, onPlan = { pageTrays.trayPlan.value = it },
                                         backgroundRecords = host.backgroundRecords.isNotEmpty(), onBackground = host.onOpenBackground,
                                         under = computerPill?.let { pill -> { pill(Modifier) } },

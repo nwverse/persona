@@ -20,7 +20,7 @@ internal fun TaskReceiptLook(todo: Todo, host: AssistantTaskHost) {
     var missing by remember(todo) { mutableStateOf(false) }
     JButton(stringResource(R.string.chat_tasks_look), {
         if (host.sheet.value != TaskSheet.Task(todo.id)) {
-            openTask(host, todo)
+            openTaskDetail(host, todo.id)
         } else {
             // The durable binding remains navigable when the Agent is outside the session list or offline.
             val target = host.tasks.lead(todo, host.sessions)?.key

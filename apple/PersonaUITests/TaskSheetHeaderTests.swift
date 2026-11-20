@@ -1,15 +1,7 @@
 import XCTest
 
-/// A task opened from the main conversation (#3255): its sheet has one header, the agent's chat's — ✕, the task's
-/// title over the agent's state and place, ⋯ — with no row of the space's other agents under it; ⋯ has
-/// 「在 Agents 里打开」, and there the Agents page's chat keeps its tabs. Against scripts/mock/mock_hub.py with
-/// MOCK_TASKS=1 MOCK_TASKS_NO_ASKS=1 MOCK_MANAGERS=1 (PERSONA_MOCK_HUB): one assistant, so the MacBook, where the task's
-/// agent runs, is this assistant's. With the default mock's several the MacBook is another assistant's, the app lists
-/// only the current one's sessions (#5587), and the sheet, with no agent to show, draws its own header (✕, the title as
-/// text) over 「Agent 没开起来」 (#10253): the test stops at launch on such a hub. With MOCK_TASKS_DOCK=multi
-/// (PERSONA_TASK_MULTI=1) the task has two agents and its title's ⌄ switches between them. Phone only (an iPad pushes
-/// the page, `IPadTaskDetailTests`).
-/// With PERSONA_SHOTS set it writes the pages there, PERSONA_SHOTS_APPEARANCE naming the simulator's appearance.
+/// A task opens the ordinary Agent header and controls. A multi-Agent task opens its most pressing Agent.
+/// Against scripts/mock/mock_hub.py with MOCK_TASKS=1 MOCK_TASKS_NO_ASKS=1 MOCK_MANAGERS=1.
 final class TaskSheetHeaderTests: XCTestCase {
     private var hub: String!
 
@@ -19,7 +11,7 @@ final class TaskSheetHeaderTests: XCTestCase {
             throw XCTSkip("needs scripts/mock/mock_hub.py with MOCK_TASKS=1 MOCK_TASKS_NO_ASKS=1 MOCK_MANAGERS=1 (PERSONA_MOCK_HUB)")
         }
         try MockHubRoster.requireOneAssistant(hub, lacks: "the app lists only the current one's sessions, so the task's agent "
-                                              + "on the MacBook is not there and its sheet has no chat header")
+                                              + "on the MacBook has no available chat")
         self.hub = hub
     }
 
@@ -30,67 +22,27 @@ final class TaskSheetHeaderTests: XCTestCase {
         try app.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: "\(dir)/task-sheet-\(appearance)-\(name).png"))
     }
 
-    @MainActor func testOneHeaderAndNoTabs() throws {
-        guard UIDevice.current.userInterfaceIdiom == .phone else { throw XCTSkip("a phone's sheet") }
+    @MainActor func testTheTaskOpensItsAgentsOwnHeader() throws {
         let multi = ProcessInfo.processInfo.environment["PERSONA_TASK_MULTI"] == "1"
         let app = XCUIApplication()
+        app.launchEnvironment["PERSONA_UI_TEST_SESSION"] = "1"
         let url = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", url, "-holdChromeOpen", "YES", "-tab", "assistant"] // a run before may have ended on the Agents page
+        app.launchArguments = ["-pairURL", url, "-holdChromeOpen", "YES", "-tab", "assistant", "-dev.openChat", "",
+                               "-openAssistant", "server/b2e4d6f8-0000-4000-8000-000000000001"]
         app.launchPinned()
-
-        app.openActionTray("running") // the action bar lists the working tasks in In Progress (#3393)
-        let pill = app.buttons.matching(NSPredicate(format: "identifier == 'action-tray.task' AND label CONTAINS '修小组件横屏崩溃'")).firstMatch
-        XCTAssertTrue(pill.waitForExistence(timeout: 20), "no task in Progress:\n\(app.debugDescription)")
-        sleep(2) // the conversation settles
-        pill.tap()
-
-        // One row: ✕ and the title (the task's) side by side, and nothing else that closes or goes back.
-        let title = app.buttons.matching(identifier: "chat.title").firstMatch
-        XCTAssertTrue(title.waitForExistence(timeout: 10), "no chat header in the sheet:\n\(app.debugDescription)")
-        XCTAssertTrue(title.label.hasPrefix("修小组件横屏崩溃"), "the header's title is not the task's: \(title.label)")
-        let close = app.buttons.matching(identifier: "关闭")
-        XCTAssertEqual(close.count, 1, "not one ✕:\n\(app.debugDescription)")
-        XCTAssertEqual(close.firstMatch.frame.midY, title.frame.midY, accuracy: 12, "✕ is not on the title's row")
-        XCTAssertFalse(app.buttons["返回"].exists, "a ‹ besides the sheet's ✕")
-        XCTAssertLessThan(title.frame.maxY, app.windows.firstMatch.frame.height * 0.2, "the header is not at the top")
-        // No strip of the space's tabs.
-        XCTAssertEqual(app.buttons.matching(identifier: "chat.sibling").count, 0, "the space's tabs are in the sheet")
-        // The mock was just started: let the link settle so the pictures show the state line, not Connecting….
-        let linking = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH '连接中'")).firstMatch
-        let settled = Date.now.addingTimeInterval(15)
-        while linking.exists && Date.now < settled { usleep(300_000) }
-        sleep(1)
-        try shot(app, multi ? "multi" : "task")
-
-        if multi {
-            // The title's ⌄ lists the task's two agents (once both sessions are in); picking the other switches the page.
-            let both = Date.now.addingTimeInterval(20)
-            while !title.label.contains("点按切换") && Date.now < both { usleep(300_000) }
-            XCTAssertTrue(title.label.contains("点按切换"), "no ⌄ on the title: \(title.label)")
-            title.tap()
-            let other = app.buttons.matching(NSPredicate(format: "label BEGINSWITH '补齐网络层的单元测试'")).firstMatch
-            XCTAssertTrue(other.waitForExistence(timeout: 5), "no agent to switch to:\n\(app.debugDescription)")
-            try shot(app, "multi-menu")
-            other.tap()
-            sleep(2)
-            XCTAssertTrue(app.buttons.matching(identifier: "chat.title").firstMatch.label.hasPrefix("修小组件横屏崩溃"))
-            XCTAssertEqual(app.buttons.matching(identifier: "chat.sibling").count, 0)
-            return
-        }
-
-        // ⋯ has the task's way to the Agents page; there the chat has its space's tabs again.
-        app.buttons["更多"].firstMatch.tap()
-        let open = app.buttons["在 Agents 里打开"]
-        XCTAssertTrue(open.waitForExistence(timeout: 5), "no 在 Agents 里打开 in ⋯:\n\(app.debugDescription)")
-        try shot(app, "menu")
-        open.tap()
-        let tabs = app.buttons.matching(identifier: "chat.sibling")
-        let deadline = Date.now.addingTimeInterval(10)
-        while tabs.count == 0 && Date.now < deadline { usleep(200_000) }
-        XCTAssertGreaterThan(tabs.count, 0, "the Agents page's chat lost its tabs:\n\(app.debugDescription)")
-        XCTAssertTrue(app.buttons["返回"].firstMatch.exists, "no ‹ on the Agents page's chat")
-        XCTAssertFalse(app.buttons["关闭"].exists, "the sheet is still up")
-        sleep(1)
-        try shot(app, "agents")
+        app.openActionTray(multi ? "needs-you" : "running")
+        let task = app.trayTasks.matching(NSPredicate(format: "label CONTAINS %@", "修小组件横屏崩溃")).firstMatch
+        XCTAssertTrue(task.waitForExistence(timeout: 20), app.debugDescription)
+        task.tap()
+        let title = app.buttons["chat.title"].firstMatch
+        XCTAssertTrue(title.waitForExistence(timeout: 10))
+        let expected = multi ? "macbook/a1f3c2d4-0000-4000-8000-000000000002" : "macbook/a1f3c2d4-0000-4000-8000-000000000001"
+        let loaded = NSPredicate(format: "value == %@", expected)
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: loaded, object: title)], timeout: 10), .completed,
+                       "The Agent header never named the requested session: \(app.debugDescription)")
+        XCTAssertTrue(app.buttons["task-handoff.return"].exists)
+        XCTAssertFalse(app.buttons["task-detail.fullscreen"].exists)
+        XCTAssertTrue(app.buttons["返回"].firstMatch.exists)
+        try shot(app, multi ? "urgent-agent" : "agent")
     }
 }

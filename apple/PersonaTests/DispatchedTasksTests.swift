@@ -16,6 +16,45 @@ struct DispatchedTasksTests {
         FeedItem(id: "feed", conversation: "main", at: .now, kind: kind, ref: ref, body: body)
     }
 
+    private func agentSession(_ machine: String, id: String = "same", group: String = "one", state: AgentState) throws -> Session {
+        let data = try JSONSerialization.data(withJSONObject: [
+            "machine_id": machine, "session_id": id, "title": machine, "cwd": "/tmp", "status": "idle", "state": state.rawValue,
+        ])
+        var session = try JSON.decoder.decode(Session.self, from: data)
+        session.group = group
+        return session
+    }
+
+    @Test func taskPicksUrgentAvailableAgentButAnIndividualCardKeepsItsMachine() throws {
+        let first = try agentSession("alpha", state: .working)
+        let other = try agentSession("bravo", state: .needsYou)
+        let todo = TodoItem(id: "t", title: "Handoff", agents: [
+            .init(machineID: "missing", sessionID: "same"),
+            .init(machineID: "alpha", sessionID: "same"),
+            .init(machineID: "bravo", sessionID: "same"),
+        ])
+        let sessions = [first.key: first, other.key: other]
+        #expect(DispatchedTasks.destination("t", todo: todo, selected: nil, group: "one", sessions: sessions) == .agent(other.key))
+        #expect(DispatchedTasks.destination("t", todo: todo, selected: first.key, group: "one", sessions: sessions) == .agent(first.key))
+        #expect(DispatchedTasks.destination("t", todo: todo, selected: first.key, group: "two", sessions: sessions) == .todo("t"))
+        let missing = SessionKey(group: "one", machineID: "missing", sessionID: "same")
+        #expect(DispatchedTasks.destination("t", todo: todo, selected: missing, group: "one", sessions: sessions) == .todo("t"))
+    }
+
+    @Test func unavailableReleasedAndFailedStartsStayWithTheirOwnTodo() throws {
+        let session = try agentSession("alpha", state: .working)
+        var row = TodoItem.Agent(machineID: "alpha", sessionID: "same")
+        row.releasedAt = .now
+        var todo = TodoItem(id: "t", title: "Handoff", agents: [row])
+        #expect(DispatchedTasks.destination("t", todo: todo, selected: nil, group: "one", sessions: [session.key: session]) == .todo("t"))
+        todo.agents[0].releasedAt = nil
+        todo.agents[0].startError = "offline"
+        #expect(DispatchedTasks.destination("t", todo: todo, selected: session.key, group: "one", sessions: [session.key: session]) == .todo("t"))
+        todo.agents = []
+        #expect(DispatchedTasks.destination("t", todo: todo, selected: nil, group: "one", sessions: [:]) == .todo("t"))
+        #expect(DispatchedTasks.destination("gone", todo: nil, selected: nil, group: "one", sessions: [:]) == .todo("gone"))
+    }
+
     @Test func macDetailSelectionOpensTheRequestedSessionNotAnotherLead() {
         let first = SessionKey(group: "hub", machineID: "computer", sessionID: "first")
         let second = SessionKey(group: "hub", machineID: "computer", sessionID: "second")
@@ -186,6 +225,9 @@ struct DispatchHandoffFailureTests {
         #expect(W.plain("exit status 1") == nil)
         #expect(W.plain("  ") == nil)
         #expect(W.rowLine("exit status 1") == W.details)
+        #expect(W.cardLine("exit status 1", canOpen: false) == String(localized: "Didn't Start"))
+        #expect(W.detailLine("exit status 1").contains("exit status 1"))
+        #expect(W.detailLine("rpc: connection closed") == W.cardLine("rpc: connection closed"))
         #expect(W.rowLine("rpc: connection closed") == W.words(.connectionLost))
         #expect(W.cardLine("rpc: connection closed") == String(localized: "Didn't start: \(W.words(.connectionLost)) [Tasks Store 38bbb7]"))
         #expect(W.cardLine("exit status 1") == W.details)
