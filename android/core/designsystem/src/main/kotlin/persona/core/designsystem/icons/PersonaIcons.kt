@@ -28,8 +28,12 @@ object PersonaIcons {
     val attachment: PhIcon get() = PhIcons.Paperclip
     /** SF Symbol `chevron.left`. */
     val back: PhIcon get() = PhIcons.CaretLeft
+    /** SF Symbol `display`. */
+    val backgroundMonitor: PhIcon get() = PhIcons.Monitor
     /** SF Symbol `gearshape.2`. */
     val backgroundTask: PhIcon get() = PhIcons.GearSix
+    /** SF Symbol `list.clipboard`. */
+    val backgroundTasks: PhIcon get() = PhIcons.ListChecks
     /** SF Symbol `clock.fill`. */
     val backgroundWaiting: PhIcon get() = PhIcons.Clock
     /** SF Symbol `macwindow`. */
@@ -334,10 +338,6 @@ object PersonaIcons {
     val successFilled: PhIcon get() = PhIcons.CheckCircle
     /** SF Symbol `list.clipboard`. */
     val taskPlan: PhIcon get() = PhIcons.ListChecks
-    /** Running and recently completed background tasks in Agent chat. */
-    val backgroundTasks: PhIcon get() = PhIcons.ListChecks
-    /** A background command that watches an ongoing signal. */
-    val backgroundMonitor: PhIcon get() = PhIcons.Monitor
     /** SF Symbol `terminal`. */
     val terminal: PhIcon get() = PhIcons.TerminalWindow
     /** SF Symbol `terminal.fill`. */

@@ -33,10 +33,13 @@ func (s *Service) sendDigest(ctx context.Context) {
 	s.revalidateFailedStartDeferrals(ctx)
 	b := &s.supervise
 	batch := s.supervisionBatchInterval(ctx)
+	cooldown := s.superviseTimings().routineCooldown()
+	gating := batch > 0 || cooldown > 0 // a recipient's routine signals may be held (gateDigestBatches)
 	b.dedupMu.Lock()
 	defer b.dedupMu.Unlock()
 	b.mu.Lock()
 	b.timer, b.timerAt = nil, time.Time{}
+	b.syncBatchInterval(batch)
 	list := make([]superviseSignal, 0, len(b.pending))
 	for _, g := range b.pending {
 		list = append(list, g)
@@ -50,7 +53,7 @@ func (s *Service) sendDigest(ctx context.Context) {
 		return
 	}
 	list = slices.DeleteFunc(list, func(g superviseSignal) bool {
-		return g.NotBefore.After(now.Add(time.Second)) || batch > 0 && supervisionBatchDeferred(g, now)
+		return g.NotBefore.After(now.Add(time.Second)) || gating && supervisionBatchDeferred(g, now)
 	})
 	if len(list) == 0 {
 		s.scheduleDigestLocked(now)
@@ -127,7 +130,7 @@ func (s *Service) sendDigest(ctx context.Context) {
 	list = list[:0]
 	held := map[string]superviseSignal{}
 	for id, g := range b.pending { // as they are now: one may have come or gone meanwhile
-		if waits[id] || g.NotBefore.After(now.Add(time.Second)) || batch > 0 && supervisionBatchDeferred(g, now) {
+		if waits[id] || g.NotBefore.After(now.Add(time.Second)) || gating && supervisionBatchDeferred(g, now) {
 			held[id] = g
 			continue
 		}
@@ -144,8 +147,8 @@ func (s *Service) sendDigest(ctx context.Context) {
 	prev := b.last
 	b.last = now
 	b.mu.Unlock()
-	if batch > 0 {
-		defer s.rescheduleSupervision() // an early screening return must not strand another recipient's deferred batch
+	if gating {
+		defer s.schedulePendingSupervision() // an early return must not strand another batch or override delivery backoff
 	}
 
 	list = s.screenMechanicalSignals(ctx, list, now, prev)
@@ -215,8 +218,8 @@ func (s *Service) sendDigest(ctx context.Context) {
 		}
 		groups[to] = append(groups[to], g)
 	}
-	if batch > 0 {
-		order = s.gateDigestBatches(order, groups, now, batch)
+	if gating {
+		order = s.gateDigestBatches(order, groups, now, batch, cooldown)
 		b.mu.Lock()
 		s.scheduleDigestLocked(now)
 		b.mu.Unlock()
@@ -226,16 +229,19 @@ func (s *Service) sendDigest(ctx context.Context) {
 		delivered = s.deliverToLeaderAgent(ctx, lead, leaders[[2]string{lead.MachineID, lead.SessionID}], web, now, prev) || delivered
 	}
 	for _, to := range order {
-		delivered = s.deliverDigest(ctx, here, to, groups[to], web, now, prev) || delivered
+		if s.deliverDigest(ctx, here, to, groups[to], web, now, prev) {
+			delivered = true
+			s.toldRecipient(to, now) // its next routine signals wait out the cooldown (#11614)
+		}
 	}
-	if delivered && (len(order) > 1 || batch > 0) {
+	if delivered && (len(order) > 1 || gating) {
 		// One message went out: what another left undone (put the last message back to prev) does not undo it.
 		b.mu.Lock()
 		if b.last.Before(now) {
 			b.last = now
 		}
 		b.mu.Unlock()
-	} else if batch > 0 && !delivered {
+	} else if gating && !delivered {
 		// A held or moot batch sent nothing. Do not invent a legacy last-message time in case batching is switched off.
 		b.mu.Lock()
 		if b.last.Equal(now) {

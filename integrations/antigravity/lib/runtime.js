@@ -1,7 +1,8 @@
 import { daemonBinary, mcpServers } from './compat.js'
 import { contextWrapped, wirePackageName } from '../../runtime-sdk/lib/compat.js'
 // Antigravity (agy) runtime for Persona (docs/integrations/runtimes.md).
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
+import { constants, existsSync, lstatSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -14,6 +15,7 @@ import { inspectImage } from './media-guard.js'
 import { readMediaImage } from './media.js'
 import { discoverModels, mapModels, SIGNIN_TIMEOUT } from './models.js'
 import { nativeErrorStep } from './errors.js'
+import { usageAccountFromQuota } from './usage.js'
 import { isPolicyDir, POLICY_DIR_NAME, policyDirOf, readPolicy, removePolicy, splitPolicy, SUPERVISION_ERROR_CODE, syncPolicy } from './policy.js'
 import {
   agyModeToPersona,
@@ -45,6 +47,8 @@ const SIGNED_OUT = /\b(?:signed out|logged out|not signed in|not logged in|(?:lo
 const AUTO_REFUSAL_NOTICE = 'agy 拒绝了 Auto 模式，已改由 Persona 自动批准权限请求'
 const MODE_NOTICE_STEP = 'PERSONA_MODE_NOTICE'
 const CONVERSATION_ID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i
+const HISTORY_EPOCH = '.persona-history-epoch' // in a brain directory: the token a restarted companion starts from
+const newToken = () => randomBytes(4).toString('hex')
 
 export function createAgyRuntime(options = {}) {
   const home = options.home || homedir()
@@ -82,6 +86,7 @@ export function createAgyRuntime(options = {}) {
   const archived = new Set() // agyId
   const lastPushedSeq = new Map() // personaId -> number
   const lastPushedHistory = new Map()
+  const projections = new Map() // agyId -> { token, file, next, shown } (projectedHistory)
   const dirtyLiveSeqs = new Map() // personaId -> Set<number> of already-pushed live seqs modified in place
   const watchedPolls = new Map()
   const rewinding = new Set()
@@ -429,6 +434,7 @@ export function createAgyRuntime(options = {}) {
       socketPath: options.socketPath,
       instance: options.instance,
       log,
+      onHub: (connected) => { if (connected) void refreshUsageWindows() },
       ...(update ? { package: { name: update.name, hash: update.hash }, onUpdate: (offer) => void takeUpdate(offer) } : {}),
       retryMs: options.retryMs,
     },
@@ -749,13 +755,86 @@ export function createAgyRuntime(options = {}) {
     return `agy:${rawId}:full:api-errors:content-v2:step-ids-v2:mcp-tools:lazy-media:checkpoints:wakes`
   }
 
+  // Steps shown from ACP before the native export (a prompt's live and settled steps, a wake) have IDs the export
+  // does not reuse. The history stays while they only grow, so a send is an append; it changes once any of them is
+  // dropped (export, interrupt). The next token is on disk first, so a restart never reports the old one; an
+  // unreadable epoch starts fresh (#12014).
+  function projectedHistory(rawId, history, steps) {
+    let p = projections.get(rawId)
+    if (!p) {
+      let file = ''
+      let unreadable = false
+      try { file = readFileSync(join(brainDirOf(rawId), HISTORY_EPOCH), 'utf8').trim() } catch (err) { unreadable = err?.code !== 'ENOENT' }
+      const valid = /^[\da-f]{8}$/.test(file)
+      projections.set(rawId, (p = { token: valid || (!file && !unreadable) ? file : newToken(), file: valid ? file : '', shown: new Set() }))
+    }
+    const shown = new Set(steps)
+    if ([...p.shown].some((step) => !shown.has(step))) {
+      p.token = p.next ?? newToken()
+      p.next = undefined
+    }
+    if (shown.size && p.next === undefined && p.token === p.file) {
+      const next = newToken()
+      if (writeEpoch(brainDirOf(rawId), next)) p.file = p.next = next
+      else p.token = next // never on disk: no restart reports it
+    }
+    p.shown = shown
+    return p.token ? `${history}:projected:${p.token}` : history
+  }
+
+  function writeEpoch(dir, token) {
+    try {
+      if (!lstatSync(dir).isDirectory()) return false
+      const flag = constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW
+      writeFileSync(join(dir, HISTORY_EPOCH), `${token}\n`, { flag, mode: 0o600 })
+      return true
+    } catch {
+      return false
+    }
+  }
+
   function cutMatches(cut, transcript) {
     return cut?.branch === transcript.branch && cut.next === JSON.stringify(transcript.steps.find((step) => step.step_index >= cut.limit))
   }
 
-  function rememberCut(rawId, transcript, limit) {
-    nativeCuts.set(rawId, { branch: transcript.branch, limit,
+  function nativeCutState(native) {
+    return Number.isInteger(native?.step_count) && native.step_count >= 0
+      ? `${native.step_count}|${native.last_modified_time || ''}` : ''
+  }
+
+  function cutNeedsCheck(cut, native) {
+    const state = nativeCutState(native)
+    return Boolean(cut && state && cut.state !== state)
+  }
+
+  function rememberCut(rawId, transcript, limit, native) {
+    nativeCuts.set(rawId, { branch: transcript.branch, limit, state: nativeCutState(native),
       next: JSON.stringify(transcript.steps.find((step) => step.step_index >= limit)) })
+  }
+
+  function nativeStepMatchesExport(native, exported) {
+    if (!exported || native?.type !== `CORTEX_STEP_TYPE_${exported.type}`) return false
+    const nativeTime = native.metadata?.createdAt
+    const exportedTime = exported.created_at
+    if (nativeTime || exportedTime) {
+      const a = Date.parse(nativeTime || '')
+      const b = Date.parse(exportedTime || '')
+      if (!Number.isFinite(a) || !Number.isFinite(b) || Math.floor(a / 1000) !== Math.floor(b / 1000)) return false
+    }
+    if (exported.type === 'USER_INPUT') {
+      const text = (native.userInput?.items || []).map((item) => item.text || '').join('\n')
+      return comparableInput(text) === comparableInput(exported.content || '')
+    }
+    if (exported.type === 'PLANNER_RESPONSE') {
+      const response = native.plannerResponse?.response
+      return typeof response === 'string' && response === (exported.content || '')
+    }
+    return true
+  }
+
+  function nativeExportMatches(transcript, nativeSteps) {
+    const exported = new Map(transcript.steps.map((step, index) => [step.step_index ?? index, step]))
+    return nativeSteps.every((step, index) => nativeStepMatchesExport(step, exported.get(index)))
   }
 
   function exportedTranscriptOf(rawId) {
@@ -870,11 +949,11 @@ export function createAgyRuntime(options = {}) {
     const pid = toPersonaId(rawId)
     const turn = liveTurnOf(pid)
     if (turn?.liveSteps.length) {
+      const projected = [...turn.priorPending, ...turn.liveSteps]
       return {
         ...transcript,
-        steps: [...turn.base.steps, ...turn.priorPending, ...turn.liveSteps],
-        // Live and settled prompt steps share a history epoch until native export flushes to disk.
-        history: `${turn.base.history}:settled:${turn.historySeq ?? turn.seq}`,
+        steps: [...turn.base.steps, ...projected],
+        history: projectedHistory(rawId, turn.base.history, projected),
         synthetic: true,
       }
     }
@@ -886,16 +965,17 @@ export function createAgyRuntime(options = {}) {
         return {
           ...transcript,
           steps: [...pending.base.steps, ...pending.steps],
-          history: `${pending.base.history}:settled:${pending.seq}`,
+          history: projectedHistory(rawId, pending.base.history, pending.steps),
           synthetic: true,
         }
       }
     }
+    const history = projectedHistory(rawId, transcript.history, [])
     const tail = nativeTails.get(rawId)
     if (tail?.key === tailKey(transcript, native) && tail.error) {
-      return { ...transcript, steps: [...transcript.steps, tail.error] }
+      return { ...transcript, history, steps: [...transcript.steps, tail.error] }
     }
-    return transcript
+    return { ...transcript, history }
   }
 
   // Keep the refusal notice at its original position when later native steps arrive. Their projected indices move
@@ -975,13 +1055,15 @@ export function createAgyRuntime(options = {}) {
   }
 
   // Native rewind restores older summary timestamps. Verify a shorter summary against the native trajectory so
-  // restarts keep the cut, while a stale idle summary cannot hide a newer external input.
+  // restarts keep the cut, while a stale idle summary cannot hide a newer external input. An existing cut is checked
+  // again when its native summary changes: an unchanged export boundary says nothing about steps appended after it.
   async function reconcileNativeCut(rawId, native = readConversationStates().get(rawId)) {
     const transcript = readTranscript(brainDirOf(rawId), true)
     const count = native?.step_count
-    if (!Number.isInteger(count) || count < 0 || !transcript.steps.some((step) => step.step_index >= count) ||
-        cutMatches(nativeCuts.get(rawId), transcript)) return
-    if (cutChecks.has(rawId)) return cutChecks.get(rawId)
+    const validCount = Number.isInteger(count) && count >= 0
+    const existing = nativeCuts.get(rawId)
+    const discover = validCount && transcript.steps.some((step) => step.step_index >= count) && !cutMatches(existing, transcript)
+    if ((!discover && !cutNeedsCheck(existing, native)) || cutChecks.has(rawId)) return cutChecks.get(rawId)
     const acp = isAssistant(rawId) ? assistantAcps.get(rawId) : sharedAcp
     if (!acp || (acp.isAsst && !acp.proc)) return
     const check = withAcp(acp, async () => {
@@ -989,8 +1071,27 @@ export function createAgyRuntime(options = {}) {
         await acp.ensureSessionLoaded(rawId, sessionCwds.get(rawId) || home,
           acp.isAsst ? mcpServersFor(toPersonaId(rawId), true) : [], extraDirsFor(rawId))
         const snapshot = await acp.nativeRequest('GetCascadeTrajectory', { cascadeId: rawId, disableRehydration: true })
-        if (snapshot.trajectory?.cascadeId === rawId && (snapshot.trajectory.steps || []).length === count) {
-          rememberCut(rawId, transcript, count)
+        if (snapshot.trajectory?.cascadeId !== rawId) return
+        const current = nativeCuts.get(rawId)
+        // A newer rewind owns its cut; stale snapshots must not mutate it during or after that rewind.
+        if (current !== existing || rewinding.has(toPersonaId(rawId))) return
+        const nativeSteps = snapshot.trajectory.steps || []
+        const actual = nativeSteps.length
+        const matched = cutMatches(current, transcript)
+        const exportMatches = nativeExportMatches(transcript, nativeSteps)
+        let changed = false
+        if (current && (!matched || (current.limit !== actual && exportMatches))) {
+          nativeCuts.delete(rawId)
+          changed = true
+        }
+        // A new cut needs the summary and trajectory to agree. Revalidating a cut whose export boundary still matches
+        // also needs the exported prefix to match the native trajectory: while that export lags, its abandoned tail
+        // must stay hidden and the old native state remains armed for the next check.
+        if (exportMatches && transcript.steps.some((step) => step.step_index >= actual) && (matched || actual === count)) {
+          if (!current || !matched) changed = true
+          rememberCut(rawId, transcript, actual, native)
+        }
+        if (changed) {
           syncTranscriptAppend(rawId)
           rt.sessionsChanged()
         }
@@ -1160,6 +1261,9 @@ export function createAgyRuntime(options = {}) {
 
     const unknown = new Map() // reason -> sessions listed as unknown for it
     const rows = chosen.map(({ rawId, pid, summary, native, cwd, mtimeMs, running, hasTranscript }) => {
+      if (cutNeedsCheck(nativeCuts.get(rawId), native)) {
+        void reconcileNativeCut(rawId, native).catch((error) => log(`agy rewind history: ${error.message}`))
+      }
       const nativeTranscript = transcriptOf(rawId, native || null)
       const transcript = withModeNotice(rawId, nativeTranscript)
       const { steps, history } = transcript
@@ -2378,7 +2482,7 @@ export function createAgyRuntime(options = {}) {
       if (after.trajectory?.cascadeId !== rawId || (after.trajectory.steps || []).length !== target.index) {
         throw new RpcError('The native conversation changed during rewind. Reload its history', 'rewind_failed')
       }
-      rememberCut(rawId, readTranscript(brainDirOf(rawId), true), target.index)
+      rememberCut(rawId, readTranscript(brainDirOf(rawId), true), target.index, readConversationStates().get(rawId))
       missedWakes.delete(rawId)
       // Native exports retain the old branch until replacement steps arrive. Its durable summary supplies the cut.
       const deadline = Date.now() + 5000
@@ -2472,12 +2576,37 @@ export function createAgyRuntime(options = {}) {
     catalogTimer.unref?.()
   }
 
+  let usageWindowsTimer
+  let usageWindowsFlight
+  let usageWindowsError = ''
+
+  function refreshUsageWindows() {
+    if (stopped || usageWindowsFlight || !rt.nodeHas('usage_windows')) return usageWindowsFlight
+    const flight = (async () => {
+      try {
+        const result = await withAcp(sharedAcp, () => sharedAcp.nativeRequest('RetrieveUserQuotaSummary', {
+          request: { forceRefresh: false },
+        }))
+        if (stopped) return
+        rt.usageWindows(usageAccountFromQuota(result, new Date()))
+        usageWindowsError = ''
+      } catch (error) {
+        if (!stopped && usageWindowsError !== error.message) log(`agy usage windows: ${error.message}`)
+        usageWindowsError = error.message
+      }
+    })()
+    usageWindowsFlight = flight
+    void flight.finally(() => { if (usageWindowsFlight === flight) usageWindowsFlight = undefined })
+    return flight
+  }
+
   /** Resolves once agy is gone. */
   function stop() {
     if (stopping) return stopping
     stopped = true
     clearInterval(idleTimer)
     clearInterval(assistantReaper)
+    clearInterval(usageWindowsTimer)
     clearTimeout(catalogTimer)
     catalogAbort.abort()
     for (const pid of autonomousTurns.keys()) retireAutonomousTurn(toAgyId(pid))
@@ -2507,7 +2636,11 @@ export function createAgyRuntime(options = {}) {
     start: () => {
       void models().catch((err) => log(`agy model discovery error: ${err.message}`))
       scheduleCatalog()
-      return rt.start()
+      const started = rt.start()
+      clearInterval(usageWindowsTimer)
+      usageWindowsTimer = setInterval(() => { void refreshUsageWindows() }, options.usageWindowsEveryMs ?? 300_000)
+      usageWindowsTimer.unref?.()
+      return started
     },
     stop,
     idle,

@@ -189,7 +189,10 @@ started like this**; each task with its number when there are several, where it 
 these directly**; a task's model chip is its short name ("Opus 4.8", `planModelLabel`), the Edit field keeps the raw id; then **Start** / **Start N tasks**, **Edit** and **Don't start**, in one row while Start's whole label fits and
 stacked (Start above the other two) when it would be cut), a dismissed one reads **Not started · N
 tasks**. A started plan is the hand-off cards in the card's place, and the card follows the store's latest plan, so a sheet that
-kept the plan it was opened with (the tray's Review) says **✓ Started N tasks** instead of offering Start again. Tests:
+kept the plan it was opened with (the tray's Review) says **✓ Started N tasks** instead of offering Start again. On every style,
+an open task with `brief` also has one `PlanTaskBrief` inset well: who asked or started it and when, a folded criteria / time /
+bounds summary, then **Show All** for the whole request or labelled hand-over, goal, effective criteria and expected time, and
+out of bounds. A task without one is unchanged, and an edited Start never sends the decoded brief back. Tests:
 `TaskRecordsTest` (core/domain), `PlanCardConversationTest`, `PlanCardFailureReasonTest`.
 
 #### Background rounds fold into one line (#4314, leaders in #6595)

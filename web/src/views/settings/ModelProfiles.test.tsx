@@ -8,6 +8,7 @@ vi.hoisted(() => {
 });
 vi.mock("../../lib/store", () => ({ onHubEvent: () => () => {} }));
 import { initI18n, t } from "../../i18n";
+import { modeTitle } from "../../lib/session-actions";
 import { ModelProfiles } from "./ModelProfiles";
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 afterEach(() => vi.unstubAllGlobals());
@@ -138,12 +139,12 @@ it("edits name, purposes, launchers, and tiers interactively via shared pickers 
   {
    id: "assistant", category_id: "assistant", name: "Main chat", group: "Default", kind: "launcher" as const,
    override: {}, effective: { provider: "launcher.gw", model: "sonnet-4" }, revision: 1,
-   fields: ["provider", "model", "effort"], provider_ids: ["launcher.gw", "launcher.other"],
+   fields: ["provider", "model", "effort", "permission_mode"], provider_ids: ["launcher.gw", "launcher.other"],
   },
   {
    id: "agent.new", category_id: "agent.new", name: "Agents", group: "Default", kind: "launcher" as const,
    override: {}, effective: { provider: "launcher.gw", model: "sonnet-4" }, revision: 1,
-   fields: ["provider", "model", "effort"], provider_ids: ["launcher.gw", "launcher.other"],
+   fields: ["provider", "model", "effort", "permission_mode"], provider_ids: ["launcher.gw", "launcher.other"],
   },
   {
    id: "kb", category_id: "kb", name: "Information processing", group: "Default", kind: "api" as const,
@@ -222,7 +223,7 @@ it("edits name, purposes, launchers, and tiers interactively via shared pickers 
   // 1) Update profile name.
   setVal(dialog().querySelector<HTMLInputElement>(`input[aria-label="${t("settings-modelprofiles.name")}"]`)!, "Economy Plus");
 
-  // 2) Change assistant model via shared ModelPicker.
+  // 2) Change assistant model via shared ModelPicker and set permission_mode.
   const assistantCard = dialog().querySelector<HTMLElement>('[data-testid="profile-purpose-assistant"]')!;
   await vi.waitFor(() => {
    const picker = [...assistantCard.querySelectorAll<HTMLButtonElement>("button[aria-expanded]")].find((b) => b.textContent?.includes("Sonnet 4"));
@@ -233,9 +234,12 @@ it("edits name, purposes, launchers, and tiers interactively via shared pickers 
   await flush();
   await act(async () => [...assistantCard.querySelectorAll<HTMLButtonElement>('[role="option"]')].find((b) => b.textContent?.includes("Opus 4"))!.click());
   await flush();
+  setVal(assistantCard.querySelector<HTMLSelectElement>("select[data-permission-mode-select]")!, "acceptEdits");
+  await flush();
 
-  // 3) Change kb model via Direct API discovered select.
+  // 3) Change kb model via Direct API discovered select (never shows permission_mode).
   const kbCard = dialog().querySelector<HTMLElement>('[data-testid="profile-purpose-kb"]')!;
+  expect(kbCard.querySelector("select[data-permission-mode-select]")).toBeNull();
   await vi.waitFor(() => {
    const sel = [...kbCard.querySelectorAll<HTMLSelectElement>("select")].find((s) => [...s.options].some((o) => o.value === "fast-2"));
    expect(sel).toBeDefined();
@@ -254,12 +258,14 @@ it("edits name, purposes, launchers, and tiers interactively via shared pickers 
   await act(async () => btn(t("settings-modelprofiles.add_launcher"), dialog()).click());
   await flush();
 
-  // 5) Add a new Agent preset (tier).
+  // 5) Add a new Agent preset (tier) with a permission_mode.
   await act(async () => btn(t("settings-modelprofiles.add_tier"), dialog()).click());
   await flush();
   const newTier = [...dialog().querySelectorAll<HTMLElement>('[data-testid^="profile-tier-edit-"]')].at(-1)!;
   setVal(newTier.querySelector<HTMLInputElement>(`input[aria-label="${t("settings-modelprofiles.tier_name")}"]`)!, "fast");
   setVal(newTier.querySelector<HTMLSelectElement>(`select[aria-label="${t("settings-modelprofiles.tier_launcher")}"]`)!, "other");
+  await flush();
+  setVal(newTier.querySelector<HTMLSelectElement>("select[data-permission-mode-select]")!, "plan");
   await flush();
   setVal(newTier.querySelector<HTMLInputElement>(`input[aria-label="${t("settings-modelprofiles.tier_description")}"]`)!, "Quick mechanical tasks");
   await flush();
@@ -275,7 +281,7 @@ it("edits name, purposes, launchers, and tiers interactively via shared pickers 
    name: "Economy Plus",
    description: "Everyday models",
    purposes: {
-    assistant: { provider: "launcher.gw", model: "opus-4", effort: "medium" },
+    assistant: { provider: "launcher.gw", model: "opus-4", effort: "medium", permission_mode: "acceptEdits" },
     kb: { provider: "launcher.api_fast", model: "fast-2", effort: "low" },
    },
    launchers: {
@@ -284,7 +290,7 @@ it("edits name, purposes, launchers, and tiers interactively via shared pickers 
    },
    tiers: {
     standard: { launcher: "gw", model: "sonnet-4", effort: "medium", description: "Default coding" },
-    fast: { launcher: "other", description: "Quick mechanical tasks" },
+    fast: { launcher: "other", permission_mode: "plan", description: "Quick mechanical tasks" },
    },
   });
   expect(JSON.stringify(puts[0].body)).not.toMatch(/api_key|token|secret/i);
@@ -367,6 +373,25 @@ it("keeps edits on 409 conflict and allows reloading latest revision", async () 
   await flush();
   expect(puts.map((b) => b.revision)).toEqual([1, 2]);
   expect(dialog().querySelector('[data-testid="model-profile-editor"]')).toBeNull();
+ } finally {
+  await act(async () => root.unmount()); host.remove();
+ }
+});
+
+it("displays a preset's and purpose's permission_mode using the shared mode label", async () => {
+ await initI18n("en");
+ vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ revision: 1, profiles: [{ id: "safe", name: "Safe", changes: [],
+  purposes: { assistant: { provider: "launcher.claude", permission_mode: "acceptEdits" } },
+  tiers: { review: { launcher: "claude", model: "sonnet", effort: "high", permission_mode: "plan", description: "Read only review" } } }] }), { status: 200 })));
+ const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+ const flush = async () => { for (let i = 0; i < 8; i++) await act(async () => { await Promise.resolve(); }); };
+ try {
+  await act(async () => { root.render(<ModelProfiles onChanged={() => {}} />); }); await flush();
+  act(() => [...host.querySelectorAll("button")].find((b) => b.textContent?.includes("Safe"))!.click()); await flush();
+  const tierRows = [...document.querySelectorAll('[data-testid="model-profile-tiers"] li')].map((li) => li.textContent);
+  expect(tierRows[0]).toContain(modeTitle("plan"));
+  const purposeRows = [...document.querySelectorAll('[data-testid="model-profile-purposes"] li')].map((li) => li.textContent);
+  expect(purposeRows[0]).toContain(modeTitle("acceptEdits"));
  } finally {
   await act(async () => root.unmount()); host.remove();
  }

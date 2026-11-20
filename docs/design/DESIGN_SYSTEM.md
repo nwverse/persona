@@ -619,6 +619,11 @@ on-demand model panel, not the everyday Assistant home (#6887).
   image route (`remote_images`, docs/protocol/protocol.md "Remote images (#9473)") at the size drawn; what other
   people wrote (the Inbox's Lark, GitHub and connector threads, `asksBeforePictures()`) keeps each run its size with
   Load Image over it until tapped, since a picture there may be a tracking pixel.
+  A machine-local Markdown image uses the session's machine and cwd and the same layout. A local image inside a line
+  of text is lifted into its own block so the machine-file loader and any failure are visible. A failed local image
+  keeps Retry on its tile and shows the complete reason below the tile or run, including at accessibility text sizes;
+  recreating the tile does not retry, and Retry runs only after a tap. The full-screen viewer shows the same reason
+  and offers Retry. Local file links open the same file viewer as bare paths, including missing or denied files.
   The web (#9475) draws the same rules: `ui/ReplyImages.tsx` (a chunk of its own with the step that lifts a run out of
   its paragraph, `ui/reply-images-plugin.ts`, loaded with a reply's first picture), rules in `lib/reply-image-layout.ts`;
   a lone picture is 300 px tall (240 px in a narrow window), a run at most 480 px wide, the turn images' 10 px radius
@@ -756,7 +761,7 @@ The answerable decision row (iOS, #3804; `apple/Persona/Views/Assistant/Tasks/De
 
 `OrphanedLine` (iOS, #3618; `apple/Persona/Views/Assistant/Tasks/SupervisionViews.swift`) is one caption line, "Nobody is working on this · <reason>", in `Theme.cautionText` with the warning mark (`Theme.Icon.error`) under a task's state on the To-dos row and the to-do's page; the task board puts the same words first in its subtitle. The words carry the state, so color is not the only signal (section 6.3). It is not shown while the task waits for the user, nor on a done to-do. It is a status line, not a notice: no surface and no action of its own. The frozen Mac app draws neither the decision row nor this line.
 
-The brief box (web, #3822; `web/src/views/assistant/TaskBrief.tsx`) shows what a task is held to: on the plan card before **Start**, and on the to-do's page above its criteria. It adds no surface: it is the inset well the review checklist already uses (`rounded-control`, `bg-inset`, `shadow-hairline`), with the closeout card's label / value rows. Whose words a line holds is never left to styling: the owner's own are introduced as theirs with the date, work they did not ask for names who started it, and a brief made later says it was reconstructed and labels the hand-over prompt as that. Long text is held to a few lines with **Show all** in place (principle 2). On the plan card the whole brief is folded to who asked and one line that counts the rest, behind that one control, and the card's buttons stay at the bottom edge of the tray it scrolls in: added detail never puts a pending request's answer out of reach (section 4.8). The criteria keep one list, the review checklist's own (met, missing, open, not checked); under it a finished task adds only the criteria a scope change dropped (`--ink-3`, the undo mark, the criterion struck through, the word and the change that dropped it) and what was done beyond the brief. Overdue is a caution chip (`--orange` on `--orange-tint` with the clock) plus a sentence, not a tint over the box. Other clients that draw a brief keep the same first lines and add the dropped state to their one list of criteria.
+The brief box (web and Android, #3822; `web/src/views/assistant/TaskBrief.tsx`, `android/feature/chat/src/main/kotlin/persona/feature/chat/PlanTaskBrief.kt`) shows what a task is held to. The web draws it on the plan card before **Start** and on the to-do's page above its criteria; Android draws it on the open plan card before **Start**. It adds no surface: it is the inset well the review checklist already uses (`rounded-control`, `bg-inset`, `shadow-hairline`), with the closeout card's label / value rows. Whose words a line holds is never left to styling: the owner's own are introduced as theirs with the date, work they did not ask for names who started it, and a brief made later says it was reconstructed and labels the hand-over prompt as that. Long text is held to a few lines with **Show all** in place (principle 2). On the plan card the whole brief is folded to who asked and one line that counts the rest, behind that one control, and the card's buttons stay at the bottom edge of the tray it scrolls in: added detail never puts a pending request's answer out of reach (section 4.8). The criteria keep one list, the review checklist's own (met, missing, open, not checked); under it a finished task adds only the criteria a scope change dropped (`--ink-3`, the undo mark, the criterion struck through, the word and the change that dropped it) and what was done beyond the brief. Overdue is a caution chip (`--orange` on `--orange-tint` with the clock) plus a sentence, not a tint over the box. Other clients that draw a brief keep the same first lines and add the dropped state to their one list of criteria.
 
 **Background tasks panel** (web, #5421, the owner's requested alignment with cindy's Background tasks tab, `BackgroundTasksBody`; `web/src/views/chat/BackgroundPanel.tsx`). An Agent's side panel, opened only by hand (the top bar's button, the loop mark, a workflow card, `/workflows`). Under the side panel's header (Background tasks, list mark):
 - sections **Running** and **Completed**, 11 px medium headings in `--ink-3`;
@@ -780,10 +785,10 @@ are in `docs/android/android.md` ("Background tasks in Agent chat").
 **Hand-off cards** (web, #5096; the owner asked that this part of the main chat follow cindy's `SessionHandoffCard` exactly, which replaces the "Dispatched: <title> · Open" line). iOS draws the same shape (`DispatchHandoffCard`): a well with ↳, title and badge, "3 min. ago · state", ↗, the failure line in `Theme.danger`. Each Agent a dispatch started or a task took over is one full-width card in the chat (`views/assistant/Handoff.tsx`; iOS and Android, #5110):
 - **Frame:** a bordered `rounded-xl` surface, 16 px padding and 14 px gaps (12 / 12 at phone width), whose border turns `--ink` on hover.
 - **Mark:** a 36 px round `--field` well with the ↳ mark (`cornerDownRight`), which inverts on hover.
-- **Title line:** the title (14 px semibold, one line) and a 10 px uppercase pill badge: New and Resumed are filled `--ink`, Already active is outlined.
+- **Title line:** the title (14 px semibold, one line) and a 10 px uppercase pill badge: New, Resumed and Continuation are filled `--ink`, Already active is outlined. On iOS and web, a plan that carries on an existing to-do says Continuation, including when its Agent fails to start. Resumed means the same Agent was reopened.
 - **Second line** (12 px): the history mark, "last active …" (the time alone at phone width), then ` · ` and the Agent's state from `StatusMark` and `lib/state-labels.ts`, in the attention color when it needs the user.
 - **End:** ↗ (`arrowUpRight`).
-- **Open:** the card opens the Agent where Settings › Agent preferences › "How Agents open" says (#5424): the side panel beside the chat (the default; over the chat on a phone-sized window), or the Agent's page. The card looks the same either way. Before an Agent is up, the card has no ↗ unless the task can be opened, and its second line says the Agent is starting, why it did not start (`--red`), or that the task closed or is gone.
+- **Open:** the card opens the Agent where Settings › Agent preferences › "How Agents open" says (#5424): the side panel beside the chat (the default; over the chat on a phone-sized window), or the Agent's page. The card looks the same either way. Before an Agent is up, the card has no ↗ unless the task can be opened, and its second line says the Agent is starting, why it did not start (`--red`), or that the task closed or is gone. On iOS and web, a failure with no readable cause says "Didn't start." and offers details only when the card can open them. If the card cannot open, its failure line wraps so the explanation can be read on the card.
 
 Two departures from cindy, both from Persona's rules:
 - cindy shows a short session id on the card. The Assistant's chat keeps ids out of sight (super rule 4, section 5.6), so here it is only in the card's tooltip.
@@ -1705,12 +1710,13 @@ Clearing the main chat's context (**Clear context** in its ⋯ menu and `/clear`
 
 Deleting a Persona chat (#6172, web first) serves everyday people and reuses Menu, Dialog and Button without new tokens. **Delete…** appears in sidebar and History menus. The destructive one-object dialog has **Delete chat** and Cancel, with copy stating that Persona history is removed, task and Agent references and previously saved knowledge remain, and the computer transcript is retained. No physical-file checkbox is offered. It appears for ordinary and archived former main chats when the hub supports it. The main chat uses the existing Clear context action before its archived predecessor can be deleted. Cancel and repeat submission are disabled while the request is pending. Busy or waiting work is refused inline without removing the row; success removes it, while an already open reference shows **Conversation deleted** without a composer.
 
-Removing a link between two Knowledge entries (#10333, web `Relationships.tsx`; iPhone and iPad follow) is rung 2 with a
-narrow default: the dialog names both entries, says both are kept, and says only this link stays out while the rest keeps
-updating. The wider effect, stopping automatic changes to both whole lists, is a `Switch` in the dialog, off by default and
-fixed once the request is sent; turning it on spells out the two lists it protects. What was removed is listed under the
-related entries as **Removed by you**, each with **Allow again** (a secondary small `Button`), so the narrow default
-stays reversible without a toast. Allow again links nothing; it lets Persona decide again.
+Removing a link between two Knowledge entries serves everyday people. The web dialog (`Relationships.tsx`, #10333) and the
+content-height sheet on iPhone and iPad (`KBRemoveLinkSheet`, #10481, rung 3) name both entries and say what stays out.
+**Also stop automatic changes to both lists** starts off each time. Turning on the `Switch` or `Toggle` names both lists
+it will protect. Apple's sheet keeps **Cancel** and the destructive **Remove Link** visible in a vertical stack of themed
+buttons while the explanation scrolls when it needs more room. The link disappears immediately on submit, then the app checks both entries.
+**Removed by you** follows the related entries and offers a secondary **Allow again** action on each row. It makes the
+narrow removal reversible by letting Persona consider the link in a future update.
 
 A blocked terminal card on the web offers **Close Agent**, including when no choices can be parsed from the screen.
 Its footer reuses `Button`, explains that the pending confirmation is cancelled and the conversation kept, and
@@ -2526,6 +2532,8 @@ done, not applicable, or deviated (with the reason). It is short on purpose. The
 - [ ] Model and product separate: names which of speed, model, presentation or features it touches, and changes none of the others (principle 5).
 - [ ] Checkable: each item above marked done carries its evidence (screenshot, test name, command output) in the PR (principle 6).
 - [ ] Fast, local-first and stateful: local Sending is immediate, hub receipt shows Processing, failure recovers; before/after feedback and execution timings are separate (principle 7).
+- [ ] Other platforms: done / issue #N / not applicable (reason)
+- [ ] Parity list row updated
 
 **Rules**
 

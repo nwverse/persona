@@ -460,11 +460,17 @@ func (s *Service) pickerTiers(ctx context.Context, machine string, launchers []C
 // hiddenUsable: machine has hidden launcher name (launchersHere, which a start goes by) and its latest check did not
 // fail, as withHealth holds the visible ones.
 func (s *Service) hiddenUsable(ctx context.Context, machine, name string) bool {
+	_, _, usable := s.hiddenLauncherInventory(ctx, machine, name)
+	return usable
+}
+
+// hiddenLauncherInventory retains the explicit-hidden read so candidate metadata can come from the same RPC.
+func (s *Service) hiddenLauncherInventory(ctx context.Context, machine, name string) (list []proto.Launcher, known, usable bool) {
 	if _, bad := s.launcherUnusable(ctx, machine, name); bad {
-		return false
+		return nil, false, false
 	}
-	list, known := s.launchersHere(withUnhidden(ctx, name), machine)
-	return known && slices.ContainsFunc(list, func(l proto.Launcher) bool { return l.Name == name })
+	list, known = s.launchersHere(withUnhidden(ctx, name), machine)
+	return list, known, known && slices.ContainsFunc(list, func(l proto.Launcher) bool { return l.Name == name })
 }
 
 // machineLauncherRoutes are "New Agent"'s pickers on one machine: its launchers with the agent each starts

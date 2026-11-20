@@ -41,7 +41,7 @@ const Usage = `  personad hook             Claude Code hook entry (reads hook JS
   personad notify "title" [body] [--silent] [--error] [--strict]
                            one notification to the phone; exit 0 whatever happens unless --strict (docs/integrations/script-cli.md)
   personad tool <tool> [<json args> | -] | --cli <connector> [--format json|text] <words…>
-                           a connector's tools from the assistant's shell, or task_spawn from a supervised Agent's pane
+                           a connector's tools from the assistant's shell, or an Agent's own tools from its pane
                            (docs/protocol/connector-protocol.md "Command line"; personad tool --help)
   personad office docx|pptx|xlsx|check …
                            write a Word document or a deck from Markdown, a workbook from JSON / CSV, or say what is in

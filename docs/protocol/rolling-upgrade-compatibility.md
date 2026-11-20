@@ -237,6 +237,21 @@ selected host. They offer typed model IDs for native `omp` only when that respon
 `"supports_start_model": true`. An older node can start `omp` with its own default. Older clients ignore the
 optional field. A registered runtime called `omp` still supplies its own list of supported models.
 
+## Start-defaults field convergence (#11719)
+
+The rule fields of `GET`/`PUT /api/v1/assistant/start-defaults` and of the nested `start_defaults` in `PUT /api/v1/assistant` converge on new names in #11719. This is extension-facing JSON, and the same structure is persisted in the Postgres settings, so dual-read must cover both live requests and already-stored policies.
+
+| Identifier | Old name | New name | New hub / manager behavior |
+| --- | --- | --- | --- |
+| Rule match | `when` | `applies_when` | Dual-read on decode (stored policies included); dual-write the same value on encode; both keys present with different values is a 400, with equal values the current name is read (presence, never an OR). An explicit `null` is present on the wire, so `null` beside a real value is a disagreement, not an absent field. |
+| Candidate list | `then.presets` | `then.candidates` | Same as above; each row gains `priority` (omitted is 0, so a list with no priorities behaves byte-for-byte like the old ordered list). |
+| Read-only preview | none | `POST /api/v1/assistant/start-defaults/preview` | Reuses the `assistant.start_defaults` scope, no new scope. An older hub has no such route, so an extension call gets 404/403 and must not be rewritten to another endpoint and retried. |
+
+- **The two write paths fail differently on an old hub/manager, and a writer must know which it is talking to.** On the dedicated `PUT /api/v1/assistant/start-defaults` route, `DisallowUnknownFields` makes an old hub answer 400 to `applies_when` / `candidates`. On the older nested `start_defaults` of `PUT /api/v1/assistant`, the handler decoded with a plain `json.Decoder`, so an old manager **silently ignores** the new fields instead of failing: it can return 200 while storing an empty match and no candidates, which turns a worker-scoped rule into an all-task rule. There is no capability bit to read, so the safe order is to `GET /api/v1/assistant/start-defaults` first and check whether the answer carries `applies_when` / `candidates` (present means a new peer), then write only the field names that peer understands. Never "try both names" within one write as a fallback.
+- Reads answer both field names, so an old reader that GETs and then PUTs back does not wipe the policy to empty rules. An old reader does not know `priority`: it drops the field when re-encoding, so a prioritized policy does **not** round-trip through an old reader unchanged — every priority comes back as 0 and equal-weight selection order applies.
+- Semantics are not loosened: `assistant.start_defaults` is still granted by name only, an extension's policy still must expire within an hour, unknown fields are still a 400 on the strict route, and the preview writes no state. Aliases are never silently merged; a genuine value conflict must be resolved by the writer.
+- Candidate selection reads one `startCandidateSource` interface (`start_candidates.go`); a future dynamic candidates source implements it and changes none of the fields or compatibility rules in this section.
+
 ## 配置、目录、服务与升级渠道
 
 | 标识 | 旧名 | 新名 | 新实现读旧安装 | 与旧实现共存／回退 |
