@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // ScheduleTodoAssessment describes observable evidence, not acceptance of the work.
@@ -211,6 +212,62 @@ func retainTodoEvidence(before, after scheduleTodoSnapshot) scheduleTodoSnapshot
 	return out
 }
 
+// scheduledRunReply is a linked run's own reply, its assessment's explanation (and so the reason of the owner decision a
+// second no-progress run raises, escalateScheduledTodo); "" when it cannot be told apart, and the assessment then says
+// what the hub saw (todo_no_evidence). The reply is the one to the run's own prompt (runReply). A run in its source
+// conversation shares that conversation with its other work: its supervision messages, the owner's words, the runs of
+// other schedules sent there. Two linked runs due in the same minute are answered one after the other, and both
+// watchers see the conversation settle after the second answer, so that conversation's latest turn put one run's
+// reply on the other's to-do (#11553). Only a run in a conversation of its own, where nothing else goes and a run is
+// skipped rather than stacked on the last one, still falls back to the latest turn when its prompt is not on the page.
+func (s *Service) scheduledRunReply(ctx context.Context, task Task, run ScheduleRun) string {
+	items, ok := s.taskStateItems(ctx, run.MachineID, run.SessionID)
+	if !ok {
+		return ""
+	}
+	if reply, found := runReply(items, task.stateRunKey); found || run.Conversation == "source" {
+		return reply
+	}
+	_, last := splitLastTurn(items)
+	_, reply := turnExchange(last)
+	return reply
+}
+
+// runReply is the reply in items to the prompt the hub sent for the run whose key is key (runKeyIn): the last reply
+// after that prompt, up to the next message that opened a turn of its own. found says whether that prompt is in items;
+// with it, reply is "" when nothing answered it, or when its turn was not its own: the prompt was queued into another
+// turn, or another message was queued into its turn, and a reply after that answers both.
+func runReply(items []proto.Item, key string) (reply string, found bool) {
+	if key == "" {
+		return "", false
+	}
+	i := len(items) - 1
+	for i >= 0 && runKeyIn(items[i]) != key {
+		i--
+	}
+	if i < 0 {
+		return "", false
+	}
+	if items[i].Queued {
+		return "", true
+	}
+	for _, it := range items[i+1:] {
+		if it.Kind != proto.KindText || strings.TrimSpace(it.Text) == "" {
+			continue
+		}
+		switch it.Role {
+		case "user":
+			if it.Queued {
+				return "", true
+			}
+			return reply, true
+		case "assistant":
+			reply = strings.TrimSpace(it.Text)
+		}
+	}
+	return reply, true
+}
+
 func (s *Service) finishScheduledTodo(ctx context.Context, task Task, run ScheduleRun) {
 	if task.TodoID == "" || task.Repeat == repeatOnce || run.ID == "" {
 		return
@@ -222,9 +279,7 @@ func (s *Service) finishScheduledTodo(ctx context.Context, task Task, run Schedu
 	}
 	reason := run.Error
 	if reason == "" {
-		if items, ok := s.lastTurnItems(ctx, run.MachineID, run.SessionID); ok {
-			_, reason = turnExchange(items)
-		}
+		reason = s.scheduledRunReply(ctx, task, run)
 	}
 	reason = clip(oneLine(strings.ReplaceAll(reason, "\x00", "")), 500)
 	sc, err := s.lockedSchedule(ctx)
