@@ -14,8 +14,6 @@ Workspace policy: "new" makes an isolated checkout; {"new":{"branch":"task/my-ch
 
 `wait_seconds` observes up to 50 seconds after dispatch, appending `Inline observation` JSON: `completed`(this input's `reply`), `question`(pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, with known input/session ids. Observation never answers questions, accepts tasks, resends or cancels work; normal supervision/`task_review` applies. Older nodes may time out rather than return an unrelated reply. Only an immediately dispatchable single-task plan waits; approval cards and multi-task plans return immediately.
 
-For a task unrelated to the Inbox, set its inbox_item to "none" to leave it unlinked.
-
 ```json
 {
   "type": "object",
@@ -193,7 +191,7 @@ For a task unrelated to the Inbox, set its inbox_item to "none" to leave it unli
           },
           "inbox_item": {
             "type": "string",
-            "description": "Exact handed-off Inbox id for related work only. Checked against this conversation and manager; links the task without filing or replying."
+            "description": "Handed-off Inbox ID, or 'none' for unrelated work. Checks the conversation and manager; links without filing or replying."
           },
           "tier": {
             "type": "string",
