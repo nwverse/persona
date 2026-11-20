@@ -8,8 +8,8 @@ export function ConversationArrangeBar({ custom, onReset, onDone }: { custom: bo
       {/* One lazy style per arrange surface; a CSS import would add its asset to both first-screen preload graphs. */}
       <style>{".conversation-order-content [data-row-age],.conversation-order-content [aria-haspopup=menu]{display:none}"}</style>
       <div className="min-w-36 flex-1">
-        <h2 className="text-[12px] font-medium text-ink">{t("conversation-order.arrange_title")}</h2>
-        <p className="mt-0.5 text-[11.5px] leading-[1.5] text-ink-3">{t("conversation-order.arrange_hint")}</p>
+        <h2 className="text-label font-medium text-ink">{t("conversation-order.arrange_title")}</h2>
+        <p className="mt-0.5 text-submeta leading-[1.5] text-ink-3">{t("conversation-order.arrange_hint")}</p>
       </div>
       <div className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-2">
         {custom && <Button tone="quiet" size="sm" onClick={onReset}>{t("conversation-order.order_reset")}</Button>}
