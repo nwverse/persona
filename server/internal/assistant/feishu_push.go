@@ -161,6 +161,9 @@ func (s *Service) feishuMirror(ctx context.Context, machine, session string) {
 	if !ok || sess.WokeByTask && !main || spaceOf(sess) == SpaceHealth { // a health task's runs stay off Feishu (health.go)
 		return
 	}
+	if s.transientRetryTurn(ctx, sess) {
+		return
+	}
 	asked, answer, turn, ok := s.channelLastTurnOf(ctx, machine, session)
 	if !ok {
 		return
