@@ -331,6 +331,11 @@ var Routes = []string{
 	"GET /api/v1/todos/{id}",                // one to-do as the list has it, with its view
 	"GET /api/v1/todos/{id}/images/{image}", // one attached picture's exact bytes (todo_images.go, #11084)
 	"GET /api/v1/todos/{id}/repositories",
+	"GET /api/v1/todos/{id}/backend-workspace",
+	"GET /api/v1/todos/{id}/backend-workspace/operations/{operation_id}",
+	"POST /api/v1/todos/{id}/backend-workspace/prepare",
+	"POST /api/v1/todos/{id}/backend-workspace/cancel",
+	"POST /api/v1/todos/{id}/backend-workspace/cleanup",
 	"GET /api/v1/todos/{id}/workspace-rules",
 	"PUT /api/v1/todos/{id}/workspace-rules",
 	"POST /api/v1/todos/{id}/workspace-naming/preview",

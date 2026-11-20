@@ -7,7 +7,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -18,6 +17,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/teamdocs"
 )
 
@@ -101,7 +101,7 @@ func run(args []string) error {
 		return memberError(store.Revoke(setup, args[1], args[2]))
 	}
 	cancel()
-	ln, err := net.ListenTCP("tcp", net.TCPAddrFromAddrPort(listenAddr))
+	ln, err := osproc.Listen("tcp", listenAddr.String())
 	if err != nil {
 		return errors.New("cannot listen on the requested loopback address")
 	}

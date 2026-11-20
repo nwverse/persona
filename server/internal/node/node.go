@@ -750,6 +750,12 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	if strings.HasPrefix(method, "node.update.") {
 		return n.handleUpdate(ctx, method, params)
 	}
+	if method == "task.workspace.capabilities" {
+		return map[string]any{"capability": "task_workspace_v1"}, nil
+	}
+	if strings.HasPrefix(method, "task.workspace.") {
+		return n.taskWorkspace(ctx, strings.TrimPrefix(method, "task.workspace."), params)
+	}
 	switch method {
 	case nodeproto.SourceSend:
 		method = "session.send"
@@ -1431,6 +1437,12 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			// Consume the old stop before starting: a failed/interrupted resume is not another confirmed idle stop.
 			if err := n.saveStopCause(ctx, p.ResumeSessionID, proto.StopUnknown); err != nil {
 				return nil, err
+			}
+			if p.ResumeAutomatic {
+				// The assistant's own resume that does not bring the Agent up leaves it stopped by that step, not by the
+				// user: resume_failed, which the assistant may try again, never unknown (#11441).
+				id := p.ResumeSessionID
+				defer func() { n.noteResumeFailed(id, resultErr) }()
 			}
 		}
 		if p.ResumeSessionID != "" && p.Host == "" {
