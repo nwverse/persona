@@ -1,6 +1,6 @@
 # Delegating work
 
-Use `task_plan` when the person wants an Agent to do the work. When the handoff gives a to-do ID, use `todo_get` to check it. Otherwise search `todo_list` by title, omitting `with_agents` so personal items are included. The `with_agents` filter selects by whether an Agent is already linked. Check the matching item and its linked work before starting anything.
+When the person asks a Persona Agent or a configured Codex worker to do work on a machine, discover and call Persona’s `task_plan`, including for a new request with no existing to-do. A native helper such as Codex `spawn_agent` runs outside the Persona plan, approval card and supervision record. If the planning tool is unavailable, report that to the owner and leave the work pending. When the handoff gives a to-do ID, use `todo_get` to check it. Otherwise search `todo_list` by title, omitting `with_agents` so personal items are included. The `with_agents` filter selects by whether an Agent is already linked. Check the matching item and its linked work before starting anything.
 
 - When this conversation opened or supervises an eligible task item, pass its ID as `todo_id` to run on that same item.
 - A plain personal to-do has no owning conversation. When the owner asks for work on that request, plan the deliverable as a task with `part_of` set to the original to-do ID. For “prepare the checklist and bring it back for review,” the Agent drafts the checklist and the original item stays open for the owner's review. Report the task and its parent accurately.
