@@ -252,6 +252,26 @@ test('a restart changes the history only when projected steps were outstanding (
   assert.equal((await items()).history, restarted.history, 'nothing was outstanding')
 })
 
+test('a restart with an unreadable history epoch does not reuse the history of projected steps (#12014)', {
+  skip: process.platform === 'win32' || process.getuid?.() === 0,
+}, async (t) => {
+  const { node, home, restart } = await fixture(t, { promptPlan: [{ reply: 'Third answer' }] })
+  const items = () => node.peer.call('session.items', { session_id: SESSION })
+  const idle = await items()
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Third' })
+  await until('the reply waits for its export', async () => texts(await items()).includes('Third answer'))
+  const sent = await items()
+  assert.equal(sent.history, idle.history)
+  const epoch = join(home, 'config/brain', RAW, '.persona-history-epoch')
+  chmodSync(epoch, 0o000)
+  try {
+    await restart()
+    assert.notEqual((await items()).history, sent.history, 'clients drop the projected steps they hold')
+  } finally {
+    chmodSync(epoch, 0o600)
+  }
+})
+
 test('a send changes the history at once when its brain directory is read-only (#12014)', {
   skip: process.platform === 'win32' || process.getuid?.() === 0,
 }, async (t) => {

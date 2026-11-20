@@ -755,14 +755,16 @@ export function createAgyRuntime(options = {}) {
 
   // Steps shown from ACP before the native export (a prompt's live and settled steps, a wake) have IDs the export
   // does not reuse. The history stays while they only grow, so a send is an append; it changes once any of them is
-  // dropped (export, interrupt). The next token is on disk first, so a restart never reports the old one (#12014).
+  // dropped (export, interrupt). The next token is on disk first, so a restart never reports the old one; an
+  // unreadable epoch starts fresh (#12014).
   function projectedHistory(rawId, history, steps) {
     let p = projections.get(rawId)
     if (!p) {
       let file = ''
-      try { file = readFileSync(join(brainDirOf(rawId), HISTORY_EPOCH), 'utf8').trim() } catch {}
+      let unreadable = false
+      try { file = readFileSync(join(brainDirOf(rawId), HISTORY_EPOCH), 'utf8').trim() } catch (err) { unreadable = err?.code !== 'ENOENT' }
       const valid = /^[\da-f]{8}$/.test(file)
-      projections.set(rawId, (p = { token: valid || !file ? file : newToken(), file: valid ? file : '', shown: new Set() }))
+      projections.set(rawId, (p = { token: valid || (!file && !unreadable) ? file : newToken(), file: valid ? file : '', shown: new Set() }))
     }
     const shown = new Set(steps)
     if ([...p.shown].some((step) => !shown.has(step))) {
