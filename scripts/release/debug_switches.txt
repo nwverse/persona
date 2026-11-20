@@ -187,6 +187,7 @@ openTerminalTips
 openTerminalsPage
 openThreadAt
 openTodoDetail
+openTodoPlace
 openTodoTitled
 openTokenUsage
 openTranslationSettings

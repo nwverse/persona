@@ -567,10 +567,13 @@ struct AssistantView: View {
     /// animation, then the drawer closes: one motion, not a push and a slide while the drawer closes (#6599).
     private func show(_ page: ShellPage?) {
         guard let page else { return }
+        // A To-dos place the sidebar picked (#10465): To-dos opens on it at its root, what it kept being the place
+        // before's.
+        let fresh = page == .todos && TodoWorkspace.shared.takePick()
         #if os(iOS)
-        if embedded, let unified { return showRoot(page, in: unified) }
+        if embedded, let unified { return showRoot(page, in: unified, fresh: fresh) }
         #endif
-        let kept = placesByValue ? places.enter(page, from: navPath.wrappedValue) : nil
+        let kept = placesByValue ? places.enter(page, from: navPath.wrappedValue, fresh: fresh) : nil
         #if DEBUG
         ShellTrace.shared.note("place \(page) \(kept == nil ? "root" : "kept") drawer=\(activeDrawer.isOut) path=\(navPath.wrappedValue.count) kept=\(kept?.count ?? 0)")
         #endif
@@ -628,7 +631,7 @@ struct AssistantView: View {
     /// The Sidebar layout (#8359): each page the sidebar opens is a root of the page beside it, the conversation one of
     /// them. Picking one replaces the root at once, the one left keeping what was opened on it; picking the one in front
     /// goes back to it (`SidebarPageRoots`). The shaded row follows the root (`UnifiedSidebar.shownPlace`, `atRoot`).
-    private func showRoot(_ page: ShellPage, in unified: UnifiedSidebar) {
+    private func showRoot(_ page: ShellPage, in unified: UnifiedSidebar, fresh: Bool = false) {
         switch page {
         case .newConversation:
             traceRoot(page, unified.select(.conversation, path: navPath, contentChanged: true))
@@ -637,7 +640,7 @@ struct AssistantView: View {
             traceRoot(page, nil)
             enterHealth()
         default:
-            let step = SidebarPageRoot.of(page).map { unified.select($0, path: navPath) }
+            let step = SidebarPageRoot.of(page).map { unified.select($0, path: navPath, fresh: fresh) }
             if page == .inbox, let step { inboxPicked(step) }
             traceRoot(page, step)
         }

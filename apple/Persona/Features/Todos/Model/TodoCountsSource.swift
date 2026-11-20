@@ -123,18 +123,35 @@ final class TodoCountsSource {
         let ordered = TodoFiling.ordered(filed)
         if ordered != self.filed { self.filed = ordered }
         var next = hubCounts ?? TodoCountsFallback.counts(filed)
-        let carried = overlay.isEmpty ? [] : TodoCountsFallback.carried(filed)
-        var awayByProject: [String: Int] = [:]
-        for row in filed where row.section == TodoListSection.needsYou && !carried.contains(row.id) && !row.asks.isEmpty
-            && Set(row.asks).isSubset(of: overlay[row.id] ?? []) {
-            next.sections[TodoListSection.needsYou] = max(0, (next.sections[TodoListSection.needsYou] ?? 0) - 1)
-            guard !row.quiet else { continue }
-            next.needsYou = max(0, next.needsYou - 1)
-            if let project = row.project { awayByProject[project, default: 0] += 1 }
-        }
+        let awayByProject = lessAnswered(&next, filed)
         if next != counts { counts = next }
         let nextPlaces = places(scope: scope, filed: filed, awayByProject: awayByProject)
         if nextPlaces != places { places = nextPlaces }
+    }
+
+    /// The counts of `rows`, part of `filed` (a place's, #10465), by the rules a hub without counts is counted by, less
+    /// the answers given here: a place's bar and its Needs you header.
+    func counts(of rows: [TodoFiled]) -> TodoCounts {
+        var c = TodoCountsFallback.counts(rows)
+        lessAnswered(&c, rows)
+        return c
+    }
+
+    /// `counts` less the to-dos of `rows` in Needs you whose every ask was answered here; returns each project's part
+    /// of what left N.
+    @discardableResult
+    private func lessAnswered(_ counts: inout TodoCounts, _ rows: [TodoFiled]) -> [String: Int] {
+        guard !overlay.isEmpty else { return [:] }
+        let carried = TodoCountsFallback.carried(rows)
+        var awayByProject: [String: Int] = [:]
+        for row in rows where row.section == TodoListSection.needsYou && !carried.contains(row.id) && !row.asks.isEmpty
+            && Set(row.asks).isSubset(of: overlay[row.id] ?? []) {
+            counts.sections[TodoListSection.needsYou] = max(0, (counts.sections[TodoListSection.needsYou] ?? 0) - 1)
+            guard !row.quiet else { continue }
+            counts.needsYou = max(0, counts.needsYou - 1)
+            if let project = row.project { awayByProject[project, default: 0] += 1 }
+        }
+        return awayByProject
     }
 
     private func places(scope: AssistantScope?, filed: [TodoFiled], awayByProject: [String: Int]) -> [TodoPlace] {

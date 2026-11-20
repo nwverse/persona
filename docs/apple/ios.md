@@ -2112,6 +2112,23 @@ built in stages behind the hub's `todo_view`; this section grows with it.
   what it draws and whether the gate is on (`probe.todos-page`). The store's one-minute clock for rows filed by the
   app's own rules runs while a counted row is filed so (the drawer's N included, whether or not the list was drawn) and
   follows whatever changes that, another assistant made current included (`TodoCountsSource.byRulesChanged`).
+- **Places** (DESIGN_SYSTEM 3.5 "To-dos places"; `docs/design/sidebar-navigation.md` section 7). `TodosPlacesModel` reads
+  the store's places (`countsSource.places`: the hub's with one manager, the current assistant's projects with several)
+  and the place picked (`TodoWorkspace.place`, kept for the app's run). `TodoPlaceRows` is the sidebar's To-dos row
+  with its places folded under it (`sidebar.fold.todos`), each drawn by the sidebar's own row, and reads only the places
+  and the place shown, so their numbers redraw those rows alone. The list's title is the system's title menu of the
+  same places (`TodoTitleMenu`). A place a hub no longer lists (no `todo_places`, a 404 or 405, another assistant's
+  project) is All To-dos (`TodosPlaces.effective`). The list filters the one list on the device (`TodosPlaces.holds`;
+  the list route has no place): Today, open and due today, overdue or reminding today; Upcoming, open and dated, laid
+  out by day (`TodoUpcomingLayout`) with no section bar; a project, its rows. A place's bar and Needs you header count
+  its rows (`TodoCountsSource.counts(of:)`, less the answers given on the device), never held, and every place but All
+  To-dos says what needs the owner outside it (`TodosListModel.hiddenNeeds`). A pick in the sidebar opens To-dos on the
+  place at its root (`TodoWorkspace.open`, taken once by `AssistantView.show` as `fresh`); the To-dos row is All To-dos
+  while To-dos is in front and otherwise reopens it as it was left (`TodosPlacesModel.reopen`; the page says whether it
+  is on screen, `TodoWorkspace.pageUp`); a pick in the title menu, Show All and "3 coming up this week" change the list
+  in place. Upcoming's ⋯ › Show as Calendar (`todos.v1.upcomingCalendar`)
+  draws the to-dos calendar coloured by each row's view (`TodoCalendarView`'s `state`; today's page keeps its session
+  reader). DEBUG `-openTodoPlace today|upcoming|project:<slug>` opens To-dos on a place.
 - **404 and 405.** An older hub answers 405 for `GET /api/v1/todos/{id}` and `GET /api/v1/todos/places` (the `PATCH` and
   `DELETE` routes of `/api/v1/todos/{id}` match the path) and 404 for the other new routes: `TodoNotThere` takes both
   as "not there". A 404 with `todo_not_found` is the to-do itself gone. `GET /api/v1/todos` answering 404 still hides

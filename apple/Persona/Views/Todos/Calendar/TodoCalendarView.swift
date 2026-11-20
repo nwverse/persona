@@ -165,6 +165,9 @@ struct TodoCalendarView: View {
     var open: (String) -> Void
     /// Back to the list ("N without a due date").
     var showList: () -> Void
+    /// Where each to-do stands, for its colour: given by the V1 list from the hub's view (#10465, Upcoming's calendar);
+    /// nil works it out from its Agents' sessions, as the to-dos page always has.
+    var state: ((TodoItem) -> TaskState)? = nil
 
     @StoredValue("todos.calendar.showDone") private var showDone = true
     @State private var adding: TodoCalendarSlot?
@@ -236,11 +239,16 @@ struct TodoCalendarView: View {
     // MARK: What is shown
 
     private var entries: [CalendarEntry] {
-        let lookup = TodosLogic.makeSessionLookup(AppModel.shared.allSessions(inFront: inFront))
-        let source = TodoEntrySource(todos: todos, state: { TodosLogic.todoStatus($0, lookup: lookup) }, showDone: showDone)
+        let source = TodoEntrySource(todos: todos, state: state ?? sessionState, showDone: showDone)
         // The day view's strip shows the whole week's dots.
         let range = TodoCalendar.range(mode == .day ? .week : mode, anchor: anchor, calendar: calendar)
         return source.entries(in: range, calendar: calendar, now: .now)
+    }
+
+    /// Each to-do's state from its Agents' sessions (every session read, so only without `state`).
+    private var sessionState: (TodoItem) -> TaskState {
+        let lookup = TodosLogic.makeSessionLookup(AppModel.shared.allSessions(inFront: inFront))
+        return { TodosLogic.todoStatus($0, lookup: lookup) }
     }
 
     @ViewBuilder private func content(wide: Bool) -> some View {

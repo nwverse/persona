@@ -14,8 +14,10 @@ extension TodosListDeps {
 /// The V1 To-dos list (#10465; docs/design/proposals/todos-redesign.md 3.3, 3.4; DESIGN_SYSTEM 3.4 "To-dos list"): the
 /// section bar (`TodosBar`, on the Inbox's `CapsuleFilterBar`, the grouping at its end), the sections in the hub's order
 /// with Can wait and Someday folded, and the rows (`TodoListRow`). The calm rule hides the bar and the headers while only
-/// plain To do rows exist. Rows open today's to-do page until the to-do's own page arrives; ticking, swiping and New To-Do
-/// arrive in the next step. iOS only: visionOS keeps today's To-dos.
+/// plain To do rows exist. It shows one place (`TodosPlacesModel`, DESIGN_SYSTEM 3.5 "To-dos places"), picked in the
+/// sidebar or from its title's menu: Upcoming by day, with its calendar a ⋯ away; every place but All To-dos says what
+/// needs the owner elsewhere. Rows open today's to-do page until the to-do's own page arrives; ticking, swiping and New
+/// To-Do arrive in another step. iOS only: visionOS keeps today's To-dos.
 struct TodoListView: View {
     @Environment(AppModel.self) private var app
     @Environment(\.shownTree) private var shownTree
@@ -25,10 +27,24 @@ struct TodoListView: View {
     @StoredValue("todos.v1.sort") private var sort = TodosListSort.suggested
     /// The rows in sight, for where the list rests (not observed: scrolling redraws nothing).
     @State private var sight = TodoListSight()
-    /// Whether this page has put its list back where the place was left: once, as the page is made. A list kept in its
-    /// navigation stack keeps its own place when a to-do pushed over it pops.
-    @State private var placed = false
+    /// The place this page last put its list back for (where it was left, or its top): once per place, as the page is
+    /// made or another place is picked. A list kept in its navigation stack keeps its own place when a to-do pushed over
+    /// it pops.
+    @State private var placedIn: String?
     private let workspace = TodoWorkspace.shared
+    /// The places: the title's menu, and the place the list shows (`model.place`) and its name, which the page takes
+    /// from them only when they change (`TodoPlaceFollower`), so a place's number changing redraws nothing here (P5).
+    @State private var places = TodosPlacesModel(deps: .live)
+    @State private var placeTitle: String?
+    /// Upcoming drawn as a calendar (⋯ › Show as Calendar), kept on the device.
+    @StoredValue("todos.v1.upcomingCalendar") private var upcomingCalendar = false
+    @State private var allProjects = false
+    /// A new to-do from a day heading's + on Upcoming, due that day.
+    @State private var addingDay: TodoCalendarSlot?
+    /// A new to-do from a project's empty state, made in it.
+    @State private var newInProject: TodoPlaceRef?
+    /// A to-do opened from Upcoming's calendar.
+    @State private var pushedTodo: TodoDetailRoute?
 
     /// Whether this page's tree is the one the window shows: a tree on its way out leaves the workspace alone.
     private var shownHere: Bool { builtTree == nil || shownTree?.tree === builtTree }
@@ -40,9 +56,56 @@ struct TodoListView: View {
         if #available(iOS 26.0, *) { true } else { false }
     }
 
-    private var drawsBar: Bool { model.ready && !model.calm && model.hasRows }
+    private var drawsBar: Bool { model.ready && !model.calm && model.hasRows && model.place != .upcoming }
 
     var body: some View {
+        Group {
+            if model.place == .upcoming && upcomingCalendar {
+                TodoUpcomingCalendar(asCalendar: $upcomingCalendar) { pushedTodo = TodoDetailRoute(id: $0) }
+            } else {
+                list
+            }
+        }
+        .background {
+            TodoPlaceFollower(places: places) { place, title in
+                if model.place != place { model.place = place }
+                if placeTitle != title { placeTitle = title }
+            }
+            // On screen or not, for the sidebar's To-dos row (`TodoWorkspace.pageUp`).
+            .onAppear { workspace.page(up: true) }
+            .onDisappear { workspace.page(up: false) }
+        }
+        .detailTitle(title)
+        .toolbarTitleMenu { TodoTitleMenu(places: places) { allProjects = true } }
+        .navigationBarTitleDisplayMode(.inline)
+        .pageToolbar {
+            ToolbarItem(placement: .primaryAction) { moreMenu }
+        }
+        .onChange(of: grouping) { _, g in model.grouping = g }
+        .onChange(of: sort) { _, s in model.sort = s }
+        // Each minute while the page is in front, and as it comes back to the front: the rows' times, and what the clock
+        // moves (Done today, the due days).
+        .tabActiveTask {
+            while !Task.isCancelled {
+                model.tick()
+                try? await Task.sleep(for: .seconds(60))
+            }
+        }
+        // The projects' names, read when the page opens and for the assistant made current.
+        .task(id: app.assistantSwitches) { await TodoProjects.shared.load(app.api?.currentAssistantSettings()) }
+        .task { await model.refresh() }
+        .navigationDestination(item: $pushedTodo) { r in TodoDetailView(todoID: r.id) }
+        .sheet(item: $addingDay) { slot in TodoQuickAddSheet(slot: slot) }
+        .sheet(item: $newInProject) { place in TodoPlaceNewSheet(project: place.project ?? "", projectName: places.title(place)) }
+        .sheet(isPresented: $allProjects) {
+            TodoAllProjectsSheet(places: places) { place in
+                allProjects = false
+                places.show(place)
+            }
+        }
+    }
+
+    private var list: some View {
         ScrollViewReader { proxy in
             List {
                 if model.ready {
@@ -51,6 +114,15 @@ struct TodoListView: View {
                             .listRowInsets(EdgeInsets())
                             .listRowSeparator(.hidden)
                             .themedRow()
+                            .id(Self.barRow)
+                    }
+                    if model.hiddenNeeds > 0 {
+                        TodoPlaceNotice(count: model.hiddenNeeds, place: title) { places.show(.all) }
+                            .listRowInsets(EdgeInsets(top: Theme.Space.xs, leading: Theme.Space.page, bottom: Theme.Space.xs,
+                                                      trailing: Theme.Space.page))
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
+                            .id(Self.noticeRow)
                     }
                     content
                 }
@@ -69,22 +141,27 @@ struct TodoListView: View {
                 if phase != .idle { model.settleArrivals() } // nothing fades in under a finger
                 // Where a scroll came to rest; not the idle a page is made in, before its rows are drawn.
                 if phase == .idle, old != .idle, let top = sight.top(in: model.groups) {
-                    workspace.rested(workspace.place, at: top, shown: shownHere)
+                    workspace.rested(model.place.id, at: top, shown: shownHere)
                 }
             }
             .onAppear {
                 model.grouping = grouping
                 model.sort = sort
+                model.place = places.current
                 model.start()
                 model.hold.set(.outOfSight, false)
             }
             .onDisappear { model.hold.set(.outOfSight, true) }
             // Back where the place's list last rested, once its rows are laid out: only for a page made anew (another
-            // place opened in between), never when a to-do pushed over it pops.
-            .task(id: model.ready) {
-                guard model.ready, !placed else { return }
-                guard let key = workspace.scrolled(in: workspace.place), model.row(key) != nil else {
-                    placed = true
+            // page opened in between) or another place picked, never when a to-do pushed over it pops. A place picked
+            // with nothing kept starts at its top.
+            .task(id: PlacedKey(ready: model.ready, place: model.place.id)) {
+                let place = model.place.id
+                guard model.ready, placedIn != place else { return }
+                let switched = placedIn != nil
+                guard let key = workspace.scrolled(in: place), model.row(key) != nil else {
+                    placedIn = place
+                    if switched, let top = topRow { proxy.scrollTo(top, anchor: .top) }
                     return
                 }
                 // Once the list has drawn its first rows under its bars (a second at most): until then it has nothing to
@@ -98,27 +175,27 @@ struct TodoListView: View {
                 try? await Task.sleep(for: .milliseconds(150))
                 guard !Task.isCancelled else { return }
                 if sight.top(in: model.groups) != key { proxy.scrollTo(key, anchor: .top) }
-                placed = true
+                placedIn = place
             }
         }
-        .detailTitle(String(localized: "All To-dos [To-dos List]"))
-        .navigationBarTitleDisplayMode(.inline)
-        .pageToolbar {
-            ToolbarItem(placement: .primaryAction) { moreMenu }
-        }
-        .onChange(of: grouping) { _, g in model.grouping = g }
-        .onChange(of: sort) { _, s in model.sort = s }
-        // Each minute while the page is in front, and as it comes back to the front: the rows' times, and what the clock
-        // moves (Done today, the due days).
-        .tabActiveTask {
-            while !Task.isCancelled {
-                model.tick()
-                try? await Task.sleep(for: .seconds(60))
-            }
-        }
-        // The projects' names, read when the page opens and for the assistant made current.
-        .task(id: app.assistantSwitches) { await TodoProjects.shared.load(app.api?.currentAssistantSettings()) }
-        .task { await model.refresh() }
+    }
+
+    /// The place's name: the page's title.
+    private var title: String { placeTitle ?? String(localized: "All To-dos [To-dos List]") }
+
+    private static let barRow = "todos.bar.row"
+    private static let noticeRow = "todos.places.notice"
+
+    /// The list's first row: the bar where it is a row (iOS 18), the place's notice, or the first to-do.
+    private var topRow: String? {
+        if drawsBar && !Self.pinsBar { return Self.barRow }
+        if model.hiddenNeeds > 0 { return Self.noticeRow }
+        return model.groups.first.flatMap { $0.keys.first }
+    }
+
+    private struct PlacedKey: Equatable {
+        var ready: Bool
+        var place: String
     }
 
     // MARK: The list
@@ -137,7 +214,11 @@ struct TodoListView: View {
                         if fold.open { ForEach(fold.keys, id: \.self) { key in row(key) } }
                     }
                 } header: {
-                    if let title = group.title { TodosSectionHeader(model: model, group: group, title: title) }
+                    if model.place == .upcoming {
+                        TodoUpcomingHeader(group: group) { addingDay = TodoCalendarSlot(day: $0, time: nil) }
+                    } else if let title = group.title {
+                        TodosSectionHeader(model: model, group: group, title: title)
+                    }
                 }
                 .listSectionSeparator(.hidden, edges: .top) // no line over a section's first row, the calm list's included
             }
@@ -193,6 +274,9 @@ struct TodoListView: View {
     @ViewBuilder private var emptyState: some View {
         if let offline = app.assistantManagerOffline, !model.hasRows {
             AssistantOfflineNotice(manager: offline)
+        } else if !model.place.isAll && !model.hasRows {
+            TodoPlaceEmptyState(place: model.place, title: title, comingUp: model.comingUp,
+                                show: { places.show($0) }, capture: { newInProject = model.place })
         } else {
             switch model.choice {
             case .all:
@@ -216,29 +300,41 @@ struct TodoListView: View {
 
     // MARK: Menus
 
-    /// The list's ⋯: the order inside each section, and Someday and Done today shown or folded.
+    /// The list's ⋯: the order inside each section, and Someday and Done today shown or folded; on Upcoming, Show as
+    /// Calendar.
     private var moreMenu: some View {
         Menu {
-            Picker(selection: $sort) {
-                ForEach(TodosListSort.allCases) { Text($0.title).tag($0) }
-            } label: {
-                Text("Sort By [To-dos List]")
-                Text(sort.title)
-            }
-            .pickerStyle(.menu)
-            Section {
-                Toggle(isOn: foldBinding(TodoListSection.someday)) {
-                    Label(String(localized: "Show Someday [To-dos List]"), systemImage: Theme.Icon.time)
+            if model.place == .upcoming {
+                Toggle(isOn: $upcomingCalendar) {
+                    Label(String(localized: "Show as Calendar [To-dos Places]"), systemImage: Theme.Icon.calendarView)
                 }
-                Toggle(isOn: foldBinding(TodoListSection.done)) {
-                    Label(String(localized: "Show Done Today [To-dos List]"), systemImage: Theme.Icon.success)
-                }
+                .accessibilityIdentifier("todos.places.showCalendar")
+            } else {
+                listMenu
             }
         } label: {
             Label(String(localized: "More [To-dos List]"), systemImage: Theme.Icon.more)
                 .labelStyle(.iconOnly)
         }
         .accessibilityIdentifier("todos.more")
+    }
+
+    @ViewBuilder private var listMenu: some View {
+        Picker(selection: $sort) {
+            ForEach(TodosListSort.allCases) { Text($0.title).tag($0) }
+        } label: {
+            Text("Sort By [To-dos List]")
+            Text(sort.title)
+        }
+        .pickerStyle(.menu)
+        Section {
+            Toggle(isOn: foldBinding(TodoListSection.someday)) {
+                Label(String(localized: "Show Someday [To-dos List]"), systemImage: Theme.Icon.time)
+            }
+            Toggle(isOn: foldBinding(TodoListSection.done)) {
+                Label(String(localized: "Show Done Today [To-dos List]"), systemImage: Theme.Icon.success)
+            }
+        }
     }
 
     private func foldBinding(_ fold: String) -> Binding<Bool> {

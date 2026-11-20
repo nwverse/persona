@@ -251,3 +251,21 @@ System Back at a place root returns to the conversation as a root switch, with n
 root leaves the app. The compact phone drawer still pushes a place that has no host yet over the conversation. A fixed place that already has a host is shown on that host. Health and
 Scheduled Tasks are not navigation destinations on Android; picking them shows the conversation page, where those screens already open.
 
+## 7. To-dos places under the To-dos row (#10465)
+
+On iOS, against a hub with `todo_view` and from #10465's switch-on, the To-dos row in the drawer and the sidebar folds open
+the To-dos places (`docs/design/proposals/todos-redesign.md` 3.3; DESIGN_SYSTEM 3.5 "To-dos places"): **Today**,
+**Upcoming**, up to five **projects**, then **All Projects…**. They are children of To-dos, not places of their own:
+
+- A child is drawn as a sidebar row set in under To-dos (`TodoPlaceRows` draws them through `AssistantSidebar`'s own row),
+  and picking one is picking To-dos (`ShellPage.todos`, `ShellRoute.todos`) on that place (`TodoWorkspace.open`). The
+  shaded row is the place shown while To-dos is the page: To-dos itself for All To-dos, else the child.
+- The rules above hold with one addition: To-dos opened for another place starts at its root, never animated, and drops
+  what it kept, which belonged to the place before (`ShellPlaces.enter(fresh:)` on the iPhone shell,
+  `SidebarPageRoots.select(fresh:)` for the Sidebar layout's page; `ShellPlacesTests`, `SidebarPageRootsTests`). The same
+  place picked again is the tab-bar rule as before.
+- The To-dos row brings To-dos back as it was left, on its last place (kept for the app's run), as every place comes
+  back (option 2, and option 3's kept drill-down); while To-dos is in front, beside the sidebar or under the drawer
+  (`TodoWorkspace.pageUp`), it is All To-dos, To-dos' root (`TodosPlacesModel.reopen`).
+- All Projects… is a task: its sheet opens over the drawer and a project picked in it opens after the sheet has gone.
+- The list's title menu ("All To-dos ⌄") is the same places a second way, inside the page: it changes the list in place.
