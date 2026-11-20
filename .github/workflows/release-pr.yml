@@ -540,6 +540,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      # The failure conclusion needs this script even when the platform gate below stops before any artifact download.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
       - name: Require every platform job to succeed before verification
         env:
           CLI_WEB: ${{ needs.cli-web.result }}
@@ -551,11 +557,6 @@ jobs:
           for result in "$CLI_WEB" "$ANDROID" "$APPLE" "$WINDOWS"; do
             test "$result" = success || { echo "A required platform failed or did not complete: $result" >&2; exit 1; }
           done
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.plan.outputs.commit }}
-          fetch-depth: 0
-          persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
           name: release-pr-plan-${{ needs.plan.outputs.pr }}
