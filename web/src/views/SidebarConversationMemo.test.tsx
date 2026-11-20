@@ -189,6 +189,7 @@ describe("the Persona conversation rows", () => {
     // the main row's ⋯: the main conversation's menu (no pin, rename or archive), with End while it is live
     act(() => more().click());
     await flush();
+    await vi.waitFor(() => expect(menu()).not.toBeNull());
     expect(menu()?.textContent).toContain(t("conversation-menu.copy_id"));
     expect(menu()?.textContent).not.toContain(t("conversation-menu.make_leader"));
     expect(menu()?.textContent).toContain(t("conversation-menu.end"));
@@ -201,6 +202,7 @@ describe("the Persona conversation rows", () => {
     await flush();
     act(() => more().click());
     await flush();
+    await vi.waitFor(() => expect(menu()).not.toBeNull());
     expect(menu()?.textContent).toContain(t("conversation-menu.copy_id"));
     expect(menu()?.textContent).not.toContain(t("conversation-menu.end"));
     await close();
@@ -208,6 +210,7 @@ describe("the Persona conversation rows", () => {
     // a right click on the pinned row: that conversation's menu (pinned), as it is now
     act(() => row("pinned").dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 10, clientY: 10 })));
     await flush();
+    await vi.waitFor(() => expect(menu()).not.toBeNull());
     expect(menu()?.textContent).toContain(t("conversation-menu.end_leader"));
     expect(menu()?.textContent).toContain(t("conversation-menu.rename"));
     expect(menu()?.textContent).not.toContain(t("conversation-menu.end"));

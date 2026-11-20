@@ -59,6 +59,8 @@ data class AssistantConfig(
     val manager: String? = null,
     @SerialName("default_permission_mode") val defaultPermissionMode: String? = null,
     @SerialName("permission_defaults") val permissionDefaults: AssistantPermissionDefaults? = null,
+    /** Saved ordinary-conversation order; null or empty means activity time. Unknown ids stay for clients that know them. */
+    @SerialName("conversation_order") val conversationOrder: List<String>? = null,
 ) {
     /** Whether the main conversation folds its background rounds: on unless turned off, also on a hub that omits it. */
     val backgroundFolded: Boolean get() = mainBackgroundFolded ?: true
@@ -97,6 +99,8 @@ data class AssistantConfigUpdate(
     @SerialName("main_supervises_own_tasks") val mainSupervisesOwnTasks: Boolean? = null,
     @SerialName("close_ended_terminals") val closeEndedTerminals: Boolean? = null,
     @SerialName("default_permission_mode") val defaultPermissionMode: String? = null,
+    /** Non-null writes the saved order; [] resets to activity time. Null leaves the setting unchanged. */
+    @SerialName("conversation_order") val conversationOrder: List<String>? = null,
 ) {
     companion object {
         const val CLEAR_MAIN = "-"

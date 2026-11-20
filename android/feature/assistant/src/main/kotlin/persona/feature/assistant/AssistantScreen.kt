@@ -3,6 +3,8 @@ package persona.feature.assistant
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyItemScope
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -14,21 +16,31 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.drawOutline
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import persona.core.contracts.Session
 import persona.core.contracts.Machine
 import persona.core.contracts.SessionKey
 import persona.core.contracts.api.AssistantManagement
+import persona.core.contracts.api.AssistantConfigUpdate
 import persona.core.contracts.api.AssistantRefused
 import persona.core.contracts.api.AssistantRepository
 import persona.core.contracts.api.AssistantReadinessFeature
@@ -192,6 +204,17 @@ fun AssistantScreen(
     val pageManagement = remember(management, managerChoice.hubId, managerChoice.shown) {
         management?.forManager(managerChoice.shown)
     }
+    val conversationArranger = remember(pageManagement, repository, demo) {
+        pageManagement?.takeUnless { demo }?.let { api ->
+            ConversationArranger(
+                prepare = { repository.conversationOrderUpdater() },
+                write = { order ->
+                    api.updateConfig(AssistantConfigUpdate(conversationOrder = order)).conversationOrder
+                },
+            )
+        }
+    }
+    val conversationArrangeUi = conversationArranger?.ui?.collectAsStateWithLifecycle()?.value ?: ConversationArrangeUi()
     val usageApi = remember(pageManagement, usageHistory) {
         (pageManagement as? persona.core.contracts.api.UsageHistoryApi) ?: usageHistory
     }
@@ -208,6 +231,7 @@ fun AssistantScreen(
             (it.session == receipt.session || (receipt.session == PendingMainConversation && it.clientMessageId == receipt.clientMessageId)) }) }
     val mainMessages = if (managerChoice.manager == null) outbox.filter { (it.mainTarget || it.session == PendingMainConversation) && (it.session == PendingMainConversation || it.session == snapshot.mainSession) } else emptyList()
     val scope = rememberCoroutineScope()
+    val conversationWriteScope = draftScope ?: LocalAssistantHost.current?.coroutineScope ?: scope
     val sharedSidebar = LocalAssistantSidebarHost.current
     val drawerState: MutableState<Boolean> = sharedSidebar?.opened ?: rememberSaveable { mutableStateOf(false) }
     var drawerOpen by drawerState
@@ -369,10 +393,45 @@ fun AssistantScreen(
     // conversation, not the centered start page. This page and assistant only; another main conversation forgets it.
     var clearedMain by mainConversation.clearedMain
     val clearedPage = clearedMain != null && active == null && newChat == null && !viewingMainQueue
-    val groups = remember(snapshot, query, ended, archived, words, history.titles, history.tagEdits, history.activeTag) {
-        conversationGroups(snapshot.copy(conversations = history.tagged(snapshot.conversations.filter { it.key !in archived }.map {
+    val orderedSnapshot = if (conversationArrangeUi.arranging || conversationArrangeUi.pending > 0) {
+        snapshot.copy(conversationOrder = conversationArrangeUi.order)
+    } else snapshot
+    val groups = remember(orderedSnapshot, query, ended, archived, words, history.titles, history.tagEdits, history.activeTag) {
+        conversationGroups(orderedSnapshot.copy(conversations = history.tagged(orderedSnapshot.conversations.filter { it.key !in archived }.map {
             if (it.key in ended) it.copy(status = "offline", state = "offline") else it
         })), query, words, activeTag = history.activeTag)
+    }
+    val latestArrangeActivityIds = rememberUpdatedState(groups.others.map { it.sessionId })
+    val beginArrange: (() -> Unit)? = conversationArranger?.let { controller ->
+        {
+            query = ""
+            history.activeTag?.let(history::selectTag)
+            conversationWriteScope.launch {
+                controller.start(if (conversationArrangeUi.pending > 0) conversationArrangeUi.order else snapshot.conversationOrder)
+            }
+        }
+    }
+    LaunchedEffect(conversationArranger, resources, feedback) {
+        val controller = conversationArranger ?: return@LaunchedEffect
+        controller.events.collect { event ->
+            when (event) {
+                is ConversationArrangeEvent.Failed -> {
+                    if (feedback?.failure(event.error) != true) toast.show(persona.core.designsystem.FeedbackNotice(
+                        resources.getString(R.string.assistant_arrange_save_failed),
+                        style = persona.core.designsystem.FeedbackStyle.Error,
+                    ))
+                }
+                is ConversationArrangeEvent.Reset -> {
+                    val message = resources.getString(R.string.assistant_arrange_reset_done)
+                    val undo = persona.core.designsystem.FeedbackAction(resources.getString(R.string.assistant_arrange_undo)) {
+                        conversationWriteScope.launch { controller.undoReset(event.revision, latestArrangeActivityIds.value) }
+                    }
+                    if (feedback?.notice(message, undo) != true) {
+                        toast.show(persona.core.designsystem.FeedbackNotice(message, undo))
+                    }
+                }
+            }
+        }
     }
     val searchOn = pageManagement != null && !demo && AssistantSearchFeature in LocalHubFeatures.current
     val knownChats = remember(snapshot.conversations, ended, archived, history.titles, history.tagEdits, history.archived, history.restoring) {
@@ -834,6 +893,7 @@ fun AssistantScreen(
             onOpenTodo = { id -> scope.launch { drawerOpen = false }; navigator.navigate(TodoDetailRoute(id)) },
             onOpenAgent = { key -> scope.launch { drawerOpen = false }; navigator.navigate(ChatRoute(key.machineId, key.sessionId, ConversationKind.Agent)) },
             found = foundChats, searchPartial = searchPartial,
+            arranger = conversationArranger, arrangeScope = conversationWriteScope, onArrange = beginArrange,
         )
         ConversationHistoryDialogs(history, snapshot.conversations, scope,
             onOpen = { openFromList(it); scope.launch { drawerOpen = false } },
@@ -1453,6 +1513,10 @@ internal fun AssistantDrawer(
     merged: MergedSidebarContent? = null,
     showSchedule: Boolean = true,
     onAgentSearch: () -> Unit = {},
+    /** Null keeps the drawer without Arrange (demos and hubs without assistant settings). */
+    arranger: ConversationArranger? = null,
+    arrangeScope: CoroutineScope? = null,
+    onArrange: (() -> Unit)? = null,
 ) {
     // iOS UnifiedSidebar.atRoot (UnifiedSidebar.swift:39–41): a place root shades its row, not a conversation.
     val shadeConversations = shadedPlace == null || shadedPlace == AssistantSidebarShade.Conversation
@@ -1479,6 +1543,15 @@ internal fun AssistantDrawer(
     var chatsFolded by remember { mutableStateOf(foldStore.chatsFolded) }
     val resources = androidx.compose.ui.platform.LocalResources.current
     val haptics = rememberHaptics()
+    val arrangeState = arranger?.ui?.collectAsStateWithLifecycle()
+    val arrangeUi = arrangeState?.value ?: ConversationArrangeUi()
+    val arranging = arranger != null && arrangeUi.arranging
+    val localArrangeScope = rememberCoroutineScope()
+    val writesScope = arrangeScope ?: localArrangeScope
+    val listState = rememberLazyListState()
+    val conversationDrag = arranger?.let { controller ->
+        rememberConversationDrag(listState, controller) { groups.others.map { it.sessionId } }
+    }
     Column(Modifier.fillMaxHeight().padding(horizontal = if (drawer) Tokens.Space.s else 12.dp.dense)) {
         val headPadding = Modifier.padding(horizontal = if (drawer) Tokens.Space.l else Tokens.Space.xs).padding(top = Tokens.Space.s)
         val search: @Composable () -> Unit = {
@@ -1528,6 +1601,7 @@ internal fun AssistantDrawer(
                 selected = shadeConversations && groups.main?.key == active && (merged != null || groups.main != null),
                 hasMain = hasMain,
                 onMain = {
+                    if (arranging) arranger?.done()
                     val main = groups.main
                     if (main != null && mainHit != null) MessageJumps.request(main.machineId, main.sessionId, mainHit.itemId)
                     onMain()
@@ -1578,10 +1652,10 @@ internal fun AssistantDrawer(
         val chatRows: androidx.compose.foundation.lazy.LazyListScope.() -> Unit = {
             // Regular window: the field lives in the full-window search; compact keeps the inline field (and any stale
             // query typed before unfolding remains clearable until blank).
-            if (merged == null && ((!fullWindowSearch && (!drawer || searchVisible)) || query.isNotBlank())) {
+            if (!arranging && merged == null && ((!fullWindowSearch && (!drawer || searchVisible)) || query.isNotBlank())) {
                 item { JSearchField(query, onQuery, stringResource(R.string.assistant_search_chats)) }
             }
-            if (tagChoices.isNotEmpty()) item(key = "conversation-tag-filter") {
+            if (!arranging && tagChoices.isNotEmpty()) item(key = "conversation-tag-filter") {
                 ConversationTagFilter(tagChoices, activeTag, onTag)
             }
             if (searchPartial) item {
@@ -1589,7 +1663,61 @@ internal fun AssistantDrawer(
                     Modifier.padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.s),
                     style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
             }
-            if (found != null) {
+            if (arranging) {
+                val controller = requireNotNull(arranger)
+                val drag = requireNotNull(conversationDrag)
+                val activityIds = groups.others.map { it.sessionId }
+                item(key = "arrange-controls") {
+                    Column(Modifier.fillMaxWidth().padding(bottom = Tokens.Space.s)) {
+                        JSectionHeader(stringResource(R.string.assistant_arrange_chats))
+                        Row(
+                            Modifier.fillMaxWidth().padding(horizontal = Tokens.Space.m),
+                            horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            JButton(stringResource(R.string.assistant_arrange_reset),
+                                { writesScope.launch { controller.reset(activityIds) } },
+                                // Measure Done at its intrinsic width first; at accessibility text sizes the reset label gets the rest.
+                                modifier = Modifier.weight(1f),
+                                kind = JButtonKind.Quiet, size = JButtonSize.Medium,
+                                enabled = arrangeUi.order.isNotEmpty() && arrangeUi.drag == null)
+                            JButton(stringResource(persona.core.designsystem.R.string.designsystem_done), controller::done,
+                                kind = JButtonKind.Primary, size = JButtonSize.Medium,
+                                modifier = Modifier.testTag("conversation-arrange-done"))
+                        }
+                    }
+                }
+                if (groups.directions.isNotEmpty()) item(key = "arrange-directions-header") {
+                    JSectionHeader(stringResource(R.string.assistant_directions), count = groups.directions.size)
+                }
+                itemsIndexed(groups.directions, key = { _, session -> "arrange-direction-" + session.key.path }) { index, session ->
+                    DirectionLeadRows(groups.tree?.direction(session.sessionId)?.takeUnless { it.secretary },
+                        groups.names[session.sessionId] ?: session.conversationTitle(conversationWords()),
+                        GroupPosition.of(index, groups.directions.size), onOpenTodo, onOpenAgent, shadedPlace.takeIf { merged == null }) { position, disclosure ->
+                        ConversationRow(session, selected = shadeConversations && session.key == active,
+                            position = position,
+                            onOpen = { controller.done(); onOpen(session.key) }, onEnd = onEnd?.let { action -> { action(session) } },
+                            onCopy = { onCopy(session) }, onArchive = onArchive?.let { action -> { action(session) } },
+                            onRename = onRename?.let { action -> { action(session) } },
+                            onDiagnostics = onDiagnostics?.let { action -> { action(session) } },
+                            leader = true, onLeader = onLeader?.let { action -> { action(session) } },
+                            counts = leaderCountsLabel(groups.counts[session.sessionId], resources),
+                            working = groups.counts[session.sessionId]?.running == true,
+                            named = groups.names[session.sessionId], disclosure = disclosure)
+                    }
+                }
+                val arranged = orderConversations(groups.others, arrangeUi.drag?.order ?: arrangeUi.order)
+                itemsIndexed(arranged, key = { _, session -> "arrange:" + session.sessionId }) { index, session ->
+                    ArrangeConversationItem(session, GroupPosition.of(index, arranged.size), drag,
+                        canMoveUp = index > 0, canMoveDown = index < arranged.lastIndex,
+                        onMoveUp = { writesScope.launch { controller.moveUp(session.sessionId, activityIds) } },
+                        onMoveDown = { writesScope.launch { controller.moveDown(session.sessionId, activityIds) } },
+                        named = if (session.sessionId == groups.background) stringResource(R.string.assistant_background_supervisor) else null)
+                }
+                if (groups.directions.isEmpty() && arranged.isEmpty() && groups.main == null) item {
+                    JEmptyState(stringResource(R.string.assistant_empty_title), stringResource(R.string.assistant_empty_detail))
+                }
+            } else if (found != null) {
                 val rows = found.filter { groups.main == null || it.session.key != groups.main.key }
                 itemsIndexed(rows, key = { _, row -> "found-" + row.session.key.path }) { index, row ->
                     ConversationRow(row.session, selected = shadeConversations && row.session.key == active,
@@ -1606,6 +1734,7 @@ internal fun AssistantDrawer(
                             else onEditTags?.let { action -> { action(row.session) } },
                         onDiagnostics = onDiagnostics?.let { action -> { action(row.session) } },
                         onLeader = onLeader?.let { action -> { action(row.session) } },
+                        onArrange = onArrange,
                         said = row.hit?.let(::markedSnippet))
                 }
                 if (rows.isEmpty()) item {
@@ -1652,6 +1781,7 @@ internal fun AssistantDrawer(
                     onEditTags = onEditTags?.takeUnless { builtIn }?.let { action -> { action(session) } },
                     onDiagnostics = onDiagnostics?.let { action -> { action(session) } },
                     onLeader = onLeader?.takeUnless { builtIn }?.let { action -> { action(session) } },
+                    onArrange = onArrange,
                     named = if (builtIn) stringResource(R.string.assistant_background_supervisor) else null,
                     origin = if (builtIn) AssistantConversationOrigin.Task.id else session.origin)
             }
@@ -1677,6 +1807,7 @@ internal fun AssistantDrawer(
                     onEditTags = onEditTags?.takeUnless { builtIn }?.let { action -> { action(session) } },
                     onDiagnostics = onDiagnostics?.let { action -> { action(session) } },
                     onLeader = onLeader?.takeUnless { builtIn }?.let { action -> { action(session) } },
+                    onArrange = onArrange,
                     named = if (builtIn) stringResource(R.string.assistant_background_supervisor) else null,
                     origin = if (builtIn) AssistantConversationOrigin.Task.id else session.origin)
             }
@@ -1743,13 +1874,84 @@ internal fun AssistantDrawer(
             }
         }
         if (merged != null) {
-            Box(Modifier.weight(1f)) { merged.list(assistantRows, footer, onAgentSearch) }
+            Box(Modifier.weight(1f)) { merged.list(listState, assistantRows, footer, onAgentSearch) }
         } else {
-            LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 12.dp.dense), content = assistantRows)
+            LazyColumn(Modifier.weight(1f), state = listState, contentPadding = PaddingValues(bottom = 12.dp.dense), content = assistantRows)
             footer()
         }
     }
 }
+
+@Composable
+private fun LazyItemScope.ArrangeConversationItem(
+    session: Session,
+    position: GroupPosition,
+    drag: ConversationDragState,
+    canMoveUp: Boolean,
+    canMoveDown: Boolean,
+    onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit,
+    named: String?,
+) {
+    val id = session.sessionId
+    val lifted = drag.lifted(id)
+    val shape = PersonaTheme.shapes.cardShape
+    val backing = PersonaTheme.palette.surfaceOpaque
+    val elevation = with(androidx.compose.ui.platform.LocalDensity.current) { ConversationLiftElevation.toPx() }
+    val modifier = if (lifted) {
+        Modifier.zIndex(1f).graphicsLayer {
+            val lift = drag.liftOf(id)
+            translationY = drag.translation(id)
+            shadowElevation = elevation * lift
+            scaleX = 1f + ConversationLiftScale * lift
+            scaleY = scaleX
+            this.shape = shape
+            clip = true
+        }.drawBehind {
+            drawOutline(shape.createOutline(size, layoutDirection, this), backing.copy(alpha = backing.alpha * drag.liftOf(id)))
+        }
+    } else Modifier.animateItem(placementSpec = conversationPlacement())
+    Box(modifier.conversationDragAfterLongPress(drag, id)) {
+        JGroupItem(if (lifted) GroupPosition.Single else position) {
+            val up = stringResource(R.string.assistant_arrange_move_up)
+            val down = stringResource(R.string.assistant_arrange_move_down)
+            val dragDescription = stringResource(R.string.assistant_arrange_drag)
+            val moves = listOfNotNull(
+                CustomAccessibilityAction(up) { onMoveUp(); true }.takeIf { canMoveUp },
+                CustomAccessibilityAction(down) { onMoveDown(); true }.takeIf { canMoveDown },
+            )
+            JRow(named ?: session.conversationTitle(conversationWords()),
+                subtitle = session.lastText?.takeIf { it.isNotBlank() },
+                leading = {
+                    Column(
+                        Modifier.width(ConversationHandleWidth).heightIn(min = Tokens.MinTouch.android)
+                            .conversationDragHandle(drag, id)
+                            .testTag("conversation-arrange-handle-$id")
+                            .semantics(mergeDescendants = true) {
+                                contentDescription = dragDescription
+                                customActions = moves
+                            },
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                    ) {
+                        ConversationGrip(if (drag.dragging == id) PersonaTheme.palette.ink2 else PersonaTheme.palette.ink3)
+                    }
+                },
+                trailing = {
+                    JIconButton(PhIcons.ArrowUp, up, onMoveUp, enabled = canMoveUp,
+                        modifier = Modifier.testTag("conversation-arrange-up-$id"))
+                    JIconButton(PhIcons.ArrowDown, down, onMoveDown, enabled = canMoveDown,
+                        modifier = Modifier.testTag("conversation-arrange-down-$id"))
+                }, chevron = false)
+        }
+    }
+}
+
+@Composable
+private fun conversationPlacement() = if (PersonaTheme.reduceMotion) null else PersonaTheme.motion.enter<IntOffset>()
+private val ConversationHandleWidth = GripWidth + Tokens.Space.Standard.m
+private val ConversationLiftElevation = Tokens.Space.Standard.s
+private const val ConversationLiftScale = 0.02f
 
 /**
  * One conversation of the history (iOS `AssistantSidebar.row`). A swipe left archives it ([onArchive]; not the main one).
@@ -1762,6 +1964,7 @@ private fun ConversationRow(
     session: Session, selected: Boolean, onOpen: () -> Unit, onEnd: (() -> Unit)?,
     modifier: Modifier = Modifier, position: GroupPosition = GroupPosition.Single,
     leader: Boolean = false, onLeader: (() -> Unit)? = null, onCopy: () -> Unit = {}, onArchive: (() -> Unit)? = null,
+    onArrange: (() -> Unit)? = null,
     onRename: (() -> Unit)? = null, onEditTags: (() -> Unit)? = null, onDiagnostics: (() -> Unit)? = null,
     counts: String? = null, named: String? = null, origin: String? = session.origin,
     /** A 常驻 lead's caret that folds its to-dos open (#4352, DirectionRows.kt), before its ⋯; null: none. */
@@ -1835,7 +2038,8 @@ private fun ConversationRow(
     if (menu) JActionSheet(
         title = title, onDismiss = { menu = false },
         actions = conversationActions(androidx.compose.ui.platform.LocalResources.current, leader, session.isLive, onLeader, onCopy, onEnd,
-            onArchive, onRename = onRename, onEditTags = onEditTags, onDiagnostics = onDiagnostics, glass = PersonaTheme.style == AppStyle.Glass),
+            onArchive, onRename = onRename, onEditTags = onEditTags, onDiagnostics = onDiagnostics, onArrange = onArrange,
+            glass = PersonaTheme.style == AppStyle.Glass),
         // The long press's preview (iOS's context menu): what it last said (the row shows only the title) and when.
         preview = session.lastText?.let { persona.core.domain.plainMarkdown(it) }?.takeIf { it.isNotBlank() },
         previewCaption = historyTime(session.updated, resources),
@@ -1892,11 +2096,13 @@ internal fun conversationActions(
     resources: android.content.res.Resources, leader: Boolean, live: Boolean, onLeader: (() -> Unit)?, onCopy: () -> Unit,
     onEnd: (() -> Unit)?, onArchive: (() -> Unit)? = null, onRename: (() -> Unit)? = null,
     onEditTags: (() -> Unit)? = null, onDiagnostics: (() -> Unit)? = null, glass: Boolean = false,
+    onArrange: (() -> Unit)? = null,
 ): List<JAction> =
     buildList {
         onLeader?.let { add(JAction(resources.getString(if (leader) R.string.assistant_end_leader else R.string.assistant_make_leader), PersonaIcons.pin, onClick = it)) }
         onRename?.let { add(JAction(resources.getString(R.string.assistant_rename_menu), PersonaIcons.edit, onClick = it)) }
         onEditTags?.let { add(JAction(resources.getString(R.string.assistant_edit_tags_menu), PersonaIcons.edit, onClick = it)) }
+        onArrange?.let { add(JAction(resources.getString(R.string.assistant_arrange_chats), PhIcons.ChatsCircle, onClick = it)) }
         onArchive?.let { add(JAction(resources.getString(R.string.assistant_archive), PersonaIcons.archive, onClick = it)) }
         add(JAction(resources.getString(R.string.assistant_copy_session_id), if (glass) PersonaIcons.id else PhIcons.Copy, onClick = onCopy))
         onDiagnostics?.let { add(JAction(resources.getString(R.string.assistant_copy_diagnostics), PersonaIcons.diagnostics, onClick = it)) }

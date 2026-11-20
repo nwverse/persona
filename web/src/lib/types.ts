@@ -1020,6 +1020,8 @@ export interface AssistantInfo {
   /** "Show scheduled task chats" in the sidebar's Recent (#8324, lib/recent-task-chats.ts): one value on the hub for all
    *  of the user's devices, off by default; absent from an older hub (no switch, and Recent leaves them out). */
   recent_task_chats?: boolean;
+  /** User-chosen ordinary conversation order (#12017), shared by every client; absent or empty means activity time. */
+  conversation_order?: string[];
   /** The background supervisor's conversation (#4927, lib/background-supervisor.ts): its session id once the hub made
    *  it; absent before that and from an older hub. Read-only. */
   background_supervisor?: string;
