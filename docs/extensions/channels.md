@@ -83,6 +83,7 @@ whose comments say the rules follow the Lark bot), and Siri (in the App). `/agen
 | --- | --- | --- |
 | Receive text | Always available | — |
 | `images_in` | Boolean | Receive images (up to 4, sent into the chat as image attachments) |
+| `images_out` | Boolean | Send pictures (#11986): in an answer or a push, each picture on a line of its own (`![alt](https://…)`, the block images the apps draw) is fetched through `remoteimage` with the same checks as the apps' remote images (the open internet only), drawn at 2048 px (smaller when that is over 3 MB), and sent in the last piece's `images` (at most 4, JPEG or PNG); its line leaves the text. Pictures in code, inline ones and the ones past 4 stay or become text, and one that can't be fetched or shown (HEIC, AVIF) becomes "Image: <alt> <address>". The hub's instructions tell Persona it may send pictures that way. Without it the text keeps its Markdown images and the hub drops `images` before the program |
 | `files_in` | Boolean | Receive files: the hub saves them to a temporary directory on the computer hosting the chat and writes the path into the message (as the Lark bot has always done); if unavailable, the message says "A file ‘…’ was sent, but can't be handed over yet" |
 | `voice_in` | Boolean | Receive voice (the channel supplies transcribed text) |
 | `format` | `markdown` / `plain` | The format of answers delivered to the user. The hub always sends Markdown; the channel converts it to what the IM understands (WeChat removes images, strikethrough… keeps bold and code; Lark cards unchanged); for `plain` channels, the hub's instructions to Persona request "plain text, conclusion first" |
@@ -258,7 +259,7 @@ Requires a process that speaks the protocol (`NeedsRPC`). Version 1.
 
 | Method | Parameters | Returns |
 | --- | --- | --- |
-| `channel.send` | `{contribution, ref, text, kind, reply_to?}`: `text` is Markdown (already split by `max_text`), `kind` is `answer` / `note` / `ask` / `push` | `{message_id?}`; if sending is impossible (no conversation it can send to yet), return error code `cannot_send` |
+| `channel.send` | `{contribution, ref, text, kind, reply_to?, images?}`: `text` is Markdown (already split by `max_text`), `kind` is `answer` / `note` / `ask` / `push`; `images` (`[{mime, data}]`, only with `images_out`) are pictures to send after the text, and `text` may then be empty | `{message_id?}`; if sending is impossible (no conversation it can send to yet), return error code `cannot_send` |
 | `channel.typing` | `{contribution, on}` | `{}` (called only with `typing`) |
 | `channel.edit` | `{contribution, message_id, text}` | `{}` (called only with `progress`) |
 

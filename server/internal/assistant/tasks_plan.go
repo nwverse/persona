@@ -125,8 +125,9 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		t.Goal, t.OutOfBounds = clip(oneLine(t.Goal), 300), cleanDoneWhen(t.OutOfBounds)
 		t.Continues, t.ContinuesWhy = strings.TrimSpace(t.Continues), clip(oneLine(t.ContinuesWhy), 300)
 		t.StartedWhy = clip(oneLine(t.StartedWhy), 300)
-		t.EstimateSource = ""
-		if t.Continues == "" {
+		t.EstimateSource, t.EstimateEvidence = "", nil
+		t.EstimateCalibration = true // hub-owned provenance of this tool's dispatch
+		if t.Continues == "" || t.ExpectMinutes > 0 {
 			t.ExpectMinutes, t.EstimateSource = automaticEstimate(t.ExpectMinutes, "")
 		}
 		if err := briefRequired(t); err != nil && !(s.briefsOptional && t.Continues == "") {
@@ -176,15 +177,24 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		takesModes := true
 		if _, ok := s.machineByName(ctx, t.Machine); ok {
 			own := t.launchPick()
-			fit, err := s.fitPlanTaskSpeed(ctx, t)
+			fit, configuredMode, err := s.fitPlanTask(ctx, t)
 			if err != nil {
 				return "", fmt.Errorf("task %d: %w", i+1, err)
 			}
-			if fit.allowAll() {
+			switch {
+			case t.Readonly:
+				if fit.allowAll() {
+					t.Permission = "bypassPermissions"
+				}
+			case configuredMode != "" && fit.supportsPermissionMode(configuredMode):
+				if t.Permission == "" {
+					t.Permission = configuredMode
+				}
+			case fit.allowAll():
 				t.Permission = "bypassPermissions"
 			}
 			// traex, omp…: no mode, no effort (launcher_modes.go). One the call names is refused now, rather than by
-			// the computer once the task starts; one a tier filled in is dropped. pi, cursor, agy: dropped either way.
+			// the computer once the task starts; one a tier filled in is dropped. pi, cursor: dropped either way.
 			if takesModes = startTakesModes(fit.agent); !takesModes {
 				if err := startModesRefused(t.Launcher, fit.agent, asked, own.effort); err != nil {
 					return "", fmt.Errorf("task %d: %w", i+1, err)
@@ -260,7 +270,8 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	}
 	dups := s.planDuplicates(ctx, a.Tasks) // before the plan's own todos exist
 	now := time.Now().UTC()
-	p := &TaskPlan{ID: "plan_" + randomHex(6), Conversation: sessionID, Tasks: a.Tasks, State: planOpen, CreatedAt: now, UpdatedAt: now}
+	p := &TaskPlan{ID: "plan_" + randomHex(6), Conversation: sessionID, Tasks: a.Tasks, State: planOpen,
+		CreatedAt: now, UpdatedAt: now}
 	if err := s.savePlan(ctx, p); err != nil {
 		return "", err
 	}
@@ -291,6 +302,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		b.WriteString("This is not confirmation that any agent started: you are told when one fails to start. A worker that has " +
 			"report_to_supervisor reports to you in a message, and they cannot hand work on.")
 		b.WriteString(dups)
+		b.WriteString(taskPlanEstimateNotes(started.Tasks))
 		return b.String(), nil
 	}
 	var granted func() func(PlanTask) bool
@@ -324,7 +336,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			s.directionsSoon() // a leader's plan waiting for Start is a decision for the owner (leader_reports.go)
 		}
 		return fmt.Sprintf("Plan %s is on the user's screen as a card and pushed to their phone; nothing has started. "+
-			"Don't wait for it: carry on. When they start it, the tasks show up in the context snapshot.", p.ID) + dups, nil
+			"Don't wait for it: carry on. When they start it, the tasks show up in the context snapshot.", p.ID) + dups + taskPlanEstimateNotes(p.Tasks), nil
 	}
 	started, err := s.startPlan(ctx, p.ID, nil, false)
 	if err != nil {
@@ -367,6 +379,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			"gets a one-line notice with the task's link when each one ends.")
 	}
 	b.WriteString(dups)
+	b.WriteString(taskPlanEstimateNotes(started.Tasks))
 	if wait > 0 && len(started.Tasks) == 1 && scope == nil && started.Tasks[0].Error == "" {
 		t := started.Tasks[0]
 		return s.waitAgentReply(ctx, b.String(), t.WaitInputID, wait, func(ctx context.Context) (string, string, error) {

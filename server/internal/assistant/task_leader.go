@@ -61,7 +61,11 @@ func (t PlanTask) linkSource() (source, via string) {
 // linkPlanAgent links the agent just started for plan task t to its todo.
 func (s *Service) linkPlanAgent(ctx context.Context, t PlanTask, mid, sid string, allowDone bool) error {
 	source, via := t.linkSource()
-	return s.linkTodoAgentWithSourceAllowingDone(ctx, t.TodoID, mid, sid, t.Title, t.Cwd, t.startedAgent, "", source, via, allowDone)
+	err := s.linkTodoAgentWithSourceAllowingDone(ctx, t.TodoID, mid, sid, t.Title, t.Cwd, t.startedAgent, "", source, via, allowDone)
+	if err == nil && !allowDone {
+		s.estimateAdmitted(ctx, t, mid, sid)
+	}
+	return err
 }
 
 // leaderTask is the open task agent machine/session leads, with the agent's own row; false for any other agent.
@@ -211,7 +215,7 @@ func (s *Service) runtimeLeaderTools(ctx context.Context, machine, session strin
 			return nil
 		}
 	}
-	return leaderToolList()
+	return localizedMCPTools(leaderToolList(), s.toolLanguage(ctx))
 }
 
 // leaderTools are the tools only a task leader's agent gets, on top of any agent's: none for any other agent.
@@ -220,7 +224,7 @@ func (s *Service) leaderTools(ctx context.Context, machine, session string) []pr
 		return nil
 	}
 	if _, _, ok := s.leaderTask(ctx, machine, session); ok {
-		return leaderToolList()
+		return localizedMCPTools(leaderToolList(), s.toolLanguage(ctx))
 	}
 	if revision, _ := ctx.Value(revisionDiscoveryKey{}).(bool); revision {
 		return nil // a revision-aware peer recovers through its cursor, never through the legacy startup wait
@@ -237,7 +241,7 @@ func (s *Service) leaderTools(ctx context.Context, machine, session string) []pr
 		case <-time.After(100 * time.Millisecond):
 		}
 		if _, _, ok := s.leaderTask(ctx, machine, session); ok {
-			return leaderToolList()
+			return localizedMCPTools(leaderToolList(), s.toolLanguage(ctx))
 		}
 	}
 	return nil

@@ -102,7 +102,7 @@ func (t *PlanTask) noteWhy(note string) {
 // launcher list rather than another probe. A read-only task whose launcher has no read-only mode is refused here
 // (readonlyLauncherRefusal), when it is planned and again before it starts.
 func (s *Service) fitTaskLauncher(ctx context.Context, t *PlanTask, m Device, own startPick, params map[string]any) (startAgent, error) {
-	note, agent, err := s.fitLauncher(ctx, m, own, params)
+	note, agent, err := s.fitNewLauncher(ctx, m, own, params)
 	if err != nil {
 		return agent, err
 	}
@@ -284,11 +284,25 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if err != nil {
 		return "", "", err
 	}
+	t.Model, _ = params["model"].(string)
 	if err := checkStartSpeed(params, fit, ""); err != nil {
 		return "", "", err
 	}
-	if fit.allowAll() && !t.preservePermission {
-		t.Permission = "bypassPermissions"
+	configuredMode, _ := params["permission_mode"].(string)
+	delete(params, "permission_mode")
+	if !t.preservePermission {
+		switch {
+		case t.Readonly:
+			if fit.allowAll() {
+				t.Permission = "bypassPermissions"
+			}
+		case configuredMode != "" && fit.supportsPermissionMode(configuredMode):
+			if t.Permission == "" {
+				t.Permission = configuredMode
+			}
+		case fit.allowAll():
+			t.Permission = "bypassPermissions"
+		}
 	}
 	modes := startTakesModes(fit.agent)
 	if !modes { // traex, omp…: no mode and no effort, whatever a default or a tier filled in (launcher_modes.go)
@@ -359,12 +373,15 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if len(t.DoneWhen) > 0 { // what the supervisor will check (supervise.go)
 		prompt += "\n\n" + prompts.RenderTaskDoneWhen(t.DoneWhen)
 	}
+	var entry prompts.TaskHandoff // none verified: a work machine, no to-do
 	if t.TodoID != "" && !s.isWorkMachine(m.ID) {
-		rules = append(rules, s.taskHandoff(ctx, m.ID, fit))
+		entry = s.taskEntry(ctx, m.ID, fit)
+		rules = append(rules, prompts.RenderTaskHandoff(entry))
 	}
 	switch {
 	case t.Role == roleLeader: // what it may hand out, and how its workers reach it (task_leader.go)
-		rules = append(rules, prompts.RenderTaskLeader())
+		// Through the terminal entry the handoff note above names, for an Agent without the Persona MCP (#12136).
+		rules = append(rules, prompts.RenderTaskLeader(prompts.TaskLeader{Terminal: entry.Terminal()}))
 	case t.Parent != "":
 		rules = append(rules, prompts.RenderTaskWorker())
 	}

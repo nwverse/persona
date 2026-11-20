@@ -741,6 +741,8 @@ picked otherwise. They also count for the send check (`launcherHasModel`), so a 
 Without a quota extension, this section explains that querying is unavailable, without an error. Code: shared `server/internal/quota` (report shape, delegated requests), manager-side `assistant/models_quota.go` (routes, cache, gateway selection), hub-side `extmgr/extension_quota.go` (extension quota reading, `app.call plugins.quota`),
 and node-side `node/launcherquota.go`.
 
+A launcher whose provider reports a prepaid balance rather than an allowance window is separate from the Quota extension: an official DeepSeek launcher added in Persona has its `GET /user/balance` read by the manager with the same sealed key and shown as an amount and currency in the sidebar's usage panel (`docs/server/usage-windows.md`, “Prepaid balances (#11825)”). The key never leaves the manager, and a launcher found in a shell rc file keeps its key on that computer, so only launchers added in Persona report a balance.
+
 - Extensions **cannot see keys**: They answer `quota.query` and pass requests through `quota.http` to the party holding the key, which replaces `${launcher_key}` in the request with the key.
   Requests may go only to the launcher's own gateway (same origin, including redirects); key occurrences in responses are replaced with the placeholder again.
 - Who sends: For Persona-managed launchers, the manager sends with decrypted keys (hub delegates through `models.launcher_http`; quota returns `503 assistant_offline` when the manager is absent). For ~/.zshrc launchers, **the computer with that launcher** sends (node `launchers.http`: run the probe to obtain address and key, then request the gateway locally).

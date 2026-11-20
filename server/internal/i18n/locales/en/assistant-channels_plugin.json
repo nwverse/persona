@@ -1,6 +1,7 @@
 {
   "extra_images": "additional images",
   "image_too_large": "an image too large to scale down",
+  "image_link": "Image: {alt} {url}",
   "unnamed": "unnamed",
   "unsupported_file": "file “{name}”",
   "not_sent": "Not sent: {error}",

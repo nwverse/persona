@@ -116,9 +116,10 @@ internal fun AgentsScreen(
     /** A notification's card to open once it is listed (#4808). */
     cardRequests: CardOpenRequests = AgentsCardOpen,
     sidebar: AgentsSidebarLayout? = null,
+    providedListState: androidx.compose.foundation.lazy.LazyListState? = null,
 ) {
     val latestPage by model.page.collectAsStateWithLifecycle()
-    val listState = rememberLazyListState()
+    val listState = providedListState ?: rememberLazyListState()
     LaunchedEffect(model, listState, latestPage.pagination.paged) {
         if (!latestPage.pagination.paged) return@LaunchedEffect
         snapshotFlow {
