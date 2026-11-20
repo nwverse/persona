@@ -175,16 +175,30 @@ func (s *Service) historyCall(ctx context.Context, machine, method string, raw j
 	}
 	if method == DeviceAssistantHandoff {
 		if h != nil {
-			if c, known := s.historySession(ctx, machine, p.SessionID); known && (c.Rev == 0 || c.Rev != h.Revision || s.historyDirty(searchKey{machine, p.SessionID})) {
-				var native json.RawMessage
-				if sourceErr := s.historySource(ctx, machine, method, json.RawMessage(raw), &native); sourceErr == nil {
-					return native, true, nil
-				}
-				if ctx.Err() != nil {
-					return nil, true, ctx.Err()
+			fresh := true
+			if c, known := s.historySession(ctx, machine, p.SessionID); known {
+				fresh = c.Rev > 0 && c.Rev == h.Revision && !s.historyDirty(searchKey{machine, p.SessionID})
+			}
+			if fresh {
+				if out, ok := s.historyHandoff(ctx, st, h, false); ok {
+					return out, true, nil
 				}
 			}
-			if out, ok := s.historyHandoff(ctx, st, h); ok {
+			var native json.RawMessage
+			if sourceErr := s.historySource(ctx, machine, method, json.RawMessage(raw), &native); sourceErr == nil {
+				return native, true, nil
+			}
+			if ctx.Err() != nil {
+				return nil, true, ctx.Err()
+			}
+			if out, ok := s.historyHandoff(ctx, st, h, true); ok {
+				if !fresh || s.historyMachineOffline(ctx, machine) {
+					var handoff mainHandoff
+					if json.Unmarshal(out, &handoff) == nil {
+						handoff.Partial = true
+						out, _ = json.Marshal(handoff)
+					}
+				}
 				return out, true, nil
 			}
 		}
@@ -199,7 +213,7 @@ func (s *Service) historyCall(ctx context.Context, machine, method string, raw j
 			fresh = c.Rev > 0 && h.Revision == c.Rev && !s.historyDirty(searchKey{machine, p.SessionID})
 		}
 		if h.TailSeq != nil {
-			if out, ok := s.historyPage(ctx, st, h, p, fresh || offline); ok {
+			if out, ok := s.historyPage(ctx, st, h, p, fresh || offline, offline); ok {
 				if offline {
 					out = partialHistoryPage(out)
 				}
@@ -220,7 +234,7 @@ func (s *Service) historyCall(ctx context.Context, machine, method string, raw j
 			return nil, true, ctx.Err()
 		}
 		if h != nil {
-			if out, ok := s.historyPage(ctx, st, h, p, true); ok {
+			if out, ok := s.historyPage(ctx, st, h, p, true, true); ok {
 				out = partialHistoryPage(out)
 				return out, true, nil
 			}
@@ -275,7 +289,7 @@ func historyItem(row conversationlog.Item, h *db.ConversationHistory) proto.Item
 	return it
 }
 
-func (s *Service) historyPage(ctx context.Context, st conversationHistoryStore, h *db.ConversationHistory, p historyParams, fresh bool) (json.RawMessage, bool) {
+func (s *Service) historyPage(ctx context.Context, st conversationHistoryStore, h *db.ConversationHistory, p historyParams, fresh, allowPartial bool) (json.RawMessage, bool) {
 	unknownTail := h.TailSeq == nil
 	if unknownTail {
 		if !fresh || len(h.Coverage) == 0 {
@@ -318,6 +332,7 @@ func (s *Service) historyPage(ctx context.Context, st conversationHistoryStore, 
 	if span == nil {
 		return nil, false
 	}
+	requestedFrom, requestedThrough := from, through
 	from, through = max(from, span.From), min(through, span.Through)
 	limit := p.Limit
 	if limit <= 0 || limit > 500 {
@@ -355,9 +370,19 @@ func (s *Service) historyPage(ctx context.Context, st conversationHistoryStore, 
 		for start > 0 && items[start].Seq == items[start-1].Seq {
 			start--
 		}
+		if !allowPartial && seen < min(p.Turns, 10) && len(rows) < limit && from > requestedFrom {
+			return nil, false
+		}
 		items = items[start:]
 		if start > 0 {
 			from = max(from, items[0].Seq-1)
+		}
+	}
+	// A covered suffix or prefix does not prove a larger requested window. Fill
+	// it from the source while online; retain partial data when the source fails.
+	if !allowPartial && len(rows) < limit && (p.Turns <= 0 || !newest) {
+		if (newest && from > requestedFrom) || (!newest && through < requestedThrough) {
+			return nil, false
 		}
 	}
 	pageFrom, pageTo := from, through
@@ -473,15 +498,19 @@ func (s *Service) historyRemember(ctx context.Context, st conversationHistorySto
 		Revision: revision, FromSeq: from, ThroughSeq: through, Tail: tail, Items: items})
 }
 
-func (s *Service) historyHandoff(ctx context.Context, st conversationHistoryStore, h *db.ConversationHistory) (json.RawMessage, bool) {
+func (s *Service) historyHandoff(ctx context.Context, st conversationHistoryStore, h *db.ConversationHistory, allowPartial bool) (json.RawMessage, bool) {
 	if h.TailSeq == nil {
+		return nil, false
+	}
+	partial := !h.SummaryKnown || !conversationlog.Covers(h.Coverage, 0, *h.TailSeq)
+	if partial && !allowPartial {
 		return nil, false
 	}
 	rows, err := st.ConversationItems(ctx, h.MachineID, h.SessionID, h.History, 0, *h.TailSeq, 500, true)
 	if err != nil {
 		return nil, false
 	}
-	result := mainHandoff{Summary: h.Summary}
+	result := mainHandoff{Summary: h.Summary, Partial: partial}
 	afterCompact := 0
 	for _, row := range rows {
 		if row.Item.Compact != nil {
@@ -490,6 +519,12 @@ func (s *Service) historyHandoff(ctx context.Context, st conversationHistoryStor
 	}
 	for _, row := range rows {
 		it := row.Item
+		if !row.Complete {
+			result.Partial = true
+			if !allowPartial {
+				return nil, false
+			}
+		}
 		if !row.Complete || it.Seq <= afterCompact || it.Kind != proto.KindText || (it.Role != "user" && it.Role != "assistant") {
 			continue
 		}

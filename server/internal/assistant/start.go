@@ -537,6 +537,7 @@ type mainHandoff struct {
 	// A cleared external choice reserves this ID before its start, so retries cannot create another conversation.
 	For     string `json:"for,omitempty"`
 	Summary string `json:"summary,omitempty"`
+	Partial bool   `json:"partial,omitempty"`
 	Recent  []struct {
 		Role string `json:"role"`
 		Text string `json:"text"`

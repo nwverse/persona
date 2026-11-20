@@ -558,3 +558,44 @@ func TestDurableHistoryPagingRetainsSourceLimits(t *testing.T) {
 		t.Fatalf("catch-up cursor contract %+v", p)
 	}
 }
+
+func TestDurableHistoryPartialTailFillsLargerOnlineWindow(t *testing.T) {
+	for _, params := range []map[string]any{
+		{"turns": 3, "lazy_images": true},
+		{"limit": 80, "lazy_images": true},
+	} {
+		t.Run(fmt.Sprint(params), func(t *testing.T) {
+			s, _, _, rt := historyFixture(t)
+			if p := readHistory(t, s, "side-chat", map[string]any{"turns": 1, "lazy_images": true}); len(p.Items) != 2 {
+				t.Fatalf("seed tail %+v", p)
+			}
+			rt.mu.Lock()
+			before := rt.reads
+			rt.mu.Unlock()
+			p := readHistory(t, s, "side-chat", params)
+			rt.mu.Lock()
+			after := rt.reads
+			rt.mu.Unlock()
+			if len(p.Items) != 6 || p.Items[0].ID != "u1" || after <= before {
+				t.Fatalf("partial cache hid available source: %+v, reads %d -> %d", p, before, after)
+			}
+		})
+	}
+}
+
+func TestDurableHistoryPartialHandoffPrefersSourceAndMarksOfflineFallback(t *testing.T) {
+	s, _, _, rt := historyFixture(t)
+	readHistory(t, s, "side-chat", map[string]any{"turns": 1, "lazy_images": true})
+	var handoff mainHandoff
+	params := map[string]any{"session_id": "side-chat"}
+	if err := s.call(t.Context(), "server", DeviceAssistantHandoff, params, &handoff); err != nil || handoff.Summary != "source engine compaction" {
+		t.Fatalf("partial cache hid source handoff: %+v %v", handoff, err)
+	}
+	rt.mu.Lock()
+	rt.offline = true
+	rt.mu.Unlock()
+	handoff = mainHandoff{}
+	if err := s.call(t.Context(), "server", DeviceAssistantHandoff, params, &handoff); err != nil || !handoff.Partial || len(handoff.Recent) != 2 {
+		t.Fatalf("partial offline handoff misrepresented: %+v %v", handoff, err)
+	}
+}
