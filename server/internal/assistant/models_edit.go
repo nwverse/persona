@@ -187,24 +187,62 @@ func permissionModeSupported(agent string, listed proto.PermissionModeSet, mode 
 func (s *Service) permissionModesForLauncher(ctx context.Context, machine, name string, provider *ModelProvider) []string {
 	var agent string
 	var listed proto.PermissionModeSet
-	if provider != nil {
+	machineResolved := false
+	if name != "" && machine != "" {
+		// When a specific machine is known, use that machine's authoritative launcher definition instead of
+		// the cross-machine union carried on provider.
+		var machineAgent string
+		var machineListed proto.PermissionModeSet
+		for _, m := range s.zshrcLaunchers(ctx, false) {
+			if m.MachineID != machine {
+				continue
+			}
+			for _, l := range m.Launchers {
+				if l.Name == name {
+					machineAgent = l.Agent
+					machineListed = l.PermissionModes
+					machineResolved = true
+					break
+				}
+			}
+			if machineResolved {
+				break
+			}
+		}
+		if c, ok := s.configuredLauncher(ctx, machine, name); ok {
+			if c.AgentType != "" {
+				machineAgent = c.AgentType
+			} else if machineAgent == "" && c.Agent != "" {
+				machineAgent = c.Agent
+			}
+			if c.PermissionModes != 0 || !machineResolved {
+				machineListed = c.PermissionModes
+			}
+			machineResolved = true
+		}
+		if !machineResolved {
+			if list, known := s.launchersHere(ctx, machine); known {
+				for _, l := range list {
+					if l.Name == name {
+						machineAgent = l.Agent
+						machineListed = l.PermissionModes
+						machineResolved = true
+						break
+					}
+				}
+			}
+		}
+		if machineResolved {
+			agent = machineAgent
+			listed = machineListed
+		}
+	}
+	if !machineResolved && provider != nil {
 		agent = provider.Agent
 		listed = provider.PermissionModes
 	}
 	if name != "" {
-		if machine != "" {
-			if c, ok := s.configuredLauncher(ctx, machine, name); ok {
-				if c.AgentType != "" {
-					agent = c.AgentType
-				} else if agent == "" && c.Agent != "" {
-					agent = c.Agent
-				}
-				if listed == 0 && c.PermissionModes != 0 {
-					listed = c.PermissionModes
-				}
-			}
-		}
-		if agent == "" && listed == 0 {
+		if !machineResolved && agent == "" && listed == 0 {
 			for _, l := range s.storedLaunchers(ctx) {
 				if l.Name == name {
 					agent = l.AgentType()
@@ -212,7 +250,7 @@ func (s *Service) permissionModesForLauncher(ctx context.Context, machine, name 
 				}
 			}
 		}
-		if agent == "" && listed == 0 {
+		if !machineResolved && agent == "" && listed == 0 {
 			for _, v := range s.launcherViews(ctx) {
 				if v.Name == name {
 					agent = viewAgent(v)
@@ -221,7 +259,7 @@ func (s *Service) permissionModesForLauncher(ctx context.Context, machine, name 
 				}
 			}
 		}
-		if agent == "" && slices.Contains([]string{"codex", "traex", "agy", "omp", "pi", "cursor"}, name) {
+		if agent == "" && listed == 0 && slices.Contains([]string{"codex", "traex", "agy", "omp", "pi", "cursor"}, name) {
 			agent = name
 		}
 	}
