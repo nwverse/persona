@@ -299,7 +299,7 @@ type SnapshotProfile struct {
 // SnapshotTier is one tier of the profile in use: what an Agent started on it runs on ("" model or effort: the
 // launcher's), and when to use it.
 type SnapshotTier struct {
-	Name, Launcher, Model, Effort, Description string
+	Name, Launcher, Model, Effort, Speed, Description string
 }
 
 // Snapshot is the live context a starting assistant gets in its system prompt.
@@ -750,6 +750,16 @@ type TaskEnded struct {
 }
 
 func RenderTaskEnded(n TaskEnded) string { return render("assistant/task_ended", n) }
+
+// RelayRefused tells a conversation that the message it sent another with conversation_send or conversation_new (Tool)
+// was refused for good by that conversation (Title, ID) with a refusal Code, and is not tried again (#11393). Excerpt
+// is how the message began. Language is the owner's (answerLanguage: "" Chinese, "English", "日本語").
+type RelayRefused struct {
+	Language                       string
+	Tool, ID, Title, Code, Excerpt string
+}
+
+func RenderRelayRefused(d RelayRefused) string { return render("assistant/relay_refused", d) }
 
 // ChatReply tells a conversation that wrote into a Lark chat as the user that others wrote there since (#10777): the
 // chat's name (Group: a group, else a direct chat with that person), when the conversation last wrote there (local

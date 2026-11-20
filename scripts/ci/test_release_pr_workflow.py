@@ -40,6 +40,16 @@ class ReleaseWorkflowTests(unittest.TestCase):
             self.assertIn("release-pr-" + name + "-", str(jobs[name]))
         self.assertNotIn("cli-web", jobs["cli-web"].get("environment", ""))
         self.assertNotIn("secrets.", str(jobs["cli-web"]))
+        self.assertEqual(jobs["android"]["steps"][2]["with"]["packages"], "platform-tools")
+        self.assertEqual(jobs["cli-web"]["steps"][5]["env"]["NODE_OPTIONS"], "--max-old-space-size=4096")
+        self.assertIn('--receipt "$RUNNER_TEMP/android-receipt.json"', str(jobs["android"]))
+        self.assertEqual(jobs["android"]["steps"][4]["with"]["path"], "${{ runner.temp }}/release-plan")
+        self.assertIn('RUNNER_TEMP', str(jobs["android"]))
+        self.assertNotIn("Path('release/plan.json')", str(jobs["android"]))
+        self.assertIn('release-pr-plan-${{ needs.plan.outputs.pr }}', str(jobs))
+        self.assertIn('release-pr-plan-${{ steps.source.outputs.number }}', str(jobs["plan"]))
+        self.assertNotIn('release-pr-plan-${{ steps.plan.outputs.pr }}-${{ steps.plan.outputs.commit }}', str(jobs["plan"]))
+        self.assertNotIn('release-pr-plan-${{ needs.plan.outputs.pr }}-${{ needs.plan.outputs.commit }}', str(jobs))
 
     def test_windows_requires_native_execution_and_authenticode(self):
         text = PR.read_text()
@@ -50,9 +60,26 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("beta.yml", text)
         self.assertIn("latest.yml", text)
 
+    def test_pr_metadata_survives_the_clean_source_checkout(self):
+        text = PR.read_text()
+        self.assertIn("PR_JSON: ${{ runner.temp }}/release-pr.json", text)
+        self.assertIn("PR_LIST_JSON: ${{ runner.temp }}/release-pr-list.json", text)
+        self.assertIn("PR_REST_JSON: ${{ runner.temp }}/release-pr-rest.json", text)
+        self.assertNotIn("json.load(open(\"release-pr.json\"))", text)
+        self.assertNotIn("Path('release-pr.json')", text)
+        self.assertNotIn("> release-pr.json", text)
+        self.assertNotIn("> release-pr-list.json", text)
+        self.assertNotIn("> release-pr-rest.json", text)
+        self.assertIn('verify-pr --pr-json "$PR_JSON"', text)
+        self.assertIn("GIT_COMMIT: ${{ github.event.pull_request.merge_commit_sha || github.sha }}", text)
+        self.assertIn("COMMIT=\"$commit\" python3", text)
+        self.assertIn("--json number,title,state,isDraft,baseRefName", text)
+        self.assertNotIn("open(os.environ['PR_JSON'])", text)
+        self.assertIn('json.load(open(sys.argv[1]))', text)
+
     def test_main_without_a_merged_release_pr_has_no_build_plan(self):
         text = PR.read_text()
-        self.assertIn("Path('release-pr.json').write_text('{}')", text)
+        self.assertIn("Path(os.environ['PR_JSON']).write_text('{}')", text)
         self.assertNotIn("raise SystemExit(78)", text)
         self.assertIn("steps.source.outputs.number != '0'", str(self.pr["jobs"]["plan"]["steps"]))
         for name, job in self.pr["jobs"].items():
@@ -63,14 +90,22 @@ class ReleaseWorkflowTests(unittest.TestCase):
         text = PUBLISH.read_text()
         self.assertIn("github.event.workflow_run.conclusion == 'success'", text)
         self.assertIn("github.event.workflow_run.head_sha", text)
+        self.assertIn('git fetch --no-tags origin main', text)
+        self.assertIn('git merge-base --is-ancestor "$COMMIT" FETCH_HEAD', text)
+        self.assertNotIn('refs/heads/main | cut -f1', text)
         self.assertIn("release/merged-pr.json", text)
         self.assertIn("mergeCommit", text)
         self.assertIn("github.actor == 'chyroc'", text)
         self.assertIn("github.triggering_actor == 'chyroc'", text)
         self.assertIn("verify-merged-pr", text)
-        self.assertIn("refs/heads/main", text)
+        self.assertIn("github.event.workflow_run.head_branch == 'main'", text)
         self.assertEqual(self.publish["jobs"]["authorize"]["environment"], "persona-release")
         self.assertEqual(self.publish["jobs"]["cli-web"]["environment"], "persona-release")
+        source = self.publish["jobs"]["source"]
+        self.assertNotIn("environment", source)
+        self.assertIn("release:", str(source))
+        self.assertIn("needs.source.outputs.pr != ''", self.publish["jobs"]["authorize"]["if"])
+        self.assertIn("needs.source.outputs.pr", str(self.publish["jobs"]["authorize"]["outputs"]))
         self.assertNotIn("pull_request_target:", text)
 
     def test_immutable_tag_and_download_verification_precede_beta_pointer(self):
@@ -99,6 +134,9 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("preserve its failed source", text)
         self.assertIn("release-reserved.txt", text)
         self.assertIn("--reserved $(tr '\\n' ' ' < release-reserved.txt)", text)
+        self.assertLess(text.index('refs/heads/release/*'), text.index('schedule-version'))
+        self.assertIn('releases/latest', text)
+        self.assertIn('select(.head.ref == $branch)', text)
         self.assertNotIn("--force", text)
         self.assertNotIn('refs/tags/$TAG', text)
         self.assertNotIn("gh release create", text)
@@ -109,10 +147,23 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("needs: [plan, verify]", text)
         self.assertIn("needs.plan.outputs.source_commit", text)
         self.assertIn("--match-head-commit \"$HEAD\"", text)
+        merge = self.pr["jobs"]["merge"]
+        self.assertEqual(merge["environment"], "persona-release")
+        self.assertEqual(merge["if"], "needs.plan.outputs.pr != '0' && needs.plan.outputs.version != '' && github.event_name == 'pull_request'")
+        self.assertEqual(merge["steps"][1]["env"]["GH_TOKEN"], "${{ secrets.RELEASE_PR_TOKEN }}")
+        self.assertIn("missing RELEASE_PR_TOKEN", merge["steps"][1]["run"])
+        self.assertIn('merged_by != "chyroc"', (ROOT / 'scripts/operations/release_pr.py').read_text())
         self.assertIn("github.event.workflow_run.conclusion == 'success'", PUBLISH.read_text())
         self.assertIn("github.event.workflow_run.head_branch == 'main'", PUBLISH.read_text())
         self.assertIn("verify-merged-pr", PUBLISH.read_text())
         self.assertIn("Create the immutable tag only after the merged source passed every platform check", PUBLISH.read_text())
+        tag = next(step for step in self.publish["jobs"]["authorize"]["steps"]
+                   if step.get("name") == "Create the immutable tag only after the merged source passed every platform check")
+        self.assertEqual(tag["env"]["GH_TOKEN"], "${{ secrets.RELEASE_PR_TOKEN }}")
+        self.assertIn("missing RELEASE_PR_TOKEN", tag["run"])
+        marker = next(step for step in self.publish["jobs"]["authorize"]["steps"]
+                      if step.get("name") == "Mark the Release as owned by this verified release PR")
+        self.assertEqual(marker["env"]["GH_TOKEN"], "${{ secrets.RELEASE_PR_TOKEN }}")
 
     def test_review_regressions_checkout_sources_and_upload_order(self):
         pr = PR.read_text()
@@ -137,6 +188,15 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("steps.owner.outputs.release_pr == 'false'", text)
         self.assertIn('release-publish owns its exact artifacts', text)
         self.assertIn('for name in VERSION SHA256SUMS android.json latest.json', PUBLISH.read_text())
+
+    def test_stable_latest_promotion_follows_independent_artifact_verification(self):
+        text = PUBLISH.read_text()
+        self.assertLess(text.index('Independently download every uploaded artifact'), text.index('stable_release.py'))
+        self.assertLess(text.index('stable_release.py'), text.index('beta_channel_release.py'))
+        stable = next(step for step in self.publish['jobs']['cli-web']['steps']
+                      if step.get('name') == 'Advance only the verified stable Latest pointer')
+        self.assertEqual(stable['if'], "needs.authorize.outputs.channel == 'release'")
+        self.assertIn('--manifest release/downloads/latest.json', stable['run'])
 
     def test_workflows_lint(self):
         result = subprocess.run(["actionlint", str(PR), str(PUBLISH), str(SCHEDULE)], capture_output=True, text=True)

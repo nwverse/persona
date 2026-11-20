@@ -40,22 +40,25 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number || 0 }}
+          PR_JSON: ${{ runner.temp }}/release-pr.json
+          PR_LIST_JSON: ${{ runner.temp }}/release-pr-list.json
+          PR_REST_JSON: ${{ runner.temp }}/release-pr-rest.json
         run: |
           set -euo pipefail
           if [[ "${{ github.event_name }}" = push ]]; then
             commit="${{ github.sha }}"
-            gh api "repos/$REPOSITORY/commits/$commit/pulls" > release-pr-list.json
-            python3 - <<'PY'
+            gh api "repos/$REPOSITORY/commits/$commit/pulls" > "$PR_LIST_JSON"
+            COMMIT="$commit" python3 - <<'PY'
           import json,os
           from pathlib import Path
           commit=os.environ['COMMIT']
-          candidates=[p for p in json.loads(Path('release-pr-list.json').read_text()) if p.get('state')=='closed' and (p.get('merge_commit_sha') or p.get('mergeCommit',{}).get('oid'))==commit and p.get('title','').startswith('release:') and p.get('user',{}).get('login')=='chyroc']
+          candidates=[p for p in json.loads(Path(os.environ['PR_LIST_JSON']).read_text()) if p.get('state')=='closed' and (p.get('merge_commit_sha') or p.get('mergeCommit',{}).get('oid'))==commit and p.get('title','').startswith('release:') and p.get('user',{}).get('login')=='chyroc']
           if len(candidates)!=1:
               print('No unique merged release PR for this main commit; not a release run')
-              Path('release-pr.json').write_text('{}')
+              Path(os.environ['PR_JSON']).write_text('{}')
               raise SystemExit(0)
-          Path('release-pr.json').write_text(json.dumps(candidates[0]))
-          pr=json.loads(Path('release-pr.json').read_text())
+          Path(os.environ['PR_JSON']).write_text(json.dumps(candidates[0]))
+          pr=json.loads(Path(os.environ['PR_JSON']).read_text())
           pr['state']='MERGED'
           pr['isDraft']=pr.get('draft',False)
           pr['baseRefName']=pr.get('base',{}).get('ref','main')
@@ -63,28 +66,28 @@ jobs:
           pr['headRepository']={'nameWithOwner':pr.get('head',{}).get('repo',{}).get('full_name','')}
           pr['author']=pr.get('user',{})
           pr['mergeCommit']={'oid':pr.get('merge_commit_sha')}
-          Path('release-pr.json').write_text(json.dumps(pr))
+          Path(os.environ['PR_JSON']).write_text(json.dumps(pr))
           PY
           else
-            gh pr view "$PR_NUMBER" --repo "$REPOSITORY" --json state,isDraft,baseRefName,headRefOid,headRepository,author,title,mergeCommit > release-pr.json
-            gh api "repos/$REPOSITORY/pulls/$PR_NUMBER" --jq '{merge_commit_sha}' > release-pr-rest.json
+            gh pr view "$PR_NUMBER" --repo "$REPOSITORY" --json number,title,state,isDraft,baseRefName,headRefOid,headRepository,author,mergeCommit > "$PR_JSON"
+            gh api "repos/$REPOSITORY/pulls/$PR_NUMBER" --jq '{merge_commit_sha}' > "$PR_REST_JSON"
             python3 - <<'PY'
-          import json
+          import json,os
           from pathlib import Path
-          pr=json.loads(Path('release-pr.json').read_text())
-          pr['mergeCommit']={'oid':json.loads(Path('release-pr-rest.json').read_text())['merge_commit_sha']}
-          Path('release-pr.json').write_text(json.dumps(pr))
+          pr=json.loads(Path(os.environ['PR_JSON']).read_text())
+          pr['mergeCommit']={'oid':json.loads(Path(os.environ['PR_REST_JSON']).read_text())['merge_commit_sha']}
+          Path(os.environ['PR_JSON']).write_text(json.dumps(pr))
           PY
           fi
           set -euo pipefail
-          if [[ "${{ github.event_name }}" = push ]] && ! python3 -c 'import json; raise SystemExit(0 if json.load(open("release-pr.json")) else 1)'; then
+          if [[ "${{ github.event_name }}" = push ]] && ! python3 -c 'import json,sys; raise SystemExit(0 if json.load(open(sys.argv[1])) else 1)' "$PR_JSON"; then
             printf 'number=0\n' >> "$GITHUB_OUTPUT"
             printf 'channel=release\n' >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          printf 'number=%s\n' "$(python3 -c 'import json; print(json.load(open("release-pr.json"))["number"])')" >> "$GITHUB_OUTPUT"
+          printf 'number=%s\n' "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["number"])' "$PR_JSON")" >> "$GITHUB_OUTPUT"
           channel=release
-          if [[ "$(python3 -c 'import json; print(json.load(open("release-pr.json"))["title"])')" == *-beta.* ]]; then channel=beta; fi
+          if [[ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["title"])' "$PR_JSON")" == *-beta.* ]]; then channel=beta; fi
           printf 'channel=%s\n' "$channel" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v4
         with:
@@ -98,15 +101,16 @@ jobs:
         env:
           REPOSITORY: ${{ github.repository }}
           CHANNEL: ${{ steps.source.outputs.channel }}
+          PR_JSON: ${{ runner.temp }}/release-pr.json
           PR_NUMBER: ${{ steps.source.outputs.number }}
           MERGE_COMMIT: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
-          GIT_COMMIT: ${{ github.sha }}
+          GIT_COMMIT: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
         run: |
           set -euo pipefail
           if [[ "${{ github.event_name }}" = push ]]; then
-            version="$(python3 scripts/operations/release_pr.py --repository "$REPOSITORY" --channel "$CHANNEL" verify-pr --pr-json release-pr.json --merged --commit "$GIT_COMMIT")"
+            version="$(python3 scripts/operations/release_pr.py --repository "$REPOSITORY" --channel "$CHANNEL" verify-pr --pr-json "$PR_JSON" --merged --commit "$GIT_COMMIT")"
           else
-            version="$(python3 scripts/operations/release_pr.py --repository "$REPOSITORY" --channel "$CHANNEL" verify-pr --pr-json release-pr.json)"
+            version="$(python3 scripts/operations/release_pr.py --repository "$REPOSITORY" --channel "$CHANNEL" verify-pr --pr-json "$PR_JSON")"
           fi
           python3 scripts/operations/release_pr.py --repository "$REPOSITORY" --channel "$CHANNEL" next-version --version "$version"
           current_build="$(python3 - <<'PY'
@@ -132,7 +136,7 @@ jobs:
           mkdir -p release
           python3 scripts/operations/release_pr.py --repository "$REPOSITORY" --channel "$CHANNEL" plan \
             --version "$version" --commit "$GIT_COMMIT" --pr "$PR_NUMBER" --merge-commit "$MERGE_COMMIT" --build "$build" \
-            --source-commit "$(python3 -c 'import json; print(json.load(open("release-pr.json"))["headRefOid"])')" --out release/plan.json
+            --source-commit "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["headRefOid"])' "$PR_JSON")" --out release/plan.json
           python3 scripts/operations/release_pr.py --repository "$REPOSITORY" --channel "$CHANNEL" check-plan --plan release/plan.json --commit "$GIT_COMMIT"
           {
             printf 'pr=%s\n' "$PR_NUMBER"
@@ -146,7 +150,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: steps.source.outputs.number != '0'
         with:
-          name: release-pr-plan-${{ steps.plan.outputs.pr }}-${{ steps.plan.outputs.commit }}
+          name: release-pr-plan-${{ steps.source.outputs.number }}
           path: release/plan.json
           if-no-files-found: error
           retention-days: 2
@@ -174,7 +178,7 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - uses: actions/download-artifact@v4
         with:
-          name: release-pr-plan-${{ needs.plan.outputs.pr }}-${{ needs.plan.outputs.commit }}
+          name: release-pr-plan-${{ needs.plan.outputs.pr }}
           path: release
       - name: Prepare the public GitHub update source without a personal config
         run: |
@@ -187,6 +191,8 @@ jobs:
           RELEASE_CHANNEL: ${{ needs.plan.outputs.channel }}
           RUSTUP_TOOLCHAIN: '1.98.0'
           PERSONA_RELEASE_BUILD: ${{ needs.plan.outputs.build }}
+          # The hosted TypeScript project needs more than Node's default 2 GB; keep the first-screen budget unchanged.
+          NODE_OPTIONS: '--max-old-space-size=4096'
         run: scripts/release/publish.sh
       - name: Bind the verified downloads to the release plan
         run: |
@@ -226,6 +232,9 @@ jobs:
           distribution: temurin
           java-version: '21'
       - uses: android-actions/setup-android@v3
+        with:
+          # The default also installs the legacy `tools` package, which the SDK repository no longer has.
+          packages: platform-tools
       - name: Install the reviewed Android SDK, NDK and Rust targets
         run: |
           set -euo pipefail
@@ -235,8 +244,8 @@ jobs:
           printf '%s\n' "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - uses: actions/download-artifact@v4
         with:
-          name: release-pr-plan-${{ needs.plan.outputs.pr }}-${{ needs.plan.outputs.commit }}
-          path: release
+          name: release-pr-plan-${{ needs.plan.outputs.pr }}
+          path: ${{ runner.temp }}/release-plan
       - name: Prepare protected Android signing configuration without logging secrets
         env:
           PERSONA_ANDROID_CERTIFICATE_SHA256: ${{ secrets.PERSONA_ANDROID_CERTIFICATE_SHA256 }}
@@ -258,29 +267,32 @@ jobs:
           python3 scripts/release/android_tag_release.py \
             --config "$RUNNER_TEMP/persona-android/android.json" \
             --worktree "$GITHUB_WORKSPACE" --commit "${{ needs.plan.outputs.commit }}" \
-            --version "${{ needs.plan.outputs.version }}" --receipt release/android-receipt.json
+            --version "${{ needs.plan.outputs.version }}" --receipt "$RUNNER_TEMP/android-receipt.json"
       - name: Verify the signed APK and Android index against the release plan
         run: |
           set -euo pipefail
-          mkdir -p release/downloads
+          mkdir -p release/downloads "$RUNNER_TEMP/release-downloads"
+          cp "$RUNNER_TEMP/android-receipt.json" "$RUNNER_TEMP/release-downloads/android-receipt.json"
           python3 - <<'PY'
           import hashlib,json,os,shutil
           from pathlib import Path
-          plan=json.loads(Path('release/plan.json').read_text())
-          receipt=json.loads(Path('release/android-receipt.json').read_text())
+          plan=json.loads(Path(os.environ['RUNNER_TEMP']+'/release-plan/plan.json').read_text())
+          receipt=json.loads(Path(os.environ['RUNNER_TEMP']+'/release-downloads/android-receipt.json').read_text())
           assert receipt['commit']==plan['commit']
           assert len(receipt['assets'])==2
           for item in receipt['assets']:
               path=Path(item['path'])
               assert path.is_file()
               assert hashlib.sha256(path.read_bytes()).hexdigest()==item['sha256']
-              shutil.copyfile(path,Path('release/downloads')/item['name'])
-          index=json.loads(Path('release/downloads/android.json').read_text())
+              shutil.copyfile(path,Path(os.environ['RUNNER_TEMP']+'/release-downloads')/item['name'])
+          index=json.loads(Path(os.environ['RUNNER_TEMP']+'/release-downloads/android.json').read_text())
           assert index['version']==plan['version']
           assert index['source_sha']==plan['commit']
           assert index['name'].startswith('Persona-')
-          assert index['sha256']==hashlib.sha256(Path('release/downloads',index['name']).read_bytes()).hexdigest()
-          Path('release/android-receipt.json').unlink()
+          assert index['sha256']==hashlib.sha256(Path(os.environ['RUNNER_TEMP']+'/release-downloads',index['name']).read_bytes()).hexdigest()
+          for name in ('Persona-'+plan['version']+'-android.apk','android.json'):
+              shutil.copyfile(Path(os.environ['RUNNER_TEMP']+'/release-downloads')/name,Path('release/downloads')/name)
+          Path(os.environ['RUNNER_TEMP']+'/release-downloads/android-receipt.json').unlink()
           PY
       - uses: actions/upload-artifact@v4
         with:
@@ -304,7 +316,7 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
-          name: release-pr-plan-${{ needs.plan.outputs.pr }}-${{ needs.plan.outputs.commit }}
+          name: release-pr-plan-${{ needs.plan.outputs.pr }}
           path: release
       - uses: actions/download-artifact@v4
         with:
@@ -517,7 +529,7 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
-          name: release-pr-plan-${{ needs.plan.outputs.pr }}-${{ needs.plan.outputs.commit }}
+          name: release-pr-plan-${{ needs.plan.outputs.pr }}
           path: release
       - uses: actions/download-artifact@v4
         with:
@@ -582,7 +594,7 @@ jobs:
   merge:
     name: Merge the verified release PR for post-merge verification
     needs: [plan, verify]
-    if: needs.plan.outputs.pr != '0' && needs.plan.outputs.version != '' && github.event_name == 'pull_request' && github.actor == 'chyroc' && github.triggering_actor == 'chyroc'
+    if: needs.plan.outputs.pr != '0' && needs.plan.outputs.version != '' && github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: persona-release
@@ -597,12 +609,13 @@ jobs:
           persist-credentials: false
       - name: Squash the exact verified PR head, then require the main merge to be verified again
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}
           REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ needs.plan.outputs.pr }}
           HEAD: ${{ needs.plan.outputs.source_commit }}
         run: |
           set -euo pipefail
+          test -n "$GH_TOKEN" || { echo 'persona-release is missing RELEASE_PR_TOKEN; refusing an unverifiable merge actor' >&2; exit 1; }
           gh pr view "$PR_NUMBER" --repo "$REPOSITORY" --json state,isDraft,baseRefName,headRefOid,headRepository,author,title,mergeCommit > release/merge-pr.json
           gh api "repos/$REPOSITORY/pulls/$PR_NUMBER" --jq '{merge_commit_sha}' > release/merge-pr-rest.json
           python3 - <<'PY'

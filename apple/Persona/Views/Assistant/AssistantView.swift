@@ -1042,7 +1042,12 @@ struct AssistantHome: View {
                     Label(error, systemImage: Theme.Icon.error).font(Theme.Font.caption).foregroundStyle(Theme.danger)
                         .padding(.horizontal, Theme.Space.s)
                 }
-                if pending == nil || pending?.failed != nil { ReadinessHomeCard(route: $route) }
+                if pending == nil || pending?.failed != nil {
+                    VStack(spacing: Theme.Space.m) {
+                        PushHealthNotice(group: model.hub?.group ?? "")
+                        ReadinessHomeCard(route: $route)
+                    }
+                }
                 if let m = model.assistantManagerOffline { ManagerOfflineNote(manager: m) }
                 if ChatComposerKind.padCard {
                     // The iPad: the iPhone's composer, the launcher, mode and effort in its model menu (#2779).

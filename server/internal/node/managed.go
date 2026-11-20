@@ -511,7 +511,20 @@ func Launch(ctx context.Context, name string, args []string, ticket string) erro
 		argv = codexBypassArgs(argv)
 	}
 	env = withoutEnv(env, []string{codexBypassEnv})
+	if agent == "codex" {
+		// The provider wrapper is another native process boundary. Resolve npm's
+		// shim too; never let cmd.exe parse the first message on this final hop.
+		exe, env, err = codexStartProgram(exe, true, env)
+		if err != nil {
+			return fmt.Errorf("%s %w", codexStartError, err)
+		}
+	}
 	exe, argv, env, _ = launchExec(agent, exe, argv, env)
+	if agent == "codex" {
+		if err := codexStartCommandLine(argv); err != nil {
+			return fmt.Errorf("%s %w", codexStartError, err)
+		}
+	}
 	return osproc.Exec(exe, argv, env)
 }
 
@@ -591,6 +604,11 @@ func gatewayModelArgs(args, env []string, warn func(string)) []string {
 // Launch leaves it out for a session model the gateway says takes none (launchEffort, #8798).
 // codexCatalog is the model catalog URL of a Codex provider's gateway, "" for none (codexProviderArgs).
 func launchArgv(agent string, args, respArgs []string, respEffort, respModel string, respEnv []string, codexCatalog string) []string {
+	if agent == agyAgent && slices.Equal(args, []string{"models"}) {
+		// Discovery needs the same provider settings as a start, with no model selected.
+		respArgs = withoutModelArgs(respArgs)
+		respModel = ""
+	}
 	hasModelArg := false
 	hasSettingsArg := false
 	hasEffortArg := false

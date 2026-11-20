@@ -1,5 +1,9 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- Snapshot sequence numbers must order application as well as computation (#10514). `publish` numbered snapshots under `pubMu` but applied their interaction lists later, so a delayed older list could withdraw a prepared approval installed by a newer one. Recheck the sequence under `pubMu` immediately before `askOnPhone`; skip only superseded interaction lists and leave current omissions and explicit lifecycle endings unchanged. Force two real publishers across an existing leaf-mutex gate, then prove the owner's Allow returns once and applies once.
+
+- Moving temporary model outages to a durable manager retry must not swallow the node's other bounded recovery paths (#10444). Keep unavailable-model chains, recent transient 404s, safeguards refusals, gateway-quota recovery and tool-search resends on their existing contracts; only the outage classes owned by the new scheduler change. Tests of node-internal recovery can use a recoverable missing-model failure, while scheduled failure-fallback tests need a permanent error such as 401. Run the combined recovery tests after merging newer origin-attestation and delivery changes. Exercise the real hub interrupt and owner-message paths too: a direct `UserStopped` test misses a hub that notifies only Assistant, and `/exit` or `/quit` starts no turn that could cancel the wake.
+
 - Negotiate external runtime supervision policy explicitly, and isolate per-session rule layers outside `~/.persona/assistant` (#11173). Hardcoding `SourceKind == SourceRuntime` as unsupported blocks capable runtimes like Antigravity CLI, while dropping the guard or concatenating `supervision_instructions` into user message text weakens compaction durability and role isolation (#10338, #11121). Gate policy delivery on explicit `caps.supervision_policy` / `capabilities.supervision_policy` (defaulting absent or unknown to unsupported so DSH and older runtimes keep exact fail-closed behavior). On `agy acp`, verify append vs. replace semantics empirically before choosing a channel: `_meta.antigravity.systemPrompt.append` accumulates across `session/resume` calls and cannot be cleared on demotion, whereas per-session managed directories under `<agyDir>/persona-supervision/<rawId>` passed via `additionalDirectories` load into `<user_rules>` on every turn, reflect atomic edits and deletions on the next turn, leave shared `~/.persona/assistant/AGENTS.md` untouched, keep concurrent ordinary chats isolated, and fail closed with `assistant_supervision_runtime` when ACP lacks `additionalDirectories`, disk writes fail, or policy exceeds the two-file 48,000-byte (`AGENTS.md` + `GEMINI.md`) cap.
 
 - Recover an untold completion by native turn identity, not transcript revision (#10686). Trailing transcript bookkeeping must not suppress an already judged signal. Revalidate the complete current ledger entry under its lock and enqueue without rewriting it, so an older recovery snapshot cannot replace a newer turn or judgment. Exercise both PostgreSQL-backed manager restart and stale-snapshot rejection, with replay disabled as a negative control.
@@ -838,3 +842,12 @@ the hub's record of what was sent before looking at the client.
 When merging no-output turn handling, keep account-sealed compaction ahead of `no_output` / `stopped` handling in triage
 and clients. A generic kind must not restore Continue for a permanent error; ordinary silent turns keep their own text
 and Continue. Test both paths together, including the clients' independent invalid and plain-text flags.
+
+## The hub's codes reach the manager in two shapes (#11393)
+
+A relay refusal was classified with `errors.As(err, &rpc.Error{})` alone. That misses the hub's own codes: over the bus,
+`busError` gives `machine_offline`, `node_closed` and `no_device` back as a `codedError` that wraps a Go error kind
+(`apierr.ErrOffline`, `rpc.ErrClosed`, `ErrNoDevice`), not an `*rpc.Error`, and the manager's own machines answer
+`apierr.ErrOffline` with no code at all. Read from the code, `conversation_send` to a computer that was away returned
+the error instead of queueing the message as #10194 meant it to. Read a code from either shape (`relayErrCode`) and
+test each failure in the shape production delivers it (`busError(&rpc.Error{…})`), not only as a bare `*rpc.Error`.

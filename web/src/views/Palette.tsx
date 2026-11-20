@@ -34,6 +34,7 @@ import { CARD_OUT, EASE, EXIT_MS, IconButton, Kbd, toast, useExit } from "../ui/
 import { StatusMark } from "../ui/StatusMark";
 import { Icon } from "../ui/icons";
 import { useEscapeClose, useModalFocus } from "../ui/overlay";
+import { useCloseOnBack } from "../lib/back-close";
 import { copyFileMention, FilesHeading, FilesNotice, FileResultRow, openFileHit, usePaletteFiles, type FileRow } from "./palette/FilesSection";
 import { AgentConditions } from "./palette/AgentConditions";
 import { useSavedSearches, type SavedSearchPanel } from "./palette/SavedSearches";
@@ -43,7 +44,7 @@ import { t } from "../i18n";
 import { byTime } from "../lib/times";
 import { STATE_LABEL } from "../lib/state-labels";
 import { plainMarkdown } from "../lib/plain-markdown";
-import { PHONE, useMedia } from "../lib/viewport";
+import { NARROW, PHONE, useMedia } from "../lib/viewport";
 import type { AssistantSearchAnswer, AssistantSearchHit } from "../lib/assistant-search";
 
 interface Hit {
@@ -378,6 +379,9 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
   // Esc closes it wherever the focus is in it (the field, a row Tab reached, the Filter), and only it: a Dialog under it
   // stays open, a menu over it (the Filter's) closes first
   useEscapeClose(open && !managing, onClose);
+  // on a narrow screen Back closes it first, as it does the drawer and the sheets (lib/back-close.ts); a pick that goes
+  // to a page takes its entry over, and a sheet opened from it (Saved searches, a command's) reuses it
+  useCloseOnBack(open && !managing, onClose, useMedia(NARROW));
   // the field takes the focus on every open (opened again on its way out, it is not mounted anew)
   useEffect(() => {
     if (open && !managing) input.current?.focus({ preventScroll: true });
@@ -414,12 +418,15 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
     if (!listShown) navigate({ name: "agent-list" });
   };
 
+  // On a narrow screen it sits in the part a soft keyboard leaves (--kb-top / --kb-h, lib/viewport.ts), the card no
+  // taller than that: the list scrolls its last row above the keyboard. With no keyboard that part is the whole screen
+  // and the gap under the card is 0, so a card that fits stays where it was.
   return createPortal(
-    <div ref={backdrop} data-closing={exit.leaving || undefined} inert={exit.leaving || undefined} className="fixed inset-0 z-40 flex items-start justify-center bg-black/20 px-4 pt-[14vh] backdrop-blur-[2px] dark:bg-black/45" style={{ animation: "fade-in 120ms ease-out both" }} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div ref={card} role="dialog" aria-modal="true" tabIndex={-1} data-shortcut-layer={open || undefined} aria-label={label} className="w-full max-w-[560px] overflow-hidden rounded-[14px] bg-surface shadow-overlay outline-none" style={{ animation: `slide-up 200ms ${EASE} both` }}>
+    <div ref={backdrop} data-closing={exit.leaving || undefined} inert={exit.leaving || undefined} className="fixed inset-0 z-40 flex items-start justify-center bg-black/20 px-4 pt-[14vh] backdrop-blur-[2px] dark:bg-black/45 max-lg:top-(--kb-top) max-lg:bottom-auto max-lg:h-(--kb-h) max-lg:pb-[min(0.75rem,calc(100dvh-var(--kb-h)))]" style={{ animation: "fade-in 120ms ease-out both" }} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div ref={card} role="dialog" aria-modal="true" tabIndex={-1} data-shortcut-layer={open || undefined} aria-label={label} className="w-full max-w-[560px] overflow-hidden rounded-[14px] bg-surface shadow-overlay outline-none max-lg:flex max-lg:max-h-full max-lg:flex-col" style={{ animation: `slide-up 200ms ${EASE} both` }}>
         {/* on the way out it shows what it showed when open: closed, the lists below come back empty */}
         {open ? (kept.current = <>
-        <label className="flex h-12 items-center gap-2.5 border-b border-line px-4">
+        <label className="flex h-12 shrink-0 items-center gap-2.5 border-b border-line px-4">
           <Icon name="search" size={15} stroke={2} className="text-ink-3" />
           <input
             ref={input}

@@ -379,6 +379,7 @@ extension AppModel {
         guard let hub = registry.hubs.first(where: { $0.id == id }) else { return }
         guard registry.members(hub.group).count > 1 else { removeGroup(hub.group); return }
         closeTunnels(id)
+        updateHeldRetryReceipts { receipts in receipts.filter { $0.target.pairing != id } }
         var r = registry
         r.hubs.removeAll { $0.id == id }
         registry = r

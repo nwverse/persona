@@ -57,6 +57,12 @@ const (
 	// guard — a message id already delivered is not sent again, one whose send was cut off is refused.
 	DeviceSessionSendOnce = "session.send_once"
 
+	// ClarificationProofParam carries an opaque, one-time hub- or extension-manager-issued proof on
+	// session.send_once. ClarificationInteractionParam binds it to the prepared card. Both are stripped
+	// before the node call; neither is an owner_input attestation supplied by the assistant.
+	ClarificationProofParam       = "approval_clarification_proof"
+	ClarificationInteractionParam = "approval_clarification_id"
+
 	// DeviceAssistantAnswerAgain is a node send that must match the completed transcript tail.
 	// The manager and node both use this distinct method, so an older peer cannot
 	// silently ignore the guard. The hub claims the client_msg_id before forwarding.
@@ -188,6 +194,17 @@ const FeishuFromElsewhere = "elsewhere"
 type FeishuAction struct {
 	Event  json.RawMessage `json:"event"`
 	Action string          `json:"action,omitempty"`
+}
+
+// ClarificationProof is the bound question returned when a one-time proof is
+// consumed at the hub's final transport boundary. The opaque token itself is
+// never a caller, submission, approval, or reusable owner capability.
+type ClarificationProof struct {
+	InteractionID string `json:"interaction_id"`
+	MachineID     string `json:"machine_id"`
+	SessionID     string `json:"session_id"`
+	Text          string `json:"text"`
+	ClientMsgID   string `json:"client_msg_id"`
 }
 
 // FeishuView is feishu.view's answer.

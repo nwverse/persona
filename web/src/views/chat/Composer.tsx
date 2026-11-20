@@ -54,11 +54,11 @@ const ImageEditor = lazyPage(() => import("./ImageEditor").then((m) => m.ImageEd
 const ComposerPanel = lazyPage(() => import("./ComposerPanel").then((m) => m.ComposerPanel), { idle: true });
 const ComposerOverlay = lazyPage(() => import("./ComposerOverlays").then((m) => m.ComposerOverlay));
 const preloadComposerOverlay = () => void ComposerOverlay.preload().catch(() => {});
-const AssistantComposerPanel = lazyPage(() => import("./AssistantComposerPanel").then((m) => m.AssistantComposerPanel));
+const SlashSkillEntry = lazyPage(() => import("./SlashSkillView").then((m) => m.SlashSkillEntry));
 // Skill-aware history labels are needed only when recall search opens, not on the first screen.
 const HistorySearch = lazyPage(() => import("./HistorySearch").then((m) => m.HistorySearch));
-// The command palette stays idle-preloaded. The assistant's intent chunk owns the skill stage and its loading/error view.
-const SlashPalette = lazyPage(() => import("./SlashPalette").then((m) => m.SlashPalette), { idle: true });
+// The shared picker shell is already idle-preloaded with @. Load slash-specific rows when the user types /.
+const SlashPalette = lazyPage(() => import("./SlashPalette").then((m) => m.SlashPalette));
 /** How long "Not sent yet" stays under the box after Enter was pressed while blocked. */
 const NUDGE_MS = 4000;
 
@@ -274,6 +274,7 @@ export const Composer = memo(function Composer({
     return split.text;
   };
   const skillEnvironment = JSON.stringify([machineId, mention?.cwd, mention?.skills]);
+  const catalogMemory = useMemo<import("./useSkillCatalog").CatalogMemory>(() => ({}), [skillEnvironment, draftKey]);
   const previousSkillEnvironment = useRef(skillEnvironment);
   useEffect(() => {
     setActive(0);
@@ -767,8 +768,17 @@ export const Composer = memo(function Composer({
   // an empty box and an idle agent: voice takes the send button's place (it would be off anyway), as on iOS
   const roundVoice = voice?.mode === "start" && !canSend && !showStop && !blocked && !disabled;
 
+  // `/model` alone opens the model panel (where the agent switches models), `/permissions` alone the permission menu
+  // (#6476), from Enter and the send buttons alike. Where the chat has no such picker, the words are sent as typed.
+  const pickerCommand = (text: string) => {
+    const opened = (isModelCommand(text) && requestModelPicker(draftKey)) || (isPermissionsCommand(text) && requestPermissionPicker(draftKey));
+    if (opened) setDraft("");
+    return opened;
+  };
+
   const submit = async (text = draft) => {
     if (!canWriteDraft()) return;
+    if (pickerCommand(text)) return;
     const refs = getContexts(draftKey);
     const q = getQuotes(draftKey).list;
     // a file still on its way holds the message, as a video does on the phone (#8361); the words stay in the box
@@ -862,9 +872,11 @@ export const Composer = memo(function Composer({
     input.current?.focus({ preventScroll: true });
   };
 
-  const slashProps = { rows, active, onHover: setActive, onPick: pick, onClose: closeSlash, query, source: mention, machineId, within: box, ime: ime.tracker };
+  const slashProps = {
+    rows, active, onHover: setActive, onPick: pick, onClose: closeSlash,
+    query, source: mention, machineId, within: box, memory: catalogMemory, ime: ime.tracker,
+  };
   const commandPalette = () => <SlashPalette {...slashProps} active={Math.min(active, Math.max(rows.length - 1, 0))} />;
-  const MentionPanel = mention?.skills ? AssistantComposerPanel : ComposerPanel;
   return (
     <div
       ref={box}
@@ -891,7 +903,7 @@ export const Composer = memo(function Composer({
           {mention?.skills ? (
             <OverlayBoundary open onClose={closeSlash} fallback={commandPalette()}>
               <Suspense fallback={commandPalette()}>
-                <AssistantComposerPanel {...slashProps} slash />
+                <SlashSkillEntry {...slashProps} />
               </Suspense>
             </OverlayBoundary>
           ) : commandPalette()}
@@ -902,12 +914,12 @@ export const Composer = memo(function Composer({
 
       {token && (
         <Suspense fallback={null}>
-          <MentionPanel from="at" query={token.query} source={mention} machineId={machineId} attach={disabled ? undefined : machineId ? "files" : "images"} plan={planMode} onPick={(p) => pickPanel(p, token)} onClose={closePlus} handle={panel} />
+          <ComposerPanel key={skillEnvironment} memory={catalogMemory} from="at" query={token.query} source={mention} machineId={machineId} attach={disabled ? undefined : machineId ? "files" : "images"} plan={planMode} onPick={(p) => pickPanel(p, token)} onClose={closePlus} handle={panel} />
         </Suspense>
       )}
       {plusOpen && !disabled && (
         <Suspense fallback={null}>
-          <MentionPanel from="plus" source={mention} machineId={machineId} attach={machineId ? "files" : "images"} plan={planMode} onPick={(p) => pickPanel(p, null)} onClose={closePlus} />
+          <ComposerPanel key={skillEnvironment} memory={catalogMemory} from="plus" source={mention} machineId={machineId} attach={machineId ? "files" : "images"} plan={planMode} onPick={(p) => pickPanel(p, null)} onClose={closePlus} />
         </Suspense>
       )}
 
@@ -1023,16 +1035,9 @@ export const Composer = memo(function Composer({
             const modEnter = e.ctrlKey || e.metaKey;
             // a plain Enter picks the highlighted row; Shift+Enter or Alt+Enter is always a new line
             const pickEnter = e.key === "Enter" && !modEnter && !e.shiftKey && !e.altKey;
-            // `/model` alone opens the model panel instead of sending (where the agent switches models)
-            if (send && isModelCommand(draft) && requestModelPicker(draftKey)) {
+            // `/model` or `/permissions` alone opens its picker, ahead of the slash palette's Enter, which would pick its row
+            if (send && pickerCommand(draft)) {
               e.preventDefault();
-              setDraft("");
-              return;
-            }
-            // so does `/permissions` alone: the permission menu (#6476)
-            if (send && isPermissionsCommand(draft) && requestPermissionPicker(draftKey)) {
-              e.preventDefault();
-              setDraft("");
               return;
             }
             // ↑ in an empty box edits the last message where Edit last message is on offer (#4503); else the history's

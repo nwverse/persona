@@ -1,7 +1,7 @@
 import { conversationDeleted, onConversationDeleted } from "../../lib/conversation-deleted";
 // A session's items: the newest page over HTTP, then live over the WebSocket (docs/protocol/protocol.md "Continuity of items").
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { api, ApiError, errorText, isAbort, READ_TIMEOUT_MS, sessionPath } from "../../lib/api";
+import { api, ApiError, errorText, isAbort, READ_TIMEOUT_MS, sessionHistoryNotFound, sessionPath } from "../../lib/api";
 import { sessionLoadError } from "../../lib/session-link";
 import { getState, listenSession, markConversationDeleted, send, type ItemsEvent } from "../../lib/store";
 import { afterPull, afterPush, FRESH_TALLY, newestItemAt, notLive as tallyNotLive, RevWatch, shouldPull, type StaleTally } from "../../lib/stale-page";
@@ -103,6 +103,9 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
   const [loading, setLoading] = useState(!initial);
   const [firstRead, setFirstRead] = useState(false);
   const [error, setError] = useState("");
+  // The latest page's read said its computer can't find this history (#11450): no older page is read, which would
+  // answer an empty one, end paging and take the error away.
+  const historyMissing = useRef(false);
   const [hasMore, setHasMore] = useState(initial?.hasMore ?? false);
   const hasMoreRef = useRef(hasMore);
   const updateHasMore = useCallback((next: boolean) => {
@@ -517,6 +520,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       clearTimeout(refused);
       refused = undefined;
       setError("");
+      historyMissing.current = false;
       try {
         const p = await api<ItemsPage>(`${sessionPath(mid, sid)}/items?${PAGE}`, { signal: ctl.signal });
         if (dead || version !== pageRequest) return;
@@ -534,6 +538,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
           endRefused();
         } else if (!opts.starting) {
           const text = sessionLoadError(errorText(e));
+          historyMissing.current = sessionHistoryNotFound(e);
           if (isNotLoaded(e)) refused = window.setTimeout(() => endRefused(text), READ_TIMEOUT_MS);
           else setError(text);
         }
@@ -577,7 +582,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
     if (replacing.current || conversationDeleted(mid, sid)) return Promise.resolve(undefined);
     if (earlierInFlight.current) return earlierInFlight.current.promise;
     const delay = earlierRetryAt.current - Date.now();
-    if (!itemsRef.current.length || !hasMoreRef.current || (delay > 0 && !options?.waitForRetry)) return Promise.resolve(undefined);
+    if (!itemsRef.current.length || !hasMoreRef.current || historyMissing.current || (delay > 0 && !options?.waitForRetry)) return Promise.resolve(undefined);
     const read: EarlierRead = { controller: new AbortController(), promise: Promise.resolve(undefined) };
     earlierInFlight.current = read;
     setLoadingEarlier(true);

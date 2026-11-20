@@ -7,7 +7,7 @@ import os
 /// `… [State Names]` keys; `StateNamesTests` keeps other entries and other files from defining them again.
 /// `interfaceText`, so the Live Activity follows the app's language at once.
 nonisolated enum StateName: String, CaseIterable, Sendable {
-    case needsYou, working, unread, seen, notRunning, unknown
+    case needsYou, working, unread, justFinished, seen, notRunning, unknown
     /// Waiting to be woken (`isWaiting`): a loop or a timer brings it back.
     case waiting
     /// Seen, but its last turn asks the user something (#5096).
@@ -28,6 +28,7 @@ nonisolated enum StateName: String, CaseIterable, Sendable {
         case .needsYou: interfaceText("Needs You [State Names]")
         case .working: interfaceText("Working [State Names]")
         case .unread: interfaceText("Unread [State Names]")
+        case .justFinished: interfaceText("Just finished [State Names]") // perf-ok: StateName.text caches this lookup per locale
         case .seen: interfaceText("Seen [State Names]")
         case .notRunning: interfaceText("Not Running [State Names]")
         case .unknown: interfaceText("Unknown [State Names]")
@@ -83,13 +84,10 @@ nonisolated enum StateName: String, CaseIterable, Sendable {
     /// to-do's Needs you in sentence case, as its section heading and its line say it (DESIGN_SYSTEM 5: headings in
     /// sentence case), the shipped sentence form (`needsYouSentence`); its section bar's choice is a button, in Title
     /// Case: `needsYou.text`, as the Inbox's bar says it. Working and Waiting are the direction tree's (`taskWorking`,
-    /// `taskWaiting`), whose Chinese words are not a session's.
+    /// `taskWaiting`), whose Chinese words are not a session's. Just finished (finished and not ticked, or closed and not
+    /// seen yet) is the one word a to-do shares with a session: `justFinished.text`.
     static var todoNeedsYou: String {
         kept("todoNeedsYou") { interfaceText("Needs you [State Names]") } // perf-ok: resolved once per locale
-    }
-    /// Finished and not ticked, or closed and not seen yet.
-    static var todoJustFinished: String {
-        kept("todoJustFinished") { interfaceText("Just finished [State Names]") } // perf-ok: resolved once per locale
     }
     /// The owner's own; nobody works on it and nothing waits.
     static var todoToDo: String {

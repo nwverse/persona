@@ -202,7 +202,7 @@ nonisolated enum TodosListLayout {
         case TodoListSection.working: StateName.taskWorking
         case TodoListSection.waiting: StateName.taskWaiting.text
         case TodoListSection.todo: StateName.todoToDo
-        case TodoListSection.justFinished: StateName.todoJustFinished
+        case TodoListSection.justFinished: StateName.justFinished.text
         case TodoListSection.someday: StateName.todoSomeday
         default: StateName.done.text
         }
@@ -372,7 +372,7 @@ nonisolated enum TodoRowContentLogic {
         let state: String? = switch c.mark {
         case .needs: StateName.todoNeedsYou
         case .working: StateName.taskWorking
-        case .ready: StateName.todoJustFinished
+        case .ready: StateName.justFinished.text
         case .waiting: StateName.taskWaiting.text
         case nil: c.closed && heard.isEmpty ? StateName.done.text : nil
         }
@@ -392,7 +392,7 @@ nonisolated enum TodoRowContentLogic {
         case TodoListSection.needsYou: TodoLineText.Said(lead: StateName.todoNeedsYou, tone: .needs)
         case TodoListSection.working: TodoLineText.Said(lead: StateName.taskWorking)
         case TodoListSection.waiting: TodoLineText.Said(lead: StateName.taskWaiting.text)
-        case TodoListSection.justFinished: TodoLineText.Said(lead: StateName.todoJustFinished, tone: .ready)
+        case TodoListSection.justFinished: TodoLineText.Said(lead: StateName.justFinished.text, tone: .ready)
         default: nil
         }
     }

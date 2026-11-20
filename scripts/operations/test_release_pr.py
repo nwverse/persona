@@ -88,8 +88,10 @@ class ReleasePRTests(unittest.TestCase):
                        {"author": {"login": "other"}}, {"headRepository": {"nameWithOwner": "fork/persona"}}):
             with self.subTest(change=change), self.assertRaises(release.ReleaseError):
                 release.verify_merged_pr(self.pr(**{**pr, **change}), "nwverse/persona", "beta", COMMIT, "chyroc")
-        self.assertEqual(release.verify_merged_pr({**pr, "mergedBy": None}, "nwverse/persona", "beta", COMMIT, "chyroc"), "0.9.2-beta.2")
-        self.assertEqual(release.verify_merged_pr({**pr, "mergedBy": {"login": "github-actions[bot]"}}, "nwverse/persona", "beta", COMMIT, "chyroc"), "0.9.2-beta.2")
+        for merger in (None, "other", "github-actions[bot]", "github-actions"):
+            with self.subTest(merger=merger), self.assertRaises(release.ReleaseError):
+                release.verify_merged_pr({**pr, "mergedBy": None if merger is None else {"login": merger}},
+                                         "nwverse/persona", "beta", COMMIT, "chyroc")
         with self.assertRaises(release.ReleaseError):
             release.verify_merged_pr(pr, "nwverse/persona", "beta", COMMIT, "other")
 
