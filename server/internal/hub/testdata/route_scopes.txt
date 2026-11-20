@@ -61,6 +61,7 @@ extensions.call:{id} /api/v1/extensions/{id}/
 -                    DELETE /api/v1/assistant/standing-authorizations/{id}
 -                    DELETE /api/v1/assistant/starred/{id}
 -                    DELETE /api/v1/assistant/tasks/{id}
+-                    DELETE /api/v1/assistant/tasks/{id}/skip-next
 -                    DELETE /api/v1/assistant/tasks/{id}/start-grant
 -                    DELETE /api/v1/auth/tokens/{id}
 -                    DELETE /api/v1/bots/feishu/owner
@@ -451,6 +452,7 @@ assistant.ask        POST /api/v1/assistant/conversations/{id}/stop
 -                    POST /api/v1/assistant/tasks
 -                    POST /api/v1/assistant/tasks/{id}/fresh
 -                    POST /api/v1/assistant/tasks/{id}/run
+-                    POST /api/v1/assistant/tasks/{id}/skip-next
 -                    POST /api/v1/assistant/urgent-call/test
 -                    POST /api/v1/assistant/warm
 todos.write          POST /api/v1/assistant/workspace-naming/preview

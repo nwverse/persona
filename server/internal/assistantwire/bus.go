@@ -303,6 +303,8 @@ var Routes = []string{
 	"PUT /api/v1/assistant/tasks/{id}",
 	"DELETE /api/v1/assistant/tasks/{id}",
 	"POST /api/v1/assistant/tasks/{id}/run",
+	"POST /api/v1/assistant/tasks/{id}/skip-next",
+	"DELETE /api/v1/assistant/tasks/{id}/skip-next",
 	"POST /api/v1/assistant/tasks/{id}/fresh",
 	"DELETE /api/v1/assistant/tasks/{id}/start-grant",
 	"GET /api/v1/assistant/places",
