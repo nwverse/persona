@@ -175,8 +175,8 @@ func TestWorkerMemoryReportThenDoneWritesOnceAndPreservesLog(t *testing.T) {
 	assertFileUnchanged(t, env.log, before)
 }
 
-// Parallel tool calls in one assistant line share a Seq but not an item or tool-use ID. Neither report may disappear,
-// and WorkDone reuses the latest report's full identity instead of writing a third record.
+// Parallel tool calls in one assistant line share a Seq but not an item or tool-use ID. Different outcomes must not
+// disappear, and WorkDone reuses the latest report's full identity instead of writing a third record.
 func TestWorkerMemorySameSequenceReportsKeepDistinctItems(t *testing.T) {
 	env := newWorkerMemoryEnv(t)
 	env.setProject(t, "explicit")
@@ -224,6 +224,26 @@ func TestWorkerMemorySameSequenceReportsKeepDistinctItems(t *testing.T) {
 	if len(records) != 2 || !seen[first] || !seen[second] {
 		t.Fatalf("WorkDone duplicated or replaced a same-Seq report: %+v", records)
 	}
+}
+
+// Exact duplicate handoffs are retries, not two outcomes. Only different report content needs a distinct durable item.
+func TestWorkerMemoryExactDuplicateReportsStayOne(t *testing.T) {
+	env := newWorkerMemoryEnv(t)
+	env.setProject(t, "explicit")
+	items := []proto.Item{
+		{ID: "prompt", Seq: 1, Kind: proto.KindText, Role: "user", Text: "Fix both retry loops."},
+		{ID: "report-a", Seq: 2, Kind: proto.KindToolUse, Role: "assistant", ToolUseID: "call-a",
+			ToolName: "report_to_supervisor", ToolInput: workerMemoryReportInput(), TS: turnEnd},
+		{ID: "report-b", Seq: 2, Kind: proto.KindToolUse, Role: "assistant", ToolUseID: "call-b",
+			ToolName: "report_to_supervisor", ToolInput: workerMemoryReportInput(), TS: turnEnd},
+	}
+	env.f.setItems(items...)
+	for range 2 {
+		env.s.goRecordWorkerReport(context.Background(), env.todo, "box", "s1", workerMemoryConclusion,
+			[]string{workerMemoryPR, workerMemoryIssue}, turnEnd)
+		env.s.tasks.outcomeRuns.Wait()
+	}
+	assertOriginalWorkerMemory(t, workerMemoryRecords(t, env.e, "explicit"))
 }
 
 // Identical parallel report text and timestamps are disambiguated by their evidence links, not by which one happens to
