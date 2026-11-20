@@ -4,6 +4,7 @@
 //   --record <path>            append one JSON line per inbound request/notification
 //   --no-additional-dirs       omit agentCapabilities.sessionCapabilities.additionalDirectories
 //   --fail-resume              reject session/resume requests with an ACP error
+//   --ignore-term              stay up after SIGTERM and stdin close
 //
 // Prompt behavior:
 //   text containing 'hold'     keeps session/prompt open until session/cancel arrives
@@ -20,6 +21,7 @@ if (process.argv.includes('models')) {
 const recordFile = process.argv[process.argv.indexOf('--record') + 1]
 const noAdditionalDirs = process.argv.includes('--no-additional-dirs')
 const failResume = process.argv.includes('--fail-resume')
+const ignoreTerm = process.argv.includes('--ignore-term')
 const record = (o) => appendFileSync(recordFile, `${JSON.stringify({ worker: process.pid, ...o })}\n`)
 const send = (o) => process.stdout.write(`${JSON.stringify(o)}\n`)
 
@@ -100,6 +102,10 @@ function onNotification(msg) {
   send({ jsonrpc: '2.0', id: turn.id, result: { stopReason: 'cancelled' } })
 }
 
+if (ignoreTerm) {
+  process.on('SIGTERM', () => {})
+  setInterval(() => {}, 60_000)
+}
 record({ started: process.pid })
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity })
 rl.on('line', (line) => {
@@ -109,4 +115,4 @@ rl.on('line', (line) => {
   if (msg.method && msg.id !== undefined) onRequest(msg)
   else if (msg.method) onNotification(msg)
 })
-rl.on('close', () => process.exit(0))
+rl.on('close', () => { if (!ignoreTerm) process.exit(0) })

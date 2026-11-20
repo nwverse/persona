@@ -60,6 +60,34 @@ test('assistant worker PID snapshots report updates and replay only live workers
   await until('empty snapshot', () => Object.keys(node.last('runtime.assistant_pids').pids).length === 0)
 })
 
+test('the last assistant worker exiting while the hub is down replays an empty snapshot when it returns', async (t) => {
+  const node = await startFakeNode(t, { features: ['assistant_pids'] })
+  const rt = createRuntime(minimal({ start: async () => ({}), send: async () => {} }), {
+    runtime: 'toy', assistant: true, socketPath: node.path, retryMs: 20, refreshMs: 0,
+  })
+  t.after(() => rt.stop())
+  await rt.start()
+  await until('connected and listed', () => rt.hubConnected && node.last('runtime.sessions'))
+  rt.assistantPid('s1', 110)
+  await until('worker reported', () => node.last('runtime.assistant_pids')?.pids.s1 === 110)
+  node.setHub(false)
+  await until('hub gone', () => !rt.hubConnected)
+  rt.assistantPid('s1', 0)
+  await until('worker removed', () => Object.keys(node.last('runtime.assistant_pids').pids).length === 0)
+  const reports = node.all('runtime.assistant_pids').length
+  const peer = node.peer
+  node.setHub(true)
+  await until('snapshot replayed', () => node.all('runtime.assistant_pids').length > reports)
+  assert.equal(node.peer, peer)
+  assert.deepEqual(node.last('runtime.assistant_pids'), { pids: {} })
+  node.setHub(false)
+  await until('hub gone again', () => !rt.hubConnected)
+  const beforeReconnect = node.all('runtime.assistant_pids').length
+  peer.close()
+  await until('next socket sends its empty snapshot', () => node.peer !== peer && node.all('runtime.assistant_pids').length > beforeReconnect)
+  assert.deepEqual(node.last('runtime.assistant_pids'), { pids: {} })
+})
+
 for (const [assistant, features] of [[true, []], [false, ['assistant_pids']]]) {
   test(`assistant PID reports require both sides to opt in (assistant=${assistant})`, async (t) => {
     const node = await startFakeNode(t, { features })

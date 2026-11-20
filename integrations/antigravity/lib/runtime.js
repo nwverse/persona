@@ -97,6 +97,7 @@ export function createAgyRuntime(options = {}) {
   const interruptSettleMs = options.interruptSettleMs ?? 10_000
   const assistantAcpIdleMs = options.assistantAcpIdleMs ?? 300_000
   const assistantAcps = new Map()
+  const retiringAssistants = new Map()
   const clients = new Set()
   let processSequence = 0
   let stopped = false
@@ -132,7 +133,7 @@ export function createAgyRuntime(options = {}) {
   }
 
   function isAssistant(rawId, explicit, cwd = sessionCwds.get(rawId)) {
-    return explicit === true || assistants.has(toPersonaId(rawId)) || isAssistantDir(cwd || '')
+    return explicit === true || assistants.has(toPersonaId(rawId)) || isAssistantDir(cwd || '', home)
   }
 
   function acceptsUpdate(acp, rawId) {
@@ -162,14 +163,20 @@ export function createAgyRuntime(options = {}) {
     return acp
   }
 
-  async function retireAssistantAcp(acp) {
-    if (assistantAcps.get(acp.assistantId) === acp) assistantAcps.delete(acp.assistantId)
+  function retireAssistantAcp(acp) {
+    const rawId = acp.assistantId
+    const bound = assistantAcps.get(rawId) === acp
+    if (bound) assistantAcps.delete(rawId)
     if (assistantAcps.size === 0) {
       clearInterval(assistantReaper)
       assistantReaper = undefined
     }
-    await acp.stop()
-    clients.delete(acp)
+    const retiring = Promise.all([acp.stop(), retiringAssistants.get(rawId)]).then(() => {
+      clients.delete(acp)
+      if (retiringAssistants.get(rawId) === retiring) retiringAssistants.delete(rawId)
+    })
+    if (bound) retiringAssistants.set(rawId, retiring)
+    return retiring
   }
 
   function reapAssistants() {
@@ -255,6 +262,7 @@ export function createAgyRuntime(options = {}) {
     while (acp.recycling) await acp.recycling
     acp.leases++
     try {
+      while (retiringAssistants.has(acp.assistantId)) await retiringAssistants.get(acp.assistantId)
       return await fn()
     } finally {
       acp.leases--
@@ -1107,7 +1115,7 @@ export function createAgyRuntime(options = {}) {
       // The node removes its temporary probe directory when the check ends. Keep those transcripts out after restarts.
       if (basename(cwd).startsWith('persona-check-') && !existsSync(cwd)) continue
       if (cwd) sessionCwds.set(rawId, cwd)
-      if (isAssistantDir(cwd)) assistants.add(pid)
+      if (isAssistantDir(cwd, home)) assistants.add(pid)
 
       candidates.push({ rawId, pid, summary, native, cwd, mtimeMs, running, hasTranscript })
     }
@@ -1442,7 +1450,7 @@ export function createAgyRuntime(options = {}) {
 
   async function start(params) {
     const cwd = params.cwd || home
-    const isAsst = params.assistant === true || isAssistantDir(cwd)
+    const isAsst = params.assistant === true || isAssistantDir(cwd, home)
     const acp = isAsst ? makeAcp(true) : sharedAcp
     try {
       // A process that rejected the model gets replaced and the session opened again on the new one (#10368).
@@ -2153,7 +2161,7 @@ export function createAgyRuntime(options = {}) {
     const acp = sharedAcp
     const rawId = ownedId(params.session_id)
     const pid = toPersonaId(rawId)
-    if (params.restore !== 'conversation' || assistants.has(pid) || isAssistantDir(sessionCwds.get(rawId) || '')) {
+    if (params.restore !== 'conversation' || isAssistant(rawId)) {
       throw new RpcError('This session supports conversation rewind', 'rewind_unsupported')
     }
     if (typeof params.prompt !== 'string' || !params.prompt.trim() || !Number.isInteger(params.occurrence) || params.occurrence < 1 ||

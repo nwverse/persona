@@ -125,3 +125,19 @@ test('an unexpected Assistant worker exit clears just its PID; the next send res
   assert.deepEqual(pids(), { [stable]: stablePID })
   assert.throws(() => process.kill(restarted, 0), { code: 'ESRCH' })
 })
+
+test('a send during idle retirement waits for the old worker to exit before starting a replacement', async (t) => {
+  const { pids, start, call, calls, request } = await fixture(t, {
+    agyArgs: ['--ignore-term'], assistantAcpIdleMs: 350,
+  })
+  const session = await start({ assistant: true })
+  const oldPID = await until('original worker reported', () => pids()[session])
+  await until('old worker is retiring', () => !pids()[session])
+  process.kill(oldPID, 0)
+  await call('send', session, { text: 'resume' })
+  assert.throws(() => process.kill(oldPID, 0), { code: 'ESRCH' })
+  const resumed = await until('replacement worker receives prompt', () => request('session/prompt', session))
+  assert.notEqual(resumed.worker, oldPID)
+  assert.deepEqual(calls().filter((entry) => entry.started).map((entry) => entry.started), [oldPID, resumed.worker])
+  process.kill(resumed.worker, 'SIGKILL')
+})

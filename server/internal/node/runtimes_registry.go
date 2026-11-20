@@ -405,6 +405,16 @@ func (b *runtimeRegistry) assistantIn(pids []int) *runtimeConn {
 	return nil
 }
 
+func (b *runtimeRegistry) clearAssistantPIDs() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, h := range b.conns {
+		h.mu.Lock()
+		h.assistantPIDs = nil
+		h.mu.Unlock()
+	}
+}
+
 func (b *runtimeRegistry) setAssistantPIDs(h *runtimeConn, reports map[string]int, isAssistant func(string) bool) {
 	h.mu.Lock()
 	pid := h.pid

@@ -436,7 +436,8 @@ func TestAssistantRuntimePIDReportsOnTheSocket(t *testing.T) {
 	previousLineage := nodeLineage
 	t.Cleanup(func() { nodeLineage = previousLineage })
 	nodeLineage = func() []int { return nil }
-	n, _ := runtimeNode(t)
+	rh := sharedHost(t)
+	n, _ := runtimeNodeOn(t, rh)
 	host := dialRuntime(t, n, assistantRuntimeHello())
 	plain := dialRuntime(t, n, map[string]any{"runtime": "plain-pid", "caps": map[string]any{"start": true, "send": true}})
 	if features, _ := host.helloR["features"].([]any); !slices.Contains(features, any("assistant_pids")) {
@@ -461,7 +462,7 @@ func TestAssistantRuntimePIDReportsOnTheSocket(t *testing.T) {
 		_, _, otherListed := n.runtimes.rowOf(other)
 		return chatListed && otherListed
 	})
-	report := func(client *fakeRuntime, pids map[string]int) {
+	report := func(t *testing.T, client *fakeRuntime, pids map[string]int) {
 		t.Helper()
 		if err := client.peer.Notify("runtime.assistant_pids", map[string]any{"pids": pids}); err != nil {
 			t.Fatal(err)
@@ -472,20 +473,43 @@ func TestAssistantRuntimePIDReportsOnTheSocket(t *testing.T) {
 		}
 	}
 	pid := worker.Process.Pid
-	report(plain, map[string]int{other: pid})
-	report(host, map[string]int{other: pid, "unlisted-assistant": pid})
+	report(t, plain, map[string]int{other: pid})
+	report(t, host, map[string]int{other: pid, "unlisted-assistant": pid})
 	if roots := n.assistantRoots(); len(roots) != 0 {
 		t.Fatalf("accepted PID without assistant capability or ownership: %v", roots)
 	}
-	report(host, map[string]int{chat: pid})
+	report(t, host, map[string]int{chat: pid})
 	if got := n.assistantRoots()[pid]; got != chat {
 		t.Fatalf("worker authorized as %q, want %q", got, chat)
 	}
-	report(host, map[string]int{})
+	report(t, host, map[string]int{})
 	if got := n.assistantRoots()[pid]; got != "" {
 		t.Fatalf("omitted worker still authorized as %q", got)
 	}
-	report(host, map[string]int{chat: pid})
+	t.Run("hub reconnect", func(t *testing.T) {
+		report(t, host, map[string]int{chat: pid})
+		rh.detach(n)
+		if workers := rh.reg.assistantWorkers(); len(workers) != 0 {
+			t.Fatalf("hub detach kept assistant workers: %v", workers)
+		}
+		report(t, host, map[string]int{chat: pid})
+		if workers := rh.reg.assistantWorkers(); len(workers) != 0 {
+			t.Fatalf("accepted PIDs without a hub: %v", workers)
+		}
+		report(t, host, map[string]int{})
+		reconnected, _ := runtimeNodeOn(t, rh)
+		if _, _, ok := reconnected.runtimes.rowOf(chat); !ok {
+			t.Fatal("assistant row did not survive hub reconnect")
+		}
+		if got := reconnected.assistantRoots()[pid]; got != "" {
+			t.Fatalf("former worker still authorized after hub reconnect as %q", got)
+		}
+		report(t, host, map[string]int{chat: pid})
+		if got := reconnected.assistantRoots()[pid]; got != chat {
+			t.Fatalf("fresh snapshot authorized worker as %q, want %q", got, chat)
+		}
+	})
+	report(t, host, map[string]int{chat: pid})
 	if err := host.conn.Close(); err != nil {
 		t.Fatal(err)
 	}

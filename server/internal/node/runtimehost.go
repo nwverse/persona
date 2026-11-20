@@ -81,12 +81,15 @@ func (rh *RuntimeHost) current() *Node {
 // attach makes n the Node serving the hub: it lists and drives the runtimes' sessions from now on. What the last hub
 // connection watched is forgotten (the new one watches afresh); runtimes hear that a hub is there.
 func (rh *RuntimeHost) attach(n *Node) {
-	rh.mu.Lock()
-	rh.node = n
-	rh.mu.Unlock()
 	n.runtimes = rh.reg
 	rh.reg.setHostOff(n.engineHostOff)
 	n.runtimeHost = rh
+	rh.mu.Lock()
+	if rh.node != n {
+		rh.reg.clearAssistantPIDs()
+	}
+	rh.node = n
+	rh.mu.Unlock()
 	rh.reg.resetWatches()
 	rh.notifyHub(true)
 }
@@ -99,6 +102,7 @@ func (rh *RuntimeHost) detach(n *Node) {
 		return
 	}
 	rh.node = nil
+	rh.reg.clearAssistantPIDs()
 	rh.mu.Unlock()
 	rh.reg.resetWatches()
 	rh.notifyHub(false)
@@ -411,16 +415,22 @@ func (rh *RuntimeHost) event(h *runtimeConn, event string, params json.RawMessag
 	if !ready {
 		return // hello first
 	}
-	n := rh.current()
 	if event == "runtime.assistant_pids" {
 		var p struct {
 			PIDs map[string]int `json:"pids"`
 		}
-		if n != nil && json.Unmarshal(params, &p) == nil {
-			rh.reg.setAssistantPIDs(h, p.PIDs, func(id string) bool { return n.runtimeAssistantChat(h, id) })
+		if json.Unmarshal(params, &p) == nil {
+			rh.mu.Lock()
+			defer rh.mu.Unlock()
+			n := rh.node
+			if n == nil {
+				p.PIDs = nil
+			}
+			rh.reg.setAssistantPIDs(h, p.PIDs, func(id string) bool { return n != nil && n.runtimeAssistantChat(h, id) })
 		}
 		return
 	}
+	n := rh.current()
 	if event == "runtime.launchers" { // its launchers changed (runtimecontrol.go)
 		var p struct {
 			Launchers []runtimeLauncher `json:"launchers"`

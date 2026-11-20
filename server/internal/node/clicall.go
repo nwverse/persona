@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/assistantskills"
+	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -248,10 +249,20 @@ func (n *Node) cliCall(ctx context.Context, c net.Conn, req sockRequest) proto.T
 	}
 	n.mu.Lock()
 	cwd := ""
-	if p := n.procs[session]; p != nil {
+	p := n.procs[session]
+	if p != nil {
 		cwd = p.cwd
 	}
 	n.mu.Unlock()
+	if p == nil {
+		if st, ok := n.state.get(session); ok && st.Cwd != "" {
+			cwd = st.Cwd
+		} else if s, _, ok := n.runtimes.rowOf(session); ok && s.Cwd != "" {
+			cwd = s.Cwd
+		} else if n.runtimeAssistant(session) {
+			cwd = identity.AssistantDir(n.home)
+		}
+	}
 	if !n.mayCall(cwd, req.Name) {
 		return proto.ErrorResult(proto.ToolErrorUnavailable, req.Name+" is not available: the command line calls only the tools of the hub's connectors that are signed in", 0)
 	}

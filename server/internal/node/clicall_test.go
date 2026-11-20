@@ -49,8 +49,7 @@ func TestAssistantCLICallerUsesOnlyVerifiedRuntimeWorkers(t *testing.T) {
 	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
 		t.Skip("no local peer process lookup")
 	}
-	n, _ := testNode(t)
-	n.runtimes = newRuntimeRegistry()
+	n, hub := runtimeNode(t)
 	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: filepath.Join(t.TempDir(), "s"), Net: "unix"})
 	if err != nil {
 		t.Fatal(err)
@@ -118,6 +117,49 @@ func TestAssistantCLICallerUsesOnlyVerifiedRuntimeWorkers(t *testing.T) {
 	check("agent", "")
 	check("runtime", "")
 	check("unrelated", "")
+	t.Run("cliCall", func(t *testing.T) {
+		t.Setenv("PERSONA_SKILLS_DIR", t.TempDir())
+		t.Setenv("PERSONA_PLUGIN_SKILLS_DIR", t.TempDir())
+		n.bin = "/opt/example/personad"
+		stateCwd := prepareAssistantForTest(t, n, ".persona/assistant", []string{"example"}, nil)
+		rowCwd := prepareAssistantForTest(t, n, ".persona/health", []string{"other"}, nil)
+		n.runtimes.setSessions(host, []proto.Session{{SessionID: assistantID, Cwd: rowCwd}, {SessionID: agentID}})
+		n.state.put(assistantID, sessionState{Cwd: stateCwd})
+		calls := assistantHub(hub)
+		call := func(role, name string) proto.ToolResult {
+			return n.cliCall(t.Context(), peers[role], sockRequest{Name: name, SessionID: "forged", Assistant: true})
+		}
+		if res := call("assistant", "example_list"); res.IsError {
+			t.Fatalf("prepared runtime assistant denied: %+v", res)
+		}
+		if res := call("assistant", "other_list"); !res.IsError {
+			t.Fatalf("runtime row overrode prepared state: %+v", res)
+		}
+		n.state.put(assistantID, sessionState{})
+		if res := call("assistant", "other_list"); res.IsError {
+			t.Fatalf("prepared runtime row denied: %+v", res)
+		}
+		for _, role := range []string{"agent", "runtime", "unrelated"} {
+			if res := call(role, "other_list"); !res.IsError || !strings.Contains(res.Content[0].Text, "只能在助手的对话里用") {
+				t.Errorf("%s was not denied as an unauthorized caller: %+v", role, res)
+			}
+		}
+		n.runtimes.setSessions(host, []proto.Session{{SessionID: assistantID}, {SessionID: agentID}})
+		calls.mu.Lock()
+		defer calls.mu.Unlock()
+		if len(calls.calls) != 2 {
+			t.Fatalf("hub received %d calls, want 2", len(calls.calls))
+		}
+		for index, name := range []string{"example_list", "other_list"} {
+			var params map[string]any
+			if err := json.Unmarshal(calls.calls[index], &params); err != nil {
+				t.Fatal(err)
+			}
+			if params["session_id"] != assistantID || params["assistant"] != true || params["name"] != name {
+				t.Errorf("unexpected hub request: %s", calls.calls[index])
+			}
+		}
+	})
 	n.state.put(assistantID, sessionState{Cwd: t.TempDir()})
 	check("assistant", "")
 	n.state.put(assistantID, sessionState{Cwd: identity.AssistantDir(n.home)})
