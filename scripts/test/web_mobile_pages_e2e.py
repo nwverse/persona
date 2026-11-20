@@ -388,7 +388,7 @@ INBOX_TITLE = """() => { const h = document.querySelector('[data-item-title]'); 
 
 def inbox_title_phone(browser, base, token, shots):
     """An Inbox item's title wraps on a phone for every source (#11511), not only a Feishu one's: a GitHub review's
-    "Add …" was cut to a few letters beside Done. Up to three lines, all of it shown; Done stays one line; wide, the
+    "Add …" was cut to a few letters beside Done. It wraps in full, all of it shown; Done stays one line; wide, the
     title is still one line, cut at its end."""
     item = "/inbox/github%3Areview12"  # the fake hub's GitHub review (MOCK_GITHUB_INBOX=1), "Add retries to the example uploader"
     for lang, locale in (("en", "en-US"), ("ja", "ja-JP")):
@@ -403,7 +403,7 @@ def inbox_title_phone(browser, base, token, shots):
         page.wait_for_selector("[data-item-title]")
         page.wait_for_timeout(500)
         res = page.evaluate(INBOX_TITLE)
-        check(res["sw"] <= res["cw"] + 1 and res["sh"] <= res["ch"] + 1 and 2 <= res["lines"] <= 3,
+        check(res["sw"] <= res["cw"] + 1 and res["sh"] <= res["ch"] + 1 and res["lines"] >= 2,
               f"360 {lang}: a GitHub item's title wraps to {res['lines']} lines, all of it shown", res)
         check(res["doneLines"] == 1 and res["doneH"] <= 33, f"360 {lang}: {res['done']} stays on one line", res)
         shot(page, shots, f"inbox_title_360_{lang}")
