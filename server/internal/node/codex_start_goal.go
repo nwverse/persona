@@ -149,13 +149,20 @@ func (n *Node) codexTextGoal(ctx context.Context, id, pane, goal string, native 
 		n.logf("start %s: text goal not sent: %v", id, err)
 		return
 	}
+	if current := n.sessionOfPane(pane); current != id { // an engine switch may have replaced the agent in the pane
+		n.logf("start %s: text goal not sent: the pane is no longer this session (%q)", id, current)
+		return
+	}
 	// The same look a send takes first: a draft or an approval is still the user's, for this message too.
 	if err := n.checkPane(ctx, pane, "codex", ""); err != nil {
 		n.logf("start %s: text goal not sent: the terminal is not ready for it: %v", id, err)
 		return
 	}
 	if !native.typedAt.IsZero() { // /goal may have landed after its wait ran out: never restate a goal that is set
-		if _, _, g, _ := n.backgroundTasks(native.path); g != nil && !g.UpdatedAt.Before(native.typedAt.Add(-time.Second)) {
+		// Read the rollout itself, not a background scan that may not have caught up with a late confirmation. This
+		// look and the send below are not atomic: a native goal recorded in between still gets the text too. That
+		// leaves both the native goal and the same condition as a message, which is harmless, never a second command.
+		if codexRolloutGoalSet(native.path, native.typedAt) {
 			n.logf("start %s: goal set, confirmed after its wait; no text goal sent", id)
 			return
 		}
@@ -187,10 +194,11 @@ func (n *Node) codexTextGoal(ctx context.Context, id, pane, goal string, native 
 }
 
 // codexRolloutUserMessage says whether the rollout has a user message carrying text, recorded at or after since (a
-// second of clock tolerance, as the native goal check's). The text may sit inside Codex's own message wrapper, so a
-// message that contains it counts; the time bound keeps the task's first message out. Only a new thread's rollout is
-// scanned (a start's goal), so the file is small. item_completed/UserMessage lines carry the full text, also for a
-// paste the composer showed as a chip (codexThreadStart reads the first message the same way).
+// second of clock tolerance, as the native goal check's). The task's own first message never counts: a goal may be
+// the same words as the prompt, and the first message is often written within the tolerance. The text may sit inside
+// Codex's own message wrapper, so a message that contains it counts. Only a new thread's rollout is scanned (a
+// start's goal), so the file is small. item_completed/UserMessage lines carry the full text, also for a paste the
+// composer showed as a chip (codexThreadStart reads the first message the same way).
 func codexRolloutUserMessage(path, text string, since time.Time) bool {
 	f, err := os.Open(path)
 	if err != nil {
@@ -200,12 +208,10 @@ func codexRolloutUserMessage(path, text string, since time.Time) bool {
 	want := strings.Join(strings.Fields(text), " ")
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 64<<10), 8<<20)
+	first := true // the first user message is the task's prompt, never the goal's delivery
 	for sc.Scan() {
 		line := sc.Bytes()
 		if !strings.Contains(string(line), `"UserMessage"`) {
-			continue
-		}
-		if at := lineTime(line); at.Before(since.Add(-time.Second)) {
 			continue
 		}
 		var l struct {
@@ -223,11 +229,53 @@ func codexRolloutUserMessage(path, text string, since time.Time) bool {
 		if json.Unmarshal(line, &l) != nil || l.Payload.Type != "item_completed" || l.Payload.Item.Type != "UserMessage" {
 			continue
 		}
+		if first {
+			first = false
+			continue
+		}
+		if at := lineTime(line); at.Before(since.Add(-time.Second)) {
+			continue
+		}
 		var b strings.Builder
 		for _, c := range l.Payload.Item.Content {
 			b.WriteString(c.Text)
 		}
 		if got := strings.Join(strings.Fields(b.String()), " "); got == want || strings.Contains(got, want) {
+			return true
+		}
+	}
+	return false
+}
+
+// codexRolloutGoalSet says whether the rollout has a thread_goal_updated with a non-null goal updated at or after
+// since (a second of clock tolerance, as the native goal check's). It reads the file directly, so a confirmation the
+// background scan has not reached yet still counts.
+func codexRolloutGoalSet(path string, since time.Time) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 64<<10), 8<<20)
+	for sc.Scan() {
+		line := sc.Bytes()
+		if !strings.Contains(string(line), `"thread_goal_updated"`) {
+			continue
+		}
+		var l struct {
+			Type    string `json:"type"`
+			Payload struct {
+				Type string `json:"type"`
+				Goal *struct {
+					UpdatedAt int64 `json:"updatedAt"`
+				} `json:"goal"`
+			} `json:"payload"`
+		}
+		if json.Unmarshal(line, &l) != nil || l.Type != "event_msg" || l.Payload.Type != "thread_goal_updated" || l.Payload.Goal == nil {
+			continue
+		}
+		if l.Payload.Goal.UpdatedAt >= since.Add(-time.Second).Unix() {
 			return true
 		}
 	}
