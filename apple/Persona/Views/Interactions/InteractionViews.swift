@@ -1195,8 +1195,6 @@ struct PermissionForm: View {
                 Task { await model.resolve(interaction, Resolution(allow: true, ownerApprovalPhrase: phrase)) }
             }
             .themedButton()
-            .lineLimit(1)
-            .minimumScaleFactor(0.8)
             .frame(maxWidth: .infinity)
             .accessibilityIdentifier("owner-approval-exact-reply")
         }
