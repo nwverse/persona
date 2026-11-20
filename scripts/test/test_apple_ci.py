@@ -82,6 +82,31 @@ class AppleCIPreparationTests(unittest.TestCase):
             script.index("Unsigned iOS and embedded watch/extensions build"),
         )
 
+    def test_explicit_unsigned_build_lane_preserves_the_real_build_and_skips_devices(self):
+        script = SCRIPT.read_text()
+        workflow = (ROOT / '.github/workflows/apple-test.yml').read_text()
+        self.assertIn('options: [ios, ios18, ios-build]', workflow)
+        self.assertIn('all|ios|ios18|packages|ios-build', script)
+        self.assertIn('[ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ]', script)
+        self.assertIn('[ "$LANE" != packages ] && [ "$LANE" != ios-build ]', script)
+        start = script.index('if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ]')
+        end = script.index('if [ "$LANE" = ios18 ]; then', start)
+        device = script[start:end]
+        runtime = device[device.index('if [ "$LANE" != ios-build ]'):device.index('resolve Persona')]
+        for step in ('Stage resolved packages for Meta configuration',
+                     'Build PersonaCore XCFramework before package resolution',
+                     'Generate public unsigned Apple config',
+                     'Generate Apple project'):
+            self.assertLess(script.index(step), start)
+        for expected in ('resolve Persona', "-destination 'generic/platform=iOS'",
+                         '-disableAutomaticPackageResolution "${UNSIGNED[@]}" build',
+                         'No CallKit in the device build', 'Debug view stack frames (device build)'):
+            self.assertIn(expected, device)
+        self.assertIn('Download matching $platform 26.0 simulator runtime', runtime)
+        self.assertNotIn('sim-boot.sh', device)
+        self.assertNotIn('PersonaSSH native tunnel integration tests', script[start:])
+        self.assertNotIn('Blocking calls on the main actor (isolation lint)', script[start:])
+
     def test_native_ssh_tests_run_before_the_app_and_fail_the_lane_on_error(self):
         script = SCRIPT.read_text()
         packages = script.split('if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = packages ]; then\n', 1)[1].split('\nfi', 1)[0]

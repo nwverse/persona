@@ -1,13 +1,13 @@
 #!/bin/bash
 # Public, local-runnable Apple checks. Requires XcodeGen, Python 3 and rsync.
 # The default lane uses macOS 26 and Xcode 26.0.x; ios18 uses the 18.6 simulator.
-# Usage: scripts/ci/apple.sh [all|ios|ios18|packages]
+# Usage: scripts/ci/apple.sh [all|ios|ios18|packages|ios-build]
 # Cache CI_SPM_CACHE (default ~/Library/Caches/persona-ci/spm); keep the printed
 # output directory's *.xcresult bundles when investigating failures.
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 LANE="${1:-all}"
-case "$LANE" in all|ios|ios18|packages) ;; *) printf 'Usage: %s [all|ios|ios18|packages]\n' "$0" >&2; exit 2 ;; esac
+case "$LANE" in all|ios|ios18|packages|ios-build) ;; *) printf 'Usage: %s [all|ios|ios18|packages|ios-build]\n' "$0" >&2; exit 2 ;; esac
 [ "$#" -le 1 ] || { printf 'apple-ci: too many arguments\n' >&2; exit 2; }
 [ "$(uname -s)" = Darwin ] || { printf 'apple-ci: FAIL requires macOS with Xcode\n' >&2; exit 1; }
 for tool in python3 xcodebuild xcrun xcodegen rsync git; do
@@ -184,10 +184,11 @@ if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = packages ]; then
   ci_run 'Isolation lint unit tests' 900 xcrun swift test -c release --disable-testable-imports --package-path "$SPM/IsolationLint/package" --scratch-path "$SPM/IsolationLint/build"
   ci_run 'Blocking calls on the main actor (isolation lint)' 300 "$SPM/IsolationLint/build/release/isolation-lint" --root "$SOURCE" --baseline "$SOURCE/scripts/test/apple_isolation_baseline.json"
 fi
-if [ "$LANE" = all ] || [ "$LANE" = ios ]; then
+if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ]; then
   for sdk in iphoneos iphonesimulator watchos watchsimulator; do
     ci_run "Require $sdk SDK" 60 xcrun --sdk "$sdk" --show-sdk-version
   done
+  if [ "$LANE" != ios-build ]; then
   # Current hosted images omit the Xcode 26.0-compatible iOS/watch runtimes.
   # Generic device builds validate both platforms for the embedded watch app,
   # even though SDK lookup succeeds. Prepare both before resolving/building.
@@ -205,6 +206,7 @@ if [ "$LANE" = all ] || [ "$LANE" = ios ]; then
     printf 'apple-ci: selected compatible %s runtime %s\n' "$platform" "$runtime"
     if [ "$platform" = iOS ]; then IOS_RUNTIME="$runtime"; fi
   done
+  fi
   resolve Persona
   # Generic device builds compile the actual watch/widget/notification/share
   # dependency graph; do not delete the watch target to accommodate the runner.
@@ -231,7 +233,7 @@ if [ "$LANE" = ios18 ]; then
   fi
   resolve Persona
 fi
-if [ "$LANE" != packages ]; then
+if [ "$LANE" != packages ] && [ "$LANE" != ios-build ]; then
   if [ "$LANE" = ios18 ]; then
     IOS_VERSION=18.6
     IOS_PHONE="iPhone 16 Pro"
