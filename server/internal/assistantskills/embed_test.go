@@ -407,3 +407,35 @@ func TestWorkGuidePreservesReplacementAfterInstall(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkGuideRestoresCodexLinkAfterOlderNode(t *testing.T) {
+	cwd, user := t.TempDir(), t.TempDir()
+	claude := filepath.Join(cwd, ".claude", "skills")
+	codex := filepath.Join(cwd, ".agents", "skills")
+	sync := func(on bool) {
+		for _, dir := range []string{claude, codex} {
+			if err := Sync(dir, user, Selection{WorkGuide: on}, t.Logf); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	sync(true)
+	// A node predating the guide removes its canonical directory and rewrites
+	// both inventories, leaving the relative link dangling on the Codex side.
+	if err := os.RemoveAll(filepath.Join(claude, workGuideName)); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{claude, codex} {
+		if err := os.WriteFile(filepath.Join(dir, builtinStamp), []byte("old persona-office\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sync(true)
+	if !WorkGuideReady(cwd) {
+		t.Fatal("upgraded node did not recover both managed skill roots")
+	}
+	sync(false)
+	if _, err := os.Lstat(filepath.Join(codex, workGuideName)); !os.IsNotExist(err) {
+		t.Fatal("rollback retained the recovered Codex link", err)
+	}
+}

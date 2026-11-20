@@ -310,14 +310,19 @@ func installBuiltins(dir string, mine []string, selection Selection) error {
 	stamp := filepath.Join(dir, builtinStamp)
 	old, _ := os.ReadFile(stamp)
 	installed := installedNames(old)
+	ownsGuide := slices.Contains(installed, workGuideName) && ownsWorkGuide(dir, old)
 	var guideLink string
 	if codexSkillDir(dir) {
 		guideLink = filepath.FromSlash(runtimeGuideLink)
-		if selection.WorkGuide && !WorkGuideInstalled(filepath.Dir(filepath.Join(dir, guideLink))) {
-			selection.WorkGuide = false
+		if selection.WorkGuide {
+			selection.WorkGuide = WorkGuideInstalled(filepath.Dir(filepath.Join(dir, guideLink)))
+			// Older nodes drop unknown names from their inventory but leave symlinks.
+			// Reclaim only the exact alias to a verified, managed canonical guide.
+			if selection.WorkGuide && !ownsGuide {
+				ownsGuide = ownsWorkGuide(dir, old)
+			}
 		}
 	}
-	ownsGuide := slices.Contains(installed, workGuideName) && ownsWorkGuide(dir, old)
 	var names []string
 	for _, n := range builtinNames() {
 		if n == workGuideName && !ownsGuide {
