@@ -378,6 +378,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 			"if they are waiting for it, and hand out or schedule anything that follows (deploy, TestFlight, closing an issue).", t.ID) + against, nil
 	case reviewNeedsUser:
 		conclusion.Outcome, conclusion.Reason, conclusion.Recommend, conclusion.Decision = outcomeDecide, decision.Reason, decision.Recommend, decision
+		conclusion.Check = scheduledCheckOf(ctx) // raised by a recurring check (escalateScheduledTodo), never by a model's call
 		reversible := false
 		switch {
 		case !deadline.IsZero():

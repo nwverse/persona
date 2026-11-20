@@ -37,6 +37,12 @@ func Failure(code, stage, operation, repo, path string) *Problem {
 	if code == "ref_not_found" || code == "ref_invalid" || code == "invalid_path" || code == "path_conflict" || code == "naming_incomplete" {
 		actions = []string{"inspect", "cancel", "edit_inputs", "prepare_new"}
 	}
+	if stage == "start" && (code == "unsupported" || code == "engine_start_failed") {
+		actions = []string{"inspect", "retry_start", "switch_engine"}
+	}
+	if stage == "start" && code == "result_mismatch" {
+		actions = []string{"inspect", "stop_session"}
+	}
 	return &Problem{code, stage, repo, path, operation, actions}
 }
 
@@ -60,7 +66,15 @@ type CleanupResult struct {
 	Removed       bool     `json:"removed"`
 	RetainedPaths []string `json:"retained_paths"`
 }
+
+// Launch is the Node receipt for the one session using a backend workspace.
+type Launch struct {
+	ExpectedSessionID string `json:"expected_session_id,omitempty"`
+	UseID             string `json:"use_id"`
+	SessionID         string `json:"session_id,omitempty"`
+}
 type Record struct {
+	Launch              *Launch              `json:"launch,omitempty"`
 	SchemaVersion       int                  `json:"schema_version"`
 	WorkspaceID         string               `json:"workspace_id"`
 	OperationID         string               `json:"operation_id"`
