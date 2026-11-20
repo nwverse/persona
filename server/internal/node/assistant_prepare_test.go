@@ -238,9 +238,9 @@ func TestWorkGuidePrepareAndRollback(t *testing.T) {
 		claude := filepath.Join(cwd, ".claude", "skills", "persona-work")
 		codex := filepath.Join(cwd, ".agents", "skills", "persona-work")
 		if guide != "" {
-			source, err := filepath.EvalSymlinks(codex)
-			if err != nil || source != claude {
-				t.Fatalf("expected one canonical guide, got %q, %v", source, err)
+			target, err := os.Readlink(codex)
+			if err != nil || filepath.Clean(filepath.Join(filepath.Dir(codex), target)) != claude {
+				t.Fatalf("expected a link to the canonical guide, got %q, %v", target, err)
 			}
 		} else if _, err := os.Lstat(codex); !os.IsNotExist(err) {
 			t.Fatalf("guide link after rollback: %v", err)
