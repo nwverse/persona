@@ -56,8 +56,14 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 	}
 	n.mu.Lock()
 	agents := make(map[string]host.Agent, len(n.agents))
-	for k, v := range n.agents {
-		agents[k] = v
+	agyRuntimeIDs := map[string]string{}
+	for id, agent := range n.agents {
+		agents[id] = agent
+		if agent.Agent == agyAgent && agent.AgentStatus != proto.StatusOffline && agent.AgentStatus != proto.StatusInterrupted {
+			if conversation := n.agyConversationLocked(id, agent.PaneID); conversation != "" {
+				agyRuntimeIDs[id] = agyAgent + "-" + conversation
+			}
+		}
 	}
 	onList := n.onAgentsList // replaced whole with n.agents (setAgentsAt), never changed in place
 	n.mu.Unlock()
@@ -223,6 +229,14 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			n.mergeOpencodeRow(&s) // its conversation is the plugin's (opencode.go)
 		case a.Agent == cursorAgent || a.Agent == agyAgent:
 			// Herdr drives the pane (agent.prompt, the keys). Agy can also read its verified conversation (workagent.go).
+			if runtimeID := agyRuntimeIDs[id]; runtimeID != "" {
+				seen[runtimeID] = true
+				if s.Model == "" {
+					if runtimeRow, _, ok := n.runtimes.rowOf(runtimeID); ok {
+						s.Model = runtimeRow.Model
+					}
+				}
+			}
 		case otherAgent(a):
 			s.ReadOnlyReason = otherNoReader(a.Agent)
 		}
