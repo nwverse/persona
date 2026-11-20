@@ -585,7 +585,7 @@ Who does the follow-up: by default the **background supervisor** (#4927, "Backgr
   Completion is about the assigned task and its `done_when`, not whichever side question the Agent answered last. A known peer, cross-conversation or inspection turn cannot enter pending review on its answer alone. Only a fresh, successful `report_to_supervisor` done call with evidence tied to this task can establish the completion candidate from such a turn; the supervisor must still verify it. Unknown-source fallbacks never imply that a new question replaced a finished task. Ordinary delivery turns continue through the existing judge without requiring that tool.
   Ordinary `agent_send` from a conversation other than the task's supervisor carries a `side-conversation` context marker; the supervisor's instructions and explicit task handoffs retain their existing behavior. A text of only `/exit` / `/quit` (no attachments) from such a conversation, as `agent_send` or as `agent_interrupt`'s `then`, is refused before anything is stopped, sent or confirmed on the phone, and again after the phone answers should the agent have become such a task meanwhile (#3537): the node closes an agent only for the bare command, and the agent a task runs on is not another conversation's to close (the user can close it in the app, or with `agent_archive` and `close` once it is idle).
 - **Supervisor loop** (`server/internal/assistant/supervise_signals.go`, no model calls): every 30 seconds, inspect supervised tasks plus task events and derive signals:
-  `review` pending review, `idle` stopped unfinished, `needs_you` waiting for an answer over 3 minutes (immediately for quiet tasks, since the user received no push), `stalled` working without progress (no session update) for more than max(20 minutes, estimate × 1.5), or in any other state (waiting on background work, a wake, stopped) with nothing new in its transcript for more than max(2 hours, estimate × 1.5), so a wait nothing ends is still heard of (#5124), `no_progress` working with its session moving but no real progress, only waits, polls or the same command again (below), `interrupted` by model-service error, `failed` to start, `orphaned` when nobody works on it any more (below), `inbox` new Inbox messages from other people about it (below, off by default).
+  `review` pending review, `idle` stopped unfinished, `needs_you` waiting for an answer over 3 minutes (immediately for quiet tasks, since the user received no push), `stalled` working without progress (no session update) for more than max(20 minutes, estimate × 1.5), or in any other state (waiting on background work, a wake, stopped) with nothing new in its transcript for more than max(2 hours, estimate × 1.5), so a wait nothing ends is still heard of (#5124), `no_progress` working with its session moving but no real progress, only waits, polls or the same command again (below), `interrupted` by model-service error, `failed` to start, `orphaned` when nobody works on it any more (below), `inbox` new Inbox messages from other people about it (below, off by default), `check` news from a recurring schedule linked to it, the hub's and never the Agent's (`report`: `no_progress`, `error`, or `decided` for the owner's option on the decision it raised; `docs/assistant/assistant.md`, "Scheduled tasks").
   **`no_progress`** (#10089, `server/internal/assistant/supervise_progress.go`): `stalled` reads only whether the session moved, and an Agent looping on `sleep` plus a status check writes to its transcript every minute. The hub keeps, in memory, a stretch per Agent since its last real progress. Progress is a `report_to_supervisor` with evidence or a later step, a `done_when` criterion whose state or evidence changed, the Agent's own plan with more steps done or another current step, a tool call that changes something (editing or writing a file, a commit, a push, a PR opened or merged, a release, a deploy), and a message from the user or the supervisor (`agent_send`); transcript writes, reports without evidence, and reading, searching, building or testing are not. Each tool call it sees (a new `activity_at`, from the session lists and the supervision pass) counts once, and is a wait when its activity is waiting (`sleep` / `until` / `while` / `wait`, ScheduleWakeup, Monitor, background output), checking CI, or the same activity line as an earlier call of the stretch. A working Agent is told of once the stretch is max(30 minutes, estimate × 1.5) old, the hub saw at least 4 calls in it, at least four in five were waits, and the latest started within max(20 minutes, estimate × 1.5) (one silent longer is `stalled`'s). One signal per stretch (key: session and stretch start), dropped before delivery if progress came meanwhile, never alongside `stalled` for the same Agent, and none for a parked task or one with the owner or waiting for review. After a manager restart a stretch starts over, so the signal can come later than the threshold, never sooner; a short call between two observations can be missed. It does not stop the Agent: closing stuck Agents is #4784.
   These follow the task's current Agents (#6483, `supersededAgents` in `server/internal/assistant/task_completion.go`): an unreleased link whose session is offline or no longer listed, while a link made after it is listed and not offline, is an Agent the task was handed over from. It is left out of the stop receipt and its judgment (the task settles once the current Agent stops, so `idle` reaches the supervisor) and out of `needs_you` / `stalled`. A lone offline Agent with no later one is still the task's Agent.
   The same signal for the same task is reported only once within the same state segment. A second guard suppresses an unchanged summary for the same task, Agent and signal kind for 30 minutes, regardless of new turn timestamps or elapsed-minute counters. Its hashed fingerprints and timestamps live in Postgres settings (`assistant.supervision_dedup`), survive manager restarts, and are reserved before dispatch; failed dispatch and queue admission release the reservation. An unreadable or unwritable reservation is retried rather than treated as empty history. Changed evidence, questions, summary, task, Agent or status can wake again. Signals from multiple tasks are combined into **one "📋 督办" (supervision) message** in the main chat (`prompts/assistant/supervise.md`: task, signal, criteria, question, Agent's last text, evidence and links; no handling instructions).
@@ -642,7 +642,7 @@ record per piece of work, made when the work is handed out and never rewritten (
 
 | Field | From | Meaning |
 | --- | --- | --- |
-| `request` | the hub | The owner's message that led to the task, verbatim: `text` (cut at 2000 characters, then `truncated`), `at`, and where the whole of it is (`conversation`, `message_id`); `via`: the conversations that relayed it, oldest first ("Across a relay" below). Absent when the owner did not ask for it |
+| `request` | the hub | The owner's words that led to the task. `text` keeps their original wording and spacing, up to 2000 characters (`truncated` if clipped). `part: true` marks a selected passage. `at`, `conversation` and `message_id` identify the original message. `via` lists the conversations that relayed it, oldest first. Absent when the owner did not ask for it |
 | `started_by`, `trigger`, `trigger_title`, `reason` | the hub, `reason` from the model | Who started it: `owner`, `assistant`, `leader`, `routine`, `hub`, or `unknown`; what the turn followed when it was not the owner (`supervision`, `followup`, `routine`, `conversation`, `notice`, `meeting`, `wake`); and why (`task_plan`'s `started_why`) |
 | `goal` | the model | The work in one sentence (the task's title when a writable task gives none) |
 | `done_when`, `expect_minutes`, `out_of_bounds` | the model | What done means, about how long it should take, what the Agent must not do |
@@ -658,18 +658,25 @@ never writes `request`: a `brief` in the tool call is dropped.
 
 **Across a relay.** When the main conversation hands the owner's request to a leader, the leader's latest message is
 the relay, so its brief would only say a conversation started it. `conversation_send` and `conversation_new` take an
-optional `quote`: `"latest"` or a message id (`server/internal/assistant/relay_quote.go`). The hub reads the sending
-conversation's last ten turns and accepts only a message the owner sent there from an app (it has a client message
-id), or a verified quote that conversation itself received, so a quote passes on through more than one conversation.
-Anything else refuses the send before the hop and rate limits count it. The hub keeps what it verified (setting
-`assistant.quotes`, by sender and message id, 14 days, at most 64) and the receiver gets the text verbatim in a
-`<persona-context kind="owner-request" message_id="…">` block right after the relay context
-(`prompts/assistant/relay.md`). When the receiver hands work out on that message, `request` is the kept quote,
-found by the sender (the item's `source`) and the id in that block; only a block directly after the canonical relay
-context counts (`prompts.ParseRelayQuoteID`), and its text is never read as the request. `started_by` stays
-`leader` / `assistant` with trigger `conversation`, and `request.via` lists who passed it on. A relayed quote is the
-owner's request, never their approval: a scope change that needs the owner's yes takes only a message they wrote in
-the conversation making the change. Hops and rate limits are as before.
+optional `quote`. With `"latest"`, the hub uses the one owner message or verified incoming quote in **this turn**.
+A queued owner message belongs to the turn already running. A background notice or wake continues it. If the turn
+contains several candidates, the tool lists their ids and first words so the sender can choose. If the turn contains
+none, or its start is outside the transcript page, the sender can give the exact words of an earlier request or omit
+`quote`.
+
+A message id or the owner's exact words can select from the last ten turns. An id takes precedence. Text matches
+the newest owner message or verified incoming quote that contains it, with at least four characters and runs of
+whitespace compared as a single space. The receiver gets the original spacing. A selected passage sets
+`request.part` and keeps the source message's time and id. A marked Just me turn cannot quote anything, and a
+Just me question remains ineligible afterwards. A refusal uses no relay allowance.
+
+The hub keeps the verified words for 14 days, up to 64 entries in `assistant.quotes`, keyed by sender and the id
+in the receiver's `<persona-context kind="owner-request" message_id="…">` block. A whole message keeps its id.
+Each passage has its own stable reference so different receivers can pass on their own passage using the id in
+their block. The receiver's brief takes the stored words by that reference and the relay item's source. Only a
+block directly following the canonical relay context counts (`prompts.ParseRelayQuoteID`). The brief keeps
+`started_by` as `leader` or `assistant`, trigger `conversation`, and the conversation ids in `request.via`.
+A scope change requiring the owner's approval still needs a message they wrote in the conversation making it.
 
 **Hand-overs** (#11699, `server/internal/assistant/relay_handover.go`). A `conversation_send` that carries a verified
 quote and has a direction's lead conversation (`assistant.leaders`, not a task leader Agent) on either end is one
@@ -777,7 +784,7 @@ its creation time, its conversation, its ledger's criteria; `reconstructed: true
 
 Off by default: with no leaders, everything above is unchanged and only the main chat supervises. Layering: user → main chat (secretary) → one leader per repository or long-running project → workers.
 
-- **Opening one**: the owner's tap, or the assistant with the owner's approval. A New chat is routed as it opens (below, "New chat opens a direction"): **Start direction** on its offer, or **Make it a direction** on any side conversation, makes it a leader at once; **End direction** takes one out. These are the owner's own choice, so they need no phone approval and are never redone by the hub. The assistant can still add a side conversation's id to `assistant.leaders` with `persona_settings` (`set`, the whole list of conversation ids; `conversations_list` has them), which the user approves on the phone. Either way, only Persona conversations on the assistant's computer other than the main chat are accepted, and at most 20. Removing an id ends it; tasks it handed out keep their supervisor in the ledger but their signals go back to the main chat.
+- **Opening one.** A New chat is an ordinary conversation. The owner can **Pin** any eligible side conversation to make it a direction and **Unpin** to end it (below, "Pin a chat as a direction"). The owner's choice takes effect immediately. The assistant can also propose a change to `assistant.leaders` through `persona_settings` (`set` with the full list of conversation IDs from `conversations_list`), which requires the owner's approval on the phone. Up to 20 side conversations on the assistant's computer can be leaders. When one is removed, its tasks keep their supervisor in the ledger and their signals go back to the main chat.
 - **What a leader gets**: its context starts with "这是 leader 对话" (prompts `assistant/context.md`). A task it hands out with `task_plan` is supervised with the leader as `supervisor` (tasks handed out before it became one are not). The supervision loop routes each signal to its task's supervisor when that is a current leader (`digestTo`, `server/internal/assistant/supervise_leader.go`): the leader gets its own "📋 督办" message (when its conversation is gone, the main chat gets them instead) (the leader variant of `prompts/assistant/supervise.md`), with the same gathering, queueing, deduplication and folding as the main chat's. It reviews its tasks with `task_review` (accepted, rework with the same 2-round limit, cancelled); another side conversation cannot.
 - **What still goes to the main chat**: a leader's `needs_user` (the user gets the decision card as always, and the main chat gets an `escalated` entry with the leader's reason and recommendation, so it neither asks again nor loses track); any signal of a task waiting for the user; failed and retried starts (the start remedies, `task_start_screen` / `task_start_keys` / `task_retry`, stay main-chat tools); and tasks waiting for the user's nod to ship stay in the snapshot's approvals list. The main chat may still review a leader's task (for example after the user answered there); the task stays the leader's.
 - **Depth cap**: an agent linked to an open task (a worker) cannot call `task_plan` or `agent_start`, even when it runs as an assistant conversation: it is told to do the work itself with its in-session subagents and to ask its supervisor (`report_to_supervisor`) if it needs another task. Coding agents never had those tools, apart from a task leader's restricted `task_plan` ("Task leaders" below); the main chat and leaders are not limited.
@@ -1067,25 +1074,24 @@ to-do with an origin, a piece nothing touches for 48 h is shelved by the To-dos 
 started is never reported stuck (it has nothing to be stuck on) unless it waits on the owner.
 The main chat and other conversations still create the owner's own to-dos.
 
-**New chat opens a direction (#3607).** Right after the owner sends a New chat's first message (an app's
-`POST /api/v1/assistant/conversations`: not the main chat, a guest, the health space, a purpose or an extension's), the
-hub asks the model purpose `assistant.route` (Model configuration › Information processing, under the knowledge
-category, like chat titles) whether the sentence opens a direction or is a quick chat, off the conversation's path
-(`route.go`, prompts `assistant/route.md`, `route_input.md`). It gets the current leaders and the knowledge base's
-project names, and the model call has 2 seconds: a slower, failed or unreadable answer is a quick chat, and nothing shows.
-A direction is only offered: the offer (its name, the existing kb project the sentence names or a new project's name,
-and with 6 leaders or more the closest existing leader to use instead) is kept in `assistant.route_offers` for 7 days
-and told to the apps (`direction_offer`). The owner's taps:
+**Pin a chat as a direction (#4331, #11700).** A New chat is an ordinary chat. Pin makes it a direction.
+The app sends the first message with `POST /api/v1/assistant/conversations`. Creating the conversation makes
+zero calls to `assistant.route` and creates zero direction offers. The owner can change the conversation's role later.
 
-| Tap | Endpoint | What it does |
+| Owner action | Endpoint | Result |
 | --- | --- | --- |
-| Start direction | `POST /api/v1/assistant/directions/{id}/start` | Takes the offer: adds the conversation to `assistant.leaders`, files its record under the offer's project (a new one is made in the knowledge base as a long project), names it as offered unless the owner named it; 404 without an offer |
-| Just a quick chat | `DELETE /api/v1/assistant/directions/offers/{id}` | Drops the offer; nothing else changes |
-| Make it a direction | `POST /api/v1/assistant/directions/{id}/make` | The same for any side conversation, with no offer; `{"project"?, "title"?}` |
-| End direction | `POST /api/v1/assistant/directions/{id}/end` | Takes it out of `assistant.leaders`; its record is ended, nothing is deleted |
+| Pin | `POST /api/v1/assistant/directions/{id}/make` | Makes an eligible side conversation a leader. Accepts an optional `project` and `title`. |
+| Unpin | `POST /api/v1/assistant/directions/{id}/end` | Removes it from `assistant.leaders` and marks its direction record ended. |
 
-Each records the direction `by: "user"`, so the hub never files it under another project itself (one made without a project stays so until the owner picks one); `leader.changed` follows as for any change. The apps' strip, the ⋯ items and
-the New agent field come with W1 / I1 / A1.
+The direction records the owner's choice as `by: "user"`. The owner's filing stays in effect and changes emit
+`leader.changed`. A direction created without a project stays that way until the owner chooses one.
+
+Managers upgraded from the original #3607 implementation can still read, accept or dismiss stored offers for
+seven days from creation. `GET /api/v1/assistant/directions/offers` returns `{"offers":[]}` when none are current.
+`POST /api/v1/assistant/directions/{id}/start` accepts a current offer using its suggested project and title,
+with optional overrides. It returns 404 and points to `…/make` if the offer is absent or expired.
+`DELETE /api/v1/assistant/directions/offers/{id}` reports whether it removed a current offer. Taking a current
+offer broadcasts `direction_offer` with `offer: null`.
 
 **New agent goes under a leader (#3608).** Work is handed to a leader three ways, and each makes the leader the task's
 `supervisor`, so its signals go to the leader (`digestTo`) and the leader reviews it:
@@ -1093,9 +1099,9 @@ the New agent field come with W1 / I1 / A1.
 - **The main chat hands a plan to a leader**: `task_plan` with `supervisor` (main chat only, a current leader; the
   plan's tasks carry it, `PlanTask.supervisor`). The plan card stays in the main chat and each task's card goes into
   the leader's conversation too; a leader that ended before the owner pressed Start leaves the tasks to the main chat.
-- **The owner starts an agent by hand** (`agent_route.go`): the New agent sheet asks `POST /api/v1/assistant/route/agent`
-  for its **Under** field (the leader of the kb project that owns the directory; else the leader `assistant.route`
-  matches the prompt to, prompt `assistant/route_agent.md`, 2 s; else Persona), and once the agent runs,
+- **The owner starts an agent by hand.** The server offers `POST /api/v1/assistant/route/agent` (`agent_route.go`) to suggest a supervisor.
+  It first looks for the leader of the knowledge-base project that owns the directory. Otherwise `assistant.route` can match
+  the prompt to a current leader within two seconds (`assistant/route_agent.md`), with Persona as the fallback. Once the agent runs,
   `POST /api/v1/assistant/agents/{mid}/{sid}/supervisor` makes it that conversation's supervised task (as
   `agent_supervise` does for the main chat; the card goes into that conversation). Called again with another
   conversation, it moves the task there (**Move to…**) and its card follows (the old conversation keeps its history).

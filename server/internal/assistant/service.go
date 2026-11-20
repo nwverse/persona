@@ -25,6 +25,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/remoteimage"
 	"github.com/nwverse/persona/server/internal/secretkey"
+	"github.com/nwverse/persona/server/internal/taskworkspace"
 )
 
 // Options are what a Service runs with.
@@ -130,6 +131,9 @@ type Service struct {
 	// superviseTimes are how supervision messages gather and space out (zero fields: the package's; tests shorten
 	// them, supervise_signals.go superviseTimings).
 	superviseTimes superviseTimings
+	// todoAskAfter is how long a linked to-do goes without progress before its recurring check asks the owner (0:
+	// scheduleAskAfter's floor; tests shorten it, schedule_todo_evidence.go).
+	todoAskAfter time.Duration
 	// retryNow is the clock a due retry checks the task's time against (retryStillDue; nil: time.Now, tests set it).
 	retryNow func() time.Time
 
@@ -602,6 +606,11 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 		return beforeNodeWrite(method, err)
 	}
 	p := DeviceCall{Device: device, Method: method, Params: raw}
+	if fields, ok := params.(map[string]any); ok && method == DeviceSessionStart {
+		if _, managed := fields["backend_workspace"].(taskworkspace.Request); managed {
+			p.Method = devicewire.MethodStartBackendSession
+		}
+	}
 	res, ok, err := s.localFleetDeviceCall(ctx, p) // what the hub answered before the nodes' events were the manager's
 	if !ok {
 		res, err = s.hub.DeviceCall(ctx, p)

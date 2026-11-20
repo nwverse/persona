@@ -1331,9 +1331,11 @@ progress state. One-shot follow-ups cannot opt in. Existing unlinked schedules s
 schedule through an authorized `schedule_routine` edit. This is not permission to create or widen recurring work.
 
 Each dispatched linked run starts with its to-do ID. When its watched turn settles, the hub records `todo_progress`
-on its `ScheduleRun` in `assistant.runs`: `progress`, `no_progress`, `unknown` or `inactive`, with the to-do ID,
-consecutive assessable no-progress count and the run's explanation. Skipped or unstarted attempts are `not_run`;
-a newer completed run makes a late older unassessed result `superseded`. A still-running, unassessed run is `pending`.
+on its `ScheduleRun` in `assistant.runs`: `baseline`, `progress`, `working`, `no_progress`, `unknown` or `inactive`,
+with the to-do ID, consecutive assessable no-progress count and a reason. The reason of `baseline`, `working` and
+`no_progress` is the hub's evidence; `progress` and `unknown` quote the run's explanation. Skipped or unstarted
+attempts are `not_run`; a newer completed run makes a late older unassessed result `superseded`. A still-running,
+unassessed run is `pending`.
 
 The explanation is the run's own reply (#11553): the last reply after the prompt that carries the run's key, up to the
 next message that opened a turn. A run in its source conversation shares that conversation with its other work:
@@ -1344,27 +1346,45 @@ queued into another turn, or another message was queued into its turn), or its p
 explanation is the hub's evidence line ("no new Agent reply, criterion change or progress report"). A run in a
 conversation of its own falls back to that conversation's latest turn.
 
-The baseline is the previous assessment, or a before-dispatch snapshot on the first run. Observable progress is
+The first run after the link only records the baseline (`baseline`, #11587). Compared with a snapshot taken just
+before it was sent, it judged only its own few seconds, and an Agent working without words was counted at once.
+Each later run compares with the previous assessment's evidence. Observable progress is
 any changed nonempty last Agent answer on a current unreleased, undismissed task Agent, a state change of an
 existing acceptance criterion, or changed content/steps in an explicit `report_to_supervisor` `progress` report.
 Answers are read from transcript text, not truncated session previews; runtime API errors, the schedule's own
-conversation, tool activity, timestamps, notes, evidence-only criterion edits, display paraphrases and repeated
+conversation, timestamps, notes, evidence-only criterion edits, display paraphrases and repeated
 identical reports do not count. These are observable changes, not a judgment that an artifact is useful or that the
 work is accepted. Criterion rewording alone does not count.
+Tool calls are work (#11587, `schedule_todo_evidence.go`). The check reads each Agent's latest turn and keeps its distinct
+calls (name and input, hashed) and when it read them. A call made after the baseline was read that does not wait,
+poll or check CI (the activity classes the `no_progress` signal uses) and repeats no call seen before (in that turn
+at the baseline, or earlier since) makes the run `working`. That restarts the streak like progress, and its reason says
+how many calls came since when. Waits, polls, repeats and tool results alone do not count.
 
-One assessed no-progress run queues an existing blocked supervisor signal. At two, the existing actionable
-`needs_user` review puts **Change approach / Keep waiting**, the explanation and the cost of waiting in Needs you,
-including for `push: asked`. Choosing another approach asks for a proposal within existing permissions, not
-permission to spend, send or widen scope. The decision's 24-hour deadline only revisits it; the hub never applies
-the proposed strategy change by default. Existing notification preferences and decision routing still apply.
+The first no-progress run sends its supervisor a `check` signal (`report: no_progress`). It names the task Agent's
+computer and session, not the conversation the run went to, and reads as the hub's check, never as the Agent's own
+report. A failed assessment write sends `check` with `report: error`. The owner is asked once the streak has at least
+two runs and the task has gone without progress for the `no_progress` signal's floor: max(30 minutes,
+1.5 × `expect_minutes`), from when the streak's baseline was read to the current run's read. The existing actionable
+`needs_user` review puts **Change approach / Keep waiting**, the hub's evidence and the cost of waiting in Needs you,
+including for `push: asked`. The evidence says since when no reply, report or criterion change came, and whether the
+Agents made no tool calls or how many calls only waited or repeated. It never quotes the run's own summary, which
+often says the work is going fine.
+The option the owner takes on that decision, recommended or not, is recorded in the to-do's decisions. It goes to the
+task's supervising conversation as `check` with `report: decided`, the decision as asked and each option's result,
+not to the Agent at work. This covers the card, the push's OK, the to-do's accept route and `task_decided`. The Agent
+hears only what the supervisor then sends it, and the card says the choice went to the supervisor. An answer in the
+owner's own words still goes the ordinary way. Choosing another approach asks the supervisor for a proposal within
+existing permissions, not permission to spend, send or widen scope. The decision's 24-hour deadline only revisits it;
+the hub never applies the proposed strategy change by default. Existing notification preferences still apply.
 For a worker supervised by a task-leader Agent, the conversation above that leader reviews the decision through
-its existing authority; the worker stays supervised by its leader.
+its existing authority and receives the owner's option; the worker stays supervised by its leader.
 Another pending owner decision is never overwritten; a failed escalation is retried on a later assessment.
 The first escalation attempt's run identity is saved with the assessment before creating its review. If the
 review succeeded but the final escalation-marker write failed, later assessments or restart replays recognize
 that exact pending review and repair the marker without replacing the decision or claiming another owner question.
 
-Observed progress resets the streak. Unreadable evidence is `unknown`: it does not increment or clear the
+Observed progress or work resets the streak. Unreadable evidence is `unknown`: it does not increment or clear the
 previous known count, and it preserves the last readable evidence. An initially unreadable baseline must become
 readable before it can establish a no-progress run; later recovery can still prove progress against known evidence.
 Closed, cancelled, superseded or paused work is inactive, clears the streak and is not reopened or escalated.
@@ -2116,7 +2136,7 @@ Assistant MCP tools (`assistant/conversations.go`, descriptions `prompts/mcp/ass
 - **Inter-chat messages** (`conversation_send`, `conversation_new` opening):
   - Prepend `<persona-context kind="context" title="来自对话「…」">` (`title`: "From chat ‘…’", `prompts/assistant/relay.md`), explaining it's not user-authored, source chat, hop count;
     if a reply is needed, use `conversation_send`; do not reply merely to acknowledge receipt. `Item.source.kind="conversation"` retains the stable sender id and title, separately from the runtime role and native peer `from`. Clients show a source message rather than a user bubble; the relay's instructions remain inspectable as Context. Explicit source metadata is persisted in a separate `message-source` context, not a selectable Context card. Full canonical legacy relay contexts remain recognizable; user-pasted templates are protected at the entry point.
-  - **The owner's words travel with it** (#3822): `quote` (`"latest"` or a message id) carries one of the owner's own messages, verified by the hub, in a second context block; work the receiver hands out on it records their words in its brief (`docs/assistant/unified-entry.md`, "Briefs (#3822)").
+  - **The owner's words travel with it** (#3822): `quote: "latest"` carries the sole owner message or verified incoming quote in the current turn. If several fit, choose an id or the owner's exact words. An id or at least four characters of exact wording can also select a passage from the last ten turns. The receiver's brief preserves the original wording and source, with `request.part: true` for a passage. Just me turns and the marked questions themselves keep those words in the conversation (`docs/assistant/unified-entry.md`, "Briefs (#3822)").
   - **A spawned chat reports back** (#4669, `assistant/spawned.go`): a chat `conversation_new` opened is followed (`assistant.relay`'s `spawned`, kept 7 days) until it sends to its opener with `conversation_send`. A turn of it that fails, or one that ends without it ever having reported, leaves one notice in the opener (`OriginRef`; `prompts/assistant/spawn_notice.md`) with its id, link and error or last words. The notice is a message from the spawned chat under the same hop and rate limits as its own `conversation_send`; past them the log says the opener was not told.
   - **A failed turn is a failure** (#4669): the node makes a Claude turn whose result is `is_error`, or whose whole answer is an auth / upstream error line (`assistantwire.ErrorOnlyText`, sharing `AuthErrorWords` with the triage's `userErrorWords`), the session's `turn_error`: the apps show it failed, the push is ⚠️ and goes out however quick the turn was, and the hub logs `assistant <id>: turn failed (launcher …, kind …, code …)` without the error's words.
   - **Queue while running**: if target is running, already queued, or the owner is talking in it, persist in hub settings `assistant.relay` (survives restart), displayed above the input like typed queues
