@@ -13,6 +13,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/screen"
 	"github.com/nwverse/persona/server/internal/shellcmd"
@@ -226,7 +227,7 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		// conversations by (a health chat's: #10941). A first start that failed keeps its start or its record (#861)
 		// and starts under its id below.
 		if kind == "claude" && !codex && !n.resumeKnown(ctx, resume) {
-			return nil, refusal(codeResumeUnknown, i18n.T(i18n.Default, "node-start.resume_unknown"), nil)
+			return nil, resumeUnknown()
 		}
 	}
 
@@ -438,8 +439,12 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	return n.sessionFor(id, *a), nil
 }
 
-// codeResumeUnknown refuses a resume of an id the computer never had (resumeKnown).
-const codeResumeUnknown = "resume_unknown"
+// resumeUnknown refuses a resume of an id the computer never had (resumeKnown), or one an extension may not resume
+// here (resumeOutsideHealth): the same words for both, so the refusal does not say which. The hub words it in the
+// request's language by its code (apierr).
+func resumeUnknown() error {
+	return refusal(proto.CodeResumeUnknown, i18n.T(i18n.Default, "rpc-errors.resume_unknown"), nil)
+}
 
 // resumeKnown: this computer has something of conversation id to resume: its transcript, a start of it (one that
 // failed included), a Claude process of it that it saw (a hook's SessionStart before a first message wrote the
@@ -457,6 +462,55 @@ func (n *Node) resumeKnown(ctx context.Context, id string) bool {
 	_ = n.state.loaded(ctx)
 	_, ok := n.state.get(id)
 	return ok
+}
+
+// resumeOutsideHealth: this computer has conversation id, and every directory it knows it by is outside the health
+// space and the Agent folders kept out of Persona: where its transcript or rollout started and where it last was (the
+// assistant's own health project too), its node record's, a start's of it, its running agent's. The hub asks it
+// (session.start's resume_outside_health) for a resume an extension's token names that its computer does not list
+// (#10941): a quiet chat leaves the list after a week, or sooner on a busy computer, and a stopped Agent takes no
+// message, so a resume is the only way back to one the extension started. One it has nothing of, or nothing that
+// says where it ran (a transcript whose head names no directory), is refused like one of the space: either would let
+// the extension start a conversation the manager takes for another, or run one of the space outside it.
+func (n *Node) resumeOutsideHealth(ctx context.Context, id string) bool {
+	id = n.resolveAlias(id)
+	var dirs []string
+	if p := n.transcriptPath(id); p != "" {
+		st, err := os.Stat(p)
+		if err != nil {
+			return false
+		}
+		m := n.meta(p, st)
+		if m.start == "" {
+			return false
+		}
+		dirs = append(dirs, m.start, m.cwd, n.assistantDirOfProject(filepath.Base(filepath.Dir(p))))
+	}
+	if r := n.starts.get(id); r != nil {
+		dirs = append(dirs, r.session.Cwd)
+	}
+	if a, ok := n.agent(id); ok {
+		dirs = append(dirs, a.Cwd, a.ForegroundCwd)
+	}
+	if n.state != nil {
+		if n.state.loaded(ctx) != nil {
+			return false // its record, which may say the space, is not in yet
+		}
+		if st, ok := n.state.get(id); ok {
+			dirs = append(dirs, st.Cwd)
+		}
+	}
+	known := false
+	for _, d := range dirs {
+		if d == "" {
+			continue
+		}
+		if identity.InHealthSpace(d) || n.cwdBlocked(d) {
+			return false
+		}
+		known = true
+	}
+	return known
 }
 
 // retypeStart types a start's line again into pane once its shell is at rest (settleShell), after leaving the

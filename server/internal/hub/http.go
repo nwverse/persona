@@ -895,13 +895,14 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// An extension's token resumes only a conversation its computer lists outside the health space, as a scoped token
-	// does (above) and as it reads one (extensionReadable): a computer with no transcript of the id would start a new
-	// conversation under it, which the manager would then take for the one the id names, a health chat's included
-	// (#10941, docs/extensions/extensions.md "Never shown to extensions").
-	if pr.Role == roleExtension && p.ResumeSessionID != "" && !h.scopedPublicSession(p.MachineID, p.ResumeSessionID) {
-		writeErr(w, http.StatusNotFound, errDeleteUnknown)
-		return
+	// An extension's token resumes a conversation its computer lists outside the health space, or one it does not
+	// list that the computer checks (extensionResume, #10941).
+	checkedResume := false
+	if pr.Role == roleExtension && p.ResumeSessionID != "" {
+		var ok bool
+		if checkedResume, ok = h.extensionResume(w, p.MachineID, p.ResumeSessionID); !ok {
+			return
+		}
 	}
 	m := h.localMachine(p.MachineID)
 	if m == nil {
@@ -1015,8 +1016,17 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 		}
 		setWorkLauncherConfig(m, p.Launcher, params)
 	}
+	if checkedResume {
+		params["resume_outside_health"] = true // nodeproto.ResumeOutsideHealth: set after the manager's fill, never the caller's
+	}
 	if err := m.call(ctx, method, params, &res); err != nil {
 		h.startEnded(m.cfg.ID, p.ResumeSessionID, params, err)
+		if re := (*rpc.Error)(nil); checkedResume && errors.As(err, &re) && re.Code == proto.CodeResumeUnknown {
+			// The answer the hub gives a conversation it lists in the space or does not know: the extension is not
+			// told which it was.
+			writeErr(w, http.StatusNotFound, errDeleteUnknown)
+			return
+		}
 		callErr(w, apierr.OnMachine(err, m.name())) // a launcher the new tab cannot run "on <name>'s MacBook"
 		return
 	}
@@ -1097,7 +1107,10 @@ func (h *Hub) startEnded(mid, resume string, params map[string]any, err error) {
 		if errors.As(err, &re) {
 			// Work picker refusals happen before the launcher runs. Counting
 			// them as failures could hide a working launcher from the picker.
-			if strings.HasPrefix(re.Code, "work_") {
+			// So does a resume of a conversation the computer has nothing of,
+			// which a manager from before that refusal counts against the
+			// launcher (#10941).
+			if strings.HasPrefix(re.Code, "work_") || re.Code == proto.CodeResumeUnknown {
 				return
 			}
 			r.Code, r.Data = re.Code, re.Data

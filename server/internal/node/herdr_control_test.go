@@ -256,7 +256,7 @@ func TestHerdrResumeOfAnIDTheComputerNeverHadIsRefused(t *testing.T) {
 	f.setScreen("w7:p1", screenFixture(t, "claude-2.1.312-empty-162.txt"))
 	for range 2 { // and again: the refused one left nothing it would count
 		_, err := request(t, n, "session.start", map[string]any{"cwd": cwd, "launcher": "claude", "resume_session_id": forged, "prompt": "hi"})
-		if code := rpcCode(err); code != codeResumeUnknown {
+		if code := rpcCode(err); code != proto.CodeResumeUnknown {
 			t.Fatalf("a resume of an id the computer never had: %v (code %q)", err, code)
 		}
 	}
@@ -277,6 +277,121 @@ func TestHerdrResumeOfAnIDTheComputerNeverHadIsRefused(t *testing.T) {
 		"text": startCmd("claude", "--session-id "+forged, personaDir(home))})
 	if !slices.Contains(f.trace(), want) {
 		t.Fatalf("no --session-id start in %v", f.trace())
+	}
+}
+
+// The regression check of #10941's rule for an extension's resume: the hub passes on one of a conversation its
+// computer does not list (quiet for a week, past the 80 newest, a short transcript: a stopped Agent takes no message,
+// so a resume is its only way back) with resume_outside_health, and the node resumes it only when it has it and every
+// directory it knows it by is outside the health space and the blocked Agent folders. Everything else is refused
+// resume_unknown before herdr is asked anything or the record moves: an id it has nothing of (the forged session), a
+// health chat, a run started in the space whose shell left it (listed outside at rest), one whose record or Codex
+// rollout says the space, one in a blocked folder, one whose transcript names no directory.
+func TestHerdrAnExtensionsResumeOfAnUnlistedChat(t *testing.T) {
+	const (
+		own      = "7a1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a40"
+		forged   = "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b"
+		run      = "0a1b2c3d-7777-4f60-8a7b-9c0d1e2f3a41"
+		chat     = "0a1b2c3d-1111-4f60-8a7b-9c0d1e2f3a42"
+		recorded = "0a1b2c3d-2222-4f60-8a7b-9c0d1e2f3a43"
+		movedIn  = "0a1b2c3d-3333-4f60-8a7b-9c0d1e2f3a44"
+		rollout  = "0a1b2c3d-4444-4f60-8a7b-9c0d1e2f3a45"
+		blocked  = "0a1b2c3d-5555-4f60-8a7b-9c0d1e2f3a46"
+		headless = "0a1b2c3d-6666-4f60-8a7b-9c0d1e2f3a47"
+		// The same shapes outside the space: each is resumed, so what refuses the ones above is where they ran.
+		recordedOut = "0a1b2c3d-8888-4f60-8a7b-9c0d1e2f3a48"
+		rolloutOut  = "0a1b2c3d-9999-4f60-8a7b-9c0d1e2f3a49"
+		bigHeadOut  = "0a1b2c3d-aaaa-4f60-8a7b-9c0d1e2f3a4a"
+	)
+	n, f, home := herdrNode(t)
+	work := mkdir(t, filepath.Join(home, "errands"))
+	health := mkdir(t, filepath.Join(home, ".persona", "health"))
+	charts := mkdir(t, filepath.Join(health, "charts"))
+	private := mkdir(t, filepath.Join(home, "private"))
+	quiet := time.Now().Add(-9 * 24 * time.Hour) // no longer in the offline list
+	prompt := func(cwd, text string) string {
+		return `{"type":"user","timestamp":"2026-11-05T07:31:12Z","cwd":"` + cwd + `","message":{"role":"user","content":"` + text + `"}}`
+	}
+	writeTranscript(t, home, work, own, quiet, prompt(work, "file the receipts"))
+	writeTranscript(t, home, charts, run, quiet, prompt(charts, "chart the resting heart rate"), prompt("/tmp/elsewhere", "and log it"))
+	writeTranscript(t, home, health, chat, quiet, prompt(health, "what do you remember about my sleep"))
+	n.state.put(recorded, sessionState{Launcher: "claude", Cwd: charts, TaskInstructions: "Log the dose every night"})
+	writeTranscript(t, home, work, movedIn, quiet, prompt(work, "start here"))
+	n.state.put(movedIn, sessionState{Launcher: "claude", Cwd: health}) // resumed in the space by the owner since
+	writeRollout(t, home, rollout, charts, quiet, quiet)
+	writeTranscript(t, home, private, blocked, quiet, prompt(private, "private things"))
+	n.setBlockedAgentDirs([]string{private})
+	// A first prompt too big for the head read (an inline image) hides where the session started: its tail is outside.
+	big := strings.Repeat("x", 300*1024)
+	writeTranscript(t, home, work, headless, quiet, prompt(charts, "chart this "+big), prompt(work, "and file it"))
+	n.state.put(recordedOut, sessionState{Launcher: "claude", Cwd: work}) // Persona started it; its transcript is gone
+	writeRollout(t, home, rolloutOut, work, quiet, quiet)
+	n.state.put(bigHeadOut, sessionState{Launcher: "claude", Cwd: work})
+	writeTranscript(t, home, work, bigHeadOut, quiet, prompt(work, "file this "+big), prompt(work, "and that"))
+	f.reply("workspace.list", map[string]any{"workspaces": []any{}})
+	f.reply("workspace.create", map[string]any{"workspace": map[string]any{"workspace_id": "w7"},
+		"tab": map[string]any{"tab_id": "w7:t1"}, "root_pane": map[string]any{"pane_id": "w7:p1"}})
+	startHerdr(f, "w7:p1", proto.StatusDone)
+	f.setScreen("w7:p1", screenFixture(t, "claude-2.1.312-empty-162.txt"))
+	resume := func(id string) error {
+		_, err := request(t, n, "session.start", map[string]any{"cwd": work, "launcher": "claude", "resume_session_id": id,
+			"resume_outside_health": true})
+		return err
+	}
+
+	for _, id := range []string{own, recordedOut, rolloutOut} {
+		if !n.resumeOutsideHealth(t.Context(), id) {
+			t.Errorf("%s, outside the space: not resumable", id)
+		}
+	}
+	if n.resumeOutsideHealth(t.Context(), bigHeadOut) {
+		t.Errorf("%s, a transcript whose head names no directory: resumable", bigHeadOut)
+	}
+	for _, id := range []string{forged, run, chat, recorded, movedIn, rollout, blocked, headless} {
+		if err := resume(id); rpcCode(err) != proto.CodeResumeUnknown {
+			t.Errorf("resume of %s: %v (code %q), want %s", id, err, rpcCode(err), proto.CodeResumeUnknown)
+		}
+	}
+	for _, c := range f.trace() {
+		if !strings.HasPrefix(c, "server.") && !strings.HasPrefix(c, "session.snapshot") {
+			t.Fatalf("a refused resume reached herdr: %s", c)
+		}
+	}
+	if st, _ := n.state.get(recorded); st.Cwd != charts || st.TaskInstructions == "" {
+		t.Fatalf("a refused resume changed the record: %+v", st)
+	}
+	if _, ok := n.state.get(forged); ok {
+		t.Fatal("a refused resume left a record")
+	}
+
+	if err := resume(own); err != nil {
+		t.Fatalf("the extension's own chat its computer no longer lists: %v", err)
+	}
+	if want := call("pane.send_input", map[string]any{"pane_id": "w7:p1", "keys": []string{"Enter"},
+		"text": startCmd("claude", "--resume "+own, personaDir(home))}); !slices.Contains(f.trace(), want) {
+		t.Fatalf("no --resume start in %v", f.trace())
+	}
+}
+
+// The owner's resume carries no resume_outside_health: a run started in the health space resumes as before, wherever
+// its shell went since (#10941 changes nothing of it).
+func TestHerdrOwnersResumeOfAHealthRunIsUnchecked(t *testing.T) {
+	const run = "0a1b2c3d-7777-4f60-8a7b-9c0d1e2f3a41"
+	n, f, home := herdrNode(t)
+	charts := mkdir(t, filepath.Join(home, ".persona", "health", "charts"))
+	writeTranscript(t, home, charts, run, time.Now().Add(-9*24*time.Hour),
+		`{"type":"user","timestamp":"2026-11-05T07:31:12Z","cwd":"`+charts+`","message":{"role":"user","content":"chart it"}}`)
+	f.reply("workspace.list", map[string]any{"workspaces": []any{}})
+	f.reply("workspace.create", map[string]any{"workspace": map[string]any{"workspace_id": "w7"},
+		"tab": map[string]any{"tab_id": "w7:t1"}, "root_pane": map[string]any{"pane_id": "w7:p1"}})
+	startHerdr(f, "w7:p1", proto.StatusDone)
+	f.setScreen("w7:p1", screenFixture(t, "claude-2.1.312-empty-162.txt"))
+	if _, err := request(t, n, "session.start", map[string]any{"cwd": charts, "launcher": "claude", "resume_session_id": run}); err != nil {
+		t.Fatalf("the owner's resume: %v", err)
+	}
+	if want := call("pane.send_input", map[string]any{"pane_id": "w7:p1", "keys": []string{"Enter"},
+		"text": startCmd("claude", "--resume "+run, personaDir(home))}); !slices.Contains(f.trace(), want) {
+		t.Fatalf("no --resume start in %v", f.trace())
 	}
 }
 

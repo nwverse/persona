@@ -201,6 +201,25 @@ profile's `keep`: a quiet one leaves its computer's list again and its automatic
 as it was. Rolling forward lists again the ones that only dropped out of a computer's list; one the older manager's
 automatic archive took stays archived until the owner restores it, as nothing restores an archive by itself.
 
+### Resumes a computer has nothing of, and an extension's resumes (#10941)
+
+Since #10941 a node refuses a Claude Code resume of an id it has no transcript, start or record of with
+`resume_unknown`, before any tab opens, and a node that announces `resume_outside_health` also checks an extension's
+resume of a chat its computer does not list (protocol.md `session.start`). The hub, the devices manager, the assistant
+manager and the node may each be older:
+
+| Pair | What happens |
+| --- | --- |
+| New hub, new node | An extension's resume of an unlisted chat goes on marked `resume_outside_health`; the node resumes it only outside the health space, and its `resume_unknown` reaches the extension as the hub's own 404. The owner's resumes are never marked. |
+| New hub, older node | The node does not announce `resume_outside_health`, so the hub resumes for an extension only a chat the computer lists outside the space (404 otherwise; 503 `sessions_not_listed`, retryable, before the hub has had a list of that computer since it started). The owner's resumes behave as that node always did, including a start under an id it has nothing of. |
+| New devices manager, node older than the hub last heard | A marked start toward a node that does not announce the check is refused `node_outdated` (409) and nothing starts. |
+| Older devices manager, new hub and node | The manager passes a start's params on as they came, so the node gets the mark. |
+| Older hub, new node | The hub never marks a resume and lets an extension resume any id its computer is asked for, as before #10941. The node still refuses an id it has nothing of, so no conversation starts under the id of another; a transcript it has is resumed, health space included. |
+| New node, older hub: the owner's wording | `resume_unknown` comes with the node's own words, in Chinese: an older hub has no wording of that code in the reader's language. A hub since #10941 words it in en, zh-Hans and ja (`rpc-errors.resume_unknown`). |
+| New node, older assistant manager: launcher health | A hub since #10941 does not report a `resume_unknown` refusal to the manager (`StartEnded`). An older hub does, and a manager from before #10941 counts it against the launcher: the launcher shows as failing on that computer until its next check passes (`docs/server/launcher-health.md`). It takes a Resume of an id the computer has nothing of, which the apps offer only for chats a computer listed; updating the hub and its managers before the nodes avoids it. |
+
+Nothing is stored: rolling either side back or forward changes only what the next resume does.
+
 ### Launcher default models (#4663)
 
 A launcher with no explicit model has an empty `model` on the wire; display text is never a model ID. Older nodes and

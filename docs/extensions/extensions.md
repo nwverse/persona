@@ -837,9 +837,9 @@ Whatever scopes it was granted, an extension's token never sees:
   from the hub) is given up for a week (its transcript is gone); while one of them is off, it waits for that computer
   and is listed again once all are on. A row a computer lists under a chat's id tells the chat only as an assistant
   conversation or as one in the space, and a chat noted in the space stays there whatever a computer lists under its
-  id. Nor does a token start a conversation under such an id: `POST /api/v1/sessions` resumes only a chat its
-  computer lists outside the space (404 otherwise, as for a scoped token), and a computer refuses a resume of an id
-  it has no transcript, start or record of (`resume_unknown`). It fails closed: a conversation no computer lists,
+  id. Nor does a token start a conversation under such an id: a computer refuses a resume of an id it has no
+  transcript, start or record of (`resume_unknown`), and one of a chat its computer does not list goes on only where
+  the computer checks it (see "Resuming a chat"). It fails closed: a conversation no computer lists,
   never noted and with no deletion record, a history whose conversations cannot be read, or a run whose link keeps no
   directory and whose session cannot be read, counts too. The one rule decides every way a to-do leaves its manager:
   such a to-do is not on `GET /api/v1/todos`, every route of it answers 404 `todo_not_found` as for a to-do that does
@@ -863,6 +863,30 @@ Whatever scopes it was granted, an extension's token never sees:
   A manager from before #10941 lists such a to-do as any other, and the hub cannot tell which manager it relays to.
 
 The apps' and devices' credentials are not affected.
+
+### Resuming a chat
+
+A stopped Agent takes no message (#4754), so `POST /api/v1/sessions` with `resume_session_id` (`agents.control`; with
+a `permission_mode`, also `agents.permission_mode`) is the only way back to one the extension started. What its token
+may resume, on its own manager's computers (#10941):
+
+- **A chat its computer lists** outside the health space, as the owner would. One listed in the space answers 404
+  `not_found`, as a chat that does not exist.
+- **A chat its computer no longer lists.** A computer lists a quiet Claude Code chat only for a week, among its 80
+  newest and once its transcript holds 2 KB, so on a busy computer one drops out within two days. The hub passes such
+  a resume on, marked `resume_outside_health`, to a computer whose Persona Link announces that check. The computer
+  resumes the chat only when it has it (a transcript or rollout, a start, a running Agent or its record of it) and
+  every folder it knows it by is outside the health space and the Agent folders set to Block: where it started, where
+  it last was, and where its record says. Anything else answers the same 404: a chat or run of the space (one whose
+  shell left it since included), an id the computer has nothing of, a transcript whose start cannot be read (a first
+  prompt with a large inline image). The answer does not tell a health chat from no chat.
+- **On a computer whose Persona Link is older** (it does not announce `resume_outside_health`), only a chat it lists:
+  one it does not list answers 404, and `503 sessions_not_listed` (`retryable: true`, `Retry-After`) while the hub has
+  had no list of that computer's chats since it started; try again then.
+
+A resume never starts a new chat under the id it names: a computer that has nothing of the id refuses it with
+`resume_unknown`, worded in the reader's language. A scoped device token resumes only a chat its computer lists
+outside the space (404 otherwise).
 
 ### Sent as the user: `sent.record` (#5278)
 
