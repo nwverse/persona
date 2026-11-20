@@ -233,7 +233,7 @@ def _matcher(pattern):
     return lambda path: compiled.match(path) is not None
 
 
-_GROUPS = [[([_matcher(pattern) for pattern in patterns], checks) for patterns, checks in group] for group in TABLE]
+_GROUPS = [[([_matcher(pattern) for pattern in listed], named) for listed, named in group] for group in TABLE]
 
 
 def patterns():
@@ -247,8 +247,8 @@ def suites():
 
 
 def checks(path):
-    """The checks of one path, in the table's order: a CHECKS name, name:<argument> for a check that takes it from
-    the path (integration:<pkg>, go-package:<top>/<name>), or suite:<scripts/**/test_*.py>."""
+    """The checks of one path, in the table's order: a CHECKS name, <check>:<argument> for a check that takes its
+    argument from the path (integration:<pkg>, go-package:<top>/<name>), or suite:<scripts/**/test_*.py>."""
     found = []
     parts = path.split("/")
     for group in _GROUPS:
