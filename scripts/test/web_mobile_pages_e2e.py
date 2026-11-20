@@ -195,7 +195,7 @@ def todos(page, tag, shots):
     on_request = lambda r: detail_reads.append(r.url) if "/api/v1/todos/" in r.url and ("/repositories" in r.url or "/decisions" in r.url) else None
     page.on("request", on_request)
     goto(page, "/todos")
-    circle = page.get_by_role("button", name="完成待办").first
+    circle = page.get_by_role("button", name="完成待办", exact=True).first
     circle.wait_for()
     check(page.locator("[data-todo][aria-current]").count() == 0, f"{tag}: no to-do row is current before one is opened")
     search = page.get_by_placeholder("搜索待办")
@@ -216,7 +216,7 @@ def todos(page, tag, shots):
     check(page.evaluate("location.pathname + location.search") == path, f"{tag}: and does not open the row", path)
     page.unroute("**/api/v1/todos/*")
     # the row opens from the keyboard
-    row = page.locator('[role=button][tabindex="0"]').filter(has=page.get_by_role("button", name="完成待办")).first
+    row = page.locator('[role=button][tabindex="0"]').filter(has=page.get_by_role("button", name="完成待办", exact=True)).first
     row.focus()
     page.keyboard.press("Enter")
     page.wait_for_function("location.search.startsWith('?id=')")
