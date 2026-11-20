@@ -355,6 +355,13 @@ describe("triageTodos", () => {
     expect(sectionStartsFolded("shelved", [{ last: NOW - 3600_000, lead: {} }], NOW)).toBe(true);
   });
 
+  it("keeps a fresh legacy cancellation visible while old and plain review history stay folded", () => {
+    const legacyCancelled = { done_at: hoursAgo(1), done_by: "review" as const, cancelled_at: hoursAgo(1) };
+    expect(sectionStartsFolded("cancelled", [{ last: NOW - 3600_000, lead: legacyCancelled }], NOW)).toBe(false);
+    expect(sectionStartsFolded("cancelled", [{ last: NOW - 25 * 3600_000, lead: { ...legacyCancelled, done_at: hoursAgo(25), cancelled_at: hoursAgo(25) } }], NOW)).toBe(true);
+    expect(sectionStartsFolded("done", [{ last: NOW - 3600_000, lead: { done_at: hoursAgo(1), done_by: "review" } }], NOW)).toBe(true);
+  });
+
   it("unfinished to-dos lead a row and come before Just finished; seen ones are Done", () => {
     const look = makeSessionLookup([session("unseen", "unread"), session("unseen2", "unread"), session("idle", "idle", 2)]);
     const list = [

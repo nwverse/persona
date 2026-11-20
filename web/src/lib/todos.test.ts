@@ -1035,6 +1035,18 @@ describe("strikesThrough (#11677)", () => {
     expect(strikesThrough({ ...cancelled, done_at: null }, true)).toBe(false);
   });
 
+  it("strikes every cancellation representation accepted for Cancelled filing", () => {
+    const representations = [
+      td({ done_by: "cancelled" }),
+      td({ cancelled_at: at }),
+      td({ done_by: "review", cancelled_at: at }),
+    ];
+    for (const cancelled of representations) {
+      expect(isCancelled(cancelled)).toBe(true);
+      expect(strikesThrough(cancelled, false)).toBe(true);
+    }
+  });
+
   it("leaves an accepted, deployed, auto-completed or owner-ticked task plain", () => {
     const accepted = td({ done_by: "review", supervision: { supervisor: "c", state: "accepted" } });
     const deployed = td({ delivery: { state: "live", at } });

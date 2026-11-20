@@ -542,6 +542,19 @@ class TodoTriageTest {
     }
 
     @Test
+    fun aDismissedReviewDecisionKeepsIndependentDeliveryApproval() {
+        val reviewed = Supervision(supervisor = "c", state = "needs_user",
+            reviews = listOf(TaskReview(at = hoursAgo(1), verdict = "needs_user")))
+        val dismissed = todo("t", agents = listOf(agent("idle")), supervision = reviewed,
+            delivery = TodoDelivery(state = "pr", gate = "owner", unblock = "user"))
+            .copy(decisionReview = DecisionReview(reviewAt = hoursAgo(1), dismissalId = "dismiss-current"))
+        assertTrue(dismissed.decisionDismissed())
+        assertEquals(HoldUnblock.User, dismissed.hold?.unblock)
+        assertEquals(TriageSection.Waiting to TriageRule.OwnerDecides, at(dismissed).let { it.section to it.rule })
+        assertEquals("dismissal-only control", TriageRule.Rest, at(dismissed.copy(delivery = null)).rule)
+    }
+
+    @Test
     fun aDismissedOwnerDecisionRestoresAcceptedAtRest() {
         val accepted = todo("t", agents = listOf(agent("idle")), reopenedAt = hoursAgo(4), supervision = acceptedReopened())
         val waiting = listOf("decide", "cannot").map { outcome ->

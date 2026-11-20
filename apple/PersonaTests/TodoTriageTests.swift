@@ -827,6 +827,21 @@ extension TodoTriageTests {
         #expect(undismissed.shownState(.followup) == .needsYou)
     }
 
+    @Test func dismissedReviewDecisionKeepsIndependentDeliveryApproval() {
+        let dismissed = todo("t", agents: ["idle"]) {
+            $0.supervision = .init(supervisor: "c", state: "needs_user",
+                                   reviews: [.init(at: ago(1), verdict: "needs_user")])
+            $0.decisionReview = DecisionReview(reviewAt: ISO8601DateFormatter().string(from: ago(1)), dismissalID: "dismiss-current")
+            $0.delivery = .init(state: "pr", gate: "owner", unblock: "user")
+        }
+        #expect(dismissed.decisionDismissed)
+        let t = at(dismissed)
+        #expect(t.section == .waiting && t.rule == .ownerDecides)
+        var withoutDelivery = dismissed
+        withoutDelivery.delivery = nil
+        #expect(at(withoutDelivery).rule == .rest)
+    }
+
     @Test func missingPRStateDoesNotWaitForMerge() throws {
         let url = "https://example.com/pull/9"
         for payload in [
