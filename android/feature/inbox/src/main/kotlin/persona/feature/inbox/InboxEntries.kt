@@ -24,8 +24,10 @@ internal val LocalInboxPictureMarkdown = staticCompositionLocalOf<InboxPictureMa
 internal fun InboxPictureText(text: String, source: ReplyImageSource?) {
     val pictures = LocalInboxPictureMarkdown.current
     if ("![" in text && source != null && pictures != null) pictures(text, source, Modifier)
-    else androidx.compose.material3.Text(text, style = persona.core.designsystem.PersonaTheme.type.body,
-        color = persona.core.designsystem.PersonaTheme.palette.ink)
+    else persona.core.designsystem.ReadingContent {
+        androidx.compose.material3.Text(text, style = persona.core.designsystem.PersonaTheme.type.body,
+            color = persona.core.designsystem.PersonaTheme.palette.ink)
+    }
 }
 
 val LocalInboxRepository = staticCompositionLocalOf<InboxRepository?> { null }

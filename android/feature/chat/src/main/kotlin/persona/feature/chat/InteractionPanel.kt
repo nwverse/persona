@@ -398,10 +398,10 @@ internal fun InteractionForm(
                 if (draft.message.isNotEmpty() && !interaction.hasFieldsForm) Text(stringResource(R.string.chat_permission_clear_reason), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
             }
             "plan" -> {
-                if (full) ChatMarkdown(interaction.plan.orEmpty())
+                if (full) ReadingContent { ChatMarkdown(interaction.plan.orEmpty()) }
                 else {
                     Column(Modifier.heightIn(max = 140.dp).verticalScroll(rememberScrollState(), enabled = false)) {
-                        ChatMarkdown(interaction.plan.orEmpty())
+                        ReadingContent { ChatMarkdown(interaction.plan.orEmpty()) }
                     }
                     JTextButton(stringResource(R.string.chat_plan_show_full), onExpand)
                 }

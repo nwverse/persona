@@ -9,6 +9,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -29,6 +30,7 @@ import persona.core.contracts.InboxEventFields
 import persona.core.contracts.InboxFollow
 import persona.core.designsystem.AppStyle
 import persona.core.designsystem.GroupPosition
+import persona.core.designsystem.InterfaceFontScaleCap
 import persona.core.designsystem.PersonaTheme
 import persona.core.domain.inbox.InboxItem
 import persona.core.navigation.AppTab
@@ -111,7 +113,7 @@ class InboxRowMetaWidthReviewTest {
 
 }
 
-/** The row's time with a title: same line at the default text size, under the title once the text grows (from 1.5×). */
+/** The row's time with a title: identical inline geometry at the default, interface cap, and 2.0 system maximum. */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35], qualifiers = "en-w360dp-h800dp-xhdpi")
@@ -141,7 +143,7 @@ class InboxRowTitleTimeReviewTest {
         event = InboxEventFields(where = "Launch group", now = "confirm_reply"),
     )
 
-    @Test fun theTimeSitsUnderTheTitleOnlyOnceTheTextGrows() {
+    @Test fun timeSharesTheTitleLineAtDefaultCapAndSystemMaximum() {
         var scale by mutableStateOf(1f)
         rule.setContent {
             CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, scale)) {
@@ -154,17 +156,28 @@ class InboxRowTitleTimeReviewTest {
             }
         }
         assertTrue(time.isNotBlank())
-        // Default size: one line for the title and the time at its trailing edge, as every row has always been.
+        // Default size: one line for the title and the time at its trailing edge, as every row has always had.
         rule.waitForIdle()
         val titleOne = rule.onAllNodesWithText(record().item.title, useUnmergedTree = true).fetchSemanticsNodes().single().boundsInRoot
         val timeOne = rule.onAllNodesWithText(time, useUnmergedTree = true).fetchSemanticsNodes().single().boundsInRoot
         assertTrue("the time shares the title's line at 1x: $titleOne / $timeOne", timeOne.top < titleOne.bottom)
 
-        // At 1.5× and more the time moves below the title rather than squeezing its first glyph away.
-        rule.runOnIdle { scale = 2f }
-        rule.waitForIdle()
-        val titleTwo = rule.onAllNodesWithText(record().item.title, useUnmergedTree = true).fetchSemanticsNodes().single().boundsInRoot
-        val timeTwo = rule.onAllNodesWithText(time, useUnmergedTree = true).fetchSemanticsNodes().single().boundsInRoot
-        assertTrue("the time must sit below the title at 2x: $titleTwo / $timeTwo", timeTwo.top >= titleTwo.bottom)
+        // The 2.0 input retains its coverage but has exactly the capped interface geometry at this width.
+        var capTitle: Rect? = null
+        var capTime: Rect? = null
+        for (chosenScale in listOf(InterfaceFontScaleCap, 2f)) {
+            rule.runOnIdle { scale = chosenScale }
+            rule.waitForIdle()
+            val title = rule.onAllNodesWithText(record().item.title, useUnmergedTree = true).fetchSemanticsNodes().single().boundsInRoot
+            val clock = rule.onAllNodesWithText(time, useUnmergedTree = true).fetchSemanticsNodes().single().boundsInRoot
+            assertTrue("the capped time shares the title's line at $chosenScale: $title / $clock", clock.top < title.bottom)
+            if (chosenScale == InterfaceFontScaleCap) {
+                capTitle = title
+                capTime = clock
+            } else {
+                assertEquals("title at the 2.0 system maximum", capTitle, title)
+                assertEquals("time at the 2.0 system maximum", capTime, clock)
+            }
+        }
     }
 }

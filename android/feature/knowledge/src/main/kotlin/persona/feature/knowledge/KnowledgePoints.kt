@@ -71,9 +71,11 @@ internal fun PointRow(point: TopicPoint, position: GroupPosition, onClick: () ->
                             color = palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
-                Text(point.text, style = PersonaTheme.type.body, color = palette.ink)
-                point.why?.takeIf { it.isNotBlank() }?.let {
-                    Text(pointReason(kind, it), style = PersonaTheme.type.caption, color = palette.ink2)
+                ReadingContent {
+                    Text(point.text, style = PersonaTheme.type.body, color = palette.ink)
+                    point.why?.takeIf { it.isNotBlank() }?.let {
+                        Text(pointReason(kind, it), style = PersonaTheme.type.caption, color = palette.ink2)
+                    }
                 }
             }
         }
@@ -105,13 +107,13 @@ internal fun PointSheet(
                     Text(stringResource(R.string.knowledge_point_confirmed, confirmedText(it)), style = PersonaTheme.type.caption, color = palette.ink3, maxLines = 1)
                 }
             }
-            SelectionContainer { Text(point.text, style = PersonaTheme.type.title, color = palette.ink) }
+            ReadingContent { SelectionContainer { Text(point.text, style = PersonaTheme.type.title, color = palette.ink) } }
             if (crumbs.isNotEmpty()) Text(crumbs.joinToString(" › "), style = PersonaTheme.type.caption, color = palette.ink3)
             point.why?.takeIf { it.isNotBlank() }?.let { why ->
                 Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
                     Text(stringResource(if (kind == PointKind.Pitfall) R.string.knowledge_point_cause_title else R.string.knowledge_point_why_title),
                         style = PersonaTheme.type.caption, color = palette.ink2, modifier = Modifier.semantics { heading() })
-                    SelectionContainer { Text(why, style = PersonaTheme.type.body, color = palette.ink) }
+                    ReadingContent { SelectionContainer { Text(why, style = PersonaTheme.type.body, color = palette.ink) } }
                 }
             }
             if (sources.isNotEmpty()) Column {

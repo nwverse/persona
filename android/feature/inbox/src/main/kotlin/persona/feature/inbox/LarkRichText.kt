@@ -270,31 +270,33 @@ fun LarkCodeBlock(code: String, language: String, modifier: Modifier = Modifier)
             .border(RichTextTokens.codeBorder, palette.ink.copy(alpha = 0.1f), shape)
             .padding(Tokens.Space.m)
     ) {
-        Row(
-            Modifier.fillMaxWidth().padding(bottom = Tokens.Space.xs),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                language.ifBlank { "code" },
-                style = PersonaTheme.type.micro,
-                color = palette.ink3,
-                maxLines = 1
-            )
+        InterfaceContent {
             Row(
-                Modifier.clickable { copy(code, null) },
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xxs)
+                Modifier.fillMaxWidth().padding(bottom = Tokens.Space.xs),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                JIcon(PhIcons.Copy, modifier = Modifier.size(RichTextTokens.codeCopyIcon), tint = palette.accent)
                 Text(
-                    stringResource(R.string.inbox_lark_code_copy),
+                    language.ifBlank { "code" },
                     style = PersonaTheme.type.micro,
-                    color = palette.accent,
-                    maxLines = 1,
-                    softWrap = false,
-                    overflow = TextOverflow.Ellipsis
+                    color = palette.ink3,
+                    maxLines = 1
                 )
+                Row(
+                    Modifier.clickable { copy(code, null) },
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xxs)
+                ) {
+                    JIcon(PhIcons.Copy, modifier = Modifier.size(RichTextTokens.codeCopyIcon), tint = palette.accent)
+                    Text(
+                        stringResource(R.string.inbox_lark_code_copy),
+                        style = PersonaTheme.type.micro,
+                        color = palette.accent,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
         }
         SelectionContainer {

@@ -39,6 +39,7 @@ import persona.core.designsystem.JSpinner
 import persona.core.designsystem.JTag
 import persona.core.designsystem.LocalizedFormats
 import persona.core.designsystem.PersonaTheme
+import persona.core.designsystem.ReadingContent
 import persona.core.designsystem.Status
 import persona.core.designsystem.Tokens
 import persona.core.designsystem.Tone
@@ -253,7 +254,7 @@ private fun ItemRow(icon: PhIcon, text: String, byline: String?, at: Double?, ac
     Row(Modifier.fillMaxWidth().padding(horizontal = rowPadding, vertical = Tokens.Space.m), horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
         JIcon(icon, null, size = Tokens.Space.l, tint = PersonaTheme.palette.accent, modifier = Modifier.padding(top = Tokens.Space.xxs))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xxs)) {
-            SelectionContainer { Text(text, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink) }
+            SelectionContainer { ReadingContent { Text(text, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink) } }
             byline?.let { Text(it, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3) }
         }
         at?.let { Time(it, actions, clock) }
@@ -266,7 +267,7 @@ private fun ActionRow(action: MinutesAction, actions: MinutesActions, clock: @Co
     Row(Modifier.fillMaxWidth().padding(horizontal = rowPadding, vertical = Tokens.Space.m), horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
         JIcon(PhIcons.ListChecks, null, size = Tokens.Space.l, tint = PersonaTheme.palette.accent, modifier = Modifier.padding(top = Tokens.Space.xxs))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
-            SelectionContainer { Text(action.what, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink) }
+            SelectionContainer { ReadingContent { Text(action.what, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink) } }
             val due = action.dueDate?.takeIf { it.isNotBlank() }?.let { stringResource(R.string.knowledge_minutes_due, it) }
             listOfNotNull(action.who, action.by, due).filter { it.isNotBlank() }.joinToString(" · ").takeIf { it.isNotEmpty() }?.let {
                 Text(it, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3)
