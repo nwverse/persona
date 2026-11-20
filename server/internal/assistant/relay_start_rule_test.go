@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -80,7 +81,8 @@ func (d *dispatchPolicyHarness) planIn(t *testing.T, id string, over map[string]
 // A direction's lead that a hand-over of the owner's quoted words went into (#11699) waits for the owner's Start before
 // writable work it marks user_requested, whatever opens the turn, until the owner writes there. Read-only tasks and
 // kinds the owner trusts start as before; so does everything that is no such hand-over: an unquoted message to a lead,
-// quoted words to a conversation that is no lead, a hand-over still queued, and the main conversation.
+// quoted words to a conversation that is no lead, a hand-over still queued or past its 14 days, and the main
+// conversation.
 func TestALeadAHandoverWentIntoWaitsForStart(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -111,6 +113,21 @@ func TestALeadAHandoverWentIntoWaitsForStart(t *testing.T) {
 			d.setStatus(d.leaderID, proto.StatusWorking)
 			d.f.setItems(ownerItem("m-owner", quotedWords))
 			d.send(t, d.mainID, d.leaderID, `"text":"please fix the export","quote":"latest"`)
+		}, nil, false, true},
+		{"a hand-over past its 14 days going in", "lead", func(d *dispatchPolicyHarness, t *testing.T) {
+			d.setStatus(d.leaderID, proto.StatusWorking)
+			d.f.setItems(ownerItem("m-owner", quotedWords))
+			d.send(t, d.mainID, d.leaderID, `"text":"please fix the export","quote":"latest"`)
+			h := &d.s.handovers
+			h.mu.Lock()
+			for id, e := range h.m {
+				e.At = e.At.Add(-handoverMemory - time.Hour)
+				h.m[id] = e
+			}
+			h.mu.Unlock()
+			d.setStatus("", "")
+			drainRelayTest(t, d.s, d.idle(d.leaderID))
+			d.f.setItems(received(t, d.f, d.mainID))
 		}, nil, false, true},
 		{"quoted words to a conversation that is no lead", "side", func(d *dispatchPolicyHarness, t *testing.T) {
 			d.f.setItems(ownerItem("m-owner", quotedWords))
