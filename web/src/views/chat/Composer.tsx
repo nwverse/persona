@@ -135,6 +135,7 @@ export const Composer = memo(function Composer({
   commands = AGENT_COMMANDS,
   onSend,
   onStop,
+  onSendNow,
   onEditLastMessage,
   editingLast,
   loadingDraft,
@@ -166,6 +167,9 @@ export const Composer = memo(function Composer({
    *  back into the box. */
   onSend: (m: Outgoing) => Promise<boolean>;
   onStop?: () => void;
+  /** Ctrl/⌘+Enter while the agent works or waits: after the message is queued, hands the queue over now (the queue panel's
+   *  Send now). Absent where the agent cannot take messages now; Ctrl/⌘+Enter then queues as Enter does. */
+  onSendNow?: () => void | Promise<void>;
   /** Starts editing the last Claude prompt in this box (↑ in it while empty, Esc twice; #4503, #2945). */
   onEditLastMessage?: () => void;
   /** Set while the box edits the last message: a bar says so, Esc or × cancels, and a send rewinds first. */
@@ -722,7 +726,7 @@ export const Composer = memo(function Composer({
   // an empty box and an idle agent: voice takes the send button's place (it would be off anyway), as on iOS
   const roundVoice = voice?.mode === "start" && !canSend && !showStop && !blocked && !disabled;
 
-  const submit = async (text = draft) => {
+  const submit = async (text = draft, now = false) => {
     if (!canWriteDraft()) return;
     const refs = getContexts(draftKey);
     const q = getQuotes(draftKey).list;
@@ -771,6 +775,7 @@ export const Composer = memo(function Composer({
     const ok = await onSend({ text: withContexts(refs, body, sent.length > 0), images: sent.map((a) => ({ mime: a.mime, data: a.data })),
       ...(quoteReply ? { quoteReply: true } : {}), ...(committed ? { edit: committed } : {}) });
     if (!canWriteDraft()) { releaseAttachments(sent); return; }
+    if (ok && now && queues) await onSendNow?.();
     if (ok) {
       history.record(skillDraft(refs, text));
       releaseAttachments(sent);
@@ -1051,7 +1056,7 @@ export const Composer = memo(function Composer({
               e.preventDefault();
               // any Enter while blocked says why (also an empty box or attachments only): submit() would do nothing
               if (blocked) nudgeBlocked(e.repeat);
-              else void submit();
+              else void submit(draft, modEnter && Boolean(onSendNow));
             }
           }}
           placeholder={pill && hasFinePointer() ? t("chat-composer.suggestion", { suggestion: pill }) : placeholder}
