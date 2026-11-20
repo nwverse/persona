@@ -453,7 +453,7 @@ private fun SettingsHome(
                     { JSwitchRow(stringResource(R.string.assistant_settings_owner_approval), ownerReply, ownerApproval,
                         leadingIcon = PersonaIcons.message, enabled = !state.busy) },
                     { JSwitchRow(stringResource(R.string.assistant_settings_owner_approval_persistent), persistentOwner,
-                        persistentOwnerCards, leadingIcon = PhIcons.Clock, enabled = !state.busy) },
+                        persistentOwnerCards, leadingIcon = PersonaIcons.schedule, enabled = !state.busy) },
                 ))
                 item("owner-approval-caption") { Caption(stringResource(R.string.assistant_settings_owner_approval_caption)) }
                 item("owner-approval-phrases") {
