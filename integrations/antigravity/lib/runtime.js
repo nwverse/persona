@@ -39,7 +39,7 @@ import {
 
 // agy acp's answer to a model it does not offer, and agy models' answer while the CLI is signed out (#10368).
 const UNKNOWN_MODEL = /\bunknown model\b|\bmodel_not_found\b/i
-const SIGNED_OUT = /\b(?:sign(?:ed)?|log(?:ged)?)[ -]?in\b/i
+const SIGNED_OUT = /\b(?:signed out|logged out|not signed in|not logged in|(?:log|sign)[ -]?in required|please (?:sign|log)[ -]?in|invalid_grant|re-?authenticat\w*|refresh[ _-]token (?:expired|revoked|invalid)|(?:expired|revoked|invalid) refresh[ _-]token)\b/i
 // The hub localizes this exact runtime notice (transcript.RuntimeAgyAutoRefusalNotice).
 const AUTO_REFUSAL_NOTICE = 'agy 拒绝了 Auto 模式，已改由 Persona 自动批准权限请求'
 const MODE_NOTICE_STEP = 'PERSONA_MODE_NOTICE'
@@ -66,7 +66,7 @@ export function createAgyRuntime(options = {}) {
   const missedWakes = new Map()
   const unexportedTurns = new Map() // agyId -> { baseMaxIndex, seq, steps, hasReply, base } settled turns awaiting native transcript export
   const exportPolls = new Map() // agyId -> interval watching for a settled turn's native transcript flush
-  const sentMsgIds = new Map() // `${agyId}:${stepIndex}` -> { text, clientMsgId }
+  const sentMsgIds = new Map() // `${agyId}:${inputOrdinal}` -> { text, clientMsgId }
   let nextTurnSeq = 1
   const createdAt = new Map() // owned sessions remain discoverable before their first transcript export
   const forkSeeds = new Map()
@@ -742,8 +742,7 @@ export function createAgyRuntime(options = {}) {
   }
 
   function historyOf(rawId) {
-    // Refresh cached transcripts that did not include lazy tool images.
-    return `agy:${rawId}:full:api-errors:content-v2:step-ids-v2:mcp-tools:lazy-tool-media`
+    return `agy:${rawId}:full:api-errors:content-v2:step-ids-v2:mcp-tools:lazy-media:checkpoints`
   }
 
   function cutMatches(cut, transcript) {
@@ -845,10 +844,14 @@ export function createAgyRuntime(options = {}) {
   }
 
   function clientMsgIdFor(rawId) {
-    return (idx, text) => {
-      const sent = sentMsgIds.get(`${rawId}:${idx}`)
-      return sent && sent.text === text ? sent.clientMsgId : undefined
+    return (_index, text, ordinal) => {
+      const sent = sentMsgIds.get(`${rawId}:${ordinal}`)
+      return sent && sent.text === comparableInput(text) ? sent.clientMsgId : undefined
     }
+  }
+
+  function comparableInput(text) {
+    return text.replace(/^\/plan(?:\s+|$)/, '').replace(/<attached_images>[\s\S]*?<\/attached_images>/g, '').trim()
   }
 
   function markDirtySeq(pid, seq) {
@@ -1457,12 +1460,13 @@ export function createAgyRuntime(options = {}) {
       // A process that rejected the model gets replaced and the session opened again on the new one (#10368).
       const rawId = await busyCall(acp, () => retryStaleModels(acp, () => openSession(acp, params, cwd)))
       const pid = toPersonaId(rawId)
+      const hasInput = Boolean(params.prompt || params.images?.length)
 
       const session = {
         session_id: pid,
         title: basename(cwd) || LABEL,
         cwd,
-        status: params.prompt ? 'working' : 'idle',
+        status: hasInput ? 'working' : 'idle',
         updated_at: new Date().toISOString(),
         rev: 1,
         model: sessionModels.get(rawId),
@@ -1474,12 +1478,13 @@ export function createAgyRuntime(options = {}) {
         permission_mode: effectiveModeOf(rawId) !== 'default' ? effectiveModeOf(rawId) : undefined,
       }
 
-      if (params.prompt) {
+      if (hasInput) {
         if (isAsst) await rt.pushNow()
         await send({
           session_id: pid,
           text: params.prompt,
-          client_msg_id: `start-${Date.now()}`,
+          images: params.images,
+          client_msg_id: params.client_msg_id || `start-${Date.now()}`,
           assistant: isAsst,
           mode: params.permission_mode,
           model: params.model,
@@ -1640,23 +1645,23 @@ export function createAgyRuntime(options = {}) {
     turn.nextToolNum = 0
   }
 
-  function beginLiveTurn(rawId, pid, turn) {
+  function beginLiveTurn(rawId, pid, turn, images) {
     missedWakes.delete(rawId)
     clearExportPoll(rawId)
     prepareLiveTurn(rawId, turn)
-    if (turn.userText) {
-      const idx = turn.nextStepIndex++
+    if (turn.userText || images.length) {
       turn.liveSteps.push({
-        step_index: idx,
+        step_index: turn.nextStepIndex++,
         type: 'USER_INPUT',
         source: 'USER_EXPLICIT',
         status: 'DONE',
         created_at: turn.startedIso,
         content: turn.userText,
         client_msg_id: turn.clientMsgId,
+        ...(images.length ? { media: images.map(({ mimeType, data }) => ({ mime_type: mimeType, data })) } : {}),
       })
       if (turn.clientMsgId) {
-        sentMsgIds.set(`${rawId}:${idx}`, { text: turn.userText, clientMsgId: turn.clientMsgId })
+        sentMsgIds.set(`${rawId}:${turn.inputCount}`, { text: comparableInput(turn.userText), clientMsgId: turn.clientMsgId })
         while (sentMsgIds.size > 512) sentMsgIds.delete(sentMsgIds.keys().next().value)
       }
     }
@@ -1667,9 +1672,16 @@ export function createAgyRuntime(options = {}) {
   }
 
   function promptWork(turn, exportedSteps) {
-    return Boolean(turn.streamingText || turn.toolActivity || exportedSteps.some((step) =>
-      step.type === 'GENERIC' || step.tool_calls?.length ||
-      (step.type === 'PLANNER_RESPONSE' && typeof step.content === 'string' && step.content.trim())))
+    return Boolean(turn.streamingText || turn.toolActivity || exportedSteps.some(exportedWork))
+  }
+
+  function exportedWork(step) {
+    return step.type === 'GENERIC' || step.tool_calls?.length ||
+      (step.type === 'PLANNER_RESPONSE' && typeof step.content === 'string' && step.content.trim())
+  }
+
+  function atOrAfter(at, bound) {
+    return at >= (at % 1000 === 0 ? Math.floor(bound / 1000) * 1000 : bound)
   }
 
   function transient401(error) {
@@ -1678,7 +1690,7 @@ export function createAgyRuntime(options = {}) {
       `${error.message ?? error.error ?? ''} ${error.code ?? ''} ${error.turn_error ?? ''} ${error.content ?? ''} ${JSON.stringify(error.data ?? '')}`
     return /\b401\b/.test(text) && /\bUNAUTHENTICATED\b/i.test(text) &&
       /missing (?:the )?(?:required )?(?:authentication |auth )?credentials?\b/i.test(text) &&
-      !SIGNED_OUT.test(text) && !/invalid.grant|login.required|log.?out|signed.out|reauthenticat|refresh.token.*(?:expired|revoked|invalid)|(?:expired|revoked|invalid).*refresh.token|revoked.*(?:login|credential)/i.test(text)
+      !SIGNED_OUT.test(text)
   }
 
   function withoutRetriedInputs(rawId, steps) {
@@ -1686,20 +1698,25 @@ export function createAgyRuntime(options = {}) {
     if (!retries) return steps
     const hidden = new Set()
     for (const retry of retries) {
+      let inputs = 0
       let firstInput = false
       for (const step of steps) {
-        if (step.step_index <= retry.base) continue
+        if (hidden.has(step)) continue
+        const input = explicitInput(step)
+        if (input) inputs++
+        if (step.step_index <= retry.base || inputs < retry.inputCount) continue
         const at = Date.parse(step.created_at)
-        if (!(at >= retry.startedAt && at <= retry.endedAt)) continue
-        if (explicitInput(step)) {
-          if (cleanUserText(step.content) !== retry.text) break
-          if (at >= retry.retriedAt) {
-            if (firstInput) hidden.add(step)
+        if (!atOrAfter(at, retry.startedAt) || at > retry.endedAt) break
+        if (input) {
+          if (comparableInput(cleanUserText(step.content)) !== retry.text) break
+          if (firstInput) {
+            if (atOrAfter(at, retry.retriedAt)) hidden.add(step)
             break
           }
-          if (firstInput) break
           firstInput = true
-        } else if (step.type === 'ERROR_MESSAGE' && at < retry.retriedAt && transient401(step)) {
+        } else if (exportedWork(step)) {
+          break
+        } else if (step.type === 'ERROR_MESSAGE' && at <= retry.retriedAt && transient401(step)) {
           hidden.add(step)
         }
       }
@@ -1710,11 +1727,17 @@ export function createAgyRuntime(options = {}) {
   async function retryPrompt401(acp, rawId, blocks, turn, { failure, result, cancelled }) {
     if (cancelled() || result?.stopReason === 'cancelled' || promptWork(turn, [])) return undefined
     if (failure && !transient401(failure)) return undefined
-    const exportedSteps = () => exportedTranscriptOf(rawId).steps.filter((step) => step.step_index > turn.exportedBaseMax)
+    const exportedSteps = () => {
+      let inputs = 0
+      return exportedTranscriptOf(rawId).steps.filter((step) => {
+        if (explicitInput(step)) inputs++
+        return step.step_index > turn.exportedBaseMax && (!turn.priorPending.length || inputs >= turn.inputCount)
+      })
+    }
     const steps = exportedSteps()
     if (!failure) {
       const last = steps.findLast((step) => ['USER_INPUT', 'PLANNER_RESPONSE', 'GENERIC', 'ERROR_MESSAGE'].includes(step.type))
-      if (last?.type !== 'ERROR_MESSAGE' || Date.parse(last.created_at) < Date.parse(turn.startedIso) || !transient401(last)) return undefined
+      if (last?.type !== 'ERROR_MESSAGE' || !atOrAfter(Date.parse(last.created_at), Date.parse(turn.startedIso)) || !transient401(last)) return undefined
     }
     if (promptWork(turn, steps)) return undefined
 
@@ -1729,7 +1752,7 @@ export function createAgyRuntime(options = {}) {
     }
     if (cancelled() || promptWork(turn, exportedSteps())) return undefined
 
-    const marker = { base: turn.exportedBaseMax, text: turn.userText, startedAt: Date.parse(turn.startedIso),
+    const marker = { base: turn.exportedBaseMax, inputCount: turn.inputCount, text: comparableInput(turn.userText), startedAt: Date.parse(turn.startedIso),
       retriedAt: Date.now(), endedAt: Infinity }
     const retries = promptRetries.get(rawId) ?? []
     retries.push(marker)
@@ -1873,7 +1896,7 @@ export function createAgyRuntime(options = {}) {
               cancelling.delete(rawId)
               staleWorkingAt.delete(rawId)
               completedTurns.delete(pid)
-              beginLiveTurn(rawId, pid, turn)
+              beginLiveTurn(rawId, pid, turn, blocks.filter((block) => block.type === 'image'))
               turn.pollTimer = setInterval(() => syncTranscriptAppend(rawId), 400)
               prepared = true
             }

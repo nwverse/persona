@@ -121,7 +121,11 @@ func (s *Service) decisionToldLocked(ctx context.Context, id, label, machine, se
 			s.decisionsChanged(ctx, id, at)
 		}
 	}
-	s.userDecided(ctx, id)
+	if a.Check != "" { // a recurring check's decision goes to the supervisor, as from its card (#11747)
+		s.checkDecided(ctx, t, a, label)
+	} else {
+		s.userDecided(ctx, id)
+	}
 	chosen := label
 	if label == a.Recommend {
 		chosen = "" // as "OK" takes it
