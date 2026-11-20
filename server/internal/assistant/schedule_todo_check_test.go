@@ -335,6 +335,46 @@ func TestScheduledTodoCheckDecisionGoesToSupervisor(t *testing.T) {
 	}
 }
 
+// The same check's decision answered where the Agent works (an exact option in its chat, or task_decided with
+// told_agent) also goes to the supervisor, as from the card (#11747).
+func TestScheduledTodoCheckDecisionToldGoesToSupervisor(t *testing.T) {
+	for _, pick := range []string{"recommended", "other"} {
+		t.Run(pick, func(t *testing.T) {
+			s, f, todo := newSupervisedService(t)
+			ctx := context.Background()
+			s.todoAskAfter = time.Nanosecond
+			s.superviseTimes.gather = time.Hour
+			task := todoProgressTask(todo.ID)
+			setTasks(s, task)
+			assessTodoBaseline(t, s, task.ID)
+			assessTodoRun(t, s, task.ID, nil)
+			assessTodoRun(t, s, task.ID, nil)
+			a := askOf(s, todo.ID)
+			if a == nil || a.Check != task.ID || len(a.Options) != 2 {
+				t.Fatalf("the check's decision is not marked as the check's: %+v", a)
+			}
+			agentAtWork(f, todo)
+			label := a.Options[0].Label
+			if pick == "other" {
+				label = a.Options[1].Label
+			}
+			ag := todo.Agents[0]
+			if ok, err := s.decisionTold(ctx, todo.ID, label, ag.MachineID, ag.SessionID, label); err != nil || !ok {
+				t.Fatalf("the owner's answer was not taken: %v %v", ok, err)
+			}
+			if st := todoNow(s, todo.ID).Supervision.State; st == reviewNeedsUser {
+				t.Fatal("the to-do still waits on the owner")
+			}
+			s.supervise.mu.Lock()
+			g, ok := s.supervise.pending[todo.ID+"|"+sigCheck+":"+checkDecidedReport]
+			s.supervise.mu.Unlock()
+			if !ok || g.Detail != label || g.Decision == nil {
+				t.Fatalf("the supervisor was not handed the owner's option: %+v", g)
+			}
+		})
+	}
+}
+
 // The decision row the owner's answer leaves on the to-do, with a database.
 func TestScheduledTodoCheckDecisionIsRecorded(t *testing.T) {
 	database := todoTestDB(t)

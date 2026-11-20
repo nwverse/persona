@@ -133,6 +133,8 @@ type TaskReview struct {
 	OwnerResponse   string    `json:"owner_response,omitempty"`
 	OwnerResponseAt time.Time `json:"owner_response_at,omitzero"`
 	HoldReleased    bool      `json:"hold_released,omitempty"`
+	// Handoff is an internal wait recorded after session.send was acknowledged.
+	Handoff *taskHandoff `json:"handoff,omitempty"`
 }
 
 // OwnerWait is a judgment that a supervised task's stretch of work (begun at Work) stopped on the owner's decision:
@@ -159,6 +161,10 @@ func (v *Supervision) clone() *Supervision {
 	out.Reviews = make([]TaskReview, len(v.Reviews))
 	for i, r := range v.Reviews {
 		out.Reviews[i] = r
+		if r.Handoff != nil {
+			handoff := *r.Handoff
+			out.Reviews[i].Handoff = &handoff
+		}
 		out.Reviews[i].Checks = slices.Clone(r.Checks)
 		out.Reviews[i].Options = slices.Clone(r.Options)
 		out.Reviews[i].Evidence = r.Evidence.clone()

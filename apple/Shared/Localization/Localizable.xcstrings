@@ -94851,19 +94851,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Low-Distraction Mode"
+            "value" : "Push grading"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "通知を抑えるモード"
+            "value" : "プッシュ通知の優先度フィルター"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "低打扰模式"
+            "value" : "推送分级"
           }
         }
       }
