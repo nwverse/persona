@@ -62,11 +62,11 @@ type quickMeta struct {
 	tool        string // the name of that call (transcript.Meta.LastTool)
 	wake        bool   // the latest turn was a background task waking the agent
 	readAt      time.Time
-	mode     string
-	modeAt   time.Time
-	effort   string
-	effortAt time.Time
-	modelAt  time.Time
+	mode        string
+	modeAt      time.Time
+	effort      string
+	effortAt    time.Time
+	modelAt     time.Time
 	version     string
 	versionAt   time.Time // when the line that said version was written: a resumed process has written none yet
 	ultracode   *bool
