@@ -1,4 +1,5 @@
 {
+  "permission_inherit": "Follow default ({mode})",
   "candidate_title": "Candidate models",
   "candidate_extension": "Use the extension’s lists",
   "candidate_off": "Use only the purpose’s model",

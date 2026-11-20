@@ -1,4 +1,9 @@
 {
+  "permission_on_launcher": "{mode} ({launcher})",
+  "permission_changes": "Permission mode changes",
+  "permission_change": "{subject}: {before} → {after}",
+  "permission_tier": "Agent preset {name}",
+  "tier_permission_follow": "Follow Agents settings",
   "title": "Model profiles",
   "footer": "Select a profile to inspect, edit, or apply it. Changes take effect on the next call or Agent start without modifying credentials.",
   "active": "Active",

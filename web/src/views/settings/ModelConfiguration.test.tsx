@@ -11,6 +11,7 @@ vi.mock("./ModelProfiles", () => ({ ModelProfiles: () => null }));
 vi.mock("../../ui/atoms", async (original) => ({ ...(await original<typeof import("../../ui/atoms")>()), toast: vi.fn() }));
 import { initI18n, t } from "../../i18n";
 import type { ModelBinding, ModelProvider, ModelPurpose } from "../../lib/model-config";
+import { modeTitle } from "../../lib/session-actions";
 import { getState, reset } from "../../lib/store";
 import type { Session } from "../../lib/types";
 import { ModelConfiguration } from "./ModelConfiguration";
@@ -24,9 +25,10 @@ const agents: ModelPurpose = {
   fields: ["provider", "model", "effort"],
 };
 const providers: ModelProvider[] = [
-  { id: "launcher.default", name: "Default launcher", kind: "launcher" },
-  { id: "launcher.custom", name: "Custom launcher", kind: "launcher" },
-  { id: "launcher.messages", name: "Messages provider", kind: "api", api: "messages", model: "api-default" },
+  { id: "launcher.default", name: "Default launcher", kind: "launcher",
+    permission_modes: ["default", "plan"], assistant_permission_modes: ["default", "auto", "plan", "bypassPermissions"] },
+  { id: "launcher.custom", name: "Custom launcher", kind: "launcher", permission_modes: ["default", "plan"], assistant_permission_modes: [] },
+  { id: "launcher.messages", name: "Messages provider", kind: "api", api: "messages", model: "api-default", assistant_permission_modes: ["default", "plan"] },
   { id: "launcher.codex", name: "Codex", kind: "launcher", agent: "codex" },
   { id: "launcher.responses", name: "Responses provider", kind: "api", api: "responses" },
 ];
@@ -63,10 +65,10 @@ const hub = async (input: RequestInfo | URL, init?: RequestInit): Promise<Respon
     if (conflict) return json({ error: "revision conflict" }, 409);
     expect(body.revision).toBe(current.revision);
     const override: ModelBinding = {};
-    for (const field of ["provider", "model", "effort"] as const) {
+    for (const field of ["provider", "model", "effort", "permission_mode"] as const) {
       if (typeof body[field] === "string") override[field] = body[field];
     }
-    if (current.id === use.id) current = child(override, current.revision + 1);
+    if (current.id === use.id) current = { ...child(override, current.revision + 1), fields: current.fields };
     else current = { ...current, override, effective: { ...current.effective, ...override }, revision: current.revision + 1 };
     return json({ purpose: current, providers });
   }
@@ -96,6 +98,7 @@ const flush = async () => { for (let i = 0; i < 6; i++) await act(async () => { 
 const dialog = () => document.querySelector<HTMLElement>('[role="dialog"]')!;
 const button = (label: string, scope: ParentNode = document) => [...scope.querySelectorAll("button")].find((b) => b.textContent === label)!;
 const row = () => [...host.querySelectorAll("button")].find((b) => b.textContent?.includes(current.name))!;
+const permission = () => dialog().querySelector<HTMLSelectElement>(`select[aria-label="${t("newagent.permission_mode")}"]`);
 const effort = () => dialog().querySelector<HTMLInputElement>('input[list="model-efforts"]')!;
 function type(input: HTMLInputElement, value: string) {
   act(() => {
@@ -103,9 +106,8 @@ function type(input: HTMLInputElement, value: string) {
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
 }
-async function choose(id: string) {
+async function choose(id: string, select = dialog().querySelector("select")!) {
   await act(async () => {
-    const select = dialog().querySelector("select")!;
     select.value = id;
     select.dispatchEvent(new Event("change", { bubbles: true }));
   });
@@ -195,6 +197,7 @@ describe.each([
   it("updates backend detail when the provider changes while keeping headless form and server compatibility", async () => {
     await render();
     await open();
+    expect(permission()).toBeNull(); // an older hub has not advertised the field
     expect(dialog().querySelector('[data-execution-preview]')?.textContent).toBe("后台进程 · claude -p");
     expect([...dialog().querySelectorAll("select option")].map((o) => o.getAttribute("value"))).not.toContain("launcher.responses");
     await choose("launcher.codex");
@@ -254,12 +257,50 @@ describe.each([
     expect(writes[0].body).toEqual({ revision: 7, provider: "launcher.messages", model: "api-model", effort: "low" });
   });
 
+  it("shows and saves the advertised launcher modes and clears them when following Agents", async () => {
+    current = child();
+    current.fields!.push("permission_mode");
+    current.effective.permission_mode = "plan";
+    await render();
+    await open();
+    expect([...permission()!.options].map((option) => option.value)).toEqual(["", "default", "auto", "plan", "bypassPermissions"]);
+    expect(permission()?.selectedOptions[0].textContent).toBe(t("settings-modelconfiguration.permission_inherit", { mode: modeTitle("plan") }));
+    await choose("auto", permission()!);
+    await act(async () => button(t("common.save"), dialog()).click());
+    expect(writes[0].body).toMatchObject({ revision: 7, permission_mode: "auto" });
+    expect(row().textContent).toContain(t("settings-modelconfiguration.separately_configured"));
+
+    await open();
+    expect(permission()?.value).toBe("auto");
+    await act(async () => button(t("settings-modelconfiguration.follow_agents"), dialog()).click());
+    expect(writes[1].body).toEqual({ revision: 8, provider: null, model: null, effort: null, permission_mode: null });
+  });
+
+  it("removes a selected mode when switching to an unsupported launcher and saves new model edits", async () => {
+    listFails = true;
+    current = child({ permission_mode: "plan" });
+    current.fields!.push("permission_mode");
+    await render();
+    await open();
+    await choose("launcher.messages");
+    expect([...permission()!.options].map((option) => option.value)).toEqual(["", "default", "plan"]);
+    expect(permission()?.value).toBe("");
+    await choose("plan", permission()!);
+    await choose("launcher.custom");
+    expect(permission()).toBeNull();
+
+    type(dialog().querySelector<HTMLInputElement>(`input[aria-label="${t("settings-modelconfiguration.specific_model")}"]`)!, "new-model");
+    await act(async () => button(t("common.save"), dialog()).click());
+    expect(writes[0].body).toMatchObject({ provider: "launcher.custom", model: "new-model", permission_mode: null });
+  });
+
   it("allows setting effort on a Messages direct-API purpose", async () => {
     current = triage({ provider: "launcher.messages", model: "api-model", effort: "off" });
     await render();
     await open();
     const select = [...dialog().querySelectorAll<HTMLSelectElement>("select")].find((input) => input.closest("label")?.textContent?.includes(t("settings-modelconfiguration.effort")))!;
     expect(select).not.toBeNull();
+    expect(permission()).toBeNull();
     expect([...select.options].map((option) => option.value)).toContain("off");
     await act(async () => {
       select.value = "low";

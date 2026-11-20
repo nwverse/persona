@@ -54,7 +54,10 @@ type ModelProvider struct {
 	HasKey       bool                  `json:"has_key,omitempty"`
 	Models       []proto.ProviderModel `json:"models,omitempty"`
 	ModelAliases map[string]string     `json:"model_aliases,omitempty"`
-	Status       string                `json:"status,omitempty"`
+	// PermissionModes describes starts on this launcher. An omitted value is unknown; [] means unsupported.
+	PermissionModes          *[]string `json:"permission_modes,omitempty"`
+	AssistantPermissionModes *[]string `json:"assistant_permission_modes,omitempty"`
+	Status                   string    `json:"status,omitempty"`
 }
 
 type ModelChoice = assistantwire.ModelChoice
@@ -440,7 +443,7 @@ func (s *Service) voicePlugins(ctx context.Context) []assistantwire.VoicePlugin 
 
 // viewAgent is the CLI a launcher runs, its name telling when it says none.
 func viewAgent(v LauncherView) string {
-	if v.Agent == "" && slices.Contains([]string{"codex", "traex", "agy", "omp"}, v.Name) {
+	if v.Agent == "" && slices.Contains([]string{"claude", "codex", "traex", "agy", "omp"}, v.Name) {
 		return v.Name
 	}
 	return v.Agent
@@ -488,10 +491,21 @@ func (s *Service) modelProviders(ctx context.Context) []ModelProvider {
 				}
 			}
 		}
-		out = append(out, ModelProvider{ID: "launcher." + v.Name, Name: cmp.Or(v.DisplayName, v.Name), Kind: kind, Agent: agent, API: apiName, ChatEffort: kind == "api" && apiName == "chat", Effort: v.Effort, Model: v.Model, Machines: v.Machines, Hidden: v.Hidden, HasKey: v.HasKey, Models: v.Models, ModelAliases: aliases})
+		permissions := v.permissionOptions
+		if kind == "api" {
+			permissions = modelPermissionOptions{}
+			if messagesAPI(apiName) {
+				// A Messages connection may also back a Claude Code launcher purpose.
+				permissions = discoveredPermissionOptions(proto.Launcher{Name: v.Name, Agent: "claude"})
+			}
+		}
+		out = append(out, ModelProvider{ID: "launcher." + v.Name, Name: cmp.Or(v.DisplayName, v.Name), Kind: kind, Agent: agent, API: apiName, ChatEffort: kind == "api" && apiName == "chat", Effort: v.Effort, Model: v.Model, Machines: v.Machines, Hidden: v.Hidden, HasKey: v.HasKey, Models: v.Models, ModelAliases: aliases, PermissionModes: modelPermissionModesField(permissions.engine),
+			AssistantPermissionModes: modelPermissionModesField(permissions.headless)})
 	}
 	if !slices.ContainsFunc(out, func(p ModelProvider) bool { return p.ID == "launcher.claude" }) {
-		p := ModelProvider{ID: "launcher.claude", Name: mc(l, "provider_claude_default"), Kind: "launcher", Agent: "claude"}
+		p := ModelProvider{ID: "launcher.claude", Name: mc(l, "provider_claude_default"), Kind: "launcher", Agent: "claude",
+			PermissionModes:          modelPermissionModesField(configuredPermissionModes("claude", 0)),
+			AssistantPermissionModes: modelPermissionModesField(configuredPermissionModes("claude", 0))}
 		if b, ok := s.builtinClaude(ctx, s.zshrcLaunchers(ctx, false)); ok {
 			p.Machines = b.Machines // where plain claude is: Settings › Model Providers lists it by machine
 		}

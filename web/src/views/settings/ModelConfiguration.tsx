@@ -6,14 +6,15 @@ import {
   type ModelBinding, type ModelConfigurationBody, type ModelDraft, type ModelProvider, type ModelPurpose, type ModelPurposeBody,
 } from "../../lib/model-config";
 import {
-  agentsOverride, catalogLists, chooseProvider, claudeCodeOnly, configDirChoices, configDirLabel, draftFor, effortOffered, executionForm, followedCategory, modelConfiguration, modelPatch, overridden,
-  ownRecord, parentCategory, providersFor, purposeDescription, purposeGroups, purposeLaunch, resetPatch, runtimeChoices, saveModelPurpose, supportsField, withPurposeAfter,
+  agentsOverride, catalogLists, chooseProvider, claudeCodeOnly, configDirChoices, configDirLabel, draftFor, effortOffered, executionForm, fitPermissionMode, followedCategory, modelConfiguration, modelPatch, overridden,
+  ownRecord, parentCategory, providersFor, purposeDescription, purposeGroups, purposeLaunch, purposePermissionModes, resetPatch, runtimeChoices, saveModelPurpose, supportsField, supportsPermissionMode, withPurposeAfter,
   withUsesAfterCategories,
 } from "../../lib/model-config-execution";
 import { ASSISTANT_MODEL_PICK_FEATURE, mainChatAgentMismatch } from "../../lib/assistant-models";
 import { SUPERVISE_PURPOSE } from "../../lib/background-supervisor";
 import type { AssistantLaunchers } from "../../lib/session-models";
 import { effortChoices, takesEffort } from "../../lib/launcher-models";
+import { modeTitle } from "../../lib/session-actions";
 import { useStore } from "../../lib/store";
 import { formatTokens } from "../../lib/tokens";
 import { formatNumber, t } from "../../i18n";
@@ -24,7 +25,7 @@ import { Group, Pill, Row } from "./SettingsParts";
 import { MANAGER_HEADER } from "../../lib/manager-choice";
 import { ConfigurationManager } from "./ConfigurationManager";
 import { DirectAPIEditor, DirectEffortSelect, directEffortState } from "./DirectAPIEditor";
-import { ModelPicker, useLauncherModels } from "./ModelBindingPickers";
+import { ModelPicker, PermissionModeSelect, useLauncherModels } from "./ModelBindingPickers";
 import { ModelProfiles } from "./ModelProfiles";
 import { candidateDraft, candidateProblem, candidateProviders, candidateUpdate, type CandidateDraft } from "../../lib/model-candidates";
 import { ExtensionCandidates } from "./ExtensionCandidates";
@@ -147,7 +148,7 @@ function PurposeRow({ purpose: p, providers, sourceName, category, onOpen }: { p
         <Row label={p.id === "agent.new" ? t("newagent.title") : p.name} onClick={onOpen} wrapHint hint={<>
           {/* what the purpose is for, right under its name (#5806); the model and how it runs follow */}
           {description && <div data-testid="purpose-description" className="mb-1 whitespace-normal">{description}</div>}
-          <div className="truncate">{modelSummary(p, providers)}</div>
+          <div className="truncate">{modelSummary(p, providers)}{p.kind === "launcher" && p.effective?.permission_mode && ` · ${modeTitle(p.effective.permission_mode)}`}</div>
           <div className="mt-1 flex flex-wrap items-center gap-1.5">
             <Pill wrap>{form.label} · {form.backend}</Pill>
             {inheritance && <span className="whitespace-normal">{inheritance}</span>}
@@ -212,9 +213,9 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
     try {
       const r = await modelPurpose(id, manager);
       if (!alive.current || at !== loads.current) return;
-      // A direct link can outlive the catalog request. A saved model override hides the parent model that clearing it
-      // will inherit, so load that parent before offering model-specific efforts; failure keeps the retry visible.
-      const parent = !catalog && r.purpose.override.model && r.purpose.parent
+      // A direct link can outlive the catalog request. Load the parent when a saved override hides an inherited
+      // model or permission mode the editor needs. A failed read has the same retry as the purpose itself.
+      const parent = !catalog && (r.purpose.override.model || r.purpose.override.permission_mode) && r.purpose.parent
         ? (await modelPurpose(r.purpose.parent, manager)).purpose : undefined;
       if (!alive.current || at !== loads.current) return;
       setLinkedParent(parent);
@@ -256,7 +257,7 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
   const category = p && !followsAgents && catalog ? followedCategory(p, catalog) : undefined;
   const follow = followsAgents ? t("settings-modelconfiguration.follow_agents") : category ? t("settings-modelconfiguration.follow_category", { name: category.name }) : "";
   const onlyClaudeID = useId();
-  const writable = p && (["provider", "model", "effort"] as const).some((field) => supportsField(p, field));
+  const writable = p && ((["provider", "model", "effort"] as const).some((field) => supportsField(p, field)) || supportsPermissionMode(p));
   // The Direct API editor (model discovery, efforts by model, draft test: #6887) is for a direct API category's own
   // binding. A use with a record of its own under a category (ownRecord: Meeting minutes, an extension's purpose) keeps
   // the shared editor, whose empty draft follows that category's binding and whose effort goes by effortOffered (#7980).
@@ -285,6 +286,15 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
   const inheritedEffort = following
     ? sameParentProvider ? parent?.effective?.effort : undefined
     : sameEffectiveProvider && !p?.override.effort ? p?.effective?.effort : undefined;
+  const permissionModes = purposePermissionModes(p, chosen);
+  const permissionMode = fitPermissionMode(draft.permission_mode, permissionModes);
+  const inheritedMode = following
+    ? sameParentProvider ? parent?.effective?.permission_mode : undefined
+    : sameEffectiveProvider && !p?.override?.permission_mode ? p?.effective?.permission_mode : undefined;
+  const inheritedModeTitle = modeTitle(fitPermissionMode(inheritedMode, permissionModes));
+  const permissionFollow = inheritedModeTitle
+    ? t("settings-modelconfiguration.permission_inherit", { mode: inheritedModeTitle })
+    : follow || t("settings-modelconfiguration.follow_default");
   const chatEffort = !directAPI && chosen?.kind === "api" && chosen.api === "chat"
     ? directEffortState(chosen, [], effortModel) : undefined;
   const listedEfforts = launcherList.status === "ready" && launcherList.list && takesEffort(launcherList.list.agent)
@@ -319,10 +329,8 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
     setBusy(true);
     setError("");
     try {
-      // one patch: the reset's, keeping the runtime and the profile (a use with a record of its own clears all three
-      // whatever this page grouped it under),
-      // else the draft's fields, effort with them where the provider it runs on takes one
-      const patch = restore ? resetPatch(p, draft.runtime, draft.config_dir) : modelPatch(p, draft, effortAllowed);
+      // Send the reset or the current draft with its revision. The reset keeps the runtime and profile.
+      const patch = restore ? resetPatch(p, draft.runtime, draft.config_dir) : modelPatch(p, { ...draft, permission_mode: permissionMode }, effortAllowed);
       // Editing only the candidate order must not rewrite an independently inherited binding.
       const bindingUnchanged = !restore && candidateChange && JSON.stringify(patch) === JSON.stringify(modelPatch(p, draftFor(p), effortAllowed));
       const changes = !restore && candidateChange ? { ...(bindingUnchanged ? { revision: p.revision } : patch), candidates: candidateChange } : patch;
@@ -364,6 +372,8 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
         <Group title={t("settings-modelconfiguration.effective")} footer={p.inherited_from ? t("settings-modelconfiguration.inherited_from", { name: sourceName(p.inherited_from) ?? "" }) : t("settings-modelconfiguration.effective_footer")}>
           <Row label={t("settings-modelconfiguration.provider")} mono><span className="max-w-[220px] truncate">{providerName(p.effective?.provider, data?.providers) ?? t("settings-modelconfiguration.not_configured")}</span></Row>
           <Row label={t("settings-modelconfiguration.model")} mono><span className="max-w-[220px] truncate">{p.effective?.model || t("settings-modelconfiguration.provider_default")}</span></Row>
+          {p.kind === "launcher" && (!!p.effective?.permission_mode || !!purposePermissionModes(p, effectiveProvider)?.length) &&
+            <Row label={t("newagent.permission_mode")}><span>{modeTitle(p.effective?.permission_mode) || t("settings-modelconfiguration.follow_default")}</span></Row>}
           {runtimes.length > 0 && <Row label={t("settings-modelconfiguration.runtime")}><span>{runtimeLabel(p.effective?.runtime, effectiveAgent)}</span></Row>}
           {configDirChoices(p, effectiveAgent).length > 0 && <Row label={t("settings-modelconfiguration.config_dir")}><span>{configDirLabel(p.effective?.config_dir)}</span></Row>}
           {p.status && !(directAPI && p.status === UNVERIFIED_STATUS) && <Row label={t("settings-modelconfiguration.status")}><Pill>{p.status}</Pill></Row>}
@@ -429,6 +439,8 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
             onChange={(e) => setDraft((d) => ({ ...d, effort: e.target.value }))} />
           <datalist id="model-efforts">{listedEfforts.map((v) => <option key={v} value={v} />)}</datalist>
         </label>)}
+        {!!permissionModes?.length && <PermissionModeSelect modes={permissionModes} value={permissionMode} followLabel={permissionFollow}
+          disabled={busy} onChange={(permission_mode) => setDraft((current) => ({ ...current, permission_mode }))} />}
         {runtimes.length > 0 && <div className="block">
           <span className="mb-1 block text-[12px] font-medium text-ink-2">{t("settings-modelconfiguration.runtime")}</span>
           <Segmented label={t("settings-modelconfiguration.runtime")} value={chosenAgent === "claude" ? draft.runtime : "cli"} options={runtimes.map((r) => ({ v: r.id, label: r.label }))}

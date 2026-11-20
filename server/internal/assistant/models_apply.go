@@ -138,8 +138,9 @@ func (s *Service) finishModel(ctx context.Context, id string, params map[string]
 	if b.Effort != "" {
 		params["effort"] = b.Effort
 	}
-	// The profile new conversations start in is not what a running process runs on (#4633): choosing one restarts nothing.
+	// The profile and permission defaults apply at startup. Changing either leaves existing conversations in place.
 	b.ConfigDir = ""
+	b.PermissionMode = ""
 	raw, _ := json.Marshal(b)
 	sum := sha256.Sum256(append([]byte(s.modelBindingFingerprint(ctx, b)), raw...))
 	params["model_fingerprint"] = hex.EncodeToString(sum[:])

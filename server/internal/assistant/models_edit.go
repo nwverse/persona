@@ -14,10 +14,11 @@ import (
 )
 
 type modelPatch struct {
-	Revision *int64          `json:"revision"`
-	Provider json.RawMessage `json:"provider"`
-	Model    json.RawMessage `json:"model"`
-	Effort   json.RawMessage `json:"effort"`
+	Revision       *int64          `json:"revision"`
+	Provider       json.RawMessage `json:"provider"`
+	Model          json.RawMessage `json:"model"`
+	Effort         json.RawMessage `json:"effort"`
+	PermissionMode json.RawMessage `json:"permission_mode"`
 	// Runtime is accepted and ignored, whatever its value: an older app still sends the main chat's "cli" or
 	// "agentsdk", and every assistant conversation runs on Claude Code's CLI.
 	Runtime json.RawMessage `json:"runtime"`
@@ -36,13 +37,13 @@ func patchModel(b ModelBinding, in modelPatch) (ModelBinding, error) {
 			}
 		}
 		if provider != b.Provider {
-			b.Model, b.Effort = "", ""
+			b.Model, b.Effort, b.PermissionMode = "", "", ""
 		}
 	}
 	for _, f := range []struct {
 		raw json.RawMessage
 		dst *string
-	}{{in.Provider, &b.Provider}, {in.Model, &b.Model}, {in.Effort, &b.Effort}, {in.ConfigDir, &b.ConfigDir}} {
+	}{{in.Provider, &b.Provider}, {in.Model, &b.Model}, {in.Effort, &b.Effort}, {in.PermissionMode, &b.PermissionMode}, {in.ConfigDir, &b.ConfigDir}} {
 		if f.raw == nil {
 			continue
 		}
@@ -53,6 +54,10 @@ func patchModel(b ModelBinding, in modelPatch) (ModelBinding, error) {
 		var v string
 		if err := json.Unmarshal(f.raw, &v); err != nil {
 			return b, i18n.Err("assistant-models.err_field_type")
+		}
+		if v == "" && f.dst == &b.PermissionMode {
+			b.PermissionMode = ""
+			continue
 		}
 		if v == "" || strings.TrimSpace(v) != v || strings.ContainsAny(v, "\r\n\x00") || len(v) > 512 {
 			return b, i18n.Err("assistant-models.err_field_invalid")
@@ -198,6 +203,14 @@ func (s *Service) validateModel(ctx context.Context, p ModelPurpose, b ModelBind
 	}
 	if b.Effort != "" && !slices.Contains(effortLevelsForKind(p.Kind), b.Effort) {
 		return i18n.Err("assistant-models.err_effort_unsupported")
+	}
+	if b.PermissionMode != "" {
+		if !p.configurablePermissionMode() {
+			return i18n.Err("assistant-models.err_permission_launcher_only")
+		}
+		if err := checkModelPermissionMode(b.PermissionMode, modelProviderPermissionOptions(provider).forPurpose(p)); err != nil {
+			return err
+		}
 	}
 	if p.Kind == "api" {
 		c, err := s.apiConfig(ctx, b)

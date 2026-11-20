@@ -49,27 +49,38 @@ func (s *Service) toolModelProfile(ctx context.Context, self, name string, args 
 }
 
 func (s *Service) applyStartTier(ctx context.Context, params map[string]any) error {
+	_, err := s.resolveStartTier(ctx, params)
+	return err
+}
+
+// Resolve the preset's permission separately so it stays tied to the matching
+// launcher through host fitting and never overwrites an explicit caller mode.
+func (s *Service) resolveStartTier(ctx context.Context, params map[string]any) (launchPermission, error) {
 	if _, err := validateStartSpeed(params); err != nil {
-		return err
+		return launchPermission{}, err
 	}
 	tier, _ := params["tier"].(string)
 	delete(params, "tier") // node runtimes need only the resolved fields
 	if tier == "" {
-		return nil
+		return launchPermission{}, nil
 	}
 	t, err := s.tierModel(ctx, tier)
 	if err != nil {
-		return err
+		return launchPermission{}, err
 	}
 	launcher, _ := params["launcher"].(string)
 	model, _ := params["model"].(string)
 	effort, _ := params["effort"].(string)
 	speed, _ := params["speed"].(string)
-	if layTier(t, &launcher, &model, &effort) && speed == "" && (model == "" || model == t.Model) {
-		speed = t.Speed
+	var permission launchPermission
+	if layTier(t, &launcher, &model, &effort) {
+		permission = launchPermission{launcher: t.Launcher, mode: t.PermissionMode}
+		if speed == "" && (model == "" || model == t.Model) {
+			speed = t.Speed
+		}
 	}
 	params["launcher"], params["model"], params["effort"], params["speed"] = launcher, model, effort, speed
-	return nil
+	return permission, nil
 }
 
 // layTier lays tier t over a start's launcher, model and effort, and says whether it gave them anything: not when the

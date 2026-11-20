@@ -1,4 +1,5 @@
 {
+  "permission_inherit": "跟随默认（{mode}）",
   "candidate_title": "候选模型",
   "candidate_extension": "使用扩展请求的列表",
   "candidate_off": "仅使用此用途的模型",

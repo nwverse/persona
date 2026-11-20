@@ -53,6 +53,14 @@ func checkModelProfile(p *ModelProfile, stored []storedLauncher) error {
 				break
 			}
 		}
+		if b.PermissionMode != "" {
+			if kind != "launcher" {
+				return i18n.Err("assistant-models.err_permission_launcher_only")
+			}
+			if err := checkPermissionModeID(b.PermissionMode); err != nil {
+				return err
+			}
+		}
 		if b.Effort != "" && !slices.Contains(effortLevelsForKind(kind), b.Effort) {
 			return profileEffortErr(id, b.Effort, effortLevelsForKind(kind))
 		}
@@ -129,6 +137,9 @@ func checkModelTiers(tiers map[string]ModelTier) error {
 		if t.Effort != "" && !slices.Contains(proto.EffortLevels, t.Effort) {
 			return profileEffortErr(name, t.Effort, proto.EffortLevels)
 		}
+		if err := checkPermissionModeID(t.PermissionMode); err != nil {
+			return err
+		}
 		if !proto.ValidSpeed(t.Speed) {
 			return i18n.Err("assistant-model_profiles.err_tier_speed", i18n.Args{"tier": name, "speed": t.Speed})
 		}
@@ -180,9 +191,11 @@ func (s *Service) saveModelProfileLocked(ctx context.Context, revision *int64, i
 	}
 	i := slices.IndexFunc(ps.Profiles, func(p ModelProfile) bool { return p.ID == id })
 	p := ModelProfile{ID: id}
+	var savedPurposes map[string]ModelBinding
 	var saved map[string]ModelTier // the tiers as they are: only the ones added or changed are held to checkTierModel
 	if i >= 0 {
-		p, saved = ps.Profiles[i], ps.Profiles[i].Tiers
+		p = ps.Profiles[i]
+		saved, savedPurposes = p.Tiers, p.Purposes
 		// the values are never written through: a copy of the maps is a copy
 		p.Purposes, p.Launchers, p.Tiers = maps.Clone(p.Purposes), maps.Clone(p.Launchers), maps.Clone(p.Tiers)
 	} else if len(ps.Profiles) >= maxModelProfiles {
@@ -200,7 +213,40 @@ func (s *Service) saveModelProfileLocked(ctx context.Context, revision *int64, i
 	if err := checkModelProfile(&p, stored); err != nil {
 		return p, "", err
 	}
+	var modes map[string]modelPermissionOptions
+	for id, b := range p.Purposes {
+		was := savedPurposes[id]
+		if b.PermissionMode == "" || (was.Provider == b.Provider && was.PermissionMode == b.PermissionMode) {
+			continue
+		}
+		purpose, err := s.modelPurposeDef(ctx, id)
+		if err != nil {
+			return p, "", err
+		}
+		if b.Provider == "" {
+			base, _, err := s.modelBaseline(ctx, purpose)
+			if err != nil {
+				return p, "", err
+			}
+			b.Provider = base.Provider
+		}
+		if modes == nil {
+			modes = s.modelPermissionsByProvider(ctx)
+		}
+		if err := checkModelPermissionMode(b.PermissionMode, modes[b.Provider].forPurpose(purpose)); err != nil {
+			return p, "", err
+		}
+	}
 	for name, t := range p.Tiers {
+		was := saved[name]
+		if t.PermissionMode != "" && (was.Launcher != t.Launcher || was.PermissionMode != t.PermissionMode) {
+			if modes == nil {
+				modes = s.modelPermissionsByProvider(ctx)
+			}
+			if err := checkModelPermissionMode(t.PermissionMode, modes[launcherProvider(t.Launcher)].engine); err != nil {
+				return p, "", err
+			}
+		}
 		if was, ok := saved[name]; !ok || was.Model != t.Model {
 			if err := checkTierModel(name, t); err != nil {
 				return p, "", err

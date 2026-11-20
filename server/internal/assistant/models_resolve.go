@@ -182,7 +182,7 @@ func (s *Service) fallbackAPIProvider(ctx context.Context) string {
 	return fallbackAPIProviderFrom(s.storedLaunchers(ctx), s.hiddenLaunchers(ctx))
 }
 
-// mergeModel puts over's choices on base: another provider starts from nothing (its model and effort are its own).
+// mergeModel puts over's choices on base: another provider starts from nothing (its model, effort and permission mode are its own).
 func mergeModel(base, over ModelBinding) ModelBinding {
 	if over.Provider != "" && over.Provider != base.Provider {
 		base = ModelBinding{Provider: over.Provider, ConfigDir: base.ConfigDir}
@@ -193,6 +193,9 @@ func mergeModel(base, over ModelBinding) ModelBinding {
 	if over.Effort != "" {
 		base.Effort = over.Effort
 	}
+	if over.PermissionMode != "" {
+		base.PermissionMode = over.PermissionMode
+	}
 	if over.ConfigDir != "" {
 		base.ConfigDir = over.ConfigDir
 	}
@@ -202,6 +205,10 @@ func mergeModel(base, over ModelBinding) ModelBinding {
 // effectiveModel applies purpose defaults after merging, so choosing another provider cannot clear triage's default.
 func effectiveModel(p ModelPurpose, base, over ModelBinding) ModelBinding {
 	b := mergeModel(base, over)
+	if !p.configurablePermissionMode() || (p.ID == purposeLarkAgent && over.PermissionMode == "") {
+		// Only an explicit owner selection in the dedicated Lark binding applies to that entry.
+		b.PermissionMode = ""
+	}
 	if p.ID == "inbox.triage" && b.Effort == "" {
 		b.Effort = "off"
 	}

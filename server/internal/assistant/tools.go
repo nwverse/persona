@@ -613,6 +613,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		// The tier is resolved first (an unknown one asks and starts nothing), then Model Settings' Agents laid over it as
 		// the start lays it: what runs is said on the card (a hand-off from the health space asks) and in the answer.
 		tier := strings.TrimSpace(a.Tier)
+		var presetPermission launchPermission
 		if tier != "" {
 			t, err := s.tierModel(ctx, tier)
 			if err != nil {
@@ -621,8 +622,11 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			model := a.Model
 			if !layTier(t, &a.Launcher, &a.Model, &a.Effort) {
 				tier = "" // a launcher of its own: the tier gives it nothing
-			} else if a.Speed == "" && (model == "" || model == t.Model) {
-				a.Speed = t.Speed
+			} else {
+				presetPermission = launchPermission{launcher: t.Launcher, mode: t.PermissionMode}
+				if a.Speed == "" && (model == "" || model == t.Model) {
+					a.Speed = t.Speed
+				}
 			}
 		}
 		own.ompModelDefault = a.Launcher == "omp" && a.Model == ""
@@ -658,6 +662,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		}
 		// The admission gate refuses a too-busy computer before the user is asked to approve anything.
 		gated, _ := run["launcher"].(string)
+		approvedMode := s.launchPermissionDefault(ctx, "agent.new", am.ID, gated, fit, presetPermission, false)
 		if err := s.checkAgentStart(ctx, am.ID, s.startLauncher(ctx, gated)); err != nil {
 			return "", fmt.Errorf("%w; no agent was started", err)
 		}
@@ -678,6 +683,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			where += i18n.T(s.lang(ctx), "assistant-tools.with_model", i18n.Args{"model": a.Model})
 		case proto.FasterSpeed(a.Speed):
 			where += " · " + a.Speed
+		}
+		if approvedMode != "" {
+			where += " · " + i18n.T(s.lang(ctx), "assistant-feishu_workbench.mode_"+approvedMode)
 		}
 		if a.Ultracode {
 			where += " · ultracode"
@@ -727,8 +735,14 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			return "", fmt.Errorf("%w; no agent was started", err)
 		}
 		// Allow all for Claude Code and for a provider whose approval is an Auto Accept switch (startAgent.allowAll, #8141).
-		if fit.allowAll() {
-			params["permission_mode"] = "bypassPermissions"
+		finalLauncher, _ := params["launcher"].(string)
+		if approvedMode != "" {
+			if finalLauncher != gated || s.isWorkMachine(am.ID) || !fit.acceptsConfiguredMode(finalLauncher, approvedMode, false) {
+				return "", fmt.Errorf("the approved permission mode is unavailable on the destination; no agent was started")
+			}
+			params["permission_mode"] = approvedMode
+		} else if fit.allowAll() {
+			params["permission_mode"] = proto.ModeBypass
 		}
 		if !startTakesModes(fit.agent) { // the machine a health detour landed on may run another agent under this name
 			if err := startModesRefused(picked, fit.agent, "", own.effort); err != nil {

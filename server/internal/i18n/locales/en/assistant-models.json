@@ -1,4 +1,6 @@
 {
+  "err_permission_launcher_only": "This use does not allow a configurable permission mode.",
+  "err_permission_unsupported": "The selected launcher does not offer this permission mode.",
   "name_assistant": "Main chat",
   "name_agent_new": "Agents",
   "name_kb": "Processing",

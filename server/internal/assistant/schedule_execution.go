@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/nwverse/persona/server/internal/proto"
 	"net/http"
 	"reflect"
 	"slices"
@@ -115,6 +116,7 @@ func (s *Service) taskExecution(ctx context.Context, t Task, validate bool, bind
 	ex.BindingFingerprint, ex.Fingerprint = s.taskExecutionFingerprints(ctx, machine, b)
 	if !validate {
 		ex.Agent = s.launcherAgent(withUnhidden(ctx, ex.Launcher), machine, ex.Launcher)
+		ex.PermissionMode = scheduledPermission(t, ex, b)
 		if ex.Cwd == "" {
 			if d, ok := s.device(ctx, machine); ok {
 				ex.Cwd = s.assistantCwd(d)
@@ -150,6 +152,7 @@ func (s *Service) taskExecution(ctx context.Context, t Task, validate bool, bind
 		return ex, err
 	}
 	ex.Agent = s.launcherAgent(withUnhidden(ctx, ex.Launcher), machine, ex.Launcher)
+	ex.PermissionMode = scheduledPermission(t, ex, b)
 	if ex.Cwd != "" {
 		var result struct {
 			Cwd string `json:"cwd"`
@@ -163,6 +166,19 @@ func (s *Service) taskExecution(ctx context.Context, t Task, validate bool, bind
 		ex.Cwd = result.Cwd
 	}
 	return ex, nil
+}
+
+func scheduledPermission(task Task, execution TaskExecution, binding ModelBinding) string {
+	fit := startAgent{agent: execution.Agent}
+	if task.inheritsScheduledPermission() &&
+		!proto.IsExternalLauncher(execution.Launcher) && fit.acceptsConfiguredMode(execution.Launcher, binding.PermissionMode, true) {
+		return binding.PermissionMode
+	}
+	return execution.PermissionMode
+}
+
+func (task Task) inheritsScheduledPermission() bool {
+	return task.PermissionMode == "" && task.SessionID == "" && task.Space == ""
 }
 
 type taskExecutionEdit struct {
@@ -512,10 +528,7 @@ func (s *Service) taskRunSnapshot(ctx context.Context, t Task) (Task, taskRunMod
 		return t, taskRunModel{}, i18n.Err("assistant-schedule.execution_own_chat")
 	}
 	b, err := s.resolveModelRecord(ctx, "task."+t.ID, &r)
-	t.runGrantBasis = t.grantBasis()
-	if r.Binding != (ModelBinding{}) {
-		t.runGrantBasis = t.grantBasis(b)
-	}
+	t.runGrantBasis = t.grantBasisForModel(r.Binding, b)
 	return t, taskRunModel{effective: b, override: r.Binding}, err
 }
 

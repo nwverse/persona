@@ -201,7 +201,7 @@ func (s *Service) retryOn(ctx context.Context, t *PlanTask, m Device, with retry
 	if !modes {
 		t.Effort = ""
 	}
-	if !t.preservePermission {
+	if !t.preservePermission && !t.PermissionConfigured {
 		if agent.allowAll() {
 			t.Permission = "bypassPermissions"
 		} else {

@@ -22,10 +22,11 @@ import (
 
 // startPick is what a start's caller named itself, before a tier and Model configuration › Agents fill in the rest.
 // ultracode is the tri-state the caller gave (nil: it said nothing, false: it explicitly asked for it off). permission
-// is a task's permission mode as it stood before the launcher that runs set it (launchPick only; pickOf leaves it "").
+// is the permission mode before any preset or purpose default is applied.
 type startPick struct {
 	launcher, effort, model, speed, tier, permission string
 	ultracode                                        *bool
+	presetPermission                                 launchPermission
 	// The caller or preset selected omp with no model before Model Settings were applied.
 	ompModelDefault bool
 }
@@ -82,9 +83,10 @@ func pickOf(params map[string]any) startPick {
 	m, _ := params["model"].(string)
 	t, _ := params["tier"].(string)
 	v, _ := params["speed"].(string)
+	p, _ := params["permission_mode"].(string)
 	u, _ := params["ultracode"].(*bool)
 	return startPick{launcher: strings.TrimSpace(l), effort: strings.TrimSpace(e),
-		model: strings.TrimSpace(m), speed: strings.TrimSpace(v), tier: strings.TrimSpace(t), ultracode: u}
+		model: strings.TrimSpace(m), speed: strings.TrimSpace(v), tier: strings.TrimSpace(t), permission: strings.TrimSpace(p), ultracode: u}
 }
 
 // resolveStart fills params (a session.start's, with the caller's own launcher, model, effort and tier, if any) with
@@ -92,9 +94,11 @@ func pickOf(params map[string]any) startPick {
 // fitLauncher.
 func (s *Service) resolveStart(ctx context.Context, params map[string]any, launcherDefaultModel bool) (startPick, error) {
 	own := pickOf(params)
-	if err := s.applyStartTier(ctx, params); err != nil {
+	preset, err := s.resolveStartTier(ctx, params)
+	if err != nil {
 		return own, err
 	}
+	own.presetPermission = preset
 	selected := pickOf(params)
 	own.ompModelDefault = selected.launcher == "omp" && selected.model == ""
 	return own, s.applyModelBinding(ctx, "agent.new", params, launcherDefaultModel)
@@ -105,15 +109,17 @@ func (s *Service) resolveStart(ctx context.Context, params map[string]any, launc
 // unless its runtime's switch is on, which a start in bypassPermissions turns on (proto.Launcher.AutoAccept: Paseo's
 // Auto Accept).
 type startAgent struct {
-	agent      string
-	snapshot   string // the explicitly known kind for a to-do link; agent's compatibility defaults are not evidence
-	source     string // the selected launcher's provenance, retained through fitting and health detours
-	autoAccept bool
+	agent           string
+	snapshot        string // the explicitly known kind for a to-do link; agent's compatibility defaults are not evidence
+	source          string // the selected launcher's provenance, retained through fitting and health detours
+	autoAccept      bool
+	permissionModes proto.PermissionModeSet
+	permissionHost  string
 }
 
 // launcherStartAgent is what launcher l runs.
 func launcherStartAgent(l ConfiguredLauncher) startAgent {
-	return startAgent{agent: l.AgentType, source: l.Source, autoAccept: l.AutoAccept}
+	return startAgent{agent: l.AgentType, source: l.Source, autoAccept: l.AutoAccept, permissionModes: l.PermissionModes}
 }
 
 // fitNewLauncher applies a new Agent's defaults using the launcher actually available on its destination.
@@ -197,6 +203,7 @@ func (s *Service) fitLauncher(ctx context.Context, m Device, own startPick, para
 		return "", startAgent{}, i18n.Err("external-adapter.purpose_unsupported")
 	}
 	asked, _ := params["host"].(string)
+	defer func() { agent.permissionHost = asked }()
 	if host := agentStartHost(m, asked); host != "" {
 		// Where the start's engine runs only its own launchers, plain claude and a managed launcher do not run either.
 		if note, agent, err, done := s.fitEngineLauncher(ctx, m, host, params); done {

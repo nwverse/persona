@@ -23,8 +23,12 @@ type modelProfileSwitch struct {
 // are written in one transaction. Nothing is written when anything fails. A switch to the profile already in use
 // that changes nothing keeps the rollback as it was.
 func (s *Service) applyModelProfile(ctx context.Context, id string, by ProfileActor) (modelProfileSwitch, error) {
+	return s.applyModelProfileReviewed(ctx, id, by, nil)
+}
+
+func (s *Service) applyModelProfileReviewed(ctx context.Context, id string, by ProfileActor, review []ModelProfilePermissionChange) (modelProfileSwitch, error) {
 	s.models.mu.Lock()
-	sw, pushed, err := s.applyModelProfileLocked(ctx, id, by)
+	sw, pushed, err := s.applyModelProfileLocked(ctx, id, by, review)
 	s.models.mu.Unlock()
 	if err == nil && (sw.From != sw.To || len(sw.Changed) > 0) {
 		s.modelProfileSwitched(ctx, sw, pushed)
@@ -32,7 +36,7 @@ func (s *Service) applyModelProfile(ctx context.Context, id string, by ProfileAc
 	return sw, err
 }
 
-func (s *Service) applyModelProfileLocked(ctx context.Context, id string, by ProfileActor) (modelProfileSwitch, bool, error) {
+func (s *Service) applyModelProfileLocked(ctx context.Context, id string, by ProfileActor, review []ModelProfilePermissionChange) (modelProfileSwitch, bool, error) {
 	ps, seeded, err := s.modelProfilesLocked(ctx)
 	if err != nil {
 		return modelProfileSwitch{}, false, err
@@ -62,6 +66,7 @@ func (s *Service) applyModelProfileLocked(ctx context.Context, id string, by Pro
 	writes := map[string]any{}
 	sw := modelProfileSwitch{From: state.Active, To: id}
 	providers := s.modelProviders(ctx)
+	var actual []ModelProfilePermissionChange
 	for _, cat := range modelCategoryIDs {
 		b, ok := p.Purposes[cat]
 		if !ok {
@@ -70,6 +75,9 @@ func (s *Service) applyModelProfileLocked(ctx context.Context, id string, by Pro
 		purpose, err := s.modelPurpose(ctx, cat, providers)
 		if err != nil {
 			return sw, false, err
+		}
+		if change, changed := modelPermissionChange(cat, purpose.Override, b); changed {
+			actual = append(actual, change)
 		}
 		b.ConfigDir = purpose.Override.ConfigDir // where the main chat's new conversations start is not a profile's (#4633)
 		if b == purpose.Override {
@@ -104,6 +112,10 @@ func (s *Service) applyModelProfileLocked(ctx context.Context, id string, by Pro
 		image.Purposes[cat] = purpose.Override
 		writes[modelRecordKey(cat)] = modelRecord{Revision: purpose.Revision + 1, Binding: b}
 		sw.Changed = append(sw.Changed, cat)
+	}
+	actual = append(actual, tierPermissionChanges(tiersInProfile(ps, state.Active), p.Tiers)...)
+	if err := checkProfilePermissionReview(by, review, actual); err != nil {
+		return sw, false, err
 	}
 	changedLaunchers := false
 	for _, name := range slices.Sorted(maps.Keys(p.Launchers)) {
@@ -156,8 +168,12 @@ func (s *Service) applyModelProfileLocked(ctx context.Context, id string, by Pro
 // rollbackModelProfile undoes the last switch: what it replaced goes back, the profile in use before it is in use
 // again. What the rollback replaced is kept in turn, so a second rollback redoes the switch.
 func (s *Service) rollbackModelProfile(ctx context.Context, by ProfileActor) (modelProfileSwitch, error) {
+	return s.rollbackModelProfileReviewed(ctx, by, nil)
+}
+
+func (s *Service) rollbackModelProfileReviewed(ctx context.Context, by ProfileActor, review []ModelProfilePermissionChange) (modelProfileSwitch, error) {
 	s.models.mu.Lock()
-	sw, pushed, err := s.rollbackModelProfileLocked(ctx, by)
+	sw, pushed, err := s.rollbackModelProfileLocked(ctx, by, review)
 	s.models.mu.Unlock()
 	if err == nil && (sw.From != sw.To || len(sw.Changed) > 0) {
 		s.modelProfileSwitched(ctx, sw, pushed)
@@ -165,7 +181,7 @@ func (s *Service) rollbackModelProfile(ctx context.Context, by ProfileActor) (mo
 	return sw, err
 }
 
-func (s *Service) rollbackModelProfileLocked(ctx context.Context, by ProfileActor) (modelProfileSwitch, bool, error) {
+func (s *Service) rollbackModelProfileLocked(ctx context.Context, by ProfileActor, review []ModelProfilePermissionChange) (modelProfileSwitch, bool, error) {
 	state, err := s.readModelProfileState(ctx)
 	if err != nil {
 		return modelProfileSwitch{}, false, err
@@ -173,6 +189,14 @@ func (s *Service) rollbackModelProfileLocked(ctx context.Context, by ProfileActo
 	prev := state.Previous
 	if prev == nil {
 		return modelProfileSwitch{}, false, errModelProfileNoRollback
+	}
+	var tierChanges []ModelProfilePermissionChange
+	if (by.Kind == "assistant" || review != nil) && state.Active != prev.Profile {
+		ps, _, err := s.readModelProfiles(ctx)
+		if err != nil {
+			return modelProfileSwitch{}, false, err
+		}
+		tierChanges = tierPermissionChanges(tiersInProfile(ps, state.Active), tiersInProfile(ps, prev.Profile))
 	}
 	stored, err := s.readStoredLaunchers(ctx)
 	if err != nil {
@@ -201,6 +225,7 @@ func (s *Service) rollbackModelProfileLocked(ctx context.Context, by ProfileActo
 	sw := modelProfileSwitch{From: state.Active, To: prev.Profile}
 	undo := &modelProfileImage{Profile: state.Active, At: now, Purposes: map[string]ModelBinding{}, Launchers: map[string]LauncherModels{}}
 	writes := map[string]any{}
+	var actual []ModelProfilePermissionChange
 	for _, cat := range modelCategoryIDs {
 		b, ok := prev.Purposes[cat]
 		if !ok {
@@ -211,6 +236,9 @@ func (s *Service) rollbackModelProfileLocked(ctx context.Context, by ProfileActo
 		if err != nil {
 			return sw, false, err
 		}
+		if change, changed := modelPermissionChange(cat, r.Binding, b); changed {
+			actual = append(actual, change)
+		}
 		b.ConfigDir = r.Binding.ConfigDir
 		if b == r.Binding {
 			continue
@@ -218,6 +246,9 @@ func (s *Service) rollbackModelProfileLocked(ctx context.Context, by ProfileActo
 		undo.Purposes[cat] = r.Binding
 		writes[modelRecordKey(cat)] = modelRecord{Revision: r.Revision + 1, Binding: b}
 		sw.Changed = append(sw.Changed, cat)
+	}
+	if err := checkProfilePermissionReview(by, review, append(actual, tierChanges...)); err != nil {
+		return sw, false, err
 	}
 	changedLaunchers := false
 	for _, name := range slices.Sorted(maps.Keys(prev.Launchers)) {

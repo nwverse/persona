@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -281,16 +282,6 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	if p.Space != "" && p.Space != SpaceHealth {
 		return proto.Session{}, badRequest(fmt.Errorf("space %q: health or none", p.Space))
 	}
-	if p.Origin == OriginInbox {
-		// Default keeps the explicit Persona MCP allowlist effective: Plan rejects MCP before consulting it. The
-		// manager/node origin policy, not the launcher's permission mode, prevents externally visible work.
-		p.PermissionMode = "default"
-	} else if p.PermissionMode == "" && p.GuestTools == nil {
-		p.PermissionMode = s.settings(ctx).DefaultPermissionMode
-		if p.PermissionMode == "" {
-			p.PermissionMode = proto.ModeBypass
-		}
-	}
 	var cwd string
 	var err error
 	if p.Space == SpaceHealth {
@@ -374,6 +365,19 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	// in Persona's profile (#10859).
 	fromSetting := p.GuestTools == nil && purpose != purposeAgent && s.withNewConversationProfile(ctx, machine, params)
 	used, _ := params["launcher"].(string)
+	if p.Origin == OriginInbox {
+		// The manager/node origin policy protects Inbox tools. A Plan mode
+		// would reject MCP before the Inbox allowlist can be consulted.
+		p.PermissionMode = "default"
+	} else if p.PermissionMode == "" && p.GuestTools == nil {
+		if !p.TaskExecution && p.Space == "" && !p.Public && s.mayUseHeadlessPermissionDefault(ctx, p, purpose) {
+			p.PermissionMode = s.launchPermissionDefault(ctx, purpose, machine, used, startAgent{}, launchPermission{}, true)
+		}
+		if p.PermissionMode == "" {
+			p.PermissionMode = cmp.Or(s.settings(ctx).DefaultPermissionMode, proto.ModeBypass)
+		}
+	}
+	params["permission_mode"] = p.PermissionMode
 	// A profile is Claude Code's: the node refuses a config_dir for any other agent before starting it (#6467). Judged
 	// here, by the launcher the start finally runs on, not the one asked for: the model configuration and a fallback
 	// can both change it. One hidden from the pickers still runs what it runs (withUnhidden, as finishMainChatModel

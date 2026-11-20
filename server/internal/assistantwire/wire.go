@@ -245,6 +245,8 @@ type ModelBinding struct {
 	Provider string `json:"provider,omitempty"`
 	Model    string `json:"model,omitempty"`
 	Effort   string `json:"effort,omitempty"`
+	// PermissionMode is the start default for launcher-backed purposes. Empty follows the parent or launcher.
+	PermissionMode string `json:"permission_mode,omitempty"`
 	// ConfigDir is the main chat's only: the Claude profile its new conversations start in (#4633). None is Persona's
 	// own profile (the default); "legacy" is this computer's existing Claude Code setup. Kept across a provider change;
 	// an existing conversation keeps the profile it was started in.

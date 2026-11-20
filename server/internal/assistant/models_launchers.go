@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -141,6 +142,7 @@ type LauncherView struct {
 	// names, never the value (launcher_secrets.go). MachineKeyReferences: the same for the computers' own keys.
 	KeyReference         *extmgr.SecretReferenceView            `json:"key_reference,omitempty"`
 	MachineKeyReferences map[string]*extmgr.SecretReferenceView `json:"machine_key_references,omitempty"`
+	permissionOptions    modelPermissionOptions                 // modes all discoveries of this launcher agree on
 	keySealed            string                                 // the stored key, for withKeyReferences
 	// Definition per machine (zshrc launchers, detail only): the function body, secrets masked.
 	Definitions map[string]string `json:"definitions,omitempty"`
@@ -157,7 +159,8 @@ func launcherView(l storedLauncher) LauncherView {
 		SubagentForce: l.SubagentForce, HasHeaders: l.HeadersSealed != "", HasEnv: l.EnvSealed != "", Proxy: l.Proxy, NoProxy: l.NoProxy, TimeoutMS: l.TimeoutMS,
 		CompactWindow: l.CompactWindow, MaxContext: l.MaxContext, Effort: l.Effort, Origin: l.Source,
 		Share: l.share(), ScopeMachines: l.ScopeMachines, Delivery: l.delivery(), OwnService: l.ownService(), LegacyScope: l.Share == "",
-		Pi: l.PiAPI() != "" && l.share() != shareNone, ViaMachine: l.ViaMachine, keySealed: l.KeySealed}
+		Pi: l.PiAPI() != "" && l.share() != shareNone, ViaMachine: l.ViaMachine, keySealed: l.KeySealed,
+		permissionOptions: discoveredPermissionOptions(proto.Launcher{Name: l.Name, Agent: cmp.Or(l.Agent, "claude"), Source: "persona"})}
 }
 
 // launcherView adds the only header metadata safe to reopen in an editor: field names, never their values. An

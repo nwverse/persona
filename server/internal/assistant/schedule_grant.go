@@ -111,13 +111,28 @@ func (s *Service) taskGrantBasis(ctx context.Context, t Task) (string, error) {
 		return "", err
 	}
 	if record.Binding == (ModelBinding{}) {
-		return t.grantBasis(), nil
+		binding, err := s.resolveModel(ctx, "assistant")
+		if err != nil {
+			return "", err
+		}
+		if !t.inheritsScheduledPermission() || binding.PermissionMode == "" {
+			return t.grantBasis(), nil
+		}
 	}
 	base, err := s.taskModelBaseline(ctx, s.taskMachine(ctx, t))
 	if err != nil {
 		return "", err
 	}
-	return t.grantBasis(mergeModel(base, record.Binding)), nil
+	return t.grantBasisForModel(record.Binding, mergeModel(base, record.Binding)), nil
+}
+
+// An inherited permission setting is part of the authority granted for a
+// schedule's new conversations, even without a schedule-specific override.
+func (t Task) grantBasisForModel(override, effective ModelBinding) string {
+	if override != (ModelBinding{}) || (t.inheritsScheduledPermission() && effective.PermissionMode != "") {
+		return t.grantBasis(effective)
+	}
+	return t.grantBasis()
 }
 
 type scheduleGrantKey struct{}

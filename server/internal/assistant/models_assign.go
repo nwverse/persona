@@ -73,7 +73,7 @@ func (s *Service) assignOne(ctx context.Context, id, provider string, providers 
 		return keptCustomized, nil
 	}
 	b := p.Override
-	b.Provider, b.Effort = provider, "" // a provider's model and effort are its own (patchModel)
+	b.Provider, b.Effort, b.PermissionMode = provider, "", "" // these settings belong to the provider (patchModel)
 	if err := s.validateModel(ctx, p, mergeModel(base, b), providers); err != nil {
 		s.logf("launchers: assign %s to %s: %s", id, provider, i18n.Localize(err, i18n.En))
 		return keptIncompatible, nil

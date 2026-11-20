@@ -1,4 +1,5 @@
 {
+  "permission_inherit": "デフォルトに従う（{mode}）",
   "candidate_title": "候補モデル",
   "candidate_extension": "拡張機能がリクエストしたリストを使う",
   "candidate_off": "この用途のモデルだけを使う",

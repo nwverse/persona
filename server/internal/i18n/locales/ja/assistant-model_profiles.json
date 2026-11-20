@@ -1,4 +1,5 @@
 {
+  "err_permission_owner": "権限モードの変更を確認するには、設定でこのプロファイルを切り替えるか、ロールバックしてください。",
   "name_performance": "性能",
   "name_economy": "節約",
   "about_performance": "現在の設定をコピーしたテンプレートです。切り替える前にモデルを編集できます。",

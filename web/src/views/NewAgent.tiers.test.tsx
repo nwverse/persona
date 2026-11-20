@@ -67,6 +67,7 @@ beforeEach(() => {
     const url = String(input);
     if (url.includes("/model-config/purposes/")) return purpose ? json(purpose) : json({ error: "not found" }, 404);
     if (url.includes("/launchers/fast/models")) return json(fastList);
+    if (url.includes("/launchers/codex/models")) return json({ agent: "codex", models: [] });
     if (url.includes("/launchers/") && url.includes("/models")) return json(claudeList);
     if (url.includes("/launchers")) return json({ launchers, tiers, tiers_profile: tiers ? { id: "performance", name: "性能" } : undefined });
     return json({ path: "/code", entries: [] });
@@ -135,6 +136,47 @@ describe("New agent: presets (#2225)", () => {
     expect(launched[0]).toMatchObject({ launcher: "claude" });
     expect(launched[0]?.model).toBeUndefined();
     expect(launched[0]?.effort).toBeUndefined();
+  });
+
+  it("selects the preset's permission for this start without remembering it", async () => {
+    localStorage.setItem("new.mode.mac", "default");
+    tiers = [{ name: "review", launcher: "fast", permission_mode: "plan" }];
+    await open();
+    await pick("preset:review");
+    expect(button("计划模式").getAttribute("aria-checked")).toBe("true");
+    act(() => button("启动").click());
+    expect(launched[0]).toMatchObject({ launcher: "fast", permissionMode: "plan" });
+    expect(localStorage.getItem("new.mode.mac")).toBe("default");
+  });
+
+  it("lets an explicit permission choice override the preset while keeping its model", async () => {
+    tiers = [{ name: "review", launcher: "fast", model: "m-review", permission_mode: "plan" }];
+    await open();
+    await pick("preset:review");
+    act(() => button("自动审批").click());
+    expect(hint()).toBeNull();
+    act(() => button("启动").click());
+    expect(launched[0]).toMatchObject({ launcher: "fast", model: "m-review", permissionMode: "auto" });
+  });
+
+  it("shows the Model settings mode and leaves runtime resolution to the hub", async () => {
+    purpose = { purpose: { id: "agent.new", effective: { provider: "launcher.claude", permission_mode: "plan" } }, providers: [] };
+    await open();
+    const followedMode = [...document.querySelectorAll('[role="radio"]')].find((item) => item.textContent?.includes("· 计划模式"));
+    expect(followedMode?.getAttribute("aria-checked")).toBe("true");
+    act(() => button("启动").click());
+    expect(launched[0]?.permissionMode).toBeUndefined();
+  });
+
+  it("uses the modes advertised for a Codex start without offering Claude-only modes", async () => {
+    launchers = [...launchers, { name: "codex", agent: "codex", start_permission_modes: ["plan", "bypassPermissions"], prompt_optional: true }];
+    tiers = [{ name: "review", launcher: "codex", permission_mode: "plan" }];
+    await open();
+    await pick("preset:review");
+    expect(button("计划模式").getAttribute("aria-checked")).toBe("true");
+    expect(button("自动审批")).toBeUndefined();
+    act(() => button("启动").click());
+    expect(launched[0]).toMatchObject({ launcher: "codex", permissionMode: "plan", agentType: "codex" });
   });
 
   it("says what a launcher fixing its own model can't take, and sends none of it", async () => {

@@ -74,6 +74,11 @@ type PlanTask struct {
 	Speed              string `json:"speed,omitempty"`
 	Tier               string `json:"tier,omitempty"`
 	Permission         string `json:"permission,omitempty"`
+	// PermissionDefaulted distinguishes the plan's preview from an explicit
+	// choice. PermissionConfigured preserves the mode shown on an approved
+	// plan, or refuses a new destination that cannot apply it.
+	PermissionDefaulted  bool `json:"permission_defaulted,omitempty"`
+	PermissionConfigured bool `json:"permission_configured,omitempty"`
 	// Ultracode: the agent starts with Claude Code's ultracode on (#12). A pointer so that an edit from the card can
 	// turn it off, and one from a client that does not know it keeps the assistant's choice.
 	Ultracode *bool `json:"ultracode,omitempty"`

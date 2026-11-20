@@ -70,6 +70,7 @@ export interface PickerTier {
   /** "" or absent: the launcher's default (the model settings' when the launcher is theirs). */
   model?: string;
   effort?: string;
+  permission_mode?: string;
   /** When to use it. */
   description?: string;
 }

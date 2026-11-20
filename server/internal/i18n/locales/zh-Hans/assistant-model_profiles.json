@@ -1,4 +1,5 @@
 {
+  "err_permission_owner": "请在设置中切换或回滚此配置方案，以确认权限模式的更改。",
   "name_performance": "性能",
   "name_economy": "经济",
   "about_performance": "从当前配置复制的模板。切换前可编辑模型选择。",

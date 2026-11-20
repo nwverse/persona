@@ -82,6 +82,9 @@ func (s *Service) modelPurpose(ctx context.Context, id string, providers []Model
 	if p.Kind == "launcher" {
 		p.Fields = append(p.Fields, "effort")
 	}
+	if p.configurablePermissionMode() {
+		p.Fields = append(p.Fields, "permission_mode")
+	}
 	if len(p.ConfigDirs) > 0 {
 		p.Fields = append(p.Fields, "config_dir")
 	}
@@ -230,6 +233,10 @@ func (s *Service) modelConfigRoutes() {
 		b, err := patchModel(p.Override, in)
 		if err != nil {
 			apierr.Write(w, 400, err)
+			return
+		}
+		if b.PermissionMode != "" && !p.configurablePermissionMode() {
+			apierr.Write(w, 400, i18n.Err("assistant-models.err_permission_launcher_only"))
 			return
 		}
 		var candidates *candidateSetting

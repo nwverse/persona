@@ -752,7 +752,7 @@ func (s *Service) pickerDefault(ctx context.Context, r *http.Request, picker []C
 	}
 	if purpose == "task" && r.PathValue("mid") != "" {
 		if b, err := s.taskModelBaseline(ctx, r.PathValue("mid")); err == nil {
-			return map[string]any{"provider": strings.TrimPrefix(b.Provider, "launcher."), "model": b.Model, "effort": b.Effort}
+			return launcherPickerBinding(b)
 		}
 	}
 	return s.launcherDefault(ctx, purpose)
@@ -798,5 +798,9 @@ func (s *Service) assistantPickerDefault(ctx context.Context, picker []Configure
 }
 
 func launcherPickerBinding(b ModelBinding) map[string]any {
-	return map[string]any{"provider": strings.TrimPrefix(b.Provider, "launcher."), "model": b.Model, "effort": b.Effort}
+	row := map[string]any{"provider": strings.TrimPrefix(b.Provider, "launcher."), "model": b.Model, "effort": b.Effort}
+	if b.PermissionMode != "" {
+		row["permission_mode"] = b.PermissionMode
+	}
+	return row
 }

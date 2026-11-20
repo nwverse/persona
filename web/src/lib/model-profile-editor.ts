@@ -26,6 +26,7 @@ export interface PurposeDraftEntry {
   provider: string;
   model: string;
   effort: string;
+  permission_mode?: string;
 }
 
 /** Tri-state per launcher field: undefined = leave unchanged on switch; "" = clear to launcher default; non-empty = set. */
@@ -41,6 +42,7 @@ export interface TierDraftEntry {
   launcher: string;
   model: string;
   effort: string;
+  permission_mode?: string;
   speed: string;
   description: string;
 }
@@ -74,6 +76,7 @@ export function profileToDraft(profile: ModelProfile, catalogPurposeIds?: readon
       provider: b?.provider ?? "",
       model: b?.model ?? "",
       effort: b?.effort ?? "",
+      permission_mode: b?.permission_mode,
     };
   }
   const launchers: Record<string, LauncherDraftEntry> = {};
@@ -96,6 +99,7 @@ export function profileToDraft(profile: ModelProfile, catalogPurposeIds?: readon
       launcher: tier.launcher ?? "",
       model: tier.model ?? "",
       effort: tier.effort ?? "",
+      permission_mode: tier.permission_mode,
       speed: tier.speed ?? "",
       description: tier.description ?? "",
     }));
@@ -214,6 +218,7 @@ export function draftToProfileInput(draft: ProfileDraft, revision: number): Mode
     if (provider) binding.provider = provider;
     if (model) binding.model = model;
     if (effort) binding.effort = effort;
+    if (entry.permission_mode) binding.permission_mode = entry.permission_mode;
     purposes[id] = binding;
   }
   const launchers: Record<string, ModelProfileLauncherModels> = {};
@@ -240,6 +245,7 @@ export function draftToProfileInput(draft: ProfileDraft, revision: number): Mode
     const description = entry.description.trim();
     if (model) out.model = model;
     if (effort) out.effort = effort;
+    if (entry.permission_mode) out.permission_mode = entry.permission_mode;
     if (speed) out.speed = speed;
     if (description) out.description = description;
     tiers[tierName] = out;

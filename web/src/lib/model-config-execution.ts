@@ -158,6 +158,7 @@ export const modelConfiguration = (manager?: string) => api<ModelConfigurationBo
 export function draftFor(p: ModelPurpose): ModelDraft {
   const runtime = runtimeChoices(p).length ? p.override?.runtime || p.effective?.runtime || "cli" : "";
   const draft: ModelDraft = { provider: p.override?.provider ?? "", model: p.override?.model ?? "", effort: p.override?.effort ?? "", runtime };
+  if (supportsPermissionMode(p)) draft.permission_mode = p.override?.permission_mode ?? "";
   // Asked without the agent on purpose: seeded whatever the purpose runs on, so an editor opened on one without profiles
   // (Codex), which hides the choice, keeps the saved one for Claude Code and for its save (#4633).
   if (configDirChoices(p).length) draft.config_dir = p.override?.config_dir || p.effective?.config_dir || "private";
@@ -165,11 +166,26 @@ export function draftFor(p: ModelPurpose): ModelDraft {
 }
 
 export function chooseProvider(draft: ModelDraft, provider: string): ModelDraft {
-  return draft.provider === provider ? draft : { ...draft, provider, model: "", effort: "" };
+  if (draft.provider === provider) return draft;
+  return { ...draft, provider, model: "", effort: "", ...(draft.permission_mode !== undefined && { permission_mode: "" }) };
 }
 
 export function supportsField(p: ModelPurpose, field: Exclude<keyof ModelDraft, "runtime" | "config_dir">): boolean {
   return (p.fields ?? ["provider", "model"]).includes(field);
+}
+
+export function supportsPermissionMode(p: ModelPurpose): boolean {
+  return p.kind === "launcher" && supportsField(p, "permission_mode");
+}
+
+export function purposePermissionModes(p: ModelPurpose | undefined, provider?: ModelProvider): readonly string[] | undefined {
+  if (!p || !supportsPermissionMode(p)) return undefined;
+  return purposeLaunch(p) === "headless" ? provider?.assistant_permission_modes : provider?.permission_modes;
+}
+
+/** Keep a saved mode when the capabilities are unknown. An advertised list is authoritative. */
+export function fitPermissionMode(mode: string | undefined, modes: readonly string[] | undefined): string {
+  return mode && (!modes || modes.includes(mode)) ? mode : "";
 }
 
 /** A use of Agents the hub lets the user set apart (Lark /agent, the AI twin): it says so with fields of its own, and
@@ -180,7 +196,7 @@ export function agentsOverride(p: ModelPurpose): boolean {
 
 /** The binding says something of its own: the row says **Separately configured**. */
 export function overridden(b: ModelBinding): boolean {
-  return !!(b.provider || b.model || b.effort);
+  return !!(b.provider || b.model || b.effort || b.permission_mode);
 }
 
 /** A use with a record of its own under a category, told by its own data, whatever group this page lists it in and
@@ -226,6 +242,7 @@ export function modelPatch(p: ModelPurpose, draft: ModelDraft, effort = supports
   for (const field of ["provider", "model", "effort"] as const) {
     if (field === "effort" ? effort : supportsField(p, field)) patch[field] = draft[field].trim() || null;
   }
+  if (supportsPermissionMode(p)) patch.permission_mode = draft.permission_mode || null;
   if (runtimeChoices(p).length && draft.runtime) patch.runtime = draft.runtime;
   if (configDirChoices(p).length && draft.config_dir) patch.config_dir = draft.config_dir;
   return patch;

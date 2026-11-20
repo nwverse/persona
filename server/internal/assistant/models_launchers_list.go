@@ -128,7 +128,20 @@ func (s *Service) launcherViewsFrom(ctx context.Context, zshrc []zshrcLaunchers,
 	managed := map[string]bool{}
 	for _, l := range stored {
 		managed[l.Name] = true
-		out = append(out, s.launcherView(l))
+		v := s.launcherView(l)
+		if l.Agent == "agy" {
+			// A managed Antigravity launcher can start headless if its companion is available on the machine.
+			// A terminal start can still select the CLI there.
+			for _, machine := range zshrc {
+				if slices.ContainsFunc(machine.Launchers, func(x proto.Launcher) bool {
+					return x.Agent == "agy" && x.Assistant
+				}) {
+					v.permissionOptions.headless = configuredPermissionModes("agy", 0)
+					break
+				}
+			}
+		}
+		out = append(out, v)
 	}
 	hidden := s.hiddenLaunchers(ctx)
 	byName := map[string]*LauncherView{}
@@ -138,15 +151,18 @@ func (s *Service) launcherViewsFrom(ctx context.Context, zshrc []zshrcLaunchers,
 			if managed[l.Name] || l.Name == "claude" || !listedRCLauncher(l) {
 				continue
 			}
+			options := discoveredPermissionOptions(l)
 			v := byName[l.Name]
 			if v == nil {
 				src := "zshrc"
 				if l.Source != "" {
 					src = l.Source
 				}
-				v = &LauncherView{Name: l.Name, Source: src, Agent: l.Agent, BaseURL: l.BaseURL, Model: l.Model, Hidden: slices.Contains(hidden, l.Name)}
+				v = &LauncherView{Name: l.Name, Source: src, Agent: l.Agent, BaseURL: l.BaseURL, Model: l.Model, Hidden: slices.Contains(hidden, l.Name), permissionOptions: options}
 				byName[l.Name] = v
 				names = append(names, l.Name)
+			} else {
+				v.permissionOptions = v.permissionOptions.common(options)
 			}
 			v.Machines = append(v.Machines, m.MachineID)
 			if rc := cmp.Or(m.Sync.RCFile, defaultRCFile); v.Source == "zshrc" && !slices.Contains(v.RCFiles, rc) {

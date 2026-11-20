@@ -10,11 +10,12 @@ import {
   rollbackModelProfile,
   saveModelProfile,
   switchModelProfile,
+  type ModelProfilePermissionChange,
   type ModelProfileSaveInput,
   type ModelProfiles as Profiles,
 } from "../../lib/model-profiles";
 import { namedLauncher, namesFromProviders, providerIdNote, providerTitle } from "../../lib/provider-names";
-import { effortTitle } from "../../lib/session-actions";
+import { effortTitle, modeTitle } from "../../lib/session-actions";
 import { onHubEvent } from "../../lib/store";
 import { t } from "../../i18n";
 import { Button, Dialog, Loading, toast } from "../../ui/atoms";
@@ -51,6 +52,36 @@ function purposeLabel(id: string, purposes?: ModelPurpose[]): string {
     translate: t("settings-modelprofiles.cat_translate"),
   };
   return fallback[id] ?? id;
+}
+
+function PermissionChanges({ changes, purposes, providers }: {
+  changes?: ModelProfilePermissionChange[];
+  purposes?: ModelPurpose[];
+  providers?: ModelProvider[];
+}) {
+  if (!changes?.length) return null;
+  const follow = t("settings-modelprofiles.purpose_follow_default");
+  const label = (mode: string | undefined, launcher?: string) => {
+    const title = modeTitle(mode) || follow;
+    return launcher
+      ? t("settings-modelprofiles.permission_on_launcher", { mode: title, launcher: providerName(`launcher.${launcher}`, providers) ?? launcher })
+      : title;
+  };
+  return <ul className="mt-1 flex flex-col gap-1" data-testid="model-profile-permission-changes">
+    {changes.map((change) => {
+      const subject = change.tier === undefined
+        ? purposeLabel(change.purpose, purposes)
+        : t("settings-modelprofiles.permission_tier", { name: change.tier });
+      const launcherChanged = change.before_launcher !== change.after_launcher;
+      return <li key={change.tier === undefined ? change.purpose : `tier.${change.tier}`}>
+        {t("settings-modelprofiles.permission_change", {
+          subject,
+          before: label(change.before, launcherChanged ? change.before_launcher : undefined),
+          after: label(change.after, launcherChanged ? change.after_launcher : undefined),
+        })}
+      </li>;
+    })}
+  </ul>;
 }
 
 /** `providers` and `purposes`: the model configuration's, to name launchers/categories cleanly and share picker filtering (#5029). */
@@ -156,7 +187,7 @@ function ModelProfilesForOwner({
     return () => { stopWrites(); stopEvents(); invalidateRead(); };
   }, []);
 
-  const apply = async (id?: string) => {
+  const apply = async (permissionChanges?: ModelProfilePermissionChange[], id?: string) => {
     if (!current() || pendingWrites.has(manager)) return;
     pendingWrites.add(manager);
     writesChanged();
@@ -165,14 +196,19 @@ function ModelProfilesForOwner({
     setReadError(""); setActionError(""); setConflict(false);
     const reqContext = { token, tokenOwner: owner, isAuthContextCurrent: current };
     try {
-      const result = await (id ? switchModelProfile(id, manager, reqContext) : rollbackModelProfile(manager, reqContext));
+      const result = await (id
+        ? switchModelProfile(id, manager, reqContext, permissionChanges)
+        : rollbackModelProfile(manager, reqContext, permissionChanges));
       if (current()) {
         setData(result);
         if (edit === interaction.current) { setEditing(false); setSelected(null); }
         changed.current();
       }
     } catch (e) {
-      if (current() && edit === interaction.current) setActionError(errorText(e));
+      if (current() && edit === interaction.current) {
+        setActionError(errorText(e));
+        if (e instanceof ApiError && e.status === 409) await load();
+      }
     } finally {
       pendingWrites.delete(manager);
       writesChanged();
@@ -255,8 +291,11 @@ function ModelProfilesForOwner({
         </Row>
       ))}
       {data?.rollback && (
-        <Row label={t("settings-modelprofiles.rollback")} hint={data.rollback.to || t("settings-modelprofiles.custom")}>
-          <Button tone="quiet" busy={busy} onClick={() => void apply()}>{t("settings-modelprofiles.rollback")}</Button>
+        <Row label={t("settings-modelprofiles.rollback")} wrapHint hint={<>
+          {data.rollback.to || t("settings-modelprofiles.custom")}
+          <PermissionChanges changes={data.rollback.permission_changes} purposes={purposes} providers={providers} />
+        </>}>
+          <Button tone="quiet" busy={busy} onClick={() => void apply(data.rollback?.permission_changes)}>{t("settings-modelprofiles.rollback")}</Button>
         </Row>
       )}
     </Group>
@@ -270,7 +309,7 @@ function ModelProfilesForOwner({
         editing ? undefined : <>
           <Button tone="quiet" disabled={busy} onClick={closeDialog}>{t("common.cancel")}</Button>
           <Button tone="secondary" disabled={busy} onClick={startEditing}>{t("settings-modelprofiles.edit")}</Button>
-          <Button tone="primary" busy={busy} onClick={() => profile && void apply(profile.id)}>{t("settings-modelprofiles.apply")}</Button>
+          <Button tone="primary" busy={busy} onClick={() => profile && void apply(profile.permission_changes, profile.id)}>{t("settings-modelprofiles.apply")}</Button>
         </>
       }
     >
@@ -294,6 +333,10 @@ function ModelProfilesForOwner({
         <>
           {profile.description && <p className="mb-3 text-label text-ink-3">{profile.description}</p>}
           <p className="mb-3 text-label text-ink-3">{t("settings-modelprofiles.changes", { count: profile.changes.length })}</p>
+          {!!profile.permission_changes?.length && <div className="mb-4 rounded-control bg-inset px-3 py-2 text-label text-ink-2">
+            <p className="font-semibold">{t("settings-modelprofiles.permission_changes")}</p>
+            <PermissionChanges changes={profile.permission_changes} purposes={purposes} providers={providers} />
+          </div>}
           {profile.active && profile.changes.length > 0 && (
             <p className="mb-4 rounded-control bg-inset px-3 py-2 text-label text-ink-2">{t("settings-modelprofiles.active_drift")}</p>
           )}
@@ -313,7 +356,7 @@ function ModelProfilesForOwner({
                       <span className="min-w-0 [overflow-wrap:anywhere] text-ink-3">
                         {providerTitle(l)}
                         {id && <> <span className="font-mono text-submeta">{id}</span></>}
-                        {[x.model, x.effort, speed].filter(Boolean).map((v) => ` · ${v}`).join("")}
+                        {[x.model, x.effort, speed, modeTitle(x.permission_mode)].filter(Boolean).map((v) => ` · ${v}`).join("")}
                       </span>
                     </div>
                     {x.description && <p className="mt-0.5 text-ink-2">{x.description}</p>}
@@ -333,6 +376,7 @@ function ModelProfilesForOwner({
                   b.provider ? (providerName(b.provider, providers) ?? b.provider) : t("settings-modelprofiles.purpose_follow_default"),
                   b.model,
                   b.effort && effortTitle(b.effort),
+                  modeTitle(b.permission_mode),
                 ].filter(Boolean).join(" · ");
                 return (
                   <li key={id} className="flex items-baseline justify-between gap-2 rounded-control bg-field px-3 py-2 text-label">

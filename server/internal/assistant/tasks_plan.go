@@ -88,6 +88,8 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		if t.Readonly {
 			asked = ""
 		}
+		t.PermissionDefaulted = asked == "" && !t.Readonly
+		t.PermissionConfigured = false
 		t.normalizeReadonlyPermission(readonlyModeOf(s.settings(ctx)))
 		t.TodoID, t.Error, t.ErrorCode, t.ErrorArgs, t.RetryWith = "", "", "", nil, nil
 		t.WorkspaceResolved, t.ReservedTodoID, t.WorkspaceInferred = nil, "", false
@@ -177,16 +179,22 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		takesModes := true
 		if _, ok := s.machineByName(ctx, t.Machine); ok {
 			own := t.launchPick()
-			fit, err := s.fitPlanTaskSpeed(ctx, t)
+			fit, configured, err := s.fitPlanTaskSpeed(ctx, t)
 			if err != nil {
 				return "", fmt.Errorf("task %d: %w", i+1, err)
 			}
-			if fit.allowAll() {
-				t.Permission = "bypassPermissions"
+			switch {
+			case configured != "":
+				t.Permission, t.PermissionConfigured = firstNonEmpty(asked, configured), true
+				if !fit.acceptsConfiguredMode(t.Launcher, t.Permission, false) {
+					return "", fmt.Errorf("task %d: %w", i+1, i18n.Err("assistant-models.err_permission_unsupported"))
+				}
+			case fit.allowAll():
+				t.Permission = proto.ModeBypass
 			}
 			// traex, omp…: no mode, no effort (launcher_modes.go). One the call names is refused now, rather than by
 			// the computer once the task starts; one a tier filled in is dropped. pi, cursor, agy: dropped either way.
-			if takesModes = startTakesModes(fit.agent); !takesModes {
+			if takesModes = configured != "" || startTakesModes(fit.agent); !takesModes {
 				if err := startModesRefused(t.Launcher, fit.agent, asked, own.effort); err != nil {
 					return "", fmt.Errorf("task %d: %w", i+1, err)
 				}
@@ -447,8 +455,9 @@ func applyPlanEdit(t *PlanTask, e PlanTask) {
 	if s := strings.TrimSpace(e.Speed); s != "" {
 		t.Speed = s
 	}
-	if s := strings.TrimSpace(e.Permission); s != "" {
+	if s := strings.TrimSpace(e.Permission); s != "" && s != t.Permission {
 		t.Permission = s
+		t.PermissionDefaulted = false
 	}
 	if e.Ultracode != nil {
 		t.Ultracode = e.Ultracode

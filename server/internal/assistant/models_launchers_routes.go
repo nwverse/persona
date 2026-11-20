@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"maps"
@@ -437,7 +438,7 @@ type pickerTier struct {
 // in use, by name, but those whose launcher the machine does not have (a direct API provider is in no machine's list)
 // or the list leaves out because its latest check failed. None when no profile is in use or it cannot be read: the
 // form then has no preset row.
-func (s *Service) pickerTiers(ctx context.Context, machine string, launchers []ConfiguredLauncher) (*ModelProfile, []pickerTier) {
+func (s *Service) pickerTiers(ctx context.Context, machine string, launchers []ConfiguredLauncher, host ...string) (*ModelProfile, []pickerTier) {
 	p, _, err := s.activeModelProfile(ctx)
 	if err != nil || p == nil {
 		return nil, nil
@@ -449,10 +450,26 @@ func (s *Service) pickerTiers(ctx context.Context, machine string, launchers []C
 		if proto.IsExternalLauncher(t.Launcher) {
 			continue
 		}
-		if slices.ContainsFunc(launchers, func(l ConfiguredLauncher) bool { return l.Name == t.Launcher }) ||
-			slices.Contains(hidden, t.Launcher) && s.hiddenUsable(ctx, machine, t.Launcher) { // hidden still runs (#4661)
-			out = append(out, pickerTier{ModelTier: t, Name: name})
+		l := slices.IndexFunc(launchers, func(l ConfiguredLauncher) bool { return l.Name == t.Launcher })
+		if l < 0 && !(slices.Contains(hidden, t.Launcher) && s.hiddenUsable(ctx, machine, t.Launcher)) {
+			continue
 		}
+		if t.PermissionMode != "" {
+			var fit startAgent
+			if l >= 0 {
+				fit = launcherStartAgent(launchers[l])
+				fit.snapshot = cmp.Or(launchers[l].AgentType, launchers[l].Agent)
+			} else {
+				fit = s.lastSeenAgent(ctx, machine, t.Launcher)
+			}
+			if len(host) > 0 {
+				fit.permissionHost = host[0]
+			}
+			if s.isWorkMachine(machine) || !fit.acceptsConfiguredMode(t.Launcher, t.PermissionMode, false) {
+				t.PermissionMode = ""
+			}
+		}
+		out = append(out, pickerTier{ModelTier: t, Name: name})
 	}
 	return p, out
 }
@@ -527,6 +544,12 @@ func (s *Service) machineLauncherRoutes() {
 		// ID, which clients look up here.
 		stored := s.storedLaunchers(ctx)
 		for i, l := range shown {
+			if (purpose == "" || purpose == "agent.new") && !s.isWorkMachine(mid) {
+				fit := launcherStartAgent(l.ConfiguredLauncher)
+				fit.snapshot = cmp.Or(l.AgentType, l.Agent)
+				fit.permissionHost = r.URL.Query().Get("host")
+				shown[i].StartPermissionModes = fit.startPermissionModes(l.Name, false)
+			}
 			if proto.IsExternalLauncher(l.Name) && l.External != nil {
 				shown[i].DisplayName = l.External.Name
 				continue
@@ -545,7 +568,7 @@ func (s *Service) machineLauncherRoutes() {
 			for _, l := range shown {
 				usable = append(usable, l.ConfiguredLauncher)
 			}
-			if p, tiers := s.pickerTiers(ctx, mid, usable); len(tiers) > 0 {
+			if p, tiers := s.pickerTiers(ctx, mid, usable, r.URL.Query().Get("host")); len(tiers) > 0 {
 				out["tiers"], out["tiers_profile"] = tiers, map[string]string{"id": p.ID, "name": p.Name}
 			}
 			// and the providers left out here for their own-service rule, with why (#8109), as the main chat's has them

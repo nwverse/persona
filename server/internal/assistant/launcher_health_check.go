@@ -404,7 +404,8 @@ func (s *Service) healthLines(ctx context.Context, machine string) string {
 // Persona-managed provider's own name replaces (launcher_auto_name).
 type launcherWithHealth struct {
 	ConfiguredLauncher
-	Health *launcherHealthView `json:"health,omitempty"`
+	Health               *launcherHealthView `json:"health,omitempty"`
+	StartPermissionModes []string            `json:"start_permission_modes,omitempty"`
 }
 
 type launcherHealthView struct {

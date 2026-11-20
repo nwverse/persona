@@ -288,10 +288,33 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if err := checkStartSpeed(params, fit, ""); err != nil {
 		return "", "", err
 	}
-	if fit.allowAll() && !t.preservePermission {
-		t.Permission = "bypassPermissions"
+	launcher, _ := params["launcher"].(string)
+	presetPermission := own.presetPermission
+	if t.startFilled.preset {
+		// A start-defaults rule may choose execution, but does not add a
+		// different permission mode after the task's Start was approved.
+		presetPermission = launchPermission{}
 	}
-	modes := startTakesModes(fit.agent)
+	configured := s.plannedPermissionDefault(ctx, *t, m.ID, launcher, fit, presetPermission)
+	switch {
+	case t.PermissionConfigured && !t.Readonly && !t.preservePermission && t.InboxHandoff == "" && t.Parent == "":
+		// A waiting plan approved a concrete mode. Neither a preference edit
+		// nor a retry on another launcher is authority to broaden it.
+		if s.isWorkMachine(m.ID) || !fit.acceptsConfiguredMode(launcher, t.Permission, false) {
+			return "", "", i18n.Err("assistant-models.err_permission_unsupported")
+		}
+		configured = t.Permission
+	case configured != "":
+		if t.Permission == "" || t.PermissionDefaulted {
+			t.Permission = configured
+		}
+		if !fit.acceptsConfiguredMode(launcher, t.Permission, false) {
+			return "", "", i18n.Err("assistant-models.err_permission_unsupported")
+		}
+	case fit.allowAll() && !t.preservePermission:
+		t.Permission = proto.ModeBypass
+	}
+	modes := configured != "" || startTakesModes(fit.agent)
 	if !modes { // traex, omp…: no mode and no effort, whatever a default or a tier filled in (launcher_modes.go)
 		delete(params, "effort")
 		t.Effort = ""

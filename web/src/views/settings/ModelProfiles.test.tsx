@@ -32,6 +32,55 @@ it("switches profiles and exposes rollback", async () => {
  await act(async () => root.unmount()); host.remove();
 });
 
+it("sends the displayed permission changes and reloads a stale preview before another click", async () => {
+ await initI18n("en");
+ const changes = [{ purpose: "assistant", after: "plan" }, { tier: "review", before: "auto", after: "plan", after_launcher: "gw" }];
+ const fresh = [{ purpose: "assistant", before: "default", after: "plan" }];
+ const posted: { path: string; body: unknown }[] = [];
+ let stale = false;
+ const response = () => Response.json({
+  profiles: [{ id: "economy", name: "Economy", changes: ["assistant"], permission_changes: stale ? fresh : changes }],
+  rollback: { changes: [], permission_changes: [] },
+ });
+ vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+  const path = String(input);
+  if (init?.method === "POST") {
+   posted.push({ path, body: JSON.parse(String(init.body)) });
+   if (!stale) {
+    stale = true;
+    return Response.json({ error: "Permission settings changed. Review the new values." }, { status: 409 });
+   }
+  }
+  return response();
+ }));
+ const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+ const summary = '[data-testid="model-profile-permission-changes"]';
+ const button = (text: string, scope: ParentNode = document) => [...scope.querySelectorAll("button")].find((b) => b.textContent?.trim() === text)!;
+ try {
+  const providers = [{ id: "launcher.gw", name: "Team gateway", kind: "launcher" as const }];
+  await act(async () => { root.render(<ModelProfiles providers={providers} onChanged={() => {}} />); });
+  await act(async () => button("Economy", host).click());
+  const dialog = document.querySelector('[role="dialog"]')!;
+  expect([...dialog.querySelectorAll(`${summary} li`)].map((row) => row.textContent)).toEqual([
+   "Main chat: Follow default → Plan mode",
+   "Agent preset review: Auto-review → Plan mode (Team gateway)",
+  ]);
+
+  await act(async () => button(t("settings-modelprofiles.apply"), dialog).click());
+  const path = "/api/v1/model-profiles/economy/apply";
+  expect(posted).toEqual([{ path, body: { permission_changes: changes } }]);
+  expect(dialog.querySelector('[role="alert"]')?.textContent).toContain("Review the new values");
+  expect(dialog.querySelector(summary)?.textContent).toBe("Main chat: Default permissions → Plan mode");
+  await act(async () => button(t("settings-modelprofiles.apply"), dialog).click());
+  expect(posted[1]).toEqual({ path, body: { permission_changes: fresh } });
+
+  await act(async () => button(t("settings-modelprofiles.rollback"), host).click());
+  expect(posted[2]).toEqual({ path: "/api/v1/model-profiles/rollback", body: { permission_changes: [] } });
+ } finally {
+  await act(async () => root.unmount()); host.remove();
+ }
+});
+
 it("shows apply failures inside the dialog and clears errors on cancel and close", async () => {
  await initI18n();
  const onChanged = vi.fn();
@@ -110,6 +159,7 @@ it("names a preset's launcher by the provider's display name, its ID beside it; 
 
 it("edits name, purposes, launchers, and tiers interactively via shared pickers and saves with revision", async () => {
  await initI18n("en");
+ await Promise.all([import("./ModelProfileEditor"), import("../../ui/ModelPicker")]);
  const puts: { path: string; body: Record<string, unknown> }[] = [];
  let revision = 3;
  let profileData: Record<string, unknown> = {
@@ -126,19 +176,20 @@ it("edits name, purposes, launchers, and tiers interactively via shared pickers 
    gw: { model: "sonnet-4", effort: "medium" },
   },
   tiers: {
-   standard: { launcher: "gw", model: "sonnet-4", effort: "medium", description: "Default coding" },
+   standard: { launcher: "gw", model: "sonnet-4", effort: "medium", permission_mode: "auto", description: "Default coding" },
   },
  };
  const providers = [
-  { id: "launcher.gw", name: "Team gateway", kind: "launcher" as const, agent: "claude", model: "sonnet-4" },
-  { id: "launcher.other", name: "Other launcher", kind: "launcher" as const, agent: "claude", model: "opus-4" },
-  { id: "launcher.api_fast", name: "Fast API", kind: "api" as const, api: "messages" as const, model: "fast-1" },
+  { id: "launcher.gw", name: "Team gateway", kind: "launcher" as const, agent: "claude", model: "sonnet-4",
+   permission_modes: ["default", "auto", "plan"], assistant_permission_modes: ["default", "plan"] },
+  { id: "launcher.other", name: "Other launcher", kind: "launcher" as const, agent: "omp", model: "opus-4", permission_modes: [] },
+  { id: "launcher.api_fast", name: "Fast API", kind: "api" as const, api: "messages" as const, model: "fast-1", permission_modes: ["default", "plan"] },
  ];
  const purposes = [
   {
    id: "assistant", category_id: "assistant", name: "Main chat", group: "Default", kind: "launcher" as const,
    override: {}, effective: { provider: "launcher.gw", model: "sonnet-4" }, revision: 1,
-   fields: ["provider", "model", "effort"], provider_ids: ["launcher.gw", "launcher.other"],
+   fields: ["provider", "model", "effort", "permission_mode"], provider_ids: ["launcher.gw", "launcher.other"],
   },
   {
    id: "agent.new", category_id: "agent.new", name: "Agents", group: "Default", kind: "launcher" as const,
@@ -189,9 +240,9 @@ it("edits name, purposes, launchers, and tiers interactively via shared pickers 
  const onChanged = vi.fn();
  const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
  const flush = async () => { for (let i = 0; i < 6; i++) await act(async () => { await new Promise((r) => setTimeout(r, 0)); }); };
- const setVal = (el: HTMLInputElement | HTMLSelectElement, value: string) => {
+ const setVal = async (el: HTMLInputElement | HTMLSelectElement, value: string) => {
   const proto = el instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
-  act(() => {
+  await act(async () => {
    Object.getOwnPropertyDescriptor(proto, "value")!.set!.call(el, value);
    el.dispatchEvent(new Event(el instanceof HTMLSelectElement ? "change" : "input", { bubbles: true }));
   });
@@ -202,7 +253,7 @@ it("edits name, purposes, launchers, and tiers interactively via shared pickers 
   await flush();
   // Footer no longer tells users they must use the hub API to edit profiles.
   expect(host.textContent).not.toContain("hub API");
-  act(() => [...host.querySelectorAll("button")].find((b) => b.textContent?.includes("Economy"))!.click());
+  await act(async () => [...host.querySelectorAll("button")].find((b) => b.textContent?.includes("Economy"))!.click());
   await flush();
   const dialog = () => document.querySelector<HTMLElement>('[role="dialog"]')!;
   // Structured inspect view replaces raw JSON <pre>.
@@ -220,7 +271,7 @@ it("edits name, purposes, launchers, and tiers interactively via shared pickers 
   expect(dialog().textContent).toContain(t("settings-modelprofiles.save_note_active"));
 
   // 1) Update profile name.
-  setVal(dialog().querySelector<HTMLInputElement>(`input[aria-label="${t("settings-modelprofiles.name")}"]`)!, "Economy Plus");
+  await setVal(dialog().querySelector<HTMLInputElement>(`input[aria-label="${t("settings-modelprofiles.name")}"]`)!, "Economy Plus");
 
   // 2) Change assistant model via shared ModelPicker.
   const assistantCard = dialog().querySelector<HTMLElement>('[data-testid="profile-purpose-assistant"]')!;
@@ -234,14 +285,24 @@ it("edits name, purposes, launchers, and tiers interactively via shared pickers 
   await act(async () => [...assistantCard.querySelectorAll<HTMLButtonElement>('[role="option"]')].find((b) => b.textContent?.includes("Opus 4"))!.click());
   await flush();
 
+  const permission = (card: ParentNode) => card.querySelector<HTMLSelectElement>(`select[aria-label="${t("newagent.permission_mode")}"]`);
+  expect([...permission(assistantCard)!.options].map((option) => option.value)).toEqual(["", "default", "plan"]);
+  await setVal(permission(assistantCard)!, "plan");
+
+  const standardTier = dialog().querySelector<HTMLElement>('[data-testid="profile-tier-edit-standard"]')!;
+  expect([...permission(standardTier)!.options].map((option) => option.value)).toEqual(["", "default", "auto", "plan"]);
+  expect(permission(standardTier)?.value).toBe("auto");
+  await setVal(permission(standardTier)!, "plan");
+
   // 3) Change kb model via Direct API discovered select.
   const kbCard = dialog().querySelector<HTMLElement>('[data-testid="profile-purpose-kb"]')!;
+  expect(permission(kbCard)).toBeNull();
   await vi.waitFor(() => {
    const sel = [...kbCard.querySelectorAll<HTMLSelectElement>("select")].find((s) => [...s.options].some((o) => o.value === "fast-2"));
    expect(sel).toBeDefined();
   });
   const kbModelSelect = [...kbCard.querySelectorAll<HTMLSelectElement>("select")].find((s) => [...s.options].some((o) => o.value === "fast-2"))!;
-  setVal(kbModelSelect, "fast-2");
+  await setVal(kbModelSelect, "fast-2");
   await flush();
 
   // 4) Clear small_model on launcher "gw" and add managed launcher "other".
@@ -250,7 +311,7 @@ it("edits name, purposes, launchers, and tiers interactively via shared pickers 
   await act(async () => clearButtons[0].click());
   await flush();
   const addLauncherSelect = dialog().querySelector<HTMLSelectElement>(`select[aria-label="${t("settings-modelprofiles.add_launcher")}"]`)!;
-  setVal(addLauncherSelect, "other");
+  await setVal(addLauncherSelect, "other");
   await act(async () => btn(t("settings-modelprofiles.add_launcher"), dialog()).click());
   await flush();
 
@@ -258,10 +319,14 @@ it("edits name, purposes, launchers, and tiers interactively via shared pickers 
   await act(async () => btn(t("settings-modelprofiles.add_tier"), dialog()).click());
   await flush();
   const newTier = [...dialog().querySelectorAll<HTMLElement>('[data-testid^="profile-tier-edit-"]')].at(-1)!;
-  setVal(newTier.querySelector<HTMLInputElement>(`input[aria-label="${t("settings-modelprofiles.tier_name")}"]`)!, "fast");
-  setVal(newTier.querySelector<HTMLSelectElement>(`select[aria-label="${t("settings-modelprofiles.tier_launcher")}"]`)!, "other");
+  await setVal(newTier.querySelector<HTMLInputElement>(`input[aria-label="${t("settings-modelprofiles.tier_name")}"]`)!, "fast");
+  const newLauncher = newTier.querySelector<HTMLSelectElement>(`select[aria-label="${t("settings-modelprofiles.tier_launcher")}"]`)!;
+  expect(permission(newTier)?.selectedOptions[0].textContent).toBe(t("settings-modelprofiles.tier_permission_follow"));
+  await setVal(permission(newTier)!, "auto");
+  await setVal(newLauncher, "other");
   await flush();
-  setVal(newTier.querySelector<HTMLInputElement>(`input[aria-label="${t("settings-modelprofiles.tier_description")}"]`)!, "Quick mechanical tasks");
+  expect(permission(newTier)).toBeNull();
+  await setVal(newTier.querySelector<HTMLInputElement>(`input[aria-label="${t("settings-modelprofiles.tier_description")}"]`)!, "Quick mechanical tasks");
   await flush();
 
   // 6) Save profile -> sends PUT with revision 3 and never exposes/sends secrets.
@@ -275,7 +340,7 @@ it("edits name, purposes, launchers, and tiers interactively via shared pickers 
    name: "Economy Plus",
    description: "Everyday models",
    purposes: {
-    assistant: { provider: "launcher.gw", model: "opus-4", effort: "medium" },
+    assistant: { provider: "launcher.gw", model: "opus-4", effort: "medium", permission_mode: "plan" },
     kb: { provider: "launcher.api_fast", model: "fast-2", effort: "low" },
    },
    launchers: {
@@ -283,15 +348,18 @@ it("edits name, purposes, launchers, and tiers interactively via shared pickers 
     other: { model: "opus-4" },
    },
    tiers: {
-    standard: { launcher: "gw", model: "sonnet-4", effort: "medium", description: "Default coding" },
+    standard: { launcher: "gw", model: "sonnet-4", effort: "medium", permission_mode: "plan", description: "Default coding" },
     fast: { launcher: "other", description: "Quick mechanical tasks" },
    },
   });
   expect(JSON.stringify(puts[0].body)).not.toMatch(/api_key|token|secret/i);
+  expect((puts[0].body.tiers as Record<string, unknown>).fast).not.toHaveProperty("permission_mode");
   expect(onChanged).toHaveBeenCalledTimes(1);
   // Returns to inspect view with active-drift hint so user can Apply profile if desired.
   expect(dialog().querySelector('[data-testid="model-profile-editor"]')).toBeNull();
   expect(dialog().textContent).toContain(t("settings-modelprofiles.active_drift"));
+  expect(dialog().querySelector('[data-testid="model-profile-tiers"]')?.textContent).toContain(t("lib-session-actions.mode_plan"));
+  expect(dialog().querySelector('[data-testid="model-profile-purposes"]')?.textContent).toContain(t("lib-session-actions.mode_plan"));
  } finally {
   await act(async () => root.unmount()); host.remove();
  }

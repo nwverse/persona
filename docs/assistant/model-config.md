@@ -63,8 +63,30 @@ It is returned by the model-configuration list and detail endpoints, never store
 
 Non-launcher purposes always have an empty launch value, even if their parent is a launcher.
 `applyModel` overwrites any caller-supplied `launch` in node-call params. `startOn` requires `headless` before
-`assistant.send`; a new `AgentStartParams` requires `engine` before `session.start`. Existing launcher, model, effort,
-permission and resume choices are unchanged.
+`assistant.send`. A new `AgentStartParams` requires `engine` before `session.start`.
+
+### Permission defaults for new sessions
+
+People who use different Agent launchers can set a **Permission mode** in Web **Settings › Models**. The control
+appears on launcher-backed purposes with selectable modes. The options come from the selected launcher's
+capabilities. Direct API calls and plugin model services have no permission setting.
+
+Choose **Follow default** to inherit the category's mode on the same provider. If the category supplies no mode,
+the start follows its existing launcher or application default. Switching providers clears the previous provider's
+override. The order for a new session is its explicit choice, a compatible Agent preset, the purpose's setting,
+then the existing default. A mode saved for one launcher does not follow a start that falls back to a different
+launcher. Existing conversations retain their own permission mode.
+
+Read-only tasks, guest conversations and restricted launch paths continue to obey their own policy. The Inbox AI
+twin uses the mode required by its Inbox tool allowlist. Meeting rooms use a guest-specific tool set. These two
+purposes have no permission picker. Lark /agent can use its own saved choice and otherwise follows the existing
+Lark policy. On a computer where the launcher or host cannot enforce a mode, the start uses its existing policy.
+For example, terminal Codex supports Plan mode and Full access, while headless Codex can also honor Ask and Auto.
+
+The catalog advertises `permission_mode` in the purpose's `fields`. Providers list terminal options in
+`permission_modes` and headless options in `assistant_permission_modes`. An empty list means that execution path
+has no supported modes. PATCH with a mode sets it, `null` clears it, and an omitted field leaves it as saved.
+The manager validates the mode against the resulting provider.
 
 The web page groups purposes by `(kind, launch)`: **Persona chats · Background process**, **Agents · Interactive**,
 **Background processing · Direct API**, then **Extensions** (only when installed; extensions' own API purposes stay here).

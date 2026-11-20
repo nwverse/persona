@@ -1,4 +1,5 @@
 {
+  "err_permission_owner": "Switch or roll back this profile in Settings to confirm the changes to permission modes.",
   "name_performance": "Performance",
   "name_economy": "Economy",
   "about_performance": "Template copied from the current configuration. Edit its model choices before switching.",

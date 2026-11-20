@@ -73,6 +73,12 @@ func (s *Service) AgentStartParams(ctx context.Context, p AgentStartParams) (map
 			if err := checkStartSpeed(params, agent, ""); err != nil {
 				return nil, badRequest(err, s.appLang(ctx, p.Lang))
 			}
+			if workSession, _ := params["work_session"].(bool); !workSession && p.AllowPermissionDefault && own.permission == "" {
+				launcher, _ := params["launcher"].(string)
+				if mode := s.launchPermissionDefault(ctx, "agent.new", m.ID, launcher, agent, own.presetPermission, false); mode != "" {
+					params["permission_mode"] = mode
+				}
+			}
 			leaveLauncherNote(ctx, note) // the app says so (agents_bus.go launcher_note, #4661)
 			// AGY returns a session only after startup, including for a launcher resolved from Model settings.
 			if declared, _ := params["agent_type"].(string); declared == "" && agent.agent == "agy" {

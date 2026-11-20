@@ -1,4 +1,6 @@
 {
+  "err_permission_launcher_only": "この用途では権限モードを変更できません。",
+  "err_permission_unsupported": "選択したランチャーはこの権限モードに対応していません。",
   "name_assistant": "メインチャット",
   "name_agent_new": "Agents",
   "name_kb": "情報処理",

@@ -11,32 +11,28 @@ export interface ModeOption {
   detail: string;
 }
 
+// The locale is selected after modules load and can change while the app is open.
+function modeOption(id: string, key: string, detail = key): ModeOption {
+  return {
+    id,
+    get title() { return t(`lib-session-actions.${key}`); },
+    get detail() { return t(`lib-session-actions.${detail}_detail`); },
+  };
+}
+
 export const PERMISSION_MODES: ModeOption[] = [
-  { id: "default", title: t("lib-session-actions.mode_default"), detail: t("lib-session-actions.mode_default_detail") },
-  { id: "acceptEdits", title: t("lib-session-actions.mode_accept_edits"), detail: t("lib-session-actions.mode_accept_edits_detail") },
-  { id: "plan", title: t("lib-session-actions.mode_plan"), detail: t("lib-session-actions.mode_plan_detail") },
-  { id: "auto", title: t("lib-session-actions.mode_auto"), detail: t("lib-session-actions.mode_auto_detail") },
-  { id: "bypassPermissions", title: t("lib-session-actions.mode_bypass_permissions"), detail: t("lib-session-actions.mode_bypass_permissions_detail") },
+  modeOption("default", "mode_default"),
+  modeOption("acceptEdits", "mode_accept_edits"),
+  modeOption("plan", "mode_plan"),
+  modeOption("auto", "mode_auto"),
+  modeOption("bypassPermissions", "mode_bypass_permissions"),
 ];
 
-export const EFFORTS: ModeOption[] = [
-  { id: "low", title: t("lib-session-actions.effort_low"), detail: t("lib-session-actions.effort_low_detail") },
-  { id: "medium", title: t("lib-session-actions.effort_medium"), detail: t("lib-session-actions.effort_medium_detail") },
-  { id: "high", title: t("lib-session-actions.effort_high"), detail: t("lib-session-actions.effort_high_detail") },
-  { id: "xhigh", title: t("lib-session-actions.effort_xhigh"), detail: t("lib-session-actions.effort_xhigh_detail") },
-  { id: "max", title: t("lib-session-actions.effort_max"), detail: t("lib-session-actions.effort_max_detail") },
-];
+export const EFFORTS = ["low", "medium", "high", "xhigh", "max"].map((id) => modeOption(id, `effort_${id}`));
 
 /** Codex's reasoning efforts (node/codex_effort.go); a thread offers those of its model, in `Session.efforts`. */
-export const CODEX_EFFORTS: ModeOption[] = [
-  { id: "minimal", title: t("lib-session-actions.codex_effort_minimal"), detail: t("lib-session-actions.codex_effort_minimal_detail") },
-  { id: "low", title: t("lib-session-actions.codex_effort_low"), detail: t("lib-session-actions.codex_effort_low_detail") },
-  { id: "medium", title: t("lib-session-actions.codex_effort_medium"), detail: t("lib-session-actions.codex_effort_medium_detail") },
-  { id: "high", title: t("lib-session-actions.codex_effort_high"), detail: t("lib-session-actions.codex_effort_high_detail") },
-  { id: "xhigh", title: t("lib-session-actions.codex_effort_xhigh"), detail: t("lib-session-actions.codex_effort_xhigh_detail") },
-  { id: "max", title: t("lib-session-actions.codex_effort_max"), detail: t("lib-session-actions.codex_effort_max_detail") },
-  { id: "ultra", title: t("lib-session-actions.codex_effort_ultra"), detail: t("lib-session-actions.codex_effort_ultra_detail") },
-];
+export const CODEX_EFFORTS = ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
+  .map((id) => modeOption(id, `codex_effort_${id}`));
 
 /** Modes a running session can switch to: "Allow all" is chosen only when it starts. */
 export const SWITCHABLE_MODES = PERMISSION_MODES.filter((m) => m.id !== "bypassPermissions");
@@ -50,7 +46,8 @@ export const BYPASS_WARNING = t("lib-session-actions.bypass_warning");
  * Claude with the new mode (#2416). So does an agent whose Claude was started with a flag that puts "Allow all" in
  * its mode cycle (`bypass`: Session.bypass_available, or it is in that mode now; #1379). Other agents keep
  * SWITCHABLE_MODES. */
-const ALL_MODES = PERMISSION_MODES.map((m) => (m.id === BYPASS_MODE ? { ...m, detail: t("lib-session-actions.mode_bypass_permissions_assistant_detail") } : m));
+const ALL_MODES = PERMISSION_MODES.map((m) => m.id === BYPASS_MODE
+  ? modeOption(m.id, "mode_bypass_permissions", "mode_bypass_permissions_assistant") : m);
 
 export function switchableModes(assistant: boolean | undefined, agent?: string, bypass?: boolean): ModeOption[] {
   return assistant || agent === "agy" || bypass ? ALL_MODES : SWITCHABLE_MODES;
@@ -82,7 +79,7 @@ export function hasModes(s: Session | undefined): boolean {
 
 /** A session's own approval, the first of the modes a session lists (`listedModesOf`): "Launcher default", not "Ask",
  *  since the agent's own settings may already approve everything (#8261). */
-export const LAUNCHER_DEFAULT: ModeOption = { id: "default", title: t("lib-session-actions.mode_launcher_default"), detail: t("lib-session-actions.mode_launcher_default_detail") };
+export const LAUNCHER_DEFAULT = modeOption("default", "mode_launcher_default");
 
 /** The permission modes the composer switches a session of an agent that is not Claude Code between (#8261, the node's
  *  `capabilities.permission_modes`): its own approval and Full access, on Paseo's Grok, OpenCode or Codex. Undefined with
@@ -102,7 +99,7 @@ export function listedModeNow(s: Session, listed: string[]): string {
  *  back (a switch, unlike Claude Code's start-only Full access), the rest as Claude Code names them. */
 export function listedModeOption(id: string): ModeOption {
   if (id === "default") return LAUNCHER_DEFAULT;
-  if (id === BYPASS_MODE) return { id, title: t("lib-session-actions.mode_bypass_permissions"), detail: t("lib-session-actions.mode_bypass_listed_detail") };
+  if (id === BYPASS_MODE) return modeOption(id, "mode_bypass_permissions", "mode_bypass_listed");
   return PERMISSION_MODES.find((m) => m.id === id) ?? { id, title: id, detail: "" };
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"maps"
 	"net/http"
 	"slices"
@@ -20,10 +21,10 @@ import (
 
 // profileRecords reads the records of the categories any of ps names, each once: the view compares every profile
 // with them while it holds models.mu.
-func (s *Service) profileRecords(ctx context.Context, ps []ModelProfile) (map[string]modelRecord, error) {
+func (s *Service) profileRecords(ctx context.Context, ps []ModelProfile, rollback map[string]ModelBinding) (map[string]modelRecord, error) {
 	records := map[string]modelRecord{}
 	for _, id := range modelCategoryIDs {
-		if !slices.ContainsFunc(ps, func(p ModelProfile) bool { _, ok := p.Purposes[id]; return ok }) {
+		if _, restores := rollback[id]; !restores && !slices.ContainsFunc(ps, func(p ModelProfile) bool { _, ok := p.Purposes[id]; return ok }) {
 			continue
 		}
 		r, err := s.modelRecord(ctx, id)
@@ -67,6 +68,31 @@ func modelProfileChanges(p ModelProfile, records map[string]modelRecord, stored 
 	return changes
 }
 
+// ModelProfilePermissionChange exposes the stored override that a switch or rollback would replace.
+type ModelProfilePermissionChange struct {
+	Purpose        string `json:"purpose,omitempty"`
+	Tier           string `json:"tier,omitempty"`
+	Before         string `json:"before,omitempty"`
+	After          string `json:"after,omitempty"`
+	BeforeLauncher string `json:"before_launcher,omitempty"`
+	AfterLauncher  string `json:"after_launcher,omitempty"`
+}
+
+func modelProfilePermissionChanges(purposes map[string]ModelBinding, records map[string]modelRecord) []ModelProfilePermissionChange {
+	changes := []ModelProfilePermissionChange{}
+	for _, id := range modelCategoryIDs {
+		next, ok := purposes[id]
+		if !ok {
+			continue
+		}
+		before := records[id].Binding
+		if change, changed := modelPermissionChange(id, before, next); changed {
+			changes = append(changes, change)
+		}
+	}
+	return changes
+}
+
 // ---- the view ----
 
 // ModelProfileView is a profile as GET /api/v1/model-profiles shows it.
@@ -74,7 +100,8 @@ type ModelProfileView struct {
 	ModelProfile
 	Active bool `json:"active,omitempty"`
 	// Changes: what switching to it would change now (for the one in use: where the configuration moved away from it).
-	Changes []string `json:"changes"`
+	Changes           []string                       `json:"changes"`
+	PermissionChanges []ModelProfilePermissionChange `json:"permission_changes"`
 }
 
 // ModelProfilesView is GET /api/v1/model-profiles.
@@ -90,9 +117,10 @@ type ModelProfilesView struct {
 
 // ModelProfileUndo is what a rollback would do: back to profile To ("" none), changing Changes.
 type ModelProfileUndo struct {
-	To      string    `json:"to,omitempty"`
-	At      time.Time `json:"at"`
-	Changes []string  `json:"changes"`
+	To                string                         `json:"to,omitempty"`
+	At                time.Time                      `json:"at"`
+	Changes           []string                       `json:"changes"`
+	PermissionChanges []ModelProfilePermissionChange `json:"permission_changes"`
 }
 
 func (s *Service) modelProfilesView(ctx context.Context) (ModelProfilesView, error) {
@@ -114,7 +142,11 @@ func (s *Service) modelProfilesView(ctx context.Context) (ModelProfilesView, err
 		return ModelProfilesView{}, err
 	}
 	ctx = withManagedSnapshot(ctx, stored)
-	records, err := s.profileRecords(ctx, ps.Profiles)
+	var rollbackPurposes map[string]ModelBinding
+	if state.Previous != nil {
+		rollbackPurposes = state.Previous.Purposes
+	}
+	records, err := s.profileRecords(ctx, ps.Profiles, rollbackPurposes)
 	if err != nil {
 		return ModelProfilesView{}, err
 	}
@@ -123,11 +155,14 @@ func (s *Service) modelProfilesView(ctx context.Context) (ModelProfilesView, err
 		at, by := state.At, state.By
 		v.At, v.By = &at, &by
 	}
+	activeTiers := tiersInProfile(ps, state.Active)
 	for _, p := range ps.Profiles {
-		v.Profiles = append(v.Profiles, ModelProfileView{ModelProfile: p, Active: p.ID == state.Active, Changes: modelProfileChanges(p, records, stored)})
+		v.Profiles = append(v.Profiles, ModelProfileView{ModelProfile: p, Active: p.ID == state.Active, Changes: modelProfileChanges(p, records, stored),
+			PermissionChanges: append(modelProfilePermissionChanges(p.Purposes, records), tierPermissionChanges(activeTiers, p.Tiers)...)})
 	}
 	if prev := state.Previous; prev != nil {
-		undo := &ModelProfileUndo{To: prev.Profile, At: prev.At, Changes: slices.Sorted(maps.Keys(prev.Purposes))}
+		undo := &ModelProfileUndo{To: prev.Profile, At: prev.At, Changes: slices.Sorted(maps.Keys(prev.Purposes)),
+			PermissionChanges: append(modelProfilePermissionChanges(prev.Purposes, records), tierPermissionChanges(activeTiers, tiersInProfile(ps, prev.Profile))...)}
 		for _, name := range slices.Sorted(maps.Keys(prev.Launchers)) {
 			m := prev.Launchers[name]
 			for _, f := range m.fields(nil) {
@@ -169,7 +204,8 @@ func modelProfileStatus(err error) int {
 		return http.StatusNotFound
 	case errors.Is(err, errModelProfileConflict), errors.Is(err, errModelProfileNoRollback):
 		return http.StatusConflict
-	case errors.As(err, &m) && strings.HasPrefix(m.Key, "assistant-model_profiles."):
+	case errors.As(err, &m) && (strings.HasPrefix(m.Key, "assistant-model_profiles.") ||
+		m.Key == "assistant-models.err_permission_launcher_only" || m.Key == "assistant-models.err_permission_unsupported"):
 		return http.StatusBadRequest
 	}
 	return http.StatusInternalServerError
@@ -205,6 +241,20 @@ func profilePurposes(in map[string]profilePurposeInput) map[string]ModelBinding 
 		out[id] = p.ModelBinding
 	}
 	return out
+}
+
+// profilePermissionReview reads the permission changes presented by this client. Older clients post no body.
+func profilePermissionReview(w http.ResponseWriter, r *http.Request) ([]ModelProfilePermissionChange, bool) {
+	var in struct {
+		PermissionChanges []ModelProfilePermissionChange `json:"permission_changes"`
+	}
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&in); err != nil && !errors.Is(err, io.EOF) {
+		writeBodyErr(w, err, err)
+		return nil, false
+	}
+	return in.PermissionChanges, true
 }
 
 func (s *Service) modelProfileRoutes() {
@@ -280,14 +330,22 @@ func (s *Service) modelProfileRoutes() {
 		view(w, r)
 	}))
 	s.handle("POST /api/v1/model-profiles/{id}/apply", full(func(w http.ResponseWriter, r *http.Request) {
-		if _, err := s.applyModelProfile(r.Context(), r.PathValue("id"), profileActor(r)); err != nil {
+		review, ok := profilePermissionReview(w, r)
+		if !ok {
+			return
+		}
+		if _, err := s.applyModelProfileReviewed(r.Context(), r.PathValue("id"), profileActor(r), review); err != nil {
 			apierr.Write(w, modelProfileStatus(err), err)
 			return
 		}
 		view(w, r)
 	}))
 	s.handle("POST /api/v1/model-profiles/rollback", full(func(w http.ResponseWriter, r *http.Request) {
-		if _, err := s.rollbackModelProfile(r.Context(), profileActor(r)); err != nil {
+		review, ok := profilePermissionReview(w, r)
+		if !ok {
+			return
+		}
+		if _, err := s.rollbackModelProfileReviewed(r.Context(), profileActor(r), review); err != nil {
 			apierr.Write(w, modelProfileStatus(err), err)
 			return
 		}

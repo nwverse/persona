@@ -43,9 +43,17 @@ export interface ModelProfileTier {
   launcher: string;
   model?: string;
   effort?: string;
+  permission_mode?: string;
   speed?: string;
   description?: string;
 }
+
+export type ModelProfilePermissionChange = {
+  before?: string;
+  after?: string;
+  before_launcher?: string;
+  after_launcher?: string;
+} & ({ purpose: string; tier?: never } | { purpose?: never; tier: string });
 
 export interface ModelProfile {
   id: string;
@@ -57,13 +65,14 @@ export interface ModelProfile {
   tiers?: Record<string, ModelProfileTier>;
   active?: boolean;
   changes: string[];
+  permission_changes?: ModelProfilePermissionChange[];
 }
 
 export interface ModelProfiles {
   revision?: number;
   active?: string;
   profiles: ModelProfile[];
-  rollback?: { to?: string; changes: string[] };
+  rollback?: { to?: string; changes: string[]; permission_changes?: ModelProfilePermissionChange[] };
 }
 
 export interface ModelProfileSaveInput {
@@ -89,8 +98,14 @@ export const saveModelProfile = (id: string, input: ModelProfileSaveInput, manag
     headers: manager ? { [MANAGER_HEADER]: manager } : undefined,
   });
 
-export const switchModelProfile = (id: string, manager?: string, context?: RequestContext) =>
-  api<ModelProfiles>(`/model-profiles/${enc(id)}/apply`, { ...context, method: "POST", headers: manager ? { [MANAGER_HEADER]: manager } : undefined });
+export const switchModelProfile = (id: string, manager?: string, context?: RequestContext, permissionChanges?: ModelProfilePermissionChange[]) =>
+  api<ModelProfiles>(`/model-profiles/${enc(id)}/apply`, {
+    ...context, method: "POST", headers: manager ? { [MANAGER_HEADER]: manager } : undefined,
+    json: permissionChanges === undefined ? undefined : { permission_changes: permissionChanges },
+  });
 
-export const rollbackModelProfile = (manager?: string, context?: RequestContext) =>
-  api<ModelProfiles>("/model-profiles/rollback", { ...context, method: "POST", headers: manager ? { [MANAGER_HEADER]: manager } : undefined });
+export const rollbackModelProfile = (manager?: string, context?: RequestContext, permissionChanges?: ModelProfilePermissionChange[]) =>
+  api<ModelProfiles>("/model-profiles/rollback", {
+    ...context, method: "POST", headers: manager ? { [MANAGER_HEADER]: manager } : undefined,
+    json: permissionChanges === undefined ? undefined : { permission_changes: permissionChanges },
+  });

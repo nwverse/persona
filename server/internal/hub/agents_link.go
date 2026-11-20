@@ -104,7 +104,7 @@ func (h *Hub) agentStartParams(ctx context.Context, m *Machine, params map[strin
 	err = errBusOffline
 	if owner := h.machineOwner(m.cfg.ID); h.waitManagerOf(ctx, owner) {
 		err = h.asstOf(owner).call(ctx, assistantwire.MethodAgentStartParams, assistantwire.AgentStartParams{MachineID: m.cfg.ID,
-			Params: params, NameFrom: nameFrom, Lang: string(h.contextLang(ctx))}, &res)
+			Params: params, NameFrom: nameFrom, Lang: string(h.contextLang(ctx)), AllowPermissionDefault: principalOf(ctx).Role == roleFull}, &res)
 	}
 	var re *rpc.Error
 	switch {

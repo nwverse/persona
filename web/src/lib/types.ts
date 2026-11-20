@@ -978,6 +978,8 @@ export interface Launcher {
    *  (`default`, sent as no mode) and, where it has one, Full access. Such a launcher's start also takes only the efforts
    *  its model lists (lib/launcher-models.ts `effortRule`). Absent: Claude Code's five, or none. */
   permission_modes?: string[];
+  /** Permission overrides that are effective for a fresh start on the selected host. */
+  start_permission_modes?: string[];
   /** A Codex launcher the computer starts in a shell pane the user picked (Run agent here), keeping that pane when the
    *  start fails (#5504); absent from an older computer, where Run agent here offers Claude Code only. */
   run_here?: boolean;

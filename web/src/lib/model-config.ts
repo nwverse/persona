@@ -8,6 +8,7 @@ export interface ModelBinding {
   provider?: string;
   model?: string;
   effort?: string;
+  permission_mode?: string;
   /** Main chat only (#2455): how it runs Claude, "cli" or "agentsdk"; absent is the CLI. */
   runtime?: string;
   /** Main chat only (#4633): the Claude profile its new conversations start in, "legacy" (this computer's own); absent
@@ -20,6 +21,10 @@ export interface ModelProvider {
   name: string;
   kind: "api" | "launcher" | "plugin";
   agent?: string;
+  /** Interactive agent launch modes. An empty list means the provider cannot set a mode. */
+  permission_modes?: string[];
+  /** Permission modes supported by headless assistant launches on this provider. */
+  assistant_permission_modes?: string[];
   api?: ProviderAPI;
   /** A current hub accepts purpose effort on this Chat connection; absent on older hubs. */
   chat_effort?: boolean;
@@ -94,6 +99,7 @@ export interface ModelDraft {
   provider: string;
   model: string;
   effort: string;
+  permission_mode?: string;
   /** "" when the purpose has no runtime choice. */
   runtime: string;
   /** Set only when the purpose offers a profile choice (#4633): "private" or "legacy". */

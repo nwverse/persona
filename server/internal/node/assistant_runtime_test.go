@@ -798,3 +798,32 @@ func TestAssistantOnARuntimeSendsASlashCommandOnItsOwn(t *testing.T) {
 		t.Fatalf("a /status with a picture went without context: %q", ctx)
 	}
 }
+
+func TestAgyAssistantPermissionAppliesBeforeFirstTurn(t *testing.T) {
+	n, hub := runtimeNode(t)
+	assistantHub(hub)
+	hello := assistantRuntimeHello()
+	hello["runtime"], hello["agent"], hello["launcher"] = agyAgent, agyAgent, agyAgent
+	host := dialRuntime(t, n, hello)
+	host.mu.Lock()
+	host.answer = func(method string, _ json.RawMessage) (any, error) {
+		if method != "session.start" {
+			return nil, fmt.Errorf("unexpected %s", method)
+		}
+		return map[string]any{"session": proto.Session{SessionID: "agy-assistant-test", Status: proto.StatusIdle}}, nil
+	}
+	host.mu.Unlock()
+
+	_, err := nodeCall(t, n, "assistant.send", map[string]any{"launcher": agyAgent, "cwd": n.home, "permission_mode": "plan"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	starts := host.got("session.start")
+	var params map[string]any
+	if len(starts) != 1 || json.Unmarshal(starts[0], &params) != nil || params["permission_mode"] != "plan" {
+		t.Fatalf("runtime launched without its configured permission: %s", starts)
+	}
+	if sends := host.got("session.send"); len(sends) != 0 {
+		t.Fatalf("an empty start unexpectedly began a turn: %s", sends)
+	}
+}

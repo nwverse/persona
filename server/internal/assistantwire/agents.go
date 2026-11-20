@@ -217,6 +217,9 @@ type AgentStartParams struct {
 	Params    map[string]any `json:"params"`
 	NameFrom  string         `json:"name_from,omitempty"`
 	Lang      string         `json:"lang,omitempty"`
+	// The hub attests a full-role start. Older hubs and scoped or extension
+	// callers do not grant this capability.
+	AllowPermissionDefault bool `json:"allow_permission_default,omitempty"`
 }
 
 // AgentResumeParams is agents.resume_params's params: Params are the message's (the node's session.send; the hub

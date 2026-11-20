@@ -1,6 +1,6 @@
-// Shared model, provider, and effort picker controls used by both ModelConfiguration and ModelProfileEditor
+// Shared model, provider, effort, and permission picker controls used by both ModelConfiguration and ModelProfileEditor
 // so profile editing uses the exact same candidate filtering, labels, and /model list behavior.
-import { Suspense, useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useId, useRef, useState } from "react";
 import { t } from "../../i18n";
 import { api, errorText } from "../../lib/api";
 import { effortChoices, providerModels, takesEffort } from "../../lib/launcher-models";
@@ -9,7 +9,7 @@ import { MANAGER_HEADER } from "../../lib/manager-choice";
 import { providerAgent, providerName, type ModelBinding, type ModelProvider, type ModelPurpose } from "../../lib/model-config";
 import { providersFor } from "../../lib/model-config-execution";
 import { EFFORT_LEVELS, type ProviderModel } from "../../lib/providers";
-import { effortTitle } from "../../lib/session-actions";
+import { BYPASS_MODE, effortTitle, modeTitle } from "../../lib/session-actions";
 import { Loading } from "../../ui/atoms";
 import type { ModelList } from "../../ui/ModelPicker";
 import { DirectEffortSelect, directEffortState } from "./DirectAPIEditor";
@@ -19,6 +19,26 @@ export const ModelPicker = lazyPage(() => import("../../ui/ModelPicker").then((m
 
 export const pickerInputClass =
   "h-9 w-full rounded-control bg-field px-3 text-meta text-ink shadow-inset-field outline-none placeholder:text-ink-3 focus:shadow-[inset_0_0_0_1px_var(--accent)] disabled:opacity-60";
+
+export function PermissionModeSelect({ modes, value, followLabel, disabled, onChange }: {
+  modes: readonly string[];
+  value: string;
+  followLabel: string;
+  disabled?: boolean;
+  onChange: (mode: string) => void;
+}) {
+  const detailID = useId();
+  const label = t("newagent.permission_mode");
+  return <label className="block">
+    <span className="mb-1 block text-label font-medium text-ink-2">{label}</span>
+    <select className={pickerInputClass} value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)}
+      aria-label={label} aria-describedby={value === BYPASS_MODE ? detailID : undefined}>
+      <option value="">{followLabel}</option>
+      {modes.map((mode) => <option key={mode} value={mode}>{modeTitle(mode)}</option>)}
+    </select>
+    {value === BYPASS_MODE && <span id={detailID} className="mt-1 block text-submeta text-orange">{t("lib-session-actions.bypass_warning")}</span>}
+  </label>;
+}
 
 export type LauncherModelState = ModelList & { machine?: string; provider?: string };
 

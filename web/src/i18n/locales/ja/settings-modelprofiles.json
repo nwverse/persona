@@ -1,4 +1,9 @@
 {
+  "permission_on_launcher": "{mode}（{launcher}）",
+  "permission_changes": "権限モードの変更",
+  "permission_change": "{subject}：{before} → {after}",
+  "permission_tier": "Agent プリセット {name}",
+  "tier_permission_follow": "Agents の設定に従う",
   "title": "モデルプロファイル",
   "footer": "プロファイルを選ぶと確認・編集・適用ができます。変更は次のモデル呼び出しまたは Agent 起動時に反映され、認証情報は変更されません。",
   "active": "使用中",

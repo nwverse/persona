@@ -1,4 +1,9 @@
 {
+  "permission_on_launcher": "{mode}（{launcher}）",
+  "permission_changes": "权限模式变更",
+  "permission_change": "{subject}：{before} → {after}",
+  "permission_tier": "Agent 预设 {name}",
+  "tier_permission_follow": "跟随 Agents 设置",
   "title": "模型档位",
   "footer": "选择档位可查看、编辑或应用。更改在下一次模型调用或 Agent 启动时生效，不会修改凭据。",
   "active": "当前",

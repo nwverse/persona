@@ -29,7 +29,7 @@ import {
 } from "../lib/launcher-models";
 import { choiceCarries, modelTitle, type ModelChoice } from "../lib/new-agent-panel";
 import { readModels } from "../lib/session-models";
-import { BYPASS_MODE, BYPASS_WARNING, effortTitle, listedModeOption, modeTitle, PERMISSION_MODES } from "../lib/session-actions";
+import { BYPASS_MODE, effortTitle, listedModeOption, modeTitle, PERMISSION_MODES } from "../lib/session-actions";
 import {
   clearRecentSetups, forgetSetup, formHolds, loadRecentSetups, machineModel, recentCards, rememberSetup, setupKey, setupTime, type RecentCard, type RecentSetup,
 } from "../lib/recent-setups";
@@ -137,8 +137,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   // this start's model (an id from the list; "": the default) and effort ("": the launcher's), never saved
   const [model, setModel] = useState("");
   const [effort, setEffort] = useState("");
-  // the presets this computer offers (tiers of the profile in use), and the one picked: it fills the launcher, model and
-  // effort as picking them by hand would; a pick by hand after it unmarks it. Never saved.
+  // The preset fills the launcher, model, effort and its supported permission mode. Its mode is never remembered.
   const [tiers, setTiers] = useState<PickerTier[]>([]);
   const [tier, setTier] = useState<PickerTier | null>(null);
   // a launcher picked on the computer chosen before that this one can't run (#5104): the form went back to the default
@@ -424,6 +423,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     setModel("");
     setTiers([]);
     setTier(null);
+    setProviderMode("");
     setModelDefault("");
     setHubDefault(undefined);
     setConfigured(null);
@@ -525,6 +525,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     setHelpFor("");
     setDropped(null);
     if (preset || c.launcher !== launcher || c.model !== model || c.effort !== effort) setTier(preset);
+    if (c.launcher !== launcher) setProviderMode("");
     setLauncher(c.launcher);
     setModel(c.model);
     setEffort(c.effort);
@@ -548,12 +549,33 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
       setModel("");
       setEffort("");
       setTier(null);
+      setProviderMode("");
     }
   }, [open, opensIn, nativeOmp, listLauncher, agent]);
-  // what a start on it takes besides the model (#8261): Claude Code's modes and efforts, or the permission modes a
-  // launcher lists (Paseo's other providers) and the efforts its model lists, or neither (Codex keeps its own)
+  // Older hubs only describe modes for Claude Code and providers such as Paseo. Newer hubs can advertise
+  // which modes this launcher can enforce on a fresh start, independently of model and effort support.
+  const advertisedStartModes = listEntry?.start_permission_modes;
   const claudeModes = takesEffort(agent) && !listedModes(listEntry);
-  const providerModes = claudeModes || nativeOmp ? undefined : listedModes(listEntry);
+  const providerModes = claudeModes || nativeOmp ? undefined
+    : advertisedStartModes?.length ? advertisedStartModes : listedModes(listEntry);
+  const supportedMode = (id: string) => claudeModes
+    ? PERMISSION_MODES.some((m) => m.id === id)
+    : Boolean(providerModes?.includes(id));
+  const supportedDefault = (id: string) => advertisedStartModes?.includes(id) ?? supportedMode(id);
+  const presetMode = tier?.launcher === listLauncher && tier.permission_mode && supportedDefault(tier.permission_mode) ? tier.permission_mode : "";
+  const inheritedMode = followed.permission_mode && supportedDefault(followed.permission_mode) ? followed.permission_mode : "";
+  const formMode = claudeModes ? mode : providerMode;
+  const selectedMode = presetMode || (supportedMode(formMode) ? formMode : "");
+  const bypassChosen = (selectedMode || inheritedMode) === BYPASS_MODE;
+  const bypassWarning = t("lib-session-actions.bypass_warning");
+  const providerModeHint = selectedMode ? listedModeOption(selectedMode).detail
+    : !advertisedStartModes ? t("newagent.provider_mode_hint") : "";
+  const inheritedLabel = inheritedMode ? `${t("newagent.follow_model_settings")} · ${modeTitle(inheritedMode)}` : t("newagent.follow_launcher");
+  const chooseMode = (value: string) => {
+    if (presetMode && value !== presetMode) setTier(null);
+    if (claudeModes) setMode(value);
+    else setProviderMode(value);
+  };
   // Codex takes its first message with the start (lib/new-agent.ts); a computer that can opens it without one too
   // (prompt_optional, docs/integrations/codex.md "Starting without a first message"), an older one needs it
   const codex = agent === "codex";
@@ -647,7 +669,10 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   const ultracodeShown = !loadingModels && efforts.length > 0 && ultracodeStartOffered(features, agent);
   // what of the picked preset this launcher can't take, said once its list is in
   const startModelOptions = { agent, list: models.list, followed, launcher: listEntry, nativeOmp };
-  const tierMissed = tier && listLauncher === tier.launcher && (models.list !== undefined || (agent === "omp" && models.error)) ? tierLeftOut(tier, startModelOptions) : [];
+  const tierMissed = tier && listLauncher === tier.launcher && (models.list !== undefined || (agent === "omp" && models.error))
+    ? tierLeftOut(tier, startModelOptions).map((value) => value === tier.effort ? effortTitle(value) : value)
+    : [];
+  if (tier?.permission_mode && !presetMode) tierMissed.push(modeTitle(tier.permission_mode));
   // the follow row's second line: what Model settings › New agent runs (the hub's default, by display names)
   const defaultList = useModelList(open ? mid : "", defaultRuns, startCatalogHost(defaultEntry, opensIn, startHost)).list;
   const followDetail = hubDefault
@@ -714,9 +739,6 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     if (dir) localStorage.setItem(`new.cwd.${mid}`, dir);
     if (launcher && !unified) localStorage.setItem(`new.launcher.${mid}`, launcher);
     const picks = startPicks({ ...startModelOptions, model, effort });
-    // a Codex keeps its own modes; the choice stays for this computer's next Claude Code. A launcher that lists its own
-    // takes one of those alone, never the remembered one (its own goes as no mode).
-    const permissionMode = claudeModes ? mode : providerModes?.includes(providerMode) && providerMode !== "default" ? providerMode : "";
     if (claudeModes) {
       if (mode) localStorage.setItem(`new.mode.${mid}`, mode);
       else localStorage.removeItem(`new.mode.${mid}`);
@@ -724,7 +746,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     // this start as a recent setup (#2134): the folder picked (not the worktree made from it), the model and effort sent;
     // mode and effort only for Claude Code
     const claude = agent === "claude";
-    const setup = { machine: mid, cwd: dir, launcher, model: picks.model ?? "", agent_type: agent, mode: claude ? permissionMode : "", effort: claude ? (picks.effort ?? "") : "" };
+    const setup = { machine: mid, cwd: dir, launcher, model: picks.model ?? "", agent_type: agent, mode: claude ? mode : "", effort: claude ? (picks.effort ?? "") : "" };
     // only an explicit "on" is sent: off is what a new Claude is anyway
     const ultra = ultracodeShown && !ultracodeBlocked && ultracode ? true : undefined;
     const inline = !workspace && !desktopStart && launchersOf === mid && agent === "traex"
@@ -734,7 +756,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     const launcherDefaultEffort = agent === "agy" && !!launcher && !picks.effort;
     const target = { launcher: projectDocument ? listLauncher : launcher, ...picks,
       nameHint: projectDocument ? `${projectDocument.snapshot.project}/${projectDocument.snapshot.document} r${projectDocument.snapshot.revision}` : undefined,
-      launcherDefaultEffort: launcherDefaultEffort || undefined, permissionMode: permissionMode || undefined,
+      launcherDefaultEffort: launcherDefaultEffort || undefined, permissionMode: selectedMode || undefined,
       host: projectDocument ? documentHost : opensIn, ultracode: ultra,
       ...(codex ? { agentType: "codex", inlinePrompt: true } : inline) };
     const launch = (dir: string, workspaceId: string | undefined) => {
@@ -1019,34 +1041,33 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
           {claudeModes && (
             <Field label={t("newagent.permission_mode")}>
               <div role="radiogroup" aria-label={t("newagent.permission_mode")} className="flex flex-wrap gap-1.5">
-                <Choice radio selected={mode === ""} onClick={() => setMode("")}>{t("newagent.follow_launcher")}</Choice>
+                <Choice radio selected={!selectedMode} onClick={() => chooseMode("")}>{inheritedLabel}</Choice>
                 {PERMISSION_MODES.map((m) => (
-                  <Choice key={m.id} radio selected={mode === m.id} onClick={() => setMode(m.id)} title={m.detail}>
+                  <Choice key={m.id} radio selected={selectedMode === m.id} onClick={() => chooseMode(m.id)} title={m.detail}>
                     {m.title}
                   </Choice>
                 ))}
               </div>
-              <p className={cx("mt-1.5 text-[11.5px]", mode === BYPASS_MODE ? "text-red" : "text-ink-3")}>
-                {mode === BYPASS_MODE ? BYPASS_WARNING : PERMISSION_MODES.find((m) => m.id === mode)?.detail ?? t("newagent.permission_mode_hint")}
+              <p className={cx("mt-1.5 text-[11.5px]", bypassChosen ? "text-red" : "text-ink-3")}>
+                {bypassChosen ? bypassWarning : PERMISSION_MODES.find((m) => m.id === selectedMode)?.detail ?? t("newagent.permission_mode_hint")}
               </p>
             </Field>
           )}
 
-          {/* a launcher that lists its own modes (Paseo's other providers, #8261): its own, or what else it lists (Full
-              access), the two its conversation switches between; one with nothing more than its own shows no field */}
+          {/* A launcher with only its own defaults needs no picker. */}
           {providerModes && providerModes.some((m) => m !== "default") && (
             <Field label={t("newagent.permission_mode")}>
               <div role="radiogroup" aria-label={t("newagent.permission_mode")} data-testid="new-agent-provider-modes" className="flex flex-wrap gap-1.5">
-                <Choice radio selected={providerMode === "" || !providerModes.includes(providerMode)} onClick={() => setProviderMode("")}>{t("newagent.follow_launcher")}</Choice>
-                {providerModes.filter((id) => id !== "default").map(listedModeOption).map((m) => (
-                  <Choice key={m.id} radio selected={providerMode === m.id} onClick={() => setProviderMode(m.id)} title={m.detail}>
+                <Choice radio selected={!selectedMode || (selectedMode === "default" && !inheritedMode)} onClick={() => chooseMode("")}>{inheritedLabel}</Choice>
+                {providerModes.filter((id) => id !== "default" || inheritedMode).map(listedModeOption).map((m) => (
+                  <Choice key={m.id} radio selected={selectedMode === m.id} onClick={() => chooseMode(m.id)} title={m.detail}>
                     {m.title}
                   </Choice>
                 ))}
               </div>
-              <p className={cx("mt-1.5 text-submeta", providerMode === BYPASS_MODE ? "text-red" : "text-ink-3")}>
-                {providerMode === BYPASS_MODE ? BYPASS_WARNING : t("newagent.provider_mode_hint")}
-              </p>
+              {(bypassChosen || providerModeHint) && <p className={cx("mt-1.5 text-submeta", bypassChosen ? "text-red" : "text-ink-3")}>
+                {bypassChosen ? bypassWarning : providerModeHint}
+              </p>}
             </Field>
           )}
 
@@ -1155,7 +1176,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
               {tier && (
                 <Note data-testid="new-agent-preset-hint" icon={tierMissed.length ? "warning" : "layers"} tone={tierMissed.length ? "orange" : undefined}>
                   {tierMissed.length
-                    ? t("newagent.preset_left_out", { what: tierMissed.map((v) => (v === tier.effort ? effortTitle(v) : v)).join(" · ") })
+                    ? t("newagent.preset_left_out", { what: tierMissed.join(" · ") })
                     : t("newagent.preset_picked", { name: tier.name, what: tier.description || tierRuns(tier, names) })}
                 </Note>
               )}
@@ -1287,7 +1308,7 @@ function RecentSetups({ cards, machines, names, picked, onPick, onForget, onClea
 
 /** What a preset runs on, in a line: its launcher ("Title (id)", #5029), model and effort (its name). */
 function tierRuns(x: PickerTier, names: Named[]): string {
-  return [providerLabel(namedLauncher(x.launcher, names)), x.model, x.effort && effortTitle(x.effort)].filter(Boolean).join(" · ");
+  return [providerLabel(namedLauncher(x.launcher, names)), x.model, effortTitle(x.effort), modeTitle(x.permission_mode)].filter(Boolean).join(" · ");
 }
 
 function Choice({ selected, onClick, title, radio, children }: { selected: boolean; onClick: () => void; title?: string; /** One of a radiogroup. */ radio?: boolean; children: React.ReactNode }) {

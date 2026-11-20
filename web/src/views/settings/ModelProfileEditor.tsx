@@ -5,7 +5,7 @@ import { t } from "../../i18n";
 import { api } from "../../lib/api";
 import { MANAGER_HEADER } from "../../lib/manager-choice";
 import { providerAgent, type ModelBinding, type ModelProvider, type ModelPurpose } from "../../lib/model-config";
-import { chooseProvider, effortOffered, modelConfiguration } from "../../lib/model-config-execution";
+import { chooseProvider, effortOffered, fitPermissionMode, modelConfiguration, purposePermissionModes } from "../../lib/model-config-execution";
 import {
   draftToProfileInput,
   isProfileDraftDirty,
@@ -28,12 +28,13 @@ import {
 } from "../../lib/model-profiles";
 import { namedLauncher, namesFromProviders, providerIdNote, providerLabel, providerTitle, type Named } from "../../lib/provider-names";
 import { EFFORT_LEVELS, type ProviderView } from "../../lib/providers";
-import { effortTitle } from "../../lib/session-actions";
+import { effortTitle, modeTitle } from "../../lib/session-actions";
 import { Button, cx, Switch } from "../../ui/atoms";
 import {
   ApiModelSelect,
   LauncherModelSelect,
   pickerInputClass,
+  PermissionModeSelect,
   ProfileEffortSelect,
   ProviderSelect,
   useDiscoveredApiModels,
@@ -280,7 +281,20 @@ export function ModelProfileEditor({
 
   const handleSave = () => {
     if (!canSave) return;
-    void onSave(draftToProfileInput(draft, revision));
+    const input = draftToProfileInput(draft, revision);
+    // Capability changes can leave a saved mode outside a provider's current list. Keep every other pending edit.
+    for (const [id, binding] of Object.entries(input.purposes ?? {})) {
+      if (!binding.permission_mode) continue;
+      const purpose = purposes.find((p) => p.id === id);
+      const provider = providers.find((p) => p.id === (binding.provider || purpose?.effective?.provider));
+      if (!fitPermissionMode(binding.permission_mode, purposePermissionModes(purpose, provider))) delete binding.permission_mode;
+    }
+    for (const tier of Object.values(input.tiers ?? {})) {
+      if (!tier.permission_mode) continue;
+      const provider = providers.find((p) => p.id === `launcher.${tier.launcher}`);
+      if (!fitPermissionMode(tier.permission_mode, provider?.permission_modes)) delete tier.permission_mode;
+    }
+    void onSave(input);
   };
 
   const chatEffortKnown = providers.some((p) => p.chat_effort === true);
@@ -521,6 +535,8 @@ function PurposeBindingCard({
   });
   const apiModels = useDiscoveredApiModels(entry.included && expanded && isDirectApi ? chosen : undefined, manager);
   const effortAllowed = effortOffered(purpose, chosen, effectiveProvider, false, chatEffortKnown);
+  const permissionModes = purposePermissionModes(purpose, chosen);
+  const permissionMode = fitPermissionMode(entry.permission_mode, permissionModes);
   const followed: ModelBinding = !entry.provider && purpose.effective?.model ? { model: purpose.effective.model } : {};
 
   const summary = !entry.included
@@ -531,6 +547,7 @@ function PurposeBindingCard({
           : t("settings-modelprofiles.purpose_follow_default"),
         entry.model,
         entry.effort && effortTitle(entry.effort),
+        permissionMode && modeTitle(permissionMode),
       ]
         .filter(Boolean)
         .join(" · ");
@@ -573,10 +590,10 @@ function PurposeBindingCard({
               ariaLabel={`${title} ${t("settings-modelconfiguration.model_provider")}`}
               onChange={(nextProvider) => {
                 const updated = chooseProvider(
-                  { provider: entry.provider, model: entry.model, effort: entry.effort, runtime: "" },
+                  { provider: entry.provider, model: entry.model, effort: entry.effort, permission_mode: entry.permission_mode, runtime: "" },
                   nextProvider,
                 );
-                onChange({ provider: updated.provider, model: updated.model, effort: updated.effort });
+                onChange({ provider: updated.provider, model: updated.model, effort: updated.effort, permission_mode: updated.permission_mode });
               }}
             />
           </label>
@@ -632,6 +649,8 @@ function PurposeBindingCard({
               onChange={(effort) => onChange({ effort })}
             />
           )}
+          {!!permissionModes?.length && <PermissionModeSelect modes={permissionModes} value={permissionMode}
+            followLabel={t("settings-modelconfiguration.follow_default")} disabled={busy} onChange={(permission_mode) => onChange({ permission_mode })} />}
         </div>
       )}
     </div>
@@ -861,6 +880,8 @@ function TierEditorCard({
         : t("settings-modelprofiles.tier_speed_default");
 
   const chosenAgent = launcherList.list?.agent || providerAgent(chosenProvider, providerId);
+  const permissionModes = chosenProvider?.permission_modes;
+  const permissionMode = fitPermissionMode(tier.permission_mode, permissionModes);
 
   return (
     <div data-testid={`profile-tier-edit-${tier.name || tier.key}`} className="flex flex-col gap-3 rounded-control bg-field p-3 shadow-hairline">
@@ -897,7 +918,7 @@ function TierEditorCard({
           onChange={(e) => {
             const nextLauncher = e.target.value;
             if (nextLauncher === tier.launcher) return;
-            onChange({ launcher: nextLauncher, model: "", effort: "" });
+            onChange({ launcher: nextLauncher, model: "", effort: "", permission_mode: "" });
           }}
         >
           <option value="">{t("settings-modelprofiles.tier_launcher_placeholder")}</option>
@@ -956,6 +977,9 @@ function TierEditorCard({
           </select>
         </label>
       </div>
+
+      {!!permissionModes?.length && <PermissionModeSelect modes={permissionModes} value={permissionMode}
+        followLabel={t("settings-modelprofiles.tier_permission_follow")} disabled={busy} onChange={(permission_mode) => onChange({ permission_mode })} />}
 
       <label className="block">
         <span className="mb-1 block text-label font-medium text-ink-2">

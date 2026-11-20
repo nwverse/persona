@@ -23,16 +23,17 @@ import (
 // card was made from: profiles edited in the meantime are a conflict, never overwritten.
 
 // tierEdit is model_profiles.tiers' set value. A field left out keeps the tier's own; a different launcher drops the
-// old model and effort (they were the old launcher's), as a provider change does in Model Settings.
+// old model, effort and permission mode (they were the old launcher's), as a provider change does in Model Settings.
 type tierEdit struct {
-	Tier        string   `json:"tier"`
-	Launcher    *string  `json:"launcher"`
-	Model       *string  `json:"model"`
-	Effort      *string  `json:"effort"`
-	Speed       *string  `json:"speed"`
-	Description *string  `json:"description"`
-	Profiles    []string `json:"profiles"`
-	Remove      bool     `json:"remove"`
+	Tier           string   `json:"tier"`
+	Launcher       *string  `json:"launcher"`
+	Model          *string  `json:"model"`
+	Effort         *string  `json:"effort"`
+	PermissionMode *string  `json:"permission_mode"`
+	Speed          *string  `json:"speed"`
+	Description    *string  `json:"description"`
+	Profiles       []string `json:"profiles"`
+	Remove         bool     `json:"remove"`
 }
 
 // tierChange is what a set does to one profile: the tier before and after (nil: none).
@@ -72,7 +73,7 @@ func editTiers(ps *modelProfiles, e tierEdit, now time.Time) ([]tierChange, erro
 			for _, f := range []struct {
 				set  *string
 				into *string
-			}{{e.Model, &t.Model}, {e.Effort, &t.Effort}, {e.Speed, &t.Speed}, {e.Description, &t.Description}} {
+			}{{e.Model, &t.Model}, {e.Effort, &t.Effort}, {e.PermissionMode, &t.PermissionMode}, {e.Speed, &t.Speed}, {e.Description, &t.Description}} {
 				if f.set != nil {
 					*f.into = strings.TrimSpace(*f.set)
 				}
@@ -179,12 +180,12 @@ func (s *Service) setModelTiers(ctx context.Context, v json.RawMessage) (*ownCha
 	if !modelTierName.MatchString(e.Tier) {
 		return nil, i18n.Err("assistant-model_profiles.err_tier_name", i18n.Args{"tier": e.Tier})
 	}
-	given := e.Launcher != nil || e.Model != nil || e.Effort != nil || e.Speed != nil || e.Description != nil
+	given := e.Launcher != nil || e.Model != nil || e.Effort != nil || e.PermissionMode != nil || e.Speed != nil || e.Description != nil
 	switch {
 	case e.Remove && given:
 		return nil, errors.New("remove takes only tier and profiles")
 	case !e.Remove && !given:
-		return nil, errors.New("give what to set (launcher, model, effort, speed, description), or remove: true")
+		return nil, errors.New("give what to set (launcher, model, effort, permission_mode, speed, description), or remove: true")
 	}
 	if e.Launcher != nil {
 		// before the card, and outside models.mu: a computer may be asked for its launchers
@@ -204,6 +205,9 @@ func (s *Service) setModelTiers(ctx context.Context, v json.RawMessage) (*ownCha
 	}
 	if len(changes) == 0 {
 		return &ownChange{summary: "Nothing to change: tier " + e.Tier + " is already like that in every profile named."}, nil
+	}
+	if err := s.checkTierPermissionChanges(ctx, changes); err != nil {
+		return nil, err
 	}
 	if s.store() == nil {
 		return nil, errors.New("no database on this hub")
@@ -261,6 +265,9 @@ func (s *Service) saveTierEditLocked(ctx context.Context, revision int64, e tier
 	}
 	if !sameTierChanges(changes, card) {
 		return "", "", stale
+	}
+	if err := s.checkTierPermissionChanges(ctx, changes); err != nil {
+		return "", "", err
 	}
 	state, err := s.readModelProfileState(ctx)
 	if err != nil {
@@ -337,6 +344,6 @@ func (s *Service) getModelTiers(ctx context.Context) (string, error) {
 
 // modelTiersValue is the shape of model_profiles.tiers' set value, as the setting's list entry says it.
 const modelTiersValue = `{"tier": a name (lowercase letters, digits, _ -), "launcher": a launcher name, "model": a model id ("" the launcher's default), ` +
-	`"effort": a level ("" the launcher's), "speed": standard | fast | ultrafast ("" the launcher's), "description": when to use it (one line, at most 100 characters), ` +
+	`"effort": a level ("" the launcher's), "permission_mode": a mode the launcher supports ("" inherits), "speed": standard | fast | ultrafast ("" the launcher's), "description": when to use it (one line, at most 100 characters), ` +
 	`"profiles": [profile ids] (default: every profile), "remove": true to delete it}; a field left out keeps the tier's own ` +
-	`(a different launcher drops the old model, effort and speed), a new tier needs its launcher`
+	`(a different launcher drops the old model, effort, permission mode and speed), a new tier needs its launcher`

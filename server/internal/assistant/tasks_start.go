@@ -73,7 +73,7 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 			checkSpeed = false
 		}
 		if checkSpeed {
-			if _, err := s.fitPlanTaskSpeed(ctx, &p.Tasks[i]); err != nil {
+			if _, _, err := s.fitPlanTaskSpeed(ctx, &p.Tasks[i]); err != nil {
 				return nil, planInvalid{err}
 			}
 		}

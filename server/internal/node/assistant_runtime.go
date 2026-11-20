@@ -139,6 +139,11 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 	startedNew := id == ""
 	if startedNew {
 		startParams := map[string]any{"cwd": cwd, "assistant": true}
+		if h.agent() == agyAgent && mode != "" {
+			// This companion enforces a mode at session creation, including
+			// starts that have no first turn yet.
+			startParams["permission_mode"] = mode
+		}
 		if pickedModel != "" {
 			startParams["model"] = pickedModel
 		}

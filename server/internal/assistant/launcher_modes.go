@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -38,4 +39,33 @@ func startModesRefused(launcher, agent, permission, effort string) error {
 		return fmt.Errorf("launcher %s runs %s, which takes no effort (%s): leave effort out", launcher, agent, effort)
 	}
 	return nil
+}
+
+// configuredPermissionModes is the advertised or built-in permission vocabulary
+// for a launcher. Nil means the agent is unknown. A known agent with no mode
+// has an empty list, so configuration does not offer a setting it cannot use.
+func configuredPermissionModes(agent string, advertised proto.PermissionModeSet) []string {
+	if agent == "agy" {
+		// The companion may broaden a rejected Auto mode to Full access.
+		// Do not allow that fallback through a stored model preference.
+		if advertised == 0 {
+			advertised = proto.PermissionModeSetOf("default", "acceptEdits", "plan", proto.ModeBypass)
+		}
+		return slices.DeleteFunc(advertised.List(), func(mode string) bool { return mode == "auto" })
+	}
+	if advertised != 0 {
+		return advertised.List()
+	}
+	switch agent {
+	case "claude":
+		return slices.Clone(proto.PermissionModes)
+	case "codex":
+		// Codex has no separate edit-approval mode. Its native workspace
+		// sandbox treats that name the same as default in Assistant chat.
+		return []string{"default", "plan", "auto", proto.ModeBypass}
+	case "":
+		return nil
+	default:
+		return []string{}
+	}
 }
