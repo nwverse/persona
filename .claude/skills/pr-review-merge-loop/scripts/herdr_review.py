@@ -389,7 +389,7 @@ def transcript_result(path, marker, schema):
     return value
 
 
-def wait_transcript(path, marker, schema, pane, unit, timeout):
+def wait_transcript(path, marker, schema, pane, unit, timeout, accepted_stall=False):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if path.is_file():
@@ -400,7 +400,7 @@ def wait_transcript(path, marker, schema, pane, unit, timeout):
                     raise
         agents = command("agent", "list", timeout=20).get("agents", [])
         agent = next((item for item in agents if item.get("pane_id") == pane), None)
-        if agent and agent.get("agent_status") == "blocked":
+        if agent and agent.get("agent_status") == "blocked" and not accepted_stall:
             raise RuntimeError("interactive reviewer requested an unexpected interaction")
         if not scope_running(unit):
             if path.is_file():
@@ -468,13 +468,24 @@ def agent_state(pane):
     return next((item for item in agents if item.get("pane_id") == pane), None)
 
 
-def prompt_started(pane):
-    """A startup stall does not prove Herdr rejected the submitted prompt."""
+def prompt_started(pane, transcript, marker, schema, unit):
+    """Retain accepted work, including a fast return to idle or a blocked turn."""
     agent = agent_state(pane)
-    return agent is not None and agent.get("agent_status") in ("working", "done", "blocked")
+    if agent is None:
+        return False
+    status = agent.get("agent_status")
+    if status in ("working", "blocked"):
+        return True
+    if status in ("idle", "done"):
+        try:
+            transcript_result(transcript, marker, schema)
+        except RuntimeError:
+            return False
+        return True
+    return False
 
 
-def submit_prompt(pane, prompt):
+def submit_prompt(pane, prompt, transcript, marker, schema, unit):
     """Keep an accepted prompt on its original pane across observation stalls."""
     try:
         command("agent", "prompt", pane, prompt, "--wait", "--until", "working",
@@ -484,8 +495,10 @@ def submit_prompt(pane, prompt):
     except RuntimeError as error:
         if "agent prompt produced no observed state change" not in str(error):
             raise
-        if not prompt_started(pane):
+        if not prompt_started(pane, transcript, marker, schema, unit):
             raise RuntimeError("interactive reviewer prompt did not start: " + str(error)) from error
+        return True
+    return False
 
 
 def run(slot, flags):
@@ -551,9 +564,9 @@ def run(slot, flags):
                 session_id = wait_session_id(session_path, pane, unit)
                 transcript = transcript_path(os.getcwd(), session_id)
                 wait_agent(pane, unit)
-                submit_prompt(pane, prompt)
+                accepted_stall = submit_prompt(pane, prompt, transcript, marker, schema, unit)
                 value = wait_transcript(transcript, marker, schema, pane, unit,
-                                        int(_config.get("lifetime_seconds", 7200)))
+                                        int(_config.get("lifetime_seconds", 7200)), accepted_stall)
                 result = {"is_error": False, "subtype": "success", "result": "",
                           "structured_output": value, "permission_denials": []}
                 sys.stdout.write(json.dumps(result, separators=(",", ":")))
