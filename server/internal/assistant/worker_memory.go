@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -16,15 +17,36 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// workerMemoryID names one outcome item of one worker's turn. The machine belongs in the ID because session IDs are
-// only unique on their own computer; Agent in the record remains the session ID readers already use.
+// workerMemoryID is the legacy durable prefix for one outcome item of one worker's turn. The machine belongs in the ID
+// because session IDs are only unique on their own computer; Agent in the record remains the session ID readers use.
 func workerMemoryID(todoID, machine, session string, turn, itemIndex int) string {
 	return fmt.Sprintf("%s/%s/%s/%d/%d", todoID, machine, session, turn, itemIndex)
+}
+
+// workerMemoryItemID disambiguates content blocks that share a transcript Seq. ItemIndex remains the stable turn offset;
+// the encoded item key distinguishes parallel tool calls without making IDs from one-off timestamps or goroutine order.
+func workerMemoryItemID(todoID, machine, session string, turn, itemIndex int, itemKey string) string {
+	id := workerMemoryID(todoID, machine, session, turn, itemIndex)
+	if itemKey == "" {
+		return id
+	}
+	return id + "/" + base64.RawURLEncoding.EncodeToString([]byte(itemKey))
+}
+
+func workerOutcomeItemKey(it proto.Item) string {
+	if it.ToolUseID != "" {
+		return it.ToolUseID
+	}
+	return it.ID
 }
 
 // goWorkerOutcome runs a memory recording off the tool or triage path. The same wait group as task outcomes lets
 // tests and shutdown observers wait for the write without holding up the worker's report.
 func (s *Service) goWorkerOutcome(run func()) {
+	if s.runWorkerOutcome != nil {
+		s.runWorkerOutcome(run)
+		return
+	}
 	s.tasks.outcomeRuns.Add(1)
 	go func() {
 		defer s.tasks.outcomeRuns.Done()
@@ -38,9 +60,8 @@ func (s *Service) goRecordWorkerReport(ctx context.Context, t Todo, machine, ses
 	ctx = context.WithoutCancel(ctx)
 	s.goWorkerOutcome(func() {
 		items, read := s.lastTurnItems(ctx, machine, session)
-		// With triage on, a final answer means WorkDone owns the write with its pinned items. With triage off there is
-		// no WorkDone fallback, so the successful done report itself must still be recorded.
-		index := workerReportIndex(items, text, at, s.workOn(ctx))
+		// A successful done report is always eligible. If WorkDone later commits, it reuses this report's stable identity.
+		index := workerReportIndex(items, text, at)
 		if !read || len(items) == 0 || index < 0 {
 			return
 		}
@@ -57,24 +78,46 @@ func (s *Service) goRecordWorkerReport(ctx context.Context, t Todo, machine, ses
 		for _, e := range evidence {
 			links = append(links, urlRe.FindAllString(e, -1)...)
 		}
-		s.recordWorkerOutcome(ctx, t, machine, session, s.workerCwd(ctx, t, machine, session), turn, itemIndex, text, links, text)
+		s.recordWorkerOutcome(ctx, t, machine, session, s.workerCwd(ctx, t, machine, session), turn, itemIndex,
+			workerOutcomeItemKey(items[index]), text, links, text)
 	})
 }
 
-// goRecordWorkerDone records a committed WorkDone using the exact items triage read, never a later turn. If this turn
-// already reported done, it reuses that report's item identity; otherwise the final assistant text is the outcome item.
+func workerReportEvidenceLinks(it proto.Item) []string {
+	if it.Kind != proto.KindToolUse {
+		return nil
+	}
+	var report struct {
+		Evidence []string `json:"evidence"`
+	}
+	if json.Unmarshal(it.ToolInput, &report) != nil {
+		return nil
+	}
+	var links []string
+	for _, evidence := range report.Evidence {
+		links = append(links, urlRe.FindAllString(evidence, -1)...)
+	}
+	return links
+}
+
+// goRecordWorkerDone records a committed WorkDone using the exact items triage read, never a later turn. Resolve the todo
+// before starting the asynchronous write so a later assignment cannot change the durable ID or project ownership.
 func (s *Service) goRecordWorkerDone(ctx context.Context, work db.SessionWork, items []proto.Item) {
 	ctx = context.WithoutCancel(ctx)
+	t, ok := s.workerTodoOf(ctx, work.MachineID, work.SessionID)
+	if !ok || t.DoneAt != nil && work.TurnAt.After(*t.DoneAt) {
+		return
+	}
+	s.goRecordWorkerDoneForTodo(ctx, t, work, items)
+}
+
+func (s *Service) goRecordWorkerDoneForTodo(ctx context.Context, t Todo, work db.SessionWork, items []proto.Item) {
 	s.goWorkerOutcome(func() {
-		t, ok := s.workerTodoOf(ctx, work.MachineID, work.SessionID)
-		if !ok {
-			return
-		}
 		if len(items) == 0 {
 			s.logf("WARN worker memory todo %s: done turn has no captured transcript", t.ID)
 			return
 		}
-		index := workerReportIndex(items, "", time.Time{}, false)
+		index := workerReportIndex(items, "", time.Time{})
 		if index < 0 {
 			index = workerFinalTextIndex(items)
 		}
@@ -92,12 +135,13 @@ func (s *Service) goRecordWorkerDone(ctx context.Context, work db.SessionWork, i
 			return
 		}
 		_, reply := turnExchange(items)
-		links := urlRe.FindAllString(reply, -1)
+		links := workerReportEvidenceLinks(items[index])
+		links = append(links, urlRe.FindAllString(reply, -1)...)
 		for _, a := range work.Work.Artifacts {
 			links = append(links, a.Ref)
 		}
 		s.recordWorkerOutcome(ctx, t, work.MachineID, work.SessionID, s.workerCwd(ctx, t, work.MachineID, work.SessionID),
-			turn, itemIndex, work.Work.Line, links, reply)
+			turn, itemIndex, workerOutcomeItemKey(items[index]), work.Work.Line, links, reply)
 	})
 }
 
@@ -106,7 +150,7 @@ func (s *Service) goRecordWorkerDone(ctx context.Context, work db.SessionWork, i
 // conclusion and links. No in-memory claim is made: memory.jsonl alone decides whether a replay is already recorded.
 // Live callers pin the outcome text; direct callers may omit it and use the session's listed last text instead.
 func (s *Service) recordWorkerOutcome(ctx context.Context, t Todo, machine, session, cwd string, turn, itemIndex int,
-	conclusion string, links []string, pinnedText ...string) {
+	itemKey, conclusion string, links []string, pinnedText ...string) {
 	if strings.TrimSpace(conclusion) == "" || !s.kbWritable(ctx) {
 		return
 	}
@@ -119,10 +163,13 @@ func (s *Service) recordWorkerOutcome(ctx context.Context, t Todo, machine, sess
 	if len(projects) == 0 {
 		return
 	}
-	id := workerMemoryID(t.ID, machine, session, turn, itemIndex)
+	legacyID := workerMemoryID(t.ID, machine, session, turn, itemIndex)
+	id := workerMemoryItemID(t.ID, machine, session, turn, itemIndex, itemKey)
 	pending := make([]*kb.Project, 0, len(projects))
 	for _, p := range projects {
-		if !e.ProjectMemoryHas(p.Slug, id) {
+		// A record written before item keys were added still owns this outcome. Checking the legacy prefix also keeps
+		// retries idempotent across a rolling upgrade; newly written records carry only their fully discriminated ID.
+		if !e.ProjectMemoryHas(p.Slug, id) && (id == legacyID || !e.ProjectMemoryHas(p.Slug, legacyID)) {
 			pending = append(pending, p)
 		}
 	}
@@ -281,10 +328,9 @@ func (s *Service) workerTurnPage(ctx context.Context, machine, session string, b
 	return res.Items, res.HasMore, true
 }
 
-// workerReportIndex finds a done report's tool call. For a live report (pending), a later final answer means the turn
-// already ended and WorkDone owns the write; at selects the matching call if a turn repeated the same report text.
-// For WorkDone it finds the latest non-error done report and reuses its identity.
-func workerReportIndex(items []proto.Item, text string, at time.Time, pending bool) int {
+// workerReportIndex finds a done report's tool call. For a live report, at selects the matching call if a turn repeated
+// the same report text. For WorkDone it finds the latest non-error done report and reuses its identity.
+func workerReportIndex(items []proto.Item, text string, at time.Time) int {
 	best := -1
 	bestDelta := time.Duration(1<<63 - 1)
 	for i := len(items) - 1; i >= 0; i-- {
@@ -301,9 +347,6 @@ func workerReportIndex(items []proto.Item, text string, at time.Time, pending bo
 			continue
 		}
 		if text != "" && clip(strings.TrimSpace(report.Text), 2000) != text {
-			continue
-		}
-		if pending && workerFinalTextIndex(items[i+1:]) >= 0 {
 			continue
 		}
 		failed := false
