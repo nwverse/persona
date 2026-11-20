@@ -1,4 +1,5 @@
 {
+  "followup_recurrence_consent": "Create a repeating follow-up only after the owner explicitly requests it in this conversation. Wait for the owner to reply here before retrying with user_requested: true, or have them set it up in Scheduled Tasks. You can schedule a single follow-up with at.",
   "execution_context_unavailable": "Cannot verify the task conversation’s execution context. Reconnect its agent and try again.",
   "followup": "Follow-up",
   "morning": "Morning brief",

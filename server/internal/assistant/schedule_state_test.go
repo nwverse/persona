@@ -232,8 +232,9 @@ func TestTaskStateRecurringFollowupLeavesMainChat(t *testing.T) {
 	node.settings = &Settings{Main: "main", Timezone: "UTC"}
 	s := newStorelessService(t, node)
 	before := len(s.tasksView(t.Context(), nil))
+	attestFollowupRequest(t, s, "main")
 	if _, err := s.toolScheduleFollowup(t.Context(), "server", "main", json.RawMessage(
-		`{"title":"Public issue patrol","prompt":"Report only changes","every":"30m"}`,
+		`{"title":"Public issue patrol","prompt":"Report only changes","every":"30m","user_requested":true}`,
 	)); err != nil {
 		t.Fatal(err)
 	}

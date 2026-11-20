@@ -1,4 +1,5 @@
 {
+  "followup_recurrence_consent": "只有用户在当前对话明确要求重复跟进后，才能创建周期任务。等用户在这里回复，再用 user_requested: true 重试，或由用户在定时任务里设置。只需跟进一次时可用 at。",
   "execution_context_unavailable": "暂时无法核对任务对话的执行环境。请重新连接其 Agent 后重试。",
   "followup": "定时跟进",
   "morning": "早报",

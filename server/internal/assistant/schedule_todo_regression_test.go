@@ -45,7 +45,9 @@ func TestScheduleTodoAssociationRegression(t *testing.T) {
 			args := map[string]any{"title": "Backfill check", "prompt": "Advance the backfill",
 				"todo_id": todo.ID, "push": "asked"}
 			if tool == "schedule_followup" {
+				attestFollowupRequest(t, s, "conv1")
 				args["every"] = "30m"
+				args["user_requested"] = true
 			} else {
 				args["time"] = "22:00"
 			}
@@ -89,9 +91,10 @@ func TestScheduleTodoAuthorityRegression(t *testing.T) {
 
 func TestScheduledTodoQuietNoProgressRegression(t *testing.T) {
 	s, f, todo := scheduledTodoFixture(t)
+	attestFollowupRequest(t, s, "conv1")
 	if _, err := runJSON(t, s, "conv1", "schedule_followup", map[string]any{
 		"title": "Backfill check", "prompt": "Advance the backfill", "todo_id": todo.ID,
-		"every": "30m", "new_conversation": true, "push": "asked",
+		"every": "30m", "new_conversation": true, "push": "asked", "user_requested": true,
 	}); err != nil {
 		t.Fatal(err)
 	}

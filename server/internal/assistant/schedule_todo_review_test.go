@@ -248,6 +248,13 @@ func TestScheduledTodoDelayedHistoryReplayPreservesNewerAssessment(t *testing.T)
 
 func TestScheduledTodoFailedAttemptsDoNotCountAsNoProgress(t *testing.T) {
 	s, f, todo := scheduledTodoFixture(t)
+	attestFollowupRequest(t, s, "conv1")
+	if _, err := runJSON(t, s, "conv1", "schedule_followup", map[string]any{
+		"title": "Backfill check", "prompt": "Advance the backfill", "todo_id": todo.ID,
+		"every": "30m", "new_conversation": true, "push": "asked", "user_requested": true,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	s.runRetry = time.Millisecond
 	f.mu.Lock()
 	reads := 0
@@ -268,12 +275,7 @@ func TestScheduledTodoFailedAttemptsDoNotCountAsNoProgress(t *testing.T) {
 			SessionID: sid, Status: proto.StatusIdle, State: proto.StateIdle})
 	}
 	f.mu.Unlock()
-	if _, err := runJSON(t, s, "conv1", "schedule_followup", map[string]any{
-		"title": "Backfill check", "prompt": "Advance the backfill", "todo_id": todo.ID,
-		"every": "30m", "new_conversation": true, "push": "asked",
-	}); err != nil {
-		t.Fatal(err)
-	}
+
 	tasks, _ := scheduleState(s)
 	if _, err := runNow(t, s, tasks[0].ID); err != nil {
 		t.Fatal(err)

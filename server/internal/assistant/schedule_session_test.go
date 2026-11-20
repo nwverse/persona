@@ -148,8 +148,12 @@ func TestFreshEachRunOnRescheduleUsesFinalRepeat(t *testing.T) {
 				At: time.Now().Add(-time.Minute), MachineID: "server", SessionID: origin})
 			s.recordRun(ScheduleRun{RefID: "followup", Status: runOK, MachineID: "server", SessionID: origin})
 
+			if tc.every != "" {
+				attestFollowupRequest(t, s, origin)
+			}
 			args, err := json.Marshal(map[string]any{
 				"title": "Renewal", "prompt": prompt, "at": tc.at, "every": tc.every, "fresh_each_run": true,
+				"user_requested": tc.every != "",
 			})
 			if err != nil {
 				t.Fatal(err)

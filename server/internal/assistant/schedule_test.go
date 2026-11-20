@@ -274,8 +274,8 @@ func TestALateRunDoesNotOverwriteANewerStatus(t *testing.T) {
 }
 
 // The 30-minute patrol from 2026-10-31: each run ended with schedule_followup(new_conversation, at=30m, the same
-// prompt), so it was a new one-off every time, gone from the app while a run was stuck. Now its first re-schedule
-// turns it into one task every 30 minutes, with the launcher and mode the user picked, and later ones change nothing.
+// prompt). Reusing its existing row keeps the follow-up visible while a run is
+// stuck, without turning the one-off into an unattended recurring task.
 func TestARunReschedulingItselfKeepsOneTask(t *testing.T) {
 	f := newFakeHub()
 	f.settings = &Settings{Timezone: "Asia/Shanghai"}
@@ -283,13 +283,13 @@ func TestARunReschedulingItselfKeepsOneTask(t *testing.T) {
 	m := "server"
 	prompt := "按手册巡检一次，最后用 schedule_followup（new_conversation=true，at=30m，prompt 和本条相同）安排下一次。"
 	setTasks(h, Task{ID: "fu_1", Title: "30 分钟巡检", Prompt: prompt, Repeat: repeatOnce, At: time.Now().Add(-time.Minute),
-		LastRun: time.Now(), MachineID: "server", PermissionMode: "acceptEdits", Launcher: "claude-fast"})
+		LastRun: time.Now(), MachineID: "server", CreatedBy: "assistant", PermissionMode: "acceptEdits", Launcher: "claude-fast"})
 	h.recordRun(ScheduleRun{Kind: "followup", RefID: "fu_1", Status: runOK, MachineID: "server", SessionID: "run-1"})
 
 	copied := "⏰ 30 分钟巡检（你之前安排的跟进）\n\n" + prompt // the run copies its whole message
 	args, _ := json.Marshal(map[string]any{"at": "30m", "prompt": copied, "title": "30 分钟巡检", "new_conversation": true})
 	out, err := h.toolScheduleFollowup(context.Background(), m, "run-1", args)
-	if err != nil || !strings.Contains(out, "every 30 分钟") {
+	if err != nil || !strings.Contains(out, "Rescheduled fu_1") {
 		t.Fatalf("schedule: %q, %v", out, err)
 	}
 	tasks := h.tasksView(context.Background(), nil)
@@ -297,10 +297,14 @@ func TestARunReschedulingItselfKeepsOneTask(t *testing.T) {
 		t.Fatalf("still one task, got %+v", tasks)
 	}
 	p := tasks[0]
-	if p.ID != "fu_1" || p.Repeat != repeatInterval || p.EveryMinutes != 30 || !p.Enabled || p.Prompt != prompt ||
+	if p.ID != "fu_1" || p.Repeat != repeatOnce || p.EveryMinutes != 0 || !p.Enabled || p.Prompt != prompt ||
 		p.PermissionMode != "acceptEdits" || p.Launcher != "" {
-		t.Fatalf("one repeating task with the user's settings and the prompt without the ⏰ line: %+v", p)
+		t.Fatalf("one rearmed task with the user's settings and the prompt without the ⏰ line: %+v", p)
 	}
+	// Already-recurring tasks are a separate case. Their rule and next run
+	// stay exactly as the owner set them, including when turned off.
+	p.Repeat, p.EveryMinutes = repeatInterval, 30
+	setTasks(h, p)
 	if got := taskPrompt(p, p.At, p.At, time.UTC, false, false, false); !strings.Contains(got, "不用再用 schedule_followup") ||
 		strings.Count(got, "⏰") != 1 {
 		t.Fatalf("a repeating run is told it repeats by itself: %q", got)
@@ -377,24 +381,25 @@ func TestARunOfADeletedTaskDoesNotBringItBack(t *testing.T) {
 	}
 }
 
-// A run that cancels its own repeating task and, in the same turn, schedules it again (the same title, to change its rule
-// or prompt) gets a new task: the conversation deleted it, the user did not (#9090). Deleted in the app or by another
-// conversation's tool while the run was going, it stays deleted (#4792).
+// Cancelling in the task's own conversation can still create a new recurrence
+// after an owner request. Cancelling first cannot bypass the consent check, and
+// a task deleted in the app or by another conversation remains deleted (#4792).
 func TestARunThatCancelsItsOwnTaskCanScheduleItAgain(t *testing.T) {
 	ctx := context.Background()
 	const title = "Midday check"
-	args, _ := json.Marshal(map[string]any{"cron": "30 12 * * 1-5", "title": title, "prompt": "Look at how today's work is going."})
+	args, _ := json.Marshal(map[string]any{"cron": "30 12 * * 1-5", "title": title, "prompt": "Look at how today's work is going.", "user_requested": true})
 	for _, tc := range []struct {
 		name, by string // by: "app", or the session whose cancel_followup deletes it
 		again    bool
 		told     string
 	}{
-		{"its own conversation", "run-1", true, ""},
+		{"its own conversation with an owner request", "run-1", true, ""},
+		{"its own conversation without consent", "run-1", false, ""},
 		{"the app", "app", false, "assistant-schedule.deleted_not_again"},
 		{"another conversation", "run-2", false, "assistant-schedule.deleted_elsewhere_not_again"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f := newFakeHub()
+			f := newFakeHub().withMachine()
 			f.settings = &Settings{Timezone: "Asia/Shanghai"}
 			h := newStorelessService(t, f)
 			setTasks(h, Task{ID: "fu_1", Title: title, Prompt: "Look at how the work is going.", Repeat: repeatCron, Cron: "30 12 * * *",
@@ -410,7 +415,16 @@ func TestARunThatCancelsItsOwnTaskCanScheduleItAgain(t *testing.T) {
 			} else if out, err := h.runTool(ctx, "server", tc.by, "cancel_followup", json.RawMessage(`{"id":"fu_1"}`)); err != nil || out != "Cancelled." {
 				t.Fatalf("cancel: %q %v", out, err)
 			}
+			if tc.again {
+				attestFollowupRequest(t, h, "run-1")
+			}
 			out, err := h.toolScheduleFollowup(ctx, "server", "run-1", args)
+			if !tc.again && tc.told == "" {
+				if !errors.Is(err, errFollowupRecurrenceConsent) || len(h.tasksView(ctx, nil)) != 0 {
+					t.Fatalf("an unattended re-create was accepted: %q, %v", out, err)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -430,10 +444,11 @@ func TestARunThatCancelsItsOwnTaskCanScheduleItAgain(t *testing.T) {
 }
 
 func TestScheduleFollowupEvery(t *testing.T) {
-	h := newStorelessService(t, newFakeHub())
+	h := newStorelessService(t, newFakeHub().withMachine())
 	m := "server"
 	setTasks(h)
-	out, err := h.toolScheduleFollowup(context.Background(), m, "s1", json.RawMessage(`{"every":"2h","prompt":"看看部署","title":"部署巡检"}`))
+	attestFollowupRequest(t, h, "s1")
+	out, err := h.toolScheduleFollowup(context.Background(), m, "s1", json.RawMessage(`{"every":"2h","prompt":"看看部署","title":"部署巡检","user_requested":true}`))
 	if err != nil || !strings.Contains(out, "every 2 小时") {
 		t.Fatalf("%q, %v", out, err)
 	}
@@ -453,7 +468,7 @@ func TestScheduleFollowupEvery(t *testing.T) {
 // every is held to the range checkTask holds the app to: a task saved every 8 days could not be saved again from the
 // app (not even switched off), so the tool refuses it too, and saves nothing.
 func TestScheduleFollowupRejectsIntervalOverAWeek(t *testing.T) {
-	h := newStorelessService(t, newFakeHub())
+	h := newStorelessService(t, newFakeHub().withMachine())
 	setTasks(h)
 	for _, every := range []string{"8d", "169h", "213504d"} {
 		args, _ := json.Marshal(map[string]any{"every": every, "prompt": "Check the deploy", "title": "Deploy check"})
@@ -464,7 +479,8 @@ func TestScheduleFollowupRejectsIntervalOverAWeek(t *testing.T) {
 			t.Fatalf("every=%s saves nothing: %+v", every, tasks)
 		}
 	}
-	if _, err := h.toolScheduleFollowup(context.Background(), "server", "s1", json.RawMessage(`{"every":"7d","prompt":"x"}`)); err != nil {
+	attestFollowupRequest(t, h, "s1")
+	if _, err := h.toolScheduleFollowup(context.Background(), "server", "s1", json.RawMessage(`{"every":"7d","prompt":"x","user_requested":true}`)); err != nil {
 		t.Fatalf("every 7 days is the longest allowed: %v", err)
 	}
 	tasks := h.tasksView(context.Background(), nil)

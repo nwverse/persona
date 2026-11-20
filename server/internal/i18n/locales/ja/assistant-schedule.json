@@ -1,4 +1,5 @@
 {
+  "followup_recurrence_consent": "繰り返しのフォローアップは、この会話でオーナーが明示的に依頼したときだけ作成できます。ここでオーナーの返信を待ってから user_requested: true でやり直すか、定期タスクで設定してもらってください。一度だけのフォローアップには at を使えます。",
   "execution_context_unavailable": "タスクの会話の実行環境を確認できません。Agent を再接続して再試行してください。",
   "followup": "フォローアップ",
   "morning": "朝のまとめ",

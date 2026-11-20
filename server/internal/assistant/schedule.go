@@ -736,6 +736,23 @@ func sameText(a, b string) bool {
 	return a != "" && oneLine(stripScheduleHeader(a)) == oneLine(stripScheduleHeader(b))
 }
 
+var errFollowupRecurrenceConsent = i18n.Err("assistant-schedule.followup_recurrence_consent")
+
+type followupRecurrence struct {
+	every    int
+	cron     cronRule
+	approved bool
+}
+
+func (r followupRecurrence) requested() bool { return r.every > 0 || r.cron.spec != nil }
+
+func (s *Service) ownerRequestedFollowup(ctx context.Context, machine, session string) bool {
+	unattended := func() bool { return s.roundUnderWay(machine, session) || s.handedOver(session) }
+	// The transcript RPC can take time. Recheck the manager's live activity
+	// marks afterward, in case the window still shows yesterday's owner turn.
+	return !unattended() && s.handoffUserTurn(ctx, machine, session) && !unattended()
+}
+
 func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID string, args json.RawMessage) (string, error) {
 	var a struct {
 		TodoID          *string         `json:"todo_id"`
@@ -746,6 +763,7 @@ func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID s
 		Prompt          string          `json:"prompt"`
 		Title           string          `json:"title"`
 		NewConversation bool            `json:"new_conversation"`
+		UserRequested   bool            `json:"user_requested"`
 		Push            *string         `json:"push"`  // left out: a new follow-up pushes every run, one rescheduled keeps its push
 		Inbox           *string         `json:"inbox"` // left out: a new follow-up puts nothing in the Inbox, one rescheduled keeps its setting
 		Until           json.RawMessage `json:"until"`
@@ -817,15 +835,24 @@ func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID s
 	if at.Before(now.Add(-time.Minute)) {
 		return "", fmt.Errorf("%s is in the past", at.In(loc).Format("2006-01-02 15:04"))
 	}
-	needsOwn := hasTaskModel(a.Launcher, a.Model, a.Effort)
-	// A one-off ignores until, even a bad one. An interval task takes it; scheduleOwn applies it when this run is
-	// rescheduling its own task (including a one-off this call turns into an interval).
-	if out, id, ok, err := s.scheduleOwn(ctx, sessionID, a.Title, a.Prompt, prompt, a.At, at, every, rule, push, inbox, a.FreshEachRun, a.Until, a.Launcher, a.Model, a.Effort, a.TodoID); ok || err != nil {
+	recurrence := followupRecurrence{every: every, cron: rule}
+	if recurrence.requested() && a.UserRequested {
+		// A model's flag is never authority by itself. In particular a stale
+		// transcript can still show the owner while a scheduled round starts.
+		recurrence.approved = s.ownerRequestedFollowup(ctx, machine, sessionID)
+	}
+	// An ordinary one-off ignores until. A recurring task applies it after
+	// validating the recurrence, including when it begins from a one-off.
+	if out, id, ok, err := s.scheduleOwn(ctx, sessionID, a.Title, a.Prompt, prompt, at, recurrence, push, inbox, a.FreshEachRun, a.Until, a.Launcher, a.Model, a.Effort, a.TodoID); ok || err != nil {
 		if err == nil && id != "" {
 			err = s.setTaskModel(ctx, id, a.Launcher, a.Model, a.Effort)
 		}
 		return out, err
 	}
+	if recurrence.requested() && !recurrence.approved {
+		return "", errFollowupRecurrenceConsent
+	}
+	needsOwn := hasTaskModel(a.Launcher, a.Model, a.Effort)
 	space, _ := s.selfSpace(ctx, sessionID) // not listed: the assistant's own, as before the health space
 	t := Task{ID: "fu_" + randomHex(4), Title: strings.TrimSpace(a.Title), Prompt: prompt, Repeat: repeatOnce, At: at.UTC(), Enabled: true,
 		MachineID: machine, Space: space, CreatedBy: "assistant", CreatedAt: now.UTC()}
@@ -894,13 +921,12 @@ func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID s
 	return fmt.Sprintf("Scheduled %s for %s (%s); %s.", t.ID, at.In(loc).Format("01-02 15:04 Mon"), until(at), pushText(t)), nil
 }
 
-// scheduleOwn handles a run scheduling its own next run ("finally use schedule_followup (at=30m, same prompt as this one)
-// to schedule the next one"): the same task is kept, with the launcher and permission mode the user picked for it, instead of a new
-// follow-up per run. A one-off rescheduled by a relative time becomes a task every that long; one that already
-// repeats stays as it is (a changed prompt is taken). A task deleted while its run was going stays deleted: the run is
-// told so, nothing is scheduled (#4792), unless this conversation deleted it itself (#9090). A one-off given a cron rule (`cron`, zero spec for none) runs on it from now on. ok is false when this conversation's latest run isn't one of the task's
-// (rawPrompt is what was asked, before stripScheduleHeader), or the title and prompt are another task's.
-func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, prompt, atArg string, at time.Time, every int, cron cronRule, push, inbox *string, freshEachRun *bool, untilRaw json.RawMessage, launcher, model, effort, todoID *string) (string, string, bool, error) {
+// scheduleOwn rearms a run's own task instead of creating a new row. A relative
+// at keeps a one-off one-off. An explicit, approved every or cron can promote
+// it. Existing recurring tasks keep their cadence. A task deleted while its
+// run was going stays deleted, unless this conversation deleted it (#9090).
+// ok is false when the latest run or the title/prompt refers to another task.
+func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, prompt string, at time.Time, recurrence followupRecurrence, push, inbox *string, freshEachRun *bool, untilRaw json.RawMessage, launcher, model, effort, todoID *string) (string, string, bool, error) {
 	if sessionID == "" {
 		return "", "", false, nil
 	}
@@ -956,6 +982,10 @@ func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, 
 			return "", "", false, nil
 		}
 	}
+	if sc.tasks[i].Repeat == repeatOnce && recurrence.requested() && !recurrence.approved {
+		sc.mu.Unlock()
+		return "", id, true, errFollowupRecurrenceConsent
+	}
 	tasks := slices.Clone(sc.tasks)
 	t := &tasks[i]
 	previous := *t
@@ -978,22 +1008,18 @@ func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, 
 		out = fmt.Sprintf("%s「%s」 already repeats (%s); next run %s (%s). Kept its prompt up to date. Don't schedule its next run yourself.",
 			t.ID, t.label(), ruleText(*t, loc), next.In(loc).Format("01-02 15:04 Mon"), until(next))
 	default:
-		// Only within the app's range (checkTask); a longer one stays a one-off.
-		if d, ok := relative(atArg); every == 0 && cron.spec == nil && ok && d >= minEvery*time.Minute && d <= maxEvery*time.Minute {
-			every = int(d.Minutes())
-		}
 		t.At, t.Enabled = at.UTC(), true
 		switch {
-		case cron.spec != nil:
-			t.Repeat, t.Cron, t.At = repeatCron, cron.expr, time.Time{}
+		case recurrence.cron.spec != nil:
+			t.Repeat, t.Cron, t.At = repeatCron, recurrence.cron.expr, time.Time{}
 			rearm(Task{}, t, time.Now())
 			out = fmt.Sprintf("%s「%s」 now runs by itself on %s; the user sees it in Persona › 定时任务. "+ // i18n-ignore: model-facing, names the app's page as the replies beside it do
-				"Don't schedule its next run from now on.", t.ID, t.label(), cronReply(cron, loc, time.Now()))
-		case every > 0:
-			t.Repeat, t.EveryMinutes = repeatInterval, every
+				"Don't schedule its next run from now on.", t.ID, t.label(), cronReply(recurrence.cron, loc, time.Now()))
+		case recurrence.every > 0:
+			t.Repeat, t.EveryMinutes = repeatInterval, recurrence.every
 			next := t.next(time.Now(), loc)
 			out = fmt.Sprintf("%s「%s」 now repeats every %s by itself (next %s, %s); the user sees it in Persona › 定时任务. "+
-				"Don't schedule its next run from now on.", t.ID, t.label(), everyText(every), next.In(loc).Format("01-02 15:04 Mon"), until(next))
+				"Don't schedule its next run from now on.", t.ID, t.label(), everyText(recurrence.every), next.In(loc).Format("01-02 15:04 Mon"), until(next))
 		default:
 			out = fmt.Sprintf("Rescheduled %s「%s」 for %s (%s).", t.ID, t.label(), at.In(loc).Format("01-02 15:04 Mon"), until(at))
 		}

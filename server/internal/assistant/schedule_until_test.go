@@ -313,7 +313,8 @@ func TestUntilOnScheduleTools(t *testing.T) {
 		t.Fatal("a past until was saved")
 	}
 
-	out, err = h.toolScheduleFollowup(ctx, "server", "s1", json.RawMessage(`{"every":"30m","prompt":"看看部署","title":"部署巡检","until":"`+endText+`"}`))
+	attestFollowupRequest(t, h, "s1")
+	out, err = h.toolScheduleFollowup(ctx, "server", "s1", json.RawMessage(`{"every":"30m","user_requested":true,"prompt":"看看部署","title":"部署巡检","until":"`+endText+`"}`))
 	if err != nil || !strings.HasSuffix(out, suffix) {
 		t.Fatalf("every: %q %v", out, err)
 	}
@@ -345,7 +346,7 @@ func TestUntilOnScheduleTools(t *testing.T) {
 	}
 
 	n = len(h.tasksView(ctx, nil))
-	if _, err := h.toolScheduleFollowup(ctx, "server", "s1", json.RawMessage(`{"every":"30m","prompt":"过期的","until":"2000-01-01 00:00"}`)); err == nil || err.Error() != i18n.T(i18n.Default, "assistant-schedule.until_passed") {
+	if _, err := h.toolScheduleFollowup(ctx, "server", "s1", json.RawMessage(`{"every":"30m","user_requested":true,"prompt":"过期的","until":"2000-01-01 00:00"}`)); err == nil || err.Error() != i18n.T(i18n.Default, "assistant-schedule.until_passed") {
 		t.Fatalf("past every: %v", err)
 	}
 	if len(h.tasksView(ctx, nil)) != n {
@@ -389,7 +390,8 @@ func TestUntilOnScheduleTools(t *testing.T) {
 	setTasks(h, Task{ID: "fu", Title: "巡检", Prompt: "看看", Repeat: repeatOnce, At: time.Now().Add(-time.Minute),
 		Enabled: false, LastRun: time.Now(), Until: kept})
 	h.recordRun(ScheduleRun{RefID: "fu", SessionID: "run-2", Status: runOK})
-	out, err = h.toolScheduleFollowup(ctx, "server", "run-2", json.RawMessage(`{"at":"30m","prompt":"看看","title":"巡检","until":"`+endText+`"}`))
+	attestFollowupRequest(t, h, "run-2")
+	out, err = h.toolScheduleFollowup(ctx, "server", "run-2", json.RawMessage(`{"every":"30m","user_requested":true,"prompt":"看看","title":"巡检","until":"`+endText+`"}`))
 	if err != nil || !strings.HasSuffix(out, suffix) {
 		t.Fatalf("converted: %q %v", out, err)
 	}

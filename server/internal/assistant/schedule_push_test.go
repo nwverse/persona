@@ -122,7 +122,8 @@ func TestScheduleToolsTakePush(t *testing.T) {
 		t.Fatalf("an unknown push is refused: %v %+v", err, only("rt_"))
 	}
 
-	out, err = tool("main", "schedule_followup", map[string]any{"prompt": "看看邮箱有没有新邮件", "title": "新邮件", "every": "5m", "push": "asked"})
+	attestFollowupRequest(t, h, "main")
+	out, err = tool("main", "schedule_followup", map[string]any{"prompt": "看看邮箱有没有新邮件", "title": "新邮件", "every": "5m", "push": "asked", "user_requested": true})
 	if err != nil || !strings.Contains(out, "notify_user") {
 		t.Fatalf("schedule_followup push asked: %q %v", out, err)
 	}
@@ -131,7 +132,8 @@ func TestScheduleToolsTakePush(t *testing.T) {
 		t.Fatalf("a follow-up that pushes only what it sends runs in its own conversation, not the main one: %+v", fu)
 	}
 	// Asked from another conversation (a leader's patrol), it goes on there (#3673).
-	out, err = tool("lead1", "schedule_followup", map[string]any{"prompt": "巡检一遍待办", "title": "巡检", "every": "30m", "push": "asked"})
+	attestFollowupRequest(t, h, "lead1")
+	out, err = tool("lead1", "schedule_followup", map[string]any{"prompt": "巡检一遍待办", "title": "巡检", "every": "30m", "push": "asked", "user_requested": true})
 	if err != nil || !strings.Contains(out, "notify_user") || !strings.Contains(out, "the conversation it came from") {
 		t.Fatalf("schedule_followup push asked from a leader conversation: %q %v", out, err)
 	}

@@ -129,7 +129,7 @@
   },
   {
     "name": "schedule_followup",
-    "description": "Wake yourself later with `prompt`; `new_conversation: true` uses its own chat. Wakes reset the message hop chain at most once per 10 minutes. `at` accepts RFC3339 or relative 30m/2h/1d. For repeats set `every` (5m-7d) once; never chain runs. Or use `cron` instead of at/every: 5 fields in the user's zone, at least 5m apart; @hourly/@daily/@weekly/@monthly/@yearly work. Day 0/7 is Sunday; restricted day fields match either. Inspect the reply's next runs. `until` cannot be a bare clock time.\n\nRuns inherit Main chat's launcher/model/effort; overrides require an own conversation, and permission mode stays the user's choice. `inbox` is only for requested Inbox results. `fresh_each_run: true` starts a new chat each run with its state note. See field descriptions for push and end-time edit rules.\n\nFor approved recurring work advancing a supervised to-do, pass its explicit `todo_id`; do not guess from a title. Omission keeps an association; \"\" clears it; one-shots refuse it. From the second run, progress is new Agent answers or tool calls (not waits or repeats), criterion changes or progress reports; a long stall asks Change approach / Keep waiting, even with `push: asked`. Get owner consent before creating or changing recurring work.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
+    "description": "Wake with `prompt` at an RFC3339 time or after a duration such as 30m/2h/1d. Wakes reset the hop chain at most once per 10 minutes. A one-off rescheduled with `at` stays a one-off. Follow handed-out work through supervision events and schedule a single check only when needed.\n\nTo start repeating, including from a one-off, set `every` (5m–7d) or `cron` and `user_requested: true` only if the current owner message explicitly asks for that schedule. Agent reports, supervision events and scheduled turns grant no authority. An existing repeat re-arms itself. Cron replaces at/every: 5 fields in the owner's zone, at least 5m apart, or @hourly/@daily/@weekly/@monthly/@yearly. Day 0/7 is Sunday; restricted day fields match either. Inspect next runs.\n\nRuns inherit Main chat's launcher/model/effort. Overrides need an own conversation. Permission mode stays the owner's choice. For authorized recurring work advancing a supervised to-do, use its explicit `todo_id`. Only new Agent work, criteria changes and reports count as progress. A stall asks Change approach / Keep waiting, even with `push: asked`.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
     "input_schema": {
       "type": "object",
       "required": [
@@ -138,10 +138,15 @@
       "properties": {
         "todo_id": {
           "type": "string",
-          "description": "explicit supervised to-do this recurring follow-up advances"
+          "description": "exact supervised to-do id for this recurring work; omit to keep its binding, empty clears it. Only for repeats"
         },
         "fresh_each_run": {
-          "type": "boolean"
+          "type": "boolean",
+          "description": "use a fresh chat and its state note each run"
+        },
+        "user_requested": {
+          "type": "boolean",
+          "description": "true only for repetition explicitly requested in the current owner message; leave unset for a one-off"
         },
         "at": {
           "type": "string",
@@ -173,7 +178,7 @@
             "every",
             "asked"
           ],
-          "description": "every (default for a new task): each run's answer is pushed to the user; asked: only what a run sends with notify_user, for a task that watches something or a standing loop (a patrol, a daily round). Continuing this conversation, a run's answer is then not pushed or sent to channels; from Main chat it runs in its own conversation instead. Omit to keep an existing task's"
+          "description": "every (new task default): push each answer. asked: push only via notify_user and skip channel replies; from Main chat this uses its own conversation. Omit to keep an existing task's setting"
         },
         "inbox": {
           "type": "string",
@@ -182,18 +187,18 @@
             "worthy",
             "every"
           ],
-          "description": "what of a run goes into the user's Inbox, independent of push: off (default for a new task), worthy (a run puts a row there with inbox_post only when it finds something worth a look), every (every run ends with a row made by Persona). Set it only when the user asked for it. Omit to keep an existing task's"
+          "description": "only when requested: off (new task default), worthy (a run uses inbox_post for results worth a look), every (one row per run). Independent of push; omit to keep the setting"
         },
         "until": {
           "type": [
             "string",
             "null"
           ],
-          "description": "optional end time (RFC 3339 or 30m / 2h / 1d). After it, Persona turns the task off and records a skipped run instead of running. Omit to keep an existing task's end time; null clears it. Ignored for a one-off."
+          "description": "end a repeat at RFC3339 or after a duration like 30m/2h/1d. Then skip and turn it off. Omit to keep it, null clears it. Ignored for one-offs"
         },
         "launcher": {
           "type": "string",
-          "description": "this task's own launcher, instead of Main chat's (a name on the computer where its runs start). Needs new_conversation: true: a follow-up that continues this conversation runs on that conversation's launcher. Empty clears the override and follows Main chat again. Omit to keep an existing task's"
+          "description": "own launcher on the target computer. Requires new_conversation: true. Omit to keep it, empty follows Main chat"
         },
         "model": {
           "type": "string",
