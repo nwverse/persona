@@ -37,7 +37,7 @@ struct StarredChatContext {
                                         role: item.role, title: title, speaker: bar.from ?? (bar.isUser ? "" : speaker),
                                         source_manager: manager, written_at: item.ts, text: bar.text)
             return StarredMenuAction(title: String(localized: "Star"), symbol: Theme.Icon.starredMessage) {
-                Task {
+                Task<Void, Never> {
                     if scope == store.scope {
                         await store.add(draft, loadText: item.fullSize == nil ? nil : { try await fullText(source, bar: bar) })
                     }
