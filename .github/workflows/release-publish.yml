@@ -190,12 +190,13 @@ jobs:
           PY
       - name: Create the immutable tag only after the merged source passed every platform check
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}
           REPOSITORY: ${{ github.repository }}
           TAG: v${{ steps.source.outputs.version }}
           COMMIT: ${{ steps.source.outputs.commit }}
         run: |
           set -euo pipefail
+          test -n "$GH_TOKEN" || { echo 'persona-release is missing RELEASE_PR_TOKEN; refusing an unauthorized tag actor' >&2; exit 1; }
           existing="$(git ls-remote --tags "https://github.com/$REPOSITORY.git" "refs/tags/$TAG" "refs/tags/$TAG^{}")"
           if [[ -n "$existing" ]]; then
             printf '%s\n' "$existing" | grep -F "$COMMIT" >/dev/null || {
@@ -209,7 +210,7 @@ jobs:
           test "$(git rev-parse "$TAG^{commit}")" = "$COMMIT"
       - name: Mark the Release as owned by this verified release PR
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}
           REPOSITORY: ${{ github.repository }}
           TAG: v${{ steps.source.outputs.version }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
