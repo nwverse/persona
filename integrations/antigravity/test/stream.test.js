@@ -325,11 +325,12 @@ test('an autonomous wake preserves a previous unexported reply through interrupt
   nativeState(directory, 'IDLE', 5)
   await until('both replies are exported despite a mid-prompt system message', () => runtime.idle() && node.last('session.items')?.to_seq === 5)
   const final = await node.peer.call('session.items', { session_id: SESSION })
-  assert.deepEqual(final.items.map((item) => item.text), ['Run the workflow.', 'Workflow started.', 'Workflow finished.'])
+  assert.deepEqual(final.items.filter((item) => !item.wake).map((item) => item.text), ['Run the workflow.', 'Workflow started.', 'Workflow finished.'])
+  assert.deepEqual(final.items.filter((item) => item.wake).map((item) => item.seq), [5])
 })
 
-test('a text-only wake does not rewrite the unexported prompt history', async (t) => {
-  const { node, update, chunk, promptCount, runtime } = await fixture(t)
+test('a text-only wake preserves the unexported prompt and opens its own live exchange', async (t) => {
+  const { node, directory, update, chunk, promptCount, runtime } = await fixture(t, { exportPollMs: 20 })
   await node.peer.call('session.send', { session_id: SESSION, text: 'Run the workflow.' })
   await promptCount(1)
   await chunk('Workflow started.')
@@ -337,7 +338,77 @@ test('a text-only wake does not rewrite the unexported prompt history', async (t
   await until('prompt reply held until export', () => runtime.idle() && node.last('session.items')?.items.some((item) => item.text === 'Workflow started.'))
   const prior = await node.peer.call('session.items', { session_id: SESSION })
   await chunk('Workflow finished.')
-  assert.deepEqual(await node.peer.call('session.items', { session_id: SESSION }), prior)
+  const live = await node.peer.call('session.items', { session_id: SESSION })
+  assert.deepEqual(live.items.slice(0, prior.items.length), prior.items)
+  assert.deepEqual(live.items.slice(prior.items.length).map((item) => [item.kind, item.wake]), [['notice', true]])
+  assert.equal(node.last('session.items')?.items.at(-1)?.id, live.items.at(-1).id)
+
+  const exported = [userStep(0, 'Run the workflow.'), replyStep(1, 'Workflow started.'), replyStep(2, 'Workflow finished.')]
+  transcripts(directory, exported, exported)
+  nativeState(directory, 'IDLE', 3)
+  await until('both exact replies land in one markerless export', () => runtime.idle())
+  const settled = await node.peer.call('session.items', { session_id: SESSION })
+  assert.deepEqual(settled.items.map(item => item.wake ? 'wake' : item.text),
+    ['Run the workflow.', 'Workflow started.', 'wake', 'Workflow finished.'])
+})
+
+test('live and native wakes keep one identity across batched notifications and a watched file attachment', async (t) => {
+  const { node, directory, chunk, runtime } = await fixture(t, { exportPollMs: 20 })
+  const steps = readFileSync(new URL('./fixtures/autonomous-wake.jsonl', import.meta.url), 'utf8').trim().split('\n').map(line => JSON.parse(line))
+  const visible = () => node.peer.call('session.items', { session_id: SESSION })
+  transcripts(directory, steps.slice(0, 3), steps.slice(0, 3))
+  nativeState(directory, 'IDLE', 3)
+  const prior = await visible()
+  await chunk(steps[5].content)
+  const live = await visible()
+  assert.deepEqual(live.items.slice(0, prior.items.length), prior.items)
+  assert.ok(live.items.at(-1).wake)
+  const wakeID = live.items.at(-1).id
+  assert.equal(node.last('session.items').items.at(-1).id, wakeID)
+  transcripts(directory, steps.slice(0, 6), steps.slice(0, 6))
+  nativeState(directory, 'IDLE', 6)
+  await until('one completed native wake replaces the stream', () => runtime.idle() && node.last('session.items')?.to_seq === 6)
+  const final = await visible()
+  assert.deepEqual(final.items.slice(0, prior.items.length), prior.items)
+  assert.deepEqual(final.items.filter(item => item.wake).map(item => item.id), [wakeID])
+  assert.equal(final.items.at(-1).text, steps[5].content)
+})
+
+test('an observed ACP wake keeps its boundary when the native export omits its scheduler notice', async (t) => {
+  const { node, directory, chunk, runtime } = await fixture(t, { exportPollMs: 20 })
+  const steps = readFileSync(new URL('./fixtures/autonomous-wake.jsonl', import.meta.url), 'utf8').trim().split('\n').map(line => JSON.parse(line))
+  const priorSteps = steps.slice(0, 3)
+  transcripts(directory, priorSteps, priorSteps)
+  nativeState(directory, 'IDLE', 3)
+  const read = () => node.peer.call('session.items', { session_id: SESSION })
+  const prior = await read()
+  await chunk('The check is complete.')
+  const live = await read()
+  const wake = live.items.find(item => item.wake)
+  assert.ok(wake)
+  const exported = [...priorSteps, { ...steps[5], step_index: 3 }]
+  transcripts(directory, exported, exported)
+  nativeState(directory, 'IDLE', 4)
+  await until('matching native reply settles the observed ACP wake', () => runtime.idle())
+  const final = await read()
+  assert.deepEqual(final.items.slice(0, prior.items.length), prior.items)
+  assert.deepEqual(final.items.filter(item => item.wake).map(item => item.id), [wake.id])
+  assert.equal(final.items.at(-1).text, 'The check is complete.')
+  const receipt = readFileSync(join(directory, 'config/brain', RAW, '.persona-observed-wakes'), 'utf8')
+  assert.equal(receipt, readFileSync(new URL('./fixtures/observed-wake.txt', import.meta.url), 'utf8'))
+
+  await runtime.stop()
+  const cold = await startFakeNode(t)
+  const next = createAgyRuntime({ agyBin: join(directory, 'agy'), agyDir: join(directory, 'config'),
+    home: directory, socketPath: cold.path, log: () => {} })
+  t.after(() => next.stop())
+  next.start()
+  await cold.ready
+  const coldPage = () => cold.peer.call('session.items', { session_id: SESSION })
+  assert.deepEqual((await coldPage()).items, final.items)
+  // Reusing the same indices and timestamps in a native replacement branch is not that observed wake.
+  transcripts(directory, [...exported, ...exported.slice(2)], [...exported, ...exported.slice(2)])
+  assert.deepEqual((await coldPage()).items.filter(item => item.wake), [])
 })
 
 test('a late export of one wake cannot settle the next wake', async (t) => {

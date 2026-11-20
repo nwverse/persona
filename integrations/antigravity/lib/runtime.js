@@ -10,6 +10,7 @@ import { pathToFileURL } from 'node:url'
 import { createRuntime, installCurrent, interactionId, page, RpcError, snippet, summaryOf, verifyPackage } from '../../runtime-sdk/index.js'
 import { isAssistantDir } from '../../runtime-sdk/lib/identity.js'
 import { AgyAcpClient } from './acp.js'
+import { inspectImage } from './media-guard.js'
 import { readMediaImage } from './media.js'
 import { discoverModels, mapModels, SIGNIN_TIMEOUT } from './models.js'
 import { nativeErrorStep } from './errors.js'
@@ -28,6 +29,7 @@ import {
   personaModeToAgy,
   PREFIX,
   readTranscript,
+  rememberObservedWake,
   RUNTIME,
   stepsToItems,
   transcriptStatus,
@@ -741,7 +743,7 @@ export function createAgyRuntime(options = {}) {
   }
 
   function historyOf(rawId) {
-    return `agy:${rawId}:full:api-errors:content-v2:step-ids-v2:mcp-tools:lazy-media:checkpoints`
+    return `agy:${rawId}:full:api-errors:content-v2:step-ids-v2:mcp-tools:lazy-media:checkpoints:wakes`
   }
 
   function cutMatches(cut, transcript) {
@@ -1534,8 +1536,10 @@ export function createAgyRuntime(options = {}) {
       turn.historySeq = turn.seq
       const { base, steps, ...pending } = unexportedTurns.get(rawId) ?? {}
       turn.wakeCursor = { after: turn.exportedBaseMax, skip: 0, pending: turn.priorPending.length ? pending : undefined }
+      turn.liveSteps.push({ step_index: turn.nextStepIndex++, type: 'PERSONA_AUTONOMOUS_WAKE', created_at: turn.startedIso })
       autonomousTurns.set(pid, turn)
       if (!lastPushedSeq.has(pid)) lastPushedSeq.set(pid, 0)
+      syncTranscriptAppend(rawId)
       staleWorkingAt.delete(rawId)
       promptFailures.delete(rawId)
       rt.sessionsChanged(0)
@@ -1573,7 +1577,30 @@ export function createAgyRuntime(options = {}) {
           turn.observedMissed = cursor
           return false
         })
-        if ((wake >= 0 || (!skip && !pending && !cursor.observed)) && autonomousExported(turn, steps.slice(Math.max(first, wake + 1)))) {
+        let resumed = wake >= 0 ? Math.max(first, wake + 1) : -1
+        if (wake < 0 && !skip && !cursor.observed) {
+          if (!pending) resumed = first
+          else if (pending.hasReply && turn.streamingText.trim()) {
+            // The whole foreground turn and a text-only wake can land in one markerless export.
+            // Match the delivered answer in its own input ordinal before considering the next reply.
+            let inputs = 0
+            for (let i = 0; i < steps.length - 1; i++) {
+              const step = steps[i]
+              if (explicitInput(step)) inputs++
+              if (i >= first && inputs === pending.inputCount && step.type === 'PLANNER_RESPONSE' && step.status === 'DONE' &&
+                  !step.tool_calls?.length && step.content?.trim() === pending.replyText.trim()) {
+                resumed = i + 1
+                break
+              }
+            }
+            if (resumed >= 0 && steps.slice(resumed).some(explicitInput)) resumed = -1
+          }
+        }
+        if (resumed >= 0 && autonomousExported(turn, steps.slice(resumed))) {
+          if (wake < 0) {
+            rememberObservedWake(brainDirOf(rawId), steps, resumed)
+            if (pending && pending.seq === unexportedTurns.get(rawId)?.seq) unexportedTurns.delete(rawId)
+          }
           missedWakes.delete(rawId)
           retireAutonomousTurn(rawId)
           return
@@ -1801,14 +1828,24 @@ export function createAgyRuntime(options = {}) {
       blocks.push({ type: 'text', text: fullText })
     }
     if (Array.isArray(params.images)) {
+      let refused = 0
       for (const img of params.images) {
         if (img?.data) {
+          // A picture the model service cannot decode would stay in the history and fail every later request.
+          if (!inspectImage(Buffer.from(img.data, 'base64')).ok) {
+            refused++
+            continue
+          }
           blocks.push({
             type: 'image',
             data: img.data,
             mimeType: img.media_type || img.mime || 'image/png',
           })
         }
+      }
+      if (refused) {
+        blocks.push({ type: 'text', text: `[${refused} attached picture${refused > 1 ? 's were' : ' was'} incomplete or damaged ` +
+          'and not sent; tell the user and go on without it]' })
       }
     }
 
