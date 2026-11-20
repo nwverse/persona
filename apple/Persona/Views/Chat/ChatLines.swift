@@ -102,6 +102,8 @@ struct ChatLines {
     /// Background rounds fold too (docs/apple/ios.md "Background rounds"): the main conversation and the leader
     /// conversations (`AssistantInfo.leaders`, #6595), with the hub's `main_background_folded` on. Needs `foldSupervision`.
     var foldBackground = false
+    /// The main Assistant conversation: a routine relay reply stays folded; leader conversations keep the old fallback.
+    var main = false
     var openSupervision: Set<String> = []
     var openAllSupervision = false
     var active = false
@@ -173,7 +175,7 @@ struct ChatLines {
                 entry = nil
             }
             guard let trace = round, let first = trace.first else { return }
-            if Supervision.visible(evidence, results: results, live: running) {
+            if Supervision.visible(evidence, results: results, live: running, routineMainRelay: main && source?.kind == "conversation") {
                 out += trace
             } else {
                 out.append(.supervision(id: "sv-" + first.id, lines: trace, live: running, source: source))
