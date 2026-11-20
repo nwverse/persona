@@ -84,10 +84,14 @@ func (n *Node) runtimeStartOn(ctx context.Context, h *runtimeConn, p runtimeStar
 	defer cancel()
 	params := map[string]any{"cwd": p.Cwd, "prompt": p.Prompt}
 	for k, v := range map[string]string{"launcher": p.Launcher, "model": p.Model, "permission_mode": p.PermissionMode,
-		"effort": p.Effort, "workspace_id": p.WorkspaceID, "resume": p.Resume, "session_id": p.SessionID, "agent_type": p.AgentType} {
+		"effort": p.Effort, "workspace_id": p.WorkspaceID, "resume": p.Resume, "session_id": p.SessionID, "agent_type": p.AgentType,
+		"client_msg_id": p.ClientMsgID} {
 		if v != "" {
 			params[k] = v
 		}
+	}
+	if len(p.Images) > 0 {
+		params["images"] = p.Images
 	}
 	if p.Shell {
 		params["shell_launcher"] = true

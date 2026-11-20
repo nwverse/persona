@@ -70,6 +70,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
         })
         self.assertIn('test "$result" = success', verify_script)
         self.assertIn("--conclusion success", verify_script)
+        # GitHub skips the whole aggregate after a failed or skipped dependency by default. That would also skip
+        # its failure-conclusion step and leave the exact merge-result check in_progress forever.
+        self.assertEqual(jobs["verify"]["if"],
+                         "always() && needs.plan.outputs.pr != '0' && needs.plan.outputs.version != ''")
         self.assertTrue(any(step.get("if") == "failure()" and "--conclusion failure" in step["run"]
                             for step in jobs["verify"]["steps"]))
         verified_upload = next(step for step in jobs["verify"]["steps"]

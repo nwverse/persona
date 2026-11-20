@@ -517,11 +517,14 @@ page one setting away (#5424):
     Open in new window and Remove task…; the task's starting or failed state while no Agent is up), an Agent `AgentPanel`.
     The chat stays beside it on a wide window; a phone-sized one has the panel over the chat, and Back closes it. Both are
     a lazy chunk (`views/SidePanel.tsx`). Leaving a Persona chat keeps its panel for when you come back (`lib/panel-memory.ts`).
+    The header's chat bubble before × (**Open Agent page**, `PanelChrome.page`) opens the Agent the panel shows (the one ⌄
+    picked) as its own page, the page the Agents list opens, and closes the panel; a task with no Agent up has no bubble.
+    That page has the way back below, and returning opens the panel again.
   - **Full page**: a task opens its most pressing Agent's page (`mostUrgentAgent`), or the to-do's page while no Agent is
     on it; an Agent that belongs to no task opens its own page, with the way back below.
   - `/s/…` and `/todos?id=…` links in a reply open in the side panel on a wide window while it is chosen, else as those
     pages (a phone-sized window has no room beside the chat).
-- **The way back** (Full page). The Agent's page shows cindy's "Came from <conversation> · click to return" strip above the chat; ✕ puts it away. Clicking it, or Back, returns to the conversation where its chat was left: the conversation's history entry keeps the first line in view and its offset (`web/src/lib/handoff.ts`), and the chat opens there once instead of at its end.
+- **The way back** (Full page, and a side panel's Open Agent page). The Agent's page shows cindy's "Came from <conversation> · click to return" strip above the chat; ✕ puts it away. Clicking it, or Back, returns to the conversation where its chat was left: the conversation's history entry keeps the first line in view and its offset (`web/src/lib/handoff.ts`), and the chat opens there once instead of at its end. Left from a task's or an Agent's side panel, the entry also keeps that panel (`sidePanel`), which Back opens again. An Agent's page opened any other way (the Agents list, a link) has no strip.
 - Code: `web/src/views/assistant/Handoff.tsx`, `web/src/lib/handoff.ts`, `web/src/lib/agent-open.ts`, `web/src/views/assistant/TaskPanel.tsx`, `web/src/views/chat/HandoffBack.tsx`. Tests: `Handoff.test.tsx`, `lib/handoff.test.ts`, `TaskPanel.test.tsx`, `AgentOpenSetting.test.tsx`, `HandoffBack.test.tsx`, `AssistantActionBar.test.tsx`; browser: `web/e2e/handoff-cards.py` (both settings). iOS and Android draw the same cards in the chat (#5110).
 
 ### Task board
@@ -995,7 +998,7 @@ to its supervising conversation in either configuration (#11195). Code: `server/
   it, and at the deadline it goes straight to the user even while its current supervisor is busy. If that supervisor
   itself is `needs_you`, an owner-only card moves to the next rung (or to the user) on the existing 30-second routing
   tick instead of staying behind another decision. Neither path answers the card for the user. With the hub's push
-  tiering on (the low-distraction switch, `docs/server/server.md`), a card that runs past its last rung before any
+  tiering on (the push grading switch, `docs/server/server.md`), a card that runs past its last rung before any
   absolute deadline goes back to the task's supervisor once (the entry says so; the owner gets a held P1 notice for
   the briefing), then stays with that supervisor until it is answered or escalated. This quiet hold can keep an
   ordinary question from ever reaching the user on a timeout, and also applies to a permission or plan before its
@@ -1372,7 +1375,7 @@ Hub-inserted chat entries do not enter Claude's transcript (that would trigger a
 | Task details (embedded Agent chat), task board | `apple/Persona/Views/Assistant/Tasks/TaskSheets.swift` |
 | Feed inserted into chat at the end of its turn (before the next message) | `ChatLines.mergeFeed`, `ChatLine.Content.feed` |
 | Above the input: question card (earliest only, with "N more"), `@` list, dock, routing label; routed messages go directly to the task | `ChatView.taskFooter`, `Composer.sendText` |
-| Action bar on iPhone, iPad and Mac: Needs You and In Progress in place of the dock, each opening its tray, each thing in one of them (#3393, the Apple side of #3387); in the main conversation with low-distraction mode on, Held Pushes after them, its tray in the same place (#7782, #8223) | `apple/Persona/Views/Assistant/Tasks/AssistantActionBar.swift` (`ActionTrayContent`, `DockCapsule`), `apple/Persona/Views/Assistant/Tasks/PushInterceptsView.swift` |
+| Action bar on iPhone, iPad and Mac: Needs You and In Progress in place of the dock, each opening its tray, each thing in one of them (#3393, the Apple side of #3387); in the main conversation with push grading on, Held Pushes after them, its tray in the same place (#7782, #8223) | `apple/Persona/Views/Assistant/Tasks/AssistantActionBar.swift` (`ActionTrayContent`, `DockCapsule`), `apple/Persona/Views/Assistant/Tasks/PushInterceptsView.swift` |
 
 - Reuse Agent state colors (`AgentState.tone`: Needs you red, Working amber, Unread green), not the prototype's orange waiting state, to match Agents.
 - If dock pills do not fit, truncate the title but never "Waiting for you."
@@ -1393,7 +1396,7 @@ Hub-inserted chat entries do not enter Claude's transcript (that would trigger a
   Dynamic Type), 12 pt horizontal and 6 pt vertical padding, a full capsule radius, `Theme.Fill.chip` behind secondary
   text, 28 pt tall at the default size, 8 pt apart. Open is the filter chip's on look in the same size (accent fill, white
   semibold); Needs You with rows takes the waiting pill's tint, empty it is the plain grey capsule and opens "All Caught Up".
-  In the main conversation with low-distraction mode on, Held Pushes (#7782) is an entry in the same capsule after
+  In the main conversation with push grading on, Held Pushes (#7782) is an entry in the same capsule after
   them; its tray of today's held pushes opens in the trays' place, above the row at the bar's width, and one tray is open
   at a time (#8223; Android's `AssistantTray.HeldPushes` shares the slot the same way, the web opens a dialog).
   The entries (and Held Pushes and the computer pill after them) are one row, Needs You first. When they do not fit the

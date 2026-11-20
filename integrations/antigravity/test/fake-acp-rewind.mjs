@@ -96,14 +96,22 @@ input.on('line', (line) => {
     const tool = { sessionUpdate: 'tool_call_update', toolCallId: 'test-tool', status: 'completed' }
     if (plan.tool) update(tool)
     if (plan.lateTool) setTimeout(() => update(tool), plan.lateTool)
-    if (plan.export) {
+    if (plan.export || plan.flushReply) {
       const transcript = `${directory}/config/brain/${sessionId}/.system_generated/logs/transcript_full.jsonl`
       let index = readFileSync(transcript, 'utf8').trim().split('\n').length
+      const now = new Date().toISOString()
+      const created_at = plan.wholeSeconds ? now.replace(/\.\d{3}Z$/, 'Z') : now
       const append = (type, content) => appendFileSync(transcript,
-        JSON.stringify({ type, content, step_index: index++, status: 'DONE', created_at: new Date().toISOString() }) + '\n')
-      append('USER_INPUT', req.params.prompt[0].text)
-      if (plan.error) append('ERROR_MESSAGE', plan.error)
-      if (plan.reply) append('PLANNER_RESPONSE', plan.reply)
+        JSON.stringify({ type, content, step_index: index++, status: 'DONE', created_at }) + '\n')
+      if (plan.flushReply) {
+        append('USER_INPUT', plan.flushReply.prompt)
+        append('PLANNER_RESPONSE', plan.flushReply.reply)
+      }
+      if (plan.export) {
+        append('USER_INPUT', (plan.planMode ? '/plan ' : '') + req.params.prompt[0].text)
+        if (plan.error) append('ERROR_MESSAGE', plan.error)
+        if (plan.reply) append('PLANNER_RESPONSE', plan.reply)
+      }
     }
     if (plan.error && !plan.export) return send({ id: req.id, error: { code: -32000, message: plan.error } })
     return send({ id: req.id, result: { stopReason: 'end_turn' } })

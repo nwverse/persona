@@ -536,7 +536,9 @@ jobs:
   verify:
     name: All available release-PR checks passed
     needs: [plan, cli-web, android, apple, windows]
-    if: needs.plan.outputs.pr != '0' && needs.plan.outputs.version != ''
+    # A failed or skipped dependency normally skips this whole job, including its failure-conclusion step. Always run
+    # the aggregate for an actual release plan so the exact merge-result check cannot remain pending indefinitely.
+    if: always() && needs.plan.outputs.pr != '0' && needs.plan.outputs.version != ''
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
