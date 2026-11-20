@@ -83,3 +83,15 @@ private fun questionBody(context: Context, questions: List<Question>): String {
 /** [s] cut to [max] characters (code points, not UTF-16 units) with an ellipsis, as the hub's textfmt.Clip. */
 private fun clip(s: String, max: Int): String =
     if (s.codePointCount(0, s.length) <= max) s else s.substring(0, s.offsetByCodePoints(0, max)) + "…"
+
+
+/** A card can precede its session. With an unknown remote state root, protect a possible Health directory until the row arrives. */
+internal fun healthCardDirectory(path: String?, unlisted: Boolean): Boolean {
+    if (path.isNullOrEmpty()) return false
+    val parts = path.replace('\\', '/').split('/')
+    return parts.zipWithNext().any { (parent, child) ->
+        (unlisted || parent in persona.core.contracts.ProtocolCompatibility.stateDirectories) &&
+            (child == "health" || managerHealthDirectory.matches(child))
+    }
+}
+private val managerHealthDirectory = Regex("health-m-[a-f0-9]+")

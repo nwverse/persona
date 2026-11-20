@@ -44,6 +44,8 @@ internal class NotificationDelivery(
     },
     /** Only notifications showing now, not the delivered/dismissed history used to suppress a second arrival. */
     private val showing: () -> Set<String> = notified,
+    /** Health interaction alerts retain the hub's already-redacted live copy. Catch-up has only the pending card. */
+    private val postLiveInteraction: (Interaction, NotifyEvent) -> Unit = { ix, event -> postInteraction(ix, event.quiet, null) },
 ) {
     suspend fun accept(event: ServerEvent) {
         when (event) {
@@ -75,7 +77,7 @@ internal class NotificationDelivery(
                     val key = SessionKey(event.machineId, event.sessionId)
                     val ix = interactions.pending.value.firstOrNull { it.id == id && it.sessionKey == key } ?: return
                     if (NotificationPolicy.expired(ix)) { retract(id); return }
-                    if (session == null || !suppressed(session)) postInteraction(ix, event.quiet, null)
+                    if (session == null || !suppressed(session)) postLiveInteraction(ix, event)
                 } else if (session == null || !suppressed(session)) postNotify(event)
             }
             else -> Unit

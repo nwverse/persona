@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
@@ -33,7 +34,19 @@ import java.util.Base64
  * images to zoom, PDFs page by page, anything else described. ⋯ copies, shares and reloads.
  */
 @Composable
-internal fun FilePreview(state: FilesState, controller: FilesController, images: MarkdownImages, insert: (String) -> Unit, back: () -> Unit) {
+fun StandaloneFilePreview(machine: String, path: String, api: SessionFiles, onBack: () -> Unit) = key(machine, path, api) {
+    val resources = LocalResources.current
+    val cwd = FilesPaths.parent(path).orEmpty()
+    val scope = rememberCoroutineScope()
+    val controller = remember { FilesController(api, machine, cwd, scope, { filesLoadError(resources, it) }) }
+    val images = remember { MarkdownImages(api, machine, cwd) }
+    val state by controller.state.collectAsStateWithLifecycle()
+    LaunchedEffect(controller) { controller.preview(FileSelection.File(path)) }
+    FilePreview(state, controller, images, null, onBack)
+}
+
+@Composable
+internal fun FilePreview(state: FilesState, controller: FilesController, images: MarkdownImages, insert: ((String) -> Unit)?, back: () -> Unit) {
     val selection = state.selection ?: return
     val context = LocalContext.current
     val resources = LocalResources.current
@@ -63,7 +76,7 @@ internal fun FilePreview(state: FilesState, controller: FilesController, images:
         else -> file?.name?.ifEmpty { null } ?: path?.let(FilesPaths::name) ?: stringResource(R.string.files_title)
     }
     JPage(title, subtitle = path, onBack = back, actions = {
-        if (path != null) JTextButton(stringResource(R.string.files_insert_path), { insert(path) })
+        if (path != null && insert != null) JTextButton(stringResource(R.string.files_insert_path), { insert(path) })
         JIconButton(PhIcons.DotsThree, stringResource(R.string.files_preview_options), { menu = true })
     }) { padding ->
         val diff = state.diff

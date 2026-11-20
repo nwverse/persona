@@ -369,6 +369,13 @@ internal fun AssistantConversations.inGroup(names: GroupNames, scope: CoroutineS
         override suspend fun startConversation(pick: persona.core.contracts.ModelPick) = names.key(source.startConversation(pick))
         // another manager's main conversation (docs/assistant/managers.md step 4), in this group's merged ids
         override suspend fun mainConversationOf(manager: String) = names.key(source.mainConversationOf(manager))
+        override suspend fun healthSpace(): HealthSpace {
+            val health = source.healthSpace()
+            return object : HealthSpace by health {
+                override val machineId = names.machineId(health.machineId)
+                override suspend fun startReportChat(prompt: String) = names.key(health.startReportChat(prompt))
+            }
+        }
         override suspend fun spaceConversations(space: String) = source.spaceConversations(space).map(names::session)
         override suspend fun startConversationIn(space: String) = names.key(source.startConversationIn(space))
     }

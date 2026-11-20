@@ -37,6 +37,7 @@ class PhoneToolsRuntime(
     private val visibility = MutableStateFlow(false)
     private val resident = MutableStateFlow(false)
     private val permissionRevision = MutableStateFlow(0)
+    val healthRecords: PhoneHealthRecords = LocalHealthRecords(context.applicationContext, settings.enabled, permissionRevision)
     private val backend = AndroidPhoneTools(context) { visibility.value }
     private val outbox = PhoneToolResultOutbox()
     private val inFlight = Semaphore(MAX_IN_FLIGHT)

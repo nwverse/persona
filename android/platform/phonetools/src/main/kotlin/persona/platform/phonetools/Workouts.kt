@@ -92,7 +92,9 @@ object Workouts {
         return Access(client, granted)
     }
 
-    suspend fun recent(c: Context, args: JsonObject): PhoneToolResult {
+    suspend fun recent(c: Context, args: JsonObject): PhoneToolResult = PhoneToolResult.text(recentData(c, args).toString())
+
+    internal suspend fun recentData(c: Context, args: JsonObject): JsonObject {
         val access = access(c)
         val types = args.raw("activity")?.trim()?.takeIf { it.isNotEmpty() }?.let { name ->
             val key = name.lowercase().replace(' ', '_')
@@ -110,12 +112,14 @@ object Workouts {
             .filter { types == null || it.exerciseType in types }
             .take(limit)
             .map { row(c, access, it) }
-        return PhoneToolResult.text(buildJsonObject {
+        return buildJsonObject {
             put("workouts", buildJsonArray { rows.forEach { add(it) } })
-        }.toString())
+        }
     }
 
-    suspend fun detail(c: Context, args: JsonObject): PhoneToolResult {
+    suspend fun detail(c: Context, args: JsonObject): PhoneToolResult = PhoneToolResult.text(detailData(c, args).toString())
+
+    internal suspend fun detailData(c: Context, args: JsonObject): JsonObject {
         val access = access(c)
         val id = args.raw("id")?.trim()?.takeIf { it.isNotEmpty() } ?: invalid("id must be a workout's id from phone_workouts_recent")
         val session = try {
@@ -143,7 +147,7 @@ object Workouts {
                 rates.forEach { add(buildJsonObject { put("minute", it.first); put("bpm", it.second) }) }
             }
         }
-        return PhoneToolResult.text(JsonObject(fields).toString())
+        return JsonObject(fields)
     }
 
     /** One session's row; fields without data are left out. */

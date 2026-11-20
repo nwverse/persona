@@ -77,9 +77,10 @@ internal fun attachmentName(context: Context, uri: Uri): String =
  * [uri] as an attachment of the draft. [video]: one from the photo picker, sent as it is up to the hub's 200 MB (iOS
  * compresses a longer one; Android refuses it as it does any file over the limit), its length read for its card.
  */
-fun selectAttachment(context: Context, uri: Uri, image: Boolean, video: Boolean = false): ComposerAttachment {
+fun selectAttachment(context: Context, uri: Uri, image: Boolean, video: Boolean = false, keepForDraft: Boolean = true): ComposerAttachment {
     val resolver = context.contentResolver
-    runCatching { resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+    // Immediate report uploads use the picker’s one-time grant; drafts must survive a process restart.
+    if (keepForDraft) runCatching { resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
     val name = runCatching { attachmentName(context, uri) }.getOrDefault(context.getString(R.string.chat_attach_default_name))
     val size = runCatching {
         resolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use {
@@ -90,7 +91,7 @@ fun selectAttachment(context: Context, uri: Uri, image: Boolean, video: Boolean 
         video = video && !image, duration = if (video && !image) videoDuration(context, uri) else null)
     // A file over the limit is refused before anything is copied; retrying could not help, so it can only be removed.
     if (!image) oversizeReason(name, size, context.resources)?.let { return attachment.copy(uploadState = DraftUploadState.Invalid, error = it) }
-    return if (attachmentReadable(context, attachment)) attachment else attachment.copy(
+    return if (attachmentReadable(context, attachment, requirePersistedGrant = keepForDraft)) attachment else attachment.copy(
         uploadState = DraftUploadState.Invalid, error = context.getString(R.string.chat_attach_lost_permission))
 }
 
@@ -108,11 +109,11 @@ internal fun isVideo(context: Context, uri: Uri): Boolean =
     runCatching { context.contentResolver.getType(uri) }.getOrNull()?.startsWith("video/") == true
 
 /** App-owned camera URIs need no provider grant; external URIs must survive process death. */
-internal fun attachmentReadable(context: Context, attachment: ComposerAttachment): Boolean {
+internal fun attachmentReadable(context: Context, attachment: ComposerAttachment, requirePersistedGrant: Boolean = true): Boolean {
     if (attachment.uri.isEmpty()) return attachment.path != null
     return runCatching {
         val uri = Uri.parse(attachment.uri)
-        val granted = uri.authority == "${context.packageName}.chat.files" ||
+        val granted = !requirePersistedGrant || uri.authority == "${context.packageName}.chat.files" ||
             context.contentResolver.persistedUriPermissions.any { it.uri == uri && it.isReadPermission }
         granted && context.contentResolver.openFileDescriptor(uri, "r")?.use { true } == true
     }.getOrDefault(false)

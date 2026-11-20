@@ -136,7 +136,9 @@ object Health {
     fun window(days: Int, now: Instant, zone: ZoneId): Pair<Instant, Instant> =
         now.atZone(zone).toLocalDate().minusDays((days - 1).toLong()).atStartOfDay(zone).toInstant() to now
 
-    suspend fun summary(c: Context, args: JsonObject): PhoneToolResult {
+    suspend fun summary(c: Context, args: JsonObject): PhoneToolResult = PhoneToolResult.text(summaryData(c, args).toString())
+
+    internal suspend fun summaryData(c: Context, args: JsonObject): JsonObject {
         modelReason(c)?.let {
             unavailable("$it，读不了健康数据。\nHealth Connect is " +  // i18n-ignore: tool result for the model
                 (if (status(c) == HealthConnectClient.SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED) "out of date" else "not available") +
@@ -157,13 +159,15 @@ object Health {
             val rows: Map<String, JsonElement> = try {
                 if (metric == "sleep") sleep(client, start, end, zone).mapValues { JsonPrimitive(it.value) }
                 else quantity(client, metric, start, end, zone)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 // One failed metric should not sink the whole summary.
                 mapOf(end.atZone(zone).toLocalDate().toString() to buildJsonObject { put("error", e.message ?: e.javaClass.simpleName) })
             }
             for ((day, v) in rows) byDay.getOrPut(day) { linkedMapOf() }[metric] = v
         }
-        return PhoneToolResult.text(buildJsonObject {
+        return buildJsonObject {
             put("start", iso(start, zone))
             put("end", iso(end, zone))
             put("days", days)
@@ -177,7 +181,7 @@ object Health {
                     add(JsonObject(linkedMapOf<String, JsonElement>("date" to JsonPrimitive(day)) + values))
                 }
             })
-        }.toString())
+        }
     }
 
     internal suspend fun quantity(client: HealthConnectClient, metric: String, start: Instant, end: Instant, zone: ZoneId): Map<String, JsonElement> {

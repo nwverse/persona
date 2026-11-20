@@ -76,7 +76,7 @@ object ChatWiringModule {
                 allMachines.filter { persona.core.contracts.GroupKeys.namespaceOf(it.id) == selectedNamespace }
             }
             val host = AssistantHostBindings(active.scope.path, active.assistantManagement, active.drafts,
-                active.coroutineScope, available, machines, conversations, active.mainSender) { key, options ->
+                active.coroutineScope, available, machines, conversations, active.mainSender, chatContent = { key, options ->
                 ChatDestination(ChatRoute(key.machineId, key.sessionId,
                     kind = if (options.assistant) ConversationKind.Assistant else ConversationKind.Agent), navigator,
                     renderStyle = if (options.assistant) ChatRenderStyle.Assistant else ChatRenderStyle.Agent,
@@ -85,7 +85,9 @@ object ChatWiringModule {
                     historyReadOnly = options.readOnlyNote != null,
                     healthChat = options.healthChat,
                     historyFooter = options.readOnlyNote?.let { note -> { persona.core.designsystem.JNotice(note, status = persona.core.designsystem.Status.Offline) } })
-            }
+            }, phoneHealth = phone?.healthRecords, healthFilePreview = session?.files?.let { files ->
+                { machine, path, close -> persona.feature.files.StandaloneFilePreview(machine, path, files, close) }
+            })
             CompositionLocalProvider(LocalAssistantHost provides host) { key(active.scope.path) { content() } }
         }
     }

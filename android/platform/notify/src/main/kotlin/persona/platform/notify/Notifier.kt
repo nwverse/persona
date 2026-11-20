@@ -189,6 +189,10 @@ class Notifier @Inject constructor(
         postInteraction(ix, note = null, hushed = hushed, deliveryPreferences = null)
     }
 
+    internal fun postLiveInteraction(ix: Interaction, alert: NotifyEvent) {
+        postInteraction(ix, note = null, hushed = alert.quiet, deliveryPreferences = null, alert = alert)
+    }
+
     /** Catch-up supplies its own hub group's preferences; null keeps live delivery's current-preference check. */
     fun postInteraction(ix: Interaction, hushed: Boolean, deliveryPreferences: DeviceNotificationPreferences?) {
         postInteraction(ix, note = null, hushed = hushed, deliveryPreferences = deliveryPreferences)
@@ -200,16 +204,20 @@ class Notifier @Inject constructor(
         note: String?,
         hushed: Boolean = false,
         deliveryPreferences: DeviceNotificationPreferences? = null,
+        alert: NotifyEvent? = null,
     ): Boolean {
         val settings = deliveryPreferences ?: preferences.preferences.value
         if (settings?.input != true) return false
         if (NotificationPolicy.expired(ix)) { retract(ix.id); return false }
-        val assistant = isAssistant(ix.sessionKey)
-        val title = if (assistant == true && ix.kind == "question") context.getString(R.string.notify_title_assistant_asks)
+        val session = sessions.sessions.value.firstOrNull { it.key == ix.sessionKey }
+        val health = session?.space == persona.core.contracts.api.AssistantSpace.HEALTH || healthCardDirectory(ix.cwd, unlisted = session == null)
+        val title = if (health) alert?.title?.takeIf(String::isNotBlank) ?: context.getString(R.string.notify_health_title)
+            else if (session?.assistant == true && ix.kind == "question") context.getString(R.string.notify_title_assistant_asks)
             else ix.sessionTitle?.takeIf { it.isNotBlank() } ?: context.getString(R.string.notify_title_needs_you)
-        val (line, detail) = requestCopy(context, ix).let { (line, detail) ->
-            if (note == null) line to detail else note to "$note\n$detail"
-        }
+        val (line, detail) = if (health) {
+            val safe = alert?.body?.takeIf(String::isNotBlank) ?: context.getString(R.string.notify_health_body)
+            safe to safe
+        } else requestCopy(context, ix).let { (line, detail) -> if (note == null) line to detail else note to "$note\n$detail" }
         val builder = base(CH_INPUT, settings.lockDetails).forSession(ix.sessionKey).setContentTitle(title).setContentText(line)
             .addExtras(android.os.Bundle().apply { putBoolean(EXTRA_REQUEST, true) })
             .setStyle(NotificationCompat.BigTextStyle().bigText(detail.take(2000)))
@@ -222,7 +230,10 @@ class Notifier @Inject constructor(
         ix.expiresAt?.let { deadline ->
             builder.setTimeoutAfter((Instant.parse(deadline).toEpochMilli() - System.currentTimeMillis()).coerceAtLeast(1))
         }
-        NotificationPolicy.actions(ix).forEach { action -> builder.addAction(action(ix, action)) }
+        if (health) builder.setSubText(alert?.subtitle?.takeIf(String::isNotBlank))
+        NotificationPolicy.actions(ix).filter { !health || it.labelRes != null }.forEach { action ->
+            builder.addAction(action(ix, action))
+        }
         post(interactionTag(ix.id), EVENT_ID, builder.build())
         return true
     }

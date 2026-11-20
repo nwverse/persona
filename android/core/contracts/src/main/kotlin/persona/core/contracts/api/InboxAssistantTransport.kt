@@ -90,6 +90,8 @@ interface InboxAssistantTransport {
     /** A conversation that runs on [launcher] (POST /api/v1/assistant/conversations `launcher`), not the default one. */
     suspend fun createConversation(main: Boolean, launcher: String): JsonObject =
         throw UnsupportedOperationException("Picking a launcher unavailable")
+    /** Bind report and memory actions to this particular pairing and its health machine. */
+    suspend fun healthSpace(): HealthSpace = throw UnsupportedOperationException("Health records unavailable")
     /**
      * The chats of the assistant's [space] (`GET /api/v1/assistant?space=`, docs/assistant/health.md), answering
      * `{machine_id, conversations}` as [assistant] does. A space is the default manager's: no manager is named.
@@ -211,6 +213,8 @@ interface AssistantConversations : AssistantRepository {
     suspend fun startConversation(launcher: String): SessionKey = throw UnsupportedOperationException("Picking a launcher unavailable")
     /** A new conversation on the setup picked for it on the new-chat page's model panel (#5055): its launcher, model and effort. */
     suspend fun startConversation(pick: persona.core.contracts.ModelPick): SessionKey = startConversation(pick.launcher)
+    /** Bind report and memory actions to this particular pairing and its health machine. */
+    suspend fun healthSpace(): HealthSpace = throw UnsupportedOperationException("Health records unavailable")
     /**
      * The chats of the assistant's [space] ([AssistantSpace]), read from the hub each time: they are never in [assistant]'s
      * list. Each carries [space] even from a hub that leaves it out of this list.

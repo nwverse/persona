@@ -36,6 +36,16 @@ internal class FailedStarts(context: Context) {
             at = prefs.getLong("$page.at", System.currentTimeMillis()))
     }
 
+    /** Move a Health failure written before spaces had separate storage; it must never appear on the ordinary starter. */
+    fun readSpace(page: String, health: Boolean): FirstMessage? {
+        val original = read(page)
+        if (original?.space == persona.core.contracts.api.AssistantSpace.HEALTH) {
+            if (read("$page/health") == null) write("$page/health", original)
+            write(page, null)
+        }
+        return if (health) read("$page/health") else original?.takeIf { it.space == null }
+    }
+
     /** Keeps [message] for [page] while it failed; anything else (sending, gone) clears it. */
     fun write(page: String, message: FirstMessage?) {
         val failed = message?.takeIf { it.failed }

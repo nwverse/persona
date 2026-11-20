@@ -3,6 +3,10 @@ package persona.core.hub
 import persona.core.contracts.JsonCodec
 import persona.core.contracts.SessionKey
 
+import persona.core.contracts.api.AssistantSpace
+import persona.core.contracts.api.CheckupReport
+import persona.core.contracts.api.HealthSpace
+import persona.core.contracts.api.MemoryFile
 import persona.core.contracts.api.InboxAssistantTransport
 import persona.core.contracts.api.InboxBulkAction
 import persona.core.contracts.api.InboxDoneTarget
@@ -208,6 +212,38 @@ class HttpInboxAssistantTransport private constructor(
         buildJsonObject { put("prompt", ""); put("main", main); put("launcher", launcher) })
     // A space's requests carry `?space=` on the URL too (as the web's do): with it the hub client names no manager, since
     // a space is the default manager's (isAssistantPath).
+    override suspend fun healthSpace(): HealthSpace {
+        val space = AssistantSpace.HEALTH
+        val root = url("api", "v1", "assistant").newBuilder().addQueryParameter("space", space).build().pinned(null)
+        val machine = requireNotNull(json(root)["machine_id"]?.jsonPrimitive?.contentOrNull?.takeIf(String::isNotBlank))
+        return object : HealthSpace {
+            override val machineId = machine
+            private fun report(vararg path: String) = url("api", "v1", "machines", machine, "health", "reports", *path).pinned(null)
+            private fun memoryURL(vararg path: String) = url("api", "v1", "assistant", "memory", *path)
+                .newBuilder().addQueryParameter("space", space).build().pinned(null)
+
+            override suspend fun reports(): List<CheckupReport> = JsonCodec.decodeFromJsonElement(
+                json(report())["reports"] ?: error("Missing reports"))
+            override suspend fun deleteReport(name: String) { json(report(healthEntryName(name)), method = "DELETE") }
+            override suspend fun memory(): List<MemoryFile> = JsonCodec.decodeFromJsonElement(
+                json(memoryURL())["files"] ?: error("Missing memory"))
+            override suspend fun saveMemory(name: String, content: String) {
+                json(memoryURL(healthEntryName(name)), buildJsonObject { put("content", content) }, method = "PUT")
+            }
+            override suspend fun deleteMemory(name: String) { json(memoryURL(healthEntryName(name)), method = "DELETE") }
+            override suspend fun startReportChat(prompt: String): SessionKey {
+                val result = json(url("api", "v1", "assistant", "conversations").newBuilder().addQueryParameter("space", space).build().pinned(null),
+                    buildJsonObject { put("space", space); put("prompt", prompt) })
+                return JsonCodec.decodeFromJsonElement<persona.core.contracts.Session>(result.getValue("session")).key
+            }
+        }
+    }
+
+    private fun healthEntryName(name: String): String {
+        require(name.isNotBlank() && name != "." && name != ".." && '/' !in name && '\\' !in name)
+        return name
+    }
+
     override suspend fun assistantIn(space: String) =
         json(url("api", "v1", "assistant").newBuilder().addQueryParameter("space", space).build())
     override suspend fun createConversationIn(space: String) =

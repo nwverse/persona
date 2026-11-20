@@ -77,7 +77,7 @@ chat does; any other failure is a toast with the reason ("Couldn't clear the con
 "/" list and "+" sheet offer `/clear` too, which clears the same way (`LocalMainChatClear`); `/clear` sent alone does it,
 anything more is a message, a failure puts `/clear` back in the box, and on the cleared page it does nothing. Tests
 `ClearContextTest`, `MainChatClearTest`.
-It has no native Health destination or archived-chat browser; this change does not invent either feature.
+The sidebar’s **Health** entry opens the latest Health chat, or its private home when there are no chats. **New health chat** opens that home from a Health conversation. It contains checkup reports and private memory from the selected hub, plus local trends and workouts using this pairing’s Health Connect access. See [Android Health](../assistant/health.md#android-health-4329-4052).
 Recent, pinned and automatic conversation history, pinning, archive actions and New conversation are retained.
 
 There is no old-layout selector or migration. Android previously had a fixed four-destination shell, not an equivalent

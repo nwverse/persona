@@ -21,6 +21,7 @@ dependencies {
     implementation(project(":feature:chat"))
     implementation(libs.compose.preview)
     implementation(libs.androidx.activity)
+    implementation(libs.androidx.navigation3.ui)
     implementation(libs.androidx.core)
     implementation(libs.androidx.lifecycle.compose)
     implementation(libs.coroutines.android)

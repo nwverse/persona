@@ -36,6 +36,8 @@ data class AssistantHostBindings(
     val conversations: persona.core.contracts.api.AssistantRepository,
     val mainSender: MainConversationSender,
     val chatContent: @Composable (SessionKey, AssistantChatOptions) -> Unit,
+    val phoneHealth: persona.core.contracts.api.PhoneHealthRecords? = null,
+    val healthFilePreview: (@Composable (String, String, () -> Unit) -> Unit)? = null,
 )
 
 val LocalAssistantHost = staticCompositionLocalOf<AssistantHostBindings?> { null }

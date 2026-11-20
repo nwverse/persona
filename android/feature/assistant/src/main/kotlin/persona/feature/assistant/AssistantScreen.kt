@@ -177,6 +177,9 @@ fun AssistantScreen(
     /** The selected hub group's name while several are paired, which ends the title menu's heading as on iOS; null with one. */
     hubGroup: String? = null,
     composerUpload: persona.feature.chat.ComposerAttachmentUpload? = null,
+    phoneHealth: persona.core.contracts.api.PhoneHealthRecords? = LocalAssistantHost.current?.phoneHealth,
+    healthFilePreview: (@Composable (String, String, () -> Unit) -> Unit)? = LocalAssistantHost.current?.healthFilePreview,
+    onHealthAccess: () -> Unit = { navigator.navigate(persona.core.navigation.SettingsPageRoute(persona.core.navigation.SettingsPage.PhoneData)) },
 ) = PersonaTheme {
     val receivedSnapshot by repository.assistant.collectAsStateWithLifecycle()
     val conversationsOf = repository as? persona.core.contracts.api.AssistantConversations
@@ -218,10 +221,17 @@ fun AssistantScreen(
     val haptics = persona.core.designsystem.rememberHaptics()
     val archivedWords = stringResource(R.string.assistant_archived)
     var query by rememberSaveable(managerChoice.hubId, managerChoice.shown) { mutableStateOf("") }
+    var activeMachine by rememberSaveable(managerChoice.hubId, managerChoice.shown) { mutableStateOf<String?>(null) }
+    var activeSession by rememberSaveable(managerChoice.hubId, managerChoice.shown) { mutableStateOf<String?>(null) }
+    // Per manager, so switching manager leaves New chat's page.
+    var newChat by remember(managerChoice.hubId, managerChoice.shown) { mutableStateOf<NewChatStart?>(null) }
+    val active = activeSession?.let { SessionKey(activeMachine.orEmpty(), it) }
+    val healthPage = active == null && newChat?.space == persona.core.contracts.api.AssistantSpace.HEALTH
     val transientComposer = key(managerChoice.hubId, managerChoice.shown) { rememberChatComposerState() }
+    val privateComposer = key(managerChoice.hubId) { rememberChatComposerState() }
     // Keep an in-flight editor alive when its assistant is hidden, so its successful send can clear only that draft.
     val draftEditors = remember(draftRepository, draftScope) { mutableMapOf<Pair<String?, String>, ChatDraftEditor>() }
-    val draftEditor = if (draftRepository != null && draftScope != null) {
+    val draftEditor = if (!healthPage && draftRepository != null && draftScope != null) {
         draftEditors.getOrPut(managerChoice.hubId to managerChoice.shown) {
             ChatDraftEditor(draftRepository, draftScope, DraftKey.Assistant(managerChoice.shown.takeUnless { it == persona.core.contracts.api.ManagerRoster.ASSISTANT_MANAGER }?.let { "main@$it" } ?: "main"))
         }
@@ -233,7 +243,7 @@ fun AssistantScreen(
     val draftError by key(draftEditor) {
         (draftEditor?.error ?: remember { MutableStateFlow<Int?>(null) }).collectAsStateWithLifecycle()
     }
-    val composer = savedComposer ?: transientComposer
+    val composer = if (healthPage) privateComposer else savedComposer ?: transientComposer
     val draftRead by key(draftEditor) { (draftEditor?.ready ?: remember { MutableStateFlow(true) }).collectAsStateWithLifecycle() }
     val draftReady = draftEditor == null || draftRead
     LaunchedEffect(draftEditor, savedComposer) {
@@ -243,22 +253,22 @@ fun AssistantScreen(
     // A failed first message is kept on the device per assistant (FirstMessage.kt), as iOS keeps it across launches.
     val appContext = androidx.compose.ui.platform.LocalContext.current.applicationContext
     val failedStarts = remember(appContext) { FailedStarts(appContext) }
-    val firstPage = "${managerChoice.hubId.orEmpty()}/${managerChoice.shown}"
-    val sendState = sends.getOrPut(managerChoice.hubId to managerChoice.shown) {
-        AssistantSendState().apply { first.value = failedStarts.read(firstPage).takeUnless { demo } }
+    val sendOwner = if (healthPage) "${managerChoice.shown}/health" else managerChoice.shown
+    val regularPage = "${managerChoice.hubId.orEmpty()}/${managerChoice.shown}"
+    val firstPage = "${managerChoice.hubId.orEmpty()}/$sendOwner"
+    val sendState = sends.getOrPut(managerChoice.hubId to sendOwner) {
+        AssistantSendState().apply {
+            if (!demo) first.value = failedStarts.readSpace(regularPage, healthPage)
+        }
     }
     var sending by sendState.sending
     var firstMessage by sendState.first
-    var activeMachine by rememberSaveable(managerChoice.hubId, managerChoice.shown) { mutableStateOf<String?>(null) }
-    var activeSession by rememberSaveable(managerChoice.hubId, managerChoice.shown) { mutableStateOf<String?>(null) }
     var viewingMainQueue by rememberSaveable(managerChoice.hubId, managerChoice.shown) { mutableStateOf(false) }
     var pendingClientId by sendState.clientId
     var pendingText by sendState.text
     var openedMain by rememberSaveable(managerChoice.hubId, managerChoice.shown) { mutableStateOf(false) }
     var proactiveOpen by rememberSaveable(managerChoice.hubId, managerChoice.shown) { mutableStateOf(false) }
     var settingsOpen by rememberSaveable(managerChoice.hubId, managerChoice.shown) { mutableStateOf(false) }
-    // Per manager, so switching manager leaves New chat's page.
-    var newChat by remember(managerChoice.hubId, managerChoice.shown) { mutableStateOf<NewChatStart?>(null) }
     val context = androidx.compose.ui.platform.LocalContext.current
     var ending by remember { mutableStateOf<Session?>(null) }
     var endingBusy by remember { mutableStateOf(false) }
@@ -299,13 +309,16 @@ fun AssistantScreen(
     fun copyDiagnostics(session: Session) {
         copy(conversationDiagnostics(session), resources.getString(R.string.assistant_diagnostics_copied))
     }
-    val active = activeSession?.let { SessionKey(activeMachine.orEmpty(), it) }
     // The health space (docs/assistant/health.md, #4329): its chats as last read, and every chat known to be one, so New
     // on a health chat opens the health space's new-chat page.
     var healthChats by remember(managerChoice.hubId) { mutableStateOf<List<Session>?>(null) }
     var healthKeys by remember(managerChoice.hubId) { mutableStateOf(emptySet<SessionKey>()) }
-    var healthBusy by remember { mutableStateOf(false) }
-    val healthPage = active == null && newChat?.space == persona.core.contracts.api.AssistantSpace.HEALTH
+    var healthBusy by remember(managerChoice.hubId) { mutableStateOf(false) }
+    var healthSection by rememberSaveable(managerChoice.hubId, managerChoice.shown) { mutableStateOf<HealthSection?>(null) }
+    var healthRevision by remember { mutableIntStateOf(0) }
+    val records = if (healthPage && hubOnline && conversationsOf != null)
+        healthRead(conversationsOf, managerChoice.hubId, healthRevision) { conversationsOf.healthSpace() } else null
+    val healthOwner = (records as? HealthRead.Ready)?.value
     // New chat's page takes @ (iOS: the shell's starter composer; Health's has none). Its picked sessions go with its message.
     val mentionsHere = active == null && !viewingMainQueue && !healthPage && mentionSessions != null
     val starterQuotes = if (mentionsHere) starterMentions.quotes else emptyList()
@@ -496,8 +509,10 @@ fun AssistantScreen(
         newConversation()
         newChat = HealthEntry.newChat(from, health = true)
     }
+    val healthPairing = managerChoice.hubId
     suspend fun loadHealth(): List<Session> {
         val chats = requireNotNull(conversationsOf).spaceConversations(persona.core.contracts.api.AssistantSpace.HEALTH)
+        if (persona.core.contracts.api.AssistantManagerChoice.current.value.hubId != healthPairing) throw CancellationException("Pairing changed")
         healthChats = chats
         healthKeys = healthKeys + chats.map { it.key }
         return chats
@@ -505,6 +520,7 @@ fun AssistantScreen(
     // The sidebar's Health: the newest health chat, else the health space's new-chat page.
     fun openHealth() {
         if (sending || healthBusy || conversationsOf == null) return
+        if (!hubOnline) { startHealthConversation(); return }
         healthBusy = true
         scope.launch {
             try {
@@ -536,7 +552,7 @@ fun AssistantScreen(
         if (managers.offline != null) return
         if (sending || !draftReady) return
         // A forward put on the new conversation's composer (#3901) goes with what is typed, or alone.
-        val forwards = if (resend == null && active == null) persona.feature.chat.ForwardPlacements.home else emptyList()
+        val forwards = if (resend == null && active == null && !healthPage) persona.feature.chat.ForwardPlacements.home else emptyList()
         // A failed first message holds the blank page until it is sent again or deleted (iOS).
         if (resend == null && (active == null && firstMessage != null ||
                 !(composer.hasContent || starterQuotes.isNotEmpty() || forwards.isNotEmpty()) || !composer.ready)) return
@@ -709,7 +725,10 @@ fun AssistantScreen(
     }
     LaunchedEffect(pageManagement, assistantMachine, startConversationWith) { loadStarterLaunchers() }
     // The health space's new-chat page lists its past chats: read each time it opens.
-    LaunchedEffect(healthPage) { if (healthPage && conversationsOf != null) assistantAttempt { loadHealth() } }
+    LaunchedEffect(healthPage, hubOnline, conversationsOf) {
+        if (healthPage && hubOnline && conversationsOf != null) assistantAttempt { loadHealth() }
+        if (!healthPage) healthSection = null
+    }
     // A chat opened from elsewhere (a notification, a link) that is not on the assistant's own list may be a health one:
     // asked once, so its New opens the health space's page.
     LaunchedEffect(active) {
@@ -919,8 +938,8 @@ fun AssistantScreen(
                         if (shellLines.isNotEmpty()) Spacer(Modifier.fillMaxWidth().onGloballyPositioned {
                             needsRoom.composerAt(it.positionInRoot().y.roundToInt())
                         })
-                        val uploadTarget = active ?: snapshot.mainSession
-                            ?: SessionKey(assistantMachine, PendingMainConversation.sessionId)
+                        val uploadTarget = if (healthPage) SessionKey(healthOwner?.machineId.orEmpty(), PendingMainConversation.sessionId)
+                            else active ?: snapshot.mainSession ?: SessionKey(assistantMachine, PendingMainConversation.sessionId)
                         // New chat's @: the sessions, and a typed path's folder on the assistant's computer (where uploads go).
                         val mentionMachine = persona.core.contracts.GroupKeys.raw(uploadTarget.machineId)
                         val folders = remember(mentionFiles, mentionMachine) {
@@ -931,8 +950,8 @@ fun AssistantScreen(
                         val mentions = if (mentionsHere) mentionSessions?.collectAsStateWithLifecycle()?.value
                             ?.let { starterMentionSource(it, folders) } else null
                         // A forward waiting for the new conversation (#3901): its card and source photos over the composer.
-                        val homeForwards = if (active == null) persona.feature.chat.ForwardPlacements.home else emptyList()
-                        val homePhotoHandoffs = if (active == null) persona.feature.chat.ForwardPlacements.homePhotoHandoffs() else emptyMap()
+                        val homeForwards = if (active == null && !healthPage) persona.feature.chat.ForwardPlacements.home else emptyList()
+                        val homePhotoHandoffs = if (active == null && !healthPage) persona.feature.chat.ForwardPlacements.homePhotoHandoffs() else emptyMap()
                         LaunchedEffect(homeForwards, composer, homePhotoHandoffs, composer.attachments.map { it.id }) {
                             if (homeForwards.isEmpty()) return@LaunchedEffect
                             val present = composer.attachments.mapTo(mutableSetOf()) { it.id }
@@ -950,9 +969,8 @@ fun AssistantScreen(
                             }
                         }
                         ChatComposer(uploadTarget, composer, working = false, sending = sending || !draftReady,
-                            // The health page sends no files: an upload goes to the main chat's machine, outside the health space.
-                            canClear = false, service = composerService?.takeIf { uploadTarget.machineId.isNotBlank() && !healthPage },
-                            uploadDestination = if (onHealthChat) "health" else null,
+                            canClear = false, service = composerService?.takeIf { uploadTarget.machineId.isNotBlank() },
+                            uploadDestination = if (healthPage || onHealthChat) persona.core.contracts.api.AssistantSpace.HEALTH else null,
                             upload = composerUpload,
                             onSend = { submit() }, onCommand = { composer.insert(it, composer.focused) },
                             onNotice = { message ->
@@ -1051,7 +1069,32 @@ fun AssistantScreen(
                 // The main conversation just cleared: an empty chat, the composer still at the bottom (#5100).
                 Box(Modifier.fillMaxSize().padding(padding).testTag("main-cleared"))
             } else if (healthPage) {
-                HealthHome(healthChats, contentPadding = padding, onOpen = ::openConversation, onCopy = ::copyId)
+                HealthHome(healthChats, contentPadding = padding, online = hubOnline, onSection = { healthSection = it },
+                    onOpen = ::openConversation, onCopy = ::copyId)
+                healthSection?.let { section ->
+                    HealthSheet(onClose = { healthSection = null }) {
+                        val close = { healthSection = null }
+                        when (section) {
+                            HealthSection.Trends, HealthSection.Workouts -> HealthPhonePage(section, phoneHealth,
+                                onAccess = { healthSection = null; onHealthAccess() }, onBack = close)
+                            HealthSection.Reports, HealthSection.Memory -> when {
+                                healthOwner != null && section == HealthSection.Reports -> HealthReportsPage(healthOwner, composerService,
+                                    onOpenChat = { key -> healthKeys = healthKeys + key; healthSection = null; openConversation(key) },
+                                    preview = healthFilePreview, onBack = close)
+                                healthOwner != null -> HealthMemoryPage(healthOwner, close)
+                                else -> JListPage(stringResource(section.title), onBack = close) {
+                                    item {
+                                        when {
+                                            !hubOnline -> JNotice(stringResource(R.string.health_offline))
+                                            records is HealthRead.Failed -> HealthFailure(records.problem, { healthRevision++ })
+                                            else -> JLoading()
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             } else {
                 NewChatPage(enabled = !sending && draftReady && composer.ready, machines = machines,
                     usageHistory = usageApi, onOpenUsage = { navigator.navigate(UsageCalendarRoute) },
@@ -1347,7 +1390,8 @@ private fun NewChatPage(
  */
 @Composable
 private fun HealthHome(
-    chats: List<Session>?, contentPadding: PaddingValues, onOpen: (SessionKey) -> Unit, onCopy: (SessionKey) -> Unit,
+    chats: List<Session>?, contentPadding: PaddingValues, online: Boolean, onSection: (HealthSection) -> Unit,
+    onOpen: (SessionKey) -> Unit, onCopy: (SessionKey) -> Unit,
 ) {
     val history = remember(chats) { HealthEntry.history(chats.orEmpty()) }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = pagePadding, end = pagePadding,
@@ -1358,6 +1402,8 @@ private fun HealthHome(
                 Text(stringResource(R.string.assistant_health_lead), style = PersonaTheme.type.voice, color = PersonaTheme.palette.ink2)
             }
         }
+        if (!online) item("offline") { JNotice(stringResource(R.string.health_offline)) }
+        healthSections(onSection)
         if (history.isNotEmpty()) item(key = "health-history") {
             JSectionHeader(stringResource(R.string.assistant_health_history), count = history.size)
         }

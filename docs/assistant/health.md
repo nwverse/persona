@@ -1,7 +1,7 @@
 # Health space (#2691)
 
 Health-related chats are split out of the assistant's main chat into a separate **Health** space: its own entry point, its own chat directory, its own memory.
-The first version is modeled on ChatGPT Health and starts with the hub and the web (#2789); the iOS and Mac entry points then reuse the same APIs (#2901). Android has a minimal entry (#4329): its health chats and a new health chat page.
+The first version is modeled on ChatGPT Health and starts with the hub and the web (#2789); the iOS and Mac entry points then reuse the same APIs (#2901). Android uses the same private chats, memory and checkup reports and reads local measurements through Health Connect (#4329, #4052).
 
 ## Why split it out
 
@@ -13,7 +13,7 @@ With a separate directory, Claude Code's per-directory auto memory, CLAUDE.md an
 
 | What ChatGPT Health does | What Persona v1 does | Later |
 | --- | --- | --- |
-| A separate Health entry in the sidebar (desktop) / menu (phone), opening an independent space ([1]) | A separate **Health** entry in the web sidebar, `/health`; **Health** in the iOS, Mac and Android assistant sidebar | Android: the rest of the Health home (memory, reports, sources) |
+| A separate Health entry in the sidebar (desktop) / menu (phone), opening an independent space ([1]) | A separate **Health** entry in the web sidebar, `/health`; **Health** in the iOS, Mac and Android assistant sidebar | — |
 | Health home: recent data and trends, synced records, suggested questions, past health chats, connected accounts ([2]) | `/health` page: a one-line privacy note, data sources (Apple Health / Health Connect via the phone), suggested questions, past health chats, health memory | Recent trend cards on the home page (using the structured cards from #886) |
 | Health memory is stored separately and does not flow back into regular chats; users can view and delete it ([3]) | The Health space has its own directory and its auto memory belongs only to it; viewable and deletable on the web; the main chat's tools cannot see health chats | Give the Health space only health-related tools |
 | Talking about health in a regular chat suggests moving to Health ([4]) | Not done | Suggest "Continue in Health" when the main chat touches on health |
@@ -122,7 +122,7 @@ Entering Health goes straight back to the latest health chat, with its context, 
 | --- | --- |
 | Web | `/health` resumes and replaces itself (Back skips it); `/health/new` is the new chat page; `views/health/entry.ts` `healthEntry`, header buttons `HealthChatActions` in `views/health/Health.tsx`. Tests: `entry.test.ts`, `Health.conversation.test.tsx` |
 | iOS / Mac | the sidebar's **Health** runs `AssistantView.enterHealth` (`HealthModel.entry`); the top bar's **New Chat** in a health chat pushes the Health page (`HealthModel.newOpensHealth`). `-openAssistantPage health` / `-openShellPage health` still show the page itself. Tests: `HealthModelTests` |
-| Android | the assistant sidebar's **Health** (`HealthEntry.resolve`), see "Android entry point" below |
+| Android | the assistant sidebar's **Health** (`HealthEntry.resolve`), see [Android Health](#android-health-4329-4052) below |
 
 ## Dietary intake and resting energy
 
@@ -165,13 +165,14 @@ Verification image removed; see the associated PR.
 - The sidebar's **Recent**, **Archived** and search do not list health chats (`AssistantLists` splits by `Session.assistantSpace`; health ones are in `AppModel.healthConversations`).
 - Screenshot arguments: `-tab assistant -openAssistantPage health` (new shell: `-openShellPage health`). Unit tests: `PersonaTests/HealthModelTests`.
 
-## Android entry point (#4329)
+## Android Health (#4329, #4052)
 
 - Entry: **Health** below **Knowledge** in the assistant drawer (not in demo mode). It opens the latest health chat or, with none, the new health chat page ("Entering Health" above; `feature/assistant/.../HealthEntry.kt`, `AssistantScreen.kt` `openHealth`).
-- New health chat page: the hero line, the input box and the space's past chats (newest first, tap to open). The first message starts the chat with `POST /api/v1/assistant/conversations?space=health` and `"space":"health"`, never `main`. The box takes no files (they would go to the main chat's machine, outside the Health space) and has no launcher picker.
-- In a health chat the top bar's new chat button reads **New health chat** and opens that page. Health chats pushed live (`space: "health"`) stay out of the main chat lists.
-- Requests carry `?space=health` on the URL, so the hub client sends no manager header: the space is the default manager's, as on the web.
-- Tests: `HealthEntryTest`, `HealthEntryScreenTest` (feature/assistant), `InboxAssistantTransportTest.theHealthSpaceListsAndStartsItsChatsByName`, `HubManagerHeaderTest`, `SpaceConversationsTest`.
+- **New health chat** in an open Health chat returns to the private home. Its composer and history stay apart from the ordinary assistant. The first message starts a chat with `POST /api/v1/assistant/conversations?space=health` and `"space":"health"`. Opening the home or reading a record starts no chat.
+- **Checkup reports** lists the originals and summaries on the computer named by `GET /api/v1/assistant?space=health` for the selected pairing. The file viewer opens each supplied path on that computer. Uploading a PDF or an image saves the original with `dest=health` and opens a private chat for the selected report(s). Deleting a report confirms the loss of both files and explains that existing chats and memory keep their copies. A node without report support asks for an update.
+- **Health memory** lists, reads, edits and deletes the private memory files through `/api/v1/assistant/memory?space=health`. The generated index is read-only. The health space uses the paired hub’s default assistant even when a different manager is selected in Persona.
+- **Health trends** shows 7 or 30 days of steps, sleep and weight recorded on this phone. **Workout reports** lists Health Connect exercise sessions from the past 30 days; the detail displays the available duration, distance, energy, heart rate, elevation and splits. Workout reports previously generated by the hub remain ordinary chats in the Health history. Opening these pages reads the phone locally. Both require the Health switch for this pairing and the corresponding Android read permissions; **Manage access** opens the existing phone-data settings. No measurements is a separate state from unavailable or denied access. With the hub offline, authorized local measurements remain available.
+- Glass, Brief and Board share these pages. Health chat notifications show the title and body issued by the hub. See [Outbound](#outbound-3194) for the hub’s redaction rules.
 
 ## Charts (#3140)
 
@@ -219,7 +220,7 @@ Checkup reports are usually PDFs dozens of pages long. If only the chat history 
   View the structured record, open the original or delete. Deletion is permanent and removes both original and record; **content already mentioned in chats and health memory is not deleted with them**, as the confirmation explains. Names must identify a single regular file in `reports/`; symlinks, directories and `../` are rejected.
   On the web it is on the home page (`views/health/HealthReports.tsx`); iOS / Mac use a separate page (`HealthReportsView.swift`). An old node returns 409 `node_outdated`, which the page displays. APIs live in `server/internal/devices/healthreports.go`, forwarded by hub (`devicewire.Routes`).
   Screenshot arguments: `-openReportRecord YES` (open the first report's record directly), `-showReportDelete YES` (show delete confirmation directly), both starting from the reports page.
-- Not yet: Android (its Health entry has no reports section and its box takes no files, #4329).
+- Android uses the same report list, preview and deletion routes and can upload PDFs and images as report originals; see [Android Health](#android-health-4329-4052).
 
 ## Not in v1
 
@@ -240,7 +241,7 @@ Checkup reports are usually PDFs dozens of pages long. If only the chat history 
 - Suggest "Continue in Health" when the main chat touches on health.
 - diet-advice push notifications go into the Health space.
 - The main chat reading the health directory via Bash or via Codex: block it fully with a sandbox or OS-level isolation (after #3282).
-- More data sources: medical records, checkup report upload on Android (web and iOS: see "Checkup reports" above), heart rate / HRV from recordings (#1950).
+- More data sources: medical records and heart rate / HRV from recordings (#1950).
 
 ## How to verify
 
@@ -248,6 +249,7 @@ Checkup reports are usually PDFs dozens of pages long. If only the chat history 
   `go test ./internal/hub -run Health` (push without body), `go test ./internal/connector -run ConfirmEach`, `go test ./internal/node -run LarkGateHealth`, `go test ./internal/identity` (health directory, `SpaceOf`, `IsAssistantDir`).
   After changing `health_claude_md.md`, update the golden and review the diff (`docs/assistant/prompts.md`). Charts: `go test ./internal/assistant -run HealthClaudeMDTeachesCharts`, `go test ./internal/feishubot -run PersonaCards`.
 - Web: `cd web && npm test && npm run build`.
+- Android: `HealthEntryScreenTest` exercises the sidebar, health-only starter, memory, checkups and local views. `HealthSpaceTransportTest` and `HealthSpaceGroupTest` verify the private routes and pairing. `HealthRecordsTest` covers Health Connect results; `HealthNotificationTest` covers live and catch-up notification content.
 - iOS / Mac: `PersonaTests/HealthModelTests` (lists and memory carry `space`, merging pushes, sidebar does not list health chats, new chats carry `space`); build `Persona` and `PersonaMac`.
 - iPhone dietary intake acceptance (real device; not covered by server or simulator tests):
   1. In 薄荷健康, enable writing dietary energy, protein, carbohydrates and total fat to Apple Health, record today's intake, and confirm the resulting entries in the Health app. Note the totals actually present there.

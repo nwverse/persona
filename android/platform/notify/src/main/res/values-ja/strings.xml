@@ -57,4 +57,6 @@
     <plurals name="notify_question_more">
         <item quantity="other">ほかに %1$d 問</item>
     </plurals>
+    <string name="notify_health_title">ヘルスケア</string>
+    <string name="notify_health_body">ヘルスケアスペースに新着があります。Personaを開いて確認してください</string>
 </resources>

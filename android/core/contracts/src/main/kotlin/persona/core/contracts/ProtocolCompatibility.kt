@@ -9,6 +9,7 @@ object ProtocolCompatibility {
     fun isUpdateAPK(name: String) = name.endsWith(".apk") && (name.startsWith("persona-update-") || name.startsWith("jarvis-update-"))
     val phoneConfirmationActions = setOf("persona.phone.confirm", "jarvis.phone.confirm")
     val appSchemes = setOf("persona", "jarvis")
+    val stateDirectories = setOf(".persona", ".jarvis")
     val personaServers = setOf("persona", "jarvis")
     val clientHeaders = listOf("X-Persona-Client", "X-Jarvis-Client")
     val operationHeaders = listOf("X-Persona-Op-Id", "X-Jarvis-Op-Id")

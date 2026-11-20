@@ -58,4 +58,6 @@
         <item quantity="one">%1$d more question</item>
         <item quantity="other">%1$d more questions</item>
     </plurals>
+    <string name="notify_health_title">Health</string>
+    <string name="notify_health_body">New in your health space. Open Persona to see it.</string>
 </resources>

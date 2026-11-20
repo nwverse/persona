@@ -314,6 +314,13 @@ class RealAssistantRepository(
         }
     }
 
+    override suspend fun healthSpace(): persona.core.contracts.api.HealthSpace {
+        val transport = requireNotNull(connection.current.value) { CoreText.of(Key.PairHubFirst).shown }
+        val health = transport.healthSpace()
+        check(connection.current.value === transport) { CoreText.of(Key.ConnectionSwitched).shown }
+        return health
+    }
+
     override suspend fun spaceConversations(space: String): List<Session> {
         val transport = requireNotNull(connection.current.value) { CoreText.of(Key.PairHubFirst).shown }
         val data = transport.assistantIn(space)
