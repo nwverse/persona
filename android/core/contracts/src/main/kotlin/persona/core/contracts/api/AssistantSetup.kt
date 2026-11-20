@@ -63,6 +63,8 @@ data class AssistantConfig(
     @SerialName("owner_reply_approval") val ownerReplyApproval: Boolean? = null,
     @SerialName("persistent_owner_action_cards") val persistentOwnerActionCards: Boolean? = null,
     @SerialName("owner_reply_approval_phrases") val ownerReplyApprovalPhrases: List<String>? = null,
+    /** Saved ordinary-conversation order; null or empty means activity time. Unknown ids stay for clients that know them. */
+    @SerialName("conversation_order") val conversationOrder: List<String>? = null,
 ) {
     /** Whether the main conversation folds its background rounds: on unless turned off, also on a hub that omits it. */
     val backgroundFolded: Boolean get() = mainBackgroundFolded ?: true
@@ -104,6 +106,8 @@ data class AssistantConfigUpdate(
     @SerialName("owner_reply_approval") val ownerReplyApproval: Boolean? = null,
     @SerialName("persistent_owner_action_cards") val persistentOwnerActionCards: Boolean? = null,
     @SerialName("owner_reply_approval_phrases") val ownerReplyApprovalPhrases: List<String>? = null,
+    /** Non-null writes the saved order; [] resets to activity time. Null leaves the setting unchanged. */
+    @SerialName("conversation_order") val conversationOrder: List<String>? = null,
 ) {
     companion object {
         const val CLEAR_MAIN = "-"

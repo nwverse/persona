@@ -98,6 +98,9 @@ type Settings struct {
 	// too, by last activity with the others (#8324; since #6228 they are only in All chats). Display only, one value
 	// for every device. nil is off (the default).
 	RecentTaskChats *bool `json:"recent_task_chats,omitempty"`
+	// ConversationOrder is the user's manual order of ordinary conversation ids (#12017). Empty keeps activity-time
+	// ordering. Clients append ids they do not currently hold so a limited read cannot silently discard the rest.
+	ConversationOrder []string `json:"conversation_order,omitempty"`
 	WorkGuide       *bool `json:"work_guide,omitempty"`
 	// MeetingAttendanceDefault: the role a meeting recording pre-selects on the phone (off, listener, participant;
 	// docs/assistant/meeting-minutes.md "Attending a meeting"); nil is off.

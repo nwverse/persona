@@ -1031,6 +1031,8 @@ export interface AssistantInfo {
   owner_reply_approval?: boolean;
   persistent_owner_action_cards?: boolean;
   owner_reply_approval_phrases?: string[];
+  /** User-chosen ordinary conversation order (#12017), shared by every client; absent or empty means activity time. */
+  conversation_order?: string[];
   /** The background supervisor's conversation (#4927, lib/background-supervisor.ts): its session id once the hub made
    *  it; absent before that and from an older hub. Read-only. */
   background_supervisor?: string;
