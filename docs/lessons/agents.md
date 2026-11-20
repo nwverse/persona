@@ -1548,3 +1548,7 @@ A managed model probe has the command and provider settings already, so run it d
 `#!/usr/bin/env node` with a different Node.js on the service's PATH. Keep shell discovery for aliases and functions,
 and require a complete frame before caching an errored scan. A timed-out helper can print a banner inside the frame.
 The Assistant picker reserves a short window after shell discovery so fallback choices still respect a node's own-service policy.
+
+## Gateway quota errors and stopped recovery (#12095)
+
+A gateway can report `rate_limit` without Claude Code's subscription `quotaLimits`. Its UTC available-again prose belongs to the existing usage-limit wait; temporary account capacity is transient. Classifying the turn alone does not permit restarting a terminal Agent that exited: record narrow, node-owned stop provenance too. Never overwrite explicit user/exit provenance, or reauthorize a consumed recovery attempt from a stale transcript error.
