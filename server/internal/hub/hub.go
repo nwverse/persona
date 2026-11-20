@@ -60,6 +60,7 @@ type Hub struct {
 	deviceFinishesMu      sync.Mutex
 	deviceFinishesFlushMu sync.Mutex
 	deviceFinishes        []deviceSessionFinish
+	deviceFinishesRunning bool
 	testAfterFinishAppend func()
 	testAfterFinishRefuse func()
 	clientOps             clientOpsWake

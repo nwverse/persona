@@ -156,6 +156,7 @@ func TestDevelopmentPauseDefersDeviceSessionWrites(t *testing.T) {
 	}
 	defer h.quiesce.resume()
 	h.finishDeviceSession(7, time.Now(), "closed", 30)
+	h.nodeWorkers.Wait()
 	if store.finished != 0 {
 		t.Fatal("a device session was finished while writes were paused")
 	}
@@ -802,7 +803,7 @@ func TestExtReportSaveResumeInterleaving(t *testing.T) {
 // Finding #5 (devicesessions.go): deterministic interleavings between
 // finishDeviceSession and resumeDevelopmentWriters, preserving FIFO order.
 func TestDeviceSessionFinishResumeInterleavingAndOrder(t *testing.T) {
-	for _, point := range []string{"after-append", "after-refuse"} {
+	for _, point := range []string{"after-append", "in-beginOrDefer", "after-refuse"} {
 		t.Run(point, func(t *testing.T) {
 			h := newTestHub(t)
 			store := &orderedDeviceSessionWrites{meshStore: newMeshStore()}
@@ -820,9 +821,12 @@ func TestDeviceSessionFinishResumeInterleavingAndOrder(t *testing.T) {
 					<-release
 				})
 			}
-			if point == "after-append" {
+			switch point {
+			case "after-append":
 				h.testAfterFinishAppend = hook
-			} else {
+			case "in-beginOrDefer":
+				h.quiesce.testOnPauseDefer = hook
+			default:
 				h.testAfterFinishRefuse = hook
 			}
 
@@ -858,6 +862,7 @@ func TestDeviceSessionFinishResumeInterleavingAndOrder(t *testing.T) {
 			}
 
 			h.finishDeviceSession(8, time.Now(), "second", 30)
+			h.nodeWorkers.Wait()
 
 			store.mu.Lock()
 			got := slices.Clone(store.ids)
@@ -1815,5 +1820,161 @@ func TestPushRegisterRespectsQuiesceAndAdmittedContext(t *testing.T) {
 			t.Fatal("pause did not return after admitted HTTP register finished")
 		}
 		h.quiesce.resume()
+	})
+}
+
+type blockingDeviceSessionStore struct {
+	*meshStore
+	mu            sync.Mutex
+	ids           []int64
+	active        int
+	maxConcurrent int
+	onFinish      func(id int64)
+}
+
+func (s *blockingDeviceSessionStore) FinishDeviceSession(_ context.Context, id int64, _ time.Time, _ string, _ int) error {
+	s.mu.Lock()
+	s.active++
+	if s.active > s.maxConcurrent {
+		s.maxConcurrent = s.active
+	}
+	s.mu.Unlock()
+	if s.onFinish != nil {
+		s.onFinish(id)
+	}
+	s.mu.Lock()
+	s.ids = append(s.ids, id)
+	s.active--
+	s.mu.Unlock()
+	return nil
+}
+
+// finishDeviceSession does not block disconnect callers behind slow DB writes:
+// a burst of closes returns immediately while a single tracked worker flushes
+// the queue in FIFO order, and a failed pause schedules resume asynchronously.
+func TestFinishDeviceSessionIsNonBlockingAndSerialized(t *testing.T) {
+	t.Run("burst disconnects return immediately and flush FIFO", func(t *testing.T) {
+		h := newTestHub(t)
+		entered := make(chan struct{})
+		release := make(chan struct{})
+		var once sync.Once
+		store := &blockingDeviceSessionStore{
+			meshStore: newMeshStore(),
+			onFinish: func(id int64) {
+				if id == 1 {
+					once.Do(func() {
+						close(entered)
+						<-release
+					})
+				}
+			},
+		}
+		h.store = store
+
+		burstDone := make(chan struct{})
+		go func() {
+			for id := int64(1); id <= 4; id++ {
+				h.finishDeviceSession(id, time.Now(), "closed", 30)
+			}
+			close(burstDone)
+		}()
+		select {
+		case <-burstDone:
+		case <-time.After(200 * time.Millisecond):
+			t.Fatal("finishDeviceSession burst blocked behind slow FinishDeviceSession")
+		}
+		select {
+		case <-entered:
+		case <-time.After(time.Second):
+			t.Fatal("background flush worker did not start")
+		}
+
+		// Second schedule call while worker is running must not spawn another worker.
+		h.scheduleDeviceSessionFinishes()
+		close(release)
+		h.nodeWorkers.Wait()
+
+		store.mu.Lock()
+		got := slices.Clone(store.ids)
+		maxConc := store.maxConcurrent
+		store.mu.Unlock()
+		if !slices.Equal(got, []int64{1, 2, 3, 4}) {
+			t.Fatalf("finished session ids = %v, want [1 2 3 4]", got)
+		}
+		if maxConc != 1 {
+			t.Fatalf("max concurrent FinishDeviceSession = %d, want 1", maxConc)
+		}
+		h.deviceFinishesMu.Lock()
+		running := h.deviceFinishesRunning
+		queued := len(h.deviceFinishes)
+		h.deviceFinishesMu.Unlock()
+		if running || queued != 0 {
+			t.Fatalf("after drain: running=%v queued=%d, want false/0", running, queued)
+		}
+	})
+
+	t.Run("failed pause wakes single async flush without blocking resume", func(t *testing.T) {
+		h := newTestHub(t)
+		entered := make(chan struct{})
+		release := make(chan struct{})
+		var once sync.Once
+		store := &blockingDeviceSessionStore{
+			meshStore: newMeshStore(),
+			onFinish: func(id int64) {
+				if id == 10 {
+					once.Do(func() {
+						close(entered)
+						<-release
+					})
+				}
+			},
+		}
+		h.store = store
+
+		if !h.quiesce.begin() {
+			t.Fatal("initial begin failed")
+		}
+		pauseCtx, pauseCancel := context.WithCancel(context.Background())
+		pauseDone := make(chan error, 1)
+		go func() { pauseDone <- h.pauseDevelopmentWriters(pauseCtx) }()
+		waitFor(t, "quiesce paused", func() bool {
+			h.quiesce.mu.Lock()
+			defer h.quiesce.mu.Unlock()
+			return h.quiesce.paused
+		})
+
+		h.finishDeviceSession(10, time.Now(), "closed", 30)
+		h.finishDeviceSession(11, time.Now(), "closed", 30)
+		h.nodeWorkers.Wait()
+
+		pauseCancel()
+		h.quiesce.end()
+		select {
+		case err := <-pauseDone:
+			if err == nil {
+				t.Fatal("expected pauseDevelopmentWriters to fail")
+			}
+		case <-time.After(200 * time.Millisecond):
+			t.Fatal("failed pauseDevelopmentWriters blocked on device session flush")
+		}
+
+		select {
+		case <-entered:
+		case <-time.After(time.Second):
+			t.Fatal("failed pause did not wake pending device session flush")
+		}
+		close(release)
+		h.nodeWorkers.Wait()
+
+		store.mu.Lock()
+		got := slices.Clone(store.ids)
+		maxConc := store.maxConcurrent
+		store.mu.Unlock()
+		if !slices.Equal(got, []int64{10, 11}) {
+			t.Fatalf("finished session ids = %v, want [10 11]", got)
+		}
+		if maxConc != 1 {
+			t.Fatalf("max concurrent FinishDeviceSession = %d, want 1", maxConc)
+		}
 	})
 }

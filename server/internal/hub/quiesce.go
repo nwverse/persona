@@ -264,7 +264,7 @@ func (h *Hub) resumeDevelopmentWriters() {
 	h.resumeExtReportSave()
 	h.wakeHelloWriters()
 	h.wakePhoneWrites()
-	h.flushDeviceSessionFinishes()
+	h.scheduleDeviceSessionFinishes()
 	h.lockTests.wake()
 	h.resumeMachineEntries()
 	h.live.resumeWrites()
