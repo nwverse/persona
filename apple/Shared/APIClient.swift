@@ -861,10 +861,11 @@ nonisolated struct APIClient: Sendable {
     /// The models the launcher's agent lists in its /model menu (New Agent's model picker). The node starts the CLI to
     /// ask (a few seconds, kept 10 minutes); refresh asks it again. Assistant purpose asks the shell launcher's list,
     /// even when the computer's Agent engine has a provider of the same name.
-    func launcherModels(machine: String, launcher: String, refresh: Bool = false, purpose: String? = nil) async throws -> LauncherModels {
+    func launcherModels(machine: String, launcher: String, refresh: Bool = false, purpose: String? = nil, host: String? = nil) async throws -> LauncherModels {
         let path = "/api/v1/machines/\(machine)/launchers/\(launcher.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? launcher)/models"
         var query = refresh ? ["refresh": "1"] : [:]
         if let purpose { query["purpose"] = purpose }
+        if let host, !host.isEmpty { query["host"] = host }
         let client = purpose == "assistant" ? currentAssistantSettings() : self
         return try JSON.decoder.decode(LauncherModels.self, from: await client.request("GET", path, query: query, timeout: 75))
     }
