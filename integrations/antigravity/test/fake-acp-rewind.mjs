@@ -1,4 +1,4 @@
-import { appendFileSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { createInterface } from 'node:readline'
 import { DatabaseSync } from 'node:sqlite'
@@ -8,6 +8,8 @@ if (process.argv.includes('models')) { console.log('test-model\tTest Model'); pr
 const directory = process.argv[2]
 const log = process.argv[process.argv.indexOf('--log-file') + 1]
 const calls = `${directory}/calls.jsonl`
+const loaded = new Set()
+const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...message }) + '\n')
 const server = createServer(async (req, res) => {
   const chunks = []
   for await (const chunk of req) chunks.push(chunk)
@@ -20,15 +22,49 @@ const server = createServer(async (req, res) => {
     return
   }
   if (method === 'GetCascadeTrajectory') {
+    if (snapshot.requireLoad && params.disableRehydration && !loaded.has(params.cascadeId)) {
+      res.writeHead(404).end('{"code":"not_found","message":"Cascade is not loaded"}')
+      return
+    }
     if (!snapshot.trajectory.steps?.length) delete snapshot.trajectory.steps
     res.end(JSON.stringify(snapshot))
     return
   }
   if (method === 'GetCascadeTrajectorySteps') {
+    while (JSON.parse(readFileSync(`${directory}/trajectory.json`, 'utf8')).holdErrors) {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
     res.end(JSON.stringify({ steps: (snapshot.trajectory.steps || []).slice(params.stepOffset) }))
     return
   }
+  if (method === 'ForkConversation' && snapshot.forkId) {
+    while (snapshot.holdFork && !existsSync(`${directory}/release-fork`)) {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+    const newCascadeId = snapshot.forkId
+    const forkedAtStepIndex = params.forkAtStepIndex === -1 ? snapshot.trajectory.steps.length - 1 : params.forkAtStepIndex
+    const brain = `${directory}/config/brain`
+    const from = `${brain}/${params.sourceCascadeId}/.system_generated/logs/transcript_full.jsonl`
+    const to = `${brain}/${newCascadeId}/.system_generated/logs`
+    if (!snapshot.delayForkExport) {
+      mkdirSync(to, { recursive: true })
+      writeFileSync(`${to}/transcript_full.jsonl`, readFileSync(from, 'utf8').trimEnd().split('\n').slice(0, forkedAtStepIndex + 1).join('\n') + '\n')
+    }
+    res.end(JSON.stringify({ newCascadeId, forkedAtStepIndex }))
+    return
+  }
   if (method === 'RevertToCascadeStep') {
+    if (snapshot.holdRevert) {
+      for (const update of [
+        { sessionUpdate: 'agent_message_chunk', content: { text: 'Stale reply.' } },
+        { sessionUpdate: 'tool_call', toolCallId: 'stale-tool', name: 'read_file' },
+        { sessionUpdate: 'session_info_update', title: 'Rewind in progress' },
+      ]) send({ method: 'session/update', params: { sessionId: params.cascadeId, update } })
+      while (!existsSync(`${directory}/release-revert`)) {
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      }
+      delete snapshot.holdRevert
+    }
     snapshot.trajectory.steps = (snapshot.trajectory.steps || []).slice(0, params.stepIndex + 1)
     writeFileSync(`${directory}/trajectory.json`, JSON.stringify(snapshot))
     const db = new DatabaseSync(`${directory}/config/conversation_summaries.db`)
@@ -50,9 +86,14 @@ input.on('line', (line) => {
   if (req.id === undefined) return
   if (req.method === 'session/list') openService()
   const snapshot = JSON.parse(readFileSync(`${directory}/trajectory.json`, 'utf8'))
+  if (req.method === 'session/resume' || req.method === 'session/load') loaded.add(req.params.sessionId)
   if (req.method === 'session/prompt' && snapshot.promptError) {
     process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: req.id, error: { code: -32000, message: snapshot.promptError } }) + '\n')
     return
+  }
+  if (req.method === 'session/prompt' && snapshot.promptReply) {
+    send({ method: 'session/update', params: { sessionId: req.params.sessionId,
+      update: { sessionUpdate: 'agent_message_chunk', content: { text: snapshot.promptReply } } } })
   }
   process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: req.id, result: {} }) + '\n')
 })

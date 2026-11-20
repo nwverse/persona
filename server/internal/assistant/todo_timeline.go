@@ -86,6 +86,14 @@ func (s *Service) todoTimelineRoutes() {
 	})
 }
 
+// supervisorOf is the conversation that follows to-do t up ("" none).
+func supervisorOf(t Todo) string {
+	if t.Supervision == nil {
+		return ""
+	}
+	return t.Supervision.Supervisor
+}
+
 // healthRun: session c works in the health space, by its space or its directory (identity.InHealthSpace: this only
 // hides, so a subfolder counts).
 func healthRun(c proto.Session) bool {

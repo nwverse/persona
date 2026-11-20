@@ -27,6 +27,7 @@ const superviseTool = "supervise"
 // dropped.
 func (s *Service) sendDigest(ctx context.Context) {
 	b := &s.supervise
+	batch := s.supervisionBatchInterval(ctx)
 	b.dedupMu.Lock()
 	defer b.dedupMu.Unlock()
 	b.mu.Lock()
@@ -36,10 +37,18 @@ func (s *Service) sendDigest(ctx context.Context) {
 		list = append(list, g)
 	}
 	now := time.Now()
-	if wait, ok := digestWait(now, b.last, list, s.superviseTimings()); !ok || wait > time.Second {
+	if wait, ok := digestWaitWithBatch(now, b.last, list, s.superviseTimings(), batch); !ok || wait > time.Second {
 		if ok {
 			s.scheduleDigestLocked(now)
 		}
+		b.mu.Unlock()
+		return
+	}
+	if batch > 0 {
+		list = slices.DeleteFunc(list, func(g superviseSignal) bool { return supervisionBatchDeferred(g, now) })
+	}
+	if len(list) == 0 {
+		s.scheduleDigestLocked(now)
 		b.mu.Unlock()
 		return
 	}
@@ -113,13 +122,16 @@ func (s *Service) sendDigest(ctx context.Context) {
 	list = list[:0]
 	held := map[string]superviseSignal{}
 	for id, g := range b.pending { // as they are now: one may have come or gone meanwhile
-		if waits[id] {
+		if waits[id] || batch > 0 && supervisionBatchDeferred(g, now) {
 			held[id] = g
 			continue
 		}
 		list = append(list, g)
 	}
 	if len(list) == 0 {
+		if len(held) > 0 {
+			s.scheduleDigestLocked(now)
+		}
 		b.mu.Unlock()
 		return
 	}
@@ -127,6 +139,9 @@ func (s *Service) sendDigest(ctx context.Context) {
 	prev := b.last
 	b.last = now
 	b.mu.Unlock()
+	if batch > 0 {
+		defer s.rescheduleSupervision() // an early screening return must not strand another recipient's deferred batch
+	}
 
 	list = s.screenMechanicalSignals(ctx, list, now, prev)
 	if len(list) == 0 {
@@ -195,6 +210,12 @@ func (s *Service) sendDigest(ctx context.Context) {
 		}
 		groups[to] = append(groups[to], g)
 	}
+	if batch > 0 {
+		order = s.gateDigestBatches(order, groups, now, batch)
+		b.mu.Lock()
+		s.scheduleDigestLocked(now)
+		b.mu.Unlock()
+	}
 	delivered := false
 	for _, lead := range leaderOrder {
 		delivered = s.deliverToLeaderAgent(ctx, lead, leaders[[2]string{lead.MachineID, lead.SessionID}], web, now, prev) || delivered
@@ -202,11 +223,18 @@ func (s *Service) sendDigest(ctx context.Context) {
 	for _, to := range order {
 		delivered = s.deliverDigest(ctx, here, to, groups[to], web, now, prev) || delivered
 	}
-	if delivered && len(order) > 1 {
+	if delivered && (len(order) > 1 || batch > 0) {
 		// One message went out: what another left undone (put the last message back to prev) does not undo it.
 		b.mu.Lock()
 		if b.last.Before(now) {
 			b.last = now
+		}
+		b.mu.Unlock()
+	} else if batch > 0 && !delivered {
+		// A held or moot batch sent nothing. Do not invent a legacy last-message time in case batching is switched off.
+		b.mu.Lock()
+		if b.last.Equal(now) {
+			b.last = prev
 		}
 		b.mu.Unlock()
 	}
@@ -372,8 +400,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		return true
 	}
 	if err := s.tryDirectRelay(ctx, here.MachineID, to, &msg); err != nil {
-		if supervisionRuntimeRefused(err) {
-			s.reportRuntimeRelayFailure(ctx, here.MachineID, to, msg)
+		if s.refusedDirect(ctx, here.MachineID, to, msg, err) {
 			accepted = true // retire this delivery while keeping the task available for review
 			return true
 		}

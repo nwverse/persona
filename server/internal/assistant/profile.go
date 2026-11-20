@@ -176,6 +176,9 @@ type Settings struct {
 	// MainSupervisesOwnTasks: the main conversation follows up the tasks no leader supervises itself. nil is off (the
 	// default, #4927): the background supervisor does (supervise_background.go).
 	MainSupervisesOwnTasks *bool `json:"main_supervises_own_tasks,omitempty"`
+	// SupervisionBatchMinutes independently batches routine supervision per final recipient, anchored at its first
+	// routine signal. Nil or 0 preserves the legacy shared gather and spacing. Immediate signals bypass the batch.
+	SupervisionBatchMinutes *int `json:"supervision_batch_minutes,omitempty"`
 	// BackgroundSupervisorKeepsContext: the background supervisor is one long conversation again from its next round,
 	// keeping each later round in context, as before #7315 (rounds already run from the first turn stay on their own
 	// branches). nil is off (the default): each round starts from its first turn with only that round's facts and tools
@@ -460,8 +463,9 @@ func (s *Service) launcherNow(ctx context.Context) string {
 }
 
 // profile is what the hub's features need of the settings (Snapshot.Profile); tasks are the scheduled tasks and todos
-// the open todos' agents as reported (either nil: unreadable, and Keep is left out, so the nodes keep what they list).
-// nil when the settings could not be read.
+// the open todos' agents as reported (either nil: unreadable, and Keep is left out, so the nodes keep what they list;
+// Keep is left out too when what places the directions' sessions cannot be read, directionKeep). nil when the
+// settings could not be read.
 func (s *Service) profile(ctx context.Context, tasks []TaskView, todos *TodoReport) *Profile {
 	saved, ok := s.savedSettings(ctx)
 	if !ok {
@@ -470,21 +474,28 @@ func (s *Service) profile(ctx context.Context, tasks []TaskView, todos *TodoRepo
 	v := s.effective(ctx, saved)
 	p := &Profile{MachineID: v.MachineID, Main: v.Main, MainMachineID: v.MainMachineID, Launcher: v.Launcher, Timezone: v.Timezone}
 	if tasks != nil && todos != nil {
-		p.Keep = keptSessions(v, tasks, todos.Links, s.spaceKeep(ctx, v))
+		if placed, err := s.directionKeep(ctx, v); err != nil {
+			s.logf("assistant: keep: %v", err)
+		} else {
+			p.Keep = keptSessions(v, tasks, todos.Links, s.leadSessions(ctx, v), s.spaceKeep(ctx, v), placed)
+		}
 	}
 	return p
 }
 
 // keptSessions are the conversations their machines list however long they have been quiet: the main conversation,
-// the main ones it replaced, scheduled tasks' own, the agents of open todos, and those listed for their spaces to be
-// told (convs, spaceKeep: the task leaders' agents of open tasks, and a batch at a time of the conversations to-dos
-// name that were never noted). Otherwise a busy machine's 80 newest transcripts crowd them out of the list and the
-// Persona tab has no main chat (2026-11-01: the main one, quiet for two days, was gone), a weekly task's conversation
-// drops out in between, with the app's link to it and the check that its last run still goes, an open task whose agent
-// finished and exited shows "Starting Agent" for ever: its todo names a session the list no longer has (#4510), and
-// the space of a to-do's conversation quiet since before the manager noted spaces could never be told
-// (conversation_space_backfill.go, #10941).
-func keptSessions(v Settings, tasks []TaskView, links []TodoLink, convs []SessionRef) []SessionRef {
+// the main ones it replaced, scheduled tasks' own, the agents of open todos, the current leaders (leads) and those listed
+// for their spaces to be told (convs, spaceKeep: the task leaders' agents of open tasks, and a batch at a time of the
+// conversations to-dos name that were never noted). Otherwise a busy machine's 80 newest transcripts crowd them out of
+// the list and the Persona tab has no main chat (2026-11-01: the main one, quiet for two days, was gone), a weekly
+// task's conversation drops out in between, with the app's link to it and the check that its last run still goes, an
+// open task whose agent finished and exited shows "Starting Agent" for ever: its todo names a session the list no
+// longer has (#4510), a direction the owner leaves alone for a week loses its Pinned row and its tasks' supervision
+// messages go to the main chat (#11392), and the space of a to-do's conversation quiet since before the manager noted
+// spaces could never be told (conversation_space_backfill.go, #10941). Last come the sessions placed under the current
+// directions (placed, directionKeep), or a quiet one reads not_listed in its direction and can no longer be moved
+// (#11515). Keeping a row listed does not keep its transcript file.
+func keptSessions(v Settings, tasks []TaskView, links []TodoLink, leads, convs, placed []SessionRef) []SessionRef {
 	out := []SessionRef{}
 	add := func(machine, id string) {
 		if machine != "" && id != "" && !slices.Contains(out, SessionRef{MachineID: machine, SessionID: id}) {
@@ -503,8 +514,39 @@ func keptSessions(v Settings, tasks []TaskView, links []TodoLink, convs []Sessio
 	}
 	// The background supervisor: quiet between tasks, still the one their signals go to (supervise_background.go).
 	add(v.BackgroundSupervisorMachineID, v.BackgroundSupervisor)
+	for _, l := range leads {
+		add(l.MachineID, l.SessionID)
+	}
 	for _, c := range convs {
 		add(c.MachineID, c.SessionID)
+	}
+	for _, p := range placed {
+		add(p.MachineID, p.SessionID)
+	}
+	return out
+}
+
+// leadSessions are the current leaders' conversations (assistant.leaders without the main one), each on the computer
+// its direction record names, else the assistant's (a leader not recorded yet, or the records unreadable). An ended
+// direction is no longer in assistant.leaders, so its conversation leaves the set.
+func (s *Service) leadSessions(ctx context.Context, v Settings) []SessionRef {
+	if len(v.Leaders) == 0 {
+		return nil
+	}
+	b := &s.directions
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	loaded := s.directionsLocked(ctx)
+	out := make([]SessionRef, 0, len(v.Leaders))
+	for _, id := range v.Leaders {
+		if id == "" || id == v.Main {
+			continue
+		}
+		machine := v.MachineID
+		if d := b.m[id]; loaded && d != nil && d.MachineID != "" {
+			machine = d.MachineID
+		}
+		out = append(out, SessionRef{MachineID: machine, SessionID: id})
 	}
 	return out
 }
@@ -592,7 +634,8 @@ type assistantView struct {
 	NextSuggestions bool `json:"next_suggestions"`
 	// MainSupervisesOwnTasks is in effect, like DoneNeedsDelivery: false means the background supervisor follows up
 	// the tasks no leader supervises.
-	MainSupervisesOwnTasks bool `json:"main_supervises_own_tasks"`
+	MainSupervisesOwnTasks  bool `json:"main_supervises_own_tasks"`
+	SupervisionBatchMinutes int  `json:"supervision_batch_minutes"`
 }
 
 // view is GET /api/v1/assistant; withArchived lists archived conversations too (flagged `archived`). It lists the
@@ -631,7 +674,8 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 		AgentAutoNamingMax:           agentNamingLimit(v),
 		AgentAutoNamingIntervalHours: agentNamingInterval(v),
 		InboxSignals:                 v.InboxSignals != nil && *v.InboxSignals, MainSupervisesOwnTasks: !s.backgroundOn(v),
-		NextSuggestions: v.NextSuggestions != nil && *v.NextSuggestions}
+		SupervisionBatchMinutes: supervisionBatchMinutesOf(v),
+		NextSuggestions:         v.NextSuggestions != nil && *v.NextSuggestions}
 	if d, ok := s.device(ctx, v.MachineID); ok {
 		out.Cwd = s.spaceCwd(d, sp)
 		var list []proto.Session
