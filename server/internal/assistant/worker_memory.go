@@ -58,7 +58,7 @@ func (s *Service) goWorkerOutcome(run func()) {
 // background: the report's answer does not wait for the node, a model or the knowledge base.
 func (s *Service) goRecordWorkerReport(ctx context.Context, t Todo, machine, session, text string, evidence []string, at time.Time) {
 	ctx = context.WithoutCancel(ctx)
-	cwd := s.workerCwd(ctx, t, machine, session)
+	cwd := workerPinnedCwd(t, machine, session)
 	s.goWorkerOutcome(func() {
 		items, read := s.lastTurnItems(ctx, machine, session)
 		// A successful done report is always eligible. If WorkDone later commits, it reuses this report's stable identity.
@@ -110,7 +110,7 @@ func workerReportEvidenceLinks(it proto.Item) []string {
 	if json.Unmarshal(it.ToolInput, &report) != nil {
 		return nil
 	}
-	return workerEvidenceLinks(report.Evidence)
+	return workerEvidenceLinks(workerNormalizedEvidence(report.Evidence))
 }
 
 // workerOutcomeCandidate reports whether an item could have owned a legacy outcome record: a successful done report or
@@ -165,7 +165,7 @@ func (s *Service) goRecordWorkerDone(ctx context.Context, work db.SessionWork, i
 	if !ok || t.DoneAt != nil && work.TurnAt.After(*t.DoneAt) {
 		return
 	}
-	cwd := s.workerCwd(ctx, t, work.MachineID, work.SessionID)
+	cwd := workerPinnedCwd(t, work.MachineID, work.SessionID)
 	s.goRecordWorkerDoneForTodo(ctx, t, cwd, work, items)
 }
 
@@ -302,10 +302,9 @@ func (s *Service) workerTodoOf(ctx context.Context, machine, session string) (To
 	return copyTodoLocked(found), true
 }
 
-func (s *Service) workerCwd(ctx context.Context, t Todo, machine, session string) string {
-	if c, ok := s.session(ctx, machine, session); ok && c.Cwd != "" {
-		return c.Cwd
-	}
+// workerPinnedCwd uses the directory already recorded on the todo's agent. It avoids a synchronous node read on the
+// report response path and keeps directory ownership tied to the same handoff as the todo.
+func workerPinnedCwd(t Todo, machine, session string) string {
 	for _, a := range t.Agents {
 		if a.MachineID == machine && a.SessionID == session {
 			return a.Cwd

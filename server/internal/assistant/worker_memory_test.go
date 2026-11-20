@@ -691,6 +691,51 @@ func TestWorkerReportIndexFindsCompletedTurnReport(t *testing.T) {
 	}
 }
 
+// Capturing the todo's recorded cwd must not add a synchronous session RPC to the report response path.
+func TestWorkerMemoryReportDoesNotReadSessionAtHandoff(t *testing.T) {
+	env := newWorkerMemoryEnv(t)
+	env.setProject(t, "explicit")
+	env.f.setItems(
+		proto.Item{ID: "prompt", Seq: 1, Kind: proto.KindText, Role: "user", Text: "Start"},
+		proto.Item{ID: "report", Seq: 2, Kind: proto.KindToolUse, Role: "assistant", ToolUseID: "report-call",
+			ToolName: "report_to_supervisor", ToolInput: workerMemoryReportInput(), TS: turnEnd})
+	reads := 0
+	env.s.runWorkerOutcome = func(run func()) {
+		env.f.mu.Lock()
+		for _, call := range env.f.calls {
+			if call.Method == DeviceSessionGet {
+				reads++
+			}
+		}
+		env.f.mu.Unlock()
+		run()
+	}
+	env.s.goRecordWorkerReport(context.Background(), env.todo, "box", "s1", workerMemoryConclusion,
+		[]string{workerMemoryPR, workerMemoryIssue}, turnEnd)
+	env.s.tasks.outcomeRuns.Wait()
+	if reads != 0 {
+		t.Fatalf("report handoff made %d synchronous session.get call(s), want zero", reads)
+	}
+	assertOriginalWorkerMemory(t, workerMemoryRecords(t, env.e, "explicit"))
+}
+
+// WorkDone uses only evidence accepted by reportToSupervisor; it cannot resurrect a URL clipped or capped out of the
+// live report, even though the transcript retains the original JSON.
+func TestWorkerReportEvidenceLinksUsesAcceptedEvidence(t *testing.T) {
+	input := func(evidence []string) proto.Item {
+		raw, _ := json.Marshal(map[string]any{"kind": "done", "text": workerMemoryConclusion, "evidence": evidence})
+		return proto.Item{Kind: proto.KindToolUse, Role: "assistant", ToolName: "report_to_supervisor", ToolInput: raw}
+	}
+	extra := []string{"one", "two", "three", "four", "five", "six", "seven", "eight", workerMemoryPR}
+	if got := workerReportEvidenceLinks(input(extra)); len(got) != 0 {
+		t.Fatalf("WorkDone retained a capped-out URL: %+v", got)
+	}
+	accepted := append([]string{workerMemoryPR}, extra[:7]...)
+	if got := workerReportEvidenceLinks(input(accepted)); len(got) != 1 || got[0] != workerMemoryPR {
+		t.Fatalf("WorkDone lost accepted evidence: %+v", got)
+	}
+}
+
 // Live evidence has already been trimmed, clipped and capped by reportToSupervisor; apply the same acceptance rules to
 // the transcript's original JSON before comparing it, or a valid report can become impossible to find.
 func TestWorkerReportIndexNormalizesEvidence(t *testing.T) {
