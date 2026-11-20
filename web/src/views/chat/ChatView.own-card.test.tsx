@@ -303,6 +303,9 @@ describe("cards the chat's own turn waits on", () => {
     expect(before(above()!, needs)).toBe(true);
     expect(tray()?.contains(above())).toBe(false);
     expect(host.querySelector("[data-tray-list]")).toBeNull();
+    // the cards give up their height and scroll in their own box; the capsules under them never shrink out of view
+    expect(above()?.className).toContain("overflow-y-auto");
+    expect(tray()?.classList.contains("shrink-0")).toBe(true);
     // answerable in place, and not counted or listed behind the capsule as well
     expect(card(bash.id)!.querySelector("button")).not.toBeNull();
     expect(needs.textContent).toBe(t("assistant-tasks.tray_needs_you"));

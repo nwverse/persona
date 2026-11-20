@@ -1428,7 +1428,8 @@ export function InteractionCard({ ix }: { ix: Interaction }) {
  *  dock's capsules. Never folded behind a position chip, a "N pending" line or the Needs you tray: the chat cannot go on
  *  until one is answered. Takes only `TurnAsk`s, so no other card can be drawn here. */
 export function TurnCards({ asks }: { asks: readonly TurnAsk[] }) {
-  return asks.length > 0 && <div data-turn-asks className="contents">{asks.map((ix) => <InteractionCard key={ix.id} ix={ix} />)}</div>;
+  // their own box, which gives up its height first and scrolls (as the stack's does): the capsules under them stay in view
+  return asks.length > 0 && <div data-turn-asks data-scroll-box className="-m-1 flex min-h-0 shrink flex-col gap-2 overflow-y-auto overscroll-contain p-1 empty:hidden">{asks.map((ix) => <InteractionCard key={ix.id} ix={ix} />)}</div>;
 }
 
 /**
