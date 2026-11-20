@@ -51,6 +51,7 @@
   "verdict_acked": "了解しました",
   "verdict_take": "おすすめで進める",
   "verdict_taken": "おすすめで進めます。担当の Agent に渡しました",
+  "decision_handled_in_agent": "元の会話で対応済み",
   "verdict_reply_hint": "これに返信：「OK」で受け取ります。それ以外は ToDo の決定事項に記録し、元の Agent に渡します",
   "verdict_decide_hint": "これに返信：「OK」でおすすめのとおりに。自分の選択を書いてもかまいません。どちらも ToDo の決定事項に記録し、担当の Agent に渡します",
   "verdict_decide_hint_none": "これに返信して選択を書いてください。ToDo の決定事項に記録し、担当の Agent に渡します",

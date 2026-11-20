@@ -1,8 +1,8 @@
-Verify handed-out work. accepted closes the task; its terminal stays unless the owner opted in at Start, when accepted done closes its idle tab once saved. Report the cleanup result (closed, skipped or pending); never close the tab yourself or ask to. rework sends gaps to that Agent: at most 2 rounds; a third requires a complete owner decision. A stopped Agent is read-only: replace with agent_start. External waits use parked with source evidence, not needs_user. Only answerable owner-only decisions use needs_user: why_owner, reason, recommend, 2–4 options (recommended first, each with leads_to), cost_of_waiting. Otherwise act within your authority, rework or close.
+Verify handed-out work. accepted closes it. If the owner opted in at Start, accepted done cleans up the saved idle tab. Report closed, skipped or pending; never close it yourself or ask to. rework sends gaps to the Agent twice; a third needs a complete owner decision. Replace a stopped Agent via agent_start. External waits use parked with source evidence. needs_user requires an owner-only decision with why_owner, reason, recommend, 2–4 options and cost_of_waiting. Otherwise act, rework or close.
 
 accepted with outcome done (default) and current done_when requires every criterion exactly once in checks, met=true with nonblank evidence. Refuse missing/duplicate/unknown/unmet checks before writing; user_check cannot bypass this. outcome cannot, cancelled and no-criteria tasks are unchanged. Other verdicts may omit checks without erasing progress. Report each criterion as met, not met or dropped (logged scope change), then also_done. Judge the scoped brief, not a later handover or the Agent's word; review every task supervision asks you to.
 
-Supervised accepted/needs_user send one Lark conclusion card (verdict, reason, link; needs_user adds recommend, selected by “OK”); do not duplicate it. Give accepted's outcome/reason/link or needs_user's reason/recommend. Acceptance passes an existing “Please verify” card; user_check means the owner must still inspect. needs_user defaults to recommend after 24h/deadline except irreversible or visible_to_others: never default those, remind daily. Recheck once at 24h. can_wait requires nobody blocked today, low waiting cost and no deadline within 12h (see schema). “You decide”, “This isn't what I asked for”, “Tell me the background first” return to supervision: don't repeat the question or take irreversible/external action.
+Give accepted's outcome/reason/link. The hub handles conclusion cards and passes “Please verify” on acceptance unless user_check. needs_user can default to recommend at 24h/deadline; irreversible or visible_to_others only reminds. Recheck at 24h. can_wait needs low cost, nobody blocked today and no deadline within 12h. “You decide”, “This isn't what I asked for” and “Tell me the background first” return to supervision. Clarify without repeating or taking irreversible/external action.
 
 A non-main conversation reviewing another supervisor's task may only accept/cancel; send gaps with agent_send. A leader's needs_user reaches main too. Cancel only duplicates/unwanted tasks; their Agents close/archive and waiting cards end.
 
@@ -84,6 +84,10 @@ A non-main conversation reviewing another supervisor's task may only accept/canc
     "cost_of_waiting": {
       "type": "string",
       "description": "needs_user (required): one sentence saying what it costs if the user does not answer soon"
+    },
+    "question_quote": {
+      "type": "string",
+      "description": "needs_user: quote the Agent's original question verbatim if reason paraphrases it, so the hub can check for an existing reply"
     },
     "can_wait": {
       "type": "boolean",

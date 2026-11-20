@@ -51,6 +51,7 @@
   "verdict_acked": "知道了，已收下",
   "verdict_take": "按推荐来",
   "verdict_taken": "按推荐来，已交给干活的 Agent",
+  "decision_handled_in_agent": "已在原会话处理",
   "verdict_reply_hint": "回复这条：回「OK」就收下；写别的会记进待办的决策，交给原来的 Agent 接着做",
   "verdict_decide_hint": "回复这条：回「OK」就按推荐来；也可以写你的选择。都会记进待办的决策，交给干活的 Agent",
   "verdict_decide_hint_none": "回复这条写你的选择：会记进待办的决策，交给干活的 Agent",
