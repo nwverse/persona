@@ -2,6 +2,7 @@
 package hubclient
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -121,21 +122,10 @@ func (c *Client) headers() http.Header {
 
 // JSON makes one request and decodes one bounded response. It reports the bytes read for callers with a total budget.
 func (c *Client) JSON(ctx context.Context, method, path string, query url.Values, limit int64, out any) (int64, error) {
-	req, err := http.NewRequestWithContext(ctx, method, c.endpoint(path, query), nil)
-	if err != nil {
-		return 0, ErrTransport
-	}
-	req.Header = c.headers()
-	req.Header.Set("Accept", "application/json")
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return 0, ErrTransport
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	resp, body, err := c.exchange(ctx, method, path, query, "", nil, limit)
 	size := int64(len(body))
-	if err != nil || size > limit {
-		return size, ErrResponse
+	if err != nil {
+		return size, err
 	}
 	if resp.StatusCode != http.StatusOK {
 		return size, c.httpError(resp, body)
@@ -144,6 +134,47 @@ func (c *Client) JSON(ctx context.Context, method, path string, query url.Values
 		return size, ErrResponse
 	}
 	return size, nil
+}
+
+// PostOperation returns the bounded reply even when the hub is still processing
+// or refuses. The caller interprets it using the operation's result contract.
+func (c *Client) PostOperation(ctx context.Context, path, id string, payload []byte, limit int64) (int, []byte, error) {
+	resp, body, err := c.exchange(ctx, http.MethodPost, path, nil, id, payload, limit)
+	if err != nil {
+		return 0, nil, err
+	}
+	return resp.StatusCode, body, nil
+}
+
+func (c *Client) exchange(ctx context.Context, method, path string, query url.Values, opID string, payload []byte, limit int64) (*http.Response, []byte, error) {
+	var input io.Reader
+	if payload != nil {
+		// Do not give net/http a GetBody function that could replay a write.
+		input = io.NopCloser(bytes.NewReader(payload))
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.endpoint(path, query), input)
+	if err != nil {
+		return nil, nil, ErrTransport
+	}
+	req.Header = c.headers()
+	req.Header.Set("Accept", "application/json")
+	if payload != nil {
+		req.ContentLength = int64(len(payload))
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if opID != "" {
+		req.Header.Set("X-Persona-Op-Id", opID)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, nil, ErrTransport
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil || int64(len(body)) > limit {
+		return resp, body, ErrResponse
+	}
+	return resp, body, nil
 }
 
 // Hello reads only the initial authenticated WebSocket hello. Public HTTP health
