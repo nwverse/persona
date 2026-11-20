@@ -998,7 +998,7 @@ to its supervising conversation in either configuration (#11195). Code: `server/
   it, and at the deadline it goes straight to the user even while its current supervisor is busy. If that supervisor
   itself is `needs_you`, an owner-only card moves to the next rung (or to the user) on the existing 30-second routing
   tick instead of staying behind another decision. Neither path answers the card for the user. With the hub's push
-  tiering on (the low-distraction switch, `docs/server/server.md`), a card that runs past its last rung before any
+  tiering on (the push grading switch, `docs/server/server.md`), a card that runs past its last rung before any
   absolute deadline goes back to the task's supervisor once (the entry says so; the owner gets a held P1 notice for
   the briefing), then stays with that supervisor until it is answered or escalated. This quiet hold can keep an
   ordinary question from ever reaching the user on a timeout, and also applies to a permission or plan before its
@@ -1375,7 +1375,7 @@ Hub-inserted chat entries do not enter Claude's transcript (that would trigger a
 | Task details (embedded Agent chat), task board | `apple/Persona/Views/Assistant/Tasks/TaskSheets.swift` |
 | Feed inserted into chat at the end of its turn (before the next message) | `ChatLines.mergeFeed`, `ChatLine.Content.feed` |
 | Above the input: question card (earliest only, with "N more"), `@` list, dock, routing label; routed messages go directly to the task | `ChatView.taskFooter`, `Composer.sendText` |
-| Action bar on iPhone, iPad and Mac: Needs You and In Progress in place of the dock, each opening its tray, each thing in one of them (#3393, the Apple side of #3387); in the main conversation with low-distraction mode on, Held Pushes after them, its tray in the same place (#7782, #8223) | `apple/Persona/Views/Assistant/Tasks/AssistantActionBar.swift` (`ActionTrayContent`, `DockCapsule`), `apple/Persona/Views/Assistant/Tasks/PushInterceptsView.swift` |
+| Action bar on iPhone, iPad and Mac: Needs You and In Progress in place of the dock, each opening its tray, each thing in one of them (#3393, the Apple side of #3387); in the main conversation with push grading on, Held Pushes after them, its tray in the same place (#7782, #8223) | `apple/Persona/Views/Assistant/Tasks/AssistantActionBar.swift` (`ActionTrayContent`, `DockCapsule`), `apple/Persona/Views/Assistant/Tasks/PushInterceptsView.swift` |
 
 - Reuse Agent state colors (`AgentState.tone`: Needs you red, Working amber, Unread green), not the prototype's orange waiting state, to match Agents.
 - If dock pills do not fit, truncate the title but never "Waiting for you."
@@ -1396,7 +1396,7 @@ Hub-inserted chat entries do not enter Claude's transcript (that would trigger a
   Dynamic Type), 12 pt horizontal and 6 pt vertical padding, a full capsule radius, `Theme.Fill.chip` behind secondary
   text, 28 pt tall at the default size, 8 pt apart. Open is the filter chip's on look in the same size (accent fill, white
   semibold); Needs You with rows takes the waiting pill's tint, empty it is the plain grey capsule and opens "All Caught Up".
-  In the main conversation with low-distraction mode on, Held Pushes (#7782) is an entry in the same capsule after
+  In the main conversation with push grading on, Held Pushes (#7782) is an entry in the same capsule after
   them; its tray of today's held pushes opens in the trays' place, above the row at the bar's width, and one tray is open
   at a time (#8223; Android's `AssistantTray.HeldPushes` shares the slot the same way, the web opens a dialog).
   The entries (and Held Pushes and the computer pill after them) are one row, Needs You first. When they do not fit the
