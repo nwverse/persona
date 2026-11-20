@@ -260,7 +260,7 @@ export const Answer = memo(function Answer({ item, streaming, mid, sid, fade, no
   // a long answer the hub cut for the page: its start, and "View full text" under it
   const live = streaming !== undefined;
   const full = useFullText(live ? undefined : item, mid, sid);
-  const text = streaming ?? (noCloseout ? stripCloseout(full.text) : full.text);
+  const text = streaming ?? (noCloseout ? stripCloseout(full.text, !item?.full_size || (Boolean(mid && sid) && !full.more)) : full.text);
   if (!text) return null;
   const cwd = mid && sid ? getSession(mid, sid)?.cwd : undefined;
   return (

@@ -10,6 +10,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/textfmt"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
 
@@ -32,6 +33,10 @@ waiting: <for status="blocked": who or what you wait for>
 // Parse reads the last closeout block in an agent's reply. ok is false when there is none or its status is not one
 // of done, not_done and blocked: a block that does not say where the work stands is no closeout.
 func Parse(reply string) (c proto.Closeout, artifacts []proto.WorkArtifact, ok bool) {
+	if report, ok := textfmt.FinalWorkReport(reply); ok {
+		c.Status, c.Merged, c.Deployed = report.Status, yesNo(report.Merged), yesNo(report.Deployed)
+		return readFields(c, report.Body)
+	}
 	all := blockRe.FindAllStringSubmatch(reply, -1)
 	if len(all) == 0 {
 		return c, nil, false
@@ -53,7 +58,12 @@ func Parse(reply string) (c proto.Closeout, artifacts []proto.WorkArtifact, ok b
 	default:
 		return proto.Closeout{}, nil, false
 	}
-	for _, line := range strings.Split(m[2], "\n") {
+	return readFields(c, m[2])
+}
+
+func readFields(c proto.Closeout, body string) (proto.Closeout, []proto.WorkArtifact, bool) {
+	var artifacts []proto.WorkArtifact
+	for line := range strings.Lines(body) {
 		key, val, found := cutKey(line)
 		if !found || val == "" {
 			continue
@@ -96,6 +106,9 @@ func Parse(reply string) (c proto.Closeout, artifacts []proto.WorkArtifact, ok b
 
 // Strip returns reply without its closeout blocks, for a reader that is given the closeout separately.
 func Strip(reply string) string {
+	if report, ok := textfmt.FinalWorkReport(reply); ok {
+		reply = reply[:report.Start] + reply[report.End:]
+	}
 	return strings.TrimSpace(blockRe.ReplaceAllString(reply, ""))
 }
 
@@ -110,7 +123,7 @@ func Has(reply string) bool {
 // question in such a reply is conversation or an offer, not a wait (docs/protocol/agent-states.md "Awaiting your
 // reply", #4110). False when the reply has no closeout.
 func WaitsOnNobody(reply string) bool {
-	if !strings.Contains(reply, "<closeout") { // most replies have none: no regexp run, nothing allocated
+	if !strings.Contains(reply, "<closeout") && !strings.Contains(reply, "### Persona ") { // most replies have none: no regexp run, nothing allocated
 		return false
 	}
 	c, _, ok := Parse(reply)

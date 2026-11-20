@@ -54,7 +54,7 @@ internal fun MessageContent(item: Item, user: Boolean, update: ChatTextUpdate? =
     var whole by remember(item.id) { mutableStateOf<String?>(null) }
     val cut = item.fullSize != null && whole == null && update?.streaming != true
     val text = (whole ?: update?.text ?: item.text.orEmpty().let { if (item.fullSize != null) cutText(it) else it })
-        .let { if (hideCloseout) persona.core.domain.sort.stripCloseout(it) else it }
+        .let { if (hideCloseout) persona.core.domain.sort.stripCloseout(it, complete = !cut && update?.streaming != true) else it }
     val ancillaryStream = remember(item.id, update?.streaming == true) { AssistantAncillaryStream { _, _ -> } }
     val ancillary = if (update?.streaming == true && !user && item.from.isNullOrBlank()) {
         ancillaryStream.update(text, hostnames = LocalChatPorts.current?.hostnames.orEmpty(), linkable = emptySet())

@@ -1492,13 +1492,13 @@ CLOSEOUT_BLOCKED = "a9c00000-0000-4000-8000-000000000003"
 CLOSEOUT_NOT_DONE = "a9c00000-0000-4000-8000-000000000004"
 CLOSEOUT_REPLIES = {
     CLOSEOUT_DONE: ("导出超时修好了：大报表改成分页流式写出，线上导出 50 万行用时从 94 秒降到 11 秒。\n\n"
-                    '<closeout status="done" merged="yes" deployed="yes">\n'
-                    "did: 报表导出改成分页流式写出，不再一次读进内存\n"
-                    "did: 给导出接口补了 50 万行的压测用例\n"
-                    "artifact: pr https://github.com/example/app/pull/31\n"
-                    "artifact: commit 4f2a91c\n"
-                    "verified: `go test ./export/...`\n"
-                    "</closeout>"),
+                    "### Persona 工作报告\n\n- Status: done\n- Merged: yes\n- Deployed: yes\n"
+                    "- Did: 报表导出改成分页流式写出，不再一次读进内存\n"
+                    "- Did: 给导出接口补了 50 万行的压测用例\n"
+                    "- Artifact: pr https://github.com/example/app/pull/31\n"
+                    "- Artifact: commit 4f2a91c\n"
+                    "- Verified: `go test ./export/...`\n"
+                    "\n---"),
     CLOSEOUT_DISPROVED: ("支付 SDK 升到 v4 了，回调验签换成了新接口，PR 已经合并。\n\n"
                          '<closeout status="done" merged="yes" deployed="no">\n'
                          "did: 支付 SDK 从 v3 升到 v4，回调验签换成新接口\n"
@@ -1507,13 +1507,13 @@ CLOSEOUT_REPLIES = {
                          "missing: 上线前要有人在沙箱里走一遍真实支付\n"
                          "</closeout>"),
     CLOSEOUT_BLOCKED: ("迁移脚本写好了，在预发库上跑过一遍。正式库要等 DBA 给迁移窗口，我先停在这里。\n\n"
-                       '<closeout status="blocked" merged="no" deployed="n/a">\n'
-                       "did: 写了用户表拆分的迁移脚本，可重复执行\n"
-                       "artifact: branch feat/split-users\n"
-                       "artifact: doc docs/migrations/split-users.md\n"
-                       "verified: `./scripts/migrate.sh --env staging`\n"
-                       "waiting: DBA 批准正式库的迁移窗口\n"
-                       "</closeout>"),
+                       "### Persona 工作报告\n\n- Status: blocked\n- Merged: no\n- Deployed: n/a\n"
+                       "- Did: 写了用户表拆分的迁移脚本，可重复执行\n"
+                       "- Artifact: branch feat/split-users\n"
+                       "- Artifact: doc docs/migrations/split-users.md\n"
+                       "- Verified: `./scripts/migrate.sh --env staging`\n"
+                       "- Waiting: DBA 批准正式库的迁移窗口\n"
+                       "\n---"),
     CLOSEOUT_NOT_DONE: ('<closeout status="not_done">\n'
                         "did: 搜索页的结果高亮做了一半，中文分词还没接\n"
                         "verified: untested\n"
