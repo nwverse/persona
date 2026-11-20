@@ -492,4 +492,29 @@ func TestAPIPurposeCodexEffortsValidationAndRun(t *testing.T) {
 			}
 		}
 	}
+
+	// Regression test (#12043 review 5996865114 P1): an existing stored Claude or Antigravity configuration carrying
+	// Codex-only effort (minimal or ultra) must NOT forward that effort to model.run; it omits Effort so the launcher
+	// uses its own default rather than failing with "unknown effort level" on the node.
+	for _, tc := range []struct {
+		launcher string
+		effort   string
+	}{
+		{"claude", "ultra"},
+		{"claude", "minimal"},
+		{"anti", "ultra"},
+		{"agy", "minimal"},
+	} {
+		before := len(devs.saw)
+		cfg := ai.Config{RunLauncher: tc.launcher, ViaMachine: "server", ReasoningEffort: tc.effort}
+		if _, err := s.runClient(cfg).Complete(ctx, "sys", "legacy-"+tc.launcher+"-"+tc.effort, 64); err != nil {
+			t.Fatalf("runClient(%s, %s): %v", tc.launcher, tc.effort, err)
+		}
+		if len(devs.saw) != before+1 {
+			t.Fatalf("expected 1 model.run call for %s, got %d", tc.launcher, len(devs.saw)-before)
+		}
+		if got := devs.saw[len(devs.saw)-1]; got.Effort != "" {
+			t.Fatalf("model.run forwarded Codex-only effort %q to non-Codex launcher %q: %+v", tc.effort, tc.launcher, got)
+		}
+	}
 }
