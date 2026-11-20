@@ -846,7 +846,7 @@ func (s *Service) relayDelivered(ctx context.Context, to string, msg relayMsg) {
 // where the message going in is. A conversation whose messages are all held is drained again when the first hold
 // ends.
 func (s *Service) drainRelays(machine string, list []proto.Session) {
-	leads := s.leadsNow(context.Background())
+	leads := s.queueLeads(context.Background())
 	b := &s.relays
 	b.mu.Lock()
 	if !s.relayLocked(context.Background()) || len(b.st.Queue) == 0 {

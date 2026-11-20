@@ -247,9 +247,26 @@ func (s *Service) queuedAnswers(to string) map[string]bool {
 	return out
 }
 
-// leadsNow are the conversations that are a direction's lead (isLeader), read before the relay lock is taken: a
-// hand-over in a lead's queue ranks ahead of the rest (relayMsg.rankIn).
-func (s *Service) leadsNow(ctx context.Context) map[string]bool {
+// queueLeads are the conversations that are a direction's lead (isLeader), for a drain to rank a hand-over in a lead's
+// queue ahead of the rest (relayMsg.rankIn). They are read before the relay lock is taken, and only while a queue holds a
+// hand-over, the one message whose rank they change: nil otherwise. One queued meanwhile ranks with the rest until the
+// next drain.
+func (s *Service) queueLeads(ctx context.Context) map[string]bool {
+	b := &s.relays
+	b.mu.Lock()
+	held := false
+	if s.relayLocked(ctx) {
+		for _, q := range b.st.Queue {
+			if slices.ContainsFunc(q, func(m relayMsg) bool { return m.Handover != "" }) {
+				held = true
+				break
+			}
+		}
+	}
+	b.mu.Unlock()
+	if !held {
+		return nil
+	}
 	out := map[string]bool{}
 	for _, id := range s.settings(ctx).Leaders {
 		if s.isLeader(ctx, id) {
