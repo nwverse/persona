@@ -255,21 +255,27 @@ export function agentOnIt(t: Triage): boolean {
   return t.section === "working";
 }
 
+/** Why the sidebar's To-dos badge counts a to-do (ownerNeeds): what it waits on the owner for (rule 1, OwnerWait), or
+ *  `unattended`, no Agent is on it and none of its pieces carries it (rule 4). The To-dos page says it on the row's mark
+ *  (#11838); a later reason is one more member here, decided in ownerNeeds, so the badge and the mark keep one rule. */
+export type OwnerNeed = OwnerWait | "unattended";
+
 /**
- * The to-dos the sidebar's To-dos badge counts (#11085), by id: the open ones (countsAsOpen) that need the owner, not
- * those Agents are on. Quiet tasks (#1731) are left out, as before. Among the rest, the first rule that holds wins:
+ * The to-dos the sidebar's To-dos badge counts (#11085), by id, each with why (OwnerNeed): the open ones (countsAsOpen)
+ * that need the owner, not those Agents are on. Quiet tasks (#1731) are left out, as before. Among the rest, the first
+ * rule that holds wins:
  *
- *  1. it waits on the owner (waitsOnOwner)                                          → counts
+ *  1. it waits on the owner (waitsOnOwner)                                          → counts, for what it waits on
  *  2. one of its own Agents is on it (agentOnIt)                                    → does not count
  *  3. its pieces carry it: a to-do under it (`part_of`, at any depth) has an Agent on it or waits on the owner,
  *     and a piece that waits counts by itself, so the request is not counted twice   → does not count
  *  4. anything else: a personal to-do no Agent was ever on, and whatever has no sign of an Agent on it (its Agents
- *     stopped, finished work nobody has looked at, a PR waiting on others)           → counts
+ *     stopped, finished work nobody has looked at, a PR waiting on others)           → counts, `unattended`
  *
  * The page's "Not done" stays countsAsOpen, so the badge is never more than it. A `part_of` loop is walked once. Its
- * size is the badge's number.
+ * size is the badge's number, and the To-dos page marks exactly these rows (lib/todo-owner-needs.ts reads it for both).
  */
-export function ownerBadge(todos: Todo[], lookup: SessionLookup | undefined, now: number, restored: ReadonlyMap<string, number> = new Map()): ReadonlySet<string> {
+export function ownerNeeds(todos: Todo[], lookup: SessionLookup | undefined, now: number, restored: ReadonlyMap<string, number> = new Map()): ReadonlyMap<string, OwnerNeed> {
   // decided on every to-do, as the page decides it (quiet ones too: their Agents and asks still carry a request)
   const superseded = supersededFailedStarts(todos);
   const placed = new Map(todos.map((td) => [td.id, triage(td, lookup, now, restored.get(td.id) ?? 0, superseded.has(td.id))]));
@@ -293,13 +299,20 @@ export function ownerBadge(todos: Todo[], lookup: SessionLookup | undefined, now
     }
     return false;
   };
-  const counted = new Set<string>();
+  const counted = new Map<string, OwnerNeed>();
   for (const td of todos) {
     const t = placed.get(td.id)!;
     if (td.quiet || !countsAsOpen(td, t)) continue;
-    if (waitsOnOwner(td, t) || (!agentOnIt(t) && !carried(td.id))) counted.add(td.id);
+    const wait = waitsOnOwner(td, t);
+    if (wait) counted.set(td.id, wait);
+    else if (!agentOnIt(t) && !carried(td.id)) counted.set(td.id, "unattended");
   }
   return counted;
+}
+
+/** The ids ownerNeeds counts: the badge's to-dos, its number their count. */
+export function ownerBadge(todos: Todo[], lookup: SessionLookup | undefined, now: number, restored: ReadonlyMap<string, number> = new Map()): ReadonlySet<string> {
+  return new Set(ownerNeeds(todos, lookup, now, restored).keys());
 }
 
 /** Whether a to-do's checkbox shows it open: not closed, or a failed start still waiting on the owner (rule 1), which

@@ -101,6 +101,43 @@ func relayFailureOf(err error) relayFailure {
 	return relayFailedRefused
 }
 
+// sendNotTaken: the failed send err (not nil) provably did not reach its conversation, so what it carried took no
+// effect there (a direction's notes block, direction_notes.go; #11392). What the node said decides (delivered);
+// without it, err is read through relayFailureOf, so an error the relays class anew is read anew here too, and only
+// what rules out its having gone in counts, which within three classes is narrower than the class:
+//   - a setup to fix (relayFailedSetup: node_outdated, which the manager's devices layer answers before the computer is
+//     reached; no_device) and a conversation that is gone;
+//   - the computer away (relayFailedNotNow by apierr.ErrOffline or machine_offline), but not the class's node error
+//     without a code or link closed with the send on it (node_closed), which may have gone in;
+//   - the manager's own refusal (relayFailedLocal: the bus down or suspended, a call cancelled before it was written),
+//     but not a cancel after the request was written;
+//   - of what relayFailureOf calls in doubt, only what the transport says was never written (rpc.ErrNotSent,
+//     rpc.ErrNotWritten: a deadline that ran out before it left, which relayFailureOf reads as any deadline).
+//
+// A conversation at work and a refusal for good (relayFailedBusy, relayFailedRefused) count as taken without the
+// node's word: the node says delivered "none" when it typed nothing, and the class holds a deadline with the node on it.
+func sendNotTaken(err error) bool {
+	switch nodeDelivered(err) {
+	case "none":
+		return true
+	case "unknown", "yes":
+		return false
+	}
+	unwritten := errors.Is(err, rpc.ErrNotSent) || errors.Is(err, rpc.ErrNotWritten)
+	switch relayFailureOf(err) {
+	case relayFailedSetup, relayFailedGone:
+		return true
+	case relayFailedNotNow:
+		code, _ := relayErrCode(err)
+		return errors.Is(err, apierr.ErrOffline) || code == CodeMachineOffline
+	case relayFailedLocal:
+		return unwritten || !errors.Is(err, context.Canceled)
+	case relayFailedInDoubt:
+		return unwritten
+	}
+	return false
+}
+
 // relayErrCode is err's code as the node or the hub gave it: an rpc.Error's, or the one of an error the bus gave back
 // its kind (busError). coded is false for an error with neither: the manager's own.
 func relayErrCode(err error) (code string, coded bool) {
@@ -171,6 +208,7 @@ func (s *Service) relayRefused(machine, to string, msg relayMsg, err error) (sta
 		}
 	case msg.Tool == "conversation_send" || msg.Tool == "conversation_new":
 		what = "its sender is told"
+		s.handoverEnded(msg.Handover, code) // a hand-over of the owner's words it carried (relay_handover.go)
 		return false, func(ctx context.Context) { s.tellRelayRefused(ctx, machine, to, msg, code) }
 	case msg.Tool == noticeTool && (msg.State == "needs" || msg.State == "failed"):
 		what = "the push it stood for goes out"

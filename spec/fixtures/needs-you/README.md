@@ -22,7 +22,8 @@ badge. These cases pin what that number counts, so the places and the clients ag
   `expected.badge` is the tab's badge. The header and the filter show the number of rows.
 - All data is made up.
 - Run: `AgentsNeedsYouFixtureTests` in `apple/PersonaTests` (iOS: the section, its filter and the tab's badge) and
-  `cd android && ./gradlew :core:domain:test --tests '*AgentsNeedsYouFixtureTest*'` (Android: the tab's badge; its
-  "Needs your decision" section counts decisions, one per card, under a name of its own). The web app's Agents badge
-  counts sessions in Needs you without quiet tasks' agents by a rule of its own, which Persona Link's summary shares
+  `cd android && ./gradlew :core:domain:test --tests '*AgentsNeedsYouFixtureTest*'` (Android: the rows and the tab's
+  badge; the Agents page's Needs you section, its header and its filter count rows by the same rule, one per waiting
+  session, through `agentNeedsYouRows`, which also applies the computer filter). The web app's Agents badge counts
+  sessions in Needs you without quiet tasks' agents by a rule of its own, which Persona Link's summary shares
   (spec/fixtures/attention): it counts muted agents and no card on no session, so it does not replay these cases.

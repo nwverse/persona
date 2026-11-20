@@ -500,6 +500,14 @@ func callErr(w http.ResponseWriter, err error) {
 func (h *Hub) callNode(w http.ResponseWriter, r *http.Request, m *Machine, method string, params any, timeout time.Duration, outdated string, args i18n.Args, handle ...func(error) bool) (json.RawMessage, bool) {
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
+	if strings.HasPrefix(method, "git.") {
+		var err error
+		method, params, err = backendGitTarget(r, method, params)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, err)
+			return nil, false
+		}
+	}
 	var out json.RawMessage
 	if err := m.call(ctx, method, params, &out); err != nil {
 		if h.nodeOutdated(w, r, err, outdated, args) {
@@ -796,6 +804,7 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 		Model           string        `json:"model,omitempty"` // picked in "New agent" for this start; empty: applyModel's
 		Prompt          string        `json:"prompt"`
 		Images          []proto.Image `json:"images,omitempty"`
+		ClientMsgID     string        `json:"client_msg_id,omitempty"`
 		ResumeSessionID string        `json:"resume_session_id"`
 		WorkspaceID     string        `json:"workspace_id"`
 		// Host: the machine's enabled engine host to open in (herdr, orca, paseo…; #2576); empty: its default host.
@@ -904,9 +913,7 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 	if p.TodoID != "" {
 		p.Prompt = decided
 	}
-	if strings.TrimSpace(p.Prompt) == "" {
-		p.Images = nil // an empty start has no first message to attach pictures to
-	} else {
+	if strings.TrimSpace(p.Prompt) != "" {
 		p.Images = append(p.Images, handoffImages...)
 	}
 	async := startsAsync(p.Async, p.ResumeSessionID, p.Launcher, p.AgentType)
@@ -1001,7 +1008,7 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 	if shown, ok := h.awaitListed(ctx, m, res.Session.SessionID); ok {
 		res.Session.State = shown.State // as the manager works it out (fleet_link.go)
 	}
-	if p.TodoID != "" && p.ResumeSessionID == "" && strings.TrimSpace(p.Prompt) == "" {
+	if p.TodoID != "" && p.ResumeSessionID == "" && strings.TrimSpace(p.Prompt) == "" && len(p.Images) == 0 {
 		cwd := res.Session.Cwd
 		if cwd == "" {
 			cwd = startCwd(m, p.Cwd)

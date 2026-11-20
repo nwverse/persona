@@ -135,6 +135,8 @@ type TaskReview struct {
 	OwnerResponse   string    `json:"owner_response,omitempty"`
 	OwnerResponseAt time.Time `json:"owner_response_at,omitzero"`
 	HoldReleased    bool      `json:"hold_released,omitempty"`
+	// Handoff is an internal wait recorded after session.send was acknowledged.
+	Handoff *taskHandoff `json:"handoff,omitempty"`
 }
 
 // OwnerWait is a judgment that a supervised task's stretch of work (begun at Work) stopped on the owner's decision:
@@ -161,6 +163,10 @@ func (v *Supervision) clone() *Supervision {
 	out.Reviews = make([]TaskReview, len(v.Reviews))
 	for i, r := range v.Reviews {
 		out.Reviews[i] = r
+		if r.Handoff != nil {
+			handoff := *r.Handoff
+			out.Reviews[i].Handoff = &handoff
+		}
 		out.Reviews[i].Checks = slices.Clone(r.Checks)
 		out.Reviews[i].Options = slices.Clone(r.Options)
 		out.Reviews[i].Evidence = r.Evidence.clone()
@@ -277,6 +283,30 @@ func (s *Service) superviseTodo(ctx context.Context, id, supervisor string, done
 	})
 	if err != nil {
 		s.logf("task %s: supervision: %v", id, err)
+	}
+}
+
+// startSupervisionRound: a plan's task took todo id over to start a new Agent on it (task_plan continues, or its
+// todo_id; takeTodoForTask), so the work from here is a new round of its supervision (#11553). A terminal review of the
+// work before it (accepted or cancelled) stays in the ledger's reviews, as history, and no longer decides the to-do's
+// state: the ledger goes back to going on, with no reworks and no owner wait yet. Otherwise every client (web
+// acceptanceStands, Apple, Android and the hub's triage alike) went on showing the earlier round's acceptance on the
+// new work, filed the to-do under Just finished or Done whenever its new Agent stopped, and superviseJudged dropped the
+// new round's stops as more work sent after an acceptance. That rule stays for what it was made for (#3156, #7539):
+// more work sent to an accepted task's Agent, a message on its card, a Reopen by hand. A to-do with no ledger gets
+// none here, and a ledger in any other state is the current round's already.
+func (s *Service) startSupervisionRound(ctx context.Context, id string) {
+	if t, ok := s.todoNow(id); !ok || t.Supervision == nil {
+		return
+	}
+	if _, _, err := s.updateSupervision(ctx, id, func(v *Supervision) bool {
+		if v.State != reviewAccepted && v.State != reviewCancelled {
+			return false
+		}
+		v.State, v.Round, v.Waits = "", 0, nil
+		return true
+	}); err != nil {
+		s.logf("task %s: new supervision round: %v", id, err)
 	}
 }
 

@@ -53,13 +53,15 @@ type fakeHub struct {
 	zshrc        map[string][]proto.Launcher // a machine\'s own launchers.list (over launcherList)
 	// hostLaunchers: a machine's launchers.list for a start in its engine host (the call names a host), answered as an
 	// engine that runs only its own launchers would (host_runtime, #8140).
-	hostLaunchers map[string][]proto.Launcher
-	rcFiles       map[string]string                  // a machine's launchers.list rc_file (its shell follows: bash or zsh)
-	slowLaunchers map[string]bool                    // a machine whose launchers.list answers only when the call gives up
-	launcherGate  chan struct{}                      // when set, every launchers.list answer waits for this gate
-	agentModels   map[string][]proto.AgentModel      // the nodes' launchers.models, by launcher
-	modelsLocked  map[string]string                  // launchers.models's locked, by launcher
-	managed       map[string][]proto.ManagedLauncher // what each node was given (launchers.managed)
+	hostLaunchers       map[string][]proto.Launcher
+	rcFiles             map[string]string                  // a machine's launchers.list rc_file (its shell follows: bash or zsh)
+	slowLaunchers       map[string]bool                    // a machine whose launchers.list answers only when the call gives up
+	launcherGate        chan struct{}                      // when set, every launchers.list answer waits for this gate
+	failLauncherRefresh bool                               // launchers.list with refresh:true fails, ordinary reads still answer
+	launcherListParams  []map[string]any                   // launchers.list params in order
+	agentModels         map[string][]proto.AgentModel      // the nodes' launchers.models, by launcher
+	modelsLocked        map[string]string                  // launchers.models's locked, by launcher
+	managed             map[string][]proto.ManagedLauncher // what each node was given (launchers.managed)
 	// catalogNodes: the nodes take launchers.catalog (a node from before it answers unknown method); catalog is what each got.
 	catalogNodes  bool
 	catalog       map[string][]proto.ManagedLauncher
@@ -177,6 +179,8 @@ type fakeHub struct {
 	checks  map[string]proto.LauncherCheck
 	checked []string
 	onCheck func(f *fakeHub) // runs (under the fake's lock) inside each launchers.check
+	// onRename runs (under the fake's lock) inside each session rename, where a node's reader loop would be waiting.
+	onRename func()
 	// checkWait, when set, runs before each launchers.check is answered, outside the fake's lock, with the call's
 	// context: a check that takes its time; its error is the call's.
 	checkWait func(ctx context.Context) error
@@ -443,8 +447,11 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 			}
 		}
 		return json.Marshal(map[string]any{"items": items})
-	case DeviceSessionRename:
+	case DeviceSessionRename, assistantwire.DeviceSessionRenameTabIfCurrent:
 		f.sends = append(f.sends, map[string]any{"rename": a})
+		if f.onRename != nil {
+			f.onRename()
+		}
 		return json.RawMessage(`{"ok":true}`), nil
 	case assistantwire.DeviceLaunchersCheck:
 		name, _ := a["name"].(string)
@@ -476,6 +483,7 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		name, _ := a["name"].(string)
 		return json.Marshal(map[string]any{"agent": launcherAgent(name)})
 	case DeviceLaunchersList:
+		f.launcherListParams = append(f.launcherListParams, a)
 		if a["source"] == proto.ExternalLauncherSource {
 			list, ok := f.zshrc[p.Device]
 			if !ok {
@@ -505,6 +513,9 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 			<-ctx.Done()
 			f.mu.Lock()
 			return nil, ctx.Err()
+		}
+		if a["refresh"] == true && f.failLauncherRefresh {
+			return nil, errors.New("launcher refresh failed")
 		}
 		if host, _ := a["host"].(string); host != "" {
 			if l, ok := f.hostLaunchers[p.Device]; ok {

@@ -37,6 +37,8 @@ func (s *Service) FeishuAction(ctx context.Context, p FeishuAction) (*feishubot.
 func (s *Service) botCardAction(ctx context.Context, a *feishubot.CardAction, action string) *feishubot.CardResponse {
 	l := s.botLang(ctx)
 	switch a.Str("a") {
+	case "nop": // a link of a "more" menu was opened: nothing to do
+		return nil
 	case "ix":
 		return s.answerFromCard(ctx, a, action)
 	case "accept":
@@ -518,17 +520,19 @@ func (s *Service) botStartAgent(machine, cwd, prompt, mode string) error {
 		return err
 	}
 	t := botTarget{Kind: targetAgent, MachineID: d.ID, SessionID: res.Session.SessionID}
-	label := agentLabel(res.Session)
+	preferTab := s.useHerdrTabName(ctx)
+	label, secondary := feishuSessionNames(res.Session, preferTab)
 	if label == "" || label == "." {
 		label = cwd
 	}
 	label += " · " + d.Name
 	s.setBotCurrent(t)
-	c := feishubot.NewCard("", "", i18n.T(l, "assistant-feishu_cards.started")).Markdown(i18n.T(l, "assistant-feishu_cards.started_body", i18n.Args{"machine": feishubot.EscapeMarkdown(d.Name), "dir": feishubot.Code(cwd)}))
+	c := feishubot.NewCard(i18n.T(l, "assistant-feishu_cards.started"), feishubot.Blue, i18n.T(l, "assistant-feishu_cards.started")).Subtitle(dotJoin(label, secondary)).
+		Markdown(i18n.T(l, "assistant-feishu_cards.started_body", i18n.Args{"machine": feishubot.EscapeMarkdown(d.Name), "dir": feishubot.Code(cwd)}))
 	if prompt != "" {
 		c.Note(i18n.T(l, "assistant-feishu_cards.started_working"))
 	}
-	mid, err := s.botPost(ctx, "", c.Buttons(s.openButton(ctx, d.ID, res.Session.SessionID)), "")
+	mid, err := s.botPost(ctx, "", c.AppendToLinks(s.openButton(ctx, d.ID, res.Session.SessionID)), "")
 	if err != nil {
 		s.logf("bots: started note: %v", err)
 	}

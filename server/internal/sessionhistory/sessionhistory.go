@@ -149,10 +149,12 @@ type Item[T any] struct {
 }
 
 // Part is what one source gave towards a page: its rows after the cursor in order, and whether it has more beyond
-// the last of them.
+// the last of them. Reached, when set, is how far the source read: rows it left out (a blocked folder's) can lie past
+// its last item, and a page goes on from there rather than from that item.
 type Part[T any] struct {
-	Items []Item[T]
-	More  bool
+	Items   []Item[T]
+	More    bool
+	Reached *Key
 }
 
 // Sorted puts items in order.
@@ -186,11 +188,12 @@ func Merge[T any](parts []Part[T], limit int) ([]Item[T], *Key) {
 		all = append(all, p.Items...)
 		if p.More {
 			more = true
-			if len(p.Items) > 0 {
-				last := p.Items[len(p.Items)-1].Key
-				if stop == nil || last.Before(*stop) {
-					stop = &last
-				}
+			last := p.Reached
+			if last == nil && len(p.Items) > 0 {
+				last = &p.Items[len(p.Items)-1].Key
+			}
+			if last != nil && (stop == nil || last.Before(*stop)) {
+				stop = last
 			}
 		}
 	}
@@ -205,18 +208,29 @@ func Merge[T any](parts []Part[T], limit int) ([]Item[T], *Key) {
 	if len(all) > limit {
 		all, more = all[:limit], true
 	}
-	if !more || len(all) == 0 {
+	if !more {
 		return all, nil
+	}
+	if len(all) == 0 {
+		// Every row read up to the stop was left out: an empty page that goes on after it, so the rows past it are
+		// neither skipped nor taken for the end. No stop known: the last page, as before.
+		if stop == nil {
+			return all, nil
+		}
+		next := *stop
+		return all, &next
 	}
 	next := all[len(all)-1].Key
 	return all, &next
 }
 
-// Page is one answer of a source that pages with its own cursor.
+// Page is one answer of a source that pages with its own cursor. Reached is the key of the last row the page read,
+// those the fetch left out included; nil when it left none out past its last item.
 type Page[T any] struct {
 	Items      []Item[T]
 	NextCursor string
 	Complete   bool
+	Reached    *Key
 }
 
 // Fetch asks a source for one page of q.
@@ -234,6 +248,14 @@ func Collect[T any](ctx context.Context, fetch Fetch[T], q Query, after *Key, wa
 	}
 	var part Part[T]
 	complete := true
+	in := func(k Key) bool {
+		return k.T >= q.Since.UnixMilli() && k.T < sub.Until.UnixMilli() && (after == nil || after.Before(k))
+	}
+	reach := func(k Key) {
+		if part.Reached == nil || part.Reached.Before(k) {
+			part.Reached = &k
+		}
+	}
 	for i := 0; i < collectPages; i++ {
 		page, err := fetch(ctx, sub)
 		if err != nil {
@@ -241,12 +263,16 @@ func Collect[T any](ctx context.Context, fetch Fetch[T], q Query, after *Key, wa
 		}
 		complete = complete && page.Complete
 		for _, it := range page.Items {
-			if it.Key.T >= q.Since.UnixMilli() && it.Key.T < sub.Until.UnixMilli() && (after == nil || after.Before(it.Key)) {
+			if in(it.Key) {
 				part.Items = append(part.Items, it)
+				reach(it.Key)
 			}
 		}
+		if page.Reached != nil && in(*page.Reached) {
+			reach(*page.Reached)
+		}
 		if page.NextCursor == "" || page.NextCursor == sub.Cursor {
-			part.Items = Sorted(part.Items)
+			part.Items, part.Reached = Sorted(part.Items), nil
 			return part, complete, nil
 		}
 		if len(part.Items) >= want {

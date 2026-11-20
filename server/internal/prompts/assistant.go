@@ -26,6 +26,7 @@ type AssistantMachine struct {
 
 // AssistantClaudeMD is the assistant directory's CLAUDE.md (assistant/claude_md).
 type AssistantClaudeMD struct {
+	WorkGuide    bool
 	Owner        string // "" is "user"
 	Machines     []AssistantMachine
 	Notes        string // Settings › Assistant › About me, trimmed
@@ -433,10 +434,11 @@ func RenderSnapshotWorkflow(w SnapshotWorkflow) string {
 // AssistantContext is the hub's answer to assistant.context: the snapshot, for the main conversation with a line
 // saying so first (assistant/context). Node puts what changed of it at the start of each message (TurnContext).
 type AssistantContext struct {
-	Main     bool
-	Leader   bool // a leader conversation (#3133): it supervises the tasks it hands out
-	Owner    string
-	Snapshot string
+	ScheduledWorkPlan bool // Inline instructions for a granted scheduled round when the manager uses persona-work.
+	Main              bool
+	Leader            bool // a leader conversation (#3133): it supervises the tasks it hands out
+	Owner             string
+	Snapshot          string
 	// Directions: for the main conversation, the current leaders it hands work to (task_plan supervisor, #3609);
 	// LeaderName: for a leader, its direction's name.
 	Directions []ContextDirection
@@ -928,6 +930,8 @@ type SuperviseLastReview struct {
 // DecisionAgentReply asks a supervisor to confirm a pending decision after its owner writes in the task's Agent chat.
 type DecisionAgentReply struct {
 	Language, Machine, Session string
+	Handled                    bool
+	Text, Closeout             string
 }
 
 // SuperviseInbox is the Inbox item an inbox entry names (#4293): its id, title (the chat's name or the mail's subject),
@@ -1050,6 +1054,7 @@ type Relay struct {
 // RelayQuote is the owner's message a relay carries: its id, when and in which conversation they wrote it, the
 // conversations that passed it on after that one (oldest first), and the text verbatim. ParseRelayQuoteID reads the id back.
 type RelayQuote struct {
+	Part                 bool // the text is an excerpt from the source message
 	ID, At, Conversation string
 	Via                  []string
 	Text                 string
@@ -1263,18 +1268,6 @@ type SuperviseCloseout struct {
 	CheckedMerged, CheckedDeployed string
 	LocalDeployment                bool
 }
-
-// Route is the system prompt of assistant.route (assistant/route): is a New chat's first message a direction or a quick
-// chat. Language is the direction name's language by its own name ("" Chinese); Crowded: there are Leaders leaders
-// already, so the model names the closest one too.
-type Route struct {
-	Language string
-	TitleMax int
-	Crowded  bool
-	Leaders  int
-}
-
-func RenderRoute(r Route) string { return render("assistant/route", r) }
 
 // RouteLeader is a current leader as the route model is shown it.
 type RouteLeader struct{ ID, Title, Project string }

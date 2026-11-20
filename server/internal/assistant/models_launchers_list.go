@@ -199,27 +199,41 @@ type machineLauncherListing struct {
 	HostRuntime bool                     `json:"host_runtime"`
 }
 
+type launcherRefreshKey struct{}
+
+// withLauncherRefresh asks the node to replace its ordinary one-minute shell-launcher snapshot. It is used only for
+// bounded recovery of a specific Assistant launcher, not ordinary picker loads.
+func withLauncherRefresh(ctx context.Context) context.Context {
+	return context.WithValue(ctx, launcherRefreshKey{}, true)
+}
+
 // known distinguishes an explicit node list (including []) from a missing/null catalog on an older node.
 func (s *Service) machineLaunchersOn(ctx context.Context, machine, host string) (list []proto.Launcher, hostRuntime, known bool, err error) {
 	var res machineLauncherListing
 	params := map[string]any{}
+	if refresh, _ := ctx.Value(launcherRefreshKey{}).(bool); refresh {
+		params["refresh"] = true
+	}
 	if host != "" {
 		params["host"] = host
 	}
 	if err := s.call(ctx, machine, DeviceLaunchersList, params, &res); err != nil {
 		return nil, false, false, err
 	}
-	list, hostRuntime = s.machineLaunchersFrom(ctx, machine, res)
+	list, hostRuntime = s.machineLaunchersFrom(ctx, machine, res, true)
 	return list, hostRuntime, res.Launchers != nil, nil
 }
 
-func (s *Service) machineLaunchersFrom(ctx context.Context, machine string, res machineLauncherListing) ([]proto.Launcher, bool) {
+// machineLaunchersFrom is machine's list from res, its node's answer. ask: a provider's own-service rule may ask the
+// node as the pickers do (usableOn); false goes by what it said before only (usableOnAsking), for a status that asks no
+// node.
+func (s *Service) machineLaunchersFrom(ctx context.Context, machine string, res machineLauncherListing, ask bool) ([]proto.Launcher, bool) {
 	d, _ := s.device(ctx, machine)
 	hidden := s.hiddenLaunchers(ctx)
 	// Only the providers in this computer's scope: one out of it is not named to the node, whose own launcher by
 	// that name (if any) is what runs there.
 	managed := slices.DeleteFunc(slices.Clone(s.storedLaunchers(ctx)), func(m storedLauncher) bool {
-		return proto.IsExternalLauncher(m.Name) || !s.usableOn(ctx, m, machine)
+		return proto.IsExternalLauncher(m.Name) || !s.usableOnAsking(ctx, m, machine, ask)
 	})
 	if res.HostRuntime {
 		managed = slices.DeleteFunc(managed, func(m storedLauncher) bool { return m.Agent != "agy" })
@@ -283,6 +297,23 @@ func (s *Service) pickerLaunchersKnown(ctx context.Context, machine, host string
 		discovered = append(discovered, ConfiguredLauncher{Launcher: l})
 	}
 	return sessionLaunchers(discovered, s.hello(ctx).Models.Launchers[machine]), known, nil
+}
+
+// pickerLaunchersSeen is pickerLaunchers from seen, machine's own launchers as last seen, without asking its node for
+// them: the same rule (machineLaunchersFrom: a Persona-managed provider in the computer's scope takes the place of its
+// own launcher by that name, a hidden one is left out), then hub.json's launchers for it (sessionLaunchers). ask is
+// machineLaunchersFrom's: false asks the node nothing at all.
+func (s *Service) pickerLaunchersSeen(ctx context.Context, machine string, seen []proto.Launcher, ask bool) []ConfiguredLauncher {
+	res := machineLauncherListing{}
+	for _, l := range seen {
+		res.Launchers = append(res.Launchers, proto.LauncherEnvelope(l))
+	}
+	list, _ := s.machineLaunchersFrom(ctx, machine, res, ask)
+	discovered := make([]ConfiguredLauncher, 0, len(list))
+	for _, l := range list {
+		discovered = append(discovered, ConfiguredLauncher{Launcher: l})
+	}
+	return sessionLaunchers(discovered, s.hello(ctx).Models.Launchers[machine])
 }
 
 // assistantLaunchers are the machine's launchers backed by a provider the main conversation supports.
@@ -496,6 +527,27 @@ func (s *Service) launcherModelResolution(ctx context.Context, machine, launcher
 // askLauncherModels is machine's node's /model list of launcher name (node/launcher_models.go), with the models of
 // the plugin gateway behind it, one row per model (oneRowPerModel).
 func (s *Service) askLauncherModels(ctx context.Context, machine, name string, refresh bool) (proto.LauncherModels, error) {
+	res, err := s.launcherModelRows(ctx, machine, name, refresh)
+	if err != nil {
+		return res, err
+	}
+	res = s.oneRowPerModel(ctx, name, s.presetModels(ctx, machine, name, res))
+	for i, m := range res.Models {
+		res.Models[i].ResolvedOffered = false // only used with the node's original rows for legacy sessions
+		id := m.ID
+		if m.Resolved != "" {
+			id = m.Resolved
+		}
+		res.Models[i].Price = nil
+		if c, ok := catalogModel(id); ok && c.InheritedFrom == "" {
+			res.Models[i].Price = c.Price
+		}
+	}
+	return res, nil
+}
+
+// launcherModelRows reads the target node's rows before the picker merges gateway models, routes and aliases.
+func (s *Service) launcherModelRows(ctx context.Context, machine, name string, refresh bool) (proto.LauncherModels, error) {
 	var res proto.LauncherModels
 	params := map[string]any{"refresh": refresh}
 	if purpose := launcherPurpose(ctx); purpose != "" {
@@ -509,17 +561,6 @@ func (s *Service) askLauncherModels(ctx context.Context, machine, name string, r
 	}
 	if res.Models == nil {
 		res.Models = []proto.AgentModel{}
-	}
-	res = s.oneRowPerModel(ctx, name, s.presetModels(ctx, machine, name, res))
-	for i, m := range res.Models {
-		id := m.ID
-		if m.Resolved != "" {
-			id = m.Resolved
-		}
-		res.Models[i].Price = nil
-		if c, ok := catalogModel(id); ok && c.InheritedFrom == "" {
-			res.Models[i].Price = c.Price
-		}
 	}
 	return res, nil
 }

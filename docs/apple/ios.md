@@ -2073,11 +2073,45 @@ built in stages behind the hub's `todo_view`; this section grows with it.
   Signing out of every hub forgets the remembered values, and a group that goes while others stay (signed out of, or
   merged into another: `TodosV1.forget`) loses its own, since the app's stored pick, written only when the owner picks
   a hub, can still name that group at the next launch. The gate turns on at the first hello that lists `todo_view`, also in the
-  middle of a run: holding that change while To-dos is on screen, so a visible page never swaps, is the page's job and
-  arrives with the V1 list; the gate stays a plain value. It is off in every build until the switch-on
+  middle of a run: holding that change while To-dos is on screen, so a visible page never swaps, is the page's job
+  (`TodosPlacePage`, below); the gate stays a plain value. It is off in every Release build until the switch-on
   (`TodosV1.released`), and on the iPhone and iPad only (`TodosV1.platform`): visionOS keeps today's To-dos. The data
   and model files under `apple/Persona/Features/Todos/` compile on every platform, since `TodoStore` (shared with
-  visionOS) names them; the V1 views will be iOS only. The hub's `todo_send_state` marker is not read yet.
+  visionOS) names them; the V1 views are iOS only (`List/`). The hub's `todo_send_state` marker is not read yet.
+- **The list** (`apple/Persona/Features/Todos/List/`, iOS only; DESIGN_SYSTEM 3.4 "To-dos list"). `TodosListModel`
+  (`Deps`: the store, the hub, the clock, the projects' names) follows the store and lays the list out once per change
+  (`TodosListLayout`, pure): the sections for the bar's choice (`TodosBar`, `TodosChoice`), the grouping and the sort,
+  from `countsSource.filed`, less the steps their parents carry. Each row reads its own cell (`TodosListModel.Row`),
+  whose content (`TodoRowContentLogic`: times said from now, the mark, line 2 through `TodoLineText`, the door, line 3,
+  and the row in words for VoiceOver) is worked out again only when its facts, its view or the minute changes; a line
+  key this build does not know says the section's word, so the mark stays. While the list is scrolled or out of sight
+  (`Hold`: the page reports its scroll phase and when it is out of sight) a new filing waits, and so does what each
+  row says, since a new line can wrap or a door come and go and a row's new height moves every row under it; a row
+  gone from the store keeps its cell until then. A row that comes to need the owner lands at once, alone, onto the
+  list as drawn; the numbers (`countsSource`) are never held. When the rest lands, the rows that changed group are
+  drawn in place at once and fade in (`Theme.Motion.conceal`), so nothing slides across the list. A row in another
+  group or fold is a new view there (another section's `ForEach`), so a trigger it observes cannot start the fade (it
+  starts with the value as it already is, and the view it leaves sees the change first), and an `onAppear` that
+  starts one comes a frame after the row was drawn whole. The landing marks the row instead (`Row.entering`), which the
+  new view reads from its first frame, drawn hidden, and clears inside the animation as it appears. A mark not taken
+  (a row that landed out of sight) is cleared at the next landing and when a scroll starts, so nothing fades in under
+  a finger; with Reduce Motion nothing is marked. The page's minute
+  (`tick`, also as the page comes back to the front) says the times again. Rows open today's to-do page until the to-do's own page arrives. On iOS 26 the section bar is pinned over the
+  list; iOS 18 has no scroll edge effect to draw behind it, so there the bar is the list's first row, as the Inbox's.
+  `TodoWorkspace` (one for the app, `TodoWorkspace.shared`, outside the pages' trees) keeps the place and where each
+  place's list came to rest, written only while the scene is active and only from the tree the window shows; a page
+  made anew puts its list back there once, and a page a to-do popped back to keeps its own place. The grouping and the
+  sort are kept on the device (`todos.v1.grouping`, `todos.v1.sort`); the bar's choice is not.
+- **Which page.** `TodosPlacePage` draws the V1 list while the gate is on, else today's `TodosView` (frozen), deciding
+  once, when the page is made (`TodosPageChoice`): a hello that turns the gate on while To-dos is up (a manager that
+  connects late), or while a to-do is pushed over it, never swaps it; the next time To-dos opens it is the V1 list. The
+  drawer's and sidebar's To-dos row and the folded Pages heading show N on the V1 path (`TodoStore.sidebarCount`),
+  today's open count otherwise, also while a page made before the gate came on still draws today's list
+  (`TodoWorkspace.holdsToday`), so the page and the drawer never say two numbers. DEBUG `-showTodosV1 YES` stands for
+  the release (`TodosV1.allowedHere`); V1 still needs a hub that lists `todo_view`. With `-probes YES` the page exports
+  what it draws and whether the gate is on (`probe.todos-page`). The store's one-minute clock for rows filed by the
+  app's own rules runs while a counted row is filed so (the drawer's N included, whether or not the list was drawn) and
+  follows whatever changes that, another assistant made current included (`TodoCountsSource.byRulesChanged`).
 - **404 and 405.** An older hub answers 405 for `GET /api/v1/todos/{id}` and `GET /api/v1/todos/places` (the `PATCH` and
   `DELETE` routes of `/api/v1/todos/{id}` match the path) and 404 for the other new routes: `TodoNotThere` takes both
   as "not there". A 404 with `todo_not_found` is the to-do itself gone. `GET /api/v1/todos` answering 404 still hides
@@ -2123,8 +2157,10 @@ a follow-up's prompt (`injected.detail`, or the raw input) is never shown while 
 visible one; its block shows only the one-line `injected.line` (`ChatLine.hidesPrompt`). A round stays shown by exactly
 the supervision rule (`Supervision.visible`): a successful `ask_user` / `notify_user`, a pending live `ask_user`, an
 accepted / needs-user `task_review`, a `supervision_finish` receipt with user visibility, or `fold.supervision_user`.
-A completed round with a nonblank final reply also stays visible unless it successfully finished silent. The reply
-uses the usual bubble and the work stays collapsed. See `docs/assistant/assistant.md` "Background rounds".
+A completed round with a nonblank final reply also stays visible unless it successfully finished silent, except for a
+routine cross-conversation report to the main conversation: that reply stays inside the expandable background record,
+just as on the web. Explicit owner-visibility actions above still open and notify. The reply uses the usual bubble and
+the work stays collapsed. See `docs/assistant/assistant.md` "Background rounds".
 
 While folding is on, the main chat's Needs You tray groups task rows by the conversation that supervises them (the
 to-do's `origin`) when they come from more than one: the conversation's own group first without a header, then each
@@ -2711,8 +2747,8 @@ group's. With one installed manager, or a hub without a roster, nothing below sh
   (`ManagersText.switcherLocked`, `switcherNote`); turned off while it is in use, the footer says it is listed for now and why.
   An older hub answers yes and keeps nothing: the list read after it still says shown, the switch goes back and a toast says to
   update the hub. While the hub marks it `hidden` its row in the list carries a Hidden chip. Tests `ManagersModelTests`.
-- **Low-distraction mode** (#8157): the last section of Settings › Notifications, after this device's own rows, is the hub's
-  push grading switch (`APIClient.pushLnMode` / `setPushLnMode`, `GET` / `PUT /api/v1/push/ln-mode`); its footer says it holds
+- **Push grading** (#8157): the last section of Settings › Notifications, after this device's own rows, is the hub's
+  push grading switch (`APIClient.pushLnMode` / `setPushLnMode`, `GET` / `PUT /api/v1/push/ln-mode`, the legacy wire route); its footer says it holds
   for every device and what still notifies. A hub without the route, or one that does not answer, shows no section; a change
   shows at once, and a refusal puts it back and says why. `docs/server/server.md` "Push grading (push urgency filtering, `hub/lnmode.go`)".
 - **Quiet hours**: Settings › Notifications has this device's quiet hours (a switch, then From / Until), only when the prefs answer
@@ -2747,18 +2783,19 @@ web's routes (`docs/protocol/protocol.md`, `/api/v1/assistant/saved-prompts`) an
   beside the chat's own is a row of its own (ids `saved:<id>`). Persona chats, which have no agent commands, list the saved prompts (the main chat after its `/clear`).
 - **Assistant Profile › In Chats › Saved Prompts** (`Views/Settings/SavedPromptsView.swift`; both styles): each prompt's
   `/name` and its text's first two lines, New Prompt, and per row (context menu, swipe, VoiceOver actions) Edit, Move Up /
-  Move Down (`PUT …/order`) and Delete, confirmed. Delete and a move show at once and come back with the reason when the
+  Move Down (`PUT …/order`) and Delete, confirmed through `accessibleConfirmationDialog` (an alert at the largest text sizes). Delete and a move show at once and come back with the reason when the
   hub refuses; a list changed on another device meanwhile (409) is read again with a word. A change that answers after
   the current assistant or hub changed leaves the new list alone, and a move that answers after a delete made meanwhile
   does not bring the deleted prompt back.
-- **The editor** (`SavedPromptEditor`): Name after a fixed `/` and Text. It says the hub's rules before asking it
+- **The editor** (`SavedPromptEditor`): Name after a fixed `/` and Text; `sheetCancel`'s ✕ leaves, `SheetConfirm`'s ✓ saves (a spinner while it runs; #11183). It says the hub's rules before asking it
   (`SavedPromptRules`: a taken name at once, the others once something is typed or Save was tapped); a count shows past
   80% of 8,000 characters; the hub's own refusal shows in the sheet and keeps what was typed.
-- Save as Prompt… on a message's menu, and Android, follow in their own issues.
+- Android supports saved prompts (#11667, `docs/android/android.md` "Saved prompts"). Save as Prompt… on a message's menu is a separate feature.
 - DEBUG: `-tab settings -openAssistantPage prompts|prompt|newPrompt` (`promptsEntry`: the profile scrolled to In Chats).
   Tests: `PersonaTests/SavedPromptsTests.swift`; UI suite `SavedPromptsUITests` against the mock with
   `MOCK_SAVED_PROMPTS=1` (`TEST_RUNNER_PERSONA_MOCK_HUB`; skips without it) swipes a row, checks Delete asks first and
-  Cancel sends nothing, light and dark; `TEST_RUNNER_PERSONA_SHOTS=<dir>` keeps `saved-prompts-<light|dark>-<swipe|confirm>.png`.
+  Cancel sends nothing, and opens the editor, checks its ✕ and ✓ and that the ✕ saves nothing, light and dark;
+  `TEST_RUNNER_PERSONA_SHOTS=<dir>` keeps `saved-prompts-<light|dark>-<swipe|confirm|editor>.png`.
 
 ## The pages show the current assistant
 
@@ -2817,7 +2854,7 @@ is listed), and a hub that answers it has no roster filters nothing (`AppModel.m
   default's conversations name none, and with one installed manager or no roster nothing is named.
 - **Counts**: the tab badges, the app icon's number (their sum), the sidebar's Inbox and To-dos counts, the home page's
   Needs You and the main conversation's dock count the current assistant's (`AppModel.countBadges`,
-  `InboxStore.actionCount`, `TodoStore.badgeCount`). The
+  `InboxStore.unreadCount` for the Inbox's badge and row, `TodoStore.badgeCount`). The
   switcher shows beside every other assistant what waits there (`AssistantBadges`, `AppModel.assistantBadges`): its agents
   waiting (a session with a pending card or in Needs You once, quiet and muted ones left out, a card on no session by
   itself; Persona's own conversations by their cards only) plus `inbox_needs_you`. The header's face carries a mark while
@@ -3006,6 +3043,10 @@ Claude Code, Codex and Session Triage. Applying runtime settings to all online c
 computers in the current Hub. Connectors, extensions, markets, channels and knowledge selection use a captured assistant
 request context; switching assistants returns Settings to the list, and a late response cannot replace the new scope.
 An explicitly manager-bound detail link still opens that assistant's copy without changing the app's pick.
+
+An extension purpose with candidate support shows the lists it requested, their most recent use, and each model's provider
+or reason for being unavailable. Choose the extension’s lists, the purpose model alone, or an ordered list of directly
+callable providers and model IDs. Leave an ID empty to follow that provider’s default. Saving uses the current revision. When the revision changes elsewhere, the editor keeps the draft until you confirm a reload.
 
 The rest of the first group follows the same rule. Skills, Auto-Start Tasks (`TaskTrustModel`), Outlook sign-in on Add Mail
 Account, an extension form's launcher picker, each page's Subscriptions entry (`SettingsPage.subscriptions(state:manager:)`)
