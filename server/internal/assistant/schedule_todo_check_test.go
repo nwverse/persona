@@ -236,7 +236,7 @@ func TestScheduledTodoCheckSignalNamesTheAgent(t *testing.T) {
 	if g.Kind != sigCheck || g.Report != checkNoProgressReport || g.Machine != "box" || g.Session != "worker" {
 		t.Fatalf("the check's signal is not about the task's Agent: %+v", g)
 	}
-	if g.urgent() || g.waitsOnDecision() || g.id() != todo.ID+"|check:no_progress" {
+	if g.urgent() || g.waitsOnDecision() || supervisionBatchImmediate(g) || g.id() != todo.ID+"|check:no_progress" {
 		t.Fatalf("a no-progress check jumped the supervision gap or shared a report's slot: %+v", g)
 	}
 	e, ok := s.digestEntry(t.Context(), g, "")
@@ -308,7 +308,7 @@ func TestScheduledTodoCheckDecisionGoesToSupervisor(t *testing.T) {
 			s.supervise.mu.Lock()
 			g, ok := s.supervise.pending[todo.ID+"|"+sigCheck+":"+checkDecidedReport]
 			s.supervise.mu.Unlock()
-			if !ok || g.Detail != label || g.Decision == nil || len(g.Decision.Options) != 2 || !g.urgent() ||
+			if !ok || g.Detail != label || g.Decision == nil || len(g.Decision.Options) != 2 || !g.urgent() || !supervisionBatchImmediate(g) ||
 				g.Machine != todo.Agents[0].MachineID || g.Session != todo.Agents[0].SessionID {
 				t.Fatalf("the supervisor was not handed the owner's option: %+v", g)
 			}

@@ -32,8 +32,8 @@ type scheduleTodoSnapshot struct {
 	Unreadable map[string]bool   `json:"unreadable,omitempty"` // Agent identities whose evidence could not be read
 	// Calls: each Agent's distinct tool calls in its latest turn, hashed (scheduleCallKeys); At: when it was read. The
 	// next check tells new work from waits and repeats by them (scheduledTodoWork).
-	Calls map[string][]string `json:"calls,omitempty"`
-	At    time.Time           `json:"at,omitzero"`
+	Calls map[string][]string           `json:"calls,omitempty"`
+	At    time.Time                     `json:"at,omitzero"`
 	seen  map[string][]scheduleToolCall // the latest turns' calls as read, for comparing; not kept
 }
 
@@ -66,10 +66,10 @@ type scheduleTodoProgress struct {
 	NoProgress int                    `json:"no_progress"`
 	// Since: when the evidence the streak's first no-progress run compared with was read; Calls: the tool calls its
 	// runs saw, all waits or repeats. Zero without a streak.
-	Since    time.Time `json:"since,omitzero"`
-	Calls    int       `json:"calls,omitempty"`
-	Signaled bool      `json:"signaled,omitempty"`
-	Escalated  bool                   `json:"escalated,omitempty"`
+	Since     time.Time `json:"since,omitzero"`
+	Calls     int       `json:"calls,omitempty"`
+	Signaled  bool      `json:"signaled,omitempty"`
+	Escalated bool      `json:"escalated,omitempty"`
 	// Kept before creating the review, so a failed final marker write can recognize its own decision.
 	EscalationRun string `json:"escalation_run,omitempty"`
 }
