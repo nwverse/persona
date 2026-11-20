@@ -42,19 +42,22 @@ describe("keyboardVars", () => {
 });
 
 describe("useKeyboardFrame", () => {
+  const html = document.documentElement;
+  const startWidth = window.innerWidth;
+  const startHeight = window.innerHeight;
+  const setInner = (w: number, h: number) => {
+    Object.defineProperty(window, "innerWidth", { configurable: true, writable: true, value: w });
+    Object.defineProperty(window, "innerHeight", { configurable: true, writable: true, value: h });
+  };
   afterEach(() => {
     delete (window as { visualViewport?: unknown }).visualViewport;
+    setInner(startWidth, startHeight);
+    document.querySelectorAll("[data-kb-test]").forEach((e) => e.remove());
   });
-
-  it("marks the root with data-kb while the keyboard is up, and clears it when it goes or the shell unmounts", () => {
-    // iOS: only the visual viewport shrinks (jsdom has none, and its innerHeight is 768)
+  /** A visual viewport (jsdom has none) and the shell on it. */
+  function mount() {
     const vv = Object.assign(new EventTarget(), { height: window.innerHeight, offsetTop: 0, scale: 1 });
     Object.defineProperty(window, "visualViewport", { configurable: true, value: vv });
-    const keyboard = (height: number) => act(() => {
-      vv.height = height;
-      vv.dispatchEvent(new Event("resize"));
-    });
-    const html = document.documentElement;
     function Shell() {
       const ref = useRef<HTMLDivElement>(null);
       useKeyboardFrame(ref);
@@ -64,6 +67,29 @@ describe("useKeyboardFrame", () => {
     document.body.append(host);
     root = createRoot(host);
     act(() => root!.render(createElement(Shell)));
+    return vv;
+  }
+  /** Chrome on Android: the whole page (and its visual viewport with it) is resized; the window's resize says so. */
+  const page = (vv: { height: number }, w: number, h: number) => act(() => {
+    setInner(w, h);
+    vv.height = h;
+    window.dispatchEvent(new Event("resize"));
+  });
+  const field = () => {
+    const input = document.createElement("input");
+    input.setAttribute("data-kb-test", "");
+    document.body.append(input);
+    input.focus();
+    return input;
+  };
+
+  it("marks the root with data-kb while the keyboard is up, and clears it when it goes or the shell unmounts", () => {
+    // iOS: only the visual viewport shrinks (jsdom's innerHeight is 768)
+    const vv = mount();
+    const keyboard = (height: number) => act(() => {
+      vv.height = height;
+      vv.dispatchEvent(new Event("resize"));
+    });
     expect(html.hasAttribute("data-kb")).toBe(false);
 
     keyboard(400);
@@ -81,6 +107,41 @@ describe("useKeyboardFrame", () => {
     root = undefined;
     expect(html.hasAttribute("data-kb")).toBe(false);
     expect(html.style.getPropertyValue("--kb-h")).toBe("");
+  });
+
+  it("marks it for a keyboard that resizes the whole page while a field is focused, leaving --kb-h to 100dvh", () => {
+    setInner(390, 844);
+    const vv = mount();
+    field();
+    page(vv, 390, 508);
+    expect(html.hasAttribute("data-kb")).toBe(true);
+    expect(html.style.getPropertyValue("--kb-h")).toBe("");
+    expect(html.style.getPropertyValue("--kb-top")).toBe("");
+    page(vv, 390, 844);
+    expect(html.hasAttribute("data-kb")).toBe(false);
+
+    page(vv, 390, 508);
+    act(() => root!.unmount());
+    root = undefined;
+    expect(html.hasAttribute("data-kb")).toBe(false);
+  });
+
+  it("is not a keyboard with nothing taking typing, nor a page that only turned", () => {
+    setInner(390, 844);
+    const vv = mount();
+    page(vv, 390, 508); // the page got shorter, but no field has the focus
+    expect(html.hasAttribute("data-kb")).toBe(false);
+    page(vv, 390, 844);
+
+    // turned: the tallest height starts over at the new width
+    const input = field();
+    page(vv, 844, 390);
+    expect(html.hasAttribute("data-kb")).toBe(false);
+    page(vv, 844, 250);
+    expect(html.hasAttribute("data-kb")).toBe(true);
+    input.blur();
+    page(vv, 844, 240);
+    expect(html.hasAttribute("data-kb")).toBe(false);
   });
 });
 
