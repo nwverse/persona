@@ -316,6 +316,35 @@ class KnowledgeOwnerTest {
         }
     }
 
+    @Test fun projectStorageStaysWithItsManagerAndRejectsThePreviousPairingsEditor() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val store = ViewModelStore()
+        try {
+            AssistantManagerChoice.choose("hub", "m-garden", "assistant")
+            val original = PinnedKnowledge(coverage = ProjectFreshness())
+            val connection = object : KnowledgeConnection { override val current = MutableStateFlow<KnowledgeRepository?>(original) }
+            val detail = KnowledgeDetailViewModel(KnowledgeKind.Projects, "garden", connection, FakeMainSender(), "m-garden")
+            store.put("project-storage", detail)
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { detail.page.collect() }
+            runCurrent()
+            AssistantManagerChoice.choose("hub", "m-other", "assistant")
+            val onlyPolicy = KnowledgeUpdate(projectMode = "reference-only")
+            detail.saveProjectStorage(original.scope, onlyPolicy); runCurrent()
+            assertEquals(listOf("m-garden"), original.saves)
+            val other = PinnedKnowledge(HubScope("next-hub", "pair-2"), ProjectFreshness())
+            connection.current.value = other
+            detail.saveProjectStorage(original.scope, onlyPolicy); runCurrent()
+            detail.saveProjectStorage(original.scope, onlyPolicy); runCurrent()
+            assertTrue(other.saves.isEmpty())
+            val legacy = PinnedKnowledge(HubScope("older", "pair-3"))
+            connection.current.value = legacy; runCurrent()
+            detail.saveProjectStorage(legacy.scope, onlyPolicy); runCurrent()
+            assertTrue(legacy.saves.isEmpty())
+        } finally {
+            backgroundScope.cancel(); store.clear(); runCurrent(); Dispatchers.resetMain()
+        }
+    }
+
     @Test fun theDefaultAssistantsEntryNamesNoneAndAsksTheMainQueue() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val store = ViewModelStore()
@@ -357,14 +386,13 @@ class KnowledgeOwnerTest {
 }
 
 /** Records the manager each read and save named, as the hub client would put it on the request. */
-private class PinnedKnowledge : KnowledgeRepository {
-    override val scope = HubScope("demo", "pinned")
+private class PinnedKnowledge(override val scope: HubScope = HubScope("demo", "pinned"), private val coverage: ProjectFreshness? = null) : KnowledgeRepository {
     val reads = mutableListOf<String?>()
     val saves = mutableListOf<String?>()
     private suspend fun named(path: List<String>) = currentCoroutineContext()[ManagerPins]?.manager(path, "hub")
     override suspend fun list(kind: KnowledgeKind, tag: String?) = KnowledgeList(emptyList())
     override suspend fun detail(kind: KnowledgeKind, id: String) = KnowledgeDetail(kind.wire, id, "data/projects/$id",
-        meta = buildJsonObject { put("name", "天气 App") })
+        meta = buildJsonObject { put("name", "天气 App") }, freshness = coverage)
     override suspend fun entry(kind: KnowledgeKind, id: String): KnowledgeDetailResponse {
         reads += named(listOf("kb", kind.wire, id))
         return KnowledgeDetailResponse(detail(kind, id))

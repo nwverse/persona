@@ -194,42 +194,51 @@ nonisolated struct KBUnlink: Identifiable, Hashable, Sendable {
 /// The confirmed facts as the entry page shows them: the text, or a way to add some; Edit and Delete beside it.
 struct KBFactsSection: View {
     var facts: String
+    var readOnly = false
     var edit: () -> Void
     var delete: () -> Void
 
     var body: some View {
-        Section {
-            if facts.isEmpty {
-                Button(action: edit) {
-                    Label("Add Confirmed Facts", systemImage: Theme.Icon.add).lineLimit(1)
-                }
-                .accessibilityIdentifier("kb.facts.add")
-            } else {
-                Text(facts)
-                    .font(Theme.Font.body)
-                    .readingContent()
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, Theme.Space.xxs)
-                    .accessibilityIdentifier("kb.facts")
-                    .contextMenu {
-                        Button(action: edit) { Label("Edit [KB Facts]", systemImage: Theme.Icon.edit) }
-                        Button(role: .destructive, action: delete) { Label("Delete", systemImage: Theme.Icon.delete) }
+        if !readOnly || !facts.isEmpty {
+            Section {
+                if facts.isEmpty {
+                    Button(action: edit) {
+                        Label("Add Confirmed Facts", systemImage: Theme.Icon.add).lineLimit(1)
                     }
-                    .swipeActions(edge: .trailing) {
-                        Button(action: delete) { Label("Delete", systemImage: Theme.Icon.delete) }.tint(Theme.danger)
-                        Button(action: edit) { Label("Edit [KB Facts]", systemImage: Theme.Icon.edit) }
+                    .accessibilityIdentifier("kb.facts.add")
+                } else if readOnly {
+                    content
+                } else {
+                    content
+                        .contextMenu {
+                            Button(action: edit) { Label("Edit [KB Facts]", systemImage: Theme.Icon.edit) }
+                            Button(role: .destructive, action: delete) { Label("Delete", systemImage: Theme.Icon.delete) }
+                        }
+                        .swipeActions(edge: .trailing) {
+                            Button(action: delete) { Label("Delete", systemImage: Theme.Icon.delete) }.tint(Theme.danger)
+                            Button(action: edit) { Label("Edit [KB Facts]", systemImage: Theme.Icon.edit) }
+                        }
+                    Button(action: edit) {
+                        Label("Edit Confirmed Facts", systemImage: Theme.Icon.edit).lineLimit(1)
                     }
-                Button(action: edit) {
-                    Label("Edit Confirmed Facts", systemImage: Theme.Icon.edit).lineLimit(1)
+                    .accessibilityIdentifier("kb.facts.edit")
                 }
-                .accessibilityIdentifier("kb.facts.edit")
+            } header: {
+                Text("Confirmed Facts")
+            } footer: {
+                if !readOnly { Text("Your corrections are kept when Persona updates this entry.") }
             }
-        } header: {
-            Text("Confirmed Facts")
-        } footer: {
-            Text("Your corrections are kept when Persona updates this entry.")
         }
+    }
+
+    private var content: some View {
+        Text(facts)
+            .font(Theme.Font.body)
+            .readingContent()
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, Theme.Space.xxs)
+            .accessibilityIdentifier("kb.facts")
     }
 }
 

@@ -388,3 +388,17 @@ func TestProjectRefreshCommitsWhenSourceURLIsRecorded(t *testing.T) {
 	fieldReview(t, detail.Freshness.Fields["summary"], "", 0)
 	fieldReview(t, detail.Freshness.Fields["one_line"], "", 0)
 }
+
+func TestEmptyProjectCanSetStorageBeforeGatheringEvidence(t *testing.T) {
+	e := testEngine(t, nil)
+	projectUpdateOK(t, e, "garden", Update{Name: "Garden"})
+	row, detail := projectViews(t, e, "garden")
+	if row.Freshness == nil || detail.Freshness == nil || row.ProjectMode != "" || row.Freshness.NeedsReview || row.Freshness.TimelineEnd != 0 || len(row.Freshness.Fields) != 0 {
+		t.Fatalf("unwritten project must report an empty evidence window without asserting field coverage or an explicit mode: %+v", row)
+	}
+	projectSourceUpdateOK(t, e, "garden", UserUpdate{ProjectMode: new(referenceOnly)})
+	row, detail = projectViews(t, e, "garden")
+	if row.ProjectMode != referenceOnly || detail.Summary != "" || len(detail.Log) != 0 {
+		t.Fatalf("storage before content: %+v / %+v", row, detail)
+	}
+}

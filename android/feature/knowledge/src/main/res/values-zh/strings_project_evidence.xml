@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="knowledge_evidence_title">来源与覆盖范围</string>
+    <string name="knowledge_evidence_summary">摘要</string>
+    <string name="knowledge_evidence_overview">一句话简介</string>
+    <string name="knowledge_evidence_summary_review">摘要待复核</string>
+    <string name="knowledge_evidence_overview_review">简介待复核</string>
+    <string name="knowledge_evidence_review">待复核</string>
+    <string name="knowledge_evidence_cutoff_unknown">覆盖范围未知</string>
+    <string name="knowledge_evidence_locked">已锁定</string>
+    <string name="knowledge_evidence_writer_user">由你撰写</string>
+    <string name="knowledge_evidence_writer_persona">由 Persona 撰写</string>
+    <string name="knowledge_evidence_writer_extension">由 %1$s 撰写</string>
+    <string name="knowledge_evidence_writer_unknown">撰写者未知</string>
+    <string name="knowledge_evidence_based_on">依据：%1$s</string>
+    <string name="knowledge_evidence_sources">来源</string>
+    <string name="knowledge_evidence_source_status">来源状态：%1$s</string>
+    <string name="knowledge_evidence_open">未关闭</string>
+    <string name="knowledge_evidence_closed">已关闭</string>
+    <string name="knowledge_evidence_merged">已合并</string>
+    <string name="knowledge_evidence_reference_only">仅保留引用</string>
+    <string name="knowledge_evidence_managed">由 Persona 维护</string>
+    <string name="knowledge_evidence_reference_hint">保留原始来源链接和已有笔记。此后不再写入新的摘要或时间线条目。</string>
+    <string name="knowledge_evidence_managed_hint">Persona 可以更新本项目的简介、摘要和时间线。</string>
+    <string name="knowledge_evidence_edit">编辑存储方式</string>
+    <string name="knowledge_evidence_refs">来源引用</string>
+    <string name="knowledge_evidence_refs_hint">每行一个 HTTP 或 HTTPS 网址。</string>
+    <string name="knowledge_evidence_maintainer_user">由你复核</string>
+    <string name="knowledge_evidence_maintainer_persona">由 Persona 复核</string>
+    <string name="knowledge_evidence_maintainer_extension">由 %1$s 复核</string>
+    <string name="knowledge_evidence_maintainer_unknown">复核人未知</string>
+    <string name="knowledge_evidence_summary_unknown">摘要覆盖情况未知</string>
+    <string name="knowledge_evidence_overview_unknown">概览覆盖情况未知</string>
+    <string name="knowledge_evidence_verification">部署情况需要单独验证。</string>
+    <string name="knowledge_evidence_cancel">取消</string>
+    <string name="knowledge_evidence_write_forbidden">此设备没有修改此条目的权限。</string>
+    <string name="knowledge_evidence_invalid_refs">最多 30 个 HTTP 或 HTTPS 网址。网址不可包含凭据，每个最长 2,048 字节。</string>
+    <string name="knowledge_evidence_timeline">时间线共 %3$d 字节，已覆盖位置 %1$d 至 %2$d</string>
+    <string name="knowledge_evidence_truncated">更早的时间线字节未包含在这个范围内。</string>
+    <string name="knowledge_evidence_revisions">来源版本</string>
+    <string name="knowledge_evidence_current_sources">当前来源版本</string>
+    <string name="knowledge_evidence_summary_changed">生成概述后，摘要已被编辑。</string>
+    <string name="knowledge_evidence_changed">写入此字段后，相关证据已变更。</string>
+    <string name="knowledge_evidence_arrived">有新证据待核对。</string>
+    <string name="knowledge_evidence_provenance">记录来源：%1$s</string>
+    <string name="knowledge_evidence_environment_state">环境验证：%1$s</string>
+    <plurals name="knowledge_evidence_newer">
+        <item quantity="one">%1$s · 有 %2$d 条较新更新</item>
+        <item quantity="other">%1$s · 有 %2$d 条较新更新</item>
+    </plurals>
+    <plurals name="knowledge_evidence_uncovered">
+        <item quantity="one">%1$d 项更新未覆盖</item>
+        <item quantity="other">%1$d 项更新未覆盖</item>
+    </plurals>
+</resources>

@@ -246,9 +246,7 @@ func (e *Engine) projectFreshness(p *Project, summary string) (*kbwire.ProjectFr
 		result.Fields[field] = view
 		result.NeedsReview = result.NeedsReview || view.NeedsReview
 	}
-	if len(result.Fields) == 0 {
-		return nil, timeline.lines
-	}
+	// An empty field map lets an owner choose reference-only storage before the first write.
 	return result, timeline.lines
 }
 

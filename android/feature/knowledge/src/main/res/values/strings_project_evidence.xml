@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="knowledge_evidence_title">Sources and coverage</string>
+    <string name="knowledge_evidence_summary">Summary</string>
+    <string name="knowledge_evidence_overview">One-line overview</string>
+    <string name="knowledge_evidence_summary_review">Summary needs review</string>
+    <string name="knowledge_evidence_overview_review">Overview needs review</string>
+    <string name="knowledge_evidence_review">Needs review</string>
+    <string name="knowledge_evidence_cutoff_unknown">Coverage unknown</string>
+    <string name="knowledge_evidence_locked">Locked</string>
+    <string name="knowledge_evidence_writer_user">Written by you</string>
+    <string name="knowledge_evidence_writer_persona">Written by Persona</string>
+    <string name="knowledge_evidence_writer_extension">Written by %1$s</string>
+    <string name="knowledge_evidence_writer_unknown">Writer unknown</string>
+    <string name="knowledge_evidence_based_on">Based on %1$s</string>
+    <string name="knowledge_evidence_sources">Sources</string>
+    <string name="knowledge_evidence_source_status">Source status: %1$s</string>
+    <string name="knowledge_evidence_open">Open</string>
+    <string name="knowledge_evidence_closed">Closed</string>
+    <string name="knowledge_evidence_merged">Merged</string>
+    <string name="knowledge_evidence_reference_only">References only</string>
+    <string name="knowledge_evidence_managed">Managed by Persona</string>
+    <string name="knowledge_evidence_reference_hint">Keep links to the original sources. Existing notes stay here. New summaries and timeline entries are blocked.</string>
+    <string name="knowledge_evidence_managed_hint">Persona can update this project’s overview, summary and timeline.</string>
+    <string name="knowledge_evidence_edit">Edit storage</string>
+    <string name="knowledge_evidence_refs">Source references</string>
+    <string name="knowledge_evidence_refs_hint">One HTTP or HTTPS address per line.</string>
+    <string name="knowledge_evidence_maintainer_user">Review by you</string>
+    <string name="knowledge_evidence_maintainer_persona">Review by Persona</string>
+    <string name="knowledge_evidence_maintainer_extension">Review by %1$s</string>
+    <string name="knowledge_evidence_maintainer_unknown">Reviewer unknown</string>
+    <string name="knowledge_evidence_summary_unknown">Summary coverage unknown</string>
+    <string name="knowledge_evidence_overview_unknown">Overview coverage unknown</string>
+    <string name="knowledge_evidence_verification">Deployment requires separate verification.</string>
+    <string name="knowledge_evidence_cancel">Cancel</string>
+    <string name="knowledge_evidence_write_forbidden">This device does not have permission to change this entry.</string>
+    <string name="knowledge_evidence_invalid_refs">Use up to 30 HTTP or HTTPS addresses without credentials, up to 2,048 bytes each.</string>
+    <string name="knowledge_evidence_timeline">Timeline bytes %1$d–%2$d of %3$d</string>
+    <string name="knowledge_evidence_truncated">Earlier timeline bytes were outside this window.</string>
+    <string name="knowledge_evidence_revisions">Source revisions</string>
+    <string name="knowledge_evidence_current_sources">Current source revisions</string>
+    <string name="knowledge_evidence_summary_changed">The summary changed after this overview was written.</string>
+    <string name="knowledge_evidence_changed">Evidence has changed since this field was written.</string>
+    <string name="knowledge_evidence_arrived">New evidence is available.</string>
+    <string name="knowledge_evidence_provenance">Recorded by %1$s</string>
+    <string name="knowledge_evidence_environment_state">Environment verification: %1$s</string>
+    <plurals name="knowledge_evidence_newer">
+        <item quantity="one">%1$s · %2$d newer update</item>
+        <item quantity="other">%1$s · %2$d newer updates</item>
+    </plurals>
+    <plurals name="knowledge_evidence_uncovered">
+        <item quantity="one">%1$d uncovered update</item>
+        <item quantity="other">%1$d uncovered updates</item>
+    </plurals>
+</resources>

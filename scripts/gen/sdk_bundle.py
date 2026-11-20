@@ -35,6 +35,8 @@ def files():
     for name in sorted(os.listdir(examples)):
         if name == "Manifest.custom-contributions.json" or (name.startswith("UIStream") and name.endswith(".json")):
             yield "ts/fixtures/" + name, os.path.join(examples, name)
+    for name in ("KBGetResult.project-evidence.json", "KBListResult.project-evidence.json"):
+        yield "ts/fixtures/plugin/" + name, os.path.join(examples, "plugin", name)
 
 
 def tar_header(info):

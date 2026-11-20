@@ -30,7 +30,7 @@ import { BrandMark } from "../../ui/BrandMark";
 import { connectorBrand } from "../../lib/connectors";
 import { lists, listKey, remember, searches, searchKey } from "./cache";
 import { mergeMeetingLists } from "./meetings";
-import { Badges, Card, importedNotesLabel, KBIcon, KIND_ICON, Marked, onPlainClick, SectionTitle, Tile, TonePill } from "./KBParts";
+import { Badges, Card, importedNotesLabel, KBIcon, KIND_ICON, Marked, onPlainClick, ProjectReviewNote, SectionTitle, Tile, TonePill } from "./KBParts";
 import { t } from "../../i18n";
 
 /** Rows drawn at once in a section; more on "Show more" (people run to thousands). */
@@ -374,6 +374,7 @@ function EntryRow({ e, tag, selected, onOpen, onMenu }: { e: KBEntry; tag?: stri
           {when && <span className="shrink-0 whitespace-nowrap text-[11px] text-ink-3">{when}</span>}
         </span>
         {e.one_line && <span className="mt-0.5 line-clamp-2 text-[12.5px] leading-snug text-ink-2">{e.one_line}</span>}
+        {e.kind === "projects" && <ProjectReviewNote freshness={e.freshness} />}
         {badges && (
           // One line high: tags that would wrap fall below it and out of sight, so only whole ones show.
           <span className="mt-1.5 flex h-[18px] flex-wrap items-center gap-x-1.5 gap-y-4 overflow-hidden">
@@ -466,6 +467,7 @@ function ResultRow({ r, q, selected, onOpen }: { r: KBResult; q: string; selecte
             <Marked text={r.entry.one_line} query={q} />
           </span>
         )}
+        {r.entry.kind === "projects" && <ProjectReviewNote freshness={r.entry.freshness} />}
         {hits.map((h, i) => (
           <span key={i} className="mt-1 block">
             <span className="block truncate text-[11px] text-ink-3">{h.source}</span>

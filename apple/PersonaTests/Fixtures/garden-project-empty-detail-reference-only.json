@@ -1,0 +1,38 @@
+{
+  "detail": {
+    "freshness": {
+      "fields": {
+        "one_line": {
+          "needs_review": false,
+          "review_by": "persona",
+          "review_reason": "reference-only"
+        },
+        "summary": {
+          "needs_review": false,
+          "review_by": "persona",
+          "review_reason": "reference-only"
+        }
+      },
+      "needs_review": false,
+      "timeline_end": 0
+    },
+    "id": "empty-garden",
+    "kind": "projects",
+    "meta": {
+      "created": "2026-11-20T05:54:17.99107Z",
+      "kind": "short",
+      "locked_fields": [
+        "name"
+      ],
+      "name": "Empty garden",
+      "project_mode": "reference-only",
+      "relevance": 0,
+      "slug": "empty-garden",
+      "status": "active",
+      "tagged_at": "0001-01-01T00:00:00Z",
+      "updated": "2026-11-20T05:54:17.994293Z"
+    },
+    "path": "knowledge/projects/empty-garden",
+    "project_mode": "reference-only"
+  }
+}

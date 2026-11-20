@@ -35,6 +35,8 @@ if [ "$what" = all ] || [ "$what" = ts ]; then
   # Tests use package-local canonical fixtures; do not overwrite the destination repository's schema.
   mkdir -p "$dest/sdk/ts/fixtures"
   cp "$here"/schema/extension/examples/UIStream*.json "$here/schema/extension/examples/Manifest.custom-contributions.json" "$dest/sdk/ts/fixtures/"
+  mkdir -p "$dest/sdk/ts/fixtures/plugin"
+  cp "$here"/schema/extension/examples/plugin/KB*Result.project-evidence.json "$dest/sdk/ts/fixtures/plugin/"
 fi
 {
   echo "persona $commit${dirty:+ (with uncommitted changes)}"

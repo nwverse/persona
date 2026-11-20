@@ -1,0 +1,53 @@
+{
+  "items": [
+    {
+      "kind": "projects",
+      "id": "example",
+      "name": "Garden",
+      "relevance": 40,
+      "updated": "2026-01-02T12:00:00Z",
+      "freshness": {
+        "needs_review": true,
+        "timeline_end": 140,
+        "fields": {
+          "summary": {
+            "needs_review": true,
+            "review_by": "user",
+            "lock_reason": "field_locked",
+            "review_reason": "new_evidence",
+            "uncovered_evidence_count": 2,
+            "cutoff": {
+              "timeline_from": 0,
+              "timeline_through": 75
+            }
+          },
+          "one_line": {
+            "needs_review": false,
+            "writer": "persona",
+            "source": "kb.project",
+            "review_by": "persona",
+            "uncovered_evidence_count": 0,
+            "cutoff": {
+              "timeline_from": 0,
+              "timeline_through": 140
+            }
+          }
+        }
+      },
+      "sources": [
+        {
+          "id": "github:example/garden#4",
+          "url": "https://github.com/example/garden/pull/4",
+          "refs": [
+            "chats/garden-review"
+          ],
+          "delivery_state": "merged",
+          "delivery_at": "2026-01-02T12:00:00Z",
+          "environment_verification": "unverified"
+        }
+      ]
+    }
+  ],
+  "tags": [],
+  "total": 1
+}

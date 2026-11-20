@@ -15,3 +15,10 @@ dependencies {
     testImplementation(libs.sshd.core)
     testImplementation(libs.eddsa)
 }
+
+tasks.named<Copy>("processTestResources") {
+    from(rootProject.file("../schema/extension/examples/plugin")) {
+        include("KBListResult.project-evidence.json", "KBGetResult.project-evidence.json")
+        into("project-evidence")
+    }
+}

@@ -241,6 +241,10 @@ func (s *Service) recordWorkerOutcome(ctx context.Context, t Todo, machine, sess
 	id := workerMemoryItemID(t.ID, machine, session, turn, itemIndex, itemKey)
 	pending := make([]*kb.Project, 0, len(projects))
 	for _, p := range projects {
+		if p.Mode == "reference-only" {
+			s.logf("worker memory: skipped reference-only project %s", p.Slug)
+			continue
+		}
 		// An unambiguous record written before item keys were added still owns this outcome. A legacy prefix shared by
 		// parallel items is not enough evidence to suppress either one; newly written records carry their keyed ID.
 		if !e.ProjectMemoryHas(p.Slug, id) &&

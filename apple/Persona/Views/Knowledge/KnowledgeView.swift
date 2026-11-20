@@ -679,6 +679,7 @@ struct KBRow: View {
                 if let line = entry.oneLine, !line.isEmpty {
                     Text(line).font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(2)
                 }
+                if entry.kind == KBKind.projects.rawValue { KBProjectReviewNote(freshness: entry.freshness) }
                 // As many tags as fit whole (a cut "#Manage…" says nothing).
                 ViewThatFits(in: .horizontal) {
                     badges(tags: 2)
@@ -797,6 +798,7 @@ struct KBHitRow: View {
                 if hits.isEmpty, let line = result.entry.oneLine, !line.isEmpty {
                     Text(line).font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(2)
                 }
+                if result.entry.kind == KBKind.projects.rawValue { KBProjectReviewNote(freshness: result.entry.freshness) }
                 ForEach(hits, id: \.self) { h in
                     VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                         Text(h.source).font(Theme.Font.label).foregroundStyle(.tertiary).lineLimit(1)
@@ -828,6 +830,8 @@ struct KnowledgeDetailView: View {
     @Environment(\.knowledgeSettingsAPI) private var inheritedAPI
     @State private var capturedAPI: APIClient?
     @Environment(\.openURL) private var openURL
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.kbOpenEntry) private var opener
     var entry: KBEntry
     /// Opened from a search: the places it was found come first.
     var query: String? = nil
@@ -876,6 +880,10 @@ struct KnowledgeDetailView: View {
                     .listRowInsets(EdgeInsets(top: 4, leading: 4, bottom: 8, trailing: 4))
             }
             if let d = detail?.detail {
+                if d.hasProjectEvidence, let api = capturedAPI,
+                   api.sameSettingsScope(as: model.api) {
+                    KBProjectEvidenceSection(detail: d, api: api, saved: load)
+                }
                 if let query, let matches = detail?.matches { found(matches, query: query, chat: d.kind == KBKind.chats.rawValue ? d.id : nil) }
                 if let facts = ItemFacts(kind: d.kind, meta: d.meta), !facts.isEmpty { factsSection(facts) }
                 // A recording that stands for an imported meeting too (#8872): its notes in the app, opened in this one.
@@ -897,7 +905,7 @@ struct KnowledgeDetailView: View {
                     } header: { sectionHeader(String(localized: "Agents on This Project"), agents.count) }
                 }
                 if let log = d.log, !log.isEmpty { timeline(log) }
-                KBFactsSection(facts: KBFacts.text(d.meta), edit: { factsEditor = true }, delete: { Task { await deleteFacts() } })
+                KBFactsSection(facts: KBFacts.text(d.meta), readOnly: d.kind == KBKind.projects.rawValue && d.projectMode == KBProjectPolicy.referenceOnly.rawValue, edit: { factsEditor = true }, delete: { Task { await deleteFacts() } })
                 // Empty once the header's parts are taken out (a summary that is just the one line): no blank card.
                 // A topic's summary is written from its points (docs/assistant/knowledge.md "Topics"): the points instead.
                 if d.kind == KBKind.topics.rawValue {
@@ -989,6 +997,11 @@ struct KnowledgeDetailView: View {
             }
         }
         .task { await load() }
+        .onChange(of: capturedAPI?.sameSettingsScope(as: model.api)) { wasCurrent, isCurrent in
+            guard entry.kind == KBKind.projects.rawValue, wasCurrent == true, isCurrent == false else { return }
+            detail = nil
+            if let opener { opener.open = nil } else { dismiss() }
+        }
         .environment(\.knowledgeSettingsAPI, capturedAPI)
         .refreshable { await load() }
         #if os(macOS)
@@ -1000,12 +1013,16 @@ struct KnowledgeDetailView: View {
 
     private var header: some View {
         let e = shown
+        let hasEvidence = e.kind == KBKind.projects.rawValue && (e.freshness != nil || e.sources != nil || e.projectMode != nil)
+        let badges = hasEvidence ? AnyLayout(LarkFlowLayout(spacing: Theme.Space.sm, lineSpacing: Theme.Space.xs))
+                                 : AnyLayout(HStackLayout(spacing: Theme.Space.sm))
+        let actions = hasEvidence ? AnyLayout(StackingButtonRow()) : AnyLayout(HStackLayout(spacing: Theme.Space.m))
         return VStack(alignment: .leading, spacing: Theme.Space.m) {
             HStack(alignment: .center, spacing: Theme.Space.m) {
                 KBAvatar(entry: e, size: 48)
                 VStack(alignment: .leading, spacing: Theme.Space.xs) {
                     Text(e.name).font(Theme.Font.title).lineLimit(3)
-                    HStack(spacing: Theme.Space.sm) {
+                    badges {
                         ImportanceBadge(importance: e.importance)
                         if let k = e.projectKind { KBPill(text: String(localized: "\(k) project"), tint: (e.extra ?? "").hasPrefix("long") ? Theme.Hue.blue : nil) }
                         if let n = e.topicPoints { KBPill(text: String(localized: "\(n) knowledge points")) }
@@ -1017,27 +1034,44 @@ struct KnowledgeDetailView: View {
             if let line = e.oneLine, !line.isEmpty {
                 Text(line).font(Theme.Font.body).foregroundStyle(.primary.opacity(0.85)).fixedSize(horizontal: false, vertical: true)
             }
+            if e.kind == KBKind.projects.rawValue, let api = capturedAPI, api.sameSettingsScope(as: model.api) {
+                KBProjectReviewNote(freshness: e.freshness)
+            }
             if let tags = e.tags, !tags.isEmpty {
                 LarkFlowLayout(spacing: 6, lineSpacing: 6) {
                     ForEach(tags, id: \.self) { t in KBPill(text: "#" + t) }
                 }
             }
-            HStack(spacing: Theme.Space.m) {
-                Button { Task { await ask() } } label: {
-                    // White on the prominent fill: the symbol took the tint and vanished into the blue.
-                    Label("Ask Persona", systemImage: Theme.Icon.ai).lineLimit(1).frame(maxWidth: Self.buttonsFill)
-                        .foregroundStyle(.white)
-                }
-                .themedButton(prominent: true)
-                if entry.kind == KBKind.projects.rawValue {
-                    Button { newAgent = true } label: {
-                        Label("Start Agent", systemImage: Theme.Icon.newConversation).lineLimit(1).frame(maxWidth: Self.buttonsFill)
-                    }
-                    .themedButton()
-                }
-            }
+            actions { headerButtons(wholeNames: hasEvidence) }
             .controlSize(Self.buttonsSize)
             .padding(.top, Theme.Space.xxs)
+        }
+    }
+
+    @ViewBuilder private func headerButtons(wholeNames: Bool) -> some View {
+        Button { Task { await ask() } } label: {
+            headerButtonLabel("Ask Persona", icon: Theme.Icon.ai, wholeName: wholeNames)
+                .frame(maxWidth: Self.buttonsFill)
+                .foregroundStyle(.white)
+        }
+        .themedButton(prominent: true)
+        if entry.kind == KBKind.projects.rawValue {
+            Button { newAgent = true } label: {
+                headerButtonLabel("Start Agent", icon: Theme.Icon.newConversation, wholeName: wholeNames)
+                    .frame(maxWidth: Self.buttonsFill)
+            }
+            .themedButton()
+        }
+    }
+
+    @ViewBuilder private func headerButtonLabel(_ title: LocalizedStringKey, icon: String, wholeName: Bool) -> some View {
+        if wholeName {
+            HStack(spacing: Theme.Space.sm) {
+                ThemedIcon(icon).accessibilityHidden(true)
+                Text(title).buttonLabelLine(minimumScale: 1)
+            }
+        } else {
+            Label(title, systemImage: icon).lineLimit(1)
         }
     }
 
@@ -1343,8 +1377,12 @@ struct KnowledgeDetailView: View {
     private var shown: KBEntry { Self.shown(entry, detail: detail) }
 
     nonisolated static func shown(_ entry: KBEntry, detail: KBDetailResponse?) -> KBEntry {
-        guard let m = detail?.detail.meta else { return entry }
+        guard let detail else { return entry }
         var e = entry
+        e.projectMode = detail.detail.projectMode
+        e.freshness = detail.detail.freshness
+        e.sources = detail.detail.sources
+        guard let m = detail.detail.meta else { return e }
         if let n = m["name"]?.string ?? m["title"]?.string, !n.isEmpty { e.name = n }
         if let i = m["importance"]?.string { e.importance = i }
         if let r = m["relevance"]?.int { e.relevance = r }
@@ -1388,9 +1426,11 @@ struct KnowledgeDetailView: View {
 
     private func load() async {
         if capturedAPI == nil { capturedAPI = inheritedAPI ?? model.api?.currentAssistantSettings() }
-        guard let api = capturedAPI else { return }
+        guard let api = capturedAPI, api.sameSettingsScope(as: model.api) else { return }
         do {
-            detail = try await api.kbDetail(entry.kind, id: entry.id, query: query)
+            let response = try await api.kbDetail(entry.kind, id: entry.id, query: query)
+            guard !Task.isCancelled, api.sameSettingsScope(as: model.api) else { return }
+            detail = response
             error = nil
             #if DEBUG
             // `-showKnowledgeFacts YES` / `-showKnowledgeUnlink YES` with `-showKnowledgeEntry <kind>/<id>`: the confirmed
@@ -1408,8 +1448,7 @@ struct KnowledgeDetailView: View {
             }
             #endif
         } catch {
-            // Cancelled (the page went away mid-load) is not an error to show.
-            if let shown = error.shown { self.error = shown }
+            if !Task.isCancelled, api.sameSettingsScope(as: model.api), let shown = error.shown { self.error = shown }
         }
     }
 }

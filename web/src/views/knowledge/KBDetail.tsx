@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { api, ApiError, credentialOwner, enc, errorText, getToken, isAbort, subscribeCredentialOwner } from "../../lib/api";
 import { MANAGER_HEADER, shownManager, useChosenManager, useKnownDefault } from "../../lib/manager-choice";
 import { ConfirmedFacts } from "./ConfirmedFacts";
+import { ProjectEvidence } from "./ProjectEvidence";
 import { RecordingMinutes } from "./RecordingMinutes";
 import { RecordingDayRecap } from "./RecordingDayRecap";
 import { RecordingAsks } from "./RecordingAsks";
@@ -63,7 +64,7 @@ import { openNewAgent } from "../../lib/new-agent";
 import { DayDialog, MessageView, MomentDialog, TagEditor } from "./KBDialogs";
 import { ErrorBox } from "./KBList";
 import { Empty } from "../session/files/parts";
-import { Badges, Card, importedMeetingOf, importedNotesLabel, KBIcon, Marked, MoreRow, onPlainClick, SectionTitle, Tile, TonePill } from "./KBParts";
+import { Badges, Card, importedMeetingOf, importedNotesLabel, KBIcon, Marked, MoreRow, onPlainClick, ProjectReviewNote, SectionTitle, Tile, TonePill } from "./KBParts";
 import { t } from "../../i18n";
 
 /** Timeline lines shown before "Show all". */
@@ -278,6 +279,7 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
               </div>
             </div>
             {e.one_line && <p className="mt-3.5 text-[14px] leading-relaxed text-ink">{e.one_line}</p>}
+            {kind === "projects" && <ProjectReviewNote freshness={d ? d.freshness : e.freshness} />}
             {e.tags && e.tags.length > 0 && (
               <div className="mt-3 flex flex-wrap gap-1.5">
                 {e.tags.map((t) => (
@@ -328,6 +330,9 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
 
           {d && (
             <div className="mt-7 flex flex-col gap-6" style={{ animation: "fade-in 200ms ease-out both" }}>
+              {d.kind === "projects" && (d.freshness || d.project_mode || d.sources?.length) ? (
+                <ProjectEvidence detail={d} auth={auth} current={current} onOpen={onOpen} onMoment={setMoment} onSaved={onSaved} />
+              ) : null}
               {rec && handoff.latest && (
                 <RecordingHandoffRow
                   handoff={handoff.latest}
@@ -447,6 +452,7 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
                 kind={kind}
                 id={id}
                 value={typeof d.meta?.pinned === "string" ? d.meta.pinned : ""}
+                readOnly={d.project_mode === "reference-only"}
                 auth={auth}
                 current={current}
                 refresh={load}

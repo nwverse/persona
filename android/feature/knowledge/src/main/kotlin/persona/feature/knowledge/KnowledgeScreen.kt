@@ -251,6 +251,7 @@ private fun ColumnScope.KnowledgeRowContent(
     entry.oneLine?.takeIf { it.isNotBlank() && metadata }?.let {
         Text(it, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink2, maxLines = 3, overflow = TextOverflow.Ellipsis)
     }
+    if (metadata) ProjectCoverageNotice(entry)
     extra()
 }
 
@@ -341,6 +342,8 @@ internal fun KnowledgeDetailScreen(
     var recent by rememberSaveable(page.scope?.path) { mutableStateOf(false) }
     var openLinks by rememberSaveable(page.scope?.path) { mutableStateOf(listOf<String>()) }
     var editing by rememberSaveable(page.scope?.path) { mutableStateOf(false) }
+    var evidenceOpen by rememberSaveable(page.scope?.path) { mutableStateOf(false) }
+    var storageEditing by rememberSaveable(page.scope?.path) { mutableStateOf(false) }
     var openPoint by remember(page.scope) { mutableStateOf<Pair<TopicPoint, List<String>>?>(null) }
     val defaultQuestion = stringResource(R.string.knowledge_question_default)
     var question by rememberSaveable(page.scope?.path) { mutableStateOf(defaultQuestion) }
@@ -369,7 +372,9 @@ internal fun KnowledgeDetailScreen(
             }
         }
     }
-    LaunchedEffect(tagging.saved) { if (tagging.saved > 0) editing = false }
+    LaunchedEffect(tagging.saved) {
+        if (tagging.saved > 0) { editing = false; storageEditing = false }
+    }
     // While the hub writes a recording's minutes, the page reads it again every few seconds (as the web's, every 5 s).
     val minutesPending = page.detail?.meta.string("minutes_state") == "pending"
     LaunchedEffect(minutesPending, lifecycle) {
@@ -417,6 +422,7 @@ internal fun KnowledgeDetailScreen(
                         Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
                             EntryMetadata(entry, allTags = true)
                             entry.oneLine?.takeIf { it.isNotBlank() }?.let { Text(it, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink) }
+                            ProjectCoverageNotice(entry)
                             // A field of the page: the chat's composer frame brings its own inset (and the board's rule
                             // across the page), so it stood out of line with the tags and the buttons.
                             JTextField(question, { question = it }, placeholder = stringResource(R.string.knowledge_ask_placeholder), enabled = !sending.busy)
@@ -437,6 +443,9 @@ internal fun KnowledgeDetailScreen(
                                 onRetry = if (canHand) { { showHandoff(handoff) } } else null)
                         }
                     }
+                    projectEvidence(detail, evidenceOpen, onToggle = { evidenceOpen = !evidenceOpen },
+                        onEdit = { model.dismissTagError(); storageEditing = true },
+                        onEntry = { navigator.open(it, model.owner) }, onWeb = { uriHandler.openUri(it) })
                     agents(page.agents, navigator)
                     if (detail.kind == KnowledgeKind.Topics.wire) topicPoints(detail, entry.name) { point, crumbs -> openPoint = point to crumbs }
                     val recording = entry.isRecording
@@ -515,6 +524,10 @@ internal fun KnowledgeDetailScreen(
     }
     openPoint?.let { (point, crumbs) ->
         PointSheet(point, crumbs, detail?.links.orEmpty(), { source -> openPoint = null; navigator.open(source, model.owner) }, { openPoint = null })
+    }
+    if (storageEditing && detail?.editableProjectMode != null && entry?.isProject == true) {
+        val scope = page.scope
+        ProjectStorageEditor(detail, tagging, { model.saveProjectStorage(scope, it) }, { storageEditing = false })
     }
     if (editing && entry != null) KnowledgeTagEditor(entry, tagging, onSave = model::saveTags, onDismiss = { editing = false })
     if (handoffOpen && detail != null && meetingTargets.isNotEmpty()) {

@@ -288,7 +288,8 @@ internal fun KnowledgeDetail.entry(): KnowledgeEntry {
         else meta.string("updated").ifBlank { meta.string("last_at").ifBlank { meta.string("last_seen") } }
     return KnowledgeEntry(kind, id, name,
         meta.string("one_line").ifBlank { meta.string("note") }, meta.string("importance"),
-        (meta?.get("relevance") as? JsonPrimitive)?.intOrNull ?: 0, meta.strings("tags"), updated, extra)
+        (meta?.get("relevance") as? JsonPrimitive)?.intOrNull ?: 0, meta.strings("tags"), updated, extra,
+        projectMode = projectMode, freshness = freshness, sources = sources)
 }
 
 internal val KnowledgeEntry.isRecording: Boolean get() = kind == KnowledgeKind.Recordings.wire

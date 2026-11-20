@@ -1,0 +1,54 @@
+{
+  "detail": {
+    "freshness": {
+      "fields": {
+        "one_line": {
+          "needs_review": true,
+          "review_by": "persona",
+          "review_reason": "coverage_unknown",
+          "uncovered_evidence_count": 1
+        },
+        "summary": {
+          "needs_review": true,
+          "review_by": "persona",
+          "review_reason": "coverage_unknown",
+          "uncovered_evidence_count": 1
+        }
+      },
+      "needs_review": true,
+      "timeline_end": 87
+    },
+    "id": "garden-verification",
+    "kind": "projects",
+    "log": [
+      "- 2026-11-20 13:42 · Persona · A separate environment check is pending."
+    ],
+    "meta": {
+      "created": "2026-11-20T05:42:12.713245Z",
+      "dirty": true,
+      "kind": "short",
+      "locked_fields": [
+        "name"
+      ],
+      "name": "Garden verification",
+      "relevance": 0,
+      "slug": "garden-verification",
+      "source_urls": [
+        "https://github.com/example/garden/issues/4#issuecomment-1"
+      ],
+      "status": "active",
+      "tagged_at": "0001-01-01T00:00:00Z",
+      "updated": "2026-11-20T05:42:12.713245Z"
+    },
+    "path": "knowledge/projects/garden-verification",
+    "sources": [
+      {
+        "delivery_at": "2026-11-18T11:00:00Z",
+        "delivery_state": "merged",
+        "environment_verification": "unverified",
+        "id": "github:example/garden#4",
+        "url": "https://github.com/example/garden/pull/4"
+      }
+    ]
+  }
+}

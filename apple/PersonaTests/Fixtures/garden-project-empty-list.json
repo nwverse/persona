@@ -1,0 +1,18 @@
+{
+  "items": [
+    {
+      "extra": "short · active",
+      "freshness": {
+        "fields": {},
+        "needs_review": false,
+        "timeline_end": 0
+      },
+      "id": "empty-garden",
+      "kind": "projects",
+      "name": "Empty garden",
+      "relevance": 0,
+      "updated": "2026-11-20T05:54:17.99107Z"
+    }
+  ],
+  "tags": []
+}

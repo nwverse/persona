@@ -1,0 +1,128 @@
+{
+  "items": [
+    {
+      "extra": "short · active",
+      "freshness": {
+        "fields": {
+          "one_line": {
+            "needs_review": true,
+            "review_by": "persona",
+            "review_reason": "coverage_unknown",
+            "uncovered_evidence_count": 1
+          },
+          "summary": {
+            "needs_review": true,
+            "review_by": "persona",
+            "review_reason": "coverage_unknown",
+            "uncovered_evidence_count": 1
+          }
+        },
+        "needs_review": true,
+        "timeline_end": 87
+      },
+      "id": "garden-verification",
+      "kind": "projects",
+      "name": "Garden verification",
+      "relevance": 0,
+      "sources": [
+        {
+          "delivery_at": "2026-11-18T11:00:00Z",
+          "delivery_state": "merged",
+          "environment_verification": "unverified",
+          "id": "github:example/garden#4",
+          "url": "https://github.com/example/garden/pull/4"
+        }
+      ],
+      "updated": "2026-11-20T05:42:12.713245Z"
+    },
+    {
+      "extra": "short · active",
+      "freshness": {
+        "evidence": [
+          {
+            "position": "577ffb3f2fd8c4b7edd410346b2c7310ef37f8602fab0c4f588425cd0a2547f4",
+            "ref": "projects/community-garden/meta.json#pinned"
+          },
+          {
+            "position": "b02031584f2b5a61989a024994de658d725f13868a59b998f214fcf3bb7ea29b",
+            "ref": "chats/garden-review",
+            "source_id": "github:example/garden#4"
+          }
+        ],
+        "fields": {
+          "one_line": {
+            "cutoff": {
+              "sources": [
+                {
+                  "position": "577ffb3f2fd8c4b7edd410346b2c7310ef37f8602fab0c4f588425cd0a2547f4",
+                  "ref": "projects/community-garden/meta.json#pinned"
+                },
+                {
+                  "position": "b02031584f2b5a61989a024994de658d725f13868a59b998f214fcf3bb7ea29b",
+                  "ref": "chats/garden-review",
+                  "source_id": "github:example/garden#4"
+                }
+              ],
+              "timeline_from": 13,
+              "timeline_through": 208
+            },
+            "needs_review": false,
+            "review_by": "persona",
+            "source": "kb.project",
+            "uncovered_evidence_count": 0,
+            "writer": "persona"
+          },
+          "summary": {
+            "cutoff": {
+              "sources": [
+                {
+                  "position": "577ffb3f2fd8c4b7edd410346b2c7310ef37f8602fab0c4f588425cd0a2547f4",
+                  "ref": "projects/community-garden/meta.json#pinned"
+                },
+                {
+                  "position": "4abfd27792672ae17e3b15eb0f8002983c286afd0727ba3e49dc6cd0650e8e66",
+                  "ref": "chats/garden-review",
+                  "source_id": "github:example/garden#4"
+                }
+              ],
+              "timeline_from": 13,
+              "timeline_through": 87
+            },
+            "lock_reason": "field_locked",
+            "needs_review": true,
+            "review_by": "user",
+            "review_reason": "new_evidence",
+            "source": "kb.project",
+            "uncovered_evidence_count": 3,
+            "writer": "persona"
+          }
+        },
+        "needs_review": true,
+        "timeline_end": 208
+      },
+      "id": "community-garden",
+      "kind": "projects",
+      "name": "Community garden",
+      "one_line": "The garden plan has been reviewed.",
+      "relevance": 0,
+      "sources": [
+        {
+          "id": "https://example.org/garden/planting-plan",
+          "url": "https://example.org/garden/planting-plan"
+        },
+        {
+          "delivery_at": "2026-11-18T11:00:00Z",
+          "delivery_state": "merged",
+          "environment_verification": "unverified",
+          "id": "github:example/garden#4",
+          "refs": [
+            "chats/garden-review"
+          ],
+          "url": "https://github.com/example/garden/pull/4"
+        }
+      ],
+      "updated": "2026-11-20T05:42:12.71278Z"
+    }
+  ],
+  "tags": []
+}

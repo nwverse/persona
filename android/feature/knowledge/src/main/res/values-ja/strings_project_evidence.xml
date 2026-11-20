@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="knowledge_evidence_title">情報源と対象範囲</string>
+    <string name="knowledge_evidence_summary">要約</string>
+    <string name="knowledge_evidence_overview">一行の概要</string>
+    <string name="knowledge_evidence_summary_review">要約に確認が必要</string>
+    <string name="knowledge_evidence_overview_review">概要に確認が必要</string>
+    <string name="knowledge_evidence_review">確認が必要</string>
+    <string name="knowledge_evidence_cutoff_unknown">対象範囲は不明</string>
+    <string name="knowledge_evidence_locked">ロック中</string>
+    <string name="knowledge_evidence_writer_user">あなたが作成</string>
+    <string name="knowledge_evidence_writer_persona">Persona が作成</string>
+    <string name="knowledge_evidence_writer_extension">%1$s が作成</string>
+    <string name="knowledge_evidence_writer_unknown">作成者は不明</string>
+    <string name="knowledge_evidence_based_on">参照元：%1$s</string>
+    <string name="knowledge_evidence_sources">情報源</string>
+    <string name="knowledge_evidence_source_status">情報源の状態：%1$s</string>
+    <string name="knowledge_evidence_open">オープン</string>
+    <string name="knowledge_evidence_closed">クローズ</string>
+    <string name="knowledge_evidence_merged">マージ済み</string>
+    <string name="knowledge_evidence_reference_only">参照のみ</string>
+    <string name="knowledge_evidence_managed">Persona が管理</string>
+    <string name="knowledge_evidence_reference_hint">元の情報源へのリンクと既存のメモを保持します。新しい要約やタイムラインの項目は追加されません。</string>
+    <string name="knowledge_evidence_managed_hint">Persona がこのプロジェクトの概要、要約、タイムラインを更新できます。</string>
+    <string name="knowledge_evidence_edit">保存方法を編集</string>
+    <string name="knowledge_evidence_refs">参照先</string>
+    <string name="knowledge_evidence_refs_hint">HTTP または HTTPS の URL を 1 行に 1 件入力してください。</string>
+    <string name="knowledge_evidence_maintainer_user">確認担当: あなた</string>
+    <string name="knowledge_evidence_maintainer_persona">確認担当: Persona</string>
+    <string name="knowledge_evidence_maintainer_extension">確認担当: %1$s</string>
+    <string name="knowledge_evidence_maintainer_unknown">確認担当は不明</string>
+    <string name="knowledge_evidence_summary_unknown">要約の対象範囲は不明</string>
+    <string name="knowledge_evidence_overview_unknown">概要の対象範囲は不明</string>
+    <string name="knowledge_evidence_verification">デプロイ状況は別途確認が必要です。</string>
+    <string name="knowledge_evidence_cancel">キャンセル</string>
+    <string name="knowledge_evidence_write_forbidden">この端末にはこの項目を変更する権限がありません。</string>
+    <string name="knowledge_evidence_invalid_refs">認証情報を含まない HTTP または HTTPS の URL を 30 件まで入力してください（各 2,048 バイト以下）。</string>
+    <string name="knowledge_evidence_timeline">タイムライン %3$d バイトのうち %1$d〜%2$d バイト</string>
+    <string name="knowledge_evidence_truncated">先頭の一部はこの範囲に含まれません。</string>
+    <string name="knowledge_evidence_revisions">情報源の版</string>
+    <string name="knowledge_evidence_current_sources">現在の情報源の版</string>
+    <string name="knowledge_evidence_summary_changed">概要を書いた後、要約が編集されました。</string>
+    <string name="knowledge_evidence_changed">この項目を書いた後、根拠が変わりました。</string>
+    <string name="knowledge_evidence_arrived">新しい根拠があります。</string>
+    <string name="knowledge_evidence_provenance">記録元: %1$s</string>
+    <string name="knowledge_evidence_environment_state">環境での検証: %1$s</string>
+    <plurals name="knowledge_evidence_newer">
+        <item quantity="one">%1$s · 新しい更新 %2$d 件</item>
+        <item quantity="other">%1$s · 新しい更新 %2$d 件</item>
+    </plurals>
+    <plurals name="knowledge_evidence_uncovered">
+        <item quantity="one">未反映の更新 %1$d 件</item>
+        <item quantity="other">未反映の更新 %1$d 件</item>
+    </plurals>
+</resources>

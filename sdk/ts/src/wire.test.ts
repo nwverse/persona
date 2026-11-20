@@ -1,8 +1,29 @@
 import { expect, test } from "bun:test";
-import { connect, type Contributes, type Manifest } from "./index.ts";
+import { connect, Hub, type KBGetResult, type KBListResult, type Contributes, type Manifest } from "./index.ts";
 import { testFixtures } from "./test-fixtures.ts";
 
 const fixture = new URL("Manifest.custom-contributions.json", testFixtures);
+
+test("kb.read keeps project field coverage and canonical delivery separate", async () => {
+  const read = (name: string) => Bun.file(new URL("plugin/" + name, testFixtures)).json();
+  let result: unknown = await read("KBListResult.project-evidence.json");
+  const hub = new Hub(line => hub.answer({ id: JSON.parse(line).id, result }));
+  const list = await hub.call<KBListResult>("kb.list", { kind: "projects" });
+  const field = list.items[0].freshness?.fields.summary;
+  expect(field?.cutoff?.timeline_through).toBe(75);
+  expect(field?.uncovered_evidence_count).toBe(2);
+  expect(field?.writer).toBeUndefined();
+
+  result = await read("KBGetResult.project-evidence.json");
+  const get = () => hub.call<KBGetResult>("kb.get", { kind: "projects", id: "example" });
+  const detail = (await get()).detail;
+  expect(detail.sources).toEqual(list.items[0].sources);
+  expect(detail.sources?.[0]?.delivery_state).toBe("merged");
+  expect(detail.sources?.[0]?.environment_verification).toBe("unverified");
+
+  result = { detail: { kind: "projects", id: "example", path: "projects/example", meta: {} } };
+  expect((await get()).detail.freshness).toBeUndefined();
+});
 
 test("generated contributions keep typed UI and arbitrary JSON keys", async () => {
   const raw = await Bun.file(fixture).json();

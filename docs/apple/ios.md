@@ -1409,6 +1409,12 @@ Changes save immediately; failure restores the old value and explains why at the
 
 **Ask for a Closeout** (#3612, the `closeout` switch) is one more row after Wake on Time, with a sample closeout card under it, off by default and disabled while the master switch is off like the other actions. `TriageSwitches.closeout` is optional: a hub that does not name the switch gets no row, and a save leaves the key out, so that hub keeps its value. **Ask for the Status Afterwards** (#3616, `closeout_ask`) follows it with a three-step stopped → question → report example; it also requires only the master switch, not Ask for a Closeout, asks once for one Agent-model turn, and stays hidden and unencoded when the hub omits the field. The frozen Mac app shows neither row; its saves still send back the values the hub gave.
 
+## Project sources and coverage (Assistant › Knowledge, #9465)
+
+Project rows and search results identify which conclusion needs review and how many changes it misses. The project page keeps that indication beside the overview. **Sources and coverage** opens the separate receipts for the summary and one-line overview, their locks, writers, maintainers and source references. An absent historical cutoff is unknown. A linked source can report a merge while deployment and acceptance still need separate evidence.
+
+**Edit project storage** lets the owner choose full or reference-only storage using `project_mode`. The editor reads the owner’s explicit pointers from `detail.meta.source_urls`. Clearing them preserves discovered references in `sources` and linked history. A save uses the assistant and Hub that supplied the project. Existing confirmed facts remain readable in either mode. A Hub that supplies `freshness` for an empty project supports the editor before the first entry is written. Older Hubs that omit the projection keep the original project screen. The Hub's write rules are described in `docs/assistant/knowledge.md`.
+
 ## Knowledge selection (Settings › Knowledge Selection, #2217)
 
 Below Connectors, iPhone and iPad only: the same document the web edits in Settings → Knowledge selection (`GET / PUT /api/v1/kb/selection`, stored on the

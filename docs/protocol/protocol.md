@@ -5098,6 +5098,11 @@ The knowledge base belongs to a manager (the assistant). The hub forwards these 
 | PUT | `/api/v1/kb/selection` | The whole document, validated: `400` says what is wrong (unknown rule names, an `order` without every rule exactly once, days outside 1–36500, `context` outside 0–200, items without a source, kind or id), `403` from a read-only device; returns the stored document and sends a `kb_selection` event |
 | GET | `/api/v1/kb/selection/candidates?source=` | A connector's chats for the per-item picker: `{source, cached?, listed_at, chats:[{id, name, kind, source, bot?, muted?, collapsed?, done?, estimate?, item, read, days?}]}`; `read` is `whole`, `personal` or `none`; `cached` when the history import runs or is stopped and the list comes from its plan; `404` when the connector offers no history |
 
+Project list and detail share the optional `freshness`, `sources` and `project_mode` projection.
+The default full mode can be omitted. An empty project can expose `freshness.fields: {}` before it has any field coverage.
+The owner edits `project_mode` and `source_urls` through the project PUT. Only `detail.meta.source_urls` supplies the editable URL list.
+See [Project freshness and reference-only sources](../assistant/knowledge.md#project-freshness-and-reference-only-sources).
+
 ### Recording sync (#3235)
 
 After transcription, recordings from the phone (including ones the watch sends back to the phone) are synced into the knowledge base's `recordings` through these endpoints ([recording.md](../apple/recording.md), [knowledge.md](../assistant/knowledge.md) ("Recordings")). Only the transcript text is sent, never audio.

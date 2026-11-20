@@ -914,7 +914,7 @@ Now every locked field has a holder, and writes follow **the user > an extension
 A project's `updated` time records its latest project change. Its `freshness` records what the saved `summary` and
 `one_line` cover. HTTP project list and detail and RPC `kb.list` and `kb.get` use the same projection. The
 `personad mcp` tools `kb_list` and `kb_get` show **Needs review** and the field's review reason, responsible party,
-timeline positions and uncovered count. Detail includes the source revisions behind those positions.
+timeline positions and uncovered count. In the Web, iOS, and Android clients, open the project's sources and coverage to inspect each field and edit its storage settings. An empty project has a measured timeline end of zero and an empty `freshness.fields` map. Its owner can choose reference-only storage before adding content. Older Hubs can omit the whole projection.
 
 - `freshness.fields.summary` and `freshness.fields.one_line` describe the value actually saved. `writer` and `source`
   identify a recorded write. `review_by` names the current maintainer, either `persona`, `user` or `ext:<id>`. A
@@ -951,7 +951,7 @@ URLs of at most 2048 bytes each, without embedded credentials. This example is a
 
 - Reference-only projects remain available for routing by name, alias, source and linked entities. The pipeline
   skips project rewrites and records skipped derived timeline writes in its logs without the payload. The policy
-  also blocks project worker-memory writes. Independently configured source archives keep their own data and
+  also skips project worker-memory extraction and blocks late worker-memory writes. Independently configured source archives keep their own data and
   retention settings.
 - Writes carrying `summary`, `log`, `goal`, `my_role`, `note` or `pinned` are refused as a whole, naming the
   fields, on the user and extension paths. A request that enables reference-only cannot carry those fields either.

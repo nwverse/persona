@@ -1,0 +1,25 @@
+{
+  "detail": {
+    "freshness": {
+      "fields": {},
+      "needs_review": false,
+      "timeline_end": 0
+    },
+    "id": "empty-garden",
+    "kind": "projects",
+    "meta": {
+      "created": "2026-11-20T05:54:17.99107Z",
+      "kind": "short",
+      "locked_fields": [
+        "name"
+      ],
+      "name": "Empty garden",
+      "relevance": 0,
+      "slug": "empty-garden",
+      "status": "active",
+      "tagged_at": "0001-01-01T00:00:00Z",
+      "updated": "2026-11-20T05:54:17.99107Z"
+    },
+    "path": "knowledge/projects/empty-garden"
+  }
+}

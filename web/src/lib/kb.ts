@@ -2,6 +2,8 @@
 // list grouping and ranking, search results merged by entry with the words marked, which tags a row has room for,
 // the timeline, the profile without what the header shows, and the message "Ask Persona" sends. The iOS app is the
 // reference (apple/Persona/Views/Knowledge/KnowledgeView.swift, apple/Shared/Knowledge.swift).
+import type { KBEntry as WireKBEntry } from "../../../sdk/ts/src/wire";
+export type { KBProjectEvidenceRef, KBProjectFieldFreshness, KBProjectFreshness } from "../../../sdk/ts/src/wire";
 import type { TopicPoint } from "./kb-points";
 import { formatDate, t } from "../i18n";
 import { contextBody } from "./context-body";
@@ -33,7 +35,10 @@ export function kindTitle(k: string): string {
 
 // ── wire types ──────────────────────────────────────────
 
-export interface KBEntry {
+type ProjectProjection = Pick<WireKBEntry, "project_mode" | "sources" | "freshness">;
+export type KBProjectMode = "full" | "reference-only";
+
+export interface KBEntry extends ProjectProjection {
   kind: string;
   id: string;
   name: string;
@@ -84,7 +89,7 @@ export function momentFeed(m: Pick<KBMomentRef, "feed">): string {
   return m.feed?.trim() || t("lib-kb.moments");
 }
 
-export interface KBDetail {
+export interface KBDetail extends ProjectProjection {
   kind: string;
   id: string;
   path: string;
@@ -428,6 +433,8 @@ export interface KBDay {
 
 /** `PUT /kb/{kind}/{id}` (the hub's kb.Update); tagging set here is locked against the automatic one. */
 export interface KBUpdate {
+  project_mode?: KBProjectMode;
+  source_urls?: string[];
   remove_people?: string[];
   remove_chats?: string[];
   remove_projects?: string[];

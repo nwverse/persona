@@ -45,6 +45,9 @@ data class KnowledgeEntry(
     @SerialName("meeting_id") val meetingId: String? = null,
     /** Client-only: the imported meeting this recording stands for in the merged Meetings list. */
     @Transient val imported: KnowledgeEntry? = null,
+    @SerialName("project_mode") val projectMode: String? = null,
+    val freshness: ProjectFreshness? = null,
+    val sources: List<ProjectSource> = emptyList(),
 ) {
     val key: String get() = "$kind/$id"
 }
@@ -68,6 +71,52 @@ data class KnowledgeDetail(
     val minutes: RecordingMinutes? = null,
     /** A topic's knowledge points (topics only, docs/assistant/knowledge.md "Topics"). */
     val points: List<TopicPoint>? = null,
+    @SerialName("project_mode") val projectMode: String? = null,
+    val freshness: ProjectFreshness? = null,
+    val sources: List<ProjectSource> = emptyList(),
+)
+
+/** Project list and detail reads share the same field-specific evidence projection. */
+@Serializable
+data class ProjectFreshness(
+    @SerialName("needs_review") val needsReview: Boolean = false,
+    @SerialName("timeline_end") val timelineEnd: Long = 0,
+    val evidence: List<ProjectEvidenceRef> = emptyList(),
+    val fields: Map<String, ProjectFieldFreshness> = emptyMap(),
+)
+
+@Serializable
+data class ProjectFieldFreshness(
+    val writer: String? = null,
+    val source: String? = null,
+    val cutoff: ProjectCutoff? = null,
+    @SerialName("lock_reason") val lockReason: String? = null,
+    @SerialName("review_by") val reviewBy: String? = null,
+    @SerialName("needs_review") val needsReview: Boolean = false,
+    @SerialName("review_reason") val reviewReason: String? = null,
+    @SerialName("uncovered_evidence_count") val uncoveredEvidenceCount: Int? = null,
+)
+
+/** Timeline positions are byte offsets; source positions are opaque evidence revisions. */
+@Serializable
+data class ProjectCutoff(
+    @SerialName("timeline_from") val timelineFrom: Long,
+    @SerialName("timeline_through") val timelineThrough: Long,
+    @SerialName("timeline_truncated") val timelineTruncated: Boolean = false,
+    val sources: List<ProjectEvidenceRef> = emptyList(),
+)
+
+@Serializable
+data class ProjectEvidenceRef(val ref: String, val position: String, @SerialName("source_id") val sourceId: String? = null)
+
+@Serializable
+data class ProjectSource(
+    val id: String,
+    val url: String? = null,
+    val refs: List<String> = emptyList(),
+    @SerialName("delivery_state") val deliveryState: String? = null,
+    @SerialName("delivery_at") val deliveryAt: String? = null,
+    @SerialName("environment_verification") val environmentVerification: String? = null,
 )
 
 /** A source a knowledge point was said in; [day] is YYYY-MM-DD. */
@@ -161,6 +210,9 @@ data class KnowledgeUpdate(
     val tags: List<String>? = null,
     val status: String? = null,
     @SerialName("project_kind") val projectKind: String? = null,
+    @SerialName("project_mode") val projectMode: String? = null,
+    /** Replaces explicit pointers only. An empty list clears them, and null preserves them. */
+    @SerialName("source_urls") val sourceUrls: List<String>? = null,
 )
 
 @Serializable

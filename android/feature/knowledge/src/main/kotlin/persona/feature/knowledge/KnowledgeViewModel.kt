@@ -254,8 +254,22 @@ internal class KnowledgeDetailViewModel(
 
     /** Saves hand-made tagging, then reads the entry again and has the list reload. */
     fun saveTags(update: KnowledgeUpdate) {
-        if (_tagging.value.busy) return
         val repository = connection.current.value ?: return
+        saveUpdate(repository, update)
+    }
+
+    /** Policy and explicit pointers belong to the project and pairing displayed when this editor was opened. */
+    fun saveProjectStorage(scope: HubScope?, update: KnowledgeUpdate) {
+        val repository = connection.current.value ?: return
+        val shown = page.value
+        if (kind != KnowledgeKind.Projects || scope != repository.scope || scope != shown.scope ||
+            shown.detail?.editableProjectMode == null) return
+        if (update.projectMode == null && update.sourceUrls == null) return
+        saveUpdate(repository, update)
+    }
+
+    private fun saveUpdate(repository: KnowledgeRepository, update: KnowledgeUpdate) {
+        if (_tagging.value.busy) return
         val saved = _tagging.value.saved
         _tagging.value = KnowledgeTagging(busy = true, saved = saved)
         viewModelScope.launch {
@@ -267,10 +281,18 @@ internal class KnowledgeDetailViewModel(
                 refresh()
                 KnowledgeEdits.changed()
             } catch (cancelled: CancellationException) {
-                _tagging.value = KnowledgeTagging(saved = saved)
+                if (connection.current.value === repository) _tagging.value = KnowledgeTagging(saved = saved)
                 throw cancelled
             } catch (error: Exception) {
-                _tagging.value = KnowledgeTagging(error = operationFeedback(error).text, saved = saved)
+                if (connection.current.value === repository) {
+                    val failure = hubCodedFailure(error)
+                    val message = when {
+                        failure?.code == "kb_read_only" -> UiText.Res(persona.core.designsystem.R.string.designsystem_knowledge_read_only)
+                        failure?.status == 403 && failure.code != null -> UiText.Res(R.string.knowledge_evidence_write_forbidden)
+                        else -> operationFeedback(error).text
+                    }
+                    _tagging.value = KnowledgeTagging(error = message, saved = saved)
+                }
             }
         }
     }

@@ -10,6 +10,7 @@ type Props = {
   kind: string;
   id: string;
   value: string;
+  readOnly?: boolean;
   auth: { token: string; tokenOwner: string; headers: Record<string, string> };
   current: () => boolean;
   refresh: () => Promise<boolean>;
@@ -19,19 +20,20 @@ type Props = {
 /** Explicit corrections stay separate from the inferred profile. Each opening starts from authoritative detail. */
 export function ConfirmedFacts(props: Props) {
   const [editing, setEditing] = useState(false);
+  if (props.readOnly && !props.value) return null;
   return (
     <section>
-      <SectionTitle title={t("knowledge-confirmedfacts.title")} right={!editing && (
+      <SectionTitle title={t("knowledge-confirmedfacts.title")} right={!editing && !props.readOnly && (
         <Button tone="quiet" onClick={() => props.current() && setEditing(true)}>
           {t(props.value ? "knowledge-confirmedfacts.edit" : "knowledge-confirmedfacts.add")}
         </Button>
       )} />
       <Card>
         <div className="p-4">
-          {editing ? <FactsEditor {...props} onClose={() => setEditing(false)} /> : (
+          {editing && !props.readOnly ? <FactsEditor {...props} onClose={() => setEditing(false)} /> : (
             <>
               <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-ink select-text">{props.value || t("knowledge-confirmedfacts.empty")}</p>
-              <p className="mt-2 text-xs leading-relaxed text-ink-3">{t("knowledge-confirmedfacts.hint")}</p>
+              {!props.readOnly && <p className="mt-2 text-xs leading-relaxed text-ink-3">{t("knowledge-confirmedfacts.hint")}</p>}
             </>
           )}
         </div>

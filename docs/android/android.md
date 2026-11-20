@@ -1578,6 +1578,10 @@ Managers are **assistants** to the user (助手, アシスタント; the code an
 
 ## Inbox AI drafting and handoff; knowledge base categories, entries and tagging
 
+Project rows and details use `freshness` to show which summary or one-line overview needs review. **Sources and coverage** shows each field’s recorded cutoff, uncovered evidence, lock and maintainer. A missing historical cutoff is shown as unknown. The `sources` list links to the underlying evidence and gives the connector’s last observed delivery state. Deployment and acceptance require their own evidence.
+
+**Edit storage** lets the owner switch `project_mode` between `full` and `reference-only` and edit the explicit URLs from `detail.meta.source_urls`. Clearing those URLs preserves discovered references. Existing summaries and timelines remain readable in either mode. If the Hub refuses a save, the sheet keeps the edit. Older Hubs that omit the projection keep the ordinary project page.
+
 Behavior ported 2026-11-02 from the old main-line App (`81dc6928`), using the corresponding iOS features as reference (`apple/Persona/Views/Inbox/InboxActions.swift`, `KnowledgeView.swift`).
 
 Inbox (`feature/inbox`):
