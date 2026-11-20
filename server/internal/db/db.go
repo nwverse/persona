@@ -150,6 +150,11 @@ func Check(ctx context.Context, url string) error {
 	return nil
 }
 
+// BackendPIDs are the server process ids of this pool's open connections. A
+// process that must tell its own sessions from another writer's (the hub,
+// quiescing its own writers for a snapshot) passes them as the ones to ignore.
+func (d *DB) BackendPIDs() []int32 { return d.pids.list() }
+
 // appName is the application_name a part's connections give Postgres, so a part can tell the other's connections
 // (and ones of a build from before, which give none) on a database they share (managerdb.go).
 func appName(sets Sets) string {
@@ -253,6 +258,7 @@ func (d *DB) migrate(ctx context.Context) error {
 // number now, and run the renumbered one again; so it is moved to the new number first, or dropped when the new number
 // is recorded too. The renumbered migrations are idempotent; the ones that took over the old numbers never ran there.
 var renumbered = []struct{ from, to string }{
+	{"0520_task_workspaces.sql", "20261119163935_task_workspaces.sql"},   // earlier backend preparation builds
 	{"0515_workspace_naming.sql", "20261118234802_workspace_naming.sql"}, // naming branch before timestamped migrations
 	{"0513_todo_repositories.sql", "0516_todo_repositories.sql"},         // 0513 is assistant_search_plain
 	{"0514_todo_repositories.sql", "0516_todo_repositories.sql"},         // 0514 is assistant_search_strong

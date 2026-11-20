@@ -44,6 +44,7 @@ internal class ChatRowActions(
     val viewerImage: (item: Item, description: String) -> ViewerImage = { item, description -> chatViewerImage(session, item, null, description) },
     /** The exhausted recovery chain the newest API error card explains (#7824, [exhaustedRecovery]); null: none. */
     val exhausted: ExhaustedRecovery? = null,
+    val replyImages: persona.core.contracts.api.ReplyImageSource? = null,
 ) {
     /** Opens the viewer on the conversation's pictures at [item]; a picture not among them opens alone. */
     fun openPicture(item: Item) {
@@ -80,6 +81,7 @@ internal data class ChatWorkflows(
     val runs: Map<String, Workflow>,
     val folds: WorkflowFolds,
     val open: ((WorkflowAgent) -> Unit)?,
+    val openBackground: ((Workflow) -> Unit)? = null,
 )
 
 internal val LocalChatWorkflows = compositionLocalOf<ChatWorkflows?> { null }

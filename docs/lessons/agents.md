@@ -1,5 +1,25 @@
 # Lessons: Claude Code, Codex, and herdr
 
+## A one-start speed must not become a resume default (#11141)
+
+- Codex's per-start `service_tier` belongs only in the initial argv; validate it against the selected model's catalog rather than trusting Codex to refuse an unadvertised tier.
+- Claude Code fast mode needs `"fastMode": true` in the effective single `--settings` file. Give the initial command a merged copy and keep the base `claudeLaunch` spec for herdr's `resume_argv`, or an automatic resume silently inherits the billable choice. A shell function that supplies its own `--settings` cannot be merged: refuse fast mode rather than appending a fast-only file that would discard the function's credentials and model.
+- A new `session.start` field needs its own node capability: older nodes otherwise accept it and start at the launcher's speed. Faster speed on a resume or another runtime is a coded refusal before approval or launch.
+
+## An account-sealed compaction needs a new conversation, not Continue (#10399)
+
+- Classify the permanent cause before trusting a runtime's generic transient kind or a gateway's status. Cancel
+  continuations already queued before the cause was recognized; hiding the button alone does not stop them.
+- Archiving is visibility, not invalidation: a newer transcript restores it. Derive obsolete interruption rows from
+  the linked task's current participants, parking and close state, and keep the same cases on every client.
+- Error detection also runs on every ordinary session's last answer. Compare a case-insensitive prefix without
+  lowercasing whole answers; an extra allocation per row broke the 8,200-session list's allocation budget.
+- For mock screenshots, combine `MOCK_TASKS=1 MOCK_TASKS_CUT=1 MOCK_TASKS_INVALID=1` with the mock hub. This is UI
+  evidence only, not deployment or proof that a real account-sealed conversation has disappeared from Needs you.
+- Keep permanent compaction errors separate from retryable tool-search refusals when merging error handling.
+  Preserve both wire codes and both failed-turn tests; loading all tools can fix tool search, not account-sealed context.
+
+
 ## A deferred action on an agent belongs to its process, not its session id (#10296)
 
 - A session id outlives its Claude Code process: the owner quits and resumes, Persona's Resume starts a new one, a crash is resumed. A queued restart into Full access, keyed by session id alone for a day, quit a claude that resumed the conversation later in Default and restarted it in Full access.
@@ -41,6 +61,17 @@ and the blocked-session fallback; preserve drafts and report unknown delivery if
 a pre-existing draft merely because it equals earlier assistant text: equality proves neither ownership nor non-delivery.
 Use an isolated fixture that acknowledges Enter without consuming the paste, and prove it fails without the production
 check. This demonstrates the confirmation gap, not the cause of any particular live incident.
+
+## herdr's "idle" is not "ready for the first message", and `agent.prompt` only types (#11345)
+
+herdr reports a work agent as soon as it sees its process, and calls agy idle as soon as its input box shows, but agy
+keeps signing in after that (model list, slash commands, skills and hooks reloaded) and can drop a message typed then.
+herdr's `agent.prompt` without `wait` answers `ok` once it has typed the text and Enter, so a start that sends once and
+returns reports a dropped task as started. On one Windows node two of three agy starts lost their task this way, with
+the Enter landing at the same time after agy's "ready" line in the lost and the delivered starts alike, so a fixed
+delay is no fix. Confirm instead: the agent turns working, blocked or done, or its integration reports a session.
+Retype only what is provably gone (the agent still idle, nothing of the message or a `[Pasted text …]` chip on screen),
+and otherwise list the session as needing the user.
 
 # A continuation must stay on its original to-do (#6820)
 
@@ -328,6 +359,10 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
   read the input box once; if it's still the just-sent text (strip `[Image #n]` / `[Pasted text #n]`, compare the first few words), press Enter once more. If empty or different, press nothing.
   Use only that post-wait read: the first version read immediately and gave up on a mismatch, which missed the 11-01 case (right after pasting the box may not yet contain this text).
 - Codex app-server integration (2026-11-02): Unix sockets carry WebSocket, not JSON-lines; external stdio has no second attach port. Directory discovery doesn't resume; control goes only to the original loaded owner. Unknown / cancelled requests must not send error / decline, which could consume the desktop approval callback. `serverRequest/resolved` withdraws cards as dismissed without fabricating approval; deduplicate using generation and typed request ID together. Generic server errors after send admission aren't "definitely not sent" and must not auto-retry; old outbox operation ids don't expire after one day (`docs/integrations/codex-app-server.md`).
+- An npm-installed Codex can be found by absolute path while its `/usr/bin/env node` launcher still fails under a node
+  service (#11686). For stdio app-server calls, resolve the npm launcher symlink and add its installation's bin directory
+  to the child PATH when Node.js is missing. Test subscription polling with a service PATH that omits the NVM directory;
+  a successful interactive launch does not exercise that path.
 - Session effort readback is not an edit capability (#6887): keep Codex rollout effort visible for terminal/history rows,
   and do not replace a running effort missing from a stale model list with its default. Long tool output can move the
   latest `turn_context` beyond the quick tail; include those small setting rows in the existing incremental scan.
@@ -727,6 +762,7 @@ Quota can recover before the reported reset. Skipping every on-demand probe unti
   - herdr types argv into the pane shell: quote only necessary elements (an alias as the first element still expands); elements must not contain single quotes.
   - If official integration later reports the same or another session id, herdr retains the original `resume_argv`: after a session id change, explicitly report again or it restores the old session.
   - herdr before 0.9.2 answers `ok` to `resume_argv` and drops it (2026-11-13: a dev machine ran 0.9.0 for days; the upgrade to 0.9.5 by live handoff carried nothing over, the node believed it had reported, and the next restart resumed Persona's Agents bare). A report holds only for the server that took it: the node records the server instance (`herdr.Client.ServerID`, the socket's mtime, new on every restart, handoff and upgrade) and `backfillResume` reports again when a Persona pane's server changed.
+  - The node did not check the version, so a computer that stayed below 0.9.2 resumed bare on every restart without a word (2026-11-20: a power cut restarted a 0.9.1 server, four Persona Agents on a gateway launcher came back on the account's default model, and the assistant's switch back was refused as "runs on <launcher> already", #11792). `reportResume` now asks the server (`ServerVersion`, ping only) and skips a server older than 0.9.2, saying so once; rows whose claude lacks Persona's `--mcp-config` carry `off_launcher` (`offlauncher.go`). Upgrading herdr's binary is not enough: the running server keeps dropping until a live handoff or restart starts the new one.
   - The argv is `eval "<the start command with --resume <id>>"`: herdr only checks that the first word is a plain name (`eval` passes) and types it into the pane's shell, so `CLAUDE_CONFIG_DIR=…` prefixes and launchers that are shell functions work without a wrapper script on PATH. herdr also refuses control characters and more than 8 KiB (`resumeSayable`). Real-Claude check in a throwaway named session: `herdrresume_live_test.go`.
 
 
@@ -1246,6 +1282,20 @@ settings and session metadata for defaults and current values. A fixed catalog h
 external sessions. Treat ACP configuration responses and notifications as authoritative, publish acknowledged partial
 changes, and propagate failures. Native `auto` is distinct from full permission bypass.
 
+## ACP mode success is not the applied agy mode (#10980)
+
+agy can accept `session/set_mode` yet apply `default` because native Auto is unavailable. Treat the direct mode result or
+`current_mode_update` as the answer, not a model's trailing `config_option_update`; otherwise accepted Auto can be mistaken
+for a refusal. When Auto is refused, apply the existing `bypassPermissions` path through native `accept-edits`, wait for
+that fallback before answering a permission, publish the final mode and emit one notice. An acknowledgement of `auto` can
+precede a delayed `default`, so only a newer non-Auto choice ends that correlation. Serialize the fallback with newer
+explicit mode changes, reapply an explicit mode if native settings diverge from it, and recheck interruption after every
+fallback wait. Keep whether a mode was explicit or came from agy's settings: explicit choices survive settings changes,
+while settings-derived sessions reread and reapply `configuredMode()` before the next prompt. A notice sent only with
+`rt.append` disappears on refetch; keep it in the item projection at a stable sequence as later native steps arrive, and
+retain the native step index separately for output files and client-message bindings. Cover direct and notification
+refusals, repeated starts, all three asking modes, settings changes, notice reloads and en / zh-Hans / ja localization.
+
 ## Runtime availability checks need the runtime's authentication context (#3790)
 
 An SSH node and a local companion can have different credential access. A model list and session start succeeding in
@@ -1464,6 +1514,26 @@ the timestamp on the workspace catalog and match machine, source and source ID. 
 old sessions even if pin and unpin happen before the coalesced catalog push: a session push can observe the temporary
 pin while the final catalog bytes equal the earlier unpinned snapshot.
 
+- **Separate assignment data from framework policy (#10200).** Let the manager supply matching project background once; callers add only facts it cannot resolve. Preserve attachment suffixes when a launcher falls back to first-message rules. A dedicated instruction channel must survive resume and must suppress duplicate SessionStart closeout guidance. Never replace a configured Codex developer policy to obtain a cleaner transcript: fall back conservatively. Herdr refuses apostrophes even inside quoted restore arguments; encode them as TOML Unicode escapes, and use a persistent file for Claude's multiline policy. One new closeout can carry delivery, gate and responsible party while both historical formats remain readable.
+
 ## A transcript directory is not the selected launcher's sign-in
 
 When restoring an assistant conversation, finding its newest transcript does not establish that a newly selected launcher can authenticate in that profile. Check private-profile ownership before stopping the old process or writing input; a later CLI sign-in error has already accepted the wrong launch and may forward a provider-only model. A refusal should preserve the original process and session state and explain how to continue. Regression coverage needs cold resumes and live idle processes, with both an omitted model and the old provider's explicit model (#10453).
+
+The same holds for a shell launcher's private profile, which a managed catalog can't name: its gateway token lives in the launcher's environment, so the profile never gets a sign-in, and plain claude started there answers "Not logged in" while `claude auth status` in the user's own setup says signed in. Ask Claude Code about the profile the start will actually use (`claudeAuthStatusProfile`), not the machine's default, and move the conversation to where the launcher is signed in rather than telling the user to sign in again (#11694).
+
+## Cross-session permission evidence (#9671)
+
+- A session-list mode is a display snapshot, not evidence of the mode in which a message was written. Capture at the source node while handling the producing call; delayed reports and retries retain that observation.
+- A caller's session ID is not process identity. Resolve the nearest known Agent in the socket peer's ancestry: a nested Agent may not claim a more privileged parent. Bind external registry data to the process generation; on macOS the kernel creation time also lets an old registry file fail closed after PID reuse.
+- `encoding/json` matches struct fields case-insensitively. Drop every spelling of authority fields and rebuild them from internal context. Ordinary RPCs must ignore source claims even if an older intermediary forwards extra parameters.
+- RPC marshaling compacts `json.RawMessage` and escapes HTML characters. A call digest must use that representation at both ends, or a valid message containing `<` or `&` loses its evidence in transit.
+- A worker's observation cannot grant a class to a later automatic judge or an unknown source in the same digest. Preserve unknown evidence rather than deriving authority from copied text, labels or cached modes. This provenance never makes Agent text the owner's input.
+
+## Managed model discovery must tolerate a slow interactive shell (#10927)
+
+An interactive rc file can spend the entire discovery deadline in a version manager before the launcher command begins.
+A managed model probe has the command and provider settings already, so run it directly and test npm's
+`#!/usr/bin/env node` with a different Node.js on the service's PATH. Keep shell discovery for aliases and functions,
+and require a complete frame before caching an errored scan. A timed-out helper can print a banner inside the frame.
+The Assistant picker reserves a short window after shell discovery so fallback choices still respect a node's own-service policy.

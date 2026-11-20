@@ -14,6 +14,8 @@ nonisolated enum StartModes {
     /// The permission modes a start on it takes when they are not Claude Code's (the node's `permission_modes`, #8261);
     /// nil for Claude Code's launchers, for the others, which take none, and from an older computer.
     static func listed(_ launcher: Launcher?) -> [String]? {
+        // A native omp start always uses the launcher's own approval. It does not advertise Claude's controls.
+        if launcher?.startsOmp == true { return [SessionModes.ModeID.launcherDefault] }
         guard let modes = launcher?.permissionModes, !modes.isEmpty else { return nil }
         return modes
     }
@@ -54,7 +56,7 @@ nonisolated enum StartModes {
     /// The efforts offered: the ones the model that will run lists (`known`), every start level while that is not
     /// known. A limited launcher's only from its model's list: none while that is not known. None for omp.
     static func efforts(known: [String]?, for launcher: Launcher?) -> [SessionModes.Option] {
-        if launcher?.isOmp == true { return [] }
+        if launcher?.isOmp == true || launcher?.startsOmp == true { return [] }
         guard let known else { return limited(launcher) ? [] : SessionModes.startEffortLevels }
         return SessionModes.startEffortLevels.filter { known.contains($0.id) }
     }

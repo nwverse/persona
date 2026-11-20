@@ -86,11 +86,21 @@ type Options struct {
 	Event func(machine, event string, params json.RawMessage) (forward bool)
 	// Detached: a machine's node connection ended (not for another one taking over): what waited on it ends.
 	Detached func(machine string)
+	// HiddenAgentDirsChanged is told after a machine's hidden Agent folders changed (agentdirs.go), outside every
+	// lock of the devices: the assistant shows the sessions again by the new rules.
+	HiddenAgentDirsChanged func(machine string)
 	// Location is the user's time zone ("today" of the token usage); nil: the machine's.
 	Location func() *time.Location
+	// PromptLanguage is the owner language for newly generated node-side prompt wrappers.
+	// Nil retains legacy Chinese; it is display policy, never an authority input.
+	PromptLanguage func() string
 	// ConfigFile is the manager's manager.json (internal/managerconf): its usage section (the account-pool gateways
 	// and their keys, usagegateways.go) is read and written there. "": none (tests).
 	ConfigFile string
+	// LauncherBalances reads the prepaid balances of the provider launchers the manager holds keys for (#11825,
+	// usagebalance.go). The assistant owns it, since it owns the launchers and their sealed keys. known false: the
+	// launcher list could not be read, so the last samples stay. nil: no balance source.
+	LauncherBalances func(ctx context.Context) (accounts []proto.UsageAccount, known bool)
 	// TailcatKey is the identity file the computers reached over tailcat trust (tunnel.LoadOrCreateHubKey); "": this
 	// machine's data directory's (tunnel.HubKeyPath).
 	TailcatKey string
@@ -176,6 +186,7 @@ type Devices struct {
 
 	usageWin usageWindowsHub // subscription rate-limit windows across machines (usagewindows.go, #2432)
 	usageGW  usageGateways   // the account-pool gateways that add accounts to it (usagegateways.go, #2595)
+	usageBal usageBalances   // the launchers' prepaid balances that add accounts to it (usagebalance.go, #11825)
 
 	// reqPrefix and reqSeq make the nodes' requests' keys for the hub (devices.request), unique across managers.
 	reqPrefix string
@@ -201,6 +212,8 @@ func New(o Options) *Devices {
 	}
 	d.usageWin.gateways = d.usageGW.accounts
 	d.usageGW.init(usage, d.usageWin.invalidate, d.logf)
+	d.usageWin.balances = d.usageBal.accounts
+	d.usageBal.init(o.LauncherBalances, d.usageWin.invalidate, d.logf)
 	return d
 }
 
@@ -238,7 +251,8 @@ func (d *Devices) Run(ctx context.Context) error {
 	// The messages held while their computers were away (held.go).
 	d.workers.Add(1)
 	go func() { defer d.workers.Done(); d.heldLoop(mctx) }()
-	go d.usageGW.run(ctx) // the account-pool gateways (usagegateways.go)
+	go d.usageGW.run(ctx)   // the account-pool gateways (usagegateways.go)
+	go d.usageBal.run(mctx) // the launchers' prepaid balances (usagebalance.go, #11825)
 	// A switch to Persona Link a restart left (link_switch.go).
 	go d.resumeLinkSwitches(mctx)
 	// The hub's hand-over, or after ownListWait the manager's own list (ownlist.go) until it comes.
@@ -682,11 +696,13 @@ func (d *Devices) callNode(ctx context.Context, p devicewire.NodeCall) (json.Raw
 	if len(params) == 0 {
 		params = json.RawMessage(`{}`)
 	}
-	if p.Method == "session.send" {
+	if p.Method == "session.send" || p.Method == "session.send_once" {
 		var err error
-		params, err = d.prepareSessionSkills(params)
-		if err != nil {
-			return nil, err
+		if p.Method == "session.send" {
+			params, err = d.prepareSessionSkills(params)
+			if err != nil {
+				return nil, err
+			}
 		}
 		if params, err = ownerInputParams(p, params); err != nil {
 			return nil, err
@@ -703,6 +719,11 @@ func (d *Devices) callNode(ctx context.Context, p devicewire.NodeCall) (json.Raw
 	}
 	if refusesHandoff(p.Method, params) {
 		return nil, errHandoffRefused
+	}
+	var languageErr error
+	params, languageErr = d.promptLanguageParams(p.Method, params)
+	if languageErr != nil {
+		return nil, languageErr
 	}
 	m.noteWatch(p.Method, params)
 	if p.Method == "session.unwatch" && m.follows(params) {
@@ -723,8 +744,20 @@ func (d *Devices) callNode(ctx context.Context, p devicewire.NodeCall) (json.Raw
 		snapshot = new(sessionSnapshot)
 	}
 	modeSID, modeFrom, modeTo, recordMode := m.modeSetFrom(p, params) // the record of mode changes (mode_changes.go)
+	var nodeParams any = params
+	if p.Method == devicewire.MethodPortDial {
+		var dial devicewire.PortDial
+		if err := json.Unmarshal(params, &dial); err != nil {
+			return nil, &rpc.Error{Code: "invalid_params", Message: "port.dial: " + err.Error()}
+		}
+		dial.StreamVersion = 0
+		if p.StreamVersion == devicewire.PortStreamHalfCloseV1 {
+			dial.StreamVersion = p.StreamVersion
+		}
+		nodeParams = dial
+	}
 	var out json.RawMessage
-	err := m.callWithSnapshot(ctx, p.Method, params, &out, snapshot)
+	err := m.callWithSnapshot(ctx, p.Method, nodeParams, &out, snapshot)
 	if try, ok := ctx.Value(heldDeliveryKey{}).(*heldTry); ok {
 		try.called, try.err = true, err // a held delivery is judged on this call alone (held.go)
 	}
@@ -827,7 +860,7 @@ func (d *Devices) List() []Summary {
 func (d *Devices) summaryOf(m *Machine) Summary {
 	m.mu.Lock()
 	s := Summary{ID: m.cfg.ID, Name: m.name(), Kind: m.cfg.Kind, SSHHost: m.cfg.SSHHost, Home: m.info.Home,
-		DataDir: m.info.DataDir, Online: m.online || m.warmLocked(time.Now())}
+		HomeReal: m.info.HomeReal, DataDir: m.info.DataDir, Online: m.online || m.warmLocked(time.Now())}
 	m.mu.Unlock()
 	s.Trust = d.machineTrust(m)
 	s.Reachable = m.reachable()
@@ -928,7 +961,37 @@ func (d *Devices) Relist(ctx context.Context, id string) error {
 // Summary is one machine for the assistant (assistantwire.Device).
 type Summary struct {
 	ID, Name, Kind, SSHHost, Home, DataDir, Trust string
-	Online, Reachable                             bool
+	// HomeReal is Home with its links followed, when the node says it is another path (proto.NodeInfo.HomeReal).
+	HomeReal          string
+	Online, Reachable bool
+}
+
+// Shown is how a machine's sessions are shown now, for a reader that takes them as the computer's word (the assistant's
+// direction sessions). Listed: the list is one its node gave, on this connection or kept from before it (nil and none
+// given on this connection is not known, as report has it). Until: until when the machine is shown as before while
+// its node is away (the reconnect grace, a warm start after a restart, a resident's reload); zero when it is not.
+type Shown struct {
+	Listed bool
+	Until  time.Time
+}
+
+// Shown is machine id's Shown; false when there is no such machine.
+func (d *Devices) Shown(id string) (Shown, bool) {
+	m := d.machineByID(id)
+	if m == nil {
+		return Shown{}, false
+	}
+	now := time.Now()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s := Shown{Listed: m.sessions != nil || m.sessionsListed}
+	if m.warmLocked(now) {
+		s.Until = m.warmUntil
+	}
+	if now.Before(m.reloadUntil) && m.reloadUntil.After(s.Until) {
+		s.Until = m.reloadUntil
+	}
+	return s, true
 }
 
 // Has reports whether id is one of the machines (an entry another one absorbed included).
@@ -970,9 +1033,19 @@ func (d *Devices) CallNode(ctx context.Context, id, method string, params json.R
 			ctx = context.WithValue(ctx, ownerControlKey{}, method)
 		}
 	}
+	var languageErr error
+	params, languageErr = d.promptLanguageParams(method, params)
+	if languageErr != nil {
+		return nil, languageErr
+	}
+	actor := devicewire.ModeActorOf(ctx)
+	sid, from, to, record := m.modeSetFrom(devicewire.NodeCall{Method: method, Actor: actor}, params)
 	var out json.RawMessage
 	if err := m.call(ctx, method, params, &out); err != nil {
 		return nil, err
+	}
+	if record {
+		m.recordModeSet(actor, sid, from, to, out)
 	}
 	return out, nil
 }

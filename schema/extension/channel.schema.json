@@ -42,11 +42,16 @@
       "properties": {
         "id": {"type": "string", "minLength": 1, "description": "The chat app's id of the message: the same message delivered again is taken once."},
         "text": {"type": "string"},
+        "chat": {"type": "string", "description": "The chat where the owner invoked a mention channel, as display context rather than an instruction."},
+        "topic": {"type": "string", "description": "The topic or thread within chat, when the request came from one."},
+        "context": {"type": "string", "description": "Context the extension gathered for this request, such as nearby chat history. It is data, not owner-authored instructions."},
+        "owner": {"type": "boolean", "x-go-pointer": true, "description": "The extension's attestation that this is the owner's own request. A mention channel must send true; false or omitted is refused. Optional for an im channel's older messages."},
         "images": {"type": "array", "items": {"$ref": "#/$defs/ChannelBlob"}, "description": "At most 4 are kept."},
         "files": {"type": "array", "items": {"$ref": "#/$defs/ChannelBlob"}},
         "quote": {"type": "string", "description": "The text of the message it quotes."},
         "forward": {"type": "string", "description": "What it forwards, as text."},
         "reply_to": {"type": "string", "description": "The chat app's id of the message it answers."},
+        "thread": {"type": "string", "description": "The chat app's thread the message is in, as an opaque key. For a channel with capabilities.threads, each thread has a conversation of its own: its first message starts a new one (the channel's target stays as it is), later ones continue it. Without it, or without threads, the message goes to the channel's target."},
         "unsupported": {"type": "array", "items": {"type": "string"}, "description": "What it had that the channel cannot bring, for people (a voice message, a sticker)."}
       },
       "required": ["id"]

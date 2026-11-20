@@ -679,11 +679,10 @@ func (s *Service) settleTurnReporting(ctx context.Context, machine, sid, unheard
 	}
 	// The whole last reply, as Markdown: the session list's last_text is one line cut at 200 characters.
 	text := strings.TrimSpace(last.LastText)
-	if _, answer := turnExchange(items); answer != "" {
-		text = answer
-	}
+	_, answer := turnExchange(items)
+	text = cmp.Or(answer, text)
 	// A paged reply may have lost its tail (the file lines and the closeout are there): read the whole item.
-	text = s.taskAnswer(cctx, machine, sid, items, text)
+	text = s.taskAnswer(cctx, last.MachineID, last.SessionID, items, text)
 	if current, ok := s.todoNow(t.ID); !ok || current.Cancelled() || current.AgentAborted(machine, sid) {
 		s.logf("task %s: cancelled or agent %s/%s aborted: not issuing done receipt", t.ID, machine, sid)
 		return settleRefused
@@ -724,6 +723,7 @@ func (s *Service) settleTurnReporting(ctx context.Context, machine, sid, unheard
 	if again && turn.State != turnDone {
 		return settleTaken // it had an interrupted receipt
 	}
+	handledDecision := read && !stopped && answer != "" && s.decisionReplyTurnEnded(cctx, t, last, items, text)
 	switch id := receiptID(t.ID, turn); {
 	case again && turn.Receipt:
 		// Taken up before it had a name, and its receipt went out then (under an id of its own): no second one.
@@ -745,6 +745,10 @@ func (s *Service) settleTurnReporting(ctx context.Context, machine, sid, unheard
 	}
 	if s.closedWhileRead(t.ID) {
 		s.turnJudged(cctx, t.ID, taskDoneCheck{}, nil, "done") // nothing to judge: the sweep does not ask again
+		return settleTaken
+	}
+	if handledDecision {
+		s.turnJudged(cctx, t.ID, taskDoneCheck{}, nil, "agent_decision_handled")
 		return settleTaken
 	}
 	if again {
@@ -825,10 +829,11 @@ func (s *Service) successorOpens(ctx context.Context, t Todo, started proto.Sess
 		s.logf("task %s: reopen for the owner's message: %v", t.ID, err)
 		return
 	}
-	s.logf("task %s: reopened: the owner's message started a new agent for it", t.ID)
 	if started.SessionID == "" {
+		s.logf("task %s: reopened: the owner's message may have started a new agent for it", t.ID)
 		return
 	}
+	s.logf("task %s: reopened: the owner's message started a new agent for it", t.ID)
 	if cur, ok := s.taskOf(ctx, started.MachineID, started.SessionID); ok && cur.ID == t.ID {
 		s.taskWorks(ctx, cur)
 	}
@@ -928,10 +933,11 @@ func (s *Service) routeToTaskAs(ctx context.Context, conversation, todoID, text,
 			return FeedItem{}, i18n.Err("assistant-tasks.route_agents_exited")
 		}
 		started, err := s.startTaskSuccessor(ctx, t, last, text)
-		if hubClosedTask(&t) && (err == nil || sendUnknown(err)) { // a start that never went out asked for nothing
+		_, st.uncertain = errors.AsType[*uncertainTaskStart](err)
+		if hubClosedTask(&t) && (err == nil || st.uncertain) { // a start that never went out asked for nothing
 			s.successorOpens(ctx, t, started) // before a message that waited for the start goes to its agent
 		}
-		s.endTaskStart(todoID, st, started) // empty when it failed: a message that waited for it starts one itself
+		s.endTaskStart(todoID, st, started)
 		if err != nil {
 			return FeedItem{}, err
 		}
@@ -939,13 +945,17 @@ func (s *Service) routeToTaskAs(ctx context.Context, conversation, todoID, text,
 		if started.SessionID != "" { // the run it reached (#10465); a start that named no session leaves it unknown
 			body["machine_id"], body["session_id"] = started.MachineID, started.SessionID
 		}
-		return s.appendFeed(ctx, conversation, feedRouted, todoID, body)
+		it, err := s.appendFeed(ctx, conversation, feedRouted, todoID, body)
+		if err != nil { // the new agent has the text as its first message
+			return FeedItem{}, wordsSent{err}
+		}
+		return it, nil
 	}
 	return s.sendToTaskAgent(ctx, conversation, todoID, pickTaskAgent(live), text, relay, guard)
 }
 
-// routeAfterStart waits for task todoID's agent start st, then sends text to the new agent it started; a start that
-// started none (it failed, or was not a new agent's) has the message routed again, which may start one. The wait goes
+// routeAfterStart waits for task todoID's agent start st, then sends text to the new agent it started. Only a start
+// known to have started none lets the message route again, which may start one. The wait goes
 // on when the app stops waiting, as the start does, so the text is not lost; it is bounded by taskStartWait.
 func (s *Service) routeAfterStart(ctx context.Context, conversation, todoID, text string, guard func(Todo) bool, st *taskStart) (FeedItem, error) {
 	timer := time.NewTimer(taskStartWait())
@@ -954,6 +964,9 @@ func (s *Service) routeAfterStart(ctx context.Context, conversation, todoID, tex
 	case <-st.done:
 	case <-timer.C:
 		return FeedItem{}, i18n.Err("assistant-tasks.route_starting")
+	}
+	if st.uncertain {
+		return FeedItem{}, i18n.Err("assistant-tasks.route_waited_unconfirmed")
 	}
 	s.tasks.mu.Lock()
 	c := st.agent
@@ -1023,5 +1036,9 @@ func (s *Service) sendToTaskAgent(ctx context.Context, conversation, todoID stri
 	if relay != "" {
 		body["relay"] = relay
 	}
-	return s.appendFeed(sctx, conversation, feedRouted, todoID, body)
+	it, err := s.appendFeed(sctx, conversation, feedRouted, todoID, body)
+	if err != nil { // its agent has the text
+		return FeedItem{}, wordsSent{err}
+	}
+	return it, nil
 }

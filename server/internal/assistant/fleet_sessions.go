@@ -107,7 +107,7 @@ func (s *Service) setSessions(machine string, list []proto.Session) {
 		}
 	}
 	s.availSweep(machine, list, now) // the waits of conversations no longer listed (availability.go)
-	s.pruneGoneQuiet(machine) // the verdicts and Stops of task Agents no longer listed (silent_turns.go)
+	s.pruneGoneQuiet(machine)        // the verdicts and Stops of task Agents no longer listed (silent_turns.go)
 	s.fleetKeep(machine, list, connected, unsure)
 	for _, ref := range inlineUpdates {
 		s.inOrder(func() { go s.registerInlineTurn(context.Background(), ref) })
@@ -267,10 +267,16 @@ func (s *Service) publishList(machine string) []proto.Session {
 	list = s.deletionRows(context.Background(), machine, list, true)
 	// A review's reviewer is no agent of the user's (supervise_autoreview.go): its result is on the task it reviewed.
 	hide := s.reviewerSessions()
-	if len(hide) > 0 {
+	reviewWorktrees := map[string]bool{}
+	for _, e := range mustSessionReviews(s) {
+		if e.MachineID == machine && e.Worktree != "" {
+			reviewWorktrees[e.Worktree] = true
+		}
+	}
+	if len(hide) > 0 || len(reviewWorktrees) > 0 {
 		kept := make([]proto.Session, 0, len(list))
 		for _, sess := range list {
-			if !hide[[2]string{machine, sess.SessionID}] {
+			if !hide[[2]string{machine, sess.SessionID}] && !reviewWorktrees[cmp.Or(sess.WorkspaceCwd, sess.Cwd)] {
 				kept = append(kept, sess)
 			}
 		}
@@ -541,6 +547,9 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 		decorateLimit(&list[i]) // a subscription's usage limit and when it resets (usage_limit.go)
 		list[i].TurnErrorCode = sessionTurnErrorCode(list[i])
 		if list[i].TurnError != "" {
+			if proto.UnrecoverableTurnErrorCode(list[i].TurnError) != "" {
+				list[i].TurnErrorKind = proto.TurnErrorUnrecoverable
+			}
 			if list[i].TurnErrorCode == proto.TurnErrorModelFallbackUnavailable {
 				list[i].TurnErrorKind = proto.TurnErrorUser
 			}
@@ -584,6 +593,7 @@ func (s *Service) decoratedSession(machine, sid string) (proto.Session, bool) {
 	if !ok {
 		return proto.Session{}, false
 	}
+	row.SetHiddenByDirectory(s.hiddenByDirectory(machine, row))
 	one := []proto.Session{row}
 	s.foldSubset(machine, one) // what the last complete list folded it as, as for a row the node lists
 	return one[0], true
@@ -603,7 +613,9 @@ func (s *Service) listedSession(machine, sid string) (proto.Session, bool) {
 	if len(list) == 0 {
 		return proto.Session{}, false // an unreadable deletion ledger hides assistant rows rather than exposing them
 	}
-	return list[0], true
+	row = list[0]
+	row.SetHiddenByDirectory(s.hiddenByDirectory(machine, row))
+	return row, true
 }
 
 // listedSessions are the sessions machine's node lists, each as the apps get it (listedSession, for the whole list,
@@ -622,6 +634,9 @@ func (s *Service) listedSessions(ctx context.Context, machine string) ([]proto.S
 	list, err := s.archivedListed(context.Background(), m.ID, s.decorateInventory(m.ID, s.nodeSessions(m.ID), true), mark)
 	if err != nil {
 		s.logf("load agent archives: %v", err)
+	}
+	for i := range list {
+		list[i].SetHiddenByDirectory(s.hiddenByDirectory(m.ID, list[i]))
 	}
 	s.foldSubset(m.ID, list) // never stored: the fold is the complete list's, archive rows and all (foldInventory)
 	return list, nil

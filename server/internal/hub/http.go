@@ -69,7 +69,7 @@ func (h *Hub) routes() http.Handler {
 	h.nodeUpdateRelayRoutes(api)
 	api.HandleFunc("GET /api/v1/interactions", func(w http.ResponseWriter, r *http.Request) {
 		ixs := visibleInteractions(h.pendingInteractions(), h.requestHasElicitation(r))
-		if extensionToken(r) { // an extension's token: its manager's cards only, none private (extension_private.go)
+		if restrictedAgentData(r) {
 			em := extensionManager(r)
 			ixs = slices.DeleteFunc(ixs, func(ix proto.Interaction) bool {
 				return em != "" && cmp.Or(ix.Manager, assistantwire.AssistantID) != em || h.hiddenFromExtensions(ix)
@@ -89,7 +89,7 @@ func (h *Hub) routes() http.Handler {
 	h.assistantRoutes(api)
 	h.pinRoutes(api)
 	h.notifyRoutes(api)
-	h.lnRoutes(api)
+	h.pushGradingRoutes(api)
 	h.personaRoutes(api)
 	h.lookRoutes(api)
 	h.lookUploadRoutes(api)
@@ -112,7 +112,7 @@ func (h *Hub) routes() http.Handler {
 	h.runtimeCLIRoutes(api)
 	// What the center serves: its own apps' requests and those the members pass on (peer_http.go), whose source the
 	// member judged (no gate here for them). A member passes everything but its own few routes on (memberForward).
-	centerAPI := h.centerSharing(h.auth(h.extensionAPIs(jsonRouteErrors(api), api)))
+	centerAPI := h.centerSharing(h.auth(h.quiesceGate(h.extensionAPIs(jsonRouteErrors(api), api))))
 	h.mesh.centerAPI.Store(centerAPI)
 	appAPI := h.gate(h.memberForward(centerAPI))
 	h.busRoutes(mux)
@@ -307,6 +307,10 @@ func (h *Hub) auth(next http.Handler) http.Handler {
 				writeErrCode(w, http.StatusForbidden, codeOtherManager, err)
 				return
 			}
+		} else if p.Role == roleScoped {
+			if !h.authorizeScopedDevice(w, r, p) {
+				return
+			}
 		} else if !allowed(p, r.Method, r.URL.Path) {
 			msg := "this device can only read and answer"
 			if p.Role == roleLink || p.Role == roleLinkPair {
@@ -496,6 +500,14 @@ func callErr(w http.ResponseWriter, err error) {
 func (h *Hub) callNode(w http.ResponseWriter, r *http.Request, m *Machine, method string, params any, timeout time.Duration, outdated string, args i18n.Args, handle ...func(error) bool) (json.RawMessage, bool) {
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
+	if strings.HasPrefix(method, "git.") {
+		var err error
+		method, params, err = backendGitTarget(r, method, params)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, err)
+			return nil, false
+		}
+	}
 	var out json.RawMessage
 	if err := m.call(ctx, method, params, &out); err != nil {
 		if h.nodeOutdated(w, r, err, outdated, args) {
@@ -537,6 +549,10 @@ func (h *Hub) proxy(method string, params func(*http.Request) any) http.HandlerF
 func (h *Hub) sessionItems(w http.ResponseWriter, r *http.Request, m *Machine) {
 	q := r.URL.Query()
 	params := map[string]any{"session_id": r.PathValue("sid")}
+	strict := q.Get("strict") == "1"
+	if strict {
+		params["strict_read"] = true
+	}
 	userInputs := q.Get("user_inputs") == "1"
 	if userInputs {
 		params["user_inputs"] = true // only a count/position projection, never message bodies
@@ -577,17 +593,22 @@ func (h *Hub) sessionItems(w http.ResponseWriter, r *http.Request, m *Machine) {
 		return
 	}
 	var res struct {
-		Items     []proto.Item `json:"items"`
-		HasMore   bool         `json:"has_more"`
-		MoreAfter bool         `json:"more_after,omitempty"`
-		More      bool         `json:"more,omitempty"` // a fold's lines go on after these
+		Items      []proto.Item `json:"items"`
+		HasMore    bool         `json:"has_more"`
+		MoreAfter  bool         `json:"more_after,omitempty"`
+		More       bool         `json:"more,omitempty"` // a fold's lines go on after these
+		StrictRead bool         `json:"strict_read,omitempty"`
 		itemSpan
 	}
 	if err := m.call(ctx, "session.items", params, &res); err != nil {
 		callErr(w, err)
 		return
 	}
-	res.Items = cardCompatItems(h.requestLang(r), h.requestWants(r, featureCardRing), localizedItems(h.requestLang(r), h.withInjected(res.Items)))
+	if strict && !res.StrictRead {
+		writeErrCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.Err("chatexport.node_version"))
+		return
+	}
+	res.Items = cardCompatItems(h.requestLang(r), h.requestWants(r, featureCardRing), h.requestWants(r, featureMarkdownCloseout), localizedItems(h.requestLang(r), h.withInjected(res.Items)))
 	if q.Get("lazy_images") == "1" {
 		res.Items = proto.WithoutImageData(res.Items)
 	}
@@ -599,15 +620,32 @@ func (h *Hub) sessionItems(w http.ResponseWriter, r *http.Request, m *Machine) {
 func (h *Hub) sessionItemFull(w http.ResponseWriter, r *http.Request, m *Machine) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	var it proto.Item
-	if err := m.call(ctx, "session.item", map[string]any{"session_id": r.PathValue("sid"), "item_id": r.PathValue("iid")}, &it); err != nil {
+	params := map[string]any{"session_id": r.PathValue("sid"), "item_id": r.PathValue("iid")}
+	strict := r.URL.Query().Get("strict") == "1"
+	if strict {
+		params["strict_read"] = true
+	}
+	var full struct {
+		proto.Item
+		StrictRead      bool `json:"strict_read,omitempty"`
+		SourceTextBytes *int `json:"source_text_bytes,omitempty"`
+	}
+	if err := m.call(ctx, "session.item", params, &full); err != nil {
 		callErr(w, err)
 		return
 	}
-	// The whole item for the channels that follow the conversation, or show its view (the manager's, fleet_follow.go).
-	h.asstOf(h.sessionOwner(m.cfg.ID, r.PathValue("sid"))).notify(assistantwire.EventSessionItems, assistantwire.SessionItems{MachineID: m.cfg.ID, SessionID: r.PathValue("sid"),
-		Items: []proto.Item{it}})
-	writeItemsJSON(w, cardCompatItems(h.requestLang(r), h.requestWants(r, featureCardRing), localizedItems(h.requestLang(r), h.withInjected([]proto.Item{it})))[0])
+	if strict && !full.StrictRead {
+		writeErrCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.Err("chatexport.node_version"))
+		return
+	}
+	it := full.Item
+	if !strict {
+		// A client opened an item whole. Let the channels following its view see it too (fleet_follow.go).
+		h.asstOf(h.sessionOwner(m.cfg.ID, r.PathValue("sid"))).notify(assistantwire.EventSessionItems, assistantwire.SessionItems{MachineID: m.cfg.ID, SessionID: r.PathValue("sid"),
+			Items: []proto.Item{it}})
+	}
+	full.Item = cardCompatItems(h.requestLang(r), h.requestWants(r, featureCardRing), h.requestWants(r, featureMarkdownCloseout), localizedItems(h.requestLang(r), h.withInjected([]proto.Item{it})))[0]
+	writeItemsJSON(w, full)
 }
 
 // sessionImage serves one item's image as raw bytes. An item's image never changes, so the app may cache it forever.
@@ -671,9 +709,8 @@ func (h *Hub) proxyBodyFor(method string, timeout time.Duration, mutate ...func(
 	})
 }
 
-// interruptSession stops a session's turn (session.interrupt). One of the assistant's conversations stopped here is
-// the user's stop button in an app: the assistant is told, so a Feishu /agent request it works on is stopped as well
-// (#3308; the plugin's own /stop goes through the assistant, not here).
+// interruptSession stops a session's turn (session.interrupt). The manager retires any pending follow-up for every
+// known session; a reporting Assistant conversation is also marked stopped for its plugin (#3308).
 func (h *Hub) interruptSession(w http.ResponseWriter, r *http.Request, m *Machine) {
 	p, ok := optionalObject(w, r, 32<<20)
 	if !ok {
@@ -686,7 +723,7 @@ func (h *Hub) interruptSession(w http.ResponseWriter, r *http.Request, m *Machin
 	if !ok {
 		return
 	}
-	if s, ok := m.session(sid); ok && (s.Assistant || m.isAssistant(s)) {
+	if _, ok := m.session(sid); ok {
 		h.asstOf(h.sessionOwner(m.cfg.ID, sid)).UserStopped(r.Context(), assistantwire.SessionRef{MachineID: m.cfg.ID, SessionID: sid})
 	}
 	writeRawJSON(w, out)
@@ -695,6 +732,15 @@ func (h *Hub) interruptSession(w http.ResponseWriter, r *http.Request, m *Machin
 func (h *Hub) listSessions(w http.ResponseWriter, r *http.Request) {
 	named, ok := h.sessionsManager(w, r) // ?manager=<id>: that manager's computers only (sessions_list.go)
 	if !ok {
+		return
+	}
+	// include_inactive=1: sessions active in a time window, inactive ones too (sessions_history.go). Without it, as
+	// before: since / cursor / limit stay the indexed list's.
+	if history, err := historyMode(r); err != nil {
+		sessionListErr(w, err)
+		return
+	} else if history {
+		h.historySessions(w, r, named)
 		return
 	}
 	_, lookup := r.URL.Query()["session_id"]
@@ -776,21 +822,26 @@ func writeSessionLists(w http.ResponseWriter, lists []stampedList) {
 
 func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 	var p struct {
-		MachineID       string `json:"machine_id"`
-		Cwd             string `json:"cwd"`
-		Launcher        string `json:"launcher"`
-		AgentType       string `json:"agent_type,omitempty"`
-		WorkSession     bool   `json:"work_session,omitempty"`
-		Model           string `json:"model,omitempty"` // picked in "New agent" for this start; empty: applyModel's
-		Prompt          string `json:"prompt"`
-		ResumeSessionID string `json:"resume_session_id"`
-		WorkspaceID     string `json:"workspace_id"`
+		MachineID       string        `json:"machine_id"`
+		Cwd             string        `json:"cwd"`
+		Launcher        string        `json:"launcher"`
+		AgentType       string        `json:"agent_type,omitempty"`
+		WorkSession     bool          `json:"work_session,omitempty"`
+		Model           string        `json:"model,omitempty"` // picked in "New agent" for this start; empty: applyModel's
+		Prompt          string        `json:"prompt"`
+		Images          []proto.Image `json:"images,omitempty"`
+		ClientMsgID     string        `json:"client_msg_id,omitempty"`
+		ResumeSessionID string        `json:"resume_session_id"`
+		WorkspaceID     string        `json:"workspace_id"`
 		// Host: the machine's enabled engine host to open in (herdr, orca, paseo…; #2576); empty: its default host.
 		// Checked by the node (an older node ignores it and starts in its engine).
 		Host           string `json:"host,omitempty"`
 		PermissionMode string `json:"permission_mode,omitempty"`
 		Effort         string `json:"effort,omitempty"`
-		Ultracode      *bool  `json:"ultracode,omitempty"`
+		// LauncherDefaultEffort keeps an explicit launcher's effort at its native default.
+		LauncherDefaultEffort bool   `json:"launcher_default_effort,omitempty"`
+		Speed                 string `json:"speed,omitempty"`
+		Ultracode             *bool  `json:"ultracode,omitempty"`
 		// Goal: a one-line condition the node sets with /goal after the first message is in (node/startgoal.go); a
 		// start it cannot take there answers 409 start_goal_unsupported before anything starts.
 		Goal string `json:"goal,omitempty"`
@@ -829,7 +880,16 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 	}
 	// Resuming with a permission mode changes that session's mode: an extension's token, only of a conversation its
 	// extension opened (extension_modes.go).
-	if pr := principalOf(r.Context()); pr.Role == roleExtension && p.ResumeSessionID != "" && p.PermissionMode != "" {
+	pr := principalOf(r.Context())
+	if pr.Role == roleScoped && (p.PermissionMode != "" || p.ResumeSessionID != "") && !slices.Contains(pr.Scopes, extwire.ScopeAgentsPermissionMode) {
+		scopedPermissionDenied(w, extwire.ScopeAgentsPermissionMode)
+		return
+	}
+	if pr.Role == roleScoped && p.ResumeSessionID != "" && !h.scopedPublicSession(p.MachineID, p.ResumeSessionID) {
+		writeErr(w, http.StatusNotFound, errDeleteUnknown)
+		return
+	}
+	if pr.Role == roleExtension && p.ResumeSessionID != "" && p.PermissionMode != "" {
 		if why := h.extensionModeRefused(pr, p.MachineID, p.ResumeSessionID, map[string]any{"permission_mode": p.PermissionMode}); why != "" {
 			h.refuseExtensionMode(w, r, pr, p.MachineID, p.ResumeSessionID, p.PermissionMode, why)
 			return
@@ -845,6 +905,7 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	decided := ""
+	var handoffImages []proto.Image
 	if p.TodoID != "" {
 		// The manager checks the todo (404, 409, 503 assistant_offline while it is away) and puts its decisions before
 		// the prompt, a new agent's project background before those (#1618, #2820); they go to the agent, not into
@@ -854,7 +915,7 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 			hand.New, hand.MachineID, hand.Cwd = true, m.cfg.ID, startCwd(m, p.Cwd)
 		}
 		var ok bool
-		if decided, ok = h.todoHandoff(r.Context(), w, hand); !ok {
+		if decided, handoffImages, ok = h.todoHandoff(r.Context(), w, hand); !ok {
 			return
 		}
 	}
@@ -878,13 +939,19 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 	if p.TodoID != "" {
 		p.Prompt = decided
 	}
-	async := startsAsync(p.Async, p.ResumeSessionID, p.AgentType)
+	if strings.TrimSpace(p.Prompt) != "" {
+		p.Images = append(p.Images, handoffImages...)
+	}
+	async := startsAsync(p.Async, p.ResumeSessionID, p.Launcher, p.AgentType)
+	nameAfterStart := async
 	parent := r.Context()
 	if r.Header.Get("X-Persona-Op-Id") != "" {
 		// Finish an accepted start even if its HTTP response is lost; client_ops records the outcome.
 		parent = context.WithoutCancel(parent)
 	}
-	ctx, cancel := context.WithTimeout(parent, startBudget(async && !p.WorkSession))
+	startedAt := time.Now()
+	budget := startBudget(async && !p.WorkSession)
+	ctx, cancel := context.WithDeadline(parent, startedAt.Add(budget))
 	defer cancel()
 	var res struct {
 		Session      proto.Session `json:"session"`
@@ -911,6 +978,16 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 		}
 		callErr(w, err) // 503 assistant_offline without the manager (the machine is its to reach), else 502
 		return
+	}
+	resolvedLauncher, _ := params["launcher"].(string)
+	resolvedAgent, _ := params["agent_type"].(string)
+	async = startsAsync(p.Async, p.ResumeSessionID, resolvedLauncher, resolvedAgent)
+	if resolvedBudget := startBudget(async && !p.WorkSession); resolvedBudget != budget {
+		// The manager may have found a synchronous launcher after the request was admitted.
+		cancel()
+		resolvedCtx, cancelResolved := context.WithDeadline(parent, startedAt.Add(resolvedBudget))
+		defer cancelResolved()
+		ctx = resolvedCtx
 	}
 	method := "session.start"
 	if p.WorkSession {
@@ -957,7 +1034,7 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 	if shown, ok := h.awaitListed(ctx, m, res.Session.SessionID); ok {
 		res.Session.State = shown.State // as the manager works it out (fleet_link.go)
 	}
-	if p.TodoID != "" && p.ResumeSessionID == "" && strings.TrimSpace(p.Prompt) == "" {
+	if p.TodoID != "" && p.ResumeSessionID == "" && strings.TrimSpace(p.Prompt) == "" && len(p.Images) == 0 {
 		cwd := res.Session.Cwd
 		if cwd == "" {
 			cwd = startCwd(m, p.Cwd)
@@ -979,7 +1056,7 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 	m.mu.Unlock()
 	res.LauncherNote = apierr.JoinNotes(h.requestLang(r), note, apierr.StartInstead(h.requestLang(r), engine, m.name(), res.Instead, res.Session))
 	writeJSON(w, res)
-	if async && p.TabName == "" {
+	if nameAfterStart && p.TabName == "" {
 		// The name takes a model call (seconds): the tab opens as agent-<n> and is renamed when it comes.
 		go func(id string) {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -1032,8 +1109,8 @@ func startEngine(info proto.NodeInfo) string {
 
 // startsAsync: a start the app asked to have answered at once is, when the node can acknowledge it before the session
 // is ready (only Claude can, and not a resume).
-func startsAsync(asked bool, resume, agentType string) bool {
-	return asked && resume == "" && (agentType == "" || agentType == "claude")
+func startsAsync(asked bool, resume, launcher, agentType string) bool {
+	return asked && resume == "" && (agentType == "claude" || (agentType == "" && launcher != "agy"))
 }
 
 // startBudget is how long a start may take: one acknowledged before the session is ready a moment, one answered only
@@ -1147,6 +1224,9 @@ func (h *Hub) broadcastTo(typ string, b []byte, elicitation bool) {
 	}
 	forms := map[i18n.Lang][]byte{}
 	for c := range h.clients {
+		if c.role == roleScoped && typ != "sessions" {
+			continue
+		}
 		if elicitation && !c.has("elicitation") {
 			continue
 		}
@@ -1246,9 +1326,10 @@ func (h *Hub) itemsToSubscribers(machineID, sessionID string, items []proto.Item
 	}
 	// One message per language and image mode: the node's Chinese lines read in each connection's (transcript_text.go).
 	type form struct {
-		lang i18n.Lang
-		lazy bool
-		ring bool // draws ```persona-card rings (card_compat.go)
+		lang             i18n.Lang
+		lazy             bool
+		markdownCloseout bool
+		ring             bool // draws ```persona-card rings (card_compat.go)
 	}
 	msgs := map[form][]byte{}
 	key := [2]string{machineID, sessionID}
@@ -1261,10 +1342,10 @@ func (h *Hub) itemsToSubscribers(machineID, sessionID string, items []proto.Item
 		if !sub {
 			continue
 		}
-		f := form{c.lang(), wantsLazy, c.has(featureCardRing)}
+		f := form{lang: c.lang(), lazy: wantsLazy, ring: c.has(featureCardRing), markdownCloseout: c.has(featureMarkdownCloseout)}
 		b, ok := msgs[f]
 		if !ok {
-			its := cardCompatItems(f.lang, f.ring, localizedItems(f.lang, items))
+			its := cardCompatItems(f.lang, f.ring, f.markdownCloseout, localizedItems(f.lang, items))
 			if f.lazy {
 				its = proto.WithoutImageData(its)
 			}
@@ -1316,7 +1397,7 @@ func (h *Hub) serveWS(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(r.Context())
 	who := principalOf(r.Context())
 	c := &client{cancel: cancel, done: ctx.Done(), hub: h, conn: conn, out: make(chan []byte, 512), subs: map[[2]string]bool{}, since: time.Now(),
-		device: who.ID, role: who.Role, delta: wantsFeature(r, featureSessionsDelta), listMode: wantsFeature(r, featureSessionsList), have: map[string]map[string][]byte{},
+		device: who.ID, role: who.Role, delta: who.Role != roleScoped && wantsFeature(r, featureSessionsDelta), listMode: who.Role != roleScoped && wantsFeature(r, featureSessionsList), have: map[string]map[string][]byte{},
 		urlFeatures: urlFeatures(r), acceptLang: i18n.FromRequest(r), meta: clientMeta{updates: make(chan heartbeatConfig, 512), done: ctx.Done()}}
 	c.traffic = h.requestTrafficAttribution(r, who)
 	c.uiConnection = randomHex(24)
@@ -1381,7 +1462,11 @@ func (h *Hub) serveWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.clients[c] = struct{}{}
-	h.helloLocked(c, hello, stream, after, resuming)
+	if c.role == roleScoped {
+		c.sendJSON(hello)
+	} else {
+		h.helloLocked(c, hello, stream, after, resuming)
+	}
 	h.mu.Unlock()
 	go h.fleetClientsChanged() // an app that takes elicitations (fleet_link.go)
 
@@ -1474,6 +1559,9 @@ func (h *Hub) onClientMessage(ctx context.Context, c *client, data []byte) {
 	if json.Unmarshal(data, &msg) != nil {
 		return
 	}
+	if c.role == roleScoped && !scopedSocketCommand(msg.Type) {
+		return
+	}
 	h.mu.Lock()
 	c.activeAt = time.Now()
 	h.mu.Unlock()
@@ -1524,6 +1612,9 @@ func (h *Hub) onClientMessage(ctx context.Context, c *client, data []byte) {
 	case "subscribe":
 		m := h.localMachine(msg.MachineID)
 		if m == nil {
+			return
+		}
+		if c.role == roleScoped && !h.scopedPublicSession(m.cfg.ID, msg.SessionID) {
 			return
 		}
 		if m.conversationDeleted(msg.SessionID) {
@@ -1655,7 +1746,7 @@ func (h *Hub) sendBacklog(ctx context.Context, c *client, m *Machine, sid string
 			c.sendJSON(failure)
 			return
 		}
-		res.Items = cardCompatItems(c.lang(), c.has(featureCardRing), localizedItems(c.lang(), h.withInjected(res.Items)))
+		res.Items = cardCompatItems(c.lang(), c.has(featureCardRing), c.has(featureMarkdownCloseout), localizedItems(c.lang(), h.withInjected(res.Items)))
 		if lazy {
 			res.Items = proto.WithoutImageData(res.Items)
 		}
