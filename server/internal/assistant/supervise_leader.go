@@ -106,8 +106,10 @@ func (s *Service) digestTo(cfg Settings, g superviseSignal) string {
 	own := s.ownSupervisor(cfg)
 	if g.To != "" {
 		switch {
-		case g.Kind == sigDecide && g.To == cfg.Main:
-			return own // a task leader's decision for the conversation above it, whose task is one no leader conversation supervises
+		case (g.Kind == sigDecide || g.Kind == sigCheck) && g.To == cfg.Main:
+			// A task leader's decision, or the owner's answer to a check's decision on its worker, for the conversation
+			// above it, whose task is one no leader conversation supervises.
+			return own
 		case g.To == cfg.BackgroundSupervisor && g.To != own:
 			return cfg.Main // named the background supervisor, which was switched off or moved meanwhile
 		}

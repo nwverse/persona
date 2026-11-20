@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/link"
 	"github.com/nwverse/persona/server/internal/taskworkspace"
 	"github.com/nwverse/persona/server/internal/workspacenaming"
@@ -217,7 +218,10 @@ func (e *workspaceExecutor) hasNoResources(root string) bool {
 	return true
 }
 
-func (n *Node) taskWorkspace(ctx context.Context, method string, raw json.RawMessage) (any, error) {
+func (n *Node) taskWorkspace(ctx context.Context, method string, raw, start json.RawMessage) (any, error) {
+	if method == devicewire.MethodStartBackendSession && len(start) == 0 {
+		return nil, errors.New("unknown workspace method")
+	}
 	var req taskworkspace.Request
 	if json.Unmarshal(raw, &req) != nil || !taskworkspace.ValidRequest(req) {
 		return taskworkspace.Record{Error: taskworkspace.Failure("invalid_input", "validation", req.OperationID, "", "")}, nil
@@ -335,7 +339,12 @@ func (n *Node) taskWorkspace(ctx context.Context, method string, raw json.RawMes
 	}
 	j.Error = nil
 	switch method {
+	case devicewire.MethodStartBackendSession:
+		return e.startSession(ctx, req, start)
 	case "inspect":
+		if j.Launch != nil && j.Launch.SessionID == "" && j.Launch.ExpectedSessionID != "" {
+			e.observedLaunch(ctx)
+		}
 		for i := range j.Repositories {
 			r := &j.Repositories[i]
 			if r.State == "materializing" && e.checkRegistration(ctx, r) == "" {
@@ -369,6 +378,9 @@ func (n *Node) taskWorkspace(ctx context.Context, method string, raw json.RawMes
 			j.State = "cancelled"
 		}
 	case "acquire":
+		if strings.HasPrefix(req.UseID, "launch_") && slices.ContainsFunc(j.Uses, func(other string) bool { return strings.HasPrefix(other, "launch_") && other != req.UseID }) {
+			return e.conflict(req, "worktree_in_use", method), nil
+		}
 		if j.State != "ready" || j.Cleanup != nil || !workspacenaming.ValidOperationID(req.UseID) {
 			return e.fail("not_ready", method, "", j.Plan.RootPath), nil
 		}
@@ -381,6 +393,12 @@ func (n *Node) taskWorkspace(ctx context.Context, method string, raw json.RawMes
 			j.Uses = append(j.Uses, req.UseID)
 		}
 	case "release":
+		if j.Launch != nil && j.Launch.UseID == req.UseID {
+			if !e.launchStopped(ctx) {
+				return e.conflict(req, "worktree_in_use", "release"), nil
+			}
+			j.Launch = nil
+		}
 		j.Uses = slices.DeleteFunc(j.Uses, func(id string) bool { return id == req.UseID })
 	case "cleanup":
 		result := e.cleanup(ctx, req)
