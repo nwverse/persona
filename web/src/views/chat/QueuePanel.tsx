@@ -1,8 +1,8 @@
 // The queued messages (Session.queued) at the top of the composer's card, as cindy's pending queue (#5327; the owner
 // asked this part of the chat to follow cindy): rows in send order, the top one next, no numbers (the labels carry
 // them). A row is one line, the marks of what it carries before its words; on hover or focus it shows a drag handle
-// and round buttons: Send now (where the agent takes queued messages now; it hands over the whole queue at one press,
-// its tooltip saying so and what happens), Edit (pulled back into the box below) and Delete. Dragging the handle, or
+// and round buttons: Send now (the tooltip explains whether it sends the next message or the whole queue), Edit
+// (pulled back into the box below) and Delete. Dragging the handle, or
 // ↑ ↓ Home End on it, re-queues them all in the new order. Four rows or fewer show in full; five or more show three
 // and "N more".
 // Messages from other conversations come last and are only shown; since #6394 they collapse into one line
@@ -75,7 +75,8 @@ export function QueuePanel({ session, draftKey, canEdit, persona, onWithdrawn, p
   // the user's own come first; the rest came from other conversations and are only shown (#4342)
   const own = queued.length - Math.min(Math.max(session.queued_relayed ?? 0, 0), queued.length);
   const agent = persona ?? agentLabel(session);
-  const runtime = persona === undefined && session.source_kind === "runtime";
+  const runtimeSource = session.source_kind === "runtime";
+  const runtime = persona === undefined && runtimeSource;
   const editable = canEdit && (session.capabilities?.queue_edit ?? !runtime);
   // a Claude takes queued messages at its next step, and can be given them now (#6088); so does a Persona chat's (#4342)
   const takesNow = canEdit && (session.capabilities?.queue_send_now ?? (!runtime && (session.agent === "claude" || (persona !== undefined && own > 0))));
@@ -185,7 +186,8 @@ export function QueuePanel({ session, draftKey, canEdit, persona, onWithdrawn, p
       toast(t("chat-queuepanel.sent_now", { agent }), "ok");
     }).then((ok) => ok && toBox(false));
   // what the dialog used to say, now the button's tooltip and description
-  const explain = t(session.source_kind === "runtime" ? "chat-queuepanel.send_now_body_runtime" :
+  const sendNowTip = t(runtimeSource ? "chat-queuepanel.send_now_tip_runtime" : "chat-queuepanel.send_now_tip", { agent });
+  const explain = t(runtimeSource ? "chat-queuepanel.send_now_body_runtime" :
     persona !== undefined ? "chat-queuepanel.send_now_body_persona" : "chat-queuepanel.send_now_body", { agent });
 
   const keyMove = (e: React.KeyboardEvent, row: Row) => {
@@ -251,7 +253,7 @@ export function QueuePanel({ session, draftKey, canEdit, persona, onWithdrawn, p
       editable={editable}
       movable={editable && own > 1}
       takesNow={takesNow}
-      agent={agent}
+      sendNowTip={sendNowTip}
       explain={explain}
       explainId={explainId}
       busy={busy === row.id}
@@ -458,7 +460,7 @@ function QueuedPhotoThumbs({ paths, previews, count, mid, cwd }: {
 
 /** One of the owner's queued messages. `photos`: ones it went with beside its words (a Persona chat's, when this browser
  *  sent it). */
-function QueueRow({ row, n, photos, photoPreviews, mid, cwd, editable, movable, takesNow, agent, explain, explainId, busy, locked, dragging, rowRef, handleRef, onKey, onPointerDown, onSendNow, onEdit, onDelete }: {
+function QueueRow({ row, n, photos, photoPreviews, mid, cwd, editable, movable, takesNow, sendNowTip, explain, explainId, busy, locked, dragging, rowRef, handleRef, onKey, onPointerDown, onSendNow, onEdit, onDelete }: {
   row: Row;
   n: number;
   photos: number;
@@ -468,7 +470,7 @@ function QueueRow({ row, n, photos, photoPreviews, mid, cwd, editable, movable, 
   editable: boolean;
   movable: boolean;
   takesNow: boolean;
-  agent: string;
+  sendNowTip: string;
   /** What sending now does, as Send now's tooltip and description. */
   explain: string;
   explainId: string;
@@ -499,7 +501,6 @@ function QueueRow({ row, n, photos, photoPreviews, mid, cwd, editable, movable, 
     else el.removeAttribute("title");
   };
   const buttons = (editable ? 2 : 0) + (takesNow ? 1 : 0);
-  const tip = t("chat-queuepanel.send_now_tip", { agent });
   const alwaysShowSendNow = n === 1 && takesNow;
   const editButtons = editable && (
     <>
@@ -572,9 +573,9 @@ function QueueRow({ row, n, photos, photoPreviews, mid, cwd, editable, movable, 
               data-send-now
               disabled={locked}
               onClick={onSendNow}
-              aria-label={tip}
+              aria-label={sendNowTip}
               aria-describedby={explainId}
-              title={`${tip}\n${explain}`}
+              title={`${sendNowTip}\n${explain}`}
               className={SEND_NOW_PILL}
             >
               <Icon name="arrowUp" size={11} stroke={2.25} />
@@ -589,9 +590,9 @@ function QueueRow({ row, n, photos, photoPreviews, mid, cwd, editable, movable, 
                 data-send-now
                 disabled={locked}
                 onClick={onSendNow}
-                aria-label={tip}
+                aria-label={sendNowTip}
                 aria-describedby={explainId}
-                title={`${tip}\n${explain}`}
+                title={`${sendNowTip}\n${explain}`}
                 className={ROUND}
               >
                 <Icon name="arrowUp" size={12} stroke={2.25} />

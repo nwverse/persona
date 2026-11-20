@@ -1989,7 +1989,7 @@ export function createAgyRuntime(options = {}) {
         clearInterval(turn.pollTimer)
         // The turn is over: a card still waiting has nothing to answer for any more.
         const wasCancelled = turn.cancelled || cancelling.has(rawId)
-        if (promptTurns.get(pid) === turn) cancelling.delete(rawId)
+        if (promptTurns.get(pid) === turn || activeTurns.get(pid)?.turn === turn) cancelling.delete(rawId)
         if ((wasCancelled || turn.inactive) && turn.exportedBaseMax !== undefined) {
           const count = readConversationStates().get(rawId)?.step_count
           staleWorkingAt.set(rawId, Number.isInteger(count) ? count : -1)
@@ -2072,7 +2072,7 @@ export function createAgyRuntime(options = {}) {
     const rawId = ownedId(session_id)
     const pid = toPersonaId(rawId)
     getQueue(pid)
-    const running = promptTurns.get(pid)
+    const running = activeTurns.get(pid)?.turn
     if (running) await cancelPrompt(rawId, running)
     rt.sessionsChanged(0)
   }

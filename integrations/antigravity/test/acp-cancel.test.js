@@ -176,6 +176,42 @@ test('queue edits preserve photos and send-now cancels just the active prompt', 
   assert.equal((await n.peer.call('session.interrupt', { session_id })).settled, true)
 })
 
+for (const failPreparation of [false, true]) {
+  test(`send-now skips a preparing turn and ${failPreparation ? 'reports a successor preparation error' : 'starts the queued prompt'}`, async (t) => {
+    const { n, record, start } = await agyRuntime(t)
+    const session_id = await start()
+    const gate = Promise.withResolvers()
+    const original = AgyAcpClient.prototype.ensureSessionLoaded
+    let loads = 0
+    t.mock.method(AgyAcpClient.prototype, 'ensureSessionLoaded', async function (...args) {
+      loads += 1
+      if (loads === 1) await gate.promise
+      else if (failPreparation) throw new Error('Queued turn could not load its session')
+      return original.apply(this, args)
+    })
+    const first = n.peer.call('session.send', { session_id, text: 'hold' })
+    try {
+      await until('first turn preparing', () => loads === 1, SLOW)
+      assert.deepEqual(await n.peer.call('session.send', { session_id, text: 'reply' }), { ok: true, queued: true })
+      assert.deepEqual(await n.peer.call('session.queue.send_now', { session_id }), { sent: true })
+      await until('preparing turn cancelled', () => received(record).some((call) => call.method === 'session/cancel'), SLOW)
+    } finally {
+      gate.resolve()
+      await first
+    }
+
+    const row = () => n.last('runtime.sessions')?.sessions.find((session) => session.session_id === session_id)
+    if (failPreparation) {
+      await until('successor preparation error published', () => row()?.turn_error === 'Queued turn could not load its session', SLOW)
+    } else {
+      await until('queued prompt completes', () => row()?.last_text === 'Finished.', SLOW)
+    }
+    assert.equal(loads, 2)
+    const prompts = received(record).filter((call) => call.method === 'session/prompt')
+    assert.deepEqual(prompts.map((call) => call.params.prompt), failPreparation ? [] : [[{ type: 'text', text: 'reply' }]])
+  })
+}
+
 test('start with empty image entries opens an idle session without prompting', async (t) => {
   const { n, record, idle } = await agyRuntime(t)
   const { session } = await n.peer.call('session.start', { images: [{ mime: 'image/png' }] })

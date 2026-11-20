@@ -83,6 +83,17 @@ describe("QueuePanel row actions", () => {
     expect(document.getElementById(send.getAttribute("aria-describedby")!)!.textContent).toContain("Nova 会马上收到");
   });
 
+  it("explains that a runtime assistant stops its turn and starts only the next queued message", () => {
+    const runtime: Session = { ...session, agent: "agy", assistant: true, source_kind: "runtime", capabilities: { queue_send_now: true } };
+    render(<QueuePanel session={runtime} draftKey="qp-runtime-assistant-send" canEdit persona="Nova" />);
+    const send = within(0, "[data-send-now]");
+    const tip = "停止 Nova 当前这一轮，开始处理下一条排队消息";
+    const body = "Nova 会停止当前这一轮，开始处理下一条排队消息。其余消息仍按原顺序排队。";
+    expect(send.getAttribute("aria-label")).toBe(tip);
+    expect(document.getElementById(send.getAttribute("aria-describedby")!)!.textContent).toBe(body);
+    expect(send.title).toBe(`${tip}\n${body}`);
+  });
+
   it("shows a spinner where the busy row's actions were and takes no other action meanwhile", async () => {
     let answer: (v: unknown) => void = () => {};
     vi.mocked(api).mockReturnValue(new Promise((r) => (answer = r)));

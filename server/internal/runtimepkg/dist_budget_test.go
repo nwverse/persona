@@ -10,7 +10,7 @@ import (
 // the model service cannot decode (#11789), are covered by this budget. Raise it only for code a runtime needs, never
 // to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 192_088
+	const budget = 192_481
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {

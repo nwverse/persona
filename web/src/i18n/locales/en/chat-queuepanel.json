@@ -12,6 +12,7 @@
   "drag": "Drag queued message {n} to reorder",
   "send_now": "Send now",
   "send_now_tip": "Send all queued messages now, without waiting for {agent}'s next step",
+  "send_now_tip_runtime": "Stop {agent}'s current turn and start the next queued message",
   "edit": "Edit",
   "edit_label": "Edit queued message {n}",
   "delete": "Delete",
