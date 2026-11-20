@@ -580,15 +580,21 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 		}
 		ctx, note := withLauncherNote(ctx)
 		// The owner's message, which the hub sends and reports: its parameters may move a direction's notes block
-		// (direction_notes.go), settled by the hub's notice, or now when they are refused and nothing is sent.
-		ctx, carry := withNotesCarry(ctx)
+		// (direction_notes.go), settled by the hub's notice, or now when they are refused and nothing is sent. A
+		// message they were already given for is the hub's retry, which it may answer from its record without a
+		// notice: it moves nothing.
+		msg, _ := p.Params["client_msg_id"].(string)
+		var carry *notesCarry
+		if !s.notesOwnerSeen(p.SessionID, msg) {
+			ctx, carry = withNotesCarry(ctx)
+		}
 		params, err := s.SendParams(ctx, p)
 		if err != nil {
 			s.notesSendOutcome(ctx, carry, false)
 			s.appSendRefused(p.MachineID, p.SessionID, err) // the hub sends nothing: no ConversationSent (north_star.go)
 			return nil, err
 		}
-		s.notesOwnerSent(carry)
+		s.notesOwnerSent(ctx, carry, msg)
 		if *note != "" {
 			return map[string]any{"params": params, "launcher_note": *note}, nil
 		}

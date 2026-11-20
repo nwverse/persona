@@ -1125,23 +1125,29 @@ content, not memory: memory stays one for every conversation (#9440), and a dire
   each with the sends that carry its block, and an outcome settles only its own send's move. The manager's own sends
   (`call`: `assistant.send`, `assistant.warm`, `session.send`, `session.send_once`, `assistant.answer_again`) are
   settled by the node's answer, and as not taken when refused before they leave (a launcher out of the computer's
-  scope); the owner's messages by the hub's `session.assistant_sent` notice, which names no message and so settles the
-  oldest of the owner's messages to that conversation still waiting for one (they go in one at a time), and at once as
-  not taken when their `assistant.send_params` is refused. A send the node took keeps its block, and the moves before
-  it stay too. A send not taken drops its move once no other send in flight carries that block: the block before it is
-  put back when no later move is in flight, else the later move counts from it, so only that one message is refused,
-  not every message until the turn ends. Only these sends move the block: the node's own request for what its message
-  runs on (`assistant.model`) and the parameters the manager makes before it sends them through `call` carry the block
-  in effect, as a send to a leader at work does.
-- **An outcome never learned keeps the block**: the moves in flight are in memory only. After a manager restart
-  between a send and its outcome, the new block stays, as it does for an owner's message whose notice never comes (the
-  hub did not send it after all, as for a retry it answers from its record, or it stopped while sending it; after 10
-  minutes, longer than the hub waits for any send, it no longer waits for one, so the hub's next notice settles the
-  message it is about),
-  and for the oldest move or owner's message beyond eight in flight for one conversation. When the node had in fact
-  refused that send, the lead's process still runs the block before it: until the lead is idle, every send that finds
-  it at work carries the new block and the node refuses it, and the first send that finds it idle gives the process
-  the new block.
+  scope) or when the computer is offline or not one of the hub's. The owner's messages are settled by the hub's
+  `session.assistant_sent` notice, which names the message by its `client_msg_id`, and at once as not taken when
+  their `assistant.send_params` is refused. A notice settles only the message it names; one that names none (a message
+  sent without an id, or an older hub's notice) settles the oldest message without an id still waiting for one, else
+  the oldest one waiting. A second `assistant.send_params` for a message the manager already gave parameters for is
+  the hub's retry, which the hub may answer from its record without sending it or telling how it went: it moves
+  nothing and waits for no notice (the manager keeps each conversation's latest 64 ids). A send the node took keeps
+  its block, and the moves before it stay too. A send not taken drops its move once no other send in flight carries
+  that block: the block before it is put back when no later move is in flight, else the later move counts from it, so
+  only that one message is refused, not every message until the turn ends. Only these sends move the block. A send
+  whose outcome nobody reports takes the last confirmed block, the one before the oldest move still in flight, not a
+  block such a move gave: the node's own request for what its message runs on (`assistant.model`), and the parameters
+  the manager makes before it sends them through `call`.
+- **An outcome never learned keeps the block**. An owner's message whose notice never comes (the hub did not send it
+  after all, as for a retry the manager did not know it had seen; it stopped while sending it; or the notice was lost
+  while the manager's connection was down) waits 10 minutes, longer than the hub waits for any send, and takes no
+  other message's notice meanwhile. Until then its move stays in flight, so a send nobody reports takes the block
+  before it; after that it counts as an outcome never learned, and its block stays in effect. The moves in flight are
+  in memory only: after a manager restart between a send and its outcome the new block stays too, as it does for the
+  oldest move or owner's message beyond eight in flight for one conversation. When the node had in fact refused that
+  send, the lead's process still runs the block before it: until the lead is idle, every send that finds it at work
+  carries the new block and the node refuses it, and the first send that finds it idle gives the process the new
+  block.
 - **Two editors** (#11392): a save may say which `notes_at` it started from, as `GET /api/v1/assistant/leaders`
   lists it (`null` there and here: there were no notes); when the
   notes changed since, it is refused with 409 `notes_changed` and the stored `notes` and `notes_at`, so a client can
@@ -1156,7 +1162,8 @@ content, not memory: memory stays one for every conversation (#9440), and a dire
   status alone is never added), and no block goes to Agents.
 - **Checks**: `server/internal/assistant/direction_notes_test.go` (the route, the leader's policy and context, new
   Agents), `server/internal/assistant/lead_conversations_test.go` (`notes_at`, the idle rule across a restart, the
-  outcome of the send that carried a block, in both orders and for every send that moves one) and the
+  outcome of the send that carried a block, in both orders and for every send that moves one, the hub's notice by the
+  message it names), `server/internal/hub/assistant_sent_test.go` (the notice names its message) and the
   goldens `direction_notes.*` / `todo_direction.*`; the web editor's browser check runs against the mock
   hub with `MOCK_LEADERS=1`: `node web/e2e/direction-notes.mjs` (desktop and phone width, light and dark).
 
