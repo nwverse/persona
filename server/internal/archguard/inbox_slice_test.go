@@ -60,13 +60,15 @@ var inboxBookReaders = map[string]struct {
 	"tasks_draft_decisions.go": {5, "the Reader's card-send lock and item copy (deferred from step S3)"},
 }
 
-// inboxBookReadersOpenPRs are readers open PRs add, so that they merge without touching this file; review each in its
-// PR. Move an entry to inboxBookReaders when its PR lands, and drop it when the PR closes or stops reaching the book.
-var inboxBookReadersOpenPRs = map[string]struct {
+// inboxBookOpenPRs are files open PRs add that reach the book, with their counts, so that those PRs merge without
+// touching this file; review each in its PR. When its PR lands, move an entry to inboxBookReaders (a reader) or
+// inboxBookBridge (the bridge's); drop it when the PR closes or stops reaching the book.
+var inboxBookOpenPRs = map[string]struct {
 	sites int
 	seam  string
 }{
-	"outbound_messages.go": {1, "#9782: autoSendSuggestion reads an item under the book's lock; the Reader's item copy"},
+	"outbound_messages.go":    {1, "#9782: autoSendSuggestion reads an item under the book's lock; the Reader's item copy"},
+	"tasks_inbox_existing.go": {2, "#9744: the task bridge links an existing task's item, as tasks_inbox.go does"},
 }
 
 const inboxBookHint = "reach the Inbox through a method of the Inbox core (an inbox*.go file) instead: the Reader " +
@@ -87,7 +89,7 @@ func TestInboxBookStaysInTheInbox(t *testing.T) {
 		}
 		reached[name] = len(sites)
 		r, reader := inboxBookReaders[name]
-		if pr, ok := inboxBookReadersOpenPRs[name]; ok && !reader {
+		if pr, ok := inboxBookOpenPRs[name]; ok && !reader {
 			r, reader = pr, true
 		}
 		switch {
