@@ -111645,6 +111645,121 @@
         }
       }
     },
+    "Notifications can't reach this device. Allow them in Settings." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notifications can't reach this device. Allow them in Settings."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このデバイスは通知を受け取れません。設定で通知を許可してください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台设备收不到通知。请在设置中允许通知。"
+          }
+        }
+      }
+    },
+    "Notifications can't reach this device. Ask the person who set up Persona to finish notification setup." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notifications can't reach this device. Ask the person who set up Persona to finish notification setup."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このデバイスは通知を受け取れません。Personaの設定をした人に、通知の設定を完了してもらってください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台设备收不到通知。请让负责设置 Persona 的人完成通知设置。"
+          }
+        }
+      }
+    },
+    "Notifications can't reach this device. Check your network. Persona will try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notifications can't reach this device. Check your network. Persona will try again."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このデバイスは通知を受け取れません。ネットワークを確認してください。Personaは再試行します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台设备收不到通知。请检查网络，Persona 会重试。"
+          }
+        }
+      }
+    },
+    "Notifications can't reach this device. Keep Persona open while it tries again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notifications can't reach this device. Keep Persona open while it tries again."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このデバイスは通知を受け取れません。Personaを開いたままにすると、再試行します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台设备收不到通知。请保持 Persona 打开，它会自动重试。"
+          }
+        }
+      }
+    },
+    "Notifications can't reach this device. Update Persona to turn them back on." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notifications can't reach this device. Update Persona to turn them back on."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このデバイスは通知を受け取れません。Personaをアップデートして通知を復旧してください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台设备收不到通知。请更新 Persona 以恢复通知。"
+          }
+        }
+      }
+    },
     "Notifications for Persona are off in Settings." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -122230,6 +122345,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Persona Link · %1$@ から"
+          }
+        }
+      }
+    },
+    "Persona Notification Settings" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona Notification Settings"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Personaの通知設定"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona 通知设置"
           }
         }
       }
@@ -167905,6 +168043,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "The hub has no push registration for this device." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The hub has no push registration for this device."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ハブにこのデバイスのプッシュ登録がありません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "hub 没有这台设备的推送注册。"
+          }
+        }
+      }
     },
     "The hub hasn't said which way it pushes to this device." : {
       "extractionState" : "manual",

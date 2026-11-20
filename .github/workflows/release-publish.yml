@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       pr:
-        description: 'Merged release PR number whose exact main merge commit is still current'
+        description: 'Merged release PR number whose verified merge commit is an ancestor of current main'
         required: true
         type: number
 
@@ -140,7 +140,7 @@ jobs:
             printf 'version=%s\n' "$version"
             printf 'commit=%s\n' "$MERGE_COMMIT"
           } >> "$GITHUB_OUTPUT"
-      - name: Verify the merged PR and main are this exact source
+      - name: Verify the merged PR and current main retain this exact source
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPOSITORY: ${{ github.repository }}
@@ -152,7 +152,10 @@ jobs:
           set -euo pipefail
           version="$(python3 scripts/operations/release_pr.py --repository "$REPOSITORY" --channel "$CHANNEL" verify-merged-pr --pr-json release/merged-pr.json --commit "$COMMIT" --actor "$ACTOR")"
           test "$version" = "${{ steps.source.outputs.version }}"
-          test "$(git ls-remote "https://github.com/$REPOSITORY.git" refs/heads/main | cut -f1)" = "$COMMIT"
+          # Ordinary PRs may merge during the exact-source post-merge build. Keep this verified commit as the tag
+          # source, but require it to be retained by main rather than racing a moving branch head.
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$COMMIT" FETCH_HEAD
       - name: Download the release PR's exact verified artifacts
         uses: actions/download-artifact@v4
         with:

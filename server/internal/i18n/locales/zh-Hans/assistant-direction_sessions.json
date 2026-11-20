@@ -1,4 +1,5 @@
 {
+  "full_access_required": "把会话归入常驻方向需要有完整权限的设备。",
   "machine_not_found": "这台电脑不在当前助理的管理范围内。",
   "session_not_found": "这个会话不在当前助理的管理范围内。",
   "direction_not_found": "这个常驻方向不存在。",
