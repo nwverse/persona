@@ -1397,6 +1397,9 @@ not invented.
   new parent turn without becoming a user-authored message: clients begin a new exchange at it, so the last words
   of the turn before it stay that turn's answer and are never folded into the woken turn's work (#9140). Cold windows reconstruct earlier launch associations
   and delivery status before parsing their tail; incremental reads append results, never rewrite the old receipt.
+  Antigravity also emits a generic system `notice` with `wake: true` when its background work resumes after a
+  delivered answer. Live ACP and native transcript readers use the same exchange boundary before the resumed
+  content, including when a viewer has already advanced past the native scheduling notification (#11756).
 
 Apple integration (#3377): decode `task` on `tool_result` as well as on legacy notices, accept `running`, retain all
 results per call and use only terminal evidence to stop the work bar. Handle `wake` independently of item kind.

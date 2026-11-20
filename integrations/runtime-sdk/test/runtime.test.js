@@ -257,6 +257,22 @@ test('content rewritten under another history goes out even where its seq did no
   assert.equal(n.all('session.items').length, 3)
 })
 
+test('a wake batch reaches a watcher before the first live text of the new exchange', async (t) => {
+  const n = await startFakeNode(t)
+  const rt = createRuntime(minimal({ items: async () => ({ items: [], history: 'h', to_seq: 0 }) }), { runtime: 'toy', socketPath: n.path })
+  t.after(() => rt.stop())
+  rt.start()
+  await n.ready
+  await n.peer.call('session.watch', { session_id: 's1', since_seq: 0 })
+  rt.append('s1', { items: [{ id: 'reply#0', seq: 1, kind: 'text' }], fromSeq: 0, toSeq: 1, history: 'h' })
+  rt.append('s1', { items: [{ id: 'reply#-1', seq: 2, kind: 'notice', wake: true }], fromSeq: 1, toSeq: 2, history: 'h' })
+  rt.stream('s1', 'Checking again.')
+  await until('new exchange starts streaming', () => n.last('session.delta')?.text === 'Checking again.')
+  const events = n.events.filter(entry => entry.event === 'session.items' || entry.event === 'session.delta')
+  assert.deepEqual(events.map(entry => entry.event), ['session.items', 'session.delta'])
+  assert.deepEqual(events[0].params.items.map(item => item.id), ['reply#0', 'reply#-1'])
+})
+
 test('in-place item updates under the same history go out without advancing seq and coalesce by id', async (t) => {
   const n = await startFakeNode(t)
   const rt = createRuntime(minimal({ items: async () => ({ items: [], history: 'h1', to_seq: 5 }) }), { runtime: 'toy', socketPath: n.path, retryMs: 20 })
