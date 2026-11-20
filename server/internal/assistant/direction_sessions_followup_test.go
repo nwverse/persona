@@ -702,3 +702,273 @@ func TestDirectionReadAndWriteRefusalCodes(t *testing.T) {
 		t.Fatalf("a bad body changed the book: %s", got)
 	}
 }
+
+// An ended direction recorded on a computer id another computer absorbed since: its leader conversation is still never
+// filed or placed.
+func TestDirectionLeaderRecordedUnderAnAbsorbedComputerIDStaysSpecial(t *testing.T) {
+	ft := directionFilingFleetEnv(t, newFleetMem())
+	ctx := context.Background()
+	convs := []proto.Session{{MachineID: "mac", SessionID: "conv_old_lead", Cwd: "/home/u/.persona/assistant", Assistant: true,
+		Status: proto.StatusIdle, Title: "An ended direction"}}
+	ft.d.mu.Lock()
+	convs = append(slices.Clone(ft.d.machines["mac"].sessions), convs...)
+	ft.d.mu.Unlock()
+	ft.sessions("mac", convs...)
+	directionQueueDone(t, ft.s)
+	ended := time.Now().Add(-time.Hour).UTC()
+	b := &ft.s.directions
+	b.mu.Lock()
+	if !ft.s.directionsLocked(ctx) {
+		b.mu.Unlock()
+		t.Fatal("directions unavailable")
+	}
+	b.m["conv_old_lead"] = &direction{MachineID: "a-mac", By: "user", At: ended.Add(-time.Hour), EndedAt: &ended}
+	b.mu.Unlock()
+	if out := directionFilingPut(ft.s, roleFull, "", "mac", "conv_old_lead", "conv_lead_a"); out.Status != http.StatusConflict || out.Code != "direction_leader_conversation" {
+		t.Fatalf("filing an ended direction's leader conversation: %d %s", out.Status, out.Raw)
+	}
+}
+
+// The write counts the target direction outside the book's lock: a write that lands meanwhile makes it count again
+// on the new book, and nothing waits on the lock while the computers are asked.
+func TestDirectionFilingCountsAgainWhenTheBookChanged(t *testing.T) {
+	e := directionFilingEnv(t, nil)
+	ctx := context.Background()
+	counts := 0
+	held := func(records map[string]directionFiling) (int, error) {
+		counts++
+		if counts == 1 {
+			done := make(chan error, 1)
+			go func() {
+				_, err := e.s.fileDirectionSession(ctx, [2]string{"server", "chat-b"},
+					&directionFiling{Direction: "conv_lead_a", By: titleByUser, At: time.Now().UTC()}, func(map[string]directionFiling) (int, error) { return 0, nil })
+				done <- err
+			}()
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Errorf("the write that landed meanwhile: %v", err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Error("a write waited on the book's lock while another counted")
+			}
+		}
+		return len(records), nil
+	}
+	out, err := e.s.fileDirectionSession(ctx, [2]string{"server", "chat-a"},
+		&directionFiling{Direction: "conv_lead_a", By: titleByUser, At: time.Now().UTC()}, held)
+	if err != nil || !out.Changed || counts != 2 {
+		t.Fatalf("write: %+v %v, counted %d times, want 2", out, err, counts)
+	}
+	if !directionBookHas(t, e.s, "server", "chat-a") || !directionBookHas(t, e.s, "server", "chat-b") {
+		t.Fatalf("a write was lost: %s", directionBookSnapshot(t, e.s))
+	}
+}
+
+// A tree built while what places sessions cannot be read keeps the sessions told last, instead of telling the apps
+// every direction lost them.
+func TestDirectionTreeKeepsItsSessionsWhenTheyCannotBePlaced(t *testing.T) {
+	ctx := context.Background()
+	st := &directionCountingStore{memStore: &memStore{}}
+	e := directionFilingEnv(t, st)
+	e.s.originSet(ctx, "server", "chat-opened", OriginSpawned, "conv_lead_a", "")
+	e.f.mu.Lock()
+	for i := range e.f.sessions["server"] {
+		if e.f.sessions["server"][i].SessionID == "chat-opened" {
+			e.f.sessions["server"][i].Status, e.f.sessions["server"][i].State = proto.StatusWorking, proto.StateWorking
+		}
+	}
+	e.f.mu.Unlock()
+	e.clock.advance(time.Minute)
+	e.s.directionTreeSync(ctx)
+	told := e.directionsEvents()
+	if got := e.tree().Directions[0]; !slices.Contains(directionSessionViews(got.Sessions), "chat-opened") {
+		t.Fatalf("precondition: the working leader-opened chat is in A's sessions: %+v", got.Sessions)
+	}
+	st.fail(true)
+	if got := e.tree().Directions[0]; !slices.Contains(directionSessionViews(got.Sessions), "chat-opened") {
+		t.Fatalf("a tree that could not place sessions dropped them: %+v", got.Sessions)
+	}
+	e.s.directionTreeSync(ctx)
+	if got := e.directionsEvents(); got != told {
+		t.Fatalf("the apps were told a changed tree: %d events, want %d", got, told)
+	}
+}
+
+func directionSessionViews(list []directionSession) []string {
+	out := make([]string, 0, len(list))
+	for _, s := range list {
+		out = append(out, s.SessionID)
+	}
+	return out
+}
+
+// directionFleetShown: computer id's node is away while the devices still show it as before until until (its
+// reconnect grace, or the warm start after a restart): online and reachable, its last list, no further word.
+func directionFleetShown(ft *fleetTest, id string, until time.Time) {
+	ft.d.mu.Lock()
+	defer ft.d.mu.Unlock()
+	ft.d.machines[id].shownUntil = until
+}
+
+// directionFleetGone: the window ended with its node still away: the devices show it offline and tell the manager
+// nothing.
+func directionFleetGone(ft *fleetTest, id string) {
+	ft.d.mu.Lock()
+	defer ft.d.mu.Unlock()
+	ft.d.machines[id].away, ft.d.machines[id].shownUntil = true, time.Time{}
+}
+
+// The tree is built again when a computer stops being shown as before, with nothing telling the manager: at the end
+// of the reconnect grace (the devices told it at the start, while their summary still said online) and at the end of
+// the warm start after a restart (they tell it nothing at all). Point 1 of the review of #11463.
+func TestDirectionTreeRebuiltWhenAComputerStopsBeingShownAsBefore(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		detach bool
+	}{{"reconnect grace", true}, {"warm start", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			ft := directionFilingFleetEnv(t, newFleetMem())
+			clock := newFakeClock()
+			ft.s.dtree.mu.Lock()
+			ft.s.dtree.after = clock.After
+			ft.s.dtree.mu.Unlock()
+			ctx := context.Background()
+			directionFleetComputer(t, ft, "laptop", proto.Session{SessionID: "agent-laptop", Agent: "claude", Cwd: "/home/u/code",
+				Status: proto.StatusWorking, Title: "Laptop agent"})
+			directionFilingMustPut(t, ft.s, "laptop", "agent-laptop", "conv_lead_a")
+			directionFleetShown(ft, "laptop", time.Now().Add(30*time.Second))
+			if tc.detach {
+				ft.s.NodeDetached("laptop")
+			}
+			clock.advance(directionTreeSettle)
+			ft.s.directionTreeSync(ctx)
+			told := directionHubEvents(ft.f, "directions")
+			if tree, _ := directionFilingTreeGet(t, ft.s); !slices.Contains(directionSessionIDs(tree[0].Sessions), "agent-laptop") {
+				t.Fatalf("precondition: while shown as before the Agent keeps its last state: %+v", tree[0])
+			}
+
+			directionFleetGone(ft, "laptop")
+			clock.advance(31 * time.Second)
+			if got := directionHubEvents(ft.f, "directions"); got != told+1 {
+				t.Fatalf("the end of the window told the apps %d times, want once", got-told)
+			}
+			if tree, raw := directionFilingTreeGet(t, ft.s); strings.Contains(raw, "agent-laptop") {
+				t.Fatalf("the tree still lists the Agent of a computer no longer shown: %+v", tree[0])
+			}
+			if got := directionFindSession(t, directionMustRead(t, ft.s, "", "conv_lead_a").Sessions, "agent-laptop"); got.State != "computer_offline" {
+				t.Fatalf("state %q, want computer_offline", got.State)
+			}
+		})
+	}
+}
+
+// A connected computer that has not given its list on this connection (a cold start, or its list call failed) has a
+// list that is not known, not an empty one (point 3 of the review of #11463).
+func TestDirectionStandingListUnknownUntilTheComputerGivesItsList(t *testing.T) {
+	ft := directionFilingFleetEnv(t, newFleetMem())
+	directionFleetComputer(t, ft, "box", directionStoppedAgent("agent-box"))
+	directionFilingMustPut(t, ft.s, "box", "agent-box", "conv_lead_a")
+	ft.d.mu.Lock()
+	ft.d.machines["box"].unlisted, ft.d.machines["box"].sessions = true, nil
+	ft.d.mu.Unlock()
+	if got := directionFindSession(t, directionMustRead(t, ft.s, "", "conv_lead_a").Sessions, "agent-box"); got.State != "list_unknown" {
+		t.Fatalf("a computer with no list yet: state %q, want list_unknown", got.State)
+	}
+	ft.d.mu.Lock()
+	ft.d.machines["box"].unlisted = false
+	ft.d.mu.Unlock()
+	ft.sessions("box") // its list arrives, without the Agent
+	directionQueueDone(t, ft.s)
+	if got := directionFindSession(t, directionMustRead(t, ft.s, "", "conv_lead_a").Sessions, "agent-box"); got.State != "not_listed" {
+		t.Fatalf("a list without the session: state %q, want not_listed", got.State)
+	}
+}
+
+// Undo works right after the write it undoes: it puts back exactly the entry that write replaced or took out, without
+// the session's row and into an ended or full direction (points 4 and 5 of the review of #11463).
+func TestDirectionUndoRightAfterItsWrite(t *testing.T) {
+	ctx := context.Background()
+	notListed := func(t *testing.T, write string) {
+		e := directionFilingEnv(t, nil)
+		e.f.setSessions("box", proto.Session{MachineID: "box", SessionID: "agent-gone", Agent: "claude", Status: proto.StatusIdle, Title: "Filed title"})
+		directionFilingMustPut(t, e.s, "box", "agent-gone", "conv_lead_a")
+		filed := directionFindSession(t, directionMustRead(t, e.s, "", "conv_lead_a").Sessions, "agent-gone")
+		e.f.setSessions("box")
+		out := directionFilingPutBody(e.s, roleFull, "", "box", "agent-gone", write)
+		if out.Status != http.StatusOK || directionValue(out.Previous) != "conv_lead_a" {
+			t.Fatalf("write %s: %d %s", write, out.Status, out.Raw)
+		}
+		undo := directionFilingPut(e.s, roleFull, "", "box", "agent-gone", *out.Previous)
+		if undo.Status != http.StatusOK || directionValue(undo.Direction) != "conv_lead_a" || !undo.Changed {
+			t.Fatalf("undo: %d %s", undo.Status, undo.Raw)
+		}
+		back := directionFindSession(t, directionMustRead(t, e.s, "", "conv_lead_a").Sessions, "agent-gone")
+		filed.State = "not_listed"
+		if !directionSameRow(back, filed) {
+			t.Fatalf("undo did not put back the entry as it was: before %+v, after %+v", filed, back)
+		}
+		if moved := directionFilingPut(e.s, roleFull, "", "box", "agent-gone", "conv_lead_b"); moved.Status != http.StatusNotFound {
+			t.Fatalf("a write that is no Undo still needs the row: %d %s", moved.Status, moved.Raw)
+		}
+	}
+	t.Run("on its own, not listed", func(t *testing.T) { notListed(t, `{"direction":""}`) })
+	t.Run("taken out, not listed", func(t *testing.T) { notListed(t, `{"direction":null}`) })
+	t.Run("taken out, its computer left", func(t *testing.T) {
+		ft := directionFilingFleetEnv(t, newFleetMem())
+		directionFleetComputer(t, ft, "spare", directionStoppedAgent("agent-spare"))
+		directionFilingMustPut(t, ft.s, "spare", "agent-spare", "conv_lead_a")
+		directionFleetRemove(ft, "spare")
+		out := directionFilingMustRemove(t, ft.s, "spare", "agent-spare")
+		if undo := directionFilingPut(ft.s, roleFull, "", "spare", "agent-spare", *out.Previous); undo.Status != http.StatusOK {
+			t.Fatalf("undo: %d %s", undo.Status, undo.Raw)
+		}
+		if got := directionFindSession(t, directionMustRead(t, ft.s, "", "conv_lead_a").Sessions, "agent-spare"); got.State != "computer_removed" {
+			t.Fatalf("restored filing: %+v", got)
+		}
+	})
+	t.Run("into an ended direction", func(t *testing.T) {
+		e := directionFilingEnv(t, nil)
+		directionFilingMustPut(t, e.s, "server", "chat-b", "conv_lead_a")
+		filed := directionFindSession(t, directionMustRead(t, e.s, "", "conv_lead_a").Sessions, "chat-b")
+		moved := directionFilingMustPut(t, e.s, "server", "chat-b", "conv_lead_b")
+		if code, _ := doRoute(t, e.s, http.MethodPost, "/api/v1/assistant/directions/conv_lead_a/end", "", roleFull); code != http.StatusOK {
+			t.Fatalf("end: %d", code)
+		}
+		e.s.directionsSync(ctx)
+		undo := directionFilingPut(e.s, roleFull, "", "server", "chat-b", *moved.Previous)
+		if undo.Status != http.StatusOK || directionValue(undo.Previous) != "conv_lead_b" {
+			t.Fatalf("undo into an ended direction: %d %s", undo.Status, undo.Raw)
+		}
+		ended := directionMustRead(t, e.s, "", "conv_lead_a")
+		if back := directionFindSession(t, ended.Sessions, "chat-b"); ended.EndedAt == nil || !directionSameRow(back, filed) {
+			t.Fatalf("undo did not put the entry back as it was: before %+v, after %+v", filed, back)
+		}
+		if again := directionFilingPut(e.s, roleFull, "", "server", "chat-a", "conv_lead_a"); again.Status != http.StatusConflict || again.Code != "direction_ended" {
+			t.Fatalf("a filing that is no Undo into the ended direction: %d %s", again.Status, again.Raw)
+		}
+	})
+	t.Run("into a full direction", func(t *testing.T) {
+		e := directionFilingEnv(t, nil)
+		var extra []proto.Session
+		for i := range directionSessionsPerDirection + 1 {
+			extra = append(extra, proto.Session{MachineID: "server", SessionID: fmt.Sprintf("chat-full-%02d", i), Cwd: "/home/u/.persona/assistant",
+				Assistant: true, Status: proto.StatusIdle, Title: "Filed"})
+		}
+		directionFilingSetSessions(e, extra...)
+		for _, c := range extra[:directionSessionsPerDirection] {
+			directionFilingMustPut(t, e.s, "server", c.SessionID, "conv_lead_a")
+		}
+		moved := directionFilingMustPut(t, e.s, "server", "chat-full-00", "conv_lead_b")
+		directionFilingMustPut(t, e.s, "server", extra[directionSessionsPerDirection].SessionID, "conv_lead_a") // A is full again
+		if undo := directionFilingPut(e.s, roleFull, "", "server", "chat-full-00", *moved.Previous); undo.Status != http.StatusOK {
+			t.Fatalf("undo into a full direction: %d %s", undo.Status, undo.Raw)
+		}
+		if got := directionMustRead(t, e.s, "", "conv_lead_a"); len(got.Sessions) != directionSessionsPerDirection+1 {
+			t.Fatalf("A holds %d after the Undo, want %d", len(got.Sessions), directionSessionsPerDirection+1)
+		}
+		if out := directionFilingPut(e.s, roleFull, "", "server", "chat-a", "conv_lead_a"); out.Status != http.StatusConflict || out.Code != "direction_full" {
+			t.Fatalf("a new filing into A: %d %s", out.Status, out.Raw)
+		}
+	})
+}

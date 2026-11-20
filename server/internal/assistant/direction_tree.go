@@ -128,7 +128,12 @@ type directionTreeBook struct {
 	run    sync.Mutex                      // one build and compare at a time
 	timer  *time.Timer                     // a real-clock comparison not yet run (tests can stop it during teardown)
 	runs   sync.WaitGroup                  // scheduled real-clock comparisons; fixtures wait before closing their store
-	// machines: the computers of the direction sessions in the tree built last (directionSessionsOn).
+	// wake, wakeTimer: the build directionTreeAt scheduled for when a computer stops being shown as before.
+	wake      time.Time
+	wakeTimer *time.Timer
+	// sessions and machines: the directions' sessions in the tree told last, and their computers (directionSessionsOn).
+	// A build that cannot place sessions keeps those (directionTree).
+	sessions map[string][]directionSession
 	machines map[string]bool
 }
 
@@ -203,7 +208,7 @@ func (s *Service) directionSessionsOn(ctx context.Context, machine string, list 
 	current := func(id string) bool { return id != "" && id != cfg.Main && slices.Contains(cfg.Leaders, id) }
 	if records, err := s.directionSessionRecords(ctx); err == nil {
 		for k, e := range s.directionEntries(records) {
-			if k[0] == machine && current(e.Direction) {
+			if k[0] == machine && e.live() && current(e.Direction) {
 				return true
 			}
 		}
@@ -237,24 +242,30 @@ func (s *Service) directionTreeSync(ctx context.Context) {
 	}
 	b.run.Lock()
 	defer b.run.Unlock()
-	tree := s.directionTree(ctx, time.Now())
+	tree, wake := s.directionTreeWake(ctx, time.Now())
 	raw, err := json.Marshal(tree)
 	if err != nil {
 		return
 	}
 	sum := sha256.Sum256(raw)
-	machines := map[string]bool{}
+	sessions, machines := map[string][]directionSession{}, map[string]bool{}
 	for _, d := range tree.Directions {
+		if len(d.Sessions) > 0 {
+			sessions[d.ID] = d.Sessions
+		}
 		for _, session := range d.Sessions {
 			machines[session.MachineID] = true
 		}
 	}
 	b.mu.Lock()
 	same := b.told && b.digest == sum
-	b.digest, b.told, b.machines = sum, true, machines
+	b.digest, b.told, b.sessions, b.machines = sum, true, sessions, machines
 	b.mu.Unlock()
 	if !same {
 		s.event(ctx, map[string]any{"type": "directions"})
+	}
+	if !wake.IsZero() {
+		s.directionTreeAt(wake)
 	}
 }
 
@@ -302,20 +313,63 @@ func (s *Service) currentLeaders(ctx context.Context, cfg Settings) ([]string, m
 
 // directionTree builds the tree from the to-dos and their Agents' sessions now (each machine asked once).
 func (s *Service) directionTree(ctx context.Context, now time.Time) directionTree {
+	out, _ := s.directionTreeWake(ctx, now)
+	return out
+}
+
+// directionTreeWake is directionTree, and when a computer of its directions' sessions stops being shown as before
+// (zero: none will): the tree can change then, and nothing tells the manager.
+func (s *Service) directionTreeWake(ctx context.Context, now time.Time) (directionTree, time.Time) {
 	tb, cfg, names := s.directionTreeParts(ctx, now)
 	out := tb.tree(names)
-	groups, err := tb.directionSessionGroups(ctx, cfg)
+	groups, wake, err := tb.directionSessionGroups(ctx, cfg)
 	if err != nil {
+		// What places sessions could not be read for now: the sessions told last stay, rather than every direction
+		// losing its sessions until the next build.
 		s.logf("direction sessions: %v", err)
-		return out
+		s.dtree.mu.Lock()
+		groups = s.dtree.sessions
+		s.dtree.mu.Unlock()
+	} else {
+		tb.directionTreeSessionRows(groups, out)
 	}
-	tb.directionTreeSessionRows(groups, out)
 	for i := range out.Directions {
 		if !out.Directions[i].Secretary {
 			out.Directions[i].Sessions = groups[out.Directions[i].ID]
 		}
 	}
-	return out
+	return out, wake
+}
+
+// directionTreeAt builds the tree again at at: a computer of a direction's session stops being shown as before then
+// (its reconnect grace or the warm start after a restart ends), and the devices tell the manager nothing of it. One
+// wake is kept, the earliest; the build itself waits directionTreeSettle more, past the devices' own change.
+func (s *Service) directionTreeAt(at time.Time) {
+	b := &s.dtree
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.wake.IsZero() && !b.wake.After(at) || s.runCtx().Err() != nil {
+		return
+	}
+	b.wake = at
+	fire := func() {
+		b.mu.Lock()
+		if b.wake.Equal(at) {
+			b.wake, b.wakeTimer = time.Time{}, nil
+		}
+		b.mu.Unlock()
+		if s.runCtx().Err() == nil {
+			s.directionTreeSoon()
+		}
+	}
+	if b.after != nil {
+		b.after(time.Until(at), fire)
+		return
+	}
+	if b.wakeTimer != nil {
+		b.wakeTimer.Stop()
+	}
+	b.wakeTimer = time.AfterFunc(time.Until(at), fire)
 }
 
 // directionTreeParts is the tree's build. The single-direction read builds only the part taskOwner needs

@@ -33,11 +33,48 @@ type directionFiling struct {
 	// Parent is the session a Codex sub-agent session ran under when it was filed (proto.Session.ParentSessionID), so
 	// placement rule 1 can follow it while its computer does not list it.
 	Parent string `json:"parent,omitempty"`
+	// Was is the entry the write of this one replaced (nil: there was none), so that a write putting it back, the
+	// Undo, restores it exactly (restoreOf). Kept one deep: a Was has no Was.
+	Was *directionFiling `json:"was,omitempty"`
+	// RemovedAt: this entry was taken out then. Kept only so the Undo of that can put it back; it places nothing,
+	// holds no place, and the session's next write replaces it (directionRemovedKeep drops it after a week).
+	RemovedAt *time.Time `json:"removed_at,omitempty"`
+}
+
+// directionRemovedKeep is how long an entry taken out is kept for its Undo when its session is written no more.
+const directionRemovedKeep = 7 * 24 * time.Hour
+
+// live: the entry places the session (it was not taken out).
+func (f directionFiling) live() bool { return f.RemovedAt == nil }
+
+// bare is the entry without what it keeps for an Undo.
+func (f directionFiling) bare() directionFiling {
+	f.Was, f.RemovedAt = nil, nil
+	return f
+}
+
+// restoreOf is the entry a write may put back exactly, as the Undo of the session's last write: the one that write
+// replaced, or the one it took out; nil when there is none (a first filing's Undo writes null instead).
+func restoreOf(e directionFiling, ok bool) *directionFiling {
+	switch {
+	case !ok:
+		return nil
+	case !e.live():
+		r := e.bare()
+		return &r
+	case e.Was != nil:
+		r := e.Was.bare()
+		return &r
+	}
+	return nil
 }
 
 type directionSessionsBook struct {
 	mu     sync.Mutex
 	loaded bool
+	// rev changes whenever m is replaced, so a write that counted a direction outside the lock knows the book it
+	// counted is still the book (fileDirectionSession).
+	rev uint64
 	// m is by runtimeListID(machine, session). An entry made before its computer's id was absorbed by another keeps the
 	// old id until the session's next write (directionEntries).
 	m map[string]*directionFiling
@@ -136,7 +173,12 @@ func (s *Service) serveDirectionFiling(w http.ResponseWriter, r *http.Request) {
 		directionFilingRefusal(w, r, http.StatusServiceUnavailable, "direction_unavailable", errDirectionUnavailable)
 		return
 	}
-	entry, filed := s.directionEntries(records)[key]
+	entry, has := s.directionEntries(records)[key]
+	filed := has && entry.live()
+	// The Undo of the session's last write puts back exactly the entry that write replaced or took out: it needs
+	// neither the session's row nor a current direction with room, as the write it undoes did not.
+	restore := restoreOf(entry.directionFiling, has)
+	undo := restore != nil && restore.Direction == *target
 	list, listErr := s.sessions(ctx, machine)
 	var row proto.Session
 	listed := false
@@ -149,7 +191,7 @@ func (s *Service) serveDirectionFiling(w http.ResponseWriter, r *http.Request) {
 			row, listed = c, true
 		}
 	}
-	needsRow := !filed || *target != ""
+	needsRow := !undo && (!filed || *target != "")
 	switch {
 	case listed && identity.IsAssistantDir(row.Cwd) && !identity.IsAssistantDirOf(row.Cwd, s.id):
 		directionFilingRefusal(w, r, http.StatusNotFound, "session_not_found", errDirectionSessionNotFound)
@@ -164,6 +206,8 @@ func (s *Service) serveDirectionFiling(w http.ResponseWriter, r *http.Request) {
 	case needsRow:
 		directionFilingRefusal(w, r, http.StatusNotFound, "session_not_found", errDirectionSessionNotFound)
 		return
+	case undo: // not listed now: the entry it puts back is as it was filed
+		row.Title, row.ParentSessionID = restore.Title, restore.Parent
 	default: // in the book, not listed now, set on its own: kept as it was filed
 		row.Title, row.ParentSessionID = entry.Title, entry.Parent
 	}
@@ -178,10 +222,10 @@ func (s *Service) serveDirectionFiling(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch {
-	case sid == cfg.Main && machine == cfg.mainRouteMachine():
+	case sid == cfg.Main && machine == s.canonical(cfg.mainRouteMachine()):
 		directionFilingRefusal(w, r, http.StatusConflict, "direction_main_conversation", errDirectionMain)
 		return
-	case sid == cfg.BackgroundSupervisor && sid != cfg.Main && machine == cmp.Or(cfg.BackgroundSupervisorMachineID, cfg.MachineID):
+	case sid == cfg.BackgroundSupervisor && sid != cfg.Main && machine == s.canonical(cmp.Or(cfg.BackgroundSupervisorMachineID, cfg.MachineID)):
 		directionFilingRefusal(w, r, http.StatusConflict, "direction_background_supervisor", errDirectionBackground)
 		return
 	case rules.special[key]:
@@ -198,14 +242,16 @@ func (s *Service) serveDirectionFiling(w http.ResponseWriter, r *http.Request) {
 			switch {
 			case !ok:
 				directionFilingRefusal(w, r, http.StatusServiceUnavailable, "direction_unavailable", errDirectionUnavailable)
-			case known:
-				directionFilingRefusal(w, r, http.StatusConflict, "direction_ended", errDirectionEnded)
-			default:
+				return
+			case !known:
 				directionFilingRefusal(w, r, http.StatusNotFound, "direction_not_found", errDirectionNotFound)
+				return
+			case !undo:
+				directionFilingRefusal(w, r, http.StatusConflict, "direction_ended", errDirectionEnded)
+				return
 			}
-			return
 		}
-		if space, known := s.conversationSpace(ctx, *target); known && spaceOf(row) != space {
+		if space, known := s.conversationSpace(ctx, *target); !undo && known && spaceOf(row) != space {
 			directionFilingRefusal(w, r, http.StatusConflict, "direction_space_mismatch", errDirectionSpace)
 			return
 		}
@@ -213,6 +259,9 @@ func (s *Service) serveDirectionFiling(w http.ResponseWriter, r *http.Request) {
 	next := &directionFiling{Direction: *target, By: titleByUser, At: time.Now().UTC(), Title: row.Title, Parent: row.ParentSessionID}
 	held := func(records map[string]directionFiling) (int, error) {
 		return s.directionHeld(ctx, rules, records, *target, key)
+	}
+	if undo {
+		next, held = restore, nil
 	}
 	out, err := s.fileDirectionSession(ctx, key, next, held)
 	if errors.Is(err, errDirectionFull) {
@@ -233,36 +282,41 @@ func (s *Service) answerDirectionFiling(w http.ResponseWriter, r *http.Request, 
 	apierr.WriteJSON(w, out)
 }
 
-// directionSpecialSessions includes current and ended leader conversations, plus main and the background supervisor,
-// and the ids that are or were directions. Special conversations are never listed as filed sessions, and only a known
-// direction's recorded opener counts as a previous or implicit placement.
+// directionSpecialSessions includes current and ended leader conversations, plus main and the background supervisor, by
+// canonical computer, and the ids that are or were directions. Special conversations are never listed as filed
+// sessions, and only a known direction's recorded opener counts as an implicit placement.
 func (s *Service) directionSpecialSessions(ctx context.Context, cfg Settings) (map[[2]string]bool, map[string]bool, error) {
-	out := map[[2]string]bool{}
+	var keys [][2]string
 	knownDirections := map[string]bool{}
 	if cfg.Main != "" {
-		out[[2]string{cfg.mainRouteMachine(), cfg.Main}] = true
+		keys = append(keys, [2]string{cfg.mainRouteMachine(), cfg.Main})
 	}
 	if cfg.BackgroundSupervisor != "" {
-		out[[2]string{cmp.Or(cfg.BackgroundSupervisorMachineID, cfg.MachineID), cfg.BackgroundSupervisor}] = true
+		keys = append(keys, [2]string{cmp.Or(cfg.BackgroundSupervisorMachineID, cfg.MachineID), cfg.BackgroundSupervisor})
 	}
 	for _, id := range cfg.Leaders {
 		if id != "" && id != cfg.Main {
-			out[[2]string{cfg.MachineID, id}] = true
+			keys = append(keys, [2]string{cfg.MachineID, id})
 			knownDirections[id] = true
 		}
 	}
 	b := &s.directions
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	if !s.directionsLocked(ctx) {
+		b.mu.Unlock()
 		return nil, nil, errors.New("directions could not be read")
 	}
 	for id, d := range b.m {
 		if d == nil {
 			continue
 		}
-		out[[2]string{cmp.Or(d.MachineID, cfg.MachineID), id}] = true
+		keys = append(keys, [2]string{cmp.Or(d.MachineID, cfg.MachineID), id})
 		knownDirections[id] = true
+	}
+	b.mu.Unlock()
+	out := make(map[[2]string]bool, len(keys))
+	for _, k := range keys { // a direction recorded on a computer id another one absorbed since is that one's
+		out[[2]string{s.canonical(k[0]), k[1]}] = true
 	}
 	return out, knownDirections, nil
 }
@@ -351,6 +405,7 @@ func (s *Service) directionSessionsLocked(ctx context.Context) bool {
 		m = map[string]*directionFiling{}
 	}
 	b.m, b.loaded = m, true
+	b.rev++
 	return true
 }
 
@@ -443,10 +498,62 @@ func (s *Service) directionKeysOf(records map[string]directionFiling, k [2]strin
 	return keys
 }
 
-// fileDirectionSession serializes the complete read/check/write of session k's entry: next nil takes it out. held
-// counts the sessions the target direction holds besides k, as the read places them; it runs under the book's lock,
-// with the book as it is, only when the session moves into a direction. Copy-on-write keeps a failed save invisible
-// even before the next lazy reload; loaded=false also forces that reload, as the other settings books do.
+// directionFilingTries is how many times a write plans and counts again when the book changed meanwhile.
+const directionFilingTries = 4
+
+// directionFilingWrite is what writing an entry for a session does to the book as records has it: the answer, and
+// whether and how the book changes (its keys drop go, keep is put under key).
+type directionFilingWrite struct {
+	out   directionFilingResult
+	write bool
+	drop  []string
+	key   string
+	keep  *directionFiling
+}
+
+// planDirectionFiling plans writing next for session k (nil takes its entry out). The entry written keeps the one it
+// replaces as its Was; an entry taken out stays, marked removed, for its Undo. An unchanged placement still writes when
+// the session's entry is not only under its canonical key: the entry stays, under that key alone.
+func (s *Service) planDirectionFiling(records map[string]directionFiling, k [2]string, next *directionFiling, now time.Time) directionFilingWrite {
+	p := directionFilingWrite{drop: s.directionKeysOf(records, k), key: runtimeListID(k[0], k[1])}
+	var current *directionFiling // the session's entry, nil: none (or one taken out)
+	e, ok := s.directionEntries(records)[k]
+	if ok && e.live() {
+		current = &e.directionFiling
+		p.out.Previous = &e.Direction
+	}
+	if next != nil {
+		p.out.Direction = &next.Direction
+	}
+	p.out.Changed = (current == nil) != (next == nil) || current != nil && next != nil && current.Direction != next.Direction
+	switch {
+	case p.out.Changed && next != nil:
+		keep := *next
+		keep.RemovedAt, keep.Was = nil, nil
+		if current != nil {
+			was := current.bare()
+			keep.Was = &was
+		}
+		p.keep = &keep
+	case p.out.Changed: // taken out: kept, marked, for its Undo
+		removed := current.bare()
+		removed.RemovedAt = &now
+		p.keep = &removed
+	case len(p.drop) == 0 || len(p.drop) == 1 && p.drop[0] == p.key:
+		return p
+	default:
+		keep := e.directionFiling
+		p.keep = &keep
+	}
+	p.write = true
+	return p
+}
+
+// fileDirectionSession writes session k's entry: next nil takes it out. held counts the sessions the target direction
+// holds besides k, as the read places them, when the session moves into a direction (nil: no limit, an Undo); it asks
+// computers, so it runs outside the book's lock on a copy, and the write goes ahead only if the book is still that one
+// (else it plans and counts again). Copy-on-write keeps a failed save invisible even before the next lazy reload; loaded=false also
+// forces that reload, as the other settings books do.
 func (s *Service) fileDirectionSession(ctx context.Context, k [2]string, next *directionFiling,
 	held func(map[string]directionFiling) (int, error)) (directionFilingResult, error) {
 	st := s.store()
@@ -454,52 +561,56 @@ func (s *Service) fileDirectionSession(ctx context.Context, k [2]string, next *d
 		return directionFilingResult{}, errors.New("no database")
 	}
 	b := &s.directionFilings
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if !s.directionSessionsLocked(ctx) {
-		return directionFilingResult{}, errors.New("direction sessions could not be read")
-	}
-	records := directionRecordsOf(b.m)
-	keys := s.directionKeysOf(records, k)
-	canonical := runtimeListID(k[0], k[1])
-	var out directionFilingResult
-	var current *directionFiling
-	if e, ok := s.directionEntries(records)[k]; ok {
-		current = &e.directionFiling
-		out.Previous = &e.Direction
-	}
-	if next != nil {
-		out.Direction = &next.Direction
-	}
-	out.Changed = (current == nil) != (next == nil) || current != nil && next != nil && current.Direction != next.Direction
-	if !out.Changed && (len(keys) == 0 || len(keys) == 1 && keys[0] == canonical) {
-		return out, nil
-	}
-	if out.Changed && next != nil && next.Direction != "" {
-		n, err := held(records)
-		if err != nil {
+	for range directionFilingTries {
+		b.mu.Lock()
+		if !s.directionSessionsLocked(ctx) {
+			b.mu.Unlock()
+			return directionFilingResult{}, errors.New("direction sessions could not be read")
+		}
+		records, rev := directionRecordsOf(b.m), b.rev
+		b.mu.Unlock()
+		now := time.Now().UTC()
+		p := s.planDirectionFiling(records, k, next, now)
+		if !p.write {
+			return p.out, nil
+		}
+		if p.out.Changed && next != nil && next.Direction != "" && held != nil {
+			n, err := held(records)
+			if err != nil {
+				return directionFilingResult{}, err
+			}
+			if n >= directionSessionsPerDirection {
+				return directionFilingResult{}, errDirectionFull
+			}
+		}
+		b.mu.Lock()
+		if !b.loaded || b.rev != rev {
+			b.mu.Unlock()
+			continue
+		}
+		m := maps.Clone(b.m)
+		for _, key := range p.drop {
+			delete(m, key)
+		}
+		for key, record := range m { // entries taken out long ago: their Undo is past
+			if record != nil && record.RemovedAt != nil && now.Sub(*record.RemovedAt) > directionRemovedKeep {
+				delete(m, key)
+			}
+		}
+		if p.keep != nil {
+			m[p.key] = p.keep
+		}
+		if err := st.PutSetting(ctx, directionSessionsKey, m); err != nil {
+			b.loaded = false
+			b.mu.Unlock()
 			return directionFilingResult{}, err
 		}
-		if n >= directionSessionsPerDirection {
-			return directionFilingResult{}, errDirectionFull
-		}
+		b.m = m
+		b.rev++
+		b.mu.Unlock()
+		return p.out, nil
 	}
-	m := maps.Clone(b.m)
-	for _, key := range keys {
-		delete(m, key)
-	}
-	switch {
-	case out.Changed && next != nil:
-		m[canonical] = next
-	case !out.Changed && current != nil: // only its old keys go: the entry stays as it is, under the canonical id
-		m[canonical] = current
-	}
-	if err := st.PutSetting(ctx, directionSessionsKey, m); err != nil {
-		b.loaded = false
-		return directionFilingResult{}, err
-	}
-	b.m = m
-	return out, nil
+	return directionFilingResult{}, errors.New("direction sessions kept changing")
 }
 
 // dropDirectionSession removes only an assistant conversation's filing (its entries under every id of its computer).
@@ -530,6 +641,7 @@ func (s *Service) dropDirectionSession(ctx context.Context, machine, sid string)
 		return err
 	}
 	b.m = next
+	b.rev++
 	b.mu.Unlock()
 	s.directionTreeSoon()
 	return nil

@@ -538,15 +538,17 @@ func TestDirectionFilingPreviousIgnoresNonDirectionOrigin(t *testing.T) {
 	}
 }
 
-// directionBookHas: the stored book has an entry under machine/session's own key.
+// directionBookHas: the stored book has an entry for machine/session under its own key that places it. An entry taken
+// out is kept, marked removed_at, only for its Undo (#11458): that is no entry.
 func directionBookHas(t *testing.T, s *Service, machine, session string) bool {
 	t.Helper()
-	var book map[string]json.RawMessage
+	var book map[string]map[string]json.RawMessage
 	if _, err := s.store().Setting(context.Background(), directionSessionsSettingKey, &book); err != nil {
 		t.Fatal(err)
 	}
-	_, ok := book[runtimeListID(machine, session)]
-	return ok
+	entry, ok := book[runtimeListID(machine, session)]
+	_, removed := entry["removed_at"]
+	return ok && !removed
 }
 
 func TestDirectionFilingAddsNoMCPToolAndSessionsChangeDoesNotFile(t *testing.T) {

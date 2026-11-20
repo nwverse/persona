@@ -30,6 +30,9 @@ const (
 	standingNotListed = "not_listed"
 	// standingComputerRemoved: its computer is no longer one of this manager's computers.
 	standingComputerRemoved = "computer_removed"
+	// standingListUnknown: its computer is connected and has not given its list on this connection (yet, or giving it
+	// failed): whether it lists the session is not known.
+	standingListUnknown = "list_unknown"
 )
 
 // How a session got into a direction: the owner filed it, or the direction's leader conversation opened it.
@@ -153,23 +156,24 @@ func (s *Service) directionReadSessions(ctx context.Context, cfg Settings, id st
 }
 
 // directionSessionGroups are the current directions' sessions, placed as the read places them, on the computers this
-// build listed and on the others, asked once.
-func (tb *treeBuild) directionSessionGroups(ctx context.Context, cfg Settings) (map[string][]directionSession, error) {
+// build listed and on the others, asked once; and when one of those computers stops being shown as before (wake).
+func (tb *treeBuild) directionSessionGroups(ctx context.Context, cfg Settings) (map[string][]directionSession, time.Time, error) {
 	s := tb.s
 	rules, err := s.directionRulesNow(ctx, cfg)
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
 	records, err := s.directionSessionRecords(ctx)
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
 	look := newDirectionLook(s, tb)
 	placed, err := s.directionPlacements(ctx, rules, records, func(d string) bool { return slices.Contains(tb.leads, d) }, look)
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
-	return look.sessionRows(ctx, placed), nil
+	groups := look.sessionRows(ctx, placed)
+	return groups, look.wake(tb.now), nil
 }
 
 // directionRules is what places sessions besides the book and the recorded openers, read once per answer: the
@@ -207,7 +211,7 @@ func (s *Service) directionPlacements(ctx context.Context, rules directionRules,
 	var candidates []directionCandidate
 	for _, k := range slices.SortedFunc(maps.Keys(entries), directionKeyOrder) {
 		e := entries[k]
-		if e.Direction == "" || !keep(e.Direction) || rules.special[k] {
+		if !e.live() || e.Direction == "" || !keep(e.Direction) || rules.special[k] {
 			continue
 		}
 		candidates = append(candidates, directionCandidate{direction: e.Direction, machine: k[0], session: k[1], title: e.Title,
@@ -219,7 +223,7 @@ func (s *Service) directionPlacements(ctx context.Context, rules directionRules,
 			continue
 		}
 		k := [2]string{s.canonical(cmp.Or(origin.MachineID, rules.cfg.MachineID)), sid}
-		if _, filed := entries[k]; filed || rules.special[k] {
+		if e, filed := entries[k]; filed && e.live() || rules.special[k] {
 			continue
 		}
 		candidates = append(candidates, directionCandidate{direction: origin.Ref, machine: k[0], session: sid,
@@ -270,7 +274,7 @@ func (s *Service) directionDeleted(ctx context.Context) (map[[2]string]bool, err
 }
 
 // directionHeld is how many sessions the owner filed direction holds besides session except, as the read places them
-// (the write's limit, under the book's lock with the book as records has it).
+// (the write's limit, with the book as records has it).
 func (s *Service) directionHeld(ctx context.Context, rules directionRules, records map[string]directionFiling, direction string,
 	except [2]string) (int, error) {
 	placed, err := s.directionPlacements(ctx, rules, records, func(d string) bool { return d == direction }, newDirectionLook(s, nil))
@@ -287,18 +291,27 @@ func (s *Service) directionHeld(ctx context.Context, rules directionRules, recor
 }
 
 // directionLook is what placing and standing ask of the computers, each computer once: its sessions as listed now
-// (shared with a tree build's), and whether it is one of this manager's computers and connected.
+// (shared with a tree build's), and how it stands (directionComputer).
 type directionLook struct {
 	s        *Service
 	rows     map[[2]string]proto.Session
 	listed   map[string]bool
 	failed   map[string]error
-	computer map[string]string
+	computer map[string]directionComputer
+}
+
+// directionComputer is how a computer stands for the sessions on it. state is "" when it is one of this manager's
+// computers and connected, standingComputerOffline or standingComputerRemoved; listed: its list is its node's
+// (standingListUnknown when not); until: it is shown as before until then while its node is away (zero: it is not).
+type directionComputer struct {
+	state  string
+	listed bool
+	until  time.Time
 }
 
 func newDirectionLook(s *Service, tb *treeBuild) *directionLook {
 	l := &directionLook{s: s, rows: map[[2]string]proto.Session{}, listed: map[string]bool{}, failed: map[string]error{},
-		computer: map[string]string{}}
+		computer: map[string]directionComputer{}}
 	if tb != nil {
 		l.rows, l.listed = tb.sessions, tb.listed
 	}
@@ -321,6 +334,18 @@ func (l *directionLook) list(ctx context.Context, machine string) {
 	}
 }
 
+// wake is the earliest time after now a computer asked stops being shown as before (zero: none will): what places
+// sessions there may read otherwise then, and nothing tells the manager (directionTreeAt).
+func (l *directionLook) wake(now time.Time) time.Time {
+	var at time.Time
+	for _, c := range l.computer {
+		if c.until.After(now) && (at.IsZero() || c.until.Before(at)) {
+			at = c.until
+		}
+	}
+	return at
+}
+
 // parentOf is placement rule 1's parent of a session on c's computer: its row's, else for c itself the parent its
 // filing kept.
 func (l *directionLook) parentOf(c directionCandidate) func(sid string) string {
@@ -332,27 +357,31 @@ func (l *directionLook) parentOf(c directionCandidate) func(sid string) string {
 	}
 }
 
-// computerState is "" when machine is one of this manager's computers and connected (online or reachable, the rule
-// the readiness check has for a computer that is offline), standingComputerOffline or standingComputerRemoved.
-// Connected or not is the computer's own connection, never whether its list could be read: the manager answers a
-// disconnected computer's list from what it last listed. Without the manager's own fleet (a hub answers the lists)
-// its list decides (standing).
-func (l *directionLook) computerState(machine string) string {
-	if st, ok := l.computer[machine]; ok {
-		return st
+// computerState is how machine stands, from the devices: connected or not is the computer's own connection (online or
+// reachable, the readiness check's rule), never whether its list could be read, since the manager answers a computer
+// that left from what it last listed. While the devices still show a computer as before (its reconnect grace, a warm
+// start, a resident's reload) it counts as connected with its last list, as everywhere else in the fleet, and the tree
+// is built again when that ends (wake). Without the manager's own fleet (a hub answers the lists) its list decides
+// (standing).
+func (l *directionLook) computerState(machine string) directionComputer {
+	if c, ok := l.computer[machine]; ok {
+		return c
 	}
-	st := ""
+	c := directionComputer{listed: true}
 	if l.s.fleetOn() {
 		d, ok := l.s.devs.Summary(machine)
 		switch {
 		case !ok:
-			st = standingComputerRemoved
+			c.state = standingComputerRemoved
 		case !d.Online && !d.Reachable:
-			st = standingComputerOffline
+			c.state = standingComputerOffline
+		}
+		if shown, ok := l.s.devs.Shown(machine); ok {
+			c.listed, c.until = shown.Listed, shown.Until
 		}
 	}
-	l.computer[machine] = st
-	return st
+	l.computer[machine] = c
+	return c
 }
 
 // standing is where placed session c stands (directionSession.State), its row when its computer listed one (for its
@@ -363,14 +392,17 @@ func (l *directionLook) standing(ctx context.Context, c directionCandidate) (sta
 	if found && row.IsDeleted() {
 		return "", row, found, true
 	}
-	if st := l.computerState(c.machine); st != "" {
-		return st, row, found, false
+	computer := l.computerState(c.machine)
+	if computer.state != "" {
+		return computer.state, row, found, false
 	}
 	switch err := l.failed[c.machine]; {
 	case errors.Is(err, ErrNoDevice):
 		return standingComputerRemoved, row, found, false
 	case err != nil:
 		return standingComputerOffline, row, found, false
+	case !found && !computer.listed:
+		return standingListUnknown, row, found, false
 	case !found || row.Archived:
 		return standingNotListed, row, found, false
 	}
