@@ -138,14 +138,14 @@ func TestAnswerCardsWriteChartsAsNumbersBeforeCutting(t *testing.T) {
 // A link's button says what it opens: a page of the hub's web app by the page, a Feishu document as one, any other
 // site by its name.
 func TestLinkNamer(t *testing.T) {
-	name := linkNamer(i18n.ZhHans, "http://10.0.0.1:18660")
+	name := linkNamer(i18n.ZhHans, "https://hub.example.com")
 	for _, c := range []struct{ u, want string }{
-		{"http://10.0.0.1:18660/persona/c1", "打开会话"},
-		{"http://10.0.0.1:18660/s/server/a1", "打开会话"},
-		{"http://10.0.0.1:18660/todos/t1", "打开待办"},
-		{"http://10.0.0.1:18660/inbox", "打开收件箱"},
-		{"http://10.0.0.1:18660/kb/people/p1", "打开知识库"},
-		{"http://10.0.0.1:18660/machines", "打开网页版"},
+		{"https://hub.example.com/persona/c1", "打开会话"},
+		{"https://hub.example.com/s/server/a1", "打开会话"},
+		{"https://hub.example.com/todos/t1", "打开待办"},
+		{"https://hub.example.com/inbox", "打开收件箱"},
+		{"https://hub.example.com/kb/people/p1", "打开知识库"},
+		{"https://hub.example.com/machines", "打开网页版"},
 		{"https://example.feishu.cn/docx/AbC", "打开飞书文档"},
 		{"https://example.feishu.cn/calendar", "打开 example.feishu.cn"},
 		{"https://www.github.com/nwverse/persona", "打开 github.com"},

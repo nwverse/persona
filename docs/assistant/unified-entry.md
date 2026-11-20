@@ -218,6 +218,10 @@ rule below. Native clients keep their existing two-entry presentation until they
   keeps them in Needs you (without the Agent's cards). Before, each task listing the Agent showed and counted the same
   approval. The shared cases (`spec/fixtures/entries`) pin it; the whole-client Needs you rule is #5974's.
 
+An open task whose delivery is held for the owner appears in **Needs you** with the reason for the hold.
+A structured decision already shown for the task keeps its controls. A wait assigned to CI, a reviewer or an Agent
+continues to use the normal task placement.
+
 The split is one pure function per client: web `assistantEntries` (`web/src/lib/assistant-entries.ts`), Android
 `assistantEntries` (`persona.core.domain.tasks`), iOS / iPad / Mac `AssistantEntries.split`
 (`apple/Persona/Views/Assistant/Tasks/AssistantActionBar.swift`, #3393). All three replay `spec/fixtures/entries`, which pins

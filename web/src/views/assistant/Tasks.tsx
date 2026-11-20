@@ -39,7 +39,7 @@ import {
 } from "../../lib/feed";
 import { backgroundWorkLine, type BackgroundWork } from "../../lib/background-work";
 import { workflowCounts } from "../../lib/workflows";
-import { dockAgents, type DockAgent, interruption, isRemovable, mostUrgentAgent, openAsk, orphanedLine, stoppedReason, taskNow, todoStatus, TODO_STATUS_INFO, waitingLine, type SessionLookup, type Todo, type TodoStatus } from "../../lib/todos";
+import { dockAgents, type DockAgent, isRemovable, mostUrgentAgent, openAsk, orphanedLine, stoppedReason, taskNow, todoStatus, TODO_STATUS_INFO, waitingLine, type SessionLookup, type Todo, type TodoStatus } from "../../lib/todos";
 import { usageLimitLabel } from "../../lib/usage-limit";
 import { openAgent, openTask } from "../../lib/handoff";
 import { navigate } from "../../lib/router";
@@ -61,6 +61,7 @@ const HeldPushesEntry = lazyPage(() => import("./HeldPushes").then((m) => m.Held
 // same chunk has a suggested rule's line (#5802), which comes with the first card that carries one, and a task whose
 // Agent did not start (#10365), which comes with the first such row.
 const NeedsYouPart = lazy(() => import("./TaskDecision"));
+const WaitingTaskRow = lazy(() => import("./WaitingTaskRow"));
 /** The suggested rule's line of a card, drawn right after it; nothing for a card without the field, unless Always
  *  was answered on it here (the line then says what was made, though the hub sent the card again without the field). */
 const ruleLine = (of: RuleCard) => (of.suggestion || underCard.made?.has(of.id!)) && <Suspense fallback={null}><NeedsYouPart rule={of} /></Suspense>;
@@ -124,7 +125,7 @@ function taskNowIn(s: State, todo: Todo, plans: Record<string, TaskPlan>): TaskN
 type TaskNow = { status: TodoStatus; lead?: Session; wait?: WaitReason };
 
 /** A task's status and lead agent (undefined without the task). */
-function useTaskNow(todo: Todo | undefined): TaskNow | undefined {
+export function useTaskNow(todo: Todo | undefined): TaskNow | undefined {
   const plans = useFeed((s) => s.plans);
   return useStore((s) => (todo ? taskNowIn(s, todo, plans) : undefined));
 }
@@ -1042,44 +1043,15 @@ export function NeedsYouBody({ item, nested = false }: { item: NeedsYouItem; nes
         <NeedsYouPart rowKey={item.key} failed={todo} countsOpenAttr={taskOpenAttr} />
       </Suspense>
     );
-  return <WaitingTaskRow rowKey={rowKey} todo={todo} status={status} countsOpenAttr={taskOpenAttr} />;
+  return (
+    <Suspense fallback={<div data-needs-row={rowKey} {...taskOpenAttr} className="truncate rounded-control bg-field px-3 py-2 text-sm">{todo.title}</div>}>
+      <WaitingTaskRow rowKey={rowKey} todo={todo} status={status} countsOpenAttr={taskOpenAttr} />
+    </Suspense>
+  );
 }
 
 /** The buttons under a Needs you task row's words (Continue; Retry and Remove), lined up with them. */
 export const ROW_ACTIONS = "flex items-center gap-4 pl-6 text-[12.5px]";
-
-/** A task in Needs you that only waits (#8237): cut off by the model service, with why and Continue (its receipt card's
- *  until then); waiting for review, with what it handed in; else what it waits for. The title opens the task. */
-function WaitingTaskRow({ rowKey, todo, status, countsOpenAttr }: { rowKey?: string; todo: Todo; status: TodoStatus; countsOpenAttr: { "data-counts-open"?: string } }) {
-  const task = useTaskNow(todo);
-  const retrying = useRetrying(todo.id);
-  const summary = useFeed((s) => {
-    const done = (todo.origin ? s.feeds[todo.origin] ?? EMPTY_FEED : EMPTY_FEED).filter((it) => it.kind === "receipt" && it.ref === todo.id && field(it, "state") !== "failed").at(-1);
-    return done ? field(done, "summary") : undefined;
-  });
-  const cutOff = status === "interrupted";
-  const cut = cutOff ? interruption(task?.lead) : undefined;
-  const canContinue = cutOff && (cut ? cut.canContinue : true);
-  const line = cut ? cut.reason : todo.supervision?.state === "pending_review" ? (summary && plainMarkdown(summary)) || progressOf(task?.lead)?.text : undefined;
-  return (
-    <div data-needs-row={rowKey} {...countsOpenAttr} data-waiting-task={todo.id} className={cx("flex flex-col gap-1.5 rounded-control px-3 py-2 text-sm", cutOff ? "bg-danger-wash" : "bg-field")}>
-      <div className="flex min-w-0 items-center gap-2">
-        <Icon name={cutOff ? "info" : "hand"} className={cx("shrink-0", cutOff ? "text-red" : "text-attention")} />
-        <button type="button" onClick={() => openTask(todo.id)} className="min-w-0 flex-1 truncate text-left hover:underline">{todo.title}</button>
-        <span className={cx("shrink-0 text-xs", cutOff ? "text-ink" : "text-ink-2")}>{cut?.invalid ? t("lib-api-errors.invalid_label") : waitsLabel(todo, status, task?.status === status ? task.wait : undefined)}</span>
-      </div>
-      {line && <div className={cx("pl-6 text-xs", cut && !cut.canContinue ? "whitespace-normal" : "truncate", cutOff ? "text-ink" : "text-ink-2")}>{line}</div>}
-      {canContinue && (
-        <div className={ROW_ACTIONS}>
-          <button type="button" data-continue-task={todo.id} disabled={retrying} onClick={() => retryTaskNow(todo, "continue")} className="touch-hit inline-flex items-center gap-1 whitespace-nowrap font-semibold text-ink hover:underline disabled:opacity-50 disabled:hover:no-underline">
-            <Icon name="retry" size={12} />
-            {retrying ? t("assistant-tasks.retrying") : t("assistant-tasks.continue")}
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
 
 /** An Agent that belongs to no task, working: one row of In progress that opens its page. */
 function RunningAgentRow({ session, activity }: { session: Session; activity?: BackgroundWork }) {
