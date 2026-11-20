@@ -16,7 +16,7 @@ import (
 // under the triage's main switch and its closeout switch.
 
 // closeoutBrief is what follows a task's prompt: the closeout's form and when to write it; "" while the switches are
-// off. afterDelivery: the prompt also asks for the delivery line (delivery.go), which the block then follows.
+// off. afterDelivery: the same block also carries delivery disposition and responsibility.
 func (s *Service) closeoutBrief(ctx context.Context, afterDelivery bool) string {
 	if sw := s.triageSwitches(ctx); !sw.Enabled || !sw.Closeout {
 		return ""
@@ -65,10 +65,14 @@ func (s *Service) reviewWorktree(machine, cwd string) bool {
 			return true
 		}
 	}
+	for _, e := range mustSessionReviews(s) {
+		if e.MachineID == machine && e.Worktree != "" && e.Worktree == cwd {
+			return true
+		}
+	}
 	return false
 }
 
-// closeoutLine is the list line of a turn that has a closeout and no phase: one nobody can call finished
 // (docs/assistant/agent-work.md "Closeout"). A claim the hub disproved comes first, naming the claim; else what the
 // agent says is missing (else what it waits for, else what it did), behind "Not finished". In lang, the user's.
 func closeoutLine(c proto.Closeout, lang i18n.Lang) string {

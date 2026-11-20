@@ -1,4 +1,11 @@
 {
+  "forward_error": "(Could not read the forward: {error})",
+  "forward_image": "[image]",
+  "unknown_sender": "Someone",
+  "bot_sender": "Bot",
+  "forward_line": "{time} {sender}: {text}",
+  "forward_clipped": "(Remaining messages omitted for length)",
+  "forward_empty": "(The forward contained no readable messages)",
   "paired": "Paired",
   "paired_body": "From now on, what you say here goes to Persona.\n\n",
   "not_sent": "Couldn't send it: {error}",

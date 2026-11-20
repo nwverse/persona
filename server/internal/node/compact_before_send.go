@@ -3,15 +3,17 @@ package node
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/screen"
 )
 
 // Compacting a nearly full Agent before a message goes in (#11137). The assistant's agent_send asks for it
@@ -38,13 +40,17 @@ var (
 	compactStartGrace = 3 * time.Minute
 	// compactPoll: how often the transcript and the Agent's status are read while it compacts or finishes a turn.
 	compactPoll = 500 * time.Millisecond
+	// codexComposerWait bounds how long a resumed Codex may take to show its input box before /compact goes in.
+	codexComposerWait = 3 * time.Minute
+	// codexStartupLook bounds how long a Codex just resumed is watched for its update offer.
+	codexStartupLook = 8 * time.Second
 	// compactTurnWait bounds how long a message held for a compaction waits for the Agent's turn to end.
 	compactTurnWait = 6 * time.Hour
 )
 
 // compactRestTicks: the reads in a row an Agent must be at rest without a compaction record for its /compact to count
 // as finished without compacting (its record may land just after its status flips).
-const compactRestTicks = 4
+const compactRestTicks = 10
 
 // compactNote is what a send asking for compaction did, for session.send's answer: held behind the turn for a
 // compaction (held), or compacted before it went in (done).
@@ -88,6 +94,13 @@ func planCompaction(asked, compactable, busy, full bool) compactPlan {
 // app-server, and Claude Code or Codex in one of Persona's terminals. Otherwise why not, for the log and refusals.
 func (n *Node) compactableRuntime(id string) (bool, string) {
 	if n.externalCodex(id) || n.codexJoined(id) {
+		if _, _, err := n.codexOwner(id); errors.Is(err, errCodexNoOwner) {
+			if src, ok := n.codexSource(id); ok && codexDesktopChat(src) {
+				// The Codex App's chat: its messages go in as the App's turns (codex_desktop_queue.go), which run no
+				// slash command, and the App offers no compaction call: the App compacts on its own.
+				return false, "the Codex App runs it, which takes no /compact from Persona"
+			}
+		}
 		return true, ""
 	}
 	a, ok := n.agent(id)
@@ -242,23 +255,188 @@ func (n *Node) compactLocked(ctx context.Context, id string) error {
 	if st, err := os.Stat(path); err == nil {
 		off = st.Size()
 	}
-	if err := n.sendLocked(ctx, id, "/compact", nil, sendOpts{}); err != nil {
-		return fmt.Errorf("/compact was not taken: %w", err)
+	before, _ := n.contextUse(id)
+	if err := n.codexComposerReady(ctx, id); err != nil {
+		return err
 	}
-	return waitCompaction(ctx, func() compactProgress {
+	pane := ""
+	if a, ok := n.agent(id); ok {
+		pane = a.PaneID
+	}
+	if err := n.sendLocked(ctx, id, "/compact", nil, sendOpts{}); err != nil {
+		if !maybeDelivered(err) {
+			return fmt.Errorf("/compact was not taken: %w", err)
+		}
+		// Typed, but its screen did not confirm it in time (a Codex busy compacting a large context shows no empty box):
+		// what the transcript and the agent's status say decides, as for any compaction.
+		n.logf("session %s: /compact typed, not confirmed on screen (%v): waiting for its record", short(id), err)
+	}
+	err := waitCompaction(ctx, func() compactProgress {
 		busy, live := n.compactBusy(id)
 		p := compactProgress{busy: busy, live: live}
 		if path == "" {
 			path = n.transcriptPath(id) // a session whose record appeared since
 		}
-		p.compacted, p.reason = compactionSince(path, off)
+		p.compacted, p.grew, p.reason = compactionSince(path, off)
+		if !p.compacted && before > 0 {
+			// A reply after the compaction saw far less than before it: the context did shrink, whatever the record.
+			if now, _ := n.contextUse(id); now > 0 && contextShrank(before, now) {
+				p.compacted = true
+			}
+		}
 		return p
 	}, compactPoll, compactStartGrace, compactBeforeSendDeadline)
+	if errors.Is(err, errCompactAgentGone) && pane != "" {
+		return n.agentExited(ctx, pane, "after /compact was typed, before any compaction was recorded")
+	}
+	return err
+}
+
+// errCompactAgentGone: the agent left its terminal while it was to compact.
+var errCompactAgentGone = errors.New("the agent stopped while compacting")
+
+// contextShrank: now is at most compactShrinkShare of before, as only a compaction makes a context.
+func contextShrank(before, now int) bool {
+	return before > 0 && now > 0 && float64(now) <= compactShrinkShare*float64(before)
+}
+
+// compactShrinkShare: the share of the context before a /compact that a reply after it may see for the drop to count
+// as the compaction.
+const compactShrinkShare = 0.6
+
+// codexComposerReady waits, for a Codex in one of Persona's terminals that does not go through its app-server, until
+// its TUI shows an empty input box: a Codex just resumed (codex resume <id>) reads its whole rollout first, and a
+// /compact typed before the box is there is lost. Codex's own update offer (default: Update now, which installs and
+// quits) is skipped with Esc as a start skips it (codexSkipUpdateKeys, #11316); any other dialog with numbered options
+// is never taken for the box, and refuses with its first line, as does a draft.
+func (n *Node) codexComposerReady(ctx context.Context, id string) error {
+	if n.externalCodex(id) || n.codexJoined(id) {
+		return nil
+	}
+	a, ok := n.agent(id)
+	if !ok || a.Agent != "codex" {
+		return nil
+	}
+	wait, cancel := context.WithTimeout(ctx, codexComposerWait)
+	defer cancel()
+	tick := time.NewTicker(compactPoll)
+	defer tick.Stop()
+	for {
+		if _, live := n.agent(id); !live {
+			return n.agentExited(ctx, a.PaneID, "after it was resumed, before it showed its input box")
+		}
+		if text, err := n.readPane(wait, a.PaneID, "visible", screen.DialogLines); err == nil {
+			switch skip, dialog := codexStartupScreen(text); {
+			case skip != nil:
+				if err := n.sendKeys(wait, a.PaneID, skip...); err != nil {
+					return fmt.Errorf("could not skip Codex's update offer: %w", err)
+				}
+				n.logf("session %s: skipped Codex's update offer before /compact", short(id))
+				sleepCtx(wait, codexDialogPause)
+				continue
+			case dialog != "":
+				return fmt.Errorf("/compact was not typed: a dialog is open in its terminal (%s)", dialog)
+			}
+		}
+		if sc, err := n.codexScreen(wait, a.PaneID); err == nil && sc.View == screen.CodexComposer {
+			if sc.Draft != "" {
+				return fmt.Errorf("/compact was not typed: %w", refusal(screen.InputDraft, codexDraftMessage(sc.Draft), nil))
+			}
+			return nil
+		} else if err == nil && (sc.View == screen.CodexApproval || sc.View == screen.CodexQuestion || sc.View == screen.CodexDialog) {
+			return fmt.Errorf("/compact was not typed: a dialog is open in its terminal")
+		}
+		select {
+		case <-wait.Done():
+			return fmt.Errorf("its Codex did not show its input box within %s", codexComposerWait)
+		case <-tick.C:
+		}
+	}
+}
+
+// codexStartupScreen reads a Codex pane's visible text for what stands before its input box: the keys that skip its
+// update offer (codexSkipUpdateKeys), else the first line of any other dialog with numbered options, else neither.
+func codexStartupScreen(text string) (skip []string, dialog string) {
+	if keys := codexUpdateOfferKeys(text); keys != nil {
+		return keys, ""
+	}
+	if d := screen.ParseDialog(text); d != nil && len(d.Options) > 0 {
+		head := d.Options[0].Label
+		if q := strings.TrimSpace(d.Question); q != "" {
+			head = q
+		}
+		return nil, clipLine(head, 120)
+	}
+	return nil, ""
+}
+
+// codexUpdateOfferKeys are the keys that skip Codex's update offer on screen text: codexSkipUpdateKeys, and the same
+// three choices however the screen reads otherwise. Its "› 1. Update now" row can pass for the input box's prompt, and
+// that is how a /compact once picked Update now and quit Codex (#11316).
+func codexUpdateOfferKeys(text string) []string {
+	if keys := codexSkipUpdateKeys(text); keys != nil {
+		return keys
+	}
+	if !strings.Contains(screen.Plain(text), "Update available") {
+		return nil
+	}
+	d := screen.ParseDialog(text)
+	if d == nil || len(d.Options) != 3 {
+		return nil
+	}
+	if first := d.Options[0].Label; (first == "Update now" || strings.HasPrefix(first, "Update now (")) &&
+		d.Options[1].Label == "Skip" && d.Options[2].Label == "Skip until next version" {
+		return []string{"escape"}
+	}
+	return nil
+}
+
+// clipLine is s on one line, at most n runes.
+func clipLine(s string, n int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if r := []rune(s); len(r) > n {
+		return string(r[:n]) + "…"
+	}
+	return s
+}
+
+// settleCodexStartup is what a Codex just started or resumed in pane may show before its input box: its update offer
+// is skipped (Esc) when it shows within codexStartupLook; anything else is left for the next send's checks.
+func (n *Node) settleCodexStartup(ctx context.Context, pane string) {
+	look, cancel := context.WithTimeout(ctx, codexStartupLook)
+	defer cancel()
+	for {
+		if text, err := n.readPane(look, pane, "visible", screen.DialogLines); err == nil {
+			if keys := codexUpdateOfferKeys(text); keys != nil {
+				if err := n.sendKeys(look, pane, keys...); err == nil {
+					n.logf("pane %s: skipped Codex's update offer after its start", pane)
+				}
+				return
+			}
+			if screen.ReadCodex(text).View == screen.CodexComposer {
+				return
+			}
+		}
+		if !sleepCtx(look, codexStep) {
+			return
+		}
+	}
+}
+
+// agentExited is the error for an agent that left its pane at step, with the pane's last lines (an update that
+// ran, a crash) so the refusal says where and why it quit.
+func (n *Node) agentExited(ctx context.Context, pane, step string) error {
+	shown, _ := n.readPane(context.WithoutCancel(ctx), pane, "recent-unwrapped", 30)
+	if last := strings.TrimSpace(lastLines(shown, 6)); last != "" {
+		return fmt.Errorf("the agent quit %s; its terminal shows:\n%s", step, last)
+	}
+	return fmt.Errorf("the agent quit %s", step)
 }
 
 // compactProgress is one read of a compaction under way.
 type compactProgress struct {
-	compacted  bool   // the transcript has a compaction record after the /compact
+	compacted  bool   // the transcript has a compaction record after the /compact, or the context shrank since
+	grew       bool   // the transcript was written to after the /compact: it is at work on it
 	busy, live bool   // the Agent works; it still runs
 	reason     string // an error the runtime wrote about it, "" when none
 }
@@ -276,7 +454,7 @@ func waitCompaction(ctx context.Context, probe func() compactProgress, poll, gra
 		p := probe()
 		switch {
 		case !p.live:
-			return fmt.Errorf("the agent stopped while compacting")
+			return errCompactAgentGone
 		case p.compacted && !p.busy:
 			return nil
 		case p.busy || p.compacted:
@@ -290,6 +468,8 @@ func waitCompaction(ctx context.Context, probe func() compactProgress, poll, gra
 				}
 				return fmt.Errorf("it finished /compact without compacting")
 			}
+		case p.grew:
+			// Written to, never seen at work: a Codex whose status lags its rollout. Its record or the deadline decides.
 		case time.Since(began) >= grace:
 			if p.reason != "" {
 				return fmt.Errorf("it did not start compacting: %s", p.reason)
@@ -312,37 +492,37 @@ func waitCompaction(ctx context.Context, probe func() compactProgress, poll, gra
 var compactMarks = [][]byte{[]byte(`"subtype":"compact_boundary"`), []byte(`"type":"compacted"`), []byte(`"type":"context_compacted"`)}
 
 // compactErrorRE: what Claude Code writes when its /compact fails ("Error during compaction: …").
-var compactErrorRE = regexp.MustCompile(`(?i)error (?:during|while) compact[^"\\]{0,200}`)
+var compactErrorRE = lazyre.New(`(?i)error (?:during|while) compact[^"\\]{0,200}`)
 
-// compactionSince reads transcript path from offset off: whether a compaction record is there, and the error the
-// runtime wrote about a failed one.
-func compactionSince(path string, off int64) (bool, string) {
+// compactionSince reads transcript path from offset off: whether a compaction record is there, whether anything was
+// written since, and the error the runtime wrote about a failed one.
+func compactionSince(path string, off int64) (compacted, grew bool, reason string) {
 	if path == "" {
-		return false, ""
+		return false, false, ""
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		return false, ""
+		return false, false, ""
 	}
 	defer f.Close()
 	if _, err := f.Seek(off, io.SeekStart); err != nil {
-		return false, ""
+		return false, false, ""
 	}
 	b, err := io.ReadAll(io.LimitReader(f, 64<<20))
 	if err != nil {
-		return false, ""
+		return false, false, ""
 	}
+	grew = len(bytes.TrimSpace(b)) > 0
 	for _, line := range bytes.Split(b, []byte{'\n'}) {
 		compact := bytes.ReplaceAll(line, []byte(`": "`), []byte(`":"`))
 		for _, m := range compactMarks {
 			if bytes.Contains(compact, m) {
-				return true, ""
+				return true, grew, ""
 			}
 		}
 	}
-	reason := ""
 	if all := compactErrorRE.FindAll(b, -1); len(all) > 0 {
 		reason = strings.TrimSpace(string(all[len(all)-1]))
 	}
-	return false, reason
+	return false, grew, reason
 }

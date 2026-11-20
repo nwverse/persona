@@ -172,9 +172,6 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				s.Activity, s.ActivityAt = m.activityOf()
 				setContext(&s, m)
 				s.ModelFallback = m.modelFallback
-				if a.Agent != "codex" && a.Agent != traexAgent {
-					s.PermissionMode, s.Effort = n.currentModes(id, m)
-				}
 				s.WokeByTask = m.wake
 				if s.Status == proto.StatusWorking || s.Status == proto.StatusBlocked {
 					s.Queued = m.queue // an idle agent has taken everything; stale entries are from outside the tail
@@ -185,6 +182,9 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				s.Loop, s.Goal, s.Plan = m.loop, m.goal, m.plan
 				s.Subagents = n.subagents(id)
 			}
+		}
+		if a.Agent != "codex" && a.Agent != traexAgent {
+			n.terminalModesRow(&s, rollout)
 		}
 		blockedSince := n.noteBlockedAt(id, s.Status == proto.StatusBlocked, now)
 		if a.Agent == "codex" && host.ParsePane(a.PaneID).Kind != host.Botmux && s.Status == proto.StatusBlocked &&
@@ -363,6 +363,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 	out = out[:j]
 	parents, origins := n.offlineDesktop()
 	linkSideSessions(out, parents)           // the desktop app's side sessions under the sessions that started them (#5935)
+	linkHerdrChildren(out, agents)           // herdr's sub-agent terminals under the session of the terminal that started them
 	placeClaudeDesktop(out, origins, n.home) // and in their projects (#8521)
 	sortNewestFirst(out)
 	return out
@@ -420,12 +421,14 @@ func (n *Node) decorateIn(s *proto.Session, pass *codexListPass) {
 	if s.Launcher == "" {
 		s.Launcher = n.inferLauncher(s.SessionID)
 	}
+	n.normalizeSessionRowModel(s) // a gateway's routed echo back to the launcher's declared id
 	if s.Title == "" {
 		s.Title = filepath.Base(s.Cwd)
 	}
 	s.BypassAvailable = n.hooks.canBypass(s.SessionID) // modes.go claudeCanBypass
 	n.modeRestartRow(s)                                // mode_restart.go
 	n.ultracodeRow(s, pass)
+	n.wakeEffortChange(s)
 }
 
 // decorateState restores metadata recorded when Persona started the session.
@@ -434,6 +437,9 @@ func (n *Node) decorateState(s *proto.Session, managesModel bool) (sessionState,
 	if ok {
 		s.StartedByPersona = true
 		s.Launcher = st.Launcher
+		if st.TaskExecution {
+			classifyTaskTurnFailure(s)
+		}
 		if managesModel {
 			model := st.Model
 			s.RequestedModel = &model
