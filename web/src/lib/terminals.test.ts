@@ -10,7 +10,7 @@ import {
   paneIds,
   paneRow,
   paneState,
-  paneTrail,
+  paneLocation,
   terminalId,
   type PaneDTO,
   type PanesResponse,
@@ -175,9 +175,13 @@ describe("Jump To", () => {
   });
 
   it("writes where a pane is", () => {
-    expect(paneTrail(tree, "pane:w1:p2")).toBe("proj › shell › zsh");
-    expect(paneTrail(tree, "sid-1")).toBe("proj › agent-1 › 修登录崩溃");
-    expect(paneTrail(tree, "gone")).toBe("");
+    expect(paneLocation(tree, "pane:w1:p2")).toMatchObject({ space: { label: "proj" }, tab: { label: "shell" }, pane: { title: "zsh" } });
+    expect(paneLocation(tree, "sid-1")).toMatchObject({ space: { label: "proj" }, tab: { label: "agent-1" }, pane: { title: "修登录崩溃" } });
+    expect(paneLocation(tree, "pane:w1:p1")).toEqual(paneLocation(tree, "sid-1"));
+    const twin = { ...tree[0], host: "tmux" };
+    expect(paneLocation([...tree, twin], "pane:w1:p1")).toBeUndefined();
+    expect(paneLocation(tree, "gone")).toBeUndefined();
+    expect(paneLocation([], "pane:w1:p2")).toBeUndefined();
     expect(paneCwd(tree, "pane:w1:p2")).toBe("/home/me/proj");
     expect(paneCwd(tree, "gone")).toBe("");
   });

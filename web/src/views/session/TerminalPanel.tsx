@@ -10,8 +10,7 @@
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { resumeAgent, useResume } from "../../lib/agent-resume";
-import { isStoppedAgent, sessionTitle, stateOf } from "../../lib/format";
-import { machineWithHub } from "../../lib/mesh";
+import { isStoppedAgent, stateOf } from "../../lib/format";
 import { registerShortcut } from "../../lib/shortcuts";
 import { getSession, useStore } from "../../lib/store";
 import { lineCount } from "../../lib/terminal";
@@ -36,7 +35,6 @@ import {
 import { Button, cx, Dialog, IconButton, Loading, Menu, Spinner, toast, type MenuItem } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { prefersReducedMotion } from "../../ui/stream/motion";
-import { PanelHeader } from "../../ui/PanelHeader";
 import { DrawnRows, rowsStyle } from "./terminal/DrawnRows";
 import { TerminalFeed, type FeedView } from "./terminal/feed";
 import { FindBar } from "./terminal/FindBar";
@@ -454,25 +452,17 @@ function modeFor(key: string, mid: string, supported: boolean): TerminalMode {
 export function TerminalPanel({
   mid,
   sid,
-  label,
   cwd,
   onFiles,
-  onClose,
-  embedded,
 }: {
   mid: string;
   sid: string;
-  label?: string;
   /** The pane's working directory when the page knows it (else the session's): dropped Files entries are named relative to it. */
   cwd?: string;
   /** Opens the Files panel beside the terminal (the terminal page; as a side panel the Files panel would replace this one). */
   onFiles?: () => void;
-  onClose: () => void;
-  /** Shown under a header of the page's own (a session's terminal view): this panel's header shrinks to a toolbar of its controls. */
-  embedded?: boolean;
 }) {
   const session = useStore(() => getSession(mid, sid));
-  const machine = useStore((s) => machineWithHub(mid, s.machines));
   const supported = useStore((s) => s.features.includes("herdr_client")) && inHerdrClient(sid, session?.pane_id);
   const key = `${mid}\n${sid}`;
   const root = useRef<HTMLDivElement>(null);
@@ -536,14 +526,12 @@ export function TerminalPanel({
   const resumable = agentRow && (isStoppedAgent(session) || (paneOffline && stateOf(session!) === "offline") || resume.phase === "resuming");
 
   const dir = cwd || session?.cwd || "";
-  const subtitle = [label ?? (session ? sessionTitle(session) : ""), machine].filter(Boolean).join(" · ");
   // pane → full: the pane surface still drives its own pane while it fades, so the other opens after it
   const waitFor = (mode: TerminalMode) => (surfaces.from === "pane" && mode === "full" ? SURFACE_MS + 40 : 0);
   const order: TerminalMode[] = surfaces.leaving ? [surfaces.leaving, surfaces.shown] : [surfaces.shown];
 
   return (
     <div ref={root} className="@container flex min-h-0 flex-1 flex-col">
-      {!embedded && <PanelHeader icon="terminal" title={t("session-terminalpanel.title")} subtitle={subtitle} onClose={onClose} />}
       <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-2 border-b border-line px-3 py-1" data-terminal-toolbar>
         {supported && <ModeToggle mode={surfaces.shown} onChange={choose} />}
         <PaneActions key={key} mid={mid} sid={sid} fullSupported={supported} onSplit={() => choose("full")} />

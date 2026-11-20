@@ -10,7 +10,7 @@ import { getSession, refreshAssistant, upsertSession } from "../../lib/store";
 import type { Session } from "../../lib/types";
 import { toast } from "../../ui/atoms";
 import { t } from "../../i18n";
-import { lazyDialog } from "../LazyOverlay";
+import { lazyDialog, lazyOverlay } from "../LazyOverlay";
 
 // "Session info" (iOS SessionInfoSheet, SessionInfoDialog.tsx): its own chunk, loaded on the dialog's first open, so
 // its fetch and rows are not the first screen's (#8261). The same component as before for the header that draws it.
@@ -20,12 +20,13 @@ export const SessionInfoDialog = lazyDialog(() => import("./SessionInfoDialog").
 // when a menu that offers one opens (preloadSessionDialogs: the chat's ⋯ menu, an Agent row's, a space's), so the click
 // draws the dialog at once. Off the first screen (#10382, docs/web/web.md "First screen").
 const loadMenuDialogs = () => import("./SessionMenuDialogs");
+export const SpaceAgentsMenu = lazyOverlay(() => loadMenuDialogs().then((m) => m.SpaceAgentsMenu));
 export const RenameDialog = lazyDialog(() => loadMenuDialogs().then((m) => m.RenameDialog));
 export const RenameSpaceDialog = lazyDialog(() => loadMenuDialogs().then((m) => m.RenameSpaceDialog));
 export const DeleteSessionDialog = lazyDialog(() => loadMenuDialogs().then((m) => m.DeleteSessionDialog));
-/** Starts loading the three, once (a failed load is asked again by the next menu or open). */
+/** Starts loading the workspace Agent menu and its sibling dialogs, once (a failed load is asked again by the next menu or open). */
 export function preloadSessionDialogs(): void {
-  for (const d of [RenameDialog, RenameSpaceDialog, DeleteSessionDialog]) void d.preload().catch(() => {});
+  for (const d of [SpaceAgentsMenu, RenameDialog, RenameSpaceDialog, DeleteSessionDialog]) void d.preload().catch(() => {});
 }
 
 /** Saves a new title from the header's in-place rename (#5421, cindy's double-click on the title, which updates at once and

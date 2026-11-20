@@ -215,24 +215,28 @@ export function paneIds(spaces: readonly TermSpace[]): string[] {
   return spaces.flatMap((sp) => sp.tabs.flatMap((t) => t.panes.map((p) => p.id)));
 }
 
-/** The pane's place for a header: workspace › tab · title. */
-export function paneTrail(spaces: readonly TermSpace[], id: string): string {
-  for (const sp of spaces)
-    for (const t of sp.tabs) {
-      const p = t.panes.find((x) => x.id === id);
-      if (p) return [sp.label, t.label === sp.label ? "" : t.label, p.title !== t.label ? p.title : ""].filter(Boolean).join(" › ");
+/** A tab's header uses the host's tab and workspace names, including on a physical-pane bookmark. */
+export function paneLocation(spaces: readonly TermSpace[], id: string) {
+  let physical: { space: TermSpace; tab: TermTab; pane: TermPane } | undefined;
+  let ambiguous = false;
+  for (const space of spaces) {
+    for (const tab of space.tabs) {
+      for (const pane of tab.panes) {
+        if (pane.id === id) return { space, tab, pane };
+        if (pane.sessionId && id === `pane:${pane.pane}`) {
+          ambiguous ||= Boolean(physical);
+          physical = { space, tab, pane };
+        }
+      }
     }
-  return "";
+  }
+  // Two hosts can report the same unqualified physical address. Never borrow the other Agent's identity.
+  return ambiguous ? undefined : physical;
 }
 
 /** The pane's working directory, "" when unknown. */
 export function paneCwd(spaces: readonly TermSpace[], id: string): string {
-  for (const sp of spaces)
-    for (const t of sp.tabs) {
-      const p = t.panes.find((x) => x.id === id);
-      if (p) return p.cwd;
-    }
-  return "";
+  return paneLocation(spaces, id)?.pane.cwd ?? "";
 }
 
 // ── which terminals stay open ────────────────────────────

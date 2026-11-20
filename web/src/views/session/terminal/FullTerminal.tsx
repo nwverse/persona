@@ -202,10 +202,11 @@ export function FullTerminal({
             ? [t("terminal-full.live_hint"), grid].filter(Boolean).join("\n")
             : v?.note || STATUS_LABEL[status]
         }
-        className="hidden shrink-0 items-center gap-1.5 whitespace-nowrap text-[11.5px] text-ink-3 @md:inline-flex"
+        role="status"
+        className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap text-submeta text-ink-3"
       >
         <span aria-hidden className={cx("size-1.5 rounded-full", DOT[status])} />
-        <span>{STATUS_LABEL[status]}</span>
+        <span className="@max-md:sr-only">{STATUS_LABEL[status]}</span>
       </span>
       {v?.elsewhere && (
         <button

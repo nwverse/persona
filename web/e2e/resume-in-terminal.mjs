@@ -109,8 +109,8 @@ async function run(browser, theme, width) {
     if (!(await item.count()) || (await item.isDisabled())) fail(`${tag}: no Resume in terminal for a stopped Agent`);
     await item.click();
     await until(async () => (await resumes()).includes(STOPPED.split("/")[1]), `${tag}: no resume reached the hub`);
-    // the terminal is the page's view now: the header's switch goes back to the chat
-    await page.getByRole("button", { name: "对话", exact: true }).locator("visible=true").first().waitFor({ state: "visible", timeout: 10000 }).catch(() => fail(`${tag}: the terminal did not open`));
+    // A resumed Agent opens its actual terminal; its header changes as the authoritative live row arrives.
+    await page.locator("[data-terminal-toolbar]:visible").first().waitFor({ state: "visible", timeout: 10000 }).catch(() => fail(`${tag}: the terminal did not open`));
     await until(async () => !(await page.locator("[data-stopped-agent]").count()), `${tag}: still a stopped Agent after Resume`);
     await shot(page, `${width}-${theme}-stopped-resumed`);
     ok(`${tag}: a stopped Agent resumes in its terminal from ⋯`);

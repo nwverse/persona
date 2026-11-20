@@ -1,4 +1,6 @@
 {
+  "conversation": "对话",
+  "tab_view": "标签页视图",
   "mode_pane": "单窗格",
   "mode_full": "完整界面",
   "mode_pane_title": "只看或接管选中的这一个窗格（电脑上的窗格按这个面板排版）",

@@ -1,4 +1,6 @@
 {
+  "conversation": "Conversation",
+  "tab_view": "Tab view",
   "mode_pane": "Single pane",
   "mode_full": "Full view",
   "mode_pane_title": "Watch or take over just the selected pane (the pane on the computer is laid out for this panel)",

@@ -2060,6 +2060,8 @@ Web: `web/src/sharing/`, `web/public-share/`; Android: `AgentShareSheet`; server
 
 ### 4.10 Web workspace selection and management
 
+An open Agent or Shell tab (#11798) uses the same 56 px page header. Its icon and tab name identify the tab, with the computer and workspace underneath. An Agent offers Conversation and Terminal in the header's segmented control; a Shell opens directly in Terminal. Narrow headers use labelled icons for the segments so the terminal toolbar always starts on the next row. The active terminal owns its connection status, mode control and herdr's Full view tab strip.
+
 In Agents' repository tree, the workspace title and its leading disclosure button toggle the same remembered fold at every depth. A title also selects the exact workspace, including an empty one; opening an Agent uses that Agent’s own row, never the workspace title or a descendant chosen by proximity. A visible overflow button offers the same actions as the context menu, including on touch devices. The desktop sidebar and phone Agents page share these rows and actions rather than adding a management destination.
 
 The existing `Dialog`, `Button`, `Menu`, `Collapse` and status components carry workspace management. Creation shows its source and starting branch, keeps additional choices in the advanced group, and starts no Agent automatically. An optional Agent start names the exact existing workspace. Creation acknowledgment shows the actual resulting path and branch; an interrupted request offers reconciliation of that same intent.

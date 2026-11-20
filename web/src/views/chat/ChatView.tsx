@@ -5,11 +5,11 @@ import { LinkManager, useShownManager } from "../../lib/manager-choice";
 import { alsoOpenText } from "../../lib/engines";
 import { lazy, memo, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, errorText, fullItem, pastHub, sessionPath } from "../../lib/api";
-import { attentionReason, externalLink, failureReason, isStoppedAgent, resumeCommand, sessionCan, sessionCanRename, sessionDisplayTab, sessionMenuActions, sourceSubtitle, sessionTitle, sessionTitleDetail, shortPath, stateOf, tabLabel, uuid } from "../../lib/format";
+import { attentionReason, externalLink, failureReason, isStoppedAgent, resumeCommand, sessionCan, sessionCanRename, sessionDisplayTab, sessionMenuActions, sourceSubtitle, sessionTitle, sessionTitleDetail, shortPath, stateOf, uuid } from "../../lib/format";
 import { useHerdrTabName } from "../../lib/agents-display";
 import { conversationPage } from "../../lib/conversation-page";
 import { navigate, type Route, type SessionView } from "../../lib/router";
-import { canShowTerminal, composerSlot, otherView, terminalJump, terminalWaits, useSessionView, viewOnlyRow } from "../../lib/session-view";
+import { canShowTerminal, composerSlot, isLiveAgentTab, otherView, terminalJump, terminalWaits, useSessionView, viewOnlyRow } from "../../lib/session-view";
 import { invalidateOverviewPanel } from "../../lib/use-shortcuts";
 import { resumeInTerminal, terminalResume } from "../../lib/agent-resume";
 import { openLink } from "../../lib/links";
@@ -29,7 +29,7 @@ import { getSession, getState, hubHas, listenSession, refresh, refreshTodos, sav
 import { codexThreadOf, waitsForFirstMessage } from "../../lib/codex-waiting";
 import { foldRows } from "../../lib/folded-rows";
 import { PREVIEW_FEATURE } from "../../lib/preview";
-import { buildTaskIndex, loopCadence, loopNext, stableSubagents, STOP_LOOP_MESSAGE, subagentCall, subagentCardKey, terminalCalls, type TaskIndex } from "../../lib/tasks";
+import { buildTaskIndex, stableSubagents, STOP_LOOP_MESSAGE, subagentCall, subagentCardKey, terminalCalls, type TaskIndex } from "../../lib/tasks";
 import { runStep, sameStep, turnDone, type RunStep } from "../../lib/run-step";
 import { stabilizeLines, stableValue } from "../../lib/stable-lines";
 import { planProgress, workLineStyle } from "../../lib/work-groups";
@@ -53,7 +53,6 @@ import { anchoredScroll, followsAgain, isScrollbarPress, jumpLabel, leavesOnKey,
 import { Button, copyText, cx, Dialog, IconButton, Loading, Menu, toast, useMenu, useNow, type MenuItem } from "../../ui/atoms";
 import { StatusMark } from "../../ui/StatusMark";
 import { Icon } from "../../ui/icons";
-import { StoppedAgentLine } from "./StoppedAgentLine";
 const TakeoverAction = lazy(() => import("./TakeoverAction"));
 import { scrollBehavior } from "../../ui/stream/motion";
 import { segmentChanges, shiftAbove } from "./offscreen";
@@ -83,7 +82,7 @@ import { RunningStatusBar } from "./RunningStatusBar";
 import { latestPlan, usePlanClosed, usePlanOutOfView } from "./latest-plan";
 import { ChatContext, LiveClockContext, type ChatContextValue } from "./chat-context";
 import { addFreshWords, resetFreshWords } from "./fresh-words";
-import { backgroundCount, backgroundLine, backgroundWaitLine, workflowAgentFor, workflowCalls, workflowCallsKey } from "../../lib/workflows";
+import { backgroundLine, backgroundWaitLine, workflowAgentFor, workflowCalls, workflowCallsKey } from "../../lib/workflows";
 import { backgroundTurn, waitingOnSubagents } from "../../lib/background-work";
 import { doneSubagentLink, useSubagentLink } from "../../lib/subagent-link";
 import { childCall, childCardKey, childOfCall, childPlaces, exchangeStarts, placeChildren, type ChildPlace } from "../../lib/child-cards";
@@ -101,10 +100,12 @@ import { useEarlierStretches } from "./useEarlierStretches";
 import { dayRowKey, withDayDividers } from "./day-dividers";
 import type { ChatRowWithModes, ModeChanges } from "./mode-changes";
 import { useFoldSearch } from "./useFoldSearch";
-import { DeleteSessionDialog, preloadSessionDialogs, RenameDialog, RenameSpaceDialog, renameTitle, SessionInfoDialog } from "./SessionDialogs";
+import { DeleteSessionDialog, preloadSessionDialogs, RenameDialog, RenameSpaceDialog, renameTitle, SessionInfoDialog, SpaceAgentsMenu } from "./SessionDialogs";
 import { PermissionPicker, usePlanMode } from "./PermissionPicker";
 import { permissionsCommand } from "../../lib/permissions-command";
 import { archiveCloseItems, closeItems } from "../AgentMenus";
+import type { AgentHeaderPanelsProps } from "./AgentTabHeader";
+import { TabPageHeader, TabPageTitle } from "../../ui/TabPageHeader";
 import { ChatSidebarButton } from "../ShellSwitch";
 import { appArchiveDeps, offerSessionDelete, restoreAgent, useArchived } from "../../lib/agent-archives";
 import { UltracodeLostNote } from "./Ultracode";
@@ -148,6 +149,11 @@ import { lazyDialog, lazyOverlay } from "../LazyOverlay";
 // The terminal view (TerminalPanel and its stream / cell parsing) loads on demand: most visits only read the chat, so it
 // stays out of the main chunk. A page that can switch to it fetches it in the background (loadTerminal below), so the
 // first switch does not slide in an empty layer.
+const loadAgentTabHeader = () => import("./AgentTabHeader");
+const TabViewSwitch = lazyPage(() => loadAgentTabHeader().then((m) => m.TabViewSwitch));
+const LoopMark = lazyPage(() => loadAgentTabHeader().then((m) => m.LoopMark));
+const AgentHeaderPanels = lazyPage(() => loadAgentTabHeader().then((m) => m.AgentHeaderPanels));
+const StoppedAgentLine = lazyPage(() => loadAgentTabHeader().then((m) => m.StoppedAgentLine));
 const loadTerminal = () => import("../session/TerminalPanel");
 // Sharing settings load on their first open, outside the first screen (docs/web/web.md "First screen").
 const ChatSearch = lazyDialog(() => import("./ChatSearch").then((m) => m.ChatSearch));
@@ -2120,6 +2126,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         overview={overview}
         title={title}
         direction={directionName !== undefined && !isMain && !notFound}
+        liveTab={Boolean(inPage && !chrome && isLiveAgentTab(session))}
         machineName={machineName}
         assistant={assistant}
         main={isMain}
@@ -2383,7 +2390,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         {/* kept while a call is on (its draft, attachments and quotes stay), the bar in its place */}
         <div ref={composerBox} className="shrink-0" hidden={voiceState === "live" || Boolean(picker)}>
         {stoppedLine ? (
-          <StoppedAgentLine mid={mid} sid={sid} onTerminal={openTerminal} />
+          <Suspense fallback={null}><StoppedAgentLine mid={mid} sid={sid} onTerminal={openTerminal} /></Suspense>
         ) : (
         <Composer
           draftKey={draftKey}
@@ -2433,7 +2440,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
           {/* Files opens beside it (the Files panel, as on the "Terminal" page); the page's header is the panel's, so the panel keeps a toolbar of its own controls ("Single pane" / "Full view"…) */}
           <PageBoundary page={`term:${mid}/${sid}`}>
             <Suspense fallback={<div className="flex h-full items-center justify-center"><Loading /></div>}>
-              <TerminalPanel mid={mid} sid={sid} onFiles={session?.cwd ? openFiles : undefined} onClose={() => setView("chat")} embedded />
+              <TerminalPanel mid={mid} sid={sid} onFiles={session?.cwd ? openFiles : undefined} />
             </Suspense>
           </PageBoundary>
         </ViewLayer>
@@ -2643,11 +2650,12 @@ export const Header = memo(function Header({
   sides,
   panel: chrome,
   direction = false,
+  liveTab = false,
 }: {
   session?: Session;
   starting?: boolean;
   interactions?: Interaction[];
-  overview?: { id: string; open: boolean; toggle: () => void };
+  overview?: AgentHeaderPanelsProps["overview"];
   title: string;
   machineName: string;
   assistant?: boolean;
@@ -2656,6 +2664,7 @@ export const Header = memo(function Header({
   /** A leader conversation, its title its direction's name: no in-place rename of that title (it would rename the
    *  conversation's own title, which the header does not show); ⋯ Rename does that, as the sidebar row's does. */
   direction?: boolean;
+  liveTab?: boolean;
   siblings: Session[];
   onToggleSidebar?: () => void;
   onInterrupt: () => void;
@@ -2678,12 +2687,13 @@ export const Header = memo(function Header({
   /** The conversation's tasks panel: a button from 640 px, a row of ⋯ on a phone (the title keeps its room there). */
   tasks?: { open: boolean; onToggle: () => void };
   /** A lead with workers (#5180): its Team panel's button, whether the panel is open, and whether a worker needs you. */
-  team?: { open: boolean; needs: boolean; onToggle: () => void };
+  team?: AgentHeaderPanelsProps["team"];
   /** A session with side sessions (#7944): how many, whether its Side sessions panel is open, whether one needs you. */
-  sides?: { count: number; open: boolean; needs: boolean; onToggle: () => void };
+  sides?: AgentHeaderPanelsProps["sides"];
   panel?: PanelChrome;
 }) {
-  const preferTab = useHerdrTabName();
+  const preferTabName = useHerdrTabName();
+  const preferTab = liveTab || preferTabName;
   const primaryTab = session && !assistant && !direction ? sessionDisplayTab(session, preferTab) : "";
   const title = primaryTab || baseTitle;
   const titleDetail = primaryTab && session ? sessionTitleDetail(session, preferTab) : "";
@@ -2774,21 +2784,9 @@ export const Header = memo(function Header({
   const compare = session && compareOf ? compareOf(session) : undefined;
   const othersNeed = others.some((s) => stateOf(s) === "needs_you");
   // the Agent's background work (#5421): the button shows while there is some, the loop mark while a /loop drives it
-  const now = useNow(30_000, Boolean(session?.loop && !assistant));
-  const running = session && !assistant ? backgroundCount(session) : 0;
   // a runtime's session renames where its node says it can (capabilities.rename, #6294), as Close goes by capabilities.close
   const canRename = Boolean(session && !main && !builtIn && sessionCanRename(session));
   const [editing, setEditing] = useState(false);
-  const spaceRows: MenuItem[] = siblings
-    .slice()
-    .sort((a, b) => (a.slot_index ?? 0) - (b.slot_index ?? 0))
-    .map((s) => ({
-      key: s.session_id,
-      label: `${tabLabel(s) || sessionTitle(s)} · ${sessionTitle(s)}`,
-      state: stateOf(s),
-      checked: s.session_id === session?.session_id,
-      onSelect: () => navigate({ name: "session", mid: s.machine_id, sid: s.session_id }),
-    }));
   const { items: assistantItems, dialogs: assistantDialogs } = useAssistantMenu(assistant ? session : undefined);
   const feishu = externalLink(session);
   const linkedTodo = session?.todo ?? session?.completed_todo;
@@ -2891,20 +2889,20 @@ export const Header = memo(function Header({
     );
   const branch = !assistant ? session?.branch?.trim() : "";
   const titleClass = "min-w-0 text-[14px] font-medium text-ink";
-  const sideLabel = sides ? [t("chat-chatview.side_sessions_count", { count: sides.count }), sides.needs ? t("chat-chatview.side_sessions_needs_you") : ""].filter(Boolean).join(" · ") : "";
 
   return (
     <>
       {menu.anchor && <SessionReviewMenuItem onItem={setSessionReviewItems} session={assistant ? undefined : session} busy={starting} ix={interactions} />}
-      <header className="@container flex h-14 shrink-0 items-center gap-2 border-b border-line bg-page/85 px-3 backdrop-blur-md sm:px-4">
+      <TabPageHeader live={liveTab}>
       <div className={headerSlot(Boolean(topCenter), "start")}>
         {onToggleSidebar && <ChatSidebarButton session={session} counted={!topCenter} onClick={onToggleSidebar} />}
       </div>
       <div data-chat-title-row className={cx("flex min-w-0 flex-1 items-center gap-0.5", Boolean(topCenter) && "max-lg:hidden")}>
         {pinned && !assistant && <span role="img" aria-label={t("chat-chatview.pinned")} title={t("chat-chatview.pinned")} className="mr-1 flex shrink-0 text-ink-3"><Icon name="pin" size={13} /></span>}
-        {session?.loop && !assistant && <LoopMark session={session} now={now} onOpen={() => openBackgroundPanel(session.machine_id, session.session_id)} />}
+        {session?.loop && !assistant && <Suspense fallback={null}><LoopMark loop={session.loop} onOpen={() => openBackgroundPanel(session.machine_id, session.session_id)} /></Suspense>}
         {session && !assistant && <AgentDeviceMark session={session} machineName={machineName} />}
         {assistant && !headBesidePage && <span data-chat-face className="mr-1.5 flex shrink-0"><AssistantFace session={session} last={last} /></span>}
+        <TabPageTitle computer={liveTab ? machineName : undefined} workspace={session?.space_name}>
         {editing && session ? (
           <TitleEditor session={session} title={primaryTab ? session.title || baseTitle : title} onDone={() => setEditing(false)} />
         ) : assistant && main && items.length > 0 ? (
@@ -2924,6 +2922,7 @@ export const Header = memo(function Header({
             {chrome?.title || title}
           </h1>
         )}
+        </TabPageTitle>
         {!editing && chrome?.beside}
         {!editing && !(assistant && main) && more("title")}
         {!editing && branch && (
@@ -2935,64 +2934,16 @@ export const Header = memo(function Header({
       </div>
       {topCenter && <div className="flex min-w-0 flex-1 justify-center lg:hidden">{topCenter}</div>}
       <div className={headerSlot(Boolean(topCenter), "end")}>
-      {overview && (
-        <button
-          type="button"
-          data-session-overview-trigger
-          aria-label={t("chat-chatview.session_overview")}
-          aria-pressed={overview.open}
-          aria-description={running > 0 ? t("chat-chatview.background_running", { count: running }) : undefined}
-          aria-controls={overview.open ? overview.id : undefined}
-          title={t("chat-chatview.session_overview")}
-          onClick={overview.toggle}
-          className={cx("touch-hit relative flex size-7 shrink-0 items-center justify-center rounded-control transition-colors hover:bg-hover hover:text-ink", overview.open ? "bg-hover text-ink" : "text-ink-3")}
-        >
-          <Icon name="list" size={15} />
-          {running > 0 && !overview.open && (
-            <span aria-hidden data-background-count className="pointer-events-none absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-field px-1 text-[10px] font-semibold text-ink-2 tabular-nums shadow-[0_0_0_2px_var(--page)]">{running}</span>
-          )}
-        </button>
-      )}
-      {team && (
-        <span className="relative flex shrink-0">
-          <IconButton icon="users" label={team.needs && !team.open ? t("chat-chatview.team_needs_you") : t("chat-chatview.team")} onClick={team.onToggle} active={team.open} />
-          {team.needs && !team.open && <span aria-hidden className="pointer-events-none absolute top-0.5 right-0.5 size-2 rounded-full bg-attention shadow-[0_0_0_2px_var(--page)]" />}
-        </span>
-      )}
-      {sides && (
-        // its side sessions (#7944): the mark and how many, on one line; the attention dot while one needs you
-        <span className="relative flex shrink-0">
-          <button
-            type="button"
-            aria-label={sideLabel}
-            title={sideLabel}
-            aria-expanded={sides.open}
-            data-side-sessions={sides.count}
-            onClick={sides.onToggle}
-            className={cx(
-              "touch-hit flex h-7 shrink-0 items-center gap-1 rounded-[8px] px-1.5 text-label leading-none font-medium whitespace-nowrap tabular-nums transition-[background-color,color,transform] duration-150 active:scale-[0.94]",
-              sides.open ? "bg-hover text-ink" : "text-ink-3 hover:bg-hover hover:text-ink",
-            )}
-          >
-            <Icon name="sideSessions" size={15} />
-            <span>{sides.count}</span>
-          </button>
-          {sides.needs && <span aria-hidden data-side-sessions-needs className="pointer-events-none absolute top-0.5 right-0.5 size-2 rounded-full bg-attention shadow-[0_0_0_2px_var(--page)]" />}
-        </span>
+      {(overview || team || sides) && (
+        <Suspense fallback={null}>
+          <AgentHeaderPanels overview={overview} team={team} sides={sides} session={assistant ? undefined : session} />
+        </Suspense>
       )}
       {showFiles && <IconButton icon="folder" label={t("chat-chatview.files")} onClick={openFiles} active={here(panel, "files") || here(panel, "git")} className="hidden sm:flex" />}
-      {/* the terminal: one button to the other view at every width (cindy's terminal is one of its right sidebar's tabs) */}
-      {view && onView && (
-        <span className="relative flex shrink-0">
-          <IconButton icon={view === "chat" ? "terminal" : "chat"} label={t(view === "chat" ? "chat-chatview.terminal" : "chat-chatview.chat")} onClick={flipView} />
-          {(view === "term" ? viewDot : termDot) && <span aria-hidden data-terminal-waits={view === "chat" || undefined} className="pointer-events-none absolute top-0.5 right-0.5 size-1.5 rounded-full bg-attention" />}
-        </span>
-      )}
-      {jumpTerminal && (
-        <span className="relative flex shrink-0">
-          <IconButton icon="terminal" label={t("chat-chatview.terminal")} onClick={openTerminalPage} />
-          {termDot && <span aria-hidden data-terminal-waits className="pointer-events-none absolute top-0.5 right-0.5 size-1.5 rounded-full bg-attention" />}
-        </span>
+      {(view && onView || jumpTerminal) && (
+        <Suspense fallback={null}>
+          <TabViewSwitch live={liveTab && showTerminal} view={view ?? "chat"} onChange={view && onView ? onView : openTerminalPage} chatDot={viewDot} termDot={termDot} />
+        </Suspense>
       )}
       {/* wide screens have New chat at the top of the sidebar; a phone's sidebar is a drawer */}
       {assistant && !chrome && session?.space !== "health" && <IconButton icon="compose" label={t("chat-chatview.new_chat")} onClick={() => navigate({ name: "persona-new" })} className="lg:hidden" />}
@@ -3005,17 +2956,7 @@ export const Header = memo(function Header({
       {chrome && <IconButton icon="x" label={t("sidepanel.close")} onClick={chrome.onClose} />}
       </div>
       {menu.anchor && <Menu anchor={menu.anchor} onClose={menu.close} align={topCenter && mediaMatches(NARROW) ? "right" : "left"} items={items} />}
-      {tabs.anchor && (
-        <Menu
-          anchor={tabs.anchor}
-          onClose={tabs.close}
-          align={topCenter && mediaMatches(NARROW) ? "right" : "left"}
-          width={360}
-          header={session?.space_name ? t("chat-chatview.space_header", { name: session.space_name }) : undefined}
-          headerAsWritten
-          items={spaceRows}
-        />
-      )}
+      {tabs.anchor && <SpaceAgentsMenu anchor={tabs.anchor} onClose={tabs.close} siblings={siblings} session={session} right={Boolean(topCenter && mediaMatches(NARROW))} />}
       {session && <SessionInfoDialog open={dialog === "info"} onClose={() => setDialog(null)} session={session} machineName={machineName} />}
       {session && <RenameDialog open={dialog === "rename"} onClose={() => setDialog(null)} session={session} />}
       {session && <RenameSpaceDialog open={dialog === "space"} onClose={() => setDialog(null)} session={session} />}
@@ -3023,7 +2964,7 @@ export const Header = memo(function Header({
       <LinkTodoDialog open={linkTodoOpen} session={session} onClose={() => setLinkTodoOpen(false)} />
       {session && sharingOpen && !assistant && !main && <SharingDialog key={`${session.machine_id}/${session.session_id}/${session.manager ?? ""}`} session={session} onClose={() => setSharingOpen(false)} />}
       {assistantDialogs}
-    </header>
+    </TabPageHeader>
     </>
   );
 });
@@ -3039,18 +2980,6 @@ export function AgentDeviceMark({ session, machineName }: { session: Session; ma
     <span role="img" aria-label={t("chat-chatview.agent_device_label", { agent: sessionMarkName(session), where })} title={where} data-agent-device={offline ? "offline" : "online"} className={cx("mr-2 inline-flex shrink-0", offline && "opacity-75")}>
       <SessionMark s={session} size={14} decorative remote className="text-ink-3" />
     </span>
-  );
-}
-
-/** Before the title while a /loop drives the Agent (#5421, cindy's schedule badge): the loop's mark; its cadence and next
- *  wake-up on hover; a click opens the Background tasks panel, where the loop is and stops. */
-function LoopMark({ session, now, onOpen }: { session: Session; now: number; onOpen: () => void }) {
-  const loop = session.loop!;
-  const hint = [t("chat-chatview.loop_mark"), loopCadence(loop), loopNext(loop, now)].filter(Boolean).join(" · ");
-  return (
-    <button type="button" onClick={onOpen} aria-label={hint} title={hint} data-loop-mark className="mr-1 flex size-4 shrink-0 items-center justify-center rounded-[4px] text-ink-3 transition-colors hover:text-ink">
-      <Icon name="loop" size={13} />
-    </button>
   );
 }
 

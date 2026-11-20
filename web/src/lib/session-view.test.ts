@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canShowTerminal, composerSlot, otherView, readView, rememberView, resolveView, terminalTarget, viewOnlyRow } from "./session-view";
+import { canShowTerminal, composerSlot, isLiveAgentTab, otherView, readView, rememberView, resolveView, terminalTarget, viewOnlyRow } from "./session-view";
 import type { Session } from "./types";
 
 function memory() {
@@ -12,6 +12,15 @@ function agent(o: Partial<Session> = {}): Session {
 }
 
 describe("which view an agent's page draws", () => {
+  it("keeps History, assistant chats and sources without a terminal outside the live tab frame", () => {
+    expect(isLiveAgentTab(agent({ slot_id: "t1" }))).toBe(true);
+    expect(isLiveAgentTab(agent({ pane_id: "w1:p1" }))).toBe(true);
+    expect(isLiveAgentTab(agent())).toBe(false);
+    expect(isLiveAgentTab(agent({ slot_id: "t1", state: "offline", status: "offline" }))).toBe(false);
+    expect(isLiveAgentTab(agent({ slot_id: "t1", status: "interrupted", state: "needs_you", capabilities: { read: true, terminal: true, send: false } }))).toBe(false);
+    expect(isLiveAgentTab(agent({ slot_id: "t1", assistant: true }))).toBe(false);
+    expect(isLiveAgentTab(agent({ slot_id: "t1", capabilities: { read: true, terminal: false } }))).toBe(false);
+  });
   it("takes the address's, then the one remembered, then the conversation", () => {
     expect(resolveView("term", "chat", true)).toBe("term");
     expect(resolveView(undefined, "term", true)).toBe("term");

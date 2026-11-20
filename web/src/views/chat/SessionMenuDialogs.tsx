@@ -4,15 +4,35 @@
 import { useEffect, useState } from "react";
 import { isUntouchedStart } from "../../lib/agent-archives";
 import { api, enc, errorText, sessionPath } from "../../lib/api";
-import { herdrTabName, sessionCan, sessionTitle } from "../../lib/format";
+import { herdrTabName, sessionCan, sessionTitle, stateOf, tabLabel } from "../../lib/format";
 import { useHerdrTabName } from "../../lib/agents-display";
 import { renameBody } from "../../lib/session-actions";
 import { href, navigate } from "../../lib/router";
 import { dropSession, getSession, refresh, refreshAssistant, upsertSession } from "../../lib/store";
 import type { Session } from "../../lib/types";
-import { Button, Dialog, toast } from "../../ui/atoms";
+import { Button, Dialog, Menu, toast } from "../../ui/atoms";
 import { t } from "../../i18n";
 import { cleanupReady, KEEP, runCleanup, useAgentWorktree, WorktreeCleanup, type Cleanup } from "./SessionWorktreeCleanup";
+
+/** The header's other Agents in this workspace. Build and sort their menu rows only when it is opened. */
+export function SpaceAgentsMenu({ anchor, onClose, siblings, session, right }: {
+  anchor: HTMLElement; onClose: () => void; siblings: Session[]; session?: Session; right: boolean;
+}) {
+  const items = siblings
+    .slice()
+    .sort((a, b) => (a.slot_index ?? 0) - (b.slot_index ?? 0))
+    .map((s) => ({
+      key: s.session_id,
+      label: `${tabLabel(s) || sessionTitle(s)} · ${sessionTitle(s)}`,
+      state: stateOf(s),
+      checked: s.session_id === session?.session_id,
+      onSelect: () => navigate({ name: "session", mid: s.machine_id, sid: s.session_id }),
+    }));
+  return (
+    <Menu anchor={anchor} onClose={onClose} align={right ? "right" : "left"} width={360}
+      header={session?.space_name ? t("chat-chatview.space_header", { name: session.space_name }) : undefined} headerAsWritten items={items} />
+  );
+}
 
 // "Rename": the herdr tab and the session's name (Claude's /rename), each only when changed (iOS RenameSessionAlert).
 export function RenameDialog({ session, open, onClose }: { session: Session; open: boolean; onClose: () => void }) {

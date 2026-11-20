@@ -18,6 +18,11 @@ type Store = Pick<Storage, "getItem" | "setItem">;
 
 export const otherView = (v: SessionView): SessionView => (v === "term" ? "chat" : "term");
 
+/** Only a running, addressable Agent belongs to the live tab frame; History keeps its stopped session detail. */
+export function isLiveAgentTab(s: Session | undefined): boolean {
+  return Boolean(s && !s.assistant && (s.pane_id || s.slot_id || s.tab_id) && stateOf(s) !== "offline" && !isStoppedAgent(s) && sessionCan(s, "terminal"));
+}
+
 /** The agent has a terminal to show in place: its source lets a terminal open, and its pane is live or it is a stopped
  *  Agent (#4754), whose terminal is the shell it left, or Resume when that is gone. */
 export function canShowTerminal(s: Session | undefined): boolean {

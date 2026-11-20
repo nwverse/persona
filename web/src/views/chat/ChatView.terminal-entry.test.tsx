@@ -20,6 +20,7 @@ vi.mock("../assistant/Persona", () => ({ usePersona: () => ({ name: "Persona" })
 
 import { applyCompleteSessions, reset, setOutbox } from "../../lib/store";
 import type { Session } from "../../lib/types";
+import { canShowTerminal } from "../../lib/session-view";
 import { t } from "../../i18n";
 import { ChatView } from "./ChatView";
 
@@ -47,10 +48,26 @@ afterEach(() => {
 async function open(view: React.ReactElement, session = row()) {
   act(() => applyCompleteSessions([session]));
   act(() => root.render(view));
-  for (let i = 0; i < 6; i++) await settle();
+  await settle();
+  if (canShowTerminal(session)) await vi.waitFor(async () => {
+    await settle();
+    expect(terminalButton()).not.toBeNull();
+  }, { timeout: 5000 });
 }
 const terminalButton = () => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("chat-chatview.terminal")}"]`);
 const dot = () => terminalButton()?.parentElement?.querySelector("[data-terminal-waits]") ?? null;
+
+it("opens a live tab on its conversation, with the host tab's name and location before any terminal mounts", async () => {
+  await open(<ChatView mid="mac" sid="s1" inPage />, row({
+    host: "herdr", pane_id: "w1:p1", slot_id: "t1", slot_name: "Review", space_name: "Garden",
+  }));
+  const header = host.querySelector("[data-live-tab-header]");
+  expect(header?.querySelector("h1")?.textContent).toBe("Review");
+  expect(header?.querySelector("[data-tab-location]")?.textContent).toBe("mac · Garden");
+  expect(header?.querySelector('[role="radio"][aria-checked="true"]')?.textContent).toBe(t("terminal-full.conversation"));
+  expect(terminalButton()?.getAttribute("aria-checked")).toBe("false");
+  expect(host.querySelector("[data-terminal-toolbar]")).toBeNull();
+});
 async function menuItems(): Promise<string[]> {
   act(() => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("chat-chatview.more_actions")}"]`)!.click());
   await settle();
