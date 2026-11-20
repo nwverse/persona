@@ -86,14 +86,17 @@ describe("EarlierStretches", () => {
     }
   });
 
-  // #11450: an earlier stretch whose computer can't find its history (404 not_found) ends there, as an empty page did:
-  // no error and no retry, and the older stretches still load.
-  it("ends an earlier stretch its computer can't find and loads the older ones", async () => {
+  // #11450: an earlier stretch whose computer can't find its history (404 not_found, with a reason or detail) ends
+  // there, as an empty page did: no error and no retry, and the older stretches still load.
+  it.each([
+    ["reason", { error: "Persona can't find its history", code: "not_found", reason: "no_transcript" }],
+    ["detail only", { error: "Persona can't find its history", code: "not_found", detail: "transcript for session b not found" }],
+  ])("ends an earlier stretch its computer can't find (%s) and loads the older ones", async (_kind, missing) => {
     const asked: string[] = [];
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const sid = /\/sessions\/m\/([^/]+)\/items\?/.exec(String(input))?.[1] ?? "";
       asked.push(sid);
-      if (sid === "b") return Response.json({ error: "Persona can't find its history", code: "not_found", reason: "no_transcript" }, { status: 404 });
+      if (sid === "b") return Response.json(missing, { status: 404 });
       return Response.json({ items: [item(1, 1)], has_more: false });
     }));
     try {
