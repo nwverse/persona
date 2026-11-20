@@ -524,7 +524,9 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // load on demand. The bound leaves 37 B above the measured ja size.
 // Merged, the two changes add 25 B + 610 B to their shared 483,143 B ja baseline, giving 483,778 B;
 // #7524's 37 B of room is kept on top.
-export const FIRST_SCREEN_BUDGET = 483_815;
+// #11979 (in-session model/effort switching in lib/model-switch.ts on main) raised the ja first screen by 80 B
+// (en 481,036 B, ja 483,895 B, zh-Hans 481,759 B); #12034's lazy-loaded Settings row adds 0 B.
+export const FIRST_SCREEN_BUDGET = 483_895;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
