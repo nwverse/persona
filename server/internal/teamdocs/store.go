@@ -10,13 +10,14 @@ import (
 	"encoding/hex"
 	"errors"
 	"math"
-	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 var (
@@ -35,7 +36,7 @@ const (
 	maxRevisionBytes = 256 * 1024
 )
 
-var storeID = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,100}$`)
+var storeID = lazyre.New(`^[a-zA-Z0-9_-]{1,100}$`)
 
 //go:embed store.sql
 var storeSchema string

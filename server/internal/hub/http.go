@@ -700,6 +700,15 @@ func (h *Hub) listSessions(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// include_inactive=1: sessions active in a time window, inactive ones too (sessions_history.go). Without it, as
+	// before: since / cursor / limit stay the indexed list's.
+	if history, err := historyMode(r); err != nil {
+		sessionListErr(w, err)
+		return
+	} else if history {
+		h.historySessions(w, r, named)
+		return
+	}
 	_, lookup := r.URL.Query()["session_id"]
 	if lookup || sessionlist.Enabled(r.URL.Query()) {
 		h.pagedSessions(w, r, named)

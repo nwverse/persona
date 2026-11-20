@@ -1,4 +1,11 @@
 {
+  "forward_error": "（転送内容を読み込めませんでした：{error}）",
+  "forward_image": "[画像]",
+  "unknown_sender": "不明な送信者",
+  "bot_sender": "ボット",
+  "forward_line": "{time} {sender}：{text}",
+  "forward_clipped": "（長すぎるため以降は省略）",
+  "forward_empty": "（転送内に読み取れるメッセージがありません）",
   "paired": "ペアリング完了",
   "paired_body": "これからは、ここで話したことがPersonaに届きます。\n\n",
   "not_sent": "送信できませんでした：{error}",
