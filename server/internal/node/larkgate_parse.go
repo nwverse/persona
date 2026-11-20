@@ -89,6 +89,89 @@ func larkLoneGateCall(cmd string, gates []proto.CommandGate) bool {
 	return true
 }
 
+// larkReadFormattingPipeline proves the narrow mixed command an Inbox default conversation may allow (#11991):
+// one literal configured GET/HEAD under an optional timeout, then only output filters or inert Python with no open
+// or file-writing API. The AST must be one pipeline, so an appended command, substitution, assignment or file redirect is not
+// formatting. The caller separately requires one classified, rule-allowed read; this helper never executes it.
+func larkReadFormattingPipeline(cmd string, gates []proto.CommandGate) bool {
+	tree, err := syntax.NewParser().Parse(strings.NewReader(cmd), "")
+	if err != nil || len(tree.Stmts) != 1 {
+		return false
+	}
+	var statements []*syntax.Stmt
+	var walk func(*syntax.Stmt) bool
+	walk = func(st *syntax.Stmt) bool {
+		if st.Background || st.Coprocess || st.Negated {
+			return false
+		}
+		switch c := st.Cmd.(type) {
+		case *syntax.CallExpr:
+			statements = append(statements, st)
+			return true
+		case *syntax.BinaryCmd:
+			return (c.Op == syntax.Pipe || c.Op == syntax.PipeAll) && walk(c.X) && walk(c.Y)
+		}
+		return false
+	}
+	if !walk(tree.Stmts[0]) || len(statements) < 2 {
+		return false
+	}
+	for i, st := range statements {
+		call := st.Cmd.(*syntax.CallExpr)
+		if len(call.Assigns) != 0 || len(call.Args) == 0 {
+			return false
+		}
+		for _, redirect := range st.Redirs {
+			// Descriptor duplication such as 2>&1 cannot read or write a file. Every path redirection stays opaque.
+			if redirect.Op != syntax.DplOut && redirect.Op != syntax.DplIn || redirect.Word == nil {
+				return false
+			}
+			fd, dynamic := executionWord(redirect.Word)
+			if dynamic || fd == "" {
+				return false
+			}
+			for j := 0; j < len(fd); j++ {
+				if fd[j] < '0' || fd[j] > '9' {
+					return false
+				}
+			}
+		}
+		words := make([]string, len(call.Args))
+		for j, arg := range call.Args {
+			var dynamic bool
+			if words[j], dynamic = executionWord(arg); dynamic {
+				return false
+			}
+		}
+		if i > 0 {
+			// sort has output-file and compress-program options, and uniq can name an output file. Unlike the
+			// pre-existing pure-read pipeline, this new mixed-command exception does not inherit those write paths.
+			if larkFilters[words[0]] && words[0] != "cd" && words[0] != "sort" && words[0] != "uniq" {
+				continue
+			}
+			if strings.Contains(words[0], "/") || !inertPythonCode(words) {
+				return false
+			}
+			files, ok := pythonWrites(words)
+			if !ok || len(files) != 0 {
+				return false
+			}
+			continue
+		}
+		if words[0] == "timeout" {
+			if len(words) <= 2 || !timeoutArg.MatchString(words[1]) {
+				return false
+			}
+			words = words[2:]
+		}
+		if len(words) != 3 || gateOf(gates, words[0]) < 0 || words[1] != "GET" && words[1] != "HEAD" ||
+			!strings.HasPrefix(words[2], "/") {
+			return false
+		}
+	}
+	return true
+}
+
 func classifyLarkDepth(cmd string, gates []proto.CommandGate, cwd string, risk larkRisk, depth int) larkVerdict {
 	return classifyLarkAt(cmd, gates, cwd, risk, depth, false)
 }
