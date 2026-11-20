@@ -246,7 +246,7 @@ localize Persona Link's client UI; they do not supply the language of model prom
 | `inbox/item.md` | Model-facing representation of one item (type line + content), shared by triage, drafting, judging, and AI twin | Same as above |
 | `inbox/kinds/subscription.md` | What each kind of a source subscription's Inbox items is (`sub_mail` … `sub_digest`, `sub_failing`), with the subscription's label; handed in with the round as the source's kinds, so it reaches `inbox/item.md` as its type line ([subscriptions.md](../extensions/subscriptions.md) "Destinations") | `subscriptions/deliver.go` |
 | `inbox/draft.md`, `draft_input.md` | Draft replies; `Rewrite` asks again after a draft repeated a never-quote sentence | Same as above |
-| `inbox/extension_context.md` | Included by `triage.md` and `draft.md`: what extensions wrote for the Inbox (`inbox_context`) | `assistant/extension_context.go` |
+| `inbox/extension_context.md` | Included by `triage.md` and `draft.md`: what extensions wrote for the Inbox (`inbox_context`) | `assistant/inbox_extension_context.go` |
 | `inbox/judge.md`, `judge_input.md` | Since phase 1, only its `task_id` is used: which of the user's ongoing tasks this item concerns | `assistant/inbox_handle.go` `linkTaskFor` |
 | `inbox/agent.md`, `agent_title.md`, `agent_ref.md` | Handling chat (AI twin) first message: bound event ID, source-specific explanation, summary / action chain / intervening messages when continuing, knowledge-base context | `assistant/inbox_agent.go` |
 | `inbox/handling/*.md` | Program messages to handling chats: new messages (`new_messages`), sent (`sent`), Agent started (`agent_started`), Agent stopped with its last words or failure (`agent_stopped`), handed back (`handback`), rejected (`rejected`), user instruction (`instructed`), handled (`closed`) | `assistant/inbox_handle.go` |
@@ -316,6 +316,16 @@ Since #1571, prompts and context for Lark `/agent` (in chats / document comments
 Go side: `prompts.go` (parsing, template functions), `assistant.go`, `inbox.go`, `kb.go`, `tools.go` (one data structure and `RenderXxx` per prompt; since #1571, lark.go for Lark /agent lives with its prompts in the plugin).
 
 ## MCP tools
+
+When adding, renaming, removing or changing a work-management tool, check the affected workflow in the built-in
+`persona-work` skill (`server/internal/assistantskills/builtin/persona-work/`) in the same PR. Put operation-specific
+changes in the relevant reference. Check that the catalog and startup hint still route a natural request to it. Keep the
+catalog description short and retain the contracts that task Agents use. A scheduled round with a start grant gets
+its planning steps inline and keeps `task_plan` available on its first call when the guide is enabled.
+Keep the exact built-in names taught by the skill in `server/internal/assistant/tool_loading.go`. With the Lab on,
+`work_tools_search` advertises selected definitions to that MCP connection using `notifications/tools/list_changed`.
+Each operation uses its original MCP tool and caller authorization. A granted scheduled round can use its existing safe preflight reads and then call `task_plan` directly.
+Reading a skill or other outside content still requires the ordinary Start approval.
 
 Each MCP tool hub provides to Agents / the assistant has one file: `mcp/<scenario>/<tool-name>.md`. The filename is the tool name. Contents: one paragraph of model-facing description, a blank line,
 then a ```json code block containing the input schema (parameters and their descriptions). These files are **not templates**; they are read verbatim. The schema is loaded with `json.Compact`,

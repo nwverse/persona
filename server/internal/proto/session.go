@@ -158,7 +158,7 @@ type Session struct {
 	Capabilities     *SessionCapabilities `json:"capabilities,omitempty"`
 	IsSubagent       bool                 `json:"is_subagent,omitempty"`
 	Attached         bool                 `json:"attached,omitempty"`
-	// CanFork: "Branch to new chat" works for it (a Claude Code conversation the node can copy, node/fork.go); older nodes
+	// CanFork: "Branch to new chat" works for it (node/fork.go); older nodes
 	// never say so, and the clients hide it.
 	CanFork          bool `json:"can_fork,omitempty"`
 	StartedByPersona bool `json:"started_by_persona"`

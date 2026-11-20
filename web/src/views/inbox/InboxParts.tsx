@@ -69,12 +69,14 @@ function hash(s: string) {
 
 /** `manager`: whose item the picture is of (a list row's; inside an item's view, ItemManager tells), so its URL names
  *  that manager (docs/assistant/managers.md "Clients"). */
-export function Monogram({ name, size = 40, square, neutral, src, manager }: { name: string; size?: number; square?: boolean; neutral?: boolean; src?: string; manager?: string }) {
+export function Monogram({ name, size = 40, square, neutral, src, avatarURL, manager }: { name: string; size?: number; square?: boolean; neutral?: boolean; src?: string; avatarURL?: string; manager?: string }) {
   const owner = useItemManager();
-  // The picture that failed to load: the letter instead of a broken image, until src changes.
+  // A new hub lists its own path; an older one only has the connector media ref in src.
+  const picture = avatarURL?.startsWith("/api/v1/avatars/") ? `${avatarURL}?size=${Math.ceil(size * devicePixelRatio)}` : src;
+  const path = picture && withManager(picture, manager ?? owner);
   const [failed, setFailed] = useState<string>();
   const shape = square ? "rounded-[10px]" : "rounded-full";
-  if (src && failed !== src) return <img src={withToken(withManager(src, manager ?? owner))} alt="" width={size} height={size} onError={() => setFailed(src)} className={cx("shrink-0 object-cover shadow-hairline", shape)} style={{ width: size, height: size }} />;
+  if (path && failed !== path) return <img src={withToken(path)} alt="" width={size} height={size} onError={() => setFailed(path)} className={cx("shrink-0 object-cover shadow-hairline", shape)} style={{ width: size, height: size }} />;
   const first = [...name.trim()][0] ?? "?";
   return (
     <span aria-hidden className={cx("flex shrink-0 items-center justify-center font-semibold", shape)} style={{ width: size, height: size, fontSize: Math.round(size * 0.4), ...(neutral ? MONO[3] : MONO[hash(name) % MONO.length]) }}>
@@ -120,8 +122,7 @@ export function ItemAvatar({ it, size = 40 }: { it: InboxItem; size?: number }) 
     // A connector's thread picture (the other person, a group's own) from the hub's avatars route, asked at the pixels
     // drawn (the route rounds up to the sizes it draws; the browser keeps it, `immutable`); the initial without one or
     // when it cannot be loaded. Inline: the row is on the first screen.
-    const pic = it.connector?.avatar_url;
-    face = <Monogram name={it.sender || it.title} size={size} neutral src={pic && `${pic}?size=${Math.ceil(size * devicePixelRatio)}`} manager={it.manager} />;
+    face = <Monogram name={it.sender || it.title} size={size} neutral avatarURL={it.connector?.avatar_url} manager={it.manager} />;
   }
   const badge = Math.max(14, Math.round(size * 0.42));
   // A connector's own mark on white in the corner; one without a mark a neutral gray, like mail.

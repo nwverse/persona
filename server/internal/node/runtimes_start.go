@@ -183,16 +183,22 @@ func (n *Node) listStarted(h *runtimeConn, started proto.Session, transcript str
 
 // noteRuntimeWorking marks h's cached row for id working as soon as session.send succeeds, before the runtime's
 // debounced runtime.sessions push arrives, unless the session is currently waiting on a user interaction.
-func (n *Node) noteRuntimeWorking(h *runtimeConn, id string) {
+func (n *Node) noteRuntimeWorking(h *runtimeConn, id string, before *proto.Session) {
 	if h == nil || id == "" {
 		return
 	}
 	h.mu.Lock()
-	for i := range h.sessions {
-		if h.sessions[i].SessionID == id && h.sessions[i].Status != proto.StatusBlocked {
-			h.sessions[i].Status = proto.StatusWorking
-			h.sessions[i].UpdatedAt = time.Now().UTC()
+	defer h.mu.Unlock()
+	for index := range h.sessions {
+		row := &h.sessions[index]
+		if row.SessionID != id || row.Status == proto.StatusBlocked {
+			continue
 		}
+		if before != nil && (row.Status != before.Status || row.Rev != before.Rev || row.TurnError != before.TurnError || !row.UpdatedAt.Equal(before.UpdatedAt)) {
+			return
+		}
+		row.Status = proto.StatusWorking
+		row.UpdatedAt = time.Now().UTC()
+		return
 	}
-	h.mu.Unlock()
 }

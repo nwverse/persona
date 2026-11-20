@@ -23,7 +23,7 @@ import { hasFinePointer } from "../../lib/viewport";
 import { Collapse, cx, Spinner, toast } from "../../ui/atoms";
 import { Icon, type IconName } from "../../ui/icons";
 import { t } from "../../i18n";
-import { restoreQueued, type QueuedImage } from "./QueueStrip";
+import { restoreQueued, type QueuedImage } from "./queue-restore";
 
 export interface QueuePanelProps {
   session: Session;

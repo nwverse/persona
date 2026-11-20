@@ -254,6 +254,13 @@ type Kernel interface {
   `assistant/context.go` (8), `assistant/feishu_workbench.go` (4), `assistant/origins.go` (#2049, idle since 2026-11-09).
 - **Done when:** `go build ./...` succeeds; the full `./internal/assistant` package passes once, with its duration, and
   `./internal/archguard` passes; the allowlist is shorter; `scripts/test/test_doc_go_paths.py` passes.
+- **Landed (#11536):** byte-for-byte moves of `clipRunesTo` to `assistant/text.go`, `cardLocks` to
+  `assistant/card_locks.go`, and the Inbox half of `assistant/extension_context.go` (its cache, `inboxExtensionContext`
+  and the never-quote check, which only the Inbox's drafts use) to `assistant/inbox_extension_context.go`; its tests stay
+  in `assistant/extension_context_test.go`, which #10079, #10891 and #10915 edit. Deferred: the two Reader methods,
+  because S2's allowlist is not on main yet and `listed()` blanks the `Last` that `decideDraft` reads, so the item copy's
+  shape is chosen with S2; and the comments in `assistant/service.go` (24 open PRs) and `assistant/inbox_triage.go` (8)
+  that still name `extension_context.go`, whose header now points to the Inbox file.
 
 ### S4. Routes, bus methods, hooks and snapshot through the kernel
 - **Change:** the kernel gains Bus, TurnSettled, Connected and Snapshot. An Inbox module in package assistant registers

@@ -251,11 +251,14 @@ func (s *Service) leaderPolicy(ctx context.Context, id, policy string, idle bool
 // yet be put back while this send's process runs it: the node's own request for what its message runs on
 // (assistant.model), and the parameters the manager makes before it sends them through call, which takes them again
 // with a carry of its own.
+//
+// A carry whose policy step already ran (the hub's retry of the owner's message while the first attempt still waits
+// for its notice, notesOwnerCarry) moves nothing. While that attempt's move is in flight it carries the newest block in
+// flight, the block in effect: that move's own, so the one notice settles the block that went, unless a later message
+// moved the block again, whose block the lead runs if that message went in; else the last confirmed block, as a send
+// no one reports.
 func (s *Service) notesInEffect(ctx context.Context, id, block string, idle bool) string {
 	carry, _ := ctx.Value(notesCarryKey{}).(*notesCarry)
-	if carry != nil && carry.id != "" {
-		carry = nil // this send's policy step already ran
-	}
 	b := &s.directions
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -267,6 +270,12 @@ func (s *Service) notesInEffect(ctx context.Context, id, block string, idle bool
 		return block
 	}
 	s.notesOwnerExpireLocked(ctx, id)
+	if carry != nil && carry.id != "" {
+		if f := b.inflight[id]; carry.id == id && carry.move != nil && f != nil && slices.Contains(f.moved, carry.move) {
+			return f.moved[len(f.moved)-1].block
+		}
+		carry = nil
+	}
 	switch {
 	case carry == nil:
 		if given := b.inflight[id].confirmed(); given != nil {
@@ -310,11 +319,12 @@ type notesMove struct {
 }
 
 // notesCarry is one send's part in its conversation's notes block (withNotesCarry): the conversation its policy step
-// ran for ("" until it ran for one with a direction record) and the move in flight whose block it carries (nil: none,
-// or settled).
+// ran for ("" until it ran for one with a direction record), the move in flight whose block it carries (nil: none,
+// or settled), and whether it is the owner's message waiting for the hub's notice (notesOwnerSent).
 type notesCarry struct {
-	id   string
-	move *notesMove
+	id    string
+	move  *notesMove
+	owner bool
 }
 
 // notesOwnerSend is the owner's message msg (its client_msg_id; "" none) the hub was given parameters for at at, until
@@ -339,7 +349,7 @@ func withNotesCarry(ctx context.Context) (context.Context, *notesCarry) {
 const notesInFlightMost = 8
 
 // notesSeenMost is how many of the owner's latest message ids the manager keeps per conversation, to know a retry of
-// one it already gave parameters for (notesOwnerSeen).
+// one it already gave parameters for (notesOwnerCarry).
 const notesSeenMost = 64
 
 // notesOwnerWait is how long the owner's message waits for the hub's notice: longer than the hub waits for any send to
@@ -442,21 +452,54 @@ func (s *Service) notesSettleLocked(ctx context.Context, carry *notesCarry, take
 	b.tidyFlight(id)
 }
 
-// notesOwnerSeen: the manager already gave parameters for the owner's message msg (its client_msg_id) to conversation
-// id. A second call for it is the hub's retry, which the hub may answer from its record without sending and without a
-// notice: it moves nothing (bus.go).
-func (s *Service) notesOwnerSeen(id, msg string) bool {
-	if msg == "" {
-		return false
+// notesOwnerCarry is ctx for the hub's request for the parameters of the owner's message msg (its client_msg_id; ""
+// none) to conversation id (assistant.send_params, bus.go), and the carry its policy step fills in (nil: none). A
+// message the manager already gave parameters for is the hub's retry, which moves nothing. While the first attempt
+// still waits for its notice, the retry is tied to it: it carries the block that attempt carried while that move is in
+// flight (notesInEffect), and the one notice settles it, for the hub sends the retry only when the first attempt
+// reached nothing, and else answers it from its record without a notice. Once nothing waits for it (settled, or past
+// notesOwnerWait), the retry has no carry: it takes the last confirmed block.
+func (s *Service) notesOwnerCarry(ctx context.Context, id, msg string) (context.Context, *notesCarry) {
+	if msg != "" {
+		b := &s.directions
+		b.mu.Lock()
+		s.notesOwnerExpireLocked(ctx, id)
+		var waiting *notesCarry
+		if f := b.inflight[id]; f != nil {
+			if i := slices.IndexFunc(f.owner, func(o notesOwnerSend) bool { return o.msg == msg }); i >= 0 {
+				waiting = f.owner[i].carry
+			}
+		}
+		seen := slices.Contains(b.ownerSeen[id], msg)
+		b.mu.Unlock()
+		switch {
+		case waiting != nil:
+			return context.WithValue(ctx, notesCarryKey{}, waiting), waiting
+		case seen:
+			return ctx, nil
+		}
+	}
+	return withNotesCarry(ctx)
+}
+
+// notesOwnerRefused: the parameters made with carry (notesOwnerCarry) were refused, and the hub sends nothing. A new
+// message's move counts as not taken; a retry's leaves its first attempt waiting for that attempt's notice.
+func (s *Service) notesOwnerRefused(ctx context.Context, carry *notesCarry) {
+	if carry == nil {
+		return
 	}
 	b := &s.directions
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return slices.Contains(b.ownerSeen[id], msg)
+	if !carry.owner {
+		s.notesSettleLocked(ctx, carry, false)
+	}
 }
 
 // notesOwnerSent: the hub sends the owner's message msg (its client_msg_id; "" none) whose parameters were made with
-// carry (SendParams), and tells how it went by its notice (ConversationSent, notesOwnerOutcome).
+// carry (notesOwnerCarry, SendParams), and tells how it went by its notice (ConversationSent, notesOwnerOutcome). A
+// retry tied to its first attempt waits for that notice from now, as the newest message: the hub waits for the retry
+// as long as for any send.
 func (s *Service) notesOwnerSent(ctx context.Context, carry *notesCarry, msg string) {
 	if carry == nil || carry.id == "" {
 		return
@@ -466,6 +509,16 @@ func (s *Service) notesOwnerSent(ctx context.Context, carry *notesCarry, msg str
 	defer b.mu.Unlock()
 	s.notesOwnerExpireLocked(ctx, carry.id)
 	f := b.flight(carry.id)
+	if carry.owner {
+		if i := slices.IndexFunc(f.owner, func(o notesOwnerSend) bool { return o.carry == carry }); i >= 0 {
+			o := f.owner[i]
+			o.at = b.clock()
+			f.owner = append(slices.Delete(f.owner, i, i+1), o) // oldest first, as notesOwnerExpireLocked reads them
+		}
+		b.tidyFlight(carry.id)
+		return
+	}
+	carry.owner = true
 	f.owner = append(f.owner, notesOwnerSend{carry: carry, msg: msg, at: b.clock()})
 	if len(f.owner) > notesInFlightMost {
 		s.notesSettleLocked(ctx, f.owner[0].carry, true) // as if its outcome were never learned: its block is kept
@@ -484,19 +537,26 @@ func (s *Service) notesOwnerSent(ctx context.Context, carry *notesCarry, msg str
 }
 
 // notesOwnerOutcome settles, by the hub's notice for conversation id, the owner's message msg (its client_msg_id) it
-// names, and only that one. A notice that names none (a message without an id, or an older hub that names no
-// message) settles the oldest message without an id still waiting for its notice, else the oldest one waiting.
+// names, and only that one. A notice that names none settles the oldest message without an id still waiting for its
+// notice. Only while the hub has not shown, on the connection the notice came on (hubConnOf), that it names messages
+// (an older hub names none) does such a notice settle the oldest message waiting when none without an id waits: a hub
+// that names messages sends a notice without an id only for a message sent without one, such as one sent just before
+// the manager restarted. A new connection may be to another version of the hub, so it shows that anew.
 func (s *Service) notesOwnerOutcome(ctx context.Context, id, msg string, taken bool) {
 	b := &s.directions
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	conn := hubConnOf(ctx)
+	if msg != "" {
+		b.namedOn = max(b.namedOn, conn+1) // a notice of an older connection handled late shows nothing of a newer one
+	}
 	s.notesOwnerExpireLocked(ctx, id)
 	f := b.inflight[id]
 	if f == nil {
 		return
 	}
 	i := slices.IndexFunc(f.owner, func(o notesOwnerSend) bool { return o.msg == msg })
-	if i < 0 && msg == "" && len(f.owner) > 0 {
+	if i < 0 && msg == "" && len(f.owner) > 0 && b.namedOn != conn+1 {
 		i = 0
 	}
 	if i < 0 {
