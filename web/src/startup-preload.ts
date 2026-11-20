@@ -485,7 +485,11 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // and the sections kept here under the hub's cards (keepSections and its note per sign-in, lib/overview-cards.ts;
 // lib/start-page.ts). The sections' bars and their names while arranging, and what a change writes, are the editor's
 // chunk (views/extensions/OverviewArrange.tsx, lib/overview-edit.ts).
-// This branch keeps the existing 482,526 B limit with the same measurement.
+// #10822: Colored sidebar icons, an Appearance choice off by default: the choice's store and the built-in pages' colors
+// (lib/sidebar-icons.ts), read where the sidebar draws its pages, and the style a colored icon takes. 126 B in each
+// language, measured in one environment against main 1e34873c71 (ja 483,878 B to 484,004 B; en 480,952 B to 481,078 B,
+// zh-Hans 481,673 B to 481,799 B); the setting's row and words load with Settings.
+// That environment measures about 3 KB above the maintainers' one, so only the 126 B difference counts.
 // #11442: phone fixes add 739 B in ja, measured in one environment against main 989b48a766 (ja 482,305 B to 483,044 B;
 // en 479,417 B to 480,159 B, zh-Hans 480,166 B to 480,922 B): toasts held only by a mouse pointer and a sheet's focused
 // field kept in view above the keyboard (ui/atoms.tsx), Back closing the search palette and the composer's overlays
