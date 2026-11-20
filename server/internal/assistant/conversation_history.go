@@ -12,7 +12,6 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/conversationlog"
 	"github.com/nwverse/persona/server/internal/db"
-	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
@@ -35,6 +34,13 @@ type conversationHistoryBook struct {
 	wake             chan struct{}
 	changes, checked map[searchKey]uint64
 	probed           map[searchKey]time.Time
+	retry            map[searchKey]historyRetry
+}
+
+type historyRetry struct {
+	until    time.Time
+	revision int64
+	change   uint64
 }
 
 // historySourceKey prevents a synchronization source read from reading itself from the database.
@@ -107,7 +113,7 @@ type historyPage struct {
 	HasMore   *bool        `json:"has_more,omitempty"`
 	MoreAfter bool         `json:"more_after,omitempty"`
 	More      bool         `json:"more,omitempty"`
-	// Partial is coverage missing outside this page or a stale end while its runtime is away.
+	// Partial marks missing coverage, incomplete payloads or an uncertain offline end.
 	Partial bool `json:"partial,omitempty"`
 }
 
@@ -224,8 +230,12 @@ func (s *Service) historyCall(ctx context.Context, machine, method string, raw j
 	if err := s.historyRemember(ctx, st, machine, p.SessionID, h, p, source, sourceRevision); err != nil && !errors.Is(err, errHistoryGenerationUnavailable) {
 		s.logf("assistant: persist history page: %v", err)
 	}
-	if p.FoldWork {
-		source.Items = transcript.FoldWork(source.Items)
+	if p.FoldWork && p.After == nil && p.Through == nil {
+		if p.Before == nil || *p.Before <= 0 {
+			source.Items = transcript.FoldWorkLatest(source.Items)
+		} else {
+			source.Items = transcript.FoldWork(source.Items)
+		}
 	}
 	if p.LazyImages {
 		source.Items = proto.WithoutImageData(source.Items)
@@ -310,19 +320,25 @@ func (s *Service) historyPage(ctx context.Context, st conversationHistoryStore, 
 	}
 	from, through = max(from, span.From), min(through, span.Through)
 	limit := p.Limit
-	if limit <= 0 {
-		limit = 200
+	if limit <= 0 || limit > 500 {
+		limit = 80
 	}
-	limit = min(limit, 500)
-	if p.Turns > 0 {
-		limit = 5000
+	switch {
+	case p.Through != nil:
+		limit = 1000
+	case p.After != nil:
+		limit = 500
+	case p.Turns > 0:
+		limit = 2000
 	}
 	rows, err := st.ConversationItems(ctx, h.MachineID, h.SessionID, h.History, from, through, limit, newest)
 	if err != nil {
 		return nil, false
 	}
 	items := make([]proto.Item, 0, len(rows))
+	payloadIncomplete := false
 	for _, row := range rows {
+		payloadIncomplete = payloadIncomplete || !row.Complete
 		if !p.LazyImages && row.Item.Image != nil && !row.Complete {
 			return nil, false
 		}
@@ -330,11 +346,9 @@ func (s *Service) historyPage(ctx context.Context, st conversationHistoryStore, 
 	}
 	if p.Turns > 0 && newest {
 		start, seen := len(items), 0
-		for start > 0 && seen < min(p.Turns, 100) {
+		for start > 0 && seen < min(p.Turns, 10) {
 			start--
-			it := items[start]
-			if it.Role == "user" && it.Kind == proto.KindText && !it.Queued && !it.Wake && it.Injected == nil &&
-				(it.ClientMsgID != "" || it.From != "" || prompts.ParseInjected(it.Text) == nil) {
+			if transcript.IsPagePrompt(items[start]) {
 				seen++
 			}
 		}
@@ -357,7 +371,7 @@ func (s *Service) historyPage(ctx context.Context, st conversationHistoryStore, 
 	}
 	hasMore := pageFrom > 0
 	answer := historyPage{Items: items, History: h.History, FromSeq: &pageFrom, ToSeq: &pageTo,
-		Partial: unknownTail || !conversationlog.Covers(h.Coverage, 0, *h.TailSeq)}
+		Partial: payloadIncomplete || unknownTail || !conversationlog.Covers(h.Coverage, 0, *h.TailSeq)}
 	if newest {
 		answer.HasMore = &hasMore
 	} else {
@@ -367,7 +381,7 @@ func (s *Service) historyPage(ctx context.Context, st conversationHistoryStore, 
 		answer.More = pageTo < min(*p.Through, *h.TailSeq)
 		answer.MoreAfter = false
 	}
-	if p.FoldWork {
+	if p.FoldWork && p.After == nil && p.Through == nil {
 		if p.Before == nil || *p.Before <= 0 {
 			answer.Items = transcript.FoldWorkLatest(answer.Items)
 		} else {
@@ -617,8 +631,17 @@ func (s *Service) historySweep(ctx context.Context, st conversationHistoryStore)
 			if !c.Assistant || c.PaneID != "" || c.IsDeleted() {
 				continue
 			}
-			if err := s.historySync(ctx, st, machine.ID, c); err != nil && !errors.Is(err, db.ErrConversationHistoryChanged) && !errors.Is(err, errHistoryGenerationUnavailable) {
-				s.logf("assistant: synchronize durable conversation: %v", err)
+			if err := s.historySync(ctx, st, machine.ID, c); err != nil && !errors.Is(err, db.ErrConversationHistoryChanged) && ctx.Err() == nil {
+				k := searchKey{machine.ID, c.SessionID}
+				s.history.mu.Lock()
+				if s.history.retry == nil {
+					s.history.retry = map[searchKey]historyRetry{}
+				}
+				s.history.retry[k] = historyRetry{time.Now().Add(time.Minute), c.Rev, s.history.changes[k]}
+				s.history.mu.Unlock()
+				if !errors.Is(err, errHistoryGenerationUnavailable) {
+					s.logf("assistant: synchronize durable conversation: %v", err)
+				}
 			}
 		}
 	}
@@ -629,7 +652,11 @@ func (s *Service) historySync(ctx context.Context, st conversationHistoryStore, 
 	s.history.mu.Lock()
 	change := s.history.changes[k]
 	force := change != s.history.checked[k] || time.Since(s.history.probed[k]) >= 30*time.Second
+	retry := s.history.retry[k]
 	s.history.mu.Unlock()
+	if retry.revision == c.Rev && retry.change == change && time.Now().Before(retry.until) {
+		return nil
+	}
 	for range 8 {
 		if s.historyDB(ctx) == nil {
 			return nil
@@ -710,6 +737,7 @@ func (s *Service) historySync(ctx context.Context, st conversationHistoryStore, 
 				s.history.probed = map[searchKey]time.Time{}
 			}
 			s.history.checked[k], s.history.probed[k] = change, time.Now()
+			delete(s.history.retry, k)
 			s.history.mu.Unlock()
 			return nil
 		}
@@ -759,6 +787,12 @@ func (s *Service) historyRoutes() {
 		if err := s.store().PutSetting(r.Context(), conversationHistoryKey, p); err != nil {
 			apierr.Write(w, http.StatusServiceUnavailable, err)
 			return
+		}
+		if *p.Enabled {
+			s.history.mu.Lock()
+			s.history.retry = nil
+			s.history.probed = nil
+			s.history.mu.Unlock()
 		}
 		s.historyWake()
 		apierr.WriteJSON(w, p)

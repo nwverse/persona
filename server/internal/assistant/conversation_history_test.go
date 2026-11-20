@@ -450,6 +450,31 @@ func TestDurableHistoryDoesNotHydrateFromAnotherGeneration(t *testing.T) {
 	}
 }
 
+func TestDurableHistoryBacksOffUnsupportedSourcesUntilNewActivity(t *testing.T) {
+	s, _, database, rt := historyFixture(t)
+	rt.mu.Lock()
+	rt.history = ""
+	rt.mu.Unlock()
+	s.historySweep(t.Context(), database)
+	rt.mu.Lock()
+	first := rt.reads
+	rt.mu.Unlock()
+	s.historySweep(t.Context(), database)
+	rt.mu.Lock()
+	second := rt.reads
+	rt.history = "h1"
+	rt.mu.Unlock()
+	if first != 3 || second != first {
+		t.Fatalf("legacy source polled repeatedly: %d -> %d", first, second)
+	}
+	s.NodeEvent("server", "sessions.revs", json.RawMessage(`{"revs":{"main-chat":100}}`))
+	s.historySweep(t.Context(), database)
+	h, err := database.ConversationHistory(t.Context(), "server", "main-chat")
+	if err != nil || h == nil || h.History != "h1" {
+		t.Fatalf("new activity did not release source backoff %+v %v", h, err)
+	}
+}
+
 func TestDurableHistoryMissingGenerationKeepsLegacyRuntimeFallback(t *testing.T) {
 	s, _, database, rt := historyFixture(t)
 	rt.mu.Lock()
@@ -460,5 +485,57 @@ func TestDurableHistoryMissingGenerationKeepsLegacyRuntimeFallback(t *testing.T)
 	}
 	if h, err := database.ConversationHistory(t.Context(), "server", "main-chat"); err != nil || h != nil {
 		t.Fatalf("invented coverage without source identity %+v %v", h, err)
+	}
+}
+
+func TestDurableHistoryKeepsLatestNarrationAndUnfoldedCatchup(t *testing.T) {
+	s, _, _, rt := historyFixture(t)
+	rt.mu.Lock()
+	rt.items = []proto.Item{
+		{ID: "question", Seq: 1, Role: "user", Kind: proto.KindText, Text: "check progress"},
+		{ID: "thinking", Seq: 2, Role: "assistant", Kind: proto.KindThinking, Text: "checking"},
+		{ID: "tool", Seq: 3, Role: "assistant", Kind: proto.KindToolUse, ToolUseID: "call-1", ToolName: "Read"},
+		{ID: "result", Seq: 4, Role: "user", Kind: proto.KindToolResult, ToolUseID: "call-1", Text: "result"},
+		{ID: "narration", Seq: 5, Role: "assistant", Kind: proto.KindText, Narration: true, Text: "current progress"},
+	}
+	rt.mu.Unlock()
+	for range 2 {
+		p := readHistory(t, s, "side-chat", map[string]any{"fold_work": true, "lazy_images": true})
+		if len(p.Items) < 2 || p.Items[len(p.Items)-1].ID != "narration" {
+			t.Fatalf("latest commentary disappeared %+v", p.Items)
+		}
+	}
+	p := readHistory(t, s, "side-chat", map[string]any{"after_seq": 0, "fold_work": true, "lazy_images": true})
+	if len(p.Items) != 5 || p.HasMore != nil {
+		t.Fatalf("catch-up folded or made an older-page claim %+v", p)
+	}
+}
+
+func TestDurableHistoryPagingRetainsSourceLimits(t *testing.T) {
+	s, _, database, rt := historyFixture(t)
+	rt.mu.Lock()
+	rt.items = nil
+	for seq := 1; seq <= 200; seq++ {
+		role := "assistant"
+		if seq%2 == 1 {
+			role = "user"
+		}
+		rt.items = append(rt.items, proto.Item{ID: fmt.Sprintf("i%d", seq), Seq: seq, Role: role, Kind: proto.KindText, Text: "words"})
+	}
+	rt.mu.Unlock()
+	if err := s.historySync(t.Context(), database, "server", proto.Session{SessionID: "main-chat", Assistant: true, Rev: 100}); err != nil {
+		t.Fatal(err)
+	}
+	p := readHistory(t, s, "main-chat", map[string]any{"lazy_images": true})
+	if len(p.Items) != 80 || p.Items[0].Seq != 121 || p.HasMore == nil || !*p.HasMore {
+		t.Fatalf("default latest-page contract %+v", p)
+	}
+	p = readHistory(t, s, "main-chat", map[string]any{"turns": 50, "lazy_images": true})
+	if len(p.Items) != 20 || p.Items[0].Seq != 181 {
+		t.Fatalf("turn cap changed %+v", p)
+	}
+	p = readHistory(t, s, "main-chat", map[string]any{"after_seq": 0, "lazy_images": true})
+	if len(p.Items) != 200 || p.MoreAfter || p.HasMore != nil {
+		t.Fatalf("catch-up cursor contract %+v", p)
 	}
 }

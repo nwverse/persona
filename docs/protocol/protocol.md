@@ -3500,7 +3500,7 @@ the video shows as a card above the input box (reading → compressing if needed
 ### Continuity of items
 
 Assistant history pages can come from the manager's durable store (#11936). A database response preserves the
-source `history` and source sequence numbers; top-level `partial:true` means coverage or offline freshness is
+source `history` and source sequence numbers; top-level `partial:true` means coverage, payload completeness or offline freshness is
 uncertain. An incomplete stored item carries `stored:{complete:false,source_bytes,machine_id,session_id,history,item_id}`.
 The tuple is a runtime source reference for the existing full-item/image routes, not a file path or a guarantee
 of offline retrieval. `source_bytes` counts the normalized JSON received; it may itself be a runtime preview.
