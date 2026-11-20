@@ -23,11 +23,11 @@ import (
 func TestInspectBackupWithoutAnInstallOrStaging(t *testing.T) {
 	fixture := newBackupFixture(t, "private_manager_database")
 	if _, err := fixture.operator().Create(context.Background(), fixture.options()); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	manifest, size, err := readBundleManifest(fixture.output)
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	t.Setenv("PATH", "")
 	t.Setenv("TMPDIR", filepath.Join(fixture.home, "unavailable-staging"))
@@ -36,11 +36,11 @@ func TestInspectBackupWithoutAnInstallOrStaging(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	args := []string{"inspect", "--bundle", fixture.output, "--json"}
 	if err := Run(context.Background(), args, &stdout, &stderr); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	var report inspectionReport
 	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	if report.Check != "offline_integrity" || report.DatabaseRestoreVerified || report.Format != manifest.Format ||
 		!report.CreatedAt.Equal(manifest.CreatedAt) || report.ArchiveBytes != size ||
@@ -48,21 +48,21 @@ func TestInspectBackupWithoutAnInstallOrStaging(t *testing.T) {
 		report.ManagerDump.Bytes <= 0 || report.Runtime.Files < 4 ||
 		report.KnowledgeBase.State != "included" || report.KnowledgeBase.Location != "internal" ||
 		report.KnowledgeBase.Files == 0 {
-		t.Fatalf("inspection report %+v", report)
+		fatalf(t, "inspection report %+v", report)
 	}
 	for _, omitted := range []string{fixture.output, fixture.home, manifest.HubDatabase, manifest.ManagerDatabase,
 		manifest.HubKeyFingerprint, manifest.ManagerKeyFingerprint, "hub-token-secret", "secret.key", "should-not-connect"} {
 		if strings.Contains(stdout.String()+stderr.String(), omitted) {
-			t.Fatal("the inspection disclosed a private manifest or config value")
+			fatal(t, "the inspection disclosed a private manifest or config value")
 		}
 	}
 	stdout.Reset()
 	if err := Run(context.Background(), args[:3], &stdout, &stderr); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	if !strings.Contains(stdout.String(), "Offline backup integrity check passed.") ||
 		!strings.Contains(stdout.String(), "personad backup verify") {
-		t.Fatalf("text report %q", stdout.String())
+		fatalf(t, "text report %q", stdout.String())
 	}
 }
 
@@ -80,7 +80,7 @@ func TestInspectBackupKnowledgeStates(t *testing.T) {
 			raw := inspectionFixture(t, tc.locator, tc.payload)
 			report, err := inspectArchive(context.Background(), bytes.NewReader(raw), int64(len(raw)))
 			if err != nil {
-				t.Fatal(err)
+				fatal(t, err)
 			}
 			kb := report.KnowledgeBase
 			wantFiles := 0
@@ -88,7 +88,7 @@ func TestInspectBackupKnowledgeStates(t *testing.T) {
 				wantFiles = 1
 			}
 			if kb.State != tc.state || kb.Location != tc.location || kb.Files != wantFiles || (kb.Bytes > 0) != tc.payload {
-				t.Fatalf("knowledge base %+v", kb)
+				fatalf(t, "knowledge base %+v", kb)
 			}
 		})
 	}
@@ -132,7 +132,7 @@ func TestInspectRejectsBadMembersAndKeys(t *testing.T) {
 		{"inconsistent key", bundleKey, func(t *testing.T, parts []inspectionPart) []inspectionPart {
 			var manifest Manifest
 			if err := json.Unmarshal(parts[0].data, &manifest); err != nil {
-				t.Fatal(err)
+				fatal(t, err)
 			}
 			manifest.HubKeyFingerprint = strings.Repeat("0", 32)
 			parts[0].data = encodeInspectionManifest(t, manifest)
@@ -157,7 +157,7 @@ func TestInspectRequiresACompleteArchiveEnd(t *testing.T) {
 	}
 	padded := append(bytes.Clone(raw), make([]byte, 4*tarBlock)...)
 	if _, err := inspectArchive(context.Background(), bytes.NewReader(padded), int64(len(padded))); err != nil {
-		t.Fatalf("standard tar padding: %v", err)
+		fatalf(t, "standard tar padding: %v", err)
 	}
 	padded[len(padded)-1] = 1
 	_, err := inspectArchive(context.Background(), bytes.NewReader(padded), int64(len(padded)))
@@ -169,7 +169,7 @@ func TestInspectReadsAnOlderManifestPosition(t *testing.T) {
 	parts[0], parts[1] = parts[1], parts[0]
 	raw := packInspectionParts(t, parts)
 	if _, err := inspectArchive(context.Background(), bytes.NewReader(raw), int64(len(raw))); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 }
 
@@ -177,7 +177,7 @@ func TestInspectRejectsOverlappingFileAndDirectory(t *testing.T) {
 	parts := inspectionMembers(t, inspectionFixture(t, KnowledgeBaseLocator{}, false))
 	var manifest Manifest
 	if err := json.Unmarshal(parts[0].data, &manifest); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	fixture := FileEntry{Size: 0, Mode: 0o600}
 	digest := sha256.Sum256(nil)
@@ -197,7 +197,7 @@ func TestInspectStreamsTheDatabasePayload(t *testing.T) {
 	parts := inspectionMembers(t, inspectionFixture(t, KnowledgeBaseLocator{}, false))
 	var manifest Manifest
 	if err := json.Unmarshal(parts[0].data, &manifest); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	parts[1].data = bytes.Repeat([]byte("d"), 2<<20)
 	digest := sha256.Sum256(parts[1].data)
@@ -208,7 +208,7 @@ func TestInspectStreamsTheDatabasePayload(t *testing.T) {
 	source := &trackingInspectionReader{Reader: bytes.NewReader(raw)}
 	report, err := inspectArchive(context.Background(), source, int64(len(raw)))
 	if err != nil || report.HubDump.Bytes != manifest.Files[0].Size || source.largest > 64<<10 {
-		t.Fatalf("streamed report %+v, largest read %d bytes, error %v", report, source.largest, err)
+		fatalf(t, "streamed report %+v, largest read %d bytes, error %v", report, source.largest, err)
 	}
 }
 
@@ -229,7 +229,7 @@ func TestInspectCancellationReachesArchiveReads(t *testing.T) {
 	source := &cancelInspectionReader{Reader: bytes.NewReader(data), cancel: cancel, beforeCancel: int64(len(data) - tarBlock)}
 	_, err := inspectArchive(ctx, source, int64(len(data)))
 	if !errors.Is(err, context.Canceled) || !source.rewound {
-		t.Fatalf("inspection did not stop during the payload pass: %v", err)
+		fatalf(t, "inspection did not stop during the payload pass: %v", err)
 	}
 }
 
@@ -263,35 +263,35 @@ func TestInspectCLIHandlesPrivateErrorsAndHelp(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if err := Run(context.Background(), []string{"inspect", "--help"}, &stdout, &stderr); err != nil ||
 		!strings.Contains(stdout.String(), "without opening a database") {
-		t.Fatalf("help %q: %v", stdout.String(), err)
+		fatalf(t, "help %q: %v", stdout.String(), err)
 	}
 	var usage clitext.UsageError
 	if err := Run(context.Background(), []string{"inspect"}, &stdout, &stderr); !errors.As(err, &usage) {
-		t.Fatalf("missing bundle: %v", err)
+		fatalf(t, "missing bundle: %v", err)
 	}
 
 	parts := inspectionMembers(t, inspectionFixture(t, KnowledgeBaseLocator{}, false))
 	parts[1].header.Name = "private-member\n"
 	name := filepath.Join(t.TempDir(), "private-backup-filename")
 	if err := os.WriteFile(name, packInspectionParts(t, parts), 0o600); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	stdout.Reset()
 	err := Run(context.Background(), []string{"inspect", "--bundle", name, "--json"}, &stdout, &stderr)
 	if err == nil || !strings.Contains(err.Error(), "unexpected") || strings.Contains(err.Error(), "private-member") ||
 		strings.Contains(err.Error(), name) || stdout.Len() != 0 || stderr.Len() != 0 {
-		t.Fatalf("error surfaced private data or partial output: %v %q %q", err, stdout.String(), stderr.String())
+		fatalf(t, "error surfaced private data or partial output: %v %q %q", err, stdout.String(), stderr.String())
 	}
 	if runtime.GOOS != "windows" {
 		link := filepath.Join(filepath.Dir(name), "backup-alias")
 		if err := os.Symlink(name, link); err != nil {
-			t.Fatal(err)
+			fatal(t, err)
 		}
 		_, err := inspectBundle(context.Background(), link)
 		requireBundleProblem(t, err, bundleUnsafe)
 
 		if err := os.Chmod(name, 0o644); err != nil {
-			t.Fatal(err)
+			fatal(t, err)
 		}
 		_, err = inspectBundle(context.Background(), name)
 		requireBundleProblem(t, err, bundleUnsafe)
@@ -342,7 +342,7 @@ func encodeInspectionManifest(t *testing.T, manifest Manifest) []byte {
 	t.Helper()
 	result, err := json.Marshal(manifest)
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	return result
 }
@@ -357,11 +357,11 @@ func inspectionMembers(t *testing.T, raw []byte) []inspectionPart {
 			return parts
 		}
 		if err != nil {
-			t.Fatal(err)
+			fatal(t, err)
 		}
 		data, err := io.ReadAll(r)
 		if err != nil {
-			t.Fatal(err)
+			fatal(t, err)
 		}
 		parts = append(parts, inspectionPart{header: *h, data: data})
 	}
@@ -383,14 +383,14 @@ func packInspectionParts(t *testing.T, parts []inspectionPart) []byte {
 		h := part.header
 		h.Size = int64(len(part.data))
 		if err := w.WriteHeader(&h); err != nil {
-			t.Fatal(err)
+			fatal(t, err)
 		}
 		if _, err := w.Write(part.data); err != nil {
-			t.Fatal(err)
+			fatal(t, err)
 		}
 	}
 	if err := w.Close(); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	return raw.Bytes()
 }
@@ -399,6 +399,6 @@ func requireBundleProblem(t *testing.T, err error, kind bundleProblemKind) {
 	t.Helper()
 	var issue *bundleProblem
 	if !errors.As(err, &issue) || issue.kind != kind {
-		t.Fatalf("error %v, want %s failure", err, kind)
+		fatalf(t, "error %v, want %s failure", err, kind)
 	}
 }
