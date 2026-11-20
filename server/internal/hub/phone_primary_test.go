@@ -227,8 +227,7 @@ func TestPhoneCallsWakeAnOfflinePrimaryDevice(t *testing.T) {
 		choosePrimary(h, "dev_iphone", "Test iPhone")
 		start := time.Now()
 		done := callPhoneAsync(h, "phone_health_summary", `{}`)
-		time.Sleep(2 * time.Second) // the silent push wakes the iPhone's app, which connects a moment later
-		synctest.Wait()
+		synctest.Wait() // the wake push is out, and the call waits for the iPhone's app
 		if got := sink.count("iphone", "background", ""); got != 1 {
 			t.Fatalf("pushes to the iPhone = %d, want 1 wake", got)
 		}
@@ -300,7 +299,7 @@ func TestNoStandInForACallerThatLeftDuringTheWake(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		done := make(chan proto.ToolResult, 1)
 		go func() { done <- h.callPhone(ctx, "phone_reminders_create", json.RawMessage(`{"title":"x"}`)) }()
-		time.Sleep(5 * time.Second) // waiting for the iPhone
+		synctest.Wait() // the call waits for the iPhone
 		cancel()
 		got := <-done
 		synctest.Wait()
