@@ -1,17 +1,32 @@
 package assistant
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"testing"
 
-	"github.com/nwverse/persona/server/internal/assistant/repositorystore"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/taskworkspace"
 	"github.com/nwverse/persona/server/internal/workspacenaming"
 )
+
+// Interleave another Manager call after registration, before the first prepare reaches Node.
+type heldWorkspacePrepareHub struct {
+	Hub
+	beforePrepare func()
+}
+
+func (h *heldWorkspacePrepareHub) DeviceCall(ctx context.Context, call DeviceCall) (json.RawMessage, error) {
+	if call.Method == "task.workspace.prepare" && call.Device == "first-box" && h.beforePrepare != nil {
+		before := h.beforePrepare
+		h.beforePrepare = nil
+		before()
+	}
+	return h.Hub.DeviceCall(ctx, call)
+}
 
 func TestBackendWorkspaceManagerRecoveryAndLegacyCompatibility(t *testing.T) {
 	database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
@@ -21,6 +36,9 @@ func TestBackendWorkspaceManagerRecoveryAndLegacyCompatibility(t *testing.T) {
 	defer database.Close()
 	f := newFakeHub()
 	f.sessions["box"] = nil
+	f.sessions["first-box"] = nil
+	var firstBox *taskworkspace.Record
+	missingReceipt := true
 	var physical *taskworkspace.Record
 	created, starts := 0, 0
 	lose := true
@@ -34,9 +52,15 @@ func TestBackendWorkspaceManagerRecoveryAndLegacyCompatibility(t *testing.T) {
 		"task.workspace.capabilities": func(string, json.RawMessage) (any, error) {
 			return map[string]string{"capability": taskworkspace.Capability}, nil
 		},
-		"task.workspace.prepare": func(_ string, raw json.RawMessage) (any, error) {
+		"task.workspace.prepare": func(machine string, raw json.RawMessage) (any, error) {
 			var req taskworkspace.Request
 			json.Unmarshal(raw, &req)
+			if machine == "first-box" {
+				if firstBox == nil || firstBox.OperationID != req.OperationID || firstBox.State != "removed" {
+					return nil, errors.New("late prepare arrived without a removal receipt")
+				}
+				return *firstBox, nil
+			}
 			if physical != nil && physical.OperationID != req.OperationID && (physical.OperationID != req.PreviousOperationID || physical.State != "cancelled") {
 				return nil, errors.New("Node still owns an uncancelled operation")
 			}
@@ -68,7 +92,19 @@ func TestBackendWorkspaceManagerRecoveryAndLegacyCompatibility(t *testing.T) {
 			}
 			return *physical, nil
 		},
-		"task.workspace.cancel": func(string, json.RawMessage) (any, error) {
+		"task.workspace.cancel": func(machine string, raw json.RawMessage) (any, error) {
+			if machine == "first-box" {
+				var req taskworkspace.Request
+				if err := json.Unmarshal(raw, &req); err != nil {
+					return nil, err
+				}
+				if missingReceipt {
+					return taskworkspace.Record{Error: taskworkspace.Failure("not_found", "cancel", req.OperationID, "", "")}, nil
+				}
+				firstBox = &taskworkspace.Record{SchemaVersion: 1, WorkspaceID: req.WorkspaceID, OperationID: req.OperationID,
+					NodeOperationID: req.OperationID, Plan: req.Plan, InputDigest: taskworkspace.InputKey(req.Plan), State: "cancelled"}
+				return *firstBox, nil
+			}
 			if physical == nil {
 				return taskworkspace.Record{Error: taskworkspace.Failure("not_found", "cancel", "", "", "")}, nil
 			}
@@ -79,7 +115,15 @@ func TestBackendWorkspaceManagerRecoveryAndLegacyCompatibility(t *testing.T) {
 			physical.State = "cancelled"
 			return *physical, nil
 		},
-		"task.workspace.cleanup": func(string, json.RawMessage) (any, error) {
+		"task.workspace.cleanup": func(machine string, raw json.RawMessage) (any, error) {
+			if machine == "first-box" {
+				if firstBox == nil {
+					return taskworkspace.Record{Error: taskworkspace.Failure("not_found", "cleanup", "op_never_sent", "", "")}, nil
+				}
+				firstBox.State = "removed"
+				firstBox.Cleanup = &taskworkspace.CleanupResult{Removed: true}
+				return *firstBox, nil
+			}
 			r := *physical
 			r.State = "removed"
 			r.Cleanup = &taskworkspace.CleanupResult{Removed: true, RetainedPaths: []string{"/home/example/owned.git"}}
@@ -93,7 +137,8 @@ func TestBackendWorkspaceManagerRecoveryAndLegacyCompatibility(t *testing.T) {
 		},
 	}
 	s, _ := repositoryService(t, database)
-	setHub(s, f)
+	transport := &heldWorkspacePrepareHub{Hub: f}
+	setHub(s, transport)
 	w := placeDo(s, "", "POST", repoBase, `{"url":"https://github.com/example/web"}`)
 	var catalog struct{ Repository RepositoryBinding }
 	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &catalog) != nil {
@@ -111,19 +156,49 @@ func TestBackendWorkspaceManagerRecoveryAndLegacyCompatibility(t *testing.T) {
 	if w = placeDo(s, "read", "POST", base+"/prepare", input); w.Code != 403 {
 		t.Fatal("readonly created resources", w.Code, w.Body)
 	}
-	never := namingRequest{OperationID: "op_never_sent", MachineID: "box", Layout: "root", SelectedRepoIDs: []string{catalog.Repository.ID}}
+	never := namingRequest{OperationID: "op_never_sent", MachineID: "first-box", Layout: "root", SelectedRepoIDs: []string{catalog.Repository.ID}}
 	if err = s.ensureBackendWorkspacePlan(t.Context(), id, never); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = repositorystore.New(database).BeginTaskWorkspace(t.Context(), id, never.OperationID, s.managerIdentity()); err != nil {
+	var next namingRequest
+	if err = json.Unmarshal([]byte(input), &next); err != nil {
 		t.Fatal(err)
 	}
-	if canceled, err := s.CancelBackendWorkspace(t.Context(), id, never.OperationID); err != nil || canceled.State != "cancelled" {
-		t.Fatal(canceled, err)
+	if err = s.ensureBackendWorkspacePlan(t.Context(), id, next); err != nil {
+		t.Fatal(err)
+	}
+	transport.beforePrepare = func() {
+		// An older Node's not_found conveys no durable proof that a late
+		// request cannot still arrive. Neither handoff nor removal is confirmed.
+		canceled, err := s.CancelBackendWorkspace(t.Context(), id, never.OperationID)
+		if err != nil || canceled.Error == nil || canceled.Error.Code != "not_found" || canceled.NodeOperationID != "" {
+			t.Fatal("unconfirmed cancellation", canceled, err)
+		}
+		held, err := s.PrepareBackendWorkspace(t.Context(), id, next.OperationID)
+		if err != nil || held.OperationID != never.OperationID || held.Error == nil || held.Error.Code != "not_found" {
+			t.Fatal("new operation overtook unconfirmed cancellation", held, err)
+		}
+		clean, err := s.CleanupBackendWorkspace(t.Context(), id, never.OperationID, false, false)
+		if err != nil || clean.State == "removed" || clean.Cleanup != nil || clean.Error == nil || clean.Error.Code != "not_found" {
+			t.Fatal("unconfirmed cleanup", clean, err)
+		}
+		missingReceipt = false
+		canceled, err = s.CancelBackendWorkspace(t.Context(), id, never.OperationID)
+		if err != nil || canceled.Error != nil || canceled.NodeOperationID != never.OperationID {
+			t.Fatal("missing durable cancellation", canceled, err)
+		}
+		clean, err = s.CleanupBackendWorkspace(t.Context(), id, never.OperationID, false, false)
+		if err != nil || clean.Error != nil || clean.State != "removed" || clean.Cleanup == nil || !clean.Cleanup.Removed {
+			t.Fatal("missing removal receipt", clean, err)
+		}
+	}
+	lateFirst, err := s.PrepareBackendWorkspace(t.Context(), id, never.OperationID)
+	if err != nil || lateFirst.State != "removed" || lateFirst.Error != nil || firstBox == nil || firstBox.State != "removed" || created != 0 {
+		t.Fatal("late prepare revived an unused workspace", lateFirst, err)
 	}
 	w = placeDo(s, "", "POST", base+"/prepare", input)
 	var first taskworkspace.Record
-	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &first) != nil || first.State != "preparing" || first.Error == nil || first.Error.Code != "operation_unknown" {
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &first) != nil || first.State != "preparing" || first.WorkspaceID == lateFirst.WorkspaceID || first.Plan.Source.MachineID != "box" || first.Error == nil || first.Error.Code != "operation_unknown" {
 		t.Fatal(w.Code, w.Body)
 	}
 	restarted := newServiceOn(t, f, database)

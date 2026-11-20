@@ -113,7 +113,7 @@ func (s *Service) PrepareBackendWorkspace(ctx context.Context, id, op string) (*
 		if err != nil {
 			return settled, err
 		}
-		if settled.Error != nil && settled.Error.Code != "not_found" && !(settled.Error.Code == "operation_conflict" && settled.NodeOperationID != "") {
+		if settled.Error != nil && !(settled.Error.Code == "operation_conflict" && settled.NodeOperationID != "") {
 			return settled, nil
 		}
 	}
@@ -141,11 +141,10 @@ func (s *Service) PrepareBackendWorkspace(ctx context.Context, id, op string) (*
 				return r, taskworkspace.Failure("operation_conflict", "prepare", op, "", "")
 			}
 			old, err := s.backendWorkspaceCall(ctx, "cancel", prior.Request())
-			var problem *taskworkspace.Problem
-			if err != nil && (!errors.As(err, &problem) || problem.Code != "not_found") {
+			if err != nil {
 				return r, err
 			}
-			if old.Error != nil && old.Error.Code != "not_found" {
+			if old.Error != nil {
 				return r, old.Error
 			}
 		}

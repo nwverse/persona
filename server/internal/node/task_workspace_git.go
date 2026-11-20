@@ -327,7 +327,7 @@ func (e *workspaceExecutor) cleanup(ctx context.Context, req taskworkspace.Reque
 		return e.fail("worktree_in_use", "cleanup", "", j.Plan.RootPath)
 	}
 	if !e.owned(j.Plan.RootPath) {
-		if _, err := os.Lstat(j.Plan.RootPath); !errors.Is(err, os.ErrNotExist) || j.Cleanup == nil {
+		if _, err := os.Lstat(j.Plan.RootPath); !errors.Is(err, os.ErrNotExist) || j.Cleanup == nil && !e.hasNoResources(j.Plan.RootPath) {
 			return e.fail("identity_mismatch", "cleanup", "", j.Plan.RootPath)
 		}
 	}

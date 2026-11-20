@@ -182,6 +182,41 @@ func workspaceReadGit(ctx context.Context, dir string, args ...string) (string, 
 	return strings.TrimSpace(out.String()), err
 }
 
+// Under both resource locks, only an absent root and an unused private store
+// prove there is nothing to remove. Unknown entries may belong to a lost receipt.
+func (e *workspaceExecutor) hasNoResources(root string) bool {
+	if len(e.journal.Identities) != 0 || len(e.journal.Repositories) != 0 || len(e.journal.Uses) != 0 {
+		return false
+	}
+	if _, err := os.Lstat(root); !errors.Is(err, os.ErrNotExist) {
+		return false
+	}
+	storage := filepath.Dir(e.path)
+	entries, err := os.ReadDir(storage)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		switch entry.Name() {
+		case "receipt.json":
+			if !entry.Type().IsRegular() {
+				return false
+			}
+		case "hooks":
+			if !entry.IsDir() {
+				return false
+			}
+			hooks, err := os.ReadDir(filepath.Join(storage, "hooks"))
+			if err != nil || len(hooks) != 0 {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func (n *Node) taskWorkspace(ctx context.Context, method string, raw json.RawMessage) (any, error) {
 	var req taskworkspace.Request
 	if json.Unmarshal(raw, &req) != nil || !taskworkspace.ValidRequest(req) {
@@ -223,13 +258,16 @@ func (n *Node) taskWorkspace(ctx context.Context, method string, raw json.RawMes
 		e.locks = append(e.locks, f)
 	}
 	storage := filepath.Join(control, taskworkspace.Hash(req.WorkspaceID))
-	if workspaceNoLinks(storage) != nil {
+	if workspaceNoLinks(filepath.Join(storage, "hooks")) != nil {
 		return nil, errors.New("workspace storage unavailable")
 	}
 	if err := os.MkdirAll(filepath.Join(storage, "hooks"), 0700); err != nil {
 		return nil, err
 	}
 	e.path = filepath.Join(storage, "receipt.json")
+	if workspaceNoLinks(e.path) != nil {
+		return nil, errors.New("workspace receipt unavailable")
+	}
 	data, err := os.ReadFile(e.path)
 	if err == nil {
 		err = json.Unmarshal(data, &e.journal)
@@ -238,12 +276,29 @@ func (n *Node) taskWorkspace(ctx context.Context, method string, raw json.RawMes
 		return nil, errors.New("workspace receipt unavailable")
 	}
 	if errors.Is(err, os.ErrNotExist) {
-		if method != "prepare" {
+		state := "preparing"
+		switch method {
+		case "prepare":
+		case "cancel", "cleanup":
+			if !e.hasNoResources(req.Plan.RootPath) {
+				return taskworkspace.Record{Error: taskworkspace.Failure("operation_unknown", method, req.OperationID, "", req.Plan.RootPath)}, nil
+			}
+			state = "cancelled"
+			if method == "cleanup" {
+				state = "removed"
+			}
+		default:
 			return taskworkspace.Record{Error: taskworkspace.Failure("not_found", method, req.OperationID, "", req.Plan.RootPath)}, nil
 		}
-		e.journal = workspaceJournal{Record: taskworkspace.Record{SchemaVersion: 1, WorkspaceID: req.WorkspaceID, OperationID: req.OperationID, Plan: req.Plan, InputDigest: taskworkspace.InputKey(req.Plan), State: "preparing", Repositories: []taskworkspace.Instance{}, Uses: []string{}}, Identities: map[string]string{}, Tombstones: []string{}}
+		e.journal = workspaceJournal{Record: taskworkspace.Record{SchemaVersion: 1, WorkspaceID: req.WorkspaceID, OperationID: req.OperationID, NodeOperationID: req.OperationID, PreviousOperationID: req.PreviousOperationID, Plan: req.Plan, InputDigest: taskworkspace.InputKey(req.Plan), State: state, Repositories: []taskworkspace.Instance{}, Uses: []string{}}, Identities: map[string]string{}, Tombstones: []string{}}
+		if state == "removed" {
+			e.journal.Cleanup = &taskworkspace.CleanupResult{Removed: true, RetainedPaths: []string{}}
+		}
 		if err = e.save(); err != nil {
 			return nil, err
+		}
+		if state != "preparing" {
+			return e.journal.Record, nil
 		}
 	}
 	j := &e.journal

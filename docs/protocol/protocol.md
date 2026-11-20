@@ -5757,6 +5757,10 @@ are stable and independent of transport IDs and engine workspace IDs.
 
 The Manager checks the capability before adopting a preparation operation. Older Nodes return an
 explicit unsupported result; legacy workspace creation remains available through its original paths.
+A cancel or cleanup can reach the Node before prepare. Under the workspace and root locks, the
+Node records a durable cancelled or removed receipt only when both the root and private storage
+show that it owns no resources. A late prepare for that operation returns its recorded state.
+Uncertain storage is retained. A missing receipt from an older Node leaves cancellation unconfirmed.
 On Unix inherited subprocess locks allow reconciliation after Node death. On Windows an interrupted
 in-flight command remains unknown until its execution can be established; it is never blindly replayed.
 
