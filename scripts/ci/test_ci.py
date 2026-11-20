@@ -281,6 +281,14 @@ class ManualWorkflowTests(unittest.TestCase):
         self.assertNotIn('continue-on-error:', ci)
         self.assertNotIn('pull_request', ci)
 
+    def test_standalone_scripts_checkout_can_merge_base_origin_main(self):
+        root = Path(__file__).resolve().parents[2]
+        workflow = yaml.load((root / '.github/workflows/scripts-tests.yml').read_text(), Loader=yaml.BaseLoader)
+        checkout = next(step for step in workflow['jobs']['scripts']['steps']
+                        if step.get('uses') == 'actions/checkout@v4')
+        self.assertEqual(checkout.get('with', {}).get('fetch-depth'), '0',
+                         'standalone non-main dispatches need origin/main and shared history for git merge-base')
+
     def test_version_tag_publishes_a_release_after_the_image(self):
         root = Path(__file__).resolve().parents[2]
         path = root / '.github/workflows/release.yml'
