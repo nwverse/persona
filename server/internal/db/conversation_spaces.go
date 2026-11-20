@@ -3,7 +3,7 @@ package db
 import "context"
 
 // The space each of the assistant's conversations is in (#10941, migrations/manager/
-// 20261119174348_assistant_conversation_spaces.sql): what the manager noted when it started one or a computer listed
+// 20261120155450_assistant_conversation_spaces.sql): what the manager noted when it started one or a computer listed
 // one, read when no computer lists it any more.
 
 // ConversationSpace is one conversation's space as noted: Space "" for the assistant's own, "health" for the health
