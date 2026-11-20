@@ -288,14 +288,19 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
     : sameEffectiveProvider && !p?.override.effort ? p?.effective?.effort : undefined;
   const chatEffort = !directAPI && chosen?.kind === "api" && chosen.api === "chat"
     ? directEffortState(chosen, [], effortModel) : undefined;
-  const listedEfforts = launcherList.status === "ready" && launcherList.list && takesEffort(launcherList.list.agent)
-    ? effortChoices(launcherList.list, draft.model, inherited) : (p?.id === "inbox.triage" || p?.kind === "api" ? ["off", "low", "medium", "high", "xhigh", "max"] : ["low", "medium", "high", "xhigh", "max"]);
   const effectiveAgent = providerAgent(effectiveProvider, p?.effective?.provider);
   const chosenAgent = (launcherList.provider === listProvider && launcherList.list?.agent) || providerAgent(chosen, runsOn);
   const permissionModes = p ? permissionModesForProvider(p, chosen, chosenAgent) : [];
   const inheritedPermissionMode = following
     ? sameParentProvider ? parent?.effective?.permission_mode : undefined
     : sameEffectiveProvider && !p?.override?.permission_mode ? p?.effective?.permission_mode : undefined;
+  const listedEfforts = launcherList.status === "ready" && launcherList.list && takesEffort(launcherList.list.agent)
+    ? effortChoices(launcherList.list, draft.model, inherited)
+    : (p?.kind === "api" && chosen?.kind === "launcher" && chosenAgent === "codex"
+      ? ["off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
+      : p?.id === "inbox.triage" || p?.kind === "api"
+        ? ["off", "low", "medium", "high", "xhigh", "max"]
+        : ["low", "medium", "high", "xhigh", "max"]);
   const mainDefaultProvider = draft.provider || p?.effective?.provider;
   const mainInfo: AssistantLaunchers = {
     launchers: (data?.providers ?? []).map((v) => ({ name: v.id, display_name: v.name, agent: providerAgent(v) })),

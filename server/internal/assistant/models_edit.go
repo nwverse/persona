@@ -84,12 +84,27 @@ func (s *Service) modelProviderCompatible(p ModelPurpose, v ModelProvider, store
 	if p.Kind == "api" && v.Kind == "launcher" {
 		// Claude Code, Codex, and Antigravity launchers can answer on the main chat's computer via model.run with
 		// zero-tool isolation (#5823, #12027); a managed launcher with a Messages gateway is called over HTTP, as
-		// before. With no such computer it stays offered, and its status says to choose one.
-		compatible = modelRunAgentSupported(v.Agent) && (p.MachineID == "" || len(v.Machines) == 0 || slices.Contains(v.Machines, p.MachineID))
+		// before. Among runtime-backed launchers, only the verified built-in Antigravity companion is admitted. With
+		// no main chat computer set it stays offered when at least one computer supports model.run, and its status
+		// says to choose one.
+		managed := false
 		for _, l := range stored {
 			if v.ID == "launcher."+l.Name {
-				compatible = messagesAPI(l.API) || compatible && (p.MachineID == "" || s.scopeReason(l, p.MachineID) == "")
+				managed = true
+				compatible = messagesAPI(l.API) || modelRunAgentSupported(l.AgentType()) && (p.MachineID == "" || s.scopeReason(l, p.MachineID) == "")
 				break
+			}
+		}
+		if !managed {
+			if v.modelRunMachines != nil {
+				if p.MachineID == "" {
+					compatible = len(v.modelRunMachines) > 0
+				} else {
+					compatible = slices.Contains(v.modelRunMachines, p.MachineID)
+				}
+			} else {
+				compatible = modelRunSourceSupported(v.source, v.Agent, v.builtinCompanion) &&
+					(p.MachineID == "" || len(v.Machines) == 0 || slices.Contains(v.Machines, p.MachineID))
 			}
 		}
 	}
@@ -128,7 +143,7 @@ func (s *Service) modelLauncherCompatible(p ModelPurpose, l ConfiguredLauncher, 
 	if proto.IsExternalLauncher(l.Name) || l.Source == proto.ExternalLauncherSource {
 		return p.ID == "assistant" && p.MachineID != "" && externalLauncherError(l.Launcher) == nil
 	}
-	v := ModelProvider{ID: "launcher." + l.Name, Kind: "launcher", Agent: cmp.Or(l.AgentType, l.Agent), Model: l.Model}
+	v := ModelProvider{ID: "launcher." + l.Name, Kind: "launcher", Agent: cmp.Or(l.AgentType, l.Agent), Model: l.Model, source: l.Source, builtinCompanion: l.BuiltinCompanion}
 	for _, managed := range stored {
 		if managed.Name == l.Name {
 			v.Kind, v.API = managed.Kind, managed.API
@@ -157,6 +172,16 @@ func effortLevelsForKind(kind string) []string {
 		return append(slices.Clone(proto.EffortLevels), "off", "none")
 	}
 	return proto.EffortLevels
+}
+
+// effortLevelsForPurpose returns the effort levels valid for a purpose of kind running on provider. An API-kind
+// purpose backed by a Codex launcher accepts Codex's reasoning effort levels (including minimal and ultra) alongside
+// the API off/none sentinel, without enabling minimal or ultra for Claude, Antigravity, or direct HTTP API providers.
+func effortLevelsForPurpose(kind string, provider *ModelProvider) []string {
+	if kind == "api" && provider != nil && provider.Kind == "launcher" && provider.Agent == "codex" && (!provider.HasKey || !messagesAPI(provider.API)) {
+		return append(slices.Clone(proto.CodexEffortLevels), "off", "none")
+	}
+	return effortLevelsForKind(kind)
 }
 
 // permissionModesForAgent returns the permission modes supported by an agent launcher.
@@ -267,7 +292,7 @@ func (s *Service) validateModel(ctx context.Context, p ModelPurpose, b ModelBind
 			return i18n.Err("assistant-models.err_provider_unsupported")
 		}
 	}
-	if b.Effort != "" && !slices.Contains(effortLevelsForKind(p.Kind), b.Effort) {
+	if b.Effort != "" && !slices.Contains(effortLevelsForPurpose(p.Kind, provider), b.Effort) {
 		return i18n.Err("assistant-models.err_effort_unsupported")
 	}
 	if b.PermissionMode != "" {

@@ -413,4 +413,23 @@ describe("API-kind purpose CLI backend badges (#12027)", () => {
     await flush();
     expect(row().textContent).toContain("直接 API · agy -p");
   });
+
+  it("offers minimal and ultra efforts only for Codex launchers on API-kind purposes", async () => {
+    listFails = true;
+    await render();
+    await open();
+    const effortValues = () => [...dialog().querySelectorAll<HTMLOptionElement>("#model-efforts option")].map((o) => o.value);
+
+    await choose("launcher.codex");
+    expect(effortValues()).toContain("minimal");
+    expect(effortValues()).toContain("ultra");
+
+    await choose("launcher.default");
+    expect(effortValues()).not.toContain("minimal");
+    expect(effortValues()).not.toContain("ultra");
+
+    await choose("launcher.agy");
+    expect(effortValues()).not.toContain("minimal");
+    expect(effortValues()).not.toContain("ultra");
+  });
 });
