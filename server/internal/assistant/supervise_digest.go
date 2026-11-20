@@ -342,6 +342,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 	}
 	if len(entries) == 0 {
 		s.agentDecisionRepliesTold(ctx, holds)
+		s.handoffResultsTold(ctx, holds)
 		s.turnsTold(ctx, holds) // said the same within the window: told
 		s.finishFailedStartBatches(ctx, to, nil, holds, now)
 		b.mu.Lock()
@@ -371,6 +372,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		s.parkedDueTold(ctx, kept) // told for good: not again after a restart (parked.go)
 		s.parkDecidedTold(ctx, kept)
 		s.agentDecisionRepliesTold(ctx, kept)
+		s.handoffResultsTold(ctx, kept)
 		s.turnsTold(ctx, holds) // and how a turn ended: kept went, the rest of them was said the same within the window
 		s.finishFailedStartBatches(ctx, to, kept, settled, now)
 	}()
@@ -560,6 +562,14 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 	var replyAsk acceptAsk
 	var draft *TodoPRStatus
 	switch g.Kind {
+	case sigHandoffResult:
+		h := v.handoffResult()
+		if h == nil || h.ID != g.Key {
+			return prompts.SuperviseEntry{}, false
+		}
+		// Render through the existing review entry, with this receipt as the evidence.
+		return prompts.SuperviseEntry{ID: t.ID, Title: t.Title, Kind: sigReview, Detail: handoffResultDetail(h),
+			DoneWhen: v.DoneWhen, Round: v.Round, Link: todoLink(web, t.ID), Quiet: t.Quiet}, true
 	case sigFailed:
 		if g.Remedying {
 			// Notification batching never holds the remedy itself. If that remedy already succeeded or became a
@@ -588,8 +598,14 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 		}
 	case sigDecisionReply:
 		a, ok := s.askCopy(t.ID)
-		if st != reviewNeedsUser || !ok || !a.AcceptedAt.IsZero() || a.AgentReply == nil ||
-			!a.AgentReply.ToldAt.IsZero() || agentDecisionReplyKey(a) != g.Key || acceptAskStale(&a, t) || acceptAskEnded(&a, t) {
+		if !ok || a.AgentReply == nil || !a.AgentReply.ToldAt.IsZero() || agentDecisionReplyKey(a) != g.Key || acceptAskStale(&a, t) {
+			return prompts.SuperviseEntry{}, false
+		}
+		if a.AgentReply.Handled {
+			if r := triageLatestReview(v); st != reviewPending || r == nil || r.At.After(a.AskedAt) {
+				return prompts.SuperviseEntry{}, false
+			}
+		} else if !a.AcceptedAt.IsZero() || acceptAskEnded(&a, t) {
 			return prompts.SuperviseEntry{}, false
 		}
 		replyAsk = a
@@ -600,7 +616,7 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 			return prompts.SuperviseEntry{}, false // resolved, closed, or replaced while the signal waited
 		}
 	case sigReview:
-		if st != reviewPending {
+		if st != reviewPending || v.handoffResult() != nil {
 			return prompts.SuperviseEntry{}, false
 		}
 	case sigNeedsYou:
@@ -632,8 +648,8 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 			return prompts.SuperviseEntry{}, false // progress came, or it was parked or reviewed, meanwhile
 		}
 	case sigIdle, sigUnjudged, sigStalled:
-		if st == reviewParked {
-			return prompts.SuperviseEntry{}, false // parked meanwhile: it waits on purpose (parked.go)
+		if st == reviewParked || v.handoffResult() != nil {
+			return prompts.SuperviseEntry{}, false // a hold or its handoff result superseded the old stop
 		}
 	case sigCheck:
 		if g.Report == checkNoProgressReport && st == reviewParked {
@@ -648,6 +664,9 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 			return prompts.SuperviseEntry{}, false // told by another message meanwhile (a later decision's)
 		}
 	case sigOrphaned:
+		if p := v.parking(); p != nil && p.Handoff != nil || v.handoffResult() != nil {
+			return prompts.SuperviseEntry{}, false // an acknowledged handoff already explains the stop
+		}
 		if o, ok := s.orphanOf(t.ID); !ok || o.key != g.Key {
 			return prompts.SuperviseEntry{}, false // an agent is back at it, or it is another stretch by now
 		}
@@ -685,7 +704,8 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 	e.LastReview = s.lastReviewEntry(ctx, v)
 	if g.Kind == sigDecisionReply {
 		e.AgentReply = &prompts.DecisionAgentReply{Language: answerLanguage(string(s.botLang(ctx))),
-			Machine: replyAsk.AgentReply.MachineID, Session: replyAsk.AgentReply.SessionID}
+			Machine: replyAsk.AgentReply.MachineID, Session: replyAsk.AgentReply.SessionID, Handled: replyAsk.AgentReply.Handled,
+			Text: replyAsk.AgentReply.Text, Closeout: replyAsk.AgentReply.Closeout}
 		return e, true // the reply's exact session is in AgentReply; no arbitrary last Agent is evidence
 	}
 	if a := v.AutoReview; g.Kind == sigReview && a != nil && a.Round == v.Round && (a.State == autoClean || a.State == autoBlocking || a.State == autoFailed) {

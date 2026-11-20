@@ -1221,7 +1221,7 @@ private fun AssistantTrayDetailSheets(
                 Text(schedule.prompt, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink)
                 schedule.lastStatus?.let { Text(it, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3) }
                 schedule.lastError?.let { JNotice(it, status = Status.NeedsYou) }
-                schedule.nextRun?.let { Text(stringResource(R.string.chat_tray_next_run, it), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3) }
+                schedule.nextRun?.let { Text(stringResource(R.string.chat_tray_next_run, formatTrayScheduleTime(it, currentLocale)), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3) }
                 val machineId = schedule.runMachineId ?: schedule.machineId
                 val sessionId = schedule.runSessionId ?: schedule.lastSessionId ?: schedule.sessionId
                 if (machineId != null && sessionId != null) JButton(stringResource(R.string.chat_task_detail_open_chat), {

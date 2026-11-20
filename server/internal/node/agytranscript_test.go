@@ -167,7 +167,7 @@ func TestAgyParallelResultsOutOfOrderPairWithTheirOwnCalls(t *testing.T) {
 	if after.native == before.native {
 		t.Errorf("watchers must learn that earlier items changed: native stayed %q", after.native)
 	}
-	history := mapAgySteps(steps, time.Time{})
+	history := mapAgySteps(steps, time.Time{}, nil)
 	results := map[string]string{}
 	failed := map[string]bool{}
 	for _, it := range history.items {
@@ -213,7 +213,7 @@ func TestAgyCallWithoutResultDoesNotShiftLaterResults(t *testing.T) {
 		step(8, "GENERIC", `,"content":"third"`) +
 		step(9, "GENERIC", `,"content":"fourth"`)
 	steps, _ := parseAgySteps([]byte(fixture), agyTestID)
-	history := mapAgySteps(steps, time.Time{})
+	history := mapAgySteps(steps, time.Time{}, nil)
 	results := map[string]string{}
 	for _, it := range history.items {
 		if it.Kind == "tool_result" {

@@ -291,6 +291,7 @@ type Node struct {
 	// codexAttached: such a row's id → the thread it became; codexWaitLooking: the look for their threads runs.
 	codexWaiting     map[string]*codexWait
 	codexAttached    map[string]codexAttach
+	codexManual      map[string]string // a manually attached thread, only while Codex still runs in its pane
 	codexWaitLooking bool
 	// codexAbandoned: failed starts whose pane could not be closed; a retry must close it before opening another.
 	codexAbandoned map[string][]codexAbandonedStart
@@ -758,7 +759,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 }
 
 func (n *Node) handleMethod(ctx context.Context, method string, params json.RawMessage) (result any, resultErr error) {
-	if verb, ok := strings.CutPrefix(method, "git.backend."); ok {
+	if verb, ok := strings.CutPrefix(method, methodGitBackendPrefix); ok {
 		return n.backendGit(ctx, verb, params)
 	}
 	if method == devicewire.MethodStartBackendSession {
@@ -923,7 +924,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		MessageSource    *proto.MessageSource          `json:"message_source"`
 		ClientMsgID      string                        `json:"client_msg_id"`
 		AtItemID         string                        `json:"at_item_id"`     // session.fork: the reply to branch off at
-		Refresh          bool                          `json:"refresh"`        // launchers.models: ask again, not the kept list
+		Refresh          bool                          `json:"refresh"`        // launchers.models/list: ask again, not the kept list
 		Purpose          string                        `json:"purpose"`        // launchers.models/check: assistant runs outside the Agent engine
 		AssistantTurn    bool                          `json:"assistant_turn"` // launchers.check: shaped as an assistant turn (launchercheck_assistant.go)
 		Conversation     string                        `json:"conversation"`   // launchers.check with assistant_turn: the conversation whose profile it runs in
@@ -1332,17 +1333,29 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 				return map[string]any{"launchers": typedLaunchers(ls), "host": p.Host, "host_runtime": true}, nil
 			}
 		}
-		ls, err := n.launchers(ctx)
+		ls, err := n.launchers(ctx, p.Refresh)
+		forced := p.Refresh
 		bl := n.runtimes.launchers()
 		if len(bl) > 0 {
 			// Explicit shell launchers keep their names; a discovered CLI fallback yields to its connected runtime.
-			ls, err = n.runtimes.withShell(bl, ls), nil
+			// Ordinary pickers keep independently usable overlays when shell discovery fails. Forced recovery reads
+			// retain the error: a partial catalog is not fresh evidence that an alias disappeared.
+			ls = n.runtimes.withShell(bl, ls)
+			if !forced {
+				err = nil
+			}
 		}
 		if withDesktop, added := n.withDesktopLauncher(ls); added { // Claude's desktop app (claudedesktop_new.go)
-			ls, err = withDesktop, nil
+			ls = withDesktop
+			if !forced {
+				err = nil
+			}
 		}
 		if withApp, added := n.withCodexAppLauncher(ls); added { // the Codex App (codexapp_new.go)
-			ls, err = withApp, nil
+			ls = withApp
+			if !forced {
+				err = nil
+			}
 		}
 		shell, rcFile := launcherShell()
 		out := map[string]any{"launchers": typedLaunchers(ls), "shell": shell, "rc_file": rcFile}
@@ -1435,9 +1448,12 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			return nil, err
 		}
 		p.Speed = speed
+		rawPrompt := p.Prompt
+		echoImages := 0
 		var runtimeImages []proto.Image
 		if method == "session.start" && len(p.Images) > 0 &&
 			(p.ResumeSessionID == "" || p.AgentType != ompAgent && launcherAgentType(p.Launcher) != ompAgent) {
+			echoImages = len(p.Images)
 			startCtx := withStartHost(ctx, p.Host)
 			runtime, _ := n.startRuntimeIn(startCtx, p.Launcher)
 			if p.ResumeSessionID == "" && runtime != nil && runtime.id() == agyAgent && !n.usesAgyPane(startCtx, p.Launcher, p.AgentType) {
@@ -1467,7 +1483,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 				session, _ := out["session"].(*proto.Session)
 				if resultErr == nil && session != nil {
 					r := echoRecord{SessionID: session.SessionID, ClientMsgID: echoOpts.ClientMsgID,
-						Text: p.Prompt, Images: len(runtimeImages), SentAt: sentAt, AfterSeq: after.seq, In: after.in}
+						Text: rawPrompt, Images: echoImages, SentAt: sentAt, AfterSeq: after.seq, In: after.in}
 					if n.echoes.expect(r) {
 						n.notifyEcho(r)
 					}
@@ -1478,6 +1494,9 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			unlock := n.recovery.lock(p.ResumeSessionID)
 			defer unlock()
 			ctx = withOmpResumeSend(ctx, p.Images, p.ClientMsgID) // what a resumed omp is sent with the prompt (ompresume.go)
+			if p.AgentType == ompAgent || launcherAgentType(p.Launcher) == ompAgent {
+				echoImages = len(p.Images)
+			}
 		}
 		if p.ResumeAutomatic {
 			if err := n.supervisorResumeAllowed(p.ResumeSessionID, p.PermissionMode, p.Launcher); err != nil {

@@ -28,6 +28,33 @@ The hub and the managers apart:
 - **One container in Docker.** The hub image runs the hub and the built-in manager as two processes under `personad supervise`, each restarted on its own, as `persona-hub run` and `persona-manager assistant` unless `PERSONA_SPLIT_PROGRAMS=0` ([docker.md](../operations/docker.md) ("Programs")).
 - **Two services on a new install.** `hub setup` installs the hub's service and the built-in manager's own (`persona-manager-assistant.service` running `persona-manager assistant`, or on a Mac the launchd agent `com.persona.manager.assistant`, running `persona-manager assistant` on a new install, each with `PERSONA_ASSISTANT_DEPLOY=service`), and binds the second to the first with a one-time code. Existing installs keep the hub's child until `hub setup --manager-service` ([upgrade.md](../operations/upgrade.md): every install type, step by step). See [managers.md](../assistant/managers.md) ("The built-in manager as its own service").
 
+## Held Agent messages from the terminal
+
+Use `personad outbox` to check and recover messages waiting for one computer, even when the computer is offline or
+the Agent is absent from the session list. Use the computer ID from the hub's machine list and a full paired-device
+token. See [Authentication](../protocol/protocol.md#authentication) for issuing and revoking a device token.
+Store it in a private file or provide it in `PERSONA_OUTBOX_TOKEN`. The command takes the hub's HTTPS address
+(including its mount path, if any) or a local HTTP address.
+
+```sh
+personad outbox list --hub '<hub URL>' --token-file '<private token file>' '<computer ID>'
+personad outbox list --hub '<hub URL>' --token-file '<private token file>' --state failed --json '<computer ID>'
+personad outbox retry --hub '<hub URL>' --token-file '<private token file>' '<computer ID>' '<session ID>' '<message ID>'
+personad outbox discard --hub '<hub URL>' --token-file '<private token file>' '<computer ID>' '<session ID>' '<message ID>'
+```
+
+The list shows queue order, message and session IDs, the send time and delivery status. Add `--session` to narrow it to one
+Agent. The default page is 50 messages. Set `--limit` to 1–100 and pass the returned cursor to `--after` with the same
+filters for the next page. This is a live view, so a message can leave the queue between a read and an action. The
+inventory omits messages' contents and attachments.
+
+Waiting means the manager still has the message. Sending and checking mean it is trying delivery or looking for
+evidence of a previous delivery. A failed message may have been refused, expired, or reached the chat without
+confirmation. Retry follows the chat's existing behavior, including checking for a message that may have arrived and
+requiring a separate owner retry when the check cannot confirm delivery. Discard removes the held copy. A copy that
+already reached the chat stays there. Messages from a signed-out device can only be discarded. If a request's outcome
+is unclear, list the outbox again before trying an action. See [Messages to an Agent whose computer is away](../assistant/assistant.md#messages-to-an-agent-whose-computer-is-away-10661).
+
 ## Team project documents pilot
 
 An operator can run `persona-projects` separately to hand a versioned text document to another project member. Build the pilot from source in the `server` directory with `go build -o persona-projects ./cmd/persona-projects`. Provision a dedicated PostgreSQL database and login that can create tables in it. Set `TEAM_PROJECT_DATABASE_URL` in the operator's environment to that database's connection URL. Use a TLS-verified database connection for a remote database.

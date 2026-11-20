@@ -79,6 +79,7 @@
   "scope_dispatch_guard": "Read and change the explicit-target dispatch guard and narrow the affected conversations' tools",
   "scope_models": "Use the model you pick for it in Settings › Model configuration (never the key)",
   "scope_transcription": "Turn its own audio into text with the transcription you chose for meetings (never the key, never other audio)",
+  "scope_market_refresh_own": "Refresh the extension marketplace it was installed from",
   "scope_call": "Call the API of extension “{id}”",
   "slot_nav_page": "Entry in the main navigation",
   "slot_overview_card": "Card on the overview",
