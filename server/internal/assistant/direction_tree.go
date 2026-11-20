@@ -65,12 +65,13 @@ type directionTree struct {
 
 // treeDirection is one direction, or the secretary group (Secretary; ID the main conversation's, Name "").
 type treeDirection struct {
-	ID        string     `json:"id"`
-	Name      string     `json:"name"`
-	Secretary bool       `json:"secretary,omitempty"`
-	Counts    treeCounts `json:"counts"`
-	Running   bool       `json:"running"` // sent false too, so a client tells a hub without it (it reads counts.working then)
-	Tasks     []treeTask `json:"tasks"`
+	ID        string             `json:"id"`
+	Name      string             `json:"name"`
+	Secretary bool               `json:"secretary,omitempty"`
+	Counts    treeCounts         `json:"counts"`
+	Running   bool               `json:"running"` // sent false too, so a client tells a hub without it (it reads counts.working then)
+	Tasks     []treeTask         `json:"tasks"`
+	Sessions  []directionSession `json:"sessions,omitempty"`
 }
 
 // treeCounts are how many of a direction's listed tasks are in each state.
@@ -179,6 +180,18 @@ func (s *Service) directionTreeSessions(d DeviceSessions) {
 		}
 	}
 	s.todos.mu.RUnlock()
+	if !on {
+		records, err := s.directionSessionRecords(context.Background())
+		if err == nil {
+			for key := range records {
+				var tuple [2]string
+				if json.Unmarshal([]byte(key), &tuple) == nil && s.canonical(tuple[0]) == s.canonical(d.MachineID) {
+					on = true
+					break
+				}
+			}
+		}
+	}
 	if on {
 		s.directionTreeSoon()
 	}
@@ -254,13 +267,37 @@ func (s *Service) currentLeaders(ctx context.Context, cfg Settings) ([]string, m
 
 // directionTree builds the tree from the to-dos and their Agents' sessions now (each machine asked once).
 func (s *Service) directionTree(ctx context.Context, now time.Time) directionTree {
+	tb, cfg, names := s.directionTreeParts(ctx, now)
+	out := tb.tree(names)
+	groups, err := tb.directionSessionGroups(ctx, cfg)
+	if err != nil {
+		s.logf("direction sessions: %v", err)
+		return out
+	}
+	tb.directionTreeSessionRows(groups)
+	for i := range out.Directions {
+		if !out.Directions[i].Secretary {
+			out.Directions[i].Sessions = groups[out.Directions[i].ID]
+		}
+	}
+	return out
+}
+
+// directionTreeParts is the shared build behind the tree and the single-direction read. The read uses taskOwner for
+// ended tasks too; the tree still limits those raw owners to current leaders in directionOf.
+func (s *Service) directionTreeParts(ctx context.Context, now time.Time) (*treeBuild, Settings, map[string]string) {
 	cfg := s.settings(ctx)
 	leads, names := s.currentLeaders(ctx, cfg)
 
 	s.todos.mu.RLock()
 	all := make([]listedTodo, 0, len(s.todos.todos))
 	for _, t := range s.todos.todos {
-		all = append(all, listedTodo{Todo: formatTodo(copyTodoLocked(t))}) // as GET /api/v1/todos lists it
+		raw := copyTodoLocked(t)
+		shown := formatTodo(raw)
+		// formatTodo uses "review" for older clients' cancellation labels. Keep the stored marker in this internal
+		// projection so the single-direction read can distinguish cancellation from ordinary completion.
+		shown.DoneBy = raw.DoneBy
+		all = append(all, listedTodo{Todo: shown})
 	}
 	s.todos.mu.RUnlock()
 	slices.SortFunc(all, func(a, b listedTodo) int { return cmp.Compare(a.ID, b.ID) })
@@ -276,7 +313,7 @@ func (s *Service) directionTree(ctx context.Context, now time.Time) directionTre
 	}
 	lists, reached := s.agentSessionLists(ctx, undone)
 	tb := newTreeBuild(s, cfg.Main, leads, all, lists, reached, now, s.location(ctx))
-	return tb.tree(names)
+	return tb, cfg, names
 }
 
 // treeBuild is one build of the tree: the to-dos placed, the sessions by machine and id, and what is nested where.
@@ -291,6 +328,7 @@ type treeBuild struct {
 	now     time.Time
 
 	sessions map[[2]string]proto.Session
+	listed   map[string]bool               // computers whose complete current list was read during this build
 	codexKid map[[2]string][]proto.Session // a machine's Codex sub-agent sessions still going, by parent session
 	// leaderAgent: every task leader's Agent (machine, session) and the to-dos it is the leader Agent of.
 	leaderAgent map[[2]string][]string
@@ -308,9 +346,10 @@ type treeAttach struct {
 func newTreeBuild(s *Service, main string, leads []string, all []listedTodo, lists map[string][]proto.Session,
 	reached map[string]bool, now time.Time, loc *time.Location) *treeBuild {
 	tb := &treeBuild{s: s, main: main, leads: leads, todos: map[string]listedTodo{}, reached: reached, now: now,
-		sessions: map[[2]string]proto.Session{}, codexKid: map[[2]string][]proto.Session{},
+		sessions: map[[2]string]proto.Session{}, listed: map[string]bool{}, codexKid: map[[2]string][]proto.Session{},
 		leaderAgent: map[[2]string][]string{}, workerAt: map[string]treeAttach{}, workersUnder: map[treeAttach][]string{}}
 	for machine, list := range lists {
+		tb.listed[machine] = true
 		for _, c := range list {
 			tb.sessions[[2]string{machine, c.SessionID}] = c
 			if c.ParentSessionID != "" && treeGoing(c) {
@@ -421,9 +460,9 @@ func treeActiveLeader(t Todo, k [2]string) bool {
 	})
 }
 
-// directionOf is the group a listed task is in: its supervisor when that is a current leader, the leader's own
-// supervisor for a worker listed on its own (supervisorAboveTask), else the secretary ("").
-func (tb *treeBuild) directionOf(t Todo) string {
+// taskOwner is the conversation that owns t, before the tree's current-leader filter: its supervisor, or the leader's
+// own supervisor for a worker listed on its own (supervisorAboveTask). The direction read uses this for ended tasks too.
+func (tb *treeBuild) taskOwner(t Todo) string {
 	if t.Supervision == nil {
 		return ""
 	}
@@ -439,7 +478,12 @@ func (tb *treeBuild) directionOf(t Todo) string {
 			}
 		}
 	}
-	if sup != "" && slices.Contains(tb.leads, sup) {
+	return sup
+}
+
+// directionOf is the group a listed task is in: its raw owner when that is a current leader, else the secretary ("").
+func (tb *treeBuild) directionOf(t Todo) string {
+	if sup := tb.taskOwner(t); sup != "" && slices.Contains(tb.leads, sup) {
 		return sup
 	}
 	return ""

@@ -216,7 +216,7 @@ func errCode(err error) string {
 }
 
 // ConversationSent: how an app's message to one of the assistant's conversations went, as the hub sent it.
-func (s *Service) ConversationSent(_ context.Context, r ConversationSent) {
+func (s *Service) ConversationSent(ctx context.Context, r ConversationSent) {
 	outcome := outcomeFailed
 	switch r.Outcome {
 	case assistantwire.ConversationDelivered:
@@ -227,6 +227,8 @@ func (s *Service) ConversationSent(_ context.Context, r ConversationSent) {
 	if outcome == outcomeFailed {
 		s.availOwnerFailed(r.MachineID, r.SessionID) // nothing was sent: no reply to wait for (availability.go)
 	}
+	// A direction's notes block counts as given only once the node took the send (direction_notes.go).
+	s.notesSendOutcome(ctx, r.SessionID, outcome != outcomeFailed)
 	s.recordSend(r.MachineID, r.SessionID, "resume", originApp, false, outcome, r.Code, r.Error)
 }
 

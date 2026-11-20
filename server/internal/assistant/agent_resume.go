@@ -143,7 +143,7 @@ func notCompactable(c proto.Session) string {
 func compactFailed(c proto.Session, am Device, err error, resumed bool) error {
 	state := "It keeps its context as it was"
 	if resumed {
-		state = "It was resumed and now rests with its context as it was"
+		state = "It was resumed; its context is as it was (when the error says it quit, it has stopped again and can be resumed once what its terminal shows is dealt with)"
 	}
 	return fmt.Errorf("could not compact %s on %s before your text: %w. %s; nothing was sent. Send again to try once "+
 		"more, or, if it cannot be compacted, start a replacement (read this one with agent_read and give it what it "+

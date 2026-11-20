@@ -29,7 +29,10 @@ vi.mock("../lib/sessions", async (importOriginal) => {
 });
 
 // the extensions' overview cards are not this test's
-vi.mock("./extensions/ExtensionSlots", () => ({ OverviewCards: () => <section data-overview-cards="" />, OverviewArrangeButton: () => null }));
+// Overview draws its cards through OverviewBody, a row where the hub has cards (#10905): none unless a test gives some
+const slots = vi.hoisted(() => ({ cards: [] as { extension: string; id: string; title: string; placement: string }[] }));
+vi.mock("../lib/extension-slots", async (importOriginal) => ({ ...(await importOriginal<typeof import("../lib/extension-slots")>()), useExtensionSlot: (slot: string) => (slot === "overview_card" ? slots.cards : []) }));
+vi.mock("./extensions/ExtensionSlots", () => ({ OverviewCards: () => <section data-overview-cards="" />, OverviewArrangeButton: () => null, OverviewArranging: () => null }));
 // a card's answer stays on its way until the test lets it end
 const op = vi.hoisted(() => ({ finish: (_: unknown) => {} }));
 vi.mock("../lib/ops", async (importOriginal) => ({ ...(await importOriginal<typeof import("../lib/ops")>()), apiOp: () => new Promise((done) => { op.finish = done; }) }));
@@ -261,6 +264,7 @@ describe("the overview", () => {
   });
 
   it("puts the extensions' cards last, under the agents' sections and the computers (#11147)", () => {
+    slots.cards = [{ extension: "example", id: "card", title: "Example", placement: "overview_card" }];
     const cards = (html: string) => html.indexOf("data-overview-cards");
     const asking = agent(1, 0, "needs_you");
     const bg = { background_working: true, background_waiting: true };
@@ -278,6 +282,7 @@ describe("the overview", () => {
     expect(early.indexOf("加载中")).toBeGreaterThan(-1);
     expect(early.indexOf("加载中")).toBeLessThan(cards(early));
     render([], [], { loaded: true });
+    slots.cards = [];
   });
 
   it("does not say nothing needs you above a waiting card", () => {
@@ -449,6 +454,27 @@ describe("tasks in progress", () => {
     expect(html).toContain("items-stretch");
     for (const id of ["a", "b"]) expect(html.slice(html.indexOf(`data-task="${id}"`) - 120, html.indexOf(`data-task="${id}"`))).toContain("h-full");
     expect(html).toContain("mt-auto flex");
+  });
+  // #10905: Overview's own sections come in the user's arrangement, kept on the hub for every device; nothing arranged,
+  // they are where they always were (the test above)
+  it("In progress moved first comes right under the greeting, above Needs you; a hidden section is not drawn", async () => {
+    const { adoptOverview } = await import("../lib/overview-cards");
+    adoptOverview([{ section: "in_progress" }, { section: "needs_you" }, { section: "waiting_on_computer" }, { section: "working", hidden: true }, { section: "unread" }, { section: "computers" }]);
+    fake.todos = [todo("a")];
+    try {
+      const html = render([agent(1, 0, "working"), agent(2, 0, "unread")], [{ id: "c1", machine_id: "mac", session_id: "s1", kind: "question", question: "ok?" } as Interaction]);
+      expect(heading(html, "进行中的任务")).toBeGreaterThan(-1);
+      expect(heading(html, "进行中的任务")).toBeLessThan(heading(html, "需要你"));
+      expect(heading(html, "需要你")).toBeLessThan(heading(html, "完成未看"));
+      expect(heading(html, "工作中")).toBe(-1);
+      expect(html.indexOf("</h1>")).toBeLessThan(heading(html, "进行中的任务"));
+    } finally {
+      fake.todos = [];
+      adoptOverview([]);
+    }
+    // put back: the default order again
+    const html = render([agent(1, 0, "working")], [{ id: "c1", machine_id: "mac", session_id: "s1", kind: "question", question: "ok?" } as Interaction]);
+    expect(heading(html, "需要你")).toBeLessThan(heading(html, "工作中"));
   });
   it("offers See all past six tasks", () => {
     fake.todos = Array.from({ length: 7 }, (_, i) => todo(`t${i}`));
