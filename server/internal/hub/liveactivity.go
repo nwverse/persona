@@ -213,17 +213,22 @@ type liveActivities struct {
 	answering bool
 	// quiescedStart, deferredHolds and deferredSaves hold writes refused while
 	// a development snapshot pauses hub writers (quiesce.go). holdReplayMu
-	// serializes deferred hold replay ahead of start claims, and saveMu
-	// serializes SaveLiveActivity per device so resumed saves cannot overwrite
-	// newer state.
+	// serializes deferred hold replay ahead of newer holds/lifts and start
+	// claims, and saveMu serializes SaveLiveActivity per device so resumed
+	// saves cannot overwrite newer state.
 	holdReplayMu  sync.Mutex
 	quiescedStart bool
 	deferredHolds []deferredLiveHold
 	deferredSaves map[string]bool
 	rowGen        map[string]uint64
 	saveMu        map[string]*sync.Mutex
-	savedGen      map[string]uint64
-	savedErr      map[string]error
+	saveWaiters   map[string][]*liveSaveWaiter
+}
+
+type liveSaveWaiter struct {
+	wantGen uint64
+	done    bool
+	err     error
 }
 
 type deferredLiveHold struct {
@@ -774,7 +779,16 @@ func (la *liveActivities) holdStart(ctx context.Context, device string, asOf tim
 	if la.h.store == nil {
 		return
 	}
-	if !quiesceHeld(ctx) {
+	la.holdReplayMu.Lock()
+	defer la.holdReplayMu.Unlock()
+	held := quiesceHeld(ctx)
+	if !la.drainDeferredHoldsLocked(held) {
+		la.mu.Lock()
+		la.deferredHolds = append(la.deferredHolds, deferredLiveHold{device: device, asOf: asOf, hold: hold})
+		la.mu.Unlock()
+		return
+	}
+	if !held {
 		if !la.h.quiesce.beginOrDefer(func() {
 			la.mu.Lock()
 			la.deferredHolds = append(la.deferredHolds, deferredLiveHold{device: device, asOf: asOf, hold: hold})
@@ -791,18 +805,20 @@ func (la *liveActivities) holdStart(ctx context.Context, device string, asOf tim
 	}
 }
 
-func (la *liveActivities) replayHold(h deferredLiveHold) bool {
+func (la *liveActivities) replayHold(h deferredLiveHold, held bool) bool {
 	if la.h.store == nil {
 		return true
 	}
-	if !la.h.quiesce.beginOrDefer(func() {
-		la.mu.Lock()
-		la.deferredHolds = append([]deferredLiveHold{h}, la.deferredHolds...)
-		la.mu.Unlock()
-	}) {
-		return false
+	if !held {
+		if !la.h.quiesce.beginOrDefer(func() {
+			la.mu.Lock()
+			la.deferredHolds = append([]deferredLiveHold{h}, la.deferredHolds...)
+			la.mu.Unlock()
+		}) {
+			return false
+		}
+		defer la.h.quiesce.end()
 	}
-	defer la.h.quiesce.end()
 	ctx, cancel := context.WithTimeout(context.Background(), la.storeTimeout)
 	defer cancel()
 	if _, err := la.h.store.HoldLiveActivityStart(ctx, h.device, h.asOf, h.hold); err != nil {
@@ -812,14 +828,18 @@ func (la *liveActivities) replayHold(h deferredLiveHold) bool {
 }
 
 // drainDeferredHolds persists holds deferred during a quiesce pause in FIFO
-// order before any start claim can consult the store budget. Returns false if
-// writes were paused again before all deferred holds drained.
+// order before any newer hold/lift or start claim can touch the store budget.
+// Returns false if writes were paused again before all deferred holds drained.
 func (la *liveActivities) drainDeferredHolds() bool {
 	if la.h.store == nil {
 		return true
 	}
 	la.holdReplayMu.Lock()
 	defer la.holdReplayMu.Unlock()
+	return la.drainDeferredHoldsLocked(false)
+}
+
+func (la *liveActivities) drainDeferredHoldsLocked(held bool) bool {
 	for {
 		la.mu.Lock()
 		if len(la.deferredHolds) == 0 {
@@ -829,7 +849,7 @@ func (la *liveActivities) drainDeferredHolds() bool {
 		h := la.deferredHolds[0]
 		la.deferredHolds = la.deferredHolds[1:]
 		la.mu.Unlock()
-		if !la.replayHold(h) {
+		if !la.replayHold(h, held) {
 			return false
 		}
 	}
@@ -1108,17 +1128,22 @@ func (la *liveActivities) updateContext(ctx context.Context, device string, fn f
 	fn(&v)
 	la.rows[device] = v
 	var devMu *sync.Mutex
-	var wantGen uint64
+	var waiter *liveSaveWaiter
 	if la.h.store != nil {
 		if la.rowGen == nil {
 			la.rowGen = map[string]uint64{}
 		}
 		la.rowGen[device]++
-		wantGen = la.rowGen[device]
+		wantGen := la.rowGen[device]
 		if la.deferredSaves == nil {
 			la.deferredSaves = map[string]bool{}
 		}
 		la.deferredSaves[device] = true
+		waiter = &liveSaveWaiter{wantGen: wantGen}
+		if la.saveWaiters == nil {
+			la.saveWaiters = map[string][]*liveSaveWaiter{}
+		}
+		la.saveWaiters[device] = append(la.saveWaiters[device], waiter)
 		devMu = la.deviceSaveMuLocked(device)
 	}
 	la.mu.Unlock()
@@ -1126,13 +1151,37 @@ func (la *liveActivities) updateContext(ctx context.Context, device string, fn f
 	if v.PushToken != "" && v.PushToken != was {
 		la.phoneAnswered(ctx, device) // only the phone reports an update token
 	}
-	if la.h.store != nil {
-		return la.flushDeviceSave(ctx, device, devMu, wantGen)
+	if waiter != nil {
+		return la.flushDeviceSave(ctx, device, devMu, waiter)
 	}
 	return nil
 }
 
-func (la *liveActivities) flushDeviceSave(ctx context.Context, device string, devMu *sync.Mutex, wantGen uint64) error {
+func (la *liveActivities) removeSaveWaiter(device string, waiter *liveSaveWaiter) {
+	la.mu.Lock()
+	list := la.saveWaiters[device]
+	if i := slices.Index(list, waiter); i >= 0 {
+		list = slices.Delete(list, i, i+1)
+		if len(list) == 0 {
+			delete(la.saveWaiters, device)
+		} else {
+			la.saveWaiters[device] = list
+		}
+	}
+	la.mu.Unlock()
+}
+
+func (la *liveActivities) waiterResultLocked(waiter *liveSaveWaiter) error {
+	if waiter != nil && waiter.done {
+		return waiter.err
+	}
+	return nil
+}
+
+func (la *liveActivities) flushDeviceSave(ctx context.Context, device string, devMu *sync.Mutex, waiter *liveSaveWaiter) error {
+	if waiter != nil {
+		defer la.removeSaveWaiter(device, waiter)
+	}
 	if la.h.store == nil {
 		return nil
 	}
@@ -1140,23 +1189,22 @@ func (la *liveActivities) flushDeviceSave(ctx context.Context, device string, de
 	defer devMu.Unlock()
 	held := quiesceHeld(ctx)
 	first := true
-	var wantErr error
-	var gotWant bool
 	for {
 		la.mu.Lock()
 		if !la.deferredSaves[device] {
-			if !gotWant && wantGen != 0 && la.savedGen[device] == wantGen {
-				wantErr = la.savedErr[device]
-			}
+			err := la.waiterResultLocked(waiter)
 			la.mu.Unlock()
-			return wantErr
+			return err
 		}
 		v, ok := la.rows[device]
 		gen := la.rowGen[device]
 		delete(la.deferredSaves, device)
 		la.mu.Unlock()
 		if !ok {
-			return wantErr
+			la.mu.Lock()
+			err := la.waiterResultLocked(waiter)
+			la.mu.Unlock()
+			return err
 		}
 		if !held {
 			if !la.h.quiesce.beginOrDefer(func() {
@@ -1169,7 +1217,10 @@ func (la *liveActivities) flushDeviceSave(ctx context.Context, device string, de
 				}
 				la.mu.Unlock()
 			}) {
-				return wantErr
+				la.mu.Lock()
+				err := la.waiterResultLocked(waiter)
+				la.mu.Unlock()
+				return err
 			}
 		}
 		baseCtx := context.Background()
@@ -1187,17 +1238,13 @@ func (la *liveActivities) flushDeviceSave(ctx context.Context, device string, de
 			la.h.logf("save live activity: %v", err)
 		}
 		la.mu.Lock()
-		if la.savedGen == nil {
-			la.savedGen = map[string]uint64{}
-			la.savedErr = map[string]error{}
+		for _, w := range la.saveWaiters[device] {
+			if !w.done && gen >= w.wantGen {
+				w.done = true
+				w.err = err
+			}
 		}
-		la.savedGen[device] = gen
-		la.savedErr[device] = err
 		la.mu.Unlock()
-		if wantGen != 0 && gen >= wantGen && !gotWant {
-			wantErr = err
-			gotWant = true
-		}
 	}
 }
 
@@ -1262,7 +1309,7 @@ func (la *liveActivities) resumeWrites() {
 			}
 		}
 		for _, s := range saves {
-			_ = la.flushDeviceSave(nil, s.device, s.mu, 0)
+			_ = la.flushDeviceSave(nil, s.device, s.mu, nil)
 		}
 	}()
 }

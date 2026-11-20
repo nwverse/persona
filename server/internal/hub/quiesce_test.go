@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -1975,6 +1976,276 @@ func TestFinishDeviceSessionIsNonBlockingAndSerialized(t *testing.T) {
 		}
 		if maxConc != 1 {
 			t.Fatalf("max concurrent FinishDeviceSession = %d, want 1", maxConc)
+		}
+	})
+}
+
+type failingMiddleLiveActivityStore struct {
+	*meshStore
+	mu     sync.Mutex
+	tokens []string
+	onSave func(db.LiveActivity) error
+}
+
+func (s *failingMiddleLiveActivityStore) SaveLiveActivity(_ context.Context, v db.LiveActivity) error {
+	s.mu.Lock()
+	s.tokens = append(s.tokens, v.PushToStartToken)
+	s.mu.Unlock()
+	if s.onSave != nil {
+		return s.onSave(v)
+	}
+	return nil
+}
+
+// When one flush loop drains three generations (1: ok, 2: error, 3: ok) while
+// callers wait on devMu, the middle caller still receives its SaveLiveActivity
+// error instead of seeing the newest generation's nil result.
+func TestLiveActivitySaveRetainsIntermediateFailureForWaiter(t *testing.T) {
+	h := newTestHub(t)
+	middleErr := db.ErrPushRegistrationConflict
+	gen1Entered := make(chan struct{})
+	releaseGen1 := make(chan struct{})
+	gen2Entered := make(chan struct{})
+	releaseGen2 := make(chan struct{})
+	var gen1Once, gen2Once sync.Once
+	store := &failingMiddleLiveActivityStore{
+		meshStore: newMeshStore(),
+		onSave: func(v db.LiveActivity) error {
+			switch v.PushToStartToken {
+			case "tok-1":
+				gen1Once.Do(func() {
+					close(gen1Entered)
+					<-releaseGen1
+				})
+				return nil
+			case "tok-2":
+				gen2Once.Do(func() {
+					close(gen2Entered)
+					<-releaseGen2
+				})
+				return middleErr
+			case "tok-3":
+				return nil
+			default:
+				return nil
+			}
+		},
+	}
+	h.store = store
+	la := h.live
+	ctx := context.Background()
+
+	err1Ch := make(chan error, 1)
+	go func() {
+		err1Ch <- la.updateContext(ctx, "dev1", func(v *db.LiveActivity) { v.PushToStartToken = "tok-1" })
+	}()
+	select {
+	case <-gen1Entered:
+	case <-time.After(time.Second):
+		t.Fatal("gen 1 save did not start")
+	}
+
+	// Queue gen 2 while gen 1 holds devMu.
+	err2Ch := make(chan error, 1)
+	go func() {
+		err2Ch <- la.updateContext(ctx, "dev1", func(v *db.LiveActivity) { v.PushToStartToken = "tok-2" })
+	}()
+	waitFor(t, "gen 2 queued", func() bool {
+		la.mu.Lock()
+		defer la.mu.Unlock()
+		return la.rowGen["dev1"] == 2
+	})
+
+	// Finish gen 1 so the same flush loop picks up gen 2.
+	close(releaseGen1)
+	select {
+	case <-gen2Entered:
+	case <-time.After(time.Second):
+		t.Fatal("gen 2 save did not start")
+	}
+
+	// Queue gen 3 while gen 2 is still in flight in caller 1's flush loop.
+	err3Ch := make(chan error, 1)
+	go func() {
+		err3Ch <- la.updateContext(ctx, "dev1", func(v *db.LiveActivity) { v.PushToStartToken = "tok-3" })
+	}()
+	waitFor(t, "gen 3 queued", func() bool {
+		la.mu.Lock()
+		defer la.mu.Unlock()
+		return la.rowGen["dev1"] == 3
+	})
+
+	// Release gen 2 (fails with middleErr); caller 1's loop then drains gen 3 (succeeds).
+	close(releaseGen2)
+
+	for i, tc := range []struct {
+		ch   chan error
+		want error
+	}{
+		{err1Ch, nil},
+		{err2Ch, middleErr},
+		{err3Ch, nil},
+	} {
+		select {
+		case err := <-tc.ch:
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("caller %d error = %v, want %v", i+1, err, tc.want)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("caller %d did not return", i+1)
+		}
+	}
+
+	store.mu.Lock()
+	gotTokens := slices.Clone(store.tokens)
+	store.mu.Unlock()
+	if !slices.Equal(gotTokens, []string{"tok-1", "tok-2", "tok-3"}) {
+		t.Fatalf("saved tokens = %v, want [tok-1 tok-2 tok-3]", gotTokens)
+	}
+	la.mu.Lock()
+	leaked := len(la.saveWaiters)
+	la.mu.Unlock()
+	if leaked != 0 {
+		t.Fatalf("saveWaiters leaked %d entries", leaked)
+	}
+}
+
+type holdDurationOrderStore struct {
+	*meshStore
+	mu        sync.Mutex
+	holds     []time.Duration
+	heldUntil map[string]time.Time
+	onHold    func(device string, asOf time.Time, hold time.Duration)
+}
+
+func (s *holdDurationOrderStore) HoldLiveActivityStart(_ context.Context, device string, asOf time.Time, hold time.Duration) (bool, error) {
+	if s.onHold != nil {
+		s.onHold(device, asOf, hold)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.holds = append(s.holds, hold)
+	if s.heldUntil == nil {
+		s.heldUntil = map[string]time.Time{}
+	}
+	s.heldUntil[device] = asOf.Add(hold)
+	return true, nil
+}
+
+// A deferred fleetMaxAge hold replayed on resume cannot land after and
+// overwrite a newer post-resume liftHold (whether background or HTTP-admitted).
+func TestLiveActivityDeferredHoldCannotOverwriteNewerLift(t *testing.T) {
+	t.Run("lift arrives before resumeWrites runs", func(t *testing.T) {
+		for _, heldCtx := range []bool{false, true} {
+			name := "background-ctx"
+			if heldCtx {
+				name = "quiesce-held-ctx"
+			}
+			t.Run(name, func(t *testing.T) {
+				h := newTestHub(t)
+				store := &holdDurationOrderStore{meshStore: newMeshStore()}
+				h.store = store
+				la := h.live
+				startAt := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+				liftAt := startAt.Add(30 * time.Second)
+
+				if err := h.quiesce.pause(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+				la.holdStart(context.Background(), "dev1", startAt, fleetMaxAge)
+
+				// Simulate the window after quiesce.resume() before resumeWrites()'s
+				// background goroutine drains deferredHolds.
+				h.quiesce.resume()
+				liftCtx := context.Background()
+				if heldCtx {
+					if !h.quiesce.begin() {
+						t.Fatal("quiesce begin failed after resume")
+					}
+					defer h.quiesce.end()
+					liftCtx = withQuiesceHeld(liftCtx)
+				}
+				la.liftHold(liftCtx, "dev1", liftAt)
+				la.resumeWrites()
+				h.nodeWorkers.Wait()
+
+				store.mu.Lock()
+				gotHolds := slices.Clone(store.holds)
+				finalDue := store.heldUntil["dev1"]
+				store.mu.Unlock()
+				if !slices.Equal(gotHolds, []time.Duration{fleetMaxAge, fleetRefresh}) {
+					t.Fatalf("hold durations = %v, want [%s %s]", gotHolds, fleetMaxAge, fleetRefresh)
+				}
+				wantDue := liftAt.Add(fleetRefresh)
+				if !finalDue.Equal(wantDue) {
+					t.Fatalf("final heldUntil = %s, want %s", finalDue, wantDue)
+				}
+			})
+		}
+	})
+
+	t.Run("lift waits for in-flight resumed hold replay", func(t *testing.T) {
+		h := newTestHub(t)
+		holdEntered := make(chan struct{})
+		releaseHold := make(chan struct{})
+		var once sync.Once
+		store := &holdDurationOrderStore{
+			meshStore: newMeshStore(),
+			onHold: func(_ string, _ time.Time, hold time.Duration) {
+				if hold == fleetMaxAge {
+					once.Do(func() {
+						close(holdEntered)
+						<-releaseHold
+					})
+				}
+			},
+		}
+		h.store = store
+		la := h.live
+		startAt := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+		liftAt := startAt.Add(30 * time.Second)
+
+		if err := h.quiesce.pause(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		la.holdStart(context.Background(), "dev1", startAt, fleetMaxAge)
+
+		h.resumeDevelopmentWriters()
+		select {
+		case <-holdEntered:
+		case <-time.After(2 * time.Second):
+			t.Fatal("resumed hold replay did not start")
+		}
+
+		liftDone := make(chan struct{})
+		go func() {
+			la.liftHold(context.Background(), "dev1", liftAt)
+			close(liftDone)
+		}()
+		select {
+		case <-liftDone:
+			t.Fatal("liftHold completed before in-flight deferred hold finished")
+		case <-time.After(25 * time.Millisecond):
+		}
+
+		close(releaseHold)
+		select {
+		case <-liftDone:
+		case <-time.After(2 * time.Second):
+			t.Fatal("liftHold did not complete after deferred hold finished")
+		}
+		h.nodeWorkers.Wait()
+
+		store.mu.Lock()
+		gotHolds := slices.Clone(store.holds)
+		finalDue := store.heldUntil["dev1"]
+		store.mu.Unlock()
+		if !slices.Equal(gotHolds, []time.Duration{fleetMaxAge, fleetRefresh}) {
+			t.Fatalf("hold durations = %v, want [%s %s]", gotHolds, fleetMaxAge, fleetRefresh)
+		}
+		wantDue := liftAt.Add(fleetRefresh)
+		if !finalDue.Equal(wantDue) {
+			t.Fatalf("final heldUntil = %s, want %s", finalDue, wantDue)
 		}
 	})
 }
