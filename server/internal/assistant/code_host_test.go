@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -141,6 +142,46 @@ func TestCodeHostRouting(t *testing.T) {
 		}
 		if name != want {
 			t.Errorf("%s: %q, want %q", url, name, want)
+		}
+	}
+}
+
+// prStatusProvider is mergeRequestProvider declaring pr_status: repo.pr_status says prState, repo.describe the state.
+type prStatusProvider struct {
+	*mergeRequestProvider
+	prState string
+}
+
+func (f *prStatusProvider) RepositoryProviderForHost(host string) (repository.ProviderInfo, bool) {
+	info, ok := f.mergeRequestProvider.RepositoryProviderForHost(host)
+	info.Capabilities = []string{"pr_status"}
+	return info, ok
+}
+
+func (f *prStatusProvider) RepositoryPRStatus(_ context.Context, provider, canonicalURL string) (repository.ReviewStatus, error) {
+	f.call("pr_status")
+	if provider != acmeProviderID || canonicalURL != acmeMR {
+		return repository.ReviewStatus{}, &repository.ProviderError{Code: "not_found", Provider: "Acme Code"}
+	}
+	return repository.ReviewStatus{State: f.prState}, nil
+}
+
+// #11584: a provider declaring pr_status is read with repo.pr_status, not repo.describe.
+func TestAcceptedReadsProviderPRStatus(t *testing.T) {
+	for _, tc := range []struct{ describe, prState, refuse string }{
+		{describe: "open", prState: "merged"},
+		{describe: "merged", prState: "open", refuse: "not merged"},
+	} {
+		p := &prStatusProvider{mergeRequestProvider: &mergeRequestProvider{acmeProvider: newAcmeProvider(), state: tc.describe}, prState: tc.prState}
+		s, todo := codeHostReviewService(t, nil, acmeMR)
+		s.repoExt = p
+		p.asked()
+		_, err := acceptReview(s, todo.ID, nil)
+		if tc.refuse == "" && err != nil || tc.refuse != "" && (err == nil || !strings.Contains(err.Error(), tc.refuse)) {
+			t.Fatalf("pr_status %s, describe %s: %v", tc.prState, tc.describe, err)
+		}
+		if asked := p.asked(); !slices.Contains(asked, "pr_status") || slices.Contains(asked, "describe") {
+			t.Fatalf("asked %v", asked)
 		}
 	}
 }

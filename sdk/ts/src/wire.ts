@@ -574,7 +574,18 @@ export interface RepositoryProviderItem {
    * kinds stay issue and pull_request.
    */
   link_kinds?: RepositoryLinkLabel[];
+  /**
+   * What else the program answers (#11584): pr_status, the state of a pull request for delivery checks
+   * (repo.pr_status). Without it the manager reads repo.describe's state. Each at most once.
+   */
+  capabilities?: RepositoryCapability[];
 }
+
+/**
+ * A repository provider's optional answer: pr_status (repo.pr_status).
+ */
+export type RepositoryCapability = "pr_status" | (string & {});
+export const REPOSITORY_CAPABILITIES = ["pr_status"] as const;
 
 /**
  * The word a repository provider shows for one kind of its links (MR for a pull_request).
@@ -6501,6 +6512,38 @@ export interface RepoDescribeResult {
   state?: string;
 }
 
+/**
+ * repo.pr_status (optional; capabilities pr_status, #11584): where a pull request the manager has stored stands, for
+ * delivery checks and the status sweep, by its canonical address. Asked about pull_request links only, at most about
+ * once a minute each. Answer with the program's own credentials; nothing of the answer reaches a model but its state.
+ */
+export interface RepoPRStatusParams {
+  /** The repository_providers item's id. */
+  contribution: string;
+  /** The link's canonical_url as repo.link answered it. */
+  canonical_url: string;
+}
+
+/**
+ * The pull request's state; the rest when the source says it. A value that breaks its rule is dropped, a state
+ * outside the enum fails the answer.
+ */
+export interface RepoPRStatusResult {
+  state: string;
+  /** The commit its merge made (merged only). */
+  merge_commit?: string;
+  /** Its head commit. */
+  head_sha?: string;
+  /** Its source branch. */
+  head_ref?: string;
+  /** Its target branch. */
+  base_ref?: string;
+  /** Who opened it, as the source names accounts. */
+  author?: string;
+  /** Whether the account the program uses opened it; left out when it cannot tell. */
+  viewer_is_author?: boolean;
+}
+
 /** One call or event of an extension point's protocol: who sends it, and the definitions its params and
  * its answer hold to (no result: any JSON; an event has no answer). */
 export interface Call {
@@ -6603,4 +6646,5 @@ export const CALLS: Record<string, Call> = {
   "repo.check": { from: "hub", params: "RepoCheckParams", result: "Empty" },
   "repo.link": { from: "hub", params: "RepoLinkParams", result: "RepoLinkResult" },
   "repo.describe": { from: "hub", params: "RepoDescribeParams", result: "RepoDescribeResult" },
+  "repo.pr_status": { from: "hub", params: "RepoPRStatusParams", result: "RepoPRStatusResult" },
 };

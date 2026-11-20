@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strconv"
 
+	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/assistant/repository"
 )
 
@@ -75,7 +76,8 @@ func (g githubHost) ReviewStatus(ctx context.Context, url string) (repository.Re
 }
 
 // providerHost is the repository provider claiming a host: which repository and link url is (repo.parse,
-// repo.link), then the link's state (repo.describe), within one provider budget.
+// repo.link), then the link's state, within one provider budget: repo.pr_status when its contribution declares
+// pr_status, else repo.describe's state.
 type providerHost struct {
 	s    *Service
 	info repository.ProviderInfo
@@ -99,6 +101,9 @@ func (p providerHost) ReviewStatus(ctx context.Context, url string) (repository.
 	}
 	if link.Kind != "pull_request" {
 		return repository.ReviewStatus{}, errNotReviewRequest
+	}
+	if r, ok := p.s.repoExt.(repository.ReviewReader); ok && slices.Contains(p.info.Capabilities, wire.RepositoryCapabilityPrStatus) {
+		return r.RepositoryPRStatus(call, p.info.ID, link.CanonicalURL)
 	}
 	d, err := p.s.repoExt.RepositoryDescribe(call, p.info.ID, link.CanonicalURL)
 	if err != nil {

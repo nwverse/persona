@@ -588,7 +588,18 @@ type RepositoryProviderItem struct {
 	// What it calls the link kinds it names (each at most once; the others keep their usual words). Only relabels: the
 	// kinds stay issue and pull_request.
 	LinkKinds []RepositoryLinkLabel `json:"link_kinds,omitempty"`
+	// What else the program answers (#11584): pr_status, the state of a pull request for delivery checks
+	// (repo.pr_status). Without it the manager reads repo.describe's state. Each at most once.
+	Capabilities []string `json:"capabilities,omitempty"`
 }
+
+// RepositoryCapability: A repository provider's optional answer: pr_status (repo.pr_status).
+const (
+	RepositoryCapabilityPrStatus = "pr_status"
+)
+
+// RepositoryCapabilities are the values of RepositoryCapability, in order.
+var RepositoryCapabilities = []string{"pr_status"}
 
 // RepositoryLinkLabel: the word a repository provider shows for one kind of its links (MR for a pull_request).
 type RepositoryLinkLabel struct {
@@ -6168,6 +6179,35 @@ type RepoDescribeResult struct {
 	State string `json:"state,omitempty"`
 }
 
+// RepoPRStatusParams: repo.pr_status (optional; capabilities pr_status, #11584): where a pull request the manager has
+// stored stands, for delivery checks and the status sweep, by its canonical address. Asked about pull_request links
+// only, at most about once a minute each. Answer with the program's own credentials; nothing of the answer reaches a
+// model but its state.
+type RepoPRStatusParams struct {
+	// The repository_providers item's id.
+	Contribution string `json:"contribution"`
+	// The link's canonical_url as repo.link answered it.
+	CanonicalURL string `json:"canonical_url"`
+}
+
+// RepoPRStatusResult: the pull request's state; the rest when the source says it. A value that breaks its rule is
+// dropped, a state outside the enum fails the answer.
+type RepoPRStatusResult struct {
+	State string `json:"state"`
+	// The commit its merge made (merged only).
+	MergeCommit string `json:"merge_commit,omitempty"`
+	// Its head commit.
+	HeadSha string `json:"head_sha,omitempty"`
+	// Its source branch.
+	HeadRef string `json:"head_ref,omitempty"`
+	// Its target branch.
+	BaseRef string `json:"base_ref,omitempty"`
+	// Who opened it, as the source names accounts.
+	Author string `json:"author,omitempty"`
+	// Whether the account the program uses opened it; left out when it cannot tell.
+	ViewerIsAuthor *bool `json:"viewer_is_author,omitempty"`
+}
+
 // requiredJSONComponent preserves required fields only inside stream payloads.
 type requiredJSONComponent Component
 
@@ -6888,6 +6928,8 @@ var newDef = map[string]func() any{
 	"RepoLinkResult":                func() any { return new(RepoLinkResult) },
 	"RepoDescribeParams":            func() any { return new(RepoDescribeParams) },
 	"RepoDescribeResult":            func() any { return new(RepoDescribeResult) },
+	"RepoPRStatusParams":            func() any { return new(RepoPRStatusParams) },
+	"RepoPRStatusResult":            func() any { return new(RepoPRStatusResult) },
 }
 
 // Call is one call or event of an extension point's protocol (the schemas' x-methods and x-events): who
@@ -6991,4 +7033,5 @@ var Calls = map[string]Call{
 	"repo.check":                     {Name: "repo.check", From: "hub", Params: "RepoCheckParams", Result: "Empty"},
 	"repo.link":                      {Name: "repo.link", From: "hub", Params: "RepoLinkParams", Result: "RepoLinkResult"},
 	"repo.describe":                  {Name: "repo.describe", From: "hub", Params: "RepoDescribeParams", Result: "RepoDescribeResult"},
+	"repo.pr_status":                 {Name: "repo.pr_status", From: "hub", Params: "RepoPRStatusParams", Result: "RepoPRStatusResult"},
 }

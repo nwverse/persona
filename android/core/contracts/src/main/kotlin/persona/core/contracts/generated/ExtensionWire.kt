@@ -853,7 +853,20 @@ data class ExtensionRepositoryProviderItem(
      * the kinds stay issue and pull_request.
      */
     @SerialName("link_kinds") val linkKinds: List<ExtensionRepositoryLinkLabel>? = null,
+    /**
+     * What else the program answers (#11584): pr_status, the state of a pull request for delivery checks
+     * (repo.pr_status). Without it the manager reads repo.describe's state. Each at most once.
+     */
+    val capabilities: List<String>? = null,
 )
+
+/**
+ * A repository provider's optional answer: pr_status (repo.pr_status).
+ */
+object ExtensionRepositoryCapability {
+    const val PR_STATUS = "pr_status"
+    val ALL = listOf("pr_status")
+}
 
 /**
  * The word a repository provider shows for one kind of its links (MR for a pull_request).
