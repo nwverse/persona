@@ -97,6 +97,7 @@ type Settings struct {
 	// too, by last activity with the others (#8324; since #6228 they are only in All chats). Display only, one value
 	// for every device. nil is off (the default).
 	RecentTaskChats *bool `json:"recent_task_chats,omitempty"`
+	WorkGuide       *bool `json:"work_guide,omitempty"`
 	// MeetingAttendanceDefault: the role a meeting recording pre-selects on the phone (off, listener, participant;
 	// docs/assistant/meeting-minutes.md "Attending a meeting"); nil is off.
 	MeetingAttendanceDefault *string `json:"meeting_attendance_default,omitempty"`
@@ -267,6 +268,8 @@ func (s *Service) updateSettings(ctx context.Context, fn func(*Settings) error) 
 	b.mu.Unlock()
 	return v, nil
 }
+
+func (v Settings) workGuideOn() bool { return v.WorkGuide != nil && *v.WorkGuide }
 
 // settings are the settings in effect, what the rest of the package reads (the main conversation, the machine, the time
 // zone; isMain and mainTasksQuiet for short): the machine one the hub has (else the hub's default), the launcher the
@@ -605,6 +608,7 @@ type assistantView struct {
 	MainBackgroundFolded bool `json:"main_background_folded"`
 	// RecentTaskChats is in effect, like DoneNeedsDelivery.
 	RecentTaskChats bool `json:"recent_task_chats"`
+	WorkGuide       bool `json:"work_guide"`
 	// MeetingAttendanceDefault is in effect (off until changed).
 	MeetingAttendanceDefault      string   `json:"meeting_attendance_default"`
 	MeetingTranscriptionDefault   string   `json:"meeting_transcription_default"`
@@ -662,6 +666,7 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 		TaskWorkspacePreference: s.taskWorkspacePreference(ctx),
 		ReadonlyMode:            readonlyModeOf(v),
 		MainBackgroundFolded:    quietOn(v.MainBackgroundFolded),
+		WorkGuide:               v.workGuideOn(),
 		RecentTaskChats:         v.RecentTaskChats != nil && *v.RecentTaskChats,
 		DoneNeedsDelivery:       v.DoneNeedsDelivery != nil && *v.DoneNeedsDelivery, IdleCloseHours: int(s.idleCloseAfter(ctx) / time.Hour),
 		ArchiveClosedDays:            int(s.archiveClosedAfter(ctx) / (24 * time.Hour)),

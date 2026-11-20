@@ -245,21 +245,44 @@ func (h *Manager) connectorThreadRoutes(api *http.ServeMux) {
 	})
 }
 
-// Only the manager knows the app-facing path. Keep a connector's original refs for older apps
-// and its own page untouched, including the author and messages it may reuse on a later read.
-func threadPageForApps(source string, page connector.ThreadPage) connector.ThreadPage {
-	page.Chat.AvatarURL = extwire.AvatarURL(source, page.Chat.Avatar)
+// The plugin supplies its original avatar references. Only the hub's response to an app adds
+// the corresponding image paths, including on nested authors and senders.
+type appThreadPerson struct {
+	connector.ThreadPerson
+	AvatarURL string `json:"avatar_url,omitempty"`
+}
+
+type appThreadChat struct {
+	connector.ThreadChat
+	AvatarURL string           `json:"avatar_url,omitempty"`
+	Author    *appThreadPerson `json:"author,omitempty"`
+}
+
+type appThreadMessage struct {
+	connector.ThreadMessage
+	Sender appThreadPerson `json:"sender"`
+}
+
+type appThreadPage struct {
+	connector.ThreadPage
+	Chat     appThreadChat      `json:"chat"`
+	Messages []appThreadMessage `json:"messages"`
+}
+
+func threadPageForApps(source string, page connector.ThreadPage) appThreadPage {
+	person := func(p connector.ThreadPerson) appThreadPerson {
+		return appThreadPerson{ThreadPerson: p, AvatarURL: extwire.AvatarURL(source, p.Avatar)}
+	}
+	chat := appThreadChat{ThreadChat: page.Chat, AvatarURL: extwire.AvatarURL(source, page.Chat.Avatar)}
 	if page.Chat.Author != nil {
-		author := *page.Chat.Author
-		author.AvatarURL = extwire.AvatarURL(source, author.Avatar)
-		page.Chat.Author = &author
+		author := person(*page.Chat.Author)
+		chat.Author = &author
 	}
-	page.Messages = append([]connector.ThreadMessage{}, page.Messages...)
-	for i := range page.Messages {
-		sender := &page.Messages[i].Sender
-		sender.AvatarURL = extwire.AvatarURL(source, sender.Avatar)
+	messages := make([]appThreadMessage, len(page.Messages))
+	for i, m := range page.Messages {
+		messages[i] = appThreadMessage{ThreadMessage: m, Sender: person(m.Sender)}
 	}
-	return page
+	return appThreadPage{ThreadPage: page, Chat: chat, Messages: messages}
 }
 
 // mediaDir is where connectors' media are kept: <hub dir>/cache/connector-media/<connector>/<hash of the ref>.

@@ -41,13 +41,12 @@ const ThreadKindNone = "none"
 
 // ThreadChat is the conversation the thread is.
 type ThreadChat struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Kind      string `json:"kind"` // dm | group | channel (bubbles), pr | issue (GitHub's thread), none (ThreadKindNone)
-	URL       string `json:"url,omitempty"`
-	Avatar    string `json:"avatar,omitempty"`     // connector media ref or HTTPS address
-	AvatarURL string `json:"avatar_url,omitempty"` // hub path, filled when the page is listed
-	Members   int    `json:"members,omitempty"`    // a group's
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Kind    string `json:"kind"` // dm | group | channel (bubbles), pr | issue (GitHub's thread), none (ThreadKindNone)
+	URL     string `json:"url,omitempty"`
+	Avatar  string `json:"avatar,omitempty"`  // connector media ref or HTTPS address
+	Members int    `json:"members,omitempty"` // a group's
 	// Reply is the action that answers in this thread, with {chat: <thread>, text, reply_to}; "" when the user cannot
 	// answer here.
 	Reply string `json:"reply,omitempty"`
@@ -85,10 +84,9 @@ type ThreadMessage struct {
 
 // ThreadPerson is who wrote a message.
 type ThreadPerson struct {
-	ID        string `json:"id,omitempty"`
-	Name      string `json:"name"`
-	Avatar    string `json:"avatar,omitempty"`     // connector media ref or HTTPS address
-	AvatarURL string `json:"avatar_url,omitempty"` // hub path, filled when the page is listed
+	ID     string `json:"id,omitempty"`
+	Name   string `json:"name"`
+	Avatar string `json:"avatar,omitempty"` // connector media ref or HTTPS address
 }
 
 // ThreadMedia is a picture, a sticker, a video, a voice message or a file in a message. Ref (the media, when the hub

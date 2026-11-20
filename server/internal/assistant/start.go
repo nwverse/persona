@@ -59,10 +59,14 @@ var errWorkAssistant = i18n.Err("assistant-start.work_machine")
 // work only for an assistant on the hub's own machine, and a link (or tailcat) machine has no ssh at all; from anywhere
 // else there is no command to give, only the Agents tools.
 func (s *Service) claudeMD(ctx context.Context, here string, larkCLI bool) string {
+	return prompts.RenderAssistantClaudeMD(s.assistantPrompt(ctx, here, larkCLI, s.settings(ctx)))
+}
+
+func (s *Service) assistantPrompt(ctx context.Context, here string, larkCLI bool, settings Settings) prompts.AssistantClaudeMD {
 	hello := s.hello(ctx)
 	d := prompts.AssistantClaudeMD{Owner: strings.TrimSpace(hello.Owner), Notes: s.notes(ctx), ExtraDirs: s.kbExtraDirs(ctx),
 		KnowledgeDir: s.kb.dir, LarkCLI: larkCLI, Language: answerLanguage(hello.Locale),
-		BackgroundSupervisor: s.backgroundOn(s.settings(ctx)), UrgentCall: s.urgentPrompt(ctx)}
+		BackgroundSupervisor: s.backgroundOn(settings), UrgentCall: s.urgentPrompt(ctx)}
 	devices := s.devices(ctx)
 	if i := slices.IndexFunc(devices, func(d Device) bool { return d.ID == here }); i >= 0 {
 		d.OnHub = devices[i].Kind == "local"
@@ -75,7 +79,7 @@ func (s *Service) claudeMD(ctx context.Context, here string, larkCLI bool) strin
 		d.Machines = append(d.Machines, prompts.AssistantMachine{Name: m.Name, ID: m.ID, Local: local, SSHHost: m.SSHHost,
 			AgentsOnly: !local && !(d.OnHub && m.Kind == "ssh")})
 	}
-	return prompts.RenderAssistantClaudeMD(d)
+	return d
 }
 
 // prepare tells machine's node what it needs before a message to the assistant (node assistant.prepare) and answers
@@ -99,6 +103,14 @@ func (s *Service) prepareSpace(ctx context.Context, machine, space string) (stri
 // a skill's files always goes: plugins.assistant hands them out once, so skipping would leave the old files on the
 // machine until the CLAUDE.md changed.
 func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onlyChanged bool) (string, bool, error) {
+	// Read settings and publish both instruction files in the same per-directory order.
+	dir := s.assistantRel()
+	if space == SpaceHealth {
+		dir = s.healthRel()
+	}
+	key := machine + "\x00" + dir
+	s.prepareLocks.acquire(key)
+	defer s.prepareLocks.release(key)
 	if s.isWorkMachine(machine) {
 		return "", false, errWorkAssistant
 	}
@@ -117,9 +129,15 @@ func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onl
 	// The digest of the hub's own part lets the extensions' data instructions ride along when it changes (the
 	// conversation restarts for it anyway) instead of restarting it on their own (extmgr extension_assistant_data.go).
 	pluginParams := map[string]any{"machine_id": machine}
-	var own string
+	var own, onDemand string
 	if space != SpaceHealth {
-		own = s.claudeMD(ctx, machine, conns.LarkCLI)
+		settings := s.settings(ctx)
+		d := s.assistantPrompt(ctx, machine, conns.LarkCLI, settings)
+		own = prompts.RenderAssistantClaudeMD(d)
+		if settings.workGuideOn() {
+			d.WorkGuide = true
+			onDemand = prompts.RenderAssistantClaudeMD(d)
+		}
 		sum := sha256.Sum256([]byte(own))
 		pluginParams["base_digest"] = hex.EncodeToString(sum[:16])
 	}
@@ -129,13 +147,12 @@ func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onl
 	if len(plugins.Skills) == 0 {
 		plugins.Skills = json.RawMessage("null")
 	}
-	dir, md := s.assistantRel(), own+plugins.Instructions
+	md := own + plugins.Instructions
 	if space == SpaceHealth {
-		dir, md = s.healthRel(), s.healthClaudeMD(ctx, machine)
+		md = s.healthClaudeMD(ctx, machine)
 	}
-	key := machine + "\x00" + dir
 	digests, files := skillDigests(plugins.Skills)
-	given := preparedState{md: md, skills: digests}
+	given := preparedState{md: md, skills: digests, workGuide: onDemand != ""}
 	if onlyChanged && !files {
 		s.preparedMu.Lock()
 		same := s.prepared[key] == given
@@ -146,6 +163,10 @@ func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onl
 	}
 	params := map[string]any{"dir": dir, "claude_md": md,
 		"connectors": conns.Connectors, "clis": conns.CLIs, "plugin_skills": plugins.Skills}
+	// Older nodes read only claude_md, so they retain the complete instructions.
+	if onDemand != "" {
+		params["work_guide_md"] = onDemand + plugins.Instructions
+	}
 	var prep struct {
 		Cwd  string   `json:"cwd"`
 		Need []string `json:"plugin_skills_need"`
@@ -174,7 +195,10 @@ func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onl
 }
 
 // preparedState is what prepareSpaceIf gave a node for a directory: the CLAUDE.md and the plugin skills (skillDigests).
-type preparedState struct{ md, skills string }
+type preparedState struct {
+	md, skills string
+	workGuide  bool
+}
 
 // skillDigests are the plugin skills of a plugins.assistant answer as prepareSpaceIf compares them, each one's plugin,
 // name and digest; files says whether any comes with its files.
