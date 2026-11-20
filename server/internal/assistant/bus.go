@@ -579,11 +579,16 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 			return nil, &rpc.Error{Code: assistantwire.CodeUndeliveredAhead, Message: "older messages to this conversation wait to go in"}
 		}
 		ctx, note := withLauncherNote(ctx)
+		// The owner's message, which the hub sends and reports: its parameters may move a direction's notes block
+		// (direction_notes.go), settled by the hub's notice, or now when they are refused and nothing is sent.
+		ctx, carry := withNotesCarry(ctx)
 		params, err := s.SendParams(ctx, p)
 		if err != nil {
+			s.notesSendOutcome(ctx, carry, false)
 			s.appSendRefused(p.MachineID, p.SessionID, err) // the hub sends nothing: no ConversationSent (north_star.go)
 			return nil, err
 		}
+		s.notesOwnerSent(carry)
 		if *note != "" {
 			return map[string]any{"params": params, "launcher_note": *note}, nil
 		}

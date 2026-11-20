@@ -228,7 +228,7 @@ func (s *Service) ConversationSent(ctx context.Context, r ConversationSent) {
 		s.availOwnerFailed(r.MachineID, r.SessionID) // nothing was sent: no reply to wait for (availability.go)
 	}
 	// A direction's notes block counts as given only once the node took the send (direction_notes.go).
-	s.notesSendOutcome(ctx, r.SessionID, outcome != outcomeFailed)
+	s.notesOwnerOutcome(ctx, r.SessionID, outcome != outcomeFailed)
 	s.recordSend(r.MachineID, r.SessionID, "resume", originApp, false, outcome, r.Code, r.Error)
 }
 

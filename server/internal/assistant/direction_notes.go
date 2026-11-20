@@ -124,11 +124,7 @@ func (s *Service) setDirectionNotes(ctx context.Context, id, notes string, from 
 	if notes == "" {
 		d.NotesAt = nil // NotesLastAt stays: the next save comes after it
 	} else {
-		now := time.Now
-		if b.now != nil {
-			now = b.now
-		}
-		at := nextNotesAt(d.NotesLastAt, now())
+		at := nextNotesAt(d.NotesLastAt, b.clock())
 		d.NotesAt, d.NotesLastAt = &at, &at
 	}
 	at := d.NotesAt
@@ -249,7 +245,16 @@ func (s *Service) leaderPolicy(ctx context.Context, id, policy string, idle bool
 // that send, and the owner's message was not kept). Kept in the record, it outlives a manager restart. A record
 // without one yet takes block: no send recorded one and no notes were saved since (setDirectionNotes sets the
 // baseline), so block is what every send gave it.
+//
+// Only a send whose outcome its caller reports moves the block: one whose ctx holds a notesCarry (withNotesCarry),
+// which this fills in. Any other send takes the block in effect as one to a leader at work does: the node's own
+// request for what its message runs on (assistant.model), and the parameters the manager makes before it sends them
+// through call, which takes them again with a carry of its own.
 func (s *Service) notesInEffect(ctx context.Context, id, block string, idle bool) string {
+	carry, _ := ctx.Value(notesCarryKey{}).(*notesCarry)
+	if carry != nil && carry.id != "" {
+		carry = nil // this send's policy step already ran
+	}
 	b := &s.directions
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -260,52 +265,188 @@ func (s *Service) notesInEffect(ctx context.Context, id, block string, idle bool
 	if d == nil {
 		return block
 	}
-	if !idle {
+	if carry == nil || !idle {
 		if d.NotesInEffect != nil {
-			return *d.NotesInEffect
+			block = *d.NotesInEffect
 		}
-		return block
-	}
-	if d.NotesInEffect == nil || *d.NotesInEffect != block {
-		if b.pending == nil {
-			b.pending = map[string]notesPending{}
+	} else if d.NotesInEffect == nil || *d.NotesInEffect != block {
+		f := b.flight(id)
+		f.moved = append(f.moved, &notesMove{prev: d.NotesInEffect, block: block})
+		if len(f.moved) > notesInFlightMost {
+			f.moved = f.moved[1:] // its outcome no longer counts: its block is kept
 		}
-		b.pending[id] = notesPending{prev: d.NotesInEffect, block: block}
-		d.NotesInEffect = &block
+		given := block
+		d.NotesInEffect = &given
 		s.saveDirectionsLocked(ctx)
+	}
+	if carry != nil {
+		carry.id, carry.move = id, b.inflight[id].carrying(block)
 	}
 	return block
 }
 
-// notesPending is a block in effect a send moved to block from prev (nil: none recorded), until the send's outcome is
-// known.
-type notesPending struct {
-	prev  *string
-	block string
+// notesFlight is what is in flight for one conversation's notes block: the moves of the block in effect whose sends'
+// outcomes are not all known, and the owner's messages the hub has yet to report, each oldest first.
+type notesFlight struct {
+	moved []*notesMove
+	owner []notesOwnerSend
 }
 
-// notesSendOutcome settles the block in effect the last send to conversation id moved (notesInEffect), once that
-// send's outcome is known (#11392). Taken by the node, the block stays. Not taken (the node refused it, as it refuses
-// a new policy for a process it already sees at work while the manager's session row still read idle, or it failed
-// before reaching the conversation), the block before it is put back, unless another send moved it since: the
-// process still runs on that one, so the next messages of the same turn are not refused too. The manager's own sends
-// are settled by their answer (call), the owner's by the hub's notice of how it sent them (ConversationSent).
-func (s *Service) notesSendOutcome(ctx context.Context, id string, taken bool) {
+// notesMove is a send's move of the block in effect from prev (nil: none recorded) to block. carriers are the sends in
+// flight that carry block: the one that moved it, and any later one that took the same block.
+type notesMove struct {
+	prev     *string
+	block    string
+	carriers int
+}
+
+// notesCarry is one send's part in its conversation's notes block (withNotesCarry): the conversation its policy step
+// ran for ("" until it ran for one with a direction record) and the move in flight whose block it carries (nil: none,
+// or settled).
+type notesCarry struct {
+	id   string
+	move *notesMove
+}
+
+// notesOwnerSend is the owner's message the hub was given parameters for at at, until its notice comes.
+type notesOwnerSend struct {
+	carry *notesCarry
+	at    time.Time
+}
+
+type notesCarryKey struct{}
+
+// withNotesCarry is ctx for one send whose outcome its caller reports with notesSendOutcome (the manager's own sends,
+// call) or has the hub report (the owner's messages, notesOwnerSent): its policy step may move the block in effect.
+func withNotesCarry(ctx context.Context) (context.Context, *notesCarry) {
+	c := &notesCarry{}
+	return context.WithValue(ctx, notesCarryKey{}, c), c
+}
+
+// notesInFlightMost is how many moves, and how many of the owner's messages, one conversation keeps in flight; the
+// oldest beyond it is dropped as if its outcome were never learned.
+const notesInFlightMost = 8
+
+// notesOwnerWait is how long the owner's message waits for the hub's notice: longer than the hub waits for any send to
+// go in (its sendWait). One whose notice has not come by then gets none (the hub stopped while sending it, or answered
+// a retry from its record without sending), and is dropped as if its outcome were never learned.
+const notesOwnerWait = 10 * time.Minute
+
+// flight is conversation id's flight, made if it has none; b.mu is held.
+func (b *directionBook) flight(id string) *notesFlight {
+	if b.inflight == nil {
+		b.inflight = map[string]*notesFlight{}
+	}
+	f := b.inflight[id]
+	if f == nil {
+		f = &notesFlight{}
+		b.inflight[id] = f
+	}
+	return f
+}
+
+// tidyFlight drops conversation id's flight once nothing is in it; b.mu is held.
+func (b *directionBook) tidyFlight(id string) {
+	if f := b.inflight[id]; f != nil && len(f.moved) == 0 && len(f.owner) == 0 {
+		delete(b.inflight, id)
+	}
+}
+
+// carrying is the newest move in flight to block, now carried by one more send; nil when none is.
+func (f *notesFlight) carrying(block string) *notesMove {
+	if f == nil {
+		return nil
+	}
+	for i := len(f.moved) - 1; i >= 0; i-- {
+		if m := f.moved[i]; m.block == block {
+			m.carriers++
+			return m
+		}
+	}
+	return nil
+}
+
+// notesSendOutcome settles carry's send once its outcome is known (#11392); a send that never left counts as not
+// taken. Taken by the node, the block it carried is what the process runs: its move, and every move before it, stay.
+// Not taken (the node refused it, as it refuses a new policy for a process it already sees at work while the
+// manager's session row still read idle, or it failed before reaching the conversation), its move counts for nothing
+// once no other send in flight carries the block: when no later move is in flight the block before it is put back, so
+// the next messages of the same turn are not refused too; else the later move counts from that block.
+func (s *Service) notesSendOutcome(ctx context.Context, carry *notesCarry, taken bool) {
+	if carry == nil || carry.move == nil {
+		return
+	}
 	b := &s.directions
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	p, ok := b.pending[id]
-	if !ok {
+	m, id := carry.move, carry.id
+	carry.move = nil
+	f := b.inflight[id]
+	i := -1
+	if f != nil {
+		i = slices.Index(f.moved, m)
+	}
+	switch {
+	case i < 0: // a later move was taken, or it was dropped
+		return
+	case taken:
+		f.moved = f.moved[i+1:]
+	case m.carriers > 1:
+		m.carriers--
+		return
+	default:
+		f.moved = slices.Delete(f.moved, i, i+1)
+		if i < len(f.moved) {
+			f.moved[i].prev = m.prev
+		} else if d := b.m[id]; b.loaded && d != nil && d.NotesInEffect != nil && *d.NotesInEffect == m.block {
+			d.NotesInEffect = m.prev
+			s.saveDirectionsLocked(ctx)
+		}
+	}
+	b.tidyFlight(id)
+}
+
+// notesOwnerSent: the hub sends the owner's message whose parameters were made with carry (SendParams) and tells how
+// it went by its notice (ConversationSent, notesOwnerOutcome). A notice names no message: it is taken as the one for
+// the oldest message still waiting for its own, since the owner's messages to one conversation go in one at a time.
+func (s *Service) notesOwnerSent(carry *notesCarry) {
+	if carry == nil || carry.id == "" {
 		return
 	}
-	delete(b.pending, id)
-	if taken || !b.loaded {
-		return
+	b := &s.directions
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	f := b.flight(carry.id)
+	now := b.clock()
+	f.owner = append(notesOwnerWaiting(f.owner, now), notesOwnerSend{carry: carry, at: now})
+	if len(f.owner) > notesInFlightMost {
+		f.owner = f.owner[1:]
 	}
-	if d := b.m[id]; d != nil && d.NotesInEffect != nil && *d.NotesInEffect == p.block {
-		d.NotesInEffect = p.prev
-		s.saveDirectionsLocked(ctx)
+}
+
+// notesOwnerOutcome settles, by the hub's notice for conversation id, the owner's oldest message to it whose notice is
+// still to come.
+func (s *Service) notesOwnerOutcome(ctx context.Context, id string, taken bool) {
+	b := &s.directions
+	b.mu.Lock()
+	var carry *notesCarry
+	if f := b.inflight[id]; f != nil {
+		if f.owner = notesOwnerWaiting(f.owner, b.clock()); len(f.owner) > 0 {
+			carry, f.owner = f.owner[0].carry, f.owner[1:]
+		}
+		b.tidyFlight(id)
 	}
+	b.mu.Unlock()
+	s.notesSendOutcome(ctx, carry, taken)
+}
+
+// notesOwnerWaiting is owner without the messages whose notice can no longer come at now (notesOwnerWait).
+func notesOwnerWaiting(owner []notesOwnerSend, now time.Time) []notesOwnerSend {
+	i := 0
+	for i < len(owner) && now.Sub(owner[i].at) >= notesOwnerWait {
+		i++
+	}
+	return owner[i:]
 }
 
 // leadIdle: a send now finds leader conversation c idle, as its computer lists it: not starting, working, waiting on
