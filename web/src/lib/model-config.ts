@@ -8,6 +8,8 @@ export interface ModelBinding {
   provider?: string;
   model?: string;
   effort?: string;
+  /** Launcher-backed purposes only: default, acceptEdits, plan, auto or bypassPermissions. */
+  permission_mode?: string;
   /** Main chat only (#2455): how it runs Claude, "cli" or "agentsdk"; absent is the CLI. */
   runtime?: string;
   /** Main chat only (#4633): the Claude profile its new conversations start in, "legacy" (this computer's own); absent
@@ -29,6 +31,8 @@ export interface ModelProvider {
   models?: ProviderModel[];
   /** Legacy Chat tier aliases resolved to the stored model IDs whose capabilities apply. */
   model_aliases?: Record<string, string>;
+  /** Explicit permission modes supported by a runtime launcher when not using the standard set. */
+  permission_modes?: string[];
   machines?: string[];
   hidden?: boolean;
   has_key?: boolean;
@@ -94,6 +98,8 @@ export interface ModelDraft {
   provider: string;
   model: string;
   effort: string;
+  /** Launcher-backed purposes only; "" inherits from parent or launcher default. */
+  permission_mode?: string;
   /** "" when the purpose has no runtime choice. */
   runtime: string;
   /** Set only when the purpose offers a profile choice (#4633): "private" or "legacy". */
@@ -146,7 +152,4 @@ export function modelSummary(p: ModelPurpose, providers: ModelProvider[] = []): 
   return [name, p.effective?.model, p.effective?.effort && t("lib-model-config.effort", { effort: p.effective.effort }), runtime].filter(Boolean).join(" · ") || t("lib-model-config.not_configured");
 }
 
-/** The main chat's note when it asked for the Agent SDK and runs on the CLI (the session's `runtime_fallback`). */
-export function runtimeFallbackText(reason: string): string {
-  return t("lib-model-config.runtime_fallback", { reason: reason.trim() });
-}
+export { runtimeFallbackText } from "./runtime-fallback";

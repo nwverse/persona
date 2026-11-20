@@ -300,7 +300,7 @@ type SnapshotProfile struct {
 // SnapshotTier is one tier of the profile in use: what an Agent started on it runs on ("" model or effort: the
 // launcher's), and when to use it.
 type SnapshotTier struct {
-	Name, Launcher, Model, Effort, Speed, Description string
+	Name, Launcher, Model, Effort, Speed, PermissionMode, Description string
 }
 
 // Snapshot is the live context a starting assistant gets in its system prompt.
@@ -846,9 +846,9 @@ type Supervise struct {
 	// they wait here before going up a rung.
 	Asked      bool
 	AskMinutes int
-	// LowDistraction: the owner's low-distraction mode is on: a card is never handed to the user on a timeout, and ask_escalate
+	// PushGrading: the owner's push grading switch is on: a card is never handed to the user on a timeout, and ask_escalate
 	// pushes only what is the owner's alone (why_owner).
-	LowDistraction bool
+	PushGrading bool
 	// Decisions: an entry is about a decision the owner cannot answer as it is (recheck, undecidable,
 	// owner_cannot_answer; #3804).
 	Decisions bool

@@ -77,6 +77,8 @@ interface AssistantState extends AgentAutoNamingState {
    *  off by default, which means the built-in background supervisor follows up the tasks no leader supervises; unset
    *  from a hub before it. */
   main_supervises_own_tasks?: boolean;
+  /** Three-tier PR/Issue delivery closeout gate (#12034): "off", "merged" (default), or "live"; unset from a hub before it. */
+  delivery_gate?: string;
   /** Days a closed session stays listed before it archives itself (#3618, docs/assistant/todos.md "Closed sessions
    *  archive themselves"): 0 is never, at most 3650; unset from a hub before it. */
   archive_closed_days?: number;
@@ -98,6 +100,8 @@ const MAX_IDLE_HOURS = 8760;
 
 /** `meeting_attendance_default`'s values, in the picker's order. */
 const MEETING_ROLES = ["off", "listener", "participant"] as const;
+/** `delivery_gate`'s values, in the picker's order. */
+const DELIVERY_GATES = ["off", "merged", "live"] as const;
 
 /** Finite day bounds (docs/protocol/protocol.md). Minutes also accept 0, selected as Forever rather than typed. */
 const RETENTION = { recording_days: { min: 1, max: 365 }, minutes_days: { min: 1, max: 3650 } } as const;
@@ -160,6 +164,18 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
       toast(t("settings-assistantsettings.save_failed", { error: errorText(e) }), "error");
     } finally { setReadonlyBusy(false); }
   };
+  const [deliveryBusy, setDeliveryBusy] = useState(false);
+  const setDeliveryGate = async (gate: string) => {
+    setDeliveryBusy(true);
+    try {
+      const r = await scopedApi<AssistantState>("/assistant", { method: "PUT", json: { delivery_gate: gate } });
+      if (r.manager !== manager || r.delivery_gate !== gate) throw new Error(t("settings-assistantsettings.delivery_gate_unconfirmed"));
+      setInfo((i) => i ? { ...i, delivery_gate: r.delivery_gate } : i);
+    } catch (e) {
+      toast(t("settings-assistantsettings.save_failed", { error: errorText(e) }), "error");
+    } finally { setDeliveryBusy(false); }
+  };
+
   const [meetingBusy, setMeetingBusy] = useState(false);
   const setMeetingRole = async (role: string) => {
     setMeetingBusy(true);
@@ -411,14 +427,25 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
         <TaskTrust manager={manager} machineName={(id) => machines.find((machine) => machine.id === id)?.name || id} />
       </Group>
 
-      {/* Who follows up the main chat's tasks (#5082), following up agents, their tasks' new messages, stopping idle ones and tidying closed ones (#3617, #4293, #4754, #3618): each row only from a hub that has its setting */}
-      {(supportsAgentAutoNaming(info) || typeof info?.main_supervises_own_tasks === "boolean" || typeof info?.agent_tasks === "boolean" || typeof info?.close_ended_terminals === "boolean" || typeof info?.inbox_signals === "boolean" || typeof info?.idle_close_hours === "number" || typeof info?.archive_closed_days === "number") && info && (
+      {/* Who follows up the main chat's tasks (#5082), delivery closeout gate (#12034), following up agents, their tasks' new messages, stopping idle ones and tidying closed ones (#3617, #4293, #4754, #3618): each row only from a hub that has its setting */}
+      {(supportsAgentAutoNaming(info) || typeof info?.main_supervises_own_tasks === "boolean" || typeof info?.delivery_gate === "string" || typeof info?.agent_tasks === "boolean" || typeof info?.close_ended_terminals === "boolean" || typeof info?.inbox_signals === "boolean" || typeof info?.idle_close_hours === "number" || typeof info?.archive_closed_days === "number") && info && (
         <Group anchor="agents" title={t("settings-assistantsettings.agents_title")}>
           {supportsAgentAutoNaming(info) && <AgentAutoNaming info={info} manager={manager} owner={owner}
             onSaved={(patch) => setInfo((current) => current ? { ...current, ...patch } : current)} />}
           {typeof info.main_supervises_own_tasks === "boolean" && (
             <Row label={t("settings-assistantsettings.main_supervises")} hint={t("settings-assistantsettings.main_supervises_hint")} wrapHint>
               <Switch on={info.main_supervises_own_tasks} onChange={(on) => void setAgents({ main_supervises_own_tasks: on })} disabled={agentsBusy} label={t("settings-assistantsettings.main_supervises")} />
+            </Row>
+          )}
+          {typeof info.delivery_gate === "string" && (
+            <Row label={t("settings-assistantsettings.delivery_gate")} hint={t("settings-assistantsettings.delivery_gate_hint")} wrapHint stackOnNarrow anchor="delivery-gate">
+              <select aria-label={t("settings-assistantsettings.delivery_gate")} value={info.delivery_gate}
+                disabled={info.manager !== manager || deliveryBusy}
+                className="min-w-0 max-w-full rounded-control bg-field px-3 py-2 text-meta text-ink shadow-inset-field pointer-coarse:min-h-11"
+                onChange={(e) => void setDeliveryGate(e.target.value)}>
+                {!(DELIVERY_GATES as readonly string[]).includes(info.delivery_gate) && <option value={info.delivery_gate} disabled>{info.delivery_gate}</option>}
+                {DELIVERY_GATES.map((gate) => <option key={gate} value={gate}>{t(`settings-assistantsettings.delivery_gate_${gate}`)}</option>)}
+              </select>
             </Row>
           )}
           {typeof info.agent_tasks === "boolean" && (

@@ -110,7 +110,7 @@ class HelperTests(unittest.TestCase):
                 "command": unittest.mock.Mock(side_effect=lambda *args, **kwargs: next(responses)),
                 "scope_running": unittest.mock.Mock(return_value=True)}), \
                 patch.object(module["time"], "sleep", return_value=None), \
-                patch.object(module["time"], "monotonic", side_effect=[0, 0, 1, 1.1, 2]):
+                patch.object(module["time"], "monotonic", side_effect=[0, 0, 1, 1.1]):
             with self.assertRaisesRegex(RuntimeError, "unexpected interaction"):
                 module["wait_transcript"](Path("/no/result"), "marker", "schema", "w3:p1", "unit", 2,
                                           accepted_stall=True)

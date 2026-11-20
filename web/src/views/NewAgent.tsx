@@ -529,8 +529,16 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     setModel(c.model);
     setEffort(c.effort);
   };
-  // a preset: the launcher, model and effort it fills in (the model is checked once the list is in)
-  const pickTier = (x: PickerTier) => pickModel({ launcher: x.launcher, model: x.model ?? "", effort: x.effort ?? "" }, x);
+  // a preset: the launcher, model, effort and optional permission mode it fills in (the model is checked once the list is in)
+  const pickTier = (x: PickerTier) => {
+    pickModel({ launcher: x.launcher, model: x.model ?? "", effort: x.effort ?? "" }, x);
+    if (x.permission_mode) {
+      const targetLauncher = launchers.find((l) => l.name === x.launcher);
+      const targetListed = listedModes(targetLauncher);
+      if (targetListed) setProviderMode(targetListed.includes(x.permission_mode) ? x.permission_mode : "");
+      else setMode(x.permission_mode);
+    }
+  };
   const followDefault = () => pickModel({ launcher: "", model: "", effort: "" });
 
   // Where it opens, when the machine enables more than one engine (#2576).
@@ -651,7 +659,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   // the follow row's second line: what Model settings › New agent runs (the hub's default, by display names)
   const defaultList = useModelList(open ? mid : "", defaultRuns, startCatalogHost(defaultEntry, opensIn, startHost)).list;
   const followDetail = hubDefault
-    ? [hubDefault.provider && launcherTitle(hubDefault.provider, names), hubDefault.model && modelTitle(defaultList, hubDefault.model), hubDefault.effort && effortTitle(hubDefault.effort)].filter(Boolean).join(" · ")
+    ? [hubDefault.provider && launcherTitle(hubDefault.provider, names), hubDefault.model && modelTitle(defaultList, hubDefault.model), hubDefault.effort && effortTitle(hubDefault.effort), hubDefault.permission_mode && modeTitle(hubDefault.permission_mode)].filter(Boolean).join(" · ")
     : modelDefault;
   const ultracodeBlocked = ultracodeShown ? startBlocked(picked?.claude_version) : "";
 
@@ -716,7 +724,9 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     const picks = startPicks({ ...startModelOptions, model, effort });
     // a Codex keeps its own modes; the choice stays for this computer's next Claude Code. A launcher that lists its own
     // takes one of those alone, never the remembered one (its own goes as no mode).
-    const permissionMode = claudeModes ? mode : providerModes?.includes(providerMode) && providerMode !== "default" ? providerMode : "";
+    const permissionMode = claudeModes ? mode
+      : providerModes?.includes(providerMode) && providerMode !== "default" ? providerMode
+      : tier && listLauncher === tier.launcher && tier.permission_mode ? tier.permission_mode : "";
     if (claudeModes) {
       if (mode) localStorage.setItem(`new.mode.${mid}`, mode);
       else localStorage.removeItem(`new.mode.${mid}`);
@@ -1287,7 +1297,7 @@ function RecentSetups({ cards, machines, names, picked, onPick, onForget, onClea
 
 /** What a preset runs on, in a line: its launcher ("Title (id)", #5029), model and effort (its name). */
 function tierRuns(x: PickerTier, names: Named[]): string {
-  return [providerLabel(namedLauncher(x.launcher, names)), x.model, x.effort && effortTitle(x.effort)].filter(Boolean).join(" · ");
+  return [providerLabel(namedLauncher(x.launcher, names)), x.model, x.effort && effortTitle(x.effort), x.permission_mode && modeTitle(x.permission_mode)].filter(Boolean).join(" · ");
 }
 
 function Choice({ selected, onClick, title, radio, children }: { selected: boolean; onClick: () => void; title?: string; /** One of a radiogroup. */ radio?: boolean; children: React.ReactNode }) {

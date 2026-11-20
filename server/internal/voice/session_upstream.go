@@ -162,7 +162,7 @@ func (c *conversation) connect(woken bool) error {
 // the rate of its audio. A failure closes up; the service's refusal is a *sessionRefused.
 func (c *conversation) startSession(ctx context.Context, up upLink, w wire, p *Provider, model, voice string,
 	in prompts.VoiceInstructions, tools []string) (int, error) {
-	s := session{Model: model, Voice: voice, InputRate: p.inputRate(), Instructions: c.instructions(in, tools), Tools: toolDecls(tools, c.meeting != nil)}
+	s := session{Model: model, Voice: voice, InputRate: p.inputRate(), Instructions: c.instructions(in, tools), Tools: toolDecls(tools, c.meeting != nil, string(c.language()))}
 	return startUpstream(ctx, up, w, p, s)
 }
 

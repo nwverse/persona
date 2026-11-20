@@ -194,6 +194,11 @@ func (n *Node) claudeResultKinds(id string) []string {
 	if f.text == "" {
 		return nil // no failed turn written (yet): the words decide
 	}
+	if f.kind == proto.TurnErrorUsageLimit && assistantwire.GatewayQuotaText(f.text) {
+		// Worker waits now classify this quota explicitly (#12095). Main/leader conversations keep their existing
+		// bounded model fallback (#3788), unless the runtime promised its own continuation above.
+		return []string{proto.TurnErrorTransient, assistantRecordKind}
+	}
 	return []string{f.kind, assistantRecordKind}
 }
 

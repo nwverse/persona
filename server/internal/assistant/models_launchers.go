@@ -80,24 +80,25 @@ type storedLauncher struct {
 
 // LauncherView is one launcher for the app: where it comes from, which machines have it; never the key.
 type LauncherView struct {
-	Kind                   string   `json:"kind,omitempty"`
-	Agent                  string   `json:"agent,omitempty"`
-	API                    string   `json:"api,omitempty"`
-	Name                   string   `json:"name"`
-	DisplayName            string   `json:"display_name,omitempty"` // managed: the name shown, "" shows Name
-	Source                 string   `json:"source"`                 // zshrc (an rc file's) | persona | agy | builtin (plain claude)
-	BaseURL                string   `json:"base_url,omitempty"`
-	Model                  string   `json:"model,omitempty"`
-	SmallModel             string   `json:"small_model,omitempty"`
-	SubagentModel          string   `json:"subagent_model,omitempty"`
-	CustomModel            string   `json:"custom_model,omitempty"`
-	CustomModelName        string   `json:"custom_model_name,omitempty"`
-	CustomModelDescription string   `json:"custom_model_description,omitempty"`
-	Args                   []string `json:"args,omitempty"`
-	HasKey                 bool     `json:"has_key,omitempty"`
-	Auth                   string   `json:"auth,omitempty"`     // managed: api_key (x-api-key) or bearer
-	Machines               []string `json:"machines,omitempty"` // zshrc: the machines whose rc file defines it; builtin: that have claude
-	Hidden                 bool     `json:"hidden,omitempty"`
+	Kind                   string                  `json:"kind,omitempty"`
+	Agent                  string                  `json:"agent,omitempty"`
+	API                    string                  `json:"api,omitempty"`
+	Name                   string                  `json:"name"`
+	DisplayName            string                  `json:"display_name,omitempty"` // managed: the name shown, "" shows Name
+	Source                 string                  `json:"source"`                 // zshrc (an rc file's) | persona | agy | builtin (plain claude)
+	BaseURL                string                  `json:"base_url,omitempty"`
+	Model                  string                  `json:"model,omitempty"`
+	SmallModel             string                  `json:"small_model,omitempty"`
+	SubagentModel          string                  `json:"subagent_model,omitempty"`
+	CustomModel            string                  `json:"custom_model,omitempty"`
+	CustomModelName        string                  `json:"custom_model_name,omitempty"`
+	CustomModelDescription string                  `json:"custom_model_description,omitempty"`
+	Args                   []string                `json:"args,omitempty"`
+	HasKey                 bool                    `json:"has_key,omitempty"`
+	Auth                   string                  `json:"auth,omitempty"`     // managed: api_key (x-api-key) or bearer
+	Machines               []string                `json:"machines,omitempty"` // zshrc: the machines whose rc file defines it; builtin: that have claude
+	Hidden                 bool                    `json:"hidden,omitempty"`
+	PermissionModes        proto.PermissionModeSet `json:"permission_modes,omitempty"`
 	// RCFiles (source zshrc only): the files it was found in (~/.zshrc, ~/.bashrc: each machine's login shell's), for the group title.
 	RCFiles []string `json:"rc_files,omitempty"`
 	// Stale (zshrc, builtin): the machines of Machines that did not answer this time (offline, timed out, failed):
