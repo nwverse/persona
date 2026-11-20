@@ -153,6 +153,16 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   // the mode picked for a launcher that lists its own (Paseo's other providers, #8261): its own ("") or Full access,
   // picked on this sheet and never remembered, so a mode left from a Claude Code start never reaches such a start
   const [providerMode, setProviderMode] = useState("");
+  // Pre-preset mode values so dropping or switching away from a preset restores them without leaking across launchers.
+  const presetModeRestore = useRef<{ mode: string; providerMode: string } | null>(null);
+  const chooseMode = (next: string) => {
+    presetModeRestore.current = null;
+    setMode(next);
+  };
+  const chooseProviderMode = (next: string) => {
+    presetModeRestore.current = null;
+    setProviderMode(next);
+  };
   const [host, setHost] = useState(""); // the engine host to open in (#2576); "": the machine's default
   const [dirs, setDirs] = useState<Dirs | null>(null);
   // the listed folder's subfolders kept: those starting with this ("": all), for a typed path naming no folder yet
@@ -252,6 +262,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     submitted.current = false;
     setEffort("");
     setProviderMode("");
+    presetModeRestore.current = null;
     setTier(null);
     setDropped(null);
     setRecents(loadRecentSetups());
@@ -424,6 +435,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     setModel("");
     setTiers([]);
     setTier(null);
+    presetModeRestore.current = null;
     setModelDefault("");
     setHubDefault(undefined);
     setConfigured(null);
@@ -524,19 +536,42 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     carrying.current = null;
     setHelpFor("");
     setDropped(null);
-    if (preset || c.launcher !== launcher || c.model !== model || c.effort !== effort) setTier(preset);
+    const changed = c.launcher !== launcher || c.model !== model || c.effort !== effort;
+    if (preset || changed) setTier(preset);
+    if (!preset && changed && presetModeRestore.current) {
+      setMode(presetModeRestore.current.mode);
+      setProviderMode(presetModeRestore.current.providerMode);
+      presetModeRestore.current = null;
+    }
     setLauncher(c.launcher);
     setModel(c.model);
     setEffort(c.effort);
   };
   // a preset: the launcher, model, effort and optional permission mode it fills in (the model is checked once the list is in)
   const pickTier = (x: PickerTier) => {
+    const base = presetModeRestore.current ?? { mode, providerMode };
     pickModel({ launcher: x.launcher, model: x.model ?? "", effort: x.effort ?? "" }, x);
-    if (x.permission_mode) {
-      const targetLauncher = launchers.find((l) => l.name === x.launcher);
-      const targetListed = listedModes(targetLauncher);
-      if (targetListed) setProviderMode(targetListed.includes(x.permission_mode) ? x.permission_mode : "");
-      else setMode(x.permission_mode);
+    const targetLauncher = launchers.find((l) => l.name === x.launcher);
+    const targetListed = listedModes(targetLauncher);
+    const targetAgent = launcherAgent(x.launcher, launchers, undefined);
+    const targetClaudeModes = takesEffort(targetAgent) && !targetListed;
+    if (targetListed) {
+      setMode(base.mode);
+      setProviderMode(x.permission_mode && targetListed.includes(x.permission_mode) ? x.permission_mode : "");
+      presetModeRestore.current = base;
+    } else if (targetClaudeModes) {
+      setProviderMode(base.providerMode);
+      if (x.permission_mode) {
+        setMode(x.permission_mode);
+        presetModeRestore.current = base;
+      } else {
+        setMode(base.mode);
+        presetModeRestore.current = null;
+      }
+    } else {
+      setMode(base.mode);
+      setProviderMode(base.providerMode);
+      presetModeRestore.current = null;
     }
   };
   const followDefault = () => pickModel({ launcher: "", model: "", effort: "" });
@@ -675,6 +710,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     if (!up || !online.some((m) => m.id === setup.machine)) return;
     setPickedSetup(setupKey(setup));
     setTier(null);
+    presetModeRestore.current = null;
     touched.current = false;
     carrying.current = null;
     setEffort(setup.agent_type === "claude" ? setup.effort : "");
@@ -725,7 +761,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     // a Codex keeps its own modes; the choice stays for this computer's next Claude Code. A launcher that lists its own
     // takes one of those alone, never the remembered one (its own goes as no mode).
     const permissionMode = claudeModes ? mode
-      : providerModes?.includes(providerMode) && providerMode !== "default" ? providerMode
+      : providerModes ? (providerModes.includes(providerMode) && providerMode !== "default" ? providerMode : "")
       : tier && listLauncher === tier.launcher && tier.permission_mode ? tier.permission_mode : "";
     if (claudeModes) {
       if (mode) localStorage.setItem(`new.mode.${mid}`, mode);
@@ -1029,9 +1065,9 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
           {claudeModes && (
             <Field label={t("newagent.permission_mode")}>
               <div role="radiogroup" aria-label={t("newagent.permission_mode")} className="flex flex-wrap gap-1.5">
-                <Choice radio selected={mode === ""} onClick={() => setMode("")}>{t("newagent.follow_launcher")}</Choice>
+                <Choice radio selected={mode === ""} onClick={() => chooseMode("")}>{t("newagent.follow_launcher")}</Choice>
                 {PERMISSION_MODES.map((m) => (
-                  <Choice key={m.id} radio selected={mode === m.id} onClick={() => setMode(m.id)} title={m.detail}>
+                  <Choice key={m.id} radio selected={mode === m.id} onClick={() => chooseMode(m.id)} title={m.detail}>
                     {m.title}
                   </Choice>
                 ))}
@@ -1047,9 +1083,9 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
           {providerModes && providerModes.some((m) => m !== "default") && (
             <Field label={t("newagent.permission_mode")}>
               <div role="radiogroup" aria-label={t("newagent.permission_mode")} data-testid="new-agent-provider-modes" className="flex flex-wrap gap-1.5">
-                <Choice radio selected={providerMode === "" || !providerModes.includes(providerMode)} onClick={() => setProviderMode("")}>{t("newagent.follow_launcher")}</Choice>
+                <Choice radio selected={providerMode === "" || !providerModes.includes(providerMode)} onClick={() => chooseProviderMode("")}>{t("newagent.follow_launcher")}</Choice>
                 {providerModes.filter((id) => id !== "default").map(listedModeOption).map((m) => (
-                  <Choice key={m.id} radio selected={providerMode === m.id} onClick={() => setProviderMode(m.id)} title={m.detail}>
+                  <Choice key={m.id} radio selected={providerMode === m.id} onClick={() => chooseProviderMode(m.id)} title={m.detail}>
                     {m.title}
                   </Choice>
                 ))}

@@ -208,6 +208,8 @@ func TestGitHubCLINetworkFailureIsNotUnconfigured(t *testing.T) {
 			{"dns", `error connecting to api.github.com: lookup api.github.com: no such host`},
 			{"tls", `Post "https://api.github.com/repos/o/r/pulls/9": tls: handshake failure`},
 			{"proxy", `Get "https://api.github.com/repos/o/r/pulls/9": proxyconnect tcp: dial tcp 127.0.0.1:8080: connect: connection refused`},
+			{"proxy_auth", `Get "https://api.github.com/repos/o/r/pulls/9": proxyconnect tcp: HTTP 407: Proxy Authentication Required`},
+			{"proxy_auth_plain", `HTTP 407: Proxy Authentication Required`},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				fakeDeliveryGHStderr(t, tc.stderr, 1)

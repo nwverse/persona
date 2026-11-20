@@ -461,6 +461,9 @@ func TestBoolSettingsSet(t *testing.T) {
 		if out, isErr := set(`"yes"`); !isErr || !strings.Contains(out, "true or false") {
 			t.Fatalf("%s set to a string: %s", key, out)
 		}
+		if out, isErr := set(`null`); !isErr || !strings.Contains(out, "true or false") || len(s.pendingQuestions()) != 0 || s.deliveryGate(ctx) != deliveryGateMerged {
+			t.Fatalf("%s set to null: err=%v out=%q pending=%d gate=%s", key, isErr, out, len(s.pendingQuestions()), s.deliveryGate(ctx))
+		}
 		mergedToOff := i18n.T(i18n.Default, "assistant-settings_tool.change_delivery_gate", i18n.Args{
 			"before": i18n.T(i18n.Default, "assistant-settings_tool.delivery_gate_merged"),
 			"after":  i18n.T(i18n.Default, "assistant-settings_tool.delivery_gate_off"),
