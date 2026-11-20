@@ -672,6 +672,135 @@ def composer_back(browser, base, token, shots):
     ctx.close()
 
 
+def agents_list_phone(browser, base, token, shots):
+    """The Agents list on a phone (#11511): Back from an Agent the page opened lands where the list was, a fresh visit at
+    the top; the title row's Filter, ⋯ and + (4 px apart) each take their own taps, on the page and in the drawer; By
+    to-do's rows are 44 px tall and fold from their count or just off their title; a landscape drawer shows no ⌘K."""
+    scroller = "document.querySelector('main [data-row-scroller]')"
+    # a row a finger reaches: inside the scroller's view and not under a sticky heading
+    reachable = f"""() => {{ const s = {scroller}, b = s.getBoundingClientRect();
+      for (const a of s.querySelectorAll('a[href^="/t/"], a[href^="/s/"]')) {{
+        const r = a.getBoundingClientRect(), x = r.left + r.width / 2, y = r.top + r.height / 2;
+        if (y > b.top && y < b.bottom && a.contains(document.elementFromPoint(x, y))) return [x, y];
+      }} return null; }}"""
+    # 375 × 548: an iPhone SE's page under Safari's bars, where the fixture's list is longer than the screen
+    for w, h in ((844, 390), (375, 548)):
+        ctx, page = phone(browser, w, h)
+        sign_in(page, base, token)
+        page.goto(base + "/")
+        sw = page.locator('main header nav[aria-label="切换页面"]')
+        sw.get_by_role("link", name="Agents").tap()
+        page.wait_for_function("location.pathname === '/agents'")
+        expect(page.locator('main [data-row-scroller] a[href^="/t/"]').first).to_be_visible()
+        page.wait_for_timeout(600)
+        room = page.evaluate(f"() => {scroller}.scrollHeight - {scroller}.clientHeight")
+        assert room >= 80, f"{w}×{h}: the Agents list is too short to scroll ({room} px)"
+        target = min(600, room)
+        while True:
+            page.evaluate(f"() => {{ {scroller}.scrollTop = {target}; }}")
+            page.wait_for_timeout(300)
+            at = page.evaluate(f"() => {scroller}.scrollTop")
+            spot = page.evaluate(reachable)
+            if spot or target < 60:
+                break
+            target -= 40
+        assert spot and at > 40, f"{w}×{h}: no row to tap below the top ({at})"
+        page.touchscreen.tap(*spot)
+        page.wait_for_function("location.pathname !== '/agents'")
+        page.wait_for_timeout(500)
+        page.go_back()
+        page.wait_for_function("location.pathname === '/agents'")
+        page.wait_for_timeout(1000)
+        back = page.evaluate(f"() => {scroller}.scrollTop")
+        assert abs(back - at) <= 2, f"{w}×{h}: Back landed at {back}, the list was at {at}"
+        sw.get_by_role("link", name="助手").tap()
+        page.wait_for_function("location.pathname === '/'")
+        sw.get_by_role("link", name="Agents").tap()
+        page.wait_for_function("location.pathname === '/agents'")
+        page.wait_for_timeout(600)
+        fresh = page.evaluate(f"() => {scroller}.scrollTop")
+        assert fresh == 0, f"{w}×{h}: a fresh visit opened at {fresh}"
+        ok(f"{w}×{h}: Back from an Agent lands where the Agents list was ({at} px); a fresh visit opens at the top")
+        ctx.close()
+
+    # each icon's own box answers with its own button; a tap 3 px inside a button's right edge is that button's
+    title_row = """(root) => [...document.querySelector(root + ' [data-testid=agent-filter-button]').parentElement.querySelectorAll(':scope > button[aria-label]')]
+      .map((b) => { const r = b.getBoundingClientRect(), i = b.querySelector('svg').getBoundingClientRect(), y = i.top + i.height / 2;
+        const own = [i.left + 1, i.left + i.width / 2, i.right - 1].every((x) => document.elementFromPoint(x, y)?.closest('button') === b)
+          && [i.top + 1, i.bottom - 1].every((yy) => document.elementFromPoint(i.left + i.width / 2, yy)?.closest('button') === b);
+        return { label: b.getAttribute('aria-label'), own, menu: b.dataset.testid !== 'agents-fold-all', right: r.right, y: r.top + r.height / 2, w: r.width, h: r.height }; })"""
+
+    def taps_own(page, root, where):
+        buttons = page.evaluate(title_row, root)
+        assert len(buttons) >= 2, (where, buttons)
+        for b in buttons:
+            assert b["own"], f"{where}: {b['label']}'s icon answers with another button"
+            assert b["w"] >= 44 and b["h"] >= 44, f"{where}: {b['label']} is {b['w']}×{b['h']}"
+        for b in (b for b in buttons if b["menu"]):  # Filter, ⋯ and + open menus; fold-all would fold the list
+            button = page.locator(f'{root} button[aria-label="{b["label"]}"]').first
+            page.touchscreen.tap(b["right"] - 3, b["y"])
+            if button.get_attribute("aria-haspopup") == "menu":
+                expect(button).to_have_attribute("aria-expanded", "true")
+            else:
+                expect(page.get_by_role("menuitem", name=b["label"]).first).to_be_visible()
+            page.keyboard.press("Escape")
+            expect(page.get_by_role("menu")).to_have_count(0)
+            page.wait_for_timeout(500)
+        return [b["label"] for b in buttons]
+
+    for w, h in ((390, 844), (360, 740)):
+        ctx, page = phone(browser, w, h)
+        sign_in(page, base, token)
+        page.goto(base + "/agents")
+        expect(page.locator("main [data-testid=agent-filter-button]")).to_be_visible()
+        page.wait_for_timeout(500)
+        on_page = taps_own(page, "main", f"/agents {w}")
+        if shots:
+            page.screenshot(path=os.path.join(shots, f"agents-title-row-{w}.png"))
+        page.goto(base + "/overview")
+        side_button(page).tap()
+        page.wait_for_timeout(500)
+        page.evaluate("() => document.querySelector('aside [data-testid=agent-filter-button]').scrollIntoView({ block: 'center' })")
+        page.wait_for_timeout(400)
+        in_drawer = taps_own(page, "aside", f"drawer {w}")
+        title = page.evaluate("() => { const t = document.querySelector('aside [data-sidebar-agents-controls] button:not([aria-label]) span'); return t.scrollWidth <= t.clientWidth; }")
+        assert title, f"drawer {w}: the Agents title is cut"
+        if shots:
+            page.screenshot(path=os.path.join(shots, f"drawer-title-row-{w}.png"))
+        ok(f"{w}: the Agents title row's buttons are 44 px and take their own taps ({', '.join(on_page)}; drawer: {', '.join(in_drawer)})")
+        ctx.close()
+
+    ctx, page = phone(browser)
+    sign_in(page, base, token, grouping="todo")
+    page.goto(base + "/agents")
+    group = page.locator('main [data-tree-branch="todo:none"] [data-tree-branch-row]')
+    expect(group).to_be_visible()
+    page.wait_for_timeout(500)
+    heights = page.evaluate("() => [...document.querySelectorAll('main [data-tree-branch-row]')].map((r) => r.getBoundingClientRect().height)")
+    assert heights and min(heights) >= 44, heights
+    chevron = group.locator("button[aria-expanded]").first
+    was = chevron.get_attribute("aria-expanded")
+    count = group.locator(":scope > span[title]").first.bounding_box()
+    page.touchscreen.tap(count["x"] + count["width"] / 2, count["y"] + count["height"] / 2)
+    expect(chevron, "a tap on Not on a to-do's count folds it").not_to_have_attribute("aria-expanded", was)
+    page.wait_for_timeout(400)
+    name = group.locator("button:not([aria-label])").first.bounding_box()
+    page.touchscreen.tap(name["x"] + name["width"] / 2, name["y"] + name["height"] / 2 - 15)
+    expect(chevron, "a tap 15 px above Not on a to-do's title folds it back").to_have_attribute("aria-expanded", was)
+    ok(f"By to-do: its {len(heights)} rows are 44 px tall and fold from their count and from just above their title")
+    ctx.close()
+
+    ctx, page = phone(browser, 844, 390)
+    sign_in(page, base, token)
+    page.goto(base + "/overview")
+    side_button(page).tap()
+    page.wait_for_timeout(500)
+    hints = page.evaluate("() => [...document.querySelectorAll('aside button kbd')].map((k) => k.getBoundingClientRect().width)")
+    assert hints and all(width == 0 for width in hints), hints
+    ok("844×390: the drawer's search box shows no ⌘K (no keyboard to press it on)")
+    ctx.close()
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("base")
@@ -694,6 +823,7 @@ def main():
         offline(browser, base, a.token, a.shots)
         palette_back(browser, base, a.token)
         composer_back(browser, base, a.token, a.shots)
+        agents_list_phone(browser, base, a.token, a.shots)
         browser.close()
     print("PASS web mobile shell e2e")
 
