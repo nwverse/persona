@@ -54,7 +54,7 @@ type handover struct {
 	From    string `json:"from"`     // the sending conversation
 	To      string `json:"to"`       // the receiving conversation …
 	ToTitle string `json:"to_title"` // … by its name when it was sent
-	// Conversation and MessageID: where the owner wrote the words (BriefRequest's).
+	// Conversation and MessageID: where the owner wrote the words (the quote's; for a part of a message, that message).
 	Conversation string    `json:"conversation"`
 	MessageID    string    `json:"message_id"`
 	State        string    `json:"state"`
@@ -123,7 +123,7 @@ func (b *handoverBook) saveLocked(s *Service, now time.Time) {
 // handoverFor is the hand-over a conversation_send from → to (toTitle) is when it carries the owner's verified words
 // (quote): its id goes on the message (relayMsg.Handover). "" when it is none: no quote, or neither end is a
 // direction's lead. It becomes an entry only once the send is accepted; done forgets it if it was not.
-func (s *Service) handoverFor(ctx context.Context, from, to, toTitle string, quote *BriefRequest) (string, func()) {
+func (s *Service) handoverFor(ctx context.Context, from, to, toTitle string, quote *relayRequest) (string, func()) {
 	if quote == nil || !s.isLeader(ctx, from) && !s.isLeader(ctx, to) {
 		return "", func() {}
 	}

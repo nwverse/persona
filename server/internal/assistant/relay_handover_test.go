@@ -369,7 +369,7 @@ func TestHandoversAreKeptLikeTheQuotes(t *testing.T) {
 	store := &memStore{}
 	s, _ := newQuietServiceOn(t, store)
 	setSettings(t, s, func(v *Settings) { v.Leaders = []string{"lead1"} })
-	quote := &BriefRequest{Conversation: "conv1", MessageID: "m1", Text: quotedWords}
+	quote := &relayRequest{BriefRequest: BriefRequest{Conversation: "conv1", MessageID: "m1", Text: quotedWords}}
 	if id, done := s.handoverFor(ctx, "conv1", "conv2", "Research", quote); id != "" {
 		done()
 		t.Fatalf("a hand-over between two conversations neither of which is a lead: %s", id)
