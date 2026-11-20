@@ -219,7 +219,7 @@ type Kernel interface {
 | A1 | Android contracts slice and a module-edge ratchet | Low: new files; `docs/android/android.md` has 2 open PRs | now |
 | A2 | Pure reply and hand-off types into the slice | Low: no open PR on the files (#10396 touches only `InboxTopBar.kt` and strings in the feature), but they are hot | now, landed fast |
 | A3 | `:core:inbox`; core:data off feature:inbox | Medium: `RealInboxRepository.kt`, the feature's `InboxRepository.kt` and the app's `InboxModule.kt` are hot (32, 27, 21 commits) with no open PR; about 68 test files implement the repository, one of them (`InboxShowcaseShotsTest.kt`) in the open #9823 repair PRs | after A2 |
-| I1 | Tier into PersonaWire; the PersonaInbox package | Low: #4512's and #7495's hunks in `apple/Shared/InboxModels.swift` miss the enum; `InboxBar.swift` has no open PR; `apple/project.yml` (2 open PRs) only gains entries | now |
+| I1 | Tier into PersonaWire; the PersonaInbox package | Low: #4512's and #7495's hunks in `apple/Shared/InboxModels.swift` miss the enum; `InboxBar.swift` has no open PR; #4512, #7495 and #11282 edit `InboxView.swift` but not its empty-state block, which loses only `EmptyKind` and `emptyKind`; `apple/project.yml` (2 open PRs) only gains entries | now |
 
 ### S1. Kernel package, with saved as its first user
 - **Change:** server/internal/assistant/kernel with Module and a Kernel of saved.Host's five members.
@@ -367,11 +367,17 @@ type Kernel interface {
   PersonaWire. It is not Codable (items carry the tier as a string), so cache and watch bytes do not change; its
   localized title stays an extension in Shared. The new package takes the pure section-bar decisions from
   `apple/Persona/Views/Inbox/InboxBar.swift` (`Rows`, entries, shown, empty, draws, `InboxBarState`, and `InboxChoice`
-  without its title); the landing, `Rows.init` from `InboxProjection` and `InboxBarLanding` stay in the app. The Rows
-  unit cases move to `swift test`; the `bar*.json` replay goes through `InboxProjection`, so it stays in PersonaTests.
-- **Done when:** `swift test` passes in both packages without a simulator; iOS and watch builds pass with `-jobs 4`, a
-  generic destination and `scripts/persona_config.py xcconfig`, naming the Xcode used or "26.0 not verified"; the PR
-  carries the `docs/apple/performance.md` checklist; `scripts/i18n/apple_l10n.py` sync shows no string change.
+  without its title), with what `empty` returns and calls: the nonisolated `EmptyKind` enum and
+  `emptyKind(source:kind:query:)`, now nested in the SwiftUI `InboxPage` (`apple/Persona/Views/Inbox/InboxView.swift`),
+  which keeps a typealias and a forwarding `emptyKind` so its callers and tests compile unchanged. The empty-state
+  titles, messages and views, the landing, `waiting` (it reads Shared's `Interaction` and `SessionKey`), `Rows.init`
+  from `InboxProjection` (it now starts with the package's public `init()`, as an extension of another module's struct
+  must) and `InboxBarLanding` stay in the app. The Rows unit cases move to `swift test`; the `bar*.json` replay goes
+  through `InboxProjection`, so it stays in PersonaTests.
+- **Done when:** PersonaInbox's `Package.swift` depends on PersonaWire alone; `swift test` passes in both packages
+  without a simulator; iOS and watch builds pass with `-jobs 4`, a generic destination and
+  `scripts/persona_config.py xcconfig`, naming the Xcode used or "26.0 not verified"; the PR carries the
+  `docs/apple/performance.md` checklist; `scripts/i18n/apple_l10n.py` sync shows no string change.
 
 **Later, not planned in detail:** the web store, API and page modules as they go quiet; the Apple views (after #4512 and
 #7495) and the item (with the compatibility tests); Android's other feature edges; the deferred S3 moves; Lark after D9.
