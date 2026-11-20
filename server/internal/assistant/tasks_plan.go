@@ -232,6 +232,14 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			a.Tasks[i].UserRequested = false
 		}
 	}
+	// A turn another conversation's message started (#11699): the owner wrote nothing there, so "the user asked for
+	// this" holds only for their verified words that message carried, and not even then in a direction's lead, which a
+	// hand-over can reach by mistake.
+	if scope == nil && slices.ContainsFunc(a.Tasks, func(t PlanTask) bool { return t.UserRequested }) && s.relayedTurnWaits(ctx, machine, sessionID, a.Tasks) {
+		for i := range a.Tasks {
+			a.Tasks[i].UserRequested = false
+		}
+	}
 	var round Task
 	var inRound bool
 	if scope == nil && !s.inHealth(ctx, sessionID) {

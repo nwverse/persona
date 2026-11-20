@@ -141,6 +141,24 @@ func (s *Service) planBriefs(ctx context.Context, machine, conversation string, 
 	return nil
 }
 
+// relayedTurnWaits: the turn in which conversation (on machine) plans tasks was started by another conversation's
+// message (briefOrigin's trigger conversation), and the owner's Start is still needed for what they asked for
+// (user_requested, #11699): that message carried no verified quote of theirs, or conversation is a direction's lead,
+// where a hand-over meant for another lead could start writable work in the wrong place before the owner sees it. It
+// reads the origin the plan's briefs took (planBriefs), or, for a plan whose every task continues another, once here.
+func (s *Service) relayedTurnWaits(ctx context.Context, machine, conversation string, tasks []PlanTask) bool {
+	var origin briefRecord
+	if i := slices.IndexFunc(tasks, func(t PlanTask) bool { return t.Continues == "" && t.Brief != nil }); i >= 0 {
+		origin = tasks[i].Brief.briefRecord
+	} else {
+		origin = s.briefOrigin(ctx, machine, conversation)
+	}
+	if origin.Trigger != "conversation" {
+		return false
+	}
+	return origin.Request == nil || s.isLeader(ctx, conversation)
+}
+
 // checkContinuationScope rejects a plan that was prepared against a different
 // revision of the original brief. ClockAt advances for every scope entry,
 // including changes that keep the effective criteria and expected time.
