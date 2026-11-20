@@ -1512,9 +1512,7 @@ extension AssistantSidebar {
             TodoPlaceRows(shown: shownPlace == .todos, open: run, folded: $todosFolded) { selected, run, fold in
                 todosHead(selected: selected, run: run, fold: fold)
             } row: { item in
-                action(item.title, item.symbol, id: item.identifier, count: item.count, child: true, selected: item.selected,
-                       run: item.run)
-                    .padding(.top, item.gapBefore ? Theme.Space.m : Theme.Space.flush)
+                todoPlaceRow(item)
             }
         } else {
             action(String(localized: "To-dos"), Theme.Icon.todo, id: "sidebar-todos", count: TodoStore.shared.sidebarCount, place: .todos, run: run)
@@ -1546,43 +1544,47 @@ extension AssistantSidebar {
                     }
             }
         } else {
-            action(title, Theme.Icon.todo, id: "sidebar-todos", count: count, selected: selected, run: run)
+            action(title, Theme.Icon.todo, id: "sidebar-todos", count: count, place: .todos, run: run)
         }
+    }
+
+    /// A To-dos place under To-dos: the sidebar's row, set in so its symbol is where To-dos' words start. Its own
+    /// function, so the rows every sidebar draws keep their stack frames (`MainPagesStackTests`).
+    @ViewBuilder private func todoPlaceRow(_ item: TodoPlaceRowItem) -> some View {
+        HStack(spacing: Theme.Sidebar.gap) {
+            Color.clear.scaledFrame(width: Theme.Sidebar.glyphColumn)
+            if AppStyle.current.usesBeautifulUI {
+                BUISidebarRow(item.title, symbol: Theme.Icon.styled(item.symbol), isActive: item.selected, action: item.run) {
+                    if item.count > 0 { CountBadge(count: item.count, look: .needs) }
+                }
+                .accessibilityIdentifier(item.identifier)
+            } else {
+                plainAction(item.title, item.symbol, id: item.identifier, count: item.count, selected: item.selected, run: item.run)
+            }
+        }
+        .padding(.top, item.gapBefore ? Theme.Space.m : Theme.Space.flush)
     }
     #endif
 
-    /// A place to go; `place`: what it shows beside the Sidebar layout's sidebar, its row shaded while it does (or
-    /// `selected`, where the row says more than the page: a To-dos place). `child`: set in under the row above it.
+    /// A place to go; `place`: what it shows beside the Sidebar layout's sidebar, its row shaded while it does.
     @ViewBuilder private func action(_ title: String, _ symbol: String, id: String? = nil, count: Int = 0, place: ShellPage? = nil,
-                                     child: Bool = false, selected: Bool? = nil, run: @escaping () -> Void) -> some View {
-        let selected = selected ?? (place != nil && place == shownPlace)
+                                     run: @escaping () -> Void) -> some View {
+        let selected = place != nil && place == shownPlace
         if AppStyle.current.usesBeautifulUI {
             // SidebarNav's primary items.
-            if child {
-                HStack(spacing: Theme.Sidebar.gap) {
-                    Color.clear.scaledFrame(width: Theme.Sidebar.glyphColumn)
-                    BUISidebarRow(title, symbol: Theme.Icon.styled(symbol), isActive: selected, action: run) {
-                        if count > 0 { CountBadge(count: count, look: .needs) }
-                    }
-                    .accessibilityIdentifier(id ?? "sidebar-" + title)
-                }
-            } else {
-                BUISidebarRow(title, symbol: Theme.Icon.styled(symbol), isActive: selected, action: run) {
-                    if count > 0 { CountBadge(count: count, look: .needs) }
-                }
-                .accessibilityIdentifier(id ?? "sidebar-" + title)
+            BUISidebarRow(title, symbol: Theme.Icon.styled(symbol), isActive: selected, action: run) {
+                if count > 0 { CountBadge(count: count, look: .needs) }
             }
+            .accessibilityIdentifier(id ?? "sidebar-" + title)
         } else {
-            plainAction(title, symbol, id: id, count: count, selected: selected, child: child, run: run)
+            plainAction(title, symbol, id: id, count: count, selected: selected, run: run)
         }
     }
 
     private func plainAction(_ title: String, _ symbol: String, id: String? = nil, count: Int = 0, selected: Bool = false,
-                             child: Bool = false, run: @escaping () -> Void) -> some View {
+                             run: @escaping () -> Void) -> some View {
         Button(action: run) {
             HStack(spacing: Theme.Sidebar.gap) {
-                // Set in under the row above: its symbol where that row's words start.
-                if child { Color.clear.scaledFrame(width: Theme.Sidebar.glyphColumn) }
                 // One box for every symbol: a wide one (Knowledge's books) scales down into it instead of pushing its words.
                 Image(systemName: symbol).resizable().scaledToFit().fontWeight(isShell ? .medium : .regular).foregroundStyle(Color.primary)
                     .scaledFrame(width: Theme.Sidebar.glyph, height: Theme.Sidebar.glyph)
