@@ -148,7 +148,7 @@ func (s *Service) sendDigest(ctx context.Context) {
 	b.last = now
 	b.mu.Unlock()
 	if gating {
-		defer s.rescheduleSupervision() // an early screening return must not strand another recipient's deferred batch
+		defer s.schedulePendingSupervision() // an early return must not strand another batch or override delivery backoff
 	}
 
 	list = s.screenMechanicalSignals(ctx, list, now, prev)

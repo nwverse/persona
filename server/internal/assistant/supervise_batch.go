@@ -212,6 +212,17 @@ func (s *Service) rescheduleSupervision() {
 	}
 }
 
+// schedulePendingSupervision arms a batch stranded by an early screening return. Delivery failures already set a
+// retry timer: preserve that backoff instead of making an old pending signal immediately due again.
+func (s *Service) schedulePendingSupervision() {
+	b := &s.supervise
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.timer == nil && len(b.pending) > 0 {
+		s.scheduleDigestLocked(time.Now())
+	}
+}
+
 func (s *Service) setSupervisionBatchMinutes(ctx context.Context, raw json.RawMessage) (*ownChange, error) {
 	var input *int
 	if err := json.Unmarshal(raw, &input); err != nil || input == nil || *input < 0 || *input > maxSupervisionBatchMinutes {

@@ -149,6 +149,22 @@ func TestRoutineCooldownDefault(t *testing.T) {
 	}
 }
 
+func TestRoutineBatchSchedulingPreservesDeliveryRetry(t *testing.T) {
+	s := &Service{}
+	s.supervise.init()
+	g := superviseSignal{Todo: "todo_retry", Kind: sigIdle, Key: "idle", At: time.Now().Add(-time.Hour)}
+	s.supervise.pending[g.id()] = g
+	s.supervise.mu.Lock()
+	s.retryDigestLocked(time.Hour)
+	deadline := s.supervise.timerAt
+	s.supervise.mu.Unlock()
+	t.Cleanup(func() { s.supervise.timer.Stop() })
+	s.schedulePendingSupervision()
+	if !s.supervise.timerAt.Equal(deadline) {
+		t.Fatalf("batch scheduling overrode delivery backoff: got %v, want %v", s.supervise.timerAt, deadline)
+	}
+}
+
 func TestDisablingOptionalBatchReleasesPendingRoutineSignals(t *testing.T) {
 	s, f, todo := newSupervisedService(t)
 	shortSupervise(t, s)
