@@ -210,7 +210,8 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 			t.Queue = s.prerequisiteQueue(ctx, *t, s.requestBlockers(ctx, *t))
 		}
 		s.briefStarted(ctx, p, t, todo) // what was asked, kept from now on (task_brief_plan.go)
-		s.setTaskStageKind(ctx, todo.ID, "", "", taskStageKind(t.Readonly, t.DoneWhen, todo.PRURL), false)
+		// Its stage kind from that brief; how it is handed out is kept for every later look (task_stage_kind.go).
+		s.restage(ctx, todo.ID, func(st *todoStage) { st.Readonly = t.Readonly })
 		if sup := supervisors[i]; sup != "" {
 			if t.Parent == "" && t.ReuseTodo == "" && sup != p.Conversation {
 				s.taskCard(ctx, sup, todo.ID, "")
@@ -381,7 +382,8 @@ func (s *Service) todoAgentStopped(ctx context.Context, a TodoAgent) bool {
 // closed or taken since the plan was made) and held until the task's agent is linked (releaseTakenTodo). The hold is
 // also the to-do's one start on its way (claimTaskStart, which a Retry and task_retry take too), so a Retry of a failed
 // start and a plan taking it over never both start an agent on it, whichever comes first (#10365). The stopped agents
-// still linked to it are let go first: the new agent is the one working on it.
+// still linked to it are let go first: the new agent is the one working on it, in a new round of the to-do's
+// supervision (startSupervisionRound).
 func (s *Service) takeTodoForTask(ctx context.Context, planID, conversation string, task PlanTask) (Todo, error) {
 	id := task.ReuseTodo
 	s.tasks.mu.Lock()
@@ -461,6 +463,8 @@ func (s *Service) takeTodoForTask(ctx context.Context, planID, conversation stri
 			return Todo{}, err
 		}
 	}
+	// The new Agent's work is a new round of its supervision: an earlier round's acceptance is history now (#11553).
+	s.startSupervisionRound(ctx, id)
 	t, _ := s.todoNow(id)
 	return formatTodo(t), nil
 }

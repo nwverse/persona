@@ -3226,6 +3226,18 @@ if os.environ.get("MOCK_TODO_PROJECTS") == "1":
         _p = {"todo_weather": "weather-app", "todo_review": "weather-app", "todo_photos": "photo-sync", "todo_nas": "photo-sync",
               "todo_blog": "blog"}.get(_t["id"])
         if _p: _t["project"] = _p
+# MOCK_STAGE_DONE=1: the stage strip's endings (#11590, docs/assistant/todos.md "Data model"): a code task accepted with
+# nothing left to deploy, whose strip ends with Done after Develop (stage_done), and a check of real data still running,
+# general work that draws no strip at all.
+if os.environ.get("MOCK_STAGE_DONE") == "1":
+    TODOS_INIT.extend([
+        {"id": "todo_stage_done", "title": "Upgrade the command-line tool", "notes": "Upgraded and checked on the laptop.",
+         "done_at": ago(minutes=40), "done_by": "review", "created_at": ago(hours=3), "updated_at": ago(minutes=40),
+         "stage": "develop", "stage_kind": "code", "stage_done": True, "spaces": [], "agents": []},
+        {"id": "todo_stage_general", "title": "Check the new rule against real data", "notes": "", "done_at": None,
+         "created_at": ago(hours=1), "updated_at": ago(minutes=5), "stage": "develop", "stage_kind": "general",
+         "spaces": [], "agents": []},
+    ])
 TODOS = copy.deepcopy(TODOS_INIT)
 
 _DIRECTION_STATE_ORDER = {"needs_you": 0, "review": 1, "stuck": 2, "working": 3, "planned": 4}
@@ -10682,6 +10694,10 @@ def mock_interactions():
         # MOCK_TASKS_NO_ASKS=1: the tasks' agents ask nothing, so the conversation shows above the composer whole.
         if os.environ.get("MOCK_TASKS_NO_ASKS") == "1":
             out = [x for x in out if x.get("session_id") not in (TESTS, WIDGET, RELEASE)]
+        # A blocked Agent folder's sessions send no cards: the node keeps them on the computer (#10053).
+        if AGENT_DIRS_HIDDEN:
+            cwds = {(r["machine_id"], r["session_id"]): r.get("cwd") for r in SESSIONS}
+            out = [x for x in out if not _hidden_by_directory(x.get("machine_id"), cwds.get((x.get("machine_id"), x.get("session_id"))) or x.get("cwd"), "block")]
         if MOCK_TASKS:  # a task's agent asking: the hub names the task (task_title)
             titles = {a["session_id"]: t["title"] for t in TODOS if t.get("origin") and not t.get("done_at") for a in t.get("agents", [])}
             out = [dict(x, task_title=titles[x["session_id"]]) if x.get("session_id") in titles else x for x in out]
@@ -11761,8 +11777,9 @@ _CLAUDE_DIRS = [("~/.claude", "default", 0, 86), ("~/.config/claude/work", "conf
 
 
 # Settings › Agent › Hidden Agent Folders (#8578, docs/protocol/protocol.md "Agent directory visibility"): machine id →
-# [{pattern, enabled}]. Rows whose cwd an enabled rule matches carry hidden_by_directory; bounded lists leave them out
-# unless include_hidden=1, the legacy list and the sockets keep them. A change pushes that computer's rows and replays
+# [{pattern, enabled, action}]. Rows whose cwd an enabled hide rule matches carry hidden_by_directory; bounded lists leave
+# them out unless include_hidden=1, the legacy list and the sockets keep them. Rows an enabled block rule matches are
+# not there at all, as a node that blocks them lists none (#10053). A change pushes that computer's rows and replays
 # its pending cards, as the manager does; the cards never leave the inventory.
 AGENT_DIRS_HIDDEN = {}
 AGENT_DIRS_FAIL = {"n": 0}  # GET /mock/agent_dirs_fail?n=<count>: the next n reads of the list answer 503
@@ -11772,14 +11789,15 @@ def _machine_home(mid):
     return next((m.get("home") for m in MACHINES if m["id"] == mid), "") or "/home/me"
 
 
-def _hidden_by_directory(mid, cwd):
+def _hidden_by_directory(mid, cwd, action="hide"):
+    """An enabled rule of that action matches cwd."""
     import fnmatch
     if not cwd:
         return False
     home, parts = _machine_home(mid), [x for x in cwd.split("/") if x]
     for r in AGENT_DIRS_HIDDEN.get(mid, []):
         pat = r["pattern"]
-        if not r.get("enabled", True):
+        if not r.get("enabled", True) or r.get("action", "hide") != action:
             continue
         if pat.startswith("*"):
             if any(fnmatch.fnmatchcase(x, pat) for x in parts):
@@ -11806,7 +11824,10 @@ def _set_agent_dirs_hidden(mid, body):
             return None, "bad pattern %r: a path or glob starting with / or ~/, or * for a folder name" % pat
         if any(x["pattern"] == pat for x in rules):
             return None, "duplicate pattern %r" % pat
-        rules.append({"pattern": pat, "enabled": r.get("enabled", True) is not False})
+        action = r.get("action") or "hide"
+        if action not in ("block", "hide"):
+            return None, "action %r is neither block nor hide" % action
+        rules.append({"pattern": pat, "enabled": r.get("enabled", True) is not False, "action": action})
     AGENT_DIRS_HIDDEN[mid] = rules
     push_machine(mid)
     for ix in out_by_machine([x for x in mock_interactions() if x.get("machine_id") == mid]):
@@ -18465,7 +18486,7 @@ def all_sessions():
     if not AGENT_DIRS_HIDDEN:
         return rows
     return [dict(r, hidden_by_directory=True) if not r.get("assistant") and _hidden_by_directory(r["machine_id"], r.get("cwd")) else r
-            for r in rows]
+            for r in rows if r.get("assistant") or not _hidden_by_directory(r["machine_id"], r.get("cwd"), "block")]
 
 
 def is_child_row(r):

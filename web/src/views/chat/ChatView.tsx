@@ -71,7 +71,7 @@ import { AWAIT_MS, awaitingTurn, DOCK_MAX, turnStart } from "./dock";
 import { HEADER_SLOT, HEADER_SLOT_END, HEADER_SLOT_START } from "./header";
 import { AgentModelPill, AssistantModelPill, useAssistantTurnFix } from "./ModelPill";
 import { switchRefused } from "../../lib/session-models";
-import { mediaMatches, NARROW, NO_HOVER, SHORT, useFinePointer, useMedia } from "../../lib/viewport";
+import { mediaMatches, NARROW, NO_HOVER, PHONE, SHORT, useFinePointer, useMedia } from "../../lib/viewport";
 import { UserBubble } from "./SegmentView";
 import { LatestMessageTime } from "./latest-message-time";
 import { scrollsAFold } from "./fold-scroll";
@@ -1346,6 +1346,14 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       stopDone();
     }
   }, [mid, sid, stopDone]);
+  // Ctrl/⌘+Enter in the box: the queue panel's Send now (QueuePanel.tsx), after the message is queued
+  const sendQueueNow = useCallback(async () => {
+    try {
+      await api(`${sessionPath(mid, sid)}/queue/send-now`, { method: "POST", json: {} });
+    } catch (e) {
+      toast(t("chat-chatview.send_now_failed", { error: errorText(e) }), "error");
+    }
+  }, [mid, sid]);
   // the turn ended, and not necessarily by this stop
   useEffect(() => {
     if (state !== "working") stopDone();
@@ -2044,11 +2052,9 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // says a worker needs you while the panel is shut
   const showConversationTasks = Boolean((assistant || inPage) && !embedded && !chrome && session?.space !== "health");
   const conversationTasksOpen = panel?.kind === "conversation-tasks" && panel.mid === mid && panel.sid === sid;
-  const chatHeaderActions = useMemo(() => showConversationTasks ? <>
-    <IconButton icon="todo" label={t("sidepanel.conversation_tasks")} active={conversationTasksOpen}
-      onClick={() => togglePanel({ kind: "conversation-tasks", mid, sid, manager: skillManager })} />
-    {headerActions}
-  </> : headerActions, [showConversationTasks, conversationTasksOpen, mid, sid, skillManager, headerActions]);
+  const conversationTasks = useMemo(() => (showConversationTasks
+    ? { open: conversationTasksOpen, onToggle: () => togglePanel({ kind: "conversation-tasks", mid, sid, manager: skillManager }) }
+    : undefined), [showConversationTasks, conversationTasksOpen, mid, sid, skillManager]);
   const teamCount = leads ? workerCount(session) : 0;
   const teamNeeds = workers.some((w) => stateOf(w) === "needs_you");
   const toggleTeam = useCallback(() => {
@@ -2122,7 +2128,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         onTerminal={openTerminal}
         viewDot={view === "term" && (interactions.length > 0 || state === "needs_you")}
         termDot={terminalWaits(session, interactions, outbox)}
-        actions={chatHeaderActions}
+        actions={headerActions}
+        tasks={conversationTasks}
         team={team}
         sides={sideControl}
         panel={chrome}
@@ -2156,8 +2163,10 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
             ) : <div role="alert" className="rounded-control bg-inset px-3 py-2 text-[13px] text-red">{t("chat-chatview.start_failed", { error: session.start_error })}</div>)}
             {session?.start_error_code === "shell_waiting" && <Suspense fallback={null}><ShellQuestion session={session} /></Suspense>}
             {starting && !tr.loading && !outgoing && <Loading label={t("chat-chatview.starting_agent")} />}
+            {/* over the content's top padding, in the scroller: starting and ending an older page move nothing on screen,
+                and nothing writes scrollTop for it (that would stop a touch fling) */}
             {earlier.loadingEarlier && (
-              <div className="flex justify-center py-2">
+              <div data-loading-earlier className="pointer-events-none absolute inset-x-0 top-1 flex justify-center">
                 <Loading label={t("chat-chatview.loading_earlier")} />
               </div>
             )}
@@ -2378,6 +2387,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
           working={state === "working" || awaiting}
           needsYou={state === "needs_you"}
           onSend={send}
+          onSendNow={session && (assistant || (session.agent === "claude" && session.source_kind !== "runtime")) ? sendQueueNow : undefined}
           disabled={Boolean(offlineLine) || (!noRow && !hydrating && !sessionCan(session, "send"))}
           onEditLastMessage={onEditLastMessage}
           editingLast={editProp}
@@ -2485,7 +2495,7 @@ function NotLivePill({ onReload, lower, error }: { onReload: () => void; /** The
     <div role="status" data-testid="chat-not-live" className={lower ? "absolute top-14 left-1/2 z-10 -translate-x-1/2" : "absolute top-3 left-1/2 z-10 -translate-x-1/2"} style={{ animation: "fade-up 150ms ease-out both" }}>
       <div className="flex h-8 items-center gap-2 rounded-full border border-line bg-surface px-3 text-[12px] leading-none whitespace-nowrap text-ink-2 shadow-raised">
         <span title={error}>{t(error ? "chat-chatview.refresh_failed" : "chat-chatview.not_live")}</span>
-        <button type="button" onClick={onReload} className="font-medium text-accent-ink hover:underline">
+        <button type="button" onClick={onReload} className="touch-hit font-medium text-accent-ink hover:underline">
           {t("chat-chatview.not_live_reload")}
         </button>
       </div>
@@ -2501,7 +2511,7 @@ function ReturnPill({ onClick }: { onClick: () => void }) {
         type="button"
         onClick={onClick}
         data-search-return
-        className="flex h-8 items-center gap-1.5 rounded-full border border-line bg-surface px-3 py-1.5 text-[12px] leading-none font-medium whitespace-nowrap text-ink-2 shadow-raised transition-colors duration-150 hover:bg-hover active:scale-[0.98]"
+        className="touch-hit flex h-8 items-center gap-1.5 rounded-full border border-line bg-surface px-3 py-1.5 text-[12px] leading-none font-medium whitespace-nowrap text-ink-2 shadow-raised transition-colors duration-150 hover:bg-hover active:scale-[0.98]"
       >
         <Icon name="arrowLeft" size={14} className="shrink-0" />
         <span className="translate-y-[0.5px]">{t("chat-chatview.search_return")}</span>
@@ -2519,7 +2529,7 @@ function JumpPill({ label, onClick, inline }: { label: string; onClick: () => vo
         onClick={onClick}
         aria-label={label}
         data-jump-pill
-        className="flex h-8 items-center gap-1.5 rounded-full border border-line bg-surface px-3 py-1.5 text-[12px] leading-none font-medium whitespace-nowrap text-ink-2 shadow-raised transition-colors duration-150 hover:bg-hover active:scale-[0.98]"
+        className="touch-hit flex h-8 items-center gap-1.5 rounded-full border border-line bg-surface px-3 py-1.5 text-[12px] leading-none font-medium whitespace-nowrap text-ink-2 shadow-raised transition-colors duration-150 hover:bg-hover active:scale-[0.98]"
       >
         <Icon name="arrowDown" size={14} className="shrink-0" />
         <span className="translate-y-[0.5px]">{label}</span>
@@ -2622,6 +2632,7 @@ export const Header = memo(function Header({
   viewDot,
   termDot,
   actions,
+  tasks,
   team,
   sides,
   panel: chrome,
@@ -2658,6 +2669,8 @@ export const Header = memo(function Header({
   termDot?: boolean;
   /** The page's own buttons, at the end of the right side (ChatView `headerActions`). */
   actions?: React.ReactNode;
+  /** The conversation's tasks panel: a button from 640 px, a row of ⋯ on a phone (the title keeps its room there). */
+  tasks?: { open: boolean; onToggle: () => void };
   /** A lead with workers (#5180): its Team panel's button, whether the panel is open, and whether a worker needs you. */
   team?: { open: boolean; needs: boolean; onToggle: () => void };
   /** A session with side sessions (#7944): how many, whether its Side sessions panel is open, whether one needs you. */
@@ -2671,6 +2684,7 @@ export const Header = memo(function Header({
   const identity = useAssistantIdentity();
   const layout = useLayout();
   const narrow = useMedia(NARROW);
+  const phone = useMedia(PHONE);
   // A rail and a phone drawer have no assistant head beside the page. Older hubs have a product head instead.
   const headBesidePage = !narrow && sidebarShown(layout) && !sidebarRail(layout) && identity !== null;
   const menu = useMenu();
@@ -2766,6 +2780,8 @@ export const Header = memo(function Header({
   const feishu = externalLink(session);
   const linkedTodo = session?.todo ?? session?.completed_todo;
 
+  // Conversation tasks' button gives way on a phone: ⋯ has it there, also before the session is in
+  const tasksItem: MenuItem[] = tasks && phone ? [{ key: "conversation-tasks", label: t("sidepanel.conversation_tasks"), icon: "todo", checked: tasks.open, onSelect: tasks.onToggle }] : [];
   const own: MenuItem[] = session
     ? [
         // the space's other agents (#5421: in ⋯ at every width, as cindy's header has no such button)
@@ -2823,6 +2839,7 @@ export const Header = memo(function Header({
           ? [{ key: "resume-terminal", label: t("chat-chatview.resume_in_terminal"), icon: "play" as const, disabled: resumeOffer === "no_engine", detail: resumeOffer === "no_engine" ? t("chat-chatview.resume_no_engine", { computer: machineName }) : undefined, onSelect: resumeHere }]
           : []),
         ...(showFiles ? [{ key: "files", label: t("chat-chatview.files"), icon: "folder" as const, checked: here(panel, "files"), onSelect: openFiles }, { key: "git", label: "Git", icon: "git" as const, checked: here(panel, "git"), onSelect: openGit }, ...(reviews ? [{ key: "review", label: t("chat-chatview.review_changes"), icon: "pullRequest" as const, checked: here(panel, "review"), onSelect: openReview }] : [])] : []),
+        ...tasksItem,
         ...sessionReviewItems,
         // a run of a comparison (#8916): back to its runs' page
         ...(compare ? [{ key: "compare", label: compare.label, icon: "branch" as const, onSelect: () => navigate({ name: "compare", id: compare.id }) }] : []),
@@ -2846,7 +2863,7 @@ export const Header = memo(function Header({
           : archiveCloseItems(session, features)),
         ...(!archived && offerSessionDelete(session, features) ? [{ key: "delete", label: t("chat-chatview.delete_chat"), icon: "trash" as const, danger: true, onSelect: () => setDialog("delete") }] : []),
       ]
-    : [];
+    : tasksItem;
   // a side panel's own rows (Open in new window, Remove task…) at the top of ⋯
   const panelItems = chrome?.items ?? [];
   const items: MenuItem[] = panelItems.length > 0 && own.length > 0 ? [...panelItems, { ...own[0], divider: true }, ...own.slice(1)] : [...panelItems, ...own];
@@ -2966,6 +2983,7 @@ export const Header = memo(function Header({
       )}
       {/* wide screens have New chat at the top of the sidebar; a phone's sidebar is a drawer */}
       {assistant && !chrome && session?.space !== "health" && <IconButton icon="compose" label={t("chat-chatview.new_chat")} onClick={() => navigate({ name: "persona-new" })} className="lg:hidden" />}
+      {tasks && <IconButton icon="todo" label={t("sidepanel.conversation_tasks")} active={tasks.open} onClick={tasks.onToggle} className="hidden sm:flex" />}
       {!chrome && actions}
       {!assistant && session && (session.agent === "codex" || session.source_kind === "codex_history" || session.source_kind === "codex_app_server") &&
         <Suspense fallback={null}><TakeoverAction key={`${session.machine_id}:${session.session_id}`} session={session} /></Suspense>}

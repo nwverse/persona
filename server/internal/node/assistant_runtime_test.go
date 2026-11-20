@@ -81,6 +81,31 @@ func startedAssistant(t *testing.T, n *Node, host *fakeRuntime) string {
 	return res.SessionID
 }
 
+func TestRuntimeAssistantModeForwardsAssistant(t *testing.T) {
+	n, hub := runtimeNode(t)
+	assistantHub(hub)
+	host := dialRuntime(t, n, assistantRuntimeHello())
+	id := startedAssistant(t, n, host)
+	if _, err := nodeCall(t, n, "session.modes", map[string]any{"session_id": id, "permission_mode": "plan"}); err != nil {
+		t.Fatal(err)
+	}
+	calls := host.got("session.modes")
+	if len(calls) != 1 {
+		t.Fatalf("session.modes calls: %s", calls)
+	}
+	var got struct {
+		SessionID string `json:"session_id"`
+		Mode      string `json:"permission_mode"`
+		Assistant bool   `json:"assistant"`
+	}
+	if err := json.Unmarshal(calls[0], &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.SessionID != id || got.Mode != "plan" || !got.Assistant {
+		t.Fatalf("session.modes payload: %s", calls[0])
+	}
+}
+
 func TestAssistantOnARuntimeStartsAndSendsWithTheSnapshot(t *testing.T) {
 	n, hub := runtimeNode(t)
 	assistantHub(hub)
