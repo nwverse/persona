@@ -899,10 +899,11 @@ nonisolated struct APIClient: Sendable {
     /// The models the launcher's agent lists in its /model menu (New Agent's model picker). The node starts the CLI to
     /// ask (a few seconds, kept 10 minutes); refresh asks it again. Assistant purpose asks the shell launcher's list,
     /// even when the computer's Agent engine has a provider of the same name.
-    func launcherModels(machine: String, launcher: String, refresh: Bool = false, purpose: String? = nil) async throws -> LauncherModels {
+    func launcherModels(machine: String, launcher: String, refresh: Bool = false, purpose: String? = nil, host: String? = nil) async throws -> LauncherModels {
         let path = "/api/v1/machines/\(machine)/launchers/\(launcher.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? launcher)/models"
         var query = refresh ? ["refresh": "1"] : [:]
         if let purpose { query["purpose"] = purpose }
+        if let host, !host.isEmpty { query["host"] = host }
         let client = purpose == "assistant" ? currentAssistantSettings() : self
         return try JSON.decoder.decode(LauncherModels.self, from: await client.request("GET", path, query: query, timeout: 75))
     }
@@ -1116,7 +1117,9 @@ nonisolated struct APIClient: Sendable {
             let routed = try await preparedForRequest()
             return try await routed.fullItem(k, id: id)
         }
-        if config.isDemo { return try JSON.decoder.decode(Item.self, from: try await request("GET", sp(k) + "/items/\(id)/full")) }
+        if config.isDemo || transport != nil {
+            return try JSON.decoder.decode(Item.self, from: try await request("GET", sp(k) + "/items/\(id)/full"))
+        }
         var req = URLRequest(url: itemURL(machine: k.machineID, session: k.sessionID, item: id, "full"), timeoutInterval: 60)
         config.authorize(&req)
         req.setValue(LanguageStore.shared.launched, forHTTPHeaderField: "Accept-Language")
@@ -1124,7 +1127,8 @@ nonisolated struct APIClient: Sendable {
         let (data, resp) = try await Self.uncachedSession.data(for: req)
         let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
         guard (200..<300).contains(status) else {
-            throw APIError(status: status, message: APIError.message(in: data) ?? HTTPURLResponse.localizedString(forStatusCode: status))
+            throw APIError(status: status, message: APIError.message(in: data) ?? HTTPURLResponse.localizedString(forStatusCode: status),
+                           fields: APIError.fields(in: data))
         }
         return try await Task.detached(priority: .userInitiated) { try JSON.decoder.decode(Item.self, from: data) }.value
     }

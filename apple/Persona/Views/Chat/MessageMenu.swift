@@ -290,8 +290,9 @@ extension View {
     /// session's Claude), for a forward's author.
     /// delete: one only on this phone ends in Delete (#4626), on the bar and in the plain context menu alike.
     func messageActionBar(id: String, text: String, isUser: Bool, date: Date? = nil, pending: Bool = false, from: String? = nil,
-                          delete: MessageBarDelete? = nil) -> some View {
-        modifier(MessageActionBarHost(id: id, text: text, isUser: isUser, date: date, pending: pending, from: from, delete: delete))
+                          delete: MessageBarDelete? = nil, starItem: Item? = nil, showsStar: Bool = true) -> some View {
+        modifier(MessageActionBarHost(id: id, text: text, isUser: isUser, date: date, pending: pending, from: from,
+                                      delete: delete, starItem: starItem, showsStar: showsStar))
     }
     /// Messages shown with the bar outside the chat's list (the background tasks' drawer): a tap or a drag there closes
     /// it, as on the list, and it closes with the sheet (#1388: it stayed until one of its buttons was used).
@@ -356,7 +357,10 @@ private struct MessageLongPress<P: View>: ViewModifier {
     }
 
     private func lift(_ menu: MessageMenu) {
-        guard let bar else { return }
+        guard var bar else { return }
+        #if os(iOS)
+        bar.starredAction = place.environment?.starredChat?.action(for: bar)
+        #endif
         let f = place.frames
         let press = CGPoint(x: menu.anchor.x - f.row.minX, y: menu.anchor.y - f.row.minY)
         // Drawn over the page, outside the chat, in the environment it had in the chat (`MessageLift.environment`).
@@ -409,6 +413,9 @@ enum MessageSwipe {
 
 private struct MessageActionBarHost: ViewModifier {
     @Environment(MessageMenu.self) private var menu: MessageMenu?
+    #if os(iOS)
+    @Environment(\.layoutDirection) private var direction
+    #endif
     let id: String
     let text: String
     let isUser: Bool
@@ -416,14 +423,22 @@ private struct MessageActionBarHost: ViewModifier {
     let pending: Bool
     let from: String?
     let delete: MessageBarDelete?
+    let starItem: Item?
+    let showsStar: Bool
     @State private var drag: CGFloat = 0
     @State private var armed = false
 
     func body(content: Content) -> some View {
         if let menu {
             swipeable(content, menu)
+                #if os(iOS)
+                .overlay(alignment: .topTrailing) {
+                    // Chat rows leave a gutter on either side. The mark fits there without covering the message.
+                    if showsStar { StarredChatMark(item: starItem).offset(x: direction == .rightToLeft ? -Theme.Space.l : Theme.Space.l) }
+                }
+                #endif
                 .environment(\.messageBar, MessageBarInfo(id: id, text: text, isUser: isUser, date: date, pending: pending, from: from,
-                                                            delete: delete))
+                                                            delete: delete, starItem: starItem))
                 .coordinateSpace(.named(MessageMenu.row))
                 .zIndex(menu.selected == id ? 1 : 0)
         } else {
@@ -483,6 +498,12 @@ private struct MessageActionBarHost: ViewModifier {
     }
 }
 
+struct StarredMenuAction {
+    let title: String
+    let symbol: String
+    let perform: () -> Void
+}
+
 struct MessageActionBar: View {
     var id = ""
     var text: String
@@ -496,6 +517,7 @@ struct MessageActionBar: View {
     /// Only on this phone (`messageActionBar(delete:)`): Delete last, in the danger color.
     var delete: MessageBarDelete?
     var itemWidth: CGFloat = Self.item
+    var starredAction: StarredMenuAction? = nil
 
     static let height: CGFloat = 62
     static let item: CGFloat = 58
@@ -538,7 +560,9 @@ struct MessageActionBar: View {
     }
 
     /// The bar's height, with the Select Messages row when it has one.
-    static func height(selects: Bool) -> CGFloat { selects ? height + selectRow + Theme.Size.hairline : height }
+    static func height(selects: Bool, stars: Bool = false) -> CGFloat {
+        height + CGFloat((selects ? 1 : 0) + (stars ? 1 : 0)) * (selectRow + Theme.Size.hairline)
+    }
     /// The Select Messages row's height: a list row's.
     static let selectRow: CGFloat = 44
 
@@ -612,6 +636,25 @@ struct MessageActionBar: View {
             HStack(spacing: 0) { ForEach(actions) { action($0) } }
                 .padding(.horizontal, Theme.Space.sm)
                 .frame(height: Self.height)
+            if let star = starredAction {
+                Divider().frame(width: width)
+                Button {
+                    star.perform()
+                    menu.close()
+                } label: {
+                    HStack(spacing: Theme.Space.s) {
+                        ThemedIcon(star.symbol).font(Theme.Font.heading).scaledFrame(height: Theme.Size.iconS)
+                        Text(star.title).font(Theme.Font.secondary).lineLimit(1).minimumScaleFactor(0.8)
+                        Spacer(minLength: Theme.Space.flush)
+                    }
+                    .padding(.horizontal, Theme.Space.l)
+                    .frame(width: width, height: Self.selectRow)
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(star.title)
+                .accessibilityIdentifier("chat.starMessage")
+            }
             if Self.selects(id: id, menu: menu, pending: pending) {
                 Divider().frame(width: width)
                 selectRow(width: width)

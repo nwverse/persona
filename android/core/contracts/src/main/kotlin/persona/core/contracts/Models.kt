@@ -102,6 +102,8 @@ data class Machine(
     @SerialName("error_code") val errorCode: String? = null,
     /** The manager it belongs to (docs/assistant/managers.md「Ownership」); null from an older hub: the default manager. */
     @SerialName("manager") val manager: String? = null,
+    /** The default for new sessions among [engineHosts]. Older hubs describe it with [engine]. */
+    @SerialName("engine_default") val engineDefault: String? = null,
 ) {
     val displayName: String get() = name.ifEmpty { id }
     val pending: Boolean get() = trust == "pending"
