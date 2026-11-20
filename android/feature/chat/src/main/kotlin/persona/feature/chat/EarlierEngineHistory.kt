@@ -3,6 +3,7 @@ package persona.feature.chat
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -78,10 +79,12 @@ internal fun currentEngineSnapshot(snapshot: ChatSnapshot, windows: List<EngineH
 internal class EarlierEngineHistory(private val repository: ChatRepository) {
     private var sources by mutableStateOf<Map<SessionKey, EngineHistorySource>>(emptyMap())
     private var ignoreSeed by mutableStateOf<Set<SessionKey>>(emptySet())
+    private var liveGeneration: Pair<SessionKey, String>? = null
+    private val generations = mutableMapOf<SessionKey, Long>()
+    private var failure by mutableStateOf<SessionKey?>(null)
     var loading by mutableStateOf(false)
         private set
-    var failed by mutableStateOf(false)
-        private set
+    val failed: Boolean get() = failure != null
     var open by mutableStateOf<Set<EngineLineKey>>(emptySet())
         private set
     var folds by mutableStateOf<Map<EngineLineKey, List<Item>>>(emptyMap())
@@ -92,30 +95,56 @@ internal class EarlierEngineHistory(private val repository: ChatRepository) {
         private set
 
     private fun source(session: SessionKey, current: SessionKey, live: ChatSnapshot): EngineHistorySource? =
-        sources[session] ?: if (session == current && session !in ignoreSeed && live.olderBoundaryKnown && !live.loading)
-            EngineHistorySource(live.items, live.hasOlder, live.history) else null
+        sources[session]?.takeUnless { session == current && session !in ignoreSeed && changedHistory(it.history, live.history) }
+            ?: if (session == current && session !in ignoreSeed && live.olderBoundaryKnown && !live.loading)
+                EngineHistorySource(live.items, live.hasOlder, live.history) else null
+
+    fun observeLiveHistory(current: SessionKey, history: String?) {
+        if (history == null) return
+        val previous = liveGeneration?.takeIf { it.first == current }?.second
+        val cached = sources[current]?.history
+        if (cached == history && current in ignoreSeed) ignoreSeed = ignoreSeed - current
+        else if (changedHistory(previous, history) || changedHistory(cached, history)) reset(current, ignoreLiveSeed = false)
+        liveGeneration = current to history
+    }
+
+    private fun reset(session: SessionKey, ignoreLiveSeed: Boolean) {
+        generations[session] = generation(session) + 1L
+        sources = sources - session
+        ignoreSeed = if (ignoreLiveSeed) ignoreSeed + session else ignoreSeed - session
+        open = open.filterNot { it.window.session == session }.toSet()
+        folds = folds.filterKeys { it.window.session != session }
+        folding = folding.filterNot { it.window.session == session }.toSet()
+        failedFolds = failedFolds.filterNot { it.window.session == session }.toSet()
+        if (failure == session) failure = null
+    }
+
+    private fun generation(session: SessionKey): Long = generations[session] ?: 0L
 
     fun plan(windows: List<EngineHistoryWindow>, current: SessionKey, live: ChatSnapshot, ready: Boolean): EngineHistoryPlan =
         planEarlierEngines(windows, ready) { source(it, current, live) }
 
     suspend fun load(window: EngineHistoryWindow, current: SessionKey, live: ChatSnapshot) {
         if (loading) return
+        val observed = liveGeneration?.takeIf { it.first == window.session }?.second
+        if (window.session == current && changedHistory(live.history, observed)) return
         loading = true
-        failed = false
+        failure = null
         val key = window.session
+        val started = generation(key)
         val old = source(key, current, live)
         try {
             val before = old?.items?.minOfOrNull { it.seq }
             val page = repository.earlierEnginePage(key, before)
+            if (started != generation(key)) return
             if (page == null) {
                 sources = sources + (key to EngineHistorySource(old?.items.orEmpty(), false, old?.history, missing = true))
                 return
             }
-            if (old?.history != null && page.history != null && old.history != page.history) {
-                // A rewind invalidated the cursor. Retry from the new history's newest page.
-                sources = sources - key
-                ignoreSeed = ignoreSeed + key
-                failed = true
+            if (changedHistory(old?.history, page.history)) {
+                // A rewind invalidated the cursor and every fold expanded against it.
+                reset(key, ignoreLiveSeed = true)
+                failure = key
                 return
             }
             val pageStart = page.items.minOfOrNull { it.seq }
@@ -125,14 +154,14 @@ internal class EarlierEngineHistory(private val repository: ChatRepository) {
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
-            failed = true
+            if (started == generation(key)) failure = key
         } finally {
             loading = false
         }
     }
 
     fun toggle(window: EngineHistoryWindow, id: String): Boolean {
-        val key = EngineLineKey(window.index, id)
+        val key = EngineLineKey(window, id)
         val opening = key !in open
         open = if (opening) open + key else open - key
         return opening
@@ -140,25 +169,30 @@ internal class EarlierEngineHistory(private val repository: ChatRepository) {
 
     suspend fun expand(window: EngineHistoryWindow, item: Item) {
         val fold = item.fold ?: return
-        val key = EngineLineKey(window.index, item.id)
+        val key = EngineLineKey(window, item.id)
         if (key in folding || key in folds) return
+        val started = generation(window.session)
         folding = folding + key
         failedFolds = failedFolds - key
         try {
             val items = repository.loadRange(window.session, item.seq, fold.throughSeq)
+            if (started != generation(window.session)) return
             check(items.any { it.id == fold.throughId } && items.none { it.kind == "fold" })
             folds = folds + (key to items)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
-            failedFolds = failedFolds + key
+            if (started == generation(window.session)) failedFolds = failedFolds + key
         } finally {
-            folding = folding - key
+            if (started == generation(window.session)) folding = folding - key
         }
     }
 }
 
-internal data class EngineLineKey(val window: Int, val item: String)
+private fun changedHistory(previous: String?, current: String?): Boolean =
+    previous != null && current != null && previous != current
+
+internal data class EngineLineKey(val window: EngineHistoryWindow, val item: String)
 
 internal data class EarlierEngineLine(val window: EngineHistoryWindow, val line: ChatLine) {
     val key get() = "history-" + window.index + "-" + line.contentKey
@@ -169,11 +203,11 @@ internal fun earlierEngineLines(
     plan: EngineHistoryPlan, open: Set<EngineLineKey>, folds: Map<EngineLineKey, List<Item>>, showModelChanges: Boolean,
 ): List<EarlierEngineLine> = plan.sections.flatMap { (window, items) ->
     val rows = items.flatMap { item ->
-        folds[EngineLineKey(window.index, item.id)]?.mapIndexed { index, expanded ->
+        folds[EngineLineKey(window, item.id)]?.mapIndexed { index, expanded ->
             expanded.asLineItem().copy(exchangeId = item.id.takeIf { index == 0 })
         } ?: listOf(item.asLineItem())
     }
-    val openWork = open.filter { it.window == window.index }.mapTo(mutableSetOf()) { it.item }
+    val openWork = open.filter { it.window == window }.mapTo(mutableSetOf()) { it.item }
     val lines = chatLines(rows, LineOptions(openWork = openWork)).lines
     val marked = EngineChanges.mark(if (showModelChanges) ModelChanges.mark(lines) else lines)
     marked.asReversed().map { EarlierEngineLine(window, it) }
@@ -206,6 +240,9 @@ internal fun rememberEarlierEngines(
     if (windows.isEmpty()) return null
     val store = remember(repository, current, windows) { EarlierEngineHistory(repository) }
     val scope = rememberCoroutineScope()
+    LaunchedEffect(store, current, live.history) {
+        store.observeLiveHistory(current, live.history)
+    }
     val plan by remember(store, windows, current, live, ready) {
         derivedStateOf { store.plan(windows, current, live, ready) }
     }
@@ -233,9 +270,9 @@ internal fun LazyListScope.earlierEngineHistory(
                 LocalChatSubagents provides null, LocalChatWorkflows provides null, LocalReplyUsage provides emptyMap()) {
                 fun expand(item: Item) { scope.launch { history.store.expand(window, item) } }
                 val work = line as? ChatLine.Work
-                val folding = history.store.folding.filter { it.window == window.index }.mapTo(hashSetOf()) { it.item }
+                val folding = history.store.folding.filter { it.window == window }.mapTo(hashSetOf()) { it.item }
                 val failed = stringResource(R.string.chat_screen_fold_failed)
-                val errors = history.store.failedFolds.filter { it.window == window.index }.associate { it.item to failed }
+                val errors = history.store.failedFolds.filter { it.window == window }.associate { it.item to failed }
                 ChatLineContent(line, window.session, loader, null,
                     onToggle = { id ->
                         if (history.store.toggle(window, id)) work?.steps?.filterIsInstance<WorkItem.Folded>()

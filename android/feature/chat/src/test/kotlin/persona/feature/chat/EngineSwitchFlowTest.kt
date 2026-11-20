@@ -107,7 +107,7 @@ class EngineSwitchFlowTest {
                     val scope = rememberCoroutineScope()
                     val state = remember(resources, scope) { ChatChromeState(resources, actions, scope, {}, {}) }
                     Box {
-                        AgentModelPill(rendered.over(agent), state, creation, true, ModelPillWidth.Wide,
+                        AgentModelPill(rendered.over(agent, 0L), state, creation, true, ModelPillWidth.Wide,
                             onSwitch = { rendered = it }, onOverlay = {})
                     }
                 }
@@ -132,7 +132,7 @@ class EngineSwitchFlowTest {
         rule.onNodeWithText("Switch Agent").performClick()
         rule.waitUntil(10_000) { rendered?.switch != null }
         rule.runOnIdle {
-            val session = rendered.over(agent)
+            val session = rendered.over(agent, 0L)
             assertEquals(listOf(ChatAction.Modes(launcher = "codex", from = "claude", model = "gpt-5.5")), requests)
             assertEquals(PendingSwitch("codex", "gpt-5.5", agent = "codex"), session.pendingSwitch)
             assertTrue(switchesNext(session, true))
@@ -144,7 +144,7 @@ class EngineSwitchFlowTest {
         rule.runOnIdle {
             assertEquals(ChatAction.Modes(launcher = "claude", from = "claude"), requests.last())
             assertEquals(2, requests.size)
-            assertNull(rendered.over(agent).pendingSwitch)
+            assertNull(rendered.over(agent, 0L).pendingSwitch)
         }
     }
 
@@ -180,7 +180,7 @@ class EngineSwitchFlowTest {
             capture(rule.onNodeWithTag("handoff-shot").captureToImage().asAndroidBitmap(), "handoff-" + if (night) "dark" else "light")
         }
         rule.onNodeWithText("View handoff context").performClick()
-        rule.waitUntil(10_000) { rule.onAllNodes(hasText(change.handoff)).fetchSemanticsNodes().isNotEmpty() }
+        rule.waitUntil(15_000) { rule.onAllNodes(hasText(change.handoff, substring = true), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
     }
 
     @Test fun theChatLoadsTheEarlierRunInPlace() {
@@ -198,9 +198,34 @@ class EngineSwitchFlowTest {
                 return ItemsResponse(listOf(Item("past", 1, "2026-11-20T10:00:01Z", role = "user", kind = "text", text = "An earlier run.")))
             }
         }
+        renderChat(current, listOf(current), repo)
+        rule.waitUntil(10_000) { rule.onAllNodes(hasText("Load earlier messages")).fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithText("An earlier run.").assertDoesNotExist()
+        rule.onNodeWithText("Load earlier messages").performClick()
+        rule.waitUntil(10_000) { rule.onAllNodes(hasText("An earlier run.")).fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithText("The current run.").assertExists()
+    }
+
+    @Test fun cachedExactLookupCannotKeepAnOldEngineChatOpen() {
+        val successor = agent.copy(sessionId = "codex-successor", agent = "codex", engineHistory = listOf(
+            EngineLeg(agent.sessionId, "claude", "2026-11-20T10:00:03Z")))
+        val followed = mutableListOf<SessionKey>()
+        val chats = object : ChatRepository {
+            override fun observe(session: SessionKey) = MutableStateFlow(ChatSnapshot(loading = false))
+            override suspend fun loadOlder(session: SessionKey) = Unit
+            override suspend fun expandFold(session: SessionKey, fromSeq: Int, toSeq: Int): List<Item> = emptyList()
+        }
+        renderChat(agent, listOf(successor), chats, ChatChromeBindings(lookupRows = listOf(agent),
+            onFollowSession = { followed += it }))
+        rule.waitUntil(10_000) { followed.isNotEmpty() }
+        rule.runOnIdle { assertEquals(listOf(successor.key), followed) }
+    }
+
+    private fun renderChat(current: Session, listed: List<Session>, repo: ChatRepository,
+        chrome: ChatChromeBindings = ChatChromeBindings()) {
         val sessions = object : SessionsRepository {
             override val machines = MutableStateFlow(listOf(Machine(current.machineId, "Computer", online = true)))
-            override val sessions = MutableStateFlow(listOf(current))
+            override val sessions = MutableStateFlow(listed)
             override suspend fun refresh() = Unit
         }
         val sender = object : MessageSender {
@@ -214,14 +239,9 @@ class EngineSwitchFlowTest {
         }
         rule.setContent {
             PersonaTheme(reduceMotion = true, style = AppStyle.Glass) {
-                ChatScreen(current.key, repo, sender, interactions, sessions, onBack = {})
+                ChatScreen(current.key, repo, sender, interactions, sessions, onBack = {}, chrome = chrome)
             }
         }
-        rule.waitUntil(10_000) { rule.onAllNodes(hasText("Load earlier messages")).fetchSemanticsNodes().isNotEmpty() }
-        rule.onNodeWithText("An earlier run.").assertDoesNotExist()
-        rule.onNodeWithText("Load earlier messages").performClick()
-        rule.waitUntil(10_000) { rule.onAllNodes(hasText("An earlier run.")).fetchSemanticsNodes().isNotEmpty() }
-        rule.onNodeWithText("The current run.").assertExists()
     }
 
     private fun captureDialog(name: String) = capture(

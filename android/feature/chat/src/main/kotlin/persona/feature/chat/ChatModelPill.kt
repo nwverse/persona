@@ -222,15 +222,11 @@ internal fun pillContent(view: PillView, pending: PillSetup?, ultracode: Boolean
     return content to spoken
 }
 
-/**
- * A switch drawn at once on this page (a pick recorded, or dropped with [switch] null) until the session's next push
- * ([rev] the row's revision when it was drawn) says what the hub has.
- */
-internal data class DrawnSwitch(val switch: PendingSwitch?, val rev: Long?)
+/** Immediate local feedback until a fresh authority observes the switch, independent of transcript size. */
+internal data class DrawnSwitch(val switch: PendingSwitch?, val observation: Long)
 
-/** [session] as drawn: a switch this page drew stands until the row moves past it. */
-internal fun DrawnSwitch?.over(session: Session): Session =
-    if (this == null || session.rev != rev) session else session.copy(pendingSwitch = switch)
+internal fun DrawnSwitch?.over(session: Session, observed: Long): Session =
+    if (this == null || observed != observation) session else session.copy(pendingSwitch = switch)
 
 /** The user's next message from the chat carries out a launcher switch waiting on [session] ([on]: where the pill shows it). */
 internal fun switchesNext(session: Session?, on: Boolean): Boolean = on && session != null &&
@@ -252,6 +248,7 @@ internal fun AgentModelPill(
     width: ModelPillWidth,
     onSwitch: (DrawnSwitch) -> Unit,
     onOverlay: (Boolean) -> Unit,
+    switchObservation: Long = 0L,
     openRequested: Boolean = false,
     onOpenHandled: () -> Unit = {},
     onConfigure: (() -> Unit)? = null,
@@ -321,9 +318,9 @@ internal fun AgentModelPill(
             prefs = prefs.pushRecent(config)
             open = false
             steps.filterIsInstance<ModeStep.Launcher>().firstOrNull()?.let { s ->
-                if (s.launcher == s.from) onSwitch(DrawnSwitch(null, session.rev))
+                if (s.launcher == s.from) onSwitch(DrawnSwitch(null, switchObservation))
                 else {
-                    onSwitch(DrawnSwitch(PendingSwitch(s.launcher, s.model, s.effort, agent = s.agent), session.rev))
+                    onSwitch(DrawnSwitch(PendingSwitch(s.launcher, s.model, s.effort, agent = s.agent), switchObservation))
                     val target = s.agent?.let { engineMark(it, names[it]).name }
                         ?: launchers.orEmpty().firstOrNull { it.name == s.launcher }?.title ?: s.launcher
                     val models = lists.list(machine, s.launcher).list?.models.orEmpty()
@@ -352,7 +349,7 @@ internal fun AgentModelPill(
                         picking = true
                         run(listOf(ModeStep.Launcher(own, own))) { ok ->
                             picking = false
-                            if (ok) onSwitch(DrawnSwitch(null, session.rev))
+                            if (ok) onSwitch(DrawnSwitch(null, switchObservation))
                         }
                     }, modifier = Modifier.padding(horizontal = Tokens.Space.m),
                     enabled = editable && !picking && AgentModelPanel.busy(session) == null)

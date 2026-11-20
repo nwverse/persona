@@ -646,6 +646,8 @@ model or choosing **Cancel pending switch** clears the pending handoff. A differ
 engine updates that pending handoff. **Don't ask again** remembers the choice on this device. To reverse it, choose
 **Ask before switching** in the model picker. The next text message from Glass applies the switch. If the draft has
 attachments, remove them or cancel the switch before sending. The attachment and message draft stay in the composer.
+A successful local choice is shown until a fresh complete row arrives. Paged list hints and reconnects refresh an open
+Agent's exact row, so another device's switch or cancellation wins even when the transcript has the same size.
 
 The open chat follows the new live session when its same-computer row names the old session in `engine_history`.
 A link to that old session opens the live conversation when its successor is listed. The handoff divider identifies
@@ -657,7 +659,8 @@ earlier run. A session that ran once keeps all its items. When a session was reu
 the switch times, so a Claude Code → Codex → Claude Code conversation reads in that order with no duplicate messages.
 Historical rows keep their original session for images, tool expansions and full text. If a page fails, **Retry**
 keeps the loaded history. When the hub reports that a history no longer exists, Android says so and can continue to
-the previous run. Chat search and sending remain scoped to the live run.
+the previous run. When a reused session reports a new history generation, its earlier pages and expanded folds are
+refreshed independently of the other engines' pages. Chat search and sending remain scoped to the live run.
 
 ## Agent public sharing
 

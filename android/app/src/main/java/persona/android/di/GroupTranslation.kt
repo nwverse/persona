@@ -55,6 +55,7 @@ internal class GroupNames(val namespace: String?) {
         is MessageSendStateEvent -> value.copy(machineId = machineId(value.machineId))
         is ItemsEvent -> value.copy(machineId = machineId(value.machineId))
         is SessionsEvent -> value.copy(machineId = machineId(value.machineId), sessions = value.sessions.map(::session))
+        is SessionRowEvent -> value.copy(session = session(value.session))
         is MachinesEvent -> value.copy(machines = value.machines.map(::machine))
         is RevsEvent -> value.copy(machineId = machineId(value.machineId))
         is InteractionEvent -> value.copy(interaction = interaction(value.interaction))

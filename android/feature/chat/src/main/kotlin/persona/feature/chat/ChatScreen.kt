@@ -156,6 +156,7 @@ private fun ChatPage(
     val sourceSnapshot by pageSources.snapshot
     val renamer = pageSources.renamer
     val sessionList by pageSources.sessionList
+    val listedSessions by pageSources.listedSessions
     val managerChoice by pageSources.managerChoice
     val machines by pageSources.machines
     val allRequests by pageSources.allRequests
@@ -165,7 +166,7 @@ private fun ChatPage(
     val writtenAt by pageSources.writtenAt
     val sendReceipts = pageSources.sendReceipts
     val pageSession = rememberChatPageSession(key, chrome, renderStyle, historyReadOnly, historyFooter, historySession, res,
-        sessionList, adoptedSessions, sendReceipts.filter { it.state == "kept" })
+        sessionList, listedSessions, adoptedSessions, sendReceipts.filter { it.state == "kept" })
     val child = pageSession.child
     val workflowAgent = pageSession.workflowAgent
     val historyOnly = pageSession.historyOnly
@@ -185,15 +186,15 @@ private fun ChatPage(
     }
     val followSession = chrome.onFollowSession ?: onContextCleared ?: chrome.onOpenSession
     // The node removes the old row only after the other engine takes over. Never infer a successor from a pane ID.
-    val switchedThread = remember(sessionList, key, renderStyle, historyOnly) {
-        if (renderStyle == ChatRenderStyle.Agent && !historyOnly) persona.core.domain.lines.EngineChanges.home(sessionList, key) else null
+    val switchedThread = remember(listedSessions, key, renderStyle, historyOnly) {
+        if (renderStyle == ChatRenderStyle.Agent && !historyOnly) persona.core.domain.lines.EngineChanges.home(listedSessions, key) else null
     }
     val nextThread = codexThread ?: switchedThread
     LaunchedEffect(nextThread?.key) {
         nextThread?.let { followSession?.invoke(it.key) }
     }
     // A launcher switch this page recorded or dropped (#5055), drawn at once until the row's next push says what the hub has.
-    val pageCloseout = rememberChatPageCloseout(key, chrome, renderStyle, child, workflowAgent, row, session)
+    val pageCloseout = rememberChatPageCloseout(key, chrome, renderStyle, child, workflowAgent, row, session, pageSession.switchObservation)
     var drawnSwitch by pageCloseout.drawnSwitch
     val switchSession = pageCloseout.switchSession
     val closeoutWork = pageCloseout.closeoutWork
@@ -1141,7 +1142,16 @@ private fun ChatPage(
                                     modelPill = if (!glass || switchSession == null) null else ({ width ->
                                         val online = connection == null || connection == ConnectionState.Online
                                         if (agentChat) AgentModelPill(switchSession, controls, chrome.worktrees?.invoke(), online, width,
-                                            onSwitch = { drawnSwitch = it }, onOverlay = { pillOverlay = it },
+                                            onSwitch = { switch ->
+                                                drawnSwitch = switch
+                                                // An acknowledged no-op or a coalesced add/cancel can leave no list hint.
+                                                scope.launch {
+                                                    try { pageSession.refreshDetail() }
+                                                    catch (cancelled: CancellationException) { throw cancelled }
+                                                    catch (_: Exception) { /* Keep the local receipt until the next whole row. */ }
+                                                }
+                                            }, onOverlay = { pillOverlay = it },
+                                            switchObservation = pageSession.switchObservation,
                                             openRequested = openModes, onOpenHandled = { openModes = false },
                                             onConfigure = chrome.onFixModel?.let { fix -> { fix(persona.core.designsystem.ReadinessActionId.EditProvider, null, switchSession.manager) } })
                                         else PersonaModelPill(switchSession, key.machineId, chrome.assistantManagement, width,

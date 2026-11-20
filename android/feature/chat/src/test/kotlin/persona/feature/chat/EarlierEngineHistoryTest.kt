@@ -1,9 +1,13 @@
 package persona.feature.chat
 
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Test
 import persona.core.contracts.EngineLeg
+import persona.core.contracts.Fold
 import persona.core.contracts.Item
 import persona.core.contracts.ItemsResponse
 import persona.core.contracts.SessionKey
@@ -113,5 +117,89 @@ class EarlierEngineHistoryTest {
         assertFalse(pager.failed)
         assertNull(plan.next)
         assertEquals(listOf(claude), plan.sections.map { it.window.session })
+    }
+
+    @Test fun aFullyLoadedReusedSessionDropsItsOldGenerationAndFoldsButKeepsOtherSessions() = runBlocking {
+        val oldFold = item("old-fold", 1, 1).copy(kind = "fold", fold = Fold(throughSeq = 1, throughId = "unfolded"))
+        val otherFold = item("other-fold", 1, 5).copy(kind = "fold", fold = Fold(throughSeq = 1, throughId = "other-step"))
+        val repo = object : HistoryRepo() {
+            override suspend fun earlierEnginePage(session: SessionKey, beforeSeq: Int?) = when (session to beforeSeq) {
+                codex to null -> ItemsResponse(listOf(otherFold), history = "codex-current")
+                claude to 2 -> ItemsResponse(listOf(oldFold), history = "before-rewind")
+                else -> error("Unexpected history page " + (session to beforeSeq))
+            }
+            override suspend fun loadRange(session: SessionKey, fromSeq: Int, throughSeq: Int) =
+                if (session == claude) listOf(item("unfolded", 1, 1)) else listOf(item("other-step", 1, 5))
+        }
+        val old = ChatSnapshot(listOf(item("old-seed", 2, 2), item("latest", 7, 8)), loading = false,
+            hasOlder = true, history = "before-rewind")
+        val pager = EarlierEngineHistory(repo)
+        fun plan(snapshot: ChatSnapshot) = pager.plan(windows, claude, snapshot, ready = true)
+        pager.observeLiveHistory(claude, old.history)
+        pager.load(requireNotNull(plan(old).next), claude, old)
+        pager.load(requireNotNull(plan(old).next), claude, old)
+        assertNull(plan(old).next)
+        pager.toggle(windows[0], "work")
+        pager.expand(windows[0], oldFold)
+        pager.expand(windows[1], otherFold)
+        assertEquals(2, pager.folds.size)
+
+        val fresh = old.copy(items = listOf(item("fresh-seed", 2, 2), item("latest", 7, 8)), history = "after-rewind")
+        // The next plan already prefers the new live seed before Compose runs the cache invalidation effect.
+        assertEquals(listOf("other-fold", "fresh-seed"), plan(fresh).sections.flatMap { it.items.map(Item::id) })
+        pager.observeLiveHistory(claude, fresh.history)
+        assertEquals(windows[0], plan(fresh).next)
+        assertEquals(setOf(EngineLineKey(windows[1], otherFold.id)), pager.folds.keys)
+        assertTrue(pager.open.isEmpty())
+    }
+
+    @Test fun aStalePageDropsItsExpandedFoldsAndRetriesFromTheLatestPage() = runBlocking {
+        val fold = item("fold", 2, 5).copy(kind = "fold", fold = Fold(throughSeq = 2, throughId = "step"))
+        val repo = object : HistoryRepo() {
+            var first = true
+            override suspend fun earlierEnginePage(session: SessionKey, beforeSeq: Int?): ItemsResponse {
+                assertEquals(codex, session)
+                if (first) {
+                    first = false
+                    assertNull(beforeSeq)
+                    return ItemsResponse(listOf(fold), hasMore = true, history = "old")
+                }
+                if (beforeSeq != null) return ItemsResponse(listOf(item("stale-page", 1, 4)), history = "new")
+                return ItemsResponse(listOf(item("new-page", 1, 4)), history = "new")
+            }
+            override suspend fun loadRange(session: SessionKey, fromSeq: Int, throughSeq: Int) =
+                listOf(item("step", 2, 5))
+        }
+        val live = ChatSnapshot(listOf(item("old", 2, 2), item("latest", 7, 8)), loading = false, history = "claude")
+        val pager = EarlierEngineHistory(repo)
+        fun plan() = pager.plan(windows, claude, live, ready = true)
+        pager.load(requireNotNull(plan().next), claude, live)
+        pager.toggle(windows[1], "work")
+        pager.expand(windows[1], fold)
+        assertEquals(1, pager.folds.size)
+        pager.load(requireNotNull(plan().next), claude, live)
+        assertTrue(pager.failed)
+        assertTrue(pager.folds.isEmpty())
+        assertTrue(pager.open.isEmpty())
+        assertTrue(plan().sections.isEmpty())
+        pager.load(requireNotNull(plan().next), claude, live)
+        assertEquals("new-page", plan().sections.first().items.single().id)
+    }
+
+    @Test fun anInFlightExpansionFromThePreviousGenerationCannotRepopulateTheCache() = runBlocking {
+        val fold = item("fold", 1, 1).copy(kind = "fold", fold = Fold(throughSeq = 1, throughId = "old-step"))
+        val read = CompletableDeferred<List<Item>>()
+        val repo = object : HistoryRepo() {
+            override suspend fun loadRange(session: SessionKey, fromSeq: Int, throughSeq: Int) = read.await()
+        }
+        val pager = EarlierEngineHistory(repo)
+        pager.observeLiveHistory(claude, "g1")
+        val expanding = launch(start = CoroutineStart.UNDISPATCHED) { pager.expand(windows[0], fold) }
+        assertEquals(1, pager.folding.size)
+        pager.observeLiveHistory(claude, "g2")
+        read.complete(listOf(item("old-step", 1, 1)))
+        expanding.join()
+        assertTrue(pager.folding.isEmpty())
+        assertTrue(pager.folds.isEmpty())
     }
 }
