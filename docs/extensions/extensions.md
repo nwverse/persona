@@ -816,22 +816,27 @@ Whatever scopes it was granted, an extension's token never sees:
   of the to-do (the directory each run's link keeps, the conversations its history was written in, the record of a
   deleted one, and the space the manager noted of each conversation when it started it or a computer listed it), not
   only from what is live, so a chat its computer no longer lists (a quiet chat is listed for a week, and only the 100
-  newest) or has not listed since a restart is told by its noted space. The chats unfinished tasks came from or report
-  to are listed however quiet (the assistant's profile `keep`), so one quiet since before a manager noted spaces is
-  noted too. It fails closed: a conversation no computer lists, never noted and with no deletion record, a history
+  newest) or has not listed since a restart is told by its noted space. A chat a to-do names (open or done: its
+  origin, its supervisor, a chat its history was written in) that was quiet since before a manager noted spaces is
+  listed again by the computers the assistant ran on (the assistant's profile `keep`), 50 at a time, until it is noted;
+  one still not listed after 3 minutes with the assistant's computer on is given up for a week (its transcript is
+  gone). It fails closed: a conversation no computer lists, never noted and with no deletion record, a history
   whose conversations cannot be read, or a run whose link keeps no directory and whose session cannot be read, counts
   too. The one rule decides every way a to-do leaves its manager: such a to-do is not on `GET /api/v1/todos`, every
   route of it answers 404 `todo_not_found` as for a to-do that does not exist (its item, timeline, decisions and
   repositories, and every write: `PATCH`, its runs, spaces, decisions and repositories), and `todo.changed` and
   `todo.decision` are not sent of it; one that only cannot be told yet waits rather than being dropped, and is sent once
-  it can be told (judged again after 30 seconds, then less often, up to every 10 minutes; at most 512 wait). Nor can a
-  token take onto a to-do of its own a run of the space, one of such a to-do, or a space such a to-do has or such a run
-  is in (404), nor a run its computer does not list yet (409 `agent_not_listed`, with `Retry-After`: an Agent just
-  started is answered before its computer lists it, so try again). Every to-do it is shown reads as a device reads it,
+  it can be told (judged again after 30 seconds, then less often, up to every 10 minutes; at most 512 wait; a manager
+  restart in between drops what waits). Nor can a token take onto a to-do of its own a run of the space, one of such a
+  to-do, or a space such a to-do has or such a run is in (404), nor a run its computer does not list yet (409
+  `agent_not_listed`, with `Retry-After`: an Agent just started is answered before its computer lists it, so try
+  again). Every to-do it is shown reads as a device reads it,
   and the list's `counts` are a device's, which count, as numbers, the to-dos it is not shown too. What told a to-do's history stays: a run's link keeps a directory in the
   space when the run's shell leaves it, and a space's unlink, move or void releases such a link rather than delete it.
-  The outcome of a task the space's words are known to be in is not written into a knowledge-base project's timeline
-  either, where `kb.read` would read it; one that only cannot be told is written, as it is the owner's own record.
+  Such a task's outcome is not written into a knowledge-base project's timeline either, where `kb.read` would read it:
+  the line of one that only cannot be told yet waits, is written once the task is told outside the space and is
+  dropped once it is told in it (judged again as the events are; a manager restart in between drops it, and the
+  outcome stays in the to-do's decisions).
   A chat's feed (`assistant.ask`) leaves out the same: the items, plans and task cards of such a to-do, a plan with a task in
   the space, every answered card, and the digests that gather many to-dos and cards at once (a routine's `brief`, the
   Today card).

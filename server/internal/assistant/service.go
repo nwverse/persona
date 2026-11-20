@@ -185,6 +185,8 @@ type Service struct {
 
 	deletedConversations conversationDeleteBook // conversation_delete.go
 	convSpaces           convSpaceBook          // conversation_space.go
+	spaceFill            spaceBackfill          // conversation_space_backfill.go
+	outcomeLines         outcomeLines           // todo_outcome.go
 	conversationWrites   sync.RWMutex
 
 	modelPicks modelPickBook // model_pick.go

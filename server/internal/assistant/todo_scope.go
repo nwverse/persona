@@ -70,7 +70,8 @@ const (
 	todoShown todoVerdict = iota
 	// todoUntold: nothing says its history is in the space, but a conversation or a run of it cannot be told now (not
 	// listed, never noted, unreadable). An extension is not shown it, and what would tell it of the to-do waits for
-	// the verdict to be told (todoChangedFlush, todoSendEvents); the owner's own records do not (outcomeLog).
+	// the verdict to be told (todoChangedFlush, todoSendEvents), its task's outcome line too (outcomeLog); a
+	// conversation never noted is listed again for it to be (spaceBackfillWant).
 	todoUntold
 	// todoHidden: its history holds, or may hold, the space's words for good (a conversation or a run of the space, a
 	// step or a to-do on its brief that does), or it is no longer kept to be told.
@@ -178,6 +179,14 @@ func (s *Service) todoVerdicts(ctx context.Context, ids []string, gone map[strin
 			conversations = append(conversations, feed[id]...)
 		}
 		bad := s.unshownConversations(ctx, conversations)
+		var untold []string
+		for c, health := range bad {
+			if !health {
+				untold = append(untold, c)
+			}
+		}
+		slices.Sort(untold)
+		s.spaceBackfillWant(untold) // for their computers to list them, so they are noted (conversation_space_backfill.go)
 		for _, id := range todos {
 			if err != nil {
 				raise(id, todoUntold)

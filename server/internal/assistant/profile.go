@@ -470,19 +470,20 @@ func (s *Service) profile(ctx context.Context, tasks []TaskView, todos *TodoRepo
 	v := s.effective(ctx, saved)
 	p := &Profile{MachineID: v.MachineID, Main: v.Main, MainMachineID: v.MainMachineID, Launcher: v.Launcher, Timezone: v.Timezone}
 	if tasks != nil && todos != nil {
-		p.Keep = keptSessions(v, tasks, todos.Links, s.openTaskConversations(v))
+		p.Keep = keptSessions(v, tasks, todos.Links, s.spaceKeep(ctx, v))
 	}
 	return p
 }
 
 // keptSessions are the conversations their machines list however long they have been quiet: the main conversation,
-// the main ones it replaced, scheduled tasks' own, the agents of open todos, and the conversations that opened or
-// supervise open tasks (convs, openTaskConversations). Otherwise a busy machine's 80 newest transcripts crowd them out
-// of the list and the Persona tab has no main chat (2026-11-01: the main one, quiet for two days, was gone), a weekly
-// task's conversation drops out in between, with the app's link to it and the check that its last run still goes, an
-// open task whose agent finished and exited shows "Starting Agent" for ever: its todo names a session the list no
-// longer has (#4510), and the space of a task's conversation quiet since before the manager noted spaces could never
-// be told (conversation_space.go, #10941).
+// the main ones it replaced, scheduled tasks' own, the agents of open todos, and those listed for their spaces to be
+// told (convs, spaceKeep: the task leaders' agents of open tasks, and a batch at a time of the conversations to-dos
+// name that were never noted). Otherwise a busy machine's 80 newest transcripts crowd them out of the list and the
+// Persona tab has no main chat (2026-11-01: the main one, quiet for two days, was gone), a weekly task's conversation
+// drops out in between, with the app's link to it and the check that its last run still goes, an open task whose agent
+// finished and exited shows "Starting Agent" for ever: its todo names a session the list no longer has (#4510), and
+// the space of a to-do's conversation quiet since before the manager noted spaces could never be told
+// (conversation_space_backfill.go, #10941).
 func keptSessions(v Settings, tasks []TaskView, links []TodoLink, convs []SessionRef) []SessionRef {
 	out := []SessionRef{}
 	add := func(machine, id string) {

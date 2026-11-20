@@ -3,10 +3,12 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -224,27 +226,128 @@ func TestQuietConversationsEventsAreTold(t *testing.T) {
 	})
 }
 
-// The owner's own records do not pay for the rule: a closed task's outcome goes into its project's timeline when the
-// conversation that handed it out is no longer listed and was never noted, as long as nothing says it is the health
-// space's (TestHiddenTaskOutcomeStaysOutOfProjects: one that is stays out).
-func TestOutcomeLineOfAnUntoldTask(t *testing.T) {
+// outcomeTimers holds the judgements again of s's held outcome lines (holdOutcomeLine) for the test to run.
+type outcomeTimers struct {
+	mu  sync.Mutex
+	due []func()
+}
+
+func fakeOutcomeTimers(s *Service) *outcomeTimers {
+	c := &outcomeTimers{}
+	h := &s.outcomeLines
+	h.mu.Lock()
+	h.after = func(_ time.Duration, f func()) { c.mu.Lock(); c.due = append(c.due, f); c.mu.Unlock() }
+	h.mu.Unlock()
+	return c
+}
+
+// fire runs the judgements due now; it says how many there were.
+func (c *outcomeTimers) fire() int {
+	c.mu.Lock()
+	due := c.due
+	c.due = nil
+	c.mu.Unlock()
+	for _, f := range due {
+		f()
+	}
+	return len(due)
+}
+
+// A closed task's outcome line waits while its to-do's verdict cannot be told (the conversation that handed it out
+// was never noted and is not listed): a project's timeline is outside the health space and kb.read reads it, so the
+// line is written only once the conversation is told outside the space, and dropped once it is told in it
+// (TestHiddenTaskOutcomeStaysOutOfProjects: one known at close is never held).
+func TestOutcomeLineWaitsForItsVerdict(t *testing.T) {
 	for _, store := range []string{"memory", "store"} {
-		t.Run(store, func(t *testing.T) {
-			var st Store
-			if store == "store" {
-				st = todoTestDB(t)
+		for _, health := range []bool{false, true} {
+			name := store + "/main space"
+			if health {
+				name = store + "/health space"
 			}
-			s, f, todo := outcomeEnv(t, st, outcomeReply)
-			f.setSessions("server") // conv1, never noted, no longer listed
-			if v := s.todoVerdicts(context.Background(), []string{todo.ID}, nil, nil)[todo.ID]; v != todoUntold {
-				t.Fatalf("the task's verdict: %d, want untold", v)
-			}
-			f.outcome = `{"outcome":"修好登录页横屏崩溃，PR 已合并","links":["https://github.com/o/weather/pull/12"]}`
-			s.recordTaskOutcome(todo, time.Now().UTC())
-			if log := kbEng(t, s).Store.Log("天气-app", 10); len(log) != 1 || !strings.Contains(log[0], "修好登录页横屏崩溃") {
-				t.Fatalf("the project's timeline: %q", log)
-			}
-		})
+			t.Run(name, func(t *testing.T) {
+				var st Store
+				if store == "store" {
+					st = todoTestDB(t)
+				}
+				s, f, todo := outcomeEnv(t, st, outcomeReply)
+				timers := fakeOutcomeTimers(s)
+				f.setSessions("server") // conv1, never noted, no longer listed
+				if v := s.todoVerdicts(context.Background(), []string{todo.ID}, nil, nil)[todo.ID]; v != todoUntold {
+					t.Fatalf("the task's verdict: %d, want untold", v)
+				}
+				f.outcome = `{"outcome":"修好登录页横屏崩溃，PR 已合并","links":["https://github.com/o/weather/pull/12"]}`
+				s.recordTaskOutcome(todo, time.Now().UTC())
+				timeline := func() []string { return kbEng(t, s).Store.Log("天气-app", 10) }
+				if log := timeline(); len(log) != 0 {
+					t.Fatalf("the project's timeline while the verdict cannot be told: %q", log)
+				}
+				if n := timers.fire(); n != 1 || len(timeline()) != 0 {
+					t.Fatalf("judged again while still untold: %d judgements, timeline %q", n, timeline())
+				}
+				conv1 := proto.Session{SessionID: "conv1", Title: "Persona", Assistant: true}
+				if health {
+					conv1.Cwd, conv1.Space = identity.HealthDir("/home/owner"), SpaceHealth
+				}
+				f.setSessions("server", conv1) // listed again, as the backfill asks
+				if n := timers.fire(); n != 1 {
+					t.Fatalf("judgements once told: %d, want 1", n)
+				}
+				log := timeline()
+				if health {
+					if len(log) != 0 {
+						t.Fatalf("the project's timeline once the task is told the health space's: %q", log)
+					}
+				} else if len(log) != 1 || !strings.Contains(log[0], "修好登录页横屏崩溃") {
+					t.Fatalf("the project's timeline once the task is told outside the space: %q", log)
+				}
+				if n := timers.fire(); n != 0 {
+					t.Fatalf("still judged again after it was told: %d", n)
+				}
+			})
+		}
+	}
+}
+
+// A health conversation that wrote to a task's run (a routed item in its feed), quiet since before the manager noted
+// spaces, is neither the task's origin nor its supervisor: the backfill still has its computer list it, so the task's
+// verdict is told the health space's, and its outcome line, held while untold, is never written where kb.read reads it.
+func TestOutcomeLineOfAQuietHealthFeedConversation(t *testing.T) {
+	database := todoTestDB(t)
+	e := projectEnv(t, database)
+	timers := fakeOutcomeTimers(e.s)
+	ctx := context.Background()
+	setSettings(t, e.s, func(v *Settings) { v.Main = "conv1" })
+	main, h1 := scopeSession("conv1", "Persona", ""), scopeSession("h1", "Heart", identity.HealthDir("/home/owner"))
+	main.Assistant, h1.Assistant = true, true
+	run := scopeSession("s2", "Charts", "/home/owner/charts")
+	run.LastText = "Charted the resting heart rate against the new dose"
+	e.sessions("server", main, run) // h1 is quiet past a week, and was never noted
+	task, err := e.s.createTaskTodo(ctx, "Chart the readings", "", "conv1", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.must("PUT", "/api/v1/todos/"+task.ID+"/agents/server/s2", "")
+	e.must("PATCH", "/api/v1/todos/"+task.ID, `{"project":"诊断能力"}`)
+	if _, err := e.s.appendFeedAt(ctx, "h1", feedRouted, task.ID, map[string]string{"text": "Resting heart rate was 48",
+		"machine_id": "server", "session_id": "s2"}, time.Now().UTC().Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	e.must("PATCH", "/api/v1/todos/"+task.ID, `{"done":true}`)
+	e.s.tasks.outcomeRuns.Wait()
+	if log := kbEng(t, e.s).Store.Log("诊断能力", 10); len(log) != 0 {
+		t.Fatalf("the project's timeline while h1 cannot be told: %q", log)
+	}
+	if keep := e.s.profile(ctx, []TaskView{}, &TodoReport{}).Keep; !slices.Contains(keep, SessionRef{MachineID: "server", SessionID: "h1"}) {
+		t.Fatalf("kept %v, want h1 listed for its space to be noted", keep)
+	}
+	e.sessions("server", main, run, h1) // listed as kept
+	e.sessions("server", main, run)     // quiet again
+	timers.fire()
+	if log := kbEng(t, e.s).Store.Log("诊断能力", 10); len(log) != 0 {
+		t.Fatalf("the project's timeline once h1 is told the health space's: %q", log)
+	}
+	if v := e.s.todoVerdicts(ctx, []string{task.ID}, nil, nil)[task.ID]; v != todoHidden {
+		t.Fatalf("the task's verdict: %d, want hidden", v)
 	}
 }
 
@@ -288,39 +391,206 @@ func TestConversationSpaceHealthNoteWins(t *testing.T) {
 	})
 }
 
-// The conversations open tasks came from and those that supervise them are listed however quiet (keptSessions), so
-// one quiet since before the manager noted spaces is noted once its computer lists it again; a done task's are not, nor
-// is the main conversation twice, and a task leader's agent is kept on its own computer.
-func TestOpenTasksConversationsAreKept(t *testing.T) {
-	e := newTodoEnv(t, nil)
-	ctx := context.Background()
-	setSettings(t, e.s, func(v *Settings) { v.Main = "conv1" })
-	task := func(title, origin string) Todo {
-		t.Helper()
-		got, err := e.s.createTaskTodo(ctx, title, "", origin, "", "")
-		if err != nil {
-			t.Fatal(err)
-		}
-		return got
+// backfillTimers is a clock the test moves for s's backfill (conversation_space_backfill.go), and its checks, which the
+// test runs.
+type backfillTimers struct {
+	mu  sync.Mutex
+	now time.Time
+	due []func()
+}
+
+func fakeBackfill(s *Service) *backfillTimers {
+	c := &backfillTimers{now: time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC)}
+	b := &s.spaceFill
+	b.mu.Lock()
+	b.clock = func() time.Time { c.mu.Lock(); defer c.mu.Unlock(); return c.now }
+	b.after = func(_ time.Duration, f func()) { c.mu.Lock(); c.due = append(c.due, f); c.mu.Unlock() }
+	b.mu.Unlock()
+	return c
+}
+
+func (c *backfillTimers) advance(d time.Duration) {
+	c.mu.Lock()
+	c.now = c.now.Add(d)
+	c.mu.Unlock()
+}
+
+func (c *backfillTimers) fire() {
+	c.mu.Lock()
+	due := c.due
+	c.due = nil
+	c.mu.Unlock()
+	for _, f := range due {
+		f()
 	}
-	task("Book the movers", "conv2")
-	led := task("Paint the hall", "conv1")
-	e.s.superviseTodo(ctx, led.ID, "conv_lead", nil, 0)
-	byLeader := task("Fix the gate", "conv3")
-	e.s.superviseTodo(ctx, byLeader.ID, "laptop/lead1", nil, 0)
-	done := task("Find the deeds", "conv_old")
-	e.must("PATCH", "/api/v1/todos/"+done.ID, `{"done":true}`)
-	p := e.s.profile(ctx, []TaskView{}, &TodoReport{})
+}
+
+// keeps says which of ids the profile has the assistant's computer list however quiet.
+func keeps(t *testing.T, s *Service, ids ...string) map[string]bool {
+	t.Helper()
+	p := s.profile(context.Background(), []TaskView{}, &TodoReport{})
 	if p == nil {
 		t.Fatal("no profile")
 	}
-	want := []SessionRef{{MachineID: "laptop", SessionID: "lead1"}, {MachineID: "server", SessionID: "conv1"},
-		{MachineID: "server", SessionID: "conv2"}, {MachineID: "server", SessionID: "conv3"},
-		{MachineID: "server", SessionID: "conv_lead"}}
-	got := slices.SortedFunc(slices.Values(p.Keep), func(a, b SessionRef) int {
-		return strings.Compare(a.MachineID+"/"+a.SessionID, b.MachineID+"/"+b.SessionID)
+	out := map[string]bool{}
+	for _, id := range ids {
+		out[id] = slices.Contains(p.Keep, SessionRef{MachineID: "server", SessionID: id})
+	}
+	return out
+}
+
+// The regression check of #10941, again: a conversation quiet since before the manager noted spaces (an upgrade; a
+// chat quiet more than a week, or past the 100 newest, is listed by no computer) was never noted, so every to-do it
+// opened, done or not, was hidden from extensions for good. The backfill has the assistant's computer list such a
+// conversation however quiet until it is noted, then no longer: the to-dos are shown, their routes and its feed answer,
+// and the chat leaves the list again. One whose transcript is gone is given up once kept a while with the computer on
+// (not while it is off), and its to-do stays hidden (fail closed). On the store the conversations are found by reading
+// the to-dos when the manager starts; in memory, by the verdict that could not tell them.
+func TestNeverNotedConversationsAreListedUntilNoted(t *testing.T) {
+	todoStores(t, func(t *testing.T, e *todoEnv, database *db.DB) {
+		ctx := context.Background()
+		clock := fakeBackfill(e.s)
+		setSettings(t, e.s, func(v *Settings) { v.Main = "conv1" })
+		main, old := scopeSession("conv1", "Persona", ""), scopeSession("conv_old", "Moving house", "")
+		main.Assistant, old.Assistant = true, true
+		e.sessions("server", main) // conv_old and conv_gone are never listed: quiet since before the upgrade
+		task := func(title, origin string) Todo {
+			t.Helper()
+			got, err := e.s.createTaskTodo(ctx, title, "", origin, "", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			return got
+		}
+		done, open, gone := task("Book the movers", "conv_old"), task("Renew the lease", "conv_old"), task("Find the deeds", "conv_gone")
+		fromMain := task("Water the plants", "conv1")
+		e.must("PATCH", "/api/v1/todos/"+done.ID, `{"done":true}`)
+		e.must("PATCH", "/api/v1/todos/"+gone.ID, `{"done":true}`)
+		// A done task of the main conversation another quiet chat wrote to (its history).
+		told := task("Pay the deposit", "conv1")
+		if _, err := e.s.appendFeedAt(ctx, "conv_told", feedRouted, told.ID, map[string]string{"text": "Paid by card"},
+			time.Now().UTC()); err != nil {
+			t.Fatal(err)
+		}
+		e.must("PATCH", "/api/v1/todos/"+told.ID, `{"done":true}`)
+		all := []Todo{done, open, gone, fromMain, told}
+		quiet := []string{"conv_old", "conv_gone", "conv_told"}
+		if database != nil { // the manager starts again: it reads the to-dos for the conversations never noted
+			e = newTodoEnv(t, database)
+			clock = fakeBackfill(e.s)
+			e.sessions("server", main)
+			if got := keeps(t, e.s, quiet...); !got["conv_old"] || !got["conv_gone"] || !got["conv_told"] {
+				t.Fatalf("kept once the to-dos are read: %v", got)
+			}
+		}
+		wantShown(t, e, "never noted", all, fromMain)
+		if got := keeps(t, e.s, append(quiet, "conv1")...); !got["conv_old"] || !got["conv_gone"] || !got["conv_told"] || !got["conv1"] {
+			t.Fatalf("kept: %v", got)
+		}
+
+		// The computer lists what is kept: conv_old's and conv_told's transcripts are there, conv_gone's is not.
+		toldChat := scopeSession("conv_told", "Deposit", "")
+		toldChat.Assistant = true
+		e.sessions("server", main, old, toldChat)
+		if got := keeps(t, e.s, quiet...); got["conv_old"] || got["conv_told"] || !got["conv_gone"] {
+			t.Fatalf("kept once conv_old and conv_told are noted: %v", got)
+		}
+		e.sessions("server", main) // and leaves them out again
+		wantShown(t, e, "noted", all, done, open, fromMain, told)
+		for _, path := range []string{"/api/v1/todos/" + done.ID, "/api/v1/todos/" + open.ID,
+			"/api/v1/assistant/conversations/conv_old/feed"} {
+			if got := e.doAs(roleExtension, "GET", path, ""); got.Code != http.StatusOK {
+				t.Errorf("an extension's GET %s once conv_old is noted: %d %s", path, got.Code, got.Body)
+			}
+		}
+
+		// conv_gone is kept while the computer is off, however long.
+		e.f.mu.Lock()
+		e.f.down = map[string]bool{"server": true}
+		e.f.mu.Unlock()
+		clock.advance(spaceBackfillWait)
+		clock.fire()
+		if got := keeps(t, e.s, "conv_gone"); !got["conv_gone"] {
+			t.Fatal("conv_gone given up while the computer is off")
+		}
+		e.f.mu.Lock()
+		e.f.down = nil
+		e.f.mu.Unlock()
+		clock.advance(spaceBackfillWait / 2)
+		clock.fire()
+		if got := keeps(t, e.s, "conv_gone"); !got["conv_gone"] {
+			t.Fatal("conv_gone given up before it was kept spaceBackfillWait with the computer on")
+		}
+		clock.advance(spaceBackfillWait / 2)
+		clock.fire()
+		if got := keeps(t, e.s, "conv_gone"); got["conv_gone"] {
+			t.Fatal("conv_gone still kept once given up")
+		}
+		wantShown(t, e, "conv_gone given up", all, done, open, fromMain, told)
+		if got := keeps(t, e.s, "conv_gone"); got["conv_gone"] {
+			t.Fatal("conv_gone taken up again by the verdict that could not tell it")
+		}
+		if database == nil {
+			return
+		}
+		// A redeploy does not keep it again, by the scan or by a verdict; a week later one does.
+		again := newTodoEnv(t, database)
+		fakeBackfill(again.s)
+		again.sessions("server", main)
+		wantShown(t, again, "conv_gone given up, after a restart", all, done, open, fromMain, told)
+		if got := keeps(t, again.s, "conv_gone"); got["conv_gone"] {
+			t.Fatal("conv_gone kept again after a restart")
+		}
+		later := newTodoEnv(t, database)
+		fakeBackfill(later.s).advance(spaceBackfillRetry + 2*spaceBackfillWait)
+		later.sessions("server", main)
+		if got := keeps(t, later.s, "conv_gone"); !got["conv_gone"] {
+			t.Fatal("conv_gone not kept again a week after it was given up")
+		}
 	})
-	if !slices.Equal(got, want) {
-		t.Fatalf("kept %v, want %v", got, want)
+}
+
+// The backfill keeps at most a batch at a time, and fills it again as the conversations in it are noted; a task
+// leader's agent that supervises an open task is kept on its own computer, and a conversation already noted is not.
+func TestSpaceBackfillBatches(t *testing.T) {
+	e := newTodoEnv(t, nil)
+	ctx := context.Background()
+	fakeBackfill(e.s)
+	setSettings(t, e.s, func(v *Settings) { v.Main = "conv1" })
+	noted := scopeSession("conv_noted", "Noted", "")
+	noted.Assistant = true
+	e.sessions("server", noted)
+	var ids []string
+	for i := range spaceBackfillBatch + 5 {
+		id := fmt.Sprintf("conv_%03d", i)
+		ids = append(ids, id)
+		if _, err := e.s.createTaskTodo(ctx, "Task "+id, "", id, "", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	led, err := e.s.createTaskTodo(ctx, "Fix the gate", "", "conv_noted", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.s.superviseTodo(ctx, led.ID, "laptop/lead1", nil, 0)
+	e.doAs(roleExtension, "GET", "/api/v1/todos", "") // in memory, the verdicts that could not tell them take them up
+	kept := e.s.spaceBackfillKept()
+	if len(kept) != spaceBackfillBatch || slices.Contains(kept, "conv_noted") {
+		t.Fatalf("kept %d: %v", len(kept), kept)
+	}
+	p := e.s.profile(ctx, []TaskView{}, &TodoReport{})
+	if !slices.Contains(p.Keep, SessionRef{MachineID: "laptop", SessionID: "lead1"}) {
+		t.Fatalf("the leader's agent is not kept: %v", p.Keep)
+	}
+	var listed []proto.Session
+	for _, id := range kept {
+		c := scopeSession(id, "Chat", "")
+		c.Assistant = true
+		listed = append(listed, c)
+	}
+	e.sessions("server", listed...)
+	rest := e.s.spaceBackfillKept()
+	if len(rest) != 5 || slices.ContainsFunc(rest, func(id string) bool { return slices.Contains(kept, id) }) {
+		t.Fatalf("kept once the first batch is noted: %v", rest)
 	}
 }

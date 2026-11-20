@@ -1,7 +1,6 @@
 package assistant
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"slices"
@@ -18,9 +17,9 @@ import (
 // 100 newest, and nothing before it is back after a restart. So the space is noted when the manager starts a
 // conversation (startConversationOn) and whenever a computer lists one (SessionsChanged), kept in the store
 // (db.NoteConversationSpaces), and read when no computer lists it (conversationSpaces). A conversation noted in the
-// health space stays there. The conversations of open tasks are listed however quiet (openTaskConversations), so one
-// quiet since before spaces were noted is noted once its computer is told; one never noted is still not told: the rule
-// fails closed for it.
+// health space stays there. One a to-do names that was quiet since before spaces were noted is listed again for it to
+// be noted (conversation_space_backfill.go); one never noted is still not told (its transcript gone): the rule fails
+// closed for it.
 
 // conversationSpaceStore keeps the conversations' spaces (assistant_conversation_spaces).
 type conversationSpaceStore interface {
@@ -101,57 +100,20 @@ func (s *Service) noteConversationSpaces(ctx context.Context, rows []db.Conversa
 	if b.noted == nil {
 		b.noted = map[[2]string]string{}
 	}
+	var ids []string
 	for _, r := range fresh {
 		if written {
 			if k := [2]string{r.MachineID, r.SessionID}; b.noted[k] != SpaceHealth {
 				b.noted[k] = r.Space
 			}
+			ids = append(ids, r.SessionID)
 		}
 		if r.Space == SpaceHealth || !durable {
 			b.learnLocked(r.SessionID, r.Space)
 		}
 	}
 	b.mu.Unlock()
-}
-
-// openTaskConversations are the conversations the open tasks came from and those that supervise them, sorted, for
-// their computers to list however quiet they are (keptSessions): a task's report goes to its supervisor, and a
-// conversation quiet since before the manager noted spaces is noted once it is listed. An assistant conversation is
-// on the assistant's computer (v.MachineID); a task leader's agent is on its own; the main conversation is kept apart.
-func (s *Service) openTaskConversations(v Settings) []SessionRef {
-	refs := map[string]bool{}
-	s.todos.mu.RLock()
-	for _, t := range s.todos.todos {
-		if t.DoneAt != nil {
-			continue
-		}
-		refs[t.Origin] = true
-		if t.Supervision != nil {
-			refs[t.Supervision.Supervisor] = true
-		}
-	}
-	s.todos.mu.RUnlock()
-	seen := map[SessionRef]bool{}
-	for ref := range refs {
-		if ref == "" || ref == v.Main {
-			continue
-		}
-		c := SessionRef{MachineID: v.MachineID, SessionID: ref}
-		if machine, sid, ok := parseLeaderRef(ref); ok {
-			c = SessionRef{MachineID: s.canonical(machine), SessionID: sid}
-		}
-		if c.MachineID != "" {
-			seen[c] = true
-		}
-	}
-	out := make([]SessionRef, 0, len(seen))
-	for c := range seen {
-		out = append(out, c)
-	}
-	slices.SortFunc(out, func(a, b SessionRef) int {
-		return cmp.Or(cmp.Compare(a.MachineID, b.MachineID), cmp.Compare(a.SessionID, b.SessionID))
-	})
-	return out
+	s.spaceBackfillNoted(ids) // noted: no computer need list them for it any more
 }
 
 // listedSpace is the space of assistant conversation c as a computer lists it (its own space or its directory's, a
@@ -175,6 +137,8 @@ func (s *Service) conversationSpacesListed(machine string, list []proto.Session)
 		return
 	}
 	var rows []db.ConversationSpace
+	var already []string // noted before: one the backfill keeps listed is done with
+	backfill := s.spaceFill.active.Load()
 	b := &s.convSpaces
 	b.mu.Lock()
 	for _, c := range list {
@@ -183,14 +147,19 @@ func (s *Service) conversationSpacesListed(machine string, list []proto.Session)
 			continue
 		}
 		if was, seen := b.noted[[2]string{machine, c.SessionID}]; seen && (was == space || was == SpaceHealth) {
+			if backfill {
+				already = append(already, c.SessionID)
+			}
 			continue // the usual list: nothing new, nothing to copy
 		}
 		rows = append(rows, db.ConversationSpace{MachineID: machine, SessionID: c.SessionID, Space: space})
 	}
 	if len(rows) == 0 {
 		b.mu.Unlock()
+		s.spaceBackfillNoted(already)
 		return
 	}
+	defer s.spaceBackfillNoted(already)
 	if _, durable := s.store().(conversationSpaceStore); !durable {
 		b.mu.Unlock()
 		s.noteConversationSpaces(context.Background(), rows) // the book alone: nothing to wait for
@@ -239,6 +208,15 @@ func (s *Service) listedSpacesWritten() bool {
 // notedSpaces are the spaces noted of conversations ids, by session id: from the book, and those it has not seen read
 // from the store in one query. One noted nowhere is left out, and so are those the store could not be read for.
 func (s *Service) notedSpaces(ctx context.Context, ids []string) map[string]string {
+	out, err := s.readNotedSpaces(ctx, ids)
+	if err != nil {
+		s.logf("conversation spaces: read %d: %v", len(ids), err)
+	}
+	return out
+}
+
+// readNotedSpaces is notedSpaces with the store's error: what the book knows is answered all the same.
+func (s *Service) readNotedSpaces(ctx context.Context, ids []string) (map[string]string, error) {
 	out := make(map[string]string, len(ids))
 	var miss []string
 	b := &s.convSpaces
@@ -253,12 +231,11 @@ func (s *Service) notedSpaces(ctx context.Context, ids []string) map[string]stri
 	b.mu.Unlock()
 	st, ok := s.store().(conversationSpaceStore)
 	if !ok || len(miss) == 0 {
-		return out
+		return out, nil
 	}
 	got, err := st.ConversationSpaces(ctx, miss)
 	if err != nil {
-		s.logf("conversation spaces: read %d: %v", len(miss), err)
-		return out
+		return out, err
 	}
 	b.mu.Lock()
 	for id, space := range got {
@@ -266,7 +243,7 @@ func (s *Service) notedSpaces(ctx context.Context, ids []string) map[string]stri
 		out[id] = b.known[id]
 	}
 	b.mu.Unlock()
-	return out
+	return out, nil
 }
 
 // spaceTold is a conversation's space ("" the assistant's own) and whether it could be told.
