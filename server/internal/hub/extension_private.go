@@ -85,22 +85,27 @@ func (h *Hub) sessionHiddenFromExtensions(machine, sid string) bool {
 
 // extensionResume answers whether an extension's token may resume conversation id on computer m (POST
 // /api/v1/sessions with resume_session_id), and whether only the computer's own check lets it (checked: the start
-// carries resume_outside_health); not ok has written the answer. A conversation the computer lists goes on unless it
-// is the health space's (404, as for one that does not exist). One it does not list (quiet for a week, past its 80
-// newest, a short transcript: a stopped Agent takes no message, so a resume is the only way back to one the extension
-// started) goes to a node that announces nodeproto.ResumeOutsideHealth, which resumes it only when it has it outside
-// the space; an older node would start a new conversation under an id it has nothing of, which the manager would take
-// for the one the id names, a health chat's included (#10941, docs/extensions/extensions.md "Resuming a chat"): 404.
-// While the hub cannot tell which it is (no list of that computer's sessions yet, which may have it, or no word of
-// its node since the hub or the devices manager started) the answer is 503, retryable. The caller asks it after every
-// check that holds for any id, so that only this answer depends on the id.
+// carries resume_outside_health); not ok has written the answer. A conversation the computer lists goes on unless an
+// extension may not control it (publicSessionForControl: the health space's, one in a folder set to Hide, a deleted
+// one): 404, as for one that does not exist. One it does not list (quiet for a week, past its 80 newest, a short
+// transcript: a stopped Agent takes no message, so a resume is the only way back to one the extension started) goes,
+// unless the owner deleted it, to a node that announces nodeproto.ResumeOutsideHealth, which resumes it only when it
+// has it outside the space; an older node would start a new conversation under an id it has nothing of, which the
+// manager would take for the one the id names, a health chat's included (#10941, docs/extensions/extensions.md
+// "Resuming a chat"): 404. While the hub cannot tell which it is (no list of that computer's sessions yet, which may
+// have it, or no word of its node since the hub or the devices manager started) the answer is 503, retryable. The
+// caller asks it after every check that holds for any id, so that only this answer depends on the id.
 func (h *Hub) extensionResume(w http.ResponseWriter, m *Machine, id string) (checked, ok bool) {
-	if s, listed := m.session(id); listed {
-		if healthSession(&s) {
+	if _, listed := m.session(id); listed {
+		if !h.publicSessionForControl(m, id) {
 			writeErr(w, http.StatusNotFound, errDeleteUnknown)
 			return false, false
 		}
 		return false, true
+	}
+	if _, deleted := h.deletedAt(m.cfg.ID)[id]; deleted {
+		writeErr(w, http.StatusNotFound, errDeleteUnknown)
+		return false, false
 	}
 	if m.announces(nodeproto.ResumeOutsideHealth) {
 		return true, true

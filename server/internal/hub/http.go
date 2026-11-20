@@ -898,7 +898,9 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if restrictedAgentData(r) {
-		if p.ResumeSessionID != "" && !h.publicSessionForControl(m, p.ResumeSessionID) {
+		// A scoped token resumes only a chat its computer lists, shown and outside the health space. An extension's
+		// resume is decided last (extensionResume): one its computer no longer lists goes to the computer's check (#10941).
+		if pr.Role == roleScoped && p.ResumeSessionID != "" && !h.publicSessionForControl(m, p.ResumeSessionID) {
 			writeErr(w, http.StatusNotFound, errDeleteUnknown)
 			return
 		}

@@ -224,10 +224,16 @@ func sessionStarts(m *guardManager, id string) []string {
 // ownerDo is extDo with the owner's token.
 func ownerDo(t *testing.T, h *Hub, url, method, path, body string, header map[string]string) (int, string) {
 	t.Helper()
+	return tokenDo(t, h.cfg.Token, url, method, path, body, header)
+}
+
+// tokenDo is extDo with token.
+func tokenDo(t *testing.T, token, url, method, path, body string, header map[string]string) (int, string) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, method, url+path, strings.NewReader(body))
-	req.Header.Set("Authorization", "Bearer "+h.cfg.Token)
+	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	for k, v := range header {
 		req.Header.Set(k, v)
@@ -378,6 +384,63 @@ func TestAnExtensionsResumeIsDecidedAfterTheRequestsOtherChecks(t *testing.T) {
 		`{"machine_id":"mb","launcher":"claude","cwd":"/work/project","resume_session_id":"`+unlisted+`","prompt":"go on"}`, nil)
 	if codeHealth != http.StatusNotFound || codeHealth != codeUnlisted || bodyHealth != bodyUnlisted {
 		t.Fatalf("well formed: the health chat %d %s, the unlisted id %d %s", codeHealth, bodyHealth, codeUnlisted, bodyUnlisted)
+	}
+}
+
+// #12162 (#12097) and #10941's resume rule together: a restricted token controls only a chat its computer lists, shown
+// and outside the health space, and a scoped token resumes only such a chat. An extension's resume of a listed chat
+// follows that rule (one in a folder set to Hide or one the owner deleted is 404 as one in the space), and one its
+// computer does not list still goes to the computer's check, unless the owner deleted it. None of the refused ones
+// reaches the computer.
+func TestAnExtensionsResumeFollowsTheControlRule(t *testing.T) {
+	const own, deletedUnlisted = "7a1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a40", "7a1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a41"
+	h, url, b := extensionResumeHub(t, []string{nodeproto.Sessions, nodeproto.ResumeOutsideHealth}, func(string) (any, error) {
+		return map[string]any{"session": map[string]any{"session_id": "started"}}, nil
+	})
+	long := time.Now().Add(-time.Hour)
+	hidden := proto.Session{MachineID: "mb", SessionID: "bhidden", Title: "HIDDEN", Cwd: "/work/hidden", Status: proto.StatusOffline, UpdatedAt: long}
+	hidden.SetHiddenByDirectory(true) // in a folder set to Hide, as the manager decorates it
+	h.takeFleetSessions(assistantwire.FleetSessions{MachineID: "mb", Sessions: []proto.Session{
+		{MachineID: "mb", SessionID: "b1", Title: "B-SESSION", Cwd: "/work/project", Status: proto.StatusOffline, UpdatedAt: long},
+		hidden,
+		{MachineID: "mb", SessionID: "bdel", Title: "DELETED", Cwd: "/work/project", Status: proto.StatusOffline, UpdatedAt: long},
+	}})
+	eventually(t, 5*time.Second, "mb's sessions", func() bool {
+		s, ok := h.localMachine("mb").session("bhidden")
+		return ok && s.HiddenByDirectory()
+	})
+	for _, id := range []string{"bdel", deletedUnlisted} {
+		if err := h.noteDeleted(t.Context(), "mb", id, time.Now().Add(-time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resume := func(id string) string {
+		return `{"machine_id":"mb","launcher":"claude","cwd":"/work/project","resume_session_id":"` + id + `","prompt":"go on"}`
+	}
+	for _, id := range []string{"bhidden", "bdel", deletedUnlisted} {
+		if code, body := extDo(t, url, http.MethodPost, "/api/v1/sessions", resume(id), nil); code != http.StatusNotFound || len(sessionStarts(b, id)) != 0 {
+			t.Errorf("the extension's resume of %s: %d %s, reached the computer %d times", id, code, body, len(sessionStarts(b, id)))
+		}
+	}
+	if code, body := extDo(t, url, http.MethodPost, "/api/v1/sessions", resume(own), nil); code != http.StatusOK ||
+		len(sessionStarts(b, own)) != 1 || !strings.Contains(sessionStarts(b, own)[0], `"resume_outside_health":true`) {
+		t.Fatalf("the extension's resume of its own unlisted chat: %d %s, %v", code, body, sessionStarts(b, own))
+	}
+
+	code, issued := ownerDo(t, h, url, http.MethodPost, "/api/v1/auth/tokens", `{"kind":"other","scopes":["agents.control","agents.permission_mode"]}`, nil)
+	var tok struct {
+		Token string `json:"token"`
+		Role  string `json:"role"`
+	}
+	if err := json.Unmarshal([]byte(issued), &tok); err != nil || code != http.StatusOK || tok.Role != roleScoped || tok.Token == "" {
+		t.Fatalf("a scoped token: %d %s", code, issued)
+	}
+	if code, body := tokenDo(t, tok.Token, url, http.MethodPost, "/api/v1/sessions", resume("b1"), nil); code != http.StatusOK {
+		t.Fatalf("the scoped token's resume of a listed chat: %d %s", code, body)
+	}
+	before := len(sessionStarts(b, own))
+	if code, body := tokenDo(t, tok.Token, url, http.MethodPost, "/api/v1/sessions", resume(own), nil); code != http.StatusNotFound || len(sessionStarts(b, own)) != before {
+		t.Fatalf("the scoped token's resume of an unlisted chat: %d %s", code, body)
 	}
 }
 

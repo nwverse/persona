@@ -877,11 +877,13 @@ A stopped Agent takes no message (#4754), so `POST /api/v1/sessions` with `resum
 a `permission_mode`, also `agents.permission_mode`) is the only way back to one the extension started. What its token
 may resume, on its own manager's computers (#10941):
 
-- **A chat its computer lists** outside the health space, as the owner would. One listed in the space answers 404
-  `not_found`, as a chat that does not exist.
+- **A chat its computer lists** outside the health space, as the owner would. One listed in the space, in a folder set
+  to Hide, or deleted by the owner answers 404 `not_found`, as a chat that does not exist (the rule every session
+  control follows).
 - **A chat its computer no longer lists.** A computer lists a quiet Claude Code chat only for a week, among its 80
-  newest and once its transcript holds 2 KB, so on a busy computer one drops out within two days. The hub passes such
-  a resume on, marked `resume_outside_health`, to a computer whose Persona Link announces that check. The computer
+  newest and once its transcript holds 2 KB, so on a busy computer one drops out within two days. Unless the owner
+  deleted it, the hub passes such a resume on, marked `resume_outside_health`, to a computer whose Persona Link
+  announces that check. The computer
   resumes the chat only when something no resume rewrites says where it started (its transcript or rollout, its omp
   session file, or for an engine's Agent its record, below) and every folder it knows it by is outside the health
   space and the Agent folders set to Block: where it started, where it last was, and where its record, a start of it
