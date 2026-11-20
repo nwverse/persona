@@ -351,17 +351,26 @@ function DevelopmentBackup({ s, onSaved }: { s: HubUpdateStatus; onSaved: (s: Hu
   const d = s.development!;
   const recommended = d.backup_default_directory ?? "";
   const effective = d.backup_directory ?? recommended;
-  const [dir, setDir] = useState("");
+  const isDefault = d.backup_directory_is_default ?? (!effective || effective === recommended);
+  const initialDir = isDefault ? "" : effective;
+  const [dir, setDir] = useState(initialDir);
   const [retain, setRetain] = useState(String(d.backup_retain ?? 3));
   const [saving, setSaving] = useState(false);
   useEffect(() => {
-    setDir(effective && effective !== recommended ? effective : "");
+    setDir(initialDir);
     setRetain(String(d.backup_retain ?? 3));
-  }, [effective, recommended, d.backup_retain]);
+  }, [initialDir, d.backup_retain]);
   const save = async () => {
     setSaving(true);
     try {
-      onSaved(await setHubUpdateSettings({ development_backup_directory: dir.trim(), development_backup_retain: Number(retain) }));
+      const trimmed = dir.trim();
+      const payload: { development_backup_directory?: string; development_backup_retain: number } = {
+        development_backup_retain: Number(retain),
+      };
+      if (trimmed !== initialDir) {
+        payload.development_backup_directory = trimmed;
+      }
+      onSaved(await setHubUpdateSettings(payload));
       toast(t("settings-hubsettings.backup_saved"), "ok");
     } catch (e) {
       toast(t("settings-hubsettings.save_failed", { error: errorText(e) }), "error");

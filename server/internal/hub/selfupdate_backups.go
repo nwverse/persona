@@ -11,8 +11,11 @@ func (u *updater) developmentBackups(ctx context.Context) ([]update.DevelopmentV
 	u.mu.Lock()
 	selected := u.developmentLocked()
 	u.mu.Unlock()
-	if !selected || !u.developmentAvailable() {
+	if !selected {
 		return nil, i18n.Err("hub-selfupdate.err_development_config")
+	}
+	if err := u.developmentUnavailableErr(); err != nil {
+		return nil, err
 	}
 	var out struct {
 		Backups []update.DevelopmentVersion `json:"backups"`
@@ -30,9 +33,13 @@ func (u *updater) developmentBackups(ctx context.Context) ([]update.DevelopmentV
 // Database dumps and history archives are never inputs to installation.
 func (u *updater) beginDevelopmentRestore(ctx context.Context, id string) error {
 	u.mu.Lock()
-	if !u.developmentLocked() || !u.developmentAvailable() {
+	if !u.developmentLocked() {
 		u.mu.Unlock()
 		return i18n.Err("hub-selfupdate.err_development_config")
+	}
+	if err := u.developmentUnavailableErr(); err != nil {
+		u.mu.Unlock()
+		return err
 	}
 	if u.checking || u.updateActiveLocked() {
 		u.mu.Unlock()

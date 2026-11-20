@@ -211,6 +211,17 @@ type liveActivities struct {
 	answerMu  sync.Mutex
 	answers   []phoneAnswer
 	answering bool
+	// quiescedStart, deferredHolds and deferredSaves hold writes refused while
+	// a development snapshot pauses hub writers (quiesce.go).
+	quiescedStart bool
+	deferredHolds []deferredLiveHold
+	deferredSaves map[string]bool
+}
+
+type deferredLiveHold struct {
+	device string
+	asOf   time.Time
+	hold   time.Duration
 }
 
 // phoneAnswer is one register_phone: the push id it named, its connection's credential, and when it arrived.
@@ -691,6 +702,14 @@ func (la *liveActivities) claimStart(r db.LiveActivity, now time.Time) (time.Tim
 		la.h.logf("live activity start deferred: reason=store_unavailable device=%s due=%s", trafficIdentity(r.DeviceID), retry.UTC().Format(time.RFC3339))
 		return retry, false
 	}
+	if !la.h.quiesce.beginOrDefer(func() {
+		la.mu.Lock()
+		la.quiescedStart = true
+		la.mu.Unlock()
+	}) {
+		return retry, false
+	}
+	defer la.h.quiesce.end()
 	ctx, cancel := context.WithTimeout(context.Background(), la.storeTimeout)
 	defer cancel()
 	due, claimed, err := la.h.store.ClaimLiveActivityStart(ctx, r.DeviceID, r.PushToStartToken, now, fleetRefresh, fleetMaxAge)
@@ -736,6 +755,16 @@ func (la *liveActivities) claimStart(r db.LiveActivity, now time.Time) (time.Tim
 func (la *liveActivities) holdStart(ctx context.Context, device string, asOf time.Time, hold time.Duration) {
 	if la.h.store == nil {
 		return
+	}
+	if !quiesceHeld(ctx) {
+		if !la.h.quiesce.beginOrDefer(func() {
+			la.mu.Lock()
+			la.deferredHolds = append(la.deferredHolds, deferredLiveHold{device: device, asOf: asOf, hold: hold})
+			la.mu.Unlock()
+		}) {
+			return
+		}
+		defer la.h.quiesce.end()
 	}
 	ctx, cancel := context.WithTimeout(ctx, la.storeTimeout)
 	defer cancel()
@@ -1006,6 +1035,19 @@ func (la *liveActivities) updateContext(ctx context.Context, device string, fn f
 		la.phoneAnswered(ctx, device) // only the phone reports an update token
 	}
 	if la.h.store != nil {
+		if !quiesceHeld(ctx) {
+			if !la.h.quiesce.beginOrDefer(func() {
+				la.mu.Lock()
+				if la.deferredSaves == nil {
+					la.deferredSaves = map[string]bool{}
+				}
+				la.deferredSaves[device] = true
+				la.mu.Unlock()
+			}) {
+				return nil
+			}
+			defer la.h.quiesce.end()
+		}
 		ctx, cancel := context.WithTimeout(ctx, la.storeTimeout)
 		defer cancel()
 		if err := la.h.store.SaveLiveActivity(ctx, v); err != nil {
@@ -1014,6 +1056,65 @@ func (la *liveActivities) updateContext(ctx context.Context, device string, fn f
 		}
 	}
 	return nil
+}
+
+// resumeWrites flushes Live Activity holds, saves and start claims deferred
+// while a development snapshot paused hub writers (quiesce.go).
+func (la *liveActivities) resumeWrites() {
+	if la == nil {
+		return
+	}
+	la.mu.Lock()
+	quiescedStart := la.quiescedStart
+	la.quiescedStart = false
+	holds := la.deferredHolds
+	la.deferredHolds = nil
+	saves := la.deferredSaves
+	la.deferredSaves = nil
+	if quiescedStart {
+		la.repair = true
+	}
+	la.mu.Unlock()
+	if quiescedStart {
+		select {
+		case la.signal <- struct{}{}:
+		default:
+		}
+	}
+	if len(holds) == 0 && len(saves) == 0 {
+		return
+	}
+	la.h.nodeWorkers.Add(1)
+	go func() {
+		defer la.h.nodeWorkers.Done()
+		for _, h := range holds {
+			la.holdStart(context.Background(), h.device, h.asOf, h.hold)
+		}
+		for device := range saves {
+			la.mu.Lock()
+			v, ok := la.rows[device]
+			la.mu.Unlock()
+			if !ok || la.h.store == nil {
+				continue
+			}
+			if !la.h.quiesce.beginOrDefer(func() {
+				la.mu.Lock()
+				if la.deferredSaves == nil {
+					la.deferredSaves = map[string]bool{}
+				}
+				la.deferredSaves[device] = true
+				la.mu.Unlock()
+			}) {
+				continue
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), la.storeTimeout)
+			if err := la.h.store.SaveLiveActivity(ctx, v); err != nil {
+				la.h.logf("save live activity: %v", err)
+			}
+			cancel()
+			la.h.quiesce.end()
+		}
+	}()
 }
 
 func (la *liveActivities) routes(api *http.ServeMux) {

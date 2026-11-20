@@ -121,3 +121,31 @@ func TestDevelopmentAdoptionFenceMatchesExactAttempt(t *testing.T) {
 		t.Fatal("non-monotonic identity", got)
 	}
 }
+
+func TestDevelopmentBackupConfigCoordinatedRequiresHooksForExtras(t *testing.T) {
+	cases := []struct {
+		name        string
+		cfg         DevelopmentBackupConfig
+		coordinated bool
+		external    bool
+	}{
+		{"builtin default", DevelopmentBackupConfig{}, true, false},
+		{"external hooks", DevelopmentBackupConfig{Quiesce: []string{"p"}, Resume: []string{"r"}}, true, true},
+		{"only quiesce", DevelopmentBackupConfig{Quiesce: []string{"p"}}, false, false},
+		{"only resume", DevelopmentBackupConfig{Resume: []string{"r"}}, false, false},
+		{"extra database without hooks", DevelopmentBackupConfig{ExtraDatabases: []string{"postgres://localhost/extra"}}, false, false},
+		{"extra root without hooks", DevelopmentBackupConfig{ExtraRoots: []string{"/srv/extra"}}, false, false},
+		{"extra database with hooks", DevelopmentBackupConfig{Quiesce: []string{"p"}, Resume: []string{"r"}, ExtraDatabases: []string{"postgres://localhost/extra"}}, true, true},
+		{"extra root with hooks", DevelopmentBackupConfig{Quiesce: []string{"p"}, Resume: []string{"r"}, ExtraRoots: []string{"/srv/extra"}}, true, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.cfg.Coordinated(); got != tc.coordinated {
+				t.Fatalf("Coordinated() = %v, want %v", got, tc.coordinated)
+			}
+			if got := tc.cfg.ExternalQuiesce(); got != tc.external {
+				t.Fatalf("ExternalQuiesce() = %v, want %v", got, tc.external)
+			}
+		})
+	}
+}

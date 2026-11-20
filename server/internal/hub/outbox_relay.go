@@ -73,13 +73,16 @@ func (h *Hub) firstHandOver(ctx context.Context, manager, id string) bool {
 		return false
 	}
 	if s, ok := h.store.(handOverStore); ok {
-		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-		first, err := s.HandOverFirst(sctx, manager, id, handedOverFor)
-		cancel()
-		if err == nil {
-			return first // an earlier hub process may have taken it
+		if h.quiesce.begin() {
+			sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			first, err := s.HandOverFirst(sctx, manager, id, handedOverFor)
+			cancel()
+			h.quiesce.end()
+			if err == nil {
+				return first // an earlier hub process may have taken it
+			}
+			h.logf("outbox: [%s] %s: %v", manager, id, err)
 		}
-		h.logf("outbox: [%s] %s: %v", manager, id, err)
 	}
 	return true
 }
@@ -87,9 +90,12 @@ func (h *Hub) firstHandOver(ctx context.Context, manager, id string) bool {
 // forgetHandOver: manager's item id was not delivered after all (refused): one that comes again is tried again.
 func (h *Hub) forgetHandOver(manager, id string) {
 	if s, ok := h.store.(handOverStore); ok {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_ = s.HandOverForget(ctx, manager, id)
-		cancel()
+		if h.quiesce.begin() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_ = s.HandOverForget(ctx, manager, id)
+			cancel()
+			h.quiesce.end()
+		}
 	}
 	h.handedOver.forget(manager + "\x00" + id)
 }

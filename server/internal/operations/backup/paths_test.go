@@ -88,6 +88,41 @@ func TestValidateOutputDirectoryRefusals(t *testing.T) {
 	if _, err := ValidateOutputDirectory(home, ""); err == nil {
 		fatal(t, "accepted an empty directory")
 	}
+	if filepath.Separator != '\\' {
+		backslash := filepath.Join(t.TempDir(), `snap\shots`)
+		if _, err := ValidateOutputDirectory(home, backslash); err == nil || !strings.Contains(err.Error(), "backslash") {
+			fatalf(t, "ValidateOutputDirectory(%q) = %v, want backslash refusal", backslash, err)
+		}
+		if _, err := os.Lstat(backslash); !errors.Is(err, os.ErrNotExist) {
+			fatalf(t, "refused backslash path was created: %v", err)
+		}
+	}
+}
+
+func TestRecommendedDevelopmentBackupDirCanonicalizesSymlinks(t *testing.T) {
+	realHome := filepath.Join(t.TempDir(), "real-home")
+	if err := os.Mkdir(realHome, 0o700); err != nil {
+		fatal(t, err)
+	}
+	linkHome := filepath.Join(t.TempDir(), "link-home")
+	if err := os.Symlink(realHome, linkHome); err != nil {
+		fatal(t, err)
+	}
+	resolvedHome, err := filepath.EvalSymlinks(realHome)
+	if err != nil {
+		fatal(t, err)
+	}
+	got := RecommendedDevelopmentBackupDir(linkHome)
+	want := filepath.Join(resolvedHome, "update", "development-backups")
+	if got != want {
+		fatalf(t, "RecommendedDevelopmentBackupDir(symlink) = %q, want %q", got, want)
+	}
+	if !SamePath(filepath.Join(linkHome, "update", "development-backups"), want) {
+		fatal(t, "SamePath did not treat symlinked and resolved recommended paths as equal")
+	}
+	if SamePath(filepath.Join(linkHome, "other"), want) {
+		fatal(t, "SamePath matched distinct paths")
+	}
 }
 
 // A symlinked parent is resolved, and a path that reaches a collected tree

@@ -461,6 +461,22 @@ func (p *Pusher) saveIntercepts() {
 			p.sentPrunedAt = now // a failed sweep waits for the next one
 		}
 		p.gradingMu.Unlock()
+		if !p.quiesce.beginOrDefer(func() {
+			p.gradingMu.Lock()
+			if saveIntercepts {
+				p.heldDirty = true
+			}
+			if len(sent) > 0 {
+				p.sentPending = append(sent, p.sentPending...)
+				if len(p.sentPending) > pushSentMax {
+					p.sentPending = slices.Clone(p.sentPending[len(p.sentPending)-pushSentMax:])
+				}
+			}
+			p.gradingWriting = false
+			p.gradingMu.Unlock()
+		}) {
+			return
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), p.storeTimeout)
 		failedIntercepts, failedSent := false, false
 		if saveIntercepts {
@@ -480,6 +496,7 @@ func (p *Pusher) saveIntercepts() {
 			}
 		}
 		cancel()
+		p.quiesce.end()
 		if !failedIntercepts && !failedSent {
 			continue
 		}
@@ -638,6 +655,16 @@ func (p *Pusher) loadSent() {
 func (p *Pusher) mirrorSent(ctx context.Context) error {
 	if p == nil || p.store == nil {
 		return nil
+	}
+	if !quiesceHeld(ctx) {
+		if !p.quiesce.beginOrDefer(func() {
+			p.mu.Lock()
+			p.maintenanceDeferred = true
+			p.mu.Unlock()
+		}) {
+			return nil
+		}
+		defer p.quiesce.end()
 	}
 	// One write at a time, so a list taken earlier never lands over a later one.
 	p.sentMirrorMu.Lock()

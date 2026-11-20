@@ -89,9 +89,10 @@ type webPushQueued struct {
 }
 
 type webPusher struct {
-	store Store
-	logf  func(string, ...any)
-	now   func() time.Time
+	store   Store
+	quiesce *writeQuiescer
+	logf    func(string, ...any)
+	now     func() time.Time
 	// client posts to the push services; check vets an endpoint (tests let their own server through).
 	client     *http.Client
 	check      func(string) (string, error)
@@ -104,10 +105,11 @@ type webPusher struct {
 	keyMu sync.Mutex // making the key: one at a time
 	keys  webpush.Keys
 
-	saveMu sync.Mutex // one write of the list at a time, the latest state
-	mu     sync.Mutex
-	subs   map[string]webSub // by device
-	last   map[string]webDelivery
+	saveMu         sync.Mutex // one write of the list at a time, the latest state
+	mu             sync.Mutex
+	subs           map[string]webSub // by device
+	last           map[string]webDelivery
+	pendingForgets []webSub
 
 	queueMu sync.Mutex
 	tails   map[webPushSubscription]*webPushQueued // the last dispatch queued for each browser endpoint
@@ -166,6 +168,12 @@ func (w *webPusher) key(ctx context.Context) (webpush.Keys, error) {
 		return webpush.Keys{}, err
 	}
 	if w.store != nil {
+		if !quiesceHeld(ctx) {
+			if !w.quiesce.begin() {
+				return webpush.Keys{}, i18n.Err("hub-selfupdate.err_quiesced")
+			}
+			defer w.quiesce.end()
+		}
 		if err := w.store.PutSetting(ctx, webPushKeysSetting, made); err != nil {
 			return webpush.Keys{}, err
 		}
@@ -180,6 +188,24 @@ func (w *webPusher) key(ctx context.Context) (webpush.Keys, error) {
 }
 
 // currentKey is the key without making one ("" when none was made yet).
+func (w *webPusher) resumeWrites() {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	forgets := w.pendingForgets
+	w.pendingForgets = nil
+	w.mu.Unlock()
+	if len(forgets) == 0 {
+		return
+	}
+	go func() {
+		for _, s := range forgets {
+			w.forgetIfCurrent(s)
+		}
+	}()
+}
+
 func (w *webPusher) currentKey() string {
 	if w == nil {
 		return ""
@@ -332,6 +358,14 @@ func (w *webPusher) signedOut(credential string) {
 
 // forgetIfCurrent drops a subscription the push service says is no more, while it is still that one.
 func (w *webPusher) forgetIfCurrent(s webSub) {
+	if !w.quiesce.beginOrDefer(func() {
+		w.mu.Lock()
+		w.pendingForgets = append(w.pendingForgets, s)
+		w.mu.Unlock()
+	}) {
+		return
+	}
+	defer w.quiesce.end()
 	dropped := false
 	_ = w.save(func(next map[string]webSub) bool {
 		cur, ok := next[s.Device]

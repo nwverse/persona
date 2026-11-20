@@ -24,9 +24,16 @@ vi.mock("../../lib/hub-update", async (original) => ({
     saved.push(input);
     status = { ...status, ...input, auto: false };
     if (input.development_backup_directory !== undefined || (input as { development_backup_retain?: number }).development_backup_retain !== undefined) {
+      const nextDir = input.development_backup_directory === undefined ? status.development!.backup_directory
+        : input.development_backup_directory || status.development!.backup_default_directory;
+      const isDefault = input.development_backup_directory === ""
+        ? true
+        : input.development_backup_directory !== undefined
+          ? nextDir === status.development!.backup_default_directory
+          : status.development!.backup_directory_is_default;
       status = { ...status, development: { ...status.development!,
-        backup_directory: input.development_backup_directory === undefined ? status.development!.backup_directory
-          : input.development_backup_directory || status.development!.backup_default_directory,
+        backup_directory: nextDir,
+        backup_directory_is_default: isDefault,
         backup_retain: (input as { development_backup_retain?: number }).development_backup_retain ?? status.development!.backup_retain } };
     }
     return status;
@@ -53,7 +60,7 @@ async function mount(state = "available") {
     state, busy: [], auto: false, auto_notice: false, confirmed: true, auto_update_nodes: false,
     development: { configured: true, branch: "main", current_commit: "a".repeat(40), current_updated_at: "2026-11-13T10:00:00Z",
       backup_directory: "/var/snapshots", backup_default_directory: "/home/persona/.persona/update/development-backups",
-      backup_retain: 3, builtin_quiesce: true },
+      backup_directory_is_default: false, backup_retain: 3, builtin_quiesce: true },
     latest: { version: "web-dev-new", build: 202611130001, newer: true, bad: false, commit: "b".repeat(40), branch: "main",
       updated_at: "2026-11-14T10:00:00Z",
       backup_id: state === "applying_backup" ? "snapshot-fixture" : undefined },
@@ -185,4 +192,37 @@ it("reloads the snapshot list after the folder changes", async () => {
   await act(async () => save.click());
   // A snapshot listed from the old folder cannot be found in the new one.
   expect(backupReads).toBe(2);
+});
+
+it("omits development_backup_directory when only snapshot retention changed", async () => {
+  await mount();
+  const group = host.querySelector('[data-settings-group="hub-dev-backup"]')!;
+  const retain = group.querySelector('select[aria-label="Snapshots to keep"]') as HTMLSelectElement;
+  await act(async () => { retain.value = "10"; retain.dispatchEvent(new Event("change", { bubbles: true })); });
+  const save = [...group.querySelectorAll("button")].find((b) => b.textContent === "Save")!;
+  await act(async () => save.click());
+  expect(saved).toEqual([{ development_backup_retain: 10 }]);
+});
+
+it("uses backup_directory_is_default even when symlinked raw paths differ", async () => {
+  await mount();
+  await act(async () => events.get("hub_update")!({ update: {
+    ...status,
+    development: {
+      ...status.development!,
+      backup_directory: "/private/var/persona/update/development-backups",
+      backup_default_directory: "/var/persona/update/development-backups",
+      backup_directory_is_default: true,
+    },
+  } }));
+  const group = host.querySelector('[data-settings-group="hub-dev-backup"]')!;
+  const folder = group.querySelector('input[aria-label="Backup folder"]') as HTMLInputElement;
+  const useRecommended = [...group.querySelectorAll("button")].find((b) => b.textContent === "Use recommended") as HTMLButtonElement;
+  expect(folder.value).toBe("");
+  expect(useRecommended.disabled).toBe(true);
+  const retain = group.querySelector('select[aria-label="Snapshots to keep"]') as HTMLSelectElement;
+  await act(async () => { retain.value = "5"; retain.dispatchEvent(new Event("change", { bubbles: true })); });
+  const save = [...group.querySelectorAll("button")].find((b) => b.textContent === "Save")!;
+  await act(async () => save.click());
+  expect(saved).toEqual([{ development_backup_retain: 5 }]);
 });

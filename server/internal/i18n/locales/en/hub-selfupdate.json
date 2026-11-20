@@ -36,6 +36,7 @@
   "reason_not_confirmed": "The new version was not confirmed within 3 minutes",
   "err_program_unreplaced": "Version {version} has no {program} for {platform}, and {service} runs it: installing it would leave {program} on the old version. Wait for a release that includes it",
   "err_development_config": "The backup writer quiesce and resume commands in hub.json must be configured as a pair, or both left empty to use the hub's built-in pause.",
+  "err_development_external_quiesce": "This hub snapshots extra databases, extra roots, or another local manager that the built-in pause cannot stop. Configure both backup quiesce and resume commands in hub.json.",
   "err_development_topology": "Development updates require the built-in child assistant. Computers owned by independent assistants need their original update channel.",
   "err_development_platform": "Development updates need a hub on Linux or macOS.",
   "err_development_quiesce": "The hub could not pause its writers for the backup: {error}",

@@ -684,8 +684,11 @@ func (h *Hub) stopBus() []*busConn {
 // tells the apps (managers.go).
 func (h *Hub) busSeen(ctx context.Context, id string, where *db.BusIdentity) {
 	if s := h.managerStore(); s != nil {
-		if err := s.SeeBusIdentity(ctx, id, where); err != nil {
-			h.logf("bus: [%s] roster: %v", id, err)
+		if h.quiesce.begin() {
+			if err := s.SeeBusIdentity(ctx, id, where); err != nil {
+				h.logf("bus: [%s] roster: %v", id, err)
+			}
+			h.quiesce.end()
 		}
 	}
 	h.managersChanged()

@@ -11,9 +11,33 @@ import (
 // RecommendedDevelopmentBackupDir is where a Web development update keeps its
 // snapshots unless the operator chose another directory: under the runtime's
 // update/ directory, which a snapshot never collects, so a snapshot cannot
-// contain an earlier one.
+// contain an earlier one. Existing symlinked prefixes are resolved so the path
+// matches what ValidateOutputDirectory persists.
 func RecommendedDevelopmentBackupDir(home string) string {
-	return filepath.Join(home, "update", "development-backups")
+	dir := filepath.Join(home, "update", "development-backups")
+	if filepath.IsAbs(dir) {
+		return resolveExisting(dir)
+	}
+	return dir
+}
+
+// SamePath reports whether two directory paths point to the same location after
+// resolving symlinks in their existing prefixes.
+func SamePath(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	return resolveExisting(filepath.Clean(a)) == resolveExisting(filepath.Clean(b))
+}
+
+func validateBackupPathChars(path string) error {
+	if strings.ContainsRune(path, 0) {
+		return errors.New("the backup directory path may not contain NUL bytes")
+	}
+	if filepath.Separator != '\\' && strings.ContainsRune(path, '\\') {
+		return errors.New("the backup directory path may not contain backslashes")
+	}
+	return nil
 }
 
 // ValidateOutputDirectory checks and prepares a snapshot directory chosen in
@@ -30,6 +54,9 @@ func ValidateOutputDirectory(home, dir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if err := validateBackupPathChars(name); err != nil {
+		return "", err
+	}
 	if !filepath.IsAbs(name) {
 		return "", errors.New("choose an absolute path, or one starting with ~")
 	}
@@ -41,6 +68,9 @@ func ValidateOutputDirectory(home, dir string) (string, error) {
 	// symlinked parents resolve it: a refused path leaves no directory behind
 	// inside the data a snapshot collects.
 	resolved := resolveExisting(clean)
+	if err := validateBackupPathChars(resolved); err != nil {
+		return "", err
+	}
 	for _, candidate := range []string{clean, resolved} {
 		if err := refuseOutputInsideCollectedTree(home, filepath.Join(candidate, ".persona-snapshot")); err != nil {
 			return "", err
@@ -72,6 +102,9 @@ func ValidateOutputDirectory(home, dir string) (string, error) {
 	// link made between the checks and the creation is caught too.
 	resolved, err = filepath.EvalSymlinks(clean)
 	if err != nil {
+		return "", err
+	}
+	if err := validateBackupPathChars(resolved); err != nil {
 		return "", err
 	}
 	if err := refuseOutputInsideCollectedTree(home, filepath.Join(resolved, ".persona-snapshot")); err != nil {

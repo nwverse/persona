@@ -58,9 +58,38 @@ func (h *Hub) keepAssistantProfile(ctx context.Context, p *assistantwire.Profile
 	if h.store == nil || p == nil {
 		return
 	}
+	if !h.quiesce.beginOrDefer(func() {
+		cp := *p
+		h.assistantProfileMu.Lock()
+		h.assistantProfilePend = &cp
+		h.assistantProfileMu.Unlock()
+	}) {
+		return
+	}
+	defer h.quiesce.end()
 	if err := h.store.PutSetting(ctx, assistantProfileKey, p); err != nil {
 		h.logf("assistant: keep the profile: %v", err)
 	}
+}
+
+func (h *Hub) resumeAssistantProfile() {
+	if h.store == nil {
+		return
+	}
+	h.assistantProfileMu.Lock()
+	p := h.assistantProfilePend
+	h.assistantProfilePend = nil
+	h.assistantProfileMu.Unlock()
+	if p == nil {
+		return
+	}
+	h.nodeWorkers.Add(1)
+	go func() {
+		defer h.nodeWorkers.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		h.keepAssistantProfile(ctx, p)
+	}()
 }
 
 // assistantProfile is the assistant's settings as it last reported them (or as the hub kept them from before a

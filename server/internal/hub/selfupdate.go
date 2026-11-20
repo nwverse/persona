@@ -155,6 +155,9 @@ type updater struct {
 	devRun      func(context.Context, *update.DevelopmentConfig, string, string, map[string]any, any) error
 	// behindNote is the update source and release noteBehind last logged as behind: once per pair, not every hour.
 	behindNote string
+	// testAfterBackupRecoveryCheck runs in tests right after UnrecoveredSnapshot
+	// and before re-acquiring u.mu in PUT /api/v1/hub/update/settings.
+	testAfterBackupRecoveryCheck func()
 }
 
 func newUpdater(h *Hub) *updater {
@@ -770,9 +773,11 @@ func (u *updater) viewIn(l i18n.Lang) updateView {
 		dv.Why = u.developmentUnavailableWhy(l)
 	}
 	backupConfig := u.developmentBackupConfigLocked()
-	dv.BackupDirectory, dv.BackupRetain, dv.BuiltinQuiesce = backupConfig.Directory, backupConfig.Retain, backupConfig.Builtin
+	dv.BackupDirectory, dv.BackupRetain = backupConfig.Directory, backupConfig.Retain
+	dv.BuiltinQuiesce = backupConfig.Builtin && u.developmentQuiesceError(backupConfig) == nil
 	if u.h.cfg != nil {
 		dv.BackupDefaultDirectory = backup.RecommendedDevelopmentBackupDir(u.h.cfg.dir)
+		dv.BackupDirectoryIsDefault = backup.SamePath(backupConfig.Directory, dv.BackupDefaultDirectory)
 	}
 	v.Development = dv
 	if u.developmentLocked() {

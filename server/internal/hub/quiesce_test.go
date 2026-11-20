@@ -3,13 +3,17 @@ package hub
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/extwire"
 )
@@ -234,4 +238,643 @@ func TestDevelopmentPauseRefusesOuterWriteRoutes(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Finding #1: authentication still runs before quiesceGate (strangers get 401,
+// not 503), authenticated requests skip TouchDeviceToken while paused, and an
+// already-launched TouchDeviceToken finishes before pause returns.
+func TestDevelopmentPauseSkipsAndWaitsForDeviceTokenTouch(t *testing.T) {
+	h := newTestHub(t)
+	tok := "jd_fixture_token_touch_test"
+	store := &tokenTouchStore{
+		meshStore: newMeshStore(),
+		token:     &db.DeviceToken{ID: "dev_touch", Name: "Phone", Kind: "phone", Role: roleFull},
+		hash:      hashToken(tok),
+	}
+	h.store = store
+	handler := h.auth(h.quiesceGate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})))
+
+	// Part A: while paused, strangers still get 401 (gate is after auth),
+	// authenticated GET succeeds without calling TouchDeviceToken, and after
+	// resume the next GET does touch the token.
+	ctx := context.Background()
+	if err := h.quiesce.pause(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Stranger POST -> 401, not 503.
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/v1/example", nil))
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("stranger during pause -> %d, want 401", w.Code)
+	}
+	// Authenticated GET -> 200, no TouchDeviceToken write.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/example", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("authenticated GET during pause -> %d, want 200", w.Code)
+	}
+	time.Sleep(25 * time.Millisecond)
+	if n := store.touches.Load(); n != 0 {
+		t.Fatalf("TouchDeviceToken ran %d times while paused", n)
+	}
+	// Authenticated POST -> 503, still no TouchDeviceToken write.
+	reqPost := httptest.NewRequest(http.MethodPost, "/api/v1/example", nil)
+	reqPost.Header.Set("Authorization", "Bearer "+tok)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, reqPost)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("authenticated POST during pause -> %d, want 503", w.Code)
+	}
+	time.Sleep(25 * time.Millisecond)
+	if n := store.touches.Load(); n != 0 {
+		t.Fatalf("TouchDeviceToken ran %d times after refused POST while paused", n)
+	}
+
+	// Part B: after resume, an authenticated GET launches TouchDeviceToken, and
+	// a concurrent pause waits until that in-flight touch completes.
+	h.quiesce.resume()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	store.onTouch = func() {
+		close(started)
+		<-release
+	}
+	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/example", nil)
+	req2.Header.Set("Authorization", "Bearer "+tok)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req2)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET after resume -> %d", w.Code)
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("TouchDeviceToken did not run after resume")
+	}
+	paused := make(chan error, 1)
+	go func() { paused <- h.quiesce.pause(ctx) }()
+	select {
+	case err := <-paused:
+		t.Fatalf("pause returned while TouchDeviceToken was still in flight: %v", err)
+	case <-time.After(30 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case err := <-paused:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("pause did not return after TouchDeviceToken completed")
+	}
+	h.quiesce.resume()
+}
+
+type tokenTouchStore struct {
+	*meshStore
+	token   *db.DeviceToken
+	hash    string
+	touches atomic.Int32
+	onTouch func()
+}
+
+func (s *tokenTouchStore) DeviceTokenByHash(_ context.Context, hash string) (*db.DeviceToken, error) {
+	if hash == s.hash {
+		cp := *s.token
+		return &cp, nil
+	}
+	return nil, nil
+}
+
+func (s *tokenTouchStore) TouchDeviceToken(_ context.Context, _ string) error {
+	s.touches.Add(1)
+	if s.onTouch != nil {
+		s.onTouch()
+	}
+	return nil
+}
+
+// Finding #2: timed and background Store writers defer due work while paused
+// and wake on resume without performing any Store write during the pause.
+func TestDevelopmentPauseDefersTimedBackgroundWriters(t *testing.T) {
+	t.Run("lock tests", func(t *testing.T) {
+		h := newTestHub(t)
+		due := time.Now().Add(-time.Second)
+		store := &bgWriteStore{meshStore: newMeshStore(), lockTestDue: &due}
+		h.store = store
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		if err := h.quiesce.pause(ctx); err != nil {
+			t.Fatal(err)
+		}
+		stop, err := h.startLockTests(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer stop()
+		time.Sleep(40 * time.Millisecond)
+		if n := store.lockTestAttempts.Load(); n != 0 {
+			t.Fatalf("AttemptLockTest ran %d times while paused", n)
+		}
+		h.resumeDevelopmentWriters()
+		waitFor(t, "due lock test dispatched after resume", func() bool {
+			return store.lockTestAttempts.Load() >= 1
+		})
+	})
+
+	t.Run("machine entries", func(t *testing.T) {
+		prev := machineEntriesDelay
+		machineEntriesDelay = 10 * time.Millisecond
+		defer func() { machineEntriesDelay = prev }()
+
+		h := newTestHub(t)
+		store := &bgWriteStore{meshStore: newMeshStore()}
+		h.store = store
+		h.devices.mu.Lock()
+		h.devices.keptRead = true
+		h.devices.reportedRead = true
+		h.devices.reported = reportedMachines{"assistant": {"m1": {Cfg: json.RawMessage(`{"id":"m1"}`)}}}
+		h.devices.mu.Unlock()
+		ctx := context.Background()
+		if err := h.quiesce.pause(ctx); err != nil {
+			t.Fatal(err)
+		}
+		h.machineEntriesChanged()
+		time.Sleep(40 * time.Millisecond)
+		if store.settingWrites(machineEntriesKey) != 0 {
+			t.Fatal("machine entries wrote to store while paused")
+		}
+		h.resumeDevelopmentWriters()
+		waitFor(t, "deferred machine entries written after resume", func() bool {
+			return store.settingWrites(machineEntriesKey) >= 1
+		})
+	})
+
+	t.Run("live activity claim hold and save", func(t *testing.T) {
+		h := newTestHub(t)
+		store := &bgWriteStore{meshStore: newMeshStore()}
+		h.store = store
+		la := h.live
+		ctx := context.Background()
+		if err := h.quiesce.pause(ctx); err != nil {
+			t.Fatal(err)
+		}
+		now := time.Now()
+		if _, claimed := la.claimStart(db.LiveActivity{DeviceID: "dev1", PushToStartToken: "tok"}, now); claimed {
+			t.Fatal("claimStart succeeded while paused")
+		}
+		la.holdStart(context.Background(), "dev1", now, fleetRefresh)
+		la.update("dev1", func(v *db.LiveActivity) { v.PushToken = "" })
+		if store.laClaims.Load() != 0 || store.laHolds.Load() != 0 || store.laSaves.Load() != 0 {
+			t.Fatalf("live activity wrote while paused: claims=%d holds=%d saves=%d",
+				store.laClaims.Load(), store.laHolds.Load(), store.laSaves.Load())
+		}
+		h.resumeDevelopmentWriters()
+		waitFor(t, "deferred live activity hold and save flushed after resume", func() bool {
+			return store.laHolds.Load() >= 1 && store.laSaves.Load() >= 1
+		})
+		la.mu.Lock()
+		repair := la.repair
+		la.mu.Unlock()
+		select {
+		case <-la.signal:
+		default:
+			if !repair {
+				t.Fatal("live activity loop was not woken after deferred claimStart")
+			}
+		}
+	})
+
+	t.Run("client ops maintenance", func(t *testing.T) {
+		prev := clientOpsCleanupEvery
+		clientOpsCleanupEvery = 10 * time.Millisecond
+		defer func() { clientOpsCleanupEvery = prev }()
+
+		h := newTestHub(t)
+		store := &bgWriteStore{meshStore: newMeshStore()}
+		h.store = store
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		if err := h.quiesce.pause(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if err := h.startClientOps(ctx); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(40 * time.Millisecond)
+		if n := store.clientOpCleanups.Load(); n != 0 {
+			t.Fatalf("CleanupClientOps ran %d times while paused", n)
+		}
+		h.resumeDevelopmentWriters()
+		waitFor(t, "deferred client ops cleanup ran after resume", func() bool {
+			return store.clientOpCleanups.Load() >= 1
+		})
+	})
+
+	t.Run("push maintenance and held pushes", func(t *testing.T) {
+		prev := pushDeviceMaintenance
+		pushDeviceMaintenance = 10 * time.Millisecond
+		defer func() { pushDeviceMaintenance = prev }()
+
+		h := newTestHub(t)
+		store := &bgWriteStore{meshStore: newMeshStore()}
+		h.store = store
+		h.push = newPusher(t.TempDir(), store, func(string, ...any) {})
+		h.push.quiesce = &h.quiesce
+		h.push.web = newWebPusher(store, func(string, ...any) {})
+		h.push.web.quiesce = &h.quiesce
+		// Reset counters after startup reconciliation in newPusher.
+		store.pushReconciles.Store(0)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		if err := h.quiesce.pause(ctx); err != nil {
+			t.Fatal(err)
+		}
+		go h.push.maintenanceLoop(ctx)
+		h.push.recordIntercept(heldPushRecord{At: time.Now(), Title: "held"})
+		// GET /api/v1/push/web must not persist a new VAPID key while paused.
+		if _, err := h.push.web.key(context.Background()); err == nil {
+			t.Fatal("webpush key creation succeeded while paused")
+		}
+		time.Sleep(40 * time.Millisecond)
+		if n := store.pushReconciles.Load(); n != 0 {
+			t.Fatalf("ReconcilePushDevices ran %d times while paused", n)
+		}
+		if store.settingWrites(heldPushesSettingKey) != 0 {
+			t.Fatal("saveIntercepts wrote while paused")
+		}
+		if store.settingWrites(webPushKeysSetting) != 0 {
+			t.Fatal("webpush key wrote while paused")
+		}
+		h.resumeDevelopmentWriters()
+		waitFor(t, "deferred push maintenance and held pushes ran after resume", func() bool {
+			return store.pushReconciles.Load() >= 1 && store.settingWrites(heldPushesSettingKey) >= 1
+		})
+	})
+
+	t.Run("persona tiers", func(t *testing.T) {
+		h := newTestHub(t)
+		store := &bgWriteStore{meshStore: newMeshStore()}
+		h.store = store
+		ctx := context.Background()
+		if err := h.quiesce.pause(ctx); err != nil {
+			t.Fatal(err)
+		}
+		h.setPersonaTier(ctx, "pkg", &personaTiers{Default: "base"}, "gold", "alice")
+		if store.settingWrites(personaTiersKey) != 0 {
+			t.Fatal("persona tiers wrote while paused")
+		}
+		h.resumeDevelopmentWriters()
+		waitFor(t, "deferred persona tiers written after resume", func() bool {
+			return store.settingWrites(personaTiersKey) >= 1
+		})
+	})
+}
+
+type bgWriteStore struct {
+	*meshStore
+	lockTestDue      *time.Time
+	lockTestAttempts atomic.Int32
+	laClaims         atomic.Int32
+	laHolds          atomic.Int32
+	laSaves          atomic.Int32
+	clientOpCleanups atomic.Int32
+	pushReconciles   atomic.Int32
+	settingMu        sync.Mutex
+	settingCounts    map[string]int
+}
+
+func (s *bgWriteStore) settingWrites(key string) int {
+	s.settingMu.Lock()
+	defer s.settingMu.Unlock()
+	return s.settingCounts[key]
+}
+
+func (s *bgWriteStore) PutSetting(ctx context.Context, key string, v any) error {
+	s.settingMu.Lock()
+	if s.settingCounts == nil {
+		s.settingCounts = map[string]int{}
+	}
+	s.settingCounts[key]++
+	s.settingMu.Unlock()
+	return s.meshStore.PutSetting(ctx, key, v)
+}
+
+func (s *bgWriteStore) NextLockTestDue(context.Context) (*time.Time, error) {
+	if s.lockTestAttempts.Load() > 0 {
+		return nil, nil
+	}
+	return s.lockTestDue, nil
+}
+
+func (s *bgWriteStore) DueLockTests(context.Context, time.Time) ([]db.LockTest, error) {
+	if s.lockTestAttempts.Load() > 0 {
+		return nil, nil
+	}
+	return []db.LockTest{{TestID: "lt_1", DeviceID: "dev1", DueAt: *s.lockTestDue}}, nil
+}
+
+func (s *bgWriteStore) AttemptLockTest(context.Context, string, int64, time.Time) (bool, error) {
+	s.lockTestAttempts.Add(1)
+	return true, nil
+}
+
+func (s *bgWriteStore) ClaimLiveActivityStart(context.Context, string, string, time.Time, time.Duration, time.Duration) (time.Time, bool, error) {
+	s.laClaims.Add(1)
+	return time.Time{}, true, nil
+}
+
+func (s *bgWriteStore) HoldLiveActivityStart(context.Context, string, time.Time, time.Duration) (bool, error) {
+	s.laHolds.Add(1)
+	return true, nil
+}
+
+func (s *bgWriteStore) SaveLiveActivity(context.Context, db.LiveActivity) error {
+	s.laSaves.Add(1)
+	return nil
+}
+
+func (s *bgWriteStore) CleanupClientOps(context.Context, time.Time) error {
+	s.clientOpCleanups.Add(1)
+	return nil
+}
+
+func (s *bgWriteStore) ReconcilePushDevices(context.Context, time.Time, time.Duration) ([]db.PushDeviceRetirement, error) {
+	s.pushReconciles.Add(1)
+	return nil, nil
+}
+
+// Finding #4: both failure branches of pauseDevelopmentWriters wake all
+// deferred workers (ext reports, hello writers, device session finishes, and
+// assistantGate) instead of only calling quiesce.resume().
+func TestPauseDevelopmentWritersFailureWakesDeferredWorkers(t *testing.T) {
+	for _, branch := range []string{"quiesce-wait-failure", "assistant-stop-failure"} {
+		t.Run(branch, func(t *testing.T) {
+			h := newTestHub(t)
+			store := &deviceSessionWrites{meshStore: newMeshStore()}
+			h.store = store
+			h.startHelloWriters()
+			defer h.stopHelloWriters()
+
+			pauseCtx, pauseCancel := context.WithCancel(context.Background())
+			defer pauseCancel()
+			var done chan error
+
+			if branch == "quiesce-wait-failure" {
+				// Hold an in-flight write so quiesce.pause sets paused=true and blocks.
+				if !h.quiesce.begin() {
+					t.Fatal("initial begin failed")
+				}
+				done = make(chan error, 1)
+				go func() { done <- h.pauseDevelopmentWriters(pauseCtx) }()
+				waitFor(t, "quiesce paused", func() bool {
+					h.quiesce.mu.Lock()
+					defer h.quiesce.mu.Unlock()
+					return h.quiesce.paused
+				})
+			} else {
+				// Register a stubborn child that never exits when cancelled.
+				childCancelled := make(chan struct{})
+				if !h.assistantProc.register(make(chan struct{}), func() { close(childCancelled) }) {
+					t.Fatal("failed to register assistant child")
+				}
+				done = make(chan error, 1)
+				go func() { done <- h.pauseDevelopmentWriters(pauseCtx) }()
+				select {
+				case <-childCancelled:
+				case <-time.After(time.Second):
+					t.Fatal("pauseDevelopmentWriters did not cancel assistant child")
+				}
+			}
+
+			// Queue deferred writes across ext report, hello writer, and device session while paused.
+			wantExt := extwire.Report{Features: []string{"after-failed-pause"}}
+			h.queueExtReportSave(wantExt)
+			h.updateClientApp("dev_hello", func(a assistantwire.ClientApp, _ bool) assistantwire.ClientApp {
+				a.Platform = "ios"
+				a.SeenAt = time.Now()
+				return a
+			})
+			h.finishDeviceSession(42, time.Now(), "closed", 30)
+
+			waitFor(t, "ext report deferred while paused", func() bool {
+				h.ext.saveMu.Lock()
+				defer h.ext.saveMu.Unlock()
+				return h.ext.savePending != nil && !h.ext.saveRunning
+			})
+
+			// Abort the pause.
+			pauseCancel()
+			if branch == "quiesce-wait-failure" {
+				h.quiesce.end()
+			}
+			select {
+			case err := <-done:
+				if err == nil {
+					t.Fatal("expected pauseDevelopmentWriters to fail")
+				}
+			case <-time.After(time.Second):
+				t.Fatal("pauseDevelopmentWriters did not return after cancel")
+			}
+
+			// Assistant gate must be open again on both branches.
+			resumed := make(chan bool, 1)
+			go func() { resumed <- h.assistantProc.waitResumed(context.Background()) }()
+			select {
+			case ok := <-resumed:
+				if !ok {
+					t.Fatal("assistantProc did not resume")
+				}
+			case <-time.After(time.Second):
+				t.Fatal("assistantProc stayed paused after failed pauseDevelopmentWriters")
+			}
+
+			// Every deferred worker must be woken and persist its pending write.
+			ctx := context.Background()
+			waitFor(t, "deferred ext report written", func() bool {
+				var got extwire.Report
+				ok, err := store.Setting(ctx, extReportKey, &got)
+				return err == nil && ok && slices.Equal(got.Features, wantExt.Features)
+			})
+			waitFor(t, "deferred hello client app written", func() bool {
+				var got map[string]assistantwire.ClientApp
+				ok, err := store.Setting(ctx, clientAppsSetting, &got)
+				return err == nil && ok && got["dev_hello"].Platform == "ios"
+			})
+			waitFor(t, "deferred device session finish written", func() bool {
+				store.mu.Lock()
+				defer store.mu.Unlock()
+				return store.finished == 1 && store.finishID == 42
+			})
+		})
+	}
+}
+
+// Finding #5 (extensions_link.go): deterministic interleavings between
+// saveExtReports observing pause / popping savePending and resumeDevelopmentWriters.
+func TestExtReportSaveResumeInterleaving(t *testing.T) {
+	t.Run("resume between pop and beginOrDefer", func(t *testing.T) {
+		h := newTestHub(t)
+		store := newMeshStore()
+		h.store = store
+		ctx := context.Background()
+		if err := h.quiesce.pause(ctx); err != nil {
+			t.Fatal(err)
+		}
+		reached := make(chan struct{})
+		release := make(chan struct{})
+		var once sync.Once
+		h.ext.saveBeforeBegin = func() {
+			once.Do(func() {
+				close(reached)
+				<-release
+			})
+		}
+		want := extwire.Report{Features: []string{"race-before-begin"}}
+		h.queueExtReportSave(want)
+		select {
+		case <-reached:
+		case <-time.After(time.Second):
+			t.Fatal("saveExtReports did not reach saveBeforeBegin")
+		}
+		// Resume runs while savePending is nil and saveRunning is true.
+		h.resumeDevelopmentWriters()
+		close(release)
+		waitFor(t, "report persisted without another report arriving", func() bool {
+			var got extwire.Report
+			ok, err := store.Setting(ctx, extReportKey, &got)
+			return err == nil && ok && slices.Equal(got.Features, want.Features)
+		})
+	})
+
+	t.Run("resume racing with paused beginOrDefer handoff", func(t *testing.T) {
+		h := newTestHub(t)
+		store := newMeshStore()
+		h.store = store
+		ctx := context.Background()
+		if err := h.quiesce.pause(ctx); err != nil {
+			t.Fatal(err)
+		}
+		inDefer := make(chan struct{})
+		release := make(chan struct{})
+		var once sync.Once
+		h.quiesce.testOnPauseDefer = func() {
+			once.Do(func() {
+				close(inDefer)
+				<-release
+			})
+		}
+		want := extwire.Report{Features: []string{"race-in-defer"}}
+		h.queueExtReportSave(want)
+		select {
+		case <-inDefer:
+		case <-time.After(time.Second):
+			t.Fatal("saveExtReports did not enter paused beginOrDefer")
+		}
+		// Start resume while saveExtReports has observed paused==true and has
+		// not yet restored savePending / cleared saveRunning.
+		resumeDone := make(chan struct{})
+		go func() {
+			h.resumeDevelopmentWriters()
+			close(resumeDone)
+		}()
+		time.Sleep(20 * time.Millisecond)
+		close(release)
+		select {
+		case <-resumeDone:
+		case <-time.After(time.Second):
+			t.Fatal("resumeDevelopmentWriters did not finish")
+		}
+		waitFor(t, "report persisted after synchronized resume", func() bool {
+			var got extwire.Report
+			ok, err := store.Setting(ctx, extReportKey, &got)
+			return err == nil && ok && slices.Equal(got.Features, want.Features)
+		})
+	})
+}
+
+// Finding #5 (devicesessions.go): deterministic interleavings between
+// finishDeviceSession and resumeDevelopmentWriters, preserving FIFO order.
+func TestDeviceSessionFinishResumeInterleavingAndOrder(t *testing.T) {
+	for _, point := range []string{"after-append", "after-refuse"} {
+		t.Run(point, func(t *testing.T) {
+			h := newTestHub(t)
+			store := &orderedDeviceSessionWrites{meshStore: newMeshStore()}
+			h.store = store
+			ctx := context.Background()
+			if err := h.quiesce.pause(ctx); err != nil {
+				t.Fatal(err)
+			}
+			reached := make(chan struct{})
+			release := make(chan struct{})
+			var once sync.Once
+			hook := func() {
+				once.Do(func() {
+					close(reached)
+					<-release
+				})
+			}
+			if point == "after-append" {
+				h.testAfterFinishAppend = hook
+			} else {
+				h.testAfterFinishRefuse = hook
+			}
+
+			finish1Done := make(chan struct{})
+			go func() {
+				h.finishDeviceSession(7, time.Now(), "first", 30)
+				close(finish1Done)
+			}()
+			select {
+			case <-reached:
+			case <-time.After(time.Second):
+				t.Fatalf("finishDeviceSession did not reach %s", point)
+			}
+
+			// Resume races right at the interleaving point, and a second session
+			// ends right after resume starts.
+			resumeDone := make(chan struct{})
+			go func() {
+				h.resumeDevelopmentWriters()
+				close(resumeDone)
+			}()
+			time.Sleep(20 * time.Millisecond)
+			close(release)
+			select {
+			case <-finish1Done:
+			case <-time.After(time.Second):
+				t.Fatal("finishDeviceSession(7) did not return")
+			}
+			select {
+			case <-resumeDone:
+			case <-time.After(time.Second):
+				t.Fatal("resumeDevelopmentWriters did not return")
+			}
+
+			h.finishDeviceSession(8, time.Now(), "second", 30)
+
+			store.mu.Lock()
+			got := slices.Clone(store.ids)
+			store.mu.Unlock()
+			if !slices.Equal(got, []int64{7, 8}) {
+				t.Fatalf("finished session ids = %v, want [7 8]", got)
+			}
+		})
+	}
+}
+
+type orderedDeviceSessionWrites struct {
+	*meshStore
+	ids []int64
+}
+
+func (s *orderedDeviceSessionWrites) FinishDeviceSession(_ context.Context, id int64, _ time.Time, _ string, _ int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ids = append(s.ids, id)
+	return nil
 }

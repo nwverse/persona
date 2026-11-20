@@ -275,6 +275,35 @@ pathlib.Path({str(resumed)!r}).touch()
         with self.assertRaisesRegex(ValueError, "quiesce"):
             webdev.snapshot(request)
 
+    def test_builtin_quiesce_refuses_extra_sources_and_other_local_managers(self):
+        request = self.history_fixture()
+        external = dict(request["config"]["backup"])
+        runtime = Path(request["runtime"])
+        extra_root = self.root / "extra-root"
+        extra_root.mkdir()
+        (extra_root / "note.txt").write_text("extra")
+
+        # Built-in pause refuses extra_databases and extra_roots.
+        for extra in ({"extra_databases": ["extra-db"]}, {"extra_roots": [str(extra_root)]}):
+            request["config"]["backup"] = dict(extra, builtin=True)
+            with self.assertRaisesRegex(ValueError, "built-in writer pause"):
+                webdev.snapshot(request)
+
+        # Built-in pause refuses another local manager even with no owned machines.
+        other = runtime / "managers" / "m-other"
+        other.mkdir(parents=True)
+        (other / "manager.json").write_text(json.dumps({"database_url": "other-manager-db"}))
+        request["config"]["backup"] = {"builtin": True}
+        with self.assertRaisesRegex(ValueError, "other local managers"):
+            webdev.snapshot(request)
+
+        # External quiesce/resume hooks still work with extra sources and another local manager.
+        request["config"]["backup"] = dict(external, extra_databases=["extra-db"], extra_roots=[str(extra_root)])
+        receipt = webdev.snapshot(request)
+        manifest = webdev.verify(runtime / "update/development-backups" / receipt["id"])
+        self.assertEqual(manifest["databases"], 3)
+        self.assertIn(str(extra_root.resolve()), manifest["roots"])
+
     def test_store_may_not_be_or_contain_a_collected_root(self):
         request = self.history_fixture()
         runtime = Path(request["runtime"])

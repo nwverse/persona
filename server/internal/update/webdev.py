@@ -523,7 +523,13 @@ def snapshot(request):
     # The Hub pauses its own writers and says so (builtin); otherwise the
     # configured hooks must pause every writer this snapshot includes.
     builtin = backup.get("builtin") is True
-    if not builtin and (not backup.get("quiesce") or not backup.get("resume")):
+    if builtin:
+        if backup.get("extra_databases") or backup.get("extra_roots"):
+            raise ValueError("built-in writer pause cannot coordinate extra_databases or extra_roots; configure quiesce and resume commands")
+        manager_root = runtime / "managers"
+        if manager_root.exists() and any(f.parent.name != "assistant" for f in manager_root.glob("*/manager.json")):
+            raise ValueError("built-in writer pause cannot coordinate other local managers; configure quiesce and resume commands")
+    elif not backup.get("quiesce") or not backup.get("resume"):
         raise ValueError("configure writer quiesce and resume commands before updating")
     retain = backup.get("retain") or 3
     if type(retain) is not int or not 1 <= retain <= 50:

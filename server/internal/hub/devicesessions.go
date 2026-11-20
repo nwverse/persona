@@ -207,32 +207,31 @@ type deviceSessionFinish struct {
 
 // finishDeviceSession records a connection's end, or keeps it pending until a
 // snapshot's pause is lifted: the row must not change while its database is
-// dumped.
+// dumped. Appending before flushing preserves FIFO order and eliminates the
+// race between a refused begin and a concurrent resume flush.
 func (h *Hub) finishDeviceSession(id int64, at time.Time, reason string, interval int) {
 	if h.store == nil {
 		return
 	}
-	if !h.quiesce.begin() {
-		h.deviceFinishesMu.Lock()
-		h.deviceFinishes = append(h.deviceFinishes, deviceSessionFinish{id: id, at: at, reason: reason, interval: interval})
-		h.deviceFinishesMu.Unlock()
-		return
+	h.deviceFinishesMu.Lock()
+	h.deviceFinishes = append(h.deviceFinishes, deviceSessionFinish{id: id, at: at, reason: reason, interval: interval})
+	h.deviceFinishesMu.Unlock()
+	if hook := h.testAfterFinishAppend; hook != nil {
+		hook()
 	}
-	defer h.quiesce.end()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := h.store.FinishDeviceSession(ctx, id, at, reason, interval); err != nil {
-		h.logf("finish device session: %v", err)
-	}
+	h.flushDeviceSessionFinishes()
 }
 
-// flushDeviceSessionFinishes writes the sessions that ended during the pause,
-// in the order they ended. A resume that finds the pause still on (another
-// snapshot began) leaves them for the next one.
+// flushDeviceSessionFinishes writes the sessions that ended, in the order they
+// ended. Serializing with deviceFinishesFlushMu guarantees both FIFO order and
+// that a concurrent resume flush waits for an in-progress check to finish
+// rather than seeing an empty queue and stranding a deferred entry.
 func (h *Hub) flushDeviceSessionFinishes() {
 	if h.store == nil {
 		return
 	}
+	h.deviceFinishesFlushMu.Lock()
+	defer h.deviceFinishesFlushMu.Unlock()
 	for {
 		h.deviceFinishesMu.Lock()
 		if len(h.deviceFinishes) == 0 {
@@ -240,14 +239,16 @@ func (h *Hub) flushDeviceSessionFinishes() {
 			return
 		}
 		next := h.deviceFinishes[0]
-		h.deviceFinishes = h.deviceFinishes[1:]
 		h.deviceFinishesMu.Unlock()
 		if !h.quiesce.begin() {
-			h.deviceFinishesMu.Lock()
-			h.deviceFinishes = append([]deviceSessionFinish{next}, h.deviceFinishes...)
-			h.deviceFinishesMu.Unlock()
+			if hook := h.testAfterFinishRefuse; hook != nil {
+				hook()
+			}
 			return
 		}
+		h.deviceFinishesMu.Lock()
+		h.deviceFinishes = h.deviceFinishes[1:]
+		h.deviceFinishesMu.Unlock()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if err := h.store.FinishDeviceSession(ctx, next.id, next.at, next.reason, next.interval); err != nil {
 			h.logf("finish device session: %v", err)

@@ -53,10 +53,58 @@ func (m *Machine) rememberCodexInventory(raw json.RawMessage) {
 	if json.Unmarshal(raw, &cfg) != nil {
 		return
 	}
+	if !m.hub.quiesce.beginOrDefer(func() {
+		m.hub.codexPendingMu.Lock()
+		if m.hub.codexPending == nil {
+			m.hub.codexPending = map[string]proto.CodexConfig{}
+		}
+		m.hub.codexPending[m.cfg.ID] = cfg
+		m.hub.codexPendingMu.Unlock()
+	}) {
+		return
+	}
+	defer m.hub.quiesce.end()
 	ctx, cancel := context.WithTimeout(context.Background(), 5e9)
 	defer cancel()
 	// Updates come from this authenticated node, not public endpoint URLs. The node never reports credentials.
 	if err := m.hub.store.PutSetting(ctx, codexInventoryKey(m.cfg.ID), cfg); err != nil {
 		m.hub.logf("[%s] remember Codex inventory: %v", m.cfg.ID, err)
 	}
+}
+
+func (h *Hub) resumeCodexInventory() {
+	if h.store == nil {
+		return
+	}
+	h.codexPendingMu.Lock()
+	pending := h.codexPending
+	h.codexPending = nil
+	h.codexPendingMu.Unlock()
+	if len(pending) == 0 {
+		return
+	}
+	h.nodeWorkers.Add(1)
+	go func() {
+		defer h.nodeWorkers.Done()
+		for mid, cfg := range pending {
+			if !h.quiesce.beginOrDefer(func() {
+				h.codexPendingMu.Lock()
+				if h.codexPending == nil {
+					h.codexPending = map[string]proto.CodexConfig{}
+				}
+				if _, exists := h.codexPending[mid]; !exists {
+					h.codexPending[mid] = cfg
+				}
+				h.codexPendingMu.Unlock()
+			}) {
+				continue
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5e9)
+			if err := h.store.PutSetting(ctx, codexInventoryKey(mid), cfg); err != nil {
+				h.logf("[%s] remember Codex inventory: %v", mid, err)
+			}
+			cancel()
+			h.quiesce.end()
+		}
+	}()
 }
