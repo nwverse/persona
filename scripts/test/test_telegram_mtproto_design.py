@@ -9,13 +9,16 @@ acceptance. The later real manager/bridge test on an isolated hub remains a sepa
 import ast
 import copy
 import json
+import os
 from pathlib import Path
 import queue
 import re
 import subprocess
 import sys
+import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 DESIGN = ROOT / "docs/extensions/telegram-mtproto-session-transport.md"
@@ -38,13 +41,32 @@ def load_contract():
     return json.loads(CONTRACT.read_text(encoding="utf-8"))
 
 
-def changed_files():
-    """Committed and uncommitted issue changes relative to the upstream main merge base."""
-    base = subprocess.check_output(["git", "merge-base", "HEAD", "origin/main"], cwd=ROOT, text=True).strip()
-    tracked = subprocess.check_output(["git", "diff", "--name-only", base, "--"], cwd=ROOT, text=True)
-    untracked = subprocess.check_output(["git", "ls-files", "--others", "--exclude-standard"],
-                                        cwd=ROOT, text=True)
-    return set(tracked.splitlines()) | set(untracked.splitlines())
+def telegram_index_entries(text):
+    # A CLAUDE.md table cell lists several documents on one line, separated by middle dots.
+    design_path = DESIGN.relative_to(ROOT).as_posix()
+    return sorted(entry.strip() for entry in re.split(r"[|·\n]", text) if design_path in entry)
+
+
+def design_inventory_violations(root):
+    """Report other files only when the branch changes this design or its shared index entry."""
+    def git(*args):
+        return subprocess.check_output(["git", *args], cwd=root)
+
+    base = git("merge-base", "HEAD", "origin/main").decode("ascii").strip()
+    tracked = git("diff", "--no-renames", "--name-only", "-z", base, "--")
+    untracked = git("ls-files", "--others", "--exclude-standard", "-z")
+    changed = set(filter(None, os.fsdecode(tracked + untracked).split("\0")))
+    outside = changed - ALLOWED_CHANGES
+    if not outside or changed & (ALLOWED_CHANGES - {"CLAUDE.md"}):
+        return outside
+    if "CLAUDE.md" in changed:
+        index = root / "CLAUDE.md"
+        in_base = git("ls-tree", "--name-only", base, "--", "CLAUDE.md")
+        before = git("show", f"{base}:CLAUDE.md").decode("utf-8") if in_base else ""
+        after = index.read_text(encoding="utf-8") if index.is_file() else ""
+        if telegram_index_entries(before) != telegram_index_entries(after):
+            return outside
+    return set()
 
 
 def asynchronous(function, *args, **kwargs):
@@ -650,7 +672,7 @@ class PhaseBoundaryTests(SyntheticCase):
     """AC7: design-only changes, negative capabilities and synthetic-only evidence."""
 
     def test_changed_files_stay_within_the_design_phase_inventory(self):
-        self.assertEqual(set(), changed_files() - ALLOWED_CHANGES)
+        self.assertEqual(set(), design_inventory_violations(ROOT))
 
     def test_reference_model_has_no_real_network_or_process_capability(self):
         tree = ast.parse(MODEL.read_text(encoding="utf-8"), filename=str(MODEL))
@@ -700,6 +722,80 @@ class PhaseBoundaryTests(SyntheticCase):
         self.assertEqual("separate_explicit_approval", acceptance["real_account_tests"])
         self.assertEqual("sanitized", acceptance["real_account_evidence"])
         self.assertIs(acceptance["synthetic_results_are_not_real_acceptance"], True)
+
+
+class DesignInventoryScopeTests(unittest.TestCase):
+    outside = "server/fixture.txt"
+    entry = f"`{DESIGN.relative_to(ROOT).as_posix()}` synthetic design"
+    index = f"| Extensions | `other.md` neighbor · {entry} |\n"
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+        env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+        isolated_git = patch.dict(os.environ, env, clear=True)
+        isolated_git.start()
+        self.addCleanup(isolated_git.stop)
+        self.git("init", "-q")
+        for name in ALLOWED_CHANGES - {"CLAUDE.md"}:
+            self.write(name, "original\n")
+        self.write("CLAUDE.md", self.index)
+        self.write(self.outside, "original\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "fixture base")
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+
+    def git(self, *args):
+        subprocess.run(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.com", *args],
+                       cwd=self.root, check=True, capture_output=True)
+
+    def write(self, name, text):
+        path = self.root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+
+    def test_clean_and_unrelated_git_states_pass(self):
+        self.assertEqual(set(), design_inventory_violations(self.root), "clean")
+        self.write("new.txt", "untracked")
+        self.assertEqual(set(), design_inventory_violations(self.root), "untracked")
+        (self.root / "new.txt").unlink()
+        self.write(self.outside, "edited")
+        self.assertEqual(set(), design_inventory_violations(self.root), "unstaged")
+        self.git("add", self.outside)
+        self.assertEqual(set(), design_inventory_violations(self.root), "staged")
+        self.git("commit", "-qm", "unrelated work")
+        self.assertEqual(set(), design_inventory_violations(self.root), "committed")
+
+    def test_each_dedicated_file_activates_the_inventory(self):
+        for name in sorted(ALLOWED_CHANGES - {"CLAUDE.md"}):
+            with self.subTest(name=name):
+                self.write(name, "design change")
+                self.assertEqual(set(), design_inventory_violations(self.root))
+                self.write(self.outside, "outside change")
+                self.assertEqual({self.outside}, design_inventory_violations(self.root))
+                self.git("restore", "--", self.outside, name)
+
+    def test_shared_index_compares_the_telegram_entry(self):
+        self.write(self.outside, "outside change")
+        self.write("CLAUDE.md", self.index.replace("neighbor", "updated neighbor"))
+        self.assertEqual(set(), design_inventory_violations(self.root))
+        for entry in ("", self.entry + " revised", f"{self.entry} · {self.entry}"):
+            with self.subTest(entry=entry):
+                self.write("CLAUDE.md", self.index.replace(self.entry, entry))
+                self.assertEqual({self.outside}, design_inventory_violations(self.root))
+
+    def test_committed_design_reports_an_untracked_path(self):
+        self.write(CONTRACT.relative_to(ROOT), "design change")
+        self.git("commit", "-qam", "design work")
+        outside = "untracked outside.txt"
+        self.write(outside, "outside change")
+        self.assertEqual({outside}, design_inventory_violations(self.root))
+
+    def test_moving_design_outside_reports_the_destination(self):
+        self.git("mv", MODEL.relative_to(ROOT).as_posix(), "moved.py")
+        self.assertEqual({"moved.py"}, design_inventory_violations(self.root))
 
 
 if __name__ == "__main__":

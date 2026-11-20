@@ -374,8 +374,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		return true
 	}
 	if err := s.tryDirectRelay(ctx, here.MachineID, to, &msg); err != nil {
-		if supervisionRuntimeRefused(err) {
-			s.reportRuntimeRelayFailure(ctx, here.MachineID, to, msg)
+		if s.refusedDirect(ctx, here.MachineID, to, msg, err) {
 			accepted = true // retire this delivery while keeping the task available for review
 			return true
 		}

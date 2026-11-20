@@ -4,7 +4,9 @@ For dialog_open, retry with dismiss_notice only when Enter alone closes the noti
 
 From the main conversation, give task to supervise new work, including done_when in text. More on your existing task keeps its title and updates its criteria. A different title, the user's own to-do or another conversation's task is refused. A failed send creates no task. Omit task for a reply, nudge or decision.
 
-Use handoff to ask an existing Agent to check a candidate for a different, stopped to-do you supervise. The node's acknowledgement starts the wait. Optional wait_seconds adds this input's completion, question or observation status to the send receipt. It never resends, accepts a task or answers a question. Follow task_review as usual.
+Use `handoff` for an already-stopped to-do you supervise. A node acknowledgement starts its wait for the receiving Agent's result.
+
+`wait_seconds` observes up to 50 seconds after dispatch, appending `Inline observation` JSON: `completed`(this input's `reply`), `question`(pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, with known input/session ids. Observation never answers questions, accepts tasks, resends or cancels work; normal supervision/`task_review` applies. Older nodes may time out rather than return an unrelated reply.
 
 ```json
 {
@@ -14,7 +16,7 @@ Use handoff to ask an existing Agent to check a candidate for a different, stopp
     "wait_seconds": {
       "type": "integer",
       "minimum": 0,
-      "description": "Observe this input for up to 50 seconds after dispatch; omit or 0 for only the send receipt."
+      "description": "0/omitted: normal receipt"
     },
     "machine": {
       "type": "string"
@@ -31,7 +33,7 @@ Use handoff to ask an existing Agent to check a candidate for a different, stopp
     },
     "resume_why": {
       "type": "string",
-      "description": "why its context is needed (shown to the user)"
+      "description": "shown to the user"
     },
     "dismiss_notice": {
       "type": "boolean",
@@ -41,18 +43,18 @@ Use handoff to ask an existing Agent to check a candidate for a different, stopp
       "type": "array",
       "maxItems": 8,
       "items": { "type": "string" },
-      "description": "Absolute paths of files the user attached in this conversation. Copies are sent to the Agent’s computer."
+      "description": "absolute paths of pictures/files the user gave in this conversation (Claude Code path or app attachment); copied to the agent, appended to its message with mentions updated; others refused"
     },
     "handoff": {
       "type": "object",
       "required": ["todo_id", "receiving_todo_id", "head", "check", "until"],
       "additionalProperties": false,
       "properties": {
-        "todo_id": { "type": "string", "description": "Originating to-do" },
-        "receiving_todo_id": { "type": "string", "description": "The target Agent’s to-do" },
-        "head": { "type": "string", "description": "Full commit ID to verify" },
-        "check": { "type": "string", "description": "What to verify" },
-        "until": { "type": "string", "description": "Duration (e.g. 2h) or RFC 3339 deadline" }
+        "todo_id": { "type": "string" },
+        "receiving_todo_id": { "type": "string" },
+        "head": { "type": "string", "description": "Full candidate commit ID" },
+        "check": { "type": "string" },
+        "until": { "type": "string", "description": "Duration or RFC 3339 deadline" }
       }
     },
     "task": {
