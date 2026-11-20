@@ -85,6 +85,27 @@ func sameTags(t *testing.T, got []proto.Item, want map[string]string) {
 	}
 }
 
+func TestEchoRuntimeRebindsToNativeLineWithClientMessageID(t *testing.T) {
+	var log echoLog
+	at := time.Now()
+	log.expect(echoRecord{SessionID: "agy-session", ClientMsgID: "sent", Text: "Check this", Images: 1, SentAt: at})
+	live := []proto.Item{{ID: "1@live#0", Seq: 1, Role: "user", Kind: proto.KindText, ClientMsgID: "sent"}}
+	if found := log.match("agy-session", echoInRuntime, live); len(found) != 1 || found[0].Line != "1@live" {
+		t.Fatalf("live match: %+v", found)
+	}
+	native := []proto.Item{
+		{ID: "2@native#0", Seq: 2, Role: "user", Kind: proto.KindText, Text: "/plan Check this", ClientMsgID: "sent"},
+		{ID: "2@native#media0", Seq: 2, Role: "user", Kind: proto.KindImage},
+	}
+	if found := log.match("agy-session", echoInRuntime, native); len(found) != 1 || found[0].Line != "2@native" {
+		t.Fatalf("native match: %+v", found)
+	}
+	sameTags(t, log.tag("agy-session", echoInRuntime, native), map[string]string{"2@native#0": "sent", "2@native#media0": "sent"})
+	if found := log.match("agy-session", echoInRuntime, native); len(found) != 0 {
+		t.Fatalf("already matched: %+v", found)
+	}
+}
+
 // Two sends with the same words ("continue") are tied to their own lines, in the order sent; a line from before the send
 // (an older "continue") and one typed at the computer with other words get nothing.
 func TestEchoTiesSendsInOrder(t *testing.T) {

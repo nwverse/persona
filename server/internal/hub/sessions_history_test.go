@@ -246,3 +246,96 @@ func TestSessionsWithoutIncludeInactiveAreUnchanged(t *testing.T) {
 		t.Fatalf("the node was asked %v", got)
 	}
 }
+
+// blockedNode answers sessions.history as a node does when its newest rows are left out (a blocked folder): it pages
+// past them with its own key cursor, sending only the visible ones.
+func blockedNode(rows []sessionhistory.Row, hidden func(sessionhistory.Row) bool) func(string, json.RawMessage) (any, error) {
+	keyOf := func(r sessionhistory.Row) sessionhistory.Key { return sessionhistory.KeyOf(r.At(), r.NodeKey()) }
+	sort.SliceStable(rows, func(i, j int) bool { return keyOf(rows[i]).Before(keyOf(rows[j])) })
+	return func(method string, params json.RawMessage) (any, error) {
+		var p struct {
+			Since, Until, Cursor string
+			Limit                int
+		}
+		_ = json.Unmarshal(params, &p)
+		since, _ := time.Parse(time.RFC3339Nano, p.Since)
+		until, _ := time.Parse(time.RFC3339Nano, p.Until)
+		after, _ := sessionhistory.DecodeCursor(p.Cursor)
+		ans := sessionhistory.Answer{Rows: []sessionhistory.Row{}, Complete: true}
+		read := 0
+		for _, r := range rows {
+			k := keyOf(r)
+			if t := r.At().UnixMilli(); t < since.UnixMilli() || t >= until.UnixMilli() || after != nil && !after.Before(k) {
+				continue
+			}
+			if read == p.Limit {
+				return ans, nil
+			}
+			read++
+			if !hidden(r) {
+				ans.Rows = append(ans.Rows, r)
+			}
+			ans.NextCursor = ""
+			if read == p.Limit {
+				ans.NextCursor = sessionhistory.EncodeCursor(k)
+			}
+		}
+		ans.NextCursor = ""
+		return ans, nil
+	}
+}
+
+// A machine whose node leaves out more of its newest rows than the hub reads for a page still has its older visible
+// rows listed, before another machine's older ones and without ending the pages early (#10053).
+func TestSessionsHistoryPagesPastAMachinesRowsLeftOut(t *testing.T) {
+	h := newTestHub(t)
+	now := time.Now().UTC()
+	row := func(id string, at time.Time) sessionhistory.Row {
+		return sessionhistory.Row{Session: proto.Session{SessionID: id, Status: proto.StatusOffline, UpdatedAt: at}, Source: sessionhistory.SourceRuntime, Runtime: "dsh"}
+	}
+	var rows []sessionhistory.Row
+	at := now.Add(-time.Minute)
+	for i := 0; i < 1100; i++ {
+		rows = append(rows, row(fmt.Sprintf("auto%04d", i), at))
+		at = at.Add(-10 * time.Second)
+	}
+	rows = append(rows, row("a0", at.Add(-time.Minute)), row("a1", at.Add(-2*time.Minute)))
+	historyNode(t, h, "ma", blockedNode(rows, func(r sessionhistory.Row) bool { return strings.HasPrefix(r.Session.SessionID, "auto") }))
+	historyNode(t, h, "mb", nodeHistory([]sessionhistory.Row{row("b0", now.Add(-20*time.Hour)), row("b1", now.Add(-21*time.Hour))}))
+	srv := httptest.NewServer(h.routes())
+	t.Cleanup(srv.Close)
+
+	var ids []string
+	cursor := ""
+	for page := 0; ; page++ {
+		if page > 40 {
+			t.Fatalf("no last page; so far %v", ids)
+		}
+		path := "/api/v1/sessions?include_inactive=1&limit=1&since=" + now.Add(-48*time.Hour).Format(time.RFC3339Nano)
+		if cursor != "" {
+			path += "&cursor=" + cursor
+		}
+		code, body := historyGet(t, srv, h.cfg.Token, path)
+		if code != http.StatusOK {
+			t.Fatalf("%s: %d %s", path, code, body)
+		}
+		var resp struct {
+			Sessions []sessionhistory.Row `json:"sessions"`
+			History  struct {
+				NextCursor string `json:"next_cursor"`
+			} `json:"history"`
+		}
+		if err := json.Unmarshal(body, &resp); err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range resp.Sessions {
+			ids = append(ids, r.Session.SessionID)
+		}
+		if cursor = resp.History.NextCursor; cursor == "" {
+			break
+		}
+	}
+	if strings.Join(ids, ",") != "a0,a1,b0,b1" {
+		t.Fatalf("rows %v; want a0,a1,b0,b1", ids)
+	}
+}

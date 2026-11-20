@@ -35,12 +35,13 @@ type larkFlow struct {
 // plain text, a log, a table) only a program that names it (#8148).
 func larkTextRuns(cmd string, flow []larkFlow, sequential bool) bool {
 	names := larkCLIRe.MatchString(cmd)
+	pipelineCalls := larkPipelineCallFlags(cmd, flow)
 	tainted, mentioned, writes, program, notesRun, pos := false, false, false, false, false, 0
 	var notes []string
 	runsNote := func(f larkFlow) bool {
 		return f.program && slices.ContainsFunc(notes, func(n string) bool { return strings.Contains(f.text, filepath.Base(n)) })
 	}
-	for _, f := range flow {
+	for i, f := range flow {
 		own := !f.call && larkCLIRe.MatchString(f.text)
 		piped := true // unless only another separator stands before the segment
 		if at := strings.Index(cmd[pos:], f.text); at >= 0 {
@@ -48,7 +49,9 @@ func larkTextRuns(cmd string, flow []larkFlow, sequential bool) bool {
 			piped = pos > 0 && (strings.Trim(gap, " \t\n\\|&;") != "" || larkPipedFrom(gap))
 			pos += at + len(f.text)
 		}
-		if names && f.opaque && !f.resolved || piped && tainted && !f.filter {
+		// Provenance relaxes only a program outside a pipeline that actually calls
+		// lark-cli. Within such a pipeline, variable-indirect and literal spellings agree.
+		if names && f.opaque && (!f.resolved || pipelineCalls[i]) || piped && tainted && !f.filter {
 			return true
 		}
 		tainted = f.filter && (own || piped && tainted)
@@ -62,6 +65,35 @@ func larkTextRuns(cmd string, flow []larkFlow, sequential bool) bool {
 		notesRun = notesRun || mentioned && slices.ContainsFunc(flow, runsNote)
 	}
 	return mentioned && (writes && program || notesRun)
+}
+
+// larkPipelineCallFlags marks each segment whose own pipeline contains a classified
+// lark-cli call. Semicolon-separated pipelines stay independent: a read in one must
+// not change the provenance boundary of an opaque program in another.
+func larkPipelineCallFlags(cmd string, flow []larkFlow) []bool {
+	groups := make([]int, len(flow))
+	calls := map[int]bool{}
+	pos, group := 0, 0
+	for i, f := range flow {
+		connected := false
+		if at := strings.Index(cmd[pos:], f.text); at >= 0 {
+			gap := cmd[pos : pos+at]
+			connected = i > 0 && larkPipedFrom(gap)
+			pos += at + len(f.text)
+		}
+		if i > 0 && !connected {
+			group++
+		}
+		groups[i] = group
+		if f.call {
+			calls[group] = true
+		}
+	}
+	out := make([]bool, len(flow))
+	for i, group := range groups {
+		out[i] = calls[group]
+	}
+	return out
 }
 
 // larkPipedFrom: the command text before a segment ends in a pipe (`|`, `|&`), not `||`.

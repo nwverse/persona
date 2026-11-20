@@ -2745,8 +2745,8 @@ group's. With one installed manager, or a hub without a roster, nothing below sh
   (`ManagersText.switcherLocked`, `switcherNote`); turned off while it is in use, the footer says it is listed for now and why.
   An older hub answers yes and keeps nothing: the list read after it still says shown, the switch goes back and a toast says to
   update the hub. While the hub marks it `hidden` its row in the list carries a Hidden chip. Tests `ManagersModelTests`.
-- **Low-distraction mode** (#8157): the last section of Settings › Notifications, after this device's own rows, is the hub's
-  push grading switch (`APIClient.pushLnMode` / `setPushLnMode`, `GET` / `PUT /api/v1/push/ln-mode`); its footer says it holds
+- **Push grading** (#8157): the last section of Settings › Notifications, after this device's own rows, is the hub's
+  push grading switch (`APIClient.pushLnMode` / `setPushLnMode`, `GET` / `PUT /api/v1/push/ln-mode`, the legacy wire route); its footer says it holds
   for every device and what still notifies. A hub without the route, or one that does not answer, shows no section; a change
   shows at once, and a refusal puts it back and says why. `docs/server/server.md` "Push grading (push urgency filtering, `hub/lnmode.go`)".
 - **Quiet hours**: Settings › Notifications has this device's quiet hours (a switch, then From / Until), only when the prefs answer
@@ -2788,7 +2788,7 @@ web's routes (`docs/protocol/protocol.md`, `/api/v1/assistant/saved-prompts`) an
 - **The editor** (`SavedPromptEditor`): Name after a fixed `/` and Text; `sheetCancel`'s ✕ leaves, `SheetConfirm`'s ✓ saves (a spinner while it runs; #11183). It says the hub's rules before asking it
   (`SavedPromptRules`: a taken name at once, the others once something is typed or Save was tapped); a count shows past
   80% of 8,000 characters; the hub's own refusal shows in the sheet and keeps what was typed.
-- Save as Prompt… on a message's menu, and Android, follow in their own issues.
+- Android supports saved prompts (#11667, `docs/android/android.md` "Saved prompts"). Save as Prompt… on a message's menu is a separate feature.
 - DEBUG: `-tab settings -openAssistantPage prompts|prompt|newPrompt` (`promptsEntry`: the profile scrolled to In Chats).
   Tests: `PersonaTests/SavedPromptsTests.swift`; UI suite `SavedPromptsUITests` against the mock with
   `MOCK_SAVED_PROMPTS=1` (`TEST_RUNNER_PERSONA_MOCK_HUB`; skips without it) swipes a row, checks Delete asks first and

@@ -84,7 +84,7 @@ Changing trust does not erase context already delivered to a computer or termina
 | Dispatch tasks | `task_plan`: hand Agent work to the user, one task per to-do (`origin` = this chat). Read-only and user-remembered tasks start directly; others become plan cards awaiting "Start" without blocking the turn. Progress appears in the live snapshot's "Tasks started from chat"; completion receipts, answered questions, and direct task messages enter chat activity ([unified-entry.md](unified-entry.md), `assistant/tasks.go`) |
 | Telegram | Available only with the Telegram extension (extension market `nwverse/persona-extensions`, #1704, #2057): read-only MCP `telegram_chats` / `telegram_messages` / `telegram_search`; more flexible reads and writes use the bundled telegram skill (Bash `tg …`, i.e. `personad tool --cli telegram`, through hub, writes confirmed on the phone). `tg` is on PATH only while Telegram is logged in (`docs/protocol/connector-protocol.md` ("Command line")) |
 | Lark | The open-source version uses official lark-cli ("Lark: lark-cli" below). With a Lark-gateway extension installed, mainly use its skill (extension commands in Bash, both reads and writes), see "Lark: skill supplied by the Lark extension"; MCP `lark_chats` / `lark_messages` / `lark_search` also come from the extension (since #1571 no Lark gateway client in hub, `docs/plans/plan-extensions.md` ("Step 3")). The old read-only `lark_api` and `lark_send` were removed as duplicates of the skill |
-| Control Persona itself | `persona_settings` (`list` first, an assistant tool, `assistant/settings_tool.go`: About Me, default launcher, and `main_tasks_quiet` are assistant-owned settings, read / written by it with its own phone confirmation cards; other settings belong to hub, listed through `app.call settings.list`, read / written through `app.tool persona_settings`, with hub confirmation): read / write triage rules (global `inbox.rules` and per-plugin-source `inbox.rules.<plugin>` for sources declaring `triage_rules`, overriding global when present), every configurable extension's form settings (`extension.<id>`: `get` lists each field, `set` changes only the fields given, each shown before → after on the card, #2385), inbox task-linking rules (`inbox.agent_rules`: which running task a needs-you item belongs to; what the AI twin takes on is inbox policies. Reading or changing it says when the AI twin is off, #5865), About Me, default launcher, "Main chat tasks notify only in main chat" (`assistant.main_tasks_quiet`), per-machine muted Claude config directories (`agents.blocked_claude_dirs`), low-distraction mode for every device (`notifications.low_distraction`, the hub's push grading switch, #8157; `docs/server/server.md` "Push grading (push urgency filtering, `hub/lnmode.go`)"), and add / remove mail accounts. Changes first show a phone confirmation card; added-account passwords / authorization codes are entered on the phone card, never through the model or chat / interaction history. After approval, hub tests IMAP / SMTP and encrypts / saves only if both work. Gmail requires Google sign-in in the App; launchers are written to unified model configuration while retaining existing model and effort |
+| Control Persona itself | `persona_settings` (`list` first, an assistant tool, `assistant/settings_tool.go`: About Me, default launcher, and `main_tasks_quiet` are assistant-owned settings, read / written by it with its own phone confirmation cards; other settings belong to hub, listed through `app.call settings.list`, read / written through `app.tool persona_settings`, with hub confirmation): read / write triage rules (global `inbox.rules` and per-plugin-source `inbox.rules.<plugin>` for sources declaring `triage_rules`, overriding global when present), every configurable extension's form settings (`extension.<id>`: `get` lists each field, `set` changes only the fields given, each shown before → after on the card, #2385), inbox task-linking rules (`inbox.agent_rules`: which running task a needs-you item belongs to; what the AI twin takes on is inbox policies. Reading or changing it says when the AI twin is off, #5865), About Me, default launcher, "Main chat tasks notify only in main chat" (`assistant.main_tasks_quiet`), per-machine muted Claude config directories (`agents.blocked_claude_dirs`), push grading for every device (`notifications.low_distraction`, the compatibility key for the hub's push grading switch, #8157; `docs/server/server.md` "Push grading (push urgency filtering, `hub/lnmode.go`)"), and add / remove mail accounts. Changes first show a phone confirmation card; added-account passwords / authorization codes are entered on the phone card, never through the model or chat / interaction history. After approval, hub tests IMAP / SMTP and encrypts / saves only if both work. Gmail requires Google sign-in in the App; launchers are written to unified model configuration while retaining existing model and effort |
 | Live snapshot | Each message to the assistant starts with `<persona-context>` (not system prompt, see "Live snapshots and prefix caching"): time (phone timezone), online computers, Needs you and Unread Agents plus the count of working ones (`agents_list` lists them on demand, #11261), unread connector chats and @me, today's upcoming meetings, scheduled follow-ups, and up to five open Inbox matters being followed by check time. Agents and tasks include web links: hub `public_url` (default `http://<hostname>:18660` when unset) plus `/s/<machine>/<session id>`, `/todos?id=<to-do id>`; the assistant uses Markdown links when mentioning them. Omit if hub can't supply the address (#2194). The main conversation's task lists (task details, open-task index, waiting to be verified or approved) hold every task; a leader's or side conversation's hold only the ones it handed out or supervises (#8666, `docs/assistant/todos.md`). Include only changes since this chat's previous snapshot (time always included): changed sections, and inside the task details, the Agents section and the unread chats only the rows that changed (#9078). hub gives each source 3 seconds, reuses reads for 45 seconds, and messages wait at most 1.5 seconds for fresh data, not at all while reads take longer than that (#8948) |
 | Faster | When the App displays a new-chat page, `POST /api/v1/assistant/warm` starts a spare node process (`spare`, valid for 10 minutes), used directly by new chats. `personad mcp` marks the Persona tools assistant conversations use often `anthropic/alwaysLoad`; the rest, and other MCP servers' tools, keep Claude Code's ordinary ToolSearch deferral (#5838, #7317): the manager picks them (`coreTools`, `assistant/tool_loading.go`), adding `leader_progress`, `todo_create`, `ask_escalate` and `direction_name` for current leader conversations from their session id; tool loading does not expand caller permissions. `assistant.load_all_tools` (`persona_settings`, off by default) loads every Persona tool up front again, in running conversations too: the change wakes each `personad mcp`'s tool watch (`assistant/mcp_tools_changes.go`), which sends the new list (`notifications/tools/list_changed`); a `personad mcp` older than tool refresh keeps its list until its process restarts. On Anthropic's own API the assistant's processes carry `ENABLE_TOOL_SEARCH=true`, so a conversation that once ran without ToolSearch defers too instead of loading every tool until its next compaction; behind a gateway they carry `false` and load every tool, and a gateway's refusal of tool search is resent once that way and remembered (#10365, `docs/integrations/claude-integration.md` "Tool search behind a gateway (#10365)") |
 | Memory | Claude Code auto memory (`~/.claude/projects/<encoded directory>/memory/*.md`); App Settings can view / edit / delete it (node `assistant.memory`). Codex and DSH read / write the same memory ("Codex", "Agent runtime (DSH)" below), so changing launchers doesn't lose it, and a Claude conversation in any profile is told to use it too ("One memory" below). Health chats have a separate health space and separate memory (`docs/assistant/health.md`) |
@@ -233,7 +233,7 @@ This is hub's same Postgres, with unchanged keys / tables and no data migration;
 Scheduled-task and finished-task Agent-closing loops belong to the assistant (`Service.Run`, beginning only after first hub connection and handshake).
 
 **Assistant settings** (settings `assistant`, exclusively read / written by the assistant since 2026-11-04, `assistant/profile.go`): chat machine, launcher, user timezone (phone `PUT /api/v1/assistant`; `timezone_picked` when a client says the user picked it by hand, which devices then leave alone, #1855), About Me, main chat, replaced old main chats, `main_tasks_quiet`, `agent_tasks` (off by default, `docs/assistant/unified-entry.md` "Agent tasks"), `inbox_signals` (off by default: new Inbox messages on a supervised task reach its supervisor, `docs/assistant/unified-entry.md` "Supervision (#3124)"), `main_supervises_own_tasks` (off by default: the background supervisor, whose conversation id is kept here as `background_supervisor`, follows up the tasks no leader supervises instead of the main chat, `docs/assistant/unified-entry.md` "Background supervisor"), `background_supervisor_keeps_context` (off by default: each of the background supervisor's rounds starts from its first turn with only that round's facts and tools; on, it is one long conversation as before #7315; `persona_settings` only for now, `docs/assistant/unified-entry.md` "Each round starts clean").
-`assistant.owner` / `notes` / `machine` / `launcher` in the manager's `manager.json` supply the defaults (laid over the hub's handshake answer); JSON matches the old hub-written form without migration. Reads are cached for 5 seconds (only it writes; `manager.updated` triggers immediate reread).
+`assistant.owner` / `notes` / `machine` / `launcher` in the manager's `manager.json` supply the defaults (laid over the hub's handshake answer); JSON matches the old hub-written form without migration. `assistant.supervision_batch_minutes` is an administrator pin instead: when present, including explicit `0`, it overrides the saved supervision interval; when omitted, the saved setting is unchanged. Reads are cached for 5 seconds (only it writes; `manager.updated` triggers immediate reread).
 `GET/PUT /api/v1/assistant` also reads and saves `default_permission_mode` in this manager’s settings. Reads identify the answering manager with `manager`. New non-guest conversations without an explicit `permission_mode` inherit it, including new main chats, scheduled new conversations and side chats. An explicit session mode, including `default`, wins. Existing conversations retain their own mode; changing the manager default never edits their settings or history. An unset preference preserves earlier behavior.
 
 The same endpoint exposes `readonly_mode` (`sandbox` by default, or the opt-in `prompt`), also available in Web Settings
@@ -1331,9 +1331,11 @@ progress state. One-shot follow-ups cannot opt in. Existing unlinked schedules s
 schedule through an authorized `schedule_routine` edit. This is not permission to create or widen recurring work.
 
 Each dispatched linked run starts with its to-do ID. When its watched turn settles, the hub records `todo_progress`
-on its `ScheduleRun` in `assistant.runs`: `progress`, `no_progress`, `unknown` or `inactive`, with the to-do ID,
-consecutive assessable no-progress count and the run's explanation. Skipped or unstarted attempts are `not_run`;
-a newer completed run makes a late older unassessed result `superseded`. A still-running, unassessed run is `pending`.
+on its `ScheduleRun` in `assistant.runs`: `baseline`, `progress`, `working`, `no_progress`, `unknown` or `inactive`,
+with the to-do ID, consecutive assessable no-progress count and a reason. The reason of `baseline`, `working` and
+`no_progress` is the hub's evidence; `progress` and `unknown` quote the run's explanation. Skipped or unstarted
+attempts are `not_run`; a newer completed run makes a late older unassessed result `superseded`. A still-running,
+unassessed run is `pending`.
 
 The explanation is the run's own reply (#11553): the last reply after the prompt that carries the run's key, up to the
 next message that opened a turn. A run in its source conversation shares that conversation with its other work:
@@ -1344,27 +1346,45 @@ queued into another turn, or another message was queued into its turn), or its p
 explanation is the hub's evidence line ("no new Agent reply, criterion change or progress report"). A run in a
 conversation of its own falls back to that conversation's latest turn.
 
-The baseline is the previous assessment, or a before-dispatch snapshot on the first run. Observable progress is
+The first run after the link only records the baseline (`baseline`, #11587). Compared with a snapshot taken just
+before it was sent, it judged only its own few seconds, and an Agent working without words was counted at once.
+Each later run compares with the previous assessment's evidence. Observable progress is
 any changed nonempty last Agent answer on a current unreleased, undismissed task Agent, a state change of an
 existing acceptance criterion, or changed content/steps in an explicit `report_to_supervisor` `progress` report.
 Answers are read from transcript text, not truncated session previews; runtime API errors, the schedule's own
-conversation, tool activity, timestamps, notes, evidence-only criterion edits, display paraphrases and repeated
+conversation, timestamps, notes, evidence-only criterion edits, display paraphrases and repeated
 identical reports do not count. These are observable changes, not a judgment that an artifact is useful or that the
 work is accepted. Criterion rewording alone does not count.
+Tool calls are work (#11587, `schedule_todo_evidence.go`). The check reads each Agent's latest turn and keeps its distinct
+calls (name and input, hashed) and when it read them. A call made after the baseline was read that does not wait,
+poll or check CI (the activity classes the `no_progress` signal uses) and repeats no call seen before (in that turn
+at the baseline, or earlier since) makes the run `working`. That restarts the streak like progress, and its reason says
+how many calls came since when. Waits, polls, repeats and tool results alone do not count.
 
-One assessed no-progress run queues an existing blocked supervisor signal. At two, the existing actionable
-`needs_user` review puts **Change approach / Keep waiting**, the explanation and the cost of waiting in Needs you,
-including for `push: asked`. Choosing another approach asks for a proposal within existing permissions, not
-permission to spend, send or widen scope. The decision's 24-hour deadline only revisits it; the hub never applies
-the proposed strategy change by default. Existing notification preferences and decision routing still apply.
+The first no-progress run sends its supervisor a `check` signal (`report: no_progress`). It names the task Agent's
+computer and session, not the conversation the run went to, and reads as the hub's check, never as the Agent's own
+report. A failed assessment write sends `check` with `report: error`. The owner is asked once the streak has at least
+two runs and the task has gone without progress for the `no_progress` signal's floor: max(30 minutes,
+1.5 × `expect_minutes`), from when the streak's baseline was read to the current run's read. The existing actionable
+`needs_user` review puts **Change approach / Keep waiting**, the hub's evidence and the cost of waiting in Needs you,
+including for `push: asked`. The evidence says since when no reply, report or criterion change came, and whether the
+Agents made no tool calls or how many calls only waited or repeated. It never quotes the run's own summary, which
+often says the work is going fine.
+The option the owner takes on that decision, recommended or not, is recorded in the to-do's decisions. It goes to the
+task's supervising conversation as `check` with `report: decided`, the decision as asked and each option's result,
+not to the Agent at work. This covers the card, the push's OK, the to-do's accept route and `task_decided`. The Agent
+hears only what the supervisor then sends it, and the card says the choice went to the supervisor. An answer in the
+owner's own words still goes the ordinary way. Choosing another approach asks the supervisor for a proposal within
+existing permissions, not permission to spend, send or widen scope. The decision's 24-hour deadline only revisits it;
+the hub never applies the proposed strategy change by default. Existing notification preferences still apply.
 For a worker supervised by a task-leader Agent, the conversation above that leader reviews the decision through
-its existing authority; the worker stays supervised by its leader.
+its existing authority and receives the owner's option; the worker stays supervised by its leader.
 Another pending owner decision is never overwritten; a failed escalation is retried on a later assessment.
 The first escalation attempt's run identity is saved with the assessment before creating its review. If the
 review succeeded but the final escalation-marker write failed, later assessments or restart replays recognize
 that exact pending review and repair the marker without replacing the decision or claiming another owner question.
 
-Observed progress resets the streak. Unreadable evidence is `unknown`: it does not increment or clear the
+Observed progress or work resets the streak. Unreadable evidence is `unknown`: it does not increment or clear the
 previous known count, and it preserves the last readable evidence. An initially unreadable baseline must become
 readable before it can establish a no-progress run; later recovery can still prove progress against known evidence.
 Closed, cancelled, superseded or paused work is inactive, clears the streak and is not reopened or escalated.
@@ -2113,7 +2133,7 @@ Assistant MCP tools (`assistant/conversations.go`, descriptions `prompts/mcp/ass
 - **Inter-chat messages** (`conversation_send`, `conversation_new` opening):
   - Prepend `<persona-context kind="context" title="来自对话「…」">` (`title`: "From chat ‘…’", `prompts/assistant/relay.md`), explaining it's not user-authored, source chat, hop count;
     if a reply is needed, use `conversation_send`; do not reply merely to acknowledge receipt. `Item.source.kind="conversation"` retains the stable sender id and title, separately from the runtime role and native peer `from`. Clients show a source message rather than a user bubble; the relay's instructions remain inspectable as Context. Explicit source metadata is persisted in a separate `message-source` context, not a selectable Context card. Full canonical legacy relay contexts remain recognizable; user-pasted templates are protected at the entry point.
-  - **The owner's words travel with it** (#3822): `quote` (`"latest"` or a message id) carries one of the owner's own messages, verified by the hub, in a second context block; work the receiver hands out on it records their words in its brief (`docs/assistant/unified-entry.md`, "Briefs (#3822)").
+  - **The owner's words travel with it** (#3822): `quote: "latest"` carries the sole owner message or verified incoming quote in the current turn. If several fit, choose an id or the owner's exact words. An id or at least four characters of exact wording can also select a passage from the last ten turns. The receiver's brief preserves the original wording and source, with `request.part: true` for a passage. Just me turns and the marked questions themselves keep those words in the conversation (`docs/assistant/unified-entry.md`, "Briefs (#3822)").
   - **A spawned chat reports back** (#4669, `assistant/spawned.go`): a chat `conversation_new` opened is followed (`assistant.relay`'s `spawned`, kept 7 days) until it sends to its opener with `conversation_send`. A turn of it that fails, or one that ends without it ever having reported, leaves one notice in the opener (`OriginRef`; `prompts/assistant/spawn_notice.md`) with its id, link and error or last words. The notice is a message from the spawned chat under the same hop and rate limits as its own `conversation_send`; past them the log says the opener was not told.
   - **A failed turn is a failure** (#4669): the node makes a Claude turn whose result is `is_error`, or whose whole answer is an auth / upstream error line (`assistantwire.ErrorOnlyText`, sharing `AuthErrorWords` with the triage's `userErrorWords`), the session's `turn_error`: the apps show it failed, the push is ⚠️ and goes out however quick the turn was, and the hub logs `assistant <id>: turn failed (launcher …, kind …, code …)` without the error's words.
   - **Queue while running**: if target is running, already queued, or the owner is talking in it, persist in hub settings `assistant.relay` (survives restart), displayed above the input like typed queues
@@ -2231,8 +2251,10 @@ is in `docs/protocol/protocol.md` ("Start defaults").
   model or launcher is never replaced, and an effort the caller's tier gives wins over the policy's.
 - **The goal** is the task's `done_when` as one checkable sentence (`prompts/assistant/task_goal.md`), set by the node
   after the first message is in the transcript, as Claude Code's `/goal` or Codex's own `/goal`
-  ([agent-goal.md](../integrations/agent-goal.md), "A goal set at the start"). A computer whose node cannot set it
-  starts the Agent without it once, and the task's why says so, as for ultracode. Only a new start (never a resume) of
+  ([agent-goal.md](../integrations/agent-goal.md), "A goal set at the start"). When Codex's `/goal` cannot be set
+  (an older Codex, a screen not ready, an unconfirmed goal), the node delivers the same sentence as an ordinary
+  message and reads it back from the rollout instead; no delivery outcome fails the start. A computer whose node
+  cannot set it starts the Agent without it once, and the task's why says so, as for ultracode. Only a new start (never a resume) of
   a task with `done_when` takes one (`startGoalSource`). The goal is decided apart from the rest of the rule: the first
   fitting rule that names `goal` decides, even when an earlier fitting rule silent on `goal` supplies the presets,
   effort and the rest. `done_when` sets it on Claude Code and Codex, `off` on neither. When no fitting rule names
@@ -2471,11 +2493,12 @@ users, and named the host, container and harness when they were known (web usabi
 
 ### Hiding ambient Agent sessions
 
-For people using Agents with noisy workspace trees, `agents.hidden_dirs` is a reversible per-computer
-visibility preference, shared across runtimes: the parallel list to `agents.blocked_claude_dirs`, with the same
-pattern syntax and get / add / remove, but nothing stops being collected. Rules are kept with each computer in the
-devices layer, live in advanced Agent settings and default to empty.
-The manager retains all sessions but excludes matched ambient sessions from Assistant observations and
-reminders. Open supervised task agents remain visible, preserving the supervisor's completion and approval
+For people using Agents with noisy workspace trees, `agents.hidden_dirs` holds reversible per-computer Agent
+folder rules, shared across runtimes: the parallel list to `agents.blocked_claude_dirs`, with the same pattern syntax
+and get / add / remove. Each rule blocks (the default for a new rule: that computer stops collecting the sessions, so
+nothing of them reaches Persona, #10053) or hides (nothing stops being collected). Rules are kept with each computer
+in the devices layer, live in advanced Agent settings and default to empty.
+For a hide rule, and for a block rule on a node that does not block yet, the manager retains all sessions but
+excludes matched ambient sessions from Assistant observations and reminders. Open supervised task agents remain visible, preserving the supervisor's completion and approval
 flow; after supervision ends, the rule applies again. See `docs/protocol/protocol.md` ("Agent directory visibility")
 for matching, persistence, app inspection and the confirmed `persona_settings` contract.
