@@ -218,7 +218,11 @@ internal fun InboxPolicySheet(repository: InboxRepository, target: InboxPolicyTa
             catch (e: Exception) { failure = res.getString(R.string.inbox_policy_failed, failureReasonText(e).resolve(res)) }
         }
     }
-    JSheet(onDismiss, title = stringResource(R.string.inbox_policy_title, target.option.shortName), dismissible = !editor.busy, scrollable = true) {
+    JSheet(onDismiss, title = stringResource(R.string.inbox_policy_title, target.option.shortName), dismissible = !editor.busy, scrollable = true,
+        pageActions = {
+            if (editor.loaded) JSheetConfirm(stringResource(R.string.inbox_policy_save), { send(InboxPolicySend.Save) },
+                enabled = editor.canSave && !editor.busy, loading = editor.sending == InboxPolicySend.Save)
+        }) {
         if (!editor.loaded) { JLoading(); return@JSheet }
         val kind = stringResource(muteTagName(target.option.tag))
         Text(stringResource(R.string.inbox_policy_intro, "${target.sourceName} · $kind"), style = PersonaTheme.type.callout, color = palette.ink2)
@@ -242,10 +246,6 @@ internal fun InboxPolicySheet(repository: InboxRepository, target: InboxPolicyTa
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {
             if (editor.policy != null) JButton(stringResource(R.string.inbox_policy_remove), { send(InboxPolicySend.Remove) },
                 kind = JButtonKind.Quiet, size = JButtonSize.Medium, enabled = !editor.busy, loading = editor.sending == InboxPolicySend.Remove)
-            Spacer(Modifier.weight(1f))
-            JButton(stringResource(R.string.inbox_policy_cancel), onDismiss, kind = JButtonKind.Secondary, size = JButtonSize.Medium, enabled = !editor.busy)
-            JButton(stringResource(R.string.inbox_policy_save), { send(InboxPolicySend.Save) }, size = JButtonSize.Medium,
-                enabled = editor.canSave && !editor.busy, loading = editor.sending == InboxPolicySend.Save)
         }
     }
 }
@@ -339,7 +339,7 @@ internal fun InboxRulesSheet(repository: InboxRepository, onDismiss: () -> Unit)
         InboxPolicySheet(repository, target, onDismiss = { editing = null; load() })
         return
     }
-    JSheet(onDismiss, title = stringResource(R.string.inbox_rules_title), scrollable = true) {
+    JSheet(onDismiss, title = stringResource(R.string.inbox_rules_title), scrollable = true, pageActions = {}) {
         val list = model.rules
         val failed = model.failed
         @Composable fun rule(p: InboxPolicy) =

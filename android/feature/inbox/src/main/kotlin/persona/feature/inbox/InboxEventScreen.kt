@@ -443,11 +443,13 @@ private fun SuggestionEditor(
 ) {
     var text by rememberSaveable(suggestion.version) { mutableStateOf(suggestion.text) }
     var words by rememberSaveable(suggestion.version) { mutableStateOf("") }
-    JSheet(onDismiss = onDismiss, title = stringResource(R.string.inbox_suggestion_editor_title), dismissible = busy == null, scrollable = true) {
+    JSheet(onDismiss = onDismiss, title = stringResource(R.string.inbox_suggestion_editor_title), dismissible = busy == null, scrollable = true,
+        pageActions = {
+            JButton(stringResource(buttons.confirm), { onConfirm(text) }, size = JButtonSize.Medium,
+                enabled = busy == null && text.isNotBlank(), loading = busy == SuggestionAction.Confirm)
+        }) {
         Column(Modifier.fillMaxWidth().imePadding(), verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
             JTextField(text, { text = it }, Modifier.fillMaxWidth(), label = stringResource(suggestionKindLabel(suggestion)), minLines = 3, maxLines = 10)
-            JButton(stringResource(buttons.confirm), { onConfirm(text) }, Modifier.fillMaxWidth(), size = JButtonSize.Medium,
-                enabled = busy == null && text.isNotBlank(), loading = busy == SuggestionAction.Confirm)
             JDivider()
             JTextField(words, { words = it }, Modifier.fillMaxWidth(), label = stringResource(R.string.inbox_suggestion_say),
                 placeholder = stringResource(R.string.inbox_suggestion_say_hint), minLines = 2)

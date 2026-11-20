@@ -122,7 +122,28 @@ internal fun TodoHandOffSheet(
     val selectedTarget = handOffTarget(runningAgents, pickedTarget)
     SideEffect { pickedTarget = handOffPick(pickedTarget, selectedTarget) }
 
-    JSheet(onDismiss = onDismiss, title = stringResource(R.string.agents_todo_hand_to_agent)) {
+    JSheet(onDismiss = onDismiss, title = stringResource(R.string.agents_todo_hand_to_agent), pageActions = {
+        JButton(
+            text = stringResource(if (starting) R.string.agents_handoff_starting else R.string.agents_todo_hand_to_agent),
+            onClick = {
+                val prompt = todoHandOffPrompt(todo.title, todo.notes, instruction)
+                if (mode == HandOffMode.New) {
+                    val m = selectedMachine ?: return@JButton
+                    onHandOffNew(
+                        m.id,
+                        cwd.ifEmpty { "~" },
+                        launcher,
+                        permissionMode.takeIf { it != "default" },
+                        prompt
+                    )
+                } else {
+                    val target = selectedTarget ?: return@JButton
+                    onHandOffExisting(target, prompt)
+                }
+            },
+            enabled = !starting && (if (mode == HandOffMode.New) selectedMachine != null else selectedTarget != null),
+        )
+    }) {
         Column(
             Modifier
                 .fillMaxWidth()
@@ -297,27 +318,6 @@ internal fun TodoHandOffSheet(
 
             error?.let { Text(it, style = PersonaTheme.type.caption, color = PersonaTheme.palette.danger.text) }
 
-            JButton(
-                text = stringResource(if (starting) R.string.agents_handoff_starting else R.string.agents_todo_hand_to_agent),
-                onClick = {
-                    val prompt = todoHandOffPrompt(todo.title, todo.notes, instruction)
-                    if (mode == HandOffMode.New) {
-                        val m = selectedMachine ?: return@JButton
-                        onHandOffNew(
-                            m.id,
-                            cwd.ifEmpty { "~" },
-                            launcher,
-                            permissionMode.takeIf { it != "default" },
-                            prompt
-                        )
-                    } else {
-                        val target = selectedTarget ?: return@JButton
-                        onHandOffExisting(target, prompt)
-                    }
-                },
-                enabled = !starting && (if (mode == HandOffMode.New) selectedMachine != null else selectedTarget != null),
-                modifier = Modifier.fillMaxWidth()
-            )
         }
     }
 }

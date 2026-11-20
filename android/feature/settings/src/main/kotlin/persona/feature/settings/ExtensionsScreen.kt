@@ -695,14 +695,16 @@ private fun ExtensionSecretSheet(
 ) {
     var value by remember(secret.name) { mutableStateOf("") }
     val scope = rememberCoroutineScope()
-    JSheet(onDismiss, title = secret.label, dismissible = !busy) {
+    JSheet(onDismiss, title = secret.label, dismissible = !busy,
+        pageActions = {
+            JSheetConfirm(stringResource(R.string.settings_ext_save), { scope.launch { if (save(value)) onDismiss() } }, loading = busy,
+                enabled = !busy && value.isNotBlank())
+        }) {
         Column(Modifier.padding(vertical = Tokens.Space.s), verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
             JTextField(value, { value = it }, Modifier.fillMaxWidth(), placeholder = stringResource(if (secret.set) R.string.settings_ext_secret_replace else R.string.settings_ext_secret_enter), singleLine = true,
                 enabled = !busy, visualTransformation = PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password))
             SettingsCaption(secret.description?.takeIf { it.isNotBlank() } ?: stringResource(R.string.settings_ext_secret_note))
-            JButton(stringResource(R.string.settings_ext_save), { scope.launch { if (save(value)) onDismiss() } }, Modifier.fillMaxWidth(), loading = busy,
-                enabled = !busy && value.isNotBlank())
             if (secret.set) JButton(stringResource(R.string.settings_ext_clear), { scope.launch { if (clear()) onDismiss() } }, Modifier.fillMaxWidth(),
                 kind = JButtonKind.Destructive, enabled = !busy)
         }

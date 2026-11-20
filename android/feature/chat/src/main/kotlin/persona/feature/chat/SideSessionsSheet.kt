@@ -33,7 +33,7 @@ internal fun sideSessionsLabel(rollup: SideRollup): String = listOfNotNull(
 @Composable
 internal fun ChatSideSessionsSheet(sides: List<Session>, rows: List<Session>, rollup: SideRollup, onDismiss: () -> Unit,
     onOpen: (SessionKey) -> Unit) {
-    JSheet(onDismiss = onDismiss, title = stringResource(R.string.chat_side_sessions), scrollable = true) {
+    JSheet(onDismiss = onDismiss, title = stringResource(R.string.chat_side_sessions), scrollable = true, pageActions = {}) {
         when {
             sides.isNotEmpty() -> sides.forEach { side ->
                 val state = sideState(side, rows + sides)

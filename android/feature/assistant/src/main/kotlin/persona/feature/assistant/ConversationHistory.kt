@@ -238,7 +238,7 @@ internal fun ArchivedConversationsSheet(
     val glass = PersonaTheme.style == AppStyle.Glass
     val unarchive = stringResource(R.string.assistant_unarchive)
     var menu by remember { mutableStateOf<Session?>(null) }
-    JSheet(onDismiss, title = stringResource(R.string.assistant_archived)) {
+    JSheet(onDismiss, title = stringResource(R.string.assistant_archived), pageActions = {}) {
         if (sessions.isEmpty()) JEmptyState(stringResource(R.string.assistant_archived_empty),
             stringResource(R.string.assistant_archived_empty_detail), icon = PersonaIcons.archive)
         else LazyColumn(Modifier.weight(1f, fill = false).testTag("archived-conversations")) {

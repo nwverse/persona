@@ -1110,7 +1110,7 @@ fun AssistantScreen(
             }
         } else {
             body(false)
-            if (drawerOpen) JSheet(onDismiss = { drawerOpen = false }, title = stringResource(R.string.assistant_conversation_list)) {
+            if (drawerOpen) JSheet(onDismiss = { drawerOpen = false }, title = stringResource(R.string.assistant_conversation_list), pageActions = {}) {
                 Box(Modifier.fillMaxWidth().fillMaxHeight(0.9f)) { sidebar() }
             }
         }

@@ -109,7 +109,7 @@ internal fun ChatSiblingTabs(
             { all = true }, badge = waiting)
         trailing?.invoke()
     }
-    if (all) JSheet(onDismiss = { all = false }, title = pluralStringResource(R.plurals.chat_tabs_sheet_title, tabs.size, tabs.size), scrollable = true) {
+    if (all) JSheet(onDismiss = { all = false }, title = pluralStringResource(R.plurals.chat_tabs_sheet_title, tabs.size, tabs.size), scrollable = true, pageActions = {}) {
         labels.forEach { label ->
             val tab = label.session
             val on = tab.key == session.key

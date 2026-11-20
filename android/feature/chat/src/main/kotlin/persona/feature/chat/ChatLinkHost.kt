@@ -292,7 +292,8 @@ fun ChatLinkHost(
                         Box(Modifier.align(Alignment.CenterHorizontally).padding(top = Tokens.Space.s).size(Tokens.Space.Standard.xxl, Tokens.Space.Standard.xs)
                             .clip(PersonaTheme.shapes.controlShape).background(palette.ink3))
                         Row(Modifier.fillMaxWidth().padding(end = Tokens.Space.xs), verticalAlignment = Alignment.CenterVertically) {
-                            JIconButton(PhIcons.CaretLeft, stringResource(R.string.chat_link_back), { back() })
+                            JSheetClose(::close)
+                            if (view?.canGoBack() == true) JIconButton(PhIcons.CaretLeft, stringResource(R.string.chat_link_back), { back() })
                             Column(Modifier.weight(1f)) {
                                 Text((if (native != null && (nativeShown || view?.pageTitle.isNullOrBlank())) nativeTitle ?: nativeFallback else view?.pageTitle.orEmpty()).ifBlank { stringResource(R.string.chat_link_page) }, style = PersonaTheme.type.bodyStrong, color = palette.ink,
                                     maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -335,7 +336,6 @@ fun ChatLinkHost(
                                     }.takeIf { forwarded == null },
                                 ))
                             }
-                            JIconButton(PhIcons.X, stringResource(R.string.chat_link_close), ::close)
                         }
                     }
                     if (view != null && !view.gone && view.loadProgress < 100 && view.failure == null)
@@ -418,6 +418,7 @@ fun ChatLinkHost(
                                     onRelease = { (it.parent as? ViewGroup)?.removeView(it) },
                                 )
                             }
+                            JSheetClose({ view.exitCustomView() }, Modifier.align(Alignment.TopStart), raised = true)
                         }
                     }
                 }

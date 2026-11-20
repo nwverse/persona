@@ -35,7 +35,7 @@ internal fun LarkDocCommentsSheet(model: LarkDocCommentsModel, writes: Boolean, 
     val scope = rememberCoroutineScope()
     var resolvedTab by remember { mutableStateOf(false) }
     LaunchedEffect(model) { if (model.threads == null) model.load() }
-    JSheet(onDismiss = onDismiss, title = stringResource(R.string.inbox_lark_doc_comments_title), scrollable = false) {
+    JSheet(onDismiss = onDismiss, title = stringResource(R.string.inbox_lark_doc_comments_title), scrollable = false, pageActions = {}) {
         LarkDocCommentsContent(model, writes, resolvedTab, { resolvedTab = it }, Modifier.weight(1f, fill = false)) { scope.launch { it() } }
     }
 }

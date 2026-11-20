@@ -100,7 +100,8 @@ fun LarkForwardedSheet(
     JSheet(
         onDismiss = onDismiss,
         title = part.title.ifBlank { stringResource(R.string.inbox_lark_chat_history) },
-        skipPartiallyExpanded = false
+        skipPartiallyExpanded = false,
+        pageActions = {},
     ) {
         LazyColumn(
             modifier = Modifier.fillMaxWidth().fillMaxHeight(0.85f),
@@ -331,7 +332,7 @@ fun LarkVideoPlayerDialog(
                     .padding(Tokens.Space.m)
                     .align(Alignment.TopStart)
             ) {
-                JButton(stringResource(R.string.inbox_close), onClick = onDismiss, kind = JButtonKind.Secondary, size = JButtonSize.Small)
+                JSheetClose(onDismiss, raised = true)
             }
         }
     }

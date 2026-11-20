@@ -373,27 +373,32 @@ private fun MailDetail(
             }
         }
     }
-    if (replying) JSheet(onDismiss = { if (!reply.sending) replying = false }, title = stringResource(R.string.inbox_mail_reply_latest_title)) {
-        // The sheet is opaque: the composer must not sample (and show) the page behind it as glass.
-        CompositionLocalProvider(LocalGlassSource provides null) {
-        Column(Modifier.fillMaxWidth().imePadding().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
-            Text(stringResource(R.string.inbox_mail_reply_recipient, message?.from?.display().orEmpty()), style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink)
-            Text(stringResource(R.string.inbox_mail_reply_marks_done), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3)
-            if (reply.targetChanged) {
-                JNotice(stringResource(R.string.inbox_mail_target_changed), status = Status.NeedsYou)
-                Text(stringResource(R.string.inbox_mail_latest_subject, message?.subject.orEmpty()), style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink)
-                JButton(stringResource(R.string.inbox_mail_view_latest), { replying = false }, kind = JButtonKind.Secondary, enabled = !loading)
-            }
-            record?.agent?.takeIf { it.state == "drafted" && it.basis.isNotBlank() && it.draft == reply.draft.text }?.let {
-                Text(stringResource(R.string.inbox_reply_ai_basis, it.basis), style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink2)
-            }
-            ReplyComposerField(reply, composer::update, onSend = {
-                if (reply.delivery in setOf(ReplyDelivery.Unknown, ReplyDelivery.Verifying, ReplyDelivery.NeedsConfirmation)) composer.send(replyTarget)
-                else confirmSend = true
-            }, placeholder = stringResource(R.string.inbox_reply_placeholder), sendEnabled = !loading &&
-                (!reply.targetChanged || (loadedTarget != null && message?.uid == loadedTarget?.uid && error == null)))
-            InboxAiDraftRow(repository, route.itemId, composer)
+    if (replying) {
+        val canSend = !loading && (!reply.targetChanged || (loadedTarget != null && message?.uid == loadedTarget?.uid && error == null))
+        val submitReply: () -> Unit = {
+            if (reply.delivery in setOf(ReplyDelivery.Unknown, ReplyDelivery.Verifying, ReplyDelivery.NeedsConfirmation)) composer.send(replyTarget)
+            else confirmSend = true
         }
+        JSheet(onDismiss = { replying = false }, title = stringResource(R.string.inbox_mail_reply_latest_title),
+            dismissible = !reply.sending, pageActions = { ReplyComposerAction(reply, submitReply, canSend) }) {
+            // The sheet is opaque: the composer must not sample (and show) the page behind it as glass.
+            CompositionLocalProvider(LocalGlassSource provides null) {
+            Column(Modifier.fillMaxWidth().imePadding().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
+                Text(stringResource(R.string.inbox_mail_reply_recipient, message?.from?.display().orEmpty()), style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink)
+                Text(stringResource(R.string.inbox_mail_reply_marks_done), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3)
+                if (reply.targetChanged) {
+                    JNotice(stringResource(R.string.inbox_mail_target_changed), status = Status.NeedsYou)
+                    Text(stringResource(R.string.inbox_mail_latest_subject, message?.subject.orEmpty()), style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink)
+                    JButton(stringResource(R.string.inbox_mail_view_latest), { replying = false }, kind = JButtonKind.Secondary, enabled = !loading)
+                }
+                record?.agent?.takeIf { it.state == "drafted" && it.basis.isNotBlank() && it.draft == reply.draft.text }?.let {
+                    Text(stringResource(R.string.inbox_reply_ai_basis, it.basis), style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink2)
+                }
+                ReplyComposerField(reply, composer::update, submitReply, stringResource(R.string.inbox_reply_placeholder),
+                    actionInPageBar = true)
+                InboxAiDraftRow(repository, route.itemId, composer)
+            }
+            }
         }
     }
     // Mail replies always asked first; the wording is now the one every send in the user's name uses.

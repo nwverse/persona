@@ -1,5 +1,6 @@
 package persona.feature.settings
 
+import persona.core.designsystem.JSheetConfirm
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -303,7 +304,7 @@ internal fun KnowledgeSelectionPage(
         var source by rememberSaveable { mutableStateOf<String?>(null) }
         LaunchedEffect(sources) { if (source == null && sources?.size == 1) source = sources!!.single().id }
         LaunchedEffect(source) { source?.let { model.loadCandidates(it) } }
-        JSheet(onDismiss = { chatPicker = false }, title = stringResource(R.string.settings_knowledge_selection_add_chat_title), scrollable = true) {
+        JSheet(onDismiss = { chatPicker = false }, title = stringResource(R.string.settings_knowledge_selection_add_chat_title), scrollable = true, pageActions = {}) {
             KnowledgeChatPickerContent(sources, source, state.candidates, state.candidatesLoading,
                 state.candidateUnavailable, state.candidateError, enabled = state.editable,
                 sourceError = sourcesError, onRetrySources = { sourcesRetry++ }, onSource = { source = it },
@@ -321,7 +322,7 @@ internal fun KnowledgeSelectionPage(
         var documentRequest by remember { mutableStateOf(0L) }
         val pickerScope = rememberCoroutineScope()
         LaunchedEffect(documentPicker) { model.loadDocuments() }
-        JSheet(onDismiss = { documentPicker = false; documentRequest++ }, title = stringResource(R.string.settings_knowledge_selection_add_document_title), scrollable = true) {
+        JSheet(onDismiss = { documentPicker = false; documentRequest++ }, title = stringResource(R.string.settings_knowledge_selection_add_document_title), scrollable = true, pageActions = {}) {
             Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
                 JSearchField(query, { query = it }, stringResource(R.string.settings_knowledge_selection_picker_search), Modifier.fillMaxWidth())
                 when {
@@ -346,8 +347,6 @@ internal fun KnowledgeSelectionPage(
                     }
                 }
             }
-            JButton(stringResource(R.string.settings_cancel), { documentPicker = false; documentRequest++ },
-                Modifier.fillMaxWidth(), kind = JButtonKind.Quiet)
         }
     }
 }
@@ -459,7 +458,12 @@ private fun KnowledgeRuleSheet(
     val valid = parsedDays.valid && (part == KnowledgeSelectionPart.Documents || parsedAttachments.valid) &&
         (part == KnowledgeSelectionPart.Documents || name != "mine" || parsedContext.valid)
     val disabled = saving || readOnly
-    JSheet(onDismiss, title = knowledgeRuleTitle(part, name), dismissible = !saving, scrollable = true) {
+    JSheet(onDismiss, title = knowledgeRuleTitle(part, name), dismissible = !saving, scrollable = true,
+        pageActions = {
+            JSheetConfirm(stringResource(R.string.settings_knowledge_selection_save), {
+                if (valid) onSave(on, parsedDays.value, parsedAttachments.value, includeAll, parsedContext.value)
+            }, Modifier.testTag("knowledge-rule-save"), enabled = valid && !disabled, loading = saving)
+        }) {
         Column(Modifier.fillMaxWidth().imePadding(), verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
             problem?.let { JNotice(it.text(), Modifier.testTag("knowledge-rule-problem"), status = Status.NeedsYou) }
             JSwitchRow(stringResource(R.string.settings_knowledge_selection_store_matching), on, { on = it }, enabled = !disabled,
@@ -482,12 +486,6 @@ private fun KnowledgeRuleSheet(
                     enabled = !disabled, isError = !parsedContext.valid, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
             }
             if (!valid) JNotice(stringResource(R.string.settings_knowledge_selection_number_invalid), status = Status.NeedsYou)
-            Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                JButton(stringResource(R.string.settings_cancel), onDismiss, Modifier.weight(1f), kind = JButtonKind.Quiet, enabled = !saving)
-                JButton(stringResource(R.string.settings_knowledge_selection_save), {
-                    if (valid) onSave(on, parsedDays.value, parsedAttachments.value, includeAll, parsedContext.value)
-                }, Modifier.weight(1f).testTag("knowledge-rule-save"), enabled = valid && !disabled, loading = saving)
-            }
         }
     }
 }
@@ -510,7 +508,12 @@ private fun KnowledgeItemSheet(
     val changed = isNew || mode != item.mode || (mode == KnowledgeItemMode.All && parsed.value != item.days)
     val disabled = saving || readOnly
     JSheet(onDismiss, title = stringResource(if (item.id.kind == "chat") R.string.settings_knowledge_selection_chat_setting
-        else R.string.settings_knowledge_selection_document_setting), dismissible = !saving, scrollable = true) {
+        else R.string.settings_knowledge_selection_document_setting), dismissible = !saving, scrollable = true,
+        pageActions = {
+            JSheetConfirm(stringResource(if (isNew) R.string.settings_knowledge_selection_add else R.string.settings_knowledge_selection_save), {
+                if (valid) onSave(item.copy(mode = mode, days = if (mode == KnowledgeItemMode.All) parsed.value else null))
+            }, Modifier.testTag("knowledge-item-save"), enabled = valid && changed && !disabled, loading = saving)
+        }) {
         Column(Modifier.fillMaxWidth().imePadding(), verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
             problem?.let { JNotice(it.text(), Modifier.testTag("knowledge-item-problem"), status = Status.NeedsYou) }
             Text(item.name.ifBlank { item.id.id }, style = PersonaTheme.type.headline, color = PersonaTheme.palette.ink)
@@ -529,12 +532,6 @@ private fun KnowledgeItemSheet(
                     supportingText = if (!parsed.valid) stringResource(R.string.settings_knowledge_selection_item_days_invalid) else null,
                     singleLine = true, enabled = !disabled, isError = !parsed.valid,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                JButton(stringResource(R.string.settings_cancel), onDismiss, Modifier.weight(1f), kind = JButtonKind.Quiet, enabled = !saving)
-                JButton(stringResource(if (isNew) R.string.settings_knowledge_selection_add else R.string.settings_knowledge_selection_save), {
-                    if (valid) onSave(item.copy(mode = mode, days = if (mode == KnowledgeItemMode.All) parsed.value else null))
-                }, Modifier.weight(1f).testTag("knowledge-item-save"), enabled = valid && changed && !disabled, loading = saving)
             }
             if (!isNew) JButton(stringResource(R.string.settings_knowledge_selection_remove_setting), { onRemove(item) },
                 Modifier.fillMaxWidth().testTag("knowledge-item-remove"), kind = JButtonKind.Destructive, enabled = !disabled)

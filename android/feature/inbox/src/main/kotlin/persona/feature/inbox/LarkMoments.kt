@@ -319,7 +319,7 @@ internal fun LarkMomentsSheet(
 
     val feishuUrl = link ?: "https://applink.feishu.cn/client/moments/detail?postId=$postId"
 
-    JSheet(onDismiss = onDismiss, title = stringResource(R.string.inbox_moments), scrollable = false) {
+    JSheet(onDismiss = onDismiss, title = stringResource(R.string.inbox_moments), scrollable = false, pageActions = {}) {
         Row(Modifier.fillMaxWidth().padding(bottom = Tokens.Space.s), horizontalArrangement = Arrangement.End) {
             JButton(
                 stringResource(R.string.inbox_open_in_lark),

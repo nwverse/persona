@@ -321,7 +321,10 @@ private fun EndpointActions(
 
 @Composable
 private fun AddressSheet(sheet: EndpointSheet, pinned: Boolean, onChange: (String) -> Unit, onSave: () -> Unit, onDismiss: () -> Unit) {
-    JSheet(onDismiss, title = stringResource(if (sheet.editing == null) R.string.settings_endpoint_add else R.string.settings_endpoint_edit_title), dismissible = !sheet.saving, scrollable = true) {
+    JSheet(onDismiss, title = stringResource(if (sheet.editing == null) R.string.settings_endpoint_add else R.string.settings_endpoint_edit_title), dismissible = !sheet.saving, scrollable = true,
+        pageActions = {
+            JSheetConfirm(stringResource(R.string.settings_endpoint_save), onSave, enabled = sheet.canSave, loading = sheet.saving)
+        }) {
         Column(Modifier.fillMaxWidth().imePadding(), verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
             JTextField(
                 sheet.address, onChange, Modifier.fillMaxWidth(), placeholder = "https://hub.example.com:18662", label = stringResource(R.string.settings_endpoint_address),
@@ -335,10 +338,6 @@ private fun AddressSheet(sheet: EndpointSheet, pinned: Boolean, onChange: (Strin
             SettingsCaption(stringResource(R.string.settings_endpoint_address_forms))
             if (!pinned) SettingsCaption(stringResource(R.string.settings_endpoint_unpinned_note))
             sheet.error?.let { JNotice(it.text(), status = Status.NeedsYou) }
-            Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                JButton(stringResource(R.string.settings_endpoint_cancel), onDismiss, Modifier.weight(1f), kind = JButtonKind.Quiet, enabled = !sheet.saving)
-                JButton(stringResource(R.string.settings_endpoint_save), onSave, Modifier.weight(1f), enabled = sheet.canSave, loading = sheet.saving, loadingText = stringResource(R.string.settings_endpoint_saving))
-            }
         }
     }
 }

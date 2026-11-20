@@ -276,8 +276,8 @@ internal fun TerminalCoverFrame(open: Boolean, onClose: () -> Unit, content: @Co
 }
 
 /**
- * The cover's bar (iOS `TerminalPanel.grabBar`), there in every state: the handle, then the take-over chip, what the
- * terminal shows ([subtitle]), the tools and Close. Dragged down it takes the cover with it.
+ * The cover's bar (iOS `TerminalPanel.grabBar`), there in every state: the handle above the leading Close, the take-over chip, what the
+ * terminal shows ([subtitle]) and the tools. Dragged down it takes the cover with it.
  */
 @Composable
 private fun TerminalCoverBar(subtitle: String?, grab: TerminalGrab, control: @Composable () -> Unit, tools: @Composable () -> Unit) {
@@ -287,13 +287,11 @@ private fun TerminalCoverBar(subtitle: String?, grab: TerminalGrab, control: @Co
             .clip(PersonaTheme.shapes.controlShape).background(palette.ink3))
         Row(Modifier.fillMaxWidth().padding(start = pagePadding, end = Tokens.Space.xs), verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+            JSheetClose(grab.close)
             control()
             Text(subtitle.orEmpty(), Modifier.weight(1f), style = PersonaTheme.type.caption, color = palette.ink2,
                 maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                tools()
-                JIconButton(PersonaIcons.close, stringResource(R.string.terminal_close), grab.close)
-            }
+            tools()
         }
     }
 }
@@ -315,7 +313,7 @@ private fun TerminalDisplaySheet(
     fontSize: Float, onFont: (Boolean) -> Unit, wrap: Boolean, onWrap: (Boolean) -> Unit, wrapEnabled: Boolean, onDismiss: () -> Unit,
 ) {
     val palette = PersonaTheme.palette
-    JSheet(onDismiss, title = stringResource(R.string.terminal_display)) {
+    JSheet(onDismiss, title = stringResource(R.string.terminal_display), pageActions = {}) {
         JRow(stringResource(R.string.terminal_font_size), subtitle = stringResource(R.string.terminal_font_size_note), trailing = {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
                 JButton(stringResource(R.string.terminal_font_down), { onFont(false) }, kind = JButtonKind.Secondary, size = JButtonSize.Small, enabled = fontSize > TerminalFontSize.MIN)

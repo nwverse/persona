@@ -3,6 +3,12 @@
 Since 2026-10-31, the Android App's visuals and interaction have been redone wholesale. As the user asked, all three directions became themes, switched in **Settings › Interface style**; the default is **Glass**.
 The old design (the parts of `docs/archive/redesign/` about appearance, layout and interaction, and the HTML prototypes removed in #9030) is superseded by this document.
 
+## Presented-page actions
+
+A presented page opens with a top-start × in the surface's primary ink. TalkBack calls it Close in the current language. In a `JSheet` that has a page header, supply `pageActions` to pin the header above its scrolling content. Use an empty action slot on a read-only page. Use `JSheetConfirm` with the localized Save, Done or Add label for a saving checkmark. Keep a specific action such as Send or Start as a word at the end. A failed or disabled operation retains its existing state and the form's own dismissal policy.
+
+Use the same dismissal callback for a `JFullScreen` root and its page bar, or set the bar's `onClose` directly. Pages pushed inside a presentation keep their Back arrow. In Settings the root owns Close and its nested destinations own Back. A consent question keeps Cancel with its answer, and a platform-owned picker or a short sheet with no navigation bar retains its native behavior. The shared close and confirmation have 48 dp targets. See design system §3.5 and `scripts/app/android_sheet_actions.py`.
+
 ## 1. Three styles
 
 Pages are written once. Each style provides its own design tokens (palette, typography, shapes, motion), component skins, and the App shell and navigation. Interaction differences live in components rendered per style; page code does not branch.

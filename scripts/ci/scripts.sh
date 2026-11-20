@@ -8,6 +8,7 @@ ci_run 'Android translations' 180 python3 scripts/app/android_i18n_check.py
 ci_run 'Android token ratchet' 180 python3 scripts/app/android_token_baseline.py
 ci_run 'Android motion ratchet' 180 python3 scripts/app/android_motion_baseline.py
 ci_run 'Android design-system slot order' 180 python3 scripts/app/android_slot_order.py
+ci_run 'Android presented-page actions' 180 python3 scripts/app/android_sheet_actions.py
 ci_run 'Workflow syntax and shell lint' 180 actionlint
 # One file per step: bash -n reads only its first file, the rest become that script's arguments.
 ci_run 'Site language check shell syntax' 30 bash -n scripts/release/site_language_check.sh

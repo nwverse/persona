@@ -1211,12 +1211,12 @@ private fun AssistantTrayDetailSheets(
     var trayPlan by pageTrays.trayPlan
     var traySchedule by pageTrays.traySchedule
     trayPlan?.let { plan -> taskHost?.let { host ->
-        JSheet(onDismiss = { trayPlan = null }, title = plan.tasks.firstOrNull()?.title, scrollable = true) {
+        JSheet(onDismiss = { trayPlan = null }, title = plan.tasks.firstOrNull()?.title, scrollable = true, pageActions = {}) {
             PlanCard(plan, host)
         }
     } }
     traySchedule?.let { schedule ->
-        JSheet(onDismiss = { traySchedule = null }, title = schedule.title, scrollable = true) {
+        JSheet(onDismiss = { traySchedule = null }, title = schedule.title, scrollable = true, pageActions = {}) {
             Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
                 Text(schedule.prompt, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink)
                 schedule.lastStatus?.let { Text(it, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3) }

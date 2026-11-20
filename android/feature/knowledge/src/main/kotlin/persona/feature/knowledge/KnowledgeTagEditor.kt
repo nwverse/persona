@@ -26,7 +26,12 @@ internal fun KnowledgeTagEditor(entry: KnowledgeEntry, tagging: KnowledgeTagging
     var projectKind by rememberSaveable(entry.key) { mutableStateOf(start.projectKind) }
     var status by rememberSaveable(entry.key) { mutableStateOf(start.status) }
     val palette = PersonaTheme.palette
-    JSheet(onDismiss = onDismiss, title = stringResource(R.string.knowledge_tag_title, entry.name), dismissible = !tagging.busy, scrollable = true) {
+    JSheet(onDismiss = onDismiss, title = stringResource(R.string.knowledge_tag_title, entry.name), dismissible = !tagging.busy, scrollable = true,
+        pageActions = {
+            JSheetConfirm(stringResource(R.string.knowledge_save), {
+                onSave(KnowledgeTagForm(importance, relevance, tags, projectKind, status).update(entry.isProject))
+            }, loading = tagging.busy)
+        }) {
         Column(Modifier.fillMaxWidth().imePadding()) {
             Label(stringResource(R.string.knowledge_importance))
             Choices(KnowledgeTagForm.IMPORTANCE.map { it to it }, importance, enabled = !tagging.busy, status = ::importanceStatus) { importance = it }
@@ -47,10 +52,6 @@ internal fun KnowledgeTagEditor(entry: KnowledgeEntry, tagging: KnowledgeTagging
                 Spacer(Modifier.height(Tokens.Space.m))
                 JNotice(stringResource(R.string.knowledge_not_saved, it.text()), status = Status.NeedsYou)
             }
-            Spacer(Modifier.height(Tokens.Space.section))
-            JButton(stringResource(R.string.knowledge_save), {
-                onSave(KnowledgeTagForm(importance, relevance, tags, projectKind, status).update(entry.isProject))
-            }, Modifier.fillMaxWidth(), loading = tagging.busy, loadingText = stringResource(R.string.knowledge_saving))
         }
     }
 }

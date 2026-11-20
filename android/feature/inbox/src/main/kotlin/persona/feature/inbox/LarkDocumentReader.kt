@@ -92,13 +92,13 @@ internal fun LarkLinkHost(repository: InboxRepository, manager: String? = null, 
                                 .background(PersonaTheme.palette.ink3, PersonaTheme.shapes.controlShape))
                             Row(Modifier.fillMaxWidth().padding(end = Tokens.Space.m), verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+                                JSheetClose({ scope.launch { drag.animateTo(ReaderDetent.Hidden); target = null } })
                                 InboxConnectionTitle(repository, stringResource(if (link.source != null && isLarkDocumentUrl(link.url)) R.string.inbox_lark_doc else R.string.inbox_lark_webpage),
                                     Modifier.weight(1f).padding(start = Tokens.Space.m))
                                 JIconButton(if (drag.currentValue == ReaderDetent.Full) PhIcons.CaretDown else PhIcons.CaretUp,
                                     stringResource(if (drag.currentValue == ReaderDetent.Full) R.string.inbox_collapse else R.string.inbox_expand), onClick = {
                                     scope.launch { drag.animateTo(if (drag.currentValue == ReaderDetent.Full) ReaderDetent.Peek else ReaderDetent.Full) }
                                 })
-                                JIconButton(PhIcons.X, stringResource(R.string.inbox_close), onClick = { scope.launch { drag.animateTo(ReaderDetent.Hidden); target = null } })
                             }
                         }
                         LarkDocumentReader(link.url, link.source, repository, Modifier.weight(1f), showConnectionTitle = false)
@@ -280,7 +280,7 @@ fun LarkDocumentReader(url: String, source: LarkContentSource?, repository: Inbo
         }), onDismiss = { pressed = null }, note = block.text.take(120))
     }
     if (commentsShown && comments != null) LarkDocCommentsSheet(comments, lark.docComments, onDismiss = { commentsShown = false })
-    if (outlineShown) JSheet(onDismiss = { outlineShown = false }, title = stringResource(R.string.inbox_lark_doc_outline), scrollable = false) {
+    if (outlineShown) JSheet(onDismiss = { outlineShown = false }, title = stringResource(R.string.inbox_lark_doc_outline), scrollable = false, pageActions = {}) {
         LazyColumn(Modifier.fillMaxWidth()) {
             items(outline) { (index, heading) ->
                 JRow(heading.text, Modifier.padding(start = Tokens.Space.l * (heading.level - 1).coerceIn(0, 3)),

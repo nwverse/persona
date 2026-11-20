@@ -73,7 +73,7 @@ internal fun ChatGoalBar(goal: GoalInfo?) {
 /** The goal opened (iOS `GoalSheet`): its status and spend, the whole objective, the latest check's reason. */
 @Composable
 internal fun ChatGoalSheet(goal: GoalInfo, onDismiss: () -> Unit) {
-    JSheet(onDismiss = onDismiss, title = stringResource(R.string.chat_goal_title), scrollable = true) { ChatGoalDetail(goal) }
+    JSheet(onDismiss = onDismiss, title = stringResource(R.string.chat_goal_title), scrollable = true, pageActions = {}) { ChatGoalDetail(goal) }
 }
 
 /** [ChatGoalSheet]'s content. */

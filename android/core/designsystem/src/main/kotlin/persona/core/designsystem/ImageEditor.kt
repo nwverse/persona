@@ -219,16 +219,15 @@ private fun EditorBody(source: Bitmap, start: ImageEditState, finishing: Boolean
 
     Column(Modifier.fillMaxSize()) {
         Box(Modifier.fillMaxWidth().statusBarsPadding().height(56.dp).padding(horizontal = Tokens.Space.xs)) {
-            JTextButton(stringResource(R.string.designsystem_cancel), onCancel, Modifier.align(Alignment.CenterStart), enabled = !finishing)
+            JSheetClose(onCancel, Modifier.align(Alignment.CenterStart), enabled = !finishing)
             Text(
                 stringResource(if (failed) R.string.designsystem_editor_failed else R.string.designsystem_editor_title),
                 Modifier.align(Alignment.Center).widthIn(max = 220.dp),
                 style = PersonaTheme.type.title, color = if (failed) palette.danger.text else palette.ink,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
-            JButton(
-                stringResource(R.string.designsystem_done), ::finish, Modifier.align(Alignment.CenterEnd).padding(end = Tokens.Space.s),
-                size = JButtonSize.Small, loading = finishing,
+            JSheetConfirm(
+                stringResource(R.string.designsystem_done), ::finish, Modifier.align(Alignment.CenterEnd), loading = finishing,
             )
         }
         Box(

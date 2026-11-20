@@ -28,7 +28,7 @@ internal fun LarkThreadSheet(root: LarkMessage, repository: InboxRepository, onD
     val composer = replies?.let { composers.get(it.target, replyRepository = it) }
     val scroll = rememberLazyListState()
     var mediaError by remember(root.id) { mutableStateOf<String?>(null) }
-    JSheet(onDismiss = onDismiss, title = stringResource(R.string.inbox_lark_thread)) {
+    JSheet(onDismiss = onDismiss, title = stringResource(R.string.inbox_lark_thread), pageActions = {}) {
         Column(Modifier.fillMaxWidth().fillMaxHeight(.92f)) {
 
             if (loader == null) {

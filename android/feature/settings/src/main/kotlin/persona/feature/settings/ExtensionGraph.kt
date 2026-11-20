@@ -315,15 +315,13 @@ internal fun ExtensionGraph(
         suspended = fullScreen,
         onFullScreen = open,
     )
-    if (fullScreen) JFullScreen(onDismiss = {
+    val closeGraph = {
         fullScreen = false
         if (compact) ui.touched = false
-    }) {
+    }
+    if (fullScreen) JFullScreen(onDismiss = closeGraph) {
         Column(Modifier.fillMaxSize().testTag("graph-full-screen")) {
-            JTopBar(item.title?.takeIf { it.isNotBlank() } ?: firstNodeTitle ?: stringResource(R.string.settings_ext_graph), onBack = {
-                fullScreen = false
-                if (compact) ui.touched = false
-            })
+            JTopBar(item.title?.takeIf { it.isNotBlank() } ?: firstNodeTitle ?: stringResource(R.string.settings_ext_graph), onClose = closeGraph)
             ExtensionGraphCanvas(
                 graph, state, handle, ui,
                 Modifier.fillMaxWidth().weight(1f),

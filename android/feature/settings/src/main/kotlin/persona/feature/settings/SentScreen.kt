@@ -64,7 +64,7 @@ internal fun SentAsYouPage(sent: HubSent?, onBack: () -> Unit, onChat: ((machine
         onOpen = { detail = it }, onChat = onChat)
     // The open row as the list has it now: a recall or a refresh changes it under the sheet.
     detail?.let { open -> state.items?.firstOrNull { it.id == open.id } ?: open }?.let { item ->
-        JSheet(onDismiss = { detail = null }, title = SentText.connectorName(LocalResources.current, item.connector).ifBlank { null }, scrollable = true) {
+        JSheet(onDismiss = { detail = null }, title = SentText.connectorName(LocalResources.current, item.connector).ifBlank { null }, scrollable = true, pageActions = {}) {
             // A chat opens under the sheet's page: the sheet goes first.
             SentDetailBody(item, onChat = onChat?.let { go -> { machine, session -> detail = null; go(machine, session) } }, onDone = { detail = null },
                 recalling = state.recalling == item.id, recallError = state.recallError?.takeIf { it.id == item.id }?.text,

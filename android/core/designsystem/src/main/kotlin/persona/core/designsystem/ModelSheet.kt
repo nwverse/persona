@@ -41,7 +41,7 @@ fun JModelSheet(
     // once the query is cleared would stay above the viewport.
     val scroll = rememberLazyListState()
     LaunchedEffect(query) { scroll.scrollToItem(0) }
-    JSheet(onDismiss = onDismiss, title = stringResource(R.string.designsystem_model_title)) {
+    JSheet(onDismiss = onDismiss, title = stringResource(R.string.designsystem_model_title), pageActions = {}) {
         Text(note, style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink2)
         Spacer(Modifier.height(Tokens.Space.m))
         JSearchField(query, { query = it }, stringResource(if (custom) R.string.designsystem_model_search_custom else R.string.designsystem_model_search))

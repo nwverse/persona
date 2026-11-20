@@ -568,7 +568,8 @@ fun ChatComposer(
     // Same draft and caret as the field; collapsing puts the caret back in the field. Sending closes it.
     if (expandedEditor) ExpandedComposer(state.value, { state.beginEdit(); state.value = it }, composerPlaceholder,
         onCollapse = { expandedEditor = false; state.focusRequest++ }, enabled = enabled) {
-        SendButton(onClick = { expandedEditor = false; send() }, enabled = canSend && hasContent && blockedLabel == null, loading = sending)
+        JButton(stringResource(persona.core.designsystem.R.string.designsystem_send), { expandedEditor = false; send() },
+            enabled = canSend && hasContent && blockedLabel == null, loading = sending)
     }
     if (menu) ChatActionsSheet(onDismiss = { menu = false }, title = stringResource(R.string.chat_composer_menu_title), actions = buildList {
         // Photos picks pictures and videos (iOS mediaPicker), four together at most.

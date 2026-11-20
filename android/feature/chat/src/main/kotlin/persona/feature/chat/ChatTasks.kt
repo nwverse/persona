@@ -120,8 +120,9 @@ internal fun ChatTasks(
         go { lines -> callRecordTarget(lines, jump.toolUseId, jump.notice) }
     }
 
-    if (open) JFullScreen({ open = false }) {
-        TaskProgressPage(index.progress, onBack = { open = false }, onRecord = { task ->
+    val closeTasks = { open = false }
+    if (open) JFullScreen(closeTasks) {
+        TaskProgressPage(index.progress, onBack = closeTasks, onRecord = { task ->
             go { lines -> taskRecordTarget(lines, task.sourceItemId, task.sourceSeq) }
             open = false
         })

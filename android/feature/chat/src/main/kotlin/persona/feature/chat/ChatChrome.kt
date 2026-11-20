@@ -273,7 +273,7 @@ internal fun ChatHeader(
                 content = worktree?.let { st -> { WorktreeCleanupSection(st, cleanup, { cleanup = it }, machine?.home) } })
         }
         "info" -> session?.let { target -> ChatSessionInfoSheet(target, machine, state, onOpenTodo = onOpenTodo, onDismiss = { dialog = null }) }
-        "peers" -> JSheet(onDismiss = { dialog = null }, title = stringResource(R.string.chat_chrome_peers_title)) {
+        "peers" -> JSheet(onDismiss = { dialog = null }, title = stringResource(R.string.chat_chrome_peers_title), pageActions = {}) {
             if (peers.isEmpty()) JEmptyState(stringResource(R.string.chat_chrome_peers_empty_title), stringResource(R.string.chat_chrome_peers_empty_text))
             LazyColumn(Modifier.fillMaxWidth().heightIn(max = 400.dp), contentPadding = PaddingValues(bottom = 16.dp.dense)) {
                 items(peers, key = { it.key.path }) { peer ->

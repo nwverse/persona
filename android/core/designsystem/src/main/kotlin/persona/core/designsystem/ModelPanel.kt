@@ -93,8 +93,9 @@ fun JModelPanel(
     var customizing by remember { mutableStateOf<String?>(null) }
     val sections = remember(providers, state, view, query, prefs) { ModelPanel.sections(providers, state, view, query, prefs) }
     val rows = sections.flatMap { it.rows }
-    JSheet(onDismiss = onDismiss, showDragHandle = true, contentPadding = Tokens.Space.flush) {
-        val open = customizing?.let { key -> rows.firstOrNull { it.key == key } }
+    val open = customizing?.let { key -> rows.firstOrNull { it.key == key } }
+    JSheet(onDismiss = onDismiss, title = if (open == null) stringResource(R.string.designsystem_model_title) else null,
+        contentPadding = Tokens.Space.flush, pageActions = if (open == null) ({}) else null) {
         if (open != null) {
             SetupPage(open, state, prefs, onPrefs, words, live = onApplyCurrent != null && open.current, onApplyCurrent = onApplyCurrent,
                 extra = if (open.current) currentExtra else null, onBack = { customizing = null })

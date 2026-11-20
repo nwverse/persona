@@ -318,7 +318,7 @@ internal fun NameDialog(
 internal fun ManagerCodeSheetHost(state: ManagersState, now: Instant, model: ManagersModel) {
     val sheet = state.code ?: return
     val scope = rememberCoroutineScope()
-    JSheet(onDismiss = model::closeCode, title = sheet.name.ifBlank { null }, scrollable = true) {
+    JSheet(onDismiss = model::closeCode, title = sheet.name.ifBlank { null }, scrollable = true, pageActions = {}) {
         ManagerCodeBody(sheet, now, busy = state.busy, failure = state.failure,
             onNewCode = { scope.launch { model.newCode(sheet.managerId) } }, onDone = model::closeCode)
     }

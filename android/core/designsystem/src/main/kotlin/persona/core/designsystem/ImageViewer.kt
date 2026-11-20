@@ -296,7 +296,7 @@ private fun ViewerBody(
                     Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.s),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    JIconButton(PhIcons.X, stringResource(R.string.designsystem_close), onDismiss, raised = true)
+                    JSheetClose(onDismiss, raised = true)
                     Spacer(Modifier.weight(1f))
                     if (images.size > 1) Text(
                         "${page + 1} / ${images.size}",

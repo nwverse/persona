@@ -74,7 +74,7 @@ class ImageEditorShotsTest {
             capture("editor-crop-${s.name.lowercase()}-${if (d) "dark" else "light"}")
         }
         // The last one: turned once to the left, Done burns it in as a 200 × 300 picture; Undo would have put it back.
-        rule.onNodeWithText("完成").performClick()
+        rule.onNodeWithContentDescription("完成").performClick()
         rule.waitUntil(5_000) { result != null }
         assertEquals(200, result!!.width)
         assertEquals(300, result!!.height)

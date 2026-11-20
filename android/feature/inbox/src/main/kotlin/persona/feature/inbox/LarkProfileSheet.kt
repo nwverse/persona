@@ -136,7 +136,8 @@ fun LarkProfileSheet(
     JSheet(
         onDismiss = onDismiss,
         title = stringResource(R.string.inbox_lark_profile),
-        skipPartiallyExpanded = false
+        skipPartiallyExpanded = false,
+        pageActions = {},
     ) {
         LarkProfileCardContent(
             person = current,

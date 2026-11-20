@@ -150,13 +150,12 @@ private fun TranslationChatPicker(
         catch (e: Exception) { error = e.message?.takeIf(String::isNotBlank) ?: resources.getString(R.string.settings_translation_lark_read_failed); emptyList() }
     }
     // Scrolls as a whole: the pinned and recent chats are at most a few dozen.
-    JSheet(onDismiss, title = stringResource(R.string.settings_translation_picker_title), scrollable = true) {
+    JSheet(onDismiss, title = stringResource(R.string.settings_translation_picker_title), scrollable = true,
+        pageActions = {
+            JSheetConfirm(stringResource(R.string.settings_done), { onSave(picked) }, Modifier.testTag("translate-chats-done"))
+        }) {
         TranslationChatPickerContent(selected, choices, error, query, { query = it }, picked) { chat ->
             picked = if (picked.any { it.id == chat.id }) picked.filterNot { it.id == chat.id } else picked + chat
-        }
-        Row(Modifier.fillMaxWidth().padding(top = Tokens.Space.m), horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s, Alignment.End)) {
-            JButton(stringResource(R.string.settings_cancel), onDismiss, kind = JButtonKind.Secondary)
-            JButton(stringResource(R.string.settings_done), { onSave(picked) }, Modifier.testTag("translate-chats-done"))
         }
     }
 }

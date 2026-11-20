@@ -36,7 +36,7 @@ internal fun ChatStatusSheet(
     val copy = rememberCopy()
     val res = LocalResources.current
     val workflowFolds = remember { WorkflowFolds() }
-    JSheet(onDismiss = onDismiss, title = stringResource(R.string.chat_status_title)) {
+    JSheet(onDismiss = onDismiss, title = stringResource(R.string.chat_status_title), pageActions = {}) {
         LazyColumn(contentPadding = PaddingValues(bottom = Tokens.Space.m),
             verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
             item {
@@ -152,7 +152,6 @@ internal fun ChatStatusSheet(
             }
             item {
                 if (terminal != null) StatusSecondaryButton(stringResource(R.string.chat_status_open_terminal), terminal)
-                StatusSecondaryButton(stringResource(R.string.chat_status_close), onDismiss)
             }
         }
     }

@@ -42,6 +42,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
+import persona.core.contracts.api.ExtensionComposerButton
 import persona.core.contracts.api.ExtensionDiffThread
 import persona.core.contracts.api.ExtensionUiResult
 import persona.core.contracts.api.ExtensionView
@@ -225,18 +226,30 @@ private fun ReviewSubmit(view: ExtensionView, state: ExtensionViewState, handle:
     var body by summaryState
     JButton(if (r.count > 0) pluralStringResource(R.plurals.settings_ext_review_submit_drafts, r.count, r.count) else stringResource(R.string.settings_ext_review_review),
         { open = true }, size = JButtonSize.Small, kind = if (r.count > 0) JButtonKind.Primary else JButtonKind.Secondary)
-    if (open) JSheet({ open = false }, title = if (r.count > 0) pluralStringResource(R.plurals.settings_ext_review_drafts, r.count, r.count) else stringResource(R.string.settings_ext_review_review)) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = rowPadding, vertical = Tokens.Space.s), verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
-            JTextField(body, { body = it }, Modifier.fillMaxWidth().nativeInputFocus(handle.nativeLocal, handle.nodeKey, "summary"), placeholder = r.placeholder?.takeIf { it.isNotBlank() } ?: stringResource(R.string.settings_ext_review_summary),
-                singleLine = false, enabled = !state.busy)
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s, Alignment.End)) {
-                r.discard?.takeIf { it.id.isNotEmpty() }?.let { d ->
-                    JButton(stringResource(R.string.settings_ext_review_discard), { open = false; handle.act(d, emptyMap()) }, size = JButtonSize.Small, kind = JButtonKind.Secondary, enabled = !state.busy)
+    if (open) {
+        val choices = r.buttons.filter { it.action.id.isNotEmpty() }
+        fun submit(choice: ExtensionComposerButton) {
+            open = false
+            handle.act(choice.action, mapOf(r.name to body))
+            if (handle.nativeLocal == null) body = ""
+        }
+        JSheet({ open = false }, title = if (r.count > 0) pluralStringResource(R.plurals.settings_ext_review_drafts, r.count, r.count)
+            else stringResource(R.string.settings_ext_review_review), pageActions = {
+                choices.firstOrNull()?.let { b ->
+                    JButton(b.title, { submit(b) }, size = JButtonSize.Small, loading = state.acting == b.action.id, enabled = !state.busy)
                 }
-                r.buttons.filter { it.action.id.isNotEmpty() }.forEachIndexed { i, b ->
-                    JButton(b.title, { open = false; handle.act(b.action, mapOf(r.name to body)); if (handle.nativeLocal == null) body = "" }, size = JButtonSize.Small,
-                        kind = if (i == 0) JButtonKind.Primary else JButtonKind.Secondary,
-                        loading = state.acting == b.action.id, enabled = !state.busy)
+            }) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = rowPadding, vertical = Tokens.Space.s), verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
+                JTextField(body, { body = it }, Modifier.fillMaxWidth().nativeInputFocus(handle.nativeLocal, handle.nodeKey, "summary"), placeholder = r.placeholder?.takeIf { it.isNotBlank() } ?: stringResource(R.string.settings_ext_review_summary),
+                    singleLine = false, enabled = !state.busy)
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s, Alignment.End)) {
+                    r.discard?.takeIf { it.id.isNotEmpty() }?.let { d ->
+                        JButton(stringResource(R.string.settings_ext_review_discard), { open = false; handle.act(d, emptyMap()) }, size = JButtonSize.Small, kind = JButtonKind.Secondary, enabled = !state.busy)
+                    }
+                    choices.drop(1).forEach { b ->
+                        JButton(b.title, { submit(b) }, size = JButtonSize.Small, kind = JButtonKind.Secondary,
+                            loading = state.acting == b.action.id, enabled = !state.busy)
+                    }
                 }
             }
         }

@@ -23,7 +23,7 @@ import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.rememberCopy
 
 /**
- * A successful uninstall whose cleanup needs the user. The hub's warnings stay readable and selectable until OK;
+ * A successful uninstall whose cleanup needs the user. The hub's warnings stay readable and selectable until explicitly closed;
  * dismissing with a drag, the scrim or Back is disabled so the list cannot be lost by accident.
  */
 @Composable
@@ -35,7 +35,8 @@ internal fun ExtensionRemovalWarningsSheet(
     if (notice.warnings.isEmpty()) return
     val copy = rememberCopy()
     val palette = PersonaTheme.palette
-    JSheet(onDismiss = {}, modifier = modifier.testTag("extension-removal-warnings"), title = notice.title, dismissible = false) {
+    JSheet(onDismiss = {}, modifier = modifier.testTag("extension-removal-warnings"), title = notice.title,
+        dismissible = false, pageClose = onDone, pageActions = {}) {
         Column(Modifier.padding(vertical = Tokens.Space.s), verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
             JInlineStatus(stringResource(R.string.settings_ext_removal_warnings_text), tone = InlineTone.Caution)
             Text(stringResource(R.string.settings_ext_removal_warnings_header), style = PersonaTheme.type.caption, color = palette.ink2)
@@ -61,7 +62,6 @@ internal fun ExtensionRemovalWarningsSheet(
                 kind = JButtonKind.Secondary,
                 icon = PersonaIcons.copy,
             )
-            JButton(stringResource(R.string.settings_ext_removal_done), onDone, Modifier.fillMaxWidth())
         }
     }
 }

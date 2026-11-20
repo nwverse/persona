@@ -80,6 +80,10 @@ fun JSheet(
     /** Marks an intentional blank-tap focus clear, distinct from a presentation-driven focus transfer. */
     onClearFocus: () -> Unit = {},
     showDragHandle: Boolean = true,
+    /** For a page that must be explicitly acknowledged even while gesture dismissal is blocked. */
+    pageClose: (() -> Unit)? = null,
+    /** A presented page has a fixed top-start Close and its own actions at the end. Omit for menus, questions and peeks. */
+    pageActions: (@Composable RowScope.() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val palette = PersonaTheme.palette
@@ -119,12 +123,19 @@ fun JSheet(
             .onSizeChanged {
                 if (skipPartiallyExpanded && sheetState.targetValue == SheetValue.Expanded) scope.launch { sheetState.expand() }
             }
-            .then(if (scrollable) Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState()) else Modifier).padding(horizontal = contentPadding ?: pagePadding).padding(bottom = bottomPadding ?: 16.dp.dense)) {
-            title?.let {
-                Text(it, style = PersonaTheme.type.title, color = palette.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Spacer(Modifier.height(12.dp.dense))
+            .then(if (scrollable && pageActions == null) Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState()) else Modifier).padding(horizontal = contentPadding ?: pagePadding).padding(bottom = bottomPadding ?: 16.dp.dense)) {
+            if (pageActions == null) {
+                title?.let {
+                    Text(it, style = PersonaTheme.type.title, color = palette.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Spacer(Modifier.height(12.dp.dense))
+                }
+                content()
+            } else {
+                SheetPageBar(title, pageClose ?: if (canDismiss) onDismiss else (blocked ?: {}),
+                    pageClose != null || canDismiss || blocked != null, pageActions)
+                Column(Modifier.weight(1f, fill = false)
+                    .then(if (scrollable) Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState()) else Modifier), content = content)
             }
-            content()
         }
         }
     }

@@ -80,9 +80,7 @@ internal fun SettingsHomePage(
     val a = visible(assistantEntries); val d = visible(deviceEntries); val h = visible(hubEntries)
     val nativeVisible = styleStore != null && settingsSearchMatches(query, stringResource(R.string.settings_update_v7_native_title),
         stringResource(R.string.settings_update_v7_native_subtitle))
-    JListPage(title = stringResource(R.string.settings_title), actions = {
-        onClose?.let { JIconButton(PersonaIcons.close, stringResource(persona.core.designsystem.R.string.designsystem_close), it, raised = true) }
-    }) {
+    JListPage(title = stringResource(R.string.settings_title), onClose = onClose) {
         item("settings-search") { JSearchField(query, onQuery, stringResource(R.string.settings_search_placeholder), Modifier.fillMaxWidth().testTag("settings-search")) }
         if (services.demo && query.isBlank()) {
             item { JNotice(stringResource(R.string.settings_demo_notice), title = stringResource(R.string.settings_demo_mode)) }

@@ -11,20 +11,15 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -41,9 +36,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.AndroidEntryPoint
 import dagger.hilt.android.lifecycle.HiltViewModel
+import persona.core.designsystem.JButton
+import persona.core.designsystem.JSheet
+import persona.core.designsystem.JTextButton
+import persona.core.designsystem.Tokens
 import persona.core.designsystem.PersonaTheme
 import persona.core.designsystem.dense
-import persona.core.designsystem.dismissKeyboardOnBlankTap
 import persona.core.contracts.SessionKey
 import persona.core.contracts.contextBody
 import persona.core.contracts.api.AssistantRepository
@@ -66,7 +64,6 @@ class ShareActivity : ComponentActivity() {
 
     @Inject lateinit var preferences: AgentsPreferences
     private lateinit var model: ShareViewModel
-    @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         model = ViewModelProvider(this)[ShareViewModel::class.java]
@@ -77,20 +74,36 @@ class ShareActivity : ComponentActivity() {
                 val sessions by model.sessions.sessions.collectAsStateWithLifecycle()
                 val machines by model.sessions.machines.collectAsStateWithLifecycle()
                 val sorting by preferences.snapshots.collectAsStateWithLifecycle(AgentsPreferencesSnapshot())
-                val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
                 LaunchedEffect(model.completed) {
                     model.completed?.let {
                         Toast.makeText(this@ShareActivity, it, Toast.LENGTH_SHORT).show()
                         finish()
                     }
                 }
-                ModalBottomSheet(onDismissRequest = { finish() }, sheetState = sheet) {
-                    Column(
-                        Modifier.fillMaxWidth().dismissKeyboardOnBlankTap().verticalScroll(rememberScrollState())
-                            .padding(horizontal = 24.dp.dense).padding(bottom = 24.dp.dense),
-                        verticalArrangement = Arrangement.spacedBy(12.dp.dense),
-                    ) {
-                        Text(stringResource(R.string.app_share_title), style = MaterialTheme.typography.titleLarge)
+                val rows = sessions.filter { it.isLive && !it.assistant && it.key != assistant.mainSession }
+                    .distinctBy { it.key }
+                    .map { session ->
+                        val version = "${session.updatedAt.orEmpty()}|${session.rev ?: ""}"
+                        val visible = if (session.agentState == persona.core.contracts.AgentState.Unread &&
+                            sorting.seen[session.key.path] == version) session.copy(state = "idle") else session
+                        AgentSession(visible, session.stateSince, session.subagents.orEmpty().any { it.running == true })
+                    }
+                    .sortedWith(compareBy<AgentSession> { agentRank(it, sorting.mutes) }
+                        .thenByDescending { it.sortDate }.thenBy { it.session.sessionId }.thenBy { it.id })
+                // Until the user picks, the sheet is on the last target if it was used within a day and is listed.
+                val selected = model.selected(rows.mapTo(HashSet()) { it.session.key })
+                JSheet(onDismiss = { finish() }, title = stringResource(R.string.app_share_title), scrollable = true, pageActions = {
+                    if (model.locked || !model.paired) {
+                        JButton(stringResource(if (model.paired) R.string.app_share_view_chat else R.string.app_open_persona), {
+                            startActivity(mainActivityIntent(this@ShareActivity).apply {
+                                model.sentTarget?.let { putExtra(MainActivity.EXTRA_SESSION, it.path) }
+                            })
+                            finish()
+                        }, enabled = !model.busy)
+                    } else JButton(stringResource(R.string.app_send), { model.send(selected) },
+                        enabled = !model.busy && model.payload.hasContent && model.paired)
+                }) {
+                    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
                         Surface(color = MaterialTheme.colorScheme.surfaceContainer, shape = MaterialTheme.shapes.medium) {
                             Column(Modifier.fillMaxWidth().padding(16.dp.dense)) {
                                 Text(model.payload.title.ifBlank { stringResource(R.string.app_share_content) }, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -109,18 +122,6 @@ class ShareActivity : ComponentActivity() {
                             placeholder = { Text(stringResource(R.string.app_share_note)) },
                             maxLines = 4,
                         )
-                        val rows = sessions.filter { it.isLive && !it.assistant && it.key != assistant.mainSession }
-                            .distinctBy { it.key }
-                            .map { session ->
-                                val version = "${session.updatedAt.orEmpty()}|${session.rev ?: ""}"
-                                val visible = if (session.agentState == persona.core.contracts.AgentState.Unread &&
-                                    sorting.seen[session.key.path] == version) session.copy(state = "idle") else session
-                                AgentSession(visible, session.stateSince, session.subagents.orEmpty().any { it.running == true })
-                            }
-                            .sortedWith(compareBy<AgentSession> { agentRank(it, sorting.mutes) }
-                                .thenByDescending { it.sortDate }.thenBy { it.session.sessionId }.thenBy { it.id })
-                        // Until the user picks, the sheet is on the last target if it was used within a day and is listed.
-                        val selected = model.selected(rows.mapTo(HashSet()) { it.session.key })
                         ShareTargetList(
                             recentFirst(rows, { it.session.key }, model.recents).map { row ->
                                 val session = row.session
@@ -135,31 +136,13 @@ class ShareActivity : ComponentActivity() {
                             Switch(model.asContext, model::updateContext, enabled = !model.busy && !model.locked)
                         }
                         if (model.loading) Text(stringResource(R.string.app_share_loading))
-                        model.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                        model.error?.let {
+                            Text(it, color = MaterialTheme.colorScheme.error)
+                            if (!model.locked && model.paired && !model.busy) JTextButton(stringResource(R.string.app_refresh), model::refresh)
+                        }
                         if (model.busy) {
                             LinearProgressIndicator(Modifier.fillMaxWidth())
                             Text(model.progress)
-                        }
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                            TextButton(onClick = { finish() }) { Text(stringResource(R.string.app_cancel), maxLines = 1) }
-                            if (model.locked || !model.paired) {
-                                Button(onClick = {
-                                    startActivity(mainActivityIntent(this@ShareActivity).apply {
-                                        model.sentTarget?.let { putExtra(MainActivity.EXTRA_SESSION, it.path) }
-                                    })
-                                    finish()
-                                }, enabled = !model.busy) {
-                                    Text(stringResource(if (model.paired) R.string.app_share_view_chat else R.string.app_open_persona), maxLines = 1)
-                                }
-                            } else {
-                                if (model.error != null && !model.busy) {
-                                    TextButton(onClick = model::refresh) { Text(stringResource(R.string.app_refresh), maxLines = 1) }
-                                }
-                                Button(onClick = { model.send(selected) },
-                                    enabled = !model.busy && model.payload.hasContent && model.paired) {
-                                    Text(stringResource(R.string.app_send), maxLines = 1)
-                                }
-                            }
                         }
                     }
                 }

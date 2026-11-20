@@ -58,18 +58,21 @@ internal fun NewAgentDialog(
     val pickers = rememberNewAgentPickers(model)
     CloseAttachmentsOnLeave(model)
     val close = { if (!state.starting) { if (state.browsing) model.closeBrowser() else onDismiss() } }
-    JSheet(onDismiss = { if (!state.starting) onDismiss() }, title = stringResource(R.string.agents_action_new_session)) {
+    val confirm: @Composable RowScope.() -> Unit = { NewAgentConfirm(state, model, machines, online) }
+    JSheet(onDismiss = close, dismissible = !state.starting, title = if (state.browsing) null else stringResource(R.string.agents_action_new_session),
+        pageActions = confirm.takeUnless { state.browsing }) {
         BackHandler(onBack = close)
+        if (state.browsing) JTopBar(stringResource(R.string.agents_new_choose_directory), onBack = close, actions = confirm)
         Box(Modifier.fillMaxWidth().weight(1f)) {
             Column(Modifier.fillMaxSize().imePadding()) {
                 LazyColumn(Modifier.weight(1f), list, contentPadding = PaddingValues(bottom = 16.dp.dense), verticalArrangement = Arrangement.spacedBy(8.dp.dense)) {
-                    newAgentItems(state, model, machines, query, { query = it }, close, onModels = { picking = true }, prompt,
+                    newAgentItems(state, model, machines, query, { query = it }, onModels = { picking = true }, prompt,
                         onBlocked = { helping = NewAgentBlockedChoice(it) },
                         onTierBlocked = { tier, launcher -> helping = NewAgentBlockedChoice(launcher, tier) }, pickers,
                         onOpenProvider = onOpenProvider?.let { open -> { name: String -> onDismiss(); open(name) } },
                         presetHelpFor = helping?.tier?.launcher)
                 }
-                NewAgentFooter(state, model, machines, online, Modifier.fillMaxWidth().padding(top = 8.dp.dense))
+                NewAgentFooter(state, model, machines, online, Modifier.fillMaxWidth().padding(top = 8.dp.dense), showAction = false)
             }
             NewAgentToast(model, Modifier.align(Alignment.TopCenter))
         }
@@ -121,10 +124,10 @@ internal fun NewAgentPage(
     val close = { if (!state.starting) { if (state.browsing) model.closeBrowser() else onBack() } }
     BackHandler(onBack = close)
     Box(Modifier.fillMaxSize()) {
-        JListPage(title = stringResource(R.string.agents_action_new_session), onBack = close, largeTitle = false, state = list, bottomBar = {
+        JListPage(title = stringResource(if (state.browsing) R.string.agents_new_choose_directory else R.string.agents_action_new_session), onBack = close, largeTitle = false, state = list, bottomBar = {
             NewAgentFooter(state, model, machines, online, Modifier.fillMaxWidth().padding(horizontal = pagePadding, vertical = Tokens.Space.s))
         }) {
-            newAgentItems(state, model, machines, query, { query = it }, close, onModels = { picking = true }, prompt,
+            newAgentItems(state, model, machines, query, { query = it }, onModels = { picking = true }, prompt,
                 onBlocked = { helping = NewAgentBlockedChoice(it) },
                 onTierBlocked = { tier, launcher -> helping = NewAgentBlockedChoice(launcher, tier) }, pickers,
                 onOpenProvider = onOpenProvider, presetHelpFor = helping?.tier?.launcher)
@@ -155,7 +158,7 @@ private fun rememberPromptFocus(state: NewAgentState, list: LazyListState): Focu
 }
 
 private fun LazyListScope.newAgentItems(
-    state: NewAgentState, model: NewAgentViewModel, machines: List<Machine>, query: String, onQuery: (String) -> Unit, close: () -> Unit,
+    state: NewAgentState, model: NewAgentViewModel, machines: List<Machine>, query: String, onQuery: (String) -> Unit,
     onModels: () -> Unit, prompt: FocusRequester, onBlocked: (persona.core.contracts.api.AgentLauncher) -> Unit,
     onTierBlocked: (PickerTier, AgentLauncher) -> Unit,
     /** The add menu's pickers (#2321); null where the form takes no attachments. */
@@ -169,7 +172,6 @@ private fun LazyListScope.newAgentItems(
     if (state.loading) item("loading") { JLinearProgress(null) }
     if (state.browsing) {
         item("browser-title") {
-            JSectionHeader(stringResource(R.string.agents_new_choose_directory), action = { JTextButton(stringResource(R.string.agents_new_back), close, enabled = !state.starting) })
             Text(state.browser?.path ?: state.browsePath, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
         }
         state.browser?.let { directory ->
@@ -446,7 +448,7 @@ private fun followSummary(res: Resources, state: NewAgentState): String {
 }
 
 @Composable
-private fun NewAgentFooter(state: NewAgentState, model: NewAgentViewModel, machines: List<Machine>, online: Boolean, modifier: Modifier) {
+private fun NewAgentFooter(state: NewAgentState, model: NewAgentViewModel, machines: List<Machine>, online: Boolean, modifier: Modifier, showAction: Boolean = true) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp.dense)) {
         if (state.pending != null) PendingBadge(if (state.starting) PendingStatus.Verifying else PendingStatus.Unconfirmed)
         state.error?.let { Text(it.resolve(), color = PersonaTheme.palette.ink2, style = PersonaTheme.type.callout) }
@@ -457,13 +459,18 @@ private fun NewAgentFooter(state: NewAgentState, model: NewAgentViewModel, machi
         if (state.pending == null && !state.browsing) state.attachmentsHold?.let {
             Text(it.resolve(), Modifier.testTag("newAgent.attachHold"), color = PersonaTheme.palette.ink2, style = PersonaTheme.type.callout)
         }
-        if (state.browsing) {
-            JButton(stringResource(R.string.agents_new_use_directory), { model.closeBrowser(use = true) }, enabled = state.browser != null && !state.loading, modifier = Modifier.fillMaxWidth())
-        } else {
-            JButton(stringResource(if (state.pending != null) R.string.agents_new_retry_check else R.string.agents_new_start), model::submit, loading = state.starting,
-                enabled = online && !state.starting && !state.loading && !state.presetNeedsModels && state.initialized && (state.pending != null || startable(state, machines)),
-                modifier = Modifier.fillMaxWidth())
-        }
+        if (showAction) NewAgentConfirm(state, model, machines, online, Modifier.fillMaxWidth())
+    }
+}
+
+@Composable
+private fun NewAgentConfirm(state: NewAgentState, model: NewAgentViewModel, machines: List<Machine>, online: Boolean, modifier: Modifier = Modifier) {
+    if (state.browsing) {
+        JButton(stringResource(R.string.agents_new_use_directory), { model.closeBrowser(use = true) }, enabled = state.browser != null && !state.loading, modifier = modifier)
+    } else {
+        JButton(stringResource(if (state.pending != null) R.string.agents_new_retry_check else R.string.agents_new_start), model::submit, loading = state.starting,
+            enabled = online && !state.starting && !state.loading && !state.presetNeedsModels && state.initialized && (state.pending != null || startable(state, machines)),
+            modifier = modifier)
     }
 }
 

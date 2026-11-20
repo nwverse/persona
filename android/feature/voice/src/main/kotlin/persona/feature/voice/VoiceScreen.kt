@@ -226,7 +226,7 @@ private fun Problem(title: String, text: String, padding: PaddingValues, onRetry
 private fun VoiceSheet(state: VoicePageState, onPick: (String) -> Unit, onDismiss: () -> Unit) {
     val palette = PersonaTheme.palette
     val text = rememberVoiceText()
-    JSheet(onDismiss, title = text.voices) {
+    JSheet(onDismiss, title = text.voices, pageActions = {}) {
         val voices = state.voices
         when {
             voices == null && state.voicesError != null -> JNotice(text.voicesFailed(state.voicesError), icon = PhIcons.WarningCircle)

@@ -88,8 +88,11 @@ internal fun InboxDraftSheet(
     val dismiss by rememberUpdatedState(onDismiss)
     // Close once this sheet's reply has gone (not because an earlier one had when it opened).
     LaunchedEffect(composer) { composer.state.map { it.sent }.distinctUntilChanged().drop(1).collect { if (it) dismiss() } }
+    val submitReply: () -> Unit = {
+        if (!state.checksResult && state.draft.ai) confirming = true else composer.send()
+    }
     JSheet(onDismiss = onDismiss, title = stringResource(if (record.isLark) R.string.inbox_reply_sheet_lark else R.string.inbox_reply_to_mail, record.item.title),
-        dismissible = !state.sending, scrollable = true) {
+        dismissible = !state.sending, scrollable = true, pageActions = { ReplyComposerAction(state, submitReply) }) {
         // The sheet is opaque: the composer must not sample (and show) the page behind it as glass.
         CompositionLocalProvider(LocalGlassSource provides null) {
         Column(Modifier.fillMaxWidth().imePadding(), verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
@@ -103,9 +106,8 @@ internal fun InboxDraftSheet(
                 },
                     kind = JButtonKind.Secondary, size = JButtonSize.Small, icon = PhIcons.ListChecks)
             }
-            ReplyComposerField(state, composer::update, onSend = {
-                if (!state.checksResult && state.draft.ai) confirming = true else composer.send()
-            }, placeholder = stringResource(R.string.inbox_reply_placeholder), probePage = record.item.title)
+            ReplyComposerField(state, composer::update, submitReply, stringResource(R.string.inbox_reply_placeholder),
+                probePage = record.item.title, actionInPageBar = true)
             InboxAiDraftRow(repository, record.item.id, composer)
         }
         }

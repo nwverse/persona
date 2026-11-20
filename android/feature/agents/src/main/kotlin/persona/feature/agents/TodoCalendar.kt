@@ -1,5 +1,6 @@
 package persona.feature.agents
 
+import persona.core.designsystem.JSheetConfirm
 import android.content.Context
 import android.icu.text.DateIntervalFormat
 import android.icu.util.DateInterval
@@ -774,7 +775,7 @@ private fun TodoCalendarDaySheet(
     onShowDay: (() -> Unit)? = null,
 ) {
     val title = remember(day, locale) { DateTimeFormatter.ofPattern(DateFormat.getBestDateTimePattern(locale, "MMMMdEEEE"), locale).format(day) }
-    JSheet(onDismiss = onDismiss, title = title, scrollable = true) {
+    JSheet(onDismiss = onDismiss, title = title, scrollable = true, pageActions = {}) {
         Column(Modifier.fillMaxWidth().padding(bottom = Tokens.Space.l).testTag("todo-calendar-day-sheet")) {
             if (onShowDay != null) {
                 JTextButton(stringResource(R.string.agents_todo_calendar_show_day), onShowDay,
@@ -840,19 +841,18 @@ private fun TodoRescheduleSheet(todo: Todo, zone: ZoneId, locale: Locale, onSave
     val dayText = remember(date, locale) { DateTimeFormatter.ofPattern(DateFormat.getBestDateTimePattern(locale, "yMMMdEEE"), locale).format(date) }
     val timeText = remember(at, locale) { DateTimeFormatter.ofPattern(DateFormat.getBestDateTimePattern(locale, "HHmm"), locale).format(at) }
     val timeLabel = stringResource(R.string.agents_todo_calendar_time)
-    JSheet(onDismiss = onDismiss, title = stringResource(R.string.agents_todo_calendar_change_due)) {
+    JSheet(onDismiss = onDismiss, title = stringResource(R.string.agents_todo_calendar_change_due),
+        pageActions = {
+            JSheetConfirm(stringResource(R.string.agents_todo_save), {
+                onSave(if (allDay) TodoDue.Day(date) else TodoDue.At(date.atTime(at).atZone(zone).toInstant()))
+            }, Modifier.testTag("todo-calendar-reschedule-save"))
+        }) {
         Column(Modifier.fillMaxWidth().padding(bottom = Tokens.Space.l).testTag("todo-calendar-reschedule")) {
             Text(todo.title, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.padding(start = rowPadding, end = rowPadding, bottom = Tokens.Space.xs))
             JRow(stringResource(R.string.agents_todo_calendar_date), value = dayText, onClick = { pickingDay = true })
             JSwitchRow(stringResource(R.string.agents_todo_calendar_all_day), allDay, { allDay = it })
             if (!allDay) JRow(timeLabel, value = timeText, onClick = { pickingTime = true })
-            Row(Modifier.fillMaxWidth().padding(top = Tokens.Space.m), horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                JButton(stringResource(R.string.agents_todo_cancel), onDismiss, Modifier.weight(1f), kind = JButtonKind.Secondary)
-                JButton(stringResource(R.string.agents_todo_save), {
-                    onSave(if (allDay) TodoDue.Day(date) else TodoDue.At(date.atTime(at).atZone(zone).toInstant()))
-                }, Modifier.weight(1f).testTag("todo-calendar-reschedule-save"))
-            }
         }
     }
     if (pickingDay) JDatePickerDialog(date, { day = it.toString(); pickingDay = false }, { pickingDay = false })
@@ -907,7 +907,11 @@ internal fun TodoQuickAddSheet(
         }
     }
     LaunchedEffect(Unit) { focus.requestFocus() }
-    JSheet(onDismiss = onDismiss, title = stringResource(R.string.agents_todo_new), dismissible = !saving) {
+    JSheet(onDismiss = onDismiss, title = stringResource(R.string.agents_todo_new), dismissible = !saving,
+        pageActions = {
+            JSheetConfirm(stringResource(R.string.agents_todo_calendar_add), { add() }, Modifier.testTag("todo-calendar-new-add"),
+                enabled = canAdd, loading = saving)
+        }) {
         Column(Modifier.fillMaxWidth().padding(bottom = Tokens.Space.l).testTag("todo-calendar-new")) {
             JTextField(
                 title,
@@ -926,11 +930,6 @@ internal fun TodoQuickAddSheet(
             if (!allDay) JRow(timeLabel, value = timeText, onClick = { pickingTime = true })
             Text(stringResource(R.string.agents_todo_calendar_add_hint), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3,
                 modifier = Modifier.padding(start = rowPadding, end = rowPadding, top = Tokens.Space.xs))
-            Row(Modifier.fillMaxWidth().padding(top = Tokens.Space.m), horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                JButton(stringResource(R.string.agents_todo_cancel), onDismiss, Modifier.weight(1f), kind = JButtonKind.Secondary, enabled = !saving)
-                JButton(stringResource(R.string.agents_todo_calendar_add), { add() }, Modifier.weight(1f).testTag("todo-calendar-new-add"),
-                    enabled = canAdd, loading = saving)
-            }
         }
     }
     if (pickingDay) JDatePickerDialog(date, { day = it.toString(); pickingDay = false }, { pickingDay = false })

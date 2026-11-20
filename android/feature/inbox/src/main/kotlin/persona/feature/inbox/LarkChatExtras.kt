@@ -145,7 +145,7 @@ internal fun LarkPinsSheet(repository: InboxRepository, feedId: String, onOpen: 
         }
     }
     LaunchedEffect(feedId) { load() }
-    JSheet(onDismiss, title = stringResource(R.string.inbox_lark_pins_title), scrollable = true) {
+    JSheet(onDismiss, title = stringResource(R.string.inbox_lark_pins_title), scrollable = true, pageActions = {}) {
         problem?.let {
             if (blocked) JNotice(it, status = Status.NeedsYou)
             else JNotice(it, status = Status.NeedsYou, actionLabel = stringResource(R.string.inbox_lark_pins_reload), onAction = { load() })
@@ -328,7 +328,7 @@ internal fun LarkReadMarkView(mark: LarkReadMark) {
 @Composable
 internal fun LarkEditHistorySheet(message: LarkMessage, onDismiss: () -> Unit) {
     val display = LocalLarkMessageDisplay.current
-    JSheet(onDismiss, title = stringResource(R.string.inbox_lark_edit_history), scrollable = true) {
+    JSheet(onDismiss, title = stringResource(R.string.inbox_lark_edit_history), scrollable = true, pageActions = {}) {
         if (!display.showsHistory(message)) Text(stringResource(R.string.inbox_lark_edit_history_hidden), style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink2)
         else JGroup(rows = message.editHistory.map { v -> {
             JRow {

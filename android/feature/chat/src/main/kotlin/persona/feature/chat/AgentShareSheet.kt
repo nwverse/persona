@@ -28,7 +28,17 @@ internal fun AgentShareContent(model: AgentShareModel, onDismiss: () -> Unit) {
     var full by remember { mutableStateOf<String?>(null) }
     var confirmRevoke by remember { mutableStateOf(false) }
     val copy = rememberCopy()
-    JSheet(onDismiss, title = stringResource(R.string.chat_agent_share_title), scrollable = true) {
+    val editing = model.page == AgentSharePage.Editor
+    val policyEnabled = !model.busy && (!editing || model.editable)
+    JSheet(onDismiss, title = stringResource(R.string.chat_agent_share_title), scrollable = true, pageActions = {
+        if (model.publicLink == null) when (model.page) {
+            AgentSharePage.Editor -> JSheetConfirm(stringResource(R.string.chat_agent_share_save), model::save,
+                enabled = policyEnabled && model.changed && (!model.needsPreview || model.confirmed))
+            AgentSharePage.New -> JButton(stringResource(R.string.chat_agent_share_create), model::create,
+                enabled = !model.busy && model.confirmed && !model.uncertainCreation)
+            else -> Unit
+        }
+    }) {
         Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
             model.notice?.let { JNotice(it.text()) }
             if (model.busy) JSpinner()
@@ -55,7 +65,6 @@ internal fun AgentShareContent(model: AgentShareModel, onDismiss: () -> Unit) {
                     JButton(stringResource(R.string.chat_agent_share_refresh), model::refreshList, Modifier.fillMaxWidth(), kind = JButtonKind.Secondary, enabled = !model.busy)
                 }
                 AgentSharePage.New, AgentSharePage.Editor -> {
-                    val editing = model.page == AgentSharePage.Editor
                     val canWiden = !editing || model.detail?.canWiden == true
                     if (editing) {
                         model.detail?.share?.let { JNotice(stringResource(R.string.chat_agent_share_editor_note, shareStatus(it), shareExpiry(it.expiresAt))) }
@@ -84,7 +93,6 @@ internal fun AgentShareContent(model: AgentShareModel, onDismiss: () -> Unit) {
                         JButton(stringResource(R.string.chat_agent_share_reload_catalog), model::loadCatalog, Modifier.fillMaxWidth(),
                             kind = JButtonKind.Quiet, enabled = !model.busy)
                     }
-                    val policyEnabled = !model.busy && (!editing || model.editable)
                     JSwitchRow(stringResource(R.string.chat_agent_share_future), model.includeFuture, model::future,
                         subtitle = stringResource(R.string.chat_agent_share_future_note), subtitleLines = Int.MAX_VALUE,
                         enabled = policyEnabled && (model.includeFuture || (canWiden && (editing || model.catalog?.canIncludeFuture == true))))
@@ -120,12 +128,9 @@ internal fun AgentShareContent(model: AgentShareModel, onDismiss: () -> Unit) {
                         }
                     }
                     if (editing) {
-                        JButton(stringResource(R.string.chat_agent_share_save), model::save, Modifier.fillMaxWidth(),
-                            enabled = policyEnabled && model.changed && (!model.needsPreview || model.confirmed))
                         JButton(stringResource(R.string.chat_agent_share_revoke), { confirmRevoke = true }, Modifier.fillMaxWidth(),
                             kind = JButtonKind.Destructive, enabled = !model.busy && model.editable)
-                    } else JButton(stringResource(R.string.chat_agent_share_create), model::create, Modifier.fillMaxWidth(),
-                        enabled = !model.busy && model.confirmed && !model.uncertainCreation)
+                    }
                     JButton(stringResource(R.string.chat_agent_share_existing), model::refreshList, Modifier.fillMaxWidth(), kind = JButtonKind.Quiet, enabled = !model.busy)
                 }
             }
@@ -134,9 +139,10 @@ internal fun AgentShareContent(model: AgentShareModel, onDismiss: () -> Unit) {
     if (confirmRevoke) JDialog(onDismiss = { confirmRevoke = false }, title = stringResource(R.string.chat_agent_share_revoke),
         text = stringResource(R.string.chat_agent_share_revoke_warning), destructive = true,
         confirm = stringResource(R.string.chat_agent_share_revoke) to { confirmRevoke = false; model.revoke() })
-    if (full != null) JFullScreen(onDismiss = { full = null }) {
+    val closePreview = { full = null }
+    if (full != null) JFullScreen(onDismiss = closePreview) {
         JPage(title = stringResource(when (full) { "selection" -> R.string.chat_agent_share_selection; "sealed" -> R.string.chat_agent_share_sealed; else -> R.string.chat_agent_share_preview }),
-            onBack = { full = null }) { padding ->
+            onBack = closePreview) { padding ->
             // The same side margin the sheet gives its rows, so Brief's edge-to-edge rows do not touch the screen edge.
             LazyColumn(Modifier.fillMaxSize().padding(horizontal = Tokens.Space.l), contentPadding = padding, verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
                 item { model.notice?.let { JNotice(it.text()) } }
@@ -179,7 +185,6 @@ internal fun AgentShareContent(model: AgentShareModel, onDismiss: () -> Unit) {
                         items(model.previewMessages, key = { it.messageId }) { message -> SharePreviewMessage(message) }
                     }
                 }
-                item { JButton(stringResource(R.string.chat_agent_share_done), { full = null }, Modifier.fillMaxWidth()) }
             }
         }
     }

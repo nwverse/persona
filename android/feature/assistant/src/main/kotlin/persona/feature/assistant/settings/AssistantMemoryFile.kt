@@ -77,7 +77,11 @@ internal fun MemoryFilePart(
     }
     if (editing && entry != null) {
         var content by rememberSaveable(entry.file.name) { mutableStateOf(entry.file.content) }
-        JSheet(onDismiss = { if (!state.busy) editing = false }, title = stringResource(R.string.assistant_settings_memory_edit_title, entry.title), dismissible = !state.busy) {
+        JSheet(onDismiss = { if (!state.busy) editing = false }, title = stringResource(R.string.assistant_settings_memory_edit_title, entry.title), dismissible = !state.busy,
+            pageActions = {
+                JSheetConfirm(stringResource(R.string.assistant_settings_save), { scope.launch { if (onSave(entry.file.name, content)) editing = false } },
+                    enabled = !state.busy && content != entry.file.content, loading = state.busy)
+            }) {
             LazyColumn(Modifier.fillMaxWidth().weight(1f, fill = false), contentPadding = PaddingValues(bottom = Tokens.Space.l),
                 verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
                 item { Caption(stringResource(R.string.assistant_settings_memory_edit_caption)) }
@@ -86,11 +90,6 @@ internal fun MemoryFilePart(
                     JTextField(content, { content = it }, Modifier.fillMaxWidth(), label = stringResource(R.string.assistant_settings_memory_content), enabled = !state.busy,
                         minLines = 8, maxLines = Int.MAX_VALUE)
                 }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                JButton(stringResource(R.string.assistant_settings_cancel), { editing = false }, Modifier.weight(1f), kind = JButtonKind.Secondary, enabled = !state.busy)
-                JButton(stringResource(R.string.assistant_settings_save), { scope.launch { if (onSave(entry.file.name, content)) editing = false } }, Modifier.weight(1f),
-                    enabled = !state.busy && content != entry.file.content, loading = state.busy)
             }
         }
     }

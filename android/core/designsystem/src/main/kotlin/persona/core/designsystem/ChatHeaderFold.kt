@@ -127,7 +127,8 @@ fun ChatSlimBar(
         val side = Modifier.width(Tokens.MinTouch.android)
         when (val leading = resolveDetailLeading(LocalSplitDetail.current, onBack)) {
             is DetailLeading.ShowList -> JIconButton(persona.core.designsystem.icons.PersonaIcons.sidebar, stringResource(R.string.designsystem_sidebar), leading.onClick, side, raised = false)
-            is DetailLeading.Back -> JIconButton(persona.core.designsystem.icons.PersonaIcons.back, stringResource(R.string.designsystem_back), leading.onClick, side, raised = false)
+            is DetailLeading.Back -> if (leading.onClick == LocalPresentedClose.current) JSheetClose(leading.onClick, side, raised = false)
+            else JIconButton(persona.core.designsystem.icons.PersonaIcons.back, stringResource(R.string.designsystem_back), leading.onClick, side, raised = false)
             DetailLeading.Hidden, null -> Spacer(side)
         }
         Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {

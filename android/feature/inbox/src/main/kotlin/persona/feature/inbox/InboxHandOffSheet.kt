@@ -117,7 +117,10 @@ internal fun InboxHandOffSheet(
             finally { busy = false }
         }
     }
-    JSheet(onDismiss = onDismiss, title = stringResource(R.string.inbox_hand_to_ai), dismissible = !busy, scrollable = true) {
+    JSheet(onDismiss = onDismiss, title = stringResource(R.string.inbox_hand_to_ai), dismissible = !busy, scrollable = true,
+        pageActions = {
+            JButton(stringResource(R.string.inbox_send), ::send, icon = PhIcons.PaperPlaneTilt, loading = busy, loadingText = stringResource(R.string.inbox_handoff_sending))
+        }) {
         Column(Modifier.fillMaxWidth().imePadding()) {
             JSectionHeader(stringResource(R.string.inbox_handoff_what))
             JTextField(instruction, { instruction = it }, placeholder = presets[0], minLines = 2, maxLines = 5, enabled = !busy)
@@ -155,8 +158,6 @@ internal fun InboxHandOffSheet(
                 Spacer(Modifier.height(Tokens.Space.m))
                 JNotice(it, status = Status.NeedsYou)
             }
-            Spacer(Modifier.height(Tokens.Space.section))
-            JButton(stringResource(R.string.inbox_send), ::send, Modifier.fillMaxWidth(), icon = PhIcons.PaperPlaneTilt, loading = busy, loadingText = stringResource(R.string.inbox_handoff_sending))
         }
     }
 }

@@ -97,7 +97,11 @@ internal fun PointSheet(
     val sources = remember(point, links) { pointSources(point, links) }
     val copy = rememberCopy()
     val copied = stringResource(R.string.knowledge_point_copied)
-    JSheet(onDismiss = onDismiss, scrollable = true) {
+    JSheet(onDismiss = onDismiss, title = stringResource(R.string.knowledge_point_plain), scrollable = true,
+        pageActions = {
+            JButton(stringResource(R.string.knowledge_point_copy), { copy(point.text, copied) },
+                size = JButtonSize.Small, kind = JButtonKind.Secondary, icon = PersonaIcons.copy)
+        }) {
         Column(Modifier.fillMaxWidth().padding(bottom = Tokens.Space.l), verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
             Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {
                 PointPill(kind)
@@ -122,8 +126,6 @@ internal fun PointSheet(
                     }
                 }
             }
-            JButton(stringResource(R.string.knowledge_point_copy), { copy(point.text, copied) }, Modifier.fillMaxWidth(),
-                kind = JButtonKind.Secondary, icon = PersonaIcons.copy)
         }
     }
 }

@@ -394,7 +394,7 @@ internal fun ExtensionMultiChoiceSheet(item: ExtensionViewItem, chosen: List<Str
     val choices = item.choices.orEmpty().take(50)
     var query by remember { mutableStateOf("") }
     var picked by remember(item) { mutableStateOf(chosen.toSet()) }
-    JSheet(onDismiss, title = item.label?.takeIf { it.isNotBlank() }, scrollable = true) {
+    JSheet(onDismiss, title = item.label?.takeIf { it.isNotBlank() }, scrollable = true, pageActions = {}) {
         if (choices.size > 6) JSearchField(query, { query = it }, stringResource(R.string.settings_ext_search), Modifier.padding(bottom = Tokens.Space.s))
         choices.filter { query.isBlank() || it.label.contains(query.trim(), ignoreCase = true) }.forEach { choice ->
             val on = choice.value in picked

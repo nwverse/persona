@@ -146,7 +146,7 @@ internal fun InboxMutesSheet(repository: InboxRepository, onDismiss: () -> Unit)
         }
     }
     LaunchedEffect(repository, owner) { load() } // another assistant, or this one back online, reads it again
-    JSheet(onDismiss, title = stringResource(R.string.inbox_mutes_title), scrollable = true) {
+    JSheet(onDismiss, title = stringResource(R.string.inbox_mutes_title), scrollable = true, pageActions = {}) {
         val list = model.mutes
         @Composable fun mute(m: InboxMute) =
             JRow(m.name, subtitle = listOf(m.sourceName ?: m.source, stringResource(m.tagName)).filter { it.isNotBlank() }.joinToString(" · "),

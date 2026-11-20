@@ -64,7 +64,7 @@ fun ComposerExpandButton(expanded: Boolean, onClick: () -> Unit, modifier: Modif
 }
 
 /**
- * The draft full screen: collapse at the top right, the text filling the page, [send] at the bottom right above
+ * The draft full screen: Close at the top start and [send] at the top end, with the field filling the room above
  * the keyboard. It edits the same [value] (text and caret) as the small field, so collapsing changes nothing.
  * Back collapses too.
  */
@@ -103,8 +103,10 @@ fun ExpandedComposer(
     }
     JFullScreen(onCollapse) {
         Column(Modifier.fillMaxSize().systemBarsPadding().imePadding().testTag("composer-expanded")) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp.dense), horizontalArrangement = Arrangement.End) {
-                ComposerExpandButton(expanded = true, onClick = onCollapse)
+            Row(Modifier.fillMaxWidth().padding(horizontal = Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {
+                JSheetClose(onCollapse, Modifier.testTag("composer-collapse"))
+                Spacer(Modifier.weight(1f))
+                send()
             }
             BasicTextField(
                 value, onValueChange, Modifier.then(hardwareModifier).weight(1f).fillMaxWidth().padding(horizontal = 20.dp.dense).focusRequester(focus).hardwareShortcutTextInput().testTag("composer-expanded-input"),
@@ -116,8 +118,6 @@ fun ExpandedComposer(
                     }
                 },
             )
-            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp.dense, vertical = 4.dp.dense), horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically, content = send)
         }
     }
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }

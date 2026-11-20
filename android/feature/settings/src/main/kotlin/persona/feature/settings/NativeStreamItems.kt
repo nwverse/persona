@@ -212,8 +212,14 @@ private fun NativeImage(node: JsonObject, local: NativeExtensionLocal, modifier:
         }
         node.text("caption")?.let { Text(it, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3) }
     }
-    if (zoom) JFullScreen({ zoom = false }) {
-        AsyncImage(src.text("url"), alt, Modifier.fillMaxSize().clickable { zoom = false }, contentScale = ContentScale.Fit)
+    if (zoom) {
+        val close = { zoom = false }
+        JFullScreen(close) {
+            Box(Modifier.fillMaxSize()) {
+                AsyncImage(src.text("url"), alt, Modifier.fillMaxSize().clickable(onClick = close), contentScale = ContentScale.Fit)
+                JSheetClose(close, Modifier.align(Alignment.TopStart).statusBarsPadding(), raised = true)
+            }
+        }
     }
 }
 

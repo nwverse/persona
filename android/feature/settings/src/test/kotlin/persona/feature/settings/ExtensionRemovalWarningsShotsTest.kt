@@ -21,6 +21,7 @@ import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -68,28 +69,28 @@ class ExtensionRemovalWarningsShotsTest {
     @Config(sdk = [35], qualifiers = "en-w400dp-h1200dp-xhdpi")
     @Test fun english() = sheet(
         "en", "Removed Example Notes", "Removed. A few things still need you to clean them up by hand.",
-        "Needs manual cleanup", "Copy warnings", "OK",
+        "Needs manual cleanup", "Copy warnings", "Close",
     )
 
     @Config(sdk = [35], qualifiers = "zh-w400dp-h1200dp-xhdpi")
     @Test fun simplifiedChinese() = sheet(
-        "zh", "已卸载 Example Notes", "已卸载。还有一些项目需要你手动清理。", "需要手动清理", "复制全部警告", "好",
+        "zh", "已卸载 Example Notes", "已卸载。还有一些项目需要你手动清理。", "需要手动清理", "复制全部警告", "关闭",
     )
 
     @Config(sdk = [35], qualifiers = "ja-w400dp-h1200dp-xhdpi")
     @Test fun japanese() = sheet(
         "ja", "Example Notesをアンインストールしました", "アンインストールは完了しました。一部の項目は手動でクリーンアップする必要があります。",
-        "手動クリーンアップが必要な項目", "警告をすべてコピー", "OK",
+        "手動クリーンアップが必要な項目", "警告をすべてコピー", "閉じる",
     )
 
     @Config(sdk = [35], qualifiers = "en-w400dp-h1200dp-xhdpi")
     @Test fun singleWarning() = sheet(
         "en", "Removed Example Notes", "Removed. A few things still need you to clean them up by hand.",
-        "Needs manual cleanup", "Copy warnings", "OK", items = listOf(warnings.first()), state = "single",
+        "Needs manual cleanup", "Copy warnings", "Close", items = listOf(warnings.first()), state = "single",
     )
 
     private fun sheet(
-        language: String, title: String, body: String, heading: String, copyLabel: String, doneLabel: String,
+        language: String, title: String, body: String, heading: String, copyLabel: String, closeLabel: String,
         items: List<String> = warnings, state: String = "multiple-long",
     ) {
         var style by mutableStateOf(AppStyle.Glass)
@@ -114,7 +115,7 @@ class ExtensionRemovalWarningsShotsTest {
         rule.onNodeWithText(copyLabel).performClick()
         assertEquals(0, done)
         assertEquals(items.joinToString("\n"), clipboardText())
-        rule.onNodeWithText(doneLabel).performClick()
+        rule.onNodeWithContentDescription(closeLabel).performClick()
         assertEquals(1, done)
     }
 
@@ -140,7 +141,7 @@ class ExtensionRemovalWarningsShotsTest {
         rule.onNodeWithText("Copy warnings").performClick()
         assertEquals(items.joinToString("\n"), clipboardText())
         assertEquals(0, done)
-        rule.onNodeWithText("OK").performClick()
+        rule.onNodeWithContentDescription("Close").performClick()
         assertEquals(1, done)
     }
 
@@ -162,7 +163,7 @@ class ExtensionRemovalWarningsShotsTest {
         rule.waitForIdle()
         rule.onNodeWithText("Removed Example Notes").assertIsDisplayed()
         assertEquals(0, done)
-        rule.onNodeWithText("OK").performClick()
+        rule.onNodeWithContentDescription("Close").performClick()
         assertEquals(1, done)
     }
 
@@ -218,7 +219,7 @@ class ExtensionRemovalWarningsShotsTest {
         rule.onAllNodesWithText("Remove").filterToOne(hasAnyAncestor(isDialog()) and hasClickAction()).performClick()
         rule.onNodeWithText("Removed Example Notes").assertExists()
         rule.onNodeWithText("Needs manual cleanup").assertExists()
-        rule.onNodeWithText("OK").performClick()
+        rule.onNodeWithContentDescription("Close").performClick()
         rule.waitForIdle()
         rule.onNode(isDialog()).assertDoesNotExist()
 
@@ -259,7 +260,7 @@ class ExtensionRemovalWarningsShotsTest {
         rule.onAllNodesWithText("Remove").filterToOne(hasAnyAncestor(isDialog()) and hasClickAction()).performClick()
         rule.onNodeWithText("Removed Example Notes").assertExists()
         assertEquals(0, backs)
-        rule.onNodeWithText("OK").performClick()
+        rule.onNodeWithContentDescription("Close").performClick()
         rule.waitForIdle()
         assertEquals(1, api.removals)
         assertEquals(1, backs)

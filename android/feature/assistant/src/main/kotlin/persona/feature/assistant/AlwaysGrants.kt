@@ -87,7 +87,7 @@ internal fun AssistantSessionInfoSheet(session: SessionKey, management: Assistan
     val scope = rememberCoroutineScope()
     var confirming by remember(session) { mutableStateOf<AlwaysGrant?>(null) }
     LaunchedEffect(model) { model.load() }
-    JSheet(onDismiss, title = stringResource(R.string.assistant_info_session), scrollable = true) {
+    JSheet(onDismiss, title = stringResource(R.string.assistant_info_session), scrollable = true, pageActions = {}) {
         Column(Modifier.testTag("session-info")) {
             Text(stringResource(R.string.assistant_info_session_text, session.sessionId), style = PersonaTheme.type.callout,
                 color = PersonaTheme.palette.ink2)

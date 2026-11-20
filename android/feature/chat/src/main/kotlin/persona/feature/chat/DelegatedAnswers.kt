@@ -107,7 +107,24 @@ internal fun ReanswerSheet(answer: DelegatedAnswer, before: Map<String, String>,
     var sending by remember(answer.id) { mutableStateOf(false) }
     var error by remember(answer.id) { mutableStateOf<String?>(null) }
     val changes = form.changes(questions, before)
-    JSheet(onDismiss, title = stringResource(R.string.chat_delegated_change), scrollable = true, dismissible = !sending) {
+    JSheet(onDismiss, title = stringResource(R.string.chat_delegated_change), scrollable = true, dismissible = !sending,
+        pageActions = {
+            JButton(stringResource(R.string.chat_reanswer_send), {
+                val sent = changes
+                if (sent.isEmpty() || sending) return@JButton
+                sending = true
+                error = null
+                scope.launch {
+                    try {
+                        send(sent)
+                        feedback?.notice(res.getString(R.string.chat_reanswer_sent), FeedbackStyle.Success)
+                        onDismiss()
+                    } catch (e: CancellationException) { throw e }
+                    catch (e: Exception) { error = reanswerError(res, e) }
+                    finally { sending = false }
+                }
+            }, enabled = changes.isNotEmpty(), loading = sending)
+        }) {
         questions.forEachIndexed { i, question ->
             JSectionHeader(question.question)
             question.options.forEachIndexed { j, option ->
@@ -130,24 +147,6 @@ internal fun ReanswerSheet(answer: DelegatedAnswer, before: Map<String, String>,
         }
         Text(stringResource(R.string.chat_reanswer_note), Modifier.padding(top = Tokens.Space.s), style = PersonaTheme.type.caption, color = palette.ink2)
         error?.let { JNotice(it, Modifier.padding(top = Tokens.Space.m), status = Status.NeedsYou, icon = PersonaIcons.error) }
-        Row(Modifier.fillMaxWidth().padding(top = Tokens.Space.l), horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-            JButton(stringResource(R.string.chat_reanswer_cancel), onDismiss, Modifier.weight(1f), kind = JButtonKind.Secondary, enabled = !sending)
-            JButton(stringResource(R.string.chat_reanswer_send), {
-                val sent = changes
-                if (sent.isEmpty() || sending) return@JButton
-                sending = true
-                error = null
-                scope.launch {
-                    try {
-                        send(sent)
-                        feedback?.notice(res.getString(R.string.chat_reanswer_sent), FeedbackStyle.Success)
-                        onDismiss()
-                    } catch (e: CancellationException) { throw e }
-                    catch (e: Exception) { error = reanswerError(res, e) }
-                    finally { sending = false }
-                }
-            }, Modifier.weight(1f), enabled = changes.isNotEmpty(), loading = sending)
-        }
     }
 }
 

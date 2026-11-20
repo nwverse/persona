@@ -35,10 +35,11 @@ fun ComposeMailDialog(
 ) {
     var leaving by remember { mutableStateOf(false) }
     JFullScreen(onDismiss = { leaving = true }) {
-        ComposeMailPage(
+        ComposeMailContent(
             transport = transport,
             draft = draft,
             onDone = onDone,
+            presented = true,
             leaveRequest = leaving,
             onLeaveHandled = { leaving = false },
         )
@@ -52,6 +53,16 @@ fun ComposeMailPage(
     onDone: () -> Unit,
     leaveRequest: Boolean = false,
     onLeaveHandled: () -> Unit = {},
+) = ComposeMailContent(transport, draft, onDone, leaveRequest, onLeaveHandled, presented = false)
+
+@Composable
+private fun ComposeMailContent(
+    transport: MailTransport,
+    draft: MailDraft,
+    onDone: () -> Unit,
+    leaveRequest: Boolean,
+    onLeaveHandled: () -> Unit,
+    presented: Boolean,
 ) {
     val scope = rememberCoroutineScope()
     val feedback = LocalAppFeedback.current
@@ -132,6 +143,7 @@ fun ComposeMailPage(
     JListPage(
         title = stringResource(draft.title),
         onBack = ::leave,
+        onClose = if (presented) ::leave else null,
         actions = {
             JButton(
                 stringResource(R.string.inbox_send),

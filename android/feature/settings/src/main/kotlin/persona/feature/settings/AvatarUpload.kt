@@ -234,7 +234,12 @@ internal fun NewFromPhotoOption(onClick: () -> Unit, enabled: Boolean) {
 @Composable
 internal fun AvatarUploadSheet(model: AvatarUploadModel, onSend: () -> Unit, onDismiss: () -> Unit) {
     val palette = PersonaTheme.palette
-    JSheet(onDismiss, title = stringResource(R.string.settings_avatar_upload_title), dismissible = !model.busy, scrollable = true) {
+    JSheet(onDismiss, title = stringResource(R.string.settings_avatar_upload_title), dismissible = !model.busy, scrollable = true,
+        pageActions = {
+            JButton(stringResource(if (model.made != null) R.string.settings_avatar_upload_retry else R.string.settings_avatar_upload_send), onSend,
+                Modifier.testTag("avatar-upload-send"), kind = JButtonKind.Primary,
+                enabled = model.canSend, loading = model.busy)
+        }) {
         AvatarCropBox(model)
         Spacer(Modifier.height(Tokens.Space.s))
         Text(stringResource(R.string.settings_avatar_upload_crop_hint), style = PersonaTheme.type.caption, color = palette.ink2)
@@ -250,10 +255,6 @@ internal fun AvatarUploadSheet(model: AvatarUploadModel, onSend: () -> Unit, onD
             Spacer(Modifier.height(Tokens.Space.m))
             JNotice(it.text(), Modifier.testTag("avatar-upload-error"), status = Status.NeedsYou)
         }
-        Spacer(Modifier.height(Tokens.Space.l))
-        JButton(stringResource(if (model.made != null) R.string.settings_avatar_upload_retry else R.string.settings_avatar_upload_send), onSend,
-            Modifier.fillMaxWidth().testTag("avatar-upload-send"), kind = JButtonKind.Primary, size = JButtonSize.Large,
-            enabled = model.canSend, loading = model.busy)
     }
 }
 

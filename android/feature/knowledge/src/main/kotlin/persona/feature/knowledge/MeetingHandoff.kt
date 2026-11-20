@@ -195,7 +195,13 @@ internal fun MeetingHandoffSheet(
         failed?.state == "failed" -> stringResource(meetingHandoffProblem(failed.problem))
         else -> null
     }
-    JSheet(onDismiss = onDismiss, title = stringResource(R.string.knowledge_handoff_title), dismissible = !work.busy, scrollable = true) {
+    JSheet(onDismiss = onDismiss, title = stringResource(R.string.knowledge_handoff_title), dismissible = !work.busy, scrollable = true,
+        pageActions = {
+            JButton(stringResource(R.string.knowledge_handoff_send), {
+                picked?.let { onSend(it, instruction, includeTranscript && transcriptOffered) }
+            }, icon = PersonaIcons.handToAI, enabled = picked != null && !work.busy,
+                loading = work.busy, loadingText = stringResource(R.string.knowledge_handoff_send))
+        }) {
         Column(Modifier.fillMaxWidth().imePadding()) {
             JSectionHeader(stringResource(R.string.knowledge_handoff_pick))
             choices.forEachIndexed { index, agent ->
@@ -222,11 +228,6 @@ internal fun MeetingHandoffSheet(
                 Spacer(Modifier.height(Tokens.Space.m))
                 JNotice(it, status = Status.NeedsYou)
             }
-            Spacer(Modifier.height(Tokens.Space.section))
-            JButton(stringResource(R.string.knowledge_handoff_send), {
-                picked?.let { onSend(it, instruction, includeTranscript && transcriptOffered) }
-            }, Modifier.fillMaxWidth(), icon = PersonaIcons.handToAI, enabled = picked != null && !work.busy,
-                loading = work.busy, loadingText = stringResource(R.string.knowledge_handoff_send))
         }
     }
 }

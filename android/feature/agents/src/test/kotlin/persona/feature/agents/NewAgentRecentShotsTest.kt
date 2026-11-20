@@ -17,6 +17,7 @@ import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -97,6 +98,27 @@ class NewAgentRecentShotsTest {
     }
 
     private fun preferences() = AgentCreationPreferences(RuntimeEnvironment.getApplication(), MemoryDataStore())
+
+    @Test
+    @Config(sdk = [35], qualifiers = "en-w400dp-h1200dp-xhdpi")
+    fun presentedDirectoryReturnsToTheFormBeforeClose() {
+        val model = NewAgentViewModel(Service(), preferences(), MutableStateFlow(machines))
+        var closed = 0
+        rule.setContent {
+            PersonaTheme(reduceMotion = true) {
+                NewAgentDialog(model, machines, online = true, onDismiss = { closed++ })
+            }
+        }
+        rule.waitUntil { model.state.value.initialized && !model.state.value.loading }
+        rule.onNodeWithContentDescription("Close").assertExists()
+        rule.onNodeWithText("Choose directory").performClick()
+        rule.onNodeWithContentDescription("Close").assertDoesNotExist()
+        rule.onNodeWithText("Use this directory").assertExists()
+        rule.onNodeWithContentDescription("Back").performClick()
+        rule.runOnIdle { assertEquals(0, closed); assertTrue(!model.state.value.browsing) }
+        rule.onNodeWithContentDescription("Close").performClick()
+        rule.runOnIdle { assertEquals(1, closed) }
+    }
 
     @Test fun twoStartsThenAFreshFormShowsThemAndATapFillsItWithoutStarting() {
         val store = preferences()

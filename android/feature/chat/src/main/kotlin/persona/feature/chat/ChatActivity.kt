@@ -194,7 +194,7 @@ internal fun ChatActivitySheet(
     val res = LocalResources.current
     val loop = session.loop
     val tasks = session.backgroundTasks
-    JSheet(onDismiss = onDismiss, title = ChatActivity.title(res, loop != null, tasks.isNotEmpty()), scrollable = true) {
+    JSheet(onDismiss = onDismiss, title = ChatActivity.title(res, loop != null, tasks.isNotEmpty()), scrollable = true, pageActions = {}) {
         Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
             if (loop != null) LoopStrip(loop, onStop)
             if (tasks.isNotEmpty()) BackgroundStrip(tasks, onOpenOutput)

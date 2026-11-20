@@ -141,7 +141,7 @@ internal fun RequestsDialog(
 ) {
     var showHistory by remember { mutableStateOf(false) }
     val shown = if (showHistory) history else requests
-    JSheet(onDismiss, title = stringResource(R.string.agents_requests_sheet_title)) {
+    JSheet(onDismiss, title = stringResource(R.string.agents_requests_sheet_title), pageActions = {}) {
         JSegmented(listOf(JSegment(stringResource(R.string.agents_requests_pending), requests.size), JSegment(stringResource(R.string.agents_requests_history_tab), history.size)), if (showHistory) 1 else 0, { showHistory = it == 1 }, Modifier.fillMaxWidth())
         LazyColumn(Modifier.weight(1f, fill = false), contentPadding = PaddingValues(bottom = 16.dp.dense)) {
             if (showHistory) item("history-note") {
@@ -177,7 +177,8 @@ internal fun RequestDetail(
     val feedback = LocalAppFeedback.current
     val openForContext = stringResource(R.string.agents_request_open_for_context)
     val openForEdit = stringResource(R.string.agents_request_open_for_edit)
-    JSheet(onDismiss, title = stringResource(if (readOnly) R.string.agents_request_history_title else R.string.agents_request_handle_title)) {
+    JSheet(onDismiss, title = stringResource(if (readOnly) R.string.agents_request_history_title else R.string.agents_request_handle_title),
+        pageActions = if (readOnly) ({}) else null) {
         key(request) {
             persona.feature.chat.ChatLinkHost(Modifier.weight(1f),
                 onContext = { feedback?.notice(openForContext) },

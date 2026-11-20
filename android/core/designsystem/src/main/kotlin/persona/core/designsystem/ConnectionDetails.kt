@@ -121,17 +121,21 @@ fun ConnectionDetailsSheet(
     LaunchedEffect(Unit) { while (true) { delay(1_000); now = currentClock() } }
     val haptics = rememberHaptics()
     val palette = PersonaTheme.palette
-    JSheet(onDismiss = onDismiss, modifier = Modifier.testTag("connection-details")) {
+    JSheet(onDismiss = onDismiss, modifier = Modifier.testTag("connection-details"), title = stringResource(state.detailsTitle), pageActions = {
+        if (state.retryable) JButton(stringResource(R.string.designsystem_connection_retry), {
+            haptics(Haptic.Tap)
+            source?.reconnect?.invoke()
+            onRetry()
+        }, Modifier.testTag("connection-retry"), size = JButtonSize.Small)
+    }) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
             when {
                 state == ConnectionState.Online -> JIcon(PhIcons.CheckCircle, null, tint = palette.positive, selected = true)
                 state.retryable -> JSpinner(Modifier.size(16.dp), stroke = 2.dp)
                 else -> JIcon(PhIcons.WarningCircle, null, tint = palette.cautionText)
             }
-            Text(stringResource(state.detailsTitle), style = PersonaTheme.type.headline, color = palette.ink, maxLines = 1)
+            Text(stringResource(state.explanation), style = PersonaTheme.type.callout, color = palette.ink2)
         }
-        Spacer(Modifier.height(Tokens.Space.s))
-        Text(stringResource(state.explanation), style = PersonaTheme.type.callout, color = palette.ink2)
         val facts = connectionFacts(state, diagnostics, waitingMessages(outbox), now)
         if (facts.isNotEmpty()) {
             Spacer(Modifier.height(Tokens.Space.m))
@@ -141,11 +145,6 @@ fun ConnectionDetailsSheet(
         }
         Spacer(Modifier.height(Tokens.Space.l))
         if (state.retryable) {
-            JButton(stringResource(R.string.designsystem_connection_retry), onClick = {
-                haptics(Haptic.Tap)
-                source?.reconnect?.invoke()
-                onRetry()
-            }, Modifier.fillMaxWidth().testTag("connection-retry"), icon = PhIcons.ArrowClockwise)
             onSettings?.let {
                 Spacer(Modifier.height(Tokens.Space.xs))
                 JTextButton(stringResource(R.string.designsystem_connection_settings), it, Modifier.fillMaxWidth())

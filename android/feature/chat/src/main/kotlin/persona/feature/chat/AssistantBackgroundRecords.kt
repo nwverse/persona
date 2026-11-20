@@ -22,7 +22,7 @@ internal fun AssistantBackgroundRecords(
     onDismiss: () -> Unit,
     hideTaskPrompts: Boolean = false,
 ) {
-    JSheet(onDismiss = onDismiss, title = stringResource(R.string.chat_assistant_background_records)) {
+    JSheet(onDismiss = onDismiss, title = stringResource(R.string.chat_assistant_background_records), pageActions = {}) {
         LazyColumn(contentPadding = PaddingValues(Tokens.Space.m), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
             items(lines.filterNot { it is ChatLine.Step || it is ChatLine.End }, key = { it.id }) { line ->
                 val activity = (line as? ChatLine.Extra)?.payload as? persona.core.domain.tasks.AssistantExtra.Feed

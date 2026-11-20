@@ -139,13 +139,10 @@ internal fun InteractionPanel(
         }
     }
     requests.firstOrNull { it.id == full }?.let { request ->
-        JSheet(onDismiss = { full = null }, title = request.cardTitle()) {
+        JSheet(onDismiss = { full = null }, title = request.cardTitle(), pageActions = {}) {
             Column(Modifier.fillMaxHeight().imePadding()) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    JTextButton(stringResource(R.string.chat_request_collapse_full), { full = null })
-                    closeCard(request)
-                }
                 body(request, true)
+                closeCard(request)
             }
         }
     }

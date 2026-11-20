@@ -38,7 +38,7 @@ internal fun planSummary(res: Resources, todos: List<TodoEntry>): String {
 internal fun PlanSheet(plan: LinePlan, onDismiss: () -> Unit) {
     val res = LocalResources.current
     val progress = planProgress(plan.todos)
-    JSheet(onDismiss, title = stringResource(R.string.chat_plan_sheet_title), scrollable = true) {
+    JSheet(onDismiss, title = stringResource(R.string.chat_plan_sheet_title), scrollable = true, pageActions = {}) {
         Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
             Text(planSummary(res, plan.todos), style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink2)
             JLinearProgress(if (progress.total > 0) progress.done.toFloat() / progress.total else 0f, color = PersonaTheme.palette.positive)

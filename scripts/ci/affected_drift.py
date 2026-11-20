@@ -131,6 +131,7 @@ DEDICATED = {
     "scripts/app/test_android_token_baseline.py": "android i18n",
     "scripts/app/test_android_motion_baseline.py": "android i18n",
     "scripts/app/test_android_slot_order.py": "android i18n",
+    "scripts/app/test_android_sheet_actions.py": "android i18n",
 }
 
 _GO_LITERAL = re.compile(r'"((?:[^"\\\n]|\\.)*)"|`([^`\n]*)`')

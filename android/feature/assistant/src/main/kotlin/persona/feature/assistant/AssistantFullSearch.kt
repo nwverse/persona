@@ -1,5 +1,6 @@
 package persona.feature.assistant
 
+import persona.core.designsystem.JSheetClose
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -167,6 +168,7 @@ internal fun AssistantFullSearch(
                 .then(if (overlay) Modifier.statusBarsPadding().imePadding() else Modifier)
                 .testTag("full-search"),
         ) {
+            JSheetClose(onDismiss, Modifier.padding(start = Tokens.Space.l).testTag("full-search-close"), raised = true)
             val heading = if (query.isBlank()) {
                 stringResource(R.string.assistant_recent)
             } else {
@@ -216,11 +218,6 @@ internal fun AssistantFullSearch(
                 JSearchField(
                     query, { query = it }, stringResource(R.string.assistant_search_chats),
                     Modifier.weight(1f).focusRequester(focus).testTag("full-search-field"),
-                )
-                Spacer(Modifier.width(Tokens.Space.m))
-                JIconButton(
-                    PersonaIcons.close, stringResource(persona.core.designsystem.R.string.designsystem_close),
-                    onDismiss, raised = true, modifier = Modifier.testTag("full-search-close"),
                 )
             }
         }

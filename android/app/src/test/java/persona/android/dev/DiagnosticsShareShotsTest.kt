@@ -4,8 +4,6 @@ import android.app.Application
 import android.content.Context
 import android.content.res.Configuration
 import android.graphics.Bitmap
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.CompositionLocalProvider
@@ -72,16 +70,15 @@ class DiagnosticsShareShotsTest {
                 LocalDensity provides Density(language.resources.displayMetrics.density, if (large) 1.3f else 1f),
             ) {
                 PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
-                    Box(Modifier.testTag("shot").width(if (tablet) 700.dp else 400.dp)
-                        .height(if (tablet || large) 1100.dp else 900.dp).background(PersonaTheme.palette.background)) {
-                        DiagnosticsShareSheet(
-                            fileName = "persona-diagnostics-android-20261117-1200.zip",
-                            note = language.getString(R.string.app_diagnostics_note), onNote = {},
-                            rows = listOf(ShareTargetRow(target, "Investigate chat", "Computer")),
-                            selected = target, onSelect = {}, busy = false, loading = false, paired = true, error = null,
-                            onOpen = {}, onCancel = {}, onOpenPersona = {},
-                        )
-                    }
+                    DiagnosticsShareSheet(
+                        fileName = "persona-diagnostics-android-20261117-1200.zip",
+                        note = language.getString(R.string.app_diagnostics_note), onNote = {},
+                        rows = listOf(ShareTargetRow(target, "Investigate chat", "Computer")),
+                        selected = target, onSelect = {}, busy = false, loading = false, paired = true, error = null,
+                        onOpen = {}, onCancel = {}, onOpenPersona = {},
+                        modifier = Modifier.testTag("shot").width(if (tablet) 700.dp else 400.dp)
+                            .height(if (tablet || large) 1100.dp else 900.dp),
+                    )
                 }
             }
         }

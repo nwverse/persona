@@ -449,7 +449,12 @@ internal fun PreviewSheet(
     val expired = rememberExpired(preview, now)
     val palette = PersonaTheme.palette
     val type = PersonaTheme.type
-    JSheet(onDismiss, title = stringResource(if (preview.upgrade) R.string.settings_ext_upgrade_name else R.string.settings_ext_install_name, name), dismissible = !busy, scrollable = true) {
+    JSheet(onDismiss, title = stringResource(if (preview.upgrade) R.string.settings_ext_upgrade_name else R.string.settings_ext_install_name, name),
+        dismissible = !busy, scrollable = true, pageActions = {
+            if (expired) JButton(stringResource(R.string.settings_ext_preview_again), onPreviewAgain, loading = busy, enabled = !busy)
+            else JButton(CatalogText.confirmLabel(LocalResources.current, preview), onConfirm, loading = busy,
+                enabled = !busy && preview.dependenciesReady)
+        }) {
         Column(modifier.padding(vertical = Tokens.Space.s), verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
             val version = preview.manifest?.version.orEmpty()
             Text(if (preview.upgrade) stringResource(R.string.settings_ext_version_change, preview.from.orEmpty(), version)
@@ -463,13 +468,7 @@ internal fun PreviewSheet(
             preview.warnings.orEmpty().forEach { JInlineStatus(it, tone = InlineTone.Caution) }
             SettingsCaption(stringResource(R.string.settings_ext_preview_note) +
                 (preview.expiresAt?.let(CatalogText::time)?.let { stringResource(R.string.settings_ext_preview_expires, it) } ?: ""))
-            if (expired) {
-                JInlineStatus(stringResource(R.string.settings_ext_preview_expired), tone = InlineTone.Caution)
-                JButton(stringResource(R.string.settings_ext_preview_again), onPreviewAgain, Modifier.fillMaxWidth(),
-                    kind = JButtonKind.Primary, loading = busy, enabled = !busy)
-            } else JButton(CatalogText.confirmLabel(LocalResources.current, preview), onConfirm, Modifier.fillMaxWidth(),
-                kind = JButtonKind.Primary, loading = busy, enabled = !busy && preview.dependenciesReady)
-            JButton(stringResource(R.string.settings_ext_preview_cancel), onDismiss, Modifier.fillMaxWidth(), kind = JButtonKind.Secondary, enabled = !busy)
+            if (expired) JInlineStatus(stringResource(R.string.settings_ext_preview_expired), tone = InlineTone.Caution)
         }
     }
 }
@@ -708,7 +707,11 @@ fun ExtensionMarketsPage(extensions: ExtensionManagement?, onBack: () -> Unit) {
 private fun AddMarketSheet(state: MarketsState, onDismiss: () -> Unit, onAdd: (String, String) -> Unit) {
     var spec by remember { mutableStateOf("") }
     var token by remember { mutableStateOf("") }
-    JSheet(onDismiss, title = stringResource(R.string.settings_ext_add_market), dismissible = !state.adding) {
+    JSheet(onDismiss, title = stringResource(R.string.settings_ext_add_market), dismissible = !state.adding,
+        pageActions = {
+            JSheetConfirm(stringResource(R.string.settings_ext_add), { onAdd(spec, token) }, loading = state.adding,
+                enabled = !state.adding && spec.isNotBlank())
+        }) {
         Column(Modifier.padding(vertical = Tokens.Space.s), verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
             JTextField(spec, { spec = it }, Modifier.fillMaxWidth(), label = stringResource(R.string.settings_ext_market_address), placeholder = stringResource(R.string.settings_ext_market_address_hint),
                 singleLine = true, enabled = !state.adding,
@@ -719,8 +722,6 @@ private fun AddMarketSheet(state: MarketsState, onDismiss: () -> Unit, onAdd: (S
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password))
             SettingsCaption(stringResource(R.string.settings_ext_market_token_note))
             state.addError?.let { JInlineStatus(it, tone = InlineTone.Failed) }
-            JButton(stringResource(R.string.settings_ext_add), { onAdd(spec, token) }, Modifier.fillMaxWidth(), loading = state.adding, loadingText = stringResource(R.string.settings_ext_market_reading),
-                enabled = !state.adding && spec.isNotBlank())
         }
     }
 }
@@ -728,7 +729,10 @@ private fun AddMarketSheet(state: MarketsState, onDismiss: () -> Unit, onAdd: (S
 @Composable
 private fun TokenSheet(market: ExtensionMarket, busy: Boolean, error: String? = null, onDismiss: () -> Unit, onSave: (String) -> Unit) {
     var token by remember(market.id) { mutableStateOf("") }
-    JSheet(onDismiss, title = stringResource(if (market.hasToken) R.string.settings_ext_token_change else R.string.settings_ext_token_set), dismissible = !busy) {
+    JSheet(onDismiss, title = stringResource(if (market.hasToken) R.string.settings_ext_token_change else R.string.settings_ext_token_set), dismissible = !busy,
+        pageActions = {
+            JSheetConfirm(stringResource(R.string.settings_ext_save), { onSave(token) }, loading = busy, enabled = !busy && token.isNotBlank())
+        }) {
         Column(Modifier.padding(vertical = Tokens.Space.s), verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
             JTextField(token, { token = it }, Modifier.fillMaxWidth(), placeholder = stringResource(if (market.hasToken) R.string.settings_ext_token_replace else R.string.settings_ext_token_enter),
                 singleLine = true, enabled = !busy, visualTransformation = PasswordVisualTransformation(),
@@ -742,7 +746,6 @@ private fun TokenSheet(market: ExtensionMarket, busy: Boolean, error: String? = 
                     size = JButtonSize.Small, icon = PhIcons.ArrowSquareOut)
             }
             error?.let { JInlineStatus(it, tone = InlineTone.Failed) }
-            JButton(stringResource(R.string.settings_ext_save), { onSave(token) }, Modifier.fillMaxWidth(), loading = busy, enabled = !busy && token.isNotBlank())
             if (market.hasToken) JButton(stringResource(R.string.settings_ext_token_remove), { onSave("") }, Modifier.fillMaxWidth(), kind = JButtonKind.Destructive, enabled = !busy)
         }
     }

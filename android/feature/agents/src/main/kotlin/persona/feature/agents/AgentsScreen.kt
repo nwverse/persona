@@ -826,18 +826,21 @@ internal fun AgentsScreen(
                 archiveTarget = null
             })
     }
-    if (showArchives && archives != null) JFullScreen({ showArchives = false }) {
-        AgentArchivesScreen(archives, names, onBack = { showArchives = false }, onOpen = { archivePreview = it })
-        archivePreview?.let { session -> JFullScreen({ archivePreview = null }) {
+    val closeArchives = { showArchives = false }
+    val closePreview = { archivePreview = null }
+    if (showArchives && archives != null) JFullScreen(closeArchives) {
+        AgentArchivesScreen(archives, names, onBack = closeArchives, onOpen = { archivePreview = it })
+        archivePreview?.let { session -> JFullScreen(closePreview) {
             persona.feature.chat.ChatDestination(ChatRoute(session.machineId, session.sessionId), navigator,
-                historyReadOnly = true, historySession = session, onHistoryBack = { archivePreview = null })
+                historyReadOnly = true, historySession = session, onHistoryBack = closePreview)
         } }
     }
     if (historyMachine != null && historySession != null) {
         val target = page.sessions.firstOrNull { it.machineId == historyMachine && it.sessionId == historySession }
-        JFullScreen({ historyMachine = null; historySession = null }) {
+        val closeHistory = { historyMachine = null; historySession = null }
+        JFullScreen(closeHistory) {
             persona.feature.chat.ChatDestination(ChatRoute(requireNotNull(historyMachine), requireNotNull(historySession)), navigator,
-                historyReadOnly = true, onHistoryBack = { historyMachine = null; historySession = null },
+                historyReadOnly = true, onHistoryBack = closeHistory,
                 historyFooter = {
                     Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(Tokens.Space.m), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
                         creation?.error?.let { Text(it.resolve(), style = PersonaTheme.type.caption) }

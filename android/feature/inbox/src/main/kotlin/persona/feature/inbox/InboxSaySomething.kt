@@ -84,15 +84,15 @@ internal fun InboxSayAction(
         onClick = { if (failed) send(res.getString(R.string.inbox_line_retry_text)) else showSheet = true },
         enabled = !busy, icon = if (failed) PersonaIcons.retry else PersonaIcons.agentChat)
     if (showSheet && canSay && !failed) JSheet(onDismiss = { showSheet = false }, title = stringResource(R.string.inbox_line_say),
-        dismissible = !busy, scrollable = true) {
+        dismissible = !busy, scrollable = true,
+        pageActions = {
+            JButton(stringResource(R.string.inbox_suggestion_say_send), { send(words) },
+                size = JButtonSize.Medium, enabled = !busy && words.isNotBlank(), loading = busy)
+        }) {
         Column(Modifier.fillMaxWidth().imePadding()) {
             JTextField(words, { words = it }, Modifier.fillMaxWidth(), label = stringResource(R.string.inbox_suggestion_say),
                 placeholder = stringResource(R.string.inbox_suggestion_say_hint), minLines = 2, enabled = !busy)
             if (writeFailed) JNotice(stringResource(R.string.inbox_failed_retry), Modifier.padding(top = Tokens.Space.s))
-            JButton(stringResource(R.string.inbox_suggestion_say_send), { send(words) }, Modifier.fillMaxWidth().padding(top = Tokens.Space.m),
-                size = JButtonSize.Medium, enabled = !busy && words.isNotBlank(), loading = busy)
-            JTextButton(stringResource(persona.core.designsystem.R.string.designsystem_cancel), { showSheet = false },
-                Modifier.align(Alignment.End).padding(top = Tokens.Space.s), enabled = !busy)
         }
     }
 }

@@ -1,5 +1,6 @@
 package persona.feature.chat
 
+import persona.core.designsystem.JSheetClose
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -126,13 +127,15 @@ private fun TaskDetailSheet(todoId: String, host: AssistantTaskHost, onDismiss: 
     LaunchedEffect(todoId) { host.tasks.reloadTodos() }
     val todo = todos.firstOrNull { it.id == todoId }
     var menu by remember(todoId) { mutableStateOf(false) }
-    JSheet(onDismiss, scrollable = true) {
+    JSheet(onDismiss) {
         if (todo == null) {
+            JSheetClose(onDismiss)
             TaskGone()
             return@JSheet
         }
         val state = host.tasks.stateOf(todo, host.sessions)
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+            JSheetClose(onDismiss)
             TaskMark(state)
             Column(Modifier.weight(1f)) {
                 Text(todo.title, style = PersonaTheme.type.title, color = PersonaTheme.palette.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -141,9 +144,10 @@ private fun TaskDetailSheet(todoId: String, host: AssistantTaskHost, onDismiss: 
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             if (state.isRemovable) TaskMoreButton { menu = true }
-            JIconButton(PhIcons.X, stringResource(R.string.chat_task_detail_close), onDismiss)
         }
-        TaskDetail(todo, state, host, onDismiss, onRemove = { menu = true })
+        Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
+            TaskDetail(todo, state, host, onDismiss, onRemove = { menu = true })
+        }
     }
     if (menu && todo != null) TaskRemoveSheet(todo, host, onDismiss) { menu = false }
 }
@@ -255,8 +259,9 @@ private fun TaskRemoveSheet(todo: Todo, host: AssistantTaskHost, onDismiss: () -
 @Composable
 private fun AgentDetailSheet(key: SessionKey, host: AssistantTaskHost, onDismiss: () -> Unit) {
     val session = host.sessions.firstOrNull { it.key == key }
-    JSheet(onDismiss, scrollable = true) {
+    JSheet(onDismiss) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+            JSheetClose(onDismiss)
             session?.let { JStatusDot(it.agentState.designStatus) }
             Column(Modifier.weight(1f)) {
                 Text(session?.displayTitle ?: stringResource(R.string.chat_task_detail_agent), style = PersonaTheme.type.title, color = PersonaTheme.palette.ink,
@@ -264,10 +269,11 @@ private fun AgentDetailSheet(key: SessionKey, host: AssistantTaskHost, onDismiss
                 Text(stringResource(R.string.chat_task_detail_own_agent), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            JIconButton(PhIcons.X, stringResource(R.string.chat_task_detail_close), onDismiss)
         }
         Spacer(Modifier.height(Tokens.Space.l))
-        AgentDetail(session, host, onDismiss)
+        Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
+            AgentDetail(session, host, onDismiss)
+        }
     }
 }
 
@@ -328,7 +334,7 @@ private fun TaskBoardSheet(host: AssistantTaskHost, onDismiss: () -> Unit) {
     val rows = todos.filter { it.origin == host.conversation }.map { it to host.tasks.stateOf(it, host.sessions) }
     val agents = host.tasks.agentsOf(host.conversation, host.sessions)
     var removing by remember { mutableStateOf<Todo?>(null) }
-    JSheet(onDismiss, title = stringResource(R.string.chat_task_board_title), scrollable = true) {
+    JSheet(onDismiss, title = stringResource(R.string.chat_task_board_title), scrollable = true, pageActions = {}) {
         if (rows.isEmpty() && agents.isEmpty()) {
             JEmptyState(stringResource(R.string.chat_task_board_empty), stringResource(R.string.chat_task_board_empty_body), icon = PhIcons.ListChecks)
             return@JSheet
@@ -404,7 +410,11 @@ internal fun PlanEditSheet(plan: TaskPlan, host: AssistantTaskHost, onDismiss: (
         confirm = stringResource(R.string.chat_plan_edit_discard) to { askDiscard = false; onDismiss() },
         dismiss = stringResource(R.string.chat_plan_edit_keep_editing) to { askDiscard = false },
     )
-    JSheet(onDismiss, title = stringResource(R.string.chat_plan_edit_title), dismissible = !unsaved, onBlockedDismiss = { askDiscard = true }) {
+    JSheet(onDismiss, title = stringResource(R.string.chat_plan_edit_title), dismissible = !unsaved, onBlockedDismiss = { askDiscard = true },
+        pageActions = {
+            JButton(stringResource(R.string.chat_tasks_plan_start), { onStart(tasks) },
+                enabled = tasks.all { it.title.isNotBlank() && it.prompt.isNotBlank() }, loading = starting)
+        }) {
         Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
             tasks.forEachIndexed { i, task ->
                 if (tasks.size > 1) JSectionHeader(stringResource(R.string.chat_plan_edit_task_n, i + 1))
@@ -430,9 +440,6 @@ internal fun PlanEditSheet(plan: TaskPlan, host: AssistantTaskHost, onDismiss: (
                     minLines = 3, maxLines = 8)
             }
         }
-        Spacer(Modifier.height(Tokens.Space.m))
-        JButton(stringResource(R.string.chat_tasks_plan_start), { onStart(tasks) }, Modifier.fillMaxWidth(),
-            enabled = tasks.all { it.title.isNotBlank() && it.prompt.isNotBlank() }, loading = starting)
     }
 }
 

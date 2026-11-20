@@ -385,7 +385,7 @@ fun JFullScreen(onDismiss: () -> Unit, content: @Composable () -> Unit) {
                 }
             }
         }
-        CompositionLocalProvider(LocalSplitDetail provides null) {
+        CompositionLocalProvider(LocalSplitDetail provides null, LocalPresentedClose provides onDismiss) {
             Box(Modifier.fillMaxSize().background(PersonaTheme.palette.background)) { content() }
         }
     }
@@ -421,8 +421,9 @@ fun JTopBar(
     titleBusy: Boolean = false,
     onTitleClick: (() -> Unit)? = null,
     showTitle: Boolean = true,
+    onClose: (() -> Unit)? = null,
 ) {
-    LocalHomeChrome.current?.takeIf { onBack == null }?.let { home ->
+    LocalHomeChrome.current?.takeIf { onBack == null && onClose == null }?.let { home ->
         CompositionLocalProvider(LocalIconsRaised provides true) {
             HomeNavigation(home.items, home.selected, home.onSelect, home.leading,
                 modifier = home.barHeight?.let { height -> Modifier.onSizeChanged { height.intValue = it.height } } ?: Modifier,
@@ -435,7 +436,7 @@ fun JTopBar(
     val compactHeight = 56.dp
     val splitLeading = resolveDetailLeading(LocalSplitDetail.current, onBack)
     val leading: @Composable () -> Unit = {
-        when (splitLeading) {
+        if (onClose != null) JSheetClose(onClose) else when (splitLeading) {
             is DetailLeading.ShowList -> JIconButton(persona.core.designsystem.icons.PersonaIcons.sidebar, stringResource(R.string.designsystem_sidebar), splitLeading.onClick)
             is DetailLeading.Back -> JBackButton(onClick = splitLeading.onClick)
             DetailLeading.Hidden -> Spacer(Modifier.width(if (style == AppStyle.Brief) Tokens.Space.s else Tokens.Space.sm))
@@ -495,6 +496,10 @@ val LocalIconsRaised = compositionLocalOf { false }
 
 @Composable
 fun JBackButton(enabled: Boolean = true, onClick: () -> Unit) {
+    if (onClick == LocalPresentedClose.current) {
+        JSheetClose(onClick, enabled = enabled)
+        return
+    }
     val icon = if (PersonaTheme.style == AppStyle.Glass) PhIcons.CaretLeft else PhIcons.ArrowLeft
     JIconButton(icon, stringResource(R.string.designsystem_back), onClick,
         enabled = enabled, raised = enabled && LocalIconsRaised.current)
@@ -530,6 +535,8 @@ fun JListPage(
     fullWidth: Boolean = false,
     /** The list's scroll, so a tap spring can ignore a drag (`listTapScroll`). */
     listScroll: NestedScrollConnection? = null,
+    /** Dismiss the presented root. Pages pushed over it use [onBack]. */
+    onClose: (() -> Unit)? = null,
     content: LazyListScope.() -> Unit,
 ) {
     val style = PersonaTheme.style
@@ -542,7 +549,7 @@ fun JListPage(
     AdaptiveListProbe(page = title, state = state)
     PageFrame(
         modifier, ambience,
-        topBar = { JTopBar(title, barSubtitle.takeIf { collapsed }, onBack ?: LocalRootBack.current, actions, titleBusy, onTitleClick, showTitle = collapsed) },
+        topBar = { JTopBar(title, barSubtitle.takeIf { collapsed }, onBack ?: LocalRootBack.current, actions, titleBusy, onTitleClick, showTitle = collapsed, onClose = onClose) },
         bottomBar = bottomBar,
         underTop = { state.canScrollBackward },
         underBottom = { scrollUnderBottom && state.canScrollForward },

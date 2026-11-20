@@ -88,7 +88,7 @@ internal fun LazyListScope.extensionSignIn(
 internal fun ExtensionSignInSheet(auth: ExtensionAuth, name: String, bind: BindState, model: ConnectorSignInModel) {
     val prompt = bind.prompt ?: return
     val res = LocalResources.current
-    JSheet(model::cancel, title = ExtensionAuthText.title(res, auth), dismissible = !bind.sending) {
+    JSheet(model::cancel, title = ExtensionAuthText.title(res, auth), dismissible = !bind.sending, pageActions = {}) {
         Column(Modifier.padding(vertical = Tokens.Space.s), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
             // The step's own hint says what to do; the extension's description only when it has none.
             auth.description?.takeIf { it.isNotBlank() && prompt.hint.isNullOrBlank() }?.let {

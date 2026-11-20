@@ -572,6 +572,8 @@ job_i18n() {
     python3 -B test_android_motion_baseline.py || return $?
   in_dir scripts/app step "$TIMEOUT_OTHER" "scripts/app: test_android_slot_order.py self-test" \
     python3 -B test_android_slot_order.py || return $?
+  in_dir scripts/app step "$TIMEOUT_OTHER" "scripts/app: presented-page checker self-test" python3 -B test_android_sheet_actions.py || return $?
+  in_dir scripts/app step "$TIMEOUT_OTHER" "scripts/app: android_sheet_actions.py" python3 -B android_sheet_actions.py || return $?
   in_dir scripts/app step "$TIMEOUT_OTHER" "scripts/app: android_slot_order.py" python3 -B android_slot_order.py || return $?
   in_dir scripts/app step "$TIMEOUT_OTHER" "scripts/app: android_token_baseline.py" python3 -B android_token_baseline.py || return $?
   in_dir scripts/app step "$TIMEOUT_OTHER" "scripts/app: android_motion_baseline.py" python3 -B android_motion_baseline.py
@@ -1083,13 +1085,13 @@ fi
 # unittest is a SKIP line instead, the rule of is_suite in scripts/ci/python-tests.py: python -m unittest runs no tests
 # in such a verification script and exits 5 ("NO TESTS RAN") on Python 3.12 and later.
 script_test_add() {
-  # job_i18n runs four of the scripts/app/test_android_* suites; the others run here (#11026).
+  # job_i18n runs five of the scripts/app/test_android_* suites; the others run here (#11026).
   case "$1" in
     scripts/test/test_external_service_refs.py) EXTREFS=1; return 0 ;;
     scripts/test/test_sdk_bundle.py) SDKBUNDLE=1; return 0 ;;
     scripts/test/test_extension_schema.py) EXTSCHEMA=1; return 0 ;;
     scripts/app/test_android_i18n_check.py|scripts/app/test_android_token_baseline.py|\
-    scripts/app/test_android_motion_baseline.py|scripts/app/test_android_slot_order.py) ANDROID=1; return 0 ;;
+    scripts/app/test_android_motion_baseline.py|scripts/app/test_android_slot_order.py|scripts/app/test_android_sheet_actions.py) ANDROID=1; return 0 ;;
   esac
   # Already added: every file of a large diff adds the same few suites again, and the grep below is a process each.
   arr_has "$1" "${SCRIPT_TESTS[@]:-}" && return 0

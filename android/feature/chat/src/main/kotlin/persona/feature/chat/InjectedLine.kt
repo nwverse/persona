@@ -125,7 +125,7 @@ internal fun InjectedLine(id: String, n: Injected, showDetail: Boolean = true) {
     }
     ChatHint(n.line, icon, tint, onClick, Modifier.testTag("injected-${n.kind}"),
         onClickLabel = stringResource(if (todo != null) R.string.chat_injected_open_task else R.string.chat_injected_view_request))
-    if (open) JSheet({ open = false }, title = n.title ?: n.line, scrollable = true) {
+    if (open) JSheet({ open = false }, title = n.title ?: n.line, scrollable = true, pageActions = {}) {
         ChatMarkdown(n.detail.orEmpty(), "injected/$id")
     }
 }

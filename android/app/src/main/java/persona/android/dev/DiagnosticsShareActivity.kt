@@ -36,7 +36,6 @@ import persona.core.designsystem.JButtonSize
 import persona.core.designsystem.JCard
 import persona.core.designsystem.JLinearProgress
 import persona.core.designsystem.JSheet
-import persona.core.designsystem.JTextButton
 import persona.core.designsystem.JTextField
 import persona.core.domain.sort.AgentSession
 import persona.core.domain.sort.agentRank
@@ -86,16 +85,14 @@ class DiagnosticsShareActivity : ComponentActivity() {
                     ShareTargetRow(session.key, session.displayTitle,
                         machines.firstOrNull { it.id == session.machineId }?.displayName ?: session.agentLabel)
                 }
-                JSheet(onDismiss = { finish() }, scrollable = true) {
-                    DiagnosticsShareSheet(
-                        fileName = model.fileName, note = model.note, onNote = model::updateNote,
-                        rows = targets, selected = selected, onSelect = model::select,
-                        busy = model.busy, loading = model.loading, paired = model.paired, error = model.error,
-                        onOpen = { target -> scope.launch { model.prepare(target) } },
-                        onCancel = { finish() },
-                        onOpenPersona = { startActivity(mainActivityIntent(this@DiagnosticsShareActivity)); finish() },
-                    )
-                }
+                DiagnosticsShareSheet(
+                    fileName = model.fileName, note = model.note, onNote = model::updateNote,
+                    rows = targets, selected = selected, onSelect = model::select,
+                    busy = model.busy, loading = model.loading, paired = model.paired, error = model.error,
+                    onOpen = { target -> scope.launch { model.prepare(target) } },
+                    onCancel = { finish() },
+                    onOpenPersona = { startActivity(mainActivityIntent(this@DiagnosticsShareActivity)); finish() },
+                )
             }
         }
     }
@@ -118,34 +115,29 @@ internal fun DiagnosticsShareSheet(
     onOpen: (SessionKey?) -> Unit,
     onCancel: () -> Unit,
     onOpenPersona: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    Column(
-        Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(Tokens.Space.m.dense),
-    ) {
-        Text(stringResource(R.string.app_diagnostics_title), style = PersonaTheme.type.title)
-        val archiveLabel = stringResource(R.string.app_diagnostics_archive)
-        JCard(
-            modifier = Modifier.semantics(mergeDescendants = true) { contentDescription = archiveLabel },
-            padding = Tokens.Space.m.dense,
-        ) {
-            Text(fileName, Modifier.fillMaxWidth(), maxLines = 2, overflow = TextOverflow.Ellipsis)
-        }
-        JTextField(
-            value = note, onValueChange = onNote, modifier = Modifier.fillMaxWidth(), enabled = !busy,
-            label = stringResource(R.string.app_share_note), maxLines = 4,
-        )
-        ShareTargetList(rows, selected, mainEnabled = !busy && paired, enabled = !busy, select = onSelect)
-        if (loading) Text(stringResource(R.string.app_share_loading))
-        error?.let { Text(it, color = PersonaTheme.palette.danger.dot) }
-        if (busy) JLinearProgress(null, Modifier.fillMaxWidth())
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            JTextButton(stringResource(R.string.app_cancel), onCancel, enabled = !busy)
-            if (!paired) {
-                JButton(stringResource(R.string.app_open_persona), onOpenPersona, enabled = !busy, size = JButtonSize.Medium)
-            } else {
-                JButton(stringResource(R.string.app_diagnostics_open_chat), { onOpen(selected) }, enabled = !busy, size = JButtonSize.Medium)
+    JSheet(onDismiss = onCancel, modifier = modifier, title = stringResource(R.string.app_diagnostics_title), dismissible = !busy,
+        scrollable = true, pageActions = {
+            if (!paired) JButton(stringResource(R.string.app_open_persona), onOpenPersona, enabled = !busy, size = JButtonSize.Medium)
+            else JButton(stringResource(R.string.app_diagnostics_open_chat), { onOpen(selected) }, enabled = !busy, size = JButtonSize.Medium)
+        }) {
+        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Tokens.Space.m.dense)) {
+            val archiveLabel = stringResource(R.string.app_diagnostics_archive)
+            JCard(
+                modifier = Modifier.semantics(mergeDescendants = true) { contentDescription = archiveLabel },
+                padding = Tokens.Space.m.dense,
+            ) {
+                Text(fileName, Modifier.fillMaxWidth(), maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
+            JTextField(
+                value = note, onValueChange = onNote, modifier = Modifier.fillMaxWidth(), enabled = !busy,
+                label = stringResource(R.string.app_share_note), maxLines = 4,
+            )
+            ShareTargetList(rows, selected, mainEnabled = !busy && paired, enabled = !busy, select = onSelect)
+            if (loading) Text(stringResource(R.string.app_share_loading))
+            error?.let { Text(it, color = PersonaTheme.palette.danger.dot) }
+            if (busy) JLinearProgress(null, Modifier.fillMaxWidth())
         }
     }
 }

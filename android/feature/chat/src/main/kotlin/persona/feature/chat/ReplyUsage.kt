@@ -117,7 +117,7 @@ internal fun ReplyUsageFooter(item: Item, view: ReplyUsageView) {
             style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3,
             maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
-    if (open) JSheet(onDismiss = { open = false }, scrollable = true) { ReplyUsageDetails(view.lines) }
+    if (open) JSheet(onDismiss = { open = false }, scrollable = true, pageActions = {}) { ReplyUsageDetails(view.lines) }
 }
 
 /** The card's lines, one under the other. They may wrap; the label above them does not. */

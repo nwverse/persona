@@ -151,7 +151,7 @@ internal fun RecapLine(items: List<Item>) {
     val resources = LocalResources.current
     val label = recapLabel(items.size, parseTime(newest.ts), now, resources)
     Box(Modifier.fillMaxWidth()) { ChatNoteChip(label, RecapIcon, onClick = { open = true }) }
-    if (open) JSheet({ open = false }, title = stringResource(R.string.chat_recap_title), scrollable = true) {
+    if (open) JSheet({ open = false }, title = stringResource(R.string.chat_recap_title), scrollable = true, pageActions = {}) {
         items.asReversed().forEachIndexed { index, item ->
             if (index > 0) JDivider(Modifier.padding(vertical = Tokens.Space.m))
             parseTime(item.ts)?.let {

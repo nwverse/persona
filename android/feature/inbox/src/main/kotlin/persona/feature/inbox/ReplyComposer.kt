@@ -270,6 +270,7 @@ internal fun ReplyComposerField(
     modifier: Modifier = Modifier,
     sendEnabled: Boolean = true,
     probePage: String? = null,
+    actionInPageBar: Boolean = false,
     accessory: (@Composable ColumnScope.() -> Unit)? = null,
 ) {
     val focus = remember { FocusRequester() }
@@ -284,18 +285,24 @@ internal fun ReplyComposerField(
             ReplyStatus(state)
         },
         trailing = {
-            if (state.delivery in setOf(ReplyDelivery.Unknown, ReplyDelivery.NeedsConfirmation)) {
-                JButton(stringResource(R.string.inbox_reply_check), onSend,
-                    size = JButtonSize.Small,
-                    enabled = sendEnabled && !state.loading && !state.sending && state.draft.text.isNotBlank())
-            } else SendButton(onSend,
-                loading = state.sending,
-                enabled = sendEnabled && !state.loading && !state.sending && state.draft.text.isNotBlank() &&
-                    state.delivery !in setOf(ReplyDelivery.Queued, ReplyDelivery.WaitingForNetwork, ReplyDelivery.Verifying))
+            if (!actionInPageBar) ReplyComposerAction(state, onSend, sendEnabled, named = false)
         },
         field = {
             ComposerTextField(state.draft.text, onUpdate, placeholder,
                 Modifier.focusRequester(focus).testTag("inbox-reply-field").onFocusChanged { focused = it.isFocused },
                 enabled = state.canEdit)
         })
+}
+
+
+@Composable
+internal fun ReplyComposerAction(state: ReplyComposerState, onSend: () -> Unit, sendEnabled: Boolean = true, named: Boolean = true) {
+    val canAct = sendEnabled && !state.loading && !state.sending && state.draft.text.isNotBlank()
+    if (state.delivery in setOf(ReplyDelivery.Unknown, ReplyDelivery.NeedsConfirmation)) {
+        JButton(stringResource(R.string.inbox_reply_check), onSend, size = JButtonSize.Small, enabled = canAct)
+    } else {
+        val enabled = canAct && state.delivery !in setOf(ReplyDelivery.Queued, ReplyDelivery.WaitingForNetwork, ReplyDelivery.Verifying)
+        if (named) JButton(stringResource(R.string.inbox_send), onSend, size = JButtonSize.Small, loading = state.sending, enabled = enabled)
+        else SendButton(onSend, loading = state.sending, enabled = enabled)
+    }
 }

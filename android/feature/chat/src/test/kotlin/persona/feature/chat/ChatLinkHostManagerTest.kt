@@ -226,9 +226,9 @@ class ChatLinkHostManagerTest {
         assertCardTop(24.dp)
         val root = rule.onRoot().getUnclippedBoundsInRoot()
         val width = root.right - root.left
-        assertEquals(56f, rule.onNodeWithContentDescription("Back").getUnclippedBoundsInRoot().left.value, 0.01f)
+        assertEquals(56f, rule.onNodeWithContentDescription("Close").getUnclippedBoundsInRoot().left.value, 0.01f)
         assertEquals((width - 40.dp - Tokens.Space.xs).value,
-            rule.onNodeWithContentDescription("Close page").getUnclippedBoundsInRoot().right.value, 0.01f)
+            rule.onNodeWithContentDescription("Page actions").getUnclippedBoundsInRoot().right.value, 0.01f)
     }
 
     private fun openEmbeddedCard(style: AppStyle, url: String, sheet: Boolean = false) {

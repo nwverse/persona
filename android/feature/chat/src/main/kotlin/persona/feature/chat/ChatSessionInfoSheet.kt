@@ -197,7 +197,7 @@ internal fun ChatSessionInfoSheet(
             error = res.getString(R.string.chat_info_unreadable, (e as? UnsupportedOperationException)?.message ?: operationFeedback(e).text.resolve(res))
         }
     }
-    JSheet(onDismiss = onDismiss, title = stringResource(R.string.chat_info_title), scrollable = true) {
+    JSheet(onDismiss = onDismiss, title = stringResource(R.string.chat_info_title), scrollable = true, pageActions = {}) {
         Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
             Text(session.displayTitle, style = PersonaTheme.type.headline, color = PersonaTheme.palette.ink, maxLines = 2,
                 overflow = TextOverflow.Ellipsis)

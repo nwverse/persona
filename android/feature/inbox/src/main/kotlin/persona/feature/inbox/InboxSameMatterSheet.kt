@@ -139,7 +139,7 @@ internal fun InboxSameMatterSheet(
         failed = tree == null || descendants == null
     }
     val candidates = sameMatterCandidates(snapshot.records, record, descendants.orEmpty(), query)
-    JSheet(onDismiss = onDismiss, title = stringResource(R.string.inbox_line_same), dismissible = !busy) {
+    JSheet(onDismiss = onDismiss, title = stringResource(R.string.inbox_line_same), dismissible = !busy, pageActions = {}) {
         Column(Modifier.fillMaxWidth().imePadding()) {
             JSearchField(query, { query = it }, stringResource(R.string.inbox_line_search_placeholder), Modifier.fillMaxWidth())
             if (writeFailed) JNotice(stringResource(R.string.inbox_failed_retry), Modifier.padding(top = Tokens.Space.s))
@@ -180,8 +180,6 @@ internal fun InboxSameMatterSheet(
                     }
                 }
             }
-            JTextButton(stringResource(persona.core.designsystem.R.string.designsystem_cancel), onDismiss,
-                Modifier.align(Alignment.End).padding(top = Tokens.Space.s), enabled = !busy)
         }
     }
 }
