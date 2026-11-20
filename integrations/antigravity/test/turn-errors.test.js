@@ -144,7 +144,7 @@ async function fixture(t, options = {}) {
 for (const exported of [false, true]) {
   test(`retries one transient 401 ${exported ? 'recorded in the transcript' : 'returned by ACP'} without duplicating the user message`, async (t) => {
     const { node, row, calls, items, idle } = await fixture(t, { initialCount: 1, promptPlan: [
-      { error: TRANSIENT_401, export: exported }, { reply: 'Finished.', export: exported },
+      { error: TRANSIENT_401, export: exported, undatedStep: exported }, { reply: 'Finished.', export: exported },
     ] })
     const send = (text, client_msg_id) => node.peer.call('session.send', { session_id: SESSION, text, client_msg_id })
     await send('Continue.', 'request-1')
@@ -183,6 +183,8 @@ test('a plan-mode 401 retries despite a previous reply flushing and whole-second
 
 for (const [reason, plan, attempts, retryDelay] of [
   ['revoked login', [{ error: `${TRANSIENT_401}; invalid_grant` }], 1],
+  ['non-adjacent expired refresh token', [{ error: `${TRANSIENT_401}; refresh_token for this account has expired` }], 1],
+  ['revoked account credential', [{ error: `${TRANSIENT_401}; revoked the account login credential` }], 1],
   ['explicit sign-in request', [{ error: `${TRANSIENT_401} Please sign in.` }], 1],
   ['assistant text', [{ error: TRANSIENT_401, reply: 'Partial answer' }], 1],
   ['tool work', [{ error: TRANSIENT_401, tool: true }], 1],
