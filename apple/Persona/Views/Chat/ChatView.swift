@@ -6140,6 +6140,7 @@ struct Composer: View, Equatable {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             if isMain {
+                PushHealthNotice(group: key.group)
                 // The main conversation: what it still needs, or a refused send (docs/assistant/onboarding.md 4.4, 5.2).
                 ReadinessHomeCard(key: key, route: $failureRoute)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
