@@ -175,6 +175,10 @@ func validRelayURL(s string) bool {
 }
 
 func (p *Pusher) register(d Device) error {
+	return p.registerContext(context.Background(), d)
+}
+
+func (p *Pusher) registerContext(ctx context.Context, d Device) error {
 	d.UpdatedAt = p.now().UTC()
 	d.RegisteredAt = d.UpdatedAt
 	d.Registering = true
@@ -209,7 +213,7 @@ func (p *Pusher) register(d Device) error {
 	p.mu.Unlock()
 	// Publish only after the ownership check and duplicate retirement commit.
 	// A failed enrollment must not expose an unpersisted APNs target to sends.
-	if err := p.writeDeviceIn(withQuiesceHeld(context.Background()), d); err != nil {
+	if err := p.writeDeviceIn(ctx, d); err != nil {
 		return err
 	}
 	d.Registering = false

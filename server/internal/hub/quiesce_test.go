@@ -1660,3 +1660,160 @@ func TestWebPushDefersFirstKeyCreationAndDispatchUntilResume(t *testing.T) {
 		})
 	}
 }
+
+type hookedDeviceStore struct {
+	*meshStore
+	upserts  atomic.Int32
+	onUpsert func(db.Device)
+}
+
+func (s *hookedDeviceStore) UpsertDevice(_ context.Context, d db.Device) error {
+	s.upserts.Add(1)
+	if s.onUpsert != nil {
+		s.onUpsert(d)
+	}
+	return nil
+}
+
+// Non-admitted device registrations obey writeQuiescer (refused while paused,
+// counted as in-flight while running), while an HTTP registration already
+// admitted through quiesceGate skips nested begin and holds its turn until done.
+func TestPushRegisterRespectsQuiesceAndAdmittedContext(t *testing.T) {
+	t.Run("direct register refused while paused", func(t *testing.T) {
+		h := newTestHub(t)
+		store := &hookedDeviceStore{meshStore: newMeshStore()}
+		h.store = store
+		h.push.store = store
+		if err := h.quiesce.pause(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		defer h.quiesce.resume()
+
+		if err := h.push.register(Device{DeviceID: "dev-paused", Name: "Phone"}); err == nil {
+			t.Fatal("direct register succeeded while writes were paused")
+		}
+		if n := store.upserts.Load(); n != 0 {
+			t.Fatalf("UpsertDevice ran %d times while paused", n)
+		}
+		if _, ok := h.push.device("dev-paused"); ok {
+			t.Fatal("refused registration was published in memory")
+		}
+	})
+
+	t.Run("in-flight direct register blocks pause until commit", func(t *testing.T) {
+		h := newTestHub(t)
+		inUpsert := make(chan struct{})
+		release := make(chan struct{})
+		store := &hookedDeviceStore{
+			meshStore: newMeshStore(),
+			onUpsert: func(db.Device) {
+				close(inUpsert)
+				<-release
+			},
+		}
+		h.store = store
+		h.push.store = store
+
+		regErr := make(chan error, 1)
+		go func() {
+			regErr <- h.push.register(Device{DeviceID: "dev-inflight", Name: "Phone"})
+		}()
+		select {
+		case <-inUpsert:
+		case <-time.After(time.Second):
+			t.Fatal("direct register did not reach UpsertDevice")
+		}
+
+		paused := make(chan error, 1)
+		go func() { paused <- h.quiesce.pause(context.Background()) }()
+		select {
+		case err := <-paused:
+			t.Fatalf("pause returned while direct register was in flight: %v", err)
+		case <-time.After(30 * time.Millisecond):
+		}
+
+		close(release)
+		if err := <-regErr; err != nil {
+			t.Fatalf("direct register error: %v", err)
+		}
+		select {
+		case err := <-paused:
+			if err != nil {
+				t.Fatalf("pause error: %v", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("pause did not return after direct register finished")
+		}
+		h.quiesce.resume()
+	})
+
+	t.Run("admitted HTTP register skips nested begin while pause waits", func(t *testing.T) {
+		h := newTestHub(t)
+		store := &hookedDeviceStore{meshStore: newMeshStore()}
+		h.store = store
+		h.push.store = store
+
+		mux := http.NewServeMux()
+		h.deviceRoutes(mux)
+		admitted := make(chan struct{})
+		proceed := make(chan struct{})
+		handler := h.quiesceGate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			close(admitted)
+			<-proceed
+			mux.ServeHTTP(w, r)
+		}))
+
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/devices", strings.NewReader(`{"device_id":"dev-http","name":"Phone"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req = req.WithContext(context.WithValue(req.Context(), principalKey{}, principal{ID: "cred_1", Role: roleFull}))
+		rec := httptest.NewRecorder()
+
+		reqDone := make(chan struct{})
+		go func() {
+			handler.ServeHTTP(rec, req)
+			close(reqDone)
+		}()
+		select {
+		case <-admitted:
+		case <-time.After(time.Second):
+			t.Fatal("HTTP register did not enter quiesceGate")
+		}
+
+		// Start pause after quiesceGate admitted the request, before registerContext runs.
+		paused := make(chan error, 1)
+		go func() { paused <- h.quiesce.pause(context.Background()) }()
+		waitFor(t, "quiesce marked paused", func() bool {
+			h.quiesce.mu.Lock()
+			defer h.quiesce.mu.Unlock()
+			return h.quiesce.paused
+		})
+		select {
+		case err := <-paused:
+			t.Fatalf("pause returned before admitted HTTP register finished: %v", err)
+		case <-time.After(25 * time.Millisecond):
+		}
+
+		// Admitted request must not fail with a nested quiesce refusal.
+		close(proceed)
+		select {
+		case <-reqDone:
+		case <-time.After(time.Second):
+			t.Fatal("admitted HTTP register did not finish")
+		}
+		if rec.Code != http.StatusOK {
+			t.Fatalf("admitted HTTP register status = %d: %s", rec.Code, rec.Body.String())
+		}
+		if store.upserts.Load() != 1 {
+			t.Fatalf("UpsertDevice count = %d, want 1", store.upserts.Load())
+		}
+		select {
+		case err := <-paused:
+			if err != nil {
+				t.Fatalf("pause error: %v", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("pause did not return after admitted HTTP register finished")
+		}
+		h.quiesce.resume()
+	})
+}
