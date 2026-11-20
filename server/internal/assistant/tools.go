@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -576,15 +577,16 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			return "", waitErr
 		}
 		var a struct {
-			Machine  string `json:"machine"`
-			Cwd      string `json:"cwd"`
-			Prompt   string `json:"prompt"`
-			Launcher string `json:"launcher"`
-			Model    string `json:"model"`
-			Effort   string `json:"effort"`
-			Speed    string `json:"speed"`
-			Tier     string `json:"tier"`
-			Worktree struct {
+			Machine        string `json:"machine"`
+			Cwd            string `json:"cwd"`
+			Prompt         string `json:"prompt"`
+			Launcher       string `json:"launcher"`
+			Model          string `json:"model"`
+			Effort         string `json:"effort"`
+			Speed          string `json:"speed"`
+			PermissionMode string `json:"permission_mode"`
+			Tier           string `json:"tier"`
+			Worktree       struct {
 				Branch string `json:"branch"`
 			} `json:"worktree"`
 			Ultracode bool `json:"ultracode"`
@@ -597,6 +599,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		_ = json.Unmarshal(args, &a)
 		if err := checkSecretEnvArg(args); err != nil {
 			return "", fmt.Errorf("%w; no agent was started", err)
+		}
+		if a.PermissionMode = strings.TrimSpace(a.PermissionMode); a.PermissionMode != "" && !slices.Contains(proto.PermissionModes, a.PermissionMode) {
+			return "", fmt.Errorf("invalid permission_mode %q; no agent was started", a.PermissionMode)
 		}
 		am, ok := s.machineByName(ctx, a.Machine)
 		if !ok {
@@ -614,7 +619,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			return "", fmt.Errorf("%w; no agent was started", err)
 		}
 		a.Cwd = proto.ExpandHome(a.Cwd, am.Home)
-		own := startPick{launcher: strings.TrimSpace(a.Launcher), effort: strings.TrimSpace(a.Effort), speed: strings.TrimSpace(a.Speed)} // before the tier
+		own := startPick{launcher: strings.TrimSpace(a.Launcher), effort: strings.TrimSpace(a.Effort), speed: strings.TrimSpace(a.Speed), permission: a.PermissionMode} // before the tier
 		// The tier is resolved first (an unknown one asks and starts nothing), then Model Settings' Agents laid over it as
 		// the start lays it: what runs is said on the card (a hand-off from the health space asks) and in the answer.
 		tier := strings.TrimSpace(a.Tier)
@@ -626,14 +631,19 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			model := a.Model
 			if !layTier(t, &a.Launcher, &a.Model, &a.Effort) {
 				tier = "" // a launcher of its own: the tier gives it nothing
-			} else if a.Speed == "" && (model == "" || model == t.Model) {
-				a.Speed = t.Speed
+			} else {
+				if a.Speed == "" && (model == "" || model == t.Model) {
+					a.Speed = t.Speed
+				}
+				if a.PermissionMode == "" && t.PermissionMode != "" {
+					a.PermissionMode = t.PermissionMode
+				}
 			}
 		}
 		own.ompModelDefault = a.Launcher == "omp" && a.Model == ""
 		// What it runs on this computer, before the user is asked (#2640, launcher_fit.go): a launcher named here that
 		// the computer lacks starts nothing; a default it lacks gives way to one it has, and the card and answer say so.
-		run := map[string]any{"launcher": a.Launcher, "model": a.Model, "effort": a.Effort, "speed": a.Speed}
+		run := map[string]any{"launcher": a.Launcher, "model": a.Model, "effort": a.Effort, "speed": a.Speed, "permission_mode": a.PermissionMode}
 		if err := s.applyModel(ctx, "agent.new", run); err != nil {
 			return "", err
 		}
@@ -650,16 +660,18 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			a.Model, _ = run["model"].(string)
 			a.Effort, _ = run["effort"].(string)
 			a.Speed, _ = run["speed"].(string)
+			a.PermissionMode, _ = run["permission_mode"].(string)
 			tier = "" // the tier's launcher is not what runs
 		}
-		// traex, omp…: no effort (launcher_modes.go). One this call names is refused before the user is asked, rather
-		// than by the computer after they said yes; one a tier filled in is dropped. pi, cursor, agy: dropped either way.
+		// traex, omp…: no effort or permission mode (launcher_modes.go). One this call names is refused before the user is asked, rather
+		// than by the computer after they said yes; one a tier filled in is dropped. pi, cursor: dropped either way.
 		if !startTakesModes(fit.agent) {
 			launcher, _ := run["launcher"].(string)
-			if err := startModesRefused(launcher, fit.agent, "", own.effort); err != nil {
+			if err := startModesRefused(launcher, fit.agent, own.permission, own.effort); err != nil {
 				return "", fmt.Errorf("%w; no agent was started", err)
 			}
 			a.Effort = ""
+			a.PermissionMode = ""
 		}
 		// The admission gate refuses a too-busy computer before the user is asked to approve anything.
 		gated, _ := run["launcher"].(string)
@@ -677,7 +689,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			where += " · " + swapped
 		case tier != "":
 			selected := pickOf(run)
-			runs = ModelTier{Launcher: selected.launcher, Model: selected.model, Effort: selected.effort, Speed: selected.speed}.runs()
+			runs = ModelTier{Launcher: selected.launcher, Model: selected.model, Effort: selected.effort, Speed: selected.speed, PermissionMode: selected.permission}.runs()
 			where += i18n.T(s.lang(ctx), "assistant-tools.with_tier", i18n.Args{"tier": tier, "runs": runs})
 		case a.Model != "":
 			where += i18n.T(s.lang(ctx), "assistant-tools.with_model", i18n.Args{"model": a.Model})
@@ -704,7 +716,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		defer cancel()
 		// The tab is named from the prompt as written; the agent gets its project's background before it (#2820).
 		title := s.tabName(sctx, a.Prompt)
-		params := map[string]any{"cwd": a.Cwd, "launcher": a.Launcher, "model": a.Model, "effort": a.Effort, "speed": a.Speed, "tab_name": title, "title": title}
+		params := map[string]any{"cwd": a.Cwd, "launcher": a.Launcher, "model": a.Model, "effort": a.Effort, "speed": a.Speed, "permission_mode": a.PermissionMode, "tab_name": title, "title": title}
 		prompt := s.withProjectContext(sctx, am.ID, a.Cwd, self, a.Prompt)
 		if a.Ultracode {
 			params["ultracode"] = true
@@ -731,15 +743,25 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if err := checkStartSpeed(params, fit, ""); err != nil {
 			return "", fmt.Errorf("%w; no agent was started", err)
 		}
-		// Allow all for Claude Code and for a provider whose approval is an Auto Accept switch (startAgent.allowAll, #8141).
-		if fit.allowAll() {
-			params["permission_mode"] = "bypassPermissions"
-		}
+		// Precedence: explicit permission_mode > tier preset > agent.new binding > Allow all (Claude / Auto Accept) > CLI default.
 		if !startTakesModes(fit.agent) { // the machine a health detour landed on may run another agent under this name
-			if err := startModesRefused(picked, fit.agent, "", own.effort); err != nil {
+			if err := startModesRefused(picked, fit.agent, own.permission, own.effort); err != nil {
 				return "", fmt.Errorf("%w; no agent was started", err)
 			}
-			delete(params, "effort") // Model configuration's, not this call's
+			delete(params, "effort")          // Model configuration's, not this call's
+			delete(params, "permission_mode") // Model configuration's or tier's, not this call's
+		} else {
+			mode, _ := params["permission_mode"].(string)
+			if mode != "" && own.permission == "" && !fit.supportsPermissionMode(mode) {
+				delete(params, "permission_mode")
+				mode = ""
+			}
+			if mode == "" && fit.allowAll() {
+				// Allow all for Claude Code and for a provider whose approval is an Auto Accept switch (startAgent.allowAll, #8141).
+				params["permission_mode"] = "bypassPermissions"
+			} else if mode == "" {
+				delete(params, "permission_mode")
+			}
 		}
 		if !s.isWorkMachine(am.ID) {
 			params["prompt"] = params["prompt"].(string) + "\n\n" + s.taskHandoff(sctx, am.ID, fit)

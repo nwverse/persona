@@ -170,6 +170,17 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	if !proto.FasterSpeed(execution.Speed) {
 		argv, codex = n.codexLauncher(ctx, launcher)
 	}
+	var launch host.Launcher
+	if codex && kind == "codex" && resume == "" && mode == "" && stockOrcaCodexArgv(launcher, argv) && n.startKind(ctx) == proto.EngineOrca {
+		launch, err = n.launcherFor(n.startKind(ctx))
+		if err != nil {
+			return nil, err
+		}
+		argv, err = codexOrcaLaunchDefaults(ctx, launch, argv)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if backend := backendLaunchFrom(ctx); backend != nil && codex && mode != "plan" {
 		for _, repo := range backend.executor.journal.Repositories {
 			argv = append(argv, "--add-dir", repo.CommonDir)
@@ -245,9 +256,11 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	prompt = taskFallback(prompt, execution.TaskAttachments)
 
 	// New sessions start in the host the start named, else the default host.
-	launch, err := n.launcherFor(n.startKind(ctx))
-	if err != nil {
-		return nil, err
+	if launch == nil {
+		launch, err = n.launcherFor(n.startKind(ctx))
+		if err != nil {
+			return nil, err
+		}
 	}
 	ws, err := n.tabSpace(ctx, launch, cwd, workspaceID)
 	if err != nil {

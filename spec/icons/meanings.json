@@ -45,21 +45,21 @@
       "sf": "chevron.left",
       "phosphor": "caret-left"
     },
+    "backgroundMonitor": {
+      "sf": "display",
+      "phosphor": "monitor"
+    },
     "backgroundTask": {
       "sf": "gearshape.2",
       "phosphor": "gear-six"
-    },
-    "backgroundWaiting": {
-      "sf": "clock.fill",
-      "phosphor": "clock"
     },
     "backgroundTasks": {
       "sf": "list.clipboard",
       "phosphor": "list-checks"
     },
-    "backgroundMonitor": {
-      "sf": "waveform.path.ecg",
-      "phosphor": "monitor"
+    "backgroundWaiting": {
+      "sf": "clock.fill",
+      "phosphor": "clock"
     },
     "byApp": {
       "sf": "macwindow",

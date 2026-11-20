@@ -135,6 +135,10 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-meeting.bad_default_role"))
 		return
 	}
+	if g := in.DeliveryGate; g != nil && !slices.Contains(deliveryGates, *g) {
+		apierr.Write(w, http.StatusBadRequest, errors.New("delivery_gate must be off, merged or live"))
+		return
+	}
 	if code := s.readMeetingTranscriptionSettings(&in.Settings, in.TranscriptionMode, in.Glossary, in.TranscriptionExtension); code != "" {
 		apierr.WriteCode(w, http.StatusBadRequest, code, i18n.Err("assistant-meeting."+code))
 		return
@@ -304,8 +308,12 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		if in.ArchiveClosedDays != nil {
 			v.ArchiveClosedDays = in.ArchiveClosedDays
 		}
-		if in.DoneNeedsDelivery != nil {
+		if in.DeliveryGate != nil {
+			v.DeliveryGate = in.DeliveryGate
+			v.DoneNeedsDelivery = nil
+		} else if in.DoneNeedsDelivery != nil {
 			v.DoneNeedsDelivery = in.DoneNeedsDelivery
+			v.DeliveryGate = nil
 		}
 		if in.ReviewSamplePercent != nil {
 			v.ReviewSamplePercent = in.ReviewSamplePercent

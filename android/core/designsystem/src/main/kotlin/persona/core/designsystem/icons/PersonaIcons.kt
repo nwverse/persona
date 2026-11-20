@@ -28,7 +28,7 @@ object PersonaIcons {
     val attachment: PhIcon get() = PhIcons.Paperclip
     /** SF Symbol `chevron.left`. */
     val back: PhIcon get() = PhIcons.CaretLeft
-    /** SF Symbol `waveform.path.ecg`. */
+    /** SF Symbol `display`. */
     val backgroundMonitor: PhIcon get() = PhIcons.Monitor
     /** SF Symbol `gearshape.2`. */
     val backgroundTask: PhIcon get() = PhIcons.GearSix
