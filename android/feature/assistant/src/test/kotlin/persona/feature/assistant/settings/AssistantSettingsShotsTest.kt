@@ -87,6 +87,9 @@ class AssistantSettingsShotsTest {
     @Config(sdk = [35], qualifiers = "en-w400dp-h2600dp-xhdpi")
     @Test fun nextSuggestionsLargeFont() = nextSuggestionLargeFont()
 
+    @Config(sdk = [35], qualifiers = "en-w400dp-h3600dp-xhdpi")
+    @Test fun ownerApprovalEnglish() = ownerApprovalShots()
+
     private class FakeManagement(memoryTitle: String, memoryBody: String) : AssistantManagement {
         private val updated = Instant.now().minusSeconds(3_600).toString()
         var config = AssistantConfig(machineId = "workstation", launcher = "claude", cwd = "/home/me/.persona/assistant",
@@ -272,6 +275,43 @@ class AssistantSettingsShotsTest {
         val large = rule.onNodeWithTag("next-large").captureToImage().asAndroidBitmap()
         assertFalse("the large-text capture really scales Compose text", standard.sameAs(large))
         save("settings-next-suggestions-en-off-glass-light-font-2.png", large)
+    }
+
+    private fun ownerApprovalShots() {
+        var style by mutableStateOf(AppStyle.Glass)
+        var dark by mutableStateOf(false)
+        var fontScale by mutableStateOf(1f)
+        val management = FakeManagement("Morning", "Keep it short.").apply {
+            config = config.copy(mainBackgroundFolded = true, ownerReplyApproval = false,
+                persistentOwnerActionCards = false, ownerReplyApprovalPhrases = listOf("发", "同意"))
+        }
+        var replyTitle = ""
+        var persistentTitle = ""
+        rule.setContent {
+            replyTitle = stringResource(R.string.assistant_settings_owner_approval)
+            persistentTitle = stringResource(R.string.assistant_settings_owner_approval_persistent)
+            val density = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale)) {
+                PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
+                    val roster = ManagerRoster(listOf(HubManager("assistant", "Persona", online = true, isDefault = true)), "assistant")
+                    CompositionLocalProvider(LocalManagerRoster provides roster) {
+                        Box(Modifier.testTag("owner-shot").width(400.dp).height(3600.dp).background(PersonaTheme.palette.background)) {
+                            AssistantSettingsScreen(management, machines, onBack = {}, onModelConfiguration = { _, _ -> })
+                        }
+                    }
+                }
+            }
+        }
+        for (s in AppStyle.entries) for (d in listOf(false, true)) for (scale in listOf(1f, 2f)) {
+            style = s; dark = d; fontScale = scale
+            rule.waitForIdle()
+            rule.onNode(hasText(replyTitle) and isToggleable()).assertIsOff()
+            rule.onNode(hasText(persistentTitle) and isToggleable()).assertIsOff()
+            rule.onNodeWithText("发\n同意").assertExists()
+            val image = rule.onNodeWithTag("owner-shot").captureToImage().asAndroidBitmap()
+            val font = if (scale > 1f) "font-2" else "default"
+            save("settings-owner-approval-en-off-$font-${s.name.lowercase()}-${if (d) "dark" else "light"}.png", image)
+        }
     }
 
     private val machines = listOf(
