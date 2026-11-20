@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -196,4 +196,79 @@ test('a companion restart preserves an empty native trajectory with no steps fie
   const page = await node.peer.call('session.items', { session_id: SESSION })
   assert.deepEqual(page.items, [])
   assert.ok(page.history.endsWith(':cut:0'))
+})
+
+const later = '2026-01-01T00:01:00Z'
+const texts = (page) => page.items.map((item) => item.text)
+
+test('a sent turn appends to the history, its export changes it once and a rewind still replaces it (#12014)', async (t) => {
+  const { node, transcript, db, nativeFile, rewind } = await fixture(t, { promptPlan: [{ reply: 'Third answer' }] })
+  const idle = await node.peer.call('session.items', { session_id: SESSION })
+  await node.peer.call('session.watch', { session_id: SESSION, since_seq: idle.to_seq })
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Third' })
+  await until('the settled reply is pushed', () => node.last('session.items')?.items.some((item) => item.text === 'Third answer'))
+  for (const batch of node.all('session.items')) {
+    assert.equal(batch.history, idle.history, 'the send and its reply append')
+    assert.ok(batch.from_seq >= idle.to_seq)
+  }
+
+  const turn = [{ step_index: 4, type: 'USER_INPUT', content: 'Third' }, { step_index: 5, type: 'PLANNER_RESPONSE', content: 'Third answer' }]
+    .map((step) => ({ ...step, status: 'DONE', created_at: later }))
+  appendFileSync(transcript, turn.map((step) => JSON.stringify(step)).join('\n') + '\n')
+  const snapshot = JSON.parse(readFileSync(nativeFile, 'utf8'))
+  snapshot.trajectory.steps.push(
+    { type: 'CORTEX_STEP_TYPE_USER_INPUT', metadata: { source: 'CORTEX_STEP_SOURCE_USER_EXPLICIT' }, userInput: { items: [{ text: 'Third' }] } },
+    { type: 'CORTEX_STEP_TYPE_PLANNER_RESPONSE', metadata: { source: 'MODEL' } })
+  writeFileSync(nativeFile, JSON.stringify(snapshot))
+  db.exec('UPDATE conversation_summaries SET step_count = 6')
+  await until('the export replaces the projected turn', () => node.last('session.items')?.history !== idle.history)
+  const exported = await node.peer.call('session.items', { session_id: SESSION })
+  assert.deepEqual(texts(exported), [...records.map((step) => step.content), 'Third', 'Third answer'])
+  assert.equal(node.last('session.items').history, exported.history)
+  assert.equal(node.last('session.items').from_seq, 0)
+
+  await rewind({ prompt: 'Third' })
+  const rewound = await node.peer.call('session.items', { session_id: SESSION })
+  assert.deepEqual(texts(rewound), records.map((step) => step.content))
+  assert.notEqual(rewound.history, exported.history)
+  await until('the rewind is pushed', () => node.last('session.items')?.history === rewound.history)
+})
+
+test('a restart changes the history only when projected steps were outstanding (#12014)', async (t) => {
+  const { node, home, restart } = await fixture(t, { promptPlan: [{ reply: 'Third answer' }] })
+  const items = () => node.peer.call('session.items', { session_id: SESSION })
+  const idle = await items()
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Third' })
+  await until('the reply waits for its export', async () => texts(await items()).includes('Third answer'))
+  assert.equal((await items()).history, idle.history)
+  const epoch = join(home, 'config/brain', RAW, '.persona-history-epoch')
+  if (process.platform !== 'win32') assert.equal(statSync(epoch).mode & 0o777, 0o600)
+
+  await restart()
+  const restarted = await items()
+  assert.notEqual(restarted.history, idle.history, 'clients drop the projected steps they hold')
+  assert.deepEqual(texts(restarted), records.map((step) => step.content))
+  await restart()
+  assert.equal((await items()).history, restarted.history, 'nothing was outstanding')
+})
+
+test('a send changes the history at once when its brain directory is read-only (#12014)', {
+  skip: process.platform === 'win32' || process.getuid?.() === 0,
+}, async (t) => {
+  const { node, home, restart } = await fixture(t, { promptPlan: [{ reply: 'Third answer' }] })
+  const items = () => node.peer.call('session.items', { session_id: SESSION })
+  const brain = join(home, 'config/brain', RAW)
+  const idle = await items()
+  chmodSync(brain, 0o500)
+  try {
+    await node.peer.call('session.send', { session_id: SESSION, text: 'Third' })
+    await until('the reply waits for its export', async () => texts(await items()).includes('Third answer'))
+    const sent = await items()
+    assert.notEqual(sent.history, idle.history, 'no restart can report the history of these projected steps')
+    assert.equal(existsSync(join(brain, '.persona-history-epoch')), false)
+    await restart()
+    assert.notEqual((await items()).history, sent.history)
+  } finally {
+    chmodSync(brain, 0o700)
+  }
 })
