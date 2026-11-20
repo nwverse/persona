@@ -127,6 +127,70 @@ func TestOutsideDecisionRaiseAnswerAndPush(t *testing.T) {
 	}
 }
 
+// An outside decision is owner work, not a quiet background round: it counts exactly like a supervisor decision.
+func TestOutsideDecisionSharesSupervisorNeedsYouCount(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		attached    bool
+		quietParent bool
+	}{{"standalone", false, false}, {"attached", true, false}, {"attached quiet parent", true, true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, f, supervised := newSupervisedService(t)
+			waitsForReview(t, s, f, supervised.ID, "两种走法：A 先灰度，B 直接全量。")
+			row := todoNow(s, supervised.ID)
+			row.Quiet = false
+			putTodo(s, row)
+			if _, err := reviewErr(s, supervised.ID, rolloutDecision()); err != nil {
+				t.Fatal(err)
+			}
+			e := &todoEnv{t: t, s: s, f: f}
+			in := outsideFixture()
+			if tc.attached {
+				parent := e.create("Release checklist")
+				parent.Quiet = tc.quietParent
+				putTodo(s, parent)
+				in.TodoID = parent.ID
+			}
+			outside := raiseOutside(t, e, "nightly", in)
+
+			var page todosList
+			if err := json.Unmarshal(e.must("GET", "/api/v1/todos", "").Body.Bytes(), &page); err != nil {
+				t.Fatal(err)
+			}
+			if got := page.Counts.NeedsYou; got != 2 {
+				t.Errorf("projection Needs you count = %d, want one supervisor decision and outside decision %s", got, outside.ID)
+			}
+			if got := page.Counts.Sections[assistantwire.TodoListSectionNeedsYou]; got != 2 {
+				t.Errorf("projection Needs you rows = %d, want one supervisor decision and outside decision %s", got, outside.ID)
+			}
+			if tc.attached {
+				var parentRow, outsideRow *listedTodo
+				for i := range page.Todos {
+					switch page.Todos[i].ID {
+					case in.TodoID:
+						parentRow = &page.Todos[i]
+					case outside.AskTodoID:
+						outsideRow = &page.Todos[i]
+					}
+				}
+				if parentRow == nil || outsideRow == nil || parentRow.View == nil || outsideRow.View == nil {
+					t.Fatal("the attached parent and outside decision need their projected rows")
+				}
+				if len(parentRow.View.Asks) != 0 {
+					t.Errorf("the outside decision also moved onto its parent: %+v", parentRow.View.Asks)
+				}
+				if len(outsideRow.View.Asks) == 0 {
+					t.Error("the outside decision has no ask on its own row")
+				}
+			}
+			legacy := triageTodos(page.Todos, lookupOf(nil), time.Now(), time.UTC, false)
+			if got := len(legacy.Sections[triageWaiting]); got != 2 {
+				t.Errorf("legacy Needs you count = %d, want one supervisor decision and outside decision %s", got, outside.ID)
+			}
+		})
+	}
+}
+
 func TestOutsideDecisionReplayAfterParentClosed(t *testing.T) {
 	e := newTodoEnv(t, nil)
 	parent := e.create("Release checklist")

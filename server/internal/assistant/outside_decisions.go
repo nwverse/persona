@@ -277,8 +277,11 @@ func (s *Service) raiseOutsideDecision(ctx context.Context, caller *outsideCalle
 	now := time.Now().UTC()
 	id := "odc_" + randomHex(8)
 	askTodoID := "todo_od_" + randomHex(8)
+	// This row is the decision's one owner-facing home, not a quiet background
+	// round: it must be in Needs-you lists and badges. NoCard below only keeps
+	// the Lark retry from adding another card; the explicit decide push follows.
 	row := db.TodoRow{ID: askTodoID, Title: d.Reason, Notes: background, CreatedAt: now, UpdatedAt: now,
-		Origin: origin, PartOf: todoID, Quiet: true}
+		Origin: origin, PartOf: todoID}
 	if _, err := s.insertTodo(ctx, row); err != nil {
 		var piece *pieceError
 		if errors.As(err, &piece) || errors.Is(err, db.ErrTodoNotFound) {
