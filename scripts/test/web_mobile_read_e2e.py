@@ -261,11 +261,13 @@ def check_viewer(page, tag):
     ok(f"{tag}: Back closes the viewer and stays on the chat")
 
 
-# Every frame from here on: the viewer's picture, once the browser has it and it shows, drawn at its fit in the room.
+# Every frame from here on: the viewer's picture, once the browser has it and it shows, drawn at its fit in the room;
+# and the frames its loading spinner shows in.
 VIEWER_FRAMES = """() => {
   const px = (v) => parseFloat(v) || 0;
-  const s = window.__viewerFrames = { seen: 0, wrong: [] };
+  const s = window.__viewerFrames = { seen: 0, wrong: [], spinning: 0 };
   const tick = () => {
+    if (document.querySelector('[role=dialog][aria-modal="true"] [role=status]')) s.spinning++;
     const img = document.querySelector('[role=dialog][aria-modal="true"] img');
     if (img && img.complete && img.naturalWidth && getComputedStyle(img).visibility !== 'hidden') {
       const area = img.parentElement, cs = getComputedStyle(area);
@@ -300,7 +302,7 @@ VIEWER_HITS = """d => {
 
 def check_viewer_controls(page, tag):
     """The first picture opened after a page load (the viewer's chunk not fetched yet) is fitted to the screen from its
-    first drawn frame, and so is the next one a swipe brings (#11511). With either (a file's four icon buttons below it,
+    first drawn frame, and so is the next one a swipe brings, neither with a loading spinner (#11511). With either (a file's four icon buttons below it,
     then a long name and two worded buttons), every control in the viewer's top row and bottom bar answers a 44 px
     square around its middle, inside its row and clear of its neighbours, and the top row's buttons stay round."""
     page.goto(S["base"] + "/overview?token=mock")
@@ -324,6 +326,9 @@ def check_viewer_controls(page, tag):
             fail(f"{tag}: {what} was drawn at the wrong size in {len(frames['wrong'])} of {frames['seen']} frames ({frames['wrong'][0]})")
         if not img.evaluate("e => !!e.style.scale"):
             fail(f"{tag}: {what} is not fitted, so it cannot zoom")
+        # the chat's pictures are in the page already: no spinner for them, not even for a frame
+        if frames["spinning"]:
+            fail(f"{tag}: the loading spinner showed for {what}, already loaded, in {frames['spinning']} frames")
         page.evaluate("() => { window.__viewerFrames.seen = 0; }")
         return frames["seen"]
 

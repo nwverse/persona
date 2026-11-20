@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 // The viewer fits its picture to the room (#11511): one the browser already has (complete before its load event, the
 // first open from the lazy chunk), one whose load lands before the mount's effects and one that loads later, each fitted
-// in every commit it shows in; another picture starts at 1× and is never drawn at the last one's size; two fingers zoom;
-// the round and bar buttons carry the 44 px touch target.
+// in every commit it shows in, with a spinner while one is still coming (never for one complete); another picture starts
+// at 1× and is never drawn at the last one's size; two fingers zoom; the round and bar buttons carry the 44 px target.
 import { act, Profiler, useLayoutEffect, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -17,10 +17,12 @@ const ROOM = { width: 358, height: 600 };
 let pictures: Record<string, { complete: boolean; width: number; height: number }>;
 let root: Root;
 let host: HTMLDivElement;
-// the picture as each commit left it, while it shows
+// the picture as each commit left it, while it shows, and the commits that rendered the loading spinner
 let drawn: { src: string | null; width: string; height: string; scale: string }[];
+let spun: number;
 
 const picture = () => document.querySelector<HTMLImageElement>('[role="dialog"] img')!;
+const spinner = () => document.querySelector('[role="dialog"] [role="status"]');
 const area = () => picture().parentElement!;
 
 beforeEach(() => {
@@ -35,6 +37,7 @@ beforeEach(() => {
   Element.prototype.setPointerCapture ??= () => {};
   pictures = {};
   drawn = [];
+  spun = 0;
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -50,6 +53,7 @@ afterEach(async () => {
 function record() {
   const img = document.querySelector<HTMLImageElement>('[role="dialog"] img');
   if (img && img.style.visibility !== "hidden") drawn.push({ src: img.getAttribute("src"), width: img.style.width, height: img.style.height, scale: img.style.scale });
+  if (spinner()) spun++;
 }
 
 async function open(images: ViewerImage[], extra?: ReactNode) {
@@ -81,6 +85,7 @@ it("fits a picture the browser already has, with no load event for it, from its 
   expect([img.style.width, img.style.height, img.style.left, img.style.top, img.style.scale]).toEqual(["358px", "358px", "0px", "121px", "1"]);
   expect(drawn.length).toBeGreaterThan(0);
   expect(drawn.every((d) => d.width === "358px" && d.height === "358px")).toBe(true);
+  expect(spun, "no commit renders the spinner for a picture already complete").toBe(0);
 });
 
 it("keeps a picture fitted when its load lands before the mount's effects (the first open from the lazy chunk)", async () => {
@@ -97,16 +102,26 @@ it("keeps a picture fitted when its load lands before the mount's effects (the f
   expect([picture().style.width, picture().style.scale]).toEqual(["358px", "1"]);
 });
 
-it("hides a picture that loads later until its size is known, then shows it fitted", async () => {
+it("shows a spinner for a picture that loads later, hidden until its size is known, then the picture fitted", async () => {
   await open([{ id: "a", src: "/a.png" }]);
   expect(picture().style.visibility).toBe("hidden");
   expect(picture().style.width).toBe("");
   expect(drawn).toEqual([]);
+  expect(spinner()?.textContent).toBe(t("common.loading"));
   await load("/a.png", 512, 256);
+  expect(spinner()).toBeNull();
   expect(picture().style.visibility).not.toBe("hidden");
   expect(picture().style.animation).toContain("pop-in");
   expect([picture().style.width, picture().style.height, picture().style.top]).toEqual(["358px", "179px", "210.5px"]);
   expect(drawn.every((d) => d.width === "358px" && d.height === "179px")).toBe(true);
+});
+
+it("says a picture that would not load could not be read, without the spinner", async () => {
+  await open([{ id: "a", src: "/a.png" }]);
+  expect(spinner()).not.toBeNull();
+  await act(async () => picture().dispatchEvent(new Event("error")));
+  expect(spinner()).toBeNull();
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain(t("chat-imageviewer.unreadable"));
 });
 
 it("zooms the fitted picture with two fingers", async () => {
@@ -135,6 +150,7 @@ it("starts the next picture at 1× and its own fit, never drawn at the last one'
   const next = drawn.filter((d) => d.src === "/b.png");
   expect(next.length).toBeGreaterThan(0);
   expect(next).toEqual(next.map(() => ({ src: "/b.png", width: "358px", height: "179px", scale: "1" })));
+  expect(spun, "no spinner for either picture, both complete").toBe(0);
 });
 
 it("gives the round buttons and the bar's buttons the touch target", async () => {
