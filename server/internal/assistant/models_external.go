@@ -252,7 +252,7 @@ func (s *Service) externalPickerLaunchers(ctx context.Context, d Device, refresh
 	c.zshrcMu.Lock()
 	known := slices.Clone(c.zshrc[d.ID])
 	c.zshrcMu.Unlock()
-	return s.pickerLaunchersSeen(ctx, d.ID, known), nil
+	return s.pickerLaunchersSeen(ctx, d.ID, known, true), nil
 }
 
 // externalTarget reads this computer's advertisement, without a global provider view or

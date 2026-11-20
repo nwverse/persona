@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -404,5 +405,47 @@ func TestMainChatOnAManagedProviderOverItsOwnLauncherIsIncompatible(t *testing.T
 		if p := purposeOf(t, s, id); p.Effective.Provider != "launcher.cx" || p.Status != want {
 			t.Fatalf("%s on the managed Codex provider cx: %+v; want status %q", id, p, want)
 		}
+	}
+}
+
+// Model settings' status asks no node (mainChatOffers): with the main chat on a runtime's launcher and a Persona-managed
+// provider that skips a computer with its own service, but no answer on that yet or one out of date, reading the model
+// configuration does not ask the node (launchers.own_service, up to ownServiceWait each time). The pickers still ask.
+func TestMainChatStatusAsksNoNodeAboutItsOwnService(t *testing.T) {
+	for name, stale := range map[string]bool{"no answer yet": false, "an answer out of date": true} {
+		t.Run(name, func(t *testing.T) {
+			s, f, _ := modelService(t)
+			f.mu.Lock()
+			f.zshrc = map[string][]proto.Launcher{"server": {{Name: "dsh-rt", Source: "dsh", Agent: "dsh", Assistant: true}, {Name: "cc", Source: "zshrc"}}}
+			f.ownServices = map[string]proto.OwnServiceState{"server/claude": {Agent: "claude", Known: true, Own: true}}
+			f.mu.Unlock()
+			putLaunchers(t, s, storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "gw", BaseURL: "https://gw.example", Model: "m1", OwnService: proto.OwnServiceSkip}})
+			setModel(t, s, "assistant", ModelBinding{Provider: "launcher.dsh-rt"})
+			if stale {
+				s.models.ownMu.Lock()
+				s.models.own = map[string]ownSeen{"server/claude": {st: proto.OwnServiceState{Agent: "claude", Known: true, Own: true}, at: time.Now().Add(-2 * ownServiceFresh)}}
+				s.models.ownMu.Unlock()
+			}
+			asked := func() int {
+				f.mu.Lock()
+				defer f.mu.Unlock()
+				return len(slices.DeleteFunc(slices.Clone(f.calls), func(c DeviceCall) bool { return c.Method != DeviceLaunchersOwnService }))
+			}
+			for _, id := range []string{"assistant", "schedule", purposeSupervise} {
+				if p := purposeOf(t, s, id); p.Effective.Provider != "launcher.dsh-rt" || p.Status != modelUnverified {
+					t.Fatalf("%s on the runtime: %+v; want status %q", id, p, modelUnverified)
+				}
+			}
+			if r := modelRequest(s, "GET", "", ""); r.Code != 200 {
+				t.Fatalf("%d %s", r.Code, r.Body.String())
+			}
+			if n := asked(); n != 0 {
+				t.Fatalf("reading the model configuration asked the node about its own service %d times", n)
+			}
+			pickerNames(t, s, "agent.new")
+			if asked() == 0 {
+				t.Fatal("New Agent's picker did not ask either, so this proves nothing")
+			}
+		})
 	}
 }
